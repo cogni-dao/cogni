@@ -48,3 +48,22 @@ appset_rel_path() {
 appsets_kustomization_rel_path() {
   printf '%s/%s/kustomization.yaml\n' "$APPSETS_REL_DIR" "$(control_env_for "$1" "$2")"
 }
+
+# The INVERSE of control_env_for, for ONE node: every OTHER env of <node> whose lane this
+# control env owns. Catalog-derived from the node's own `envs:` list — never a node list and
+# never a hardcoded lane, so a lane added by a catalog edit is picked up with no code change.
+#
+# WHY THIS EXISTS (bug.5206): the directory question and the vault question have the SAME
+# answer. `akash-actuator-wallet-cutover` states it as mechanism, not preference — "whoever
+# renders the lease must be able to read that lane's secrets, because every workload env value
+# reaches Akash as a placeholder resolved in the RECONCILING cluster. So the paying cluster
+# holds every environment's workload secrets." Custody flows DOWN-TRUST only; the reverse —
+# handing a candidate-a flight the production vault — is explicitly rejected there.
+lanes_reconciled_by() {
+  local want="$1" node="$2" env
+  for env in $(yq -r '.envs[]?' "$CATALOG_DIR/$node.yaml"); do
+    [ "$env" = "$want" ] && continue
+    [ "$(control_env_for "$env" "$node")" = "$want" ] || continue
+    printf '%s\n' "$env"
+  done
+}

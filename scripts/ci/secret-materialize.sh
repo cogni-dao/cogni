@@ -105,16 +105,43 @@ remote() {
   cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
 }
 
-# Mint the <env>-writer token via the sanctioned k8s-auth seam. Target: this is
+# WRITER IDENTITY IS THE CLUSTER'S; THE PATH IS THE LANE'S (bug.5206).
+#
+# `DEPLOY_ENVIRONMENT` named two different things here: WHO writes (the role minted just
+# below) and WHERE (`cogni/<env>/<svc>`, further down). They are the same string for a k3s
+# row and for any lane whose own cluster reconciles it — and different the moment the PAYING
+# cluster reconciles another lane, which is the whole of task.5132.
+#
+# This is the third instance of one conflation. #2305 split the AppSet DIRECTORY from its
+# filename with `control_env_for`; #2300 split the ACTUATOR ADDRESS from the XR namespace
+# with `actuatorNamespace`; this splits the WRITER from the PATH. Same rule each time: the
+# artifact belongs to the cluster that reconciles it, the name belongs to the lane.
+#
+# ONE WRITER IDENTITY PER ACCOUNT (NS3). We mint the CONTROL env's existing role — never a
+# per-lane role in this vault, which would be a second writer identity on one Console
+# account. `production-writer` writing `cogni/candidate-a/poly` is one custodian holding a
+# lane it already reconciles and pays for (#2290); a `candidate-a-writer` role living in
+# production's vault would be two.
+#
+# Defaults to the lane, so every existing caller is byte-identical: for k3s rows and for
+# production the control env IS the env, and this resolves to exactly the old role.
+SECRETS_CONTROL_ENV="${SECRETS_CONTROL_ENV:-$DEPLOY_ENVIRONMENT}"
+[[ "$SECRETS_CONTROL_ENV" =~ ^(candidate-a|preview|production)$ ]] \
+  || fail "unsupported SECRETS_CONTROL_ENV '$SECRETS_CONTROL_ENV'"
+
+# Mint the <control-env>-writer token via the sanctioned k8s-auth seam. Target: this is
 # the only phase permitted to hold it (Invariant 16 token boundary). Transitional:
 # reconcile-substrate also mints it to seed DSNs until the env-repair lane lands.
 BAO_TOKEN="$(
   cogni_openbao_kubernetes_login_retry remote "set -euo pipefail
     jwt=\$(kubectl create token openbao-operator -n default)
     kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-      bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-writer' jwt=\"\$jwt\""
+      bao write -field=token auth/kubernetes/login role='${SECRETS_CONTROL_ENV}-writer' jwt=\"\$jwt\""
 )"
-[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${DEPLOY_ENVIRONMENT}-writer token"
+[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${SECRETS_CONTROL_ENV}-writer token (writing the '${DEPLOY_ENVIRONMENT}' lane)"
+if [[ "$SECRETS_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]]; then
+  echo "[secret-materialize] writing the '${DEPLOY_ENVIRONMENT}' lane into ${SECRETS_CONTROL_ENV}'s vault as ${SECRETS_CONTROL_ENV}-writer (bug.5206)"
+fi
 
 export REPO_ROOT APP_SOURCE_DIR
 export DEPLOY_ENV="$DEPLOY_ENVIRONMENT"
