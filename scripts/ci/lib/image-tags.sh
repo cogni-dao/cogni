@@ -392,13 +392,21 @@ default_node_id() {
   return 1
 }
 
+# The database the provisioner CREATES. Must equal the one the DSN composer names
+# (scripts/setup/lib/reconcile-secrets.sh `_compose_node_value`) — two derivations of one
+# name is the bug.5207 defect, so both call `lane_db_suffix`. `provision.sh` then derives
+# app_/service_ roles FROM this name, so it needs no lane logic of its own.
+# Optional $2 is the LANE; omitted (every caller today) yields the historic name exactly.
 node_database_for_target() {
-  local node="$1"
+  local node="$1" lane="${2:-}" sfx=""
   if [ -z "${_image_tags_primary_cache[$node]+x}" ]; then
     echo "[ERROR] image-tags: unknown target: $node" >&2
     return 1
   fi
-  printf 'cogni_%s' "${node//-/_}"
+  if [ -n "$lane" ] && command -v control_env_for >/dev/null 2>&1; then
+    sfx="$(lane_db_suffix "$lane" "$(control_env_for "$lane" "$node")")"
+  fi
+  printf 'cogni_%s%s' "${node//-/_}" "$sfx"
 }
 
 node_database_csv() {
