@@ -12,6 +12,7 @@ namespace: argocd
 
 resources:
   - candidate-a-poly-applicationset.yaml
+  - candidate-a-toks4-applicationset.yaml
   - preview-poly-applicationset.yaml
   - production-beacon-applicationset.yaml
   - production-levelup-applicationset.yaml
