@@ -65,12 +65,63 @@ if [ -n "${COGNI_CATALOG_ROOT:-}" ]; then
   export COGNI_CATALOG_ROOT
 fi
 
+# THE TWO QUESTIONS THIS SCRIPT USED TO CONFLATE (bug.5206).
+#
+#   WHICH SUBSTRATE THE WORKLOAD DIALS -> this env's VM. The XR states it itself
+#     (`runtime.substrateHost: cogni-<env>.vm...`), so DB roles, databases and shared
+#     inventory are provisioned HERE, for every lane, always.
+#   WHICH VAULT HOLDS THE LANE'S SECRETS -> the vault of the cluster that RECONCILES the
+#     lane. Every workload env value reaches Akash as a placeholder resolved in the
+#     reconciling cluster, so the paying cluster holds every environment's workload secrets
+#     (`akash-actuator-wallet-cutover`: "a mechanism fact, not a preference").
+#
+# For a k3s row the two answers are the same env and nothing below changes. For an akash
+# node's non-production lane they differ, and conflating them is what broke the first poly
+# mint: the candidate-a flight wrote 32 keys into the CANDIDATE-A vault, asserted the bank
+# complete against it, and reported "provider preflight ready" — while the ExternalSecret
+# that actually feeds the lease reads the PRODUCTION vault and reported MissingProviderSecret
+# for all seven keys. A green gate resting on an unchecked assumption.
+#
+# Custody flows DOWN-TRUST, one direction only. This script never reaches UP: a candidate-a
+# flight does not hold production's vault and must not — that inversion is explicitly
+# rejected. It declines the write it cannot legitimately make, and says where the write
+# belongs, instead of performing a local one that looks like success.
+CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-.}/infra/catalog}"
+export CATALOG_DIR
+# The catalog is what ANSWERS "which vault", so its absence is not a default — it is a
+# question we cannot answer. `control_env_for` reads an absent file as "no placement stated"
+# and hands back the env itself, which is the RIGHT reading for an un-placed row but the
+# WRONG one for a row whose file simply is not here: it would silently restore the exact
+# fail-open bug.5206 was. Fail loud instead; every caller already passes COGNI_CATALOG_ROOT.
+[ -f "$CATALOG_DIR/$TARGET_NODE.yaml" ] || {
+  echo "::error::run-node-substrate: no catalog row at $CATALOG_DIR/$TARGET_NODE.yaml — cannot resolve which cluster reconciles ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}, and therefore which vault owns its secrets (bug.5206). Pass COGNI_CATALOG_ROOT." >&2
+  exit 1
+}
+# shellcheck source=scripts/ci/lib/appset-paths.sh
+. "$SCRIPT_DIR/lib/appset-paths.sh"
+CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")"
+
 echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (${DEPLOYMENT_PROVIDER}): materialize → reconcile → provider assert"
 
-bash "$MATERIALIZE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
+  bash "$MATERIALIZE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+  # Then every OTHER lane of this node that THIS cluster reconciles. Catalog-derived, so a
+  # lane added by a catalog edit is materialized with no code change, and a node with no
+  # such lane (every k3s row, every production-only node) enumerates nothing.
+  while read -r lane; do
+    [ -n "$lane" ] || continue
+    echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} reconciles ${lane}/${TARGET_NODE} — materializing that lane's secrets into THIS vault (bug.5206)"
+    bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE"
+  done <<EOF
+$(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
+EOF
+else
+  echo "::notice::${TARGET_NODE}'s ${DEPLOY_ENVIRONMENT} lane is reconciled by '${CONTROL_ENV}' — its secrets live in that cluster's vault and are written by ${CONTROL_ENV}'s own substrate run. Skipping the materialize + secret-bank assert here; this lane's DB substrate is still provisioned below."
+fi
+
 DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
   bash "$RECONCILE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
-if [ "$DEPLOYMENT_PROVIDER" = "akash" ]; then
+if [ "$DEPLOYMENT_PROVIDER" = "akash" ] && [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   TARGET="$TARGET_NODE" DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
     bash "$ASSERT_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
 fi
