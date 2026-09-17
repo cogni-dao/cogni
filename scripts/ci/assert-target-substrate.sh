@@ -230,7 +230,12 @@ done
 "$contains_node" || fail "target '$node' is not a type=node catalog target"
 
 overlay_dir="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/${node}"
-appset_file="${APP_SOURCE_DIR}/infra/k8s/argocd/appsets/${DEPLOY_ENVIRONMENT}/${DEPLOY_ENVIRONMENT}-${node}-applicationset.yaml"
+# THE definition, never rebuilt from the env (bug.5204): an akash node's non-production
+# lane is reconciled by the PRODUCTION cluster, so its AppSet lives in appsets/production/.
+# Asserting the env-only path here would fail a perfectly healthy lane.
+# shellcheck source=scripts/ci/lib/appset-paths.sh
+CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}" . "$(dirname "${BASH_SOURCE[0]}")/lib/appset-paths.sh"
+appset_file="${APP_SOURCE_DIR}/$(CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}" appset_rel_path "$DEPLOY_ENVIRONMENT" "$node")"
 
 [ -d "$overlay_dir" ] || fail "missing overlay dir: $overlay_dir"
 [ -f "$appset_file" ] || fail "missing per-target AppSet file: $appset_file"

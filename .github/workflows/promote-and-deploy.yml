@@ -227,7 +227,19 @@ jobs:
           NODE: ${{ matrix.node }}
         run: |
           set -euo pipefail
-          APPSET_FILE="infra/k8s/argocd/appsets/${DEPLOY_ENVIRONMENT}/${DEPLOY_ENVIRONMENT}-${NODE}-applicationset.yaml"
+          # THE definition, never rebuilt from the env (bug.5204). An akash node's
+          # non-production lane is reconciled by the PRODUCTION cluster (task.5132).
+          # shellcheck source=scripts/ci/lib/appset-paths.sh
+          . scripts/ci/lib/appset-paths.sh
+          CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$NODE")"
+          if [ "$CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]; then
+            # The ${CONTROL_ENV} app-of-apps reconciles appsets/${CONTROL_ENV}/ from main
+            # with prune, so the object arrives declaratively. This job holds only THIS
+            # env's SSH credential and must not reach a higher-trust cluster.
+            echo "::notice::$NODE's $DEPLOY_ENVIRONMENT lane is reconciled by '$CONTROL_ENV' — its AppSet is owned by that cluster's app-of-apps. Skipping the imperative apply."
+            exit 0
+          fi
+          APPSET_FILE="$(appset_rel_path "$DEPLOY_ENVIRONMENT" "$NODE")"
           if [ ! -f "$APPSET_FILE" ]; then
             echo "::error::$APPSET_FILE missing at head — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
             exit 1

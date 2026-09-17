@@ -43,6 +43,9 @@ ARGOCD_DIR="$REPO_ROOT/infra/k8s/argocd"
 # so a catalog-removed node's AppSet vanishes from git and Argo auto-prunes it —
 # and a cluster only ever sources its OWN env's appsets/<env>/ dir.
 APPSETS_DIR="$ARGOCD_DIR/appsets"
+# THE definition of the AppSet path + control env (bug.5204). Sourced, never re-derived.
+# shellcheck source=scripts/ci/lib/appset-paths.sh
+. "$SCRIPT_DIR/lib/appset-paths.sh"
 # Single source of truth for the AppSet shape — shared byte-for-byte with the
 # operator's TS node scaffolder (task.5092). Both interpolate __ENV__/__NODE__.
 TEMPLATE="$SCRIPT_DIR/node-applicationset.yaml.tmpl"
@@ -95,27 +98,6 @@ env_dir() {
   printf '%s/%s\n' "$APPSETS_DIR" "$1"
 }
 
-# WHICH CLUSTER RECONCILES this (env, node), as distinct from WHICH ENV the workload IS
-# (task.5132). They were the same value, which is why a real node could not hold a non-prod
-# lane: its XComputeWorkload landed in that env's OWN cluster and could only dial that
-# cluster's actuator — the TEST Console account — and a real cogni-dao node billing the test
-# account is the NS4 violation task.5130 purged.
-#
-# A node app runs on AKASH, not in any cluster, so its XR is pure DESIRED STATE and which
-# cluster holds it is free. Putting every akash node's XR in the production cluster IS NS2:
-# "the production operator controls test, preview AND production deployments for every node."
-# The workload keeps its own env everywhere it matters — deploy branch, overlay path, target
-# namespace, and the actuator idempotence key — so lanes still cannot collide.
-#
-# k3s rows are untouched: the operator and scheduler-worker genuinely run IN each env's
-# cluster, so their AppSets must stay with that cluster's Argo.
-control_env_for() {
-  local env="$1" node="$2" provider
-  if [ "$env" = "production" ]; then printf 'production\n'; return 0; fi
-  provider="$(yq -r ".deployment_provider.\"$env\" // \"\"" "$CATALOG_DIR/$node.yaml")"
-  if [ "$provider" = "akash" ]; then printf 'production\n'; else printf '%s\n' "$env"; fi
-}
-
 # The (env, node) pairs whose AppSet file belongs in control dir "$1".
 pairs_for_control_env() {
   local want="$1" env node
@@ -127,10 +109,10 @@ pairs_for_control_env() {
   done
 }
 
-# Filename keeps <env>-<node> — the WORKLOAD env — so one Argo namespace can hold
-# candidate-a, preview and production AppSets for the same node without colliding.
+# Absolute path; the repo-relative shape (and control_env_for) come from the lib so the
+# renderer, the workflows and assert-target-substrate cannot drift (bug.5204).
 appset_path() {
-  printf '%s/%s/%s-%s-applicationset.yaml\n' "$APPSETS_DIR" "$(control_env_for "$1" "$2")" "$1" "$2"
+  printf '%s/%s\n' "$REPO_ROOT" "$(appset_rel_path "$1" "$2")"
 }
 
 kustomization_path() {
