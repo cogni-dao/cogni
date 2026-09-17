@@ -19,13 +19,22 @@
  *     `cogni/<env>/<node>/*` and may add/set/rotate any key there. The boundary is
  *     OpenFGA per-node + the operator's-own-env path + OpenBao `_system`/`_shared`
  *     deny — NOT a per-key allowlist. Gate 2 only denies substrate-reserved keys.
- *   - ENV_IS_EXPLICIT_AND_VALIDATED: the caller STATES `env` (a `FLIGHT_ENVS` value,
- *     deploy/observability shape); the route 409s unless it equals this operator's
- *     own `DEPLOY_ENVIRONMENT`. The path env is still the operator's own, never an
- *     arbitrary body value — so the env axis stays closed AND a wrong-env intent is
- *     loud, not a silent stamp. Cross-env delivery = a future swappable adapter.
- *   - PATH_FROM_AUTHORIZED_RESOURCE: node slug from the registry-resolved node;
- *     env from the operator's own serverEnv (validated == the stated env).
+ *   - ENV_IS_EXPLICIT_AND_DOWN_TRUST: the caller STATES `env` (a `FLIGHT_ENVS` value,
+ *     deploy/observability shape); the route 409s unless this operator's own
+ *     `DEPLOY_ENVIRONMENT` is allowed to custody that LANE (`canWriteSecretsLane`).
+ *     Production may write candidate-a/preview/production; preview only preview;
+ *     candidate-a only itself. UP-TRUST IS REFUSED FOREVER (bug.5196).
+ *     Why this is not a cross-env write: OpenBao is per-CLUSTER, so the path is always
+ *     inside THIS operator's own vault — `cogni/preview/<node>` written by production
+ *     never reaches preview's vault. Per secrets-management.md Invariant 1 the
+ *     blast-radius boundary is `<service>`; the env prefix is a lane label. Required by
+ *     the north star: the PAYING cluster must custody every lane's secrets, because the
+ *     Composition interpolates them into the lease that cluster's account is billed for.
+ *     The enforcing gate is the `<env>-node-secrets-writer` OpenBao policy, not this
+ *     check — this one only fails fast and names the rule.
+ *   - PATH_FROM_AUTHORIZED_RESOURCE: node slug from the registry-resolved node; lane
+ *     from the STATED `env`, admitted only after `canWriteSecretsLane` against this
+ *     operator's own serverEnv. The lane is never inferred and never defaulted.
  *   - PLATFORM_SERVICE_IS_OWNER_NODE_DELEGATED: `service` never relaxes or replaces the
  *     per-node check — it runs AFTER it and can only subtract. A platform service holds
  *     no OpenFGA tuples, so its bucket is administered by `PLATFORM_SERVICE_OWNER_NODE`,
@@ -64,6 +73,7 @@ import {
   PLATFORM_SERVICE_OWNER_NODE,
   platformServiceOwningKey,
 } from "@/shared/secrets/platform-services.data";
+import { canWriteSecretsLane } from "@/shared/secrets/secrets-lane-trust.data";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -221,7 +231,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         { status: 503 }
       );
     }
-    if (requestedEnv !== deployEnv) {
+    // Fast-fail only. The ENFORCING gate is the `<env>-node-secrets-writer` OpenBao
+    // policy (provision-env-vm.sh §5b.4d / reconcile-env-substrate.sh, kept in sync):
+    // a token whose policy lacks the lane prefix cannot write it whatever this says.
+    if (!canWriteSecretsLane(deployEnv, requestedEnv)) {
       logTerminal({
         outcome: "error",
         status: 409,
@@ -234,7 +247,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
       return NextResponse.json(
         {
-          error: `this operator serves env '${deployEnv}'; to write env '${requestedEnv}' call that environment's operator`,
+          error: `this operator serves env '${deployEnv}' and may not custody the '${requestedEnv}' lane; custody flows down-trust only`,
           errorCode: "wrong_operator_env",
           servedEnv: deployEnv,
           requestedEnv,
@@ -444,7 +457,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       const result = await plane.writeSecret({
         nodeSlug: node.slug,
         service,
-        env: deployEnv,
+        env: requestedEnv,
         key,
         value,
         op,
@@ -457,7 +470,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         service,
         key,
         op,
-        env: deployEnv,
+        env: requestedEnv,
         version: result.version,
       });
       return NextResponse.json({
@@ -478,7 +491,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         service,
         key,
         op,
-        env: deployEnv,
+        env: requestedEnv,
         errorCode,
       });
       return NextResponse.json(
