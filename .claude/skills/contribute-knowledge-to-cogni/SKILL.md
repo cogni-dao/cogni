@@ -81,8 +81,7 @@ Text entry types render their `content` as **GFM markdown** in the human UI (str
 Cogni nodes own niche hubs. Pick by primary subject:
 
 - **operator** (`https://cognidao.org` / `https://test.cognidao.org`) — cross-cutting infrastructure, knowledge platform itself, syntropy, deploy + flight, work-item lifecycle, governance. **Default when in doubt.**
-- **poly** (`poly.cognidao.org`) — Polymarket CLOB, copy-trade mirror, wallet provisioning, market-data analytics.
-- **resy** (`resy.cognidao.org`) — reservation knowledge.
+- Each node owns its own domain. derive the node set — `for f in infra/catalog/*.yaml; do grep -q '^type: node' $f && basename $f .yaml; done` — never a hand-typed list (Dolt `operator-node-catalog`: "the roster is LIVE STATE"); a node's hub lives at its own host. (A hand-typed list here previously named `resy`, a node that never existed.)
 - Other nodes — see each node's charter.
 
 If a claim is genuinely cross-node (e.g. "Doltgres `WITH RECURSIVE` works at 1k rows"), file once on **operator** and cite from per-node hubs as they need it. Don't duplicate.
