@@ -1,5 +1,5 @@
 apiVersion: compute.cogni.io/v1alpha1
-kind: ComputeWorkload
+kind: XComputeWorkload
 metadata:
   name: 4b06359a-a859-4399-888e-a8c7a6696f7e
   namespace: cogni-preview
@@ -11,13 +11,13 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: preview
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:22402e414a60d6f1ac3b6f58909992bf8c8360c525909c5caca0c3c6d93e6e75
+    ref: ghcr.io/cogni-dao/poly@sha256:b0ab25dd74104927e7d07cbe556ebf3bc7d2bd583e4c529954476438e17dcc72
     source:
       repository: cogni-dao/poly
-      sha: 400494a523baf671672c06bfcc957a980f63b37d
+      sha: 04d7e0647fc0ef1cc2b7b39336d7090dcfe6d833
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:b9b8273e1005806b31067bdf6547cef4f5d7a2601c147baaed5fe45f4f813f24
+        image: ghcr.io/cogni-dao/poly@sha256:be2234121595e96dcaa3b0c8224a6aa2ed90e1d0c7f70c9ffb5f7af40facddd6
   workload:
     name: poly
     publicHost: poly-preview.cognidao.org
@@ -29,6 +29,7 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
@@ -39,3 +40,14 @@ spec:
         cpuUnits: 2
         memoryMi: 2048
         storageMi: 4096
+  migration:
+    policy: RequireBeforeServing
+  bootPolicy:
+    onDeadline: Close
+  leaseGeneration: 0
+  actuatorNamespace: cogni-production
+  dns:
+    provider: cloudflare
+    zoneId: 23220356c352c5831c6af57887b11a27
+  runtime:
+    substrateHost: cogni.vm.cognidao.org
