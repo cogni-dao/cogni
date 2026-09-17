@@ -308,45 +308,63 @@ export async function startSchedulerWorker(
     legacyQueue,
   ]);
 
+  // THE NAMESPACES THIS WORKER SERVES (bug.5212). Its own, plus every lane the cluster
+  // CUSTODIES. A foreign-custodied lane submits to this same Temporal server under
+  // `cogni-<lane>`, and the SCHEDULER_API_TOKEN it inherits is already this env's — so
+  // serving it is one more Worker per namespace and nothing else. Empty by default, so a
+  // cluster that custodies no foreign lane behaves byte-identically.
+  const custodiedNamespaces = (env.TEMPORAL_CUSTODIED_NAMESPACES ?? "")
+    .split(",")
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0 && n !== env.TEMPORAL_NAMESPACE);
+  const namespaces = [env.TEMPORAL_NAMESPACE, ...new Set(custodiedNamespaces)];
+
   type StartedWorker = {
     taskQueue: string;
+    namespace: string;
     worker: Worker;
     run: Promise<void>;
   };
   const started: StartedWorker[] = [];
-  for (const taskQueue of queues) {
-    try {
-      const worker = await Worker.create({
-        connection,
-        namespace: env.TEMPORAL_NAMESPACE,
-        taskQueue,
-        // Reuse the single pre-built bundle instead of re-bundling per queue.
-        workflowBundle,
-        activities: allActivities,
-      });
-      const run = worker.run();
-      // Per-worker isolation: log the failure, do NOT let it reject the
-      // composite shutdown promise.
-      run.catch((err) => {
+  for (const namespace of namespaces)
+    for (const taskQueue of queues) {
+      try {
+        const worker = await Worker.create({
+          connection,
+          namespace,
+          taskQueue,
+          // Reuse the single pre-built bundle instead of re-bundling per queue.
+          workflowBundle,
+          activities: allActivities,
+        });
+        const run = worker.run();
+        // Per-worker isolation: log the failure, do NOT let it reject the
+        // composite shutdown promise.
+        run.catch((err) => {
+          logger.error(
+            {
+              event: WORKER_EVENT_NAMES.LIFECYCLE_FATAL,
+              namespace,
+              taskQueue,
+              err,
+            },
+            `${WORKER_EVENT_NAMES.LIFECYCLE_FATAL}: namespace=${namespace} taskQueue=${taskQueue}`
+          );
+        });
+        started.push({ taskQueue, namespace, worker, run });
+        logWorkerEvent(logger, WORKER_EVENT_NAMES.LIFECYCLE_STARTING, {
+          namespace,
+          taskQueue,
+          isLegacyDrain: taskQueue === legacyQueue,
+          phase: "worker_created",
+        });
+      } catch (err) {
         logger.error(
-          { event: WORKER_EVENT_NAMES.LIFECYCLE_FATAL, taskQueue, err },
-          `${WORKER_EVENT_NAMES.LIFECYCLE_FATAL}: taskQueue=${taskQueue}`
+          { taskQueue, err },
+          "Failed to start Temporal Worker for queue — continuing with remaining queues"
         );
-      });
-      started.push({ taskQueue, worker, run });
-      logWorkerEvent(logger, WORKER_EVENT_NAMES.LIFECYCLE_STARTING, {
-        namespace: env.TEMPORAL_NAMESPACE,
-        taskQueue,
-        isLegacyDrain: taskQueue === legacyQueue,
-        phase: "worker_created",
-      });
-    } catch (err) {
-      logger.error(
-        { taskQueue, err },
-        "Failed to start Temporal Worker for queue — continuing with remaining queues"
-      );
+      }
     }
-  }
 
   if (started.length === 0) {
     throw new Error(

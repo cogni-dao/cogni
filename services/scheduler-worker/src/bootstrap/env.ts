@@ -30,6 +30,15 @@ const EnvSchema = z.object({
 
   /** Temporal namespace (required) - format: cogni-{APP_ENV} */
   TEMPORAL_NAMESPACE: z.string().min(1, "TEMPORAL_NAMESPACE is required"),
+  /**
+   * Namespaces this worker serves IN ADDITION to its own (bug.5212). A foreign-custodied lane
+   * — an akash node's non-production lane, reconciled and paid for by the production cluster —
+   * submits its workflows to the CONTROL cluster's Temporal under `cogni-<lane>`. That is the
+   * server this worker is already connected to, and the SCHEDULER_API_TOKEN the lane inherits
+   * is already this env's, so serving the lane needs one more Worker per namespace and nothing
+   * else. Empty (the default) means byte-identical behaviour to before.
+   */
+  TEMPORAL_CUSTODIED_NAMESPACES: z.string().optional().default(""),
 
   /** Temporal task queue (required) */
   TEMPORAL_TASK_QUEUE: z.string().min(1, "TEMPORAL_TASK_QUEUE is required"),
