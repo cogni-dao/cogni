@@ -531,6 +531,51 @@ function deployPlaneError(
 }
 
 /**
+ * Normalize any error bubbling out of an infra-reconcile path into a structured
+ * {@link deployPlaneError} (numeric `.status` + descriptive string `.code`) so the
+ * route can surface GitHub's real HTTP status instead of masking it.
+ *
+ * bug.5158: an Octokit `RequestError` carries a numeric `.status` (e.g. 422/404)
+ * but NO string `.code`. The infra-reconcile route only treated an error as
+ * structured when it had BOTH, so a raw Octokit error fell through to a generic
+ * `502 dispatch_failed` — hiding "No commit found for SHA: …" behind a retryable
+ * 502 and sending the driver into a 13× phantom-SHA retry loop over 25 min. This
+ * carries GitHub's status through and attaches a meaningful code:
+ *   - GitHub's "No commit found for SHA" (a deploy-state pin / sourceSha pointing
+ *     at a commit that does not exist) → `source_commit_not_found`;
+ *   - any other Octokit error → `github_error`, preserving GitHub's status.
+ * Errors already thrown as {@link deployPlaneError} (or anything else carrying both
+ * a numeric status and a string code) pass through untouched.
+ */
+function normalizeDeployPlaneError(
+  error: unknown
+): Error & { readonly code: string; readonly status: number } {
+  if (error && typeof error === "object" && "status" in error) {
+    const status = (error as { status?: unknown }).status;
+    if (typeof status === "number") {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code === "string") {
+        // Already structured (our own deployPlaneError, or an equivalent): keep it.
+        return error as Error & {
+          readonly code: string;
+          readonly status: number;
+        };
+      }
+      // Octokit RequestError: numeric status, no string code.
+      const message =
+        error instanceof Error ? error.message : "GitHub request failed";
+      const derivedCode = /no commit found for sha/i.test(message)
+        ? "source_commit_not_found"
+        : "github_error";
+      return deployPlaneError(derivedCode, message, status);
+    }
+  }
+  const message =
+    error instanceof Error ? error.message : "infra operation failed";
+  return deployPlaneError("dispatch_failed", message, 502);
+}
+
+/**
  * Build the actionable `invalid_repo_spec` error, surfacing the underlying
  * parse/validation reason instead of swallowing it. `parseRepoSpec` throws
  * with the failing Zod path + message (e.g. `knowledge.remote.repo must be the
@@ -1216,6 +1261,20 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * or workflow ref. This keeps the dangerous shared-Compose lever source-addressed and fail-closed.
    */
   async reconcileNodeInfra(
+    input: ReconcileNodeInfraInput
+  ): Promise<NodeInfraReconcileResult> {
+    try {
+      return await this.reconcileNodeInfraInner(input);
+    } catch (error) {
+      // Surface GitHub's real HTTP status. A raw Octokit RequestError (numeric
+      // `.status`, no string `.code`) would otherwise reach the route and fall
+      // through to a generic 502 dispatch_failed, masking the true cause and
+      // triggering a phantom-SHA retry loop (bug.5158).
+      throw normalizeDeployPlaneError(error);
+    }
+  }
+
+  private async reconcileNodeInfraInner(
     input: ReconcileNodeInfraInput
   ): Promise<NodeInfraReconcileResult> {
     if (input.env === "candidate-a") {

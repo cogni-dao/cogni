@@ -3105,6 +3105,58 @@ spec:
       status: 409,
     });
   });
+
+  // bug.5158: a raw Octokit RequestError carries GitHub's numeric `.status` but no
+  // string `.code`. It must surface GitHub's real status + a meaningful code, never
+  // fall through to the route's generic 502 dispatch_failed (which the driver retried
+  // 13× against a phantom deploy-state SHA).
+  it("surfaces a phantom-SHA Octokit error as source_commit_not_found, not a masked 502", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls": () => {
+        // The exact GitHub 422 body seen in prod Loki when a pin/sourceSha points
+        // at a commit that does not exist. Octokit throws this with a numeric
+        // `.status` and NO string `.code`.
+        throw statusError(422, "No commit found for SHA: e9cd8b30");
+      },
+    };
+
+    const rejection = await makeWriter()
+      .reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+      .catch((error: unknown) => error);
+
+    expect(rejection).toMatchObject({
+      code: "source_commit_not_found",
+      status: 422,
+    });
+    expect((rejection as { code: string }).code).not.toBe("dispatch_failed");
+    expect((rejection as { status: number }).status).not.toBe(502);
+    expect((rejection as Error).message).toContain("No commit found for SHA");
+  });
+
+  it("passes a generic Octokit error through as github_error with GitHub's status", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => {
+        // Non-404 GitHub failure on the production deploy-state read (404 is a
+        // handled null; a 500 is a raw Octokit RequestError with no `.code`).
+        throw statusError(500, "Server Error");
+      },
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+      })
+    ).rejects.toMatchObject({ code: "github_error", status: 500 });
+  });
 });
 
 describe("GitHubRepoWriter.resolveNodeRepo", () => {

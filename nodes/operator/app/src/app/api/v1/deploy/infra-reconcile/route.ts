@@ -169,15 +169,29 @@ export const POST = wrapRouteHandlerWithLogging(
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "infra operation failed";
-      const deployError =
+      // Honor GitHub's real HTTP status even when the error carries no descriptive
+      // `.code`. A raw Octokit RequestError has a numeric `.status` (e.g. 422 "No
+      // commit found for SHA: …") but no string `.code`; requiring BOTH masked it
+      // behind a generic 502 dispatch_failed, which the driver retried 13× against a
+      // phantom deploy-state SHA (bug.5158). The adapter now wraps these into a typed
+      // deployPlaneError, but this stays lenient as a backstop: derive `github_error`
+      // when only a numeric status is present, and pass GitHub's status through.
+      const errorStatus =
         error &&
         typeof error === "object" &&
         "status" in error &&
-        typeof (error as { status?: unknown }).status === "number" &&
+        typeof (error as { status?: unknown }).status === "number"
+          ? (error as { status: number }).status
+          : null;
+      const errorCode =
+        error &&
+        typeof error === "object" &&
         "code" in error &&
         typeof (error as { code?: unknown }).code === "string"
-          ? (error as { status: number; code: string })
-          : null;
+          ? (error as { code: string }).code
+          : errorStatus !== null
+            ? "github_error"
+            : null;
       ctx.log.warn(
         {
           reqId: ctx.reqId,
@@ -186,14 +200,15 @@ export const POST = wrapRouteHandlerWithLogging(
           slug: node.slug,
           parentOwner,
           parentRepo,
-          errorCode: deployError?.code ?? "dispatch_failed",
+          errorCode: errorCode ?? "dispatch_failed",
+          errorStatus: errorStatus ?? 502,
           err: message,
         },
         "deploy.infra_reconcile operation failed"
       );
       return NextResponse.json(
-        { error: deployError?.code ?? "dispatch_failed", message },
-        { status: deployError?.status ?? 502 }
+        { error: errorCode ?? "dispatch_failed", message },
+        { status: errorStatus ?? 502 }
       );
     }
   }
