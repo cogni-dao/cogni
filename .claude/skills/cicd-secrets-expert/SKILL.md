@@ -78,7 +78,7 @@ One logical `shared` secret becomes **three physical copies** — `_shared` SSOT
 | Tier | Consumed by                                                              | Render path                                                    | Custody                          |
 | ---- | ------------------------------------------------------------------------ | -------------------------------------------------------------- | -------------------------------- |
 | A1   | k8s pod baseline (anything under `nodes/<n>/app/`, every fork)           | OpenBao `cogni/<env>/<service>/*` → ESO → k8s Secret → envFrom | OpenBao                          |
-| A2   | k8s pod node-specific (downstream node like `poly`)                      | OpenBao `cogni/<env>/<node>/*` → ESO → k8s Secret → envFrom    | OpenBao                          |
+| A2   | k8s pod node-specific (any downstream `<node>`)                          | OpenBao `cogni/<env>/<node>/*` → ESO → k8s Secret → envFrom    | OpenBao                          |
 | B    | Compose-infra service (postgres, litellm, temporal, redis, alloy, caddy) | Rendered to VM `.env` or future Bao Agent                      | OpenBao unless CI/bootstrap-only |
 | D    | CI-only (workflow consumption, never runtime)                            | GH Env Secret → workflow `env:` block                          | GH Environment Secrets           |
 | E    | Repo-level CI (cross-env, one value per repo)                            | GH Repo Secret                                                 | GH Repo Secrets                  |
@@ -218,7 +218,7 @@ substrate runner"_ and whose `case "$DEPLOYMENT_PROVIDER"` accepts `k3s|akash`. 
 **The trap that outlived the bug:** the JOB `node-substrate` and the SCRIPT `run-node-substrate.sh` share a
 name but serve different populations. Tracing the job alone shows a k3s-only matrix and looks like proof
 that Akash nodes are never materialized — a wrong, confident conclusion. The disconfirming evidence is
-cheap: `node-template` and `toks4` are `deployment_provider.candidate-a: akash` and both carry complete
+cheap: check which rows declare `deployment_provider.candidate-a: akash` and carry complete
 buckets including `LITELLM_VIRTUAL_KEY`. If Akash nodes were never materialized, those could not exist.
 **Grep for every `run-node-substrate.sh` call site, not just the obvious job** — there are two.
 

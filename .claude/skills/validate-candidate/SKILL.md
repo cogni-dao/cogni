@@ -109,15 +109,14 @@ Every row in the matrix therefore carries **two verdict cells** (Human · Agent)
 Node → candidate-a URL map:
 
 - `operator` → `https://test.cognidao.org`
-- `poly` → `https://poly-test.cognidao.org`
-- `resy` → `https://resy-test.cognidao.org`
+- every node → `<node>-test.cognidao.org` — derive it, never hardcode a roster (roster is LIVE STATE — read `GET /api/v1/nodes` / `infra/catalog/*.yaml`, never hardcode; Dolt `operator-node-catalog`). `resy` is NOT a node and never was.
 
 ### Step 4 — Confirm buildSha matches PR head
 
 For each _unique_ node in the impact matrix, curl `<node-url>/version`:
 
 ```bash
-curl -sf https://poly-test.cognidao.org/version | jq .buildSha
+curl -sf https://<node>-test.cognidao.org/version | jq .buildSha   # derive <node>; read it live (`GET /api/v1/nodes`, `infra/catalog/*.yaml`, `curl https://<host>/version`) — never hardcode a roster (Dolt `operator-node-catalog`)
 ```
 
 Compare to the PR head SHA from step 1 (prefix match — `/version.buildSha` is usually full SHA, PR head is too; accept either equal or one being a prefix of the other). If mismatch, halt and report — candidate-a is serving a different build than the PR you're validating. The user needs to re-flight or wait.
@@ -227,7 +226,7 @@ If only tier 4 matches, the observability cell is 🟡, not 🟢 — regardless 
 Example shell-fallback queries:
 
 ```bash
-scripts/loki-query.sh '{namespace="cogni-candidate-a", pod=~"poly-node-app-.*"} | json | route="<feature-route>"' 5 50 | jq '.data.result[].values[][1] | fromjson | {ts:.time, reqId, msg, route, status}'
+scripts/loki-query.sh '{namespace="cogni-candidate-a", pod=~"<node>-node-app-.*"} | json | route="<feature-route>"' 5 50 | jq '.data.result[].values[][1] | fromjson | {ts:.time, reqId, msg, route, status}'
 ```
 
 **If neither path is available** (MCP disconnected and the token isn't in env) — mark every observability cell `no-grafana-data-available` and note it in the scorecard. **Do not halt.** Missing observability is a gap worth surfacing, not a reason to abandon the run. The human-axis + agent-axis evidence still stands on its own.
