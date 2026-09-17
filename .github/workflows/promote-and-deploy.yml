@@ -379,7 +379,16 @@ jobs:
           BUILD_SHA: ${{ needs.decide.outputs.build_sha }}
           PREVIEW_FORWARD: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] }}
           NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
-          OPERATOR_SOURCE_SHA: ${{ inputs.source_sha }}
+          # The RESOLVED head, not the raw input (bug.5195 defect #2). `decide` sets
+          # head_sha = source_sha ?: github.sha, and app-src is checked out AT head_sha —
+          # so this IS the operator commit whose catalog `source_sha_by_target_json` was
+          # read from. Passing the raw input made a promote that states no sourceSha (the
+          # product contract; the UI never sends one) look like ABSENT authority, and
+          # resolve_remote_source_sha correctly failed closed. The authority was never
+          # absent, only unstated. `resolve_remote_source_sha` is unchanged: truly-absent
+          # authority (both empty) still fails closed, and an explicit sourceSha resolves
+          # identically because then head_sha == inputs.source_sha.
+          OPERATOR_SOURCE_SHA: ${{ needs.decide.outputs.head_sha }}
           CATALOG_SOURCE_SHA: ${{ fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
           PREVIEW_SOURCE_SHA_MAP: ${{ github.workspace }}/preview-src/.promote-state/source-sha-by-app.json
         run: |
@@ -640,7 +649,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
           NODE: ${{ matrix.node }}
           NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
-          OPERATOR_SOURCE_SHA: ${{ inputs.source_sha }}
+          # The RESOLVED head, not the raw input (bug.5195 defect #2). `decide` sets
+          # head_sha = source_sha ?: github.sha, and app-src is checked out AT head_sha —
+          # so this IS the operator commit whose catalog `source_sha_by_target_json` was
+          # read from. Passing the raw input made a promote that states no sourceSha (the
+          # product contract; the UI never sends one) look like ABSENT authority, and
+          # resolve_remote_source_sha correctly failed closed. The authority was never
+          # absent, only unstated. `resolve_remote_source_sha` is unchanged: truly-absent
+          # authority (both empty) still fails closed, and an explicit sourceSha resolves
+          # identically because then head_sha == inputs.source_sha.
+          OPERATOR_SOURCE_SHA: ${{ needs.decide.outputs.head_sha }}
           CATALOG_SOURCE_SHA: ${{ fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
           PREVIEW_FORWARD: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] }}
           PREVIEW_SOURCE_SHA_MAP: ${{ github.workspace }}/preview-src/.promote-state/source-sha-by-app.json
