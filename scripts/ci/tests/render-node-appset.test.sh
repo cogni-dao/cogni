@@ -33,7 +33,12 @@ pass() { echo "  ok — $*"; }
 # The full <env>- filename prefix is kept on disk even though the file is nested under <env>/.
 appsets_for_env() {
   local env="$1" f base
-  for f in "$APPSETS_DIR/$env/$env"-*-applicationset.yaml; do
+  # Search EVERY control dir for the `<env>-` filename prefix, not just appsets/<env>/.
+  # Since task.5132 the directory answers WHICH CLUSTER RECONCILES while the filename
+  # keeps the WORKLOAD env — an akash node's candidate-a AppSet lives under
+  # appsets/production/. This invariant is about which ENVS a node is rendered for, so it
+  # must follow the name, not the location.
+  for f in "$APPSETS_DIR"/*/"$env"-*-applicationset.yaml; do
     [ -e "$f" ] || continue
     base="$(basename "$f")"
     base="${base#"$env"-}"
@@ -110,5 +115,46 @@ rm -rf "$tmp_catalog"
 [ "$rc" -ne 0 ] || fail "render did not fail closed on a deployable row missing 'envs'"
 grep -q "has no 'envs'" <<<"$out" || fail "missing fail-closed message for absent envs; got: $out"
 pass "fail-closed when a deployable row omits envs"
+
+# 5. CONTROL_CLUSTER_SPLIT (task.5132) — WHICH CLUSTER RECONCILES an AppSet is a
+#    different question from WHICH ENV the workload is. An akash node's non-production
+#    lane is reconciled by the PRODUCTION cluster, because the node app runs on Akash and
+#    its XR is pure desired state — while a k3s row genuinely runs IN its env's cluster and
+#    must stay there. Without the split a real node's candidate-a XR lands in candidate-a's
+#    cluster and can only dial the TEST Console account, which is the NS4 violation
+#    task.5130 purged.
+fixture="$(mktemp -d)"
+trap 'rm -rf "$fixture"' EXIT
+cp infra/catalog/toks5.yaml infra/catalog/operator.yaml "$fixture/"
+python3 - "$fixture/toks5.yaml" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+s = s.replace("envs: [production]", "envs: [candidate-a, preview, production]", 1)
+s = s.replace(
+    "deployment_provider:\n  production: akash",
+    "deployment_provider:\n  candidate-a: akash\n  preview: akash\n  production: akash",
+    1,
+)
+open(p, "w").write(s)
+PY
+
+# shellcheck source=scripts/ci/render-node-appset.sh
+CATALOG_DIR="$fixture" source <(sed -n '/^control_env_for()/,/^}/p;/^ENVS=/p' "$RENDER")
+
+for env in candidate-a preview; do
+  got="$(CATALOG_DIR="$fixture" control_env_for "$env" toks5)"
+  [ "$got" = "production" ] || fail "akash toks5 in $env should be reconciled by production, got $got"
+done
+pass "akash node's non-prod lanes are reconciled by the production cluster"
+
+for env in candidate-a preview; do
+  got="$(CATALOG_DIR="$fixture" control_env_for "$env" operator)"
+  [ "$got" = "$env" ] || fail "k3s operator in $env must stay in $env, got $got"
+done
+pass "k3s rows stay with their own env's cluster"
+
+got="$(CATALOG_DIR="$fixture" control_env_for production toks5)"
+[ "$got" = "production" ] || fail "production must be reconciled by production, got $got"
+pass "production is unchanged for every row"
 
 echo "PASS: render-node-appset.test.sh"
