@@ -42,9 +42,21 @@
  *     LANE MIGRATION of an env already in reach, never for activation.
  *   - CONTROL_ENV_OWNS_THE_APPSET_DIR (bug.5204) — the AppSet filename carries the WORKLOAD env,
  *     its directory the CONTROL env (`controlEnvFor`): an akash node's non-production lane is
- *     reconciled by the PRODUCTION cluster. Derived from the POST-MUTATION placement — the add
- *     writes catalog + AppSet in one tree, and the pre-mutation catalog reads absent placement as
- *     k3s, i.e. the wrong directory.
+ *     reconciled by the PRODUCTION cluster. On ADD it derives from the POST-MUTATION placement —
+ *     the add writes catalog + AppSet in one tree, and the pre-mutation catalog reads absent
+ *     placement as k3s, i.e. the wrong directory. On REMOVE it derives from the PRE-mutation
+ *     catalog — the placement cells still exist at plan time, and they name the directory the
+ *     AppSet was written into.
+ *   - REMOVE_COMPLETES_THE_ROW (story.5039 PR-B) — removing an env drops that env's
+ *     `deployment_provider`/`compute_api`/`lease_generation` cells along with the `envs:` entry,
+ *     so the emitted catalog satisfies NO_PLACEMENT_FOR_UNDECLARED_ENV
+ *     (tests/ci-invariants/env-declaration-completeness.spec.ts). A stranded cell is authority
+ *     pointed at a workload that does not exist — the exact shape the invariant fails CI on.
+ *     For an akash lane the remove also restores the env's scheduler-worker route to the k3s
+ *     in-cluster default (the byte-inverse of the add's public-host write, bug.5094), so a later
+ *     re-add starts from the same bytes a never-removed row has. The CLOSE of the paid lease is
+ *     deliberately NOT here: Argo prunes the AppSet → Crossplane observes REMOVE → the actuator
+ *     deletes the deployment. This plan only makes the removal COMPLETE in git.
  *   - IDEMPOTENT — requesting the state that already holds (env already present on add / already absent on
  *     remove) yields an EMPTY op list (`{ kind: "no_changes" }`), so the adapter opens no PR.
  *   - DELETE_VIA_SHA_NULL — file removals are emitted as `{ op: "delete", path }`; the adapter maps these
@@ -85,6 +97,7 @@ import {
 import { githubOwnerFromSourceRepo } from "./catalog";
 import {
   addCatalogEnv,
+  CATALOG_PLACEMENT_KEYS,
   dropCatalogEnv,
   envRank,
   envRemovalViolation,
@@ -93,6 +106,8 @@ import {
   parseCatalogActivityEnv,
   parseCatalogEnvs,
   parseCatalogNodeId,
+  parseCatalogPlacement,
+  parseCatalogPlacementMap,
   parseCatalogSourceRepo,
   setCatalogActivityEnv,
   setCatalogEnvs,
@@ -165,19 +180,21 @@ export interface EnvPlanCurrent {
   /** The shared `node-applicationset.yaml.tmpl` (only needed on ADD). */
   readonly appsetTemplate?: string | undefined;
   /**
-   * Current appsets kustomizations, keyed by CONTROL env (bug.5204) — for an ADD the adapter
-   * fetches the kustomization of the env whose cluster will reconcile the AppSet
-   * (`planEnvAddShape().controlEnv`), which is `production` for an akash non-production lane.
-   * The REMOVE path still keys by the workload env (control-env-aware removes are out of this
-   * PR's scope).
+   * Current appsets kustomizations, keyed by CONTROL env (bug.5204) — the adapter fetches the
+   * kustomization of the env whose cluster reconciles the AppSet. On ADD that is
+   * `planEnvAddShape().controlEnv` (POST-mutation placement); on REMOVE it is `controlEnvFor`
+   * over the PRE-mutation catalog's `deployment_provider.<env>` (the cells still exist at plan
+   * time). Both are `production` for an akash non-production lane.
    */
   readonly appsetsKustomizationByEnv: Readonly<Record<string, string>>;
   /** Container port + node_port for the overlay render (only needed on ADD). */
   readonly port?: number | undefined;
   readonly nodePort?: number | undefined;
   /**
-   * Current per-env scheduler-worker node-endpoints patch (only needed for the placement lever,
-   * {@link buildPlacementPlan}). Keyed by env — only the env being placed is ever read.
+   * Current per-env scheduler-worker node-endpoints patch — needed for the placement lever
+   * ({@link buildPlacementPlan}), an akash-derived ADD (public-host route from the first
+   * flight), and an akash REMOVE (in-cluster restore, REMOVE_COMPLETES_THE_ROW). Keyed by
+   * env — only the env being mutated is ever read.
    */
   readonly schedulerEndpointPatchByEnv?: Readonly<Record<string, string>>;
 }
@@ -284,8 +301,11 @@ export function planEnvAddShape(
  *   the `(env, slug)` pair into that control env's appsets kustomization, and for an akash lane
  *   move the env's scheduler-worker route to the node's public host (bug.5094 — a fresh akash lane
  *   has no `<slug>-node-app` Service to dial).
- * - REMOVE (¬present, env present): catalog `envs:` −= env, DELETE the overlay + appset, regenerate that
- *   env's appsets kustomization without the slug. Applies to candidate-a exactly like any other env.
+ * - REMOVE (¬present, env present): catalog `envs:` −= env AND −= the env's placement cells
+ *   (REMOVE_COMPLETES_THE_ROW), DELETE the overlay + the appset at its CONTROL-env path, regenerate
+ *   that control env's appsets kustomization without the pair, and for an akash lane restore the
+ *   env's scheduler-worker route to the in-cluster default. Applies to candidate-a exactly like any
+ *   other env.
  *   Removing the final env or the current activity authority is rejected with a typed 422.
  *   `node-template` removes emit a REDUCED delete set (TEMPLATE_OVERLAY_IS_RENDER_SOURCE): its overlay
  *   files stay in the tree as the render template; only the appset + kustomization entry + catalog env
@@ -496,14 +516,33 @@ function planRemove(args: {
 
   const remaining = dropCatalogEnv(currentEnvs, env);
 
-  const appsetsKustomization = current.appsetsKustomizationByEnv[env];
+  // CONTROL_ENV_OWNS_THE_APPSET_DIR on the remove side: derived from the PRE-mutation catalog —
+  // the placement cells still exist at plan time, and they name the directory the AppSet was
+  // written into. An absent cell is the k3s default, whose control env is the workload env.
+  const provider: PlacementProvider =
+    parseCatalogPlacement(current.catalog)[env] ?? "k3s";
+  const controlEnv = controlEnvFor(env, provider);
+
+  const appsetsKustomization = current.appsetsKustomizationByEnv[controlEnv];
   if (appsetsKustomization === undefined) {
     throw new EnvPlanError(
       "env_render_inputs_missing",
-      `cannot render remove of '${env}' for '${slug}': missing appsets kustomization.`,
+      `cannot render remove of '${env}' for '${slug}': missing control-env ('${controlEnv}') appsets kustomization.`,
       422
     );
   }
+
+  // REMOVE_COMPLETES_THE_ROW — the env's placement cells leave WITH the env, or the emitted
+  // catalog violates NO_PLACEMENT_FOR_UNDECLARED_ENV (authority pointed at a workload that no
+  // longer exists). Cells are dropped only when present, so a cell-less (k3s) row's placement
+  // blocks — including other envs' cells — pass through byte-verbatim.
+  let nextCatalog = setCatalogEnvs(current.catalog, remaining);
+  for (const key of CATALOG_PLACEMENT_KEYS) {
+    if (parseCatalogPlacementMap(nextCatalog, key)[env] !== undefined) {
+      nextCatalog = setCatalogPlacementCell(nextCatalog, key, env, undefined);
+    }
+  }
+
   // TEMPLATE_OVERLAY_IS_RENDER_SOURCE — node-template's overlay files are the render template every
   // wizard node clones, so its remove keeps them in the tree and deletes only the deployment (appset
   // + kustomization entry + catalog env). With no appset, no Application references the files: Argo
@@ -513,7 +552,7 @@ function planRemove(args: {
     {
       op: "upsert",
       path: CATALOG_PATH(slug),
-      content: setCatalogEnvs(current.catalog, remaining),
+      content: nextCatalog,
     },
     ...(keepOverlayFiles
       ? []
@@ -521,15 +560,24 @@ function planRemove(args: {
           { op: "delete", path: overlayPath(env, slug) },
           { op: "delete", path: externalSecretPath(env, slug) },
         ] as const)),
-    // REMOVE still treats the workload env as the control env (k3s rows). A control-env-aware
-    // remove of an akash lane is deliberately out of this PR's scope (story.5039 PR-A).
-    { op: "delete", path: appsetPath(env, env, slug) },
+    // Deleted at its CONTROL-env path — the dir the add wrote it into (parity with planAdd;
+    // PR-A left this env-keyed, which stranded an akash lane's AppSet under appsets/production/).
+    { op: "delete", path: appsetPath(controlEnv, env, slug) },
     {
       op: "upsert",
-      path: appsetsKustomizationPath(env),
+      path: appsetsKustomizationPath(controlEnv),
       content: removeFromAppsetsKustomization(appsetsKustomization, slug, env),
     },
   ];
+  if (provider === "akash") {
+    // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094), inverted: the akash add moved this env's
+    // scheduler-worker route to the node's public host; the remove restores the k3s in-cluster
+    // default (`http://<slug>-node-app:3000`) so the routing map never keeps dialing a host
+    // whose lease the Argo→Crossplane chain is about to close. Byte-inverse of planAdd's write;
+    // idempotent when the route is already in-cluster.
+    const schedulerOp = buildSchedulerEndpointOp(slug, env, "k3s", current);
+    if (schedulerOp) ops.push(schedulerOp);
+  }
   return { kind: "remove", ops, nextEnvs: remaining };
 }
 

@@ -154,6 +154,10 @@ import {
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import { createComputeCapability } from "@/bootstrap/capabilities/compute";
+import {
+  createLeaseReadCapability,
+  type LeaseReadCapability,
+} from "@/bootstrap/capabilities/compute-leases";
 import { createDeployCapability } from "@/bootstrap/capabilities/deploy";
 import {
   createMetricsCapability,
@@ -281,6 +285,8 @@ export interface Container {
   metricsCapability: MetricsCapability;
   /** Compute-substrate balance reads (story.5011) — stub (empty) until CHERRY_AUTH_TOKEN is on the runtime */
   computeCapability: ComputeResourcePort;
+  /** Read-only paid-lease surface (story.5039) — undefined until AKASH_ACTUATOR_ACCOUNT_ID is pinned on the runtime */
+  leaseReadCapability: LeaseReadCapability | undefined;
   /** Web search capability for AI tools - requires TAVILY_API_KEY to be configured */
   webSearchCapability: WebSearchCapability;
   /** Repo capability for AI tools - requires COGNI_REPO_PATH */
@@ -661,6 +667,15 @@ function createContainer(): Container {
 
   // ComputeResourcePort balance reads (requires CHERRY_AUTH_TOKEN; empty stub otherwise)
   const computeCapability = createComputeCapability(env);
+
+  // Read-only paid-lease surface (story.5039): the allocation-ledger read scoped to the
+  // actuator wallet's PUBLIC account pin + the compute capability's Console status read-back.
+  // Undefined until AKASH_ACTUATOR_ACCOUNT_ID reaches the app runtime.
+  const leaseReadCapability = createLeaseReadCapability(
+    env,
+    async () => serviceDb,
+    computeCapability
+  );
 
   // WebSearchCapability for AI tools (requires TAVILY_API_KEY)
   const webSearchCapability = createWebSearchCapability(env);
@@ -1050,6 +1065,7 @@ function createContainer(): Container {
     scheduleManager,
     metricsCapability,
     computeCapability,
+    leaseReadCapability,
     webSearchCapability,
     repoCapability,
     vcsCapability,

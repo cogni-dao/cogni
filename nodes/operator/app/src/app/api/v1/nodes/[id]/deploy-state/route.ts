@@ -9,7 +9,9 @@
  *   `buildSha` per env, no cluster auth. Swaps to a richer Argo adapter behind `DeployCapability`.
  * Scope: Thin HTTP shell — Cogni-token auth, developer-RBAC gate (the SAME `node.flight` tuple as
  *   flight / flight-status / observability), resolve {id} via the shared node-rbac seam, delegate to
- *   the injected `DeployCapability`. No cluster/GH/Grafana auth.
+ *   the injected `DeployCapability`. No cluster/GH/Grafana auth. PLUS (story.5039) the money-loop
+ *   read: this node's live paid-lease receipts + Console closure read-back + orphan diff via the
+ *   injected `LeaseReadCapability` — omitted (not empty) when that capability is unwired.
  * Invariants:
  *   - COGNI_TOKEN_ONLY (getSessionUser = Bearer-first); READ_ONLY; NO_CLUSTER_AUTH.
  *   - DEVELOPER_GATED: requires `node.flight` (→ `can_flight from developer`); fail-closed without a store.
@@ -27,9 +29,15 @@ import { z } from "zod";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
-import { getContainer } from "@/bootstrap/container";
+import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { getCurrentTraceId } from "@/bootstrap/otel";
+import {
+  orphanDiff,
+  verifyLeaseClosures,
+} from "@/features/compute/lease-closure-verification";
 import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
+import { nodes } from "@/shared/db/nodes";
 import {
   createRequestContext,
   EVENT_NAMES,
@@ -64,6 +72,16 @@ const nodeDeployStateSchema = z.object({
   replicas: replicaCountsSchema,
 });
 
+/** One durable paid-lease receipt + its Console closure read-back (story.5039, bug.5189). */
+const leaseStateSchema = z.object({
+  environment: z.string(),
+  cogniKey: z.string(),
+  state: z.string(),
+  externalName: z.string().nullable(),
+  /** Console read-back verdict — `closed` is only ever asserted from provider evidence. */
+  closure: z.enum(["closed", "open", "unknown"]),
+});
+
 const deployStateResponseSchema = z.object({
   nodeId: z.string(),
   slug: z.string(),
@@ -71,6 +89,18 @@ const deployStateResponseSchema = z.object({
   envs: z.array(nodeDeployStateSchema),
   /** Convenience rollup: the envs the node is currently live (serving) in. */
   liveEnvs: z.array(z.string()),
+  /**
+   * This node's LIVE paid-lease receipts (akash lanes), each with its Console closure
+   * read-back — the money-loop SEE half of the env verb (story.5039). Absent when the
+   * lease read capability is unwired (AKASH_ACTUATOR_ACCOUNT_ID not pinned on the runtime).
+   */
+  leases: z.array(leaseStateSchema).optional(),
+  /**
+   * `allocated` receipts whose (node, environment) the catalog no longer declares — paid
+   * leases nothing in git points at (the undetectable orphan of bug.5189). Break-glass:
+   * scripts/ops/recover-orphaned-akash-lease.sh.
+   */
+  orphans: z.array(leaseStateSchema).optional(),
 });
 
 export type DeployStateResponse = z.infer<typeof deployStateResponseSchema>;
@@ -174,11 +204,67 @@ export async function GET(
 
   const liveEnvs = envs.filter((e) => e.health === "healthy").map((e) => e.env);
 
+  // Money-loop SEE (story.5039): enumerate this node's live paid leases from the durable
+  // allocation ledger + classify each via Console read-back (bug.5189 — cluster state is never
+  // spend truth). Optional by wiring: absent capability omits the block rather than emitting an
+  // empty (and therefore lying) list. A read failure degrades the SAME way, with a warn — the
+  // probe-backed deploy view must not 500 because the ledger or Console is unreachable.
+  let leaseBlock: {
+    leases: ReadonlyArray<z.infer<typeof leaseStateSchema>>;
+    orphans: ReadonlyArray<z.infer<typeof leaseStateSchema>>;
+  } | null = null;
+  const leaseRead = getContainer().leaseReadCapability;
+  if (leaseRead) {
+    try {
+      const [registryRow] = await resolveServiceDb()
+        .select()
+        .from(nodes)
+        .where(nodeIdOrSlug(node.nodeId))
+        .limit(1);
+      const receipts = await leaseRead.listAllocated({
+        nodeId: node.nodeId,
+        limit: 50,
+      });
+      const verified = await verifyLeaseClosures({
+        receipts,
+        readStatus: leaseRead.readLeaseStatus,
+      });
+      const closureByKey = new Map(
+        verified.map((v) => [v.receipt.cogniKey, v.closure])
+      );
+      const toLease = (
+        receipt: (typeof receipts)[number]
+      ): z.infer<typeof leaseStateSchema> => ({
+        environment: receipt.environment,
+        cogniKey: receipt.cogniKey,
+        state: receipt.state,
+        externalName: receipt.externalName ?? null,
+        closure: closureByKey.get(receipt.cogniKey) ?? "unknown",
+      });
+      const declaredPairs = ((registryRow?.deployEnvs ?? []) as string[]).map(
+        (environment) => ({ nodeId: node.nodeId, environment })
+      );
+      leaseBlock = {
+        leases: verified.map((v) => toLease(v.receipt)),
+        orphans: orphanDiff(receipts, declaredPairs).map(toLease),
+      };
+    } catch (error) {
+      reqCtx.log.warn(
+        {
+          nodeId: node.nodeId,
+          causeMessage: error instanceof Error ? error.message : "unknown",
+        },
+        "node_deploy_state_lease_read_failed"
+      );
+    }
+  }
+
   const body = deployStateResponseSchema.parse({
     nodeId: node.nodeId,
     slug: node.slug,
     envs,
     liveEnvs,
+    ...(leaseBlock ?? {}),
   });
 
   complete({

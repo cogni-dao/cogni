@@ -2675,9 +2675,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
    *
    * - ADD (`present:true`): fold `env` into `infra/catalog/<slug>.yaml`'s `envs:` line, render the per-env
    *   overlay + AppSet, and fold the slug into that env's appsets kustomization.
-   * - REMOVE (`present:false`): drop `env` from the catalog `envs:` line, DELETE the overlay + AppSet
-   *   (sha:null), regenerate that env's kustomization without the slug. Removing the final env or the
-   *   current activity authority fails with 422; decommission/cutover are separate lifecycle operations.
+   * - REMOVE (`present:false`): drop `env` from the catalog `envs:` line AND drop that env's
+   *   placement cells (REMOVE_COMPLETES_THE_ROW, story.5039 PR-B), DELETE the overlay + the AppSet at
+   *   its CONTROL-env path (sha:null), regenerate that control env's kustomization without the pair,
+   *   and for an akash lane restore the env's scheduler-worker route to the in-cluster default.
+   *   Removing the final env or the current activity authority fails with 422; decommission/cutover
+   *   are separate lifecycle operations. The paid-lease CLOSE itself rides the Argo prune →
+   *   Crossplane REMOVE → actuator delete chain, never this adapter.
    *
    * Idempotent: the already-holding state opens no PR (`no_changes`). The DNS reverse/forward reconcile is
    * a flag-gated v0 seam (DNS_REVERSE_RECONCILE, default off) — see the `dnsSeam` call below.
@@ -3066,19 +3070,33 @@ export class GitHubRepoWriter implements DeployPlanePort {
       };
     }
 
-    // REMOVE (atomic per-env): the planner regenerates the removed env's kustomization, so fetch the
-    // appsets kustomization for that env. (Caddy/scheduler are per-node env-independent state and are
-    // NOT touched by an env remove — a node with `envs:[]` keeps them.)
-    appsetsKustomizationByEnv[env] = await this.readFileOnMain(
+    // REMOVE (atomic per-env): the planner rewrites the CONTROL env's kustomization — derived from
+    // the PRE-mutation catalog, whose placement cells still exist at plan time (bug.5204 parity
+    // with the add; `production` for an akash non-production lane). An akash remove also restores
+    // the env's scheduler-worker route to the in-cluster default, so fetch that env's patch too.
+    // (Caddy is per-node env-independent state and NOT touched by an env remove.)
+    const removeProvider = parseCatalogPlacement(catalog)[env] ?? "k3s";
+    const removeControlEnv = controlEnvFor(env, removeProvider);
+    appsetsKustomizationByEnv[removeControlEnv] = await this.readFileOnMain(
       octokit,
       owner,
       repo,
-      appsetsKustomizationPath(env)
+      appsetsKustomizationPath(removeControlEnv)
     );
+    const removeSchedulerPatchByEnv: Record<string, string> = {};
+    if (removeProvider === "akash") {
+      removeSchedulerPatchByEnv[env] = await this.readFileOnMain(
+        octokit,
+        owner,
+        repo,
+        schedulerEndpointPatchPath(env)
+      );
+    }
     return {
       catalog,
       templateOverlayByEnv,
       appsetsKustomizationByEnv,
+      schedulerEndpointPatchByEnv: removeSchedulerPatchByEnv,
     };
   }
 

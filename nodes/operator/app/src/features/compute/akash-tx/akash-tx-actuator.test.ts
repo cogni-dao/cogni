@@ -252,6 +252,25 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     if (this.failReads) throw new Error("ledger down");
     return this.rows.get(input.cogniKey) ?? null;
   }
+
+  async listAllocated(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }) {
+    if (this.failReads) throw new Error("ledger down");
+    return [...this.rows.values()]
+      .filter(
+        (row) =>
+          row.state === "allocated" &&
+          row.externalName !== undefined &&
+          (input.nodeId === undefined ||
+            row.identity.nodeId === input.nodeId) &&
+          (input.environment === undefined ||
+            row.environment === input.environment)
+      )
+      .slice(0, input.limit);
+  }
 }
 
 function seedAllocated(
