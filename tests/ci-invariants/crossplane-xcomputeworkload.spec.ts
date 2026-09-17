@@ -852,6 +852,38 @@ describe("XComputeWorkload public reachability (bug.5152)", () => {
     templateCode.indexOf("composition-resource-name: dns-record")
   );
 
+  it("declares deterministic ExternalDNS ownership import and proxied CNAME intent", () => {
+    expect(templateCode).toContain('printf "xcw-%s-dns" $name');
+    expect(templateCode).toContain('printf "cogni-%s-xcw" $env');
+    expect(templateCode).toContain(
+      "composition-resource-name: dns-ownership-import"
+    );
+    expect(templateCode).toContain("cogni.io/dns-role: import");
+    expect(templateCode).toContain(
+      "composition-resource-name: external-dns-record"
+    );
+    expect(templateCode).toContain("cogni.io/dns-role: record");
+    expect(templateCode).toContain(
+      "name: external-dns.kubernetes.io/cloudflare-proxied"
+    );
+    expect(templateCode).toContain('value: "true"');
+    // DNSEndpoint has no Ready condition. Crossplane may therefore treat these intent objects
+    // as materialized, but actual provider truth must remain gated by the Cloudflare Request.
+    expect(
+      templateCode.match(/gotemplating\.fn\.crossplane\.io\/ready: "True"/g)
+        ?.length
+    ).toBeGreaterThanOrEqual(3);
+    expect(templateCode).toContain(
+      '$dnsObs := index $observedResources "dns-record"'
+    );
+    expect(templateCode).toContain("published: {{ $dnsPublished }}");
+    // Stage A is adoption only. The existing writer remains until a later, separately-proven
+    // change converts it in place to an Observe-only Request.
+    for (const action of ["OBSERVE", "CREATE", "UPDATE", "REMOVE"]) {
+      expect(dnsBlock).toContain(`action: ${action}`);
+    }
+  });
+
   it("adopts the host by NAME, never by record type", () => {
     expect(dnsBlock.length).toBeGreaterThan(0);
     // Cloudflare's list API FILTERS, it does not merge: `?type=CNAME&name=<host>` over a host
