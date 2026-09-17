@@ -193,19 +193,42 @@ _resolve_node_value() {
 # value (0 churn on re-runs); secret-materialize uses THIS to overwrite a DRIFTED
 # composed DSN — e.g. a pre-#1584 DATABASE_URL still naming the legacy app_user
 # instead of the per-node app_<node> role (#1584 half-rollout self-heal).
+# THE SUBSTRATE IDENTIFIER SUFFIX FOR A FOREIGN-CUSTODIED LANE (bug.5207).
+#
+# The database and role names were derived from the NODE ALONE. The env was never IN the
+# name — it was implicit in the HOST, because one env meant one VM meant one Postgres. That
+# held for every row ever created, so `cogni_poly` was unambiguous.
+#
+# task.5132 breaks the premise: an akash node's non-production lane is reconciled, PAID FOR
+# and (bug.5206) secret-custodied by the PRODUCTION cluster, so its DSN is composed against
+# production's VM. Two lanes of one node then resolve to the SAME database and the SAME role
+# on one Postgres — and because each lane generates its own password, a lane reconcile would
+# `ALTER USER app_poly PASSWORD` and break LIVE PRODUCTION.
+#
+# The suffix is added ONLY when this lane's substrate is someone else's — i.e. the control
+# env differs from the lane. Every row that exists today (every k3s lane, every production
+# row) has control_env == env, gets the empty suffix, and keeps its exact current name.
+# NOTHING MIGRATES. A foreign-custodied lane is new by construction, so it is born correct.
+_lane_db_suffix() {
+  local lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
+  [ -n "$lane" ] && [ "$control" != "$lane" ] || return 0
+  printf '_%s' "${lane//-/_}"
+}
+
 _compose_node_value() {
-  local node="$1" k="$2" kind source shared service db
-  db="cogni_${node//-/_}"
+  local node="$1" k="$2" kind source shared service db sfx
+  sfx="$(_lane_db_suffix)"
+  db="cogni_${node//-/_}${sfx}"
   case "$k" in
     DATABASE_URL)
       # Per-node: app_<node> role + the node's own source:agent password (OpenBao).
       # Role name is computed from the node; the password is read from
       # cogni/<env>/<node> (materialize generated it before this composition).
-      printf 'postgresql://app_%s:%s@%s:5432/%s?sslmode=disable' \
-        "${node//-/_}" "$(bao_get_field "$node" APP_DB_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
+      printf 'postgresql://app_%s%s:%s@%s:5432/%s?sslmode=disable' \
+        "${node//-/_}" "${sfx}" "$(bao_get_field "$node" APP_DB_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
     DATABASE_SERVICE_URL)
-      printf 'postgresql://service_%s:%s@%s:5432/%s?sslmode=disable' \
-        "${node//-/_}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
+      printf 'postgresql://service_%s%s:%s@%s:5432/%s?sslmode=disable' \
+        "${node//-/_}" "${sfx}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
     DOLTGRES_PASSWORD)
       # Env-wide Doltgres superuser (one server, every node's knowledge_<node> DB).
       # Operator holds the single canonical SSOT (cogni/<env>/operator/DOLTGRES_PASSWORD)
@@ -227,8 +250,8 @@ _compose_node_value() {
       # operator is seeded. Composed, never derived inline, never from .env.
       local _dgu; _dgu="$(bao_get_field operator DOLTGRES_PASSWORD)"
       [[ -n "$_dgu" ]] || _dgu="$(derive_secret doltgres-root)"
-      printf 'postgresql://postgres:%s@%s:5435/knowledge_%s?sslmode=disable' \
-        "$_dgu" "${VM_IP}" "${node//-/_}"; return 0 ;;
+      printf 'postgresql://postgres:%s@%s:5435/knowledge_%s%s?sslmode=disable' \
+        "$_dgu" "${VM_IP}" "${node//-/_}" "${sfx}"; return 0 ;;
   esac
   kind=$(_cat_field "$k" '.generate.kind')
   source=$(_cat_field "$k" '.source')
