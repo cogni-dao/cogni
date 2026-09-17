@@ -4,6 +4,9 @@
 #
 # appset-paths.sh — THE definition of where a node's per-(env, node) ApplicationSet lives.
 #
+# SPEC: docs/spec/node-ci-cd-contract.md § Lane vs control env
+#   (invariant LANE_AND_CONTROL_ENV_ARE_DIFFERENT_QUESTIONS). Change one, change both.
+#
 # WHY THIS IS A LIB AND NOT A STRING EACH CALLER BUILDS (task.5132, bug.5204):
 # the path encodes TWO different questions that used to be one value —
 #   WHICH ENV THE WORKLOAD IS  -> the filename `<env>-<node>-applicationset.yaml`

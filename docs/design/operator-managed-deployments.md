@@ -11,6 +11,14 @@ work_items: []
 created: 2026-06-11
 ---
 
+> [!WARNING]
+> **Stale as of 2026-09-17 — draft, never verified**
+> The fleet moved node apps to **Akash** on 2026-09-11; this document was last
+> verified never and predates that. Treat its deployment-topology claims as
+> historical. The current contract is
+> [Node CI/CD Contract](../spec/node-ci-cd-contract.md) — see `## Lane vs control env`
+> for how `env` splits into lane and control env.
+
 # Operator-Managed Deployments
 
 > How does the operator app actually manage deployments? Picture version. No jargon.
