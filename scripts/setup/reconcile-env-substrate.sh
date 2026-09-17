@@ -126,13 +126,39 @@ bao_exec "write auth/kubernetes/role/eso-reader \
   bound_service_account_namespaces=external-secrets \
   policies=eso-reader ttl=1h" >/dev/null
 
+# ── DOWN-TRUST LANE CUSTODY (bug.5196/#2290, extended by bug.5206) ──────────
+# The lanes this env may write, widest first. ONE definition, consumed by BOTH writer
+# identities below — they had drifted: #2290 gave the lane set to node-secrets-writer only,
+# so `production-writer` (the role secret-materialize.sh actually mints) still could not
+# write cogni/data/candidate-a/*, and the first poly candidate-a mint died there.
+#   production  -> candidate-a, preview, production   (the PAYING cluster custodies every
+#                  lane, because the Composition interpolates each lane's secrets into the
+#                  lease production's Console account is billed for)
+#   preview     -> preview only
+#   candidate-a -> candidate-a only
+# Up-trust is refused forever. This WIDENS AN EXISTING IDENTITY, it does not add one:
+# NS3 allows exactly one writer identity per Console account, so `production-writer` holding
+# a lane it already reconciles and pays for is correct, while a `candidate-a-writer` role
+# living in production's vault would be a second writer and is forbidden.
+# MUST MIRROR nodes/operator/app/src/shared/secrets/secrets-lane-trust.data.ts.
+case "${DEPLOY_ENV}" in
+  production) SECRET_LANES="candidate-a preview production" ;;
+  *)          SECRET_LANES="${DEPLOY_ENV}" ;;
+esac
+
 # ── <env>-writer (openbao-writer SA; additive bind keeps openbao-operator) ───
-log "writing ${DEPLOY_ENV}-writer policy + role (SA openbao-writer + openbao-operator)..."
+log "writing ${DEPLOY_ENV}-writer policy + role (SA openbao-writer + openbao-operator); lanes: ${SECRET_LANES}"
 ensure_sa openbao-writer
 ensure_sa openbao-operator
+WRITER_HCL=""
+for _lane in ${SECRET_LANES}; do
+  WRITER_HCL="${WRITER_HCL}
+path \"cogni/data/${_lane}/*\"     { capabilities = [\"read\", \"create\", \"update\", \"patch\"] }
+path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
+done
+unset _lane
 bao_policy "${DEPLOY_ENV}-writer" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"     { capabilities = ["read", "create", "update", "patch"] }
-path "cogni/metadata/${DEPLOY_ENV}/*" { capabilities = ["read", "list"] }
+${WRITER_HCL}
 HCL
 bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-writer \
   bound_service_account_names=openbao-writer,openbao-operator \
@@ -177,10 +203,7 @@ bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-db-reader \
 # is <service>; widening the lane set does not widen that boundary.
 # The two _system/_shared denies are carried onto EVERY lane gained, data AND metadata —
 # a per-node grant must never reach a shared path in ANY lane.
-case "${DEPLOY_ENV}" in
-  production) NODE_SECRET_LANES="candidate-a preview production" ;;
-  *)          NODE_SECRET_LANES="${DEPLOY_ENV}" ;;
-esac
+NODE_SECRET_LANES="${SECRET_LANES}"
 NODE_SECRETS_WRITER_HCL=""
 for _lane in ${NODE_SECRET_LANES}; do
   NODE_SECRETS_WRITER_HCL="${NODE_SECRETS_WRITER_HCL}

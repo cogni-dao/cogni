@@ -1435,17 +1435,34 @@ HCL
   # via `kubectl create token openbao-operator` and exchange it for a bao
   # token via `bao login -method=kubernetes role=${DEPLOY_ENV}-writer`.
   #
-  # Policy is per-env: writers on this env CANNOT touch other envs' paths
-  # (spec Invariant 6 RBAC_VIA_PATH_POLICY). No `delete` capability — destroy
+  # Policy is per-LANE, not per-env (bug.5206). Writers on this env cannot touch another
+  # CLUSTER's vault — OpenBao is per-cluster, so that is structural — but the PAYING cluster
+  # must write every lane it reconciles, because the Composition interpolates each lane's
+  # secrets into the lease its Console account is billed for. Same lane set #2290 gave
+  # node-secrets-writer; they had drifted, and `production-writer` (the role
+  # secret-materialize.sh mints) still could not write cogni/data/candidate-a/*.
+  # This WIDENS AN EXISTING IDENTITY rather than adding one: NS3 allows exactly one writer
+  # identity per Console account. Up-trust stays refused. No `delete` capability — destroy
   # requires admin escalation per CC6.1.
-  log_info "Writing ${DEPLOY_ENV}-writer policy + role binding..."
+  # ⚠️ KEEP IN SYNC with scripts/setup/reconcile-env-substrate.sh (SECRET_LANES).
+  case "${DEPLOY_ENV}" in
+    production) WRITER_LANES="candidate-a preview production" ;;
+    *)          WRITER_LANES="${DEPLOY_ENV}" ;;
+  esac
+  WRITER_HCL=""
+  for _lane in ${WRITER_LANES}; do
+    WRITER_HCL="${WRITER_HCL}
+path \"cogni/data/${_lane}/*\"     { capabilities = [\"read\", \"create\", \"update\", \"patch\"] }
+path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
+  done
+  unset _lane
+  log_info "Writing ${DEPLOY_ENV}-writer policy + role binding; lanes: ${WRITER_LANES}"
   ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl get sa openbao-operator -n default >/dev/null 2>&1 \
        || kubectl create sa openbao-operator -n default"
   ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao policy write ${DEPLOY_ENV}-writer -" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"     { capabilities = ["read", "create", "update", "patch"] }
-path "cogni/metadata/${DEPLOY_ENV}/*" { capabilities = ["read", "list"] }
+${WRITER_HCL}
 HCL
   bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-writer \
     bound_service_account_names=openbao-operator \

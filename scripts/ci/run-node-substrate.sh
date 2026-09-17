@@ -101,6 +101,15 @@ export CATALOG_DIR
 . "$SCRIPT_DIR/lib/appset-paths.sh"
 CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")"
 
+# The bare zone every lane's public host hangs off (`cognidao.org`), used only to build
+# ANOTHER lane's domain when this env custodies it. Derived by stripping this env's own
+# label, so a fork on its own zone works with no extra configuration.
+DOMAIN_ROOT="${DOMAIN:-}"
+case "$DEPLOY_ENVIRONMENT" in
+  preview)     DOMAIN_ROOT="${DOMAIN_ROOT#preview.}" ;;
+  candidate-a) DOMAIN_ROOT="${DOMAIN_ROOT#test.}" ;;
+esac
+
 echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (${DEPLOYMENT_PROVIDER}): materialize → reconcile → provider assert"
 
 if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
@@ -110,8 +119,24 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   # such lane (every k3s row, every production-only node) enumerates nothing.
   while read -r lane; do
     [ -n "$lane" ] || continue
-    echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} reconciles ${lane}/${TARGET_NODE} — materializing that lane's secrets into THIS vault (bug.5206)"
-    bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE"
+    # DOMAIN builds the derive-env FQDN keys (APP_BASE_URL, NEXTAUTH_URL). It arrives scoped
+    # to THIS env, so materializing another lane with it would silently stamp
+    # `poly.cognidao.org` into the candidate-a bank — a wrong value written confidently,
+    # which is the failure mode this whole item exists to kill. The lane's domain is a pure
+    # label and derives from the same root; an unmappable lane FAILS rather than guesses.
+    lane_domain=""
+    case "$lane" in
+      production)  lane_domain="$DOMAIN_ROOT" ;;
+      preview)     lane_domain="preview.$DOMAIN_ROOT" ;;
+      candidate-a) lane_domain="test.$DOMAIN_ROOT" ;;
+    esac
+    [ -n "$lane_domain" ] || {
+      echo "::error::run-node-substrate: no public domain mapping for lane '$lane' — refusing to materialize its bank with ${DEPLOY_ENVIRONMENT}'s DOMAIN, which would stamp wrong FQDNs (bug.5206)" >&2
+      exit 1
+    }
+    echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} reconciles ${lane}/${TARGET_NODE} — materializing that lane's secrets into THIS vault (bug.5206), domain ${lane_domain}"
+    SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" DOMAIN="$lane_domain" \
+      bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE"
   done <<EOF
 $(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
 EOF
