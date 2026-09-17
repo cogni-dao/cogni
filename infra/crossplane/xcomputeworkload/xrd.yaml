@@ -373,6 +373,36 @@ spec:
                   type: integer
                   minimum: 0
                   maximum: 1000000
+                actuatorNamespace:
+                  description: >-
+                    Namespace of the akash-tx-actuator that mints THIS workload's lease.
+                    Defaults to the XR's own namespace, which is the long-standing behaviour
+                    and stays correct for production.
+
+                    It exists because the XR namespace was doing THREE jobs at once
+                    (task.5132): it keyed the actuator's idempotence key
+                    `xcw:<namespace>:<name>:<generation>`, it resolved the writer's Service
+                    DNS, AND it scoped the writer's auth-secret reference. Those are not the
+                    same question. A real node's pre-prod lane must bill the PRODUCTION
+                    Console account (akash-actuator-wallet-cutover NS3), so its lease has to
+                    be minted by the production writer — while its idempotence key must stay
+                    DISTINCT from the same node's production lease or the actuator refuses it
+                    as a settled key.
+
+                    Splitting them resolves that: the key keeps using the XR's own namespace
+                    (unique per lane), and this field points the writer lookup at the single
+                    cluster that holds the account. `writer -> envs` one-to-many is the shape
+                    the north star calls deliberate.
+
+                    This is NOT a way to put a second actuator in a pre-prod cluster. Two
+                    writers on one account double-spend, because
+                    `akash_tx_allocations_single_writer_idx` is a PER-DATABASE partial unique
+                    index and cannot see across them; and it would place the production
+                    payment instrument in a cluster that runs unreviewed code. Both are
+                    rejected in the north star.
+                  type: string
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               type: object
               properties:

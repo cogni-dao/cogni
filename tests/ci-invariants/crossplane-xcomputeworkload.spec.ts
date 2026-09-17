@@ -108,6 +108,9 @@ describe("XComputeWorkload composite API (task.5096)", () => {
   it("preserves every legacy contract the port promised", () => {
     // Identity, artifact/digest/source, topology.
     expect(Object.keys(specSchema).sort()).toEqual([
+      // task.5132 — WHICH writer mints this lease, split out of the XR namespace. Optional
+      // and defaulting to the XR's own namespace, so no existing production XR changes.
+      "actuatorNamespace",
       "bootPolicy",
       "bundle",
       "dns",
@@ -328,6 +331,46 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // condition under which it is deleted, and name the owning work item.
     expect(leaseEpoch.description).toContain("REMOVAL GATE");
     expect(leaseEpoch.description).toContain("task.5121");
+  });
+
+  it("resolves the WRITER from its own field while the idempotence key keeps the XR namespace", () => {
+    // task.5132. The XR namespace used to answer three different questions at once: which
+    // key identifies this allocation, which Service mints it, and which secret authorises
+    // that call. A real node's pre-prod lane must bill the PRODUCTION account (NS3) while
+    // keeping a key DISTINCT from its own production lease — impossible while one value
+    // drove both. Reusing the production key would hand the actuator a settled key and it
+    // would refuse to mint: the right refusal for the wrong reason.
+    // `templateCode` has the PROSE stripped — load-bearing here, because the comment that
+    // explains this split necessarily names the very strings the negatives forbid.
+
+    // The key is still namespace-derived — that is what keeps lanes from colliding.
+    expect(templateCode).toContain(
+      'printf "xcw:%s:%s:%d" $ns $name $leaseGeneration'
+    );
+
+    // The writer lookup and its auth ref move together. Splitting only one of them would
+    // dial the right Service with the wrong secret.
+    expect(templateCode).toContain(
+      'printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $writerNs'
+    );
+    expect(templateCode).toContain(
+      'akash-tx-actuator-auth:%s:token }}" $writerNs'
+    );
+
+    // Neither may keep reading $ns, or the decoupling is cosmetic.
+    expect(templateCode).not.toContain(
+      'printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $ns'
+    );
+    expect(templateCode).not.toContain(
+      'akash-tx-actuator-auth:%s:token }}" $ns'
+    );
+
+    // Default is the XR's own namespace: every existing production XR renders unchanged.
+    expect(templateCode).toContain("$writerNs := $ns");
+
+    // Optional in the schema — an XR that says nothing keeps the legacy behaviour.
+    const actuatorNamespace = specSchema.actuatorNamespace as YamlObject;
+    expect(actuatorNamespace.default).toBeUndefined();
   });
 
   it("preserves the replacement generation across every mixed-revision bridge shape", () => {
