@@ -191,8 +191,18 @@ case "$COGNI_CATALOG_ROOT" in
 esac
 [[ -d "$COGNI_CATALOG_ROOT" ]] || fail "missing catalog root: $COGNI_CATALOG_ROOT"
 
+# shellcheck source=lib/appset-paths.sh
+CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-.}/infra/catalog}" \
+  source "$SCRIPT_DIR/lib/appset-paths.sh"
 # shellcheck source=lib/image-tags.sh
 source "$SCRIPT_DIR/lib/image-tags.sh"
+
+# WHICH CLUSTER AM I RECONCILING AGAINST (bug.5206)? For every row that exists today this is
+# the env itself. For an akash node's non-production lane the PAYING cluster reconciles it, so
+# this script runs against THAT cluster's VM — its vault, its roles, its Postgres. The lane
+# still names the secret path and the database; only the IDENTITY follows the cluster.
+SUBSTRATE_CONTROL_ENV="$(CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-.}/infra/catalog}" \
+  control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE" 2>/dev/null || printf '%s' "$DEPLOY_ENVIRONMENT")"
 
 node_known=false
 for node in "${NODE_TARGETS[@]}"; do
@@ -217,7 +227,7 @@ node_envs="$(yq -r '.envs[]' "$node_catalog_file")"
 grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
   || fail "'$TARGET_NODE' is not in the '$DEPLOY_ENVIRONMENT' node-set (envs: $(yq -r '.envs | join(",")' "$node_catalog_file")) — add the env to infra/catalog/${TARGET_NODE}.yaml to deploy it here"
 
-node_db="$(node_database_for_target "$TARGET_NODE")"
+node_db="$(node_database_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")"
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
 # bug.5159 — multiplex every remote call over ONE ssh connection. Each remote() used to
@@ -246,10 +256,10 @@ BAO_TOKEN="$(
   cogni_openbao_kubernetes_login_retry remote "set -euo pipefail
     jwt=\$(kubectl create token db-provisioner -n default)
     kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-      bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-db-reader' jwt=\"\$jwt\""
+      bao write -field=token auth/kubernetes/login role='${SUBSTRATE_CONTROL_ENV}-db-reader' jwt=\"\$jwt\""
 )"
-[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${DEPLOY_ENVIRONMENT}-db-reader token"
-mark_row reader_token refreshed "minted ${DEPLOY_ENVIRONMENT}-db-reader token (read-only)"
+[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${SUBSTRATE_CONTROL_ENV}-db-reader token (reconciling the '${DEPLOY_ENVIRONMENT}' lane)"
+mark_row reader_token refreshed "minted ${SUBSTRATE_CONTROL_ENV}-db-reader token (read-only) for the ${DEPLOY_ENVIRONMENT} lane"
 
 export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT DOMAIN
 

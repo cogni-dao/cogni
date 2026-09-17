@@ -146,6 +146,38 @@ fi
 
 DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
   bash "$RECONCILE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+
+# ...then the SUBSTRATE of every lane this cluster custodies. Materializing the lane's secrets
+# without provisioning its database produces a lease that boots with a valid DSN pointing at a
+# database that does not exist — it starts, fails to connect, never serves, and the boot
+# deadline closes it. Half a substrate is the failure this whole item is made of.
+#
+# A lane reached here is akash by construction: `control_env_for` relocates a lane ONLY when
+# its placement is akash, which is also why its workload needs no edge on this VM —
+# reconcile's Caddy/NodePort block is already gated to k3s placement.
+#
+# The lane names the database (`cogni_<node>_<lane>`, bug.5207) while the identity this runs
+# under stays the cluster's. Empty for every row today, so nothing new runs.
+if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
+  while read -r lane; do
+    [ -n "$lane" ] || continue
+    lane_domain=""
+    case "$lane" in
+      production)  lane_domain="$DOMAIN_ROOT" ;;
+      preview)     lane_domain="preview.$DOMAIN_ROOT" ;;
+      candidate-a) lane_domain="test.$DOMAIN_ROOT" ;;
+    esac
+    [ -n "$lane_domain" ] || {
+      echo "::error::run-node-substrate: no public domain mapping for lane '$lane' (bug.5206)" >&2
+      exit 1
+    }
+    echo "[run-node-substrate] reconciling ${lane}/${TARGET_NODE}'s substrate on THIS cluster (task.5132)"
+    DEPLOYMENT_PROVIDER=akash DOMAIN="$lane_domain" \
+      bash "$RECONCILE_BIN" "$lane" "$TARGET_NODE"
+  done <<EOF
+$(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
+EOF
+fi
 if [ "$DEPLOYMENT_PROVIDER" = "akash" ] && [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   TARGET="$TARGET_NODE" DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
     bash "$ASSERT_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"

@@ -156,7 +156,10 @@ RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
 RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
   bash "$RUNNER" production polyfix >/dev/null
 got="$(paste -sd'|' - < "$ORDER")"
-want="materialize production polyfix|materialize candidate-a polyfix|materialize preview polyfix|reconcile production polyfix|assert production polyfix"
+# The control env materializes AND reconciles every lane it custodies: a lane whose secrets
+# exist but whose DATABASE does not yields a lease that boots, cannot connect, and is closed
+# by the boot deadline (task.5132).
+want="materialize production polyfix|materialize candidate-a polyfix|materialize preview polyfix|reconcile production polyfix|reconcile candidate-a polyfix|reconcile preview polyfix|assert production polyfix"
 [ "$got" = "$want" ] || { echo "the reconciling cluster must hold every lane it reconciles:
   got:  $got
   want: $want" >&2; exit 1; }
