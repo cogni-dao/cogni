@@ -89,6 +89,12 @@ cluster is production's.
 
 > **Path and name follow the LANE. Identity and substrate follow the CONTROL env.**
 
+The durable _why_ — the eleven live-discovered conflations, the destructive
+one, and the open `bug.5208` question about `cogni-test-org` throwaways — lives
+in the knowledge hub as `lane-is-not-control` (with `substrate-one-derivation`,
+`lane-db-two-derivations`, `lane-queue-follows-custody`). **This spec is the
+contract CI enforces; the hub entry is the reasoning.** Two planes, no third.
+
 Resolve it, never re-derive it:
 
 - shell — `control_env_for <env> <node>` in `scripts/ci/lib/appset-paths.sh`
