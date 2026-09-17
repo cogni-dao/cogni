@@ -49,7 +49,9 @@ describe("promote provenance wiring (bug.5195 defect #2)", () => {
     // `inputs.source_sha` is empty on the product-contract promote. Handing it to the
     // resolver is indistinguishable from "no authority at all", and the resolver then
     // correctly fails closed — refusing a promote that was entirely well-formed.
-    expect(body).not.toMatch(/^\s*OPERATOR_SOURCE_SHA:\s*\$\{\{\s*inputs\.source_sha/m);
+    expect(body).not.toMatch(
+      /^\s*OPERATOR_SOURCE_SHA:\s*\$\{\{\s*inputs\.source_sha/m
+    );
   });
 
   it("keeps head_sha defined so provenance can never be empty", () => {
