@@ -408,3 +408,66 @@ describe("computeWorkloadManifestFile", () => {
     );
   });
 });
+
+describe("actuator namespace (task.5132)", () => {
+  const base = {
+    slug: "toks4",
+    bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+    bundle,
+    leaseGeneration: 0,
+  } as const;
+
+  it("points a non-production lane at the production writer", () => {
+    // The production cluster reconciles every akash node's non-prod lane, so the XR lands
+    // in `cogni-candidate-a` THERE — a namespace that runs no actuator. Without this the
+    // Composition defaults the writer lookup to the XR's own namespace and fails closed.
+    for (const environment of ["candidate-a", "preview"] as const) {
+      const manifest = buildComputeWorkloadManifest({
+        ...base,
+        environment,
+        publicHost: `toks4-${environment}.cognidao.org`,
+        computeApi: "crossplane",
+      });
+      expect(
+        (manifest.spec as Record<string, unknown>).actuatorNamespace,
+        environment
+      ).toBe("cogni-production");
+    }
+  });
+
+  it("omits it for production — the default is already correct there", () => {
+    const manifest = buildComputeWorkloadManifest({
+      ...base,
+      environment: "production",
+      publicHost: "toks4.cognidao.org",
+      computeApi: "crossplane",
+    });
+    expect(
+      (manifest.spec as Record<string, unknown>).actuatorNamespace
+    ).toBeUndefined();
+  });
+
+  it("never emits it on the legacy authority, which has no such field", () => {
+    const manifest = buildComputeWorkloadManifest({
+      ...base,
+      environment: "candidate-a",
+      publicHost: "toks4-test.cognidao.org",
+      computeApi: "legacy",
+    });
+    expect(
+      (manifest.spec as Record<string, unknown>).actuatorNamespace
+    ).toBeUndefined();
+  });
+
+  it("leaves the idempotence key derived from the XR's OWN namespace", () => {
+    // The whole point of the split: the key stays per-lane (so a node's pre-prod lease can
+    // never collide with its production one) while the WRITER is shared.
+    const manifest = buildComputeWorkloadManifest({
+      ...base,
+      environment: "candidate-a",
+      publicHost: "toks4-test.cognidao.org",
+      computeApi: "crossplane",
+    });
+    expect(manifest.metadata.namespace).toBe("cogni-candidate-a");
+  });
+});
