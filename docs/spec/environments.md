@@ -13,6 +13,14 @@ verified: 2026-02-06
 tags: [deployment]
 ---
 
+> [!WARNING]
+> **Stale as of 2026-09-17 — it states Kubernetes as a non-goal and describes deployment as bare-metal SSH, which is no longer true**
+> The fleet moved node apps to **Akash** on 2026-09-11; this document was last
+> verified 2026-02-06 and predates that. Treat its deployment-topology claims as
+> historical. The current contract is
+> [Node CI/CD Contract](node-ci-cd-contract.md) — see `## Lane vs control env`
+> for how `env` splits into lane and control env.
+
 # Environment & Stack Deployment Modes
 
 ## Context
