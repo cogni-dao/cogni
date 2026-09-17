@@ -50,4 +50,4 @@ spec:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
   runtime:
-    substrateHost: cogni-candidate-a.vm.cognidao.org
+    substrateHost: cogni.vm.cognidao.org
