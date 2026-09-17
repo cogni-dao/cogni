@@ -252,5 +252,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
     env: targetEnv,
     present,
     result,
+    // ADD_DERIVES_PLACEMENT (story.5039): what the writer derived for a `present:true` request —
+    // placement/compute authority/control env are catalog-derived facts, never caller input.
+    ...(present === true && result.derived ? { derived: result.derived } : {}),
   });
 }

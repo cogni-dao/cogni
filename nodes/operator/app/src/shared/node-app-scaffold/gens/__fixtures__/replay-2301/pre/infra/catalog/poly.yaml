@@ -1,0 +1,51 @@
+name: poly
+type: node
+port: 3200
+node_port: 31600
+dockerfile: nodes/poly/app/Dockerfile
+image_tag_suffix: "-poly"
+migrator_tag_suffix: "-poly-migrate"
+source_repo: https://github.com/cogni-dao/poly.git
+image_repository: ghcr.io/cogni-dao/poly
+source_sha: bbf0a1915b127e025d0c72e262a5029672482c6b
+candidate_a_branch: deploy/candidate-a-poly
+preview_branch: deploy/preview-poly
+production_branch: deploy/production-poly
+# task.5017 — per-env node-set (deploy ⊆ provisioned). A wizard birth enters all
+# NODE_FORMATION_ENVS; this list is the catalog twin so render-node-appset.sh
+# renders exactly the births appset.ts generates. Trimming a node's reach is a
+# later catalog edit (drop an env here) once its envs are provisioned.
+# task.5130 — the candidate-a slot is REMOVED. candidate-a's actuator is pinned to the
+# TEST Console account (akash12eh8…), which is reserved for Cogni's own operator-platform
+# self-test on cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER: poly is a real
+# cogni-dao fleet node, so every environment it runs in must bill the PRODUCTION sponsor
+# account (akash10auj…). Preview remains retired until its Crossplane/actuator authority
+# is installed (task.5129). bug.5182 wanted candidate-a as poly's source-addressed
+# developer flight lane; that lane needs a non-test wallet before it can come back
+# (task.5132) — it is NOT restored here.
+envs: [production]
+deployment_provider:
+  production: akash
+# story.5016 production cutover — Crossplane authority; the private Akash transaction
+# actuator pays from production's DEDICATED account (akash10auj…). PRECONDITION:
+# old lease closed + legacy CR finalizer cleared BEFORE the promote that
+# materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
+# legacy manifest in the same commit).
+compute_api:
+  production: crossplane
+# Explicit replacement counter for a terminally closed lease — the only
+# redeploy-after-close path (actuator refuses a settled idempotence key).
+lease_generation:
+  production: 0
+activity_env: production
+owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+path_prefix: nodes/poly/
+node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
+# task.5052 (story.5016) — this node's workload runs on Akash; these provider
+# egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
+# Rendered per-env (union over rows AKASH-PLACED in that env — bug.5191) by
+# scripts/ci/render-compute-egress-allowlist.sh and applied by
+# infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
+compute_egress_cidrs:
+  - cidr: 80.200.246.35/32
+    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)

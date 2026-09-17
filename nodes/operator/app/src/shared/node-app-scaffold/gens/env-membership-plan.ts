@@ -32,6 +32,19 @@
  *
  *     Known cosmetic residue: a node may hold an empty scheduled epoch in its old authority env, which
  *     is orphaned by the move. It carries no receipts and no value (bug.5079).
+ *   - ADD_DERIVES_PLACEMENT (story.5039) — `present:true` DERIVES the env's placement instead of
+ *     accepting it as caller input, and the route keeps `present`/`placement` MUTUALLY EXCLUSIVE.
+ *     There is no legitimate second answer to derive around: akash requires a `source_repo` (an
+ *     external build plane), and a `source_repo`-bearing row left on k3s violates ci-cd Axiom 23
+ *     (absent placement is a hard failure, not a k3s fallback). So `source_repo` present ⇒ akash +
+ *     `compute_api: crossplane` (policy via `canBirthOnCrossplane`/`writerFor`) + an explicit
+ *     `lease_generation` cell; no `source_repo` ⇒ k3s with no cells. The placement verb remains for
+ *     LANE MIGRATION of an env already in reach, never for activation.
+ *   - CONTROL_ENV_OWNS_THE_APPSET_DIR (bug.5204) — the AppSet filename carries the WORKLOAD env,
+ *     its directory the CONTROL env (`controlEnvFor`): an akash node's non-production lane is
+ *     reconciled by the PRODUCTION cluster. Derived from the POST-MUTATION placement — the add
+ *     writes catalog + AppSet in one tree, and the pre-mutation catalog reads absent placement as
+ *     k3s, i.e. the wrong directory.
  *   - IDEMPOTENT — requesting the state that already holds (env already present on add / already absent on
  *     remove) yields an EMPTY op list (`{ kind: "no_changes" }`), so the adapter opens no PR.
  *   - DELETE_VIA_SHA_NULL — file removals are emitted as `{ op: "delete", path }`; the adapter maps these
@@ -58,13 +71,18 @@
  * @public
  */
 
-import { nodeAppBaseUrl } from "@/shared/node-registry/placement";
+import { canBirthOnCrossplane } from "@/shared/node-registry/crossplane-control-plane";
+import {
+  controlEnvFor,
+  nodeAppBaseUrl,
+} from "@/shared/node-registry/placement";
 
 import {
   insertAppsetKustomization,
   removeFromAppsetsKustomization,
   renderNodeAppset,
 } from "./appset";
+import { githubOwnerFromSourceRepo } from "./catalog";
 import {
   addCatalogEnv,
   dropCatalogEnv,
@@ -75,9 +93,11 @@ import {
   parseCatalogActivityEnv,
   parseCatalogEnvs,
   parseCatalogNodeId,
+  parseCatalogSourceRepo,
   setCatalogActivityEnv,
   setCatalogEnvs,
   setCatalogPlacement,
+  setCatalogPlacementCell,
 } from "./env-membership";
 import type { NodeFormationEnv } from "./envs";
 import { renderOverlay, renderOverlayFile } from "./overlay";
@@ -91,13 +111,21 @@ export const overlayPath = (env: string, slug: string): string =>
 export const externalSecretPath = (env: string, slug: string): string =>
   `infra/k8s/overlays/${env}/${slug}/external-secret.yaml`;
 
-/** Repo-relative path of a node's per-(env, slug) ApplicationSet object. */
-export const appsetPath = (env: string, slug: string): string =>
-  `infra/k8s/argocd/appsets/${env}/${env}-${slug}-applicationset.yaml`;
+/**
+ * Repo-relative path of a node's per-(env, slug) ApplicationSet object. The FILENAME carries the
+ * WORKLOAD env; the DIRECTORY carries the CONTROL env — the cluster that reconciles it
+ * (`controlEnvFor`, bug.5204). They differ exactly for an akash node's non-production lane.
+ */
+export const appsetPath = (
+  controlEnv: string,
+  workloadEnv: string,
+  slug: string
+): string =>
+  `infra/k8s/argocd/appsets/${controlEnv}/${workloadEnv}-${slug}-applicationset.yaml`;
 
-/** Repo-relative path of ONE env's appsets kustomization (the list the slug folds into). */
-export const appsetsKustomizationPath = (env: string): string =>
-  `infra/k8s/argocd/appsets/${env}/kustomization.yaml`;
+/** Repo-relative path of ONE CONTROL env's appsets kustomization (the list the pair folds into). */
+export const appsetsKustomizationPath = (controlEnv: string): string =>
+  `infra/k8s/argocd/appsets/${controlEnv}/kustomization.yaml`;
 
 export const CATALOG_PATH = (slug: string): string =>
   `infra/catalog/${slug}.yaml`;
@@ -136,7 +164,13 @@ export interface EnvPlanCurrent {
   readonly templateExternalSecretByEnv?: Readonly<Record<string, string>>;
   /** The shared `node-applicationset.yaml.tmpl` (only needed on ADD). */
   readonly appsetTemplate?: string | undefined;
-  /** Current `appsets/<env>/kustomization.yaml` per env. Keyed by env. */
+  /**
+   * Current appsets kustomizations, keyed by CONTROL env (bug.5204) — for an ADD the adapter
+   * fetches the kustomization of the env whose cluster will reconcile the AppSet
+   * (`planEnvAddShape().controlEnv`), which is `production` for an akash non-production lane.
+   * The REMOVE path still keys by the workload env (control-env-aware removes are out of this
+   * PR's scope).
+   */
   readonly appsetsKustomizationByEnv: Readonly<Record<string, string>>;
   /** Container port + node_port for the overlay render (only needed on ADD). */
   readonly port?: number | undefined;
@@ -188,13 +222,68 @@ const TEMPLATE_SLUG = "node-template";
  */
 const OPERATOR_SLUG = "operator";
 
+/** The derived activation shape of one `{env, present:true}` request — see ADD_DERIVES_PLACEMENT. */
+export type EnvAddShape =
+  /** In-repo k3s lane: no placement cells at all, reconciled by the env's own cluster. */
+  | {
+      readonly placement: "k3s";
+      readonly computeApi: null;
+      readonly controlEnv: NodeFormationEnv;
+    }
+  /** Externally built row: akash placement, crossplane authority, production reconciles non-prod. */
+  | {
+      readonly placement: "akash";
+      readonly computeApi: "crossplane";
+      readonly controlEnv: NodeFormationEnv;
+    };
+
+/**
+ * Pure: derive what activating `env` for this catalog row MEANS (ADD_DERIVES_PLACEMENT,
+ * story.5039). `source_repo` present ⇒ the row is externally built and MUST be placed
+ * (`akash` + `compute_api: crossplane`); no `source_repo` ⇒ the in-repo k3s lane with no cells.
+ *
+ * An akash derivation with no resolvable actuator writer throws `compute_authority_unavailable`
+ * (422): the catalog schema (infra/catalog/_schema.json allOf) makes an akash env without
+ * `compute_api` INVALID, and naming `crossplane` where no writer mints is a workload nobody pays
+ * for — either way the verb would author an unmergeable or dead-on-arrival PR. Refuse loudly.
+ */
+export function planEnvAddShape(
+  catalog: string,
+  env: NodeFormationEnv
+): EnvAddShape {
+  if (!hasCatalogSourceRepo(catalog)) {
+    // In-repo row: no external artifact plane, so the k3s lane — and no placement cells, which
+    // keeps the operator's own row untouchable here (it is add-immutable in practice and
+    // remove-immutable via OPERATOR_SELF_HOSTS_THE_VERB).
+    return { placement: "k3s", computeApi: null, controlEnv: env };
+  }
+  const ownerOrg = githubOwnerFromSourceRepo(parseCatalogSourceRepo(catalog));
+  if (!canBirthOnCrossplane(env, ownerOrg)) {
+    throw new EnvPlanError(
+      "compute_authority_unavailable",
+      `cannot activate '${env}' for owner org '${ownerOrg}': no Crossplane compute authority resolves ` +
+        `(canBirthOnCrossplane requires an installed control plane AND exactly one actuator writer). ` +
+        `Fix location: the CROSSPLANE_ACTUATOR_WRITERS map in src/shared/node-registry/crossplane-control-plane.ts.`,
+      422
+    );
+  }
+  return {
+    placement: "akash",
+    computeApi: "crossplane",
+    controlEnv: controlEnvFor(env, "akash"),
+  };
+}
+
 /**
  * Pure: compute the file-delta for `{ slug, env, present }` over the node's current control-plane files.
  * Every env is an INDEPENDENT, atomic toggle (ATOMIC_PER_ENV) — candidate-a is no different from
  * preview/production.
  *
- * - ADD (present, env absent): catalog `envs:` += env, render overlay + appset, fold slug into that env's
- *   appsets kustomization.
+ * - ADD (present, env absent): catalog `envs:` += env PLUS the derived placement cells
+ *   (ADD_DERIVES_PLACEMENT), render overlay + appset (under the CONTROL env's dir, bug.5204), fold
+ *   the `(env, slug)` pair into that control env's appsets kustomization, and for an akash lane
+ *   move the env's scheduler-worker route to the node's public host (bug.5094 — a fresh akash lane
+ *   has no `<slug>-node-app` Service to dial).
  * - REMOVE (¬present, env present): catalog `envs:` −= env, DELETE the overlay + appset, regenerate that
  *   env's appsets kustomization without the slug. Applies to candidate-a exactly like any other env.
  *   Removing the final env or the current activity authority is rejected with a typed 422.
@@ -208,8 +297,10 @@ export function buildEnvDeltaPlan(input: {
   readonly env: NodeFormationEnv;
   readonly present: boolean;
   readonly current: EnvPlanCurrent;
+  /** Explicit akash lease replacement counter for the added env (defaults 0 — a fresh lease). */
+  readonly leaseGeneration?: number | undefined;
 }): EnvDeltaResult {
-  const { slug, env, present, current } = input;
+  const { slug, env, present, current, leaseGeneration } = input;
 
   // OPERATOR_SELF_HOSTS_THE_VERB — the control plane cannot remove its own deployment.
   if (!present && slug === OPERATOR_SLUG) {
@@ -224,7 +315,14 @@ export function buildEnvDeltaPlan(input: {
   const activityEnv = parseCatalogActivityEnv(current.catalog);
 
   if (present) {
-    return planAdd({ slug, env, currentEnvs, activityEnv, current });
+    return planAdd({
+      slug,
+      env,
+      currentEnvs,
+      activityEnv,
+      current,
+      leaseGeneration,
+    });
   }
   return planRemove({ slug, env, currentEnvs, activityEnv, current });
 }
@@ -235,8 +333,10 @@ function planAdd(args: {
   currentEnvs: NodeFormationEnv[];
   activityEnv: NodeFormationEnv;
   current: EnvPlanCurrent;
+  leaseGeneration?: number | undefined;
 }): EnvDeltaResult {
-  const { slug, env, currentEnvs, activityEnv, current } = args;
+  const { slug, env, currentEnvs, activityEnv, current, leaseGeneration } =
+    args;
 
   // Idempotent: already present → no PR.
   if (currentEnvs.includes(env)) {
@@ -255,9 +355,14 @@ function planAdd(args: {
     activityEnv
   );
 
+  // ADD_DERIVES_PLACEMENT — the shape (placement + compute authority + control env) is a function
+  // of the catalog row, never caller input. Throws compute_authority_unavailable before any render.
+  const shape = planEnvAddShape(current.catalog, env);
+
   const templateOverlay = current.templateOverlayByEnv[env];
   const templateExternalSecret = current.templateExternalSecretByEnv?.[env];
-  const appsetsKustomization = current.appsetsKustomizationByEnv[env];
+  const appsetsKustomization =
+    current.appsetsKustomizationByEnv[shape.controlEnv];
   if (
     templateOverlay === undefined ||
     templateExternalSecret === undefined ||
@@ -268,8 +373,37 @@ function planAdd(args: {
   ) {
     throw new EnvPlanError(
       "env_render_inputs_missing",
-      `cannot render add of '${env}' for '${slug}': missing template overlay, external-secret, appset template, kustomization, or ports.`,
+      `cannot render add of '${env}' for '${slug}': missing template overlay, external-secret, appset template, control-env ('${shape.controlEnv}') kustomization, or ports.`,
       422
+    );
+  }
+
+  // ACTIVITY_FOLLOWS_INGEST — see the module header for why this needs no fenced
+  // cutover: only production can ingest, so a sub-production authority is provably
+  // empty. Without this, a promoted node is deployed and serving yet structurally
+  // unable to earn a receipt — its webhooks land in production and are dropped
+  // `unclaimed`, fail-closed and silent. That is bug.5079, which left `levelup` live
+  // in production with zero receipts.
+  let nextCatalog = setCatalogEnvs(current.catalog, nextEnvs);
+  if (nextActivityEnv !== activityEnv) {
+    nextCatalog = setCatalogActivityEnv(nextCatalog, nextActivityEnv);
+  }
+  if (shape.placement === "akash") {
+    // The three cells #2301 hand-wrote, EXPLICITLY — including a schema-default
+    // `lease_generation: 0`. Activation states its placement in git; eliding a default here
+    // is exactly the silent k3s fallback ci-cd Axiom 23 forbids.
+    nextCatalog = setCatalogPlacement(nextCatalog, env, "akash");
+    nextCatalog = setCatalogPlacementCell(
+      nextCatalog,
+      "compute_api",
+      env,
+      shape.computeApi
+    );
+    nextCatalog = setCatalogPlacementCell(
+      nextCatalog,
+      "lease_generation",
+      env,
+      String(leaseGeneration ?? 0)
     );
   }
 
@@ -277,19 +411,7 @@ function planAdd(args: {
     {
       op: "upsert",
       path: CATALOG_PATH(slug),
-      // ACTIVITY_FOLLOWS_INGEST — see the module header for why this needs no fenced
-      // cutover: only production can ingest, so a sub-production authority is provably
-      // empty. Without this, a promoted node is deployed and serving yet structurally
-      // unable to earn a receipt — its webhooks land in production and are dropped
-      // `unclaimed`, fail-closed and silent. That is bug.5079, which left `levelup` live
-      // in production with zero receipts.
-      content:
-        nextActivityEnv === activityEnv
-          ? setCatalogEnvs(current.catalog, nextEnvs)
-          : setCatalogActivityEnv(
-              setCatalogEnvs(current.catalog, nextEnvs),
-              nextActivityEnv
-            ),
+      content: nextCatalog,
     },
     {
       op: "upsert",
@@ -314,17 +436,27 @@ function planAdd(args: {
         current.port
       ),
     },
+    // CONTROL_ENV_OWNS_THE_APPSET_DIR (bug.5204) — the dir comes from the POST-MUTATION
+    // placement; the filename keeps the workload env.
     {
       op: "upsert",
-      path: appsetPath(env, slug),
+      path: appsetPath(shape.controlEnv, env, slug),
       content: renderNodeAppset(current.appsetTemplate, slug, env),
     },
     {
       op: "upsert",
-      path: appsetsKustomizationPath(env),
+      path: appsetsKustomizationPath(shape.controlEnv),
       content: insertAppsetKustomization(appsetsKustomization, slug, env),
     },
   ];
+  if (shape.placement === "akash") {
+    // PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) at activation: an akash lane has no
+    // `<slug>-node-app` Service, so the env's scheduler-worker route must carry the node's
+    // public host from the very first flight. A k3s add needs no op — every env patch already
+    // renders the in-cluster default for every catalog row.
+    const schedulerOp = buildSchedulerEndpointOp(slug, env, "akash", current);
+    if (schedulerOp) ops.push(schedulerOp);
+  }
   return { kind: "add", ops, nextEnvs };
 }
 
@@ -389,7 +521,9 @@ function planRemove(args: {
           { op: "delete", path: overlayPath(env, slug) },
           { op: "delete", path: externalSecretPath(env, slug) },
         ] as const)),
-    { op: "delete", path: appsetPath(env, slug) },
+    // REMOVE still treats the workload env as the control env (k3s rows). A control-env-aware
+    // remove of an akash lane is deliberately out of this PR's scope (story.5039 PR-A).
+    { op: "delete", path: appsetPath(env, env, slug) },
     {
       op: "upsert",
       path: appsetsKustomizationPath(env),
@@ -487,10 +621,11 @@ export function buildPlacementPlan(input: {
 }
 
 /**
- * PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) applies to the placement lever too: a flip changes WHICH
- * address the scheduler-worker must dial for `slug` in `env`, so the env's generated
- * node-endpoints patch has to move with it — else the routing map keeps pointing at the LANE THE
- * NODE JUST LEFT. Returns `null` when the routed URL already matches (idempotent — a catalog-only
+ * PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) applies to the placement lever AND the akash-derived
+ * add (story.5039): the flip/activation decides WHICH address the scheduler-worker must dial for
+ * `slug` in `env`, so the env's generated node-endpoints patch has to move with it — else the
+ * routing map keeps pointing at the LANE THE NODE JUST LEFT (or, on activation, at a Service that
+ * never exists). Returns `null` when the routed URL already matches (idempotent — a catalog-only
  * normalization, or an already-correct restore, opens no scheduler-routing hunk).
  */
 function buildSchedulerEndpointOp(

@@ -104,6 +104,70 @@ describe("insertAppsetKustomization", () => {
     ).toThrow(/resources/);
   });
 
+  // CRITICAL regression (bug.5204/story.5039): a CONTROL env's dir holds FOREIGN workload envs'
+  // AppSets (an akash node's non-production lane is reconciled by production). The old single-env
+  // filename filter silently DROPPED those lines on every whole-file rewrite.
+  it("preserves foreign-env lines when rewriting the production control kustomization", () => {
+    const PRODUCTION_BEFORE = `${HEADER}
+  - candidate-a-poly-applicationset.yaml
+  - preview-poly-applicationset.yaml
+  - production-beacon-applicationset.yaml
+  - production-operator-applicationset.yaml
+`;
+    expect(
+      insertAppsetKustomization(PRODUCTION_BEFORE, "newnode", "production")
+    ).toBe(
+      `${HEADER}
+  - candidate-a-poly-applicationset.yaml
+  - preview-poly-applicationset.yaml
+  - production-beacon-applicationset.yaml
+  - production-newnode-applicationset.yaml
+  - production-operator-applicationset.yaml
+`
+    );
+    // Folding a foreign-env pair in keeps env-major then node-sorted order (stated explicitly,
+    // not the ASCII coincidence).
+    expect(
+      insertAppsetKustomization(PRODUCTION_BEFORE, "atlas", "preview")
+    ).toBe(
+      `${HEADER}
+  - candidate-a-poly-applicationset.yaml
+  - preview-atlas-applicationset.yaml
+  - preview-poly-applicationset.yaml
+  - production-beacon-applicationset.yaml
+  - production-operator-applicationset.yaml
+`
+    );
+  });
+
+  it("is pair-scoped: the same slug may hold several workload envs in one control dir", () => {
+    const WITH_CAND = `${HEADER}
+  - candidate-a-poly-applicationset.yaml
+  - production-poly-applicationset.yaml
+`;
+    // (candidate-a, poly) present does NOT make (preview, poly) idempotent.
+    expect(insertAppsetKustomization(WITH_CAND, "poly", "preview")).toBe(
+      `${HEADER}
+  - candidate-a-poly-applicationset.yaml
+  - preview-poly-applicationset.yaml
+  - production-poly-applicationset.yaml
+`
+    );
+  });
+
+  it("THROWS on an unparseable resource line instead of silently dropping it", () => {
+    const MANGLED = `${HEADER}
+  - candidate-a-poly-applicationset.yaml
+  - some-random-file.yaml
+`;
+    expect(() =>
+      insertAppsetKustomization(MANGLED, "foo", "candidate-a")
+    ).toThrow(/unparseable resource line/);
+    expect(() =>
+      removeFromAppsetsKustomization(MANGLED, "poly", "candidate-a")
+    ).toThrow(/unparseable resource line/);
+  });
+
   // PER-ENV (story.5020) — each env's kustomization is self-contained, so folding a
   // slug into one env never touches another env's file. A node born into a subset of
   // envs simply has insertAppsetKustomization called once per birth env on that env's

@@ -137,6 +137,36 @@ describe("POST /api/v1/nodes/[id]/envs — schema", () => {
     expect(openNodePlacementPr).not.toHaveBeenCalled();
   });
 
+  it("surfaces the writer's derived activation shape on present:true (ADD_DERIVES_PLACEMENT)", async () => {
+    const derived = {
+      placement: "akash",
+      computeApi: "crossplane",
+      controlEnv: "production",
+      leaseGeneration: 0,
+    };
+    openNodeEnvPr.mockResolvedValue({
+      status: "pr_opened",
+      action: "add",
+      prNumber: 7,
+      prUrl: "https://github.com/x/y/pull/7",
+      derived,
+    });
+    const res = await post({ env: "production", present: true });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      present: true,
+      derived,
+    });
+  });
+
+  it("carries no derived field on a remove (present:false is not a derivation)", async () => {
+    openNodeEnvPr.mockResolvedValue({ status: "no_changes" });
+    const res = await post({ env: "preview", present: false });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("derived");
+  });
+
   it("maps a typed writer failure (akash_requires_source_repo) onto its status + code", async () => {
     openNodePlacementPr.mockRejectedValue(
       Object.assign(new Error("no source_repo"), {
