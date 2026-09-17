@@ -209,8 +209,14 @@ _resolve_node_value() {
 # env differs from the lane. Every row that exists today (every k3s lane, every production
 # row) has control_env == env, gets the empty suffix, and keeps its exact current name.
 # NOTHING MIGRATES. A foreign-custodied lane is new by construction, so it is born correct.
+# Delegates to the ONE definition (scripts/ci/lib/appset-paths.sh) so the name this composes
+# and the name the provisioner creates cannot drift — that drift IS bug.5207. The fallback
+# keeps this file usable where the lib is not on the path (local/test callers).
 _lane_db_suffix() {
   local lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
+  if command -v lane_db_suffix >/dev/null 2>&1; then
+    lane_db_suffix "$lane" "$control"; return 0
+  fi
   [ -n "$lane" ] && [ "$control" != "$lane" ] || return 0
   printf '_%s' "${lane//-/_}"
 }

@@ -59,6 +59,23 @@ appsets_kustomization_rel_path() {
 # reaches Akash as a placeholder resolved in the RECONCILING cluster. So the paying cluster
 # holds every environment's workload secrets." Custody flows DOWN-TRUST only; the reverse —
 # handing a candidate-a flight the production vault — is explicitly rejected there.
+# THE SUFFIX A FOREIGN-CUSTODIED LANE'S SHARED-NAMESPACE IDENTIFIERS CARRY (bug.5207).
+#
+# A database and its roles were named from the NODE alone. The env was never IN the name —
+# it was implicit in the HOST, because one env meant one VM meant one Postgres. A lane the
+# PAYING cluster custodies lands on that cluster's Postgres alongside production's own row,
+# where `cogni_<node>` and `app_<node>` are the SAME objects. A lane reconcile would then
+# reconcile the LIVE production role's password to the lane's value.
+#
+# Callers pass the control env they already resolved, so this stays a pure formatting rule
+# with one definition. Empty for every row that exists today (control == lane), so nothing
+# migrates; a foreign-custodied lane is new by construction and is born correct.
+lane_db_suffix() {
+  local lane="$1" control="$2"
+  [ -n "$lane" ] && [ "$control" != "$lane" ] || return 0
+  printf '_%s' "${lane//-/_}"
+}
+
 lanes_reconciled_by() {
   local want="$1" node="$2" env
   for env in $(yq -r '.envs[]?' "$CATALOG_DIR/$node.yaml"); do
