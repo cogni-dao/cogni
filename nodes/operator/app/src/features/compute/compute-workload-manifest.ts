@@ -60,18 +60,30 @@ const MIGRATION_POLICY = "RequireBeforeServing" as const;
 
 /**
  * BOOT_SLO_OR_CLOSE, resolved from the one thing that already decides disposability: the
- * environment. `candidate-a` is the transient proof slot — a candidate that never serves its
- * exact SHA has no forensic value worth paying rent for, so its lease is closed. `preview`
- * and `production` hold, because a live environment that stops serving is an incident to
- * inspect, not a lease to silently reclaim.
+ * environment. `onDeadline` fires in exactly ONE situation — `status.serving` never became
+ * true within `bootDeadlineSeconds` OF THE XR'S CREATION. It is not a running-lane health
+ * policy, so "a live environment that stops serving" is not a case it can reach.
+ *
+ * That is why every NON-PRODUCTION lane closes. A lane that never served once has no forensic
+ * value to pay rent for — there is nothing to inspect, because nothing ran. The earlier rule
+ * held `preview` open for that unreachable incident case, and it was harmless only while
+ * preview meant k3s, which costs nothing. task.5132 made preview a PAID Akash lease on the
+ * production sponsor account, and the repo has no close path to fall back on: `story.5039`'s
+ * deactivate half is unbuilt and `bug.5189` is what an orphaned lease costs. A never-serving
+ * preview lease would bill until a human noticed.
+ *
+ * `production` still holds. A production promote that fails to boot is a real incident, the
+ * PREVIOUS lease is still serving it, and the dead one is the evidence.
  *
  * This is deliberately NOT a caller flag: a per-request "is this disposable?" input is exactly
  * the seam through which a production workload would eventually get closed by a bad argument.
+ * It keys on the same `environment === "production"` question as `actuatorNamespace` below —
+ * one predicate, so a new non-production lane cannot arrive holding only half the policy.
  */
 export function bootPolicyForEnvironment(
   environment: DeploymentEnvironment
 ): XComputeWorkloadBootPolicy {
-  return { onDeadline: environment === "candidate-a" ? "Close" : "Hold" };
+  return { onDeadline: environment === "production" ? "Hold" : "Close" };
 }
 
 /**
