@@ -57,6 +57,9 @@ const options = {
   "flight-targets-json": { type: "string" },
   "promote-targets-csv": { type: "string" },
   "legacy-k3s-targets-json": { type: "string" },
+  // Run-wide preview-forward mode (bug.5195). The planner intersects it with each row's
+  // `envs:` membership, so a production-only node never reaches deploy/preview-<node>.
+  "preview-forward": { type: "string" },
   "catalog-projection-targets-json": { type: "string" },
   "github-output": { type: "string" },
   "repo-spec": { type: "string" },
@@ -117,6 +120,7 @@ async function main(): Promise<void> {
       environment,
       promoteTargetsCsv: values["promote-targets-csv"] ?? "",
       legacyK3sTargetsJson: values["legacy-k3s-targets-json"],
+      previewForwardMode: values["preview-forward"] === "true",
       githubOutput: required(values["github-output"], "--github-output"),
     });
     return;
@@ -301,6 +305,7 @@ async function selectPromoteTargets(input: {
   readonly environment: "candidate-a" | "preview" | "production";
   readonly promoteTargetsCsv: string;
   readonly legacyK3sTargetsJson: string;
+  readonly previewForwardMode: boolean;
   readonly githubOutput: string;
 }): Promise<void> {
   const requestedTargets = input.promoteTargetsCsv
@@ -315,6 +320,7 @@ async function selectPromoteTargets(input: {
       input.legacyK3sTargetsJson,
       "--legacy-k3s-targets-json"
     ),
+    previewForwardMode: input.previewForwardMode,
   });
   const outputs = {
     targets_json: JSON.stringify(selection.deployment),
@@ -332,6 +338,7 @@ async function selectPromoteTargets(input: {
       selection.sourceRepositories
     ),
     source_sha_by_target_json: JSON.stringify(selection.sourceShas),
+    preview_forward_by_target_json: JSON.stringify(selection.previewForward),
   };
   await appendFile(
     input.githubOutput,

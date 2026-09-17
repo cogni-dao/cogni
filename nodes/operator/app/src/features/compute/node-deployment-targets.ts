@@ -17,7 +17,23 @@ export interface DeploymentTargetSelection {
   readonly sourceShas: Readonly<Record<string, string>>;
 }
 
-export type PromoteDeploymentTargetSelection = DeploymentTargetSelection;
+export interface PromoteDeploymentTargetSelection
+  extends DeploymentTargetSelection {
+  /**
+   * Per-target preview-forward eligibility (bug.5195). Preview-forward reads a
+   * node's digest from `deploy/preview-<node>`, so it is only ever valid for a
+   * target the catalog still places in `preview`. It used to be ONE run-wide
+   * flag selected by the ABSENCE of `source_sha` — which is how a promote of a
+   * production-only node (toks5, `envs: [production]`) tried to check out a
+   * branch that does not exist and died on a raw `git` exit 1 before
+   * `promote-k8s` ever ran. The UI never sends `source_sha`, so that path was
+   * the DEFAULT one, not an edge case.
+   *
+   * A target that has left preview is not an error — it simply resolves its
+   * digest from the reviewed catalog pin instead.
+   */
+  readonly previewForward: Readonly<Record<string, boolean>>;
+}
 
 /** Partition one flight once; downstream matrix cells reuse this exact decision. */
 export function resolveDeploymentTargets(input: {
@@ -86,6 +102,8 @@ export function resolvePromoteDeploymentTargets(input: {
   readonly environment: DeploymentEnvironment;
   readonly requestedTargets: readonly string[];
   readonly legacyK3sTargets: readonly string[];
+  /** Run-wide preview-forward mode, decided by the caller. Off ⇒ the map is all false. */
+  readonly previewForwardMode?: boolean;
 }): PromoteDeploymentTargetSelection {
   const byName = new Map(
     input.catalogRows.map((row) => [row.name, row] as const)
@@ -153,6 +171,7 @@ export function resolvePromoteDeploymentTargets(input: {
   const providers: Record<string, "akash" | "k3s"> = {};
   const substrate: string[] = [];
   const k3sNodes: string[] = [];
+  const previewForward: Record<string, boolean> = {};
   for (const target of deployment) {
     const row = byName.get(target);
     if (!row)
@@ -162,6 +181,9 @@ export function resolvePromoteDeploymentTargets(input: {
       environment: input.environment,
     });
     providers[target] = provider;
+    // `envs:` is the SELECTOR (CATALOG_IS_SSOT), not the absence of an input.
+    previewForward[target] =
+      input.previewForwardMode === true && isInEnvironment(row, "preview");
     if (row.type === "node") {
       substrate.push(target);
       if (provider === "k3s") k3sNodes.push(target);
@@ -177,6 +199,7 @@ export function resolvePromoteDeploymentTargets(input: {
     k3sNodes,
     sourceRepositories,
     sourceShas,
+    previewForward,
   };
 }
 
