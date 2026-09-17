@@ -335,8 +335,8 @@ prometheus.relabel "worker_metrics" {
 // =============================================================================
 // Prometheus Metrics: OpenFGA Scraping
 // =============================================================================
-// OpenFGA exposes Prometheus metrics on :2112/metrics. Keep only OpenFGA series
-// plus `up` and add low-cardinality service/env/node labels before remote write.
+// OpenFGA exposes Prometheus metrics on :2112/metrics. Keep only OpenFGA and
+// datastore-pool series plus `up`, then add low-cardinality labels before remote write.
 
 prometheus.scrape "openfga_metrics" {
   targets         = [{"__address__" = "openfga:2112"}]
@@ -351,7 +351,7 @@ prometheus.relabel "openfga_metrics" {
 
   rule {
     source_labels = ["__name__"]
-    regex         = "(openfga_.*|up)"
+    regex         = "(openfga_.*|pgxpool_.*|up)"
     action        = "keep"
   }
 

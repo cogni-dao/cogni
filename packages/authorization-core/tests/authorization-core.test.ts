@@ -13,6 +13,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { openFgaClientConfig } from "../src/adapters/openfga-authorization.adapter";
 import {
   type AuthzCheckParams,
   authzConnectionResource,
@@ -123,6 +124,15 @@ describe("FakeAuthorizationAdapter", () => {
 });
 
 describe("OpenFgaAuthorizationAdapter", () => {
+  it("disables SDK retries so the adapter exclusively owns retry and timeout policy", () => {
+    expect(
+      openFgaClientConfig({
+        apiUrl: "http://openfga.test",
+        storeId: "store",
+      }).retryParams
+    ).toEqual({ maxRetry: 0 });
+  });
+
   it("returns allow when direct OpenFGA check is allowed", async () => {
     const client = {
       async check(): Promise<{ allowed: boolean }> {
