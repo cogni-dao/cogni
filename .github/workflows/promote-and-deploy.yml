@@ -60,6 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       environment: ${{ steps.env.outputs.environment }}
+      egress_control_env: ${{ steps.egress-control-env.outputs.control_env }}
       head_sha: ${{ steps.env.outputs.head_sha }}
       build_sha: ${{ steps.env.outputs.build_sha }}
       deploy_branch: ${{ steps.env.outputs.deploy_branch }}
@@ -150,11 +151,28 @@ jobs:
             --preview-forward "${{ steps.env.outputs.preview_forward }}" \
             --github-output "$GITHUB_OUTPUT"
 
+      # WHICH CLUSTER'S FIREWALL, not which CIDRs (bug.5206). See the twin step in
+      # candidate-flight.yml — the VM we harden must hold the lane's substrate, and its
+      # host AND ssh key are environment-scoped, so the job runs in the control env.
+      - name: Resolve compute-egress control env
+        id: egress-control-env
+        env:
+          DEPLOY_ENVIRONMENT: ${{ steps.env.outputs.environment }}
+        run: |
+          set -euo pipefail
+          control_env="$(COGNI_CATALOG_ROOT="${GITHUB_WORKSPACE}/app-src/infra/catalog" \
+            bash "${GITHUB_WORKSPACE}/app-src/scripts/ci/resolve-egress-control-env.sh" "$DEPLOY_ENVIRONMENT")"
+          echo "control_env=${control_env}" >> "$GITHUB_OUTPUT"
+          if [ "$control_env" != "$DEPLOY_ENVIRONMENT" ]; then
+            echo "::notice::${DEPLOY_ENVIRONMENT}'s akash rows are custodied by '${control_env}' — hardening that cluster's VM (bug.5206)"
+          fi
+
   reconcile-compute-egress:
     needs: decide
     if: needs.decide.result == 'success'
     runs-on: ubuntu-latest
-    environment: ${{ needs.decide.outputs.environment }}
+    # The CONTROL env, not the lane — this job's secrets must be the substrate VM's.
+    environment: ${{ needs.decide.outputs.egress_control_env }}
     steps:
       - name: Checkout reviewed application source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4

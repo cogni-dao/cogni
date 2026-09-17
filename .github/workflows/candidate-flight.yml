@@ -64,6 +64,7 @@ jobs:
       deployment_provider_by_target_json: ${{ steps.substrate-targets.outputs.deployment_provider_by_target_json }}
       source_repository_by_target_json: ${{ steps.substrate-targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.substrate-targets.outputs.source_sha_by_target_json }}
+      egress_control_env: ${{ steps.egress-control-env.outputs.control_env }}
     steps:
       - name: Checkout workflow source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -260,6 +261,22 @@ jobs:
             --flight-targets-json "$FLIGHT_TARGETS_JSON" \
             --github-output "$GITHUB_OUTPUT"
 
+      # WHICH CLUSTER'S FIREWALL, not which CIDRs (bug.5206). The allowlist CONTENTS stay
+      # the lane's; the VM we harden must be the one that actually holds this lane's
+      # Postgres/Temporal/Redis/LiteLLM. VM_HOST *and* SSH_DEPLOY_KEY are environment-scoped,
+      # so the egress job has to RUN IN that environment — overriding the host alone would
+      # hand the lane's deploy key to a foreign VM.
+      - name: Resolve compute-egress control env
+        id: egress-control-env
+        run: |
+          set -euo pipefail
+          control_env="$(COGNI_CATALOG_ROOT="${GITHUB_WORKSPACE}/app-src/infra/catalog" \
+            bash "${GITHUB_WORKSPACE}/app-src/scripts/ci/resolve-egress-control-env.sh" candidate-a)"
+          echo "control_env=${control_env}" >> "$GITHUB_OUTPUT"
+          if [ "$control_env" != "candidate-a" ]; then
+            echo "::notice::candidate-a's akash rows are custodied by '${control_env}' — hardening that cluster's VM (bug.5206)"
+          fi
+
       - name: Set up Docker Buildx
         if: steps.flight-targets.outputs.has_image_inputs == 'true'
         uses: docker/setup-buildx-action@v3
@@ -310,7 +327,8 @@ jobs:
     needs: decide
     if: needs.decide.result == 'success'
     runs-on: ubuntu-latest
-    environment: candidate-a
+    # The CONTROL env, not the lane — this job's secrets must be the substrate VM's.
+    environment: ${{ needs.decide.outputs.egress_control_env }}
     steps:
       - name: Checkout reviewed application source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
