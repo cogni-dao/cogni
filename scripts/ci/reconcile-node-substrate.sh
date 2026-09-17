@@ -564,7 +564,7 @@ ${edge_reconcile_snippet}
     next=\"\$current,${node_db}\"
   fi
   # ATOMIC-OR-REFUSE. This file is the SHARED runtime env every compose service reads.
-  # `sed -i` and `>>` mutate it in place, so a reader during that window sees a truncated or
+  # An in-place sed or append mutates it live, so a reader in that window sees a truncated or
   # half-appended file — which is how a mid-run failure here bounced production agent auth
   # for ~5 minutes on 2026-09-17. Render to a temp, VERIFY it, then publish with mv, which is
   # atomic on one filesystem: a reader sees either the old file or the new one, never a
