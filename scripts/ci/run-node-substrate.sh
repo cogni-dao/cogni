@@ -141,7 +141,21 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
 $(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
 EOF
 else
-  echo "::notice::${TARGET_NODE}'s ${DEPLOY_ENVIRONMENT} lane is reconciled by '${CONTROL_ENV}' — its secrets live in that cluster's vault and are written by ${CONTROL_ENV}'s own substrate run. Skipping the materialize + secret-bank assert here; this lane's DB substrate is still provisioned below."
+  # A FOREIGN-CUSTODIED LANE HAS NO SUBSTRATE ON ITS OWN VM, so its own flight reconciles
+  # NOTHING here (bug.5206). Everything reconcile would provision — the vault bank, the
+  # database, the roles, the Temporal namespace — belongs to the CONTROL cluster and is
+  # provisioned by THAT cluster's substrate run, which is the only run holding the identities
+  # to do it. Running it here anyway produced exactly one outcome: a mint of
+  # `production-db-reader` against the LANE's OpenBao, where that role does not exist —
+  # `invalid role name "production-db-reader"`, and the flight dies.
+  #
+  # The alternative (resolve the reader from the VM's env instead) would "work" by
+  # provisioning a SECOND copy of the lane's database on the lane's own VM — a ghost nothing
+  # dials, since the DSN the workload receives is composed against the control VM. Reconciling
+  # nothing is not a gap here; it is the correct amount of work.
+  echo "::notice::${TARGET_NODE}'s ${DEPLOY_ENVIRONMENT} lane is reconciled by '${CONTROL_ENV}' — its ENTIRE substrate (vault bank, database, roles, Temporal namespace) lives in that cluster and is provisioned by ${CONTROL_ENV}'s own substrate run. Nothing to reconcile on this VM."
+  echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}: substrate is ${CONTROL_ENV}'s — nothing to do here"
+  exit 0
 fi
 
 DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
