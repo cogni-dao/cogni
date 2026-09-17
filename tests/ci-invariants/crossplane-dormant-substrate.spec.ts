@@ -225,33 +225,51 @@ function duplicates(values: readonly string[]): string[] {
     .sort();
 }
 
-/** Every environment any writer claims to mint for, with the writers that claim it. */
-function writersByServedEnv(
+/**
+ * Every (environment, OWNER ORG) pair any writer claims to mint for, with the writers that claim
+ * it. Keyed on the PAIR, not the environment (bug.5202): `candidate-a` is now legitimately
+ * claimed by two writers — the production account for real `cogni-dao` nodes (NS3) and the
+ * platform test account for `cogni-test-org` throwaway nodes (NS4). Per ENV that is two; per
+ * PAIR it must still be exactly one, and that is the property worth guarding.
+ */
+function writersByServedPair(
   writers: readonly CrossplaneActuatorWriter[]
 ): Map<string, string[]> {
-  const byEnv = new Map<string, string[]>();
+  const byPair = new Map<string, string[]>();
   for (const writer of writers) {
     for (const environment of writer.serves) {
-      byEnv.set(environment, [...(byEnv.get(environment) ?? []), writer.id]);
+      for (const owner of writer.owners) {
+        const key = `${environment}|${owner}`;
+        byPair.set(key, [...(byPair.get(key) ?? []), writer.id]);
+      }
     }
   }
-  return byEnv;
+  return byPair;
 }
 
 /** Environments whose catalog rows select the Crossplane authority — i.e. that MUST be funded. */
-const CROSSPLANE_SELECTED_ENVS = [
-  ...new Set(
+const CROSSPLANE_SELECTED_PAIRS: readonly { env: string; owner: string }[] = [
+  ...new Map(
     yamlFiles(path.join(REPO_ROOT, "infra/catalog"))
       .flatMap(readYamlDocuments)
-      .flatMap((document) =>
-        Object.entries(
+      .flatMap((document) => {
+        // The row's OWNER decides which account may pay for it. An in-repo row (no
+        // `source_repo`) belongs to the monorepo org itself.
+        const sourceRepo =
+          typeof document.source_repo === "string" ? document.source_repo : "";
+        const owner = sourceRepo
+          ? (
+              new URL(sourceRepo).pathname.split("/").filter(Boolean)[0] ?? ""
+            ).toLowerCase()
+          : "cogni-dao";
+        return Object.entries(
           (document.compute_api as Record<string, string> | undefined) ?? {}
         )
           .filter(([, authority]) => authority === "crossplane")
-          .map(([environment]) => environment)
-      )
-  ),
-].sort();
+          .map(([env]) => [`${env}|${owner}`, { env, owner }] as const);
+      })
+  ).values(),
+].sort((a, b) => `${a.env}|${a.owner}`.localeCompare(`${b.env}|${b.owner}`));
 
 const REAL_BINDINGS = writerBindings(CROSSPLANE_ACTUATOR_WRITERS);
 
@@ -440,14 +458,15 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
    * writer would arrive on an account by accident. Asserted over the real catalog, so the guard
    * widens automatically the moment a row moves to the Crossplane authority.
    */
-  it("names exactly one writer for every environment the catalog selects crossplane in", () => {
-    expect(CROSSPLANE_SELECTED_ENVS.length).toBeGreaterThan(0);
-    for (const environment of CROSSPLANE_SELECTED_ENVS) {
+  it("names exactly one writer for every (env, owner) the catalog selects crossplane in", () => {
+    expect(CROSSPLANE_SELECTED_PAIRS.length).toBeGreaterThan(0);
+    const byPair = writersByServedPair(CROSSPLANE_ACTUATOR_WRITERS);
+    for (const { env, owner } of CROSSPLANE_SELECTED_PAIRS) {
       expect(
-        writersByServedEnv(CROSSPLANE_ACTUATOR_WRITERS).get(environment) ?? [],
-        `${environment} has crossplane catalog rows but no single writer`
+        byPair.get(`${env}|${owner}`) ?? [],
+        `${env} rows owned by ${owner} select crossplane but no single writer mints for them`
       ).toHaveLength(1);
-      expect(writerFor(environment)?.id, environment).toBeDefined();
+      expect(writerFor(env, owner)?.id, `${env}|${owner}`).toBeDefined();
     }
   });
 
@@ -668,18 +687,34 @@ describe("account -> writer injectivity is falsifiable (bug.5187)", () => {
   });
 
   it("catches an environment claimed by TWO writers", () => {
-    const byEnv = writersByServedEnv([
-      { id: "a/akash-tx-actuator", cluster: CANDIDATE, serves: [PRODUCTION] },
-      { id: "b/akash-tx-actuator", cluster: PRODUCTION, serves: [PRODUCTION] },
+    // Two writers claiming one env FOR THE SAME OWNER is still the violation.
+    const byPair = writersByServedPair([
+      {
+        id: "a/akash-tx-actuator",
+        cluster: CANDIDATE,
+        serves: [PRODUCTION],
+        owners: ["cogni-dao"],
+      },
+      {
+        id: "b/akash-tx-actuator",
+        cluster: PRODUCTION,
+        serves: [PRODUCTION],
+        owners: ["cogni-dao"],
+      },
     ]);
-    expect(byEnv.get(PRODUCTION)).toHaveLength(2);
+    expect(byPair.get(`${PRODUCTION}|cogni-dao`)).toHaveLength(2);
   });
 
   it("catches a selected environment NO writer serves", () => {
-    const byEnv = writersByServedEnv([
-      { id: "a/akash-tx-actuator", cluster: CANDIDATE, serves: [CANDIDATE] },
+    const byPair = writersByServedPair([
+      {
+        id: "a/akash-tx-actuator",
+        cluster: CANDIDATE,
+        serves: [CANDIDATE],
+        owners: ["cogni-dao"],
+      },
     ]);
-    expect(byEnv.get(PRODUCTION) ?? []).toHaveLength(0);
+    expect(byPair.get(`${PRODUCTION}|cogni-dao`) ?? []).toHaveLength(0);
   });
 
   it("does NOT flag one writer serving many environments — the north star shape", () => {
@@ -688,6 +723,7 @@ describe("account -> writer injectivity is falsifiable (bug.5187)", () => {
         id: "production/akash-tx-actuator",
         cluster: PRODUCTION,
         serves: [CANDIDATE, "preview", PRODUCTION],
+        owners: ["cogni-dao"],
       },
     ];
     const bindings = writerBindings(writers);
@@ -698,7 +734,9 @@ describe("account -> writer injectivity is falsifiable (bug.5187)", () => {
       []
     );
     for (const environment of [CANDIDATE, "preview", PRODUCTION]) {
-      expect(writersByServedEnv(writers).get(environment)).toHaveLength(1);
+      expect(
+        writersByServedPair(writers).get(`${environment}|cogni-dao`)
+      ).toHaveLength(1);
     }
   });
 });
