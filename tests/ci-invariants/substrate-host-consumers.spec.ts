@@ -6,8 +6,7 @@
  * Purpose: Enforces SUBSTRATE_HOST_IS_CONTROL_ENV_SCOPED (bug.5206) — the shared substrate a
  *   workload dials belongs to the cluster that RECONCILES the lane, not the lane it is named
  *   after, so no consumer may derive it from the workload env alone.
- * Scope: Static grep over the deploy actions/workflows/scripts that build a substrate host.
- *   Does not execute them, resolve YAML, or hit the network.
+ * Scope: Static grep over the deploy actions/workflows/scripts that build a substrate host; does not execute them, resolve YAML, hit the network, or verify the host resolves.
  * Invariants:
  *   VM_HOST_FOR_ENV_TAKES_A_RESOLVED_ENV: `vm_host_for_env` is never called with a raw
  *     workload-env variable; its first argument must be a control-env-resolved value.
