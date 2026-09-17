@@ -14,11 +14,15 @@ production_branch: deploy/production-toks5
 # story.5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth renders the transient
 # candidate-a proof slot and canonical production; PREVIEW_IS_ABSENT_AT_BIRTH. Closing the
 # candidate after the proof is the ordinary env verb ({env:candidate-a, present:false}).
-envs: [candidate-a, production]
+# task.5130 — that close is now DONE. candidate-a's actuator is pinned to the TEST Console
+# account (akash12eh8…), reserved for Cogni's own operator-platform self-test on
+# cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER: toks5 is a real cogni-dao fleet
+# node, so every environment it runs in must bill the PRODUCTION sponsor account
+# (akash10auj…). The birth proof is spent; production is this node's only slot.
+envs: [production]
 # story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
 # fallback that exists for rows minted before decentralized compute did.
 deployment_provider:
-  candidate-a: akash
   production: akash
 # task.5097 — WHICH authority reconciles the workload. Crossplane
 # (infra/crossplane/xcomputeworkload) owns every generic concern; the only Cogni-specific
@@ -27,13 +31,24 @@ deployment_provider:
 # control plane) and pay for its lease (a pinned actuator wallet); an environment missing
 # either is omitted and stays on the pre-existing legacy default (task.5104, task.5097).
 compute_api:
-  candidate-a: crossplane
   production: crossplane
+# bug.5192 — EXPLICIT replacement counter for a terminally settled lease key. The generation is
+# the only varying component of the actuator's wallet-wide idempotence key
+# (`xcw:cogni-production:f66b260b-4633-41e2-8711-b7c1b8449cc1:<generation>`), and the actuator
+# refuses to re-spend a settled key by design (`akash_tx_create_refused_settled_key`), so
+# generation 0's receipt — settled with no lease handle after the 33h writer-slot wedge — can
+# never mint this node's production lease. A human bumps this by exactly 1 to REPLACE that
+# lease; nothing bumps it implicitly, because a generation that moved on its own would answer
+# "no existing resource" after a promote and mint a SECOND PAID LEASE.
+# task.5122 renamed this cell from `lease_epoch`; the VALUE is unchanged, so the key this row
+# resolves to is still `…:1` byte-for-byte. "Epoch" is reserved for attribution/distribution.
+lease_generation:
+  production: 1
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
 # sub-production authority would have to be moved by every later promote, and generation 1
-# has no fenced cross-environment cutover. candidate-a stays passive — it never ingests, so
-# it can never run a competing activity ledger.
+# has no fenced cross-environment cutover. Born at the top, it survived the task.5130
+# candidate-a close untouched — the very property being born at production buys.
 activity_env: production
 # Stable binding only; the reconciler resolves an env-local users.id by wallet.
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
