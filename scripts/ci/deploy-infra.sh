@@ -1074,7 +1074,7 @@ printf '%s=%s\n' DOLTGRES_READER_PASSWORD "$DOLTGRES_READER_PASSWORD" >> "$RUNTI
 printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTIME_ENV"
 
 if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
-
+bash /opt/cogni-template-runtime/host-safeguards/reconcile.sh
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Step 2: Start edge stack (idempotent - only starts if not running)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

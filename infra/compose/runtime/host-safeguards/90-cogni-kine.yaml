@@ -1,0 +1,5 @@
+# Bound Kubernetes Event retention so a flapping workload cannot grow kine's
+# append-only revision history without limit. Retained revisions are reclaimed
+# by k3s-kine-compact.timer.
+kube-apiserver-arg:
+  - "event-ttl=30m"

@@ -33,11 +33,18 @@ resource "cherryservers_server" "server" {
       cogni_repo_ref       = var.cogni_repo_ref
       sops_age_private_key = var.sops_age_private_key
       harden_script        = file("${path.module}/../harden-docker-public-ports.sh")
+      kine_config          = file("${path.module}/../../../compose/runtime/host-safeguards/90-cogni-kine.yaml")
+      kine_compact_script  = file("${path.module}/../../../compose/runtime/host-safeguards/k3s-kine-compact.sh")
+      kine_compact_service = file("${path.module}/../../../compose/runtime/host-safeguards/k3s-kine-compact.service")
+      kine_compact_timer   = file("${path.module}/../../../compose/runtime/host-safeguards/k3s-kine-compact.timer")
+      kine_metrics_script  = file("${path.module}/../../../compose/runtime/host-safeguards/k3s-kine-metrics.sh")
+      kine_metrics_service = file("${path.module}/../../../compose/runtime/host-safeguards/k3s-kine-metrics.service")
+      kine_metrics_timer   = file("${path.module}/../../../compose/runtime/host-safeguards/k3s-kine-metrics.timer")
       system_reserved_memory = var.system_reserved_memory
       eviction_hard_memory   = var.eviction_hard_memory
     }))
     allow_reinstall = true
-    
+
     lifecycle {
         ignore_changes = [user_data]
     }

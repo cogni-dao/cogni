@@ -1,0 +1,71 @@
+# Grafana unified-alerting provisioning — k3s kine datastore health.
+#
+# APPLY: Grafana Cloud does not load filesystem provisioning. Apply this
+# reviewed source through the existing alerting provisioning API (or convert it
+# to Terraform when Grafana provider credentials are wired). Apply only after
+# cogni_k3s_kine_state_db_bytes is visible for every environment, because
+# missing size telemetry intentionally alerts.
+apiVersion: 1
+groups:
+  - orgId: 1
+    folder: Cogni alerts
+    name: k3s-kine
+    interval: 5m
+    rules:
+      - uid: k3s-kine-state-db-large
+        title: k3s kine state.db exceeds 1 GiB
+        condition: THRESHOLD
+        for: 30m
+        data:
+          - refId: SIZE
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              editorMode: code
+              expr: "max by (env, instance) (cogni_k3s_kine_state_db_bytes)"
+              instant: true
+              range: false
+              refId: SIZE
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: SIZE
+              conditions:
+                - evaluator: { type: gt, params: [1073741824] }
+              refId: THRESHOLD
+        annotations:
+          summary: "k3s kine state.db has exceeded 1 GiB for 30m. Check Event churn and k3s-kine-compact.timer before API-server I/O degrades."
+        labels: { severity: warning, plane: k3s }
+        noDataState: Alerting
+        execErrState: Alerting
+
+      - uid: k3s-kine-sustained-iowait
+        title: k3s host sustained I/O wait exceeds 20%
+        condition: THRESHOLD
+        for: 15m
+        data:
+          - refId: IOWAIT
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              editorMode: code
+              expr: 'sum by (env, instance) (rate(node_cpu_seconds_total{mode="iowait"}[5m])) / count by (env, instance) (node_cpu_seconds_total{mode="idle"})'
+              instant: true
+              range: false
+              refId: IOWAIT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: IOWAIT
+              conditions:
+                - evaluator: { type: gt, params: [0.2] }
+              refId: THRESHOLD
+        annotations:
+          summary: "Host CPU time has spent over 20% in I/O wait for 15m. Check kine state.db growth and disk latency before probe/Event feedback begins."
+        labels: { severity: critical, plane: k3s }
+        noDataState: Alerting
+        execErrState: Alerting
