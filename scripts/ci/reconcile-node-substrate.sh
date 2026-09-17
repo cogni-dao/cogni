@@ -525,6 +525,28 @@ elif "$dolt_mirror_enabled"; then
 "
 fi
 
+# THE LANE'S TEMPORAL NAMESPACE MUST EXIST ON THE SERVER THE LANE DIALS (task.5132).
+# The composite sets TEMPORAL_ADDRESS to the CONTROL env's VM (the substrate is the paying
+# cluster's) and TEMPORAL_NAMESPACE to `cogni-<lane>` — correctly, since one server must hold
+# both lanes without collision, exactly like `cogni_<node>_<lane>` for Postgres.
+#
+# But NOTHING registers it. Registration lives only in deploy-infra.sh step 6.7, and an app
+# promote sets skip_infra=true, so a foreign-custodied lane reaches a Temporal server that has
+# never heard of its namespace. The app's first call gets NamespaceNotFound, /readyz never
+# passes, and bootPolicy closes the lease after bootDeadlineSeconds — a paid lease spent on a
+# namespace nobody created.
+#
+# The same idempotent primitive deploy-infra and provision-test-vm already share; a re-run is
+# a no-op. This is the Temporal half of "provision the lane's substrate on the control
+# cluster", which #2319 did for Postgres and Doltgres.
+CURRENT_ROW="temporal_namespace"
+copy_to_remote "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" "/tmp/ensure-temporal-namespace.sh"
+remote "TEMPORAL_NAMESPACE='cogni-${DEPLOY_ENVIRONMENT}' \
+  TEMPORAL_CONTAINER=cogni-runtime-temporal-1 \
+  TEMPORAL_TIMEOUT=60 \
+  bash /tmp/ensure-temporal-namespace.sh"
+mark_row temporal_namespace ensured "cogni-${DEPLOY_ENVIRONMENT} registered on ${SUBSTRATE_CONTROL_ENV}'s Temporal (idempotent)"
+
 CURRENT_ROW="remote_reconcile"
 remote "set -euo pipefail
   runtime_env=/opt/cogni-template-runtime/.env
@@ -542,7 +564,7 @@ ${edge_reconcile_snippet}
     next=\"\$current,${node_db}\"
   fi
   # ATOMIC-OR-REFUSE. This file is the SHARED runtime env every compose service reads.
-  # `sed -i` and `>>` mutate it in place, so a reader during that window sees a truncated or
+  # An in-place sed or append mutates it live, so a reader in that window sees a truncated or
   # half-appended file — which is how a mid-run failure here bounced production agent auth
   # for ~5 minutes on 2026-09-17. Render to a temp, VERIFY it, then publish with mv, which is
   # atomic on one filesystem: a reader sees either the old file or the new one, never a
