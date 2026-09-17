@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 #
-# reconcile-edge-caddy.test.sh — regression guard for bug.5037.
+# reconcile-edge-caddy.test.sh — edge availability regression guards.
 #
 # The hash-persist step used `[[ cond ]] && echo …` as the script's FINAL
 # commands. Under `set -e`, a trailing `[[ false ]] && …` leaves the script's
@@ -57,12 +57,13 @@ case "$args" in
     ;;
   *" exec -T caddy caddy reload "*)
     echo "reload" >> "$log_file"
+    echo "reload-args:$args" >> "$log_file"
     if [[ "${FAKE_RELOAD_FAIL:-0}" == "1" ]]; then
       exit 1
     fi
     exit 0
     ;;
-  *" up -d --force-recreate caddy"*)
+  *"--force-recreate"*)
     echo "recreate" >> "$log_file"
     exit 0
     ;;
@@ -79,7 +80,7 @@ CADDYFILE="$TMPROOT/Caddyfile.tmpl"
 EDGE_ENV="$TMPROOT/edge.env"
 HASH_DIR="$TMPROOT/hashes"
 mkdir -p "$HASH_DIR"
-printf '{$OPERATOR_DOMAIN} { reverse_proxy host.docker.internal:30080 }\n' > "$CADDYFILE"
+printf 'test.cognidao.org { reverse_proxy host.docker.internal:30080 }\n' > "$CADDYFILE"
 printf 'DOMAIN=test.cognidao.org\nOPERATOR_DOMAIN=test.cognidao.org\n' > "$EDGE_ENV"
 
 # caddyfile_changed=true: stored hash differs from the rendered file.
@@ -101,6 +102,19 @@ set -e
 
 if [[ "$rc" -ne 0 ]]; then
   echo "FAIL: reconcile-edge-caddy exited $rc when caddyfile changed but edge .env unchanged (bug.5037 regression)" >&2
+  exit 1
+fi
+
+if ! grep -q '^reload$' "$TMPROOT/fake-compose.log"; then
+  echo "FAIL: changed materialized config did not use Caddy's atomic reload" >&2
+  exit 1
+fi
+if ! grep -q '^reload-args:.*--config - --adapter caddyfile$' "$TMPROOT/fake-compose.log"; then
+  echo "FAIL: Caddy reload did not consume the materialized host config on stdin" >&2
+  exit 1
+fi
+if grep -q '^recreate$' "$TMPROOT/fake-compose.log"; then
+  echo "FAIL: running Caddy was recreated for a config change (bug.5133 regression)" >&2
   exit 1
 fi
 
@@ -240,6 +254,14 @@ fi
 
 if [[ "$(cat "$TMPROOT/admin-count")" -ne 3 ]]; then
   echo "FAIL: expected start path to retry admin readiness until third attempt; got $(cat "$TMPROOT/admin-count") attempts" >&2
+  exit 1
+fi
+
+# A production reconcile must fail closed when incremental compose cannot
+# update postgres. It must never recover by tearing down the shared runtime.
+DEPLOY_INFRA_SCRIPT="$(cd "$SCRIPT_DIR/.." && pwd)/deploy-infra.sh"
+if grep -Eq '\$RUNTIME_COMPOSE[[:space:]]+down|docker[[:space:]]+compose[^#]*[[:space:]]down' "$DEPLOY_INFRA_SCRIPT"; then
+  echo "FAIL: deploy-infra contains an automatic runtime compose down path" >&2
   exit 1
 fi
 
