@@ -17,6 +17,7 @@ const promoteNode = vi.fn();
 let nodeRows: Array<{
   id: string;
   slug: string;
+  deployEnvs?: string[] | null;
 }> = [];
 
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
@@ -79,7 +80,9 @@ beforeEach(() => {
 
 describe("dispatchNodePreviewPromote", () => {
   it("pins the PR head SHA when a registered node's PR merges (PIN_IS_PR_HEAD_SHA)", async () => {
-    nodeRows = [{ id: "node-1", slug: "habitat" }];
+    nodeRows = [
+      { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
+    ];
     promoteNode.mockResolvedValue({
       status: "dispatched",
       env: "preview",
@@ -102,7 +105,9 @@ describe("dispatchNodePreviewPromote", () => {
   });
 
   it("ignores a closed-but-unmerged PR (MERGED_ONLY)", async () => {
-    nodeRows = [{ id: "node-1", slug: "habitat" }];
+    nodeRows = [
+      { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
+    ];
     dispatchNodePreviewPromote(
       mergedPayload({
         pull_request: {
@@ -119,8 +124,45 @@ describe("dispatchNodePreviewPromote", () => {
   });
 
   it("ignores a non-closed action", async () => {
-    nodeRows = [{ id: "node-1", slug: "habitat" }];
+    nodeRows = [
+      { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
+    ];
     dispatchNodePreviewPromote(mergedPayload({ action: "opened" }), ENV, log);
+    await flush();
+    expect(promoteNode).not.toHaveBeenCalled();
+  });
+
+  it("does NOT dispatch for a node that has no preview env (bug.5203)", async () => {
+    // Every fleet row became envs:[production] when #2238 retired the preview node slots.
+    // Dispatching preview anyway resolved ZERO targets, so the run SKIPPED to a green
+    // conclusion: beacon (run 35175805389) and toks5 (run 35176388003) each merged a fix,
+    // showed success, and deployed nothing.
+    nodeRows = [{ id: "node-1", slug: "habitat", deployEnvs: ["production"] }];
+    dispatchNodePreviewPromote(mergedPayload(), ENV, log);
+    await flush();
+    expect(promoteNode).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fall through to production when preview is absent", async () => {
+    // Silence is correct here; SILENT was the bug. Auto-promoting a node merge to
+    // production would ship unreviewed code past the human gate that makes production a
+    // manual dispatch, so the skip must never become a production promote.
+    nodeRows = [{ id: "node-1", slug: "habitat", deployEnvs: ["production"] }];
+    dispatchNodePreviewPromote(mergedPayload(), ENV, log);
+    await flush();
+    expect(promoteNode).not.toHaveBeenCalled();
+    expect(
+      log.info.mock.calls.some(
+        ([fields]: [Record<string, unknown>]) =>
+          fields?.status === "skipped_no_preview_env"
+      ),
+      "the skip must be logged as its own terminal outcome, not silently dropped"
+    ).toBe(true);
+  });
+
+  it("treats a missing deploy_envs projection as NOT in preview (fail closed)", async () => {
+    nodeRows = [{ id: "node-1", slug: "habitat", deployEnvs: null }];
+    dispatchNodePreviewPromote(mergedPayload(), ENV, log);
     await flush();
     expect(promoteNode).not.toHaveBeenCalled();
   });
@@ -136,7 +178,13 @@ describe("dispatchNodePreviewPromote", () => {
     // node-template is a seeded registry row (story.5009) whose repo name == its slug, so it
     // resolves here. It deploys via the monorepo catalog like every node, so a merge on its
     // repo dispatches the same source-addressed preview promote.
-    nodeRows = [{ id: "node-nt", slug: "node-template" }];
+    nodeRows = [
+      {
+        id: "node-nt",
+        slug: "node-template",
+        deployEnvs: ["preview", "production"],
+      },
+    ];
     promoteNode.mockResolvedValue({
       status: "dispatched",
       env: "preview",
@@ -168,7 +216,9 @@ describe("dispatchNodePreviewPromote", () => {
   });
 
   it("no-ops when the deploy-plane GitHub App is unconfigured", async () => {
-    nodeRows = [{ id: "node-1", slug: "habitat" }];
+    nodeRows = [
+      { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
+    ];
     dispatchNodePreviewPromote(
       mergedPayload(),
       { ...ENV, GH_REVIEW_APP_ID: undefined },
