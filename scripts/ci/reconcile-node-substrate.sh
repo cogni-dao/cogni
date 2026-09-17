@@ -271,11 +271,26 @@ export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT DOMAIN
 # as "key absent": the swallowed-error shape produced lying "per-node DB creds absent"
 # failures on paths that demonstrably held 35 keys. Only "No value found" (an unborn
 # path) is a legitimate empty; anything else retries and then fails naming the transport.
+# SHARED-SUBSTRATE OWNERS LIVE WHERE THE SUBSTRATE DOES (bug.5206). A node-scoped read is
+# the LANE's (`cogni/<lane>/<node>`), but `operator` and `_shared` describe the SERVER this
+# run is mutating — the Doltgres superuser, the DoltHub mirror creds — and that server is the
+# CONTROL env's. `cogni/<lane>/operator` does not exist in the paying cluster's vault and
+# never should. secret-materialize.sh already resolves this via its `__owner__` cache; this
+# file is its twin and never got the fix, so the production-side lane reconcile died on
+# "doltgres superuser SSOT absent at cogni/candidate-a/operator/DOLTGRES_PASSWORD".
+_bao_env_for_svc() {
+  case "$1" in
+    operator|_shared|node-template) printf '%s' "$SUBSTRATE_CONTROL_ENV" ;;
+    *)                              printf '%s' "$DEPLOY_ENVIRONMENT" ;;
+  esac
+}
+
 bao_get_field() {
-  local svc="$1" k="$2" raw attempt
+  local svc="$1" k="$2" raw attempt bao_env
+  bao_env="$(_bao_env_for_svc "$svc")"
   for attempt in 1 2 3; do
     if raw="$(remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
-      bao kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>&1)"; then
+      bao kv get -format=json 'cogni/${bao_env}/${svc}'" 2>&1)"; then
       printf '%s' "$raw" | jq -r --arg k "$k" '.data.data[$k] // empty' 2>/dev/null || true
       return 0
     fi
@@ -337,7 +352,15 @@ dg_pw_env="-e DOLTGRES_PASSWORD='${doltgres_superuser_password}'"
 # (which stops future bank writes but cannot remove an already-delivered VM cred).
 dolt_mirror_enabled=false
 dolt_mirror_purge=false
-if [[ "$DEPLOY_ENVIRONMENT" == "production" ]]; then
+# THE VM DECIDES, NOT THE LANE (bug.5206). bug.5003's rule is that a NON-PRODUCTION VM must
+# not hold prod-capable DoltHub creds — that is a property of the HOST being mutated, and for
+# a foreign-custodied lane the host is the CONTROL env's VM. Keyed on the lane, a candidate-a
+# lane reconcile running against PRODUCTION's VM took the purge branch: it would strip
+# DOLT_CREDS_*/DOLTHUB_* out of production's runtime .env and force-recreate production's
+# doltgres, taking the production knowledge mirror dark on every lane promote. This is why it
+# lands in the SAME commit as the owner-read fix above — that fix is what lets this line be
+# reached at all.
+if [[ "$SUBSTRATE_CONTROL_ENV" == "production" ]]; then
   dolt_creds_jwk="$(bao_get_field operator DOLT_CREDS_JWK)"
   dolt_creds_keyid="$(bao_get_field operator DOLT_CREDS_KEYID)"
   dolthub_owner="$(bao_get_field operator DOLTHUB_OWNER)"
@@ -518,11 +541,27 @@ ${edge_reconcile_snippet}
   else
     next=\"\$current,${node_db}\"
   fi
+  # ATOMIC-OR-REFUSE. This file is the SHARED runtime env every compose service reads.
+  # `sed -i` and `>>` mutate it in place, so a reader during that window sees a truncated or
+  # half-appended file — which is how a mid-run failure here bounced production agent auth
+  # for ~5 minutes on 2026-09-17. Render to a temp, VERIFY it, then publish with mv, which is
+  # atomic on one filesystem: a reader sees either the old file or the new one, never a
+  # partial one. A failed render is discarded and the run fails loudly with the file intact.
+  env_tmp=\"\${runtime_env}.reconcile.\$\$\"
   if grep -qE '^COGNI_NODE_DBS=' \"\$runtime_env\"; then
-    sed -i.bak \"s|^COGNI_NODE_DBS=.*\$|COGNI_NODE_DBS=\$next|\" \"\$runtime_env\"
+    sed \"s|^COGNI_NODE_DBS=.*\$|COGNI_NODE_DBS=\$next|\" \"\$runtime_env\" > \"\$env_tmp\"
   else
-    printf '%s=%s\n' COGNI_NODE_DBS \"\$next\" >> \"\$runtime_env\"
+    { cat \"\$runtime_env\"; printf '%s=%s\n' COGNI_NODE_DBS \"\$next\"; } > \"\$env_tmp\"
   fi
+  dbs_n=\$(grep -cE '^COGNI_NODE_DBS=' \"\$env_tmp\" || true)
+  new_n=\$(wc -l < \"\$env_tmp\")
+  old_n=\$(wc -l < \"\$runtime_env\")
+  if [ ! -s \"\$env_tmp\" ] || [ \"\$dbs_n\" != 1 ] || [ \"\$new_n\" -lt \"\$old_n\" ]; then
+    rm -f \"\$env_tmp\"
+    echo 'refusing to publish a malformed runtime env; original left intact' >&2
+    exit 1
+  fi
+  mv -f \"\$env_tmp\" \"\$runtime_env\"
   rm -f \"\$runtime_env.bak\"
 
   # Alloy node-label reconcile — stage the fresh config (rsync's restart-on-change
