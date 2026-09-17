@@ -456,6 +456,41 @@ export class DrizzleAkashTxAllocationLedger
       );
   }
 
+  /**
+   * The wallet's live paid leases: `allocated` receipts that bound a provider handle. A pure
+   * read that decides nothing (story.5039's SEE primitive) — ordered by `updated_at` so the
+   * longest-untouched receipt surfaces first, hard-limited so one pass is bounded, and always
+   * scoped to THIS wallet like every other method. Optional `nodeId`/`environment` narrowing
+   * uses the existing `(node_id, environment)` index; the UNFILTERED scan is the orphan-diff
+   * primitive (a lease whose pair the catalog no longer declares matches no filter).
+   */
+  async listAllocated(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]> {
+    const db = await this.getDb();
+    const rows = await db
+      .select(SELECTION)
+      .from(akashTxAllocations)
+      .where(
+        and(
+          eq(akashTxAllocations.walletScope, this.walletScope),
+          eq(akashTxAllocations.state, "allocated"),
+          sql`${akashTxAllocations.externalName} is not null`,
+          ...(input.nodeId
+            ? [eq(akashTxAllocations.nodeId, input.nodeId)]
+            : []),
+          ...(input.environment
+            ? [eq(akashTxAllocations.environment, input.environment)]
+            : [])
+        )
+      )
+      .orderBy(akashTxAllocations.updatedAt)
+      .limit(input.limit);
+    return rows.map(toRecord);
+  }
+
   async read(input: {
     cogniKey: string;
   }): Promise<AkashTxAllocationRecord | null> {

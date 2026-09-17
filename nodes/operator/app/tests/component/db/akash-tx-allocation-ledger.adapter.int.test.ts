@@ -315,6 +315,77 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
     ).toEqual([]);
   });
 
+  it("lists only handle-bound `allocated` receipts, wallet-scoped, with optional narrowing (story.5039)", async () => {
+    // One live paid lease on candidate-a…
+    await ledger.claim({
+      cogniKey: "k-live",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+    await ledger.recordAllocation({ cogniKey: "k-live", externalName: "7001" });
+    // …one released (settled custody, not a live spend)…
+    await ledger.claim({
+      cogniKey: "k-released",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+    await ledger.recordAllocation({
+      cogniKey: "k-released",
+      externalName: "7002",
+    });
+    await ledger.markReleased({ cogniKey: "k-released" });
+    // …one live paid lease for ANOTHER node on preview (the orphan-diff shape)…
+    await ledger.claim({
+      cogniKey: "k-other",
+      workload: "toks8",
+      environment: "preview",
+      identity: { ...IDENTITY, nodeId: OTHER_NODE_ID },
+    });
+    await ledger.recordAllocation({
+      cogniKey: "k-other",
+      externalName: "7003",
+    });
+    // …and one still preparing (no handle — never listed).
+    await ledger.claim({
+      cogniKey: "k-preparing",
+      workload: "toks9",
+      environment: "candidate-a",
+      identity: IDENTITY,
+    });
+
+    // Unfiltered: the wallet's live paid leases — BOTH nodes. This is the orphan-diff
+    // primitive: a lease whose (node, env) the catalog no longer declares matches no filter.
+    const all = await ledger.listAllocated({ limit: 10 });
+    expect(all.map((r) => r.cogniKey).sort()).toEqual(["k-live", "k-other"]);
+    expect(all.every((r) => r.externalName !== undefined)).toBe(true);
+
+    // (node, env)-narrowed: exactly the receipts one env's remove must see closed.
+    const narrowed = await ledger.listAllocated({
+      nodeId: NODE_ID,
+      environment: "candidate-a",
+      limit: 10,
+    });
+    expect(narrowed.map((r) => r.cogniKey)).toEqual(["k-live"]);
+    expect(narrowed[0]).toMatchObject({
+      environment: "candidate-a",
+      state: "allocated",
+      externalName: "7001",
+      identity: { nodeId: NODE_ID },
+    });
+
+    // Hard limit bounds the pass.
+    expect(await ledger.listAllocated({ limit: 1 })).toHaveLength(1);
+
+    // Scoped like every other method: a differently-scoped ledger sees NOTHING.
+    const foreign = new DrizzleAkashTxAllocationLedger(
+      async () => db,
+      "akash-console:akash1differentwalletaddrforscopetest0000000"
+    );
+    expect(await foreign.listAllocated({ limit: 10 })).toEqual([]);
+  });
+
   it("binds node identity in the very row that opens the wallet slot", async () => {
     // IDENTITY_BEFORE_TRANSACTION — the claim IS the receipt. Nothing later can add identity
     // to a lease that was already paid for; the NOT NULL columns make that unreachable.

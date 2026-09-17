@@ -405,4 +405,22 @@ export interface AkashTxAllocationLedgerPort {
   /** Mark a previously allocated key as released after a provider delete. */
   markReleased(input: { cogniKey: string }): Promise<void>;
   read(input: { cogniKey: string }): Promise<AkashTxAllocationRecord | null>;
+  /**
+   * Bounded enumeration of the wallet's LIVE paid leases: `state='allocated' AND
+   * external_name IS NOT NULL` — receipts that bound a provider handle and have not been
+   * released. Read-only, hard-limited, oldest-touched first — it decides nothing. This is the
+   * money-loop's SEE primitive (story.5039): what the Argo prune → Crossplane REMOVE →
+   * actuator delete chain is expected to close, enumerable BEFORE the close and provable
+   * after (bug.5189: CLOSE→VERIFY→CLEAR; cluster state is never spend truth).
+   *
+   * `nodeId`/`environment` filters are OPTIONAL by design: the undetectable orphan is a lease
+   * whose (node, env) the catalog NO LONGER declares, so the unfiltered walletScope-scoped
+   * enumeration is the primitive — a query shaped "leases of the envs we know about" could
+   * never see it.
+   */
+  listAllocated(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]>;
 }
