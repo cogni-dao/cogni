@@ -3,13 +3,13 @@
 
 /**
  * Module: `@app/api/v1/deploy/promote`
- * Purpose: Production promotion request — operator-dispatched, RBAC-gated promote of a node to production.
- * Scope: Authorizes `node.promote_production` then dispatches promote-and-deploy.yml via the operator GitHub App. Does NOT promote preview (that is the ungated node-merge → flight-preview path).
+ * Purpose: Manual promotion request — operator-dispatched, RBAC-gated promote of a node to preview or production.
+ * Scope: Authorizes per-env (`node.promote_production` for production, `node.manage_envs` for preview) then dispatches promote-and-deploy.yml via the operator GitHub App.
  * Invariants:
- *   - AUTHZ_BEFORE_SIDE_EFFECT: `node.promote_production` (→ `can_promote_production`) is checked before any dispatch.
+ *   - AUTHZ_BEFORE_SIDE_EFFECT: the env's gate — `node.promote_production` (→ `can_promote_production`) for production, `node.manage_envs` (→ `can_manage_envs`) for preview — is checked before any dispatch.
  *   - PROMOTION_RUNS_AS_THE_OPERATOR: dispatch uses the operator GitHub App, never a personal credential.
  *   - APP_PROMOTE_IS_NO_INFRA: promotion reconciles the app digest only (`skip_infra=true`), orthogonal to substrate; Compose/secret/edge changes use a deliberate infra lever.
- *   - PRODUCTION_ONLY_V0: only `env=production` is accepted; preview auto-promote is the operator merge-hook path (ungated). A `can_promote_preview` rung is additive when manual preview promotes arrive.
+ *   - PREVIEW_IS_MANUAL_TOO (story.5039): `env=preview` is a SOURCE-ADDRESSED manual promote gated on `node.manage_envs` — the same authority that activates the env; activation + the lane's first write are one product action. Production is unchanged (`node.promote_production`). The auto node-merge hook remains a separate, ungated path.
  *   - ONE_PROMOTION_PRIMITIVE: a `sourceSha` promote is SOURCE-ADDRESSED via `promoteNode` — the
  *     SAME method preview uses (different env + authz only). It reads the catalog row to discriminate
  *     remote-source (fork) vs in-repo and dispatches by `node_source_sha` (fork) or `source_sha`
@@ -37,8 +37,10 @@ export const runtime = "nodejs";
 
 const promoteInput = z.object({
   nodeId: z.string().min(1),
-  // v0: production only. Preview auto-promote is the ungated node-merge → flight-preview path.
-  env: z.literal("production"),
+  // preview: the activation trigger for a lane's first write (story.5039) — without it, an env
+  // activated via the env verb never serves until a node-repo merge manufactures the auto path.
+  // production: the RBAC-gated manual dispatch, unchanged.
+  env: z.enum(["preview", "production"]),
   sourceSha: z.string().optional(),
 });
 
@@ -86,9 +88,16 @@ export const POST = wrapRouteHandlerWithLogging(
       return NextResponse.json({ error: "authz_unavailable" }, { status: 503 });
     }
 
+    // AUTHZ SPLIT: production keeps `node.promote_production`. Preview gates on `node.manage_envs`
+    // — the SAME authority that activates the env (envs/route.ts); activation + the lane's first
+    // write are one product action. The auto merge-hook path (node-preview-promote.server.ts) is
+    // V0_NO_RBAC — it rides the candidate-a grant — so this manual gate is strictly TIGHTER than
+    // the existing preview write path. A dedicated additive `preview_promoter` → `can_promote_preview`
+    // rung (see shared/db/node-access-requests.ts header) is the vNext refinement.
     const decision = await authorization.check({
       actorId: `user:${sessionUser.id}`,
-      action: "node.promote_production",
+      action:
+        env === "production" ? "node.promote_production" : "node.manage_envs",
       resource: `node:${node.id}`,
       context: { tenantId: billingAccount.id, nodeId: node.id },
     });
@@ -104,10 +113,12 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const deployPlane = createOperatorDeployPlane(serverEnv());
       // ONE_PROMOTION_PRIMITIVE: a caller-supplied sha is SOURCE-ADDRESSED via `promoteNode` — the
-      // SAME method preview uses, here with env=production. It reads the catalog row to discriminate
-      // remote-source (fork → node_source_sha) from in-repo (operator/poly → source_sha). Without a
-      // sha, production preview-forwards the current `deploy/preview` digest — the raw dispatch
-      // (neither source_sha nor node_source_sha) trips the workflow's preview-forward branch.
+      // SAME method the auto merge-hook uses, here with the requested env. It reads the catalog row
+      // to discriminate remote-source (fork → node_source_sha) from in-repo (operator/poly →
+      // source_sha). Without a sha, production preview-forwards the current `deploy/preview` digest —
+      // the raw dispatch (neither source_sha nor node_source_sha) trips the workflow's
+      // preview-forward branch. A promote that resolves ZERO targets (env not in the node's catalog
+      // envs) still refuses loudly downstream (bug.5203, #2296) — no pre-filtering here.
       const result =
         sourceSha !== undefined
           ? await deployPlane.promoteNode({
