@@ -3,13 +3,8 @@
 
 /**
  * Module: `@tests/ci-invariants/promote-provenance-wiring`
- * Purpose: Pins HOW the promote workflow feeds source provenance into
- *   `resolve_remote_source_sha`. The resolver itself was always correct and is already
- *   covered by scripts/ci/tests/resolve-remote-source-sha.test.sh; bug.5195 defect #2 was
- *   purely WIRING — the workflow handed it the raw `inputs.source_sha` instead of the
- *   RESOLVED `decide.outputs.head_sha`, so a promote that states no sourceSha (the product
- *   contract; the UI never sends one) looked like ABSENT authority and was refused.
- * Scope: Static YAML read of one workflow. No cluster, no dispatch.
+ * Purpose: Pins how the promote workflow feeds source provenance into `resolve_remote_source_sha`. bug.5195 defect #2 was WIRING, not the resolver: the raw `inputs.source_sha` is empty on the product-contract promote, so it read as ABSENT authority.
+ * Scope: Static YAML read of one workflow file. Does NOT contact a cluster, dispatch a run, or re-test the resolver itself.
  * Invariants:
  *   - AUTHORITY_IS_THE_RESOLVED_HEAD: every consumer gets `decide.outputs.head_sha`.
  *     `decide` sets head_sha = source_sha ?: github.sha and `app-src` is checked out AT
