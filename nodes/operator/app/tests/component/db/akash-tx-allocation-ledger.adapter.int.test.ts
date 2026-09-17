@@ -18,7 +18,7 @@
  */
 
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { DrizzleAkashTxAllocationLedger } from "@/adapters/server/compute/akash-tx-allocation-ledger.adapter";
 import { akashTxAllocations } from "@/shared/db/schema";
@@ -399,7 +399,12 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
     const [row] = await db
       .select()
       .from(akashTxAllocations)
-      .where(eq(akashTxAllocations.cogniKey, "k1"));
+      .where(
+        and(
+          eq(akashTxAllocations.walletScope, WALLET),
+          eq(akashTxAllocations.cogniKey, "k1")
+        )
+      );
     expect(row).toMatchObject({
       nodeId: NODE_ID,
       compositeUid: IDENTITY.compositeUid,

@@ -90,6 +90,7 @@ import {
   AlchemyWebhookNormalizer,
   type Database,
   DrizzleAiTelemetryAdapter,
+  DrizzleComputeCostStore,
   DrizzleConnectionBrokerAdapter,
   DrizzleExecutionGrantUserAdapter,
   DrizzleExecutionGrantWorkerAdapter,
@@ -188,6 +189,7 @@ import type {
   AccountService,
   AiTelemetryPort,
   Clock,
+  ComputeCostStorePort,
   ConnectionBrokerPort,
   DataSourceRegistration,
   EpochsRead,
@@ -1182,6 +1184,19 @@ export function resolveAppDb(): Database {
  */
 export function resolveServiceDb(): Database {
   return getServiceDb();
+}
+
+let cachedComputeCostStore: ComputeCostStorePort | undefined;
+
+/**
+ * Resolve the read/write compute cost ledger behind its provider-neutral port.
+ * Dashboard callers must use `reportByNodeIds` after resolving principal access.
+ */
+export function resolveComputeCostStore(): ComputeCostStorePort {
+  cachedComputeCostStore ??= new DrizzleComputeCostStore(async () =>
+    resolveServiceDb()
+  );
+  return cachedComputeCostStore;
 }
 
 /**
