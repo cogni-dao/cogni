@@ -327,13 +327,49 @@ jobs:
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
 
+  # A foreign-custodied lane's substrate (Postgres/Temporal/LiteLLM) lives on the
+  # CONTROL env's VM (production for cogni-dao nodes), not the candidate VM. The
+  # job above hardens the candidate VM only, so the Akash provider NAT hole for
+  # such lanes never reaches the machine their substrate answers from: the leased
+  # app boots but readyz?deep=1 dies on unreachable Postgres/Temporal. Same
+  # lane-vs-control conflation as bug.5216. This twin binds environment:
+  # production for its VM secrets while rendering the candidate-a lane allowlist —
+  # the action already separates those two concerns.
+  reconcile-compute-egress-control:
+    needs: decide
+    if: needs.decide.result == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout reviewed application source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          fetch-depth: 1
+          path: app-src
+
+      - name: Reconcile lane egress on the control-env substrate VM
+        uses: ./app-src/.github/actions/reconcile-compute-egress
+        with:
+          app_source_root: ${{ github.workspace }}/app-src
+          environment: candidate-a
+          vm_host: ${{ secrets.VM_HOST }}
+          ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
+
   prepare-substrate-deploy-branch:
-    needs: [decide, reconcile-compute-egress, external-node-preflight]
+    needs:
+      [
+        decide,
+        reconcile-compute-egress,
+        reconcile-compute-egress-control,
+        external-node-preflight,
+      ]
     if: |
       always() &&
       needs.decide.result == 'success' &&
       needs.decide.outputs.has_deployment_node_targets == 'true' &&
-      needs.reconcile-compute-egress.result == 'success'
+      needs.reconcile-compute-egress.result == 'success' &&
+      needs.reconcile-compute-egress-control.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -731,11 +767,12 @@ jobs:
           retention-days: 1
 
   external-node-preflight:
-    needs: [decide, reconcile-compute-egress]
+    needs: [decide, reconcile-compute-egress, reconcile-compute-egress-control]
     if: |
       always() &&
       needs.decide.outputs.has_external_compute_node_targets == 'true' &&
-      needs.reconcile-compute-egress.result == 'success'
+      needs.reconcile-compute-egress.result == 'success' &&
+      needs.reconcile-compute-egress-control.result == 'success'
     strategy:
       fail-fast: false
       matrix:

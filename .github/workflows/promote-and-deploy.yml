@@ -171,6 +171,35 @@ jobs:
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
 
+  # A foreign-custodied lane's substrate (Postgres/Temporal/LiteLLM) lives on the
+  # CONTROL env's VM, not the lane's. The job above hardens the lane VM only, so
+  # the Akash provider NAT hole for such lanes was punched into the wrong machine:
+  # the leased app boots (/version needs nothing) and readyz?deep=1 dies on the
+  # unreachable substrate. Same lane-vs-control conflation as bug.5216. This twin
+  # binds the CONTROL env for its VM secrets while rendering the LANE's allowlist —
+  # the action already separates those two concerns. Idempotent alongside the
+  # lane-VM job; for lanes custodied locally the two apply the same allowlist.
+  reconcile-compute-egress-control:
+    needs: decide
+    if: needs.decide.result == 'success' && needs.decide.outputs.environment != 'production'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout reviewed application source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          fetch-depth: 1
+          path: app-src
+
+      - name: Reconcile lane egress on the control-env substrate VM
+        uses: ./app-src/.github/actions/reconcile-compute-egress
+        with:
+          app_source_root: ${{ github.workspace }}/app-src
+          environment: ${{ needs.decide.outputs.environment }}
+          vm_host: ${{ secrets.VM_HOST }}
+          ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
+
   reconcile-appset:
     needs: decide
     if: needs.decide.outputs.has_targets == 'true'
@@ -331,14 +360,22 @@ jobs:
           bash scripts/ci/reconcile-node-dns.sh "${DEPLOY_ENVIRONMENT}"
 
   promote-k8s:
-    needs: [decide, reconcile-compute-egress, reconcile-appset, node-substrate]
+    needs:
+      [
+        decide,
+        reconcile-compute-egress,
+        reconcile-compute-egress-control,
+        reconcile-appset,
+        node-substrate,
+      ]
     if: |
       always() &&
       needs.decide.outputs.has_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       (
         needs.decide.outputs.has_node_targets != 'true' ||
-        needs.reconcile-compute-egress.result == 'success'
+        needs.reconcile-compute-egress.result == 'success' &&
+        (needs.reconcile-compute-egress-control.result == 'success' || needs.reconcile-compute-egress-control.result == 'skipped')
       ) &&
       (
         (needs.decide.outputs.has_node_targets == 'true' && needs.node-substrate.result == 'success') ||
