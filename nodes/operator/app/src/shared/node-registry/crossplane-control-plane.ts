@@ -116,7 +116,24 @@ export const CROSSPLANE_ACTUATOR_WRITERS: readonly CrossplaneActuatorWriter[] =
     {
       id: "production/akash-tx-actuator",
       cluster: "production",
-      serves: ["production"],
+      // NS3: the PAYING cluster mints for the lanes it pays for. Preview installs the
+      // composite API but pins no account of its own (INSTALLED_IS_NOT_FUNDED), so before
+      // this it had NO writer at all and `canBirthOnCrossplane("preview")` was false —
+      // every preview placement failed closed with `actuator_account_id_missing`. It is
+      // now funded by production's account, which is the same direction bug.5196 opened
+      // for lane SECRETS: production pays, production custodies, production mints.
+      //
+      // This is the injectivity restatement working as intended, not a relaxation:
+      // `account -> writer` stays INJECTIVE (still one writer on this account, so one
+      // ledger against one escrow) while `writer -> envs` is one-to-many. Widening
+      // `serves` deliberately does NOT widen CROSSPLANE_ACTUATOR_WALLET_ENVS, which
+      // derives from `cluster` — preview still hosts no writer and holds no key.
+      //
+      // candidate-a is NOT added here on purpose: it already has exactly one writer, and
+      // `writerFor` returns undefined for an environment two writers claim. Moving
+      // candidate-a onto this account is a separate decision about who pays for it and
+      // what the test account is still for (task.5131).
+      serves: ["preview", "production"],
     },
   ] as const;
 
