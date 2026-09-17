@@ -124,9 +124,22 @@ export const CROSSPLANE_ACTUATOR_WRITERS: readonly CrossplaneActuatorWriter[] =
     {
       id: "candidate-a/akash-tx-actuator",
       cluster: "candidate-a",
-      // NS4: this account exists ONLY to test the operator platform itself. It never pays
-      // for a real node, so it serves exactly one org and one lane.
-      serves: ["candidate-a"],
+      // NS4: this account exists ONLY to test the operator platform itself, against
+      // cogni-test-org throwaway nodes. It never pays for a real node — that is the OWNER
+      // axis, and it is the only restriction NS4 actually states.
+      //
+      // It MIRRORS production's lane set on purpose. The V0 contract in
+      // `akash-cicd-pareto-scope` is "Spawn ends at production": a spawn succeeds only when
+      // the production hostname serves the exact SHA. A writer that could mint only
+      // candidate-a would leave a cogni-test-org spawn unable to declare
+      // `production: crossplane`, so LEGACY_IS_DEFAULT (bug.5177) would silently drop it
+      // onto the DEPRECATED k3s lane — both "a verb that succeeds and does nothing is
+      // BROKEN" and the "do not retreat a fleet node to k3s" anti-drift rule. The platform
+      // could then never self-test the one path NS4 exists to cover.
+      //
+      // Injectivity is untouched: this is still exactly ONE writer on the test account, so
+      // one ledger against one escrow.
+      serves: ["candidate-a", "preview", "production"],
       owners: ["cogni-test-org"],
     },
     {

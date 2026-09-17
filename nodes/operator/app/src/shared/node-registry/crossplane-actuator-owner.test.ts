@@ -22,11 +22,18 @@ describe("actuator serving is keyed on (env, owner) — bug.5202", () => {
     }
   });
 
-  it("NS4: the test account pays ONLY for cogni-test-org, and only on candidate-a", () => {
-    expect(writerFor("candidate-a", "cogni-test-org")?.id).toBe(TEST_WRITER);
-    // It never pays for a real node, and it does not reach any other lane.
-    expect(writerFor("preview", "cogni-test-org")).toBeUndefined();
-    expect(writerFor("production", "cogni-test-org")).toBeUndefined();
+  it("NS4: the test account pays ONLY for cogni-test-org — but in EVERY lane", () => {
+    // The restriction NS4 states is the OWNER, not the lane. The lane set mirrors
+    // production's because "Spawn ends at production" (akash-cicd-pareto-scope) is the V0
+    // contract: a test writer confined to candidate-a could never self-test the path it
+    // exists to cover, and a cogni-test-org spawn would fall to the deprecated k3s lane.
+    for (const env of ["candidate-a", "preview", "production"]) {
+      expect(writerFor(env, "cogni-test-org")?.id, env).toBe(TEST_WRITER);
+    }
+    // What it must never do is pay for a real node. That axis is the owner.
+    for (const env of ["candidate-a", "preview", "production"]) {
+      expect(writerFor(env, "cogni-dao")?.id, env).toBe(PROD_WRITER);
+    }
   });
 
   it("resolves candidate-a to DIFFERENT accounts by owner — the collision that forced the fix", () => {

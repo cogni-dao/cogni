@@ -116,7 +116,11 @@ describe("renderCatalog", () => {
 
     const authorityEnvs = Object.keys(row.compute_api ?? {}).sort();
     expect(authorityEnvs.length).toBeGreaterThan(0);
-    expect(authorityEnvs).toEqual(birthEnvs.filter(canBirthOnCrossplane));
+    // `filter` passes (value, index, array) — canBirthOnCrossplane now takes the OWNER as
+    // its second arg, so the bare reference fed it an index (bug.5202).
+    expect(authorityEnvs).toEqual(
+      birthEnvs.filter((env) => canBirthOnCrossplane(env, "cogni-dao"))
+    );
     for (const env of authorityEnvs) {
       expect(birthEnvs).toContain(env);
     }
