@@ -9,7 +9,7 @@ Akash Node Expert — how Cogni nodes run on decentralized compute.
 
 USE WHEN: any task touching Akash placement, ComputeWorkload CRs, leases, node migrations to/from k3s, `deployment_provider`, compute egress, or debugging a node that won't come up on Akash. devops-expert remains the CI/CD-boundary router; THIS skill is the Akash runtime + pipeline canon.
 
-**Fleet status (live-verified 2026-09-11):** toks4 3/3, levelup 2/2, node-template 3/3, poly 2/2 env-slots LIVE on Akash (CR Ready + `/version` sha match + zero k3s `<node>-node-app` pods). beacon both envs DOWN pending its Tier-2 true merge (beacon#58, task.5088). The k3s app lane is **DEPRECATED** — Derek red line: NEVER flip a node back to k3s (`place_k3s` is not a mitigation; fix forward).
+**Fleet status — DO NOT TRUST THIS LINE, read it live (`GET /api/v1/nodes`, `infra/catalog/*.yaml`, `curl https://<host>/version`) — never hardcode a roster (Dolt `operator-node-catalog`). Snapshot 2026-09-11, retained only as the shape of a good check:** toks4 3/3, levelup 2/2, node-template 3/3, poly 2/2 env-slots LIVE on Akash (CR Ready + `/version` sha match + zero k3s `<node>-node-app` pods). beacon both envs DOWN pending its Tier-2 true merge (beacon#58, task.5088). The k3s app lane is **DEPRECATED** — Derek red line: NEVER flip a node back to k3s (`place_k3s` is not a mitigation; fix forward).
 
 ## Scaling north star — mandatory recall
 

@@ -40,15 +40,14 @@ Do NOT use for code review, test fixes, or routine PR work.
 - `scripts/ci/aggregate-decide-outcome.sh` — closes the silent-success seam (bug.0443)
 - `scripts/ci/aggregate-rollup.sh` — computes `current-sha = merge-base` of per-node deploy-branch tips; merges per-node `source-sha-by-app.json` preserving unaffected entries
 - `scripts/ci/lib/image-tags.sh` — `ALL_TARGETS` / `NODE_TARGETS` from `infra/catalog/*.yaml` (axiom 16, CATALOG_IS_SSOT). Source this; never hardcode target lists.
-- Per-env deploy branches: `deploy/{candidate-a,preview,production}-{operator,poly,resy,scheduler-worker}` — per-node since task.0376
+- Per-env deploy branches: `deploy/{candidate-a,preview,production}-<node>` for each node the catalog declares (roster is LIVE STATE — read `GET /api/v1/nodes` / `infra/catalog/*.yaml`, never hardcode; Dolt `operator-node-catalog`) — per-node since task.0376
 - `.promote-state/` files on each deploy branch: `current-sha`, `source-sha-by-app.json`
 
 ## Hostname rule (per `verify-buildsha.sh`)
 
 - `operator` → `https://${DOMAIN}` (root). For preview that's `https://preview.cognidao.org`.
 - Every other node → `https://${node}-${DOMAIN_PREFIX}.${BASE}` when DOMAIN has 2+ dots, else `https://${node}.${DOMAIN}`. Concretely:
-  - poly preview → `https://poly-preview.cognidao.org`
-  - resy preview → `https://resy-preview.cognidao.org`
+  - every other node preview → `https://<node>-preview.cognidao.org` — derive it; read it live (`GET /api/v1/nodes`, `infra/catalog/*.yaml`, `curl https://<host>/version`) — never hardcode a roster (Dolt `operator-node-catalog`)
   - production swaps `preview` for the prod hostname (typically `https://www.cognidao.org` for operator + `<node>.cognidao.org` for others — confirm via `vars.DOMAIN` in the production environment).
 - scheduler-worker / migrators → no Ingress, no /version. Use `kubectl rollout status` or trust the verify-deploy job's marker emission.
 
@@ -103,7 +102,8 @@ Every promotion gets a Monitor armed before you walk away. The pattern emits one
 TARGET_SHA=<expected-buildsha-40-chars>
 SHORT=${TARGET_SHA:0:12}
 FLIGHT_ID=<flight-preview-or-promote-deploy-run-id-you-just-dispatched>
-HOSTS="https://preview.cognidao.org https://poly-preview.cognidao.org https://resy-preview.cognidao.org"
+# Derive hosts from the catalog; never hardcode a roster (roster is LIVE STATE — read `GET /api/v1/nodes` / `infra/catalog/*.yaml`, never hardcode; Dolt `operator-node-catalog`)
+HOSTS="https://preview.cognidao.org $(for n in $(yq -r '.name' infra/catalog/*.yaml); do [ "$n" = operator ] || echo "https://$n-preview.cognidao.org"; done | tr "\n" " ")"
 # Self-discover the dispatch time so we can find the chained promote-and-deploy run.
 DISPATCH_AT=$(gh run view "$FLIGHT_ID" --json createdAt --jq .createdAt)
 PD_ID=""
@@ -219,5 +219,5 @@ There is **no preview review-lease** (removed 2026-06-16, `kill-preview-review-l
 - **Per-node truth, not per-workflow.** Every promotion advances _some_ nodes, not necessarily all. Check each `deploy/<env>-<node>:.promote-state/current-sha` independently.
 - **Admin-merge breaks the pipeline.** If you see a CD-affecting PR getting admin-merged, file a bug AND propose a merge-queue follow-up; don't pretend the resulting silent-skip will heal itself.
 - **Don't dispatch without arming a Monitor.** Fire-and-forget is how outages survive shift changes.
-- **Catalog-as-SSOT for target lists.** Source `scripts/ci/lib/image-tags.sh`; never inline `(operator poly resy scheduler-worker)`.
+- **Catalog-as-SSOT for target lists.** Source `scripts/ci/lib/image-tags.sh`; never inline a node list. `resy` outlived the node by months precisely because it was inlined here.
 - **Promotion runs as the operator, never personal `gh`.** Flight/promote via the API (`vcs/flight`, `deploy/promote`); the operator GitHub App dispatches. `gh workflow run` of a promote/flight uses a personal credential and is out of bounds. Read-only `gh run view/list` for watching a run is fine.

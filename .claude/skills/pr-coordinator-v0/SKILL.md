@@ -48,19 +48,17 @@ Single-tenant slot. Only one PR on candidate-a at a time.
 
 This coordinator flights PRs to the `test` environment (slot `candidate-a`). Preview and production are downstream promotions owned by the main CI/CD chain — not this skill's problem.
 
-| Node     | URL                            |
-| -------- | ------------------------------ |
-| Operator | https://test.cognidao.org      |
-| Poly     | https://poly-test.cognidao.org |
-| Resy     | https://resy-test.cognidao.org |
+| Node     | URL                              |
+| -------- | -------------------------------- |
+| Operator | https://test.cognidao.org        |
+| <node>   | https://<node>-test.cognidao.org |
 
 ## Observability Anchors
 
 **Primary rollout proof: `/version` endpoint `buildSha` match.** For each affected node, `curl -s https://<url>/version` and confirm `buildSha` equals the PR head SHA. Three endpoints:
 
 - https://test.cognidao.org/version (operator)
-- https://poly-test.cognidao.org/version (poly)
-- https://resy-test.cognidao.org/version (resy)
+- https://<node>-test.cognidao.org/version — one per catalog node; read it live (`GET /api/v1/nodes`, `infra/catalog/*.yaml`, `curl https://<host>/version`) — never hardcode a roster (Dolt `operator-node-catalog`)
 
 `/version` is served by the _app_ (same pod Argo just rolled), not the ingress readyz. A matching buildSha means the new pod is live. Deterministic, always available, no MCP dependency.
 
@@ -133,10 +131,9 @@ Two dispatchable workflows (see "Two Independent Levers" below). Route by what t
 🛩 Flighted to candidate-a (test)
 
 - SHA:        <sha>
-- Images:     pr-<N>-<sha>-* (affected subset of: operator, poly, resy, migrator, scheduler-worker)
+- Images:     pr-<N>-<sha>-* (affected subset — source `scripts/ci/lib/image-tags.sh`, never inline a node list)
 - Operator:   https://test.cognidao.org
-- Poly:       https://poly-test.cognidao.org
-- Resy:       https://resy-test.cognidao.org
+- <node>:     https://<node>-test.cognidao.org
 - Grafana:    <deeplink from mcp__grafana__generate_deeplink, scoped to the flight window>
 - Flight run: <github actions URL>
 
@@ -150,7 +147,8 @@ On flight failure, collect the failing step's logs, summarize, **halt the loop**
 **Primary gate: `/version` buildSha match.** Curl each affected node's `/version`, confirm `buildSha` equals PR head SHA:
 
 ```bash
-for url in test.cognidao.org poly-test.cognidao.org resy-test.cognidao.org; do
+# Derive from the catalog; never hardcode a roster (roster is LIVE STATE — read `GET /api/v1/nodes` / `infra/catalog/*.yaml`, never hardcode; Dolt `operator-node-catalog`)
+for url in test.cognidao.org $(for n in $(yq -r '.name' infra/catalog/*.yaml); do [ "$n" = operator ] || echo "$n-test.cognidao.org"; done); do
   echo "=== $url ==="; curl -s https://$url/version; echo
 done
 ```
