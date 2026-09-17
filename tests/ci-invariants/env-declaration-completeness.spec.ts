@@ -3,13 +3,13 @@
 
 /**
  * Module: `@tests/ci-invariants/env-declaration-completeness`
- * Purpose: Enforces NO_SILENT_DEFAULT (story.5040 / docs/spec/ci-cd.md Axiom 23) — declaring an environment for a node is a COMPLETE act or a hard failure. An `envs:` entry whose placement cells or rendered artifacts are missing renders the deprecated k3s lane, or nothing at all, and every gate stays green.
- * Scope: Static structural test over infra/catalog/*.yaml and the artifacts the catalog implies; no shell, no build, no network.
+ * Purpose: Enforces NO_SILENT_DEFAULT (story.5040, ci-cd.md Axiom 23) — declaring an env for a node is an all-or-nothing act. A declared env whose placement cells or rendered artifacts are absent renders the deprecated k3s lane, or nothing at all, while every gate stays green.
+ * Scope: Static structural read of infra/catalog + the artifacts it implies; does not shell out, build, render, or hit the network, and does not assert artifact CONTENT.
  * Invariants:
- *   PLACEMENT_IS_COMPLETE_PER_ENV: every env in `envs:` carries `deployment_provider`, and if it is `akash` also `compute_api` + `lease_generation`. Absent = deprecated-lane fallback (bug.5177, bug.5182, bug.5179, bug.5146).
- *   NO_PLACEMENT_FOR_UNDECLARED_ENV: a placement cell for an env NOT in `envs:` is authority pointed at a workload that does not exist.
- *   DECLARED_ENV_HAS_APPSET: every (node, env) has an AppSet, under the RECONCILING cluster's dir — production for an akash non-prod lane (task.5132), the env's own otherwise.
- *   DECLARED_ENV_HAS_OVERLAY: every (node, env) has a non-empty Kustomize overlay dir. An AppSet pointing at an absent overlay syncs nothing and mints nothing, silently.
+ *   PLACEMENT_IS_COMPLETE_PER_ENV: a placed node declares provider per env; akash adds compute_api + lease_generation.
+ *   NO_PLACEMENT_FOR_UNDECLARED_ENV: a placement cell may not name an env outside `envs:`.
+ *   DECLARED_ENV_HAS_APPSET: each (node, env) has an AppSet under its reconciling cluster's dir.
+ *   DECLARED_ENV_HAS_OVERLAY: each (node, env) has a populated Kustomize overlay dir.
  * Side-effects: IO (reads infra/catalog, infra/k8s/argocd/appsets, infra/k8s/overlays)
  * Links: docs/spec/ci-cd.md Axiom 23, story.5040, task.5132, bug.5204
  * @public
