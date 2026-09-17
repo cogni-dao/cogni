@@ -23,7 +23,7 @@ production_branch: deploy/production-poly
 # is installed (task.5129). bug.5182 wanted candidate-a as poly's source-addressed
 # developer flight lane; that lane needs a non-test wallet before it can come back
 # (task.5132) — it is NOT restored here.
-envs: [production]
+envs: [candidate-a, production]
 deployment_provider:
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction

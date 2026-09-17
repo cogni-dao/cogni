@@ -12,4 +12,5 @@ namespace: argocd
 
 resources:
   - candidate-a-operator-applicationset.yaml
+  - candidate-a-poly-applicationset.yaml
   - candidate-a-scheduler-worker-applicationset.yaml
