@@ -525,3 +525,65 @@ describe("akash-tx identity on the wire (task.5103)", () => {
     expect(response.body).toMatchObject({ code: "identity_conflict" });
   });
 });
+
+describe("REFUSAL_IS_OBSERVABLE (bug.5142)", () => {
+  // A fail-closed wallet writer whose only refusal signal is an HTTP status is
+  // undiagnosable: provider-http overwrites status.failure on the next reconcile,
+  // so the reason is gone within ~60s. Every non-2xx must name itself in the log.
+  function spy() {
+    const lines: { level: string; obj: unknown; msg: unknown }[] = [];
+    const rec = (level: string) => (obj: unknown, msg?: unknown) =>
+      void lines.push({ level, obj, msg });
+    return {
+      lines,
+      log: { info: rec("info"), warn: rec("warn"), error: rec("error") },
+    };
+  }
+  const refusals = (s: ReturnType<typeof spy>) =>
+    s.lines.filter((l) => l.msg === "akash_tx_refused");
+
+  it("logs akash_tx_refused with code+status when the bearer is wrong", async () => {
+    const s = spy();
+    const dispatch = createAkashTxDispatcher({
+      actuator: stubActuator(),
+      token: TOKEN,
+      log: s.log,
+    });
+    const res = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: "Bearer wrong",
+      body: JSON.stringify(VALID_CREATE),
+    });
+    expect(res.status).toBe(401);
+    const [line] = refusals(s);
+    expect(line).toBeDefined();
+    const obj = line?.obj as { code: string; status: number; path: string };
+    expect(obj.code).toBe("unauthorized");
+    expect(obj.status).toBe(401);
+    expect(obj.path).toBe("/v1/akash/create");
+  });
+
+  it("logs akash_tx_refused when the actuator itself refuses", async () => {
+    const s = spy();
+    const dispatch = createAkashTxDispatcher({
+      actuator: stubActuator({
+        create: async () => {
+          throw new AkashTxError("migration_pending", "migration not proven");
+        },
+      }),
+      token: TOKEN,
+      log: s.log,
+    });
+    const res = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify(VALID_CREATE),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    const obj = refusals(s)[0]?.obj as { code: string; causeMessage: string };
+    expect(obj.code).toBe("migration_pending");
+    expect(obj.causeMessage).toBe("migration not proven");
+  });
+});
