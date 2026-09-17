@@ -66,7 +66,9 @@ describe("substrate host consumers (bug.5206)", () => {
         .forEach((text, i) => {
           const code = text.replace(/^\s*#\s?.*$/, "");
           if (RAW_ENV_ARG.test(code)) {
-            offences.push(`  ${file}:${i + 1}\n    ${text.trim().slice(0, 140)}`);
+            offences.push(
+              `  ${file}:${i + 1}\n    ${text.trim().slice(0, 140)}`
+            );
           }
         });
     }
