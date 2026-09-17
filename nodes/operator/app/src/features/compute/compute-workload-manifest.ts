@@ -49,6 +49,13 @@ const DIGEST_PINNED_OCI_REF =
  * lowering, so every rematerialize (flight, promote) migrates one more node onto the decoupled
  * path — there is no separate cutover to run.
  */
+/**
+ * The namespace running the actuator that mints every real node's lease. Single value on
+ * purpose: one Console account ⇒ one ledger ⇒ one active writer, so there is exactly one
+ * place a paid transaction can originate (akash-actuator-wallet-cutover).
+ */
+const PRODUCTION_ACTUATOR_NAMESPACE = "cogni-production";
+
 const MIGRATION_POLICY = "RequireBeforeServing" as const;
 
 /**
@@ -311,6 +318,22 @@ export function buildComputeWorkloadManifest(
             // alias. Dual-writing would pin `leaseEpoch` into every ref forever and make the
             // alias unremovable.
             leaseGeneration: input.leaseGeneration,
+            // WHICH writer mints this lease (task.5132). A node app runs on AKASH, so its XR
+            // is pure desired state and the production cluster reconciles every akash node's
+            // non-production lane — the AppSet for it is rendered into appsets/production/.
+            // The actuator lives in `cogni-production` THERE, so a non-prod lane must say so:
+            // the Composition defaults the writer lookup to the XR's own namespace, which in
+            // that cluster is `cogni-candidate-a`/`cogni-preview` and runs no actuator, so the
+            // call would fail closed.
+            //
+            // Production omits it and keeps the default — identical rendering to before.
+            //
+            // The idempotence key is NOT affected: it still derives from the XR's own
+            // namespace, which is what keeps a node's pre-prod lease from colliding with its
+            // production one.
+            ...(input.environment === "production"
+              ? {}
+              : { actuatorNamespace: PRODUCTION_ACTUATOR_NAMESPACE }),
             ...(input.dns ? { dns: input.dns } : {}),
             ...(input.runtime ? { runtime: input.runtime } : {}),
           }
