@@ -213,25 +213,25 @@ bao_exec() {
 # explicit "No value found" answer (a genuinely unborn path) maps to {}; anything else
 # is retried and then fatal, naming the transport.
 prefetch_path() {
-  local svc="$1" json raw attempt
+  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt
   raw=""
   for attempt in 1 2 3; do
-    if raw="$(bao_exec "" "kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>&1)"; then
+    if raw="$(bao_exec "" "kv get -format=json 'cogni/${env}/${svc}'" 2>&1)"; then
       break
     fi
     case "$raw" in
       *"No value found"*) raw='{}'; break ;;
     esac
-    echo "[secret-materialize] OpenBao read cogni/${DEPLOY_ENVIRONMENT}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
-    [[ "$attempt" == 3 ]] && { echo "::error::secret-materialize: transport failure reading cogni/${DEPLOY_ENVIRONMENT}/${svc} after 3 attempts — NOT an absent path (bug.5159)" >&2; exit 1; }
+    echo "[secret-materialize] OpenBao read cogni/${env}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
+    [[ "$attempt" == 3 ]] && { echo "::error::secret-materialize: transport failure reading cogni/${env}/${svc} after 3 attempts — NOT an absent path (bug.5159)" >&2; exit 1; }
     sleep $((attempt * 5))
   done
   json="$(printf '%s' "$raw" | jq -c '.data.data // {}' 2>/dev/null || true)"
   [[ -z "$json" ]] && json='{}'
-  mkdir -p "${CACHE_DIR}/${svc}"
+  mkdir -p "${CACHE_DIR}/${ns}"
   while IFS=$'\t' read -r key val; do
     [[ -z "$key" ]] && continue
-    printf '%s' "$val" > "${CACHE_DIR}/${svc}/${key}"
+    printf '%s' "$val" > "${CACHE_DIR}/${ns}/${key}"
   done < <(printf '%s' "$json" | jq -r 'to_entries[] | [.key, .value] | @tsv')
 }
 
@@ -239,6 +239,13 @@ prefetch_path() {
 # Overrides the lib's ssh/ROOT_TOKEN variants (sourced above).
 bao_get_field() {
   local f="${CACHE_DIR}/$1/$2"
+  [[ -f "$f" ]] && { cat "$f"; return 0; }
+  # SHARED-SUBSTRATE OWNERS LIVE WHERE THE SUBSTRATE DOES (bug.5206). A foreign-custodied
+  # lane runs on the CONTROL env's substrate, so its LiteLLM master key, Doltgres superuser
+  # and _shared values are that cluster's, not the lane's — `cogni/candidate-a/operator`
+  # does not exist in production's vault and never should. This dir is populated ONLY when
+  # the control env differs from the lane, so for every row today the lookup ends above.
+  f="${CACHE_DIR}/__owner__/$1/$2"
   [[ -f "$f" ]] && cat "$f" || true
 }
 
@@ -370,6 +377,14 @@ inherit_shared_value() {
 for svc in "$TARGET_NODE" node-template operator _shared; do
   prefetch_path "$svc"
 done
+# Ancestors, re-read from the cluster that HOSTS this lane's substrate. Additive: the
+# lane's own buckets are still prefetched above and still win; this only supplies what a
+# foreign lane structurally cannot have locally. No-op when control env == lane.
+if [[ "${SECRETS_CONTROL_ENV}" != "$DEPLOY_ENVIRONMENT" ]]; then
+  for svc in node-template operator _shared; do
+    prefetch_path "$svc" "$SECRETS_CONTROL_ENV" "__owner__/$svc"
+  done
+fi
 
 log "materializing node-owned OpenBao values for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (key names only)"
 created=0
