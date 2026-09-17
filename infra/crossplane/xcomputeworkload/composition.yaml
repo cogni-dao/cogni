@@ -140,9 +140,22 @@ spec:
             {{- end }}
             {{- $leaseGeneration := int (dig "leaseEpoch" 0 $spec) }}
             {{- if $hasLeaseGeneration }}{{ $leaseGeneration = int (get $spec "leaseGeneration") }}{{ end }}
+            {{- /* task.5132 — $ns was doing THREE jobs. Split the two that are not the
+              same question:
+                - $cogniKey keeps $ns, so a node's pre-prod lease can never collide with its
+                  production one. Reuse would hand the actuator a SETTLED key and it would
+                  refuse the mint, which is the correct refusal for the wrong reason.
+                - $writerNs resolves WHICH actuator mints it, and therefore which Console
+                  account pays. A real node bills production in every lane (NS3), so a
+                  pre-prod XR must dial the production writer rather than a Service its own
+                  cluster does not run ("preview runs no akash writer",
+                  infra/k8s/overlays/preview/operator/kustomization.yaml).
+              Default is $ns, so every existing production XR renders byte-identically. */}}
+            {{- $writerNs := $ns }}
+            {{- if (dig "actuatorNamespace" "" $spec) }}{{ $writerNs = get $spec "actuatorNamespace" }}{{ end }}
             {{- $cogniKey := printf "xcw:%s:%s:%d" $ns $name $leaseGeneration }}
-            {{- $baseUrl := printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $ns }}
-            {{- $authHeader := printf "Bearer {{ akash-tx-actuator-auth:%s:token }}" $ns }}
+            {{- $baseUrl := printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $writerNs }}
+            {{- $authHeader := printf "Bearer {{ akash-tx-actuator-auth:%s:token }}" $writerNs }}
 
             {{- /* ------------------------------------------------------------------
               LOWERING: full-fidelity XR -> the actuator's ProvisionSpec.
