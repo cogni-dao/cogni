@@ -518,11 +518,27 @@ ${edge_reconcile_snippet}
   else
     next=\"\$current,${node_db}\"
   fi
+  # ATOMIC-OR-REFUSE. This file is the SHARED runtime env every compose service reads.
+  # `sed -i` and `>>` mutate it in place, so a reader during that window sees a truncated or
+  # half-appended file — which is how a mid-run failure here bounced production agent auth
+  # for ~5 minutes on 2026-09-17. Render to a temp, VERIFY it, then publish with mv, which is
+  # atomic on one filesystem: a reader sees either the old file or the new one, never a
+  # partial one. A failed render is discarded and the run fails loudly with the file intact.
+  env_tmp=\"\${runtime_env}.reconcile.\$\$\"
   if grep -qE '^COGNI_NODE_DBS=' \"\$runtime_env\"; then
-    sed -i.bak \"s|^COGNI_NODE_DBS=.*\$|COGNI_NODE_DBS=\$next|\" \"\$runtime_env\"
+    sed \"s|^COGNI_NODE_DBS=.*\$|COGNI_NODE_DBS=\$next|\" \"\$runtime_env\" > \"\$env_tmp\"
   else
-    printf '%s=%s\n' COGNI_NODE_DBS \"\$next\" >> \"\$runtime_env\"
+    { cat \"\$runtime_env\"; printf '%s=%s\n' COGNI_NODE_DBS \"\$next\"; } > \"\$env_tmp\"
   fi
+  dbs_n=\$(grep -cE '^COGNI_NODE_DBS=' \"\$env_tmp\" || true)
+  new_n=\$(wc -l < \"\$env_tmp\")
+  old_n=\$(wc -l < \"\$runtime_env\")
+  if [ ! -s \"\$env_tmp\" ] || [ \"\$dbs_n\" != 1 ] || [ \"\$new_n\" -lt \"\$old_n\" ]; then
+    rm -f \"\$env_tmp\"
+    echo 'refusing to publish a malformed runtime env; original left intact' >&2
+    exit 1
+  fi
+  mv -f \"\$env_tmp\" \"\$runtime_env\"
   rm -f \"\$runtime_env.bak\"
 
   # Alloy node-label reconcile — stage the fresh config (rsync's restart-on-change

@@ -33,7 +33,7 @@ APPSETS_REL_DIR="infra/k8s/argocd/appsets"
 # lane; the env itself otherwise. Absent `deployment_provider.<env>` means the k3s default,
 # so an un-placed row is NEVER relocated — placement must be stated to move.
 control_env_for() {
-  local env="$1" node="$2" provider
+  local env="$1" node="$2" provider catalog_dir="${CATALOG_DIR:-infra/catalog}"
   if [ "$env" = "production" ]; then printf 'production\n'; return 0; fi
   # THE CATALOG IS WHAT ANSWERS THIS. Its absence is not a default — it is a question we
   # cannot answer. `yq` on a missing file yields "" with EXIT 0, and `set -euo pipefail` does
@@ -41,11 +41,11 @@ control_env_for() {
   # sent an akash lane's AppSet to the wrong cluster and its secrets to the wrong vault.
   # That is bug.5206 verbatim. run-node-substrate.sh guarded its own call; the hazard lives
   # HERE, where five other callers share it.
-  [ -f "$CATALOG_DIR/$node.yaml" ] || {
-    echo "::error::control_env_for: no catalog row at $CATALOG_DIR/$node.yaml — cannot resolve which cluster reconciles ${env}/${node} (bug.5206). Pass CATALOG_DIR." >&2
+  [ -f "$catalog_dir/$node.yaml" ] || {
+    echo "::error::control_env_for: no catalog row at $catalog_dir/$node.yaml — cannot resolve which cluster reconciles ${env}/${node} (bug.5206). Pass CATALOG_DIR." >&2
     return 1
   }
-  provider="$(yq -r ".deployment_provider.\"$env\" // \"\"" "$CATALOG_DIR/$node.yaml")"
+  provider="$(yq -r ".deployment_provider.\"$env\" // \"\"" "$catalog_dir/$node.yaml")"
   if [ "$provider" = "akash" ]; then printf 'production\n'; else printf '%s\n' "$env"; fi
 }
 
