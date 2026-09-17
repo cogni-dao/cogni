@@ -239,9 +239,9 @@ spec:
             */ -}}
             {{- $_ := set $e "COGNI_NODE_ID" $spec.nodeId }}
             {{- if $logPush }}
-            {{- $_ := set $e "LOKI_PUSH_URL" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_URL }}" $ns) }}
-            {{- $_ := set $e "LOKI_PUSH_USER" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_USER }}" $ns) }}
-            {{- $_ := set $e "LOKI_PUSH_PASSWORD" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_TOKEN }}" $ns) }}
+            {{- $_ := set $e "LOKI_PUSH_URL" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_URL }}" $writerNs) }}
+            {{- $_ := set $e "LOKI_PUSH_USER" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_USER }}" $writerNs) }}
+            {{- $_ := set $e "LOKI_PUSH_PASSWORD" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_TOKEN }}" $writerNs) }}
             {{- $_ := set $e "LOKI_PUSH_SOURCE" "lease" }}
             {{- end }}
             {{- /* buildNodeAppIdentityEnv() - these deliberately win over every key above. */ -}}
@@ -538,7 +538,7 @@ spec:
             {{- /* ---------- composed: DNS intent ---------- */ -}}
             {{- if and $dns (ne $dnsTarget "") $renderLease }}
             {{- $cfBase := printf "https://api.cloudflare.com/client/v4/zones/%s/dns_records" $dns.zoneId }}
-            {{- $cfToken := printf "Bearer {{ operator-env-secrets:%s:CLOUDFLARE_API_TOKEN }}" $ns }}
+            {{- $cfToken := printf "Bearer {{ operator-env-secrets:%s:CLOUDFLARE_API_TOKEN }}" $writerNs }}
             {{- $cfPayload := dict "name" $publicHost "content" $dnsTarget }}
             {{- /*
               ADOPT BY NAME, NEVER BY TYPE (bug.5152). Cloudflare's list API FILTERS, it does not
