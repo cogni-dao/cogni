@@ -18,8 +18,11 @@
  *   - IDENTITY_BEFORE_TRANSACTION: every mutating call carries an explicit
  *     `AkashTxWorkloadIdentity`, and that identity is durable in the SAME receipt before the
  *     Console is contacted. Identity is never inferred from the key, the slug, or the wallet.
- *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease is reported as
- *     unresolved/ambiguous and never healed by a fresh create.
+ *   - FAIL_CLOSED_BUT_RECOVERABLE: an allocation that cannot be resolved to exactly one LIVE
+ *     lease is reported as ambiguous and never healed by a fresh create. An allocation PROVEN
+ *     not to be billing is a different thing entirely: it settles itself, releases the wallet
+ *     slot, and is retryable under the same key (`allocation_rolled_back`). bug.5192 is what
+ *     happens when those two are the same state — fail-closed with no exit is an outage.
  *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION (task.5135): no mutating call carries a migration
  *     requirement, and no migration state can refuse one. Renting compute proves nothing about
  *     a database. The per-digest migration is a RELEASE step stated on `observe` — the unpaid,
@@ -73,6 +76,12 @@ export type AkashTxErrorCode =
   | "allocation_unresolved"
   /** More than one post-baseline allocation exists: deterministic adoption impossible. */
   | "allocation_ambiguous"
+  /**
+   * The previous attempt under this key opened a deployment that is now PROVEN closed, so its
+   * receipt was settled and the wallet slot released. Nothing is billing and nothing was
+   * double-paid. Retry with the SAME key — the next attempt re-claims a clean slot.
+   */
+  | "allocation_rolled_back"
   /** Provider IO failed in a way that leaves the outcome unknown (mutating call). */
   | "outcome_unknown"
   /** Provider refused the request terminally (screening, rejected SDL, bad handle). */
@@ -215,7 +224,41 @@ export interface AkashTxActuatorPort {
     spec: ProvisionSpec;
   }): Promise<AkashTxResource>;
   delete(input: { cogniKey: string; externalName: string }): Promise<void>;
+  /**
+   * ONE bounded pass over receipts stuck mid-transaction, verifying each against Console
+   * before settling it. Still no watches, no timers and no retry policy in here: this is a
+   * single attempt the caller schedules, exactly like the other four operations.
+   *
+   * Exists because a crashed create cannot settle its own receipt (the crash IS the reason),
+   * and the receipt it leaves behind holds a WALLET-WIDE slot: without a sweeper, one dead
+   * process stops every node in the environment from leasing (bug.5192).
+   */
+  sweepStaleAllocations(input: {
+    olderThanMs: number;
+    limit: number;
+  }): Promise<AkashTxSweepReport>;
 }
+
+/** Per-pass counts for the sweeper's single structured log line. */
+export interface AkashTxSweepReport {
+  readonly scanned: number;
+  /** Receipts settled because nothing is billing under them. */
+  readonly rolledBack: number;
+  /** Receipts whose lost allocation was found live and bound to the receipt instead. */
+  readonly adopted: number;
+  /** Receipts deliberately LEFT held: ambiguous wallet, or Console could not be read. */
+  readonly held: number;
+}
+
+/**
+ * What the wallet says about a possibly-lost allocation, beyond a pre-transaction baseline.
+ * Structurally identical to (and satisfied by) the adapter's own `AkashAllocationProbe`; it is
+ * restated here so the port owns its contract and `@/ports` never imports from `@/adapters`.
+ */
+export type AkashAllocationProbe =
+  | { outcome: "adopted"; output: ProvisionOutput }
+  | { outcome: "settled" }
+  | { outcome: "ambiguous"; dseqs: readonly string[] };
 
 /**
  * The Console transaction client the actuator needs. Structurally satisfied by
@@ -230,8 +273,16 @@ export interface AkashTxConsolePort {
     spec: ProvisionSpec;
     onAllocated?: (leaseId: string) => Promise<void>;
   }): Promise<{ leaseId: string; providerAccount: string }>;
-  /** Adopt the unique post-baseline allocation, or null when none exists. */
-  findAllocationSince(cursor: string): Promise<ProvisionOutput | null>;
+  /**
+   * Classify the wallet beyond a pre-transaction baseline into exactly one of three worlds:
+   * `adopted` (one live allocation — it is ours), `settled` (no LIVE allocation beyond the
+   * baseline: nothing is billing, whether or not a transaction ever landed), `ambiguous`
+   * (several — undecidable, stay fail-closed).
+   *
+   * bug.5192: the old `ProvisionOutput | null` shape could not express `settled`, so every
+   * crashed create became a permanent `allocation_unresolved` holding the wallet-wide slot.
+   */
+  findAllocationSince(cursor: string): Promise<AkashAllocationProbe>;
   status(input: { leaseId: string }): Promise<ProvisionOutput>;
   /** In-place SDL replacement on a known handle. Returns once the provider accepted it. */
   updateAllocated(input: {
@@ -260,6 +311,15 @@ export interface AkashTxAllocationRecord {
   readonly providerAccount?: string;
 }
 
+/** A receipt that has held the wallet slot longer than any single transaction can take. */
+export interface AkashTxStaleAllocation {
+  readonly cogniKey: string;
+  /** Absent ⇒ durably PRE-transaction: the cursor is written before the POST, so no spend. */
+  readonly allocationCursor?: string;
+  /** Milliseconds this receipt has held the wallet slot, for the log line that reports it. */
+  readonly heldForMs: number;
+}
+
 /**
  * Durable custody of "we may have paid". Deliberately independent of any Kubernetes object:
  * a deleted XR must never be able to orphan the evidence, and a slot must be resolvable by
@@ -272,6 +332,12 @@ export interface AkashTxAllocationLedgerPort {
    * The INSERT that opens the slot is the receipt, and it carries the identity — so the
    * receipt binding node, environment, composite UID and generation to the key is durable
    * before the caller has even read an allocation cursor, let alone posted a transaction.
+   *
+   * A receipt already settled `failed` with NO handle is RE-CLAIMABLE and answers `claimed`
+   * again (bug.5192). `failed AND external_name IS NULL` is only ever written with proof that
+   * nothing is billing, so there is no spend to double-pay — while `allocated`/`released`
+   * (which DID bind a handle) stay terminal `settled` exactly as before. Without this, the
+   * only escape from a crashed create is a human editing `lease_epoch` in the catalog.
    */
   claim(input: {
     cogniKey: string;
@@ -313,8 +379,29 @@ export interface AkashTxAllocationLedgerPort {
     externalName: string;
     providerAccount?: string;
   }): Promise<void>;
-  /** Terminal settle with NO resource. Legal only when no allocation can exist. */
+  /**
+   * Settle a receipt that never bound a paid resource, releasing the wallet-wide slot.
+   *
+   * Legal ONLY when nothing can still be billing under this key — i.e. the caller holds
+   * positive evidence: the create never reached a transaction (no cursor), or the deployment
+   * it opened was closed AND that closure was read back from Console. The implementation
+   * enforces the half it can (`state='preparing' AND external_name IS NULL`, so a recorded
+   * handle is never erased); the caller owns the closure proof.
+   *
+   * bug.5192: this method existed and was never called from production code, which is why one
+   * crashed create held the account-wide writer slot for 33h.
+   */
   fail(input: { cogniKey: string; failureCode: string }): Promise<void>;
+  /**
+   * Bounded scan for receipts stuck mid-transaction. Read-only, newest-last, hard-limited —
+   * it decides nothing. The sweeper that consumes it must verify each row against Console
+   * before settling anything (CLOSE_BEFORE_CLEAR); NO_TIME_BASED_RELEASE still holds, age is
+   * only what makes a row ELIGIBLE to be investigated, never what settles it.
+   */
+  listStalePreparing(input: {
+    olderThanMs: number;
+    limit: number;
+  }): Promise<readonly AkashTxStaleAllocation[]>;
   /** Mark a previously allocated key as released after a provider delete. */
   markReleased(input: { cogniKey: string }): Promise<void>;
   read(input: { cogniKey: string }): Promise<AkashTxAllocationRecord | null>;

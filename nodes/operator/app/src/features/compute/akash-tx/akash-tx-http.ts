@@ -64,6 +64,10 @@ const STATUS_BY_CODE: Readonly<Record<AkashTxErrorCode, number>> = {
   wallet_allocation_blocked: 409,
   allocation_unresolved: 409,
   allocation_ambiguous: 409,
+  // Conflict, and the ONLY self-healing one: the previous attempt is proven closed and its
+  // receipt is already settled, so the very next call with the SAME key takes a clean slot.
+  // The Composition treats 409 as retryable (`Progressing`), which is exactly right here.
+  allocation_rolled_back: 409,
   provider_rejected: 422,
   // Terminal, NOT a conflict to retry: no number of retries changes who consumed the resource.
   identity_conflict: 422,

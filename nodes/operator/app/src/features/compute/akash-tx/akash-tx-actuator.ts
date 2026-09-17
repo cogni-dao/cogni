@@ -30,8 +30,17 @@
  *     actuator; its legacy controller is absent and Console/manual writes are forbidden.
  *     candidate-a holds the managed test account and production a dedicated one; preview hosts
  *     no writer (ci-cd.md Axiom 26).
- *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease raises
- *     allocation_unresolved / allocation_ambiguous. It is NEVER healed by a fresh create.
+ *   - FAIL_CLOSED_BUT_RECOVERABLE: an allocation that cannot be resolved to exactly one LIVE
+ *     lease raises allocation_ambiguous and is NEVER healed by a fresh create. An allocation
+ *     PROVEN not to be billing — no live deployment beyond its baseline, or a create that
+ *     closed its own deployment and re-read the closure — settles its own receipt
+ *     (`allocation_rolled_back`), releases the wallet slot, and is retryable under the SAME
+ *     key. bug.5192: collapsing those two cases into one un-exitable refusal turned a single
+ *     crashed create into a 33h account-wide create outage. Fail-closed means "never spend
+ *     blind"; it must not mean "never recover".
+ *   - CLOSE_VERIFY_THEN_CLEAR: a receipt is only ever settled against positive evidence — no
+ *     cursor (durably pre-transaction), a Console read-back showing `closed`, or a wallet scan
+ *     showing nothing live beyond the baseline. Never on a timer (bug.5189).
  *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: NO mutating call states, proves, or can be
  *     refused by a migration. bug.5140 made a completed per-digest DB migration a precondition
  *     of every paid transaction; task.5135 severed that. Node toks5 is the proof it was wrong:
@@ -56,6 +65,7 @@
 import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 
 import {
+  type AkashAllocationProbe,
   type AkashTxActuatorPort,
   type AkashTxAllocationLedgerPort,
   type AkashTxAllocationRecord,
@@ -68,6 +78,8 @@ import {
   type AkashTxMigrationStep,
   type AkashTxObservation,
   type AkashTxResource,
+  type AkashTxStaleAllocation,
+  type AkashTxSweepReport,
   type AkashTxWorkloadIdentity,
   type ComputeCostEvidencePort,
   type ComputeCostStorePort,
@@ -155,6 +167,27 @@ export function mapConsoleFailure(
     opts.mutating ? "outcome_unknown" : "provider_unavailable",
     message
   );
+}
+
+/**
+ * The single `failure_code` written by every rollback path. One string so a settled-by-recovery
+ * receipt is one grep away from the incident that produced it, in logs and in Postgres alike.
+ */
+const ROLLED_BACK_FAILURE_CODE = "allocation_rolled_back";
+
+/**
+ * The dseq a failed create is PROVEN to have closed, if the client proved it.
+ *
+ * Read structurally rather than by importing AkashComputeError, because features must not
+ * reach into adapters/server. Absent is always the safe answer: it leaves the receipt held for
+ * the sweeper instead of clearing a slot over a lease that might still be billing.
+ */
+function rolledBackDseqOf(error: unknown): string | undefined {
+  const named = error as { name?: unknown; rolledBackDseq?: unknown };
+  if (named?.name !== "AkashComputeError") return undefined;
+  return typeof named.rolledBackDseq === "string" && named.rolledBackDseq !== ""
+    ? named.rolledBackDseq
+    : undefined;
 }
 
 /** Flat, stable log fields for a receipt binding. Every identity log line uses exactly these. */
@@ -290,6 +323,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         input.cogniKey,
         record.allocationCursor
       );
+      // Null = the receipt was PROVEN not to be billing and has just settled itself.
+      // Observe reports what is true — nothing exists — so the caller proceeds to create
+      // rather than reading a 409 forever (bug.5192).
+      if (!resource) return withMigration({ found: false });
       return withMigration(
         await this.withServing(
           { found: true, resource, recovered: true },
@@ -390,7 +427,14 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         input.cogniKey,
         claim.record.allocationCursor
       );
-      return { ...resource, replayed: false, recovered: true };
+      if (resource) return { ...resource, replayed: false, recovered: true };
+      // The receipt just settled itself: nothing is billing and the wallet slot is free.
+      // ONE_ATTEMPT_PER_CALL forbids spending inside the same call that recovered, so this is
+      // a retryable refusal — the NEXT call with the SAME key re-claims a clean slot.
+      throw new AkashTxError(
+        "allocation_rolled_back",
+        "the previous attempt under this key is proven closed; its receipt was settled — retry with the same key"
+      );
     }
 
     const cursor = await this.readCursor();
@@ -424,6 +468,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       });
     } catch (error) {
       const mapped = mapConsoleFailure(error, { mutating: true });
+      const rolledBackDseq = rolledBackDseqOf(error);
       this.log.error(
         {
           cogniKey: input.cogniKey,
@@ -432,11 +477,20 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           allocationCursor: cursor,
           code: mapped.code,
           causeMessage: mapped.message,
+          ...(rolledBackDseq ? { rolledBackDseq } : {}),
         },
         mapped.code === "outcome_unknown"
           ? "akash_tx_allocation_outcome_unknown"
           : "akash_tx_allocation_failed"
       );
+      // bug.5192: a create that closed its own deployment must also settle its own receipt.
+      // The client only reports `rolledBackDseq` after re-reading Console and seeing `closed`,
+      // so this is CLOSE/VERIFY *then* CLEAR — never a timer, never an assumption. Without it
+      // the receipt keeps the WALLET-WIDE slot and every node in the environment stops
+      // leasing. Settling is best-effort on purpose: the DB may be the very thing that died,
+      // and the stale-allocation sweeper is the backstop for exactly that case.
+      if (rolledBackDseq)
+        await this.settleRollback(input.cogniKey, rolledBackDseq);
       throw mapped;
     }
 
@@ -641,17 +695,26 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   }
 
   /**
-   * Resolve "we may have paid" from durable evidence alone. Exactly one post-baseline
-   * allocation is adoptable; zero is indistinguishable from a delayed provider commit and
-   * more than one is undecidable — both fail closed and keep the wallet slot held.
+   * Resolve "we may have paid" from durable evidence alone, and settle the cases that ARE
+   * resolved instead of holding the wallet forever.
+   *
+   *   - exactly one LIVE post-baseline allocation → it is ours: adopt it (returns a resource);
+   *   - none → nothing is billing, whether or not a transaction ever landed. The receipt is
+   *     settled `allocation_rolled_back`, the wallet slot is released, and this returns null;
+   *   - more than one → genuinely undecidable. Fail closed, slot stays held.
+   *
+   * bug.5192: "none" used to raise `allocation_unresolved` forever. That is fail-closed with
+   * no exit — one crashed create held the ACCOUNT-WIDE writer slot for 33h and ~700 identical
+   * refusals, while the deployment it was protecting had already been closed and refunded.
+   * Fail-closed must mean "do not spend blind", not "never recover".
    */
   private async resolveUncertain(
     cogniKey: string,
     allocationCursor: string
-  ): Promise<AkashTxResource> {
-    let adopted: ProvisionOutput | null;
+  ): Promise<AkashTxResource | null> {
+    let probe: AkashAllocationProbe;
     try {
-      adopted = await this.console.findAllocationSince(allocationCursor);
+      probe = await this.console.findAllocationSince(allocationCursor);
     } catch (error) {
       const mapped = mapConsoleFailure(error, { mutating: false });
       this.log.error(
@@ -660,16 +723,27 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
       throw mapped;
     }
-    if (!adopted) {
+
+    if (probe.outcome === "ambiguous") {
+      // Undecidable, and the ONLY remaining reason to hold the slot: adopting the wrong live
+      // lease mis-attributes spend, and closing the wrong one destroys someone else's node.
       this.log.error(
-        { cogniKey, allocationCursor },
-        "akash_tx_allocation_unresolved"
+        { cogniKey, allocationCursor, candidates: probe.dseqs.length },
+        "akash_tx_allocation_ambiguous"
       );
       throw new AkashTxError(
-        "allocation_unresolved",
-        "a paid allocation may exist for this key and was not found; refusing to create"
+        "allocation_ambiguous",
+        "multiple live allocations exist beyond this receipt's baseline; refusing to adopt one"
       );
     }
+
+    if (probe.outcome === "settled") {
+      // PROVEN not billing. Settling here is what makes recovery automatic and bounded.
+      await this.settleRollback(cogniKey, undefined, allocationCursor);
+      return null;
+    }
+
+    const adopted = probe.output;
     await this.ledger.recordAllocation({
       cogniKey,
       externalName: adopted.leaseId,
@@ -686,6 +760,119 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       "akash_tx_allocation_recovered"
     );
     return resourceFrom(adopted);
+  }
+
+  /**
+   * Settle a receipt whose transaction is PROVEN to have left nothing billing, releasing the
+   * wallet-wide slot. Loud by construction (REFUSAL_IS_OBSERVABLE): a slot that silently
+   * changed hands is how you lose track of money.
+   *
+   * Best-effort on purpose. The dominant cause of a stuck receipt is the ledger itself being
+   * unavailable — the very write that would settle it is the write that failed. A failure here
+   * is logged and swallowed so it never masks the original error; the sweeper picks it up.
+   */
+  private async settleRollback(
+    cogniKey: string,
+    rolledBackDseq?: string,
+    allocationCursor?: string
+  ): Promise<boolean> {
+    try {
+      await this.ledger.fail({
+        cogniKey,
+        failureCode: ROLLED_BACK_FAILURE_CODE,
+      });
+      this.log.warn(
+        {
+          cogniKey,
+          ...(rolledBackDseq ? { rolledBackDseq } : {}),
+          ...(allocationCursor ? { allocationCursor } : {}),
+        },
+        "akash_tx_allocation_rolled_back"
+      );
+      return true;
+    } catch (error) {
+      this.log.error(
+        {
+          cogniKey,
+          ...(rolledBackDseq ? { rolledBackDseq } : {}),
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        },
+        "akash_tx_allocation_rollback_unsettled"
+      );
+      return false;
+    }
+  }
+
+  /**
+   * ONE bounded sweep over receipts that have held the wallet slot longer than any single
+   * transaction can take. The backstop for the case no in-process handler can cover: the
+   * process that opened the receipt is GONE (bug.5192 — Postgres died mid-`onAllocated`, so
+   * even the settle-on-rollback path above could not run).
+   *
+   * CLOSE/VERIFY BEFORE CLEAR, per bug.5189 — age only makes a row ELIGIBLE, it never settles
+   * one. Every row is resolved against the SAME Console evidence a live create would use:
+   *   - no cursor → durably pre-transaction (the cursor is written before the POST): settle;
+   *   - cursor, no live allocation beyond it → nothing is billing: settle;
+   *   - cursor, exactly one live allocation → bind the handle to the receipt, never close it;
+   *   - cursor, several live allocations → LEAVE HELD and report loudly.
+   * Console unreachable also leaves the row held: no evidence, no clear.
+   */
+  async sweepStaleAllocations(input: {
+    olderThanMs: number;
+    limit: number;
+  }): Promise<AkashTxSweepReport> {
+    let stale: readonly AkashTxStaleAllocation[];
+    try {
+      stale = await this.ledger.listStalePreparing(input);
+    } catch (error) {
+      throw this.ledgerUnavailable(error, "*", "listStalePreparing");
+    }
+
+    let rolledBack = 0;
+    let adopted = 0;
+    let held = 0;
+    for (const row of stale) {
+      this.log.warn(
+        {
+          cogniKey: row.cogniKey,
+          heldForMs: row.heldForMs,
+          ...(row.allocationCursor
+            ? { allocationCursor: row.allocationCursor }
+            : {}),
+        },
+        "akash_tx_allocation_stale_detected"
+      );
+      if (!row.allocationCursor) {
+        // RECEIPT_BEFORE_TRANSACTION read backwards: no cursor proves no POST was ever sent.
+        if (await this.settleRollback(row.cogniKey)) rolledBack += 1;
+        else held += 1;
+        continue;
+      }
+      try {
+        const resource = await this.resolveUncertain(
+          row.cogniKey,
+          row.allocationCursor
+        );
+        if (resource) adopted += 1;
+        else rolledBack += 1;
+      } catch (error) {
+        held += 1;
+        this.log.error(
+          {
+            cogniKey: row.cogniKey,
+            heldForMs: row.heldForMs,
+            allocationCursor: row.allocationCursor,
+            code: error instanceof AkashTxError ? error.code : "unknown",
+          },
+          "akash_tx_allocation_stale_held"
+        );
+      }
+    }
+
+    const report = { scanned: stale.length, rolledBack, adopted, held };
+    if (stale.length > 0) this.log.warn(report, "akash_tx_allocation_sweep");
+    return report;
   }
 
   private async describe(

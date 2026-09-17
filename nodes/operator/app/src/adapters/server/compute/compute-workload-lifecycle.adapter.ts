@@ -11,12 +11,15 @@ import {
   type ComputeWorkloadLifecyclePort,
 } from "@/ports";
 
-import { AkashComputeError } from "./akash-compute.adapter";
+import {
+  type AkashAllocationProbe,
+  AkashComputeError,
+} from "./akash-compute.adapter";
 import { safeReadyzProbe, safeVersionProbe } from "./safe-version-probe";
 
 interface UpdatableComputeResourcePort extends ComputeResourcePort {
   allocationCursor?(): Promise<string>;
-  findAllocationSince?(cursor: string): Promise<ProvisionOutput | null>;
+  findAllocationSince?(cursor: string): Promise<AkashAllocationProbe>;
   provisionWithAllocation?(
     input: {
       env: string;
@@ -165,7 +168,17 @@ export class ComputeWorkloadLifecycleAdapter
       throw new ComputeLifecycleError("terminal", "ProviderRejected", false);
     }
     try {
-      return await this.compute.findAllocationSince(input.allocationCursor);
+      const probe = await this.compute.findAllocationSince(
+        input.allocationCursor
+      );
+      if (probe.outcome === "adopted") return probe.output;
+      if (probe.outcome === "settled") return null;
+      // The probe now REPORTS ambiguity instead of throwing it; the retired legacy lane keeps
+      // its original fail-closed contract by raising the same error it always saw.
+      throw new AkashComputeError(
+        "AMBIGUOUS_ADOPTION",
+        "multiple post-baseline deployments prevent deterministic adoption"
+      );
     } catch (error) {
       throw mapError(error, false);
     }

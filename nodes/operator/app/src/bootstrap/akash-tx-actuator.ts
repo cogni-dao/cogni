@@ -10,7 +10,16 @@
  * Scope: Wiring, minimal env validation and lifecycle only. Every decision about WHEN to
  *   observe/create/update/delete belongs to Crossplane, and every decision about whether a
  *   transaction is safe belongs to the actuator — neither is re-implemented here. No watches,
- *   no timers, no leader election, no reconciliation.
+ *   no leader election, no reconciliation.
+ *
+ *   ONE exception, added deliberately by bug.5192: a bounded interval that asks the actuator
+ *   to sweep stale allocation receipts. It is NOT reconciliation — it drives no desired state,
+ *   observes no Kubernetes object and retries nothing. It exists because the one failure a
+ *   request-scoped actuator structurally cannot handle is the request's own process dying
+ *   mid-transaction, and the receipt that leaves behind holds a WALLET-WIDE slot: without a
+ *   sweeper, one dead process stops every node in the environment from leasing. Crossplane
+ *   cannot do this job either — it only ever calls about ONE workload, and the wedged receipt
+ *   belongs to a different one.
  * Invariants:
  *   - ONE_WALLET_ONE_WRITER: the wallet identity comes from `resolveAkashTxWallet`, which
  *     REFUSES a missing `AKASH_ACTUATOR_CONSOLE_API_KEY` or a missing pinned
@@ -360,8 +369,44 @@ server.listen(LISTEN_PORT, "0.0.0.0", () => {
   );
 });
 
+/**
+ * How long a receipt must have held the wallet slot before the sweeper will INVESTIGATE it.
+ * Comfortably longer than the slowest legitimate create (Console write timeout + bid wait +
+ * lease), so a healthy in-flight transaction is never a candidate. Age alone never settles
+ * anything — every candidate is still resolved against Console evidence.
+ */
+const SWEEP_STALE_AFTER_MS = 15 * 60_000;
+/** One pass, hard-bounded: a sweep is a bounded attempt, not a drain loop. */
+const SWEEP_BATCH_LIMIT = 20;
+const SWEEP_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * The backstop for a create whose process never came back. Failures are logged and swallowed:
+ * the sweeper is a recovery aid, and a Console or ledger outage must never take the actuator
+ * down with it — the next pass tries again.
+ */
+const sweepTimer = setInterval(() => {
+  void actuator
+    .sweepStaleAllocations({
+      olderThanMs: SWEEP_STALE_AFTER_MS,
+      limit: SWEEP_BATCH_LIMIT,
+    })
+    .catch((error: unknown) => {
+      log.error(
+        {
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        },
+        "akash_tx_allocation_sweep_failed"
+      );
+    });
+}, SWEEP_INTERVAL_MS);
+// Never hold the process open for a recovery pass.
+sweepTimer.unref();
+
 function shutdown(signal: string): void {
   log.info({ signal }, "akash_tx_actuator_stopping");
+  clearInterval(sweepTimer);
   // In-flight requests are already idempotent by key, so a bounded drain is enough: a
   // dropped response is recoverable from the durable receipt, a double-spend is not.
   server.close(() => process.exit(0));

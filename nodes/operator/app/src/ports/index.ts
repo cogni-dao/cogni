@@ -58,6 +58,7 @@ export type {
   RecordInvocationParams,
 } from "./ai-telemetry.port";
 export {
+  type AkashAllocationProbe,
   type AkashTxActuatorPort,
   type AkashTxAllocationLedgerPort,
   type AkashTxAllocationRecord,
@@ -71,6 +72,8 @@ export {
   type AkashTxMigrationStep,
   type AkashTxObservation,
   type AkashTxResource,
+  type AkashTxStaleAllocation,
+  type AkashTxSweepReport,
   type AkashTxWorkloadIdentity,
 } from "./akash-tx.port";
 export type {

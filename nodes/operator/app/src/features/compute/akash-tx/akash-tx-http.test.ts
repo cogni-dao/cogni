@@ -81,6 +81,14 @@ function stubActuator(
       endpoints: [],
     }),
     delete: async () => {},
+    // The sweeper is a scheduled operation, never an HTTP route: the dispatcher must expose
+    // no path that reaches it, which the route-surface assertions below pin.
+    sweepStaleAllocations: async () => ({
+      scanned: 0,
+      rolledBack: 0,
+      adopted: 0,
+      held: 0,
+    }),
     ...overrides,
   };
 }
@@ -231,6 +239,44 @@ describe("akash-tx dispatcher", () => {
         })
       ).status
     ).toBe(502);
+  });
+
+  it("maps a rolled-back allocation to a RETRYABLE 409, and exposes no sweep route", async () => {
+    // bug.5192: the Composition treats 409 as retryable (`Progressing`) and anything else as
+    // Failed. A settled-and-freed receipt is precisely "come back with the same key", so the
+    // very next reconcile creates instead of wedging.
+    const dispatch = dispatcherFor(
+      stubActuator({
+        create: async () => {
+          throw new AkashTxError("allocation_rolled_back", "settled, retry");
+        },
+      })
+    );
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify(VALID_CREATE),
+    });
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      code: "allocation_rolled_back",
+    });
+
+    // The sweeper is scheduled in the composition root, never reachable over the wire: it
+    // settles receipts, and nothing outside this process gets to ask for that.
+    for (const path of ["/v1/akash/sweep", "/v1/akash/sweepStaleAllocations"]) {
+      expect(
+        (
+          await dispatch({
+            method: "POST",
+            path,
+            authorization: AUTH,
+            body: "{}",
+          })
+        ).status
+      ).toBe(404);
+    }
   });
 
   it("accepts a create that states NO migration at all (task.5135)", async () => {
