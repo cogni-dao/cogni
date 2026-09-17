@@ -1481,8 +1481,6 @@ HCL
   # (a second reader identity onto a read-only policy, not a new entry point —
   # Invariant 9). Policy is env-WIDE (read-only on all cogni/<env>/* DB keys)
   # because deploy-infra provisions every node on the VM, not one service.
-  log_info "Writing ${DEPLOY_ENV}-db-reader policy + role binding..."
-  ssh $SSH_OPTS root@"$VM_IP" \
   # bug.5206 #10 — the reader must reach every lane this cluster reconciles, read-only.
   # ⚠️ KEEP IN SYNC with scripts/setup/reconcile-env-substrate.sh.
   DB_READER_HCL=""
@@ -1493,6 +1491,8 @@ path \"cogni/metadata/${_lane}\"   { capabilities = [\"list\"] }
 path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
   done
   unset _lane
+  log_info "Writing ${DEPLOY_ENV}-db-reader policy + role binding; lanes: ${SECRET_LANES}"
+  ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl get sa db-provisioner -n default >/dev/null 2>&1 \
        || kubectl create sa db-provisioner -n default"
   ssh $SSH_OPTS root@"$VM_IP" \
