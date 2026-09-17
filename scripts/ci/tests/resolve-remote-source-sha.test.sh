@@ -12,15 +12,20 @@ cd "$REPO_ROOT"
 
 operator_sha=1111111111111111111111111111111111111111
 catalog_sha=$(yq -N '.source_sha // ""' infra/catalog/toks4.yaml)
-expected_catalog_sha=b87fc1183098e88e233ff313fbaf2a69a474ffd8
 explicit_sha=2222222222222222222222222222222222222222
 
-[ "$catalog_sha" = "$expected_catalog_sha" ]
+# The row must carry a well-formed pin, but its VALUE is the catalog's to
+# choose — freezing it here couples this unit test to every legitimate
+# re-pin (same live-row-fixture failure as the appset fixture, #2325).
+case "$catalog_sha" in
+  *[!0-9a-f]*|'') echo "toks4 catalog source_sha is not a 40-hex sha: '$catalog_sha'" >&2; exit 1 ;;
+esac
+[ "${#catalog_sha}" -eq 40 ]
 
 # Automatic preview of an operator merge resolves toks4 from the reviewed
 # catalog snapshot, not from the operator commit SHA.
 resolved=$(resolve_remote_source_sha toks4 "" "$operator_sha" "$catalog_sha" false "")
-[ "$resolved" = "$expected_catalog_sha" ]
+[ "$resolved" = "$catalog_sha" ]
 
 # An explicit node source revision is always authoritative.
 resolved=$(resolve_remote_source_sha toks4 "$explicit_sha" "$operator_sha" "$catalog_sha" false "")
