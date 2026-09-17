@@ -165,13 +165,28 @@ bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-writer \
   bound_service_account_namespaces=default \
   policies=${DEPLOY_ENV}-writer ttl=1h" >/dev/null
 
-# ── <env>-db-reader (db-provisioner SA, read-only, env-wide) ─────────────────
-log "writing ${DEPLOY_ENV}-db-reader policy + role (SA db-provisioner)..."
+# ── <env>-db-reader (db-provisioner SA, read-only, every lane this env custodies) ──
+# bug.5206 instance #10. The reader was scoped to its own env because a reader only ever
+# needed its own env's data — true while env == cluster. The paying cluster now RECONCILES
+# its non-production lanes, so `reconcile-node-substrate.sh` reads `cogni/<lane>/<node>` to
+# provision that lane's database. Scoped to its own env, the read is DENIED and surfaces as
+# `command terminated with exit code 2` → the bug.5159 transport-failure path, which is
+# correct (it is not an absent key) but names the symptom, not the missing capability.
+#
+# READ-ONLY, and the SAME lane set the writers carry. Widening a reader over lanes this
+# cluster already custodies the secrets for adds no reach it does not already have.
+log "writing ${DEPLOY_ENV}-db-reader policy + role (SA db-provisioner); lanes: ${SECRET_LANES}"
 ensure_sa db-provisioner
+DB_READER_HCL=""
+for _lane in ${SECRET_LANES}; do
+  DB_READER_HCL="${DB_READER_HCL}
+path \"cogni/data/${_lane}/*\"     { capabilities = [\"read\"] }
+path \"cogni/metadata/${_lane}\"   { capabilities = [\"list\"] }
+path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
+done
+unset _lane
 bao_policy "${DEPLOY_ENV}-db-reader" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"     { capabilities = ["read"] }
-path "cogni/metadata/${DEPLOY_ENV}"   { capabilities = ["list"] }
-path "cogni/metadata/${DEPLOY_ENV}/*" { capabilities = ["read", "list"] }
+${DB_READER_HCL}
 HCL
 bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-db-reader \
   bound_service_account_names=db-provisioner \

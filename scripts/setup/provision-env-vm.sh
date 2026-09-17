@@ -1483,13 +1483,21 @@ HCL
   # because deploy-infra provisions every node on the VM, not one service.
   log_info "Writing ${DEPLOY_ENV}-db-reader policy + role binding..."
   ssh $SSH_OPTS root@"$VM_IP" \
+  # bug.5206 #10 — the reader must reach every lane this cluster reconciles, read-only.
+  # ⚠️ KEEP IN SYNC with scripts/setup/reconcile-env-substrate.sh.
+  DB_READER_HCL=""
+  for _lane in ${SECRET_LANES}; do
+    DB_READER_HCL="${DB_READER_HCL}
+path \"cogni/data/${_lane}/*\"     { capabilities = [\"read\"] }
+path \"cogni/metadata/${_lane}\"   { capabilities = [\"list\"] }
+path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
+  done
+  unset _lane
     "kubectl get sa db-provisioner -n default >/dev/null 2>&1 \
        || kubectl create sa db-provisioner -n default"
   ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao policy write ${DEPLOY_ENV}-db-reader -" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"     { capabilities = ["read"] }
-path "cogni/metadata/${DEPLOY_ENV}"   { capabilities = ["list"] }
-path "cogni/metadata/${DEPLOY_ENV}/*" { capabilities = ["read", "list"] }
+${DB_READER_HCL}
 HCL
   bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-db-reader \
     bound_service_account_names=db-provisioner \
