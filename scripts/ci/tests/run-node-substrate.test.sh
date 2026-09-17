@@ -142,11 +142,15 @@ RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
 RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
 RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
   bash "$RUNNER" candidate-a polyfix >/dev/null
+# A foreign-custodied lane has NO substrate on its own VM: the vault bank, the database, the
+# roles and the Temporal namespace all belong to the control cluster and are provisioned by
+# THAT cluster's run. Reconciling here mints `<control>-db-reader` against the LANE's OpenBao,
+# where it does not exist, and kills the flight. Doing nothing is the correct amount of work.
 got="$(paste -sd'|' - < "$ORDER")"
-want="reconcile candidate-a polyfix"
-[ "$got" = "$want" ] || { echo "an up-trust vault write must be declined, and reconcile must still run:
+want=""
+[ "$got" = "$want" ] || { echo "a foreign-custodied lane's own flight must touch NOTHING on its own VM:
   got:  $got
-  want: $want" >&2; exit 1; }
+  want: <nothing>" >&2; exit 1; }
 
 # ── Case 7: the control env writes its OWN secrets AND every lane it reconciles. ─────
 : > "$ORDER"
