@@ -429,7 +429,7 @@ describe("actuator namespace (task.5132)", () => {
         computeApi: "crossplane",
       });
       expect(
-        (manifest.spec as Record<string, unknown>).actuatorNamespace,
+        (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace,
         environment
       ).toBe("cogni-production");
     }
@@ -443,7 +443,7 @@ describe("actuator namespace (task.5132)", () => {
       computeApi: "crossplane",
     });
     expect(
-      (manifest.spec as Record<string, unknown>).actuatorNamespace
+      (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace
     ).toBeUndefined();
   });
 
@@ -455,7 +455,7 @@ describe("actuator namespace (task.5132)", () => {
       computeApi: "legacy",
     });
     expect(
-      (manifest.spec as Record<string, unknown>).actuatorNamespace
+      (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace
     ).toBeUndefined();
   });
 
