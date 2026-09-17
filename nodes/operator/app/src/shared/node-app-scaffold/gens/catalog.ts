@@ -62,6 +62,23 @@ function imageRepositoryFromSourceRepo(sourceRepo: string): string {
   return `ghcr.io/${owner}/${repo}`;
 }
 
+/**
+ * The GitHub OWNER ORG of a node's source repo, lowercased. Decides WHICH actuator writer may
+ * mint for the node (bug.5202) — `cogni-dao` bills production in every lane, `cogni-test-org`
+ * bills the platform test account. Throws on a malformed URL rather than guessing an owner,
+ * because guessing here picks the wrong payment instrument.
+ */
+export function githubOwnerFromSourceRepo(sourceRepo: string): string {
+  const url = new URL(sourceRepo);
+  const [ownerPart] = url.pathname.split("/").filter(Boolean);
+  if (!ownerPart) {
+    throw new Error(
+      `sourceRepo must be https://github.com/<owner>/<repo>: ${sourceRepo}`
+    );
+  }
+  return ownerPart.toLowerCase();
+}
+
 export function renderCatalog(
   slug: string,
   port: number,
@@ -83,15 +100,22 @@ export function renderCatalog(
   // AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) + INSTALLED_IS_NOT_FUNDED (task.5097) —
   // placement and compute authority are DIFFERENT AXES, so they are filtered differently. Every
   // birth env is genuinely `akash` above; an env may name `crossplane` here only if it BOTH
-  // carries a Crossplane control plane AND pins an actuator wallet (`canBirthOnCrossplane`).
-  // Either fact alone is not enough: no control plane means the promote renders an
-  // XComputeWorkload into a cluster with no such CRD, and no pinned wallet means the actuator
-  // refuses every paid transaction with `actuator_account_id_missing`. Both produce a node that
-  // never comes up. Preview installs the control plane but pins NO wallet (dormant/unfunded),
-  // so births never select Crossplane there — candidate-a is the sole active writer on the
-  // shared test wallet (story.5016); production is independently pinned and isolated. Pinning
-  // an env's wallet is what makes births pick it up.
-  const crossplaneEnvs = envs.filter((env) => canBirthOnCrossplane(env));
+  // carries a Crossplane control plane AND has exactly one actuator writer that mints for THIS
+  // node's owner (`canBirthOnCrossplane`). Either fact alone is not enough: no control plane
+  // means the promote renders an XComputeWorkload into a cluster with no such CRD, and no
+  // writer means the actuator refuses every paid transaction with
+  // `actuator_account_id_missing`. Both produce a node that never comes up.
+  //
+  // The owner is load-bearing, not decoration (bug.5202). Under `akash-actuator-wallet-cutover`
+  // NS3 every REAL node bills the production account in EVERY environment, while NS4 reserves
+  // the test account for the operator's own self-test on `cogni-test-org`. Both claim the env
+  // name `candidate-a`, so authority cannot be decided from the env alone.
+  const ownerOrg = input.sourceRepo
+    ? githubOwnerFromSourceRepo(input.sourceRepo)
+    : "";
+  const crossplaneEnvs = envs.filter((env) =>
+    canBirthOnCrossplane(env, ownerOrg)
+  );
   const computeApiBlock =
     offCluster && crossplaneEnvs.length > 0
       ? `compute_api:\n${crossplaneEnvs.map((env) => `  ${env}: crossplane\n`).join("")}`

@@ -104,6 +104,19 @@ export interface CrossplaneActuatorWriter {
   readonly cluster: string;
   /** Environments whose leases this writer mints. One-to-many BY DESIGN. */
   readonly serves: readonly string[];
+  /**
+   * GitHub OWNER ORGS whose nodes this writer mints for (bug.5202).
+   *
+   * Serving used to be keyed on the environment ALONE, which cannot express the north star:
+   * `akash-actuator-wallet-cutover` NS3 says every REAL node bills the production account in
+   * EVERY environment, while NS4 says the test account pays ONLY for the operator's own
+   * self-test on `cogni-test-org` throwaway nodes. Both claim the env name `candidate-a`, so
+   * one writer per env made `writerFor("candidate-a")` either ambiguous (undefined — breaking
+   * candidate-a) or wrong (a real node billing the test account). The doc rules on who PAYS,
+   * which is a function of the node's OWNER; the code modelled who SERVES, a function of the
+   * env. Keying on the pair makes both rulings expressible at once.
+   */
+  readonly owners: readonly string[];
 }
 
 export const CROSSPLANE_ACTUATOR_WRITERS: readonly CrossplaneActuatorWriter[] =
@@ -111,29 +124,27 @@ export const CROSSPLANE_ACTUATOR_WRITERS: readonly CrossplaneActuatorWriter[] =
     {
       id: "candidate-a/akash-tx-actuator",
       cluster: "candidate-a",
+      // NS4: this account exists ONLY to test the operator platform itself. It never pays
+      // for a real node, so it serves exactly one org and one lane.
       serves: ["candidate-a"],
+      owners: ["cogni-test-org"],
     },
     {
       id: "production/akash-tx-actuator",
       cluster: "production",
-      // NS3: the PAYING cluster mints for the lanes it pays for. Preview installs the
-      // composite API but pins no account of its own (INSTALLED_IS_NOT_FUNDED), so before
-      // this it had NO writer at all and `canBirthOnCrossplane("preview")` was false —
-      // every preview placement failed closed with `actuator_account_id_missing`. It is
-      // now funded by production's account, which is the same direction bug.5196 opened
-      // for lane SECRETS: production pays, production custodies, production mints.
+      // NS3: every REAL node deployment, in EVERY environment, bills the production Console
+      // account. Environment is a property of the deployment, not of who pays — one org, one
+      // bill (the Vercel shape the north star names). Preview and candidate-a pin no account
+      // of their own, so before this they had no writer for real nodes at all and every
+      // placement failed closed with `actuator_account_id_missing`.
       //
-      // This is the injectivity restatement working as intended, not a relaxation:
-      // `account -> writer` stays INJECTIVE (still one writer on this account, so one
-      // ledger against one escrow) while `writer -> envs` is one-to-many. Widening
-      // `serves` deliberately does NOT widen CROSSPLANE_ACTUATOR_WALLET_ENVS, which
-      // derives from `cluster` — preview still hosts no writer and holds no key.
-      //
-      // candidate-a is NOT added here on purpose: it already has exactly one writer, and
-      // `writerFor` returns undefined for an environment two writers claim. Moving
-      // candidate-a onto this account is a separate decision about who pays for it and
-      // what the test account is still for (task.5131).
-      serves: ["preview", "production"],
+      // The bug.5187 injectivity restatement holds: `account -> writer` stays INJECTIVE (one
+      // writer on this account ⇒ one ledger against one escrow), while `writer -> envs` is
+      // deliberately one-to-many. CROSSPLANE_ACTUATOR_WALLET_ENVS derives from `cluster`, NOT
+      // `serves`, so preview and candidate-a still host no writer and hold no Console key —
+      // widening `serves` is a PAYMENT fact, not a claim about where keys live.
+      serves: ["candidate-a", "preview", "production"],
+      owners: ["cogni-dao"],
     },
   ] as const;
 
@@ -143,10 +154,13 @@ export const CROSSPLANE_ACTUATOR_WRITERS: readonly CrossplaneActuatorWriter[] =
  * cluster's writer pins nothing) but "is there exactly one writer that serves it".
  */
 export function writerFor(
-  environment: string
+  environment: string,
+  ownerOrg: string
 ): CrossplaneActuatorWriter | undefined {
-  const writers = CROSSPLANE_ACTUATOR_WRITERS.filter((writer) =>
-    writer.serves.includes(environment)
+  const writers = CROSSPLANE_ACTUATOR_WRITERS.filter(
+    (writer) =>
+      writer.serves.includes(environment) &&
+      writer.owners.includes(ownerOrg.toLowerCase())
   );
   return writers.length === 1 ? writers[0] : undefined;
 }
@@ -194,9 +208,12 @@ export function hasCrossplaneControlPlane(environment: string): boolean {
  * and a birth row must be legal there; conversely an environment two writers both claimed to
  * serve is ambiguous, and `writerFor` returns undefined rather than picking one.
  */
-export function canBirthOnCrossplane(environment: string): boolean {
+export function canBirthOnCrossplane(
+  environment: string,
+  ownerOrg: string
+): boolean {
   return (
     hasCrossplaneControlPlane(environment) &&
-    writerFor(environment) !== undefined
+    writerFor(environment, ownerOrg) !== undefined
   );
 }
