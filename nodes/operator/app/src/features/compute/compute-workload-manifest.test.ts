@@ -9,6 +9,7 @@ import {
   buildComputeWorkloadManifest,
   computeWorkloadManifestFile,
 } from "./compute-workload-manifest";
+import { deploymentEnvironmentSchema } from "./node-deployment-provider";
 import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "./node-services-workload-spec";
 
 const SHA = "a".repeat(40);
@@ -376,18 +377,45 @@ describe("buildComputeWorkloadManifest", () => {
 
 describe("bootPolicyForEnvironment", () => {
   /**
-   * BOOT_SLO_OR_CLOSE. A candidate that never serves its exact SHA has no forensic value
-   * worth renting; a live environment that stops serving is an incident to inspect. This is
-   * the whole reason story.5025's transient candidate cannot leak spend.
+   * BOOT_SLO_OR_CLOSE. `onDeadline` fires only when `status.serving` never became true within
+   * `bootDeadlineSeconds` of the XR's CREATION — a lane that never served once. Nothing ran,
+   * so there is nothing to inspect, so no non-production lane pays rent for it.
+   *
+   * This is the whole reason story.5025's transient candidate cannot leak spend, and since
+   * task.5132 it is the only thing stopping a never-booting PAID preview lease from billing
+   * until a human notices: `story.5039`'s deactivate half is unbuilt and there is no
+   * `closeLease` path in this repo (`bug.5189` is what an orphaned lease costs).
    */
-  it("closes a never-served candidate lease and holds every live environment", () => {
+  it("closes a never-served lease in every non-production environment", () => {
     expect(bootPolicyForEnvironment("candidate-a")).toEqual({
       onDeadline: "Close",
     });
-    expect(bootPolicyForEnvironment("preview")).toEqual({ onDeadline: "Hold" });
+    expect(bootPolicyForEnvironment("preview")).toEqual({
+      onDeadline: "Close",
+    });
+  });
+
+  /**
+   * Production is the one lane that holds. A promote that fails to boot is a real incident,
+   * the PREVIOUS lease is still serving production, and the dead one is the evidence.
+   */
+  it("holds a never-served production lease as incident evidence", () => {
     expect(bootPolicyForEnvironment("production")).toEqual({
       onDeadline: "Hold",
     });
+  });
+
+  /**
+   * ONE PREDICATE. `bootPolicy` and `actuatorNamespace` both key on "is this production?", so a
+   * lane added to `DeploymentEnvironment` later cannot arrive holding only half the policy —
+   * which is exactly how preview became a paid lane that would never close itself.
+   */
+  it("gives every environment but production the disposable policy", () => {
+    for (const environment of deploymentEnvironmentSchema.options) {
+      expect(bootPolicyForEnvironment(environment).onDeadline).toBe(
+        environment === "production" ? "Hold" : "Close"
+      );
+    }
   });
 });
 
