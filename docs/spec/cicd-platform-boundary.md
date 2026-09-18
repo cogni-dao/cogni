@@ -289,8 +289,9 @@ The provider seam is a **1:1 adapter swap** in the operator bootstrap — `Cherr
 
 ### P3 — Crossplane owns reconciliation; Cogni owns the transaction (task.5095)
 
-The ComputeWorkload controller is **frozen** and gets no new capabilities. The end state splits its
-responsibilities along one line: _generic lifecycle machinery is bought, the Akash transaction is built._
+The legacy ComputeWorkload controller has been **RETIRED** (story.5016 — deleted from the tree; no
+environment deploys it; its Console key is revoked). Its responsibilities are now split along one
+line: _generic lifecycle machinery is bought, the Akash transaction is built._
 
 | Concern                                                                                                              | Owner                                                                             | Why                                                                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -310,21 +311,30 @@ finalizer, retry loop, or leader election. Its irreducible behaviours are:
 4. **Post-response-loss recovery** — the cursor is durable _before_ the Console POST, so a lost response is
    resolved by adopting the unique post-baseline allocation, or it fails closed. It is never healed by a
    fresh create, and no timer ever releases an unresolved slot.
-5. **Migration before transaction** — bug.5116 made a completed per-digest DB migration a precondition of
-   every paid transaction, so a freshly born node has its schemas before it has a lease. The actuator is the
-   single chokepoint every paid transaction already passes through, so that precondition is enforced there
-   (bug.5140): `migration` is a REQUIRED field on `create`/`update`, a `RequireBeforeTransaction` requirement
-   is PROVEN before the wallet slot is even claimed, and `running` / `failed` / unprovable / no-prover all
-   REFUSE (`migration_pending` 409, `migration_failed` 422, `migration_unavailable` 503). `Skip` is the one
-   explicit, logged bypass. The proof runs through the same `ComputeWorkloadMigrationPort` the frozen
-   controller used, so the Kubernetes Job adapter — including its reclassification of a `DeadlineExceeded`
-   Job with no failed migrate container as an infrastructure retry — is shared, not reimplemented.
+5. **Migration as a release step, NEVER a payment precondition** (task.5135, superseding bug.5140) — bug.5116
+   wanted a freshly born node to have its schemas, and bug.5140 implemented that want as a precondition of
+   every paid transaction. That was the wrong seam. Node `toks5` proved it in production: a valid XR in
+   `cogni-production` with a valid image digest whose migration never ran, so the actuator was NEVER CALLED,
+   `akash-lease` reported "not yet ready" **1044 times**, and the node never existed in any environment —
+   silent, unbounded, and with no alarm, while the same actuator minted happily for five other nodes.
 
-   _Why here and not in the Composition:_ a Composition cannot compose the migration Job. The installed
-   package set is provider-http + go-templating + auto-ready, and `provider-kubernetes` v0.18.0 still ships
-   no namespaced `.m.crossplane.io` types, so there is nothing for a render-time gate to gate on. Enforcing
-   at the actuator needs no new controller, no new reconciliation loop, and no new package: Crossplane keeps
-   owning requeue and backoff, and a refusal is just another bounded answer it retries.
+   Renting compute proves nothing about a database. The per-digest migration now rides on the actuator's
+   UNPAID `observe` tick as `AkashTxMigrationStep`, together with the `workload` + `environment` that say
+   whose database it is (the actuator refuses to infer either — inferring them is how "which environment's
+   DB?" became a payment-plane question at all). Its phase is REPORTED on the observation and surfaced as
+   `status.migration.phase`; a `failed` phase becomes `status.failure.reason: MigrationFailed`. `create` and
+   `update` carry no migration, cannot be refused by one, and need no database-adjacent capability. The
+   runner is still the same `ComputeWorkloadMigrationPort` the frozen controller used — including its
+   reclassification of a `DeadlineExceeded` Job with no failed migrate container as an infrastructure retry
+   — so the two lanes cannot disagree about whether a digest has migrated.
+
+   _What bounds a bad schema now:_ the workload gets its lease, cannot serve its exact SHA, and trips
+   `bootPolicy.bootDeadlineSeconds` (`BOOT_SLO_OR_CLOSE`). Loud and bounded, instead of never created.
+
+   _Why still in the actuator process and not a composed resource:_ a Composition cannot compose the
+   migration Job. The installed package set is provider-http + go-templating + auto-ready, and
+   `provider-kubernetes` v0.18.0 still ships no namespaced `.m.crossplane.io` types. Co-hosting it behind an
+   unpaid seam is the decoupling; relocating the process is the follow-up.
 
 6. **Node-bound spend receipts** — the same receipt that survives a lost response also says WHO consumed
    the infrastructure (task.5103). `node_id`, `environment`, the composite `uid`/`generation` and the
@@ -339,23 +349,34 @@ finalizer, retry loop, or leader election. Its irreducible behaviours are:
 
 Refusals are observable by construction: every refusal emits a structured log marker
 (`akash_tx_wallet_allocation_blocked`, `akash_tx_allocation_unresolved`, `akash_tx_allocation_recovered`,
-`akash_tx_identity_conflict`, `akash_tx_receipt_absent`,
-`akash_tx_migration_pending`, `akash_tx_migration_failed`, `akash_tx_migration_unavailable`,
-`akash_tx_migration_capability_missing`, and even the `akash_tx_migration_skipped` bypass)
+`akash_tx_identity_conflict`, `akash_tx_receipt_absent`)
 _before_ it answers. Writing a refusal only into CR status is what made a fleet-wide wallet deadlock
-invisible (bug.5115).
+invisible (bug.5115). The release step is not a refusal but is held to the same rule: every phase emits
+`akash_tx_migration_{succeeded,running,failed,unavailable}` or
+`akash_tx_migration_capability_missing` before it is reported.
 
 **ONE_WALLET_ONE_WRITER is a precondition, not a convention.** Wallet-global serialization only
 recovers a lost response if exactly one process spends from the wallet — a second writer's lease is
 indistinguishable from the actuator's own.
 
-**One wallet, one ACTIVE writer — same account, hard cutover** (story.5016, BINDING; this SUPERSEDES
-the earlier "second dedicated Console account per environment" design, which was withdrawn). A second
-account would create exactly the split-brain the Crossplane cutover exists to purge. The order is:
-structurally disable every legacy ComputeWorkload controller writer → **revoke** the legacy Console
-API key → mint a **fresh key on the SAME account** → store it only under the actuator's dedicated
-OpenBao path → run exactly one actuator and one durable ledger against that wallet. Separation from
-the retired writer is therefore a **revocation fact**, not a runtime comparison.
+**Centralized managed account, one ACTIVE writer per wallet — v0** (story.5016, BINDING;
+supersedes the earlier dedicated-Console-account-per-environment activation prerequisite).
+candidate-a pins the managed test account/credential; preview hosts NO writer (its control plane is
+installed but dormant/unfunded, so it lands no ComputeWorkload and never actuates); production
+remains on its isolated dedicated account. Each account therefore has exactly one active WRITER —
+because the single-writer index is per-database, two writers sharing one account could not be
+serialized, so preview deliberately stays unfunded rather than becoming a second writer on the
+candidate-a test account. Note the axis: the invariant is `account -> at most one writer`, and
+`writer -> envs` is deliberately one-to-many, because a lease is minted off-cluster and one writer
+may legitimately mint for several environments. The reviewed map is `CROSSPLANE_ACTUATOR_WRITERS`
+in `@shared/node-registry/crossplane-control-plane`, asserted against git (account injectivity, one
+Console-key `remoteRef` per account, one writer per crossplane-selected environment) by
+`tests/ci-invariants/crossplane-dormant-substrate.spec.ts`. Every writing environment structurally disables its legacy ComputeWorkload
+controller before enabling its actuator, stores the credential only under that environment's
+dedicated actuator OpenBao path, and forbids Console/manual writes. A manual or second writer on a
+wallet invalidates cursor recovery. Distinct funded accounts per funded environment remain later
+hardening, not an activation prerequisite; this deliberate v0 trade removes account setup from the
+path to proving the full candidate → preview → production ladder.
 
 `features/compute/akash-tx/akash-tx-wallet.ts` enforces what remains checkable at wiring time:
 `AKASH_ACTUATOR_CONSOLE_API_KEY` is required with no fallback, and the **non-secret** pinned
@@ -364,9 +385,17 @@ key) must be present and must match the account the live Console read reports, o
 before it listens. **The actuator never possesses `AKASH_CONSOLE_API_KEY`**: task.5095 projected it
 purely to byte-compare, which made the actuator hold the very wallet it claimed isolation from, and
 still only proved "different bytes" rather than "the right wallet". The ledger scope is
-`akash-console:<environment>`, derived from the environment rather than the secret so rotation cannot
-orphan in-flight receipts. Per-environment Postgres over ONE shared wallet is the unsound shape this
-rules out — so **v0 serves candidate-a only**; preview and production are deliberately not wired.
+`akash-console:<AKASH_ACTUATOR_ACCOUNT_ID>` (bug.5187), derived from the public pinned account rather
+than from the environment or the secret, so rotation cannot orphan in-flight receipts AND one Console
+account is exactly one single-writer slot. Keyed on the environment the slot was inert for the case
+it exists to catch: two writers on one account in two environments produced two scope strings and
+could never collide. `wallet_scope` is also half the key `claimOnce` looks a prior receipt up by, so
+re-deriving it is a DATA migration, not a rename — migration `0048` backfills the rows in the same
+change (preparing rows refused, row counts asserted), a CHECK constraint makes the legacy env-keyed
+form unwritable afterwards, and the actuator refuses to boot against a ledger the backfill has not
+reached. The durable ledger serializes its writer and recovers its own lost responses; the
+shared-account model depends on the no-manual-write and one-writer-per-account rules above. `docs/spec/ci-cd.md` Axiom 26 is the authority for the current
+cross-environment account model.
 
 Custody is OpenBao under a **dedicated service boundary**, not the broad operator bucket. The catalog
 declares `tier: A1, service: akash-tx-actuator` for both `AKASH_ACTUATOR_CONSOLE_API_KEY` and
@@ -400,10 +429,12 @@ The remaining tooth — a **machine-checked growth ratchet** — is the smallest
 
 - **No `deploy-infra.sh` rewrite / decomposition.** It works in prod. Freeze it; migrate responsibilities out one at a time only when an independent reason (the k8s/Compose-tier move, Axiom 22 convergence) pulls them — never as a standalone refactor.
 - **No general-purpose Kubernetes CRDs or controllers.** The one named exception is
-  `compute.cogni.io/ComputeWorkload` plus its dedicated controller process (task.5064):
-  Kubernetes cannot natively observe or finalize a provider-hosted workload. Git/Argo owns
-  desired `spec`; the controller owns only bounded observe/create/update/delete, finalization,
-  and provenance in `status`. It is not a Crossplane-like framework and may not grow provider
+  `compute.cogni.io/ComputeWorkload` (Kubernetes cannot natively observe or finalize a
+  provider-hosted workload). Git/Argo owns desired `spec`; reconciliation is now **Crossplane**
+  (the `XComputeWorkload` composite) calling the private **`akash-tx-actuator`** for the bounded
+  observe/create/update/delete transaction, finalization, and provenance in `status` — the
+  bespoke leader-elected `compute-workload-controller` process (task.5064) that once owned this
+  was RETIRED, story.5016. It is not a Crossplane-like framework and may not grow provider
   vocabulary, workflow logic, or a second desired-state registry.
 - **No remote Tofu backend / Cloudflare-as-Tofu-resource migration** as speculative cleanup. Real gaps (ephemeral Tofu state, imperative DNS) are logged; fix them when a provisioning incident demands it, not preemptively.
 - **No new flags/options for theoretical flexibility.** `--k8s-secrets-only` is already legacy (ESO supersedes it). Don't add siblings.

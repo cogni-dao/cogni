@@ -256,7 +256,11 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
-    needs: static
+    # No `needs: static` (task.5140): unit does its own install + packages:build
+    # and consumes NO artifact from static, so gating on it only serialized
+    # static's ~1m38s onto the critical path for a fail-fast the merge queue
+    # re-checks anyway. Running unit in parallel with static drops the ci.yaml
+    # critical path to max(job) instead of static+unit.
     env:
       NODE_ENV: test
       LITELLM_MASTER_KEY: build-key
@@ -334,108 +338,26 @@ jobs:
       - name: Image Updater scope (bug.0344)
         run: bash scripts/ci/check-image-updater-scope.sh
 
-      # task.0284 — fixture-driven regression tests for the secrets:set CLI
-      # (scripts/secrets/set-secret.sh). Uses a stdin-recording bao shim; no
-      # real OpenBao, no network. Ported from node-template with the substrate.
-      - name: secrets:set CLI tests (task.0284)
-        run: bash scripts/ci/tests/set-secret.test.sh
+      # task.5140 — the hermetic scripts/ci/tests/*.test.sh suite (22 pure-bash
+      # deploy/secrets/substrate regression tests) runs in ONE parallel primitive
+      # instead of ~22 serial steps (was ~3-4 min serial → ~40-60s). The
+      # authoritative test list, the mutator-vs-parallel concurrency tiers (a few
+      # tests `cd $REPO_ROOT` and mutate tracked files, so they run serially-first,
+      # alone), and exit-code aggregation all live in the script — SCRIPTS_ARE_THE_API.
+      # Add a new tests/*.test.sh there, not as a new workflow step.
+      - name: CI shell tests (parallel)
+        run: bash scripts/ci/run-shell-tests.sh
 
-      # bug.5068 — OpenBao shared-bucket clobber proof. A transient `bao kv patch`
-      # failure must NEVER fall back to a destructive `put` (which replaces the whole
-      # multi-key bucket). Drives set-secret.sh's real bao codepath with a stub bao
-      # that injects a transient fault; proves patch-merges / transient-no-put /
-      # absent-creates. The 2026-07-02 prod 502 was this exact clobber.
-      - name: OpenBao clobber-proof tests (bug.5068)
-        run: bash scripts/ci/tests/openbao-clobber-proof.test.sh
-
-      # task.5094 — per-node secret fan-out (seed_node_app_secrets). Drives the
-      # catalog-gated fan-out against the real infra/secrets-catalog.yaml with
-      # stubbed runtime deps; proves distinct-value-per-node + custody gating.
-      - name: secrets fan-out tests (task.5094)
-        run: bash scripts/ci/tests/secrets-fanout.test.sh
-
-      # Node secret lane split: materialize is the sole OpenBao writer (app keys
-      # + shared inheritance, DSNs deferred); reconcile seeds DSNs only and no
-      # longer double-writes app keys. Fakes-only, no network.
-      - name: node secret materialize tests
-        run: bash scripts/ci/tests/secret-materialize.test.sh
-
-      - name: node substrate reconcile tests
-        run: bash scripts/ci/tests/reconcile-node-substrate.test.sh
-
-      - name: per-node substrate runner tests
-        run: bash scripts/ci/tests/run-node-substrate.test.sh
-
-      - name: target substrate assertion tests
-        run: bash scripts/ci/tests/assert-target-substrate.test.sh
-
-      - name: remote-source promotion SHA resolver tests
-        run: bash scripts/ci/tests/resolve-remote-source-sha.test.sh
-
-      # bug.5148 — ONE_AUTHORITY_PER_WORKLOAD in the deploy lane. A `compute_api:
-      # crossplane` cell renders xcomputeworkload.yaml and NOT compute-workload.yaml,
-      # so any lane that hardcodes the legacy filename can never pass for the new
-      # authority. Pins the shell twin of resolveNodeComputeApi() +
-      # computeWorkloadManifestFile(), incl. LEGACY_IS_DEFAULT and fail-closed on an
-      # unknown value (a silent downgrade would buy a SECOND PAID Akash lease).
-      - name: compute workload manifest filename tests (bug.5148)
-        run: bash scripts/ci/tests/compute-workload-manifest-file.test.sh
-
-      # task.5078 — catalog-driven edge routing. Asserts the committed Caddyfile
-      # is in sync with the catalog (drift gate that makes "add a node = 1
-      # catalog PR" enforceable), every type:node has an edge block (canary
-      # included), and catalog node_port == per-env overlay Service nodePort.
-      - name: edge routing tests (task.5078)
-        run: bash scripts/ci/tests/render-caddyfile.test.sh
-
-      # bug.5037 — the edge-Caddy reconcile must exit 0 when only the Caddyfile
-      # changed (re-flight of an existing node), not let a trailing `[[ false ]]`
-      # test fail the whole substrate reconcile.
-      - name: edge-Caddy reconcile exit-code guard (bug.5037)
-        run: bash scripts/ci/tests/reconcile-edge-caddy.test.sh
-
-      # Catalog-driven node DNS: idempotent Cloudflare A-record upsert +
-      # reconcile fans one record per non-primary type:node. Stateful CF shim,
-      # no network. Closes the node-formation DNS gap (catalog → overlays →
-      # flight → secrets all auto-fan, but the public host never resolved).
-      - name: node DNS reconcile tests
-        run: bash scripts/ci/tests/reconcile-node-dns.test.sh
-
-      # bug.5150 — unit proof for the deploy-ref ancestry invariant that the
-      # `deploy-ref-ancestry` job enforces against the real fleet. Hermetic: a throwaway
-      # origin repo over a local path, no network. Includes the RED case (a ref pinned to a
-      # commit main abandoned) — a green-only suite would have passed on incident day.
-      - name: deploy ref ancestry tests (bug.5150)
-        run: bash scripts/ci/tests/check-deploy-ref-ancestry.test.sh
-
-      - name: aggregate deploy outcome tests
-        run: bash scripts/ci/tests/aggregate-decide-outcome.test.sh
-
-      - name: node-ref VM fail-closed tests
-        run: bash scripts/ci/tests/require-node-ref-vm.test.sh
-
-      - name: per-cell substrate gate tests
-        run: bash scripts/ci/tests/resolve-substrate-gate.test.sh
-
-      - name: affected image target tests
-        run: bash scripts/ci/tests/detect-affected.test.sh
-
-      - name: scheduler node routing tests
-        run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
-
-      # task.5026 — env-singleton scheduler-worker routing reconcile. Propagates
-      # the catalog-rendered base/scheduler-worker onto deploy/<env>-scheduler-worker
-      # (the branch the worker's Argo app syncs) on every node flight, so a node-add
-      # actually reaches the worker + Reloader rolls it. Local git checkout seam, no
-      # network. Closes bug.5035/bug.5021 (the manual scheduler-worker heal).
-      - name: scheduler-worker routing reconcile tests
-        run: bash scripts/ci/tests/reconcile-scheduler-worker-routing.test.sh
-
-      # single-node-scope filters are CATALOG_IS_SSOT: generated from the
-      # nodes/* listing. Fails if a node was added/removed under nodes/ without
-      # regenerating the dorny filter block (run `pnpm gen:scope-filters`).
+      # Catalog-driven drift gates — NOT part of the shell-test suite above: each
+      # asserts a committed artifact still matches the catalog (CATALOG_IS_SSOT),
+      # kept as named steps so a specific drift failure is legible. Fast (--check).
       - name: single-node-scope filter drift (CATALOG_IS_SSOT)
         run: bash scripts/ci/render-scope-filters.sh --check
+
+      # scheduler-worker endpoint map is catalog-derived; fails if a node-add
+      # didn't regenerate it (run `pnpm gen:scheduler-worker-endpoints`).
+      - name: scheduler node routing drift
+        run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
 
       # Per-node ApplicationSet drift (CATALOG_IS_SSOT + LANE_ISOLATION, axiom
       # 18). One AppSet object per (env, node) is derived from the catalog rows
@@ -443,13 +365,6 @@ jobs:
       # an AppSet/kustomization was hand-edited without `pnpm gen:node-appset`.
       - name: per-node ApplicationSet drift (CATALOG_IS_SSOT)
         run: bash scripts/ci/render-node-appset.sh --check
-
-      # Per-env node-set gate (task.5017): deploy ⊆ provisioned. Asserts each
-      # env renders only the nodes whose catalog `envs:` lists it (preview is the
-      # minimal operator+scheduler-worker backbone), SCHEDULER_WITH_OPERATOR,
-      # CANDIDATE_A_ALWAYS, determinism, and fail-closed on a missing `envs:`.
-      - name: per-env node-set tests
-        run: bash scripts/ci/tests/render-node-appset.test.sh
 
       # Per-node overlay drift (CATALOG_IS_SSOT + NODE_AT_ROOT_MIGRATE_PATH,
       # bug.5008). Wizard-born node overlays are frozen to the operator version
@@ -460,20 +375,32 @@ jobs:
       - name: per-node overlay drift (NODE_AT_ROOT_MIGRATE_PATH)
         run: bash scripts/ci/render-node-overlays.sh --check
 
-      - name: node overlay renderer tests
-        run: bash scripts/ci/tests/render-node-overlays.test.sh
+      # task.5140 Stage B — affected-only unit tests. The suite is two disjoint
+      # vitest universes: the ROOT config (tests/** + packages + services) always
+      # runs full (turbo does not model it — dropping it would be a false green),
+      # while the OPERATOR app config (~60% of CI test time) is skipped on a PR
+      # when neither the operator app nor a package it depends on changed, and
+      # runs FULL on merge_group/push (the required-check backstop that catches
+      # any PR-time affected miss before merge). Logic + fail-safe live in
+      # scripts/ci/run-unit-tests.sh (SCRIPTS_ARE_THE_API). Coverage stays a
+      # single-flip: ENABLE_SONAR=true runs the full instrumented path so the
+      # sonar job below has an artifact.
+      - name: Unit + contract tests
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          TURBO_SCM_BASE: origin/main
+        run: |
+          if [ "${{ vars.ENABLE_SONAR }}" = "true" ]; then
+            pnpm test:ci:coverage
+          else
+            bash scripts/ci/run-unit-tests.sh
+          fi
 
-      - name: operator rollout strategy tests
-        run: bash scripts/ci/tests/operator-rollout-strategy.test.sh
-
-      - name: scheduler runtime routing tests
-        run: bash scripts/ci/tests/scheduler-runtime-routing.test.sh
-
-      - name: Unit + contract coverage tests
-        run: pnpm test:ci
-
+      # Only produced (and consumed by the sonar job) when Sonar is enabled;
+      # skipped otherwise, so the coverage-free run above can't false-fail on
+      # if-no-files-found.
       - name: Upload coverage reports
-        if: always()
+        if: vars.ENABLE_SONAR == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-${{ github.sha }}
@@ -498,7 +425,9 @@ jobs:
     # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
     if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
-    needs: static
+    # No `needs: static` (task.5140) — component does its own install + build and
+    # shares no artifact with static; running in parallel keeps it off the
+    # critical path. See the unit job note.
     env:
       NODE_ENV: test
       LITELLM_MASTER_KEY: build-key

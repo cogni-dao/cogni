@@ -248,10 +248,17 @@ export const serverSchema = z.object({
   // Optional: when unset the compute capability returns no balances (graceful degradation)
   // until ESO surfaces the token onto the operator runtime.
   CHERRY_AUTH_TOKEN: optionalString,
-  // Akash Console (managed wallet) API key — read+write compute half (task.5044). One shared
-  // account bills every Akash workload in USD (v0). Optional: unset → Akash provider absent
-  // from the compute capability (graceful degradation, same contract as CHERRY_AUTH_TOKEN).
-  AKASH_CONSOLE_API_KEY: optionalString,
+  // NOTE: AKASH_CONSOLE_API_KEY is deliberately GONE (task.5138). One Console account has ONE
+  // key and it belongs to that account's actuator (hub `akash-actuator-wallet-cutover`). The
+  // app's Akash awareness is the actuator's own ledger (akashSpend on /compute/balances,
+  // LeaseReadCapability) — never a second Console credential.
+  // The actuator wallet's PUBLIC Akash account address (the same non-secret pin the
+  // akash-tx-actuator Deployment carries as plain env config). Here it scopes the app's
+  // READ-ONLY view of the allocation ledger (story.5039): `accountWalletScope(<this>)` is the
+  // wallet_scope the actuator's receipts are keyed on, so the deploy-state/env-verb surfaces
+  // can enumerate live paid leases without holding any wallet credential. Optional: unset →
+  // lease read capability absent (routes degrade to "leases unwired").
+  AKASH_ACTUATOR_ACCOUNT_ID: optionalString,
   // NOTE: AKASH_ACTUATOR_CONSOLE_API_KEY is deliberately ABSENT from this schema (story.5016
   // secret-boundary amendment 2). It is the operator sponsor wallet's Console credential and it
   // now lives at cogni/<env>/akash-tx-actuator/*, projected ONLY into the private actuator pod

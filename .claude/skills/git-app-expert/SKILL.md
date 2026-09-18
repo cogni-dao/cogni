@@ -106,7 +106,7 @@ nodes/operator/app/src/bootstrap/ai/
   tool-bindings.ts                                 ← wires VcsCapability into tool implementations
 ```
 
-**Only the operator node has a real VcsCapability.** All other nodes (`poly`, `resy`,
+**Only the operator node has a real VcsCapability.** All other nodes (
 `node-template`) export `stubVcsCapability` — it satisfies the binding requirement but throws
 on use: `"VcsCapability not configured on this node."` This is intentional — VCS operations
 live on the operator node.
@@ -252,16 +252,16 @@ gh api "repos/Cogni-DAO/standalone-node/contents/infra/control/candidate-lease.j
 
 ## Per-App Slot Isolation (Planned)
 
-**Current**: one global `candidate-lease.json` — all apps share a single slot. A poly-only
+**Current**: one global `candidate-lease.json` — all apps share a single slot. A single-node
 PR blocks operator and vice versa.
 
-**Goal**: per-app leases so `poly` and `operator` can fly concurrently.
+**Goal**: per-app leases so any two nodes can fly concurrently.
 
 Design:
 
 - Replace single `infra/control/candidate-lease.json` with per-app files:
   `infra/control/candidate-lease-{app}.json`
-- `promote-build-payload.sh` already emits `promoted_apps` (e.g., `"poly"` for poly-only PRs)
+- `promote-build-payload.sh` already emits `promoted_apps` (the affected node subset for that PR)
 - `acquire-candidate-slot.sh` takes `APP_NAMES` env, acquires lock per promoted app
 - A PR is blocked only if any of _its_ promoted apps are currently leased by another flight
 - `release-candidate-slot.sh` releases only the apps that were acquired
@@ -296,8 +296,8 @@ When a flight fails or dispatch errors, work through this in order:
    a pod health or ingress routing issue on the candidate-a VM, not a code problem.
    Check: `curl -s https://test.cognidao.org/version`
 
-6. **`verify-buildsha` fails for resy** → resy SHA mismatch — resy images weren't promoted
-   in this flight (poly-only PR) but the verify script is checking resy anyway. This means
+6. **`verify-buildsha` fails for a node the PR never touched** → that node's images weren't
+   promoted in this flight, but the verify script is checking it anyway. This means
    `promoted_apps` output is wrong or the verify script isn't scoped correctly.
 
 7. **`wait-for-argocd` times out** → wrong `EXPECTED_SHA` passed (source SHA instead of

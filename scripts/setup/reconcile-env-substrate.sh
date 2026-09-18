@@ -126,26 +126,67 @@ bao_exec "write auth/kubernetes/role/eso-reader \
   bound_service_account_namespaces=external-secrets \
   policies=eso-reader ttl=1h" >/dev/null
 
+# ── DOWN-TRUST LANE CUSTODY (bug.5196/#2290, extended by bug.5206) ──────────
+# The lanes this env may write, widest first. ONE definition, consumed by BOTH writer
+# identities below — they had drifted: #2290 gave the lane set to node-secrets-writer only,
+# so `production-writer` (the role secret-materialize.sh actually mints) still could not
+# write cogni/data/candidate-a/*, and the first poly candidate-a mint died there.
+#   production  -> candidate-a, preview, production   (the PAYING cluster custodies every
+#                  lane, because the Composition interpolates each lane's secrets into the
+#                  lease production's Console account is billed for)
+#   preview     -> preview only
+#   candidate-a -> candidate-a only
+# Up-trust is refused forever. This WIDENS AN EXISTING IDENTITY, it does not add one:
+# NS3 allows exactly one writer identity per Console account, so `production-writer` holding
+# a lane it already reconciles and pays for is correct, while a `candidate-a-writer` role
+# living in production's vault would be a second writer and is forbidden.
+# MUST MIRROR nodes/operator/app/src/shared/secrets/secrets-lane-trust.data.ts.
+case "${DEPLOY_ENV}" in
+  production) SECRET_LANES="candidate-a preview production" ;;
+  *)          SECRET_LANES="${DEPLOY_ENV}" ;;
+esac
+
 # ── <env>-writer (openbao-writer SA; additive bind keeps openbao-operator) ───
-log "writing ${DEPLOY_ENV}-writer policy + role (SA openbao-writer + openbao-operator)..."
+log "writing ${DEPLOY_ENV}-writer policy + role (SA openbao-writer + openbao-operator); lanes: ${SECRET_LANES}"
 ensure_sa openbao-writer
 ensure_sa openbao-operator
+WRITER_HCL=""
+for _lane in ${SECRET_LANES}; do
+  WRITER_HCL="${WRITER_HCL}
+path \"cogni/data/${_lane}/*\"     { capabilities = [\"read\", \"create\", \"update\", \"patch\"] }
+path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
+done
+unset _lane
 bao_policy "${DEPLOY_ENV}-writer" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"     { capabilities = ["read", "create", "update", "patch"] }
-path "cogni/metadata/${DEPLOY_ENV}/*" { capabilities = ["read", "list"] }
+${WRITER_HCL}
 HCL
 bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-writer \
   bound_service_account_names=openbao-writer,openbao-operator \
   bound_service_account_namespaces=default \
   policies=${DEPLOY_ENV}-writer ttl=1h" >/dev/null
 
-# ── <env>-db-reader (db-provisioner SA, read-only, env-wide) ─────────────────
-log "writing ${DEPLOY_ENV}-db-reader policy + role (SA db-provisioner)..."
+# ── <env>-db-reader (db-provisioner SA, read-only, every lane this env custodies) ──
+# bug.5206 instance #10. The reader was scoped to its own env because a reader only ever
+# needed its own env's data — true while env == cluster. The paying cluster now RECONCILES
+# its non-production lanes, so `reconcile-node-substrate.sh` reads `cogni/<lane>/<node>` to
+# provision that lane's database. Scoped to its own env, the read is DENIED and surfaces as
+# `command terminated with exit code 2` → the bug.5159 transport-failure path, which is
+# correct (it is not an absent key) but names the symptom, not the missing capability.
+#
+# READ-ONLY, and the SAME lane set the writers carry. Widening a reader over lanes this
+# cluster already custodies the secrets for adds no reach it does not already have.
+log "writing ${DEPLOY_ENV}-db-reader policy + role (SA db-provisioner); lanes: ${SECRET_LANES}"
 ensure_sa db-provisioner
+DB_READER_HCL=""
+for _lane in ${SECRET_LANES}; do
+  DB_READER_HCL="${DB_READER_HCL}
+path \"cogni/data/${_lane}/*\"     { capabilities = [\"read\"] }
+path \"cogni/metadata/${_lane}\"   { capabilities = [\"list\"] }
+path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
+done
+unset _lane
 bao_policy "${DEPLOY_ENV}-db-reader" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"     { capabilities = ["read"] }
-path "cogni/metadata/${DEPLOY_ENV}"   { capabilities = ["list"] }
-path "cogni/metadata/${DEPLOY_ENV}/*" { capabilities = ["read", "list"] }
+${DB_READER_HCL}
 HCL
 bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-db-reader \
   bound_service_account_names=db-provisioner \
@@ -163,14 +204,36 @@ bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-db-reader \
 # ⚠️ KEEP IN SYNC with scripts/setup/provision-env-vm.sh Phase 5b.4d (cold-start) —
 # this policy+role is duplicated there so a FRESH provision is born with it. Converging
 # the two onto this script is the tracked DRY fast-follow; until then edit BOTH copies.
+# bug.5196 — DOWN-TRUST LANE CUSTODY. The lanes this env may write, widest first. MUST
+# mirror nodes/operator/app/src/shared/secrets/secrets-lane-trust.data.ts
+# (SECRETS_LANE_TRUST); the route check is only a fast-fail, THIS is the gate.
+#   production  -> candidate-a, preview, production   (the PAYING cluster custodies every
+#                  lane, because the Crossplane Composition interpolates each lane's
+#                  secrets into the lease production's Console account is billed for)
+#   preview     -> preview only
+#   candidate-a -> candidate-a only
+# Up-trust is refused forever: no pre-prod env gains a production path here. OpenBao is
+# per-CLUSTER, so a lane prefix is a LABEL inside this env's own vault, never a reach into
+# another cluster's vault. Per secrets-management.md Invariant 1 the blast-radius boundary
+# is <service>; widening the lane set does not widen that boundary.
+# The two _system/_shared denies are carried onto EVERY lane gained, data AND metadata —
+# a per-node grant must never reach a shared path in ANY lane.
+NODE_SECRET_LANES="${SECRET_LANES}"
+NODE_SECRETS_WRITER_HCL=""
+for _lane in ${NODE_SECRET_LANES}; do
+  NODE_SECRETS_WRITER_HCL="${NODE_SECRETS_WRITER_HCL}
+path \"cogni/data/${_lane}/*\"             { capabilities = [\"read\", \"create\", \"update\", \"patch\"] }
+path \"cogni/metadata/${_lane}/*\"         { capabilities = [\"read\", \"list\"] }
+path \"cogni/data/${_lane}/_system/*\"     { capabilities = [\"deny\"] }
+path \"cogni/data/${_lane}/_shared/*\"     { capabilities = [\"deny\"] }
+path \"cogni/metadata/${_lane}/_system/*\" { capabilities = [\"deny\"] }
+path \"cogni/metadata/${_lane}/_shared/*\" { capabilities = [\"deny\"] }"
+done
+unset _lane
+log "  node-secrets-writer lanes: ${NODE_SECRET_LANES}"
 log "writing ${DEPLOY_ENV}-node-secrets-writer policy + role (SA operator-secrets-writer @ cogni-${DEPLOY_ENV})..."
 bao_policy "${DEPLOY_ENV}-node-secrets-writer" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"             { capabilities = ["read", "create", "update", "patch"] }
-path "cogni/metadata/${DEPLOY_ENV}/*"         { capabilities = ["read", "list"] }
-path "cogni/data/${DEPLOY_ENV}/_system/*"     { capabilities = ["deny"] }
-path "cogni/data/${DEPLOY_ENV}/_shared/*"     { capabilities = ["deny"] }
-path "cogni/metadata/${DEPLOY_ENV}/_system/*" { capabilities = ["deny"] }
-path "cogni/metadata/${DEPLOY_ENV}/_shared/*" { capabilities = ["deny"] }
+${NODE_SECRETS_WRITER_HCL}
 HCL
 bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-node-secrets-writer \
   bound_service_account_names=operator-secrets-writer \

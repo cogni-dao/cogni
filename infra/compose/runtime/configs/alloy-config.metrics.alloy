@@ -239,7 +239,10 @@ loki.process "k8s_pod_logs" {
   // secret-plane outage was invisible. These pod logs are host-mounted
   // (/var/log/pods), so the signal was always reachable; only this gate hid it.
   stage.match {
-    selector = "{namespace!~\"cogni-.*|argocd|kube-system|openbao|external-secrets\"}"
+    // bug.5219: crossplane-system was dropped here, so provider-http's failure to
+    // deliver the poly canary's lease-create POST (no allocationCursor ever bound)
+    // was structurally invisible — the actuator wire path had no log plane at all.
+    selector = "{namespace!~\"cogni-.*|argocd|kube-system|openbao|external-secrets|crossplane-system\"}"
     action   = "drop"
   }
 

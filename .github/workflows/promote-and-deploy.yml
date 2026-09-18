@@ -76,6 +76,7 @@ jobs:
       deployment_provider_by_target_json: ${{ steps.targets.outputs.deployment_provider_by_target_json }}
       source_repository_by_target_json: ${{ steps.targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.targets.outputs.source_sha_by_target_json }}
+      preview_forward_by_target_json: ${{ steps.targets.outputs.preview_forward_by_target_json }}
     steps:
       - name: Determine environment
         id: env
@@ -146,6 +147,7 @@ jobs:
             --environment "${{ steps.env.outputs.environment }}" \
             --promote-targets-csv "$PROMOTE_TARGETS" \
             --legacy-k3s-targets-json "$LEGACY_K3S_TARGETS_JSON" \
+            --preview-forward "${{ steps.env.outputs.preview_forward }}" \
             --github-output "$GITHUB_OUTPUT"
 
   reconcile-compute-egress:
@@ -162,6 +164,35 @@ jobs:
           path: app-src
 
       - name: Reconcile catalog-derived external compute egress
+        uses: ./app-src/.github/actions/reconcile-compute-egress
+        with:
+          app_source_root: ${{ github.workspace }}/app-src
+          environment: ${{ needs.decide.outputs.environment }}
+          vm_host: ${{ secrets.VM_HOST }}
+          ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
+
+  # A foreign-custodied lane's substrate (Postgres/Temporal/LiteLLM) lives on the
+  # CONTROL env's VM, not the lane's. The job above hardens the lane VM only, so
+  # the Akash provider NAT hole for such lanes was punched into the wrong machine:
+  # the leased app boots (/version needs nothing) and readyz?deep=1 dies on the
+  # unreachable substrate. Same lane-vs-control conflation as bug.5216. This twin
+  # binds the CONTROL env for its VM secrets while rendering the LANE's allowlist —
+  # the action already separates those two concerns. Idempotent alongside the
+  # lane-VM job; for lanes custodied locally the two apply the same allowlist.
+  reconcile-compute-egress-control:
+    needs: decide
+    if: needs.decide.result == 'success' && needs.decide.outputs.environment != 'production'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout reviewed application source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          fetch-depth: 1
+          path: app-src
+
+      - name: Reconcile lane egress on the control-env substrate VM
         uses: ./app-src/.github/actions/reconcile-compute-egress
         with:
           app_source_root: ${{ github.workspace }}/app-src
@@ -225,7 +256,19 @@ jobs:
           NODE: ${{ matrix.node }}
         run: |
           set -euo pipefail
-          APPSET_FILE="infra/k8s/argocd/appsets/${DEPLOY_ENVIRONMENT}/${DEPLOY_ENVIRONMENT}-${NODE}-applicationset.yaml"
+          # THE definition, never rebuilt from the env (bug.5204). An akash node's
+          # non-production lane is reconciled by the PRODUCTION cluster (task.5132).
+          # shellcheck source=scripts/ci/lib/appset-paths.sh
+          . scripts/ci/lib/appset-paths.sh
+          CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$NODE")"
+          if [ "$CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]; then
+            # The ${CONTROL_ENV} app-of-apps reconciles appsets/${CONTROL_ENV}/ from main
+            # with prune, so the object arrives declaratively. This job holds only THIS
+            # env's SSH credential and must not reach a higher-trust cluster.
+            echo "::notice::$NODE's $DEPLOY_ENVIRONMENT lane is reconciled by '$CONTROL_ENV' — its AppSet is owned by that cluster's app-of-apps. Skipping the imperative apply."
+            exit 0
+          fi
+          APPSET_FILE="$(appset_rel_path "$DEPLOY_ENVIRONMENT" "$NODE")"
           if [ ! -f "$APPSET_FILE" ]; then
             echo "::error::$APPSET_FILE missing at head — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
             exit 1
@@ -317,14 +360,22 @@ jobs:
           bash scripts/ci/reconcile-node-dns.sh "${DEPLOY_ENVIRONMENT}"
 
   promote-k8s:
-    needs: [decide, reconcile-compute-egress, reconcile-appset, node-substrate]
+    needs:
+      [
+        decide,
+        reconcile-compute-egress,
+        reconcile-compute-egress-control,
+        reconcile-appset,
+        node-substrate,
+      ]
     if: |
       always() &&
       needs.decide.outputs.has_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       (
         needs.decide.outputs.has_node_targets != 'true' ||
-        needs.reconcile-compute-egress.result == 'success'
+        needs.reconcile-compute-egress.result == 'success' &&
+        (needs.reconcile-compute-egress-control.result == 'success' || needs.reconcile-compute-egress-control.result == 'skipped')
       ) &&
       (
         (needs.decide.outputs.has_node_targets == 'true' && needs.node-substrate.result == 'success') ||
@@ -361,7 +412,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Checkout per-node preview branch (preview-forward mode)
-        if: needs.decide.outputs.preview_forward == 'true'
+        if: fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node]
         uses: actions/checkout@v4
         with:
           ref: deploy/preview-${{ matrix.node }}
@@ -375,9 +426,18 @@ jobs:
           NODE: ${{ matrix.node }}
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           BUILD_SHA: ${{ needs.decide.outputs.build_sha }}
-          PREVIEW_FORWARD: ${{ needs.decide.outputs.preview_forward }}
+          PREVIEW_FORWARD: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] }}
           NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
-          OPERATOR_SOURCE_SHA: ${{ inputs.source_sha }}
+          # The RESOLVED head, not the raw input (bug.5195 defect #2). `decide` sets
+          # head_sha = source_sha ?: github.sha, and app-src is checked out AT head_sha —
+          # so this IS the operator commit whose catalog `source_sha_by_target_json` was
+          # read from. Passing the raw input made a promote that states no sourceSha (the
+          # product contract; the UI never sends one) look like ABSENT authority, and
+          # resolve_remote_source_sha correctly failed closed. The authority was never
+          # absent, only unstated. `resolve_remote_source_sha` is unchanged: truly-absent
+          # authority (both empty) still fails closed, and an explicit sourceSha resolves
+          # identically because then head_sha == inputs.source_sha.
+          OPERATOR_SOURCE_SHA: ${{ needs.decide.outputs.head_sha }}
           CATALOG_SOURCE_SHA: ${{ fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
           PREVIEW_SOURCE_SHA_MAP: ${{ github.workspace }}/preview-src/.promote-state/source-sha-by-app.json
         run: |
@@ -625,7 +685,7 @@ jobs:
           path: app-src
 
       - name: Checkout per-node preview branch (preview-forward mode)
-        if: needs.decide.outputs.preview_forward == 'true'
+        if: fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node]
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           ref: deploy/preview-${{ matrix.node }}
@@ -638,9 +698,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
           NODE: ${{ matrix.node }}
           NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
-          OPERATOR_SOURCE_SHA: ${{ inputs.source_sha }}
+          # The RESOLVED head, not the raw input (bug.5195 defect #2). `decide` sets
+          # head_sha = source_sha ?: github.sha, and app-src is checked out AT head_sha —
+          # so this IS the operator commit whose catalog `source_sha_by_target_json` was
+          # read from. Passing the raw input made a promote that states no sourceSha (the
+          # product contract; the UI never sends one) look like ABSENT authority, and
+          # resolve_remote_source_sha correctly failed closed. The authority was never
+          # absent, only unstated. `resolve_remote_source_sha` is unchanged: truly-absent
+          # authority (both empty) still fails closed, and an explicit sourceSha resolves
+          # identically because then head_sha == inputs.source_sha.
+          OPERATOR_SOURCE_SHA: ${{ needs.decide.outputs.head_sha }}
           CATALOG_SOURCE_SHA: ${{ fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
-          PREVIEW_FORWARD: ${{ needs.decide.outputs.preview_forward }}
+          PREVIEW_FORWARD: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] }}
           PREVIEW_SOURCE_SHA_MAP: ${{ github.workspace }}/preview-src/.promote-state/source-sha-by-app.json
         run: |
           set -euo pipefail

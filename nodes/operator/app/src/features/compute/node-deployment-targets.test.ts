@@ -13,10 +13,15 @@ describe("resolveDeploymentTargets", () => {
     expect(
       resolveDeploymentTargets({
         catalogRows: [
-          { name: "node-template", type: "node" },
+          {
+            name: "node-template",
+            type: "node",
+            envs: ["candidate-a"],
+          },
           {
             name: "toks4",
             type: "node",
+            envs: ["candidate-a"],
             source_repo: "https://github.com/cogni-dao/toks4",
             source_sha: "0123456789abcdef0123456789abcdef01234567",
             deployment_provider: { "candidate-a": "akash" },
@@ -44,10 +49,11 @@ describe("resolveDeploymentTargets", () => {
 
   it("never expands a node-ref flight to sibling catalog rows", () => {
     const catalogRows = [
-      { name: "operator", type: "node" },
+      { name: "operator", type: "node", envs: ["candidate-a"] },
       {
         name: "toks4",
         type: "node",
+        envs: ["candidate-a"],
         source_repo: "https://github.com/cogni-dao/toks4",
         source_sha: "0123456789abcdef0123456789abcdef01234567",
         deployment_provider: { "candidate-a": "akash" },
@@ -97,6 +103,25 @@ describe("resolveDeploymentTargets", () => {
       })
     ).toThrow("Unknown flight target");
   });
+
+  it("fails closed before placement resolution when a node is absent from the environment", () => {
+    expect(() =>
+      resolveDeploymentTargets({
+        catalogRows: [
+          {
+            name: "poly",
+            type: "node",
+            envs: ["production"],
+            source_repo: "https://github.com/cogni-dao/poly",
+            source_sha: "0123456789abcdef0123456789abcdef01234567",
+            deployment_provider: { production: "akash" },
+          },
+        ],
+        environment: "candidate-a",
+        flightTargets: ["poly"],
+      })
+    ).toThrow("Flight target poly is not configured for candidate-a");
+  });
 });
 
 describe("resolvePromoteDeploymentTargets", () => {
@@ -139,6 +164,12 @@ describe("resolvePromoteDeploymentTargets", () => {
       sourceRepositories: { external: "cogni-dao/external" },
       sourceShas: {
         external: "0123456789abcdef0123456789abcdef01234567",
+      },
+      // No preview-forward mode stated ⇒ every target false (bug.5195).
+      previewForward: {
+        "scheduler-worker": false,
+        legacy: false,
+        external: false,
       },
     });
   });
@@ -218,5 +249,92 @@ describe("resolvePromoteDeploymentTargets", () => {
         legacyK3sTargets: [],
       }).deployment
     ).toEqual([]);
+  });
+
+  describe("preview-forward eligibility (bug.5195)", () => {
+    // `envs:` is the selector, NOT the absence of a `source_sha` input. The real
+    // promote that proved this: toks5 (`envs: [production]`) was dispatched with no
+    // sourceSha — which is what the UI always sends — the run went preview-forward
+    // for EVERY target, and `git fetch deploy/preview-toks5` exited 1 before
+    // promote-k8s ran. The node never got its lease generation bump.
+    const mixed = [
+      {
+        name: "prodonly",
+        type: "node",
+        envs: ["production"],
+        source_repo: "https://github.com/Cogni-DAO/prodonly.git",
+        source_sha: "0123456789abcdef0123456789abcdef01234567",
+        deployment_provider: { production: "akash" },
+      },
+      {
+        name: "bothenvs",
+        type: "node",
+        envs: ["preview", "production"],
+        source_repo: "https://github.com/Cogni-DAO/bothenvs.git",
+        source_sha: "89abcdef0123456789abcdef0123456789abcdef",
+        deployment_provider: { production: "akash", preview: "akash" },
+      },
+    ];
+
+    it("excludes a production-only node from preview-forward while the run is in that mode", () => {
+      const selection = resolvePromoteDeploymentTargets({
+        catalogRows: mixed,
+        environment: "production",
+        requestedTargets: ["prodonly"],
+        legacyK3sTargets: [],
+        previewForwardMode: true,
+      });
+      expect(selection.deployment).toContain("prodonly");
+      expect(selection.previewForward.prodonly).toBe(false);
+    });
+
+    it("keeps preview-forward for a node the catalog still places in preview", () => {
+      const selection = resolvePromoteDeploymentTargets({
+        catalogRows: mixed,
+        environment: "production",
+        requestedTargets: ["bothenvs"],
+        legacyK3sTargets: [],
+        previewForwardMode: true,
+      });
+      expect(selection.previewForward.bothenvs).toBe(true);
+    });
+
+    it("decides per target, not per run", () => {
+      const selection = resolvePromoteDeploymentTargets({
+        catalogRows: mixed,
+        environment: "production",
+        requestedTargets: ["prodonly", "bothenvs"],
+        legacyK3sTargets: [],
+        previewForwardMode: true,
+      });
+      expect(selection.previewForward).toEqual({
+        prodonly: false,
+        bothenvs: true,
+      });
+    });
+
+    it("is all-false when the run is not preview-forward at all", () => {
+      const selection = resolvePromoteDeploymentTargets({
+        catalogRows: mixed,
+        environment: "production",
+        requestedTargets: ["prodonly", "bothenvs"],
+        legacyK3sTargets: [],
+        previewForwardMode: false,
+      });
+      expect(selection.previewForward).toEqual({
+        prodonly: false,
+        bothenvs: false,
+      });
+    });
+
+    it("defaults to off when the caller states no mode — a paid lane never opts in by omission", () => {
+      const selection = resolvePromoteDeploymentTargets({
+        catalogRows: mixed,
+        environment: "production",
+        requestedTargets: ["bothenvs"],
+        legacyK3sTargets: [],
+      });
+      expect(selection.previewForward.bothenvs).toBe(false);
+    });
   });
 });

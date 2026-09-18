@@ -7,7 +7,7 @@ image_tag_suffix: "-toks4"
 migrator_tag_suffix: "-toks4-migrate"
 source_repo: https://github.com/cogni-dao/toks4.git
 image_repository: ghcr.io/cogni-dao/toks4
-source_sha: b87fc1183098e88e233ff313fbaf2a69a474ffd8
+source_sha: 73482da19fe4bef19933536507293b66b00e879a
 candidate_a_branch: deploy/candidate-a-toks4
 preview_branch: deploy/preview-toks4
 production_branch: deploy/production-toks4
@@ -17,9 +17,14 @@ production_branch: deploy/production-toks4
 # later catalog edit (drop an env here) once its envs are provisioned.
 # story.5016 production cutover: preview slot retired (preview has no funded Akash
 # account and gets no actuator; its lease on the shared account was closed).
-envs: [candidate-a, production]
+# task.5130 — the candidate-a slot is REMOVED too. candidate-a's actuator is pinned to
+# the TEST Console account (akash12eh8…), reserved for Cogni's own operator-platform
+# self-test on cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER: toks4 is a real
+# cogni-dao fleet node, so every environment it runs in must bill the PRODUCTION sponsor
+# account (akash10auj…). Production is this node's only slot.
+envs: [preview, production]
 deployment_provider:
-  candidate-a: akash
+  preview: akash
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
 # actuator pays from production's DEDICATED account (akash10auj…). PRECONDITION:
@@ -27,18 +32,26 @@ deployment_provider:
 # materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
 # legacy manifest in the same commit).
 compute_api:
+  preview: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
-lease_epoch:
+lease_generation:
+  preview: 0
   production: 0
-activity_env: candidate-a
+# task.5130 — ACTIVITY_ENV_IS_DEPLOYED (_schema.json): the singleton activity authority
+# must be a member of `envs`, and candidate-a just left. Production is the only remaining
+# slot, and it is also the only environment that can ever earn a receipt — GitHub App
+# webhooks are delivered to production only, so a node left on candidate-a is structurally
+# unable to ingest one (bug.5079, see levelup.yaml). Nothing is lost by moving it: toks4's
+# candidate-a authority never ingested, and never could.
+activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/toks4/
 node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
 # task.5052 (story.5016) — this node's workload runs on Akash; these provider
 # egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
-# Rendered per-env (union over rows deployed to the env) by
+# Rendered per-env (union over rows AKASH-PLACED in that env — bug.5191) by
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:

@@ -11,8 +11,8 @@ The minimal procedure for changing a table. Follow it; don't improvise.
 
 ## Postgres — the only path
 
-1. **Edit the schema TS.** Core table → `packages/db-schema/src/`. Node-local → `nodes/<node>/packages/db-schema/src/` (poly is the only one with this package today; create one for a new node by forking poly's). Never reach into `nodes/<node>/app/src/...` for schema.
-2. **`pnpm db:generate:<node>`.** Auto-gen emits `NNNN_<tag>.sql`, the `_journal.json` entry, and `NNNN_snapshot.json` together. Inspect the `.sql` — drop unintended `DROP TABLE "poly_copy_trade_*"` from operator/resy gens (orphan tables, intentional).
+1. **Edit the schema TS.** Core table → `packages/db-schema/src/`. Node-local → `<node-repo>/packages/db-schema/src/` — in the NODE'S own repo; this monorepo holds `nodes/operator` + `nodes/scheduler-worker` only (this package today; create one for a new node by forking poly's). Never reach into `nodes/<node>/app/src/...` for schema.
+2. **`pnpm db:generate:operator`** (or the node's own equivalent, defined in its repo — VERIFIED: `:operator` and `:operator:doltgres` are the only generate targets here).\*_ Auto-gen emits `NNNN_<tag>.sql`, the `_journal.json`entry, and`NNNN_snapshot.json`together. Inspect the`.sql`— drop unintended`DROP TABLE "poly*copy_trade*_"` from operator/resy gens (orphan tables, intentional).
 3. **`pnpm db:check`.** Validates: snapshot/`prevId` chain (drizzle-kit), strict-monotonic journal `when` (`scripts/db/check-journal-when.mjs`), applied-migration immutability (`check-migrations-immutable.mjs`), **and generate-cleanliness** (`check-generate-clean.mjs` — fails if `db:generate:operator` would emit any drift, i.e. you edited schema TS without committing the migration). A clean tree ⇒ `db:generate` says "No schema changes". If it red-flags non-monotonic `when`, your auto-gen `Date.now()` landed before a prior entry — bump the new entry's `when` past the violation it reports. Pre-existing future-dated entries on a node (poly idx 33 today, normalizes ~May 5 2026) emit a warning so you know your auto-gen will need a manual bump until the wall clock catches up; not fatal.
 4. **Core table only:** copy the new `NNNN_*.sql` + journal entry into every other node's `migrations/` dir (each deployed DB has its own `__drizzle_migrations` table; they need their own copy with matching journal idx + `when`).
 5. Commit `.sql` + `_journal.json` + `NNNN_snapshot.json` together. Never `--no-verify` a schema PR.
@@ -46,7 +46,7 @@ Doltgres is for AI-written knowledge (`knowledge` table + companions); Postgres 
 
 When you do need a new Doltgres table:
 
-1. Edit `nodes/<node>/packages/doltgres-schema/src/` (only `@cogni/poly-doltgres-schema` exists today; fork the pattern).
+1. Edit `<node-repo>/packages/doltgres-schema/src/` — in the NODE'S own repo; fork the `node-template` pattern.
 2. `pnpm db:generate:<node>:doltgres`.
 3. Same `when` monotonicity check on the Doltgres journal.
 4. `pnpm db:check` (covers Doltgres configs too).
@@ -58,7 +58,7 @@ When you do need a new Doltgres table:
 1. **Future-dated `when`** silently no-ops your migration on candidate-a. App pod has the schema code; DB doesn't have the column. Symptom: `PostgresError: column "X" does not exist` 60s into deploy.
 2. **Hand-authored when auto-gen would have worked** — broke snapshot chain, missed journal entry, or both.
 3. **Schema edited under `nodes/<node>/app/src/...`** — drizzle config doesn't see it; `db:generate` produces no diff.
-4. **Auto-gen on operator/resy proposed `DROP TABLE poly_copy_trade_*`** — committed unread; tables vanish on next migrate.
+4. **Auto-gen proposed `DROP TABLE` for another node's orphan tables** — committed unread; tables vanish on next migrate.
 5. **Pushed with `--no-verify`** — skipped `db:check`, shipped a broken chain.
 
 ## Quick reference
@@ -74,8 +74,8 @@ Schema package locations:
 
 ```
 packages/db-schema/                                       core Postgres (cross-node)
-nodes/<node>/packages/db-schema/        @cogni/<node>-db-schema           (only poly today)
-nodes/<node>/packages/doltgres-schema/  @cogni/<node>-doltgres-schema     (only poly today)
+nodes/<node>/packages/db-schema/        @cogni/<node>-db-schema           (in the NODE'S repo)
+nodes/<node>/packages/doltgres-schema/  @cogni/<node>-doltgres-schema     (in the NODE'S repo)
 nodes/<node>/drizzle.config.ts          schema array unions whatever applies
 nodes/<node>/app/src/adapters/server/db/migrations/         Postgres history
 nodes/<node>/app/src/adapters/server/db/doltgres-migrations/ Doltgres history
@@ -85,4 +85,4 @@ nodes/<node>/app/src/adapters/server/db/doltgres-migrations/ Doltgres history
 
 - Need to choose Postgres vs Doltgres for a new table → `database-expert` (split rule + syntropy).
 - Migrator pod crash-looping or initContainer not firing → `deploy-operator` / `devops-expert` (image build wiring, Argo).
-- Normalizing the poly `when` poisoning across deployed DBs → coordinate; touches `__drizzle_migrations` rows on candidate-a + preview + prod.
+- Normalizing `when` poisoning across deployed DBs → coordinate; touches `__drizzle_migrations` rows on candidate-a + preview + prod.

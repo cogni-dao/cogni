@@ -327,13 +327,49 @@ jobs:
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
 
+  # A foreign-custodied lane's substrate (Postgres/Temporal/LiteLLM) lives on the
+  # CONTROL env's VM (production for cogni-dao nodes), not the candidate VM. The
+  # job above hardens the candidate VM only, so the Akash provider NAT hole for
+  # such lanes never reaches the machine their substrate answers from: the leased
+  # app boots but readyz?deep=1 dies on unreachable Postgres/Temporal. Same
+  # lane-vs-control conflation as bug.5216. This twin binds environment:
+  # production for its VM secrets while rendering the candidate-a lane allowlist —
+  # the action already separates those two concerns.
+  reconcile-compute-egress-control:
+    needs: decide
+    if: needs.decide.result == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout reviewed application source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ needs.decide.outputs.head_sha }}
+          fetch-depth: 1
+          path: app-src
+
+      - name: Reconcile lane egress on the control-env substrate VM
+        uses: ./app-src/.github/actions/reconcile-compute-egress
+        with:
+          app_source_root: ${{ github.workspace }}/app-src
+          environment: candidate-a
+          vm_host: ${{ secrets.VM_HOST }}
+          ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
+
   prepare-substrate-deploy-branch:
-    needs: [decide, reconcile-compute-egress, external-node-preflight]
+    needs:
+      [
+        decide,
+        reconcile-compute-egress,
+        reconcile-compute-egress-control,
+        external-node-preflight,
+      ]
     if: |
       always() &&
       needs.decide.result == 'success' &&
       needs.decide.outputs.has_deployment_node_targets == 'true' &&
-      needs.reconcile-compute-egress.result == 'success'
+      needs.reconcile-compute-egress.result == 'success' &&
+      needs.reconcile-compute-egress-control.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -549,7 +585,22 @@ jobs:
           set -euo pipefail
           # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
           . ci-src/scripts/ci/lib/ssh-retry.sh
-          APPSET_FILE="app-src/infra/k8s/argocd/appsets/candidate-a/candidate-a-${NODE}-applicationset.yaml"
+          # THE definition, never rebuilt from the env (bug.5204). An akash node's
+          # candidate-a lane is reconciled by the PRODUCTION cluster (task.5132), so its
+          # AppSet lives in appsets/production/ and this job must not touch it.
+          # shellcheck source=ci-src/scripts/ci/lib/appset-paths.sh
+          CATALOG_DIR="app-src/infra/catalog" . ci-src/scripts/ci/lib/appset-paths.sh
+          CONTROL_ENV="$(CATALOG_DIR=app-src/infra/catalog control_env_for candidate-a "$NODE")"
+          if [ "$CONTROL_ENV" != "candidate-a" ]; then
+            # Declarative, not imperative: the ${CONTROL_ENV} app-of-apps already reconciles
+            # appsets/${CONTROL_ENV}/ from main with prune, so the object appears without this
+            # job — which is why it must NOT hold that cluster's SSH credentials. Reaching a
+            # higher-trust cluster from a candidate flight is the inversion the north star
+            # rejects; doing nothing here is the correct behaviour, not a gap.
+            echo "::notice::$NODE's candidate-a lane is reconciled by '$CONTROL_ENV' — its AppSet is owned by that cluster's app-of-apps. Skipping the imperative apply."
+            exit 0
+          fi
+          APPSET_FILE="app-src/$(CATALOG_DIR=app-src/infra/catalog appset_rel_path candidate-a "$NODE")"
           if [ ! -f "$APPSET_FILE" ]; then
             echo "::error::$APPSET_FILE missing at head_sha — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
             exit 1
@@ -571,6 +622,16 @@ jobs:
           set -euo pipefail
           # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
           . ci-src/scripts/ci/lib/ssh-retry.sh
+          # Same boundary as the apply above (bug.5204/task.5132): when the PRODUCTION
+          # cluster reconciles this lane, its Application is created THERE and cannot be
+          # observed from candidate-a's VM. Waiting would time out on a healthy deploy —
+          # a false failure, which is worse than not looking.
+          # shellcheck source=ci-src/scripts/ci/lib/appset-paths.sh
+          CATALOG_DIR="app-src/infra/catalog" . ci-src/scripts/ci/lib/appset-paths.sh
+          if [ "$(CATALOG_DIR=app-src/infra/catalog control_env_for candidate-a "$NODE")" != "candidate-a" ]; then
+            echo "::notice::$NODE's candidate-a Application is reconciled by another cluster; not observable from this VM. Skipping."
+            exit 0
+          fi
           read -r -a ssh_opts <<< "$SSH_OPTS"
           app_name="candidate-a-${NODE}"
           appset_name="cogni-candidate-a-${NODE}"
@@ -706,11 +767,12 @@ jobs:
           retention-days: 1
 
   external-node-preflight:
-    needs: [decide, reconcile-compute-egress]
+    needs: [decide, reconcile-compute-egress, reconcile-compute-egress-control]
     if: |
       always() &&
       needs.decide.outputs.has_external_compute_node_targets == 'true' &&
-      needs.reconcile-compute-egress.result == 'success'
+      needs.reconcile-compute-egress.result == 'success' &&
+      needs.reconcile-compute-egress-control.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -1480,8 +1542,27 @@ jobs:
           WORKLOAD_FILE="$(compute_workload_manifest_file "$NODE" candidate-a)"
           echo "path=${GITHUB_WORKSPACE}/deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/${WORKLOAD_FILE}" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for external ComputeWorkload readiness
+      # A foreign-custodied lane's XCW lives on the CONTROL cluster (its AppSet is
+      # rendered under appsets/<control-env>/), not on this candidate VM. Polling the
+      # candidate VM for it is a structurally guaranteed not_observed timeout
+      # (bug.5216, run 35281632015). Mirror the custody skip the AppSet-apply step
+      # already does; for those lanes the external /version probe below is the gate.
+      - name: Resolve lane custody
+        id: custody
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
+        env:
+          NODE: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          CATALOG_DIR="app-src/infra/catalog" . ci-src/scripts/ci/lib/appset-paths.sh
+          CONTROL_ENV="$(CATALOG_DIR=app-src/infra/catalog control_env_for candidate-a "$NODE")"
+          echo "control_env=$CONTROL_ENV" >> "$GITHUB_OUTPUT"
+          if [ "$CONTROL_ENV" != "candidate-a" ]; then
+            echo "::notice::$NODE's candidate-a lane is custodied by '$CONTROL_ENV' — its XCW lives on that cluster; skipping the candidate-VM XCW wait and gating on the external /version probe."
+          fi
+
+      - name: Wait for external ComputeWorkload readiness
+        if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s' && steps.custody.outputs.control_env == 'candidate-a'
         uses: ./ci-src/.github/actions/wait-for-compute-workload
         with:
           app_source_root: ${{ github.workspace }}/app-src

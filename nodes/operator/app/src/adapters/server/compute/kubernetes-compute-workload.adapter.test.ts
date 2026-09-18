@@ -124,36 +124,10 @@ describe("ComputeWorkload Kubernetes contract", () => {
       // name-keyed strategic-merge entries.
       expect(kustomizationYaml).not.toMatch(/\/env\/\d+(\/|$)/m);
     }
-    const deploymentYaml = await readFile(
-      join(
-        repoRoot,
-        "infra/k8s/base/compute-workload-controller/deployment.yaml"
-      ),
-      "utf8"
-    );
-    const deployment = parse(deploymentYaml) as {
-      spec: {
-        strategy?: {
-          type?: string;
-          rollingUpdate?: { maxSurge?: number; maxUnavailable?: number };
-        };
-        template: {
-          spec: { containers: { env: { name: string }[] }[] };
-        };
-      };
-    };
-    // Singleton by design: a surge would run two pods against one coordination
-    // Lease and manufacture the CAS conflicts this controller then has to
-    // survive — so maxSurge must stay 0. But the type must be RollingUpdate,
-    // NOT Recreate: live objects retain spec.strategy.rollingUpdate from prior
-    // field managers, and ArgoCD's server-side-apply dry-run of a Recreate spec
-    // then fails Forbidden, wedging the whole Argo app (blocked candidate
-    // flights + the d69e5c29 production promote on 2026-09-10).
-    expect(deployment.spec.strategy?.type).toBe("RollingUpdate");
-    expect(deployment.spec.strategy?.rollingUpdate).toEqual({
-      maxSurge: 0,
-      maxUnavailable: 1,
-    });
+    // story.5016: the legacy `compute-workload-controller` Deployment was RETIRED
+    // (base manifests deleted; no env deploys it), so there is no controller
+    // rollout strategy left to assert here. The BY-NAME env-patch invariant above
+    // still guards every overlay against the d69e5c29 positional-pointer failure.
   });
 
   it("admits bounded topology fields and preserves service bindings over the API wire", async () => {

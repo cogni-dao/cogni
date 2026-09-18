@@ -216,6 +216,16 @@ if printf '%s\n' "$*" | grep -q ' config --services'; then
   echo doltgres
   exit 0
 fi
+# The lane's Temporal namespace ensure (task.5132) runs the REAL
+# ensure-temporal-namespace.sh over this stub. It polls
+# `docker inspect --format={{.State.Health.Status}}` and blocks until "healthy",
+# so a stub that answers nothing burns the full TEMPORAL_TIMEOUT and then fails.
+if printf '%s\n' "$*" | grep -q '^inspect '; then
+  echo healthy
+  exit 0
+fi
+# `tctl namespace describe` succeeding means "already registered", which is the
+# idempotent no-op path — the assertion below is that the ensure was ATTEMPTED.
 exit 0
 EOF
 chmod +x "$FAKEBIN/docker"

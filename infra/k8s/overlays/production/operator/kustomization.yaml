@@ -147,6 +147,13 @@ patches:
       - op: add
         path: /data/OPENBAO_NODE_SECRETS_WRITER_ROLE
         value: "production-node-secrets-writer"
+      # App-side READ pin (story.5039 lease views + task.5132 env-verb generation
+      # evidence): createLeaseReadCapability returns undefined without it, so the
+      # app's read-only lease/receipt views stay unwired. Same PUBLIC value the
+      # akash-tx-actuator Deployment pins above — an on-chain address, NOT a secret.
+      - op: add
+        path: /data/AKASH_ACTUATOR_ACCOUNT_ID
+        value: "akash10auj6u6wr7aqjawuxurgue9w7wfnca50t8cr4l"
   # NodePort assignment (operator = 30000) + instance label on selector.
   # Instance label prevents cross-node service routing: namePrefix only renames
   # resource names, not labels/selectors, so without this every Service

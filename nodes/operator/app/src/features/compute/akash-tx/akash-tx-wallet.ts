@@ -22,13 +22,31 @@
  *     A rotated-to-the-wrong-account credential is caught before the socket opens.
  *   - DEDICATED_CREDENTIAL_OR_NOTHING: `AKASH_ACTUATOR_CONSOLE_API_KEY` is REQUIRED and has no
  *     fallback of any kind. Omission cannot silently point the actuator at another wallet.
- *   - SCOPE_IS_PER_ENVIRONMENT: the ledger scope is `akash-console:<environment>`, so each env's
- *     wallet is serialized by exactly one env's Postgres. Per-env Postgres over ONE shared wallet
- *     is the unsound shape this exists to prevent. The constraint is therefore the WALLET, not
- *     the environment: seed an env only once it has its OWN funded Console account. As-built
- *     2026-09-15 — production on akash10auj..., candidate-a on akash12eh8..., preview unseeded.
- *   - SCOPE_IS_ROTATION_STABLE: the scope is derived from the environment, never from the secret
- *     value, so rotating the credential cannot orphan in-flight allocation receipts.
+ *   - SCOPE_IS_PER_ACCOUNT_NEVER_PER_ENVIRONMENT (bug.5187): the ledger scope is
+ *     `akash-console:<AKASH_ACTUATOR_ACCOUNT_ID>`. The serializer it feeds,
+ *     `akash_tx_allocations_single_writer_idx`, is a partial unique index on `(wallet_scope)
+ *     WHERE state='preparing'` — so the scope value is what decides whether two writers COLLIDE.
+ *     Keyed on the environment it could not: two writers on ONE Console account but different
+ *     `DEPLOY_ENVIRONMENT`s produced two different scope strings and never met, which made the
+ *     guard inert. Keyed on the account, one account is one slot by construction, and a writer
+ *     that serves environments other than its own (the north star: one account bills test,
+ *     preview and production alike) files every receipt in the one ledger domain that account
+ *     actually has. `writer -> envs` is deliberately one-to-many; `account -> writer` must stay
+ *     injective, and `tests/ci-invariants/crossplane-dormant-substrate.spec.ts` asserts that
+ *     half against git. Console/manual writes stay forbidden: an external writer invalidates
+ *     cursor recovery and must fail deployment proof (ci-cd.md Axiom 26).
+ *   - SCOPE_IS_ROTATION_STABLE: the scope is derived from the PUBLIC pinned account id — plain,
+ *     git-reviewable Deployment config — never from the secret value, so rotating the credential
+ *     cannot orphan in-flight allocation receipts. That reasoning is unchanged by bug.5187: the
+ *     account id is exactly as rotation-stable as the environment name was, and unlike it, it is
+ *     the thing the money is actually scoped to.
+ *   - SCOPE_IS_PART_OF_RECEIPT_IDENTITY: `claimOnce` finds a prior receipt by
+ *     `(wallet_scope, cogni_key)`. Changing the derived value therefore HIDES every existing
+ *     receipt from the next lookup, and a lookup that finds nothing mints a SECOND PAID LEASE
+ *     beside one that is still billing. The cutover is consequently not a rename: the backfill
+ *     (migration 0048) moves the rows in the same change, a CHECK constraint makes the legacy
+ *     env-keyed form unwritable afterwards, and {@link assertLedgerIsAccountScoped} refuses to
+ *     boot a writer against a ledger the backfill has not reached.
  *   - NEVER_LOGS_OR_RETURNS_THE_VALUE_IN_AN_ERROR: refusals carry a stable code and, at most, the
  *     NON-SECRET account ids. The API key never appears in a message.
  *   - CREDENTIAL_VERSION_IS_OBSERVABLE_WITHOUT_THE_VALUE: `credentialFingerprint` publishes a
@@ -44,13 +62,15 @@
 
 import { createHash } from "node:crypto";
 
+import { ACCOUNT_WALLET_SCOPE_PATTERN } from "@/shared/db/akash-tx-allocations";
+
 /** Stable refusal reasons. Config failures surface at wiring time, never as a request status. */
 export type AkashTxWalletConfigErrorCode =
   | "actuator_credential_missing"
   | "actuator_account_id_missing"
   | "actuator_account_unverifiable"
   | "actuator_account_mismatch"
-  | "environment_missing";
+  | "ledger_scope_unmigrated";
 
 /**
  * A boot/wiring-time misconfiguration. Deliberately NOT an `AkashTxError`: there is no request
@@ -67,9 +87,15 @@ export class AkashTxWalletConfigError extends Error {
 }
 
 export interface AkashTxWalletInput {
-  /** Deployment environment (`DEPLOY_ENVIRONMENT`). One wallet per environment. */
-  readonly environment?: string | undefined;
-  /** `AKASH_ACTUATOR_CONSOLE_API_KEY` — the credential of the one active writer. */
+  /**
+   * `AKASH_ACTUATOR_CONSOLE_API_KEY` — the credential of the one active writer.
+   *
+   * There is deliberately NO `environment` input (bug.5187). The ledger scope is the ACCOUNT,
+   * and a writer legitimately serves environments other than its own `DEPLOY_ENVIRONMENT`, so
+   * accepting one here could only ever re-introduce the inert per-env scope. The bootstrap
+   * still requires `DEPLOY_ENVIRONMENT` for its own logging and for the Composition contract;
+   * it just may not reach the money scope.
+   */
   readonly actuatorApiKey?: string | undefined;
   /**
    * `AKASH_ACTUATOR_ACCOUNT_ID` — the PUBLIC Akash account/wallet address this actuator is
@@ -109,14 +135,6 @@ function clean(value: string | undefined): string {
 export function resolveAkashTxWallet(
   input: AkashTxWalletInput
 ): AkashTxWalletIdentity {
-  const environment = clean(input.environment);
-  if (!environment) {
-    throw new AkashTxWalletConfigError(
-      "environment_missing",
-      "Akash tx actuator requires DEPLOY_ENVIRONMENT: the wallet scope is per-environment."
-    );
-  }
-
   const apiKey = clean(input.actuatorApiKey);
   if (!apiKey) {
     throw new AkashTxWalletConfigError(
@@ -137,10 +155,66 @@ export function resolveAkashTxWallet(
   }
 
   return {
-    walletScope: `akash-console:${environment}`,
+    walletScope: accountWalletScope(expectedAccountId),
     apiKey,
     expectedAccountId,
   };
+}
+
+/**
+ * The ledger serialization domain for a Console account. ONE function, so the actuator, the
+ * backfill's expectations and the tests cannot disagree about the string the money is keyed on.
+ */
+export function accountWalletScope(accountId: string): string {
+  return `${WALLET_SCOPE_PREFIX}${clean(accountId)}`;
+}
+
+/** Every account-keyed scope starts here; the legacy env-keyed form shared this prefix too. */
+const WALLET_SCOPE_PREFIX = "akash-console:";
+
+/**
+ * Is `walletScope` keyed on a Console ACCOUNT rather than on a deploy environment?
+ *
+ * Built from the SAME literal the database enforces in
+ * `akash_tx_allocations_wallet_scope_account_check` (migration 0048), so the in-process
+ * predicate and the constraint cannot drift: a legacy `akash-console:<environment>` value
+ * satisfies neither, because no deploy environment is named `akash1…`.
+ */
+export function isAccountWalletScope(walletScope: string): boolean {
+  return new RegExp(ACCOUNT_WALLET_SCOPE_PATTERN).test(clean(walletScope));
+}
+
+/**
+ * Refuse to start a writer whose ledger still holds env-keyed receipts (bug.5187).
+ *
+ * WHY A BOOT GATE AND NOT JUST A MIGRATION. `wallet_scope` is half of the key `claimOnce` uses
+ * to find a prior receipt — `(wallet_scope, cogni_key)`. So the derived value and the stored
+ * values must never disagree, in EITHER direction:
+ *
+ *   - stored moves first (backfill applied, an old writer still serving): the old writer's
+ *     INSERT carries `akash-console:<env>`, which the 0048 CHECK constraint rejects. It gets a
+ *     loud ledger error and spends nothing.
+ *   - code moves first (new writer up, backfill not yet applied): nothing in the database
+ *     objects, the account-keyed lookup misses five still-billing production receipts, and the
+ *     reconciler mints a second paid lease beside each. THIS is the direction a CHECK cannot
+ *     cover, and it is the one this function closes — the writer CrashLoops with a stable
+ *     reason until the migrator has run, which costs a bounded outage instead of real money.
+ *
+ * Takes a COUNT rather than a database so it stays pure and unit-testable, exactly like
+ * {@link assertActuatorWalletAccount} taking an observation instead of a Console client.
+ */
+export function assertLedgerIsAccountScoped(
+  legacyScopedReceipts: number
+): void {
+  if (legacyScopedReceipts > 0) {
+    throw new AkashTxWalletConfigError(
+      "ledger_scope_unmigrated",
+      `${legacyScopedReceipts} akash_tx_allocations row(s) still carry a legacy ` +
+        "environment-keyed wallet_scope. Those receipts are INVISIBLE to an account-keyed " +
+        "lookup, so serving requests now would mint a second paid lease beside every lease " +
+        "they already own. Refusing to start until migration 0048 has backfilled this database."
+    );
+  }
 }
 
 /**

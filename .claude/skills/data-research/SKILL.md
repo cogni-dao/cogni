@@ -13,7 +13,7 @@ In bug.5012 (2026-05-05), poly prod OOM-crashlooped. Root cause was an unbounded
 
 The fix that landed was _not_ a `LIMIT N` band-aid — it was decomposing every metric in `computeWalletMetrics` into a SQL aggregation so V8 only ever sees ~14k unique-position rows regardless of fill count. That's the architecturally correct shape, and it's the standard this skill encodes.
 
-The Research tab will host 100+ views over time (see `nodes/poly/app/src/app/(app)/research/`): target-overlap, P/L curves, fills histograms, USDC-flow, size-vs-P/L, trade-size distributions, entry-price quantiles, time-in-position, entries-by-outcome, hour-of-day, bets-per-market. Every one of those is an aggregation over millions of rows. **Every one of them must follow this skill or the next bug.5012 ships itself.**
+The Research tab will host 100+ views over time (see the node repo's `app/src/app/(app)/research/`): target-overlap, P/L curves, fills histograms, USDC-flow, size-vs-P/L, trade-size distributions, entry-price quantiles, time-in-position, entries-by-outcome, hour-of-day, bets-per-market. Every one of those is an aggregation over millions of rows. **Every one of them must follow this skill or the next bug.5012 ships itself.**
 
 ## Core principle 1: dashboards read from our DB, never from upstream on render
 
@@ -210,10 +210,10 @@ When migrating, **read the existing JS implementation first** to determine which
 
 Research views land at:
 
-- **HTTP**: `nodes/poly/app/src/app/api/v1/poly/research/<view>/route.ts` — Zod-validated request + response, partial-failure-returns-200-with-warnings semantics (see `trader-comparison/route.ts` for the canonical shape).
-- **Contract**: `nodes/poly/packages/node-contracts/src/poly.research-<view>.v1.contract.ts` — request + response Zod schemas. **Always v1; never re-version unless we have users.**
-- **Service**: `nodes/poly/app/src/features/research/server/<view>-service.ts` (mirror of `features/wallet-analysis/server/`). The SQL-aggregated readers live here; the route is a thin handler.
-- **UI**: `nodes/poly/app/src/app/(app)/research/` — the Research page tabs. Each new view is a tab.
+- **HTTP**: `<node-repo>/app/src/app/api/v1/<node>/research/<view>/route.ts` — Zod-validated request + response, partial-failure-returns-200-with-warnings semantics (see `trader-comparison/route.ts` for the canonical shape).
+- **Contract**: `<node-repo>/packages/node-contracts/src/<node>.research-<view>.v1.contract.ts` — request + response Zod schemas. **Always v1; never re-version unless we have users.**
+- **Service**: `<node-repo>/app/src/features/research/server/<view>-service.ts` (mirror of `features/wallet-analysis/server/`). The SQL-aggregated readers live here; the route is a thin handler.
+- **UI**: `<node-repo>/app/src/app/(app)/research/` — the Research page tabs. Each new view is a tab.
 
 The Research tab pattern is **comparative + time-windowed**: most views show 2–3 wallets side-by-side over a 1D / 1W / 1M / ALL window. Design your SQL with this in mind: a `wallet_id IN ($1, $2, $3)` filter and a `WHERE observed_at >= $window_start` clause are virtually guaranteed inputs.
 
@@ -283,4 +283,4 @@ Add a new recipe when a debugging path has been walked twice. The bar is reuse, 
 
 - **OLAP / data-warehouse offload.** When research traffic genuinely outgrows OLTP capacity, the answer is materialized views or a read replica — not yet, but don't be surprised when this skill grows a section on that.
 - **Real-time streaming aggregates.** Today's research is on-demand-aggregate-from-source. Live streaming to the UI (websockets pushing updates as new fills land) is a separate problem that earns its own skill when it arrives.
-- **Cross-node research.** Querying poly + resy together is x402 territory, not in this skill.
+- **Cross-node research.** Querying two nodes together is x402 territory, not in this skill.

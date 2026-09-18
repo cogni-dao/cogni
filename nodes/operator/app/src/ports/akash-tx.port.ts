@@ -18,11 +18,19 @@
  *   - IDENTITY_BEFORE_TRANSACTION: every mutating call carries an explicit
  *     `AkashTxWorkloadIdentity`, and that identity is durable in the SAME receipt before the
  *     Console is contacted. Identity is never inferred from the key, the slug, or the wallet.
- *   - FAIL_CLOSED: an allocation that cannot be resolved to exactly one lease is reported as
- *     unresolved/ambiguous and never healed by a fresh create.
- *   - MIGRATION_BEFORE_TRANSACTION: every mutating call carries an explicit migration
- *     requirement, and a `RequireBeforeTransaction` requirement that is not PROVEN complete is
- *     a refusal, never a pass (bug.5116 precondition, bug.5140 enforcement).
+ *   - FAIL_CLOSED_BUT_RECOVERABLE: an allocation that cannot be resolved to exactly one LIVE
+ *     lease is reported as ambiguous and never healed by a fresh create. An allocation PROVEN
+ *     not to be billing is a different thing entirely: it settles itself, releases the wallet
+ *     slot, and is retryable under the same key (`allocation_rolled_back`). bug.5192 is what
+ *     happens when those two are the same state — fail-closed with no exit is an outage.
+ *   - MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION (task.5135): no mutating call carries a migration
+ *     requirement, and no migration state can refuse one. Renting compute proves nothing about
+ *     a database. The per-digest migration is a RELEASE step stated on `observe` — the unpaid,
+ *     level-triggered tick — whose phase is REPORTED to the caller and never enforced here.
+ *     What this buys: the paid path needs no database-adjacent capability at all, and a
+ *     workload with a bad or missing schema fails READINESS (bounded by the composite's boot
+ *     SLO) instead of silently never being created — the toks5 failure mode, where a valid XR
+ *     with a valid digest never reached the actuator and never existed in any environment.
  *   - REFUSAL_IS_OBSERVABLE: every code here is a stable string safe for logs, Events and
  *     Crossplane conditions — a refusal a caller cannot see is a bug (bug.5115 shape).
  * Side-effects: none (types only)
@@ -68,6 +76,12 @@ export type AkashTxErrorCode =
   | "allocation_unresolved"
   /** More than one post-baseline allocation exists: deterministic adoption impossible. */
   | "allocation_ambiguous"
+  /**
+   * The previous attempt under this key opened a deployment that is now PROVEN closed, so its
+   * receipt was settled and the wallet slot released. Nothing is billing and nothing was
+   * double-paid. Retry with the SAME key — the next attempt re-claims a clean slot.
+   */
+  | "allocation_rolled_back"
   /** Provider IO failed in a way that leaves the outcome unknown (mutating call). */
   | "outcome_unknown"
   /** Provider refused the request terminally (screening, rejected SDL, bad handle). */
@@ -78,12 +92,11 @@ export type AkashTxErrorCode =
   | "not_found"
   /** Durable ledger unavailable — the actuator must refuse to spend without a receipt. */
   | "ledger_unavailable"
-  /** The bundle digest's DB migration has not completed yet. Retry with the SAME key. */
-  | "migration_pending"
-  /** The bundle digest's DB migration ran and failed. Terminal until a new digest. */
-  | "migration_failed"
-  /** The migration precondition could not be PROVEN either way; never assume success. */
-  | "migration_unavailable"
+  // `migration_pending` / `migration_failed` / `migration_unavailable` were REMOVED with
+  // task.5135. They were the three ways a database could refuse to let a computer be rented.
+  // Migration state is now an observation (`AkashTxObservation.migration.phase`), and an
+  // observation is not a refusal — leaving dead codes here would leave the old contract
+  // readable in the type that defines it.
   /** Caller sent a structurally invalid request. */
   | "invalid_request"
   /** Caller is not authorized to reach the actuator. */
@@ -109,34 +122,40 @@ export class AkashTxError extends Error {
 }
 
 /**
- * The migration precondition the CALLER states with every mutation (bug.5140, XRD
- * `spec.migration.policy`). Desired state names its own precondition; the actuator PROVES it
- * before it spends. Modelled as a discriminated union on purpose: there is no way to ask for
- * `RequireBeforeTransaction` without naming the digest that must be proven, so an
- * under-specified request is a schema error rather than a silently ungated paid lease.
+ * The RELEASE-side migration step the caller may attach to an `observe` (task.5135). Its
+ * presence is the whole policy — a workload with a database sends it, one without omits it —
+ * because the only decision left is "run it or don't", and presence already says that.
  *
- * Deliberately NOT on this wire: the migration COMMANDS. A caller-supplied command would make
- * the gate advisory — anyone who can call the actuator could pass `true` and "prove" a
- * migration. The `profile` selects a command set the actuator owns.
+ * There is no `Skip` member and no `policy` discriminator any more. Both existed to describe a
+ * GATE, and there is no gate: this type can only cause a Job to be ensured and a phase to be
+ * reported, never a transaction to be refused.
+ *
+ * Deliberately NOT on this wire: the migration COMMANDS. A caller-supplied command would let
+ * anyone who can call the actuator run arbitrary containers against the environment's database
+ * under the actuator's service account. The `profile` selects a command set the actuator owns.
  */
-export type AkashTxMigrationRequirement =
-  /** The workload has no database. The ONLY way to legitimately bypass the gate. */
-  | { readonly policy: "Skip" }
-  | {
-      readonly policy: "RequireBeforeTransaction";
-      /** Which migration contract must be proven; selects the actuator-owned phases. */
-      readonly profile: "cogni-node-app-v1";
-      /** `sha256:<64 hex>` from the workload's digest-pinned bundle ref. */
-      readonly bundleDigest: string;
-      /** Digest-pinned app artifact image — the same image the k3s initContainer runs. */
-      readonly image: string;
-      /** True when the app service declares a `DOLTGRES_URL` secret ref. */
-      readonly doltgres: boolean;
-    };
+export interface AkashTxMigrationStep {
+  /** Which migration contract to run; selects the actuator-owned phases. */
+  readonly profile: "cogni-node-app-v1";
+  /** `sha256:<64 hex>` from the workload's digest-pinned bundle ref. */
+  readonly bundleDigest: string;
+  /** Digest-pinned app artifact image — the same image the k3s initContainer runs. */
+  readonly image: string;
+  /** True when the app service declares a `DOLTGRES_URL` secret ref. */
+  readonly doltgres: boolean;
+}
+
+/** Outcome of one bounded, non-throwing migration-step attempt. */
+export type AkashTxMigrationPhase =
+  | "succeeded"
+  | "running"
+  | "failed"
+  /** No migration capability is wired, or the attempt could not be completed either way. */
+  | "unavailable";
 
 /**
- * The proof seam. Structurally satisfied by `ComputeWorkloadMigrationPort`
- * (`KubernetesMigrationJobAdapter`), so the actuator and the frozen controller prove migration
+ * The release-step seam. Structurally satisfied by `ComputeWorkloadMigrationPort`
+ * (`KubernetesMigrationJobAdapter`), so the actuator and the frozen controller drive migration
  * currency with ONE implementation — including its `compute_workload_migration_job_infra_retry`
  * reclassification of a `DeadlineExceeded` Job with no failed migrate container.
  */
@@ -161,6 +180,12 @@ export interface AkashTxObservation {
   readonly serving?: boolean;
   /** True when the resource was adopted from a durable receipt after a lost response. */
   readonly recovered?: boolean;
+  /**
+   * Phase of the release-side migration step, when the caller attached one. Undefined means
+   * "not asked". This is an OBSERVATION, not a verdict — nothing in this port refuses a
+   * transaction because of it.
+   */
+  readonly migration?: { readonly phase: AkashTxMigrationPhase };
 }
 
 export interface AkashTxCreateResult extends AkashTxResource {
@@ -179,13 +204,17 @@ export interface AkashTxActuatorPort {
     cogniKey: string;
     externalName?: string;
     expectedSourceSha?: string;
+    /** Attach the release-side migration step to this tick. Never blocks the observation. */
+    migration?: AkashTxMigrationStep;
+    /** Workload slug + environment, required only when `migration` is attached. */
+    workload?: string;
+    environment?: string;
   }): Promise<AkashTxObservation>;
   create(input: {
     cogniKey: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
-    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxCreateResult>;
   update(input: {
     cogniKey: string;
@@ -193,10 +222,43 @@ export interface AkashTxActuatorPort {
     environment: string;
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
-    migration: AkashTxMigrationRequirement;
   }): Promise<AkashTxResource>;
   delete(input: { cogniKey: string; externalName: string }): Promise<void>;
+  /**
+   * ONE bounded pass over receipts stuck mid-transaction, verifying each against Console
+   * before settling it. Still no watches, no timers and no retry policy in here: this is a
+   * single attempt the caller schedules, exactly like the other four operations.
+   *
+   * Exists because a crashed create cannot settle its own receipt (the crash IS the reason),
+   * and the receipt it leaves behind holds a WALLET-WIDE slot: without a sweeper, one dead
+   * process stops every node in the environment from leasing (bug.5192).
+   */
+  sweepStaleAllocations(input: {
+    olderThanMs: number;
+    limit: number;
+  }): Promise<AkashTxSweepReport>;
 }
+
+/** Per-pass counts for the sweeper's single structured log line. */
+export interface AkashTxSweepReport {
+  readonly scanned: number;
+  /** Receipts settled because nothing is billing under them. */
+  readonly rolledBack: number;
+  /** Receipts whose lost allocation was found live and bound to the receipt instead. */
+  readonly adopted: number;
+  /** Receipts deliberately LEFT held: ambiguous wallet, or Console could not be read. */
+  readonly held: number;
+}
+
+/**
+ * What the wallet says about a possibly-lost allocation, beyond a pre-transaction baseline.
+ * Structurally identical to (and satisfied by) the adapter's own `AkashAllocationProbe`; it is
+ * restated here so the port owns its contract and `@/ports` never imports from `@/adapters`.
+ */
+export type AkashAllocationProbe =
+  | { outcome: "adopted"; output: ProvisionOutput }
+  | { outcome: "settled" }
+  | { outcome: "ambiguous"; dseqs: readonly string[] };
 
 /**
  * The Console transaction client the actuator needs. Structurally satisfied by
@@ -211,8 +273,16 @@ export interface AkashTxConsolePort {
     spec: ProvisionSpec;
     onAllocated?: (leaseId: string) => Promise<void>;
   }): Promise<{ leaseId: string; providerAccount: string }>;
-  /** Adopt the unique post-baseline allocation, or null when none exists. */
-  findAllocationSince(cursor: string): Promise<ProvisionOutput | null>;
+  /**
+   * Classify the wallet beyond a pre-transaction baseline into exactly one of three worlds:
+   * `adopted` (one live allocation — it is ours), `settled` (no LIVE allocation beyond the
+   * baseline: nothing is billing, whether or not a transaction ever landed), `ambiguous`
+   * (several — undecidable, stay fail-closed).
+   *
+   * bug.5192: the old `ProvisionOutput | null` shape could not express `settled`, so every
+   * crashed create became a permanent `allocation_unresolved` holding the wallet-wide slot.
+   */
+  findAllocationSince(cursor: string): Promise<AkashAllocationProbe>;
   status(input: { leaseId: string }): Promise<ProvisionOutput>;
   /** In-place SDL replacement on a known handle. Returns once the provider accepted it. */
   updateAllocated(input: {
@@ -241,6 +311,15 @@ export interface AkashTxAllocationRecord {
   readonly providerAccount?: string;
 }
 
+/** A receipt that has held the wallet slot longer than any single transaction can take. */
+export interface AkashTxStaleAllocation {
+  readonly cogniKey: string;
+  /** Absent ⇒ durably PRE-transaction: the cursor is written before the POST, so no spend. */
+  readonly allocationCursor?: string;
+  /** Milliseconds this receipt has held the wallet slot, for the log line that reports it. */
+  readonly heldForMs: number;
+}
+
 /**
  * Durable custody of "we may have paid". Deliberately independent of any Kubernetes object:
  * a deleted XR must never be able to orphan the evidence, and a slot must be resolvable by
@@ -253,6 +332,12 @@ export interface AkashTxAllocationLedgerPort {
    * The INSERT that opens the slot is the receipt, and it carries the identity — so the
    * receipt binding node, environment, composite UID and generation to the key is durable
    * before the caller has even read an allocation cursor, let alone posted a transaction.
+   *
+   * A receipt already settled `failed` with NO handle is RE-CLAIMABLE and answers `claimed`
+   * again (bug.5192). `failed AND external_name IS NULL` is only ever written with proof that
+   * nothing is billing, so there is no spend to double-pay — while `allocated`/`released`
+   * (which DID bind a handle) stay terminal `settled` exactly as before. Without this, the
+   * only escape from a crashed create is a human editing `lease_epoch` in the catalog.
    */
   claim(input: {
     cogniKey: string;
@@ -294,9 +379,63 @@ export interface AkashTxAllocationLedgerPort {
     externalName: string;
     providerAccount?: string;
   }): Promise<void>;
-  /** Terminal settle with NO resource. Legal only when no allocation can exist. */
+  /**
+   * Settle a receipt that never bound a paid resource, releasing the wallet-wide slot.
+   *
+   * Legal ONLY when nothing can still be billing under this key — i.e. the caller holds
+   * positive evidence: the create never reached a transaction (no cursor), or the deployment
+   * it opened was closed AND that closure was read back from Console. The implementation
+   * enforces the half it can (`state='preparing' AND external_name IS NULL`, so a recorded
+   * handle is never erased); the caller owns the closure proof.
+   *
+   * bug.5192: this method existed and was never called from production code, which is why one
+   * crashed create held the account-wide writer slot for 33h.
+   */
   fail(input: { cogniKey: string; failureCode: string }): Promise<void>;
+  /**
+   * Bounded scan for receipts stuck mid-transaction. Read-only, newest-last, hard-limited —
+   * it decides nothing. The sweeper that consumes it must verify each row against Console
+   * before settling anything (CLOSE_BEFORE_CLEAR); NO_TIME_BASED_RELEASE still holds, age is
+   * only what makes a row ELIGIBLE to be investigated, never what settles it.
+   */
+  listStalePreparing(input: {
+    olderThanMs: number;
+    limit: number;
+  }): Promise<readonly AkashTxStaleAllocation[]>;
   /** Mark a previously allocated key as released after a provider delete. */
   markReleased(input: { cogniKey: string }): Promise<void>;
   read(input: { cogniKey: string }): Promise<AkashTxAllocationRecord | null>;
+  /**
+   * Bounded enumeration of the wallet's LIVE paid leases: `state='allocated' AND
+   * external_name IS NOT NULL` — receipts that bound a provider handle and have not been
+   * released. Read-only, hard-limited, oldest-touched first — it decides nothing. This is the
+   * money-loop's SEE primitive (story.5039): what the Argo prune → Crossplane REMOVE →
+   * actuator delete chain is expected to close, enumerable BEFORE the close and provable
+   * after (bug.5189: CLOSE→VERIFY→CLEAR; cluster state is never spend truth).
+   *
+   * `nodeId`/`environment` filters are OPTIONAL by design: the undetectable orphan is a lease
+   * whose (node, env) the catalog NO LONGER declares, so the unfiltered walletScope-scoped
+   * enumeration is the primitive — a query shaped "leases of the envs we know about" could
+   * never see it.
+   */
+  listAllocated(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]>;
+  /**
+   * Bounded enumeration of receipts in EVERY state for this wallet scope — the generation-
+   * derivation primitive (task.5132). `requiredLeaseGeneration` must see terminal receipts
+   * (`released`/`failed`): a terminal receipt permanently spends its generation for a re-added
+   * env (the recreated composite carries a new UID, so `claim`'s failed-no-handle re-claim can
+   * never match it — bug.5192's escape hatch does not apply across an XR recreation). The
+   * `listAllocated` view above deliberately hides those states; deriving from it made an ADD
+   * re-state a spent generation and the actuator refuse with `akash_tx_identity_conflict`.
+   * Read-only, hard-limited, oldest-touched first — it decides nothing.
+   */
+  listReceipts(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]>;
 }

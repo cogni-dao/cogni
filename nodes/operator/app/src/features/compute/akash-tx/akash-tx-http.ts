@@ -13,8 +13,12 @@
  *   - PRIVATE_BY_CONSTRUCTION: a bearer token is REQUIRED at construction; there is no
  *     unauthenticated mode and no public mount. Public compute mutation routes stay tombstoned.
  *   - STRICT_INPUT: strict zod objects — an unknown key is a 400, never a silently ignored field.
- *   - MIGRATION_IS_REQUIRED: `migration` is required on create and update, so a caller that
- *     forgets its precondition gets a 400 instead of an ungated paid lease (bug.5140).
+ *   - MIGRATION_NEVER_REFUSES_A_MUTATION (task.5135): create and update neither require nor
+ *     read a migration; the field is accepted for one release and ignored (see the contract's
+ *     MIGRATION_ON_MUTATION_IS_DEPRECATED). The release-side migration rides on `observe` and
+ *     comes back as `migration.phase` in the 200 body — there is no migration status code, and
+ *     no code→status row a migration can reach, because a database can no longer refuse a
+ *     lease.
  *   - IDENTITY_IS_REQUIRED_ON_EVERY_MUTATION: create and update carry `identity`, so a caller
  *     that will not name the consuming node is a 400 before the actuator is even reached
  *     (task.5103). `identity_conflict` is 422 — terminal, because a retry cannot change who
@@ -37,7 +41,6 @@ import {
   type AkashTxCreateInput,
   AkashTxCreateInputSchema,
   AkashTxDeleteInputSchema,
-  type AkashTxMigration,
   type AkashTxObserveInput,
   AkashTxObserveInputSchema,
   AkashTxUpdateInputSchema,
@@ -46,7 +49,6 @@ import {
   type AkashTxActuatorPort,
   AkashTxError,
   type AkashTxErrorCode,
-  type AkashTxMigrationRequirement,
 } from "@/ports";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
@@ -62,16 +64,14 @@ const STATUS_BY_CODE: Readonly<Record<AkashTxErrorCode, number>> = {
   wallet_allocation_blocked: 409,
   allocation_unresolved: 409,
   allocation_ambiguous: 409,
+  // Conflict, and the ONLY self-healing one: the previous attempt is proven closed and its
+  // receipt is already settled, so the very next call with the SAME key takes a clean slot.
+  // The Composition treats 409 as retryable (`Progressing`), which is exactly right here.
+  allocation_rolled_back: 409,
   provider_rejected: 422,
   // Terminal, NOT a conflict to retry: no number of retries changes who consumed the resource.
   identity_conflict: 422,
   provider_unavailable: 502,
-  // Conflict, not failure: the digest's migration is still running. Same key, later.
-  migration_pending: 409,
-  // Terminal for this digest — retrying cannot help until a new bundle is built.
-  migration_failed: 422,
-  // Unproven, not proven-false. Never downgraded to a pass.
-  migration_unavailable: 503,
   // Idempotent by key: a retry resolves the uncertainty from the durable receipt.
   outcome_unknown: 502,
   ledger_unavailable: 503,
@@ -128,21 +128,11 @@ function toSpec(parsed: AkashTxCreateInput["spec"]): ProvisionSpec {
 }
 
 /**
- * The wire union and the port union are structurally identical by design; this is the one
- * place that fact is asserted, so a drift in either becomes a typecheck failure here.
+ * Narrow the observe wire shape to the port's exact-optional types. The release-side migration
+ * step travels here — the one place on this surface where a migration is mentioned at all —
+ * along with the workload + environment that say WHOSE database it is. The actuator refuses to
+ * guess those rather than migrate the wrong environment.
  */
-function toMigration(parsed: AkashTxMigration): AkashTxMigrationRequirement {
-  return parsed.policy === "Skip"
-    ? { policy: "Skip" }
-    : {
-        policy: "RequireBeforeTransaction",
-        profile: parsed.profile,
-        bundleDigest: parsed.bundleDigest,
-        image: parsed.image,
-        doltgres: parsed.doltgres,
-      };
-}
-
 function toObserveInput(parsed: AkashTxObserveInput) {
   return {
     cogniKey: parsed.cogniKey,
@@ -150,6 +140,18 @@ function toObserveInput(parsed: AkashTxObserveInput) {
     ...(parsed.expectedSourceSha
       ? { expectedSourceSha: parsed.expectedSourceSha }
       : {}),
+    ...(parsed.migration
+      ? {
+          migration: {
+            profile: parsed.migration.profile,
+            bundleDigest: parsed.migration.bundleDigest,
+            image: parsed.migration.image,
+            doltgres: parsed.migration.doltgres,
+          },
+        }
+      : {}),
+    ...(parsed.workload ? { workload: parsed.workload } : {}),
+    ...(parsed.environment ? { environment: parsed.environment } : {}),
   };
 }
 
@@ -224,12 +226,14 @@ export function createAkashTxDispatcher(
           const input = AkashTxCreateInputSchema.parse(payload);
           return {
             status: 200,
+            // `input.migration` is deliberately NOT forwarded: it is the deprecated
+            // compatibility field, parsed so an un-rematerialized Composition does not 400,
+            // and dropped here because nothing downstream may act on it (task.5135).
             body: await deps.actuator.create({
               cogniKey: input.cogniKey,
               environment: input.environment,
               identity: input.identity,
               spec: toSpec(input.spec),
-              migration: toMigration(input.migration),
             }),
           };
         }
@@ -243,7 +247,6 @@ export function createAkashTxDispatcher(
               environment: input.environment,
               identity: input.identity,
               spec: toSpec(input.spec),
-              migration: toMigration(input.migration),
             }),
           };
         }
@@ -258,7 +261,24 @@ export function createAkashTxDispatcher(
           );
       }
     } catch (error) {
-      if (error instanceof AkashTxError) return errorResponse(error);
+      if (error instanceof AkashTxError) {
+        // bug.5221: a create that died between receipt_bound and allocation_prepared was
+        // invisible for 50+ minutes because this response carried the only record of the
+        // failure — to a caller whose logs never reach Loki. The error body stays redacted;
+        // the marker line is the in-cluster record.
+        deps.log?.warn(
+          {
+            path: request.path,
+            code: error.code,
+            causeMessage: error.message,
+            ...(error.ownerCogniKey
+              ? { ownerCogniKey: error.ownerCogniKey }
+              : {}),
+          },
+          "akash_tx_http_op_failed"
+        );
+        return errorResponse(error);
+      }
       if (isZodError(error)) {
         return errorResponse(
           new AkashTxError(

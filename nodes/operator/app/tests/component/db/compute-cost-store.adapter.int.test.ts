@@ -11,7 +11,8 @@ import { DrizzleComputeCostStore } from "@/adapters/server/compute/compute-cost-
 import type { ComputeResourceCostEvidence } from "@/ports";
 import { akashTxAllocations, computeCostIntervals } from "@/shared/db/schema";
 
-const WALLET = "cost-test-wallet";
+/** Account-keyed, per `akash_tx_allocations_wallet_scope_account_check` (bug.5187). */
+const WALLET = "akash-console:akash1costtestwalletaddressforcomponenttests";
 const NODE_ID = "2f8b7a10-4c6e-4a7b-9d31-1c2e3f4a5b60";
 const IDENTITY = {
   nodeId: NODE_ID,

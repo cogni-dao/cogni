@@ -53,14 +53,13 @@ describe("renderCatalog", () => {
    * BORN_ON_AKASH + BORN_PRODUCTION (story.5025). A Spawn is always a fork, so this is the
    * shape every real birth gets: the transient candidate-a proof slot plus canonical
    * production, both off-cluster, with PRODUCTION holding the generation-1 activity authority.
-   * Preview is absent — a birth must not buy a third lease.
+   * Preview is absent from the BIRTH ENVIRONMENT set — a birth must not buy a third lease.
    *
    * AUTHORITY_REQUIRES_AN_INSTALLED_API (task.5104) + INSTALLED_IS_NOT_FUNDED (task.5097):
-   * candidate-a AND production are declared `crossplane` — both carry a control plane and both
-   * pin a funded actuator wallet (production's is its own dedicated account, `akash10auj…`).
-   * Preview remains silent on BOTH axes: no wallet, no actuator, no birth lease — a birth must
-   * not buy a third lease, and an unfunded env would refuse every paid transaction with
-   * `actuator_account_id_missing`.
+   * candidate-a AND production are declared `crossplane` because they are the two birth envs
+   * and both carry a control plane plus a pinned actuator account. Preview keeps an installed
+   * but UNFUNDED control plane — it pins no wallet, so it can never buy a lease; a single active
+   * writer per test wallet (story.5016). It is also absent from `NODE_FORMATION_ENVS`.
    *
    * PRODUCTION_GOVERNS_SPAWN (Derek, story.5016): a birth's canonical slot is production on the
    * Crossplane rail from generation 1 — never "candidate-a first, then a faked catalog cutover".
@@ -87,6 +86,9 @@ describe("renderCatalog", () => {
     // Both facts hold for production: installed control plane AND pinned dedicated wallet.
     expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("production");
     expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).toContain("production");
+    // Preview installs the composite API (dormant control plane) but pins NO wallet, so it can
+    // never buy a lease — a single active writer per test wallet (story.5016).
+    expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("preview");
     expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).not.toContain("preview");
   });
 
@@ -114,7 +116,11 @@ describe("renderCatalog", () => {
 
     const authorityEnvs = Object.keys(row.compute_api ?? {}).sort();
     expect(authorityEnvs.length).toBeGreaterThan(0);
-    expect(authorityEnvs).toEqual(birthEnvs.filter(canBirthOnCrossplane));
+    // `filter` passes (value, index, array) — canBirthOnCrossplane now takes the OWNER as
+    // its second arg, so the bare reference fed it an index (bug.5202).
+    expect(authorityEnvs).toEqual(
+      birthEnvs.filter((env) => canBirthOnCrossplane(env, "cogni-dao"))
+    );
     for (const env of authorityEnvs) {
       expect(birthEnvs).toContain(env);
     }

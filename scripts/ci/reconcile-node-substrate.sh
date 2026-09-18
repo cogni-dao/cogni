@@ -191,8 +191,18 @@ case "$COGNI_CATALOG_ROOT" in
 esac
 [[ -d "$COGNI_CATALOG_ROOT" ]] || fail "missing catalog root: $COGNI_CATALOG_ROOT"
 
+# shellcheck source=lib/appset-paths.sh
+CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-.}/infra/catalog}" \
+  source "$SCRIPT_DIR/lib/appset-paths.sh"
 # shellcheck source=lib/image-tags.sh
 source "$SCRIPT_DIR/lib/image-tags.sh"
+
+# WHICH CLUSTER AM I RECONCILING AGAINST (bug.5206)? For every row that exists today this is
+# the env itself. For an akash node's non-production lane the PAYING cluster reconciles it, so
+# this script runs against THAT cluster's VM — its vault, its roles, its Postgres. The lane
+# still names the secret path and the database; only the IDENTITY follows the cluster.
+SUBSTRATE_CONTROL_ENV="$(CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-.}/infra/catalog}" \
+  control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE" 2>/dev/null || printf '%s' "$DEPLOY_ENVIRONMENT")"
 
 node_known=false
 for node in "${NODE_TARGETS[@]}"; do
@@ -217,7 +227,7 @@ node_envs="$(yq -r '.envs[]' "$node_catalog_file")"
 grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
   || fail "'$TARGET_NODE' is not in the '$DEPLOY_ENVIRONMENT' node-set (envs: $(yq -r '.envs | join(",")' "$node_catalog_file")) — add the env to infra/catalog/${TARGET_NODE}.yaml to deploy it here"
 
-node_db="$(node_database_for_target "$TARGET_NODE")"
+node_db="$(node_database_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")"
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
 # bug.5159 — multiplex every remote call over ONE ssh connection. Each remote() used to
@@ -243,13 +253,13 @@ trap cleanup EXIT
 # zero bao kv put/patch (Invariant 16 token boundary).
 CURRENT_ROW="reader_token"
 BAO_TOKEN="$(
-  remote "set -euo pipefail
+  cogni_openbao_kubernetes_login_retry remote "set -euo pipefail
     jwt=\$(kubectl create token db-provisioner -n default)
     kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-      bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-db-reader' jwt=\"\$jwt\""
+      bao write -field=token auth/kubernetes/login role='${SUBSTRATE_CONTROL_ENV}-db-reader' jwt=\"\$jwt\""
 )"
-[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${DEPLOY_ENVIRONMENT}-db-reader token"
-mark_row reader_token refreshed "minted ${DEPLOY_ENVIRONMENT}-db-reader token (read-only)"
+[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${SUBSTRATE_CONTROL_ENV}-db-reader token (reconciling the '${DEPLOY_ENVIRONMENT}' lane)"
+mark_row reader_token refreshed "minted ${SUBSTRATE_CONTROL_ENV}-db-reader token (read-only) for the ${DEPLOY_ENVIRONMENT} lane"
 
 export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT DOMAIN
 
@@ -261,11 +271,26 @@ export REPO_ROOT APP_SOURCE_DIR COGNI_CATALOG_ROOT DOMAIN
 # as "key absent": the swallowed-error shape produced lying "per-node DB creds absent"
 # failures on paths that demonstrably held 35 keys. Only "No value found" (an unborn
 # path) is a legitimate empty; anything else retries and then fails naming the transport.
+# SHARED-SUBSTRATE OWNERS LIVE WHERE THE SUBSTRATE DOES (bug.5206). A node-scoped read is
+# the LANE's (`cogni/<lane>/<node>`), but `operator` and `_shared` describe the SERVER this
+# run is mutating — the Doltgres superuser, the DoltHub mirror creds — and that server is the
+# CONTROL env's. `cogni/<lane>/operator` does not exist in the paying cluster's vault and
+# never should. secret-materialize.sh already resolves this via its `__owner__` cache; this
+# file is its twin and never got the fix, so the production-side lane reconcile died on
+# "doltgres superuser SSOT absent at cogni/candidate-a/operator/DOLTGRES_PASSWORD".
+_bao_env_for_svc() {
+  case "$1" in
+    operator|_shared|node-template) printf '%s' "$SUBSTRATE_CONTROL_ENV" ;;
+    *)                              printf '%s' "$DEPLOY_ENVIRONMENT" ;;
+  esac
+}
+
 bao_get_field() {
-  local svc="$1" k="$2" raw attempt
+  local svc="$1" k="$2" raw attempt bao_env
+  bao_env="$(_bao_env_for_svc "$svc")"
   for attempt in 1 2 3; do
     if raw="$(remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
-      bao kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>&1)"; then
+      bao kv get -format=json 'cogni/${bao_env}/${svc}'" 2>&1)"; then
       printf '%s' "$raw" | jq -r --arg k "$k" '.data.data[$k] // empty' 2>/dev/null || true
       return 0
     fi
@@ -327,7 +352,15 @@ dg_pw_env="-e DOLTGRES_PASSWORD='${doltgres_superuser_password}'"
 # (which stops future bank writes but cannot remove an already-delivered VM cred).
 dolt_mirror_enabled=false
 dolt_mirror_purge=false
-if [[ "$DEPLOY_ENVIRONMENT" == "production" ]]; then
+# THE VM DECIDES, NOT THE LANE (bug.5206). bug.5003's rule is that a NON-PRODUCTION VM must
+# not hold prod-capable DoltHub creds — that is a property of the HOST being mutated, and for
+# a foreign-custodied lane the host is the CONTROL env's VM. Keyed on the lane, a candidate-a
+# lane reconcile running against PRODUCTION's VM took the purge branch: it would strip
+# DOLT_CREDS_*/DOLTHUB_* out of production's runtime .env and force-recreate production's
+# doltgres, taking the production knowledge mirror dark on every lane promote. This is why it
+# lands in the SAME commit as the owner-read fix above — that fix is what lets this line be
+# reached at all.
+if [[ "$SUBSTRATE_CONTROL_ENV" == "production" ]]; then
   dolt_creds_jwk="$(bao_get_field operator DOLT_CREDS_JWK)"
   dolt_creds_keyid="$(bao_get_field operator DOLT_CREDS_KEYID)"
   dolthub_owner="$(bao_get_field operator DOLTHUB_OWNER)"
@@ -492,6 +525,28 @@ elif "$dolt_mirror_enabled"; then
 "
 fi
 
+# THE LANE'S TEMPORAL NAMESPACE MUST EXIST ON THE SERVER THE LANE DIALS (task.5132).
+# The composite sets TEMPORAL_ADDRESS to the CONTROL env's VM (the substrate is the paying
+# cluster's) and TEMPORAL_NAMESPACE to `cogni-<lane>` — correctly, since one server must hold
+# both lanes without collision, exactly like `cogni_<node>_<lane>` for Postgres.
+#
+# But NOTHING registers it. Registration lives only in deploy-infra.sh step 6.7, and an app
+# promote sets skip_infra=true, so a foreign-custodied lane reaches a Temporal server that has
+# never heard of its namespace. The app's first call gets NamespaceNotFound, /readyz never
+# passes, and bootPolicy closes the lease after bootDeadlineSeconds — a paid lease spent on a
+# namespace nobody created.
+#
+# The same idempotent primitive deploy-infra and provision-test-vm already share; a re-run is
+# a no-op. This is the Temporal half of "provision the lane's substrate on the control
+# cluster", which #2319 did for Postgres and Doltgres.
+CURRENT_ROW="temporal_namespace"
+copy_to_remote "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" "/tmp/ensure-temporal-namespace.sh"
+remote "TEMPORAL_NAMESPACE='cogni-${DEPLOY_ENVIRONMENT}' \
+  TEMPORAL_CONTAINER=cogni-runtime-temporal-1 \
+  TEMPORAL_TIMEOUT=60 \
+  bash /tmp/ensure-temporal-namespace.sh"
+mark_row temporal_namespace ensured "cogni-${DEPLOY_ENVIRONMENT} registered on ${SUBSTRATE_CONTROL_ENV}'s Temporal (idempotent)"
+
 CURRENT_ROW="remote_reconcile"
 remote "set -euo pipefail
   runtime_env=/opt/cogni-template-runtime/.env
@@ -508,11 +563,27 @@ ${edge_reconcile_snippet}
   else
     next=\"\$current,${node_db}\"
   fi
+  # ATOMIC-OR-REFUSE. This file is the SHARED runtime env every compose service reads.
+  # An in-place sed or append mutates it live, so a reader in that window sees a truncated or
+  # half-appended file — which is how a mid-run failure here bounced production agent auth
+  # for ~5 minutes on 2026-09-17. Render to a temp, VERIFY it, then publish with mv, which is
+  # atomic on one filesystem: a reader sees either the old file or the new one, never a
+  # partial one. A failed render is discarded and the run fails loudly with the file intact.
+  env_tmp=\"\${runtime_env}.reconcile.\$\$\"
   if grep -qE '^COGNI_NODE_DBS=' \"\$runtime_env\"; then
-    sed -i.bak \"s|^COGNI_NODE_DBS=.*\$|COGNI_NODE_DBS=\$next|\" \"\$runtime_env\"
+    sed \"s|^COGNI_NODE_DBS=.*\$|COGNI_NODE_DBS=\$next|\" \"\$runtime_env\" > \"\$env_tmp\"
   else
-    printf '%s=%s\n' COGNI_NODE_DBS \"\$next\" >> \"\$runtime_env\"
+    { cat \"\$runtime_env\"; printf '%s=%s\n' COGNI_NODE_DBS \"\$next\"; } > \"\$env_tmp\"
   fi
+  dbs_n=\$(grep -cE '^COGNI_NODE_DBS=' \"\$env_tmp\" || true)
+  new_n=\$(wc -l < \"\$env_tmp\")
+  old_n=\$(wc -l < \"\$runtime_env\")
+  if [ ! -s \"\$env_tmp\" ] || [ \"\$dbs_n\" != 1 ] || [ \"\$new_n\" -lt \"\$old_n\" ]; then
+    rm -f \"\$env_tmp\"
+    echo 'refusing to publish a malformed runtime env; original left intact' >&2
+    exit 1
+  fi
+  mv -f \"\$env_tmp\" \"\$runtime_env\"
   rm -f \"\$runtime_env.bak\"
 
   # Alloy node-label reconcile — stage the fresh config (rsync's restart-on-change

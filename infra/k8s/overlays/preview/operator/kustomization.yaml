@@ -8,12 +8,20 @@ namespace: cogni-preview
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  - ../../../base/compute-workload-controller
+  # preview runs NO akash writer — it shares candidate-a's test wallet
+  # (akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt) and a second writer on one
+  # wallet is unsound: the akash_tx_allocations_single_writer_idx guard is
+  # per-database and cannot serialize two writers across the two per-env
+  # ledgers. Preview lands no ComputeWorkload CRs; operator akash e2e is
+  # validated on candidate-a. See story.5016 / akash-actuator-wallet-cutover.
   - external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 
 namePrefix: operator-
+
+# No akash-tx-actuator-service-name transformer here: with the actuator base
+# removed (see resources note above), there is no actuator Service to un-prefix.
 
 replacements:
   - source:
@@ -30,36 +38,8 @@ images:
     digest: "sha256:be5e99490e9356f70c6af4b38b62cfbd9775f46047202e8c96ead10de35bd1a0"
 
 patches:
-  # story.5016 Gate 0b: controller env values are set BY NAME via strategic
-  # merge (env lists merge on `name`), never by positional JSON-pointer index.
-  # A positional `/env/N/value` patch silently repoints when the base list
-  # shifts — that exact failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS
-  # fleet-wide, and an empty allowlist rejects every Akash provider bid.
-  - target:
-      kind: Deployment
-      name: compute-workload-controller
-    patch: |
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: compute-workload-controller
-      spec:
-        template:
-          spec:
-            containers:
-              - name: controller
-                env:
-                  # Identical to base; listed first only so the merged env keeps
-                  # the base ordering (merge emits patched entries first).
-                  - name: POD_NAMESPACE
-                    valueFrom:
-                      fieldRef: { fieldPath: metadata.namespace }
-                  - name: CONTROLLER_ENVIRONMENT
-                    value: preview
-                  - name: DEPLOYMENT_DOMAIN
-                    value: preview.cognidao.org
-                  - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+  # No akash-tx-actuator Deployment patch here: preview runs no akash writer
+  # (see resources note above — one active writer per shared test wallet).
   # Node-specific ConfigMap values.
   # DNS names must match prefixed Service names (namePrefix applies to all resources).
   - target:

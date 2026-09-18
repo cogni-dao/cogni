@@ -111,9 +111,26 @@
       "then": { "required": ["deployment_provider"] }
     },
     {
-      "$comment": "story.5016 — the lease epoch replaces a paid off-cluster lease, so it is only meaningful where deployment_provider already routes the row off-cluster. Declaring it on an on-cluster row would be a counter with no lease to replace.",
-      "if": { "required": ["lease_epoch"] },
+      "$comment": "story.5016 — the lease generation replaces a paid off-cluster lease, so it is only meaningful where deployment_provider already routes the row off-cluster. Declaring it on an on-cluster row would be a counter with no lease to replace.",
+      "if": { "required": ["lease_generation"] },
       "then": { "required": ["deployment_provider"] }
+    },
+    {
+      "$comment": "bug.5177 — candidate-a no longer ships base/compute-workload-controller (story.5016 step 9 deleted it to hold ONE_WALLET_ONE_ACTIVE_WRITER). LEGACY_IS_DEFAULT means an omitted compute_api.candidate-a resolves to that deleted controller, so an akash-placed candidate-a row without an explicit cell fails 100% of its flights with a confusing 'controller is not available'. node-template and toks4 were both silently broken this way. Make the cell REQUIRED where it is load-bearing rather than defaulting to an authority the environment does not ship.",
+      "if": {
+        "required": ["envs", "deployment_provider"],
+        "properties": {
+          "envs": { "contains": { "const": "candidate-a" } },
+          "deployment_provider": {
+            "required": ["candidate-a"],
+            "properties": { "candidate-a": { "const": "akash" } }
+          }
+        }
+      },
+      "then": {
+        "required": ["compute_api"],
+        "properties": { "compute_api": { "required": ["candidate-a"] } }
+      }
     }
   ],
   "properties": {
@@ -221,9 +238,9 @@
       },
       "minProperties": 1
     },
-    "lease_epoch": {
+    "lease_generation": {
       "type": "object",
-      "description": "story.5016 — per-environment EXPLICIT replacement counter for a terminally closed Akash lease. It is the ONLY varying component of the actuator's wallet-wide idempotence key (`xcw:<namespace>:<name>:<epoch>`), and the actuator refuses to re-spend a settled key by design — so once an environment's lease closes terminally, this cell is the one supported way to recreate that node there. A human bumps it by exactly 1 when a closed lease must be REPLACED; nothing bumps it implicitly, because an epoch that moved on its own would answer 'no existing resource' after a promote and mint a SECOND PAID LEASE. Omitted environments default to 0 (the value every existing workload already runs under via the XRD default), so this field is inert for every row that has never needed a replacement. Consumed only by the crossplane compute_api authority; the legacy controller keys its lease per-generation and the materializer refuses a nonzero epoch there.",
+      "description": "story.5016 / task.5122 — per-environment EXPLICIT replacement counter for a terminally closed Akash lease. It is the ONLY varying component of the actuator's wallet-wide idempotence key (`xcw:<namespace>:<name>:<lease-generation>`), and the actuator refuses to re-spend a settled key by design — so once an environment's lease closes terminally, this cell is the one supported way to recreate that node there. A human bumps it by exactly 1 when a closed lease must be REPLACED; nothing bumps it implicitly, because a generation that moved on its own would answer 'no existing resource' after a promote and mint a SECOND PAID LEASE. Omitted environments default to 0 (the value every existing workload already runs under), so this field is inert for every row that has never needed a replacement. Consumed only by the crossplane compute_api authority; the legacy controller keys its lease per k8s metadata.generation and the materializer refuses a nonzero value there. NAME: this cell was `lease_epoch` until task.5122. `epoch` is reserved for the attribution/distribution domain (contributor activity windows, claimants, payouts); a compute-lease replacement counter is a GENERATION. The rename changed no VALUE, so no idempotence key moved.",
       "additionalProperties": false,
       "properties": {
         "candidate-a": { "type": "integer", "minimum": 0, "maximum": 1000000 },
@@ -244,7 +261,7 @@
     },
     "compute_egress_cidrs": {
       "type": "array",
-      "description": "task.5052 (story.5016) — egress CIDRs of the decentralized-compute infrastructure (e.g. Akash provider NAT) that hosts THIS row's workload, allowed to reach the env VM's substrate ports (5432,5435,6379,4000,7233). Lives on the workload's own row — NOT per-env and NOT a shared infra row — because an egress IP is a property of where the workload runs: the per-env allowlist is the union of compute_egress_cidrs across rows whose envs[] contains that env, so decommissioning the workload (or trimming an env from envs[]) closes its holes with it. Rendered by scripts/ci/render-compute-egress-allowlist.sh into the allowlist consumed by infra/provision/cherry/harden-docker-public-ports.sh. Absent/empty = fail-closed: no off-cluster compute reaches the substrate ports. Provider egress NATs are multi-tenant — declare the narrowest CIDR (usually /32).",
+      "description": "task.5052 (story.5016) — egress CIDRs of the decentralized-compute infrastructure (e.g. Akash provider NAT) that hosts THIS row's workload, allowed to reach the env VM's substrate ports (5432,5435,6379,4000,7233). Lives on the workload's own row — NOT per-env and NOT a shared infra row — because an egress IP is a property of where the workload runs: the per-env allowlist is the union of compute_egress_cidrs across rows that BOTH list that env in envs[] AND declare deployment_provider.<env>: akash (bug.5191 \u2014 membership alone is not placement, and a k3s-placed row must open no provider hole), so decommissioning the workload, trimming an env from envs[], or moving that env back to k3s closes its holes with it. Rendered by scripts/ci/render-compute-egress-allowlist.sh into the allowlist consumed by infra/provision/cherry/harden-docker-public-ports.sh. Absent/empty = fail-closed: no off-cluster compute reaches the substrate ports. Provider egress NATs are multi-tenant — declare the narrowest CIDR (usually /32).",
       "items": {
         "type": "object",
         "additionalProperties": false,

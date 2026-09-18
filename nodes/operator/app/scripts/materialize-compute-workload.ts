@@ -45,7 +45,7 @@ import {
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
 } from "@/features/compute/node-deployment-targets";
-import { resolveNodeLeaseEpoch } from "@/features/compute/node-lease-epoch";
+import { resolveNodeLeaseGeneration } from "@/features/compute/node-lease-generation";
 import { assertDeclaredNodeDeployment } from "@/features/compute/node-services-workload-spec";
 import { hostForNode } from "@/shared/node-registry/resolve";
 
@@ -57,6 +57,9 @@ const options = {
   "flight-targets-json": { type: "string" },
   "promote-targets-csv": { type: "string" },
   "legacy-k3s-targets-json": { type: "string" },
+  // Run-wide preview-forward mode (bug.5195). The planner intersects it with each row's
+  // `envs:` membership, so a production-only node never reaches deploy/preview-<node>.
+  "preview-forward": { type: "string" },
   "catalog-projection-targets-json": { type: "string" },
   "github-output": { type: "string" },
   "repo-spec": { type: "string" },
@@ -117,6 +120,7 @@ async function main(): Promise<void> {
       environment,
       promoteTargetsCsv: values["promote-targets-csv"] ?? "",
       legacyK3sTargetsJson: values["legacy-k3s-targets-json"],
+      previewForwardMode: values["preview-forward"] === "true",
       githubOutput: required(values["github-output"], "--github-output"),
     });
     return;
@@ -174,9 +178,9 @@ async function main(): Promise<void> {
   // same row: a node never selects its own reconciler.
   const computeApi = resolveNodeComputeApi({ catalog, environment });
   // Explicit replacement counter for a terminally closed lease — same operator-owned row,
-  // never a CLI flag: an epoch a caller could pass would be an epoch automation could bump,
-  // and NOTHING may bump it implicitly. Absent cell resolves to 0, the XRD default.
-  const leaseEpoch = resolveNodeLeaseEpoch({ catalog, environment });
+  // never a CLI flag: a generation a caller could pass would be a generation automation could
+  // bump, and NOTHING may bump it implicitly. Absent cell resolves to 0.
+  const leaseGeneration = resolveNodeLeaseGeneration({ catalog, environment });
   const dnsZoneId = values["dns-zone-id"]?.trim();
   if (dnsZoneId && !CLOUDFLARE_ZONE_ID.test(dnsZoneId)) {
     throw new Error(
@@ -194,7 +198,7 @@ async function main(): Promise<void> {
       domain
     ),
     computeApi,
-    leaseEpoch,
+    leaseGeneration,
     // DNS intent is Crossplane-only: the legacy controller resolves its own zone in-cluster.
     ...(computeApi === "crossplane" && dnsZoneId
       ? { dns: { provider: "cloudflare" as const, zoneId: dnsZoneId } }
@@ -301,6 +305,7 @@ async function selectPromoteTargets(input: {
   readonly environment: "candidate-a" | "preview" | "production";
   readonly promoteTargetsCsv: string;
   readonly legacyK3sTargetsJson: string;
+  readonly previewForwardMode: boolean;
   readonly githubOutput: string;
 }): Promise<void> {
   const requestedTargets = input.promoteTargetsCsv
@@ -315,7 +320,30 @@ async function selectPromoteTargets(input: {
       input.legacyK3sTargetsJson,
       "--legacy-k3s-targets-json"
     ),
+    previewForwardMode: input.previewForwardMode,
   });
+  // AN EMPTY PROMOTE IS A REFUSAL, NOT A SUCCESS (bug.5203). Every downstream job gates on
+  // `has_targets`, so a promote that resolves nothing SKIPS its way to a green conclusion
+  // indistinguishable from a successful deploy.
+  //
+  // Observed twice on 2026-09-17: the node-merge webhook dispatches env=preview, #2238 retired
+  // every preview node slot, so beacon's and toks5's merges each left only
+  // `##[warning]Skipping targets not in the preview node-set` under a SUCCESS badge. A node
+  // owner merges a fix, sees green, and nothing shipped.
+  //
+  // This belongs HERE, at the dispatch boundary, and NOT in resolvePromoteDeploymentTargets:
+  // that resolver's contract is EXCLUSION — "does not admit an off-cluster node outside the
+  // selected environment" asserts it returns [] rather than throwing, and it is right. The
+  // question "I was ASKED to deploy and deployed nothing" is only answerable where the request
+  // is known. Fleet-wide promotes (no explicit CSV) legitimately match nothing and stay silent.
+  if (requestedTargets.length > 0 && selection.deployment.length === 0) {
+    throw new Error(
+      `[materialize-compute-workload] promote named ${requestedTargets.length} target(s) ` +
+        `(${requestedTargets.join(", ")}) but NONE deploy to '${input.environment}'. ` +
+        `Refusing to report a no-op promote as success — check those rows' catalog 'envs:'.`
+    );
+  }
+
   const outputs = {
     targets_json: JSON.stringify(selection.deployment),
     has_targets: String(selection.deployment.length > 0),
@@ -332,6 +360,7 @@ async function selectPromoteTargets(input: {
       selection.sourceRepositories
     ),
     source_sha_by_target_json: JSON.stringify(selection.sourceShas),
+    preview_forward_by_target_json: JSON.stringify(selection.previewForward),
   };
   await appendFile(
     input.githubOutput,

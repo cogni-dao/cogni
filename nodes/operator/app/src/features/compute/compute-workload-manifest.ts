@@ -40,27 +40,50 @@ const DIGEST_PINNED_OCI_REF =
   /^[a-z0-9][a-z0-9._:-]*(?:\/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$/;
 
 /**
- * Empty-birth ordering, carried explicitly rather than left to the XRD default so the
- * committed desired state states its own precondition (bug.5116): a fresh node's schemas
- * must exist before its paid lease does. Legacy parity — the bespoke controller ran the
- * per-digest migration Job before any provider transaction unconditionally.
+ * Empty-birth schema policy, carried explicitly rather than left to the XRD default so the
+ * committed desired state states it as a one-line git diff (bug.5116): a fresh node's schemas
+ * are migrated as a RELEASE step on every reconcile tick, and a failure gates READINESS.
+ *
+ * It was `RequireBeforeTransaction` until task.5135, which severed the migration from the paid
+ * Akash transaction. Writing the NEW value is what moves a workload off the deprecated
+ * lowering, so every rematerialize (flight, promote) migrates one more node onto the decoupled
+ * path — there is no separate cutover to run.
  */
-const MIGRATION_POLICY = "RequireBeforeTransaction" as const;
+/**
+ * The namespace running the actuator that mints every real node's lease. Single value on
+ * purpose: one Console account ⇒ one ledger ⇒ one active writer, so there is exactly one
+ * place a paid transaction can originate (akash-actuator-wallet-cutover).
+ */
+const PRODUCTION_ACTUATOR_NAMESPACE = "cogni-production";
+
+const MIGRATION_POLICY = "RequireBeforeServing" as const;
 
 /**
  * BOOT_SLO_OR_CLOSE, resolved from the one thing that already decides disposability: the
- * environment. `candidate-a` is the transient proof slot — a candidate that never serves its
- * exact SHA has no forensic value worth paying rent for, so its lease is closed. `preview`
- * and `production` hold, because a live environment that stops serving is an incident to
- * inspect, not a lease to silently reclaim.
+ * environment. `onDeadline` fires in exactly ONE situation — `status.serving` never became
+ * true within `bootDeadlineSeconds` OF THE XR'S CREATION. It is not a running-lane health
+ * policy, so "a live environment that stops serving" is not a case it can reach.
+ *
+ * That is why every NON-PRODUCTION lane closes. A lane that never served once has no forensic
+ * value to pay rent for — there is nothing to inspect, because nothing ran. The earlier rule
+ * held `preview` open for that unreachable incident case, and it was harmless only while
+ * preview meant k3s, which costs nothing. task.5132 made preview a PAID Akash lease on the
+ * production sponsor account, and the repo has no close path to fall back on: `story.5039`'s
+ * deactivate half is unbuilt and `bug.5189` is what an orphaned lease costs. A never-serving
+ * preview lease would bill until a human noticed.
+ *
+ * `production` still holds. A production promote that fails to boot is a real incident, the
+ * PREVIOUS lease is still serving it, and the dead one is the evidence.
  *
  * This is deliberately NOT a caller flag: a per-request "is this disposable?" input is exactly
  * the seam through which a production workload would eventually get closed by a bad argument.
+ * It keys on the same `environment === "production"` question as `actuatorNamespace` below —
+ * one predicate, so a new non-production lane cannot arrive holding only half the policy.
  */
 export function bootPolicyForEnvironment(
   environment: DeploymentEnvironment
 ): XComputeWorkloadBootPolicy {
-  return { onDeadline: environment === "candidate-a" ? "Close" : "Hold" };
+  return { onDeadline: environment === "production" ? "Hold" : "Close" };
 }
 
 /**
@@ -131,7 +154,7 @@ const SUBSTRATE_HOSTNAME =
 export interface XComputeWorkloadSpec extends ComputeWorkloadSpec {
   readonly migration: { readonly policy: typeof MIGRATION_POLICY };
   readonly bootPolicy: XComputeWorkloadBootPolicy;
-  readonly leaseEpoch: number;
+  readonly leaseGeneration: number;
   readonly dns?: XComputeWorkloadDns;
   readonly runtime?: XComputeWorkloadRuntime;
 }
@@ -157,12 +180,16 @@ export interface BuildComputeWorkloadManifestInput {
   /** Which reconciliation authority owns this (node, environment). Catalog-resolved. */
   readonly computeApi: NodeComputeApi;
   /**
-   * Explicit lease replacement counter, catalog-resolved (`resolveNodeLeaseEpoch`, absent
-   * cell = 0). Required rather than defaulted here so a new caller cannot silently fall back
-   * to an epoch that differs from the catalog's — the epoch IS the idempotence key's only
-   * varying component, and a divergence mints a SECOND PAID LEASE.
+   * Explicit lease replacement counter, catalog-resolved (`resolveNodeLeaseGeneration`,
+   * absent cell = 0). Required rather than defaulted here so a new caller cannot silently
+   * fall back to a generation that differs from the catalog's — the generation IS the
+   * idempotence key's only varying component, and a divergence mints a SECOND PAID LEASE.
+   *
+   * NAME (task.5122): this was `leaseEpoch`. `epoch` is the attribution/distribution domain's
+   * word (contributor activity windows, claimants, payouts); a compute-lease replacement
+   * counter is a GENERATION. The rename moved no VALUE, so no idempotence key moved.
    */
-  readonly leaseEpoch: number;
+  readonly leaseGeneration: number;
   /**
    * DNS intent for the Crossplane authority only — the legacy controller resolves its own zone
    * from an in-cluster secret, so passing it there would be desired state nothing reads.
@@ -226,12 +253,13 @@ export function buildComputeWorkloadManifest(
     );
   }
 
-  // A nonzero epoch on the legacy authority would be desired state nothing reads — its
-  // idempotence key embeds metadata.generation, not an epoch — so an operator who bumped
-  // it to replace a closed lease would see nothing happen. Refuse rather than ignore.
-  if (input.computeApi !== "crossplane" && input.leaseEpoch !== 0) {
+  // A nonzero replacement generation on the legacy authority would be desired state nothing
+  // reads — its idempotence key embeds the k8s metadata.generation, not this counter — so an
+  // operator who bumped it to replace a closed lease would see nothing happen. Refuse rather
+  // than ignore.
+  if (input.computeApi !== "crossplane" && input.leaseGeneration !== 0) {
     throw new Error(
-      "[compute-workload-manifest] leaseEpoch is carried only by the crossplane authority; the legacy controller keys its lease per-generation and reads no epoch"
+      "[compute-workload-manifest] leaseGeneration is carried only by the crossplane authority; the legacy controller keys its lease per k8s metadata.generation and reads no replacement counter"
     );
   }
 
@@ -291,9 +319,33 @@ export function buildComputeWorkloadManifest(
             migration: { policy: MIGRATION_POLICY },
             bootPolicy: bootPolicyForEnvironment(input.environment),
             // Emitted even at 0, like migration.policy (bug.5116): the committed desired
-            // state states its own idempotence-key epoch rather than inheriting the XRD
+            // state states its own idempotence-key generation rather than inheriting a
             // default, so a catalog bump is a visible one-line git diff on the deploy branch.
-            leaseEpoch: input.leaseEpoch,
+            //
+            // CANONICAL NAME ONLY (task.5122). The deprecated `leaseEpoch` alias is NOT
+            // dual-written: every environment's control plane already serves and prefers
+            // `leaseGeneration` (the XRD/Composition bridge tracks `main` with selfHeal on
+            // preview/production and deploy/candidate-a-control-plane on candidate-a), and
+            // writing only the canonical field is what CONVERGES each deploy ref off the
+            // alias. Dual-writing would pin `leaseEpoch` into every ref forever and make the
+            // alias unremovable.
+            leaseGeneration: input.leaseGeneration,
+            // WHICH writer mints this lease (task.5132). A node app runs on AKASH, so its XR
+            // is pure desired state and the production cluster reconciles every akash node's
+            // non-production lane — the AppSet for it is rendered into appsets/production/.
+            // The actuator lives in `cogni-production` THERE, so a non-prod lane must say so:
+            // the Composition defaults the writer lookup to the XR's own namespace, which in
+            // that cluster is `cogni-candidate-a`/`cogni-preview` and runs no actuator, so the
+            // call would fail closed.
+            //
+            // Production omits it and keeps the default — identical rendering to before.
+            //
+            // The idempotence key is NOT affected: it still derives from the XR's own
+            // namespace, which is what keeps a node's pre-prod lease from colliding with its
+            // production one.
+            ...(input.environment === "production"
+              ? {}
+              : { actuatorNamespace: PRODUCTION_ACTUATOR_NAMESPACE }),
             ...(input.dns ? { dns: input.dns } : {}),
             ...(input.runtime ? { runtime: input.runtime } : {}),
           }

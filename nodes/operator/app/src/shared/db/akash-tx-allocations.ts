@@ -19,11 +19,20 @@
  *   unique index). That window — pre-POST cursor written until the allocated handle is durable —
  *   is exactly when a lost response is unrecoverable, so it is serialized wallet-wide rather
  *   than per-workload.
+ * - SCOPE_IS_THE_ACCOUNT (bug.5187): wallet_scope is `akash-console:<Akash account address>`,
+ *   enforced by akash_tx_allocations_wallet_scope_account_check. It was `akash-console:<env>`
+ *   until migration 0048, which made the index above INERT for the case it exists to catch —
+ *   two writers on ONE account in two environments produced two scope strings and never
+ *   collided. One account is now one slot, and a writer may serve many environments (the
+ *   `environment` column, not the scope, records which one consumed the lease).
  * - RECEIPT_BEFORE_TRANSACTION: allocation_cursor is written before the Console POST; a row
  *   stuck in 'preparing' with a cursor means "a paid lease may exist" and must be resolved by
  *   recovery (cursor scan), never by a fresh create.
- * - KEY_IS_THE_IDEMPOTENCE_BOUNDARY: (wallet_scope, cogni_key) is unique; a replayed create for
- *   a key that already reached 'allocated' returns the same external_name and spends nothing.
+ * - KEY_IS_THE_IDEMPOTENCE_BOUNDARY: (wallet_scope, cogni_key) is unique AND is the key
+ *   `claimOnce` looks a prior receipt up by. wallet_scope is therefore part of receipt
+ *   IDENTITY, not merely a serializer input: changing the derived value without moving the
+ *   rows in the same change hides every existing receipt, and a lookup that finds nothing
+ *   mints a second paid lease beside one that is still billing (bug.5187).
  * - IDENTITY_IS_AUTHORITATIVE_NOT_INFERRED: node_id / environment / composite_uid /
  *   composite_generation are supplied EXPLICITLY by the caller on the wire and are NOT NULL
  *   here, so a spend receipt that cannot say which node consumed the infrastructure cannot
@@ -36,9 +45,13 @@
  *   NOT wallet_scope (which operator wallet serialized and paid), NOT a billing account, NOT
  *   a DAO address, and NOT a user or actor. Those five are distinct and must never substitute
  *   for one another; v0 is operator-sponsored, so only node_id is required.
- * - ONE_WALLET_ONE_WRITER: wallet_scope is the serialization domain, so two processes spending
- *   from the SAME Console wallet MUST share a scope AND this database. The actuator enforces the
- *   converse at construction (see features/compute/akash-tx/akash-tx-wallet.ts).
+ * - ONE_ACCOUNT_ONE_WRITER: wallet_scope is the serialization domain, so two processes spending
+ *   from the SAME Console account MUST share a scope AND this database. Keying the scope on the
+ *   account makes the first half automatic; the second half is why `account -> writer` stays
+ *   injective while `writer -> envs` is deliberately one-to-many (a per-database index cannot
+ *   see another database's ledger). The actuator enforces the converse at construction (see
+ *   features/compute/akash-tx/akash-tx-wallet.ts) and the static half is asserted in
+ *   tests/ci-invariants/crossplane-dormant-substrate.spec.ts.
  * Side-effects: none
  * Links: adapters/server/compute/akash-tx-allocation-ledger.adapter.ts,
  *   features/compute/akash-tx/akash-tx-wallet.ts, docs/spec/databases.md, task.5095,
@@ -62,6 +75,18 @@ import {
  * Lifecycle of one wallet allocation attempt (source of truth for the DB CHECK).
  * `preparing` holds the wallet-wide slot; every other state has released it.
  */
+/**
+ * The shape every `wallet_scope` must have: `akash-console:` plus a bech32 Akash account address
+ * (`akash1` + 38 data characters). ONE literal, in POSIX form so the database CHECK below and
+ * every TypeScript consumer (the actuator's scope predicate, the boot gate's count query) are
+ * the same predicate rather than two that must be kept in step by hand.
+ *
+ * It is also the discriminator between the account-keyed form and the legacy
+ * `akash-console:<environment>` form bug.5187 replaced: no deploy environment is named `akash1…`.
+ */
+export const ACCOUNT_WALLET_SCOPE_PATTERN =
+  "^akash-console:akash1[0-9a-z]{38}$";
+
 export const AKASH_TX_ALLOCATION_STATES = [
   "preparing",
   "allocated",
@@ -139,6 +164,23 @@ export const akashTxAllocations = pgTable(
     check(
       "akash_tx_allocations_state_check",
       sql`${table.state} IN ('preparing', 'allocated', 'released', 'failed')`
+    ),
+    /**
+     * SCOPE_IS_PER_ACCOUNT_NEVER_PER_ENVIRONMENT (bug.5187). Every scope names a Console
+     * ACCOUNT — `akash-console:` plus a bech32 Akash address — and no deploy environment is
+     * named `akash1…`, so the legacy `akash-console:<environment>` form is UNWRITABLE once this
+     * constraint exists. That is what makes the cutover safe against a writer still running the
+     * old code: its claiming INSERT is rejected by the database and it spends nothing, instead
+     * of silently opening a second serialization domain on the same account. Mirrors
+     * `isAccountWalletScope` in features/compute/akash-tx/akash-tx-wallet.ts.
+     */
+    check(
+      "akash_tx_allocations_wallet_scope_account_check",
+      // The literal is inline because drizzle-kit serializes this expression into the snapshot:
+      // interpolating the constant changes the serialized text and makes `db:check:generate-clean`
+      // see permanent drift. `ACCOUNT_WALLET_SCOPE_PATTERN` is tied to it by assertion instead —
+      // see akash-tx-wallet.test.ts, which reads this file and the committed 0048 migration.
+      sql`${table.walletScope} ~ '^akash-console:akash1[0-9a-z]{38}$'`
     ),
   ]
 );

@@ -12,6 +12,14 @@ verified: 2026-06-09
 tags: []
 ---
 
+> [!WARNING]
+> **Stale as of 2026-09-17 — it predates Akash placement**
+> The fleet moved node apps to **Akash** on 2026-09-11; this document was last
+> verified 2026-06-09 and predates that. Treat its deployment-topology claims as
+> historical. The current contract is
+> [Node CI/CD Contract](node-ci-cd-contract.md) — see `## Lane vs control env`
+> for how `env` splits into lane and control env.
+
 # CI/CD Pipeline Flow
 
 ## Overview
@@ -75,21 +83,20 @@ The branch model, deploy-state model, and axioms below are the live contract —
 
     **Uniform substrate across the lifecycle — selection convergence (in-flight).** The lane runs the same per-node logic everywhere, but the _selection_ of which nodes get it currently differs per workflow (candidate-flight's node-formation/node-ref gates vs promote's `has_node_targets`). That divergence let `candidate-a` and `preview` reconcile substrate differently — so a node "validated" on candidate-a did not match preview/prod behavior. The target is **identical substrate behavior at every lifecycle stage** (spawn → candidate-a flight → merge→preview → promote→prod): one shared per-node substrate **runner** (`materialize → reconcile → provision` for a single node) called by every lane with the **same** rule — _the deployable nodes this flight touches get their substrate_ — so "node-formation" stops being a special case. The runner extraction + selection convergence is the active cleanup; until it lands, treat any per-env substrate-selection difference as a bug, not a contract.
 
-23. **`AKASH_IS_NODE_APP_TARGET`** (story.5016). Akash is a standard node-app deployment target selected per environment by the catalog's `deployment_provider`. Node apps run as **app-only decentralized-compute workloads**: the existing flight/promotion workflow resolves the immutable node artifact, materializes provider-neutral `ComputeWorkload` desired state into the node's deploy branch, and Argo delivers it to the operator controller. The controller alone calls `ComputeResourcePort` / `AkashComputeAdapter`; CI and public REST routes never write provider state. Absent placement remains k3s for backwards compatibility. The node wizard's future default is `deployment_provider: akash` (born-on-Akash) after the full environment ladder is proven. See [`cicd-platform-boundary.md`](./cicd-platform-boundary.md) for the port/adapter contract.
+23. **`AKASH_IS_NODE_APP_TARGET`** (story.5016). Akash is a standard node-app deployment target selected per environment by the catalog's `deployment_provider`. Node apps run as **app-only decentralized-compute workloads**: the existing flight/promotion workflow resolves the immutable node artifact, materializes provider-neutral desired state into the node's deploy branch, and Argo delivers it to **Crossplane**, which reconciles the `XComputeWorkload` composite through the private **`akash-tx-actuator`** — the sole writer that calls `ComputeResourcePort` / `AkashComputeAdapter` (the legacy leader-elected in-cluster `compute-workload-controller` was RETIRED, story.5016; deleted from the tree). CI and public REST routes never write provider state. Absent placement is a HARD FAILURE, never a silent fallback (`NO_SILENT_DEFAULT`, story.5040). A node row missing `deployment_provider`, `compute_api`, or `lease_generation` for an environment it declares must halt the render with the missing cell named — it must NOT fall through to the deprecated k3s app lane. The old "absent placement remains k3s for backwards compatibility" clause is WITHDRAWN: every fleet row now declares `akash`, so there is nothing left to be compatible with, and the fallback silently produced workloads that could never boot (bug.5177, bug.5182, bug.5179, bug.5146). The node wizard's future default is `deployment_provider: akash` (born-on-Akash) after the full environment ladder is proven. See [`cicd-platform-boundary.md`](./cicd-platform-boundary.md) for the port/adapter contract.
 24. **`CHERRY_IS_STATE_SUBSTRATE`**. The Cherry VM/k3s cluster is the **state substrate**: postgres, doltgres, redis, temporal, LiteLLM, and the shared scheduler-worker — plus the legacy node-app lane until migration completes. Akash workloads carry no infra: databases, queues, or model gateways as workload sidecars are the rejected anti-pattern (`APP_ONLY_NO_INFRA`, `compute-workload-reconciler.ts`). State stays on Cherry; apps dial it over allowlisted egress with node-scoped, budget-capped credentials only (`SCOPED_CREDS_ONLY`).
 25. **`SIDECAR_IS_SDL_SERVICE`**. An app-adjacent sidecar image (a node publishing a second deployable from the same `source_repo/sourceSha`) ships as an **additional service in the same Akash lease** — the SDL renderer meshes non-global exposes by service name (`INTERNAL_EXPOSE_IS_MESH`), preserving no-public-expose isolation. Sidecars are never injected into k8s pods via overlay/kustomize machinery (that lane was closed with PR #1884; reference contract: `cogni-dao/poly#10`).
 26. **`OPERATOR_OWNS_WORKLOAD_HEALTH`**. Off-k3s there are no provider-side Argo
     probes or self-heal. Git/Argo therefore applies provider-neutral
-    `compute.cogni.io/ComputeWorkload` desired state and a **dedicated, leader-elected operator
-    controller process** is the narrow off-cluster-state reconciler: observe/create/update/delete,
+    `compute.cogni.io/ComputeWorkload` desired state and **Crossplane** — reconciling the
+    `XComputeWorkload` composite through the private **`akash-tx-actuator`** (the legacy
+    leader-elected in-cluster `compute-workload-controller` was RETIRED, story.5016; deleted
+    from the tree) — is the narrow off-cluster-state reconciler: observe/create/update/delete,
     owner-bound finalization, missing/closed-resource recovery, and exact `/version.buildSha`
     verification. `Ready=True` is valid only for `status.observedGeneration ==
 metadata.generation`; uncertain mutations fail closed rather than blindly duplicating a
     lease. CR status contains observed state/provenance, never desired state or resolved secret
-    values. Structured logs and Kubernetes Events make current outcomes visible; the controller
-    also exposes `compute_workload_*` on `:9090/metrics`, but the Compose Alloy config does not
-    yet scrape that in-cluster endpoint, so remote metrics ingestion is explicitly not part of
-    this checkpoint. Argo's custom health rule is a **key inside Argo's own `argocd-cm`**, so it is
+    values. Structured logs and Kubernetes Events make current outcomes visible. Argo's custom health rule is a **key inside Argo's own `argocd-cm`**, so it is
     delivered by an additive `kubectl patch cm argocd-cm --type merge` from the
     versioned patch body `infra/k8s/argocd/argocd-cm-runtime-patch.yaml`, never by an
     Argo Application that owns the ConfigMap. `argocd-cm` also holds the GitHub
@@ -111,6 +118,36 @@ The legacy Akash exceptions in Axioms 18, 21, and 23 are superseded by Axiom 26:
 - The managed Console account is the centralized v0 transaction writer across environments. Each environment controller still has exactly one local credential delivery path (operator OpenBao → ESO → projected file), and its wallet-wide ledger/high-water cursor prevents ambiguous duplicate CREATEs. Distinct funded accounts per environment are later hardening, not an activation prerequisite; Console/manual writes still invalidate cursor-based deployment proof.
 - Every flight/promotion has one narrow substrate precondition, even when its current target set is empty: it renders the **complete** env allowlist from catalog `compute_egress_cidrs` and invokes the existing VM hardener through the environment's existing SSH identity. Running on empty/removal transitions is what closes stale Akash access. It accepts no caller CIDRs, converges additions, removals, and live rule drift idempotently, and must succeed before a `ComputeWorkload` or k3s app update is written. The sole hardener holds a host-local writer lock inherited by every invocation path, while staged files are run-unique, so workflow queue replacement or concurrent infra reconciliation cannot race firewall state. This reuses the infra/provision renderer and hardener without running broad `deploy-infra` or introducing a second firewall writer.
 - Ad-hoc cluster writes (`kubectl apply/patch/edit`, direct Argo mutation, or SSH config edits) invalidate deployment proof. Recovery is committed to Git and reconciled through existing workflows/Argo. `provision-env` remains the sole auditable bootstrap authority, not a normal reconciliation path.
+
+27. **`LEASE_GENERATION_IS_THE_REPLACEMENT_COUNTER`** (story.5016 / task.5122). Every paid
+    Akash mutation on the Crossplane authority is serialized under the idempotence key
+    `xcw:<namespace>:<node-id>:<lease-generation>`. A key whose outcome is settled or
+    unresolvable is refused forever — that refusal IS the double-pay guard, and it is never
+    bypassed by hand (ledger edits and `kubectl patch` are reverted/forbidden). The ONLY
+    replacement path for a terminally closed, refused, or boot-deadline-expired lease is
+    incrementing the per-`(node, env)` catalog cell `lease_generation` (resolved by
+    `resolveNodeLeaseGeneration`, emitted by the materializer), which mints a fresh key and a
+    fresh XR generation with a fresh boot budget. ONE NAME END TO END: catalog
+    `lease_generation`, typed `leaseGeneration`, XRD `spec.leaseGeneration`.
+
+    **`EPOCH_IS_RESERVED_FOR_ATTRIBUTION`** (the naming rationale, task.5122). This counter was
+    called `lease_epoch` until task.5122. **"Epoch" is reserved for the attribution/distribution
+    domain** — contributor activity windows, claimants, and payouts (`/api/v1/attribution/epochs`,
+    `activity_env`) — and a compute-lease replacement counter is a **generation**. The two are
+    unrelated concepts that advance for unrelated reasons: an attribution epoch rolls on a global
+    schedule, while a lease generation advances ONLY at a replacement event. Coupling them would
+    force a paid lease churn per epoch rollover (design-rejected 2026-09-15); sharing a word for
+    them cost a human a wrong read of the fleet. Do not reintroduce `epoch` anywhere in the
+    compute lane. The rename moved no VALUE, so no idempotence key moved.
+
+    **Alias removal gate.** The XRD still SERVES a deprecated `spec.leaseEpoch` and the
+    Composition still reads it as a last-resort fallback, because XComputeWorkloads committed on
+    `deploy/<env>-<node>` refs before task.5122 carry it. Nothing WRITES it any more — the
+    materializer emits the canonical field exclusively, so each flight/promote converts one more
+    ref. Delete the XRD property and the Composition fallback (task.5121) only once no
+    `refs/remotes/origin/deploy/*` ref contains `leaseEpoch`. Dropping it earlier would prune the
+    field out of a live XR whose counter is nonzero and silently resolve its key back to a
+    SETTLED one.
 
 ## Branch And Deploy-State Model
 

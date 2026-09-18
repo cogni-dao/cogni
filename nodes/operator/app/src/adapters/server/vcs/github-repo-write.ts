@@ -68,9 +68,12 @@ import type {
 } from "@/ports";
 import { resolveCanonicalPathClosure } from "@/shared/node-app-scaffold/canonical-path-closure";
 import {
+  appsetPath,
+  appsetsKustomizationPath,
   buildEnvDeltaPlan,
   buildPlacementPlan,
   CANONICAL_DOMAIN_ROOT,
+  type EnvAddShape,
   type EnvPlanCurrent,
   EnvPlanError,
   type EnvPlanOp,
@@ -85,6 +88,8 @@ import {
   type NodeFormationEnv,
   nextFreeNodePort,
   type PlacementProvider,
+  parseCatalogPlacement,
+  planEnvAddShape,
   renderCatalog,
   renderDistributionActivationSpec,
   renderNodeAppset,
@@ -103,6 +108,7 @@ import {
   parseNodeLocalPaths,
 } from "@/shared/node-app-scaffold/node-local-paths";
 import {
+  controlEnvFor,
   NODE_DEPLOYMENT_PROVIDERS,
   nodeAppBaseUrl,
 } from "@/shared/node-registry/placement";
@@ -156,6 +162,19 @@ export interface OpenNodeEnvPrInput {
   readonly env: NodeFormationEnv;
   /** true = add the env to the node's reach; false = remove it. Atomic per-env (candidate-a included). */
   readonly present: boolean;
+  /**
+   * Explicit akash lease replacement counter for an ADDED env. Plumbed for the lease-replacement
+   * flow; today's callers pass undefined, which the planner writes as an explicit `0` cell.
+   */
+  readonly leaseGeneration?: number | undefined;
+}
+
+/** What an ADD derived from the catalog row (ADD_DERIVES_PLACEMENT, story.5039). */
+export interface OpenNodeEnvPrDerived {
+  readonly placement: PlacementProvider;
+  readonly computeApi: "crossplane" | null;
+  readonly controlEnv: NodeFormationEnv;
+  readonly leaseGeneration: number;
 }
 
 /** Result of {@link GitHubRepoWriter.openNodeEnvPr}: a PR (opened or reused), or no-op when idempotent. */
@@ -165,8 +184,13 @@ export type OpenNodeEnvPrResult =
       readonly action: "add" | "remove";
       readonly prNumber: number;
       readonly prUrl: string;
+      /** Present on `add` only — what the verb derived (ADD_DERIVES_PLACEMENT). */
+      readonly derived?: OpenNodeEnvPrDerived;
     }
-  | { readonly status: "no_changes" };
+  | {
+      readonly status: "no_changes";
+      readonly derived?: OpenNodeEnvPrDerived;
+    };
 
 /** Input to {@link GitHubRepoWriter.openNodePlacementPr}: place ONE env's workload on k3s or akash. */
 export interface OpenNodePlacementPrInput {
@@ -341,10 +365,6 @@ const FOOTPRINT = {
   caddyfile: "infra/compose/edge/configs/Caddyfile.tmpl",
   ciYaml: ".github/workflows/ci.yaml",
 } as const;
-
-/** Per-env appsets kustomization path — the PER-ENV `appsets/<env>/kustomization.yaml` the slug folds into. */
-const appsetsKustomizationPath = (env: string): string =>
-  `infra/k8s/argocd/appsets/${env}/kustomization.yaml`;
 
 /**
  * Shared per-`(env, node)` ApplicationSet template — the SAME file `render-node-appset.sh` interpolates,
@@ -2655,15 +2675,19 @@ export class GitHubRepoWriter implements DeployPlanePort {
    *
    * - ADD (`present:true`): fold `env` into `infra/catalog/<slug>.yaml`'s `envs:` line, render the per-env
    *   overlay + AppSet, and fold the slug into that env's appsets kustomization.
-   * - REMOVE (`present:false`): drop `env` from the catalog `envs:` line, DELETE the overlay + AppSet
-   *   (sha:null), regenerate that env's kustomization without the slug. Removing the final env or the
-   *   current activity authority fails with 422; decommission/cutover are separate lifecycle operations.
+   * - REMOVE (`present:false`): drop `env` from the catalog `envs:` line AND drop that env's
+   *   placement cells (REMOVE_COMPLETES_THE_ROW, story.5039 PR-B), DELETE the overlay + the AppSet at
+   *   its CONTROL-env path (sha:null), regenerate that control env's kustomization without the pair,
+   *   and for an akash lane restore the env's scheduler-worker route to the in-cluster default.
+   *   Removing the final env or the current activity authority fails with 422; decommission/cutover
+   *   are separate lifecycle operations. The paid-lease CLOSE itself rides the Argo prune →
+   *   Crossplane REMOVE → actuator delete chain, never this adapter.
    *
    * Idempotent: the already-holding state opens no PR (`no_changes`). The DNS reverse/forward reconcile is
    * a flag-gated v0 seam (DNS_REVERSE_RECONCILE, default off) — see the `dnsSeam` call below.
    */
   async openNodeEnvPr(input: OpenNodeEnvPrInput): Promise<OpenNodeEnvPrResult> {
-    const { owner, repo, slug, env, present } = input;
+    const { owner, repo, slug, env, present, leaseGeneration } = input;
     const octokit = await this.getOctokit(owner, repo);
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
@@ -2686,6 +2710,32 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
+    // ADD_DERIVES_PLACEMENT (story.5039) — derive FIRST: the shape decides which control-env
+    // kustomization to fetch (bug.5204) and whether the node's own repo-spec must already carry a
+    // `deployment:` block (an akash lane serves env ONLY through declared secret_refs).
+    let shape: EnvAddShape | undefined;
+    if (present) {
+      try {
+        shape = planEnvAddShape(catalog, env);
+      } catch (err) {
+        if (err instanceof EnvPlanError) {
+          throw deployPlaneError(err.code, err.message, err.status);
+        }
+        throw err;
+      }
+      if (shape.placement === "akash") {
+        await this.assertAkashDeploymentBlock(catalog, slug);
+      }
+    }
+    const derived: OpenNodeEnvPrDerived | undefined = shape
+      ? {
+          placement: shape.placement,
+          computeApi: shape.computeApi,
+          controlEnv: shape.controlEnv,
+          leaseGeneration: leaseGeneration ?? 0,
+        }
+      : undefined;
+
     const current = await this.collectEnvPlanCurrent(
       octokit,
       owner,
@@ -2693,12 +2743,19 @@ export class GitHubRepoWriter implements DeployPlanePort {
       slug,
       env,
       present,
-      catalog
+      catalog,
+      shape
     );
 
     let plan: ReturnType<typeof buildEnvDeltaPlan>;
     try {
-      plan = buildEnvDeltaPlan({ slug, env, present, current });
+      plan = buildEnvDeltaPlan({
+        slug,
+        env,
+        present,
+        current,
+        leaseGeneration,
+      });
     } catch (err) {
       if (err instanceof EnvPlanError) {
         throw deployPlaneError(err.code, err.message, err.status);
@@ -2707,7 +2764,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
 
     if (plan.kind === "no_changes") {
-      return { status: "no_changes" };
+      return derived
+        ? { status: "no_changes", derived }
+        : { status: "no_changes" };
     }
 
     // DNS seam — flag-gated v0 (DNS_REVERSE_RECONCILE, default off). ADD ⇒ forward upsert; REMOVE /
@@ -2740,6 +2799,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       action: plan.kind,
       prNumber: result.prNumber,
       prUrl: result.prUrl,
+      ...(derived ? { derived } : {}),
     };
   }
 
@@ -2952,15 +3012,18 @@ export class GitHubRepoWriter implements DeployPlanePort {
     slug: string,
     env: NodeFormationEnv,
     present: boolean,
-    catalog: string
+    catalog: string,
+    shape?: EnvAddShape
   ): Promise<EnvPlanCurrent> {
     const appsetsKustomizationByEnv: Record<string, string> = {};
     const templateOverlayByEnv: Record<string, string> = {};
     const templateExternalSecretByEnv: Record<string, string> = {};
 
     if (present) {
-      // ADD touches only the one env: its template overlay + external-secret, appset template,
-      // and appsets kustomization.
+      // ADD touches the one WORKLOAD env's template overlay + external-secret (+ its scheduler
+      // routing patch for an akash lane), and the CONTROL env's appsets kustomization (bug.5204 —
+      // for an akash non-production lane that is appsets/production/, not the workload env's dir).
+      const controlEnv = shape?.controlEnv ?? env;
       templateOverlayByEnv[env] = await this.readFileOnMain(
         octokit,
         owner,
@@ -2973,11 +3036,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
         repo,
         `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/external-secret.yaml`
       );
-      appsetsKustomizationByEnv[env] = await this.readFileOnMain(
+      appsetsKustomizationByEnv[controlEnv] = await this.readFileOnMain(
         octokit,
         owner,
         repo,
-        appsetsKustomizationPath(env)
+        appsetsKustomizationPath(controlEnv)
       );
       const appsetTemplate = await this.readFileOnMain(
         octokit,
@@ -2985,6 +3048,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
         repo,
         APPSET_TEMPLATE_PATH
       );
+      const schedulerEndpointPatchByEnv: Record<string, string> = {};
+      if (shape?.placement === "akash") {
+        schedulerEndpointPatchByEnv[env] = await this.readFileOnMain(
+          octokit,
+          owner,
+          repo,
+          schedulerEndpointPatchPath(env)
+        );
+      }
       const { port, nodePort } = parseCatalogPorts(catalog, slug);
       return {
         catalog,
@@ -2994,22 +3066,37 @@ export class GitHubRepoWriter implements DeployPlanePort {
         appsetsKustomizationByEnv,
         port,
         nodePort,
+        schedulerEndpointPatchByEnv,
       };
     }
 
-    // REMOVE (atomic per-env): the planner regenerates the removed env's kustomization, so fetch the
-    // appsets kustomization for that env. (Caddy/scheduler are per-node env-independent state and are
-    // NOT touched by an env remove — a node with `envs:[]` keeps them.)
-    appsetsKustomizationByEnv[env] = await this.readFileOnMain(
+    // REMOVE (atomic per-env): the planner rewrites the CONTROL env's kustomization — derived from
+    // the PRE-mutation catalog, whose placement cells still exist at plan time (bug.5204 parity
+    // with the add; `production` for an akash non-production lane). An akash remove also restores
+    // the env's scheduler-worker route to the in-cluster default, so fetch that env's patch too.
+    // (Caddy is per-node env-independent state and NOT touched by an env remove.)
+    const removeProvider = parseCatalogPlacement(catalog)[env] ?? "k3s";
+    const removeControlEnv = controlEnvFor(env, removeProvider);
+    appsetsKustomizationByEnv[removeControlEnv] = await this.readFileOnMain(
       octokit,
       owner,
       repo,
-      appsetsKustomizationPath(env)
+      appsetsKustomizationPath(removeControlEnv)
     );
+    const removeSchedulerPatchByEnv: Record<string, string> = {};
+    if (removeProvider === "akash") {
+      removeSchedulerPatchByEnv[env] = await this.readFileOnMain(
+        octokit,
+        owner,
+        repo,
+        schedulerEndpointPatchPath(env)
+      );
+    }
     return {
       catalog,
       templateOverlayByEnv,
       appsetsKustomizationByEnv,
+      schedulerEndpointPatchByEnv: removeSchedulerPatchByEnv,
     };
   }
 
@@ -4173,10 +4260,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
             ownerWallet: input.ownerWallet,
           }
         : { ownerWallet: input.ownerWallet };
-    await addBlob(
-      `infra/catalog/${slug}.yaml`,
-      renderCatalog(slug, port, nodePort, catalogInput)
-    );
+    const catalogContent = renderCatalog(slug, port, nodePort, catalogInput);
+    await addBlob(`infra/catalog/${slug}.yaml`, catalogContent);
+    // The birth catalog's own placement decides each env's CONTROL env below (bug.5204) — a wizard
+    // birth is BORN_ON_AKASH in every birth env, so its AppSets all belong under appsets/production/.
+    const birthPlacement = parseCatalogPlacement(catalogContent);
 
     // overlays per birth env (candidate-a only today). Each overlay dir clones BOTH the node-template
     // kustomization.yaml AND its external-secret.yaml (the ESO producer of
@@ -4216,21 +4304,31 @@ export class GitHubRepoWriter implements DeployPlanePort {
       repo,
       APPSET_TEMPLATE_PATH
     );
+    // Grouped by CONTROL env: several birth envs may resolve to ONE control dir (akash ⇒
+    // production reconciles every lane), so each control kustomization is fetched once and every
+    // (env, slug) pair folds into the same evolving content — two blobs for one path would race.
+    const kustomizationByControlEnv = new Map<string, string>();
     for (const env of NODE_FORMATION_ENVS) {
+      const controlEnv = controlEnvFor(env, birthPlacement[env] ?? "k3s");
       await addBlob(
-        `infra/k8s/argocd/appsets/${env}/${env}-${slug}-applicationset.yaml`,
+        appsetPath(controlEnv, env, slug),
         renderNodeAppset(appsetTemplate, slug, env)
       );
-      const argocdKustomization = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        appsetsKustomizationPath(env)
-      );
-      await addBlob(
-        appsetsKustomizationPath(env),
+      const argocdKustomization =
+        kustomizationByControlEnv.get(controlEnv) ??
+        (await this.readFileOnMain(
+          octokit,
+          owner,
+          repo,
+          appsetsKustomizationPath(controlEnv)
+        ));
+      kustomizationByControlEnv.set(
+        controlEnv,
         insertAppsetKustomization(argocdKustomization, slug, env)
       );
+    }
+    for (const [controlEnv, content] of kustomizationByControlEnv) {
+      await addBlob(appsetsKustomizationPath(controlEnv), content);
     }
 
     // Caddyfile / ci.yaml / lockfile — single-file splices over main.

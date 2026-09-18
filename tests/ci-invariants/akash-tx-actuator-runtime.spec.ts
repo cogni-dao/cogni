@@ -32,10 +32,14 @@
  * @public
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
+import {
+  CROSSPLANE_ACTUATOR_WALLET_ENVS,
+  CROSSPLANE_CONTROL_PLANE_ENVS,
+} from "@/shared/node-registry/crossplane-control-plane";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const read = (relative: string): string =>
@@ -63,6 +67,25 @@ const ACTUATOR_OWNED_KEYS = [
 
 const BASE = "infra/k8s/base/akash-tx-actuator";
 const OVERLAY = "infra/k8s/overlays/candidate-a/operator";
+/**
+ * The FUNDED/writer environments — exactly those whose overlay must ship the actuator base,
+ * transformer, and the two actuator ExternalSecrets. Derived from the single source of truth
+ * (`CROSSPLANE_ACTUATOR_WALLET_ENVS`), never a duplicate literal, so it can never drift: preview
+ * is a dormant/unfunded control plane and must NOT ship the actuator (story.5016).
+ */
+const ACTUATOR_ENVIRONMENTS = CROSSPLANE_ACTUATOR_WALLET_ENVS;
+/**
+ * The control-plane environments that are INSTALLED but pin NO wallet — the dormant/unfunded set
+ * (CONTROL_PLANE minus WALLET, i.e. preview). Locking these to have NO actuator overlay artifacts
+ * mirrors the account-injective guard at the overlay layer: an unfunded env that shipped an
+ * actuator would be a second active writer on a shared wallet.
+ */
+const DORMANT_CONTROL_PLANE_ENVIRONMENTS = CROSSPLANE_CONTROL_PLANE_ENVS.filter(
+  (environment) =>
+    !(CROSSPLANE_ACTUATOR_WALLET_ENVS as readonly string[]).includes(
+      environment
+    )
+);
 
 interface K8sObject {
   readonly kind: string;
@@ -106,6 +129,98 @@ function container(): Record<string, unknown> {
 }
 
 describe("akash-tx-actuator runtime", () => {
+  it("is the sole compute writer in every funded environment", () => {
+    for (const environment of ACTUATOR_ENVIRONMENTS) {
+      const root = `infra/k8s/overlays/${environment}/operator`;
+      const environmentOverlay = parse<{
+        readonly resources: readonly string[];
+        readonly transformers?: readonly string[];
+      }>(`${root}/kustomization.yaml`);
+
+      expect(environmentOverlay.resources, environment).toContain(
+        `../../../base/${SERVICE_NAME}`
+      );
+      expect(environmentOverlay.resources, environment).not.toContain(
+        "../../../base/compute-workload-controller"
+      );
+      expect(environmentOverlay.transformers, environment).toContain(
+        `../../../base/${SERVICE_NAME}-service-name`
+      );
+
+      const actuatorExternal = parse<{
+        spec: { dataFrom: { extract: { key: string } }[] };
+      }>(`${root}/akash-tx-actuator-external-secret.yaml`);
+      expect(actuatorExternal.spec.dataFrom[0]?.extract.key, environment).toBe(
+        `${environment}/${OPENBAO_SERVICE}`
+      );
+
+      const authExternal = parse<{
+        spec: {
+          data: { remoteRef: { key: string; property: string } }[];
+        };
+      }>(`${root}/akash-tx-actuator-auth-external-secret.yaml`);
+      expect(authExternal.spec.data, environment).toEqual([
+        {
+          secretKey: AUTH_SECRET_KEY,
+          remoteRef: {
+            key: `${environment}/${OPENBAO_SERVICE}`,
+            property: "AKASH_TX_ACTUATOR_TOKEN",
+          },
+        },
+      ]);
+    }
+  });
+
+  it("ships NO actuator into a dormant/unfunded control-plane environment", () => {
+    // The mirror of the funded assertion above: an installed-but-unfunded control plane (preview)
+    // must NOT carry a second writer against a wallet another env already writes. If this loop
+    // ever runs empty because every control-plane env became funded, the assertion below makes
+    // that explicit rather than silently vacuous.
+    expect(
+      DORMANT_CONTROL_PLANE_ENVIRONMENTS.length,
+      "expected at least one dormant/unfunded control-plane env (preview)"
+    ).toBeGreaterThan(0);
+
+    for (const environment of DORMANT_CONTROL_PLANE_ENVIRONMENTS) {
+      const root = `infra/k8s/overlays/${environment}/operator`;
+      const environmentOverlay = parse<{
+        readonly resources?: readonly string[];
+        readonly transformers?: readonly string[];
+      }>(`${root}/kustomization.yaml`);
+
+      expect(environmentOverlay.resources ?? [], environment).not.toContain(
+        `../../../base/${SERVICE_NAME}`
+      );
+      expect(environmentOverlay.transformers ?? [], environment).not.toContain(
+        `../../../base/${SERVICE_NAME}-service-name`
+      );
+      expect(environmentOverlay.resources ?? [], environment).not.toContain(
+        "./akash-tx-actuator-external-secret.yaml"
+      );
+      expect(environmentOverlay.resources ?? [], environment).not.toContain(
+        "./akash-tx-actuator-auth-external-secret.yaml"
+      );
+
+      // The actuator ExternalSecret manifests must not exist on disk in a dormant overlay.
+      expect(
+        existsSync(
+          path.join(REPO_ROOT, root, "akash-tx-actuator-external-secret.yaml")
+        ),
+        `${environment} must not carry an actuator ExternalSecret`
+      ).toBe(false);
+      expect(
+        existsSync(
+          path.join(
+            REPO_ROOT,
+            root,
+            "akash-tx-actuator-auth-external-secret.yaml"
+          )
+        ),
+        `${environment} must not carry an actuator auth ExternalSecret`
+      ).toBe(false);
+    }
+  });
+
   it("serves at the exact address the Composition dials", () => {
     expect(service.metadata.name).toBe(SERVICE_NAME);
     expect(service.spec.type).toBe("ClusterIP");

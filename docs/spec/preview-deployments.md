@@ -14,6 +14,14 @@ verified:
 tags: [infra, preview, container-runtime, akash-forward, dx]
 ---
 
+> [!WARNING]
+> **Stale as of 2026-09-17 — draft, never verified**
+> The fleet moved node apps to **Akash** on 2026-09-11; this document was last
+> verified never and predates that. Treat its deployment-topology claims as
+> historical. The current contract is
+> [Node CI/CD Contract](node-ci-cd-contract.md) — see `## Lane vs control env`
+> for how `env` splits into lane and control env.
+
 # Preview Deployments — Imperative Preview Controller
 
 ## Context

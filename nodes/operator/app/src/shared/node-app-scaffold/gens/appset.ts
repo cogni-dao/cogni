@@ -12,15 +12,25 @@
  *   env's AppSets ever fan onto a cluster (story.5020).
  * Scope: `renderNodeAppset` substitutes the shared template (the SAME file the shell renderer feeds, so
  *   output is byte-exact and the `--check` drift gate stays green); `insertAppsetKustomization` rebuilds
- *   the WHOLE `appsets/<env>/kustomization.yaml` for ONE env with the new slug folded in (node-sorted,
- *   mirroring the shell's per-env `render_kustomization`). The old all-envs single kustomization is GONE —
- *   each env has its own self-contained kustomization generated wholesale.
- * Invariants: BYTE_EXACT_WITH_RENDERER — token substitution + per-env whole-file ordering match
- *   `render-node-appset.sh`. IDEMPOTENT — a kustomization already listing the slug is returned unchanged.
+ *   the WHOLE control-env `kustomization.yaml` with the new `(workloadEnv, slug)` pair folded in,
+ *   mirroring the shell's `render_kustomization` over `pairs_for_control_env`. A CONTROL env's dir may
+ *   legitimately hold FOREIGN workload envs' AppSets (bug.5204/task.5132: an akash node's non-production
+ *   lane is reconciled by the production cluster), so the kustomization is modelled as a set of
+ *   `(workloadEnv, node)` PAIRS — a single-env filename filter would silently DROP those foreign lines
+ *   on rewrite. The old all-envs single kustomization is GONE — each control env's kustomization is
+ *   self-contained and generated wholesale.
+ * Invariants: BYTE_EXACT_WITH_RENDERER — token substitution + env-major (candidate-a < preview <
+ *   production) then node-sorted whole-file ordering match `render-node-appset.sh`'s
+ *   `pairs_for_control_env`. IDEMPOTENT — a kustomization already listing the pair is returned
+ *   unchanged. FAIL_LOUD_ON_UNPARSEABLE — an unrecognisable resource line throws; a silent skip is
+ *   exactly the foreign-line drop mechanism this rework removes.
  * Side-effects: none — pure string transforms, no IO, no env.
- * Links: scripts/ci/render-node-appset.sh, scripts/ci/node-applicationset.yaml.tmpl, bug.0378, task.5092, story.5020
+ * Links: scripts/ci/render-node-appset.sh, scripts/ci/node-applicationset.yaml.tmpl, bug.0378,
+ *   task.5092, story.5020, bug.5204, story.5039
  * @public
  */
+
+import { NODE_DEPLOY_ENVS, type NodeFormationEnv } from "./envs";
 
 /**
  * The literal header of the GENERATED `infra/k8s/argocd/appsets/<env>/kustomization.yaml`, byte-exact to the
@@ -52,93 +62,120 @@ export function renderNodeAppset(
   return template.replaceAll("__ENV__", env).replaceAll("__NODE__", slug);
 }
 
+/** One resource line's identity: WHICH env the workload is + WHICH node. */
+interface AppsetPair {
+  readonly workloadEnv: NodeFormationEnv;
+  readonly node: string;
+}
+
+const pairKey = (p: AppsetPair): string => `${p.workloadEnv}/${p.node}`;
+
 /**
- * Parse the resources list of ONE env's `appsets/<env>/kustomization.yaml` into its node-set. Each
- * resource line is `<env>-<node>-applicationset.yaml`; the full `<env>-` prefix is kept on disk (only the
- * file is nested under `<env>/`), so it is stripped here to recover the node slug.
+ * Parse the resources list of a control-env kustomization into its `(workloadEnv, node)` pair-set.
+ * Each resource line is `<env>-<node>-applicationset.yaml`; the workload-env prefix is recovered by
+ * matching the known env vocabulary (no env is a prefix of another). THROWS on a non-empty line it
+ * cannot parse: a control dir may hold foreign workload envs' AppSets (bug.5204), and silently
+ * skipping an unrecognised line is precisely how a whole-file rewrite drops them.
  */
-function existingNodes(
-  resourceLines: readonly string[],
-  env: string
-): Set<string> {
-  const nodes = new Set<string>();
+function existingPairs(resourceLines: readonly string[]): AppsetPair[] {
+  const pairs: AppsetPair[] = [];
   for (const line of resourceLines) {
+    if (line.trim() === "") continue;
     const file = line.match(/^ {2}- (.+)-applicationset\.yaml$/)?.[1];
-    if (file === undefined) continue;
-    if (file.startsWith(`${env}-`)) {
-      nodes.add(file.slice(env.length + 1));
+    const workloadEnv =
+      file === undefined
+        ? undefined
+        : NODE_DEPLOY_ENVS.find((env) => file.startsWith(`${env}-`));
+    if (file === undefined || workloadEnv === undefined) {
+      throw new Error(
+        `appsets kustomization has an unparseable resource line: '${line.trim()}'. ` +
+          "Every entry must be `<env>-<node>-applicationset.yaml`; refusing a rewrite that would drop it."
+      );
     }
+    pairs.push({ workloadEnv, node: file.slice(workloadEnv.length + 1) });
   }
-  return nodes;
+  return pairs;
 }
 
 /**
- * Render the WHOLE `appsets/<env>/kustomization.yaml` (header + apiVersion + kind + namespace + resources)
- * for ONE env from its node-set, node-sorted (LC_ALL=C order ≡ ASCII codepoint sort for kebab slugs),
- * byte-exact to `render-node-appset.sh`'s per-env `render_kustomization`.
+ * Render the WHOLE control-env kustomization (header + apiVersion + kind + namespace + resources)
+ * from its pair-set — env-major (candidate-a < preview < production, stated explicitly rather than
+ * leaning on an ASCII coincidence) then node-sorted (LC_ALL=C order ≡ ASCII codepoint sort for
+ * kebab slugs), byte-exact to `render-node-appset.sh`'s `render_kustomization` over
+ * `pairs_for_control_env`.
  */
-function renderKustomization(env: string, nodes: Set<string>): string {
+function renderKustomization(pairs: readonly AppsetPair[]): string {
+  const envRank = (env: NodeFormationEnv): number =>
+    NODE_DEPLOY_ENVS.indexOf(env);
+  const ordered = [...pairs].sort(
+    (a, b) =>
+      envRank(a.workloadEnv) - envRank(b.workloadEnv) ||
+      (a.node < b.node ? -1 : a.node > b.node ? 1 : 0)
+  );
   const lines = [APPSETS_KUSTOMIZATION_HEADER];
-  for (const node of [...nodes].sort()) {
-    lines.push(`  - ${env}-${node}-applicationset.yaml`);
+  for (const pair of ordered) {
+    lines.push(`  - ${pair.workloadEnv}-${pair.node}-applicationset.yaml`);
   }
   // Trailing newline matches the shell renderer's final printf line.
   return `${lines.join("\n")}\n`;
 }
 
 /**
- * Fold `<slug>` into ONE env's `appsets/<env>/kustomization.yaml`, then re-render the WHOLE file
- * node-sorted, byte-exact to `render-node-appset.sh`'s per-env `render_kustomization`. Each env's
- * kustomization is self-contained (generated wholesale) — there is no all-envs sentinel-splice anymore.
+ * Fold the `(env, slug)` pair into a CONTROL env's kustomization, then re-render the WHOLE file in
+ * the canonical pair order — byte-exact to `render-node-appset.sh`'s `render_kustomization`. `env`
+ * is the WORKLOAD env of the pair being added; the caller picks WHICH control env's file to edit
+ * (`controlEnvFor`, bug.5204). Foreign-env lines already in the file are carried through verbatim.
  * Idempotent.
  */
 export function insertAppsetKustomization(
   currentKustomization: string,
   slug: string,
-  env: string
+  env: NodeFormationEnv
 ): string {
   const lines = currentKustomization.split("\n");
   const resourcesIdx = lines.indexOf("resources:");
   if (resourcesIdx === -1) {
     throw new Error(
-      `infra/k8s/argocd/appsets/${env}/kustomization.yaml is missing a 'resources:' list; cannot fold in the slug.`
+      "appsets kustomization is missing a 'resources:' list; cannot fold in the slug."
     );
   }
 
-  const nodes = existingNodes(lines.slice(resourcesIdx + 1), env);
-  if (nodes.has(slug)) {
+  const pair: AppsetPair = { workloadEnv: env, node: slug };
+  const pairs = existingPairs(lines.slice(resourcesIdx + 1));
+  if (pairs.some((p) => pairKey(p) === pairKey(pair))) {
     return currentKustomization;
   }
-  nodes.add(slug);
+  pairs.push(pair);
 
-  return renderKustomization(env, nodes);
+  return renderKustomization(pairs);
 }
 
 /**
- * Drop `<slug>` from ONE env's `appsets/<env>/kustomization.yaml`, then re-render the WHOLE file
- * node-sorted — the inverse of {@link insertAppsetKustomization}. Because it re-runs the same
- * {@link renderKustomization} over the reduced node-set, the output is byte-exact to what
+ * Drop the `(env, slug)` pair from a CONTROL env's kustomization, then re-render the WHOLE file —
+ * the inverse of {@link insertAppsetKustomization}. Because it re-runs the same
+ * {@link renderKustomization} over the reduced pair-set, the output is byte-exact to what
  * `render-node-appset.sh` emits for that reduced catalog, so the `--check` drift gate stays green on
- * a decommission (story.5020). Idempotent: a kustomization that does not list the slug is unchanged.
+ * a decommission (story.5020). Idempotent: a kustomization that does not list the pair is unchanged.
  */
 export function removeFromAppsetsKustomization(
   currentKustomization: string,
   slug: string,
-  env: string
+  env: NodeFormationEnv
 ): string {
   const lines = currentKustomization.split("\n");
   const resourcesIdx = lines.indexOf("resources:");
   if (resourcesIdx === -1) {
     throw new Error(
-      `infra/k8s/argocd/appsets/${env}/kustomization.yaml is missing a 'resources:' list; cannot drop the slug.`
+      "appsets kustomization is missing a 'resources:' list; cannot drop the slug."
     );
   }
 
-  const nodes = existingNodes(lines.slice(resourcesIdx + 1), env);
-  if (!nodes.has(slug)) {
+  const pair: AppsetPair = { workloadEnv: env, node: slug };
+  const pairs = existingPairs(lines.slice(resourcesIdx + 1));
+  const remaining = pairs.filter((p) => pairKey(p) !== pairKey(pair));
+  if (remaining.length === pairs.length) {
     return currentKustomization;
   }
-  nodes.delete(slug);
 
-  return renderKustomization(env, nodes);
+  return renderKustomization(remaining);
 }

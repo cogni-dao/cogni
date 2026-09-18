@@ -15,57 +15,83 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { ACCOUNT_WALLET_SCOPE_PATTERN } from "@/shared/db/akash-tx-allocations";
+
 import {
   type AkashTxWalletConfigError,
+  accountWalletScope,
   assertActuatorWalletAccount,
+  assertLedgerIsAccountScoped,
   credentialFingerprint,
+  isAccountWalletScope,
   resolveAkashTxWallet,
 } from "./akash-tx-wallet";
 
 const ACTUATOR = "operator-sponsor-console-key";
 const ACCOUNT = "akash1operatorsponsorwalletaddress";
 const OTHER_ACCOUNT = "akash1someotherwalletaddress";
+/** A real-shaped bech32 address — the scope predicate checks the SHAPE, so fixtures must too. */
+const REAL_ACCOUNT = "akash10auj6u6wr7aqjawuxurgue9w7wfnca50t8cr4l";
 
 describe("resolveAkashTxWallet", () => {
-  it("resolves a per-environment scope from the credential + pinned account", () => {
+  it("keys the scope on the PINNED ACCOUNT, never on an environment (bug.5187)", () => {
     expect(
       resolveAkashTxWallet({
-        environment: "candidate-a",
         actuatorApiKey: ACTUATOR,
         expectedAccountId: ACCOUNT,
       })
     ).toEqual({
-      walletScope: "akash-console:candidate-a",
+      walletScope: `akash-console:${ACCOUNT}`,
       apiKey: ACTUATOR,
       expectedAccountId: ACCOUNT,
     });
   });
 
-  it("scopes each environment separately so one env's Postgres serializes one env's wallet", () => {
+  /**
+   * THE INVERTED ASSERTION. This used to read "scopes each environment separately so one env's
+   * Postgres serializes one env's wallet", and it passed by producing THREE scope strings for
+   * three environments on ONE Console account. That is precisely the defect: the serializer is a
+   * partial unique index on `(wallet_scope) WHERE state='preparing'`, so three scope values are
+   * three slots, and two writers on one account could never collide. The north star makes one
+   * account bill test, preview and production alike, so the property to hold is the opposite —
+   * one account is ONE ledger domain however many environments its writer serves.
+   */
+  it("gives ONE scope per account however many environments its writer serves", () => {
     const scopes = ["candidate-a", "preview", "production"].map(
-      (environment) =>
+      () =>
         resolveAkashTxWallet({
-          environment,
           actuatorApiKey: ACTUATOR,
           expectedAccountId: ACCOUNT,
         }).walletScope
     );
-    expect(new Set(scopes).size).toBe(3);
+    expect(new Set(scopes).size).toBe(1);
   });
 
-  it("derives the scope from the environment, not the secret — rotation cannot orphan receipts", () => {
+  it("still separates two accounts — account -> scope stays injective", () => {
+    expect(
+      resolveAkashTxWallet({
+        actuatorApiKey: ACTUATOR,
+        expectedAccountId: ACCOUNT,
+      }).walletScope
+    ).not.toBe(
+      resolveAkashTxWallet({
+        actuatorApiKey: ACTUATOR,
+        expectedAccountId: OTHER_ACCOUNT,
+      }).walletScope
+    );
+  });
+
+  it("derives the scope from the pinned account, not the secret — rotation cannot orphan receipts", () => {
     const before = resolveAkashTxWallet({
-      environment: "production",
       actuatorApiKey: ACTUATOR,
       expectedAccountId: ACCOUNT,
     });
     const after = resolveAkashTxWallet({
-      environment: "production",
       actuatorApiKey: "rotated-console-key",
       expectedAccountId: ACCOUNT,
     });
@@ -74,10 +100,7 @@ describe("resolveAkashTxWallet", () => {
 
   it("REFUSES a missing credential — there is no fallback to any other wallet", () => {
     try {
-      resolveAkashTxWallet({
-        environment: "production",
-        expectedAccountId: ACCOUNT,
-      });
+      resolveAkashTxWallet({ expectedAccountId: ACCOUNT });
       expect.unreachable("must refuse");
     } catch (error) {
       expect((error as AkashTxWalletConfigError).code).toBe(
@@ -92,7 +115,6 @@ describe("resolveAkashTxWallet", () => {
   ])("treats a blank credential (%p) as missing, never as a wallet", (blank) => {
     expect(() =>
       resolveAkashTxWallet({
-        environment: "production",
         actuatorApiKey: blank,
         expectedAccountId: ACCOUNT,
       })
@@ -106,7 +128,6 @@ describe("resolveAkashTxWallet", () => {
   ])("REFUSES to start without a pinned AKASH_ACTUATOR_ACCOUNT_ID (%p)", (pin) => {
     try {
       resolveAkashTxWallet({
-        environment: "candidate-a",
         actuatorApiKey: ACTUATOR,
         expectedAccountId: pin,
       });
@@ -118,14 +139,20 @@ describe("resolveAkashTxWallet", () => {
     }
   });
 
-  it("requires an environment — an unscoped ledger serializes nothing", () => {
-    expect(() =>
-      resolveAkashTxWallet({
-        environment: "",
-        actuatorApiKey: ACTUATOR,
-        expectedAccountId: ACCOUNT,
-      })
-    ).toThrow(/DEPLOY_ENVIRONMENT/);
+  /**
+   * The old suite asserted the opposite ("requires an environment — an unscoped ledger
+   * serializes nothing"). Under the north star a writer serves environments other than its own,
+   * so an `environment` input could only re-introduce the inert per-env scope. Assert the
+   * surface is GONE at the source level — same reasoning as the legacy-credential test below: a
+   * stray property would be silently ignored by the resolver, so no runtime check could catch it.
+   */
+  it("CANNOT be handed an environment — the input does not exist (bug.5187)", () => {
+    const source = readFileSync(
+      path.join(__dirname, "akash-tx-wallet.ts"),
+      "utf8"
+    );
+    expect(source).not.toMatch(/input\.environment/);
+    expect(source).not.toMatch(/akash-console:\$\{environment\}/);
   });
 
   it("CANNOT be handed the legacy controller wallet — the input does not exist", () => {
@@ -140,6 +167,63 @@ describe("resolveAkashTxWallet", () => {
     expect(source).not.toMatch(/legacyControllerApiKey/);
     // AKASH_CONSOLE_API_KEY may only appear in prose explaining why it is absent.
     expect(source).not.toMatch(/input\.\w*[Ll]egacy/);
+  });
+});
+
+describe("accountWalletScope / isAccountWalletScope (bug.5187)", () => {
+  it("accepts an account-keyed scope and REJECTS every legacy environment-keyed one", () => {
+    expect(isAccountWalletScope(accountWalletScope(REAL_ACCOUNT))).toBe(true);
+    for (const environment of ["candidate-a", "preview", "production"]) {
+      expect(isAccountWalletScope(`akash-console:${environment}`)).toBe(false);
+    }
+  });
+
+  it("is the SAME predicate the database enforces and the migration installs", () => {
+    // ONE literal, three places: the exported constant, the drizzle `check()` the snapshot was
+    // generated from, and the committed migration that adds the constraint to live databases.
+    // Reading the files is the only way to prove the three agree without a running Postgres.
+    const migrationsDir = path.join(
+      __dirname,
+      "../../../adapters/server/db/migrations"
+    );
+    const schemaSource = readFileSync(
+      path.join(__dirname, "../../../shared/db/akash-tx-allocations.ts"),
+      "utf8"
+    );
+    const migration = readdirSync(migrationsDir)
+      .filter((file) => file.endsWith(".sql"))
+      .map((file) => readFileSync(path.join(migrationsDir, file), "utf8"))
+      .find((sql) =>
+        sql.includes("akash_tx_allocations_wallet_scope_account_check")
+      );
+
+    expect(schemaSource).toContain(`'${ACCOUNT_WALLET_SCOPE_PATTERN}'`);
+    expect(migration).toBeDefined();
+    expect(migration).toContain(`~ '${ACCOUNT_WALLET_SCOPE_PATTERN}'`);
+  });
+});
+
+describe("assertLedgerIsAccountScoped (bug.5187)", () => {
+  it("passes on a ledger the backfill has reached", () => {
+    expect(() => assertLedgerIsAccountScoped(0)).not.toThrow();
+  });
+
+  /**
+   * The direction a CHECK constraint cannot cover: a writer pod that starts BEFORE its migrator
+   * has run. Its account-keyed lookup cannot see the env-keyed receipts of leases that are still
+   * billing, and `claimOnce` treats "no receipt" as "nothing was ever created" — so it would
+   * mint a second paid lease beside each. A CrashLoop is the cheap outcome; refuse.
+   */
+  it("REFUSES to serve while env-keyed receipts remain", () => {
+    try {
+      assertLedgerIsAccountScoped(5);
+      expect.unreachable("must refuse");
+    } catch (error) {
+      expect((error as AkashTxWalletConfigError).code).toBe(
+        "ledger_scope_unmigrated"
+      );
+      expect((error as Error).message).toContain("second paid lease");
+    }
   });
 });
 

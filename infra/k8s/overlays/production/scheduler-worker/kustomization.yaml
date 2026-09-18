@@ -32,6 +32,14 @@ patches:
       - op: add
         path: /data/DEPLOY_ENVIRONMENT
         value: "production"
+      # bug.5212 — the lanes this cluster CUSTODIES. An akash node's non-production lane is
+      # reconciled and paid for here, so it submits its workflows to THIS Temporal under
+      # cogni-<lane>. Without these the queue has no poller and the lane's schedules never
+      # fire — silently. The SCHEDULER_API_TOKEN the lane inherits is already this env's, so
+      # no token plumbing changes. Mirrors SECRETS_LANE_TRUST[production].
+      - op: add
+        path: /data/TEMPORAL_CUSTODIED_NAMESPACES
+        value: "cogni-candidate-a,cogni-preview"
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "production-placeholder-scheduler-worker"

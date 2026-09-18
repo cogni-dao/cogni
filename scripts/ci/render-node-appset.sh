@@ -43,6 +43,9 @@ ARGOCD_DIR="$REPO_ROOT/infra/k8s/argocd"
 # so a catalog-removed node's AppSet vanishes from git and Argo auto-prunes it —
 # and a cluster only ever sources its OWN env's appsets/<env>/ dir.
 APPSETS_DIR="$ARGOCD_DIR/appsets"
+# THE definition of the AppSet path + control env (bug.5204). Sourced, never re-derived.
+# shellcheck source=scripts/ci/lib/appset-paths.sh
+. "$SCRIPT_DIR/lib/appset-paths.sh"
 # Single source of truth for the AppSet shape — shared byte-for-byte with the
 # operator's TS node scaffolder (task.5092). Both interpolate __ENV__/__NODE__.
 TEMPLATE="$SCRIPT_DIR/node-applicationset.yaml.tmpl"
@@ -95,8 +98,21 @@ env_dir() {
   printf '%s/%s\n' "$APPSETS_DIR" "$1"
 }
 
+# The (env, node) pairs whose AppSet file belongs in control dir "$1".
+pairs_for_control_env() {
+  local want="$1" env node
+  for env in "${ENVS[@]}"; do
+    for node in $(deployable_nodes_for_env "$env"); do
+      [ "$(control_env_for "$env" "$node")" = "$want" ] || continue
+      printf '%s %s\n' "$env" "$node"
+    done
+  done
+}
+
+# Absolute path; the repo-relative shape (and control_env_for) come from the lib so the
+# renderer, the workflows and assert-target-substrate cannot drift (bug.5204).
 appset_path() {
-  printf '%s/%s/%s-%s-applicationset.yaml\n' "$APPSETS_DIR" "$1" "$1" "$2"
+  printf '%s/%s\n' "$REPO_ROOT" "$(appset_rel_path "$1" "$2")"
 }
 
 kustomization_path() {
@@ -109,7 +125,7 @@ kustomization_path() {
 # dir), node-sorted (LC_ALL=C). Sourced as a dir by the PER-ENV
 # `cogni-<env>-appsets` app-of-apps; no bootstrap-splice sentinels.
 render_kustomization() {
-  local env="$1" node
+  local env="$1" penv pnode node
   cat <<'EOF'
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
@@ -125,9 +141,12 @@ namespace: argocd
 
 resources:
 EOF
-  for node in $(deployable_nodes_for_env "$env"); do
-    printf '  - %s-%s-applicationset.yaml\n' "$env" "$node"
-  done
+  # Lists the files in THIS CONTROL dir — which, for an akash node in a non-production
+  # env, is the production dir rather than that env's own (task.5132).
+  while read -r penv pnode; do
+    [ -n "$penv" ] || continue
+    printf '  - %s-%s-applicationset.yaml\n' "$penv" "$pnode"
+  done <<< "$(pairs_for_control_env "$env")"
 }
 
 write_kustomization() {
@@ -136,16 +155,18 @@ write_kustomization() {
 }
 
 write() {
-  local env node count=0 pruned=0 committed base dir expected
-  for env in "${ENVS[@]}"; do
-    dir="$(env_dir "$env")"
+  local cenv env node count=0 pruned=0 committed base dir expected
+  # Grouped by CONTROL env (which cluster's Argo owns the file), not by workload env.
+  for cenv in "${ENVS[@]}"; do
+    dir="$(env_dir "$cenv")"
     mkdir -p "$dir"
     expected=""
-    for node in $(deployable_nodes_for_env "$env"); do
+    while read -r env node; do
+      [ -n "$env" ] || continue
       render_one "$env" "$node" > "$(appset_path "$env" "$node")"
       expected="$expected$(basename "$(appset_path "$env" "$node")")"$'\n'
       count=$((count + 1))
-    done
+    done <<< "$(pairs_for_control_env "$cenv")"
     # Prune AppSets a node no longer claims (removed from its `envs:` set, or the
     # row left the catalog) within THIS env dir so `pnpm gen:node-appset` is
     # self-healing — and the per-env cogni-<env>-appsets app-of-apps then prunes
@@ -158,17 +179,18 @@ write() {
         pruned=$((pruned + 1))
       fi
     done
-    write_kustomization "$env"
+    write_kustomization "$cenv"
   done
   echo "Wrote $count per-node ApplicationSet files (pruned $pruned stale) + per-env appsets kustomizations."
 }
 
 check() {
-  local env node path stale=0 expected committed base dir kpath
-  for env in "${ENVS[@]}"; do
-    dir="$(env_dir "$env")"
+  local cenv env node path stale=0 expected committed base dir kpath
+  for cenv in "${ENVS[@]}"; do
+    dir="$(env_dir "$cenv")"
     expected=""
-    for node in $(deployable_nodes_for_env "$env"); do
+    while read -r env node; do
+      [ -n "$env" ] || continue
       path="$(appset_path "$env" "$node")"
       expected="$expected$(basename "$path")"$'\n'
       if [ ! -f "$path" ]; then
@@ -181,7 +203,7 @@ check() {
         diff -u "$path" <(render_one "$env" "$node") >&2 || true
         stale=1
       fi
-    done
+    done <<< "$(pairs_for_control_env "$cenv")"
     # Stray file for a node no longer in the catalog (e.g. a closed birth-probe).
     # All files under appsets/<env>/ are renderer-owned — candidate-b and other
     # manually managed envs keep their own appset shape elsewhere, out of scope.
@@ -193,13 +215,13 @@ check() {
         stale=1
       fi
     done
-    kpath="$(kustomization_path "$env")"
+    kpath="$(kustomization_path "$cenv")"
     if [ ! -f "$kpath" ]; then
       echo "[ERROR] missing $kpath — run: pnpm gen:node-appset" >&2
       stale=1
-    elif ! diff -u "$kpath" <(render_kustomization "$env") >/dev/null; then
+    elif ! diff -u "$kpath" <(render_kustomization "$cenv") >/dev/null; then
       echo "[ERROR] $kpath is out of sync with the catalog:" >&2
-      diff -u "$kpath" <(render_kustomization "$env") >&2 || true
+      diff -u "$kpath" <(render_kustomization "$cenv") >&2 || true
       stale=1
     fi
   done

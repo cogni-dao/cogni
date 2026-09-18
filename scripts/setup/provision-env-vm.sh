@@ -1435,17 +1435,34 @@ HCL
   # via `kubectl create token openbao-operator` and exchange it for a bao
   # token via `bao login -method=kubernetes role=${DEPLOY_ENV}-writer`.
   #
-  # Policy is per-env: writers on this env CANNOT touch other envs' paths
-  # (spec Invariant 6 RBAC_VIA_PATH_POLICY). No `delete` capability — destroy
+  # Policy is per-LANE, not per-env (bug.5206). Writers on this env cannot touch another
+  # CLUSTER's vault — OpenBao is per-cluster, so that is structural — but the PAYING cluster
+  # must write every lane it reconciles, because the Composition interpolates each lane's
+  # secrets into the lease its Console account is billed for. Same lane set #2290 gave
+  # node-secrets-writer; they had drifted, and `production-writer` (the role
+  # secret-materialize.sh mints) still could not write cogni/data/candidate-a/*.
+  # This WIDENS AN EXISTING IDENTITY rather than adding one: NS3 allows exactly one writer
+  # identity per Console account. Up-trust stays refused. No `delete` capability — destroy
   # requires admin escalation per CC6.1.
-  log_info "Writing ${DEPLOY_ENV}-writer policy + role binding..."
+  # ⚠️ KEEP IN SYNC with scripts/setup/reconcile-env-substrate.sh (SECRET_LANES).
+  case "${DEPLOY_ENV}" in
+    production) SECRET_LANES="candidate-a preview production" ;;
+    *)          SECRET_LANES="${DEPLOY_ENV}" ;;
+  esac
+  WRITER_HCL=""
+  for _lane in ${SECRET_LANES}; do
+    WRITER_HCL="${WRITER_HCL}
+path \"cogni/data/${_lane}/*\"     { capabilities = [\"read\", \"create\", \"update\", \"patch\"] }
+path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
+  done
+  unset _lane
+  log_info "Writing ${DEPLOY_ENV}-writer policy + role binding; lanes: ${SECRET_LANES}"
   ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl get sa openbao-operator -n default >/dev/null 2>&1 \
        || kubectl create sa openbao-operator -n default"
   ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao policy write ${DEPLOY_ENV}-writer -" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"     { capabilities = ["read", "create", "update", "patch"] }
-path "cogni/metadata/${DEPLOY_ENV}/*" { capabilities = ["read", "list"] }
+${WRITER_HCL}
 HCL
   bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-writer \
     bound_service_account_names=openbao-operator \
@@ -1464,15 +1481,23 @@ HCL
   # (a second reader identity onto a read-only policy, not a new entry point —
   # Invariant 9). Policy is env-WIDE (read-only on all cogni/<env>/* DB keys)
   # because deploy-infra provisions every node on the VM, not one service.
-  log_info "Writing ${DEPLOY_ENV}-db-reader policy + role binding..."
+  # bug.5206 #10 — the reader must reach every lane this cluster reconciles, read-only.
+  # ⚠️ KEEP IN SYNC with scripts/setup/reconcile-env-substrate.sh.
+  DB_READER_HCL=""
+  for _lane in ${SECRET_LANES}; do
+    DB_READER_HCL="${DB_READER_HCL}
+path \"cogni/data/${_lane}/*\"     { capabilities = [\"read\"] }
+path \"cogni/metadata/${_lane}\"   { capabilities = [\"list\"] }
+path \"cogni/metadata/${_lane}/*\" { capabilities = [\"read\", \"list\"] }"
+  done
+  unset _lane
+  log_info "Writing ${DEPLOY_ENV}-db-reader policy + role binding; lanes: ${SECRET_LANES}"
   ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl get sa db-provisioner -n default >/dev/null 2>&1 \
        || kubectl create sa db-provisioner -n default"
   ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao policy write ${DEPLOY_ENV}-db-reader -" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"     { capabilities = ["read"] }
-path "cogni/metadata/${DEPLOY_ENV}"   { capabilities = ["list"] }
-path "cogni/metadata/${DEPLOY_ENV}/*" { capabilities = ["read", "list"] }
+${DB_READER_HCL}
 HCL
   bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-db-reader \
     bound_service_account_names=db-provisioner \
@@ -1532,15 +1557,37 @@ HCL
   # substrate-only heal path) — this policy+role is duplicated across both cold-start
   # (here) and reconcile (there). Converging Phase 5b onto reconcile-env-substrate.sh
   # is the tracked DRY fast-follow; until then, edit BOTH copies together.
+  # bug.5196 — DOWN-TRUST LANE CUSTODY. The lanes this env may write, widest first. MUST
+  # mirror nodes/operator/app/src/shared/secrets/secrets-lane-trust.data.ts
+  # (SECRETS_LANE_TRUST); the route check is only a fast-fail, THIS is the gate.
+  #   production  -> candidate-a, preview, production   (the PAYING cluster custodies every
+  #                  lane, because the Crossplane Composition interpolates each lane's
+  #                  secrets into the lease production's Console account is billed for)
+  #   preview     -> preview only
+  #   candidate-a -> candidate-a only
+  # Up-trust is refused forever: no pre-prod env gains a production path here. OpenBao is
+  # per-CLUSTER, so a lane prefix is a LABEL inside this env's own vault, never a reach into
+  # another cluster's vault. Per secrets-management.md Invariant 1 the blast-radius boundary
+  # is <service>; widening the lane set does not widen that boundary.
+  # The two _system/_shared denies are carried onto EVERY lane gained, data AND metadata —
+  # a per-node grant must never reach a shared path in ANY lane.
+  NODE_SECRET_LANES="${SECRET_LANES}"
+  NODE_SECRETS_WRITER_HCL=""
+  for _lane in ${NODE_SECRET_LANES}; do
+    NODE_SECRETS_WRITER_HCL="${NODE_SECRETS_WRITER_HCL}
+  path \"cogni/data/${_lane}/*\"             { capabilities = [\"read\", \"create\", \"update\", \"patch\"] }
+  path \"cogni/metadata/${_lane}/*\"         { capabilities = [\"read\", \"list\"] }
+  path \"cogni/data/${_lane}/_system/*\"     { capabilities = [\"deny\"] }
+  path \"cogni/data/${_lane}/_shared/*\"     { capabilities = [\"deny\"] }
+  path \"cogni/metadata/${_lane}/_system/*\" { capabilities = [\"deny\"] }
+  path \"cogni/metadata/${_lane}/_shared/*\" { capabilities = [\"deny\"] }"
+  done
+  unset _lane
+  log_info "  node-secrets-writer lanes: ${NODE_SECRET_LANES}"
   log_info "Writing ${DEPLOY_ENV}-node-secrets-writer policy + role binding..."
   ssh $SSH_OPTS root@"$VM_IP" \
     "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao policy write ${DEPLOY_ENV}-node-secrets-writer -" <<HCL
-path "cogni/data/${DEPLOY_ENV}/*"             { capabilities = ["read", "create", "update", "patch"] }
-path "cogni/metadata/${DEPLOY_ENV}/*"         { capabilities = ["read", "list"] }
-path "cogni/data/${DEPLOY_ENV}/_system/*"     { capabilities = ["deny"] }
-path "cogni/data/${DEPLOY_ENV}/_shared/*"     { capabilities = ["deny"] }
-path "cogni/metadata/${DEPLOY_ENV}/_system/*" { capabilities = ["deny"] }
-path "cogni/metadata/${DEPLOY_ENV}/_shared/*" { capabilities = ["deny"] }
+${NODE_SECRETS_WRITER_HCL}
 HCL
   bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-node-secrets-writer \
     bound_service_account_names=operator-secrets-writer \

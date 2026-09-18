@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Publishes the shared XComputeWorkload API on PREVIEW. Preview is a downstream
+# environment and therefore tracks merged `main`, never an unreviewed deploy ref.
+# This installs the API only: the task.5129 rail merge intentionally carries zero
+# XComputeWorkload desired-state instances so dormancy is live-proven before Poly activates.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-xcomputeworkload
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/crossplane/xcomputeworkload
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true

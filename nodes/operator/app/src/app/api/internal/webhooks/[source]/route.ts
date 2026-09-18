@@ -18,6 +18,7 @@
 
 import { NextResponse } from "next/server";
 import { dispatchCanonicalForkSync } from "@/app/_facades/deploy/canonical-fork-sync.server";
+import { dispatchLaneOnboard } from "@/app/_facades/deploy/lane-onboard.server";
 import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
 import { dispatchPrReview } from "@/app/_facades/review/dispatch.server";
 import {
@@ -309,6 +310,11 @@ export async function POST(
       // at env=preview SOURCE-ADDRESSED by the PR head sha, pin on deploy/preview, ZERO
       // writes to main (PREVIEW_VIA_SOURCE_ADDRESSED_PROMOTE, task.5022).
       dispatchNodePreviewPromote(verified.payload, env, log);
+      // Env-membership merge → lane reconcile: the `POST /nodes/{id}/envs` verb's own PR
+      // landing is what provisions the lane's substrate (as its custodian) and renders its
+      // desired state. Matches only that verb's branch on the parent monorepo; every other
+      // merge no-ops (task.5132).
+      dispatchLaneOnboard(verified.payload, env, log);
     }
 
     // node-template merge→main → mirror canonical content to every child fork (one PR each).

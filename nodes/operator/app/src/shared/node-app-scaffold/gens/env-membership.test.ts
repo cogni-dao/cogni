@@ -22,8 +22,11 @@ import {
   parseCatalogActivityEnv,
   parseCatalogEnvs,
   parseCatalogPlacement,
+  parseCatalogPlacementMap,
+  parseCatalogSourceRepo,
   setCatalogEnvs,
   setCatalogPlacement,
+  setCatalogPlacementCell,
 } from "./env-membership";
 
 // A realistic catalog row with comments + fields around the envs: line, so the single-line-edit
@@ -191,7 +194,7 @@ describe("parseCatalogPlacement", () => {
           "  production: fly"
         )
       )
-    ).toThrow(/unknown provider/);
+    ).toThrow(/unknown value/);
   });
 
   it("tolerates a trailing `# comment` after the provider value (mirrors activity_env)", () => {
@@ -285,6 +288,169 @@ describe("hasCatalogSourceRepo", () => {
   it("detects an external build plane", () => {
     expect(hasCatalogSourceRepo(CATALOG_WITH_PLACEMENT)).toBe(true);
     expect(hasCatalogSourceRepo(CATALOG)).toBe(false);
+  });
+});
+
+describe("parseCatalogSourceRepo", () => {
+  it("reads the source_repo URL", () => {
+    expect(parseCatalogSourceRepo(CATALOG_WITH_PLACEMENT)).toBe(
+      "https://github.com/cogni-dao/toks.git"
+    );
+  });
+
+  it("throws when the row has no external build plane", () => {
+    expect(() => parseCatalogSourceRepo(CATALOG)).toThrow(/source_repo/);
+  });
+});
+
+// ── Generalized per-key placement cell editors (story.5039) ─────────────────────────────────────
+
+// A poly-shaped row: all three placement blocks present, with the top-level comments between them
+// that every cell edit must carry through verbatim.
+const CATALOG_WITH_ALL_CELLS = `name: toks
+type: node
+port: 3200
+node_port: 31700
+source_repo: https://github.com/cogni-dao/toks.git
+image_repository: ghcr.io/cogni-dao/toks
+envs: [candidate-a, production]
+deployment_provider:
+  candidate-a: akash
+  production: akash
+# authority comment that must survive verbatim.
+compute_api:
+  production: crossplane
+# lease counter comment that must survive verbatim.
+lease_generation:
+  production: 0
+activity_env: production
+path_prefix: nodes/toks/
+`;
+
+describe("parseCatalogPlacementMap", () => {
+  it("reads each key's per-env cells independently", () => {
+    expect(
+      parseCatalogPlacementMap(CATALOG_WITH_ALL_CELLS, "deployment_provider")
+    ).toEqual({ "candidate-a": "akash", production: "akash" });
+    expect(
+      parseCatalogPlacementMap(CATALOG_WITH_ALL_CELLS, "compute_api")
+    ).toEqual({ production: "crossplane" });
+    expect(
+      parseCatalogPlacementMap(CATALOG_WITH_ALL_CELLS, "lease_generation")
+    ).toEqual({ production: "0" });
+  });
+
+  it("throws on a value outside the key's vocabulary", () => {
+    expect(() =>
+      parseCatalogPlacementMap(
+        CATALOG_WITH_ALL_CELLS.replace(
+          "  production: crossplane",
+          "  production: akash"
+        ),
+        "compute_api"
+      )
+    ).toThrow(/unknown value/);
+  });
+});
+
+describe("setCatalogPlacementCell", () => {
+  it("upserts a cell into an existing block, preserving surrounding comments", () => {
+    const next = setCatalogPlacementCell(
+      CATALOG_WITH_ALL_CELLS,
+      "compute_api",
+      "candidate-a",
+      "crossplane"
+    );
+    expect(next).toContain(
+      "compute_api:\n  candidate-a: crossplane\n  production: crossplane\n"
+    );
+    expect(next).toContain("# authority comment that must survive verbatim.");
+    expect(next).toContain(
+      "# lease counter comment that must survive verbatim."
+    );
+  });
+
+  it("inserts a NEW compute_api block after the deployment_provider block (#2301 ordering)", () => {
+    const noComputeApi = CATALOG_WITH_ALL_CELLS.replace(
+      "compute_api:\n  production: crossplane\n",
+      ""
+    );
+    const next = setCatalogPlacementCell(
+      noComputeApi,
+      "compute_api",
+      "production",
+      "crossplane"
+    );
+    expect(next).toContain(
+      "deployment_provider:\n  candidate-a: akash\n  production: akash\ncompute_api:\n  production: crossplane\n"
+    );
+  });
+
+  it("inserts a NEW lease_generation block after compute_api when present, else after deployment_provider", () => {
+    const noLease = CATALOG_WITH_ALL_CELLS.replace(
+      "lease_generation:\n  production: 0\n",
+      ""
+    );
+    const afterComputeApi = setCatalogPlacementCell(
+      noLease,
+      "lease_generation",
+      "production",
+      "0"
+    );
+    expect(afterComputeApi).toContain(
+      "compute_api:\n  production: crossplane\nlease_generation:\n  production: 0\n"
+    );
+
+    const neither = noLease.replace(
+      "compute_api:\n  production: crossplane\n",
+      ""
+    );
+    const afterProvider = setCatalogPlacementCell(
+      neither,
+      "lease_generation",
+      "production",
+      "0"
+    );
+    expect(afterProvider).toContain(
+      "deployment_provider:\n  candidate-a: akash\n  production: akash\nlease_generation:\n  production: 0\n"
+    );
+  });
+
+  it("falls back to inserting after the envs: line when no predecessor block exists", () => {
+    const next = setCatalogPlacementCell(
+      CATALOG,
+      "deployment_provider",
+      "preview",
+      "akash"
+    );
+    expect(next).toContain(
+      "envs: [candidate-a, preview, production]\ndeployment_provider:\n  preview: akash\nactivity_env: candidate-a"
+    );
+  });
+
+  it("removing the last cell drops the whole block (minProperties: 1)", () => {
+    const next = setCatalogPlacementCell(
+      CATALOG_WITH_ALL_CELLS,
+      "lease_generation",
+      "production",
+      undefined
+    );
+    expect(next).not.toContain("lease_generation");
+    // Its neighbour comment (outside the block capture) survives.
+    expect(next).toContain(
+      "# lease counter comment that must survive verbatim."
+    );
+  });
+
+  it("rejects a value outside the key's vocabulary", () => {
+    expect(() =>
+      setCatalogPlacementCell(
+        CATALOG_WITH_ALL_CELLS,
+        "lease_generation",
+        "production",
+        "-1"
+      )
+    ).toThrow(/unknown value/);
   });
 });
 

@@ -9,7 +9,7 @@ read_when: Modifying CI workflows, adding checks to merge gate, or planning mult
 implements: []
 owner: cogni-dev
 created: 2025-12-22
-verified: 2026-06-15
+verified: 2026-09-18
 tags:
   - ci-cd
   - deployment
@@ -64,6 +64,124 @@ The simplification target is one artifact contract and one promotion primitive. 
     provision it. Missing substrate fails the flight with an explicit handoff to
     `provision-env.yml`, `candidate-flight-infra.yml`, or the preview/prod
     infra lane that owns the mutation.
+
+11. **LANE_AND_CONTROL_ENV_ARE_DIFFERENT_QUESTIONS**: "env" names two
+    independent things, and every consumer must state which one it means.
+    **Path and name follow the LANE. Identity and substrate follow the CONTROL
+    env.** Resolve the control env with `control_env_for` (`scripts/ci/lib/appset-paths.sh`)
+    or `controlEnvFor` (`nodes/operator/app/src/features/compute/node-deployment-provider.ts`)
+    — never by reading the env variable directly. See `## Lane vs control env` below.
+
+---
+
+## Lane vs control env
+
+`env` is overloaded. It answers two questions that used to have one answer, and
+still do for every k3s node. They diverge the moment a node runs a
+**non-production lane on Akash** — the workload runs on Akash, in no cluster at
+all, so its desired state has to be reconciled by _some_ cluster, and that
+cluster is production's.
+
+| question                               | name            | decides                                                                                                                      |
+| -------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| What is this workload?                 | **lane**        | public URL, vault path prefix, XR namespace, deploy branch, idempotence key, DB name suffix, **migration-receipt namespace** |
+| Who reconciles, pays and custodies it? | **control env** | AppSet directory, vault host + writer role, actuator namespace, substrate host, Postgres host, owner-inherited keys          |
+
+> **Path and name follow the LANE. Identity and substrate follow the CONTROL env.**
+
+The durable _why_ — the eleven live-discovered conflations, the destructive
+one, and the open `bug.5208` question about `cogni-test-org` throwaways — lives
+in the knowledge hub as `lane-is-not-control` (with `substrate-one-derivation`,
+`lane-db-two-derivations`, `lane-queue-follows-custody`). **This spec is the
+contract CI enforces; the hub entry is the reasoning.** Two planes, no third.
+
+Resolve it, never re-derive it:
+
+- shell — `control_env_for <env> <node>` in `scripts/ci/lib/appset-paths.sh`
+- TypeScript — `controlEnvFor` in `nodes/operator/app/src/features/compute/node-deployment-provider.ts`
+
+Both read `deployment_provider.<env>` from the catalog. Absent means the k3s
+default, so an un-placed row is never relocated — placement must be _stated_ to
+move. `production` is always its own control env.
+
+### Why custody flows this way
+
+`akash-actuator-wallet-cutover` states it as mechanism, not preference: every
+workload env value reaches Akash as a placeholder resolved in the **reconciling**
+cluster. Whoever renders the lease must be able to read that lane's secrets, so
+the paying cluster holds every environment's workload secrets. Custody flows
+**down-trust only** — production may hold pre-production secrets; handing a
+candidate-a flight the production vault is rejected.
+
+### Worked examples
+
+`poly`, lane `candidate-a`, `deployment_provider.candidate-a: akash`:
+
+| follows     | value                                                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------- |
+| lane        | `poly-test.cognidao.org` · `cogni/candidate-a/poly` · ns `cogni-candidate-a` · `deploy/candidate-a-poly` |
+| control env | `appsets/production/…` · production OpenBao + `production-writer` · `cogni.vm.cognidao.org`              |
+
+The AppSet filename keeps the **lane** (`candidate-a-poly-applicationset.yaml`)
+so one Argo namespace holds a node's candidate-a, preview and production
+AppSets without collision; the directory keeps the **control env**.
+
+### Failures this invariant explains
+
+Each was one team re-deriving the rule and picking the wrong half:
+
+| symptom                                                            | half chosen wrongly                               |
+| ------------------------------------------------------------------ | ------------------------------------------------- |
+| AppSet "missing at head_sha" on the first poly mint                | path built from lane alone                        |
+| lane secrets written to the wrong vault                            | writer identity from lane, not control env        |
+| `LITELLM_MASTER_KEY` absent                                        | owner-inherited keys read from lane               |
+| `cogni_poly` / `app_poly` collided with production's rows          | DB name omitted the lane suffix                   |
+| `production-db-reader` denied `cogni/candidate-a/poly`             | read policy scoped to lane only                   |
+| DoltHub mirror purge stripped production's creds on a lane promote | purge keyed on lane, not control env              |
+| `verify-candidate` polls forever with `not_observed`               | readiness host from lane, workload on control env |
+| migration reports `succeeded` over an EMPTY lane database          | receipt namespace from control env, not lane      |
+
+The last one is instructive: the job is `environment: candidate-a` and passes
+`vm_host: ${{ secrets.VM_HOST }}`, so it SSHes to the candidate VM and asks for
+an object that only ever exists on production's cluster. `kubectl` returns
+`NotFound`, the poller reports `not_observed`, and the flight can never go green
+— a **structurally blind check**, not a flake.
+
+### A receipt is scoped to what it proves
+
+The failure above is the family's subtlest member, because nothing lied: the
+per-digest migration Job completed, and the step that read it reported the truth
+it was asked for. The question was wrong. A Job named `migrate-<slug>-<digest12>`
+in the ACTUATOR's namespace answers _"has this node's bundle been migrated by
+whoever is paying?"_ — while the only useful question is _"has THIS DATABASE been
+migrated?"_. One node at one digest with two lanes has two databases
+(`cogni_poly` and `cogni_poly_candidate_a`, same Postgres since the lane suffix)
+and produced ONE Job name, so the first lane's receipt answered for the second.
+poly's candidate-a lease then served an empty schema until its boot deadline
+closed it.
+
+> **A receipt proves a fact about a resource, so it must live where that resource
+> is addressed.** For anything a lane owns, that is the LANE — even when the
+> identity performing the work belongs to the control env.
+
+Custody decides who ACTS; the workload decides WHAT IS ACTED ON. The fix is
+namespace, not name: the Job now runs in `cogni-<lane>`, where the
+`<slug>-compute-env-secrets` it references by `secretKeyRef` actually resolves to
+that lane's DSN. Every pre-existing Job name is unchanged and no proven digest
+re-runs — k8s identity is (namespace, name), so lane isolation is sufficient on
+its own. A second scoping rule in the name would be the same mistake this spec
+warns about: two derivations of one question.
+
+The same shape is latent anywhere else a per-node or per-digest artifact is
+addressed without its lane — DNS records and provider egress rules are the
+candidates to check next.
+
+### Guard
+
+`tests/ci-invariants/appset-path-consumers.spec.ts` and
+`substrate-host-consumers.spec.ts` fail any consumer that rebuilds these values
+from the env alone. A gate that enumerates consumers beats anyone's grep — add
+to the gate rather than fixing call sites one at a time.
 
 ---
 

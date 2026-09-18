@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5132 — grants THIS cluster's Akash transaction actuator the one reach it needs into the
+# lane namespaces it custodies: create/read/GC the per-digest migration Job in the namespace whose
+# Secret names the database that Job migrates. See infra/k8s/base/akash-tx-actuator-lane-access.
+#
+# WHY IT LIVES IN control-plane/production/ AND NOT IN THE OPERATOR OVERLAY. The overlay sets
+# `namespace: cogni-production` and `namePrefix: operator-`, and kustomize's namespace transformer
+# rewrites even an explicitly-stated namespace — so an object destined for `cogni-candidate-a`
+# cannot be expressed there. This directory is the per-env control-plane layer: continuously
+# reconciled, scoped so it "can never fan a foreign env onto the production cluster"
+# (../roots/production-control-plane-application.yaml). Only the PRODUCTION control plane
+# registers this Application, which is what makes the grant exist on the custodying cluster and
+# nowhere else — candidate-a and preview custody nothing, so they get no such binding.
+#
+# targetRevision `main` for the same reason as its siblings here: production must never run an
+# unmerged control plane.
+#
+# prune: true — this is pure RBAC with no workload attached, so removing a lane stanza SHOULD
+# remove the grant. That is the opposite of the Crossplane siblings' `prune: false`, where an
+# accidental prune would close a paid lease.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: akash-tx-actuator-lane-access
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/k8s/base/akash-tx-actuator-lane-access
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

@@ -16,12 +16,19 @@ source_sha: 654e5f2132cdc774a329f24c69340170e4721d2a
 candidate_a_branch: deploy/candidate-a-node-template
 preview_branch: deploy/preview-node-template
 production_branch: deploy/production-node-template
-# task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable).
+# task.5017 — per-env node-set (deploy ⊆ provisioned).
 # story.5016 production cutover: preview slot retired (preview has no funded Akash
 # account and gets no actuator; its lease on the shared account was closed).
-envs: [candidate-a, production]
+# task.5130 — the candidate-a slot is REMOVED. candidate-a's actuator is pinned to the
+# TEST Console account (akash12eh8…), reserved for Cogni's own operator-platform self-test
+# on cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER: node-template is a real
+# cogni-dao repo, so every environment it runs in must bill the PRODUCTION sponsor account
+# (akash10auj…). This closes node-template's candidate-a FLIGHT lane; restoring one needs a
+# non-test wallet first (task.5132). The overlays/candidate-a/node-template/ dir stays —
+# it is the per-env RENDER TEMPLATE for render-node-overlays.sh, not a deployed shape
+# (identical to overlays/preview/node-template/, an env node-template also does not join).
+envs: [production]
 deployment_provider:
-  candidate-a: akash
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
 # actuator pays from production's DEDICATED account (akash10auj…). PRECONDITION:
@@ -32,7 +39,7 @@ compute_api:
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
-lease_epoch:
+lease_generation:
   production: 0
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
@@ -40,7 +47,7 @@ path_prefix: nodes/node-template/
 node_id: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
 # task.5052 (story.5016) — this node's workload runs on Akash; these provider
 # egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
-# Rendered per-env (union over rows deployed to the env) by
+# Rendered per-env (union over rows AKASH-PLACED in that env — bug.5191) by
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:

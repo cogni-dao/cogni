@@ -7,14 +7,16 @@
  *   stable code→status mapping a Crossplane composition will branch on.
  * Scope: Dispatcher unit tests plus one real socket round-trip through the server factory.
  *   Does NOT reach the Akash Console or a database.
- * Invariants: no unauthenticated mutation may ever reach the actuator; no mutation may omit
- *   its migration precondition (bug.5140).
+ * Invariants: no unauthenticated mutation may ever reach the actuator; no migration state may
+ *   ever refuse one (task.5135).
  * Side-effects: IO (one loopback HTTP server on an ephemeral port)
  * Links: ./akash-tx-http, @contracts/compute.akash-tx.v1, task.5095
  * @internal
  */
 
+import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -29,8 +31,8 @@ import {
 const TOKEN = "test-token";
 const AUTH = `Bearer ${TOKEN}`;
 
-const MIGRATION = {
-  policy: "RequireBeforeTransaction",
+/** The RELEASE step, as it travels on an OBSERVE. Never on a mutation (task.5135). */
+const MIGRATION_STEP = {
   profile: "cogni-node-app-v1",
   bundleDigest: `sha256:${"a".repeat(64)}`,
   image: `ghcr.io/cogni-dao/toks9@sha256:${"b".repeat(64)}`,
@@ -47,7 +49,6 @@ const VALID_CREATE = {
   cogniKey: "candidate-a/toks9/1",
   environment: "candidate-a",
   identity: IDENTITY,
-  migration: MIGRATION,
   spec: {
     name: "toks9",
     services: [
@@ -80,6 +81,14 @@ function stubActuator(
       endpoints: [],
     }),
     delete: async () => {},
+    // The sweeper is a scheduled operation, never an HTTP route: the dispatcher must expose
+    // no path that reaches it, which the route-surface assertions below pin.
+    sweepStaleAllocations: async () => ({
+      scanned: 0,
+      rolledBack: 0,
+      adopted: 0,
+      held: 0,
+    }),
     ...overrides,
   };
 }
@@ -194,6 +203,43 @@ describe("akash-tx dispatcher", () => {
     });
   });
 
+  it("logs every AkashTxError response so a failed op is visible in-cluster (bug.5221)", async () => {
+    const warns: Array<{ fields: Record<string, unknown>; msg: string }> = [];
+    const dispatch = createAkashTxDispatcher({
+      actuator: stubActuator({
+        create: async () => {
+          throw new AkashTxError(
+            "provider_unavailable",
+            "Console request failed with HTTP 401"
+          );
+        },
+      }),
+      token: TOKEN,
+      log: {
+        info: () => {},
+        warn: (fields: Record<string, unknown>, msg: string) =>
+          warns.push({ fields, msg }),
+        error: () => {},
+      },
+    });
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify(VALID_CREATE),
+    });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toMatchObject({
+      msg: "akash_tx_http_op_failed",
+      fields: {
+        path: "/v1/akash/create",
+        code: "provider_unavailable",
+        causeMessage: "Console request failed with HTTP 401",
+      },
+    });
+  });
+
   it("maps an unresolved allocation to 409 and an unknown outcome to 502", async () => {
     const unresolved = dispatcherFor(
       stubActuator({
@@ -232,52 +278,100 @@ describe("akash-tx dispatcher", () => {
     ).toBe(502);
   });
 
-  it("refuses a create that does not state its migration precondition", async () => {
-    // bug.5140: the field is REQUIRED, so a caller cannot inherit an ungated paid lease by
-    // omission. A 400 here is a refusal to spend, which is the whole point.
-    const dispatch = dispatcherFor(stubActuator());
-    const { migration: _dropped, ...withoutMigration } = VALID_CREATE;
+  it("maps a rolled-back allocation to a RETRYABLE 409, and exposes no sweep route", async () => {
+    // bug.5192: the Composition treats 409 as retryable (`Progressing`) and anything else as
+    // Failed. A settled-and-freed receipt is precisely "come back with the same key", so the
+    // very next reconcile creates instead of wedging.
+    const dispatch = dispatcherFor(
+      stubActuator({
+        create: async () => {
+          throw new AkashTxError("allocation_rolled_back", "settled, retry");
+        },
+      })
+    );
     const response = await dispatch({
       method: "POST",
       path: "/v1/akash/create",
       authorization: AUTH,
-      body: JSON.stringify(withoutMigration),
+      body: JSON.stringify(VALID_CREATE),
     });
-    expect(response.status).toBe(400);
-    expect(response.body).toMatchObject({ code: "invalid_request" });
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      code: "allocation_rolled_back",
+    });
+
+    // The sweeper is scheduled in the composition root, never reachable over the wire: it
+    // settles receipts, and nothing outside this process gets to ask for that.
+    for (const path of ["/v1/akash/sweep", "/v1/akash/sweepStaleAllocations"]) {
+      expect(
+        (
+          await dispatch({
+            method: "POST",
+            path,
+            authorization: AUTH,
+            body: "{}",
+          })
+        ).status
+      ).toBe(404);
+    }
   });
 
-  it("refuses an update that does not state its migration precondition", async () => {
+  it("accepts a create that states NO migration at all (task.5135)", async () => {
+    // The inverse of the pre-task.5135 assertion, which required the field and 400'd without
+    // it. Buying compute has nothing to prove about a database.
     const dispatch = dispatcherFor(stubActuator());
-    const { migration: _dropped, ...withoutMigration } = VALID_CREATE;
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify(VALID_CREATE),
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("accepts an update that states NO migration at all", async () => {
+    const dispatch = dispatcherFor(stubActuator());
     const response = await dispatch({
       method: "POST",
       path: "/v1/akash/update",
       authorization: AUTH,
-      body: JSON.stringify({ ...withoutMigration, externalName: "7001" }),
+      body: JSON.stringify({ ...VALID_CREATE, externalName: "7001" }),
     });
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(200);
   });
 
-  it("refuses RequireBeforeTransaction that names no digest to prove", async () => {
-    // The union makes an under-specified requirement a schema error rather than a pass.
-    const dispatch = dispatcherFor(stubActuator());
-    const response = await dispatch({
-      method: "POST",
-      path: "/v1/akash/create",
-      authorization: AUTH,
-      body: JSON.stringify({
-        ...VALID_CREATE,
-        migration: {
-          policy: "RequireBeforeTransaction",
-          profile: "cogni-node-app-v1",
+  it("still ACCEPTS the deprecated migration field, and drops it", async () => {
+    // Zero-downtime: a Composition rendered before the rematerialize still sends it, and 400ing
+    // the whole fleet mid-rollout would be worse than the bug being fixed. It must never reach
+    // the actuator.
+    let seen: unknown;
+    const dispatch = dispatcherFor(
+      stubActuator({
+        create: async (input) => {
+          seen = input;
+          return {
+            externalName: "7001",
+            state: "active",
+            endpoints: [],
+            replayed: false,
+            recovered: false,
+          };
         },
-      }),
-    });
-    expect(response.status).toBe(400);
+      })
+    );
+    for (const policy of ["Skip", "RequireBeforeTransaction"]) {
+      const response = await dispatch({
+        method: "POST",
+        path: "/v1/akash/create",
+        authorization: AUTH,
+        body: JSON.stringify({ ...VALID_CREATE, migration: { policy } }),
+      });
+      expect(response.status).toBe(200);
+      expect(seen).not.toHaveProperty("migration");
+    }
   });
 
-  it("refuses a migration policy it does not know", async () => {
+  it("refuses a deprecated migration policy it does not know", async () => {
     const dispatch = dispatcherFor(stubActuator());
     const response = await dispatch({
       method: "POST",
@@ -291,44 +385,63 @@ describe("akash-tx dispatcher", () => {
     expect(response.status).toBe(400);
   });
 
-  it("accepts an explicit Skip for a workload with no database", async () => {
+  it("carries the release step, its workload and its environment on OBSERVE", async () => {
+    let seen: unknown;
+    const dispatch = dispatcherFor(
+      stubActuator({
+        observe: async (input) => {
+          seen = input;
+          return { found: false, migration: { phase: "running" } };
+        },
+      })
+    );
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/observe",
+      authorization: AUTH,
+      body: JSON.stringify({
+        cogniKey: VALID_CREATE.cogniKey,
+        workload: "toks9",
+        environment: "candidate-a",
+        migration: MIGRATION_STEP,
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ migration: { phase: "running" } });
+    expect(seen).toMatchObject({
+      workload: "toks9",
+      environment: "candidate-a",
+      migration: MIGRATION_STEP,
+    });
+  });
+
+  it("refuses a release step that names no digest", async () => {
+    // The step is a strict object: an under-specified one is a schema error, not a silent pass.
     const dispatch = dispatcherFor(stubActuator());
     const response = await dispatch({
       method: "POST",
-      path: "/v1/akash/create",
+      path: "/v1/akash/observe",
       authorization: AUTH,
-      body: JSON.stringify({ ...VALID_CREATE, migration: { policy: "Skip" } }),
+      body: JSON.stringify({
+        cogniKey: VALID_CREATE.cogniKey,
+        migration: { profile: "cogni-node-app-v1" },
+      }),
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
   });
 
-  it("maps the three migration refusals to stable, distinguishable statuses", async () => {
-    // 409 = come back with the same key; 422 = terminal until a new digest; 503 = unproven.
-    const cases: [
-      "migration_pending" | "migration_failed" | "migration_unavailable",
-      number,
-    ][] = [
-      ["migration_pending", 409],
-      ["migration_failed", 422],
-      ["migration_unavailable", 503],
-    ];
-    for (const [code, status] of cases) {
-      const dispatch = dispatcherFor(
-        stubActuator({
-          create: async () => {
-            throw new AkashTxError(code, code);
-          },
-        })
-      );
-      const response = await dispatch({
-        method: "POST",
-        path: "/v1/akash/create",
-        authorization: AUTH,
-        body: JSON.stringify(VALID_CREATE),
-      });
-      expect(response.status).toBe(status);
-      expect(response.body).toMatchObject({ code });
-    }
+  it("has no status code a migration can reach", async () => {
+    // The three migration refusals (409/422/503) are GONE from the error union. A database can
+    // no longer answer a paid request at all, so there is nothing left to map.
+    const source = readFileSync(
+      path.join(__dirname, "akash-tx-http.ts"),
+      "utf8"
+    );
+    const table = source.slice(
+      source.indexOf("STATUS_BY_CODE"),
+      source.indexOf("export interface AkashTxHttpRequest")
+    );
+    expect(table).not.toMatch(/migration_/);
   });
 
   it("404s an unknown operation", async () => {

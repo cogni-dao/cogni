@@ -10,7 +10,16 @@
  * Scope: Wiring, minimal env validation and lifecycle only. Every decision about WHEN to
  *   observe/create/update/delete belongs to Crossplane, and every decision about whether a
  *   transaction is safe belongs to the actuator — neither is re-implemented here. No watches,
- *   no timers, no leader election, no reconciliation.
+ *   no leader election, no reconciliation.
+ *
+ *   ONE exception, added deliberately by bug.5192: a bounded interval that asks the actuator
+ *   to sweep stale allocation receipts. It is NOT reconciliation — it drives no desired state,
+ *   observes no Kubernetes object and retries nothing. It exists because the one failure a
+ *   request-scoped actuator structurally cannot handle is the request's own process dying
+ *   mid-transaction, and the receipt that leaves behind holds a WALLET-WIDE slot: without a
+ *   sweeper, one dead process stops every node in the environment from leasing. Crossplane
+ *   cannot do this job either — it only ever calls about ONE workload, and the wedged receipt
+ *   belongs to a different one.
  * Invariants:
  *   - ONE_WALLET_ONE_WRITER: the wallet identity comes from `resolveAkashTxWallet`, which
  *     REFUSES a missing `AKASH_ACTUATOR_CONSOLE_API_KEY` or a missing pinned
@@ -18,6 +27,13 @@
  *     LIVE Console account read that the credential opens the pinned wallet — before anything
  *     listens. A refusal exits non-zero; there is no degraded mode that spends from a wallet a
  *     second writer already owns.
+ *   - LEDGER_SCOPE_IS_MIGRATED (bug.5187): the ledger scope is keyed on the pinned Console
+ *     ACCOUNT, never on `DEPLOY_ENVIRONMENT`, and `wallet_scope` is half the key `claimOnce`
+ *     uses to find a prior receipt. So this root also counts env-keyed rows once at boot and
+ *     REFUSES to serve while any remain — a pod that beats its migrator would otherwise look
+ *     straight past still-billing leases and mint a second one beside each. The reverse order
+ *     is covered by the database: `akash_tx_allocations_wallet_scope_account_check` makes the
+ *     legacy form unwritable, so an old pod that outlives the migration fails loudly instead.
  *   - NEVER_HOLDS_TWO_WALLETS: the legacy ComputeWorkload controller's `AKASH_CONSOLE_API_KEY`
  *     is NOT projected here and is never read. Holding it to byte-compare it (task.5095) was
  *     the opposite of isolation; separation is a revocation fact plus the pinned account
@@ -32,25 +48,27 @@
  *     The pinned account id is NOT a secret and correctly arrives as plain env config.
  *   - SURGE_IS_SAFE_HERE: unlike the ComputeWorkload controller, correctness does not rest on a
  *     Kubernetes Lease. Two live replicas cannot both spend, because the wallet slot is a
- *     partial unique index in Postgres (`akash_tx_allocations_single_writer_idx`).
- *   - MIGRATION_PROVER_IS_WIRED: the actuator's migration gate is fail-CLOSED, and the
- *     Composition lowers `RequireBeforeTransaction` on every create/update of a
- *     `cogni-node-app-v1` workload — so an actuator built without a prover refuses EVERY paid
- *     transaction with `migration_unavailable` (story.5016). The prover is therefore mandatory
- *     here, not optional: it is the SAME `KubernetesMigrationJobAdapter` the ComputeWorkload
- *     controller uses, against the SAME per-digest Job names in this namespace, so the two
- *     lanes cannot disagree about whether a bundle digest has migrated. There is no dormant
- *     variant — a wallet-less actuator has already exited above, so "no credential, no Jobs"
- *     is structurally unreachable at this point.
+ *     partial unique index in Postgres (`akash_tx_allocations_single_writer_idx`) — and since
+ *     bug.5187 that slot is keyed on the ACCOUNT, so it serializes the replicas of a writer
+ *     that serves several environments just as it serializes two replicas serving one.
+ *   - MIGRATION_RUNNER_IS_WIRED_BUT_NEVER_GATES (task.5135): the same
+ *     `KubernetesMigrationJobAdapter` the ComputeWorkload controller uses is still wired here,
+ *     against the SAME per-digest Job names in this namespace, so the two lanes cannot disagree
+ *     about whether a bundle digest has migrated. What changed is WHERE it is consulted: the
+ *     RELEASE step on `observe`, never the paid create/update. An actuator built WITHOUT it no
+ *     longer refuses every paid transaction — it reports `migration.phase: "unavailable"` and
+ *     still mints the lease. Renting compute must not depend on a database being reachable.
  *   - LEAST_KUBERNETES_PRIVILEGE: the ONLY Kubernetes objects this process touches are the
- *     migration Jobs it creates and the Pods it reads to classify a Failed one. Its Role
- *     (infra/k8s/base/akash-tx-actuator/rbac.yaml) grants exactly that and nothing else — no
- *     computeworkloads, no leases, no events, no configmaps. Crossplane still owns every CR.
+ *     migration Jobs it creates on the release tick and the Pods it reads to classify a Failed
+ *     one. Its Role (infra/k8s/base/akash-tx-actuator/rbac.yaml) grants exactly that and
+ *     nothing else — no computeworkloads, no leases, no events, no configmaps. Crossplane still
+ *     owns every CR. FOLLOW-UP: with the paid path no longer touching Kubernetes at all, this
+ *     runner can be lifted out of the wallet-holding process entirely (see task.5135's PR).
  * Side-effects: IO (HTTP listener; Akash Console transactions; Postgres ledger writes;
  *   Kubernetes migration Job create/read/delete in this namespace)
  * Links: @features/compute/akash-tx/akash-tx-http, @features/compute/akash-tx/akash-tx-actuator,
  *   @features/compute/akash-tx/akash-tx-wallet,
- *   @features/compute/akash-tx/akash-tx-migration-gate,
+ *   @features/compute/akash-tx/akash-tx-migration-step,
  *   @adapters/server/compute/kubernetes-migration-job.adapter,
  *   infra/k8s/base/akash-tx-actuator,
  *   infra/crossplane/xcomputeworkload/composition.yaml, task.5102, story.5016
@@ -61,6 +79,7 @@ import { readFile } from "node:fs/promises";
 
 import { createAppDbClient, type Database } from "@cogni/db-client";
 import { BatchV1Api, CoreV1Api, KubeConfig } from "@kubernetes/client-node";
+import { sql } from "drizzle-orm";
 import pino from "pino";
 
 import {
@@ -80,9 +99,14 @@ import { createAkashTxActuatorServer } from "@/features/compute/akash-tx/akash-t
 import {
   AkashTxWalletConfigError,
   assertActuatorWalletAccount,
+  assertLedgerIsAccountScoped,
   credentialFingerprint,
   resolveAkashTxWallet,
 } from "@/features/compute/akash-tx/akash-tx-wallet";
+import {
+  ACCOUNT_WALLET_SCOPE_PATTERN,
+  akashTxAllocations,
+} from "@/shared/db/akash-tx-allocations";
 
 /**
  * The port the XComputeWorkload Composition hard-codes in
@@ -140,7 +164,6 @@ const expectedAccountId = runtimeEnv.AKASH_ACTUATOR_ACCOUNT_ID;
 const wallet = (() => {
   try {
     return resolveAkashTxWallet({
-      environment,
       actuatorApiKey,
       expectedAccountId,
     });
@@ -176,6 +199,44 @@ if (!databaseUrl) {
 
 const db: Database = createAppDbClient(databaseUrl);
 const getDb = async (): Promise<Database> => db;
+
+/**
+ * LEDGER_SCOPE_IS_MIGRATED (bug.5187). `claimOnce` finds a prior receipt by
+ * `(wallet_scope, cogni_key)`, so an account-keyed writer against an environment-keyed ledger
+ * cannot SEE the receipts of leases that are still billing — and a lookup that finds nothing is
+ * how you mint a second paid lease. Migration 0048 moves the rows and then makes the legacy form
+ * unwritable; this is the other direction, the one a CHECK constraint cannot cover: a pod that
+ * starts before its migrator has run refuses to serve instead of spending.
+ *
+ * Counted, not sampled, and read once at boot: the table is a few rows per environment, and the
+ * answer is permanently 0 the moment 0048 has applied (the constraint makes any other value
+ * impossible), so this costs one query and then nothing.
+ */
+const legacyScopedReceipts = await db
+  .select({ count: sql<number>`count(*)::int` })
+  .from(akashTxAllocations)
+  .where(
+    sql`${akashTxAllocations.walletScope} !~ ${ACCOUNT_WALLET_SCOPE_PATTERN}`
+  )
+  .then(([row]) => row?.count ?? 0);
+
+try {
+  assertLedgerIsAccountScoped(legacyScopedReceipts);
+} catch (error) {
+  log.fatal(
+    {
+      reason:
+        error instanceof AkashTxWalletConfigError
+          ? error.code
+          : "ledger_scope_unmigrated",
+      environment,
+      namespace,
+      legacyScopedReceipts,
+    },
+    "akash_tx_actuator_ledger_scope_unmigrated"
+  );
+  throw error;
+}
 
 /**
  * One bounded serving proof per observe: exact source SHA on `/version` AND a 2xx `/readyz`,
@@ -275,9 +336,14 @@ const actuator = new AkashTxActuator({
   probe,
   /**
    * story.5016 — the gate this feeds is fail-CLOSED, so an omitted prover is not "no migration
-   * policy", it is "every paid create is refused". Same adapter, same namespace and therefore
-   * the same `migrate-<slug>-<digest12>` Job names as the ComputeWorkload controller: a digest
-   * already proven by one lane is proven for the other, and neither re-runs it.
+   * policy", it is "every paid create is refused".
+   *
+   * `namespace` here is this process's own and is now only a FALLBACK: the migration step states
+   * the workload's namespace per call (task.5132). It used to be the whole answer, on the
+   * reasoning that "a digest already proven by one lane is proven for the other, and neither
+   * re-runs it" — true while one env meant one VM meant one Postgres, and false the moment this
+   * cluster started custodying OTHER envs' lanes against their OWN databases on the SAME
+   * Postgres (bug.5207). A digest is proven per DATABASE, not per node.
    */
   migration: new KubernetesMigrationJobAdapter(
     kubeConfig.makeApiClient(BatchV1Api),
@@ -308,8 +374,44 @@ server.listen(LISTEN_PORT, "0.0.0.0", () => {
   );
 });
 
+/**
+ * How long a receipt must have held the wallet slot before the sweeper will INVESTIGATE it.
+ * Comfortably longer than the slowest legitimate create (Console write timeout + bid wait +
+ * lease), so a healthy in-flight transaction is never a candidate. Age alone never settles
+ * anything — every candidate is still resolved against Console evidence.
+ */
+const SWEEP_STALE_AFTER_MS = 15 * 60_000;
+/** One pass, hard-bounded: a sweep is a bounded attempt, not a drain loop. */
+const SWEEP_BATCH_LIMIT = 20;
+const SWEEP_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * The backstop for a create whose process never came back. Failures are logged and swallowed:
+ * the sweeper is a recovery aid, and a Console or ledger outage must never take the actuator
+ * down with it — the next pass tries again.
+ */
+const sweepTimer = setInterval(() => {
+  void actuator
+    .sweepStaleAllocations({
+      olderThanMs: SWEEP_STALE_AFTER_MS,
+      limit: SWEEP_BATCH_LIMIT,
+    })
+    .catch((error: unknown) => {
+      log.error(
+        {
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        },
+        "akash_tx_allocation_sweep_failed"
+      );
+    });
+}, SWEEP_INTERVAL_MS);
+// Never hold the process open for a recovery pass.
+sweepTimer.unref();
+
 function shutdown(signal: string): void {
   log.info({ signal }, "akash_tx_actuator_stopping");
+  clearInterval(sweepTimer);
   // In-flight requests are already idempotent by key, so a bounded drain is enough: a
   // dropped response is recoverable from the durable receipt, a double-spend is not.
   server.close(() => process.exit(0));

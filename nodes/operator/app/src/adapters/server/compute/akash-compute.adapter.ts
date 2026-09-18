@@ -420,10 +420,21 @@ export class AkashComputeAdapter
   }
 
   /**
-   * Adopt only a unique post-baseline allocation. The controller is the sole wallet writer;
-   * manual/route writes invalidate proof and intentionally force fail-closed ambiguity.
+   * Adopt only a unique post-baseline allocation, and say EXPLICITLY which of the three
+   * possible worlds the wallet is in. The actuator is the sole wallet writer; manual/route
+   * writes invalidate proof and intentionally force fail-closed ambiguity.
+   *
+   * bug.5192: this used to return `null` for "no post-baseline deployment", which the caller
+   * could only read as "a paid allocation may exist and was not found" — an unresolvable
+   * state that held the wallet-global writer slot forever (33h of fleet-wide create outage
+   * from ONE crashed create). `null` conflated two worlds that are BOTH settled:
+   *   - the transaction never landed, and
+   *   - it landed and was already closed + refunded (Console's deployment list enumerates
+   *     LIVE deployments; a closed one drops out of it entirely).
+   * Neither is billing, so neither warrants fail-closed. Only a LIVE allocation we cannot
+   * attribute does — and that is `ambiguous`.
    */
-  async findAllocationSince(cursor: string): Promise<ProvisionOutput | null> {
+  async findAllocationSince(cursor: string): Promise<AkashAllocationProbe> {
     if (!/^-?\d+$/.test(cursor)) {
       throw new AkashComputeError(
         "UNEXPECTED_SHAPE",
@@ -432,6 +443,9 @@ export class AkashComputeAdapter
     }
     const baseline = BigInt(cursor);
     const candidates = (await this.listAllDeployments())
+      // Defensive: today Console's list returns live deployments only, but a closed one
+      // appearing here must never count as live spend — closed is settled by definition.
+      .filter((item) => item.deployment?.state !== "closed")
       .map((item) => item.deployment?.id?.dseq)
       .filter(
         (value): value is string | number =>
@@ -440,14 +454,14 @@ export class AkashComputeAdapter
       .map((value) => String(value))
       .filter((value) => BigInt(value) > baseline);
     const unique = [...new Set(candidates)];
-    if (unique.length === 0) return null;
+    if (unique.length === 0) return { outcome: "settled" };
     if (unique.length > 1) {
-      throw new AkashComputeError(
-        "AMBIGUOUS_ADOPTION",
-        "multiple post-baseline deployments prevent deterministic adoption"
-      );
+      return { outcome: "ambiguous", dseqs: unique };
     }
-    return this.status({ leaseId: unique[0] as string });
+    return {
+      outcome: "adopted",
+      output: await this.status({ leaseId: unique[0] as string }),
+    };
   }
 
   async status(p: { leaseId: string }): Promise<ProvisionOutput> {
@@ -519,7 +533,11 @@ export class AkashComputeAdapter
 
   private async listAllDeployments(): Promise<ConsoleDeploymentDetail[]> {
     const deployments: ConsoleDeploymentDetail[] = [];
-    const limit = 1_000;
+    // Console's spec caps `limit` at 100 ("Deployments per page, at most 100" —
+    // GET /v1/doc, 2026-09-18); 1000 draws HTTP 400 on every call, which killed the
+    // create path inside readCursor for three straight lane activations (task.5132:
+    // akash_tx_http_op_failed provider_rejected "Console request failed with HTTP 400").
+    const limit = 100;
     for (let skip = 0; ; skip += limit) {
       const page = await this.request<ConsoleDeploymentList>(
         "GET",
@@ -664,10 +682,18 @@ export class AkashComputeAdapter
           endpoints: [],
         });
       } catch {
-        await this.release({ leaseId: String(dseq) }).catch(() => {});
+        // bug.5192: this is the exact path that wedged production for 33h. The deployment is
+        // closed here, but the caller's durable receipt still holds the wallet-global writer
+        // slot — so the close MUST be proven and reported, or nothing can ever settle it.
+        const rolledBack = await this.closeAndVerify(String(dseq));
         throw new AkashComputeError(
           "UNEXPECTED_SHAPE",
-          "controller could not persist the allocated deployment handle; deployment closed"
+          rolledBack
+            ? `controller could not persist the allocated deployment handle; deployment ${dseq} closed and verified closed`
+            : `controller could not persist the allocated deployment handle; deployment ${dseq} could NOT be proven closed`,
+          undefined,
+          undefined,
+          rolledBack ? String(dseq) : undefined
         );
       }
     }
@@ -702,19 +728,57 @@ export class AkashComputeAdapter
         this.writeTimeoutMs
       );
     } catch (error) {
-      await this.release({ leaseId: String(dseq) }).catch(() => {
-        // best-effort close; the original error (now dseq-tagged) is the one that matters
-      });
+      // The close is best-effort, but WHETHER it closed is not: a verified close is the only
+      // evidence that lets the caller settle its receipt and release the wallet slot instead
+      // of holding it against spend that no longer exists (bug.5192).
+      const rolledBack = await this.closeAndVerify(String(dseq));
       if (error instanceof AkashComputeError) {
         throw new AkashComputeError(
           error.code,
-          `${error.message} (deployment ${dseq} closed, escrow refunding)`
+          rolledBack
+            ? `${error.message} (deployment ${dseq} closed, escrow refunding)`
+            : `${error.message} (deployment ${dseq} close UNVERIFIED)`,
+          error.httpStatus,
+          error.bootFailureStage,
+          rolledBack ? String(dseq) : undefined
         );
       }
       throw error;
     }
 
     return { dseq: String(dseq), provider };
+  }
+
+  /**
+   * CLOSE_BEFORE_CLEAR, at the transaction boundary (bug.5189's doctrine, bug.5192's need):
+   * close the deployment, then INDEPENDENTLY re-read Console and require the read-back to say
+   * it is closed. A 200 from DELETE is not proof; only the re-read is.
+   *
+   * Returns true ONLY when nothing can still be billing under this dseq. Every failure —
+   * DELETE error, read error, or a deployment that still reads `active` — returns false, which
+   * keeps the caller's receipt held and hands the case to the stale-allocation sweeper. A
+   * wedged receipt is recoverable; a silently-cleared receipt over a live lease is not.
+   */
+  private async closeAndVerify(dseq: string): Promise<boolean> {
+    try {
+      await this.release({ leaseId: dseq });
+    } catch {
+      // Fall through: the deployment may already be closed, which the read-back settles.
+    }
+    try {
+      const detail = await this.request<ConsoleDeploymentDetail>(
+        "GET",
+        `/v1/deployments/${encodeURIComponent(dseq)}`
+      );
+      return detail?.deployment?.state === "closed";
+    } catch (error) {
+      // Console has no such deployment: nothing exists to bill.
+      return (
+        error instanceof AkashComputeError &&
+        error.code === "HTTP_ERROR" &&
+        error.httpStatus === 404
+      );
+    }
   }
 
   /**
@@ -1043,12 +1107,44 @@ export class AkashComputeError extends Error {
     public readonly code: AkashComputeErrorCode,
     message: string,
     public readonly httpStatus?: number,
-    public readonly bootFailureStage?: BootFailureStage
+    public readonly bootFailureStage?: BootFailureStage,
+    /**
+     * PROOF, not intent: set ONLY when the deployment this error aborted was closed AND that
+     * closure was independently re-read back from Console (`deployment.state == "closed"`, or
+     * a 404). A DELETE returning 200 is NOT proof — bug.5189's CLOSE_BEFORE_CLEAR doctrine
+     * applies verbatim here. Callers use it to settle a durable receipt, so a false positive
+     * would strand a paid lease; absent is always the safe answer.
+     */
+    public readonly rolledBackDseq?: string
   ) {
     super(message);
     this.name = "AkashComputeError";
   }
+
+  /** True only when this failure left NOTHING billing — see `rolledBackDseq`. */
+  get rolledBack(): boolean {
+    return this.rolledBackDseq !== undefined;
+  }
 }
+
+/**
+ * What the wallet says about a possibly-lost allocation, from durable evidence alone.
+ *
+ * The distinction this type exists to make explicit (bug.5192): a cursor with no LIVE
+ * allocation beyond it is **financially settled** — either the transaction never landed, or it
+ * landed and was already closed and refunded. Both mean nothing is billing, and neither is a
+ * reason to hold the wallet-global writer slot forever. Only `live` spend is undecidable.
+ */
+export type AkashAllocationProbe =
+  /** Exactly one live allocation beyond the baseline: it is ours, adopt it. */
+  | { outcome: "adopted"; output: ProvisionOutput }
+  /**
+   * No live allocation beyond the baseline. NOT a claim that nothing was ever created — a
+   * claim that nothing created is still billing. Safe to settle the receipt and retry.
+   */
+  | { outcome: "settled" }
+  /** More than one live allocation beyond the baseline: adoption is undecidable, fail closed. */
+  | { outcome: "ambiguous"; dseqs: readonly string[] };
 
 const BOOT_STAGE_ORDER: Readonly<Record<BootFailureStage, number>> = {
   status_unavailable: 0,

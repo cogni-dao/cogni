@@ -15,7 +15,7 @@
 #   value-free secret refs      spec.workload.services[].secretRefs[].key  (KEYS ONLY, never values)
 #   command/args                spec.workload.services[].{command,args}
 #   bindings                    spec.workload.services[].bindings
-#   empty-birth migration order spec.migration.policy
+#   empty-birth schema policy   spec.migration.policy (a RELEASE step, never a payment gate)
 #   exact-SHA readiness         status.serving + Ready condition, proved against spec.bundle.source.sha
 #   DNS intent                  spec.dns + status.dns{hostname,target,published}
 #   application-log identity    spec.workload.name + spec.nodeId + spec.environment as lease
@@ -269,22 +269,37 @@ spec:
                       default: false
                 migration:
                   description: >-
-                    Empty-birth ordering. `RequireBeforeTransaction` (the default and the legacy
-                    behaviour, bug.5116) means a completed per-digest DB migration is a
-                    PRECONDITION of every paid transaction, so a fresh node's schemas exist
-                    before its lease does. `Skip` is for workloads with no database at all.
-                    ENFORCED at the paid-transaction seam (bug.5140): the Composition lowers this
-                    into the actuator's required `migration` discriminated union, and a
-                    `RequireBeforeTransaction` create or update is REFUSED until the Job for
-                    spec.bundle.ref has succeeded. The migration COMMANDS never travel — the
-                    runtime profile names a command set the actuator owns, so no caller can
-                    "prove" a migration with a no-op.
+                    Empty-birth schema policy. `RequireBeforeServing` (the default) means the
+                    per-digest DB migration for spec.bundle.ref is RUN AS A RELEASE STEP on
+                    every reconcile tick, and its outcome gates READINESS: a failed migration
+                    surfaces as status.failure.reason MigrationFailed, and a workload whose
+                    schema never arrives cannot serve its exact SHA and so trips
+                    bootPolicy.bootDeadlineSeconds. `Skip` is for workloads with no database.
+
+                    IT DOES NOT GATE PAYMENT (task.5135). bug.5140 made a completed migration a
+                    PRECONDITION of every paid transaction, and that coupling is what let node
+                    toks5 hold a valid XR with a valid digest, never reach the actuator at all,
+                    and never exist in any environment while `akash-lease` reported "not yet
+                    ready" 1044 times — silent and unbounded. A lease is now created regardless
+                    of migration state, so a bad schema fails LOUDLY and within a bounded window
+                    instead of silently never being created. The migration COMMANDS still never
+                    travel — the runtime profile names a command set the actuator owns, so no
+                    caller can run an arbitrary container against the environment's database.
                   type: object
                   properties:
                     policy:
+                      description: >-
+                        `RequireBeforeTransaction` is a DEPRECATED alias, served only for the
+                        task.5135 zero-downtime field migration: XRs already on deploy refs
+                        carry it, and the Composition keeps lowering those onto the actuator's
+                        pre-task.5135 wire so a fleet mid-rollout cannot be refused. It is
+                        NEVER a transaction precondition in the current actuator. The next
+                        rematerialize of any workload writes `RequireBeforeServing`; remove
+                        this value once no deploy ref carries it.
                       type: string
-                      enum: [RequireBeforeTransaction, Skip]
-                      default: RequireBeforeTransaction
+                      enum:
+                        [RequireBeforeServing, RequireBeforeTransaction, Skip]
+                      default: RequireBeforeServing
                 dns:
                   description: >-
                     DNS intent. Absent means "publish status.dns.target but write no record" —
@@ -325,11 +340,18 @@ spec:
                       default: Hold
                 leaseEpoch:
                   description: >-
-                    DEPRECATED compatibility alias for leaseGeneration. It remains served only
-                    for the task.5105 zero-downtime field migration: the pre-rename materializer
-                    writes this field, while the migration materializer writes both fields with
-                    the same value. Remove only after every deploy-ref XComputeWorkload has been
-                    rematerialized with leaseGeneration. New callers must not use this field.
+                    DEPRECATED read-side alias for leaseGeneration, retained ONLY so the
+                    XComputeWorkloads already committed on deploy/<env>-<node> refs before
+                    task.5122 stay schema-valid. NOTHING WRITES IT ANY MORE: the materializer
+                    emits leaseGeneration exclusively, so every flight/promote converts one more
+                    ref off this field. It is served, never preferred - the Composition reads
+                    leaseGeneration first and fails the render if the two disagree. REMOVAL GATE
+                    (task.5121): drop this property and the Composition's fallback once no
+                    refs/remotes/origin/deploy ref contains `leaseEpoch`. Removing it earlier
+                    would prune the field out of a live XR whose replacement counter is nonzero
+                    (today: toks5 production, generation 1), silently resolving its idempotence
+                    key back to a SETTLED one - which the actuator refuses, re-deading the node.
+                    New callers must not use this field.
                   type: integer
                   minimum: 0
                   maximum: 1000000
@@ -341,13 +363,46 @@ spec:
                     A key that changed on its own — per generation, per resourceVersion, per
                     retry — would answer "no existing resource" after a promote and mint a
                     SECOND PAID LEASE, so nothing in this system is allowed to bump it
-                    implicitly. A human or the materializer bumps it exactly when a terminally
+                    implicitly. NAME (task.5122): this field was `leaseEpoch`. `epoch` is
+                    reserved for the attribution/distribution domain — contributor activity
+                    windows, claimants, payouts — so a compute-lease replacement counter is a
+                    GENERATION. The rename changed no VALUE; no idempotence key moved. A human or the materializer bumps it exactly when a terminally
                     closed lease must be REPLACED (the actuator refuses to re-spend a settled
                     key by design, which is what makes a stuck workload loud instead of
                     expensive).
                   type: integer
                   minimum: 0
                   maximum: 1000000
+                actuatorNamespace:
+                  description: >-
+                    Namespace of the akash-tx-actuator that mints THIS workload's lease.
+                    Defaults to the XR's own namespace, which is the long-standing behaviour
+                    and stays correct for production.
+
+                    It exists because the XR namespace was doing THREE jobs at once
+                    (task.5132): it keyed the actuator's idempotence key
+                    `xcw:<namespace>:<name>:<generation>`, it resolved the writer's Service
+                    DNS, AND it scoped the writer's auth-secret reference. Those are not the
+                    same question. A real node's pre-prod lane must bill the PRODUCTION
+                    Console account (akash-actuator-wallet-cutover NS3), so its lease has to
+                    be minted by the production writer — while its idempotence key must stay
+                    DISTINCT from the same node's production lease or the actuator refuses it
+                    as a settled key.
+
+                    Splitting them resolves that: the key keeps using the XR's own namespace
+                    (unique per lane), and this field points the writer lookup at the single
+                    cluster that holds the account. `writer -> envs` one-to-many is the shape
+                    the north star calls deliberate.
+
+                    This is NOT a way to put a second actuator in a pre-prod cluster. Two
+                    writers on one account double-spend, because
+                    `akash_tx_allocations_single_writer_idx` is a PER-DATABASE partial unique
+                    index and cannot see across them; and it would place the production
+                    payment instrument in a cluster that runs unreviewed code. Both are
+                    rejected in the north star.
+                  type: string
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               type: object
               properties:
@@ -377,6 +432,21 @@ spec:
                 # commit in spec.bundle.source.sha. The actuator performs the single bounded
                 # probe; this field is the composite's observable copy of that proof.
                 serving: { type: boolean }
+                # THE RELEASE STEP, OBSERVED (task.5135). Where the per-digest DB migration for
+                # spec.bundle.ref got to on the last reconcile tick. It is reported here, and
+                # `failed` becomes status.failure.reason MigrationFailed — but it never stops
+                # the lease from existing, which is the whole point of the field being in
+                # `status` rather than on the paid wire. `unavailable` means the actuator has no
+                # migration capability wired; absent means the workload declared `Skip` (or is
+                # still on the deprecated RequireBeforeTransaction lowering).
+                migration:
+                  type: object
+                  properties:
+                    phase:
+                      {
+                        type: string,
+                        enum: [succeeded, running, failed, unavailable],
+                      }
                 dns:
                   type: object
                   properties:

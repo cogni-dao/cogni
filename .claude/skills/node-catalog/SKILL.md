@@ -12,11 +12,11 @@ description: >
 
 ## The roster is live state — read it, never hardcode
 
-| Want                               | Source                                                                                                                                  |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Who's registered + owner (per env) | `GET /api/v1/nodes` (owner Bearer) — the Postgres `nodes` SSOT. Per-env status: `GET /api/v1/nodes/{id}/deploy-state`.                  |
-| Git-declared in-repo nodes         | `infra/catalog/*.yaml` `type:node` → **operator, node-template, beacon, poly** (`litellm`/`openfga`=infra, `scheduler-worker`=service). |
-| Is it actually serving             | `curl https://<host>/version` from **outside** the cluster (buildSha, not workflow-green).                                              |
+| Want                               | Source                                                                                                                                          |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who's registered + owner (per env) | `GET /api/v1/nodes` (owner Bearer) — the Postgres `nodes` SSOT. Per-env status: `GET /api/v1/nodes/{id}/deploy-state`.                          |
+| Git-declared in-repo nodes         | `infra/catalog/*.yaml` `type:node` — read the rows, do not trust any list written here (`litellm`/`openfga`=infra, `scheduler-worker`=service). |
+| Is it actually serving             | `curl https://<host>/version` from **outside** the cluster (buildSha, not workflow-green).                                                      |
 
 **URL rule** (`verify-buildsha.sh`): operator = the bare env domain; every other node = `<node>-<envprefix>.<base>`.
 

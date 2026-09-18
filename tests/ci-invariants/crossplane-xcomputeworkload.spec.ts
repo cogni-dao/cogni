@@ -26,7 +26,7 @@
  * @public
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -108,6 +108,9 @@ describe("XComputeWorkload composite API (task.5096)", () => {
   it("preserves every legacy contract the port promised", () => {
     // Identity, artifact/digest/source, topology.
     expect(Object.keys(specSchema).sort()).toEqual([
+      // task.5132 — WHICH writer mints this lease, split out of the XR namespace. Optional
+      // and defaulting to the XR's own namespace, so no existing production XR changes.
+      "actuatorNamespace",
       "bootPolicy",
       "bundle",
       "dns",
@@ -188,12 +191,40 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     );
   });
 
-  it("carries empty-birth migration ordering as declared desired state", () => {
-    const policy = (
-      (specSchema.migration as YamlObject).properties as YamlObject
-    ).policy as YamlObject;
-    expect(policy.enum).toEqual(["RequireBeforeTransaction", "Skip"]);
-    expect(policy.default).toBe("RequireBeforeTransaction");
+  it("declares the empty-birth schema policy WITHOUT claiming it gates payment", () => {
+    const migration = specSchema.migration as YamlObject;
+    const policy = (migration.properties as YamlObject).policy as YamlObject;
+    // task.5135: `RequireBeforeServing` is the default. `RequireBeforeTransaction` remains
+    // SERVED as a deprecated alias for the zero-downtime field migration — XRs already on
+    // deploy refs carry it, and rejecting them would wedge the fleet mid-rollout.
+    expect(policy.enum).toEqual([
+      "RequireBeforeServing",
+      "RequireBeforeTransaction",
+      "Skip",
+    ]);
+    expect(policy.default).toBe("RequireBeforeServing");
+
+    // THE API MUST NOT LIE. A field that no longer gates payment may not describe itself as a
+    // precondition of one — a stale description is how the next reader re-derives the coupling.
+    const description = String(migration.description);
+    expect(description).toMatch(/IT DOES NOT GATE PAYMENT/);
+    // The retired claim, in the present tense it used to be written in.
+    expect(description).not.toMatch(/is REFUSED until/i);
+    expect(description).not.toMatch(/before its lease does/i);
+  });
+
+  it("publishes the release step's phase in status, bounded to the four it can be", () => {
+    // The migration outcome is an OBSERVATION on the composite, which is the whole shape of
+    // the fix: it is something an operator can read, not something a wallet can be refused by.
+    const phase = (
+      (statusSchema.migration as YamlObject).properties as YamlObject
+    ).phase as YamlObject;
+    expect(phase.enum).toEqual([
+      "succeeded",
+      "running",
+      "failed",
+      "unavailable",
+    ]);
   });
 });
 
@@ -227,7 +258,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // @contracts/compute.akash-tx.v1 accepts EXACTLY {cogniKey, environment, spec}; the spec
     // is `{name, services[]}`. An extra key is a 400 forever, never a partially-honoured call.
     expect(template).toContain(
-      '$payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services) "migration" $migration'
+      '$payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services)'
     );
     // The four bounded ops map 1:1 onto provider-http's four actions — no Cogni code decides
     // WHEN to act.
@@ -261,9 +292,11 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     const keyLiteral =
       /\$cogniKey := printf "[^"]*"([^}]*)\}\}/.exec(templateCode)?.[1] ?? "";
     expect(keyLiteral.trim().split(/\s+/)).toEqual(keyInputs);
-    // ZERO-DOWNTIME WIRE RENAME (task.5105): an old materializer writes leaseEpoch and a new
-    // one writes both fields. The additive schema must accept both, and the Composition must
-    // prefer the canonical name while falling back to the old value. This prevents toks5's
+    // ZERO-DOWNTIME WIRE RENAME (task.5105 -> task.5122). NOTHING writes leaseEpoch any more
+    // (see compute-workload-manifest.test.ts "never writes the deprecated leaseEpoch alias"),
+    // but XRs committed on deploy/<env>-<node> refs BEFORE the rename still carry it, so the
+    // additive schema must keep accepting it and the Composition must keep reading it as a
+    // last-resort fallback while preferring the canonical name. This is what prevents toks5's
     // intended generation 1 from ever becoming 0 regardless of which deploy lane moves first.
     expect(templateCode).toContain(
       '$leaseGeneration := int (dig "leaseEpoch" 0 $spec)'
@@ -293,7 +326,51 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(leaseGeneration.default).toBeUndefined();
     const leaseEpoch = specSchema.leaseEpoch as YamlObject;
     expect(leaseEpoch.default).toBeUndefined();
-    expect(leaseEpoch.description).toContain("DEPRECATED compatibility alias");
+    expect(leaseEpoch.description).toContain("DEPRECATED read-side alias");
+    // The alias must never become permanent furniture: its own description has to carry the
+    // condition under which it is deleted, and name the owning work item.
+    expect(leaseEpoch.description).toContain("REMOVAL GATE");
+    expect(leaseEpoch.description).toContain("task.5121");
+  });
+
+  it("resolves the WRITER from its own field while the idempotence key keeps the XR namespace", () => {
+    // task.5132. The XR namespace used to answer three different questions at once: which
+    // key identifies this allocation, which Service mints it, and which secret authorises
+    // that call. A real node's pre-prod lane must bill the PRODUCTION account (NS3) while
+    // keeping a key DISTINCT from its own production lease — impossible while one value
+    // drove both. Reusing the production key would hand the actuator a settled key and it
+    // would refuse to mint: the right refusal for the wrong reason.
+    // `templateCode` has the PROSE stripped — load-bearing here, because the comment that
+    // explains this split necessarily names the very strings the negatives forbid.
+
+    // The key is still namespace-derived — that is what keeps lanes from colliding.
+    expect(templateCode).toContain(
+      'printf "xcw:%s:%s:%d" $ns $name $leaseGeneration'
+    );
+
+    // The writer lookup and its auth ref move together. Splitting only one of them would
+    // dial the right Service with the wrong secret.
+    expect(templateCode).toContain(
+      'printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $writerNs'
+    );
+    expect(templateCode).toContain(
+      'akash-tx-actuator-auth:%s:token }}" $writerNs'
+    );
+
+    // Neither may keep reading $ns, or the decoupling is cosmetic.
+    expect(templateCode).not.toContain(
+      'printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $ns'
+    );
+    expect(templateCode).not.toContain(
+      'akash-tx-actuator-auth:%s:token }}" $ns'
+    );
+
+    // Default is the XR's own namespace: every existing production XR renders unchanged.
+    expect(templateCode).toContain("$writerNs := $ns");
+
+    // Optional in the schema — an XR that says nothing keeps the legacy behaviour.
+    const actuatorNamespace = specSchema.actuatorNamespace as YamlObject;
+    expect(actuatorNamespace.default).toBeUndefined();
   });
 
   it("preserves the replacement generation across every mixed-revision bridge shape", () => {
@@ -332,9 +409,9 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     };
 
     expect([
-      renderCogniKey({ leaseEpoch: 1 }), // old materializer after new XRD
-      renderCogniKey({ leaseGeneration: 1 }), // canonical-only cleanup target
-      renderCogniKey({ leaseEpoch: 1, leaseGeneration: 1 }), // bridge dual-write
+      renderCogniKey({ leaseEpoch: 1 }), // pre-rename XR still on a deploy ref
+      renderCogniKey({ leaseGeneration: 1 }), // what the materializer writes from task.5122 on
+      renderCogniKey({ leaseEpoch: 1, leaseGeneration: 1 }), // a bridge-era dual-written XR
     ]).toEqual([
       "xcw:cogni-production:toks5:1",
       "xcw:cogni-production:toks5:1",
@@ -411,53 +488,110 @@ describe("XComputeWorkload Composition (task.5096)", () => {
   });
 });
 
-describe("XComputeWorkload migration precondition (bug.5116 order, bug.5140 gate)", () => {
-  it("states its precondition on every mutation, and only on mutations", () => {
-    // AkashTxCreateInputSchema and AkashTxUpdateInputSchema BOTH require `migration`. An update
-    // mints no lease, but it is still the call that puts a new bundle digest in front of the
-    // node's database — which is exactly what bug.5116 ordered.
-    expect(template).toContain('"migration" $migration');
-    // Scope to the LEASE request: the composition also renders a Cloudflare Request whose
-    // mappings share the same action names, and a regex over the whole template would silently
-    // assert against DNS instead of the thing that spends money.
+describe("XComputeWorkload migration decoupling (task.5135)", () => {
+  /**
+   * Scope to the LEASE request: the composition also renders a Cloudflare Request whose
+   * mappings share the same action names, and a regex over the whole template would silently
+   * assert against DNS instead of the thing that spends money.
+   */
+  function leaseMappings(): Record<string, string> {
     const leaseBlock = template.slice(
       template.indexOf("composition-resource-name: akash-lease"),
       template.indexOf("composition-resource-name: dns-record")
     );
     expect(leaseBlock.length).toBeGreaterThan(0);
-    const mappings = Object.fromEntries(
+    return Object.fromEntries(
       [
         ...leaseBlock.matchAll(
           /- action: (\w+)\n([\s\S]*?)(?=\n\s+- action: |\n\s+expectedResponseCheck:)/g
         ),
       ].map((m) => [m[1], m[2]])
-    );
+    ) as Record<string, string>;
+  }
+
+  it("carries the migration on OBSERVE — the UNPAID tick — and nowhere else", () => {
+    // THE invariant. bug.5140 put the migration on create/update, which made a database a
+    // precondition of renting a computer; node toks5 then held a valid XR with a valid digest,
+    // never reached the actuator, and existed in no environment while `akash-lease` reported
+    // "not yet ready" 1044 times. Observe spends nothing, so it is where the step belongs.
+    const mappings = leaseMappings();
     expect(Object.keys(mappings).sort()).toEqual([
       "CREATE",
       "OBSERVE",
       "REMOVE",
       "UPDATE",
     ]);
-    // CREATE posts the payload verbatim; UPDATE is hand-built and must carry it explicitly.
-    expect(mappings.CREATE).toContain(".payload.body");
-    expect(mappings.UPDATE).toContain("migration: .payload.body.migration");
-    // Observe and delete are strict objects with NO migration field — sending one is a 400.
-    expect(mappings.OBSERVE).not.toContain("migration");
+    expect(mappings.OBSERVE).toContain(
+      "migration: .payload.body.migrationStep"
+    );
+    // WHOSE database — stated, never inferred from the actuator's own deployment.
+    expect(mappings.OBSERVE).toContain("workload: .payload.body.spec.name");
+    expect(mappings.OBSERVE).toContain(
+      "environment: .payload.body.environment"
+    );
+    // The release step must NEVER reach a paid action.
+    expect(mappings.CREATE).not.toContain("migrationStep");
+    expect(mappings.UPDATE).not.toContain("migrationStep");
     expect(mappings.REMOVE).not.toContain("migration");
   });
 
-  it("builds both branches of the discriminated union, and nothing in between", () => {
-    // `Skip` is the DEFAULT accumulator, so the only way to reach the expensive branch is to
-    // satisfy its condition — a template bug fails toward the gate, never past it.
-    expect(template).toContain('{{- $migration := dict "policy" "Skip" }}');
-    // Reached when the workload declares Skip, OR has no cogni-node-app-v1 service (no app
-    // image accumulated) and therefore no database.
+  it("enumerates the paid body instead of posting the payload verbatim", () => {
+    // CREATE used to be `.payload.body`, which meant every field added for any other action
+    // leaked onto the wire that spends money — and the create contract is a strict object that
+    // 400s on an unknown key. `migrationStep` is exactly such a field.
+    const mappings = leaseMappings();
+    expect(mappings.CREATE).toContain("cogniKey: .payload.body.cogniKey");
+    expect(mappings.CREATE).toContain("spec: .payload.body.spec");
+    expect(mappings.CREATE).not.toMatch(/body: \|\n\s+\.payload\.body\s*$/);
+  });
+
+  it("renders the release step only for a workload that actually has a database", () => {
+    // The empty dict is the DEFAULT accumulator, so the only way to reach the step is to
+    // satisfy its condition — a template bug fails toward "no migration", never toward one
+    // that runs against a workload with no schema to migrate.
+    expect(template).toContain("{{- $migrationStep := dict }}");
     expect(template).toContain(
-      '{{- if and (eq $migrationPolicy "RequireBeforeTransaction") (ne $appImage "") }}'
+      '{{- if and (eq $migrationPolicy "RequireBeforeServing") (ne $appImage "") }}'
     );
-    // RequireBeforeTransaction structurally cannot travel without the facts that prove it.
     expect(template).toContain(
-      '$migration = dict "policy" "RequireBeforeTransaction" "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres'
+      '$migrationStep = dict "profile" "cogni-node-app-v1" "bundleDigest" $bundleDigest "image" $appImage "doltgres" $appDoltgres'
+    );
+    // Presence IS the policy: no `Skip` member travels on the step wire at all.
+    expect(templateCode).not.toMatch(
+      /\$migrationStep\s*=?:?=?\s*dict "policy"/
+    );
+  });
+
+  it("keeps the deprecated lowering only for XRs not yet rematerialized", () => {
+    // Zero-downtime, the same posture leaseEpoch → leaseGeneration uses: an XR already on a
+    // deploy ref carries `RequireBeforeTransaction` and may be reconciled against a
+    // pre-task.5135 actuator that REQUIRES the field. Dropping it would 400 the fleet.
+    expect(template).toContain(
+      '{{- if eq $migrationPolicy "RequireBeforeTransaction" }}'
+    );
+    expect(template).toContain(
+      '{{- if $hasLegacyMigration }}{{ $_ := set $payload "migration" $legacyMigration }}{{ end }}'
+    );
+    // The DEFAULT policy is the new one, so an XR that states nothing gets the decoupled path.
+    expect(template).toContain(
+      '$migrationPolicy := dig "migration" "policy" "RequireBeforeServing" $spec'
+    );
+  });
+
+  it("surfaces a failed migration as a NAMED, terminal status reason", () => {
+    // The loudness half of the fix. A migration that will never succeed must not hide behind a
+    // retryable refusal's "Progressing" — that is what an indefinite silent stall looks like.
+    expect(template).toContain(
+      '$migrationFailed := eq $migrationPhase "failed"'
+    );
+    expect(template).toContain("{{- else if $migrationFailed }}");
+    expect(template).toContain('$failReason = "MigrationFailed"');
+    // Must satisfy the XRD's status.failure.reason pattern, or the write is rejected by the
+    // CRD and the very failure this branch exists to announce becomes invisible again.
+    expect("MigrationFailed").toMatch(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/);
+    // A terminal refusal still outranks it; a retryable one no longer does.
+    expect(template).toContain(
+      '{{- else if and (ne $refusalCode "") (not $refusalRetryable) }}'
     );
   });
 
@@ -474,20 +608,22 @@ describe("XComputeWorkload migration precondition (bug.5116 order, bug.5140 gate
     expect(template).toContain(
       '{{- if and $isApp (eq .key "DOLTGRES_URL") }}{{ $appDoltgres = true }}{{ end }}'
     );
-    // A ref with no digest fails the render rather than sending a request the gate will 400.
-    expect(template).toContain(
-      "has no sha256 digest to prove a migration against"
-    );
+    // A ref with no digest fails the render rather than sending a request that cannot be honoured.
+    expect(template).toContain("has no sha256 digest to migrate against");
   });
 
   it("never puts a migration command on the wire", () => {
-    // `profile` NAMES a command set the actuator owns. A caller-supplied command would let any
-    // caller "prove" a migration with a no-op, which makes an enforcing gate advisory.
-    const unionLiterals = [
-      ...templateCode.matchAll(/\$migration\s*(?::?=)\s*dict ([^}]*)/g),
-    ].map((m) => m[1]);
-    expect(unionLiterals.length).toBe(2);
-    for (const literal of unionLiterals) {
+    // `profile` NAMES a command set the actuator owns. A caller-supplied command would let
+    // anyone who can reach the actuator run an arbitrary container against the environment's
+    // database under its service account.
+    const literals = [
+      ...templateCode.matchAll(
+        /\$(?:migrationStep|legacyMigration)\s*(?::?=)\s*dict ([^}]*)/g
+      ),
+    ].map((m) => m[1] as string);
+    // Two empty accumulators + the step + the deprecated union's two branches.
+    expect(literals.length).toBe(5);
+    for (const literal of literals) {
       const keys = [...literal.matchAll(/"([a-zA-Z]+)"/g)].map((m) => m[1]);
       for (const key of keys) {
         expect([
@@ -609,15 +745,17 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect(template).toContain(
       "$refusalRetryable := or (eq $respStatus 409) (ge $respStatus 500)"
     );
+    // Split into two branches by task.5135 so a TERMINAL migration failure can be reported
+    // between them: it must not outrank a terminal refusal, and must outrank a retryable one.
     expect(template).toContain(
-      '$phase = ternary "Progressing" "Failed" $refusalRetryable'
+      '{{- else if and (ne $refusalCode "") (not $refusalRetryable) }}'
     );
+    expect(template).toContain('{{- else if ne $refusalCode "" }}');
     // Every code the actuator can emit must satisfy the XRD's reason pattern, or the status
     // write is rejected and the refusal is invisible again.
     for (const code of [
-      "migration_pending",
-      "migration_failed",
-      "migration_unavailable",
+      // The three `migration_*` codes were REMOVED with task.5135 — a database can no longer
+      // refuse a paid request, so there is no migration refusal left to render.
       "wallet_allocation_blocked",
       "allocation_unresolved",
       "allocation_ambiguous",
@@ -752,5 +890,105 @@ describe("XComputeWorkload public reachability (bug.5152)", () => {
     expect(templateCode).toContain("published: {{ $dnsPublished }}");
     expect(templateCode).not.toContain("published: {{ if $dns }}");
     expect(templateCode).toContain('index $observedResources "dns-record"');
+  });
+});
+
+describe("XComputeWorkload DNS survives a promotion transition (bug.5188)", () => {
+  // Everything from the Cloudflare Request to the end of the template, prose-stripped: the
+  // assertions here pin the last-known-good DNS latch that keeps a promotion from withdrawing
+  // the live public record when the current observe carries an ERROR body with no endpoints.
+  const dnsBlock = templateCode.slice(
+    templateCode.indexOf("composition-resource-name: dns-record")
+  );
+
+  it("latches the last-known-good target from status, exactly like $prevSha/$prevResource", () => {
+    // provider-http overwrites status.response.body with the ERROR body of a failed mutation
+    // (see the lease-handle latch), which has no endpoints, so $dnsTarget collapses to "" while
+    // a promotion's migration runs. The last-served target is read back from status.dns.target
+    // and carried forward — the same posture the observed-bundle and lease-handle latches take.
+    expect(templateCode).toContain(
+      '$prevDnsTarget := dig "status" "dns" "target" ""'
+    );
+    expect(templateCode).toContain("$effectiveDnsTarget");
+  });
+
+  it("gates the composed dns-record child on the LATCHED target, never the collapsing one", () => {
+    // The render gate is what a transient endpoint-less observe used to fail: an omitted child
+    // is garbage-collected, which fires a real Cloudflare DELETE and takes the live proxied
+    // CNAME to NXDOMAIN. The gate must read the latched value so the child keeps rendering.
+    expect(templateCode).toContain(
+      'if and $dns (ne $effectiveDnsTarget "") $renderLease'
+    );
+    expect(templateCode).not.toContain(
+      'if and $dns (ne $dnsTarget "") $renderLease'
+    );
+  });
+
+  it("adopts a genuinely-new target only once the new revision actually serves", () => {
+    // PROVE_BEFORE_TRAFFIC: a different, non-empty $dnsTarget is only trusted while the workload
+    // is active AND serving. Until then the record keeps pointing at the last-known-good target,
+    // so a mid-flight endpoint change can never repoint the live name at a not-yet-serving lease.
+    expect(templateCode).toContain(
+      '{{- else if and (ne $prevDnsTarget "") (ne $dnsTarget $prevDnsTarget) (not (and $active $serving)) }}'
+    );
+  });
+
+  it("writes the latched target onto the Cloudflare record content", () => {
+    // The record the composite intends to hold must be the latched target, not the collapsed
+    // one — otherwise the CREATE/UPDATE body would publish "" the instant the observe errored.
+    expect(dnsBlock.length).toBeGreaterThan(0);
+    expect(templateCode).toContain(
+      '$cfPayload := dict "name" $publicHost "content" $effectiveDnsTarget'
+    );
+  });
+});
+
+/**
+ * CATALOG_CARRIES_ONE_NAME (task.5122). The catalog is the SSOT for the replacement counter,
+ * and the resolver (`resolveNodeLeaseGeneration`) reads ONLY `lease_generation` with NO legacy
+ * fallback -- a row left on the old key would therefore resolve silently to 0, which for a node
+ * whose lease already settled under key `:0` means the actuator refuses it forever and the node
+ * stays dead. Pin the purge here rather than trusting a one-time grep.
+ */
+describe("catalog lease generation naming", () => {
+  const CATALOG_DIR = path.join(REPO_ROOT, "infra/catalog");
+  const rows = readdirSync(CATALOG_DIR).filter(
+    (f) => f.endsWith(".yaml") && !f.startsWith("_")
+  );
+
+  it("has catalog rows to check", () => {
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it("uses lease_generation and never the deprecated lease_epoch key", () => {
+    for (const file of rows) {
+      const raw = readFileSync(path.join(CATALOG_DIR, file), "utf8");
+      const row = parse(raw) as YamlObject;
+      expect(
+        Object.hasOwn(row, "lease_epoch"),
+        `${file} still declares lease_epoch`
+      ).toBe(false);
+    }
+  });
+
+  it("declares lease_generation in the catalog schema, not lease_epoch", () => {
+    const schema = JSON.parse(
+      readFileSync(path.join(CATALOG_DIR, "_schema.json"), "utf8")
+    ) as { properties: Record<string, unknown> };
+    expect(Object.hasOwn(schema.properties, "lease_generation")).toBe(true);
+    expect(Object.hasOwn(schema.properties, "lease_epoch")).toBe(false);
+  });
+
+  /**
+   * THE VALUE IS THE MONEY (bug.5192). toks5 production's generation-0 receipt is terminally
+   * settled, so its row MUST resolve to key suffix `:1`. The rename may not move a VALUE: a
+   * changed suffix answers "no existing resource" and mints a SECOND PAID LEASE, and a suffix
+   * that reverted to 0 re-deads the node against a key the actuator already spent.
+   */
+  it("keeps toks5 production on replacement generation 1", () => {
+    const toks5 = parse(
+      readFileSync(path.join(CATALOG_DIR, "toks5.yaml"), "utf8")
+    ) as { lease_generation?: Record<string, number> };
+    expect(toks5.lease_generation?.production).toBe(1);
   });
 });

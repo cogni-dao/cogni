@@ -29,6 +29,18 @@ export interface ComputeWorkloadMigrationInput {
   readonly image: string;
   /** Name of the node-scoped Secret holding database URLs; values never transit the controller. */
   readonly secretName: string;
+  /**
+   * The namespace the Job — and therefore the migration RECEIPT — belongs to: the WORKLOAD's
+   * (`cogni-<environment>`), which is also the only namespace where `secretName` exists.
+   *
+   * Absent means "the caller's own namespace", which is what every caller whose workloads are
+   * all its own env wants (the frozen k3s controller). The ACTUATOR needs it stated: it runs in
+   * the paying cluster's `cogni-production` and reconciles foreign lanes, and a Job created in
+   * ITS namespace resolves `secretName` to PRODUCTION's Secret — so it would migrate production's
+   * database and then leave that receipt where the lane's next pass reads it as its own
+   * (task.5132). Custody decides who ACTS; the workload decides WHICH DATABASE.
+   */
+  readonly namespace?: string;
   readonly phases: readonly ComputeWorkloadMigrationPhase[];
 }
 

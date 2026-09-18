@@ -105,16 +105,43 @@ remote() {
   cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${VM_HOST}" "$@"
 }
 
-# Mint the <env>-writer token via the sanctioned k8s-auth seam. Target: this is
+# WRITER IDENTITY IS THE CLUSTER'S; THE PATH IS THE LANE'S (bug.5206).
+#
+# `DEPLOY_ENVIRONMENT` named two different things here: WHO writes (the role minted just
+# below) and WHERE (`cogni/<env>/<svc>`, further down). They are the same string for a k3s
+# row and for any lane whose own cluster reconciles it — and different the moment the PAYING
+# cluster reconciles another lane, which is the whole of task.5132.
+#
+# This is the third instance of one conflation. #2305 split the AppSet DIRECTORY from its
+# filename with `control_env_for`; #2300 split the ACTUATOR ADDRESS from the XR namespace
+# with `actuatorNamespace`; this splits the WRITER from the PATH. Same rule each time: the
+# artifact belongs to the cluster that reconciles it, the name belongs to the lane.
+#
+# ONE WRITER IDENTITY PER ACCOUNT (NS3). We mint the CONTROL env's existing role — never a
+# per-lane role in this vault, which would be a second writer identity on one Console
+# account. `production-writer` writing `cogni/candidate-a/poly` is one custodian holding a
+# lane it already reconciles and pays for (#2290); a `candidate-a-writer` role living in
+# production's vault would be two.
+#
+# Defaults to the lane, so every existing caller is byte-identical: for k3s rows and for
+# production the control env IS the env, and this resolves to exactly the old role.
+SECRETS_CONTROL_ENV="${SECRETS_CONTROL_ENV:-$DEPLOY_ENVIRONMENT}"
+[[ "$SECRETS_CONTROL_ENV" =~ ^(candidate-a|preview|production)$ ]] \
+  || fail "unsupported SECRETS_CONTROL_ENV '$SECRETS_CONTROL_ENV'"
+
+# Mint the <control-env>-writer token via the sanctioned k8s-auth seam. Target: this is
 # the only phase permitted to hold it (Invariant 16 token boundary). Transitional:
 # reconcile-substrate also mints it to seed DSNs until the env-repair lane lands.
 BAO_TOKEN="$(
-  remote "set -euo pipefail
+  cogni_openbao_kubernetes_login_retry remote "set -euo pipefail
     jwt=\$(kubectl create token openbao-operator -n default)
     kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-      bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-writer' jwt=\"\$jwt\""
+      bao write -field=token auth/kubernetes/login role='${SECRETS_CONTROL_ENV}-writer' jwt=\"\$jwt\""
 )"
-[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${DEPLOY_ENVIRONMENT}-writer token"
+[[ -n "$BAO_TOKEN" ]] || fail "could not mint ${SECRETS_CONTROL_ENV}-writer token (writing the '${DEPLOY_ENVIRONMENT}' lane)"
+if [[ "$SECRETS_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]]; then
+  echo "[secret-materialize] writing the '${DEPLOY_ENVIRONMENT}' lane into ${SECRETS_CONTROL_ENV}'s vault as ${SECRETS_CONTROL_ENV}-writer (bug.5206)"
+fi
 
 export REPO_ROOT APP_SOURCE_DIR
 export DEPLOY_ENV="$DEPLOY_ENVIRONMENT"
@@ -186,25 +213,25 @@ bao_exec() {
 # explicit "No value found" answer (a genuinely unborn path) maps to {}; anything else
 # is retried and then fatal, naming the transport.
 prefetch_path() {
-  local svc="$1" json raw attempt
+  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt
   raw=""
   for attempt in 1 2 3; do
-    if raw="$(bao_exec "" "kv get -format=json 'cogni/${DEPLOY_ENVIRONMENT}/${svc}'" 2>&1)"; then
+    if raw="$(bao_exec "" "kv get -format=json 'cogni/${env}/${svc}'" 2>&1)"; then
       break
     fi
     case "$raw" in
       *"No value found"*) raw='{}'; break ;;
     esac
-    echo "[secret-materialize] OpenBao read cogni/${DEPLOY_ENVIRONMENT}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
-    [[ "$attempt" == 3 ]] && { echo "::error::secret-materialize: transport failure reading cogni/${DEPLOY_ENVIRONMENT}/${svc} after 3 attempts — NOT an absent path (bug.5159)" >&2; exit 1; }
+    echo "[secret-materialize] OpenBao read cogni/${env}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
+    [[ "$attempt" == 3 ]] && { echo "::error::secret-materialize: transport failure reading cogni/${env}/${svc} after 3 attempts — NOT an absent path (bug.5159)" >&2; exit 1; }
     sleep $((attempt * 5))
   done
   json="$(printf '%s' "$raw" | jq -c '.data.data // {}' 2>/dev/null || true)"
   [[ -z "$json" ]] && json='{}'
-  mkdir -p "${CACHE_DIR}/${svc}"
+  mkdir -p "${CACHE_DIR}/${ns}"
   while IFS=$'\t' read -r key val; do
     [[ -z "$key" ]] && continue
-    printf '%s' "$val" > "${CACHE_DIR}/${svc}/${key}"
+    printf '%s' "$val" > "${CACHE_DIR}/${ns}/${key}"
   done < <(printf '%s' "$json" | jq -r 'to_entries[] | [.key, .value] | @tsv')
 }
 
@@ -212,6 +239,13 @@ prefetch_path() {
 # Overrides the lib's ssh/ROOT_TOKEN variants (sourced above).
 bao_get_field() {
   local f="${CACHE_DIR}/$1/$2"
+  [[ -f "$f" ]] && { cat "$f"; return 0; }
+  # SHARED-SUBSTRATE OWNERS LIVE WHERE THE SUBSTRATE DOES (bug.5206). A foreign-custodied
+  # lane runs on the CONTROL env's substrate, so its LiteLLM master key, Doltgres superuser
+  # and _shared values are that cluster's, not the lane's — `cogni/candidate-a/operator`
+  # does not exist in production's vault and never should. This dir is populated ONLY when
+  # the control env differs from the lane, so for every row today the lookup ends above.
+  f="${CACHE_DIR}/__owner__/$1/$2"
   [[ -f "$f" ]] && cat "$f" || true
 }
 
@@ -343,6 +377,14 @@ inherit_shared_value() {
 for svc in "$TARGET_NODE" node-template operator _shared; do
   prefetch_path "$svc"
 done
+# Ancestors, re-read from the cluster that HOSTS this lane's substrate. Additive: the
+# lane's own buckets are still prefetched above and still win; this only supplies what a
+# foreign lane structurally cannot have locally. No-op when control env == lane.
+if [[ "${SECRETS_CONTROL_ENV}" != "$DEPLOY_ENVIRONMENT" ]]; then
+  for svc in node-template operator _shared; do
+    prefetch_path "$svc" "$SECRETS_CONTROL_ENV" "__owner__/$svc"
+  done
+fi
 
 log "materializing node-owned OpenBao values for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (key names only)"
 created=0
