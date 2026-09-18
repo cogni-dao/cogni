@@ -97,4 +97,38 @@ mv "$tmpdir/commit-outside.json" "$tmpdir/commit.json"
 run_classifier "$tmpdir/outside.out"
 [[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/outside.out")" == path-outside-env-manager-boundary ]]
 
+# A merge-group ref carries the BASE sha, and the queue tree must contain
+# exactly the signed PR path set.
+grep -v '^\.github/workflows/ci\.yaml$' "$paths_file" > "$tmpdir/paths-restored.txt"
+mv "$tmpdir/paths-restored.txt" "$paths_file"
+write_fixtures "$valid_message"
+queue_repo="$tmpdir/queue-repo"
+mkdir -p "$queue_repo"
+(
+  cd "$queue_repo"
+  git init -q
+  git config user.email test@example.test
+  git config user.name test
+  git commit --allow-empty -qm base
+  queue_base_sha="$(git rev-parse HEAD)"
+  while IFS= read -r changed_file; do
+    mkdir -p "$(dirname "$changed_file")"
+    printf 'generated\n' > "$changed_file"
+  done < "$paths_file"
+  git add .
+  git commit -qm generated
+  queue_head_sha="$(git rev-parse HEAD)"
+  GITHUB_OUTPUT="$tmpdir/queue.out" \
+  EVENT_NAME=merge_group \
+  REPOSITORY=Cogni-DAO/cogni \
+  MQ_HEAD_REF="refs/heads/gh-readonly-queue/main/pr-42-$queue_base_sha" \
+  MQ_BASE_SHA="$queue_base_sha" \
+  MQ_HEAD_SHA="$queue_head_sha" \
+  FAST_PATH_PR_JSON="$tmpdir/pr.json" \
+  FAST_PATH_COMMIT_JSON="$tmpdir/commit.json" \
+  FAST_PATH_FILES_JSON="$tmpdir/files.json" \
+    bash "$CLASSIFIER" >/dev/null
+)
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/queue.out")" == true ]]
+
 echo "classify-env-manager-fast-path tests passed"

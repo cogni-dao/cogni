@@ -194,7 +194,11 @@ if [[ "$EVENT_NAME" == "pull_request" ]]; then
   [[ "$head_sha" == "$PR_HEAD_SHA_PR" ]] || reject_claim event-head-mismatch
 else
   mq_leaf="${MQ_HEAD_REF##*/}"
-  [[ "$mq_leaf" == pr-"$pr_number"-"$head_sha"* ]] || reject_claim merge-group-source-mismatch
+  # GitHub names the queue ref `pr-<N>-<base_sha>` (live evidence: #2367/#2368),
+  # not with the source head SHA. Queue eviction handles a source force-push;
+  # below we independently prove the rebased tree's exact path set.
+  [[ "$MQ_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || reject_claim invalid-merge-group-base
+  [[ "$mq_leaf" == pr-"$pr_number"-"$MQ_BASE_SHA"* ]] || reject_claim merge-group-base-mismatch
 fi
 
 if [[ -n "${FAST_PATH_FILES_JSON:-}" ]]; then

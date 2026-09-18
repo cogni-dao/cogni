@@ -211,7 +211,7 @@ jobs:
             BASE_REF="main"
             HEAD_REF_NAME="pr-${PR_NUMBER}"
           elif [ "$EVENT_NAME" = "merge_group" ]; then
-            # head_ref: refs/heads/gh-readonly-queue/<base>/pr-<N>-<orig_head_sha>[-<salt>]
+            # head_ref: refs/heads/gh-readonly-queue/<base>/pr-<N>-<base_sha>[-<salt>]
             PR_PATH="${MQ_HEAD_REF##*/}"
             if [[ "$PR_PATH" =~ ^pr-([0-9]+)- ]]; then
               PR_NUMBER="${BASH_REMATCH[1]}"
