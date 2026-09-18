@@ -51,6 +51,7 @@ import {
   rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
 import {
+  NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
   renderDistributionActivationSpec,
   renderPaymentsActivationSpec,
@@ -284,9 +285,9 @@ function setHappyForkHandlers(): void {
         repo: "atlas",
         base_tree: "template-tree",
       });
-      // The child's ESO leaves follow the birth set itself (story.5025), not a second
-      // hardcoded list — a node born into production must carry a production leaf or its
-      // pod has no envFrom secret to mount.
+      // Child ESO leaves are inert deploy-shape inputs, so every supported env is
+      // personalized at birth. Membership still follows NODE_FORMATION_ENVS elsewhere;
+      // carrying the preview leaf does not create a preview workload or lease.
       expect(params.tree).toEqual([
         {
           path: ".cogni/repo-spec.yaml",
@@ -294,7 +295,7 @@ function setHappyForkHandlers(): void {
           type: "blob",
           sha: "repo-spec-blob",
         },
-        ...NODE_FORMATION_ENVS.flatMap((env) => [
+        ...NODE_DEPLOY_ENVS.flatMap((env) => [
           {
             path: `k8s/external-secrets/${env}/external-secret.yaml`,
             mode: "100644",
@@ -1347,10 +1348,10 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       // Policy re-read from the FORK at its base commit — the revision whose
       // workflows must satisfy the contexts we are about to require.
       "GET /repos/{owner}/{repo}/contents/{path}",
-      // One repo-spec blob + one external-secret pair per BIRTH env (story.5025), so this
-      // sequence tracks the birth set instead of pinning a count that silently goes stale.
+      // One repo-spec blob + one external-secret pair per supported deploy env. These
+      // leaves are inert until the parent catalog activates that env.
       ...Array.from(
-        { length: 1 + 2 * NODE_FORMATION_ENVS.length },
+        { length: 1 + 2 * NODE_DEPLOY_ENVS.length },
         () => "POST /repos/{owner}/{repo}/git/blobs"
       ),
       "POST /repos/{owner}/{repo}/git/trees",
@@ -1663,10 +1664,10 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       // Policy re-read from the FORK at its base commit — the revision whose
       // workflows must satisfy the contexts we are about to require.
       "GET /repos/{owner}/{repo}/contents/{path}",
-      // One repo-spec blob + one external-secret pair per BIRTH env (story.5025), so this
-      // sequence tracks the birth set instead of pinning a count that silently goes stale.
+      // One repo-spec blob + one external-secret pair per supported deploy env. These
+      // leaves are inert until the parent catalog activates that env.
       ...Array.from(
-        { length: 1 + 2 * NODE_FORMATION_ENVS.length },
+        { length: 1 + 2 * NODE_DEPLOY_ENVS.length },
         () => "POST /repos/{owner}/{repo}/git/blobs"
       ),
       "POST /repos/{owner}/{repo}/git/trees",
