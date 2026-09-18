@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+CLASSIFIER="$REPO_ROOT/scripts/ci/classify-env-manager-fast-path.sh"
+tmpdir="$(mktemp -d)"
+cleanup() {
+  local exit_code=$?
+  rm -rf "$tmpdir"
+  trap - EXIT
+  exit "$exit_code"
+}
+trap cleanup EXIT
+
+head_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+bot_id=265189974
+paths_file="$tmpdir/paths.txt"
+printf '%s\n' \
+  'infra/catalog/blue.yaml' \
+  'infra/k8s/argocd/appsets/preview/kustomization.yaml' \
+  'infra/k8s/argocd/appsets/preview/preview-blue-applicationset.yaml' \
+  'infra/k8s/overlays/preview/blue/external-secret.yaml' \
+  'infra/k8s/overlays/preview/blue/kustomization.yaml' > "$paths_file"
+paths_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+
+write_fixtures() {
+  local message="$1"
+  jq -n \
+    --arg sha "$head_sha" \
+    --argjson bot_id "$bot_id" \
+    '{state:"open",base:{ref:"main"},head:{sha:$sha,ref:"cogni-operator/node-env-blue-preview",repo:{full_name:"Cogni-DAO/cogni"}},user:{login:"cogni-operator[bot]",id:$bot_id,type:"Bot"},commits:1}' \
+    > "$tmpdir/pr.json"
+  jq -n \
+    --arg sha "$head_sha" \
+    --arg message "$message" \
+    --argjson bot_id "$bot_id" \
+    '{sha:$sha,author:{login:"cogni-operator[bot]",id:$bot_id},parents:[{sha:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],commit:{message:$message,verification:{verified:true,reason:"valid"}}}' \
+    > "$tmpdir/commit.json"
+  jq -Rn '[inputs | {filename:.,previous_filename:null,status:"modified"}]' \
+    < "$paths_file" > "$tmpdir/files.json"
+}
+
+run_classifier() {
+  local output="$1"
+  GITHUB_OUTPUT="$output" \
+  EVENT_NAME=pull_request \
+  REPOSITORY=Cogni-DAO/cogni \
+  PR_NUMBER_PR=42 \
+  PR_HEAD_SHA_PR="$head_sha" \
+  FAST_PATH_PR_JSON="$tmpdir/pr.json" \
+  FAST_PATH_COMMIT_JSON="$tmpdir/commit.json" \
+  FAST_PATH_FILES_JSON="$tmpdir/files.json" \
+    bash "$CLASSIFIER" >/dev/null
+}
+
+valid_message="feat(node): add blue to preview
+
+Cogni-Change-Type: cogni.env-manager.v1
+Cogni-Node: blue
+Cogni-Environment: preview
+Cogni-Action: add
+Cogni-Changed-Paths-SHA256: $paths_hash"
+
+write_fixtures "$valid_message"
+run_classifier "$tmpdir/valid.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/valid.out")" == true ]]
+[[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/valid.out")" == true ]]
+
+# A copied title without the reserved signed trailer stays on full CI.
+write_fixtures 'feat(node): add blue to preview'
+run_classifier "$tmpdir/unclaimed.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/unclaimed.out")" == false ]]
+[[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/unclaimed.out")" == false ]]
+
+# A reserved claim with an invalid signature fails closed instead of falling back.
+write_fixtures "$valid_message"
+jq '.commit.verification.verified=false' "$tmpdir/commit.json" > "$tmpdir/commit-invalid.json"
+mv "$tmpdir/commit-invalid.json" "$tmpdir/commit.json"
+run_classifier "$tmpdir/unsigned.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/unsigned.out")" == false ]]
+[[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/unsigned.out")" == true ]]
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/unsigned.out")" == invalid-commit-signature ]]
+
+# A valid signature cannot bless a file outside the env-manager boundary.
+write_fixtures "$valid_message"
+printf '%s\n' '.github/workflows/ci.yaml' >> "$paths_file"
+LC_ALL=C sort -u "$paths_file" > "$tmpdir/paths-sorted.txt"
+mv "$tmpdir/paths-sorted.txt" "$paths_file"
+jq -Rn '[inputs | {filename:.,previous_filename:null,status:"modified"}]' \
+  < "$paths_file" > "$tmpdir/files.json"
+outside_hash="$(shasum -a 256 "$paths_file" | awk '{print $1}')"
+sed "s/$paths_hash/$outside_hash/" "$tmpdir/commit.json" > "$tmpdir/commit-outside.json"
+mv "$tmpdir/commit-outside.json" "$tmpdir/commit.json"
+run_classifier "$tmpdir/outside.out"
+[[ "$(awk -F= '$1=="reason"{v=$2} END{print v}' "$tmpdir/outside.out")" == path-outside-env-manager-boundary ]]
+
+echo "classify-env-manager-fast-path tests passed"
