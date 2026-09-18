@@ -371,18 +371,25 @@ jobs:
       - name: per-node overlay drift (NODE_AT_ROOT_MIGRATE_PATH)
         run: bash scripts/ci/render-node-overlays.sh --check
 
-      # task.5140 — coverage-free on PR CI. `test:ci` runs both scopes (root
-      # vitest + operator app config) with NO v8 coverage instrumentation
-      # (~25-40% faster on the ~4-min run): its only consumer, Sonar, is disabled
-      # and no thresholds gate on it. Re-enabling Sonar is a single-variable flip
-      # — set repo var ENABLE_SONAR=true and this step runs the instrumented
-      # `test:ci:coverage` so the sonar job below has an artifact to consume.
+      # task.5140 Stage B — affected-only unit tests. The suite is two disjoint
+      # vitest universes: the ROOT config (tests/** + packages + services) always
+      # runs full (turbo does not model it — dropping it would be a false green),
+      # while the OPERATOR app config (~60% of CI test time) is skipped on a PR
+      # when neither the operator app nor a package it depends on changed, and
+      # runs FULL on merge_group/push (the required-check backstop that catches
+      # any PR-time affected miss before merge). Logic + fail-safe live in
+      # scripts/ci/run-unit-tests.sh (SCRIPTS_ARE_THE_API). Coverage stays a
+      # single-flip: ENABLE_SONAR=true runs the full instrumented path so the
+      # sonar job below has an artifact.
       - name: Unit + contract tests
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          TURBO_SCM_BASE: origin/main
         run: |
           if [ "${{ vars.ENABLE_SONAR }}" = "true" ]; then
             pnpm test:ci:coverage
           else
-            pnpm test:ci
+            bash scripts/ci/run-unit-tests.sh
           fi
 
       # Only produced (and consumed by the sonar job) when Sonar is enabled;
