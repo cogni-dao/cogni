@@ -17,6 +17,10 @@ loki.source.kubernetes_events "events" {
     // OOMKilled/restart event reaches Loki and a sealed-state alert can fire.
     "openbao",
     "external-secrets",
+    // bug.5219: the Crossplane runtime (provider-http, functions) is the actuator's
+    // wire path; its events were invisible while a lease-create POST silently
+    // never arrived.
+    "crossplane-system",
     "cogni-candidate-a",
     "cogni-preview",
     "cogni-production",
