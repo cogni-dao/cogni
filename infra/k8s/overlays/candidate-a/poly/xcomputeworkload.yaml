@@ -44,7 +44,7 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Close
-  leaseGeneration: 4
+  leaseGeneration: 5
   actuatorNamespace: cogni-production
   dns:
     provider: cloudflare
