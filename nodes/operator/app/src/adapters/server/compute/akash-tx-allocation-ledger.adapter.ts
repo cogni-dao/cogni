@@ -491,6 +491,37 @@ export class DrizzleAkashTxAllocationLedger
     return rows.map(toRecord);
   }
 
+  /**
+   * Every-state enumeration for generation derivation (task.5132) — same scoping as
+   * `listAllocated` (walletScope always, optional `(node_id, environment)` narrowing), no state
+   * or handle predicate: terminal `released`/`failed` receipts are exactly the evidence
+   * `requiredLeaseGeneration` exists to count, and the allocated-only view hid them.
+   */
+  async listReceipts(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]> {
+    const db = await this.getDb();
+    const rows = await db
+      .select(SELECTION)
+      .from(akashTxAllocations)
+      .where(
+        and(
+          eq(akashTxAllocations.walletScope, this.walletScope),
+          ...(input.nodeId
+            ? [eq(akashTxAllocations.nodeId, input.nodeId)]
+            : []),
+          ...(input.environment
+            ? [eq(akashTxAllocations.environment, input.environment)]
+            : [])
+        )
+      )
+      .orderBy(akashTxAllocations.updatedAt)
+      .limit(input.limit);
+    return rows.map(toRecord);
+  }
+
   async read(input: {
     cogniKey: string;
   }): Promise<AkashTxAllocationRecord | null> {

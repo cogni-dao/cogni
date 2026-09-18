@@ -3,9 +3,10 @@
 
 /**
  * Module: `@features/compute/lease-reactivation` (test)
- * Purpose: Pin `requiredLeaseGeneration` — the fresh/settled/allocated/failed-no-handle matrix.
- *   Only handle-bound receipts (`allocated`/`released`) at or above the catalog's generation
- *   force a bump; everything else returns the catalog's own generation unchanged.
+ * Purpose: Pin `requiredLeaseGeneration` — the fresh/terminal/live/preparing matrix (task.5132).
+ *   TERMINAL receipts (`released`/`failed`) force the next generation past themselves; a LIVE
+ *   `allocated` receipt pins the derived generation AT its own (never past it); `preparing`
+ *   proves nothing.
  * Side-effects: none
  * Links: src/features/compute/lease-reactivation.ts
  * @public
@@ -58,16 +59,45 @@ describe("requiredLeaseGeneration", () => {
     ).toBe(1);
   });
 
-  it("allocated (still live) receipt at the current generation → bump too (its key is spent)", () => {
+  it("terminally FAILED gen-0 receipt → ADD derives generation 1 (task.5132)", () => {
+    // The live incident: a failed gen-0 receipt existed, this derivation answered 0, and the
+    // recreated XR presented `xcw:cogni-candidate-a:4b06359a-…:0` — refused by the actuator
+    // with `akash_tx_identity_conflict` (ledgerState=failed, identity-bound to the dead
+    // composite 02727e4b, observed 2026-09-18T03:01:34Z). `failed` is terminal from the ADD
+    // path: bug.5192's failed-no-handle re-claim needs the SAME compositeUid, and a re-added
+    // env recreates the composite with a new one.
     expect(
       requiredLeaseGeneration({
-        catalogGeneration: 2,
-        receipts: [receipt({ state: "allocated", generation: 2 })],
+        catalogGeneration: 0,
+        receipts: [receipt({ state: "failed", generation: 0 })],
       })
-    ).toBe(3);
+    ).toBe(1);
   });
 
-  it("takes max(such generations)+1 over several spent receipts", () => {
+  it("failed gen-0 AND failed gen-1 → 2 (max over terminal generations, plus one)", () => {
+    expect(
+      requiredLeaseGeneration({
+        catalogGeneration: 0,
+        receipts: [
+          receipt({ state: "failed", generation: 0 }),
+          receipt({ state: "failed", generation: 1 }),
+        ],
+      })
+    ).toBe(2);
+  });
+
+  it("LIVE allocated gen-1 receipt → stays 1: pins its own generation, no spurious bump", () => {
+    // A live paid lease must be re-stated, not leapfrogged — bumping past it would abandon a
+    // billing lease and double-pay (LIVE_KEEPS_ITS_GENERATION).
+    expect(
+      requiredLeaseGeneration({
+        catalogGeneration: 0,
+        receipts: [receipt({ state: "allocated", generation: 1 })],
+      })
+    ).toBe(1);
+  });
+
+  it("terminal receipts bump past themselves; a higher live lease still pins the max", () => {
     expect(
       requiredLeaseGeneration({
         catalogGeneration: 0,
@@ -77,19 +107,10 @@ describe("requiredLeaseGeneration", () => {
           receipt({ state: "released", generation: 2 }),
         ],
       })
-    ).toBe(5);
+    ).toBe(4);
   });
 
-  it("failed-no-handle receipts never force a bump — that key is re-claimable (bug.5192)", () => {
-    expect(
-      requiredLeaseGeneration({
-        catalogGeneration: 0,
-        receipts: [receipt({ state: "failed", generation: 0 })],
-      })
-    ).toBe(0);
-  });
-
-  it("preparing receipts never force a bump — mid-transaction is not settled evidence", () => {
+  it("preparing receipts never move the answer — mid-transaction is not evidence", () => {
     expect(
       requiredLeaseGeneration({
         catalogGeneration: 1,
@@ -104,6 +125,7 @@ describe("requiredLeaseGeneration", () => {
         catalogGeneration: 5,
         receipts: [
           receipt({ state: "released", generation: 3 }),
+          receipt({ state: "failed", generation: 2 }),
           receipt({ state: "allocated", generation: 4 }),
         ],
       })

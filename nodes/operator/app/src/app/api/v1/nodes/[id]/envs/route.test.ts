@@ -19,6 +19,7 @@ const authorize = vi.fn();
 const openNodeEnvPr = vi.fn();
 const openNodePlacementPr = vi.fn();
 const listAllocated = vi.fn();
+const listReceipts = vi.fn();
 
 const NODE = {
   id: "123e4567-e89b-12d3-a456-426614174001",
@@ -255,7 +256,8 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
     });
     openNodePlacementPr.mockResolvedValue({ status: "no_changes" });
     listAllocated.mockResolvedValue([RECEIPT]);
-    container.leaseReadCapability = { listAllocated };
+    listReceipts.mockResolvedValue([RECEIPT]);
+    container.leaseReadCapability = { listAllocated, listReceipts };
   });
 
   it("present:false enumerates the env's live paid leases BEFORE the PR and embeds openLeases + verify", async () => {
@@ -265,6 +267,7 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
     expect(listAllocated).toHaveBeenCalledWith(
       expect.objectContaining({ nodeId: NODE.id, environment: "preview" })
     );
+    expect(listReceipts).not.toHaveBeenCalled();
     await expect(res.json()).resolves.toMatchObject({
       present: false,
       openLeases: [
@@ -289,8 +292,8 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
     });
   });
 
-  it("present:true derives a BUMPED leaseGeneration from settled receipts and passes it to the writer", async () => {
-    listAllocated.mockResolvedValue([
+  it("present:true derives leaseGeneration from EVERY-state receipts (listReceipts, not listAllocated)", async () => {
+    listReceipts.mockResolvedValue([
       { ...RECEIPT, state: "released", environment: "candidate-a" },
       {
         ...RECEIPT,
@@ -301,18 +304,38 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
     ]);
     const res = await post({ env: "candidate-a", present: true });
     expect(res.status).toBe(200);
+    // The ADD read is (node, env)-scoped and state-unfiltered — the terminal evidence lives
+    // outside the allocated-only money-loop view (task.5132).
+    expect(listReceipts).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: NODE.id, environment: "candidate-a" })
+    );
+    expect(listAllocated).not.toHaveBeenCalled();
     // GENERATION_IS_NOT_CALLER_INPUT: the body carried nothing; the ledger evidence did.
+    // released gen-0 is terminal (→ 1); the live allocated gen-2 lease pins the max at 2.
     expect(openNodeEnvPr).toHaveBeenCalledWith(
       expect.objectContaining({
         env: "candidate-a",
         present: true,
-        leaseGeneration: 3,
+        leaseGeneration: 2,
       })
     );
   });
 
+  it("present:true over a terminally FAILED gen-0 receipt derives leaseGeneration 1 (task.5132)", async () => {
+    // The live incident's shape: env-verb ADD derived 0 while a failed gen-0 receipt existed,
+    // so the recreated XR presented the spent key and the actuator refused it with
+    // `akash_tx_identity_conflict`. The VERB must emit the bump.
+    listReceipts.mockResolvedValue([
+      { ...RECEIPT, state: "failed", environment: "candidate-a" },
+    ]);
+    await post({ env: "candidate-a", present: true });
+    expect(openNodeEnvPr).toHaveBeenCalledWith(
+      expect.objectContaining({ leaseGeneration: 1 })
+    );
+  });
+
   it("present:true with an empty ledger passes generation 0 (a birth-identical row)", async () => {
-    listAllocated.mockResolvedValue([]);
+    listReceipts.mockResolvedValue([]);
     await post({ env: "candidate-a", present: true });
     expect(openNodeEnvPr).toHaveBeenCalledWith(
       expect.objectContaining({ leaseGeneration: 0 })
@@ -338,5 +361,6 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
   it("the placement verb never touches the ledger", async () => {
     await post({ env: "preview", placement: "akash" });
     expect(listAllocated).not.toHaveBeenCalled();
+    expect(listReceipts).not.toHaveBeenCalled();
   });
 });
