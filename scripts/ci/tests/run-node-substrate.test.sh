@@ -48,6 +48,17 @@ EOF
   chmod +x "$1"
 }
 
+mk_stdin_drain_stub() {
+  # Models cogni_ssh_transport_retry, which buffers all non-TTY stdin so an
+  # explicitly piped payload can be replayed on transport retry.
+  cat > "$1" <<EOF
+#!/usr/bin/env bash
+cat >/dev/null
+echo "$2 \$1 \$2" >> "$ORDER"
+EOF
+  chmod +x "$1"
+}
+
 # ── Case 1: happy path — materialize then reconcile, same args, in order ──────
 mk_stub "$TMPROOT/mat.sh" materialize 0
 mk_stub "$TMPROOT/rec.sh" reconcile 0
@@ -165,6 +176,22 @@ got="$(paste -sd'|' - < "$ORDER")"
 # by the boot deadline (task.5132).
 want="materialize production polyfix|materialize candidate-a polyfix|materialize preview polyfix|reconcile production polyfix|reconcile candidate-a polyfix|reconcile preview polyfix|assert production polyfix"
 [ "$got" = "$want" ] || { echo "the reconciling cluster must hold every lane it reconciles:
+  got:  $got
+  want: $want" >&2; exit 1; }
+
+# The real materializer/reconciler invoke cogni_ssh_transport_retry, whose stdin buffering used
+# to drain the heredoc that also carried the lane loop. A child that consumes stdin must not make
+# later catalog lanes disappear.
+mk_stdin_drain_stub "$TMPROOT/mat.sh" materialize
+mk_stdin_drain_stub "$TMPROOT/rec.sh" reconcile
+: > "$ORDER"
+DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+  bash "$RUNNER" production polyfix </dev/null >/dev/null
+got="$(paste -sd'|' - < "$ORDER")"
+[ "$got" = "$want" ] || { echo "stdin-consuming children must not drain later custodied lanes:
   got:  $got
   want: $want" >&2; exit 1; }
 
