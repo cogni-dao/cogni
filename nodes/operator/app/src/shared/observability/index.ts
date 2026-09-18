@@ -20,6 +20,11 @@ export const EVENT_NAMES = {
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
+  // Env-membership merge → lane reconcile (task.5132). One terminal event per merged
+  // `cogni-operator/node-env-<slug>-<env>` PR, including the no-dispatch outcomes. Adding a
+  // PRE-PROD lane can dispatch a PRODUCTION promote (the custodian owns the lane's substrate),
+  // so this name is how that is found in Loki — never a mystery deploy.
+  LANE_ONBOARD_COMPLETE: "feature.lane_onboard.complete",
   DEPLOY_INFRA_RECONCILE_COMPLETE: "deploy.infra_reconcile.complete",
   NODE_SCHEDULES_SYNC_COMPLETE: "feature.node_schedules_sync.complete",
   NODE_DISTRIBUTION_ACTIVATION_COMPLETE:
