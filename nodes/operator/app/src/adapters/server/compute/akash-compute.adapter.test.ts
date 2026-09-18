@@ -1095,7 +1095,7 @@ describe("AkashComputeAdapter failure containment", () => {
     let listWave = 0;
     const fetchImpl = vi.fn<typeof fetch>(async (url) => {
       const u = String(url);
-      if (u.includes("/v1/deployments?skip=0&limit=1000")) {
+      if (u.includes("/v1/deployments?skip=0&limit=100")) {
         listWave++;
         const dseqs = listWave === 1 ? ["40", "41"] : ["40", "41", "42"];
         return jsonResponse({
@@ -1365,5 +1365,27 @@ describe("AkashComputeAdapter transaction boundary (task.5095)", () => {
 
     expect(puts).toHaveLength(1);
     expect(puts[0]).toContain("ghcr.io/cogni-dao/toks4:sha-abc");
+  });
+});
+
+describe("Console list pagination contract (task.5132)", () => {
+  it("never requests more than Console's documented page cap of 100", async () => {
+    // Console's spec: limit "at most 100" (GET /v1/doc). 1000 drew HTTP 400 on every
+    // call and silently killed create inside readCursor for three lane activations.
+    const requested: number[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname === "/v1/deployments") {
+        requested.push(Number(u.searchParams.get("limit")));
+        return jsonResponse({
+          data: { deployments: [], pagination: { hasMore: false } },
+        });
+      }
+      throw new Error(`unhandled ${u}`);
+    });
+    const adapter = makeAdapter(fetchImpl);
+    await adapter.allocationCursor();
+    expect(requested.length).toBeGreaterThan(0);
+    for (const l of requested) expect(l).toBeLessThanOrEqual(100);
   });
 });

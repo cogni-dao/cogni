@@ -533,7 +533,11 @@ export class AkashComputeAdapter
 
   private async listAllDeployments(): Promise<ConsoleDeploymentDetail[]> {
     const deployments: ConsoleDeploymentDetail[] = [];
-    const limit = 1_000;
+    // Console's spec caps `limit` at 100 ("Deployments per page, at most 100" —
+    // GET /v1/doc, 2026-09-18); 1000 draws HTTP 400 on every call, which killed the
+    // create path inside readCursor for three straight lane activations (task.5132:
+    // akash_tx_http_op_failed provider_rejected "Console request failed with HTTP 400").
+    const limit = 100;
     for (let skip = 0; ; skip += limit) {
       const page = await this.request<ConsoleDeploymentList>(
         "GET",
