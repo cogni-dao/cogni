@@ -112,13 +112,21 @@ esac
 
 echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (${DEPLOYMENT_PROVIDER}): materialize → reconcile → provider assert"
 
+# Snapshot the catalog-derived lanes before invoking children. Both children use SSH helpers
+# that intentionally buffer stdin for retry; feeding this loop through stdin let the first lane
+# consume every remaining lane (task.5132).
+custodied_lanes=()
+while IFS= read -r lane; do
+  [ -n "$lane" ] && custodied_lanes+=("$lane")
+done < <(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
+echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} custodies lanes of ${TARGET_NODE}: [${custodied_lanes[*]}]"
+
 if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   bash "$MATERIALIZE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
   # Then every OTHER lane of this node that THIS cluster reconciles. Catalog-derived, so a
   # lane added by a catalog edit is materialized with no code change, and a node with no
   # such lane (every k3s row, every production-only node) enumerates nothing.
-  while read -r lane; do
-    [ -n "$lane" ] || continue
+  for lane in "${custodied_lanes[@]}"; do
     # DOMAIN builds the derive-env FQDN keys (APP_BASE_URL, NEXTAUTH_URL). It arrives scoped
     # to THIS env, so materializing another lane with it would silently stamp
     # `poly.cognidao.org` into the candidate-a bank — a wrong value written confidently,
@@ -137,9 +145,7 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
     echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} reconciles ${lane}/${TARGET_NODE} — materializing that lane's secrets into THIS vault (bug.5206), domain ${lane_domain}"
     SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" DOMAIN="$lane_domain" \
       bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE"
-  done <<EOF
-$(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
-EOF
+  done
 else
   # A FOREIGN-CUSTODIED LANE HAS NO SUBSTRATE ON ITS OWN VM, so its own flight reconciles
   # NOTHING here (bug.5206). Everything reconcile would provision — the vault bank, the
@@ -173,8 +179,7 @@ DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
 # The lane names the database (`cogni_<node>_<lane>`, bug.5207) while the identity this runs
 # under stays the cluster's. Empty for every row today, so nothing new runs.
 if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
-  while read -r lane; do
-    [ -n "$lane" ] || continue
+  for lane in "${custodied_lanes[@]}"; do
     lane_domain=""
     case "$lane" in
       production)  lane_domain="$DOMAIN_ROOT" ;;
@@ -188,9 +193,7 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
     echo "[run-node-substrate] reconciling ${lane}/${TARGET_NODE}'s substrate on THIS cluster (task.5132)"
     DEPLOYMENT_PROVIDER=akash DOMAIN="$lane_domain" \
       bash "$RECONCILE_BIN" "$lane" "$TARGET_NODE"
-  done <<EOF
-$(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
-EOF
+  done
 fi
 if [ "$DEPLOYMENT_PROVIDER" = "akash" ] && [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   TARGET="$TARGET_NODE" DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
