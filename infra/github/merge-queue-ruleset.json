@@ -15,7 +15,12 @@
     "queue. Together: a PR must pass checks AND merge through the queue.",
     "",
     "Tuned for ~1-2 PR/day MVP cadence: queue depth ~= 0, fast feedback, low burn.",
-    "Re-tune if observed depth > 2 sustained or merge wait > 30 min.",
+    "`min_entries_to_merge_wait_minutes: 0` — at queue-depth ~0 every PR (incl. the operator's own",
+    "deterministic env-toggle PRs) is a lone entry, so a batch wait is PURE latency: it made each",
+    "merge sit ~5 min for a batch that never forms. 0 = merge as soon as the group is green, still",
+    "fully SERIALIZED (grouping ALLGREEN + the rebase-recheck are untouched — no protection weakened;",
+    "this is the safe near-instant lever, NOT a queue bypass). Re-tune upward only if observed",
+    "sustained depth > 2 starts wasting CI on un-batched entries.",
     "",
     "ORG-ONLY: the `merge_queue` ruleset rule is an organization / GitHub-Team feature. Verified",
     "against GitHub: this exact payload is accepted on an org repo (cogni-dao/*) and rejected (422)",
@@ -42,7 +47,7 @@
         "min_entries_to_merge": 1,
         "max_entries_to_merge": 5,
         "max_entries_to_build": 5,
-        "min_entries_to_merge_wait_minutes": 5,
+        "min_entries_to_merge_wait_minutes": 0,
         "check_response_timeout_minutes": 60
       }
     }
