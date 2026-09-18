@@ -256,7 +256,11 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
-    needs: static
+    # No `needs: static` (task.5140): unit does its own install + packages:build
+    # and consumes NO artifact from static, so gating on it only serialized
+    # static's ~1m38s onto the critical path for a fail-fast the merge queue
+    # re-checks anyway. Running unit in parallel with static drops the ci.yaml
+    # critical path to max(job) instead of static+unit.
     env:
       NODE_ENV: test
       LITELLM_MASTER_KEY: build-key
@@ -421,7 +425,9 @@ jobs:
     # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
     if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
-    needs: static
+    # No `needs: static` (task.5140) — component does its own install + build and
+    # shares no artifact with static; running in parallel keeps it off the
+    # critical path. See the unit job note.
     env:
       NODE_ENV: test
       LITELLM_MASTER_KEY: build-key
