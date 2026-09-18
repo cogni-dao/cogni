@@ -62,7 +62,9 @@ function batch(job?: V1Job, jobs: V1Job[] = []) {
     createNamespacedJob: vi.fn(async (_ns: string, body: V1Job) => ({
       body,
     })),
-    listNamespacedJob: vi.fn(async () => ({ body: { items: jobs } })),
+    listNamespacedJob: vi.fn(async (..._args: unknown[]) => ({
+      body: { items: jobs },
+    })),
     deleteNamespacedJob: vi.fn(async (..._args: unknown[]) => ({ body: {} })),
   };
 }
@@ -455,5 +457,101 @@ describe("KubernetesMigrationJobAdapter", () => {
       kind: "transient",
       retryable: true,
     });
+  });
+});
+
+/**
+ * task.5132 — the receipt must be scoped to the database it proves. Production and candidate-a
+ * lanes of ONE node at ONE digest produce ONE Job name; while both landed in the actuator's
+ * namespace, the first lane's completed Job answered for the second, which then served an empty
+ * database. The lane's own namespace is where its DSN-bearing Secret lives, so it is also the
+ * only place its receipt means anything.
+ */
+describe("KubernetesMigrationJobAdapter lane scoping", () => {
+  const LANE = "cogni-candidate-a";
+  const laneInput = () =>
+    input({
+      nodeSlug: "poly",
+      environment: "candidate-a",
+      secretName: "poly-compute-env-secrets",
+      namespace: LANE,
+    });
+
+  it("creates and reads the Job in the stated workload namespace, not the adapter's", async () => {
+    const api = batch();
+    const adapter = adapterOf(api);
+
+    await expect(adapter.ensure(laneInput())).resolves.toBe("running");
+
+    expect(api.readNamespacedJob).toHaveBeenCalledWith(
+      `migrate-poly-${"a".repeat(12)}`,
+      LANE
+    );
+    const [namespace] = api.createNamespacedJob.mock.calls[0] ?? [];
+    expect(namespace).toBe(LANE);
+  });
+
+  it("keeps the job NAME unchanged, so an already-proven digest never re-runs", async () => {
+    // Namespace isolation is the whole fix: the name still pins node+digest, so every
+    // production receipt already on the cluster stays valid and is not re-created.
+    expect(migrationJobName("poly", DIGEST)).toBe(
+      `migrate-poly-${"a".repeat(12)}`
+    );
+  });
+
+  it("GCs superseded lane receipts in the lane namespace only", async () => {
+    const keep = migrationJobName("poly", DIGEST);
+    const stale = namedJob("migrate-poly-ffffffffffff", {
+      conditions: [{ type: "Complete", status: "True" }],
+    } as V1Job["status"]);
+    const api = batch(namedJob(keep, { succeeded: 1 }), [stale]);
+    const adapter = adapterOf(api);
+
+    await expect(adapter.ensure(laneInput())).resolves.toBe("succeeded");
+
+    const [listNs] = api.listNamespacedJob.mock.calls[0] ?? [];
+    expect(listNs).toBe(LANE);
+    expect(api.deleteNamespacedJob).toHaveBeenCalledWith(
+      "migrate-poly-ffffffffffff",
+      LANE,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "Background"
+    );
+  });
+
+  it("classifies a failed lane Job against the lane's own pods", async () => {
+    const name = migrationJobName("poly", DIGEST);
+    const api = batch(
+      namedJob(name, { conditions: [{ type: "Failed", status: "True" }] })
+    );
+    const podApi = pods([neverRanPod()]);
+    const adapter = adapterOf(api, podApi, warnLog());
+
+    await expect(adapter.ensure(laneInput())).resolves.toBe("running");
+
+    const [podNs] = podApi.listNamespacedPod.mock.calls[0] ?? [];
+    expect(podNs).toBe(LANE);
+    expect(api.deleteNamespacedJob).toHaveBeenCalledWith(
+      name,
+      LANE,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "Background"
+    );
+  });
+
+  it("falls back to the adapter's namespace when the caller states none", async () => {
+    const api = batch();
+    const adapter = adapterOf(api);
+
+    await expect(adapter.ensure(input())).resolves.toBe("running");
+
+    const [namespace] = api.createNamespacedJob.mock.calls[0] ?? [];
+    expect(namespace).toBe(NAMESPACE);
   });
 });
