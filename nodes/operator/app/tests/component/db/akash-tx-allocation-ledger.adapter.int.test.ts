@@ -384,6 +384,21 @@ describe("DrizzleAkashTxAllocationLedger (Component)", () => {
       "akash-console:akash1differentwalletaddrforscopetest0000000"
     );
     expect(await foreign.listAllocated({ limit: 10 })).toEqual([]);
+
+    // listReceipts (task.5132): the SAME scoping, NO state/handle predicate — the terminal
+    // (`released`/`failed`) evidence `requiredLeaseGeneration` counts is visible here even
+    // though the allocated-only money-loop view above hides it.
+    const receipts = await ledger.listReceipts({
+      nodeId: NODE_ID,
+      environment: "candidate-a",
+      limit: 10,
+    });
+    expect(receipts.map((r) => r.cogniKey).sort()).toEqual([
+      "k-live",
+      "k-preparing",
+      "k-released",
+    ]);
+    expect(await foreign.listReceipts({ limit: 10 })).toEqual([]);
   });
 
   it("binds node identity in the very row that opens the wallet slot", async () => {

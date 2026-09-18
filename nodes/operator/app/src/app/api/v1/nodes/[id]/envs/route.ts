@@ -30,7 +30,8 @@
  *     read-back URL) in the response — the receipts the Argo prune → Crossplane REMOVE → actuator
  *     delete chain is expected to close. Enumeration only; the close itself never happens app-side.
  *   - GENERATION_IS_NOT_CALLER_INPUT / NOTHING_BUMPS_IMPLICITLY (lease-reactivation.ts): an add's
- *     `lease_generation` is DERIVED from settled-receipt evidence, never taken from the request
+ *     `lease_generation` is DERIVED from ledger-receipt evidence (every state — a TERMINAL
+ *     `released`/`failed` receipt forces the bump, task.5132), never taken from the request
  *     body, and becomes real only as the reviewed catalog commit this verb authors.
  *   - OBSERVABLE: wrapped in `wrapRouteHandlerWithLogging` (routeId `nodes.envs`) — every request
  *     emits the standard start/end envelope + metrics (validation finding on #2311: this verb
@@ -260,24 +261,32 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
     }
 
-    // Money-loop wiring (story.5039 PR-B). One ledger read serves both directions:
-    //   - REMOVE: the env's live paid leases, enumerated BEFORE the PR opens — what the Argo
-    //     prune → Crossplane REMOVE → actuator delete chain is expected to close (embedded as
-    //     `openLeases` + a `verify` URL for the read-back).
-    //   - ADD: the settled-receipt evidence `requiredLeaseGeneration` derives the catalog's
-    //     `lease_generation` cell from (GENERATION_IS_NOT_CALLER_INPUT — the REST body never
-    //     carries it; NOTHING_BUMPS_IMPLICITLY — it lands only as this verb's reviewed commit).
+    // Money-loop wiring (story.5039 PR-B). One (node, env)-scoped ledger read per direction:
+    //   - REMOVE reads `listAllocated` — the env's LIVE paid leases, enumerated BEFORE the PR
+    //     opens: what the Argo prune → Crossplane REMOVE → actuator delete chain is expected to
+    //     close (embedded as `openLeases` + a `verify` URL for the read-back).
+    //   - ADD reads `listReceipts` — receipts in EVERY state, because the evidence
+    //     `requiredLeaseGeneration` derives the catalog's `lease_generation` cell from is
+    //     exactly the TERMINAL (`released`/`failed`) receipts the allocated-only view hides
+    //     (task.5132: deriving from `listAllocated` answered 0 over a terminally failed gen-0
+    //     receipt, and the recreated XR's key was refused with `akash_tx_identity_conflict`).
+    //     GENERATION_IS_NOT_CALLER_INPUT — the REST body never carries it;
+    //     NOTHING_BUMPS_IMPLICITLY — it lands only as this verb's reviewed commit.
     // catalogGeneration is 0 here: an env being ADDED has no cell (REMOVE_COMPLETES_THE_ROW
     // drops it with the env), so the receipts are the only evidence that can force a bump.
     const leaseRead = getContainer().leaseReadCapability;
     let envReceipts: readonly AkashTxAllocationRecord[] | null = null;
     if (leaseRead) {
       try {
-        envReceipts = await leaseRead.listAllocated({
+        const scope = {
           nodeId: node.id,
           environment: targetEnv,
           limit: LEASE_ENUMERATION_LIMIT,
-        });
+        };
+        envReceipts =
+          present === true
+            ? await leaseRead.listReceipts(scope)
+            : await leaseRead.listAllocated(scope);
       } catch (err) {
         ctx.log.warn(
           {

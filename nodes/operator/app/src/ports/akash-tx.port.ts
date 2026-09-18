@@ -423,4 +423,19 @@ export interface AkashTxAllocationLedgerPort {
     environment?: string;
     limit: number;
   }): Promise<readonly AkashTxAllocationRecord[]>;
+  /**
+   * Bounded enumeration of receipts in EVERY state for this wallet scope — the generation-
+   * derivation primitive (task.5132). `requiredLeaseGeneration` must see terminal receipts
+   * (`released`/`failed`): a terminal receipt permanently spends its generation for a re-added
+   * env (the recreated composite carries a new UID, so `claim`'s failed-no-handle re-claim can
+   * never match it — bug.5192's escape hatch does not apply across an XR recreation). The
+   * `listAllocated` view above deliberately hides those states; deriving from it made an ADD
+   * re-state a spent generation and the actuator refuse with `akash_tx_identity_conflict`.
+   * Read-only, hard-limited, oldest-touched first — it decides nothing.
+   */
+  listReceipts(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]>;
 }

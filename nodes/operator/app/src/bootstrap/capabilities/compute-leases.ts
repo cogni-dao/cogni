@@ -12,8 +12,8 @@
  *   can spend: the app never holds the actuator's Console credential
  *   (NEVER_HOLDS_TWO_WALLETS), only the public account pin that names the ledger scope.
  * Invariants:
- *   - READ_ONLY_BY_CONSTRUCTION: the capability exposes `listAllocated` + a status read. No
- *     claim/prepare/record/fail path is reachable through it.
+ *   - READ_ONLY_BY_CONSTRUCTION: the capability exposes `listAllocated` + `listReceipts` + a
+ *     status read. No claim/prepare/record/fail path is reachable through it.
  *   - GRACEFUL_DEGRADATION: no `AKASH_ACTUATOR_ACCOUNT_ID` → undefined capability; routes
  *     surface "leases unwired" rather than an empty (and therefore lying) list.
  *   - SCOPED_LIKE_THE_WRITER: every ledger read is wallet-scoped exactly like the actuator's
@@ -43,6 +43,12 @@ export interface LeaseReadCapability {
     environment?: string;
     limit: number;
   }): Promise<readonly AkashTxAllocationRecord[]>;
+  /** Every-state receipt enumeration for generation derivation (task.5132) — see `AkashTxAllocationLedgerPort.listReceipts`. */
+  listReceipts(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]>;
   /** Console status read-back; undefined when the app holds no Console read credential. */
   readonly readLeaseStatus: LeaseStatusReader | undefined;
 }
@@ -67,6 +73,7 @@ export function createLeaseReadCapability(
   const status = compute.status?.bind(compute);
   return {
     listAllocated: (input) => ledger.listAllocated(input),
+    listReceipts: (input) => ledger.listReceipts(input),
     readLeaseStatus: status
       ? async ({ leaseId }) => ({ state: (await status({ leaseId })).state })
       : undefined,
