@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# A directory (not a bare file) on purpose: kustomize's default root-only load restrictor
+# rejects a `transformers:` entry that points at a file outside the kustomization root, but
+# accepts a sibling kustomization directory — the same way the overlays already consume
+# ../../../base/node-app. One shared definition, three overlays, no copy-paste drift.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - service-name.yaml
