@@ -9,7 +9,7 @@ read_when: Modifying CI workflows, adding checks to merge gate, or planning mult
 implements: []
 owner: cogni-dev
 created: 2025-12-22
-verified: 2026-09-17
+verified: 2026-09-18
 tags:
   - ci-cd
   - deployment
@@ -82,10 +82,10 @@ still do for every k3s node. They diverge the moment a node runs a
 all, so its desired state has to be reconciled by _some_ cluster, and that
 cluster is production's.
 
-| question                               | name            | decides                                                                                                             |
-| -------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
-| What is this workload?                 | **lane**        | public URL, vault path prefix, XR namespace, deploy branch, idempotence key, DB name suffix                         |
-| Who reconciles, pays and custodies it? | **control env** | AppSet directory, vault host + writer role, actuator namespace, substrate host, Postgres host, owner-inherited keys |
+| question                               | name            | decides                                                                                                                      |
+| -------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| What is this workload?                 | **lane**        | public URL, vault path prefix, XR namespace, deploy branch, idempotence key, DB name suffix, **migration-receipt namespace** |
+| Who reconciles, pays and custodies it? | **control env** | AppSet directory, vault host + writer role, actuator namespace, substrate host, Postgres host, owner-inherited keys          |
 
 > **Path and name follow the LANE. Identity and substrate follow the CONTROL env.**
 
@@ -139,12 +139,42 @@ Each was one team re-deriving the rule and picking the wrong half:
 | `production-db-reader` denied `cogni/candidate-a/poly`             | read policy scoped to lane only                   |
 | DoltHub mirror purge stripped production's creds on a lane promote | purge keyed on lane, not control env              |
 | `verify-candidate` polls forever with `not_observed`               | readiness host from lane, workload on control env |
+| migration reports `succeeded` over an EMPTY lane database          | receipt namespace from control env, not lane      |
 
 The last one is instructive: the job is `environment: candidate-a` and passes
 `vm_host: ${{ secrets.VM_HOST }}`, so it SSHes to the candidate VM and asks for
 an object that only ever exists on production's cluster. `kubectl` returns
 `NotFound`, the poller reports `not_observed`, and the flight can never go green
 — a **structurally blind check**, not a flake.
+
+### A receipt is scoped to what it proves
+
+The failure above is the family's subtlest member, because nothing lied: the
+per-digest migration Job completed, and the step that read it reported the truth
+it was asked for. The question was wrong. A Job named `migrate-<slug>-<digest12>`
+in the ACTUATOR's namespace answers _"has this node's bundle been migrated by
+whoever is paying?"_ — while the only useful question is _"has THIS DATABASE been
+migrated?"_. One node at one digest with two lanes has two databases
+(`cogni_poly` and `cogni_poly_candidate_a`, same Postgres since the lane suffix)
+and produced ONE Job name, so the first lane's receipt answered for the second.
+poly's candidate-a lease then served an empty schema until its boot deadline
+closed it.
+
+> **A receipt proves a fact about a resource, so it must live where that resource
+> is addressed.** For anything a lane owns, that is the LANE — even when the
+> identity performing the work belongs to the control env.
+
+Custody decides who ACTS; the workload decides WHAT IS ACTED ON. The fix is
+namespace, not name: the Job now runs in `cogni-<lane>`, where the
+`<slug>-compute-env-secrets` it references by `secretKeyRef` actually resolves to
+that lane's DSN. Every pre-existing Job name is unchanged and no proven digest
+re-runs — k8s identity is (namespace, name), so lane isolation is sufficient on
+its own. A second scoping rule in the name would be the same mistake this spec
+warns about: two derivations of one question.
+
+The same shape is latent anywhere else a per-node or per-digest artifact is
+addressed without its lane — DNS records and provider egress rules are the
+candidates to check next.
 
 ### Guard
 
