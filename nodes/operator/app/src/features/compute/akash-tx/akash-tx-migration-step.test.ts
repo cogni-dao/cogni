@@ -105,6 +105,8 @@ describe("runMigrationStep", () => {
       image: IMAGE,
       // Derived, never sent on the wire: a secret NAME the Job references by key.
       secretName: "toks9-compute-env-secrets",
+      // ...and the namespace that name resolves in. Both derived from the WORKLOAD (task.5132).
+      namespace: "cogni-candidate-a",
       phases: cogniNodeAppMigrationPhases({ doltgres: true }),
     });
   });
@@ -122,6 +124,27 @@ describe("runMigrationStep", () => {
       nodeSlug: "toks5",
       environment: "production",
       secretName: "toks5-compute-env-secrets",
+      namespace: "cogni-production",
+    });
+  });
+
+  it("states the LANE's namespace when this actuator custodies a foreign lane (task.5132)", async () => {
+    // The receipt-vs-database bug in one assertion. This process runs in cogni-production and
+    // pays for poly's candidate-a lane; `poly-compute-env-secrets` exists in BOTH namespaces and
+    // names a DIFFERENT database in each (`cogni_poly` vs `cogni_poly_candidate_a`, bug.5207).
+    // Leaving the namespace to the actuator's own migrated production's database and then left a
+    // receipt the lane read as proof of its own — an empty DB behind a `succeeded` phase.
+    const migration = new FakeMigration();
+    await runMigrationStep(
+      { migration, log: recordingLogger() },
+      { ...INPUT, environment: "candidate-a", workload: "poly", step: step() }
+    );
+
+    expect(migration.calls[0]).toMatchObject({
+      nodeSlug: "poly",
+      environment: "candidate-a",
+      secretName: "poly-compute-env-secrets",
+      namespace: "cogni-candidate-a",
     });
   });
 

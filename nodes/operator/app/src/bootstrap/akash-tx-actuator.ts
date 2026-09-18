@@ -336,9 +336,14 @@ const actuator = new AkashTxActuator({
   probe,
   /**
    * story.5016 — the gate this feeds is fail-CLOSED, so an omitted prover is not "no migration
-   * policy", it is "every paid create is refused". Same adapter, same namespace and therefore
-   * the same `migrate-<slug>-<digest12>` Job names as the ComputeWorkload controller: a digest
-   * already proven by one lane is proven for the other, and neither re-runs it.
+   * policy", it is "every paid create is refused".
+   *
+   * `namespace` here is this process's own and is now only a FALLBACK: the migration step states
+   * the workload's namespace per call (task.5132). It used to be the whole answer, on the
+   * reasoning that "a digest already proven by one lane is proven for the other, and neither
+   * re-runs it" — true while one env meant one VM meant one Postgres, and false the moment this
+   * cluster started custodying OTHER envs' lanes against their OWN databases on the SAME
+   * Postgres (bug.5207). A digest is proven per DATABASE, not per node.
    */
   migration: new KubernetesMigrationJobAdapter(
     kubeConfig.makeApiClient(BatchV1Api),

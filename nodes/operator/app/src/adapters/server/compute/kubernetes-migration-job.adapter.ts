@@ -7,11 +7,21 @@
  *   idempotent Kubernetes Job on the operator substrate (bug.5116). The k3s lane runs the
  *   identical contract as a Deployment initContainer; an Akash-placed node has no Deployment,
  *   so the ComputeWorkload controller runs the same migrator image here before any lease I/O.
- * Scope: BatchV1Api CRUD on `migrate-<slug>-<digest12>` Jobs in the controller's namespace.
+ * Scope: BatchV1Api CRUD on `migrate-<slug>-<digest12>` Jobs in the WORKLOAD's namespace
+ *   (`input.namespace`, falling back to this adapter's own).
  *   Renders caller-provided phases mechanically — it owns no runtimeProfile path policy.
  * Invariants:
  *   - PER_DIGEST_IDEMPOTENT: the Job name pins the bundle digest; a completed Job IS the
  *     durable skip marker (deliberately no ttlSecondsAfterFinished).
+ *   - RECEIPT_IS_SCOPED_TO_THE_DATABASE_IT_PROVES (task.5132): that skip marker lives in the
+ *     WORKLOAD's namespace, because that is the namespace whose Secret named the DSN the Job
+ *     actually migrated. The name pins the digest and nothing else, so two lanes of one node at
+ *     one digest — production on `cogni_poly`, candidate-a on `cogni_poly_candidate_a`, same
+ *     Postgres since bug.5207 — produced ONE name. Sharing a namespace made the first lane's
+ *     receipt answer for the second: poly's candidate-a lane read production's 37h-old Complete
+ *     Job, reported `succeeded`, and served an EMPTY database until its boot deadline closed the
+ *     lease. Namespace-per-workload is the whole fix; every existing Job name is unchanged and
+ *     no already-proven digest re-runs.
  *   - VALUE_FREE: DATABASE_URL reaches the Job only as a secretKeyRef; secret values never
  *     transit the controller.
  *   - RECONCILER_OWNS_POLICY: bounded in-Job retries (backoffLimit 2, safe because the
@@ -24,7 +34,7 @@
  *   - GC_SUPERSEDED: when a newer digest succeeds, older FINISHED `migrate-<slug>-*` Jobs are
  *     deleted best-effort so the namespace holds one marker per node; running Jobs are never
  *     collected.
- * Side-effects: Kubernetes Job create/list/delete in one namespace.
+ * Side-effects: Kubernetes Job create/list/delete in the workload's namespace.
  * Links: bug.5116, story.5016, infra/k8s/base/node-app/deployment.yaml (k3s initContainer)
  * @internal
  */
@@ -194,26 +204,33 @@ export class KubernetesMigrationJobAdapter
   constructor(
     private readonly batch: BatchApi,
     private readonly pods: PodsApi,
+    /** Fallback only: the namespace of a caller whose workloads are all its own env. */
     private readonly namespace: string,
     private readonly log?: MigrationJobLogger
   ) {}
+
+  /**
+   * Every Job I/O for one `ensure` — read, create, GC, pod list, delete — must resolve the SAME
+   * namespace, or the receipt is written where nothing reads it. One derivation, used everywhere.
+   */
+  private namespaceFor(input: ComputeWorkloadMigrationInput): string {
+    return input.namespace ?? this.namespace;
+  }
 
   async ensure(
     input: ComputeWorkloadMigrationInput
   ): Promise<"succeeded" | "running" | "failed"> {
     const name = migrationJobName(input.nodeSlug, input.bundleDigest);
+    const namespace = this.namespaceFor(input);
     let job: V1Job | undefined;
     try {
-      job = (await this.batch.readNamespacedJob(name, this.namespace)).body;
+      job = (await this.batch.readNamespacedJob(name, namespace)).body;
     } catch (error) {
       if (statusCode(error) !== 404) throw transient();
     }
     if (!job) {
       try {
-        await this.batch.createNamespacedJob(
-          this.namespace,
-          buildJob(input, name)
-        );
+        await this.batch.createNamespacedJob(namespace, buildJob(input, name));
       } catch (error) {
         if (error instanceof ComputeLifecycleError) throw error;
         // 409: another pass created it between read and create — same outcome.
@@ -248,10 +265,11 @@ export class KubernetesMigrationJobAdapter
     job: V1Job,
     name: string
   ): Promise<"failed" | "running"> {
+    const namespace = this.namespaceFor(input);
     let pods: V1Pod[];
     try {
       const list = await this.pods.listNamespacedPod(
-        this.namespace,
+        namespace,
         undefined,
         undefined,
         undefined,
@@ -288,7 +306,7 @@ export class KubernetesMigrationJobAdapter
     try {
       await this.batch.deleteNamespacedJob(
         name,
-        this.namespace,
+        namespace,
         undefined,
         undefined,
         undefined,
@@ -307,9 +325,10 @@ export class KubernetesMigrationJobAdapter
     input: ComputeWorkloadMigrationInput,
     keep: string
   ): Promise<void> {
+    const namespace = this.namespaceFor(input);
     try {
       const list = await this.batch.listNamespacedJob(
-        this.namespace,
+        namespace,
         undefined,
         undefined,
         undefined,
@@ -336,7 +355,7 @@ export class KubernetesMigrationJobAdapter
             this.batch
               .deleteNamespacedJob(
                 candidate,
-                this.namespace,
+                namespace,
                 undefined,
                 undefined,
                 undefined,

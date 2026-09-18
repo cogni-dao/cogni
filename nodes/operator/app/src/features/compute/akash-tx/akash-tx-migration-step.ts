@@ -23,10 +23,12 @@
  *   - COMMANDS_ARE_NOT_CALLER_SUPPLIED: the migration commands live here, keyed by
  *     runtimeProfile. A caller-supplied command would let anyone who can reach the actuator run
  *     an arbitrary container against the environment's database under its service account.
- *   - ENVIRONMENT_IS_THE_WORKLOAD'S: the Job is ensured against the secret and namespace of the
- *     workload being reconciled. The composite is namespaced `cogni-<environment>` and the
- *     Composition dials the actuator in that same namespace, so "which environment's database?"
- *     is answered by WHERE THE WORKLOAD IS, never by who is paying for it.
+ *   - ENVIRONMENT_IS_THE_WORKLOAD'S: the Job is ensured against the secret AND THE NAMESPACE of
+ *     the workload being reconciled — both stated here, from the environment the observe request
+ *     carries. "Which environment's database?" is answered by WHERE THE WORKLOAD IS, never by who
+ *     is paying for it. Until task.5132 only the secret NAME was stated; the namespace defaulted
+ *     to this process's own, which for a foreign-custodied lane resolved that name to the PAYING
+ *     env's Secret — and left the receipt where the lane then read it as its own proof.
  *   - OUTCOME_IS_OBSERVABLE: every phase emits a structured log marker before it is returned
  *     (bug.5115: a refusal that only reached CR status was invisible for hours). A `failed`
  *     phase additionally reaches the composite as a named status reason.
@@ -93,6 +95,20 @@ function migrationSecretName(workload: string): string {
   return `${workload}-compute-env-secrets`;
 }
 
+/**
+ * The namespace that Secret lives in — the WORKLOAD's, exactly as the composite that asked for
+ * this migration is namespaced (`compute-workload-secret-manifests.ts`, `buildComputeWorkloadManifest`).
+ *
+ * This process runs in the PAYING cluster's `cogni-production` and reconciles other lanes'
+ * workloads (bug.5206 custody), so its own namespace answers "who pays", never "whose database".
+ * Stating the workload's namespace is what makes ENVIRONMENT_IS_THE_WORKLOAD'S true rather than
+ * merely intended: `cogni-production/poly-compute-env-secrets` names `cogni_poly`, while the
+ * candidate-a lane's identically-named Secret names `cogni_poly_candidate_a` (task.5132).
+ */
+function workloadNamespace(environment: string): string {
+  return `cogni-${environment}`;
+}
+
 export interface AkashTxMigrationStepInput {
   readonly step: AkashTxMigrationStep;
   readonly cogniKey: string;
@@ -139,6 +155,7 @@ export async function runMigrationStep(
       bundleDigest,
       image,
       secretName: migrationSecretName(input.workload),
+      namespace: workloadNamespace(input.environment),
       phases: cogniNodeAppMigrationPhases({ doltgres }),
     });
   } catch (error) {
