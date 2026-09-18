@@ -3,25 +3,30 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 # Module: scripts/ci/run-unit-tests.sh
-# Purpose: Run the unit/contract vitest suites with affected-scoping on PRs and
-#   FULL scope on merge_group/push (task.5140 Stage B / AFFECTED_ONLY_CI). The
-#   suite is two disjoint vitest universes:
+# Purpose: Run the unit/contract vitest suites with MODULE-GRAPH affected-scoping
+#   on PRs and FULL scope on merge_group/push (task.5140 Stage B+C /
+#   AFFECTED_ONLY_CI). Two disjoint vitest universes:
 #
 #     ROOT config (`vitest run`) — tests/** + packages/*/tests + services/*/tests
 #       (ci-invariants, catalog SSoT specs, arch, all package/service unit tests).
-#       Turbo does NOT model this glob-universe (there is no //#test task), so it
-#       ALWAYS runs full. Dropping it on a PR would silently lose that coverage —
-#       the exact false-green the affected-only design must never produce.
+#       ALWAYS runs full. Many of these are coupled to their triggers by
+#       filesystem read (readFileSync/glob of catalog/manifests/docs), NOT by
+#       import — invisible to any import-graph affected selector — so running the
+#       full root suite on every PR is the deliberate safety floor. It's ~89s.
 #
-#     OPERATOR app config — ~60% of the suite's CI wall-time. Gated on turbo's
-#       affected oracle: skipped on a PR only when we are CONFIDENT neither the
-#       operator app NOR any package it depends on changed. ALWAYS run on
-#       merge_group / push:main. That full off-PR run is the BACKSTOP — the
-#       required `unit` check re-runs on the merge-queue candidate, so any
-#       PR-time affected miss is caught before the code can land on main.
+#     OPERATOR app config — the expensive half (~177s CI). On a PR it runs via
+#       vitest's native `--changed <base>`: vitest walks the IMPORT graph and
+#       runs ONLY the operator test files transitively reaching a file changed vs
+#       <base> (test-level affected, not the coarse whole-package selection of
+#       Stage B's turbo oracle). It selects nothing — a fast pass — when the
+#       operator app is unaffected. On merge_group / push:main it runs FULL.
 #
-# Fail-safe: the operator suite is skipped ONLY on a clean "not affected" signal
-# from turbo. Any turbo error / uncertainty falls through to running it.
+# Safety: `--changed` can only UNDER-select on a PR (never over-select), and the
+# blind spot is fs-coupled (non-import) tests. Both are covered by the merge_group
+# FULL run — the required `unit` check re-runs the complete suite on the
+# merge-queue candidate, so any PR-time under-selection is caught before merge.
+# PR-time `--changed` is therefore a FAST SIGNAL, never the merge gate. If <base>
+# does not resolve we fall back to a FULL operator run (never a partial one).
 #
 # Env: CI_EVENT      — github.event_name (pull_request | merge_group | push)
 #      TURBO_SCM_BASE — affected base ref (default origin/main)
@@ -52,20 +57,18 @@ if [ "$CI_EVENT" != "pull_request" ]; then
   exit 0
 fi
 
-# PR: consult turbo's affected oracle. `operator#test` appears iff the operator
-# app package is affected (itself or via a changed dependency). Skip ONLY on a
-# clean not-affected signal; run on any error (fail-safe).
-skip_operator=false
-if affected_json="$(TURBO_SCM_BASE="$BASE" pnpm turbo run test --affected --dry=json 2>/dev/null)"; then
-  if ! grep -q '"operator#test"' <<<"$affected_json"; then
-    skip_operator=true
-  fi
+# PR: module-graph affected selection via vitest --changed. Fall back to a FULL
+# operator run if the base ref can't be resolved — never trust a partial signal
+# built on a broken base (a red job from a genuine test failure is preserved;
+# only base-resolution failure triggers the fallback).
+if ! git rev-parse --verify --quiet "${BASE}^{commit}" >/dev/null 2>&1; then
+  echo "run-unit-tests: base '${BASE}' unresolvable → FULL operator run (fail-safe)"
+  run_operator
+  exit 0
 fi
 
-if $skip_operator; then
-  echo "run-unit-tests: operator app NOT affected on this PR (base=${BASE}) → skipping its vitest config."
-  echo "run-unit-tests: it runs FULL on the merge_group candidate before merge (backstop)."
-else
-  echo "run-unit-tests: operator app affected (or oracle unavailable) → running its vitest config."
-  run_operator
-fi
+echo "::group::run-unit-tests: operator app config — vitest --changed ${BASE} (module-graph affected)"
+echo "run-unit-tests: runs only operator tests importing a file changed vs ${BASE};"
+echo "run-unit-tests: 0 selected = operator unaffected (fast pass). FULL suite re-runs on merge_group (backstop)."
+pnpm exec vitest run --config nodes/operator/app/vitest.config.mts --changed "${BASE}" --passWithNoTests
+echo "::endgroup::"
