@@ -350,8 +350,12 @@ fi
 grep -q "CLOUDFLARE_API_TOKEN required" "$TMPROOT/missing-dns.out"
 
 # External compute uses the same entrypoint with the provider chosen upstream by
-# the typed planner. It checks declared secret refs + controller/CRD/credentials
-# + the installed egress boundary, without requiring or provisioning k3s app/DB state.
+# the typed planner. It checks declared secret refs + the Crossplane control plane
+# and actuator writer + the installed egress boundary, without requiring or
+# provisioning k3s app/DB state. The row DECLARES its authority (task.5138): the
+# legacy compute-workload-controller is retired, so an external-compute fixture
+# without a `compute_api.<env>: crossplane` cell is the loud-fail negative below,
+# not a happy path.
 EXTERNAL_SRC="$TMPROOT/external-src"
 EXTERNAL_BIN="$TMPROOT/external-bin"
 mkdir -p "$EXTERNAL_SRC/infra/catalog" "$EXTERNAL_SRC/nodes/toks4/.cogni" "$EXTERNAL_BIN"
@@ -360,6 +364,8 @@ name: toks4
 type: node
 node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
 path_prefix: nodes/toks4/
+compute_api:
+  candidate-a: crossplane
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: test provider
@@ -378,12 +384,26 @@ YAML
 cat > "$EXTERNAL_BIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
-  "get crd computeworkloads.compute.cogni.io") exit 0 ;;
-  *"get deployment operator-compute-workload-controller -o jsonpath="*) echo 1; exit 0 ;;
-  *"exec deployment/operator-compute-workload-controller -c controller"*)
-    [ "${FAKE_MISSING_AKASH_CREDENTIAL:-}" = 1 ] && exit 1
+  # The legacy controller is RETIRED (task.5138) — a crossplane row touching it is drift.
+  *compute-workload-controller*)
+    echo "fake external kubectl: legacy controller must never be touched: $*" >&2
+    exit 1
+    ;;
+  *"get crd computeworkloads.compute.cogni.io"*)
+    echo "fake external kubectl: legacy CRD must never be asserted: $*" >&2
+    exit 1
+    ;;
+  *"get crd xcomputeworkloads.compute.cogni.io"*) echo True; exit 0 ;;
+  *"get composition xcomputeworkload-akash"*) exit 0 ;;
+  *"get clusterproviderconfigs.http.m.crossplane.io cogni-http"*) exit 0 ;;
+  *"get deployment operator-akash-tx-actuator"*status.availableReplicas*) echo 1; exit 0 ;;
+  *"get deployment operator-akash-tx-actuator"*AKASH_ALLOWED_PROVIDERS*)
+    echo akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
     exit 0
     ;;
+  *"get secret akash-tx-actuator-auth"*.data.token*) echo dG9rZW4=; exit 0 ;;
+  *"get secret akash-tx-actuator-auth"*) exit 0 ;;
+  *"get secret akash-tx-actuator-env-secrets"*) exit 0 ;;
   "create token db-provisioner -n default") echo test-jwt; exit 0 ;;
   *"bao write -field=token auth/kubernetes/login"*) echo test-token; exit 0 ;;
   *"bao kv get -format=json cogni/candidate-a/toks4"*)
@@ -426,12 +446,6 @@ if env "${EXTERNAL_ENV[@]}" FAKE_MISSING_WORKLOAD_SECRET=1 \
   exit 1
 fi
 grep -q "missing declared key: LITELLM_VIRTUAL_KEY" "$TMPROOT/external-missing-secret.out"
-if env "${EXTERNAL_ENV[@]}" FAKE_MISSING_AKASH_CREDENTIAL=1 \
-  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-missing-credential.out" 2>&1; then
-  echo "expected missing Akash controller credential to fail" >&2
-  exit 1
-fi
-grep -q "controller provider/DNS credentials" "$TMPROOT/external-missing-credential.out"
 
 cat > "$EXTERNAL_SRC/nodes/toks4/.cogni/repo-spec.yaml" <<'YAML'
 deployment:
@@ -444,56 +458,51 @@ env "${EXTERNAL_ENV[@]}" FAKE_EMPTY_WORKLOAD_SECRET=1 \
 grep -q "all declared workload secret refs are materialized" "$TMPROOT/external-no-secret-refs.out"
 
 # ---------------------------------------------------------------------------
-# task.5104 — compute_api selects WHICH authority the preflight asserts.
-#
-# The rows above carry no compute_api cell at all, so everything asserted so far
-# already proves LEGACY_IS_DEFAULT: the fake kubectl below hard-fails on any
-# crossplane object, and the legacy fake hard-fails on anything that is not the
-# bespoke controller, so each branch's fixture is itself the "did not drift" proof.
+# task.5104 → task.5138 — compute_api selects WHICH authority the preflight asserts,
+# and since task.5138 the only assertable authority for an external-compute row is
+# crossplane: the bespoke compute-workload-controller is deleted from every overlay,
+# so LEGACY_IS_DEFAULT is retired here — an absent (or explicit `legacy`) cell must
+# FAIL LOUDLY, never resolve to a dead authority. The toks4 fixture above therefore
+# declares `compute_api.candidate-a: crossplane`, and its fake kubectl hard-fails on
+# any legacy-controller object, so the happy path is itself the "did not drift" proof.
 # ---------------------------------------------------------------------------
 
-# The legacy fixture must still take the controller path, and must never reach for
-# the Crossplane control plane.
-grep -q "compute_api=legacy" "$TMPROOT/external-success.out"
-grep -q "compute workload controller is available" "$TMPROOT/external-success.out"
-if grep -q "crossplane authority" "$TMPROOT/external-success.out"; then
-  echo "expected the legacy branch to assert no crossplane objects" >&2
+grep -q "compute_api=crossplane" "$TMPROOT/external-success.out"
+grep -q "cogni-candidate-a/operator-akash-tx-actuator is available" "$TMPROOT/external-success.out"
+grep -q "AKASH_ALLOWED_PROVIDERS is non-empty" "$TMPROOT/external-success.out"
+if grep -q "compute workload controller" "$TMPROOT/external-success.out"; then
+  echo "expected the crossplane path to assert no legacy controller" >&2
   exit 1
 fi
 
-# An EXPLICIT `compute_api.candidate-a: legacy` must be byte-identical to the absent
-# cell: same asserts, same fake, same output.
-LEGACY_SRC="$TMPROOT/legacy-src"
-mkdir -p "$LEGACY_SRC/infra/catalog" "$LEGACY_SRC/nodes/toks4/.cogni"
-cat > "$LEGACY_SRC/infra/catalog/toks4.yaml" <<'YAML'
+# NEGATIVE (task.5138): a row with NO compute_api cell — the exact fixture drift the
+# review caught — resolves to the retired legacy authority and must fail loudly at
+# catalog-parse time, naming the fix. An explicit `compute_api.candidate-a: legacy`
+# takes the same branch with the same message.
+NO_API_SRC="$TMPROOT/no-compute-api-src"
+mkdir -p "$NO_API_SRC/infra/catalog" "$NO_API_SRC/nodes/toks4/.cogni"
+cat > "$NO_API_SRC/infra/catalog/toks4.yaml" <<'YAML'
 name: toks4
 type: node
 node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
 path_prefix: nodes/toks4/
-compute_api:
-  candidate-a: legacy
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: test provider
 YAML
-cat > "$LEGACY_SRC/nodes/toks4/.cogni/repo-spec.yaml" <<'YAML'
+cat > "$NO_API_SRC/nodes/toks4/.cogni/repo-spec.yaml" <<'YAML'
 deployment:
   services:
     - name: app
       secret_refs:
         - { key: AUTH_SECRET }
-        - { key: DATABASE_URL }
-        - { key: LITELLM_VIRTUAL_KEY }
 YAML
-env "${EXTERNAL_ENV[@]}" APP_SOURCE_DIR="$LEGACY_SRC" COGNI_CATALOG_ROOT="$LEGACY_SRC/infra/catalog" \
-  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/explicit-legacy.out"
-grep -q "compute_api=legacy" "$TMPROOT/explicit-legacy.out"
-grep -q "compute workload controller is available" "$TMPROOT/explicit-legacy.out"
-grep -q "External compute preconditions ready for toks4" "$TMPROOT/explicit-legacy.out"
-if grep -q "crossplane authority" "$TMPROOT/explicit-legacy.out"; then
-  echo "expected explicit compute_api=legacy to be identical to the absent cell" >&2
+if env "${EXTERNAL_ENV[@]}" APP_SOURCE_DIR="$NO_API_SRC" COGNI_CATALOG_ROOT="$NO_API_SRC/infra/catalog" \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/retired-legacy.out" 2>&1; then
+  echo "expected an absent compute_api cell to fail loudly (legacy authority is retired)" >&2
   exit 1
 fi
+grep -Fq "compute_api.'candidate-a' for external-compute row 'toks4' is 'legacy': the legacy authority is retired, declare compute_api.candidate-a: crossplane" "$TMPROOT/retired-legacy.out"
 
 # A crossplane row asserts the Crossplane control plane + the private Akash tx
 # actuator instead. Its fake kubectl refuses every legacy-controller call, which is
@@ -654,7 +663,7 @@ if env "${XCW_ENV[@]}" APP_SOURCE_DIR="$BAD_SRC" COGNI_CATALOG_ROOT="$BAD_SRC/in
   echo "expected an unsupported compute_api to fail" >&2
   exit 1
 fi
-grep -q "unsupported compute_api 'terraform'" "$TMPROOT/xcw-bad-authority.out"
+grep -Fq "compute_api.'candidate-a' for external-compute row 'toks5' is 'terraform': the legacy authority is retired, declare compute_api.candidate-a: crossplane" "$TMPROOT/xcw-bad-authority.out"
 
 if env TARGET=scheduler-worker DEPLOY_ENVIRONMENT=candidate-a APP_SOURCE_DIR=. COGNI_CATALOG_ROOT=infra/catalog bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/service.out" 2>&1; then
   echo "expected service target to fail explicitly" >&2

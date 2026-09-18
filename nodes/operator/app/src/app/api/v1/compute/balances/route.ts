@@ -3,14 +3,19 @@
 
 /**
  * Module: `@app/api/v1/compute/balances`
- * Purpose: On-demand READ of each compute-provider account balance (story.5011) — the
- *   RBAC-gated pull surface for the dashboard fleet view (story.5013) and agents.
- * Scope: Session-gated GET that delegates to the injected ComputeResourcePort. Does not
- *   provision/release compute, settle payment (the deferred write half), or emit metrics.
- * Invariants: Session required; provider-agnostic ComputeBalance returned verbatim; empty
- *   array when CHERRY_AUTH_TOKEN is unset (graceful stub).
- * Side-effects: IO (HTTPS read to the compute provider via the adapter).
- * Links: ComputeResourcePort (@cogni/ai-tools), CherryComputeAdapter (adapters/server/compute).
+ * Purpose: On-demand READ of compute spend-awareness (story.5011/story.5013) — provider
+ *   account balances where a read credential exists (Cherry), and the Akash spend view from
+ *   the actuator's OWN cost ledger (task.5138: "cost rows follow the writer").
+ * Scope: Session-gated GET. Does not provision/release compute or settle payment.
+ * Invariants:
+ *   - ONE_CONSOLE_KEY_PER_ACCOUNT (hub `akash-actuator-wallet-cutover`): this route reads NO
+ *     Akash Console API. The account's one key belongs to its actuator; the app's Akash view
+ *     is the ledger the writer itself populates (per-node transferred totals + active rates).
+ *   - Session required; `balances` returned verbatim from ComputeResourcePort; `akashSpend`
+ *     is null (never fabricated) until AKASH_ACTUATOR_ACCOUNT_ID is pinned on the runtime.
+ * Side-effects: IO (Cherry HTTPS read; Postgres cost-ledger read).
+ * Links: ComputeResourcePort (@cogni/ai-tools), DrizzleComputeCostStore (adapters/server/compute),
+ *   task.5138, story.5039.
  * @public
  */
 
@@ -26,7 +31,18 @@ export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "compute.balances", auth: { mode: "required", getSessionUser } },
   async (_ctx, _request, _sessionUser) => {
-    const balances = await getContainer().computeCapability.balances();
-    return NextResponse.json({ balances });
+    const container = getContainer();
+    const spendReader = container.akashSpendReader;
+    const [balances, akashSpend] = await Promise.all([
+      container.computeCapability.balances(),
+      spendReader
+        ? (async () => ({
+            accountId: spendReader.accountId,
+            asOf: new Date().toISOString(),
+            byNode: await spendReader.reportByNode(),
+          }))()
+        : Promise.resolve(null),
+    ]);
+    return NextResponse.json({ balances, akashSpend });
   }
 );

@@ -90,6 +90,7 @@ import {
   AlchemyWebhookNormalizer,
   type Database,
   DrizzleAiTelemetryAdapter,
+  DrizzleComputeCostStore,
   DrizzleConnectionBrokerAdapter,
   DrizzleExecutionGrantUserAdapter,
   DrizzleExecutionGrantWorkerAdapter,
@@ -188,6 +189,7 @@ import type {
   AccountService,
   AiTelemetryPort,
   Clock,
+  ComputeCostReport,
   ConnectionBrokerPort,
   DataSourceRegistration,
   EpochsRead,
@@ -287,6 +289,17 @@ export interface Container {
   computeCapability: ComputeResourcePort;
   /** Read-only paid-lease surface (story.5039) — undefined until AKASH_ACTUATOR_ACCOUNT_ID is pinned on the runtime */
   leaseReadCapability: LeaseReadCapability | undefined;
+  /**
+   * Akash spend view from the actuator's OWN cost ledger (task.5138): per-node transferred
+   * totals + active rates — "cost rows follow the writer", so the app reads its Postgres,
+   * never a Console credential. Undefined until AKASH_ACTUATOR_ACCOUNT_ID is pinned.
+   */
+  akashSpendReader:
+    | {
+        accountId: string;
+        reportByNode(): Promise<readonly ComputeCostReport[]>;
+      }
+    | undefined;
   /** Web search capability for AI tools - requires TAVILY_API_KEY to be configured */
   webSearchCapability: WebSearchCapability;
   /** Repo capability for AI tools - requires COGNI_REPO_PATH */
@@ -669,13 +682,21 @@ function createContainer(): Container {
   const computeCapability = createComputeCapability(env);
 
   // Read-only paid-lease surface (story.5039): the allocation-ledger read scoped to the
-  // actuator wallet's PUBLIC account pin + the compute capability's Console status read-back.
-  // Undefined until AKASH_ACTUATOR_ACCOUNT_ID reaches the app runtime.
+  // actuator wallet's PUBLIC account pin — pure ledger read, no Console credential
+  // (ONE_CONSOLE_KEY_PER_ACCOUNT, task.5138). Undefined until AKASH_ACTUATOR_ACCOUNT_ID
+  // reaches the app runtime.
   const leaseReadCapability = createLeaseReadCapability(
     env,
-    async () => serviceDb,
-    computeCapability
+    async () => serviceDb
   );
+  const akashActuatorAccountId = env.AKASH_ACTUATOR_ACCOUNT_ID?.trim();
+  const akashSpendReader = akashActuatorAccountId
+    ? {
+        accountId: akashActuatorAccountId,
+        reportByNode: () =>
+          new DrizzleComputeCostStore(async () => serviceDb).reportByNode(),
+      }
+    : undefined;
 
   // WebSearchCapability for AI tools (requires TAVILY_API_KEY)
   const webSearchCapability = createWebSearchCapability(env);
@@ -1066,6 +1087,7 @@ function createContainer(): Container {
     metricsCapability,
     computeCapability,
     leaseReadCapability,
+    akashSpendReader,
     webSearchCapability,
     repoCapability,
     vcsCapability,

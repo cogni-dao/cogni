@@ -9,10 +9,11 @@
  * Scope: Static YAML checks over every environment's Argo Applications plus the shared Crossplane package manifests. Does NOT contact a cluster, a provider, or a wallet.
  * Invariants: NO_DESIRED_STATE_IN_GIT, ENGINE_IS_UNIFORM_ACROSS_ENVS, IMMUTABLE_PACKAGES,
  *   RESOURCE_BOUNDED, OBSERVABLE_BEFORE_AUTHORITY, CONSTANT_TRACKS_INSTALLED_REALITY,
- *   INSTALLED_IS_NOT_FUNDED.
+ *   INSTALLED_IS_NOT_FUNDED, NO_CONSOLE_KEY_SLOT_OUTSIDE_A_WRITER.
  * Side-effects: IO (reads repo manifests)
- * Links: story.5016 R2, task.5094, task.5096, task.5097, task.5104,
- *   src/shared/node-registry/crossplane-control-plane.ts, knowledge:akash-cicd-pareto-scope
+ * Links: story.5016 R2, task.5094, task.5096, task.5097, task.5104, task.5138,
+ *   src/shared/node-registry/crossplane-control-plane.ts, knowledge:akash-cicd-pareto-scope,
+ *   knowledge:akash-actuator-wallet-cutover
  * @public
  */
 
@@ -650,6 +651,88 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
         ).toEqual({ prune: false, selfHeal: true });
       }
     }
+  });
+});
+
+/**
+ * NO_CONSOLE_KEY_SLOT_OUTSIDE_A_WRITER (task.5138, knowledge:akash-actuator-wallet-cutover).
+ *
+ * The Sep-15 drift this pins down: the guards above police the WRITERS' credentials, but said
+ * nothing about a Console credential SLOT living somewhere else entirely. The operator app kept
+ * its own `AKASH_CONSOLE_API_KEY` — a catalog entry, an env-schema key, a projected secret —
+ * long after the actuator became the only legitimate holder, and when that key was deliberately
+ * deleted server-side the app 401'd for days because the slot still existed to fail. One Console
+ * account has ONE key, held ONLY by that account's actuator writer. A slot outside a writer is a
+ * credential waiting to become a second writer (or, as here, a corpse waiting to 401).
+ */
+describe("Console credential slots exist only inside a writer (task.5138)", () => {
+  /** Matches the retired app slot AND the actuator slot — any Akash Console key name. */
+  const CONSOLE_KEY_NAME = /AKASH_[A-Z_]*CONSOLE_API_KEY/;
+
+  it("never re-admits the retired app slot to the secrets catalog", () => {
+    const catalog = readYaml(
+      path.join(REPO_ROOT, "infra/secrets-catalog.yaml")
+    );
+    const names = ((catalog.secrets ?? []) as YamlObject[]).map(
+      (entry) => entry.name
+    );
+    // The catalog parsed and is non-trivial — an empty list would make the guard vacuous.
+    expect(names.length).toBeGreaterThan(0);
+    expect(names).not.toContain("AKASH_CONSOLE_API_KEY");
+    // The actuator's own slot is the ONE legitimate Console-key catalog entry, and it stays.
+    expect(names).toContain("AKASH_ACTUATOR_CONSOLE_API_KEY");
+  });
+
+  it("declares no AKASH_CONSOLE_API_KEY key in the app env schema", () => {
+    const source = readFileSync(
+      path.join(REPO_ROOT, "nodes/operator/app/src/shared/env/server-env.ts"),
+      "utf8"
+    );
+    // A SCHEMA DECLARATION, not a substring: the tombstone comment explaining why the key is
+    // gone is allowed to (and should) name it.
+    expect(source).not.toMatch(/^\s*AKASH_CONSOLE_API_KEY:/m);
+  });
+
+  it("lets only a writer's actuator ExternalSecret name an Akash Console key", () => {
+    // The one legitimate home per writer — the same per-env leaf `actuatorSecretPath` reads.
+    const actuatorFiles = new Set(
+      CROSSPLANE_ACTUATOR_WRITERS.map(
+        (writer) =>
+          `infra/k8s/overlays/${writer.cluster}/operator/akash-tx-actuator-external-secret.yaml`
+      )
+    );
+
+    const externalSecrets = yamlFiles(
+      path.join(REPO_ROOT, "infra/k8s")
+    ).flatMap((file) =>
+      readYamlDocuments(file)
+        .filter((document) => document.kind === "ExternalSecret")
+        .map((document) => ({
+          file: path.relative(REPO_ROOT, file),
+          document,
+        }))
+    );
+    // The enumeration actually found the fleet's ExternalSecrets — zero would mean the walk is
+    // broken, not that the repo is clean.
+    expect(externalSecrets.length).toBeGreaterThan(0);
+
+    const offenders = externalSecrets
+      .filter(
+        ({ file, document }) =>
+          !actuatorFiles.has(file) &&
+          CONSOLE_KEY_NAME.test(JSON.stringify(document))
+      )
+      .map(
+        ({ file, document }) =>
+          `${file}: ExternalSecret/${metadataName(document)}`
+      );
+    expect(offenders).toEqual([]);
+  });
+
+  it("BITES: the name pattern catches both the retired and the live slot names", () => {
+    expect(CONSOLE_KEY_NAME.test("AKASH_CONSOLE_API_KEY")).toBe(true);
+    expect(CONSOLE_KEY_NAME.test("AKASH_ACTUATOR_CONSOLE_API_KEY")).toBe(true);
+    expect(CONSOLE_KEY_NAME.test("AKASH_ACTUATOR_ACCOUNT_ID")).toBe(false);
   });
 });
 

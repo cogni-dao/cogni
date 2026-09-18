@@ -3,13 +3,14 @@
 
 /**
  * Module: `@app/api/v1/nodes/[id]/deploy-state` (test)
- * Purpose: Pin the money-loop read extension (story.5039 PR-B) — the deploy view carries this
- *   node's live paid-lease receipts with their Console closure read-back plus the orphan diff,
- *   OMITS the block (never fabricates an empty one) when the lease capability is unwired, and
- *   degrades the same way when the ledger read fails.
+ * Purpose: Pin the money-loop read extension (story.5039 PR-B, reshaped by task.5138) — the
+ *   deploy view carries this node's live paid-lease receipts plus the orphan diff, with closure
+ *   honestly "unknown" (the app holds no Console key; authoritative closure proof is in-actuator,
+ *   bug.5189), OMITS the block (never fabricates an empty one) when the lease capability is
+ *   unwired, and degrades the same way when the ledger read fails.
  * Scope: Unit tests over mocked session/authz/container — no IO.
  * Side-effects: none
- * Links: src/app/api/v1/nodes/[id]/deploy-state/route.ts, bug.5189
+ * Links: src/app/api/v1/nodes/[id]/deploy-state/route.ts, bug.5189, task.5138
  * @public
  */
 
@@ -18,7 +19,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const authorize = vi.fn();
 const getDeployState = vi.fn();
 const listAllocated = vi.fn();
-const readLeaseStatus = vi.fn();
 
 const NODE = { nodeId: "123e4567-e89b-12d3-a456-426614174001", slug: "blue" };
 
@@ -103,19 +103,18 @@ describe("GET /api/v1/nodes/[id]/deploy-state — lease read (story.5039 PR-B)",
     authorize.mockResolvedValue({ ok: true, node: NODE });
     getDeployState.mockResolvedValue(DEPLOY_CELL);
     container.deployCapability = { getDeployState };
-    container.leaseReadCapability = { listAllocated, readLeaseStatus };
+    container.leaseReadCapability = { listAllocated };
   });
 
-  it("returns leases with Console closure read-back AND the orphan diff", async () => {
+  it("returns leases with closure 'unknown' (no app-side Console read-back) AND the orphan diff", async () => {
     // One declared lease (candidate-a) still billing, one lease on an env the catalog no
     // longer declares (preview) — the undetectable orphan the unfiltered enumeration exists for.
+    // Closure is honestly "unknown" for BOTH: the app holds no Console key (task.5138,
+    // ONE_CONSOLE_KEY_PER_ACCOUNT) — the authoritative closure proof lives in-actuator (bug.5189).
     listAllocated.mockResolvedValue([
       receiptOf("candidate-a", "7001"),
       receiptOf("preview", "7002"),
     ]);
-    readLeaseStatus.mockImplementation(async ({ leaseId }) => ({
-      state: leaseId === "7001" ? "active" : "closed",
-    }));
 
     const res = await get();
     expect(res.status).toBe(200);
@@ -130,14 +129,14 @@ describe("GET /api/v1/nodes/[id]/deploy-state — lease read (story.5039 PR-B)",
         cogniKey: "xcw:cogni-candidate-a-blue:blue:0",
         state: "allocated",
         externalName: "7001",
-        closure: "open",
+        closure: "unknown",
       },
       {
         environment: "preview",
         cogniKey: "xcw:cogni-preview-blue:blue:0",
         state: "allocated",
         externalName: "7002",
-        closure: "closed",
+        closure: "unknown",
       },
     ]);
     // (preview, blue) is not in deployEnvs ["candidate-a"] → orphan.
