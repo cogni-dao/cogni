@@ -418,6 +418,20 @@ spec:
             {{- end }}
             {{- end }}
 
+            {{- /* LAST-KNOWN-GOOD DNS LATCH (bug.5188). status.response.body is overwritten with the
+               ERROR body of a failed mutation (see the lease-handle latch below), which has no endpoints,
+               so $dnsTarget collapses to "" mid-promote. Omitting the dns-record child then GC-deletes the
+               live Cloudflare record -> NXDOMAIN. Latch the last-known-good target from status exactly like
+               $prevSha/$prevResource: never withdraw a live record for a transient endpoint-less observe, and
+               only FLIP to a genuinely-new target once the new revision actually serves (PROVE_BEFORE_TRAFFIC). */ -}}
+            {{- $prevDnsTarget := dig "status" "dns" "target" "" $xr }}
+            {{- $effectiveDnsTarget := $dnsTarget }}
+            {{- if eq $dnsTarget "" }}
+            {{- $effectiveDnsTarget = $prevDnsTarget }}
+            {{- else if and (ne $prevDnsTarget "") (ne $dnsTarget $prevDnsTarget) (not (and $active $serving)) }}
+            {{- $effectiveDnsTarget = $prevDnsTarget }}
+            {{- end }}
+
             {{- /*
               PUBLISHED IS AN OBSERVATION, NOT AN INTENT ECHO (bug.5152). `published` used to
               render as "spec.dns is set", so an XR whose Cloudflare write had been failing since
@@ -440,7 +454,7 @@ spec:
             {{- if kindIs "slice" $dnsResult }}{{ $dnsRecords = $dnsResult }}{{ else if kindIs "map" $dnsResult }}{{ $dnsRecords = list $dnsResult }}{{ end }}
             {{- $dnsPublished := false }}
             {{- range $dnsRecords }}
-            {{- if and (eq (dig "type" "" .) "CNAME") (eq (dig "content" "" . | lower | trimSuffix ".") $dnsTarget) (dig "proxied" false .) }}
+            {{- if and (eq (dig "type" "" .) "CNAME") (eq (dig "content" "" . | lower | trimSuffix ".") $effectiveDnsTarget) (dig "proxied" false .) }}
             {{- $dnsPublished = true }}
             {{- end }}
             {{- end }}
@@ -536,10 +550,10 @@ spec:
             {{- end }}
 
             {{- /* ---------- composed: DNS intent ---------- */ -}}
-            {{- if and $dns (ne $dnsTarget "") $renderLease }}
+            {{- if and $dns (ne $effectiveDnsTarget "") $renderLease }}
             {{- $cfBase := printf "https://api.cloudflare.com/client/v4/zones/%s/dns_records" $dns.zoneId }}
             {{- $cfToken := printf "Bearer {{ operator-env-secrets:%s:CLOUDFLARE_API_TOKEN }}" $writerNs }}
-            {{- $cfPayload := dict "name" $publicHost "content" $dnsTarget }}
+            {{- $cfPayload := dict "name" $publicHost "content" $effectiveDnsTarget }}
             {{- /*
               ADOPT BY NAME, NEVER BY TYPE (bug.5152). Cloudflare's list API FILTERS, it does not
               merge: `?type=CNAME&name=<host>` over a host already held by a legacy A record
@@ -710,10 +724,10 @@ spec:
               */}}
               resource: {{ toJson $prevResource }}
               {{- end }}
-              {{- if ne $dnsTarget "" }}
+              {{- if ne $effectiveDnsTarget "" }}
               dns:
                 hostname: {{ $publicHost | quote }}
-                target: {{ $dnsTarget | quote }}
+                target: {{ $effectiveDnsTarget | quote }}
                 published: {{ $dnsPublished }}
               {{- end }}
               {{- if ne $failReason "" }}
