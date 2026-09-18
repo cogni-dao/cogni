@@ -43,6 +43,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/nodes` [GET, POST] - managed-node registry: list owner's nodes + create a new registration
   - `/api/v1/nodes/[id]` [GET, PATCH] - read + state-machine-aware update of a registered node row
   - `/api/v1/nodes/[id]/developers` [POST] - owner-gated approve/reject for registered agent developer flight authority
+  - `/api/v1/nodes/[id]/reconcile-merge-queue` [POST] - env-manager-gated convergence of a node repo's live merge queue to the git-owned operator policy
   - `/api/v1/nodes/[id]/launch-pack` [GET] - owner-gated AI-assistant handoff for post-publish node launch
   - `/api/v1/nodes/[id]/publish` [POST] - mints the node repo, opens the submodule deployment PR, advances dao_formed → published
   - `/api/v1/nodes/[id]/activate-distributions` [POST] - terminal owner/developer-gated repo-spec PR; verifies distributor ownership/token and paired CAS publishing authority before recording active

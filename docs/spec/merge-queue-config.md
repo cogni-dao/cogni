@@ -98,12 +98,27 @@ This is the canonical use of `STUB_JOB_FOR_PR_INTENT`: `candidate-flight.yml` wi
 
 ## Implementation — Classic Protection (checks) + a `merge_queue` Ruleset (queue)
 
-Two orthogonal layers, both config-as-code, applied by `bash infra/github/setup-main-branch.sh [<owner>/<repo>]`:
+Two orthogonal layers, both config-as-code. A repo admin may apply both with
+`bash infra/github/setup-main-branch.sh [<owner>/<repo>]`; the deployed operator can reconcile the
+queue-only layer through `POST /api/v1/nodes/{id}/reconcile-merge-queue`:
 
 - **Required-status-checks → classic branch protection.** Stay on classic protection for the checks set. Rulesets give no additional flexibility for the _event-specific required-checks-list_ problem (the falsified hypothesis below) — so there is no reason to migrate the checks. The fixture is `infra/github/branch-protection.json` → `PUT /repos/{repo}/branches/main/protection`.
 - **Queue requirement → a `merge_queue` ruleset.** The fixture is `infra/github/merge-queue-ruleset.json` → `POST`/`PUT /repos/{repo}/rulesets` (idempotent find-by-name).
 
 **The queue toggle is no longer UI-only.** Classic protection's `PUT .../protection` silently drops `required_merge_queue` — but that is a limitation of the _classic protection endpoint_, not of GitHub. The **rulesets** API carries the queue: a `merge_queue` rule is REST-settable (the 2026-04-28 experiment below in fact enabled the queue via the rulesets API). So the queue is now applied programmatically alongside the checks; the manual Settings → Branches checkbox is retired. The ruleset carries _only_ the `merge_queue` rule (not the checks), so it does not re-open the rejected "rulesets for required-checks lists" path.
+
+**Runtime convergence uses the App, not a standing developer admin token.** The reconcile route is
+`node.manage_envs`-gated, resolves the target repository from the node catalog, reads the fixture from
+the deployment parent's `main`, and delegates the write to the operator GitHub App. The adapter
+rejects a fixture that changes `ALLGREEN`, adds a bypass actor, or carries anything other than the
+single queue rule; it reads the live ruleset back and fails unless every asserted field matches.
+Required checks remain independent and untouched. This makes config drift repairable by the same
+operator authority that owns generated deploy-state PRs without giving an agent GitHub administration.
+
+`min_entries_to_merge_wait_minutes: 0` removes only the idle batch timer. It does not bypass the
+queue: every PR still enters one serialized merge group, is rebased on current `main`, and must report
+the required checks on that rebased tree. Generated environment PRs need this serialization while
+they still commit shared per-environment AppSet and scheduler maps.
 
 > Migration note: a repo that previously had the queue enabled via the classic UI checkbox should keep the ruleset as the single source of truth — the ruleset is authoritative and the legacy checkbox can be cleared once the ruleset is confirmed live (`gh api repos/{repo}/rulesets`).
 
@@ -156,7 +171,7 @@ The portability boundary stays clean: workflow YAML changes (per-trigger → per
 **Manual:**
 
 1. After applying via `setup-main-branch.sh`: verify `gh api .../branches/main/protection | jq '.required_status_checks.contexts'` returns the four canonical checks.
-2. Verify the queue ruleset is live: `gh api repos/{repo}/rulesets --jq '.[] | select(.name=="main-merge-queue") | .enforcement'` returns `active` (the script also confirms via GraphQL `mergeQueue`). Then open a no-op docs PR; click "Merge when ready"; queue accepts after the four checks report on the merge_group ref. Should complete within ~5 min.
+2. Verify the queue ruleset is live: `gh api repos/{repo}/rulesets --jq '.[] | select(.name=="main-merge-queue") | .enforcement'` returns `active` (the script also confirms via GraphQL `mergeQueue`). Then open a no-op docs PR; click "Merge when ready"; queue accepts as soon as the four checks report on the merge-group ref, with no additional batch wait.
 3. Drift detection: re-run the diff in `infra/github/README.md` against live; should be empty.
 
 ## Related
