@@ -44,6 +44,7 @@ import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import {
   diffMergeQueueRuleset,
   diffRulesetAgainstPolicy,
+  envManagerCommitMessage,
   GitHubRepoWriter,
   MERGE_QUEUE_RULESET_NAME,
   nodeMainPolicyRulesetPayload,
@@ -81,6 +82,30 @@ const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
 });
 const TEST_NODE_REPO_POLICY = parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON);
 const NODE_MAIN_POLICY_RULESET_NAME = TEST_NODE_REPO_POLICY.ruleset.name;
+
+describe("envManagerCommitMessage", () => {
+  it("signs the reserved change type and canonical changed-path hash into trailers", () => {
+    expect(
+      envManagerCommitMessage({
+        subject: "feat(node): add blue to preview",
+        node: "blue",
+        env: "preview",
+        action: "add",
+        paths: [
+          "infra/k8s/overlays/preview/blue/kustomization.yaml",
+          "infra/catalog/blue.yaml",
+          "infra/catalog/blue.yaml",
+        ],
+      })
+    ).toBe(`feat(node): add blue to preview
+
+Cogni-Change-Type: cogni.env-manager.v1
+Cogni-Node: blue
+Cogni-Environment: preview
+Cogni-Action: add
+Cogni-Changed-Paths-SHA256: 5ea8c8b4211282862f6994711022e66f653acad1ce626590338e1b2fdfdf2866`);
+  });
+});
 
 const TEST_MERGE_QUEUE_POLICY = {
   _comment: ["test fixture"],

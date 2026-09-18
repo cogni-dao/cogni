@@ -4,12 +4,12 @@ type: spec
 title: Merge Queue Required Checks — Policy & Empirical Constraints
 status: active
 trust: reviewed
-summary: Required-status-checks policy for the merge queue. GitHub's queue waits forever for required checks whose workflows lack a `merge_group:` trigger — verified empirically. Spec defines the resulting flat single-tier policy, the stub-job escape hatch for "PR-only intent" checks, and the GitLab Merge Trains port.
-read_when: Adding/removing a required status check; debugging a stuck merge queue; setting up `main`-branch protection on a Cogni-DAO node fork; planning the GitLab vFuture port.
+summary: Required-status-checks policy for the merge queue, including the signed env-manager fast path. GitHub's queue waits forever for required checks whose workflows lack a `merge_group:` trigger — verified empirically.
+read_when: Adding/removing a required status check; changing operator-generated environment PRs; debugging a stuck merge queue; setting up `main`-branch protection on a Cogni-DAO node fork; planning the GitLab vFuture port.
 implements: []
 owner: cogni-dev
 created: 2026-04-28
-verified: 2026-04-28
+verified: 2026-09-18
 tags:
   - ci-cd
   - branch-protection
@@ -30,12 +30,12 @@ Define the required-status-checks policy that actually works on GitHub today, ca
 
 - Defining the candidate-a `deploy_verified` gate — see [development-lifecycle.md](./development-lifecycle.md).
 - Per-node merge queues — discarded after analysis (see task.0391); revisit if N > 5 nodes or queue depth becomes a real bottleneck.
-- Reconciler workflows that auto-apply the config — deferred until drift becomes a recurring issue.
+- Replacing the merge queue with direct bot merges. Env-manager changes still edit shared per-environment files and require serialization on the current `main` tree.
 
 ## Core Invariants
 
 1. **REPORT_OR_DON'T_REQUIRE**: A required status check MUST be produced by a workflow that fires on both `pull_request:` AND `merge_group:` events. PR-only workflows cannot be required — the queue would wait forever for a status that never arrives. Empirically validated.
-2. **QUEUE_GATE_IS_TREE_CORRECTNESS**: The queue's required-set's load-bearing entry is the image-build aggregator (`manifest`), which proves the rebased tree built into a usable image. Other entries are cheap deterministic checks (`static`, `unit`, `component`).
+2. **QUEUE_GATE_IS_TREE_CORRECTNESS**: Normal code PRs use the image-build aggregator (`manifest`) plus `static`, `unit`, and `component`. A verified `cogni.env-manager.v1` PR changes no runtime image, so the same required context names report success after the smaller generator-correctness proof defined below.
 3. **STUB_JOB_FOR_PR_INTENT**: When a check's "real validation" only makes sense on PR-time (e.g., title convention, security scan, candidate-a flight), the workflow MAY add a `merge_group:` trigger with a no-op passthrough step that emits a success status with the same context name. This makes the check visible on both events without doing duplicate work on the queue ref. **Canonical example: `candidate-flight`** — required-on-PR (every external-agent contribution must dispatch `/vcs/flight` and pass), but explicitly NOT required-on-merge-queue (the queue's rebased SHA is different from the PR head; re-flighting it would conflict with the slot lease and waste a candidate-a deploy). Implementation: `candidate-flight.yml` adds `merge_group:` trigger + a passthrough job that emits `candidate-flight` success on merge_group events. Spec'd; implementation tracked in task.0414.
 4. **CONFIG_AS_CODE**: The set of required checks is committed to `infra/github/branch-protection.json`. Drift between live and committed is detectable (`gh api ... | diff`).
 
@@ -119,6 +119,37 @@ operator authority that owns generated deploy-state PRs without giving an agent 
 queue: every PR still enters one serialized merge group, is rebased on current `main`, and must report
 the required checks on that rebased tree. Generated environment PRs need this serialization while
 they still commit shared per-environment AppSet and scheduler maps.
+
+## Signed env-manager fast path
+
+The operator may skip unrelated application tests and image builds only for its reserved generated
+change type. The GitHub-signed commit carries these trailers:
+
+```text
+Cogni-Change-Type: cogni.env-manager.v1
+Cogni-Node: <slug>
+Cogni-Environment: candidate-a|preview|production
+Cogni-Action: add|remove|place-k3s|place-akash
+Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
+```
+
+`scripts/ci/classify-env-manager-fast-path.sh` fails closed unless all of these are true:
+
+- the workflow executes the classifier from `origin/main`, never the PR-controlled copy;
+- the PR and commit author are the exact `cogni-operator[bot]` GitHub identity;
+- GitHub reports the head commit signature as verified and valid;
+- the same-repository branch, signed trailers, and PR head SHA agree;
+- the signed path hash equals the GitHub PR file list, and every file is inside the narrow
+  catalog/AppSet/overlay/scheduler boundary for that node and environment;
+- the merge-group diff contains exactly the same path set, preventing a batched or stale shared-file
+  candidate from taking the shortcut;
+- catalog schema, NodePort uniqueness, scheduler routing, per-node AppSets, and per-node overlays all
+  reproduce without drift on the checked-out tree.
+
+Eligible PRs still produce the canonical `static`, `unit`, `component`, and `manifest` contexts, but
+the application-heavy steps no-op and `manifest` contains no image targets. A PR that does not claim
+the reserved type runs full CI. A PR that claims it but fails any proof is red; it never silently
+falls back. Titles, labels, branch names, or copied PR bodies alone grant nothing.
 
 > Migration note: a repo that previously had the queue enabled via the classic UI checkbox should keep the ruleset as the single source of truth — the ruleset is authoritative and the legacy checkbox can be cleared once the ruleset is confirmed live (`gh api repos/{repo}/rulesets`).
 
