@@ -50,7 +50,10 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 0
+  # candidate-a bumped 0->1 (2026-09-18, task.5132): generation 0's receipt is terminally
+  # failed, identity-bound to a BootDeadlineClosed XR (akash_tx_identity_conflict) — this
+  # bump is the documented human lever for replacing a terminally closed lease.
+  candidate-a: 1
   preview: 0
   production: 0
 activity_env: production
