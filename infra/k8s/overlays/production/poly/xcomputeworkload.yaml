@@ -41,10 +41,10 @@ spec:
         memoryMi: 2048
         storageMi: 4096
   migration:
-    policy: RequireBeforeTransaction
+    policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
-  leaseEpoch: 0
+  leaseGeneration: 0
   dns:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
