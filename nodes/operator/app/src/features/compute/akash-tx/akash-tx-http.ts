@@ -261,7 +261,24 @@ export function createAkashTxDispatcher(
           );
       }
     } catch (error) {
-      if (error instanceof AkashTxError) return errorResponse(error);
+      if (error instanceof AkashTxError) {
+        // bug.5221: a create that died between receipt_bound and allocation_prepared was
+        // invisible for 50+ minutes because this response carried the only record of the
+        // failure — to a caller whose logs never reach Loki. The error body stays redacted;
+        // the marker line is the in-cluster record.
+        deps.log?.warn(
+          {
+            path: request.path,
+            code: error.code,
+            causeMessage: error.message,
+            ...(error.ownerCogniKey
+              ? { ownerCogniKey: error.ownerCogniKey }
+              : {}),
+          },
+          "akash_tx_http_op_failed"
+        );
+        return errorResponse(error);
+      }
       if (isZodError(error)) {
         return errorResponse(
           new AkashTxError(

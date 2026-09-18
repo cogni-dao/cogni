@@ -203,6 +203,43 @@ describe("akash-tx dispatcher", () => {
     });
   });
 
+  it("logs every AkashTxError response so a failed op is visible in-cluster (bug.5221)", async () => {
+    const warns: Array<{ fields: Record<string, unknown>; msg: string }> = [];
+    const dispatch = createAkashTxDispatcher({
+      actuator: stubActuator({
+        create: async () => {
+          throw new AkashTxError(
+            "provider_unavailable",
+            "Console request failed with HTTP 401"
+          );
+        },
+      }),
+      token: TOKEN,
+      log: {
+        info: () => {},
+        warn: (fields: Record<string, unknown>, msg: string) =>
+          warns.push({ fields, msg }),
+        error: () => {},
+      },
+    });
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify(VALID_CREATE),
+    });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toMatchObject({
+      msg: "akash_tx_http_op_failed",
+      fields: {
+        path: "/v1/akash/create",
+        code: "provider_unavailable",
+        causeMessage: "Console request failed with HTTP 401",
+      },
+    });
+  });
+
   it("maps an unresolved allocation to 409 and an unknown outcome to 502", async () => {
     const unresolved = dispatcherFor(
       stubActuator({
