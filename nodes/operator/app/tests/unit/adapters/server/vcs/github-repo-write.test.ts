@@ -42,10 +42,12 @@ vi.mock("@octokit/core", () => ({
 
 import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import {
+  diffMergeQueueRuleset,
   diffRulesetAgainstPolicy,
   GitHubRepoWriter,
   MERGE_QUEUE_RULESET_NAME,
   nodeMainPolicyRulesetPayload,
+  parseMergeQueueRulesetFixture,
   rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
 import {
@@ -79,6 +81,32 @@ const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
 });
 const TEST_NODE_REPO_POLICY = parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON);
 const NODE_MAIN_POLICY_RULESET_NAME = TEST_NODE_REPO_POLICY.ruleset.name;
+
+const TEST_MERGE_QUEUE_POLICY = {
+  _comment: ["test fixture"],
+  name: MERGE_QUEUE_RULESET_NAME,
+  target: "branch",
+  enforcement: "active",
+  conditions: {
+    ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] },
+  },
+  rules: [
+    {
+      type: "merge_queue",
+      parameters: {
+        grouping_strategy: "ALLGREEN",
+        merge_method: "SQUASH",
+        min_entries_to_merge: 1,
+        max_entries_to_merge: 5,
+        max_entries_to_build: 5,
+        min_entries_to_merge_wait_minutes: 0,
+        check_response_timeout_minutes: 60,
+      },
+    },
+  ],
+  bypass_actors: [],
+} as const;
+const TEST_MERGE_QUEUE_POLICY_JSON = JSON.stringify(TEST_MERGE_QUEUE_POLICY);
 
 function statusError(
   status: number,
@@ -4852,5 +4880,176 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
         isInRepoNode: false,
       })
     ).rejects.toMatchObject({ code: "node_repo_policy_missing", status: 409 });
+  });
+});
+
+describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
+  const OWNER = "cogni-dao";
+  const REPO = "cogni";
+  const expected = parseMergeQueueRulesetFixture(TEST_MERGE_QUEUE_POLICY_JSON);
+
+  const policyFile = () => ({
+    type: "file",
+    encoding: "base64",
+    content: Buffer.from(TEST_MERGE_QUEUE_POLICY_JSON).toString("base64"),
+  });
+
+  it("repairs only the stale queue wait, then proves the write by readback", async () => {
+    storedRulesets.clear();
+    const drifted = structuredClone(expected);
+    const parameters = drifted.rules[0]?.parameters;
+    if (!parameters) throw new Error("test queue parameters missing");
+    parameters.min_entries_to_merge_wait_minutes = 5;
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyFile,
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: MERGE_QUEUE_RULESET_NAME },
+      ],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        storedRulesets.has(41)
+          ? readStoredRuleset(params)
+          : { id: 41, ...drifted },
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        recordRuleset(params),
+    };
+
+    await expect(
+      makeWriter().reconcileMergeQueuePolicy({
+        policyOwner: OWNER,
+        policyRepo: REPO,
+        targetOwner: OWNER,
+        targetRepo: REPO,
+      })
+    ).resolves.toEqual({
+      status: "applied",
+      rulesetName: MERGE_QUEUE_RULESET_NAME,
+      policyRef: "main",
+      mismatches: [
+        "merge_queue.min_entries_to_merge_wait_minutes is 5, expected 0",
+      ],
+      waitMinutes: 0,
+    });
+
+    const write = requests.find(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(write?.params).toMatchObject({
+      owner: OWNER,
+      repo: REPO,
+      ruleset_id: 41,
+      ...expected,
+    });
+  });
+
+  it("is a zero-write no-op when live GitHub already matches main", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyFile,
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: MERGE_QUEUE_RULESET_NAME },
+      ],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": () => ({
+        id: 41,
+        ...expected,
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileMergeQueuePolicy({
+        policyOwner: OWNER,
+        policyRepo: REPO,
+        targetOwner: OWNER,
+        targetRepo: REPO,
+      })
+    ).resolves.toEqual({
+      status: "compliant",
+      rulesetName: MERGE_QUEUE_RULESET_NAME,
+      policyRef: "main",
+      mismatches: [],
+      waitMinutes: 0,
+    });
+    expect(requests.some((request) => request.route.startsWith("PUT "))).toBe(
+      false
+    );
+    expect(requests.some((request) => request.route.startsWith("POST "))).toBe(
+      false
+    );
+  });
+
+  it("rejects a policy with a bypass actor before reading or writing target rulesets", async () => {
+    const unsafe = {
+      ...TEST_MERGE_QUEUE_POLICY,
+      bypass_actors: [
+        { actor_id: 2994706, actor_type: "Integration", bypass_mode: "always" },
+      ],
+    };
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => ({
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(JSON.stringify(unsafe)).toString("base64"),
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileMergeQueuePolicy({
+        policyOwner: OWNER,
+        policyRepo: REPO,
+        targetOwner: OWNER,
+        targetRepo: REPO,
+      })
+    ).rejects.toMatchObject({
+      code: "merge_queue_policy_invalid",
+      status: 409,
+    });
+    expect(
+      requests.filter((request) => request.route.includes("/rulesets"))
+    ).toEqual([]);
+  });
+
+  it("surfaces missing App administration permission as protection_unavailable", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyFile,
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: MERGE_QUEUE_RULESET_NAME },
+      ],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": () => ({
+        id: 41,
+        ...expected,
+        enforcement: "disabled",
+      }),
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": () =>
+        Promise.reject(
+          statusError(403, "Resource not accessible by integration")
+        ),
+    };
+
+    await expect(
+      makeWriter().reconcileMergeQueuePolicy({
+        policyOwner: OWNER,
+        policyRepo: REPO,
+        targetOwner: OWNER,
+        targetRepo: REPO,
+      })
+    ).rejects.toMatchObject({ code: "protection_unavailable", status: 502 });
+  });
+
+  it("diffs the queue's exact safety and latency parameters", () => {
+    expect(
+      diffMergeQueueRuleset(
+        {
+          ...expected,
+          bypass_actors: [
+            {
+              actor_id: 2994706,
+              actor_type: "Integration",
+              bypass_mode: "always",
+            },
+          ],
+        },
+        expected
+      )
+    ).toContain("1 bypass actor(s) present, expected none");
   });
 });

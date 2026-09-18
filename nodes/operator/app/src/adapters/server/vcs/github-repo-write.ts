@@ -659,6 +659,7 @@ export function qualifyUpstreamPrRefs(
 
 /** The canonical name of the merge-queue ruleset (matches infra/github/merge-queue-ruleset.json). */
 export const MERGE_QUEUE_RULESET_NAME = "main-merge-queue";
+export const MERGE_QUEUE_RULESET_PATH = "infra/github/merge-queue-ruleset.json";
 
 /** Subset of GET /repos/{owner}/{repo}/rulesets/{id} that we replicate onto a node repo. */
 interface RulesetResponse {
@@ -694,6 +695,136 @@ export interface RulesetWritePayload {
     actor_type: string;
     bypass_mode: string;
   }>;
+}
+
+export interface ReconcileMergeQueuePolicyResult {
+  readonly status: "compliant" | "applied";
+  readonly rulesetName: string;
+  readonly policyRef: string;
+  readonly mismatches: readonly string[];
+  readonly waitMinutes: number;
+}
+
+const mergeQueueRulesetFixtureSchema = z
+  .object({
+    name: z.literal(MERGE_QUEUE_RULESET_NAME),
+    target: z.literal("branch"),
+    enforcement: z.literal("active"),
+    conditions: z.object({
+      ref_name: z.object({
+        include: z
+          .array(z.string())
+          .refine((refs) => refs.includes("~DEFAULT_BRANCH")),
+        exclude: z.array(z.string()),
+      }),
+    }),
+    rules: z
+      .array(
+        z.object({
+          type: z.literal("merge_queue"),
+          parameters: z.object({
+            grouping_strategy: z.literal("ALLGREEN"),
+            merge_method: z.literal("SQUASH"),
+            min_entries_to_merge: z.number().int().min(1),
+            max_entries_to_merge: z.number().int().min(1),
+            max_entries_to_build: z.number().int().min(1),
+            min_entries_to_merge_wait_minutes: z.number().int().min(0),
+            check_response_timeout_minutes: z.number().int().min(1),
+          }),
+        })
+      )
+      .length(1),
+    // QUEUE_BYPASS_FORBIDDEN: generated env PRs still share derived files. Until those files
+    // move to reconcile-time rendering, bypassing serialized rebase/recheck can lose an update.
+    bypass_actors: z.array(z.never()).length(0),
+  })
+  .passthrough();
+
+/** Parse the git-owned queue policy and reject any shape that weakens serialization. */
+export function parseMergeQueueRulesetFixture(
+  text: string
+): RulesetWritePayload {
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`invalid merge-queue policy JSON: ${String(error)}`);
+  }
+  const parsed = mergeQueueRulesetFixtureSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error(
+      `invalid merge-queue policy: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`
+    );
+  }
+  return rulesetGetToPutPayload(parsed.data as RulesetResponse);
+}
+
+/** Compare only the safety- and latency-bearing queue fields asserted by the fixture. */
+export function diffMergeQueueRuleset(
+  active: RulesetResponse,
+  expected: RulesetWritePayload
+): readonly string[] {
+  const problems: string[] = [];
+  if (active.name !== expected.name) {
+    problems.push(
+      `name is ${JSON.stringify(active.name)}, expected ${JSON.stringify(expected.name)}`
+    );
+  }
+  if (active.target !== expected.target) {
+    problems.push(
+      `target is ${JSON.stringify(active.target)}, expected ${JSON.stringify(expected.target)}`
+    );
+  }
+  if (active.enforcement !== expected.enforcement) {
+    problems.push(
+      `enforcement is ${JSON.stringify(active.enforcement)}, expected ${JSON.stringify(expected.enforcement)}`
+    );
+  }
+
+  const sameSet = (left: readonly string[], right: readonly string[]) =>
+    left.length === right.length &&
+    left.every((value) => right.includes(value));
+  const gotRefs = active.conditions?.ref_name;
+  const wantRefs = expected.conditions.ref_name;
+  if (!sameSet(gotRefs?.include ?? [], wantRefs.include)) {
+    problems.push(
+      `conditions.ref_name.include is ${JSON.stringify(gotRefs?.include ?? [])}, expected ${JSON.stringify(wantRefs.include)}`
+    );
+  }
+  if (!sameSet(gotRefs?.exclude ?? [], wantRefs.exclude)) {
+    problems.push(
+      `conditions.ref_name.exclude is ${JSON.stringify(gotRefs?.exclude ?? [])}, expected ${JSON.stringify(wantRefs.exclude)}`
+    );
+  }
+
+  const activeRules = active.rules ?? [];
+  const activeQueue = activeRules.find((rule) => rule.type === "merge_queue");
+  const expectedQueue = expected.rules[0];
+  if (!activeQueue) {
+    problems.push("merge_queue rule is absent");
+  } else {
+    const got = activeQueue.parameters ?? {};
+    const want = expectedQueue?.parameters ?? {};
+    for (const [key, value] of Object.entries(want)) {
+      if (JSON.stringify(got[key]) !== JSON.stringify(value)) {
+        problems.push(
+          `merge_queue.${key} is ${JSON.stringify(got[key])}, expected ${JSON.stringify(value)}`
+        );
+      }
+    }
+  }
+  const unexpectedRules = activeRules
+    .filter((rule) => rule.type !== "merge_queue")
+    .map((rule) => rule.type);
+  if (unexpectedRules.length > 0) {
+    problems.push(`unexpected rules present: ${unexpectedRules.join(", ")}`);
+  }
+  if ((active.bypass_actors ?? []).length > 0) {
+    problems.push(
+      `${active.bypass_actors?.length ?? 0} bypass actor(s) present, expected none`
+    );
+  }
+  return problems;
 }
 
 /**
@@ -3585,6 +3716,168 @@ export class GitHubRepoWriter implements DeployPlanePort {
           "protection_unavailable",
           `operator GitHub App cannot administer rulesets on ${owner}/${repo} (HTTP 403); ` +
             "repository `administration: write` permission is required to apply branch protection",
+          502
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Reconcile the git-owned merge-queue policy onto a node's GitHub repository.
+   *
+   * The policy is read from the deployment parent at an explicit ref, validated to retain
+   * ALLGREEN serialization with zero bypass actors, then applied idempotently with readback.
+   * This is the runtime authority bridge for config-as-code: agents hold node-scoped RBAC, while
+   * the operator App alone holds `administration:write`. It deliberately updates only the named
+   * merge-queue ruleset; required checks remain owned by the independent protection policy.
+   */
+  async reconcileMergeQueuePolicy(input: {
+    policyOwner: string;
+    policyRepo: string;
+    policyRef?: string;
+    targetOwner: string;
+    targetRepo: string;
+  }): Promise<ReconcileMergeQueuePolicyResult> {
+    const policyRef = input.policyRef ?? "main";
+    const policyText = await this.fetchFileText({
+      owner: input.policyOwner,
+      repo: input.policyRepo,
+      path: MERGE_QUEUE_RULESET_PATH,
+      ref: policyRef,
+    });
+    if (policyText === null) {
+      throw deployPlaneError(
+        "merge_queue_policy_missing",
+        `${input.policyOwner}/${input.policyRepo}@${policyRef} is missing ${MERGE_QUEUE_RULESET_PATH}`,
+        409
+      );
+    }
+
+    let expected: RulesetWritePayload;
+    try {
+      expected = parseMergeQueueRulesetFixture(policyText);
+    } catch (error) {
+      throw deployPlaneError(
+        "merge_queue_policy_invalid",
+        error instanceof Error ? error.message : String(error),
+        409
+      );
+    }
+    const expectedQueue = expected.rules[0]?.parameters ?? {};
+    const waitMinutes = Number(expectedQueue.min_entries_to_merge_wait_minutes);
+
+    const octokit = await this.getOctokit(input.targetOwner, input.targetRepo);
+    try {
+      const { data: summaries } = await octokit.request(
+        "GET /repos/{owner}/{repo}/rulesets",
+        { owner: input.targetOwner, repo: input.targetRepo }
+      );
+      const existing = (
+        summaries as ReadonlyArray<{ id: number; name: string }>
+      ).find((ruleset) => ruleset.name === MERGE_QUEUE_RULESET_NAME);
+
+      let mismatches: readonly string[];
+      if (existing) {
+        const { data: active } = await octokit.request(
+          "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+          {
+            owner: input.targetOwner,
+            repo: input.targetRepo,
+            ruleset_id: existing.id,
+          }
+        );
+        mismatches = diffMergeQueueRuleset(active as RulesetResponse, expected);
+        if (mismatches.length === 0) {
+          return {
+            status: "compliant",
+            rulesetName: MERGE_QUEUE_RULESET_NAME,
+            policyRef,
+            mismatches: [],
+            waitMinutes,
+          };
+        }
+      } else {
+        mismatches = [`ruleset "${MERGE_QUEUE_RULESET_NAME}" absent`];
+      }
+
+      const written = existing
+        ? await this.requestRaw(
+            octokit,
+            "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+            {
+              owner: input.targetOwner,
+              repo: input.targetRepo,
+              ruleset_id: existing.id,
+              ...expected,
+            }
+          )
+        : await this.requestRaw(
+            octokit,
+            "POST /repos/{owner}/{repo}/rulesets",
+            {
+              owner: input.targetOwner,
+              repo: input.targetRepo,
+              ...expected,
+            }
+          );
+      const rulesetId = existing?.id ?? written?.id;
+      if (typeof rulesetId !== "number") {
+        throw new Error(
+          `merge-queue policy write returned no ruleset id for ${input.targetOwner}/${input.targetRepo}`
+        );
+      }
+
+      const { data: readback } = await octokit.request(
+        "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+        {
+          owner: input.targetOwner,
+          repo: input.targetRepo,
+          ruleset_id: rulesetId,
+        }
+      );
+      const readbackMismatches = diffMergeQueueRuleset(
+        readback as RulesetResponse,
+        expected
+      );
+      if (readbackMismatches.length > 0) {
+        throw new Error(
+          `merge-queue policy readback mismatch on ${input.targetOwner}/${input.targetRepo}: ${readbackMismatches.join("; ")}`
+        );
+      }
+
+      this.log.info(
+        {
+          targetOwner: input.targetOwner,
+          targetRepo: input.targetRepo,
+          policyOwner: input.policyOwner,
+          policyRepo: input.policyRepo,
+          policyRef,
+          mismatches,
+          waitMinutes,
+        },
+        "merge-queue policy reconciled"
+      );
+      return {
+        status: "applied",
+        rulesetName: MERGE_QUEUE_RULESET_NAME,
+        policyRef,
+        mismatches,
+        waitMinutes,
+      };
+    } catch (error) {
+      const status = (error as { status?: number })?.status;
+      if (status === 403) {
+        throw deployPlaneError(
+          "protection_unavailable",
+          `operator GitHub App cannot administer rulesets on ${input.targetOwner}/${input.targetRepo} (HTTP 403); repository administration:write is required`,
+          502
+        );
+      }
+      if (status === 422) {
+        throw deployPlaneError(
+          "merge_queue_policy_rejected",
+          `GitHub rejected the merge-queue policy on ${input.targetOwner}/${input.targetRepo} (HTTP 422)`,
           502
         );
       }
