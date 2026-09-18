@@ -5,7 +5,8 @@
  * Module: `@app/api/v1/nodes/[id]/envs` (test)
  * Purpose: Pin the env verb's request schema — `present` (deploy reach) and `placement` (serving
  *   lane, story.5016 T5) are MUTUALLY EXCLUSIVE, both dispatch under the SAME `node.manage_envs`
- *   gate, and each routes to its own writer (`openNodeEnvPr` / `openNodePlacementPr`).
+ *   gate, and each routes to its own writer (`openNodeEnvPr` / `openNodePlacementPr`), plus
+ *   EVIDENCE_OR_REFUSE (task.5132): an ADD 503s without ledger evidence; a REMOVE degrades.
  * Scope: Unit tests over mocked session/env/db/authz/writer — no IO.
  * Side-effects: none
  * Links: src/app/api/v1/nodes/[id]/envs/route.ts
@@ -92,7 +93,11 @@ const post = async (body: unknown): Promise<Response> => {
 describe("POST /api/v1/nodes/[id]/envs — schema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    container.leaseReadCapability = undefined;
+    // EVIDENCE_OR_REFUSE (task.5132): an ADD refuses without a readable ledger, so even the
+    // schema-level happy paths must wire the capability (an empty ledger = generation 0).
+    listAllocated.mockResolvedValue([]);
+    listReceipts.mockResolvedValue([]);
+    container.leaseReadCapability = { listAllocated, listReceipts };
     authorize.mockResolvedValue({ ok: true });
     openNodeEnvPr.mockResolvedValue({ status: "no_changes" });
     openNodePlacementPr.mockResolvedValue({ status: "no_changes" });
@@ -342,12 +347,27 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
     );
   });
 
-  it("present:true with the ledger unwired passes undefined (planner writes the explicit 0)", async () => {
+  it("present:true with the ledger UNWIRED refuses — 503 generation_evidence_unavailable, no PR (EVIDENCE_OR_REFUSE)", async () => {
+    // The live incident's other half (task.5132): AKASH_ACTUATOR_ACCOUNT_ID unpinned →
+    // leaseReadCapability undefined → the old fallback silently derived generation 0 and
+    // authored a catalog PR carrying a spent key. The verb must refuse, not guess.
     container.leaseReadCapability = undefined;
-    await post({ env: "candidate-a", present: true });
-    expect(openNodeEnvPr).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseGeneration: undefined })
-    );
+    const res = await post({ env: "candidate-a", present: true });
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "generation_evidence_unavailable",
+    });
+    expect(openNodeEnvPr).not.toHaveBeenCalled();
+  });
+
+  it("present:true with a FAILING ledger read refuses — 503 generation_evidence_unavailable, no PR", async () => {
+    listReceipts.mockRejectedValue(new Error("db down"));
+    const res = await post({ env: "candidate-a", present: true });
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "generation_evidence_unavailable",
+    });
+    expect(openNodeEnvPr).not.toHaveBeenCalled();
   });
 
   it("a ledger read failure degrades (openLeases: null), it does not block the remove", async () => {

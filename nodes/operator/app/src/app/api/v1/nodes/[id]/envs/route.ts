@@ -33,6 +33,11 @@
  *     `lease_generation` is DERIVED from ledger-receipt evidence (every state — a TERMINAL
  *     `released`/`failed` receipt forces the bump, task.5132), never taken from the request
  *     body, and becomes real only as the reviewed catalog commit this verb authors.
+ *   - EVIDENCE_OR_REFUSE (task.5132): an ADD REFUSES (503 `generation_evidence_unavailable`)
+ *     rather than guesses a generation — if the lease-read capability is unwired
+ *     (AKASH_ACTUATOR_ACCOUNT_ID unpinned) or the ledger read fails, no PR opens. Falling back
+ *     to catalogGeneration silently re-presented a spent gen-0 key on the live incident.
+ *     The REMOVE enumeration stays best-effort (`openLeases: null` degrades, never blocks).
  *   - OBSERVABLE: wrapped in `wrapRouteHandlerWithLogging` (routeId `nodes.envs`) — every request
  *     emits the standard start/end envelope + metrics (validation finding on #2311: this verb
  *     previously logged nothing).
@@ -275,18 +280,52 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // catalogGeneration is 0 here: an env being ADDED has no cell (REMOVE_COMPLETES_THE_ROW
     // drops it with the env), so the receipts are the only evidence that can force a bump.
     const leaseRead = getContainer().leaseReadCapability;
+    const scope = {
+      nodeId: node.id,
+      environment: targetEnv,
+      limit: LEASE_ENUMERATION_LIMIT,
+    };
     let envReceipts: readonly AkashTxAllocationRecord[] | null = null;
-    if (leaseRead) {
+    if (present === true) {
+      // EVIDENCE_OR_REFUSE (task.5132): the ADD derivation is fail-closed. Without a readable
+      // ledger the verb cannot distinguish "no prior lease" from "spent gen-0 key it must bump
+      // past" — guessing (the old catalogGeneration fallback) authored a catalog PR that
+      // re-presented a spent key and the actuator refused it with `akash_tx_identity_conflict`.
+      if (!leaseRead) {
+        return NextResponse.json(
+          {
+            error: "generation_evidence_unavailable",
+            reason:
+              "AKASH_ACTUATOR_ACCOUNT_ID is not pinned on this runtime — the ADD verb cannot derive lease_generation without reading the allocation ledger",
+          },
+          { status: 503 }
+        );
+      }
       try {
-        const scope = {
-          nodeId: node.id,
-          environment: targetEnv,
-          limit: LEASE_ENUMERATION_LIMIT,
-        };
-        envReceipts =
-          present === true
-            ? await leaseRead.listReceipts(scope)
-            : await leaseRead.listAllocated(scope);
+        envReceipts = await leaseRead.listReceipts(scope);
+      } catch (err) {
+        ctx.log.warn(
+          {
+            nodeId: node.id,
+            env: targetEnv,
+            errorCode: "generation_evidence_unavailable",
+            causeMessage: err instanceof Error ? err.message : "unknown",
+          },
+          "node_envs_lease_read_failed"
+        );
+        return NextResponse.json(
+          {
+            error: "generation_evidence_unavailable",
+            reason:
+              "the allocation-ledger read failed — the ADD verb refuses to guess lease_generation without receipt evidence",
+          },
+          { status: 503 }
+        );
+      }
+    } else if (leaseRead) {
+      // REMOVE enumeration stays best-effort: `openLeases: null` degrades, never blocks.
+      try {
+        envReceipts = await leaseRead.listAllocated(scope);
       } catch (err) {
         ctx.log.warn(
           {
