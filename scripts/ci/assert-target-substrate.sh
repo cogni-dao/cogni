@@ -60,23 +60,19 @@ egress_cidrs="$(yq -r '.compute_egress_cidrs[]?.cidr' "$catalog_file" | sort -u)
   || fail "external-compute target '$node' has no compute_egress_cidrs"
 egress_cidrs_csv="$(paste -sd, - <<<"$egress_cidrs")"
 
-# task.5104 — WHICH AUTHORITY owns this row's workload in this environment.
+# task.5104 / task.5138 — WHICH AUTHORITY owns this row's workload in this environment.
 # Shell twin of resolveNodeComputeApi() in
 # nodes/operator/app/src/features/compute/node-compute-api.ts, read from the SAME
-# catalog cell (`compute_api.<env>`, infra/catalog/_schema.json). LEGACY_IS_DEFAULT:
-# an absent cell resolves to the bespoke in-cluster compute-workload-controller, so
-# preview/production (which still ship that controller) are untouched by this branch.
-#
-# This is why the preflight is authority-aware at all: story.5016 step 9 deleted
-# base/compute-workload-controller from the candidate-a operator overlay, so asserting
-# that Deployment on a crossplane row fails 100% of the time and kills the flight
-# before the materializer ever runs.
+# catalog cell (`compute_api.<env>`, infra/catalog/_schema.json). The legacy
+# compute-workload-controller is RETIRED (story.5016 removed it from every overlay),
+# so for an external-compute row the only assertable authority is crossplane — an
+# absent cell fails loudly here rather than resolving to a dead authority.
 local compute_api
-compute_api="$(yq -N ".compute_api.\"${DEPLOY_ENVIRONMENT}\" // \"legacy\"" "$catalog_file")"
+compute_api="$(yq -N ".compute_api.\"${DEPLOY_ENVIRONMENT}\"" "$catalog_file")"
 [ -n "$compute_api" ] && [ "$compute_api" != "null" ] || compute_api="legacy"
 case "$compute_api" in
-  legacy|crossplane) ;;
-  *) fail "unsupported compute_api '$compute_api' for '$node' in env '$DEPLOY_ENVIRONMENT' (expected legacy|crossplane)" ;;
+  crossplane) ;;
+  *) fail "compute_api.'${DEPLOY_ENVIRONMENT}' for external-compute row '$node' is '${compute_api}': the legacy authority is retired, declare compute_api.${DEPLOY_ENVIRONMENT}: crossplane" ;;
 esac
 
 local ssh_opts=()
@@ -95,7 +91,6 @@ egress_cidrs_csv="$4"
 egress_allowlist="$5"
 authority="$6"
 namespace="cogni-${env_name}"
-controller="operator-compute-workload-controller"
 actuator="operator-akash-tx-actuator"
 xcw_crd="xcomputeworkloads.compute.cogni.io"
 xcw_composition="xcomputeworkload-akash"
@@ -151,25 +146,11 @@ if [ "$authority" = "crossplane" ]; then
     || fail "compute_api=crossplane for ${node} in ${env_name}: AKASH_ALLOWED_PROVIDERS is empty or unset on ${namespace}/${actuator}; an empty allowlist rejects every Akash provider bid"
   mark_ok "crossplane authority: AKASH_ALLOWED_PROVIDERS is non-empty on ${namespace}/${actuator}"
 else
-# LEGACY AUTHORITY — the bespoke in-cluster compute-workload-controller. Deliberately
-# left verbatim and un-indented so the diff proves preview/production behaviour is
-# byte-identical; do not reflow it. It is deleted outright by task.5098.
-kubectl get crd computeworkloads.compute.cogni.io >/dev/null \
-  || fail "ComputeWorkload CRD is missing"
-mark_ok "ComputeWorkload CRD exists"
-
-available="$(kubectl -n "$namespace" get deployment "$controller" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
-[ "${available:-0}" -ge 1 ] 2>/dev/null \
-  || fail "compute workload controller is not available: ${namespace}/${controller}"
-mark_ok "compute workload controller is available"
-
-kubectl -n "$namespace" exec deployment/"$controller" -c controller -- sh -ceu '
-  test -s /var/run/secrets/compute/AKASH_CONSOLE_API_KEY
-  test -s /var/run/secrets/compute/CLOUDFLARE_API_TOKEN
-  test -s /var/run/secrets/compute/CLOUDFLARE_ZONE_ID
-  test -n "$AKASH_ALLOWED_PROVIDERS"
-' >/dev/null || fail "controller provider/DNS credentials or AKASH_ALLOWED_PROVIDERS are missing"
-mark_ok "controller provider, DNS, and allowlist prerequisites exist"
+  # RETIRED AUTHORITY (task.5138 purge; deletion tracked by task.5098). The bespoke
+  # compute-workload-controller is deleted from every environment, so a row still
+  # resolving to it cannot be asserted, deployed, or paid. Fail loudly instead of
+  # asserting a Deployment that exists nowhere.
+  fail "compute_api resolved to '${authority}' for ${node} in ${env_name}: the legacy compute-workload-controller is RETIRED. Declare compute_api.${env_name}: crossplane on the catalog row."
 fi
 
 # Everything below is AUTHORITY-INDEPENDENT: the OpenBao secret bank the workload's

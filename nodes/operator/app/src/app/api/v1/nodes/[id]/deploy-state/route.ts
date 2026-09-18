@@ -10,8 +10,10 @@
  * Scope: Thin HTTP shell — Cogni-token auth, developer-RBAC gate (the SAME `node.flight` tuple as
  *   flight / flight-status / observability), resolve {id} via the shared node-rbac seam, delegate to
  *   the injected `DeployCapability`. No cluster/GH/Grafana auth. PLUS (story.5039) the money-loop
- *   read: this node's live paid-lease receipts + Console closure read-back + orphan diff via the
- *   injected `LeaseReadCapability` — omitted (not empty) when that capability is unwired.
+ *   read: this node's live paid-lease receipts + orphan diff via the injected
+ *   `LeaseReadCapability` — omitted (not empty) when that capability is unwired. Closure is
+ *   honestly "unknown" app-side: the app holds no Console key (task.5138); the authoritative
+ *   closure proof is in-actuator (bug.5189).
  * Invariants:
  *   - COGNI_TOKEN_ONLY (getSessionUser = Bearer-first); READ_ONLY; NO_CLUSTER_AUTH.
  *   - DEVELOPER_GATED: requires `node.flight` (→ `can_flight from developer`); fail-closed without a store.
@@ -72,7 +74,7 @@ const nodeDeployStateSchema = z.object({
   replicas: replicaCountsSchema,
 });
 
-/** One durable paid-lease receipt + its Console closure read-back (story.5039, bug.5189). */
+/** One durable paid-lease receipt + its closure verdict (story.5039, bug.5189, task.5138). */
 const leaseStateSchema = z.object({
   environment: z.string(),
   cogniKey: z.string(),
@@ -90,9 +92,9 @@ const deployStateResponseSchema = z.object({
   /** Convenience rollup: the envs the node is currently live (serving) in. */
   liveEnvs: z.array(z.string()),
   /**
-   * This node's LIVE paid-lease receipts (akash lanes), each with its Console closure
-   * read-back — the money-loop SEE half of the env verb (story.5039). Absent when the
-   * lease read capability is unwired (AKASH_ACTUATOR_ACCOUNT_ID not pinned on the runtime).
+   * This node's LIVE paid-lease receipts (akash lanes) — the money-loop SEE half of the env
+   * verb (story.5039). Closure reads "unknown" app-side (no Console key, task.5138). Absent
+   * when the lease read capability is unwired (AKASH_ACTUATOR_ACCOUNT_ID not pinned on the runtime).
    */
   leases: z.array(leaseStateSchema).optional(),
   /**
@@ -225,10 +227,9 @@ export async function GET(
         nodeId: node.nodeId,
         limit: 50,
       });
-      const verified = await verifyLeaseClosures({
-        receipts,
-        readStatus: leaseRead.readLeaseStatus,
-      });
+      // No Console read-back app-side (ONE_CONSOLE_KEY_PER_ACCOUNT, task.5138): closure
+      // reads `unknown`; the authoritative proof runs inside the actuator pod (bug.5189).
+      const verified = await verifyLeaseClosures({ receipts });
       const closureByKey = new Map(
         verified.map((v) => [v.receipt.cogniKey, v.closure])
       );

@@ -157,6 +157,8 @@ export const OFF_CLUSTER_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   // Operator control-plane API credentials. The operator mints these against
   // its own vendor accounts; a copy lets the holder drive fleet infrastructure
   // (deploy compute, rewrite DNS, read fleet telemetry) from anywhere.
+  // RETIRED NAME (task.5138): the app's Akash Console key slot was removed — one account,
+  // one key, held only by the actuator. The name stays denied so no node can ever squat it.
   "AKASH_CONSOLE_API_KEY",
   // Same class, tighter custody: the private Akash transaction actuator is the ONE active
   // writer on the operator sponsor wallet (task.5095, story.5016). It lives in its own
