@@ -46,7 +46,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:fb5d7dd1e255d870117b2a9569e5371f3f02ed60032465593df8a3db45cc6cad"
+    digest: "sha256:ccb5510f86c0bdeeb243af2e286c3b990bb52e341db50012d251f089d7fd6271"
 
 patches:
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
@@ -147,6 +147,13 @@ patches:
       - op: add
         path: /data/OPENBAO_NODE_SECRETS_WRITER_ROLE
         value: "production-node-secrets-writer"
+      # App-side READ pin (story.5039 lease views + task.5132 env-verb generation
+      # evidence): createLeaseReadCapability returns undefined without it, so the
+      # app's read-only lease/receipt views stay unwired. Same PUBLIC value the
+      # akash-tx-actuator Deployment pins above — an on-chain address, NOT a secret.
+      - op: add
+        path: /data/AKASH_ACTUATOR_ACCOUNT_ID
+        value: "akash10auj6u6wr7aqjawuxurgue9w7wfnca50t8cr4l"
   # NodePort assignment (operator = 30000) + instance label on selector.
   # Instance label prevents cross-node service routing: namePrefix only renames
   # resource names, not labels/selectors, so without this every Service
