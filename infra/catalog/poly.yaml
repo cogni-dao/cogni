@@ -50,7 +50,7 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 5
+  candidate-a: 35
   preview: 0
   production: 0
 activity_env: production
