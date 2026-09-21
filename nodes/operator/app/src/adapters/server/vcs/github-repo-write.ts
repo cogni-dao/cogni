@@ -126,7 +126,7 @@ export function envManagerCommitMessage(input: {
   readonly subject: string;
   readonly node: string;
   readonly env: NodeFormationEnv;
-  readonly action: "add" | "remove" | "place-k3s" | "place-akash";
+  readonly action: "add" | "remove";
   readonly paths: readonly string[];
 }): string {
   const canonicalPaths = [...new Set(input.paths)].sort();
@@ -3056,15 +3056,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
       plan.ops
     );
 
-    const title = `feat(node): place ${slug} ${env} on ${placement}`;
-    const message = envManagerCommitMessage({
-      subject: title,
-      node: slug,
-      env,
-      action: `place-${placement}`,
-      paths: entries.map((entry) => entry.path),
-    });
+    const message = `feat(node): place ${slug} ${env} on ${placement}`;
     const branch = `cogni-operator/node-placement-${slug}-${env}`;
+    const title = message;
     const body = this.placementPrBody(plan.kind, slug, env);
 
     const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {

@@ -90,7 +90,10 @@ jobs:
   # Fast gate: install → typecheck → lint
   static:
     needs: env_manager_fast_path
-    if: always()
+    # A skipped required job is satisfied by GitHub and by the operator's
+    # getCiStatus contract. Invalid/unavailable classifier results still run
+    # this job so the enforcement step fails closed.
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -336,7 +339,7 @@ jobs:
 
   unit:
     needs: env_manager_fast_path
-    if: always()
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140): unit does its own install + packages:build
     # and consumes NO artifact from static, so gating on it only serialized
@@ -539,7 +542,7 @@ jobs:
     # so the queue doesn't gate on it. Re-running on the rebased candidate burns ~3 min for marginal
     # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
     needs: env_manager_fast_path
-    if: always() && github.event_name != 'merge_group'
+    if: always() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140) — component does its own install + build and
     # shares no artifact with static; running in parallel keeps it off the

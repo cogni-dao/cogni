@@ -109,20 +109,6 @@ jobs:
             exit 1
           fi
 
-      - name: Validate changed catalog
-        if: steps.classify.outputs.eligible == 'true'
-        run: |
-          pipx install 'check-jsonschema==0.37.1'
-          check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml
-          bash scripts/ci/next-free-node-port.sh --check
-
-      - name: Verify generated deployment tree
-        if: steps.classify.outputs.eligible == 'true'
-        run: |
-          bash scripts/ci/render-scheduler-worker-endpoints.sh --check
-          bash scripts/ci/render-node-appset.sh --check
-          bash scripts/ci/render-node-overlays.sh --check
-
   # task.0391: single source of truth for event-derived metadata.
   # `pull_request` and `merge_group` have different event payloads but downstream
   # jobs need the same logical values (PR number, original head SHA, base ref,
@@ -245,6 +231,10 @@ jobs:
 
   detect:
     needs: [resolve, env_manager_fast_path]
+    # CI owns the schema + reproducible-render proof. Once it accepts the same
+    # signed type, no runtime image can be affected, so this build lane and its
+    # downstream required manifest context can be satisfied as skipped.
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     outputs:
       has_targets: ${{ steps.detect.outputs.has_targets }}

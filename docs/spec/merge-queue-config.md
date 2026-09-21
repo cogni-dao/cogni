@@ -129,7 +129,7 @@ change type. The GitHub-signed commit carries these trailers:
 Cogni-Change-Type: cogni.env-manager.v1
 Cogni-Node: <slug>
 Cogni-Environment: candidate-a|preview|production
-Cogni-Action: add|remove|place-k3s|place-akash
+Cogni-Action: add|remove
 Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
 ```
 
@@ -139,6 +139,9 @@ Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
 - the PR and commit author are the exact `cogni-operator[bot]` GitHub identity;
 - GitHub reports the head commit signature as verified and valid;
 - the same-repository branch, signed trailers, and PR head SHA agree;
+- the PR is specifically an env-membership add/remove on `cogni-operator/node-env-*`;
+- the base-to-head catalog diff is exactly that one declared membership mutation (including the
+  derived placement/compute/lease cells and activity authority), with every unrelated field equal;
 - the signed path hash equals the GitHub PR file list, and every file is inside the narrow
   catalog/AppSet/overlay/scheduler boundary for that node and environment;
 - the merge-group diff contains exactly the same path set, preventing a batched or stale shared-file
@@ -146,8 +149,9 @@ Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
 - catalog schema, NodePort uniqueness, scheduler routing, per-node AppSets, and per-node overlays all
   reproduce without drift on the checked-out tree.
 
-Eligible PRs still produce the canonical `static`, `unit`, `component`, and `manifest` contexts, but
-the application-heavy steps no-op and `manifest` contains no image targets. A PR that does not claim
+Eligible PRs still produce the canonical `static`, `unit`, `component`, and `manifest` contexts as
+GitHub `skipped` (a satisfied required conclusion), without scheduling four passthrough runners. The
+trusted classifier job owns the small schema + reproducible-generator proof. A PR that does not claim
 the reserved type runs full CI. A PR that claims it but fails any proof is red; it never silently
 falls back. Titles, labels, branch names, or copied PR bodies alone grant nothing.
 
