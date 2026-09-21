@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Temporary bug.5188 validation fixture. The root control-plane Application selects this
+# reviewed manifest through deploy/candidate-a-control-plane; this child then owns the
+# disposable XComputeWorkload and its value-free ExternalSecret leaf. It is removed before
+# PR #2364 merges.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: bug5188-dns-latch-fixture
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: deploy/candidate-a-control-plane
+    path: infra/k8s/argocd/control-plane/candidate-a/bug5188-fixture
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cogni-candidate-a
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
