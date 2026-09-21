@@ -22,6 +22,7 @@
  * @public
  */
 
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain-JS CI library, intentionally untyped (scripts layer, no build step).
@@ -48,6 +49,32 @@ describe("test-parent divergence policy", () => {
 
   it("MISSING_MAY_BE_FATAL — an absent canonical path fails the detector", () => {
     expect(policy.onMissing).toBe("fail");
+  });
+
+  it("OWNER_APP_BOUNDARY_FAILS_CLOSED — test-org sync is pinned to cogni-operator-test", () => {
+    expect(testParents[0]).toMatchObject({
+      repo: "cogni-test-org/cogni-monorepo",
+      github_app: { id: "3956976", slug: "cogni-operator-test" },
+    });
+  });
+
+  it("masks the decoded key before output and never selects an App ID from secrets", () => {
+    const workflow = fs.readFileSync(
+      path.join(REPO_ROOT, ".github/workflows/test-parent-sync.yml"),
+      "utf8"
+    );
+    const mask = workflow.indexOf('echo "::add-mask::$private_key"');
+    const output = workflow.indexOf(
+      'echo "key=$private_key" >> "$GITHUB_OUTPUT"'
+    );
+
+    expect(mask).toBeGreaterThan(-1);
+    expect(output).toBeGreaterThan(mask);
+    expect(workflow).toContain("app-id: ${{ steps.target.outputs.app_id }}");
+    expect(workflow).not.toContain("secrets.GH_REVIEW_APP_ID");
+    expect(workflow).toContain(
+      "ACTUAL_APP_SLUG: ${{ steps.app.outputs.app-slug }}"
+    );
   });
 
   // DEFAULT_DENY_DIVERGENCE. These are the paths a test-specific reimplementation would live in;
