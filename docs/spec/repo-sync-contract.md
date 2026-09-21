@@ -26,6 +26,7 @@ Cogni's deployment artifacts span three git repos today:
 - `Cogni-DAO/cogni` — the **operator control-plane hub**. Holds `nodes/operator/`, submodule pins for hosted node repos, any remaining legacy in-tree node directories while they are being migrated, plus the canonical `scripts/ci/`, `infra/k8s/base/`, `.github/workflows/`, `infra/compose/`, `infra/catalog/`.
 - `Cogni-DAO/node-template` — the **canonical node-at-root template**. Public source for named node forks. The hub may pin it as a submodule/deployment row, but does not mirror its source under `nodes/node-template/**`.
 - `Cogni-DAO/cogni-poly` — a **per-node fork artifact**. Polymarket-specific node that historically branched off node-template; continues to land operator-scope CI/infra fixes that the hub needs.
+- `cogni-test-org/cogni-monorepo` — the **test parent**. Not a downstream node: a near-1:1 mirror of the hub that candidate-a deploys FROM (the operator's `NODE_SUBMODULE_PARENT_{OWNER,REPO}` on candidate-a). See § Test-Parent Mirror.
 
 Operator-scope fixes have been diverging across these three repos with no shared lineage. Empirical evidence and the backlog of unsynced PRs are tracked in [proj.repo-sync](../../work/projects/proj.repo-sync.md). The canonical example: `scripts/ci/wait-for-in-cluster-services.sh` is byte-identical-stale between hub and node-template, while cogni-poly already eliminated the divergence in [#127](https://github.com/Cogni-DAO/cogni-poly/pull/127). bug.5001 is the same anti-pattern repeated.
 
@@ -66,7 +67,17 @@ Define the contract that:
 
 7. **CATALOG_BOUNDARY**: `infra/catalog/*.yaml` is the API between operator-scope and per-node scope. Operator-scope code reads from the catalog and never special-cases node names. Per-node source bits live in their source repo. A hub `nodes/<name>` gitlink is an operator pin, not source content.
 
-8. **THREE_TIER_FORK_SYNC**: The `node-template → fork` propagation (a different axis from hub↔artifact drift above) is **three** tiers, by content kind: **Tier 1 — flight contract** (force-overwritten), **Tier 2 — foundational substrate** (node-template-authoritative overlay → always auto-mergeable), **Tier 3 — node identity/presentation** (NEVER synced — `node-template` is a starter). For Tier 2, **node-template wins** every shared (non-`node_local`) path; the upstream branch is parented on the fork tip so the PR is conflict-free by construction (`TIER2_NODE_TEMPLATE_AUTHORITATIVE` + `TIER2_IS_ALWAYS_MERGEABLE`). The Tier-3 set is **declared as data** in `.cogni/sync-manifest.yaml`'s `node_local:` block (read at runtime from the template's own copy, `TIER3_IS_DATA`), and is left as the fork's own version (never overlaid). Operator mission: _build their mission (Tier 3, node-owned), not their plumbing (Tier 1+2, synced)_. See § Three-Tier Fork Sync.
+8. **TEST_PARENT_IS_NEAR_IDENTICAL**: an artifact declaring `role: test-parent` mirrors hub main 1:1 for ALL CI/CD infrastructure. Exactly three kinds of difference may be declared — **test identity**, **fixture roster + source pins**, and **environment-specific desired state**. A test-specific reimplementation of a workflow, generator, script, Crossplane/Argo manifest or substrate module is a contract violation, not a divergence: the mirror's value is that it executes the SAME lane production does, and a reimplemented lane proves nothing about the real one.
+
+9. **PRESENCE_IS_NOT_CONTENT**: roster-generated CONTENT is per-deployment; roster-generated PRESENCE is not. `content_may_differ:` suppresses the content check only, so a canonical path the hub generates can never be silently absent on an artifact. Content correctness stays with the canonical generators' own `--check` gates running in the artifact's own CI against the artifact's own catalog — one derivation per fact, never two readers.
+
+10. **MISSING_MAY_BE_FATAL**: an artifact declaring `on_missing: fail` turns an undeclared missing-on-artifact path into a non-zero detector exit. Evidence for the rule: the mirror's absent `infra/k8s/overlays/<env>/scheduler-worker/node-endpoints.patch.yaml` surfaced only as a 422 (`cannot plan scheduler routing for '<env>'/'<slug>': missing the current node-endpoints patch`) at env-activation time, on the mirror, hours into a node launch — not as a red build on the hub that generated the path.
+
+11. **REFRESH_IS_NOT_A_ROSTER_CHANGE**: a content refresh converges code, never membership. Retiring a node from the mirror (catalog row + ApplicationSet + body together) is its own reviewed change; the refresh declares such legacy bodies retained rather than deleting them as a side effect.
+
+12. **SYNC_IS_A_REVIEWED_PR**: the refresh opens ONE pull request as the operator GitHub App, parented on the mirror's own `main` so it is conflict-free by construction. It never pushes or force-pushes `main`, and hub `production`/`staging` secret material is declared hub-only so it cannot enter the mirror's tree by construction rather than by convention.
+
+13. **THREE_TIER_FORK_SYNC**: The `node-template → fork` propagation (a different axis from hub↔artifact drift above) is **three** tiers, by content kind: **Tier 1 — flight contract** (force-overwritten), **Tier 2 — foundational substrate** (node-template-authoritative overlay → always auto-mergeable), **Tier 3 — node identity/presentation** (NEVER synced — `node-template` is a starter). For Tier 2, **node-template wins** every shared (non-`node_local`) path; the upstream branch is parented on the fork tip so the PR is conflict-free by construction (`TIER2_NODE_TEMPLATE_AUTHORITATIVE` + `TIER2_IS_ALWAYS_MERGEABLE`). The Tier-3 set is **declared as data** in `.cogni/sync-manifest.yaml`'s `node_local:` block (read at runtime from the template's own copy, `TIER3_IS_DATA`), and is left as the fork's own version (never overlaid). Operator mission: _build their mission (Tier 3, node-owned), not their plumbing (Tier 1+2, synced)_. See § Three-Tier Fork Sync.
 
 ---
 
@@ -161,6 +172,23 @@ Approach: **node-template-authoritative overlay, parented on the fork tip** (`bu
 When nothing in Tier-2 differs the branch points at the fork tip and the PR no-ops to `up_to_date`. This replaces the earlier "restore-Tier-3-inside-a-three-way-merge" approach, which preserved fork Tier-2 edits and therefore **conflicted** whenever a fork drifted in a shared path (the `ONE_FIX_ONE_LINEAGE` hand-port case).
 
 ---
+
+## Test-Parent Mirror
+
+`cogni-test-org/cogni-monorepo` is where operator CI/CD is exercised before it reaches production: candidate-a's operator reads ITS catalog, opens node-formation PRs against IT, and renders env state from IT. That makes its staleness indistinguishable from a product bug — a node launch fails against a control plane that has not existed on main for months, and the failure is attributed to the launch.
+
+**Two axes, one policy.** The declared divergence in `.cogni/sync-manifest.yaml` is read by exactly one compiled module (`scripts/ci/lib/sync-policy.mjs`) and consumed by both:
+
+| Axis          | Mechanism                          | Output                                                                                              |
+| ------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------- |
+| **Surfacing** | `scripts/ci/detect-sync-drift.mjs` | ancestry + path drift → ONE upserted `sync-drift` hub issue; non-zero exit per MISSING_MAY_BE_FATAL |
+| **Repair**    | `scripts/ci/sync-test-parent.mjs`  | ONE reviewed PR on the mirror, as the operator GitHub App                                           |
+
+Both run on every push to hub `main` and on a daily schedule. "What drift reports" and "what sync does" cannot disagree, because neither owns a matching rule.
+
+**What the refresh computes.** The target tree STARTS as hub main's tree, then re-applies exactly the declared divergences. Preserve-by-default is the failure mode being corrected: it is what let 2,273 retired paths accumulate on a mirror that had fallen 667 commits behind. Deletions therefore propagate — except where REFRESH_IS_NOT_A_ROSTER_CHANGE declares otherwise.
+
+**Why not an allowlist.** The prior attempt ([cogni-test-org/cogni-monorepo#60](https://github.com/cogni-test-org/cogni-monorepo/pull/60), closed unmerged) pinned "exactly 34 candidate-local paths may differ" and enforced it with a bespoke parity script committed to the mirror. Both halves are the anti-pattern: an allowlist puts every newly added canonical path OUT of scope until a human remembers to add it, and a mirror-local enforcement script is precisely the test-specific reimplementation TEST_PARENT_IS_NEAR_IDENTICAL forbids. Default-deny inverts the first; hub-owned mechanism inverts the second.
 
 ## Sync Mechanism
 

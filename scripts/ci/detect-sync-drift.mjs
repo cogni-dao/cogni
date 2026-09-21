@@ -4,12 +4,31 @@
 
 /**
  * Module: `@scripts/ci/detect-sync-drift`
- * Purpose: Walks every hub file not covered by global exclude or per-artifact divergence; sha256-diffs each against a fresh clone of each public artifact; emits a markdown report grouped by drift class (different / missing-on-artifact / only-on-artifact).
- * Scope: Implements spec.repo-sync-contract S2 (drift surfacing). Forward + backflow detection; does NOT open auto-PRs on artifacts — that is v0.2.
- * Invariants: Skips private artifacts (visibility=private) until v0.2 PAT plumbing lands; never mutates the hub or artifact working trees.
- * Side-effects: IO (clones into /tmp/sync-drift-<repo>, reads hub via git show); prints markdown to stdout; exit 0 always (drift is data, not failure).
- * Notes: Drives the sync-drift-detector.yml workflow which pipes stdout into `gh issue create` / `gh issue edit` for the hub tracking issue.
- * Links: docs/spec/repo-sync-contract.md, .cogni/sync-manifest.yaml, .github/workflows/sync-drift-detector.yml
+ * Purpose: Walks every hub path the declared policy requires an artifact to carry; sha256-diffs each
+ *   against a fresh clone of each public artifact; reports ANCESTRY (how far the artifact's default
+ *   branch has fallen behind hub main) alongside path drift, grouped by class
+ *   (different / missing-on-artifact / only-on-artifact).
+ * Scope: Implements spec.repo-sync-contract S2 (drift surfacing) for every declared artifact,
+ *   including the `role: test-parent` mirror (task.5142). Surfacing only — the refresh PR is
+ *   `scripts/ci/sync-test-parent.mjs`.
+ * Invariants:
+ *   - POLICY_HAS_ONE_READER: every glob decision comes from `lib/sync-policy.mjs`; this file owns
+ *     no matching rules of its own.
+ *   - MISSING_MAY_BE_FATAL: an artifact declaring `on_missing: fail` turns an UNDECLARED
+ *     missing-on-artifact path into a non-zero exit. A canonical path the hub generates and the
+ *     mirror lacks is a broken generator input, not a report — that absence is what 422'd
+ *     spawny-boi's env activation (`missing the current node-endpoints patch`).
+ *   - REPORT_ALWAYS_PRINTS: the markdown report is emitted on stdout even when the run fails, so
+ *     the tracking issue is upserted BEFORE the workflow surfaces the failure.
+ *   - Skips private artifacts (visibility=private) until v0.2 PAT plumbing lands; never mutates the
+ *     hub or artifact working trees.
+ * Side-effects: IO (clones into /tmp/sync-drift-<repo>, reads hub via git show, one unauthenticated
+ *   GitHub compare call per artifact for ancestry); prints markdown to stdout; exit 1 only per
+ *   MISSING_MAY_BE_FATAL.
+ * Notes: Drives sync-drift-detector.yml, which pipes stdout into `gh issue create` / `gh issue edit`
+ *   for the ONE hub tracking issue.
+ * Links: docs/spec/repo-sync-contract.md, .cogni/sync-manifest.yaml, scripts/ci/lib/sync-policy.mjs,
+ *   scripts/ci/sync-test-parent.mjs, .github/workflows/sync-drift-detector.yml
  * @public
  */
 
@@ -17,51 +36,12 @@ import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { parse as parseYaml } from "yaml";
+import { compileArtifactPolicy, readManifest } from "./lib/sync-policy.mjs";
 
 const HUB_DIR = process.env.HUB_DIR ?? process.cwd();
 const HUB_REF = process.env.HUB_REF ?? "HEAD";
 const TMP_ROOT = "/tmp";
 const MANIFEST = ".cogni/sync-manifest.yaml";
-
-const REGEX_META = new Set([
-  ".",
-  "+",
-  "?",
-  "^",
-  "$",
-  "{",
-  "}",
-  "(",
-  ")",
-  "|",
-  "[",
-  "]",
-  "\\",
-]);
-
-const globToRegex = (glob) => {
-  let out = "";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        out += ".*";
-        i++;
-      } else {
-        out += "[^/]*";
-      }
-    } else if (REGEX_META.has(c)) {
-      out += `\\${c}`;
-    } else {
-      out += c;
-    }
-  }
-  return new RegExp(`^${out}$`);
-};
-
-const compileGlobs = (globs) => (globs ?? []).map(globToRegex);
-const matchesAny = (path, regexes) => regexes.some((re) => re.test(path));
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
@@ -82,26 +62,52 @@ const lsFiles = (dir, ref = "HEAD") =>
     .split("\n")
     .filter((p) => p.length > 0);
 
-const main = () => {
-  const manifest = parseYaml(readFileSync(join(HUB_DIR, MANIFEST), "utf8"));
-  const excludeRes = compileGlobs(manifest.exclude);
+/**
+ * ANCESTRY, not just paths. Path drift says WHAT differs; ancestry says how far the mirror has
+ * fallen behind the lineage it is supposed to track, which is the signal that decays continuously
+ * between explicit changes (the test parent sat 667 commits behind before anyone noticed).
+ * Unauthenticated when no token is present — every declared public artifact is a public repo.
+ */
+const compareAncestry = async (hub, artifact) => {
+  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+  const headOwner = artifact.split("/")[0];
+  const url = `https://api.github.com/repos/${artifact}/compare/${hub.replace("/", ":")}:main...${headOwner}:main`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        accept: "application/vnd.github+json",
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) return { error: `compare ${res.status}` };
+    const body = await res.json();
+    return {
+      status: body.status,
+      ahead: body.ahead_by,
+      behind: body.behind_by,
+    };
+  } catch (e) {
+    // Ancestry is a reported signal, never a gate — an unreachable API must not mask path drift.
+    return { error: String(e?.message ?? e) };
+  }
+};
 
-  const hubFiles = lsFiles(HUB_DIR, HUB_REF).filter(
-    (p) => !matchesAny(p, excludeRes)
-  );
+const main = async () => {
+  const manifest = readManifest(join(HUB_DIR, MANIFEST));
 
   const lines = [];
   const out = (s) => lines.push(s);
   out(`# Sync-drift detector report`);
   out(`hub: ${manifest.hub} @ ${HUB_REF}`);
-  out(`hub files in scope (after global excludes): ${hubFiles.length}`);
   out("");
 
   let totalReal = 0;
+  let fatal = 0;
 
   for (const artifactSpec of manifest.artifacts) {
     const { repo, visibility } = artifactSpec;
-    out(`## ${repo}  (\`${visibility}\`)`);
+    const policy = compileArtifactPolicy(manifest, repo);
+    out(`## ${repo}  (\`${visibility}\`, role \`${policy.role}\`)`);
 
     if (visibility === "private") {
       out(
@@ -111,10 +117,12 @@ const main = () => {
       continue;
     }
 
-    const divergence =
-      manifest.divergences.find((d) => d.artifact === repo) ?? {};
-    const omitRes = compileGlobs(divergence.omit_from_artifact);
-    const onlyRes = compileGlobs(divergence.artifact_only);
+    const ancestry = await compareAncestry(manifest.hub, repo);
+    out(
+      ancestry.error
+        ? `  🧬 ancestry: unavailable (${ancestry.error})`
+        : `  🧬 ancestry vs hub main: **${ancestry.behind} behind / ${ancestry.ahead} ahead** (\`${ancestry.status}\`)`
+    );
 
     const dest = join(TMP_ROOT, `sync-drift-${repo.replace("/", "_")}`);
     try {
@@ -125,22 +133,36 @@ const main = () => {
       continue;
     }
 
-    const artifactFiles = lsFiles(dest)
-      .filter((p) => !matchesAny(p, excludeRes))
-      .filter((p) => !matchesAny(p, onlyRes));
-
+    const hubFiles = lsFiles(HUB_DIR, HUB_REF).filter(
+      (p) => !policy.excluded(p)
+    );
+    const artifactFiles = lsFiles(dest).filter((p) => !policy.excluded(p));
     const artifactSet = new Set(artifactFiles);
+
     const missing = [];
     const different = [];
+    let contentFree = 0;
+    let hubOnly = 0;
+    let required = 0;
 
     for (const path of hubFiles) {
-      if (matchesAny(path, omitRes)) continue;
-      if (!artifactSet.has(path)) {
-        const fsPath = join(dest, path);
-        // If it exists on disk as a non-file (dir/symlink) report as missing
-        if (!existsSync(fsPath) || !statSync(fsPath).isFile()) {
-          missing.push(path);
-        }
+      const disposition = policy.hubDisposition(path);
+      if (disposition === "hub_only") {
+        hubOnly++;
+        continue;
+      }
+      required++;
+      const fsPath = join(dest, path);
+      const presentAsFile =
+        artifactSet.has(path) &&
+        existsSync(fsPath) &&
+        statSync(fsPath).isFile();
+      if (!presentAsFile) {
+        missing.push(path);
+        continue;
+      }
+      if (disposition === "content_free") {
+        contentFree++;
         continue;
       }
       let hubBlob;
@@ -153,11 +175,6 @@ const main = () => {
       } catch {
         continue; // submodule/symlink-as-tree-entry
       }
-      const fsPath = join(dest, path);
-      if (!statSync(fsPath).isFile()) {
-        missing.push(path);
-        continue;
-      }
       const artifactBlob = readFileSync(fsPath);
       if (sha256(hubBlob) !== sha256(artifactBlob)) {
         different.push({
@@ -168,52 +185,70 @@ const main = () => {
       }
     }
 
-    const hubSet = new Set(hubFiles.filter((p) => !matchesAny(p, omitRes)));
-    const onlyOnArtifact = artifactFiles.filter((p) => !hubSet.has(p));
+    // Backflow: the hub does not require this path here, and no divergence declares it.
+    const hubRequires = new Set(
+      hubFiles.filter((p) => policy.hubDisposition(p) !== "hub_only")
+    );
+    const onlyOnArtifact = artifactFiles.filter(
+      (p) => !hubRequires.has(p) && !policy.isArtifactOnlyDeclared(p)
+    );
 
     const realDriftCount =
       different.length + missing.length + onlyOnArtifact.length;
     totalReal += realDriftCount;
+    if (missing.length > 0 && policy.onMissing === "fail")
+      fatal += missing.length;
 
-    out(`  matching: ${hubFiles.length - missing.length - different.length}`);
+    out(
+      `  required by policy: ${required} (content-free: ${contentFree}) · declared hub-only: ${hubOnly}`
+    );
+    out(
+      `  matching: ${required - missing.length - different.length - contentFree}`
+    );
     out(`  🟡 different: ${different.length}`);
-    out(`  🔴 missing-on-artifact: ${missing.length}`);
+    out(
+      `  🔴 missing-on-artifact: ${missing.length}${
+        policy.onMissing === "fail" ? " ← **fatal** (`on_missing: fail`)" : ""
+      }`
+    );
     out(`  🟣 only-on-artifact (backflow): ${onlyOnArtifact.length}`);
     out("");
 
-    if (different.length > 0) {
-      out(`  <details><summary>🟡 ${different.length} different</summary>`);
+    const detail = (emoji, label, items, render) => {
+      if (items.length === 0) return;
+      out(`  <details><summary>${emoji} ${items.length} ${label}</summary>`);
       out("");
-      for (const d of different)
-        out(
-          `  - \`${d.path}\` — hub ${d.hubSize}B / artifact ${d.artifactSize}B`
-        );
+      for (const i of items) out(`  - ${render(i)}`);
       out("");
       out(`  </details>`);
-    }
-    if (missing.length > 0) {
-      out(
-        `  <details><summary>🔴 ${missing.length} missing-on-artifact</summary>`
-      );
-      out("");
-      for (const m of missing) out(`  - \`${m}\``);
-      out("");
-      out(`  </details>`);
-    }
-    if (onlyOnArtifact.length > 0) {
-      out(
-        `  <details><summary>🟣 ${onlyOnArtifact.length} only-on-artifact (backflow candidates)</summary>`
-      );
-      out("");
-      for (const o of onlyOnArtifact) out(`  - \`${o}\``);
-      out("");
-      out(`  </details>`);
-    }
+    };
+    detail(
+      "🟡",
+      "different",
+      different,
+      (d) => `\`${d.path}\` — hub ${d.hubSize}B / artifact ${d.artifactSize}B`
+    );
+    detail("🔴", "missing-on-artifact", missing, (m) => `\`${m}\``);
+    detail(
+      "🟣",
+      "only-on-artifact (backflow candidates)",
+      onlyOnArtifact,
+      (o) => `\`${o}\``
+    );
     out("");
   }
 
   out(`## Total drift across all checked artifacts: **${totalReal}**`);
+  if (fatal > 0) {
+    out("");
+    out(
+      `> ❌ **${fatal} required canonical path(s) are absent on an artifact declaring \`on_missing: fail\`.** ` +
+        `A path the hub generates and the mirror lacks is a broken generator input — refresh the mirror ` +
+        `(\`.github/workflows/test-parent-sync.yml\`) rather than declaring the absence away.`
+    );
+  }
   console.log(lines.join("\n"));
+  if (fatal > 0) process.exitCode = 1;
 };
 
-main();
+await main();

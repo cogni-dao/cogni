@@ -15,6 +15,15 @@ artifacts:
     visibility: public
   - repo: cogni-dao/cogni-poly
     visibility: private # detector skips until v0.2 (needs PAT)
+  # task.5142 — the CI/CD TEST PARENT. Not a downstream node artifact: a near-1:1 mirror of this
+  # hub that candidate-a deploys FROM (the operator's NODE_SUBMODULE_PARENT on candidate-a), so
+  # every CI/CD change is exercised against the same workflows, generators, scripts, Crossplane,
+  # Argo and substrate logic production runs. `on_missing: fail` because a canonical path the hub
+  # generates and the mirror lacks is a broken generator input, not a report.
+  - repo: cogni-test-org/cogni-monorepo
+    visibility: public
+    role: test-parent
+    on_missing: fail
 
 # Global excludes — never propagated to or from any artifact. Junk / caches /
 # build outputs / git internals. Default-deny-divergence applies BELOW this set.
@@ -47,26 +56,27 @@ node_local:
   - ".cogni/repo-spec.yaml" # node identity
   - ".cogni/persona/**" # persona / character
 
-# Per-artifact divergences. Two shapes:
+# Per-artifact divergences. Three shapes:
 #   omit_from_artifact: paths the hub has that the artifact intentionally lacks.
 #   artifact_only:      paths the artifact has that the hub intentionally lacks.
+#   content_may_differ: paths BOTH must carry whose content is legitimately per-deployment.
+#                       Suppresses the content check ONLY — absence is still drift — and takes
+#                       PRECEDENCE over omit_from_artifact, so a broad roster omission can
+#                       re-require the control-plane rows nested inside it.
 # Anything NOT covered by exclude[] or these lists MUST match across hub + artifact.
 divergences:
   - artifact: cogni-dao/standalone-node
     reason: "OSS public quickstart — omits hub-only nodes + canary env. Secrets substrate (OpenBao/ESO + catalog loader + tier spec) graduated to shared via task.5081."
+    # Both-sides intentional divergence — the path MUST exist on both repos, only its content
+    # differs. Superseded the v1 twin-listing workaround (same glob in omit_from_artifact AND
+    # artifact_only), which also suppressed ABSENCE and so could hide a deleted canonical file.
+    content_may_differ:
+      - "AGENTS.md" # artifact prepends a development-freeze banner (cogni-dao/standalone-node#66); the hub IS the dev repo
+      - "infra/catalog/node-template.yaml" # hub-style row vs the artifact's standalone-style fork row (task.5078)
     omit_from_artifact:
-      # AGENTS.md exists on BOTH repos but intentionally diverges — the
-      # artifact prepends a development-freeze banner (cogni-dao/standalone-node#66)
-      # that must NOT appear in the hub (the hub IS the dev repo). The schema has
-      # no "expected-different" category, so a both-sides intentional divergence
-      # must be listed in BOTH omit_from_artifact (suppresses the hub-side 🟡
-      # "different") AND artifact_only below (suppresses the resulting 🟣
-      # "only-on-artifact"). See the artifact_only twin entry.
-      - "AGENTS.md" # dev-freeze banner; both-list entry (see comment above)
       - "nodes/operator/**" # hub-only node
       - "nodes/scheduler-worker/**" # hub-only control-plane service node
       - "infra/catalog/operator.yaml"
-      - "infra/catalog/node-template.yaml" # hub-style; artifact carries standalone-style (task.5078) — both-sides intentional divergence
       # 1-repo-1-node: standalone-node IS one node, not the hub's multi-node registry.
       # Its infra/catalog carries only node-template + scheduler-worker; the hub's other
       # node rows are siblings it must not mirror (were flagged 🔴 missing-on-artifact).
@@ -85,14 +95,12 @@ divergences:
       - "infra/k8s/secrets/README.md" # hub secrets-layout doc
       - "scripts/experiments/**" # hub-only research scripts
     artifact_only:
-      - "AGENTS.md" # dev-freeze banner twin (see omit_from_artifact comment) — both lists required to zero the bidirectional drift flag
       # The node BODY. standalone-node ships the whole single node under nodes/node-template/**;
       # the hub has ZERO files there (node-template is a catalog-pinned remote source, not in-tree),
       # so every file flagged 🟣 only-on-artifact. This one rule is ~68% of cogni#1366 (~1146 items).
       - "nodes/node-template/**"
       - "infra/fork.yaml"
       - "infra/k8s/overlays/_template/node-template/**"
-      - "infra/catalog/node-template.yaml" # standalone-style fork catalog — see omit_from_artifact twin (both-sides divergence)
       - "infra/k8s/overlays/candidate-a/node-template/**" # hub + artifact diverge; hub overlay activates ExternalSecret via task.5081 CP2
       - "infra/k8s/overlays/preview/node-template/**"
       - "infra/k8s/overlays/production/node-template/**"
@@ -110,3 +118,87 @@ divergences:
       - "infra/catalog/scheduler-worker.yaml"
     artifact_only:
       - "nodes/poly/**"
+
+  # task.5142 — THE TEST PARENT. Near-1:1 with hub main by construction: production main is
+  # canonical for every workflow, generator, script, Crossplane/Argo manifest and substrate
+  # module, and the ONLY sanctioned differences are the three below. Default-deny does the rest,
+  # so a newly added canonical CI/CD path is in scope the moment it lands on main — no allowlist
+  # to update (that is what rotted before: cogni-test-org/cogni-monorepo#60 pinned "exactly 34
+  # candidate-local paths" against a hand-built parity script and was closed unmerged).
+  #
+  #   1. TEST IDENTITY    — who this deployment IS (.cogni/repo-spec.yaml: attribution source_refs,
+  #                         node registry, DAO/payment addresses).
+  #   2. FIXTURE ROSTER   — WHICH nodes this deployment runs, and their source pins. The catalog is
+  #      + PINS            the roster SSOT, so the rows and every artifact generated FROM them are
+  #                         per-deployment by definition.
+  #   3. ENV DESIRED STATE— the per-env rendering of that roster (overlays, ApplicationSets, the
+  #                         scheduler routing map, the edge Caddyfile).
+  #
+  # Roster-generated CONTENT is free; roster-generated PRESENCE is not. Every path the hub
+  # generates for the control plane (operator + scheduler-worker, present in every deployment)
+  # stays required via content_may_differ, so the class of failure this entry exists to kill —
+  # a MISSING infra/k8s/overlays/<env>/scheduler-worker/node-endpoints.patch.yaml 422'ing
+  # `cannot plan scheduler routing for '<env>'/'<slug>': missing the current node-endpoints
+  # patch.` on spawny-boi env activation — is a 🔴 that fails the detector (on_missing: fail).
+  # Content correctness stays where it already is: the mirror's OWN ci.yaml runs the canonical
+  # `render-*.sh --check` gates against its OWN catalog (ONE derivation, no second reader).
+  - artifact: cogni-test-org/cogni-monorepo
+    reason: "Near-1:1 CI/CD test parent for candidate-a (task.5142). Hub main is canonical for ALL infrastructure; only declared test identity, fixture roster/pins, and environment-specific desired state may differ. No test-specific reimplementation of workflows, generators, scripts, Crossplane, Argo or substrate logic."
+    content_may_differ:
+      # 1 — test identity
+      - ".cogni/repo-spec.yaml" # attribution source_refs + node registry for the test deployment
+      # 2 — the control-plane roster rows, re-required out of the `infra/catalog/*.yaml` omission
+      #     below. operator + scheduler-worker + node-template exist in EVERY deployment; only
+      #     their `envs:`/`activity_env:`/source pins are per-deployment.
+      - "infra/catalog/operator.yaml"
+      - "infra/catalog/scheduler-worker.yaml"
+      - "infra/catalog/node-template.yaml"
+      # 3 — env desired state rendered FROM the roster. Present on both sides, content per-roster.
+      - "infra/k8s/overlays/*/*.yaml" # per-env root kustomization/namespace — enumerates the env's components
+      - "infra/k8s/overlays/*/operator/**" # control-plane node, every env
+      - "infra/k8s/overlays/*/scheduler-worker/**" # incl. the generated node-endpoints.patch.yaml (bug.5094)
+      - "infra/k8s/argocd/appsets/*/kustomization.yaml" # enumerates the env's per-node ApplicationSets
+      - "infra/k8s/argocd/kustomization.yaml"
+      - "infra/k8s/base/scheduler-worker/configmap.yaml" # generated placement-default COGNI_NODE_ENDPOINTS CSV
+      - "infra/compose/edge/configs/Caddyfile.tmpl" # generated by scripts/ci/render-caddyfile.sh from the roster
+      - "infra/k8s/secrets/external-secrets/kustomization.yaml" # enumerates the env's per-node ESO leaves
+    omit_from_artifact:
+      # 2 — the hub's OWN roster. A hub node row (and everything generated from it) describes the
+      #     production fleet; the mirror runs the cogni-test-org fleet instead. `_schema.json` is
+      #     the catalog CONTRACT, not a row, so it is NOT omitted and must mirror 1:1.
+      - "infra/catalog/*.yaml"
+      - "infra/k8s/overlays/*/*/**" # per-node env overlays (control-plane dirs re-required above)
+      - "infra/k8s/argocd/appsets/*/*-applicationset.yaml" # per-node generated ApplicationSets
+      - "infra/k8s/secrets/external-secrets/*/*/**" # per-node ESO leaves
+      # PRODUCTION SECRETS NEVER LEAVE THE HUB. These are SOPS ciphertext, not plaintext, but the
+      # mirror is a different org with a different key set and no business holding either.
+      - "infra/k8s/secrets/production/**"
+      - "infra/k8s/secrets/staging/**"
+      - "infra/k8s/secrets/.sops.yaml"
+    artifact_only:
+      # 2 — the mirror's own roster + source pins. Submodule gitlinks under nodes/<slug> are the
+      #     test fleet's pinned fixtures (nodes/yo, nodes/test-cog, …); the hub retired in-tree
+      #     node source, so it carries none of them.
+      - ".gitmodules"
+      - "nodes/*" # submodule gitlinks (tree entries of type `commit`, not blobs)
+      - "infra/catalog/*.yaml"
+      - "infra/k8s/overlays/**"
+      - "infra/k8s/argocd/appsets/**"
+      # 3 — LEGACY FLAT BOOTSTRAP LAYOUT, still LIVE on the mirror. The hub moved the per-env
+      #     app-of-apps under control-plane/<env>/ behind per-env roots (story.5020); the mirror's
+      #     infra/k8s/argocd/kustomization.yaml still bootstrap-lists the flat
+      #     <env>-<slug>-applicationset.yaml files. Deleting them as "hub retired this" would break
+      #     candidate-a's Argo bootstrap, so they are DECLARED retained. Migrating the mirror onto
+      #     the control-plane roots is its own change, not a side effect of a content refresh.
+      - "infra/k8s/argocd/*-applicationset.yaml"
+      # 3 — the mirror's OWN secret material, in every env. Declared in BOTH directions: the hub's
+      #     production/staging ciphertext never flows in (omit_from_artifact above), and the
+      #     mirror's is never deleted by a refresh. Each repo owns its own SOPS/ESO leaves.
+      - "infra/k8s/secrets/**"
+      # 2 — LEGACY IN-TREE NODE BODIES the mirror still bootstrap-lists (canary + resy appsets are
+      #     in its infra/k8s/argocd/kustomization.yaml, and its catalog still carries their rows).
+      #     The hub retired both. Retiring them HERE is a ROSTER change — catalog row, ApplicationSet
+      #     and body together — not a side effect of a content refresh, so the refresh leaves them
+      #     alone. REFRESH_IS_NOT_A_ROSTER_CHANGE.
+      - "nodes/canary/**"
+      - "nodes/resy/**"
