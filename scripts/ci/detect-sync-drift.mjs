@@ -4,13 +4,8 @@
 
 /**
  * Module: `@scripts/ci/detect-sync-drift`
- * Purpose: Walks every hub path the declared policy requires an artifact to carry; sha256-diffs each
- *   against a fresh clone of each public artifact; reports ANCESTRY (how far the artifact's default
- *   branch has fallen behind hub main) alongside path drift, grouped by class
- *   (different / missing-on-artifact / only-on-artifact).
- * Scope: Implements spec.repo-sync-contract S2 (drift surfacing) for every declared artifact,
- *   including the `role: test-parent` mirror (task.5142). Surfacing only — the refresh PR is
- *   `scripts/ci/sync-test-parent.mjs`.
+ * Purpose: Walks every hub path the declared policy requires an artifact to carry, sha256-diffs each against a fresh clone, and reports ancestry plus path drift grouped by class.
+ * Scope: Surfacing for every declared artifact including the `role: test-parent` mirror (task.5142); does not open the refresh PR — that is scripts/ci/sync-test-parent.mjs.
  * Invariants:
  *   - POLICY_HAS_ONE_READER: every glob decision comes from `lib/sync-policy.mjs`; this file owns
  *     no matching rules of its own.
@@ -22,9 +17,7 @@
  *     the tracking issue is upserted BEFORE the workflow surfaces the failure.
  *   - Skips private artifacts (visibility=private) until v0.2 PAT plumbing lands; never mutates the
  *     hub or artifact working trees.
- * Side-effects: IO (clones into /tmp/sync-drift-<repo>, reads hub via git show, one unauthenticated
- *   GitHub compare call per artifact for ancestry); prints markdown to stdout; exit 1 only per
- *   MISSING_MAY_BE_FATAL.
+ * Side-effects: IO (clones artifacts into /tmp and reads the hub via git; prints markdown to stdout)
  * Notes: Drives sync-drift-detector.yml, which pipes stdout into `gh issue create` / `gh issue edit`
  *   for the ONE hub tracking issue.
  * Links: docs/spec/repo-sync-contract.md, .cogni/sync-manifest.yaml, scripts/ci/lib/sync-policy.mjs,

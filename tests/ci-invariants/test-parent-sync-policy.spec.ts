@@ -3,11 +3,8 @@
 
 /**
  * Module: `@tests/ci-invariants/test-parent-sync-policy`
- * Purpose: Pins the declared divergence policy for the `role: test-parent` mirror — the guarantees
- *   that make `cogni-test-org/cogni-monorepo` a near-1:1 CI/CD mirror rather than a fork that
- *   happens to share ancestry (task.5142).
- * Scope: Static structural test over `.cogni/sync-manifest.yaml` and the compiled policy module.
- *   Reads no network and clones nothing — the live comparison is `scripts/ci/detect-sync-drift.mjs`.
+ * Purpose: Pins the declared divergence policy that makes the test parent a near-1:1 CI/CD mirror rather than a fork sharing ancestry (task.5142).
+ * Scope: Static structural test over the manifest and the compiled policy; does not clone the mirror or hit the network — that is the detector's job.
  * Invariants:
  *   DEFAULT_DENY_DIVERGENCE: shared CI/CD substrate (workflows, scripts, packages, the operator
  *     app, the catalog CONTRACT, base manifests) is mirrored unless declared — so a newly added

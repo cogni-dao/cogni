@@ -5,8 +5,7 @@
 /**
  * Module: `@scripts/ci/resolve-test-parent`
  * Purpose: Print the `role: test-parent` artifact's `owner=` / `repo=` as GitHub Actions outputs.
- * Scope: One line of policy lookup, kept OUT of workflow YAML so the mirror's identity has exactly
- *   one home (.cogni/sync-manifest.yaml) and the workflow never hardcodes an owner/repo.
+ * Scope: One line of policy lookup kept OUT of workflow YAML; does not clone, sync, or validate anything beyond the role's presence.
  * Invariants: MANIFEST_IS_SSOT — a workflow that inlined `cogni-test-org/cogni-monorepo` would be a
  *   second declaration of the target, which is the drift class this whole contract exists to kill.
  * Side-effects: IO (reads the manifest); prints `key=value` lines to stdout; exits non-zero when no

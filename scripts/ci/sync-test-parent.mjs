@@ -4,12 +4,8 @@
 
 /**
  * Module: `@scripts/ci/sync-test-parent`
- * Purpose: Refresh the `role: test-parent` mirror from canonical hub main — build the target tree
- *   the declared policy says the mirror should have, commit it as a DESCENDANT of the mirror's own
- *   main, and open (or update) exactly ONE reviewed pull request on the mirror.
- * Scope: The hub→test-parent axis of spec.repo-sync-contract. Surfacing lives in
- *   `detect-sync-drift.mjs`; this is the repair. Runs as the operator GitHub App (the mirror's org
- *   installation), never as a human credential.
+ * Purpose: Refresh the `role: test-parent` mirror from canonical hub main by opening or updating exactly ONE reviewed pull request on it.
+ * Scope: The hub→test-parent repair axis of spec.repo-sync-contract; does not report drift and does not ever push or force-push the mirror's main.
  * Invariants:
  *   - POLICY_HAS_ONE_READER: the target tree is computed from `lib/sync-policy.mjs` — the SAME
  *     compiled policy the detector reports against, so "what drift says" and "what sync does" can
@@ -25,8 +21,7 @@
  *     opening a second one.
  *   - NO_SECRET_VALUES: `infra/k8s/secrets/{production,staging}/**` is declared hub-only, so hub
  *     secret material is never written into the mirror's tree by construction, not by convention.
- * Side-effects: IO (clones the mirror into a temp dir, fetches the hub, pushes ONE branch, opens or
- *   updates ONE PR). `--dry-run` computes and prints the plan without any write.
+ * Side-effects: IO (clones the mirror into a temp dir; pushes one branch and opens or updates one PR as the operator GitHub App)
  * Notes: git does the tree work (read-tree/checkout/commit-tree) — this file only decides WHICH
  *   paths, from the manifest. No bespoke tree-building, no merge-strategy plugin.
  * Links: docs/spec/repo-sync-contract.md, .cogni/sync-manifest.yaml, scripts/ci/lib/sync-policy.mjs,

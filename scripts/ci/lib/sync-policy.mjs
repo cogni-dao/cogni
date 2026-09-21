@@ -7,9 +7,7 @@
  * Purpose: The ONE reader of `.cogni/sync-manifest.yaml`'s divergence policy — compiles a repo's
  *   `exclude`/`omit_from_artifact`/`artifact_only`/`content_may_differ` globs into a single
  *   decision function that classifies any path as mirrored, content-free, hub-only or artifact-only.
- * Scope: Pure policy. Both consumers import it: `detect-sync-drift.mjs` (surfacing) and
- *   `sync-test-parent.mjs` (refresh). A second hand-rolled matcher is exactly the drift class this
- *   repo keeps paying for, so there is deliberately only one.
+ * Scope: Pure policy shared by detect-sync-drift.mjs and sync-test-parent.mjs; does not do IO beyond reading the manifest and owns no network or git behaviour.
  * Invariants:
  *   - DEFAULT_DENY_DIVERGENCE (spec.repo-sync-contract): a path is mirrored 1:1 unless a declared
  *     glob says otherwise, so a newly added canonical path is in scope the moment it lands.
