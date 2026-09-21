@@ -37,6 +37,16 @@
           "visibility": {
             "enum": ["public", "private"],
             "description": "public = anonymous clone OK in detector; private = needs PAT (detector skips in v0.1)."
+          },
+          "role": {
+            "enum": ["fork", "test-parent"],
+            "default": "fork",
+            "description": "What this artifact IS to the hub. `fork` (default) = a downstream artifact that carries its own node body. `test-parent` = a near-1:1 CI/CD mirror of the hub whose ONLY sanctioned differences are declared test identity, fixture roster/pins, and environment-specific desired state (spec.repo-sync-contract TEST_PARENT_IS_NEAR_IDENTICAL). Consumed by scripts/ci/sync-test-parent.mjs to pick its target — never a second hardcoded owner/repo."
+          },
+          "on_missing": {
+            "enum": ["report", "fail"],
+            "default": "report",
+            "description": "What an UNDECLARED missing-on-artifact path means. `report` (default) = drift is data; the detector exits 0 and the tracking issue carries it. `fail` = the detector exits non-zero. A test parent sets `fail`: a canonical path the hub generates and the mirror lacks is not a report, it is a broken generator input (task.5142 — the absent infra/k8s/overlays/<env>/scheduler-worker/node-endpoints.patch.yaml that 422'd spawny-boi env activation)."
           }
         }
       }
@@ -75,6 +85,12 @@
             "uniqueItems": true,
             "items": { "type": "string", "minLength": 1 },
             "description": "Globs of paths the artifact has but the hub MUST NOT carry."
+          },
+          "content_may_differ": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Globs of paths that MUST EXIST on both sides but whose CONTENT is legitimately per-deployment (identity, roster-generated desired state). Suppresses the content check only — a missing path is still drift, so a generated canonical path can never go silently absent. TAKES PRECEDENCE over omit_from_artifact, so a broad roster omission can re-require the control-plane rows inside it. Replaces the v1 twin-listing workaround (the same glob in omit_from_artifact AND artifact_only), which zeroed the flag in both directions and therefore hid absence too."
           }
         }
       }
