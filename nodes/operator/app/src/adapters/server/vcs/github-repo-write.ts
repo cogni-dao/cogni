@@ -35,6 +35,7 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
 import {
   extractNodeId,
   hasDeclaredNodeDeployment,
@@ -118,6 +119,22 @@ import {
   parseNodeRepoPolicy,
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+
+const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
+
+export function envManagerCommitMessage(input: {
+  readonly subject: string;
+  readonly node: string;
+  readonly env: NodeFormationEnv;
+  readonly action: "add" | "remove";
+  readonly paths: readonly string[];
+}): string {
+  const canonicalPaths = [...new Set(input.paths)].sort();
+  const pathsSha256 = createHash("sha256")
+    .update(`${canonicalPaths.join("\n")}\n`)
+    .digest("hex");
+  return `${input.subject}\n\nCogni-Change-Type: ${ENV_MANAGER_CHANGE_TYPE}\nCogni-Node: ${input.node}\nCogni-Environment: ${input.env}\nCogni-Action: ${input.action}\nCogni-Changed-Paths-SHA256: ${pathsSha256}`;
+}
 
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
@@ -2911,9 +2928,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
       plan.ops
     );
 
-    const message = `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
+    const title = `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
+    const message = envManagerCommitMessage({
+      subject: title,
+      node: slug,
+      env,
+      action: present ? "add" : "remove",
+      paths: entries.map((entry) => entry.path),
+    });
     const branch = `cogni-operator/node-env-${slug}-${env}`;
-    const title = message;
     const body = this.envPrBody(plan.kind, slug, env, plan.nextEnvs);
 
     const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {

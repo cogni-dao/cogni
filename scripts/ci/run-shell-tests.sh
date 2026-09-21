@@ -62,6 +62,7 @@ PARALLEL=(
   require-node-ref-vm.test.sh
   resolve-substrate-gate.test.sh
   detect-affected.test.sh
+  classify-env-manager-fast-path.test.sh
   reconcile-scheduler-worker-routing.test.sh
   render-node-appset.test.sh
   operator-rollout-strategy.test.sh

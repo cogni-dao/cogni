@@ -52,6 +52,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read # Signed env-manager classifier reads PR identity + exact file list
   packages: write
 
 # Different concurrency keys per event type. Cross-event races (force-push to
@@ -69,6 +70,45 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
 
 jobs:
+  env_manager_fast_path:
+    name: env-manager-fast-path
+    runs-on: ubuntu-latest
+    outputs:
+      eligible: ${{ steps.classify.outputs.eligible }}
+      claimed: ${{ steps.classify.outputs.claimed }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+
+      - id: classify
+        name: Verify signed env-manager change type
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER_PR: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA_PR: ${{ github.event.pull_request.head.sha }}
+          MQ_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          MQ_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MQ_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          classifier='scripts/ci/classify-env-manager-fast-path.sh'
+          if git cat-file -e "origin/main:$classifier" 2>/dev/null; then
+            # TRUSTED_CLASSIFIER: never let the PR execute the code that decides
+            # whether that same PR may skip runtime image builds.
+            git show "origin/main:$classifier" | bash
+          elif [ "$(git diff --name-status origin/main...HEAD -- "$classifier")" = "$(printf 'A\t%s' "$classifier")" ]; then
+            echo 'eligible=false' >> "$GITHUB_OUTPUT"
+            echo 'claimed=false' >> "$GITHUB_OUTPUT"
+            echo 'reason=classifier-bootstrap' >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::trusted env-manager classifier is missing from main"
+            exit 1
+          fi
+
   # task.0391: single source of truth for event-derived metadata.
   # `pull_request` and `merge_group` have different event payloads but downstream
   # jobs need the same logical values (PR number, original head SHA, base ref,
@@ -157,7 +197,7 @@ jobs:
             BASE_REF="main"
             HEAD_REF_NAME="pr-${PR_NUMBER}"
           elif [ "$EVENT_NAME" = "merge_group" ]; then
-            # head_ref: refs/heads/gh-readonly-queue/<base>/pr-<N>-<orig_head_sha>[-<salt>]
+            # head_ref: refs/heads/gh-readonly-queue/<base>/pr-<N>-<base_sha>[-<salt>]
             PR_PATH="${MQ_HEAD_REF##*/}"
             if [[ "$PR_PATH" =~ ^pr-([0-9]+)- ]]; then
               PR_NUMBER="${BASH_REMATCH[1]}"
@@ -190,7 +230,11 @@ jobs:
           echo "should_push=$SHOULD_PUSH" >> "$GITHUB_OUTPUT"
 
   detect:
-    needs: resolve
+    needs: [resolve, env_manager_fast_path]
+    # CI owns the schema + reproducible-render proof. Once it accepts the same
+    # signed type, no runtime image can be affected, so this build lane and its
+    # downstream required manifest context can be satisfied as skipped.
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     outputs:
       has_targets: ${{ steps.detect.outputs.has_targets }}
@@ -203,6 +247,19 @@ jobs:
           ref: ${{ needs.resolve.outputs.checkout_ref }}
           fetch-depth: 0
 
+      - name: Enforce env-manager classifier result
+        env:
+          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
+          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+        run: |
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
+          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
+            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
+          fi
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted; no runtime image changed"
+
       # Use the GitHub PR `files` API (same list as the Files Changed tab)
       # as the authoritative changed-paths source. `git diff origin/<base>...HEAD`
       # is unreliable here: when a branch is forked from a sibling branch
@@ -211,6 +268,7 @@ jobs:
       # PR never actually changed.
       - id: pr-files
         name: Fetch PR changed-paths from GitHub API
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
@@ -236,6 +294,7 @@ jobs:
 
       - id: changed-catalog
         name: Detect catalog changes
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         env:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
         run: |
@@ -246,7 +305,7 @@ jobs:
           fi
 
       - name: Validate infra/catalog/*.yaml against schema
-        if: steps.changed-catalog.outputs.catalog_changed == 'true'
+        if: needs.env_manager_fast_path.outputs.eligible != 'true' && steps.changed-catalog.outputs.catalog_changed == 'true'
         run: |
           pipx install 'check-jsonschema==0.37.1'
           check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml
@@ -259,7 +318,15 @@ jobs:
         id: detect
         env:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
-        run: bash scripts/ci/detect-affected.sh
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+        run: |
+          if [ "$FAST_PATH_ELIGIBLE" = true ]; then
+            echo 'has_targets=false' >> "$GITHUB_OUTPUT"
+            echo 'targets_json=[]' >> "$GITHUB_OUTPUT"
+            echo 'targets=' >> "$GITHUB_OUTPUT"
+          else
+            bash scripts/ci/detect-affected.sh
+          fi
 
   build:
     needs: [resolve, detect]

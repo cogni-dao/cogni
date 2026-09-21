@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read # Signed env-manager classifier reads PR identity + exact file list
   actions: read # Required for CI telemetry to fetch job logs
   packages: read # Required for pulling migrator images from GHCR
 
@@ -28,8 +29,71 @@ env:
   TEMPORAL_TASK_QUEUE: scheduler-tasks
 
 jobs:
+  env_manager_fast_path:
+    name: env-manager-fast-path
+    runs-on: ubuntu-latest
+    outputs:
+      eligible: ${{ steps.classify.outputs.eligible }}
+      claimed: ${{ steps.classify.outputs.claimed }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+
+      - id: classify
+        name: Verify signed env-manager change type
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER_PR: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA_PR: ${{ github.event.pull_request.head.sha }}
+          MQ_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          MQ_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MQ_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          classifier='scripts/ci/classify-env-manager-fast-path.sh'
+          if git cat-file -e "origin/main:$classifier" 2>/dev/null; then
+            # TRUSTED_CLASSIFIER: never let the PR execute the code that decides
+            # whether that same PR may skip heavy checks.
+            git show "origin/main:$classifier" | bash
+          elif [ "$(git diff --name-status origin/main...HEAD -- "$classifier")" = "$(printf 'A\t%s' "$classifier")" ]; then
+            # One-time bootstrap: this PR adds the classifier, so it MUST take
+            # full CI. Deletion/drift is not a bootstrap and fails above.
+            echo 'eligible=false' >> "$GITHUB_OUTPUT"
+            echo 'claimed=false' >> "$GITHUB_OUTPUT"
+            echo 'reason=classifier-bootstrap' >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::trusted env-manager classifier is missing from main"
+            exit 1
+          fi
+
+      # Tiny, deterministic proof for the one reserved generator type. These
+      # are the checks that can actually invalidate an env-manager tree; app
+      # typechecks, unit tests, component containers, and image builds cannot.
+      - name: Validate changed catalog
+        if: steps.classify.outputs.eligible == 'true'
+        run: |
+          pipx install 'check-jsonschema==0.37.1'
+          check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml
+          bash scripts/ci/next-free-node-port.sh --check
+
+      - name: Verify generated deployment tree
+        if: steps.classify.outputs.eligible == 'true'
+        run: |
+          bash scripts/ci/render-scheduler-worker-endpoints.sh --check
+          bash scripts/ci/render-node-appset.sh --check
+          bash scripts/ci/render-node-overlays.sh --check
+
   # Fast gate: install → typecheck → lint
   static:
+    needs: env_manager_fast_path
+    # A skipped required job is satisfied by GitHub and by the operator's
+    # getCiStatus contract. Invalid/unavailable classifier results still run
+    # this job so the enforcement step fails closed.
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -45,23 +109,42 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
+      - name: Enforce env-manager classifier result
+        env:
+          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
+          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+        run: |
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
+          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
+            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
+          fi
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
+
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - name: Install dependencies
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build workspace packages
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm packages:build
 
       - name: Type check
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm typecheck
 
       - name: Lint
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm lint
 
       - name: CI Telemetry
@@ -255,6 +338,8 @@ jobs:
   # exists to prevent. The hermetic UNIT proof stays here on PR CI (see the shell-tests job).
 
   unit:
+    needs: env_manager_fast_path
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140): unit does its own install + packages:build
     # and consumes NO artifact from static, so gating on it only serialized
@@ -280,43 +365,68 @@ jobs:
           # leaves origin/main unreachable and forces a runtime fetch.
           fetch-depth: 0
 
+      - name: Enforce env-manager classifier result
+        env:
+          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
+          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+        run: |
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
+          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
+            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
+          fi
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
+
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - name: Install dependencies
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build workspace packages
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm packages:build
 
       - name: Repository policy check
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm check:root-layout
 
       - name: REUSE SPDX compliance
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         uses: fsfe/reuse-action@772649cfa03a64a08c458c7cca9a6a473d74e7f9 # v6
 
       - name: Validate chain configuration
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm validate:chain
 
       - name: Format check
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm format:check
 
       - name: UI tokens check
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: bash scripts/check-ui-tokens.sh
 
       - name: Documentation check
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm check:docs
 
       - name: Sync-manifest schema check (CATALOG_IS_SSOT pattern)
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: |
           pipx install 'check-jsonschema==0.37.1'
           check-jsonschema --schemafile .cogni/sync-manifest.schema.json .cogni/sync-manifest.yaml
 
       - name: Architecture check
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm arch:check
 
       # Schema-migration guards (task: doltgres-migration-safety):
@@ -326,6 +436,7 @@ jobs:
       #   2. strict-monotonic `when` in _journal.json (silent-skip variant)
       #   3. drizzle-kit's own snapshot-chain check
       - name: Database migration guards
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm db:check
 
       # bug.0344 — structural guardrail on image-updater scope. Positive
@@ -336,9 +447,10 @@ jobs:
       # closed. Current allowlist is preview-only (see script header for
       # why candidate-a + production are intentionally excluded).
       - name: Image Updater scope (bug.0344)
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: bash scripts/ci/check-image-updater-scope.sh
 
-      # task.5140 — the hermetic scripts/ci/tests/*.test.sh suite (22 pure-bash
+      # task.5140 — the hermetic scripts/ci/tests/*.test.sh suite (23 pure-bash
       # deploy/secrets/substrate regression tests) runs in ONE parallel primitive
       # instead of ~22 serial steps (was ~3-4 min serial → ~40-60s). The
       # authoritative test list, the mutator-vs-parallel concurrency tiers (a few
@@ -346,17 +458,20 @@ jobs:
       # alone), and exit-code aggregation all live in the script — SCRIPTS_ARE_THE_API.
       # Add a new tests/*.test.sh there, not as a new workflow step.
       - name: CI shell tests (parallel)
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: bash scripts/ci/run-shell-tests.sh
 
       # Catalog-driven drift gates — NOT part of the shell-test suite above: each
       # asserts a committed artifact still matches the catalog (CATALOG_IS_SSOT),
       # kept as named steps so a specific drift failure is legible. Fast (--check).
       - name: single-node-scope filter drift (CATALOG_IS_SSOT)
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: bash scripts/ci/render-scope-filters.sh --check
 
       # scheduler-worker endpoint map is catalog-derived; fails if a node-add
       # didn't regenerate it (run `pnpm gen:scheduler-worker-endpoints`).
       - name: scheduler node routing drift
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
 
       # Per-node ApplicationSet drift (CATALOG_IS_SSOT + LANE_ISOLATION, axiom
@@ -364,6 +479,7 @@ jobs:
       # that declare a candidate_a_branch. Fails if a node was added/removed or
       # an AppSet/kustomization was hand-edited without `pnpm gen:node-appset`.
       - name: per-node ApplicationSet drift (CATALOG_IS_SSOT)
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: bash scripts/ci/render-node-appset.sh --check
 
       # Per-node overlay drift (CATALOG_IS_SSOT + NODE_AT_ROOT_MIGRATE_PATH,
@@ -373,6 +489,7 @@ jobs:
       # Regenerate from the node-template overlay + catalog and fail on drift
       # before flight (run `pnpm gen:node-overlays`).
       - name: per-node overlay drift (NODE_AT_ROOT_MIGRATE_PATH)
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: bash scripts/ci/render-node-overlays.sh --check
 
       # task.5140 Stage B — affected-only unit tests. The suite is two disjoint
@@ -386,6 +503,7 @@ jobs:
       # single-flip: ENABLE_SONAR=true runs the full instrumented path so the
       # sonar job below has an artifact.
       - name: Unit + contract tests
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         env:
           CI_EVENT: ${{ github.event_name }}
           TURBO_SCM_BASE: origin/main
@@ -400,7 +518,7 @@ jobs:
       # skipped otherwise, so the coverage-free run above can't false-fail on
       # if-no-files-found.
       - name: Upload coverage reports
-        if: vars.ENABLE_SONAR == 'true'
+        if: vars.ENABLE_SONAR == 'true' && needs.env_manager_fast_path.outputs.eligible != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-${{ github.sha }}
@@ -423,7 +541,8 @@ jobs:
     # Skip on merge_group: not in required-status-checks (see infra/github/branch-protection.json),
     # so the queue doesn't gate on it. Re-running on the rebased candidate burns ~3 min for marginal
     # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
-    if: github.event_name != 'merge_group'
+    needs: env_manager_fast_path
+    if: always() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140) — component does its own install + build and
     # shares no artifact with static; running in parallel keeps it off the
@@ -442,31 +561,52 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
+      - name: Enforce env-manager classifier result
+        env:
+          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
+          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+        run: |
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
+          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
+            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
+          fi
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
+
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - name: Install dependencies
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build workspace packages
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm packages:build
 
       - name: Install ripgrep
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a949265c1 # v2
         with:
           tool: ripgrep
 
       - name: Verify ripgrep
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: rg --version
 
       - name: Build sandbox runtime image
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm sandbox:docker:build
 
       - name: Component tests (testcontainers)
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm test:component
 
       # Doltgres-migrator regression: boots dolthub/doltgresql:latest in its
@@ -475,6 +615,7 @@ jobs:
       # end-to-end. Proves the silent-skip drift gap is caught at runtime,
       # complementing the static CI guard in `db:check:immutable`.
       - name: Doltgres migrator regression (testcontainers)
+        if: needs.env_manager_fast_path.outputs.eligible != 'true'
         run: pnpm test:doltgres-migrate
 
       - name: CI Telemetry
@@ -488,9 +629,9 @@ jobs:
 
   sonar:
     runs-on: ubuntu-latest
-    needs: unit
+    needs: [unit, env_manager_fast_path]
     # Sonar has no meaning on the merge_group ref; skip to save runtime.
-    if: vars.ENABLE_SONAR == 'true' && needs.unit.result == 'success' && github.event_name != 'merge_group'
+    if: vars.ENABLE_SONAR == 'true' && needs.unit.result == 'success' && needs.env_manager_fast_path.outputs.eligible != 'true' && github.event_name != 'merge_group'
     permissions:
       contents: read
       pull-requests: write # Required for PR decoration
@@ -529,8 +670,8 @@ jobs:
 
   sonar-disabled:
     runs-on: ubuntu-latest
-    needs: unit
-    if: vars.ENABLE_SONAR != 'true' && needs.unit.result == 'success' && github.event_name != 'merge_group'
+    needs: [unit, env_manager_fast_path]
+    if: vars.ENABLE_SONAR != 'true' && needs.unit.result == 'success' && needs.env_manager_fast_path.outputs.eligible != 'true' && github.event_name != 'merge_group'
     steps:
       - name: SonarCloud disabled
         run: |
