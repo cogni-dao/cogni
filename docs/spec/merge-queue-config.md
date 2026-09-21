@@ -136,7 +136,9 @@ Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
 `scripts/ci/classify-env-manager-fast-path.sh` fails closed unless all of these are true:
 
 - the workflow executes the classifier from `origin/main`, never the PR-controlled copy;
-- the PR and commit author are the exact `cogni-operator[bot]` GitHub identity;
+- the PR and commit author match the exact repository-scoped GitHub App identity:
+  `cogni-operator[bot]` for `Cogni-DAO/cogni`, or `cogni-operator-test[bot]` for the
+  production-shaped `cogni-test-org/cogni-monorepo` E2E ground; no other repository inherits trust;
 - GitHub reports the head commit signature as verified and valid;
 - the same-repository branch, signed trailers, and PR head SHA agree;
 - the PR is specifically an env-membership add/remove on `cogni-operator/node-env-*`;

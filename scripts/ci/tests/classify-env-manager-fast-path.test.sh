@@ -17,6 +17,8 @@ trap cleanup EXIT
 
 head_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 base_sha='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+repository='Cogni-DAO/cogni'
+bot_login='cogni-operator[bot]'
 bot_id=265189974
 control_env=production
 mkdir -p "$tmpdir/catalog"
@@ -66,14 +68,17 @@ write_fixtures() {
   jq -n \
     --arg sha "$head_sha" \
     --arg base_sha "$base_sha" \
+    --arg repository "$repository" \
+    --arg bot_login "$bot_login" \
     --argjson bot_id "$bot_id" \
-    '{state:"open",base:{ref:"main",sha:$base_sha},head:{sha:$sha,ref:"cogni-operator/node-env-blue-preview",repo:{full_name:"Cogni-DAO/cogni"}},user:{login:"cogni-operator[bot]",id:$bot_id,type:"Bot"},commits:1}' \
+    '{state:"open",base:{ref:"main",sha:$base_sha},head:{sha:$sha,ref:"cogni-operator/node-env-blue-preview",repo:{full_name:$repository}},user:{login:$bot_login,id:$bot_id,type:"Bot"},commits:1}' \
     > "$tmpdir/pr.json"
   jq -n \
     --arg sha "$head_sha" \
     --arg message "$message" \
+    --arg bot_login "$bot_login" \
     --argjson bot_id "$bot_id" \
-    '{sha:$sha,author:{login:"cogni-operator[bot]",id:$bot_id},parents:[{sha:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],commit:{message:$message,verification:{verified:true,reason:"valid"}}}' \
+    '{sha:$sha,author:{login:$bot_login,id:$bot_id},parents:[{sha:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],commit:{message:$message,verification:{verified:true,reason:"valid"}}}' \
     > "$tmpdir/commit.json"
   jq -Rn '[inputs | {filename:.,previous_filename:null,status:"modified"}]' \
     < "$paths_file" > "$tmpdir/files.json"
@@ -83,7 +88,7 @@ run_classifier() {
   local output="$1"
   GITHUB_OUTPUT="$output" \
   EVENT_NAME=pull_request \
-  REPOSITORY=Cogni-DAO/cogni \
+  REPOSITORY="$repository" \
   PR_NUMBER_PR=42 \
   PR_HEAD_SHA_PR="$head_sha" \
   CATALOG_DIR="$tmpdir/catalog" \
@@ -108,6 +113,26 @@ write_fixtures "$valid_message"
 run_classifier "$tmpdir/valid.out"
 [[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/valid.out")" == true ]]
 [[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/valid.out")" == true ]]
+
+# The production-shaped E2E repository trusts only its dedicated test App.
+repository='cogni-test-org/cogni-monorepo'
+bot_login='cogni-operator-test[bot]'
+bot_id=290565426
+write_fixtures "$valid_message"
+run_classifier "$tmpdir/test-app.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/test-app.out")" == true ]]
+
+# A correctly signed production App commit does not inherit authority in test.
+bot_login='cogni-operator[bot]'
+bot_id=265189974
+write_fixtures "$valid_message"
+run_classifier "$tmpdir/wrong-app.out"
+[[ "$(awk -F= '$1=="eligible"{v=$2} END{print v}' "$tmpdir/wrong-app.out")" == false ]]
+[[ "$(awk -F= '$1=="claimed"{v=$2} END{print v}' "$tmpdir/wrong-app.out")" == false ]]
+
+repository='Cogni-DAO/cogni'
+bot_login='cogni-operator[bot]'
+bot_id=265189974
 
 # The inverse remove is eligible only when it preserves the non-target row and
 # does not remove the activity authority.

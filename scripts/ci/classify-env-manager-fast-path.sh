@@ -22,8 +22,6 @@ MQ_BASE_SHA="${MQ_BASE_SHA:-}"
 MQ_HEAD_SHA="${MQ_HEAD_SHA:-}"
 OUTPUT_FILE="${GITHUB_OUTPUT:-}"
 
-readonly OPERATOR_BOT_LOGIN='cogni-operator[bot]'
-readonly OPERATOR_BOT_ID='265189974'
 readonly CHANGE_TYPE='cogni.env-manager.v1'
 
 if [[ -z "$OUTPUT_FILE" ]]; then
@@ -62,6 +60,25 @@ if [[ ! "$pr_number" =~ ^[0-9]+$ ]] || [[ -z "$REPOSITORY" ]]; then
   echo "classify-env-manager-fast-path: invalid repository or PR identity" >&2
   exit 2
 fi
+
+# App identity is repository-scoped. Production accepts only the production
+# installation; the production-shaped E2E repository accepts only its test App.
+# Every other repository stays on full CI rather than inheriting either trust.
+repository_key="$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+case "$repository_key" in
+  cogni-dao/cogni)
+    readonly OPERATOR_BOT_LOGIN='cogni-operator[bot]'
+    readonly OPERATOR_BOT_ID='265189974'
+    ;;
+  cogni-test-org/cogni-monorepo)
+    readonly OPERATOR_BOT_LOGIN='cogni-operator-test[bot]'
+    readonly OPERATOR_BOT_ID='290565426'
+    ;;
+  *)
+    echo "env-manager fast path: full CI (repository has no trusted operator App identity)"
+    exit 0
+    ;;
+esac
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
