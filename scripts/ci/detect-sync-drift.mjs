@@ -32,6 +32,11 @@ import { join } from "node:path";
 import { compileArtifactPolicy, readManifest } from "./lib/sync-policy.mjs";
 
 const HUB_DIR = process.env.HUB_DIR ?? process.cwd();
+/**
+ * Narrow a run to one artifact (`owner/repo`). The contract test for MISSING_MAY_BE_FATAL has to
+ * re-run the detector against a single mirror; cloning every artifact to assert one is waste.
+ */
+const ONLY = process.env.SYNC_DRIFT_ONLY ?? "";
 const HUB_REF = process.env.HUB_REF ?? "HEAD";
 const TMP_ROOT = "/tmp";
 const MANIFEST = ".cogni/sync-manifest.yaml";
@@ -99,6 +104,7 @@ const main = async () => {
 
   for (const artifactSpec of manifest.artifacts) {
     const { repo, visibility } = artifactSpec;
+    if (ONLY && repo !== ONLY) continue;
     const policy = compileArtifactPolicy(manifest, repo);
     out(`## ${repo}  (\`${visibility}\`, role \`${policy.role}\`)`);
 
