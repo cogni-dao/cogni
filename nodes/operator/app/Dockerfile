@@ -112,6 +112,23 @@ COPY --from=builder --chown=nextjs:nodejs /app/config/mcp.servers.json ./nodes/o
 ARG BUILD_SHA
 ENV APP_BUILD_SHA=$BUILD_SHA
 
+# bug.5183: SHA-addressed static bundle marker. `/version` is a force-dynamic
+# server route reading APP_BUILD_SHA — it can report a SHA that a DIFFERENT
+# container/image (rollout split-brain, two concurrent instances) is actually
+# serving the client bundle from, so /version.buildSha alone is not proof the
+# deployed STATIC layer matches. This marker is a real file baked into the
+# served public/ tree of THIS image at a SHA-unique path, so an outside-cluster
+# gate (scripts/ci/verify-buildsha.sh, VERIFY_BUNDLE_MARKER=1) can fetch
+# /__cogni-build/<sha>.txt and prove the bytes the origin serves came from the
+# flighted image. Path is unique per SHA → immutable/edge caches can never
+# cross-build alias it (the second, independent defect in bug.5183). Written as
+# nextjs so the runtime user can read it; skipped when BUILD_SHA is empty.
+RUN if [ -n "$BUILD_SHA" ]; then \
+      mkdir -p ./nodes/operator/app/public/__cogni-build && \
+      printf '%s' "$BUILD_SHA" > "./nodes/operator/app/public/__cogni-build/${BUILD_SHA}.txt" && \
+      chown -R nextjs:nodejs ./nodes/operator/app/public/__cogni-build; \
+    fi
+
 USER nextjs
 
 # Migrate runner — bundled into runtime image so Deployment initContainers can

@@ -1604,6 +1604,12 @@ jobs:
           NODES: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
           CUTOVER_TIMEOUT: ${{ env.DEPLOYMENT_PROVIDER == 'akash' && '420' || '90' }}
+          # bug.5183: candidate-flight always flights a fresh single-SHA build of
+          # this image, so every probed app carries the SHA-addressed static
+          # marker. Assert the served bundle — not just the dynamic /version
+          # route — came from the flighted image, closing the split-brain /
+          # stale-bundle hole that let two agents "test" pre-fix code.
+          VERIFY_BUNDLE_MARKER: "1"
         run: bash ci-src/scripts/ci/verify-buildsha.sh
 
       - name: Run candidate smoke checks (per-node)
