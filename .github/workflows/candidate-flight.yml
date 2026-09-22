@@ -36,6 +36,11 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
   SLOT: candidate-a
   OVERLAY_ENV: candidate-a
+  # FLEET_CONTROL_ENV (subtask.5007): the env whose cluster reconciles + pays for akash
+  # lanes. Default 'production' (cogni-dao fleet); an isolated fleet (cogni-test-org) sets
+  # the repo var to 'candidate-a' so its own control plane owns akash lanes and no test
+  # flight reaches for production authority. Read by control_env_for (scripts/ci/lib/appset-paths.sh).
+  FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
 
 jobs:
   decide:
@@ -339,7 +344,10 @@ jobs:
     needs: decide
     if: needs.decide.result == 'success'
     runs-on: ubuntu-latest
-    environment: production
+    # The control env owns the akash lane's substrate VM. Default 'production' (cogni-dao);
+    # an isolated fleet (cogni-test-org) binds its own control env via FLEET_CONTROL_ENV so
+    # this job reads that env's VM_HOST/SSH_DEPLOY_KEY, never production's (subtask.5007).
+    environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
     steps:
       - name: Checkout reviewed application source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4

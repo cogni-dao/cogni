@@ -169,4 +169,19 @@ got="$(CATALOG_DIR="$fixture" control_env_for production toks5)"
 [ "$got" = "production" ] || fail "production must be reconciled by production, got $got"
 pass "production is unchanged for every row"
 
+# FLEET_CONTROL_ENV (subtask.5007) — an ISOLATED fleet with no production cluster (e.g.
+# cogni-test-org) reconciles + pays for akash lanes from its OWN control env, so a test
+# flight never reaches for production authority. The default (FLEET_CONTROL_ENV unset =>
+# production) is exercised by EVERY assertion above, so those double as the
+# DEFAULT-PRESERVING guard that cogni-dao behaviour is byte-identical.
+for env in candidate-a preview production; do
+  got="$(FLEET_CONTROL_ENV=candidate-a CATALOG_DIR="$fixture" control_env_for "$env" toks5)"
+  [ "$got" = "candidate-a" ] || fail "isolated fleet: akash toks5 $env must reconcile via candidate-a, got $got"
+done
+pass "FLEET_CONTROL_ENV=candidate-a routes every akash lane to the isolated control plane"
+
+got="$(FLEET_CONTROL_ENV=candidate-a CATALOG_DIR="$fixture" control_env_for candidate-a operator)"
+[ "$got" = "candidate-a" ] || fail "isolated fleet: k3s operator candidate-a must stay candidate-a, got $got"
+pass "FLEET_CONTROL_ENV leaves k3s rows on their own env"
+
 echo "PASS: render-node-appset.test.sh"

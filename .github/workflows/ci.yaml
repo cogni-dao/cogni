@@ -27,6 +27,10 @@ env:
   TEMPORAL_ADDRESS: localhost:7233
   TEMPORAL_NAMESPACE: cogni-test
   TEMPORAL_TASK_QUEUE: scheduler-tasks
+  # FLEET_CONTROL_ENV (subtask.5007): the appset drift gate renders per the fleet's control
+  # env. Default 'production' (cogni-dao); an isolated fleet (cogni-test-org) sets the repo
+  # var to 'candidate-a' so its committed appsets tree matches. Read by control_env_for.
+  FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
 
 jobs:
   env_manager_fast_path:

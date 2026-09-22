@@ -55,6 +55,12 @@ concurrency:
   group: promote-deploy-${{ inputs.environment || github.ref_name }}-${{ inputs.nodes }}
   cancel-in-progress: false
 
+env:
+  # FLEET_CONTROL_ENV (subtask.5007): the env whose cluster reconciles + pays for akash
+  # lanes. Default 'production' (cogni-dao); an isolated fleet (cogni-test-org) sets the repo
+  # var to 'candidate-a'. Read by control_env_for (scripts/ci/lib/appset-paths.sh).
+  FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+
 jobs:
   decide:
     runs-on: ubuntu-latest
