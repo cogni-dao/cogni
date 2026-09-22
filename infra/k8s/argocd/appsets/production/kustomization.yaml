@@ -15,7 +15,6 @@ resources:
   - candidate-a-toks5-applicationset.yaml
   - preview-poly-applicationset.yaml
   - preview-toks4-applicationset.yaml
-  - preview-toks5-applicationset.yaml
   - production-beacon-applicationset.yaml
   - production-levelup-applicationset.yaml
   - production-node-template-applicationset.yaml
