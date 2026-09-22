@@ -198,10 +198,3 @@ divergences:
       #     production/staging ciphertext never flows in (omit_from_artifact above), and the
       #     mirror's is never deleted by a refresh. Each repo owns its own SOPS/ESO leaves.
       - "infra/k8s/secrets/**"
-      # 2 — LEGACY IN-TREE NODE BODIES the mirror still bootstrap-lists (canary + resy appsets are
-      #     in its infra/k8s/argocd/kustomization.yaml, and its catalog still carries their rows).
-      #     The hub retired both. Retiring them HERE is a ROSTER change — catalog row, ApplicationSet
-      #     and body together — not a side effect of a content refresh, so the refresh leaves them
-      #     alone. REFRESH_IS_NOT_A_ROSTER_CHANGE.
-      - "nodes/canary/**"
-      - "nodes/resy/**"
