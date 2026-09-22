@@ -117,13 +117,15 @@ This is the production-like lane for questions such as "can the operator really 
 
 Current test topology:
 
-| Boundary              | Value / rule                                                                                                                                                  | Source                                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| GitHub App            | `cogni-operator-test` for candidate/test. It must be an env-scoped App, installed on the disposable mint org as **all repositories**, with `workflows:write`. | `.claude/skills/git-app-expert/SKILL.md`, `docs/guides/github-app-webhook-setup.md`, `docs/spec/node-ci-cd-contract.md` |
-| GitHub mint org       | `cogni-test-org` via `NODE_MINT_OWNER` and `NODE_TEMPLATE_OWNER`. Candidate/preview operators must not mint into `Cogni-DAO`.                                 | `infra/k8s/overlays/{candidate-a,preview}/operator/kustomization.yaml`                                                  |
-| Parent pin repo       | `cogni-test-org/cogni-monorepo` via `NODE_SUBMODULE_PARENT_OWNER` / `NODE_SUBMODULE_PARENT_REPO` for test runs.                                               | `infra/k8s/overlays/candidate-a/operator/kustomization.yaml`                                                            |
-| DoltHub knowledge org | `cogni-test-nodes` via explicit `DOLTHUB_OWNER`. Production uses `cogni-dao`; non-prod must fail closed rather than silently creating prod knowledge repos.   | `.claude/skills/database-expert/SKILL.md`, `docs/runbooks/dolthub-remote-bootstrap.md`                                  |
-| Flight target         | Candidate/test DNS is `<node>-test.cognidao.org`; the operator flight path must verify `/version.buildSha` for the deployed node.                             | `docs/guides/node-formation-guide.md`, `scripts/ci/verify-buildsha.sh`                                                  |
+| Boundary              | Value / rule                                                                                                                                                        | Source                                                                                                                  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| GitHub App            | `cogni-operator-test` for candidate/test. It must be an env-scoped App, installed on the disposable mint org as **all repositories**, with `workflows:write`.       | `.claude/skills/git-app-expert/SKILL.md`, `docs/guides/github-app-webhook-setup.md`, `docs/spec/node-ci-cd-contract.md` |
+| GitHub mint org       | `cogni-test-org` via `NODE_MINT_OWNER` and `NODE_TEMPLATE_OWNER`. Candidate/preview operators must not mint into `Cogni-DAO`.                                       | `infra/k8s/overlays/{candidate-a,preview}/operator/kustomization.yaml`                                                  |
+| Parent pin repo       | `cogni-test-org/cogni-monorepo` via `NODE_SUBMODULE_PARENT_OWNER` / `NODE_SUBMODULE_PARENT_REPO` for test runs.                                                     | `infra/k8s/overlays/candidate-a/operator/kustomization.yaml`                                                            |
+| DoltHub knowledge org | `cogni-test-nodes` via explicit `DOLTHUB_OWNER`. Production uses `cogni-dao`; non-prod must fail closed rather than silently creating prod knowledge repos.         | `.claude/skills/database-expert/SKILL.md`, `docs/runbooks/dolthub-remote-bootstrap.md`                                  |
+| Control endpoint      | Candidate operator remains `https://test.cognidao.org`. This is where the test App calls operator APIs; it is not a node-workload DNS suffix.                       | `.claude/skills/dns-ops/SKILL.md`                                                                                       |
+| Flight target         | **New as-will-be design, still being refined:** test-org Akash nodes serve at `https://<node>.cogni-testing.org`; the flight must verify `/version.buildSha` there. | `.claude/skills/dns-ops/SKILL.md`, `scripts/ci/verify-buildsha.sh`                                                      |
+| DNS credential        | The writer token is restricted to the `cogni-testing.org` zone and held by candidate-a OpenBao/ESO, never by `cogni-test-org`.                                      | `.claude/skills/dns-ops/SKILL.md`, `.claude/skills/cicd-secrets-expert/SKILL.md`                                        |
 
 Recent PR context to know before changing this lane:
 
@@ -136,9 +138,36 @@ Recent PR context to know before changing this lane:
 Pareto path for repeatable env e2e:
 
 1. Make the **test org/app contract** explicit and audited first: `cogni-operator-test` installed all-repositories on `cogni-test-org`, `workflows:write`, `administration:write`, webhook to `https://test.cognidao.org/api/internal/webhooks/github`, creds in OpenBao for candidate/test.
-2. Keep candidate/test disposable but production-shaped: provision with `provision-env.yml` / `scripts/setup/provision-env-vm.sh`, not hand SSH. The env must source `NODE_MINT_OWNER`, `NODE_TEMPLATE_OWNER`, `NODE_SUBMODULE_PARENT_*`, `DOLTHUB_OWNER`, `DOLTHUB_API_TOKEN`, and Dolt push creds from the same paths as preview/prod.
-3. Add one automated smoke script for a synthetic node slug: publish via the operator API, wait for the child repo `sha-<childSha>` GHCR image, wait for the parent pin PR, merge/flight through the operator route, then assert `https://<slug>-test.cognidao.org/version` reports the child source SHA.
-4. Only after candidate/test is repeatable should preview/prod use this path for formed nodes. Preview/prod promotion should consume the candidate-proven digest/ref; do not make preview the first place where node-ref flight is exercised.
+2. Keep candidate/test disposable but production-shaped **without copying production identity or credentials**. Workflow/generator behavior should mirror production; owners, Apps, domains, secrets, wallets, and paid-provider accounts remain test-scoped. The test App is wild-west authority only inside the test org.
+3. Bind public routing correctly: `DOMAIN=cogni-testing.org` for test workloads, `FORK_DOMAIN_ROOT=cognidao.org` for the candidate-a shared substrate, the new zone id in the materializer input, and a DNS writer token restricted to `cogni-testing.org` in candidate-a OpenBao. The candidate operator itself remains at `test.cognidao.org`.
+4. **Match the current production GHCR contract: deployable child images are public.** Parent CI and Akash providers pull them anonymously; the current SDL renders no registry credentials. [GitHub makes a newly published container package private by default](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry), and the organization `Package Creation · Public` control only permits public packages—it does not change that default. Therefore node birth currently includes an explicit package-visibility flip to public, and the test org mirrors that same operation for every deployable child package. For the first flight, `spawny-boi` being public is sufficient. Private runtime pulls are a future hardening path tracked by `task.5143`, not a prerequisite or description of today's production behavior.
+5. Run one synthetic-node smoke path: publish via the operator API, wait for `sha-<childSha>`, wait for the parent pin PR, merge/flight through the operator route, assert `https://<slug>.cogni-testing.org/version` reports the old source SHA, then promote the new SHA under a bounded probe and require zero DNS/TLS/HTTP failures.
+6. Only after that exact path is repeatable should preview/prod consume it. Do not call static CI, a merged parent sync, a rendered `XComputeWorkload`, or a successful dispatch “E2E green”; the public workload must actually serve and update.
+
+### Test-environment parity means behavior, not shared authority
+
+Use this scorecard when someone says the test repo “mirrors production”:
+
+| Must match production                                                                                                                            | Must be isolated                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| workflow logic, generators, schemas, required gates, operator verbs, Crossplane/Actuator path, image naming, promotion and verification sequence | GitHub App, org/repositories, DNS zone + token, provider/wallet account, DoltHub org, runtime secrets, databases, and destructive authority |
+
+If a test credential can mutate `cognidao.org`, production GitHub repos, production VMs, or a production wallet, the test topology is not isolated. Do not “seed” production credentials to make it green; fix the missing test substrate or authority boundary.
+
+### How test code reaches the test parent — deliver it directly, never merge-first
+
+The parity table above says _what_ must match; this says _how the code gets there_. Getting these backwards produced a multi-PR detour through `Cogni-DAO/cogni` main during subtask.5007 — slow, and it exercised a forked path instead of the real one. Classify every change into one of two lanes:
+
+| Change                                                                                                                                | Where it's authored                                                    | Delivery path                                                                                                                                                    | Speed                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| **Test-owned** — identity, org/domain/zone config, roster filters, generated appset/overlay state, fixtures, obsolete-fixture removal | Directly in `cogni-test-org/cogni-monorepo` (as `cogni-operator-test`) | Commit straight to the test-parent PR. **Never** route it through a `Cogni-DAO/cogni` main merge.                                                                | Seconds-to-minutes; no canonical dependency        |
+| **Shared** — workflow logic, generators, operator verbs, schemas, required gates (destined for production)                            | Originates as a `Cogni-DAO/cogni` PR                                   | Stage the **PR head / exact ref** into the test parent → prove E2E on candidate → **then** merge canonical main → post-merge auto-sync converges the test parent | Bounded by one candidate E2E, not by a merge queue |
+
+**The invariant:** you merge canonical main _because_ you proved the change on candidate — never _in order to_ prove it. Auto-sync (`Cogni-DAO/cogni` → `cogni-test-org/cogni-monorepo`) is a **post-merge convergence** mechanism; it is not a delivery channel for unproven code.
+
+**Anti-pattern that bit subtask.5007** — `canonical main merge → auto-sync → candidate test`. This reverses the candidate-before-merge lifecycle: it puts the irreversible step (main merge) before the proof, and it validates a synced copy rather than the PR head you'll actually ship. Test-only generated state, roster filters, and dead fixtures should have stayed 100% in the test-parent PR.
+
+**Missing platform primitive:** exact-ref/commit staging of a canonical PR head into the test parent. Until it lands, hand-stage the shared PR's head into a test-parent branch (cherry-pick / subtree the exact commit); do **not** merge canonical prerequisites just to make them appear in the test repo. File the gap, don't route around it with a merge.
 
 ## Gotchas — these bite repeatedly
 
@@ -195,3 +224,14 @@ Triage in this order:
 4. If the test needs env or infra, read the relevant config's header TSDoc — every config documents its invariants at the top.
 5. If the layer is stack/e2e/money and you're an agent without infra access, open the PR and let CI run it rather than burning a session on local setup.
 6. Once the new test passes in isolation, run `pnpm check:fast:fix` (auto-fix) then `pnpm check:fast` (strict). Only run `pnpm check` when ready to commit.
+
+## Driving the TEST operator as an agent (RBAC + credentials)
+
+The **test operator** (`test.cognidao.org`, the `cogni-operator-test` GitHub App) is a **separate principal store** from the **prod operator** (`cognidao.org`). "operator" vs "test operator" is load-bearing — a credential valid on one is NOT valid on the other.
+
+- flock-leader's `COGNI_*_API_KEY` (in `.env.cogni`) authenticates ONLY to the **prod** operator. Verify an agent key with `GET /api/v1/cognition` (200) — NEVER `/users/me` (agent keys always 401 there, which is not proof the key is dead). On `test.cognidao.org` the same key returns **401** (no principal there).
+- On the **test** operator, flock-leader's identity is a **wallet session**, not the API key: `~/dev/cogni-template/.local-auth/candidate-a-operator.storageState.json` (Playwright storageState — build a `Cookie:` header from its `cognidao.org` cookies). The `personal-test-users-me.curl` capture **expires** — always confirm a session with `GET /api/v1/users/me` (200) before using it.
+- That wallet session authenticates but has **no node grants by default** → `POST /api/v1/vcs/{merge,flight}` return **403 `authz_denied`** (NOT 401). Fix by requesting the grant, never by assuming a key gap:
+  `POST https://test.cognidao.org/api/v1/nodes/<slug>/access-requests {"role":"developer"}` → `201 {status:"pending"}`; the node **owner approves** in the test-operator UI → `developer` grants `can_flight` → `vcs/merge` + `vcs/flight` then succeed.
+- Diagnose by status: **403 `authz_denied`** = authenticated but ungranted → request access; **401** = wrong/absent principal for THIS operator; **400** validation_error = authorized, bad body (400 ≠ 403 — test before claiming a perm gap).
+- `GET /nodes` is **empty** on the test operator (the in-repo operator resolves via `NODE_SUBMODULE_PARENT_*`, not the DB registry); `GET /nodes/<slug>` **500s** — use the node UUID from the catalog.
