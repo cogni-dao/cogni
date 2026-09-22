@@ -62,21 +62,43 @@ const lsFiles = (dir, ref = "HEAD") =>
 
 /**
  * ANCESTRY, not just paths. Path drift says WHAT differs; ancestry says how far the mirror has
- * fallen behind the lineage it is supposed to track, which is the signal that decays continuously
- * between explicit changes (the test parent sat 667 commits behind before anyone noticed).
+ * fallen behind the lineage it is supposed to track — the signal that decays continuously between
+ * explicit changes (the test parent sat 667 commits behind before anyone noticed).
+ *
+ * Ancestry is only DEFINED for an artifact that is a git fork OF THE HUB: a shared commit graph is
+ * what makes "behind/ahead" a number. An artifact kept in sync by policy rather than fork ancestry
+ * (e.g. the independently-maintained `standalone-node` template) has no common history, so the
+ * honest answer is "undefined" — NOT a false `identical`. The prior owner-qualified compare
+ * (`hub:main...owner:main`) collapsed to the base repo whenever the artifact shared the hub's owner
+ * and silently reported 0/0 for a repo that genuinely differs.
+ *
+ * When it IS a fork, compare by the hub SHA (unambiguous, and reachable across the shared fork
+ * network) rather than by an `owner:branch` head that cannot distinguish two repos of one owner.
  * Unauthenticated when no token is present — every declared public artifact is a public repo.
  */
-const compareAncestry = async (hub, artifact) => {
+const compareAncestry = async (hub, artifact, hubSha) => {
   const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
-  const headOwner = artifact.split("/")[0];
-  const url = `https://api.github.com/repos/${artifact}/compare/${hub.replace("/", ":")}:main...${headOwner}:main`;
+  const headers = {
+    accept: "application/vnd.github+json",
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
   try {
-    const res = await fetch(url, {
-      headers: {
-        accept: "application/vnd.github+json",
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-      },
+    const metaRes = await fetch(`https://api.github.com/repos/${artifact}`, {
+      headers,
     });
+    if (!metaRes.ok) return { error: `repo ${metaRes.status}` };
+    const meta = await metaRes.json();
+    if (
+      !meta.fork ||
+      meta.source?.full_name?.toLowerCase() !== hub.toLowerCase()
+    ) {
+      return { error: "not a fork of the hub — ancestry undefined" };
+    }
+    const branch = meta.default_branch ?? "main";
+    const res = await fetch(
+      `https://api.github.com/repos/${artifact}/compare/${hubSha}...${branch}`,
+      { headers }
+    );
     if (!res.ok) return { error: `compare ${res.status}` };
     const body = await res.json();
     return {
@@ -116,7 +138,10 @@ const main = async () => {
       continue;
     }
 
-    const ancestry = await compareAncestry(manifest.hub, repo);
+    const hubSha = execSync(`git -C "${HUB_DIR}" rev-parse ${HUB_REF}`, {
+      encoding: "utf8",
+    }).trim();
+    const ancestry = await compareAncestry(manifest.hub, repo, hubSha);
     out(
       ancestry.error
         ? `  🧬 ancestry: unavailable (${ancestry.error})`
