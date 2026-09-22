@@ -10,6 +10,10 @@
 
 set -euo pipefail
 
+# Test the canonical default fleet independently of repository-level variables.
+# Isolated-fleet routing is covered explicitly by render-node-appset.test.sh.
+export FLEET_CONTROL_ENV=production
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RUNNER="$REPO_ROOT/scripts/ci/run-node-substrate.sh"

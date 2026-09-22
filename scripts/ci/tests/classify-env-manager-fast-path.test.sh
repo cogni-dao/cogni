@@ -21,6 +21,7 @@ repository='Cogni-DAO/cogni'
 bot_login='cogni-operator[bot]'
 bot_id=265189974
 control_env=production
+export FLEET_CONTROL_ENV="$control_env"
 mkdir -p "$tmpdir/catalog"
 base_catalog="$tmpdir/base-catalog.yaml"
 head_catalog="$tmpdir/head-catalog.yaml"
