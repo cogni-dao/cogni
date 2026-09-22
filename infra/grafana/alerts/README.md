@@ -11,3 +11,9 @@ infra/grafana/alerts/
 ```
 
 Do not commit secrets, contact-point tokens, webhook URLs, or decrypted exports.
+
+Grafana Cloud does not support local configuration-file alert provisioning. A
+reviewed YAML file in this directory is the source contract, not proof that the
+rule is live. Closure requires applying it through the existing Grafana alerting
+provisioning API (or Terraform), then reading the rule back and exercising its
+query against live telemetry.

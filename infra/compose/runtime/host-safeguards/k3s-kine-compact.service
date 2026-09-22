@@ -1,0 +1,10 @@
+[Unit]
+Description=Compact superseded k3s kine revisions and reclaim SQLite pages
+After=k3s.service
+
+[Service]
+Type=oneshot
+# A multi-GB compact+VACUUM can exceed systemd's default timeout. The script
+# bounds its own work with size and free-space checks; let its EXIT trap run.
+TimeoutStartSec=infinity
+ExecStart=/usr/local/sbin/k3s-kine-compact.sh
