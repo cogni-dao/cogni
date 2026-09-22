@@ -12,10 +12,11 @@ name: Test Parent Sync
 # - schedule (06:00 UTC): catches a run that failed transiently, and re-bases the PR on new main.
 # - workflow_dispatch: ad-hoc, with `dry_run` for a no-write plan.
 #
-# Identity — the operator GitHub App installed on the MIRROR's org, taken from the candidate-a
-# Environment (that installation is the one with contents+pull_requests+workflows write there).
-# A human credential is never used, `main` is never pushed, and hub production/staging secret
-# material is declared hub-only so it cannot enter the mirror's tree.
+# Identity — the target owner and its allowed GitHub App ID + slug are one fail-closed binding in
+# .cogni/sync-manifest.yaml. The candidate-a Environment supplies only that App's private key. A
+# stale production App key cannot select itself: the manifest App ID drives the mint and the minted
+# slug is checked before write. A human credential is never used, `main` is never pushed, and hub
+# production/staging secret material is declared hub-only so it cannot enter the mirror's tree.
 
 on:
   schedule:
@@ -66,21 +67,29 @@ jobs:
           KEY_B64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
         run: |
           set -euo pipefail
-          {
-            echo "key<<PEM_EOF"
-            printf '%s' "$KEY_B64" | base64 -d
-            echo
-            echo "PEM_EOF"
-          } >> "$GITHUB_OUTPUT"
+          private_key=$(printf '%s' "$KEY_B64" | base64 -d | awk 'BEGIN {ORS="\\n"} {print}' | head -c -2) &> /dev/null
+          echo "::add-mask::$private_key"
+          echo "key=$private_key" >> "$GITHUB_OUTPUT"
 
       - name: Mint an installation token on the mirror's org
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          app-id: ${{ secrets.GH_REVIEW_APP_ID }}
+          app-id: ${{ steps.target.outputs.app_id }}
           private-key: ${{ steps.pem.outputs.key }}
           owner: ${{ steps.target.outputs.owner }}
           repositories: ${{ steps.target.outputs.repo }}
+
+      - name: Assert mirror owner-to-App boundary
+        env:
+          EXPECTED_APP_SLUG: ${{ steps.target.outputs.app_slug }}
+          ACTUAL_APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          if [[ "$ACTUAL_APP_SLUG" != "$EXPECTED_APP_SLUG" ]]; then
+            echo "::error::Refusing mirror write: expected App '$EXPECTED_APP_SLUG', minted '$ACTUAL_APP_SLUG'"
+            exit 1
+          fi
 
       - name: Refresh the mirror
         env:

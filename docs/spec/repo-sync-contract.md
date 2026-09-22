@@ -79,6 +79,8 @@ Define the contract that:
 
 13. **THREE_TIER_FORK_SYNC**: The `node-template → fork` propagation (a different axis from hub↔artifact drift above) is **three** tiers, by content kind: **Tier 1 — flight contract** (force-overwritten), **Tier 2 — foundational substrate** (node-template-authoritative overlay → always auto-mergeable), **Tier 3 — node identity/presentation** (NEVER synced — `node-template` is a starter). For Tier 2, **node-template wins** every shared (non-`node_local`) path; the upstream branch is parented on the fork tip so the PR is conflict-free by construction (`TIER2_NODE_TEMPLATE_AUTHORITATIVE` + `TIER2_IS_ALWAYS_MERGEABLE`). The Tier-3 set is **declared as data** in `.cogni/sync-manifest.yaml`'s `node_local:` block (read at runtime from the template's own copy, `TIER3_IS_DATA`), and is left as the fork's own version (never overlaid). Operator mission: _build their mission (Tier 3, node-owned), not their plumbing (Tier 1+2, synced)_. See § Three-Tier Fork Sync.
 
+14. **OWNER_APP_BOUNDARY_FAILS_CLOSED**: every `role: test-parent` artifact declares the non-secret GitHub App ID + slug allowed to write its owner. The workflow mints with that manifest ID, masks decoded key material before workflow output, and verifies the returned App slug before any repository write. It never selects an App ID from a generic environment secret. A stale cross-environment keypair therefore fails authentication instead of widening authority or writing to the wrong org.
+
 ---
 
 ## Topology
@@ -185,6 +187,11 @@ When nothing in Tier-2 differs the branch points at the fork tip and the PR no-o
 | **Repair**    | `scripts/ci/sync-test-parent.mjs`  | ONE reviewed PR on the mirror, as the operator GitHub App                                           |
 
 Both run on every push to hub `main` and on a daily schedule. "What drift reports" and "what sync does" cannot disagree, because neither owns a matching rule.
+
+**Authority boundary.** The test-parent artifact binds `cogni-test-org` to the
+`cogni-operator-test` App in the manifest. The GitHub Environment provides only the corresponding
+private key; it cannot choose the App identity. The workflow masks the decoded PEM before it becomes
+a step output and requires the minted App slug to match the manifest before running the repair.
 
 **What the refresh computes.** The target tree STARTS as hub main's tree, then re-applies exactly the declared divergences. Preserve-by-default is the failure mode being corrected: it is what let 2,273 retired paths accumulate on a mirror that had fallen 667 commits behind. Deletions therefore propagate — except where REFRESH_IS_NOT_A_ROSTER_CHANGE declares otherwise.
 

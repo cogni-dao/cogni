@@ -47,8 +47,34 @@
             "enum": ["report", "fail"],
             "default": "report",
             "description": "What an UNDECLARED missing-on-artifact path means. `report` (default) = drift is data; the detector exits 0 and the tracking issue carries it. `fail` = the detector exits non-zero. A test parent sets `fail`: a canonical path the hub generates and the mirror lacks is not a report, it is a broken generator input (task.5142 — the absent infra/k8s/overlays/<env>/scheduler-worker/node-endpoints.patch.yaml that 422'd spawny-boi env activation)."
+          },
+          "github_app": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "slug"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[0-9]+$",
+                "description": "Non-secret GitHub App ID allowed to write this artifact."
+              },
+              "slug": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9-]+$",
+                "description": "Expected App slug returned after token mint; runtime owner-to-App fail-closed boundary."
+              }
+            }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": ["role"],
+              "properties": { "role": { "const": "test-parent" } }
+            },
+            "then": { "required": ["github_app"] }
+          }
+        ]
       }
     },
     "exclude": {

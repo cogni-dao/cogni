@@ -24,6 +24,9 @@ artifacts:
     visibility: public
     role: test-parent
     on_missing: fail
+    github_app:
+      id: "3956976"
+      slug: cogni-operator-test
 
 # Global excludes — never propagated to or from any artifact. Junk / caches /
 # build outputs / git internals. Default-deny-divergence applies BELOW this set.
