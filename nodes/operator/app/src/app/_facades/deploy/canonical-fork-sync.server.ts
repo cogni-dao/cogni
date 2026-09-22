@@ -57,6 +57,7 @@ const TEMPLATE_REPO = "node-template";
  * `pr-build.yml` calling `scripts/ci/*.mjs` it never delivered (task.5078).
  */
 export const CI_CONTRACT_PATHS = [
+  ".cogni/repo-policy.json",
   ".github/workflows/ci.yaml",
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
