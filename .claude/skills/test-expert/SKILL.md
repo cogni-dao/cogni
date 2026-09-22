@@ -154,6 +154,21 @@ Use this scorecard when someone says the test repo “mirrors production”:
 
 If a test credential can mutate `cognidao.org`, production GitHub repos, production VMs, or a production wallet, the test topology is not isolated. Do not “seed” production credentials to make it green; fix the missing test substrate or authority boundary.
 
+### How test code reaches the test parent — deliver it directly, never merge-first
+
+The parity table above says _what_ must match; this says _how the code gets there_. Getting these backwards produced a multi-PR detour through `Cogni-DAO/cogni` main during subtask.5007 — slow, and it exercised a forked path instead of the real one. Classify every change into one of two lanes:
+
+| Change                                                                                                                                | Where it's authored                                                    | Delivery path                                                                                                                                                    | Speed                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| **Test-owned** — identity, org/domain/zone config, roster filters, generated appset/overlay state, fixtures, obsolete-fixture removal | Directly in `cogni-test-org/cogni-monorepo` (as `cogni-operator-test`) | Commit straight to the test-parent PR. **Never** route it through a `Cogni-DAO/cogni` main merge.                                                                | Seconds-to-minutes; no canonical dependency        |
+| **Shared** — workflow logic, generators, operator verbs, schemas, required gates (destined for production)                            | Originates as a `Cogni-DAO/cogni` PR                                   | Stage the **PR head / exact ref** into the test parent → prove E2E on candidate → **then** merge canonical main → post-merge auto-sync converges the test parent | Bounded by one candidate E2E, not by a merge queue |
+
+**The invariant:** you merge canonical main _because_ you proved the change on candidate — never _in order to_ prove it. Auto-sync (`Cogni-DAO/cogni` → `cogni-test-org/cogni-monorepo`) is a **post-merge convergence** mechanism; it is not a delivery channel for unproven code.
+
+**Anti-pattern that bit subtask.5007** — `canonical main merge → auto-sync → candidate test`. This reverses the candidate-before-merge lifecycle: it puts the irreversible step (main merge) before the proof, and it validates a synced copy rather than the PR head you'll actually ship. Test-only generated state, roster filters, and dead fixtures should have stayed 100% in the test-parent PR.
+
+**Missing platform primitive:** exact-ref/commit staging of a canonical PR head into the test parent. Until it lands, hand-stage the shared PR's head into a test-parent branch (cherry-pick / subtree the exact commit); do **not** merge canonical prerequisites just to make them appear in the test repo. File the gap, don't route around it with a merge.
+
 ## Gotchas — these bite repeatedly
 
 1. **`APP_ENV=test` swaps fakes via the DI container.** Fake adapters live in `src/adapters/test/*/fake-*.adapter.ts` and are wired in `src/bootstrap/container.ts` via `serverEnv.isTestMode`. LLM is the exception — it's always real LiteLLM, routed to `mock-openai-api` via `litellm.test.config.yaml`. If a stack/component test is calling a real external service, it's almost always a missing fake wiring in the DI container, not a test bug.
