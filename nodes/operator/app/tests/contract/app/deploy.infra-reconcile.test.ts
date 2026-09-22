@@ -326,6 +326,24 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
     });
   });
 
+  it("surfaces a raw Octokit error's real status + code, not a masked 502 (bug.5158)", async () => {
+    // Octokit RequestError shape: numeric `.status`, NO string `.code`. Requiring
+    // both masked GitHub's "No commit found for SHA" behind a generic 502
+    // dispatch_failed, which the driver retried 13× against a phantom deploy-state
+    // SHA over 25 min. The route must honor GitHub's status here.
+    mockDeployPlane.reconcileNodeInfra.mockRejectedValue(
+      Object.assign(new Error("No commit found for SHA: e9cd8b30"), {
+        status: 422,
+      })
+    );
+    const res = await post({ nodeId: NODE_ID, env: "production" });
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      error: "github_error",
+      message: "No commit found for SHA: e9cd8b30",
+    });
+  });
+
   it("preserves a typed candidate preflight failure", async () => {
     mockDeployPlane.reconcileNodeInfra.mockRejectedValue(
       Object.assign(new Error("source must be an open same-repo PR head"), {
