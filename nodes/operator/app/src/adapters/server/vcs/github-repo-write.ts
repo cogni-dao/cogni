@@ -2666,7 +2666,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
       })
     );
     const externalSecretEntries: GitTreeEntry[] = [];
-    for (const env of NODE_FORMATION_ENVS) {
+    // These are inert child-repo deploy-shape leaves, not env membership. Personalize
+    // every supported env at birth so a later env activation never falls back to the
+    // inherited node-template identity. The parent catalog/AppSets below remain scoped
+    // to NODE_FORMATION_ENVS, so this does not create a preview workload or lease.
+    for (const env of NODE_DEPLOY_ENVS) {
       externalSecretEntries.push(
         {
           path: `k8s/external-secrets/${env}/external-secret.yaml`,
