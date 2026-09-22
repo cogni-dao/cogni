@@ -176,10 +176,10 @@ check "(b) refuses with an explanatory 'refusing to put' message" \
 # ── (d) fresh-path empty-body 404 → treated as absent → put (bug.5037) ───────
 # A never-written path on a fresh node/env fails `kv patch` with `Code: 404` and
 # an EMPTY raw message (no "not found" text). That is unambiguous absence.
-ABSENT_STYLE=404 set_secret "" candidate-a toks4 FIRST_KEY fresh-value
+ABSENT_STYLE=404 set_secret "" candidate-a _shared FIRST_KEY fresh-value
 check "(d) empty-body 404 absent → create succeeds (exit 0)" "[[ $RC -eq 0 ]]"
 check "(d) key written on create" \
-  "[[ \"\$(cat \"$(path_dir toks4)/FIRST_KEY\" 2>/dev/null)\" == fresh-value ]]"
+  "[[ \"\$(cat \"$(path_dir _shared)/FIRST_KEY\" 2>/dev/null)\" == fresh-value ]]"
 
 echo
 echo "openbao-clobber-proof.test.sh — pass: $pass, fail: $fail"

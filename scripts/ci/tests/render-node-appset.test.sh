@@ -102,11 +102,13 @@ done
 pass "--check deterministic across 5 runs"
 
 # 4. FAIL-CLOSED — a deployable row missing `envs:` aborts the env-set render
-# (no silent all-env fallback). Point the renderer at a fixture catalog whose
-# poly row has had `envs:` stripped.
+# (no silent all-env fallback). Point the renderer at a hermetic fixture catalog
+# containing one deployable row with no `envs:` field.
 tmp_catalog="$(mktemp -d)"
-cp infra/catalog/*.yaml "$tmp_catalog/"
-yq -i 'del(.envs)' "$tmp_catalog/poly.yaml"
+cat > "$tmp_catalog/fixture-node.yaml" <<'YAML'
+name: fixture-node
+candidate_a_branch: deploy/candidate-a-fixture-node
+YAML
 set +e
 out="$(CATALOG_DIR="$tmp_catalog" bash "$RENDER" --check 2>&1)"
 rc=$?
