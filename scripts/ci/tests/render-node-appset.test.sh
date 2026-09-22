@@ -153,19 +153,25 @@ YAML
 # shellcheck source=scripts/ci/lib/appset-paths.sh
 CATALOG_DIR="$fixture" source scripts/ci/lib/appset-paths.sh
 
+# Exercise the real unset default independently of repository-level fleet vars.
+control_env_default() (
+  unset FLEET_CONTROL_ENV
+  CATALOG_DIR="$fixture" control_env_for "$@"
+)
+
 for env in candidate-a preview; do
-  got="$(CATALOG_DIR="$fixture" control_env_for "$env" toks5)"
+  got="$(control_env_default "$env" toks5)"
   [ "$got" = "production" ] || fail "akash toks5 in $env should be reconciled by production, got $got"
 done
 pass "akash node's non-prod lanes are reconciled by the production cluster"
 
 for env in candidate-a preview; do
-  got="$(CATALOG_DIR="$fixture" control_env_for "$env" operator)"
+  got="$(control_env_default "$env" operator)"
   [ "$got" = "$env" ] || fail "k3s operator in $env must stay in $env, got $got"
 done
 pass "k3s rows stay with their own env's cluster"
 
-got="$(CATALOG_DIR="$fixture" control_env_for production toks5)"
+got="$(control_env_default production toks5)"
 [ "$got" = "production" ] || fail "production must be reconciled by production, got $got"
 pass "production is unchanged for every row"
 
