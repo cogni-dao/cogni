@@ -24,6 +24,10 @@
           },
           {
             "type": "command",
+            "command": "bash scripts/agent/accept-repo-invites.sh"
+          },
+          {
+            "type": "command",
             "command": "bash scripts/agent/session-cognition.sh"
           }
         ]
