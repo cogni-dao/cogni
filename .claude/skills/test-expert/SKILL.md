@@ -224,3 +224,15 @@ Triage in this order:
 4. If the test needs env or infra, read the relevant config's header TSDoc — every config documents its invariants at the top.
 5. If the layer is stack/e2e/money and you're an agent without infra access, open the PR and let CI run it rather than burning a session on local setup.
 6. Once the new test passes in isolation, run `pnpm check:fast:fix` (auto-fix) then `pnpm check:fast` (strict). Only run `pnpm check` when ready to commit.
+
+## Driving the TEST operator as an agent (RBAC + credentials)
+
+The **test operator** (`test.cognidao.org`, the `cogni-operator-test` GitHub App) is a **separate principal store** from the **prod operator** (`cognidao.org`). "operator" vs "test operator" is load-bearing — a credential valid on one is NOT valid on the other.
+
+- flock-leader's `COGNI_*_API_KEY` (in `.env.cogni`) authenticates ONLY to the **prod** operator. Verify an agent key with `GET /api/v1/cognition` (200) — NEVER `/users/me` (agent keys always 401 there, which is not proof the key is dead). On `test.cognidao.org` the same key returns **401** (no principal there).
+- On the **test** operator, flock-leader's identity is a **wallet session**, not the API key: `~/dev/cogni-template/.local-auth/candidate-a-operator.storageState.json` (Playwright storageState — build a `Cookie:` header from its `cognidao.org` cookies). The `personal-test-users-me.curl` capture **expires** — always confirm a session with `GET /api/v1/users/me` (200) before using it.
+- That wallet session authenticates but has **no node grants by default** → `POST /api/v1/vcs/{merge,flight}` return **403 `authz_denied`** (NOT 401). Fix by requesting the grant, never by assuming a key gap:
+  `POST https://test.cognidao.org/api/v1/nodes/<slug>/access-requests {"role":"developer"}` → `201 {status:"pending"}`; the node **owner approves** in the test-operator UI → `developer` grants `can_flight` → `vcs/merge` + `vcs/flight` then succeed.
+- Diagnose by status: **403 `authz_denied`** = authenticated but ungranted → request access; **401** = wrong/absent principal for THIS operator; **400** validation_error = authorized, bad body (400 ≠ 403 — test before claiming a perm gap).
+- `GET /nodes` is **empty** on the test operator (the in-repo operator resolves via `NODE_SUBMODULE_PARENT_*`, not the DB registry); `GET /nodes/<slug>` **500s** — use the node UUID from the catalog.
+
