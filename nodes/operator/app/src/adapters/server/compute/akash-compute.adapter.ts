@@ -38,6 +38,8 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
+
 import type {
   ComputeBalance,
   ComputeResourcePort,
@@ -505,9 +507,24 @@ export class AkashComputeAdapter
   }
 
   /**
+   * sha256 hex of the exact SDL bytes `updateAllocated` would PUT for this spec — same render,
+   * same pricing options. Pure and deterministic, so the actuator can compare it to the receipt's
+   * last-applied hash and skip a byte-identical re-PUT (bug.5238): Console re-triggers a provider
+   * redeploy on EVERY PUT, and re-deploying a not-yet-serving node denies it a stable window.
+   * Kept here, next to `buildAkashSdl` + `sdlOptions`, so SDL construction never crosses the port.
+   */
+  sdlHash(spec: ProvisionSpec): string {
+    return createHash("sha256")
+      .update(buildAkashSdl(spec, this.sdlOptions))
+      .digest("hex");
+  }
+
+  /**
    * In-place SDL replacement on a handle we already own. Spends no new escrow and mints no
-   * new handle, so it needs no allocation receipt — the PUT is idempotent by construction.
-   * Returns as soon as Console accepts it; convergence is the caller's level problem.
+   * new handle, so it needs no allocation receipt. The PUT is idempotent for the ESCROW/HANDLE,
+   * but NOT on the provider: Console re-triggers a redeploy on every PUT regardless of whether
+   * the SDL changed, so the caller (actuator) must hash-gate an identical re-PUT — see `sdlHash`
+   * and bug.5238. Returns as soon as Console accepts it; convergence is the caller's level problem.
    */
   async updateAllocated(p: {
     resourceId: string;

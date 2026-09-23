@@ -67,6 +67,7 @@ interface AllocationRow {
   allocationCursor: string | null;
   externalName: string | null;
   providerAccount: string | null;
+  lastAppliedSdlHash: string | null;
 }
 
 const SELECTION = {
@@ -80,6 +81,7 @@ const SELECTION = {
   allocationCursor: akashTxAllocations.allocationCursor,
   externalName: akashTxAllocations.externalName,
   providerAccount: akashTxAllocations.providerAccount,
+  lastAppliedSdlHash: akashTxAllocations.lastAppliedSdlHash,
 };
 
 function toRecord(row: AllocationRow): AkashTxAllocationRecord {
@@ -96,6 +98,9 @@ function toRecord(row: AllocationRow): AkashTxAllocationRecord {
     ...(row.allocationCursor ? { allocationCursor: row.allocationCursor } : {}),
     ...(row.externalName ? { externalName: row.externalName } : {}),
     ...(row.providerAccount ? { providerAccount: row.providerAccount } : {}),
+    ...(row.lastAppliedSdlHash
+      ? { lastAppliedSdlHash: row.lastAppliedSdlHash }
+      : {}),
   };
 }
 
@@ -367,6 +372,38 @@ export class DrizzleAkashTxAllocationLedger
     if (updated.length === 0) {
       throw new Error(
         "cannot record an allocation for a key with no live wallet slot"
+      );
+    }
+  }
+
+  /**
+   * Persist the sha256 of the SDL just applied for this key (bug.5238). Advisory metadata: it
+   * touches neither the wallet slot, the state machine, nor any write-once identity column, so it
+   * carries no state predicate beyond the key — the update path only ever calls it on a receipt
+   * it has already bound. Called AFTER a successful `updateAllocated`, so a lost PUT re-applies
+   * next reconcile rather than being skipped forever.
+   */
+  async recordAppliedSdlHash(input: {
+    cogniKey: string;
+    sdlHash: string;
+  }): Promise<void> {
+    const db = await this.getDb();
+    const updated = await db
+      .update(akashTxAllocations)
+      .set({
+        lastAppliedSdlHash: input.sdlHash,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(akashTxAllocations.walletScope, this.walletScope),
+          eq(akashTxAllocations.cogniKey, input.cogniKey)
+        )
+      )
+      .returning({ cogniKey: akashTxAllocations.cogniKey });
+    if (updated.length === 0) {
+      throw new Error(
+        "cannot record an applied SDL hash for a key with no receipt"
       );
     }
   }

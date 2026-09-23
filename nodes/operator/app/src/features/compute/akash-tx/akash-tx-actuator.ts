@@ -52,6 +52,11 @@
  *     therefore gets its lease and fails READINESS against the composite's boot SLO — loud and
  *     bounded — which is what bug.5116 actually needed. The paid path consequently needs no
  *     database-adjacent capability at all.
+ *   - IDENTICAL_SDL_IS_A_NO_OP (bug.5238): `update` PUTs the SDL only when it hashes differently
+ *     from the last one applied (persisted on the receipt). A PUT is idempotent for the
+ *     escrow/handle but re-triggers a provider redeploy every time, so re-PUTting a byte-
+ *     identical SDL thrashes a not-yet-serving node; the gate skips only that case and any real
+ *     spec change still applies + records the new hash.
  *   - REFUSAL_IS_OBSERVABLE: every refusal emits a structured log line before it throws
  *     (bug.5115: a wallet block that only reached CR status was invisible for hours).
  * Side-effects: IO (Akash Console transactions via the injected client; durable allocation and
@@ -564,7 +569,33 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       "akash_tx_receipt_rebound"
     );
 
-    // PUT on a handle we already own is idempotent by construction.
+    // IDENTICAL_SDL_IS_A_NO_OP (bug.5238). A PUT is idempotent for the escrow/handle, but NOT
+    // on the provider: Console re-triggers a redeploy on EVERY PUT, so re-PUTting the byte-
+    // identical SDL restarts a rollout the workload may not have finished — a not-yet-serving
+    // node (beacon) is denied the stable window it needs and the composition re-renders update
+    // forever. Skip the PUT when the desired SDL hashes to the last one we applied. Only a
+    // byte-identical SDL is gated: any real change (new image sha, changed spec) hashes
+    // differently, so a genuine promote is NEVER silently skipped.
+    const desiredSdlHash = this.console.sdlHash(input.spec);
+    if (bound.record.lastAppliedSdlHash === desiredSdlHash) {
+      this.log.info(
+        {
+          cogniKey: input.cogniKey,
+          externalName: input.externalName,
+          sdlHash: desiredSdlHash,
+        },
+        "akash_tx_update_noop_identical_sdl"
+      );
+      return this.describe(
+        input.externalName,
+        bound.record.providerAccount,
+        bound.record
+      );
+    }
+
+    // Different (or first-ever) SDL: apply it, then record the hash so the next reconcile that
+    // carries the same SDL no-ops. Recorded AFTER a successful PUT — persisting before would make
+    // a failed apply skip forever.
     try {
       await this.console.updateAllocated({
         resourceId: input.externalName,
@@ -583,8 +614,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
       throw mapped;
     }
+    await this.ledger.recordAppliedSdlHash({
+      cogniKey: input.cogniKey,
+      sdlHash: desiredSdlHash,
+    });
     this.log.info(
-      { cogniKey: input.cogniKey, externalName: input.externalName },
+      {
+        cogniKey: input.cogniKey,
+        externalName: input.externalName,
+        sdlHash: desiredSdlHash,
+      },
       "akash_tx_updated"
     );
     return this.describe(
