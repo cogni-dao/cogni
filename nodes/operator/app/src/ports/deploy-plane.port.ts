@@ -425,6 +425,24 @@ export interface DeployPlanePort {
   promoteNode(input: PromoteNodeInput): Promise<NodePromoteResult>;
 
   /**
+   * The sha an environment is ACTUALLY running for one node: `<slug>` in
+   * `.promote-state/source-sha-by-app.json` on `deploy/<env>-<slug>` — the pin every promote and
+   * every candidate flight writes (`scripts/ci/update-source-sha-map.sh`). This is the ONLY
+   * runtime-readable statement of deployed truth: promotion writes ZERO commits to `main`, so
+   * `main` cannot carry it (task.5022 retired that firehose).
+   *
+   * Returns `null` when the node has never deployed to that env — a BIRTH lane, the one case where
+   * the catalog row's `source_sha` is a legitimate stand-in. Anywhere else, reading the catalog for
+   * a deploy sha reverts a live env to its birth pin (bug.5043, re-observed as bug.5237).
+   */
+  readNodeDeployPin(input: {
+    parentOwner: string;
+    parentRepo: string;
+    env: string;
+    slug: string;
+  }): Promise<string | null>;
+
+  /**
    * Existing deploy authority for shared infrastructure. Production replays the current app pin
    * through the full-infra workflow. Candidate-a classifies a reviewed PR into exactly one lane:
    * Compose/edge dispatches the existing candidate infra workflow, while control-plane changes

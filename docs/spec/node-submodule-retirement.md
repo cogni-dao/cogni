@@ -80,6 +80,15 @@ the secret-free unit gate never touches node source at all.
    still accepts an explicit `nodeRef{sourceSha}` request; preview/prod promotion preserves the
    candidate-proven digest (`BUILD_ONCE_PROMOTE_DIGEST`).
 
+   The pin this names is the **birth/flight** pin — it replaced the _gitlink_, not the deploy
+   state. Once an env has deployed, what that env is running is stated ONLY by `<slug>` in
+   `.promote-state/source-sha-by-app.json` on `deploy/<env>-<slug>`, written by every promote and
+   flight (`scripts/ci/update-source-sha-map.sh`); promotion writes zero commits to `main`, so
+   `main` cannot carry it (task.5022). **Re-rendering a live env from the catalog row reverts it to
+   its birth sha** — bug.5043, re-observed as bug.5237 when a candidate-a lane add silently
+   re-promoted production. Read the catalog `source_sha` for a deploy sha only when the env has no
+   pin yet (`DeployPlanePort.readNodeDeployPin` returns `null`).
+
 ## Target Design
 
 ### 1. Node-source access at deploy: OSS cross-repo checkout by sourceSha
