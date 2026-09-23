@@ -64,7 +64,12 @@ interface StreamCursor {
   tail: readonly string[];
   lastTsNs: bigint;
   attached: boolean;
+  /** Tick this emitter was last present in a window — liveness, not shipping state. */
+  lastSeenTick: number;
 }
+
+/** Ticks a pod-name cursor may go unseen before it is dropped (pod churn hygiene). */
+const CURSOR_STALE_TICKS = 240;
 
 /** Per-cycle counts for the pump's single structured log line. */
 export interface LeaseLogPumpTickReport {
@@ -77,6 +82,7 @@ export interface LeaseLogPumpTickReport {
 
 export class LeaseLogPump {
   private readonly cursors = new Map<string, StreamCursor>();
+  private tick_ = 0;
   private readonly now: () => Date;
   private readonly tailLines: number;
   private readonly maxTail: number;
@@ -89,6 +95,7 @@ export class LeaseLogPump {
 
   /** One bounded cycle. Never throws: every failure is logged and absorbed. */
   async tick(): Promise<LeaseLogPumpTickReport> {
+    this.tick_ += 1;
     let snapshot: AkashTxLeaseLogSources;
     try {
       snapshot = await this.deps.sources();
@@ -190,7 +197,11 @@ export class LeaseLogPump {
         tail: [],
         lastTsNs: 0n,
         attached: false,
+        lastSeenTick: this.tick_,
       };
+      // Liveness touch even when nothing new ships — a quiet stream is not a stale one.
+      cursor.lastSeenTick = this.tick_;
+      this.cursors.set(key, cursor);
       const merged = mergeTail(cursor.tail, window, this.maxTail);
       const attachLine = cursor.attached
         ? undefined
@@ -230,17 +241,26 @@ export class LeaseLogPump {
           tail: merged.nextTail,
           lastTsNs: committedTs,
           attached: true,
+          lastSeenTick: this.tick_,
         });
       });
     }
   }
 
-  /** Drop cursors for leases no longer enumerated — closed leases must not pin memory. */
+  /**
+   * Drop cursors for leases no longer enumerated (closed leases must not pin memory) and
+   * for emitters unseen for CURSOR_STALE_TICKS (pod churn inside a long-lived lease).
+   */
   private pruneCursors(sources: readonly AkashTxLeaseLogSource[]): void {
     const live = new Set(sources.map((s) => s.dseq));
-    for (const key of this.cursors.keys()) {
+    for (const [key, cursor] of this.cursors) {
       const dseq = key.slice(0, key.indexOf("/"));
-      if (!live.has(dseq)) this.cursors.delete(key);
+      if (
+        !live.has(dseq) ||
+        this.tick_ - cursor.lastSeenTick > CURSOR_STALE_TICKS
+      ) {
+        this.cursors.delete(key);
+      }
     }
   }
 }

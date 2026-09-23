@@ -103,7 +103,11 @@ const actuatorUrl =
   runtimeEnv.AKASH_TX_ACTUATOR_URL ?? "http://akash-tx-actuator:8080";
 const providerProxyUrl =
   runtimeEnv.PROVIDER_PROXY_URL ?? DEFAULT_PROVIDER_PROXY_URL;
-const pollMs = Number(runtimeEnv.LEASE_LOG_PUMP_POLL_MS ?? DEFAULT_POLL_MS);
+// Clamp defensively: NaN or a too-small override would otherwise tight-loop the actuator.
+const pollMsRaw = Number(runtimeEnv.LEASE_LOG_PUMP_POLL_MS ?? DEFAULT_POLL_MS);
+const pollMs = Number.isFinite(pollMsRaw)
+  ? Math.max(5_000, pollMsRaw)
+  : DEFAULT_POLL_MS;
 
 const sourcesClient = new AkashTxSourcesClient({
   actuatorUrl,

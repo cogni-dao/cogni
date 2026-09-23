@@ -190,7 +190,8 @@ export async function GET(
       env,
       nodeId: node.nodeId,
       query: params.get("query") ?? undefined,
-      service: params.get("service") ?? undefined,
+      // Explicitly empty degrades to the default app scope, like the other params.
+      service: params.get("service")?.trim() || undefined,
     });
   } catch (err) {
     if (err instanceof ObservabilityQueryError) {

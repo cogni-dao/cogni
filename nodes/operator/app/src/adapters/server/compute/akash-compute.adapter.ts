@@ -70,6 +70,9 @@ import {
 
 const PROVIDER = "akash";
 const MICRO = 1_000_000;
+/** Lease-log descriptor cache TTL — long enough to amortize polling, short enough that an
+ * in-place SDL update's changed service set surfaces within minutes. */
+const DESCRIPTOR_CACHE_TTL_MS = 5 * 60_000;
 
 /** Overclock Labs audit account — the `signedBy` anchor Console itself screens on. */
 export const AKASH_OVERCLOCK_AUDITOR =
@@ -286,6 +289,22 @@ export class AkashComputeAdapter
   private readonly now: () => Date;
   /** Provider gateway URIs by owner account — stable identity, cached per process. */
   private readonly hostUriCache = new Map<string, string>();
+  /**
+   * Lease-log descriptors by dseq, short-TTL. Coordinates are stable for a lease's life
+   * (an in-place SDL update can change `services`, hence the TTL rather than forever), and
+   * the pump re-enumerates every poll — without this cache the wallet-writer would spend a
+   * Console GET per lease per poll on answers that almost never change.
+   */
+  private readonly descriptorCache = new Map<
+    string,
+    { value: AkashLeaseLogDescriptor; expiresAtMs: number }
+  >();
+  /** Last minted logs JWT, reused for an identical provider set until ~80% of its TTL. */
+  private leaseLogsToken?: {
+    providersKey: string;
+    token: string;
+    expiresAtMs: number;
+  };
 
   constructor(private readonly config: AkashComputeAdapterConfig) {
     this.baseUrl = (
@@ -555,6 +574,10 @@ export class AkashComputeAdapter
   async leaseLogDescriptor(p: {
     leaseId: string;
   }): Promise<AkashLeaseLogDescriptor> {
+    const cached = this.descriptorCache.get(p.leaseId);
+    if (cached && cached.expiresAtMs > this.now().getTime()) {
+      return cached.value;
+    }
     const detail = await this.request<ConsoleDeploymentDetail>(
       "GET",
       `/v1/deployments/${encodeURIComponent(p.leaseId)}`
@@ -563,7 +586,7 @@ export class AkashComputeAdapter
     const lease = leases.find((l) => l.state === "active") ?? leases[0];
     const owner =
       typeof lease?.id?.provider === "string" ? lease.id.provider : undefined;
-    return {
+    const descriptor: AkashLeaseLogDescriptor = {
       gseq: typeof lease?.id?.gseq === "number" ? lease.id.gseq : 1,
       oseq: typeof lease?.id?.oseq === "number" ? lease.id.oseq : 1,
       ...(owner ? { providerAccount: owner } : {}),
@@ -575,6 +598,11 @@ export class AkashComputeAdapter
       services: Object.keys(lease?.status?.services ?? {}),
       state: mapState(detail?.deployment?.state, leases),
     };
+    this.descriptorCache.set(p.leaseId, {
+      value: descriptor,
+      expiresAtMs: this.now().getTime() + DESCRIPTOR_CACHE_TTL_MS,
+    });
+    return descriptor;
   }
 
   /**
@@ -585,6 +613,15 @@ export class AkashComputeAdapter
     providers: readonly string[];
     ttlSeconds: number;
   }): Promise<string> {
+    const providersKey = [...p.providers].sort().join(",");
+    const nowMs = this.now().getTime();
+    if (
+      this.leaseLogsToken &&
+      this.leaseLogsToken.providersKey === providersKey &&
+      this.leaseLogsToken.expiresAtMs > nowMs
+    ) {
+      return this.leaseLogsToken.token;
+    }
     const minted = await this.request<{ token?: string }>(
       "POST",
       "/v1/create-jwt-token",
@@ -608,6 +645,13 @@ export class AkashComputeAdapter
         "Console create-jwt-token returned no token"
       );
     }
+    // Reuse until 80% of the TTL: a consumer that got this token still has ≥20% of its
+    // life to spend it, and the wallet-writer stops minting once per caller poll.
+    this.leaseLogsToken = {
+      providersKey,
+      token: minted.token,
+      expiresAtMs: nowMs + p.ttlSeconds * 800,
+    };
     return minted.token;
   }
 
