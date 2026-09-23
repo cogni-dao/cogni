@@ -30,9 +30,6 @@ resources:
   # extracted wholesale into the public operator app's envFrom.
   - ./akash-tx-actuator-external-secret.yaml
   - ./akash-tx-actuator-auth-external-secret.yaml
-  # bug.5240 — the keyless lease-log pump rides wherever an actuator runs: it enumerates the
-  # actuator's ledger (read-only op) and ships every live lease's logs to Loki.
-  - ../../../base/lease-log-pump
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 
@@ -110,23 +107,6 @@ patches:
                     # story.5016's cutover is one wallet with ONE ACTIVE WRITER, achieved by
                     # revoking the legacy key and minting a fresh one, not by a second account.
                     value: "akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt"
-  # bug.5240 — same BY-NAME env rule as the actuator patch above.
-  - target:
-      kind: Deployment
-      name: lease-log-pump
-    patch: |
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: lease-log-pump
-      spec:
-        template:
-          spec:
-            containers:
-              - name: pump
-                env:
-                  - name: DEPLOY_ENVIRONMENT
-                    value: candidate-a
   - target:
       kind: ConfigMap
       name: node-app-config
