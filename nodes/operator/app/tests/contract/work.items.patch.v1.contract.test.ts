@@ -68,6 +68,23 @@ describe("workItemsPatchOperation.input", () => {
     }
   });
 
+  it("rejects a wrong top-level wrapper key ({patch}) and surfaces it (bug.5242)", () => {
+    // Guessing `{ patch: {...} }` from the operation name is the recurring
+    // misdiagnosis. The strict top-level wrapper must name the bad key AND flag
+    // the missing `set`, so the 400 tells the caller how to fix it.
+    const result = workItemsPatchOperation.input.safeParse({
+      id: "bug.5242",
+      patch: { status: "needs_closeout" },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const blob = JSON.stringify(result.error.issues);
+      expect(blob).toContain("patch");
+      const paths = result.error.issues.flatMap((i) => i.path);
+      expect(paths).toContain("set");
+    }
+  });
+
   it("rejects an empty set with the empty-set message", () => {
     const result = workItemsPatchOperation.input.safeParse({
       id: "bug.5005",
