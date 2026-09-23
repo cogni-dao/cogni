@@ -119,6 +119,7 @@ export {
 // Bounded, SSRF-safe workload probes. Exported for the dedicated actuator process,
 // which must prove "serving at the expected SHA" without importing an adapter internal.
 export {
+  safeHostRoutedVersionProbe,
   safeReadyzProbe,
   safeVersionProbe,
 } from "./compute/safe-version-probe";

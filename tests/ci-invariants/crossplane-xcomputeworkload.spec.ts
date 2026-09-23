@@ -191,6 +191,34 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     );
   });
 
+  it("anchors the boot deadline to the current attempt, not the XR's age (bug.5244)", () => {
+    // Anchored to creationTimestamp, a never-served XR older than the deadline was a
+    // roach motel: $closeForBudget latched true, the lease Request stopped rendering, so
+    // no OBSERVE could ever set $prevSha and no spec change could revive the workload.
+    // The anchor must be the (bundle sha, leaseGeneration) attempt, latched via status.
+    expect(template).toContain(
+      '$bootKey := printf "%s:%d" $desiredSha $leaseGeneration'
+    );
+    expect(template).toContain('dig "status" "bootEpoch" "key" "" $xr');
+    // The window resets ONLY when the attempt key changes — a mere re-render of the same
+    // attempt must keep the recorded start, or the deadline could never fire at all.
+    expect(template).toContain(
+      'and (eq $prevBootKey $bootKey) (ne $prevBootAt "")'
+    );
+    // The latch is persisted where the next render reads it.
+    const bootEpoch = (statusSchema.bootEpoch as YamlObject)
+      .properties as YamlObject;
+    expect(Object.keys(bootEpoch)).toEqual(["key", "at"]);
+  });
+
+  it("proves serving through the provider's host-routed path (bug.5237)", () => {
+    // A stale deployment still owning the public hostname made the bare-ingress serving
+    // probe a lie: the composite reported Ready at the new sha while users got the old
+    // one. OBSERVE must hand the actuator the public hostname so the probe exercises the
+    // route users actually hit.
+    expect(template).toContain("publicHost: {{ $publicHost | quote }}");
+  });
+
   it("declares the empty-birth schema policy WITHOUT claiming it gates payment", () => {
     const migration = specSchema.migration as YamlObject;
     const policy = (migration.properties as YamlObject).policy as YamlObject;

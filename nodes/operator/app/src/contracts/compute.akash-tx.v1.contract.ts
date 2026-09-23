@@ -167,6 +167,12 @@ export const AkashTxObserveInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
   externalName: ExternalNameSchema.optional(),
   expectedSourceSha: SourceShaSchema.optional(),
+  /**
+   * The workload's public hostname. When present, the serving probe must prove the exact
+   * SHA through the provider's host-routed path too — the bare lease ingress alone cannot
+   * see a stale deployment still owning the hostname (bug.5237).
+   */
+  publicHost: z.string().min(1).max(253).optional(),
   migration: AkashTxMigrationStepSchema.optional(),
   /**
    * WHOSE database the attached migration step belongs to. Required in practice whenever

@@ -47,7 +47,8 @@ async function safeHttpProbe(
   endpoint: string,
   path: string,
   expectedSourceSha: string | undefined,
-  timeoutMs = 5_000
+  timeoutMs = 5_000,
+  hostOverride?: string
 ): Promise<SafeVersionProbeResult> {
   const raw =
     endpoint.startsWith("http://") || endpoint.startsWith("https://")
@@ -87,6 +88,20 @@ async function safeHttpProbe(
   }
   const selected = addresses[0];
   if (!selected) return "version_unavailable";
+
+  if (hostOverride) {
+    // Present the PUBLIC hostname (Host header + SNI) while still connecting to the
+    // already-vetted endpoint address: this exercises the provider's host-routing layer —
+    // the one that decides which deployment answers the public hostname — without
+    // depending on the public DNS record. The override is a hostname, never an address.
+    if (
+      isIP(hostOverride) !== 0 ||
+      hostOverride === "localhost" ||
+      hostOverride.endsWith(".local")
+    )
+      return "version_unavailable";
+    url.hostname = hostOverride;
+  }
 
   return new Promise<SafeVersionProbeResult>((resolve) => {
     const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(
@@ -168,6 +183,29 @@ export async function safeVersionProbe(
       "/version",
       expectedSourceSha,
       timeoutMs
+    )) === "matched"
+  );
+}
+
+/**
+ * `/version` proof through the provider's HOST-ROUTED path: connects to the vetted lease
+ * endpoint but presents `publicHost`, so a match proves the public hostname resolves to a
+ * deployment serving the exact SHA — the bare-ingress probe cannot see a stale deployment
+ * still owning the hostname (bug.5237).
+ */
+export async function safeHostRoutedVersionProbe(
+  endpoint: string,
+  publicHost: string,
+  expectedSourceSha?: string,
+  timeoutMs = 5_000
+): Promise<boolean> {
+  return (
+    (await safeHttpProbe(
+      endpoint,
+      "/version",
+      expectedSourceSha,
+      timeoutMs,
+      publicHost
     )) === "matched"
   );
 }

@@ -204,6 +204,8 @@ export interface AkashTxActuatorPort {
     cogniKey: string;
     externalName?: string;
     expectedSourceSha?: string;
+    /** Public hostname; presence upgrades the serving proof to the host-routed path. */
+    publicHost?: string;
     /** Attach the release-side migration step to this tick. Never blocks the observation. */
     migration?: AkashTxMigrationStep;
     /** Workload slug + environment, required only when `migration` is attached. */

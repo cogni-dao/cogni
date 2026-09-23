@@ -994,6 +994,31 @@ describe("AkashTxActuator.observe", () => {
     expect(probes).toBe(1);
   });
 
+  it("hands the probe the public hostname so serving is proven host-routed (bug.5237)", async () => {
+    const ledger = new FakeLedger();
+    const api = new FakeConsole();
+    let seenPublicHost: string | undefined;
+    const actuator = new AkashTxActuator({
+      console: api,
+      ledger,
+      log: recordingLogger(),
+      ...costDeps(),
+      probe: async ({ publicHost }) => {
+        seenPublicHost = publicHost;
+        return false;
+      },
+    });
+    seedAllocated(ledger);
+    const observation = await actuator.observe({
+      cogniKey: "k1",
+      externalName: "7001",
+      expectedSourceSha: "a".repeat(40),
+      publicHost: "toks5.cognidao.org",
+    });
+    expect(observation.serving).toBe(false);
+    expect(seenPublicHost).toBe("toks5.cognidao.org");
+  });
+
   it("never probes when no expected sha is supplied", async () => {
     const ledger = new FakeLedger();
     const api = new FakeConsole();
