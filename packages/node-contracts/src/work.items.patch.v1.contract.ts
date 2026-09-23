@@ -9,6 +9,13 @@
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
  *   - PATCH_ALLOWLIST: only fields in `set` are mutable. id/created_at/updated_at are server-managed.
+ *   - STRICT_WRAPPER: the payload wrapper is `{ set: {...} }` and the top level is strict.
+ *     `set` is the SQL-style UPDATE…SET envelope and mirrors the domain port
+ *     `WorkItemCommandPort.patch(id, set)` (docs/spec/work-items-port.md) — the operation
+ *     is PATCH, the field being applied is `set`. The canonical wrapper is `set`, NOT
+ *     `patch`. A mistaken `{ patch: {...} }` (guessed from the operation name) surfaces as
+ *     an explicit `Unrecognized key: "patch"` issue instead of a silent-ignore that only
+ *     reported `set: Required` — the confusing 400 that got bug.5242 misfiled as a drift.
  *   - v0 has no expectedRevision optimistic concurrency and no transition state-machine — whoever holds a valid token is trusted.
  * Side-effects: none
  * Links: /api/v1/work/items/[id] route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
@@ -35,8 +42,11 @@ export const workItemsPatchOperation = {
   id: "work.items.patch.v1",
   summary: "Patch a work item",
   description:
-    "Updates a subset of fields on a work item. Whitelisted fields only — id, created_at, updated_at are server-managed.",
-  input: z.object({
+    "Updates a subset of fields on a work item. HTTP: PATCH /api/v1/work/items/{id} " +
+    "with body { set: { <field>: <value>, ... } } — the SQL-style UPDATE…SET envelope. " +
+    "The operation is PATCH but the payload wrapper is `set`, NOT `patch`. Whitelisted " +
+    "fields only; id (path), created_at, updated_at are server-managed. v0 has no expectedRevision.",
+  input: z.strictObject({
     id: z.string(),
     set: z
       .strictObject({
