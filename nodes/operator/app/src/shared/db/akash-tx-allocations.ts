@@ -41,6 +41,11 @@
  * - IDENTITY_IS_WRITE_ONCE: node_id and composite_uid are written by the claiming INSERT and
  *   never appear in any UPDATE. composite_generation advances monotonically, because it
  *   records which composite revision was in front of the provider, not who owns the spend.
+ * - IDENTICAL_SDL_IS_A_NO_OP (bug.5238): last_applied_sdl_hash records the sha256 of the SDL
+ *   bytes last PUT for this receipt, so the actuator's update path can skip a re-PUT of the same
+ *   SDL — an unconditional re-PUT re-triggers a provider redeploy and thrashes a node that has
+ *   not yet reached a stable serving window. Advisory, not identity: it is written only by the
+ *   update path and never gates a create.
  * - NODE_ID_IS_THE_COST_GROUPING_KEY: cost is attributed by this immutable UUID alone. It is
  *   NOT wallet_scope (which operator wallet serialized and paid), NOT a billing account, NOT
  *   a DAO address, and NOT a user or actor. Those five are distinct and must never substitute
@@ -134,6 +139,16 @@ export const akashTxAllocations = pgTable(
     externalName: text("external_name"),
     /** Provider account that won the lease, when known. */
     providerAccount: text("provider_account"),
+    /**
+     * sha256 hex of the exact Akash SDL bytes last PUT to the provider for this receipt
+     * (bug.5238, IDENTICAL_SDL_IS_A_NO_OP). The in-place update path re-PUTs the SDL only when
+     * the desired SDL hashes DIFFERENTLY from this value; a byte-identical re-PUT is skipped
+     * because Console re-triggers a provider redeploy on every PUT, and re-deploying a
+     * not-yet-serving node denies it the stable window it needs to start serving (the beacon /
+     * node-template thrash). NULL until the first in-place update — the create path never writes
+     * it, so the first update after a create always applies once and records the hash.
+     */
+    lastAppliedSdlHash: text("last_applied_sdl_hash"),
     /** Stable redacted failure code; never provider response bodies. */
     failureCode: text("failure_code"),
     createdAt: timestamp("created_at", { withTimezone: true })

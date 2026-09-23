@@ -284,6 +284,14 @@ export interface AkashTxConsolePort {
    */
   findAllocationSince(cursor: string): Promise<AkashAllocationProbe>;
   status(input: { leaseId: string }): Promise<ProvisionOutput>;
+  /**
+   * sha256 hex of the exact SDL bytes `updateAllocated(spec)` would PUT for this spec — the same
+   * `buildAkashSdl` render, pricing options and all. Pure and deterministic: identical spec →
+   * identical hash. It lives on this port (not the actuator) so SDL construction and the pricing
+   * options it needs stay inside the adapter and never cross the seam. The actuator compares it
+   * to the receipt's `lastAppliedSdlHash` to no-op a byte-identical re-PUT (bug.5238).
+   */
+  sdlHash(spec: ProvisionSpec): string;
   /** In-place SDL replacement on a known handle. Returns once the provider accepted it. */
   updateAllocated(input: {
     resourceId: string;
@@ -309,6 +317,12 @@ export interface AkashTxAllocationRecord {
   readonly allocationCursor?: string;
   readonly externalName?: string;
   readonly providerAccount?: string;
+  /**
+   * sha256 hex of the SDL bytes last PUT to the provider for this receipt (bug.5238). Undefined
+   * until the first in-place update; the create path never sets it. The update path no-ops a
+   * re-PUT when the desired SDL hashes to this value.
+   */
+  readonly lastAppliedSdlHash?: string;
 }
 
 /** A receipt that has held the wallet slot longer than any single transaction can take. */
@@ -378,6 +392,16 @@ export interface AkashTxAllocationLedgerPort {
     cogniKey: string;
     externalName: string;
     providerAccount?: string;
+  }): Promise<void>;
+  /**
+   * Persist the sha256 of the SDL just PUT for this key, so the next in-place update can no-op a
+   * byte-identical re-PUT (bug.5238). Called ONLY after `updateAllocated` succeeds — persisting
+   * before the PUT would make a failed apply skip forever. Advisory metadata, never identity: it
+   * does not touch the wallet slot, node_id, composite_uid, or the handle.
+   */
+  recordAppliedSdlHash(input: {
+    cogniKey: string;
+    sdlHash: string;
   }): Promise<void>;
   /**
    * Settle a receipt that never bound a paid resource, releasing the wallet-wide slot.

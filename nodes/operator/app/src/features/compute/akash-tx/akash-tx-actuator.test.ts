@@ -19,6 +19,7 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -210,6 +211,15 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       ...(input.providerAccount
         ? { providerAccount: row.providerAccount ?? input.providerAccount }
         : {}),
+    });
+  }
+
+  async recordAppliedSdlHash(input: { cogniKey: string; sdlHash: string }) {
+    const row = this.rows.get(input.cogniKey);
+    if (!row) throw new Error("unknown key");
+    this.rows.set(input.cogniKey, {
+      ...row,
+      lastAppliedSdlHash: input.sdlHash,
     });
   }
 
@@ -456,6 +466,15 @@ class FakeConsole implements AkashTxConsolePort {
 
   async updateAllocated(): Promise<void> {
     this.updateCalls += 1;
+  }
+
+  /**
+   * Deterministic stand-in for the adapter's `sha256(buildAkashSdl(spec))`: identical spec →
+   * identical hash, any spec change → a different hash. That is the exact property the actuator's
+   * no-op gate relies on, so hashing the spec directly is a faithful fake.
+   */
+  sdlHash(spec: ProvisionSpec): string {
+    return createHash("sha256").update(JSON.stringify(spec)).digest("hex");
   }
 
   async release(input: { leaseId: string }): Promise<void> {
@@ -1025,6 +1044,81 @@ describe("AkashTxActuator.update / delete", () => {
     expect(api.allocateCalls).toBe(spent.allocate);
     // And no second receipt: the identity re-bind lands on the SAME row the create opened.
     expect(ledger.rows.size).toBe(1);
+  });
+
+  it("no-ops a byte-identical re-PUT and leaves the receipt hash untouched (bug.5238)", async () => {
+    const { actuator, api, ledger } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+
+    // First update applies the SDL once and records its hash on the receipt.
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(api.updateCalls).toBe(1);
+    const recordedHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
+    expect(recordedHash).toBe(api.sdlHash(SPEC));
+
+    // Reconciling again with the SAME spec must NOT re-PUT — that is the thrash the fix stops.
+    const resource = await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(resource.externalName).toBe("7001");
+    expect(api.updateCalls).toBe(1);
+    // The receipt hash is unchanged — the no-op wrote nothing.
+    expect(ledger.rows.get("k1")?.lastAppliedSdlHash).toBe(recordedHash);
+  });
+
+  it("still PUTs and updates the hash when a genuine spec change yields a different SDL (bug.5238 anti-over-gate)", async () => {
+    const { actuator, api, ledger } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(api.updateCalls).toBe(1);
+    const firstHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
+
+    // A real promote: new image sha → different SDL → different hash → the PUT MUST still fire.
+    const nextSpec: ProvisionSpec = {
+      ...SPEC,
+      services: SPEC.services.map((service) => ({
+        ...service,
+        image: "ghcr.io/cogni-dao/toks9:sha-def",
+      })),
+    };
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: nextSpec,
+    });
+    expect(api.updateCalls).toBe(2);
+    const secondHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
+    expect(secondHash).toBe(api.sdlHash(nextSpec));
+    expect(secondHash).not.toBe(firstHash);
   });
 
   it("releases the provider resource and settles the key", async () => {
