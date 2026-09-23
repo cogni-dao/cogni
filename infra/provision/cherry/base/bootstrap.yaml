@@ -62,10 +62,13 @@ write_files:
       # of Event updates (2026-09-09: openbao readiness had 20,920) — a major
       # feeder of the revision history that grew state.db past 10 GB and drove
       # the node to 45% iowait. The default 1h retention is far longer than
-      # anyone reads an Event; 30m bounds the storm. Retained-history cleanup
-      # is the kine-compact timer below; this bounds the inflow.
+      # anyone reads an Event; 30m bounds the storm. bug.5188: 30m still let
+      # kine bloat 6.4 GB in ~3 days, so tighten Event retention further to 5m —
+      # Events are the #1 kine-write source and nothing in this control plane
+      # reads an Event older than a few minutes. Retained-history cleanup is the
+      # kine-compact timer below; this bounds the inflow.
       kube-apiserver-arg:
-        - "event-ttl=30m"
+        - "event-ttl=5m"
 
   # k3s container registry config — node-level, all pods get access.
   # - ghcr.io: auth for private cogni images (simpler than per-Deployment
@@ -341,11 +344,17 @@ write_files:
     permissions: "0644"
     content: |
       [Unit]
-      Description=Weekly k3s kine compaction
+      Description=Hourly k3s kine compaction
 
       [Timer]
-      OnCalendar=Sun *-*-* 04:15:00
-      RandomizedDelaySec=30m
+      # bug.5188: weekly (Sun 04:15) could not keep up — production kine bloated
+      # to 6.4 GB in ~3 days between runs, starving the apiserver long before the
+      # next compaction. Run hourly instead. This is cheap: the script's MIN_BYTES
+      # gate (512 MB) means most hourly runs no-op without stopping k3s, and it
+      # only pays the (few-second) compact+VACUUM once state.db has actually grown
+      # past the threshold — so the k3s blip happens on demand, not every hour.
+      OnCalendar=hourly
+      RandomizedDelaySec=5m
       Persistent=true
 
       [Install]
