@@ -233,6 +233,15 @@ services:
   postgres:
     image: postgres:15
     restart: unless-stopped
+    # bug.5011 root cause: postgres is the shared datastore for openfga, litellm
+    # and the app — if the kernel OOM-kills it under a deploy-infra memory spike,
+    # the whole control plane fails. Protect it hardest: oom_score_adj -900 (kill
+    # almost everything else first) + a soft mem_reservation floor. NO hard
+    # mem_limit — postgres sizes its own caches (shared_buffers/work_mem) and a
+    # cgroup cap would OOM it mid-query instead of protecting it.
+    # See docs/design/control-plane-oom-protection.md.
+    mem_reservation: 512m
+    oom_score_adj: -900
     labels:
       # bug.5105: stateful stores are never autohealed. autoheal restarting a
       # database mid-recovery means recovery never finishes — that loop took the
@@ -319,6 +328,17 @@ services:
     # Public-NIC traffic is dropped by infra/provision/cherry/harden-docker-public-ports.sh.
     ports:
       - "8080:8080"
+    # bug.5011 root cause: OpenFGA (the authz singleton) had NO memory
+    # reservation, so a deploy-infra memory spike on the oversubscribed 6GB box
+    # let the kernel OOM-kill it (the "OpenFGA gone" outages — authz_unavailable
+    # storms). mem_reservation is a soft floor the kernel honors under pressure;
+    # oom_score_adj -800 tells the kernel to sacrifice almost anything else
+    # first. mem_limit is a generous ceiling (Go service, postgres-backed, light)
+    # to catch a genuine leak without capping normal load.
+    # See docs/design/control-plane-oom-protection.md.
+    mem_reservation: 256m
+    mem_limit: 768m
+    oom_score_adj: -800
     command: run
     environment:
       - OPENFGA_DATASTORE_ENGINE=postgres
