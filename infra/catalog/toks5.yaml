@@ -19,11 +19,10 @@ production_branch: deploy/production-toks5
 # cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER: toks5 is a real cogni-dao fleet
 # node, so every environment it runs in must bill the PRODUCTION sponsor account
 # (akash10auj…). The birth proof is spent; production is this node's only slot.
-envs: [candidate-a, production]
+envs: [production]
 # story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
 # fallback that exists for rows minted before decentralized compute did.
 deployment_provider:
-  candidate-a: akash
   production: akash
 # task.5097 — WHICH authority reconciles the workload. Crossplane
 # (infra/crossplane/xcomputeworkload) owns every generic concern; the only Cogni-specific
@@ -32,7 +31,6 @@ deployment_provider:
 # control plane) and pay for its lease (a pinned actuator wallet); an environment missing
 # either is omitted and stays on the pre-existing legacy default (task.5104, task.5097).
 compute_api:
-  candidate-a: crossplane
   production: crossplane
 # bug.5192 — EXPLICIT replacement counter for a terminally settled lease key. The generation is
 # the only varying component of the actuator's wallet-wide idempotence key
@@ -45,7 +43,6 @@ compute_api:
 # task.5122 renamed this cell from `lease_epoch`; the VALUE is unchanged, so the key this row
 # resolves to is still `…:1` byte-for-byte. "Epoch" is reserved for attribution/distribution.
 lease_generation:
-  candidate-a: 0
   production: 1
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
