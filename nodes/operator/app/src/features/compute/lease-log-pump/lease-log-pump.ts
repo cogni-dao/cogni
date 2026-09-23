@@ -31,6 +31,7 @@
  * @internal
  */
 
+import { AkashTxLeaseLogSourcesOutputSchema } from "@/contracts/compute.akash-tx.v1.contract";
 import type {
   AkashTxLeaseLogSource,
   AkashTxLeaseLogSources,
@@ -49,7 +50,8 @@ export interface LeaseLogPumpLogger {
 }
 
 export interface LeaseLogPumpDeps {
-  readonly sources: () => Promise<AkashTxLeaseLogSources>;
+  /** Raw actuator response; validated here against the shared v1 wire schema. */
+  readonly sources: () => Promise<unknown>;
   readonly readLogs: ProviderLeaseLogReaderPort["read"];
   readonly push: (streams: readonly LeaseLogStream[]) => Promise<void>;
   readonly log: LeaseLogPumpLogger;
@@ -98,7 +100,10 @@ export class LeaseLogPump {
     this.tick_ += 1;
     let snapshot: AkashTxLeaseLogSources;
     try {
-      snapshot = await this.deps.sources();
+      // WIRE_IS_THE_CONTRACT: a drifted actuator fails loudly here, not mid-cycle.
+      snapshot = AkashTxLeaseLogSourcesOutputSchema.parse(
+        await this.deps.sources()
+      );
     } catch (error) {
       this.deps.log.error(
         { causeMessage: error instanceof Error ? error.message : "unknown" },
