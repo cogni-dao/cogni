@@ -23,7 +23,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, promisify } from "node:util";
 
-import { parseRepoSpec, resolveNodeArtifactBundle } from "@cogni/repo-spec";
+import {
+  parseRepoSpec,
+  resolveNodeArtifactBundle,
+  resolveRuntimeProfileSecretRefs,
+} from "@cogni/repo-spec";
 import { parse, stringify } from "yaml";
 
 import {
@@ -210,8 +214,15 @@ async function main(): Promise<void> {
   const secretResources = buildComputeSecretResources({
     slug: catalogIdentity.slug,
     environment,
-    secretRefs: bundle.services.flatMap(
-      (service) => service.service.secretRefs
+    // Resolve profile-implied refs so the projected secrets match the workload the manifest
+    // builder emits — the runtime profile supplies the standard keys the spec no longer lists.
+    secretRefs: bundle.services.flatMap((service) =>
+      resolveRuntimeProfileSecretRefs({
+        ...(service.service.runtimeProfile
+          ? { runtimeProfile: service.service.runtimeProfile }
+          : {}),
+        secretRefs: service.service.secretRefs,
+      })
     ),
   });
   // ONE_AUTHORITY_PER_WORKLOAD (task.5097). The kustomization lists exactly one compute

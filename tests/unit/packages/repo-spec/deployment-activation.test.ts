@@ -39,9 +39,10 @@ describe("renderDeploymentActivationSpec", () => {
   const spliced = renderDeploymentActivationSpec(LEGACY_SPEC);
 
   it("appends the stock cogni-node-app-v1 declaration when the block is absent", () => {
-    const parsed = parseYaml(spliced) as Record<string, unknown>;
-    expect(parsed.deployment).toEqual(COGNI_NODE_APP_V1_DEPLOYMENT);
-    // The full spec still parses through the real repo-spec parser and reads as declared.
+    // The appended block is clean: it omits the empty secret_refs list (profile-supplied).
+    expect(spliced).not.toContain("secret_refs");
+    // Through the real repo-spec parser the default restores it, so it reads as declared and
+    // round-trips exactly to the stock declaration.
     const spec = parseRepoSpec(spliced);
     expect(hasDeclaredNodeDeployment(spec)).toBe(true);
     expect(spec.deployment).toEqual(COGNI_NODE_APP_V1_DEPLOYMENT);

@@ -82,6 +82,7 @@ export {
   LEGACY_DEFAULT_NODE_DEPLOYMENT,
   missingRuntimeProfileSecretKeys,
   renderNodeDeploymentYaml,
+  resolveRuntimeProfileSecretRefs,
 } from "./node-app-deployment.js";
 export { parseRepoSpec } from "./parse.js";
 export {
