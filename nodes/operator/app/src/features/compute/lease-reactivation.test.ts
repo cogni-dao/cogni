@@ -35,6 +35,7 @@ function receipt(
       compositeUid: "8e5d4c3b-2a19-4f08-b7c6-5d4e3f2a1b09",
       compositeGeneration: generation,
     },
+    workload: "blue",
     environment: "candidate-a",
     ...rest,
   };

@@ -208,6 +208,36 @@ export const AkashTxDeleteInputSchema = z.strictObject({
   externalName: ExternalNameSchema,
 });
 
+/**
+ * Lease-log source enumeration (bug.5240). Unlike the four Crossplane ops above, this wire
+ * DELIBERATELY exposes lease coordinates (dseq/gseq/oseq/provider): its caller is the
+ * lease-log-pump, whose whole job is reading provider logs, and the coordinates plus a
+ * logs-scoped ephemeral JWT are exactly the least capability that job needs.
+ */
+export const AkashTxLeaseLogSourcesInputSchema = z.strictObject({
+  environment: EnvironmentSchema.optional(),
+  limit: z.number().int().min(1).max(64).optional(),
+});
+
+export const AkashTxLeaseLogSourceSchema = z.strictObject({
+  nodeId: z.string().uuid(),
+  workload: z.string().min(1).max(64),
+  environment: EnvironmentSchema,
+  dseq: z.string().min(1).max(32),
+  gseq: z.number().int().positive(),
+  oseq: z.number().int().positive(),
+  providerAccount: z.string().min(1).max(64),
+  providerHostUri: z.string().url(),
+  services: z.array(z.string().min(1).max(64)).max(16),
+});
+
+export const AkashTxLeaseLogSourcesOutputSchema = z.strictObject({
+  sources: z.array(AkashTxLeaseLogSourceSchema).max(64),
+  /** Logs-scoped provider JWT covering every source. Empty when `sources` is empty. */
+  token: z.string(),
+  ttlSeconds: z.number().int().nonnegative(),
+});
+
 export const AkashTxResourceSchema = z.strictObject({
   externalName: z.string(),
   state: z.enum(["pending", "active", "closed", "unknown"]),
@@ -244,6 +274,9 @@ export type AkashTxMigrationStep = z.infer<typeof AkashTxMigrationStepSchema>;
 export type AkashTxMigrationPhase = z.infer<typeof AkashTxMigrationPhaseSchema>;
 export type AkashTxIdentity = z.infer<typeof AkashTxIdentitySchema>;
 export type AkashTxObserveInput = z.infer<typeof AkashTxObserveInputSchema>;
+export type AkashTxLeaseLogSourcesInput = z.infer<
+  typeof AkashTxLeaseLogSourcesInputSchema
+>;
 export type AkashTxCreateInput = z.infer<typeof AkashTxCreateInputSchema>;
 export type AkashTxUpdateInput = z.infer<typeof AkashTxUpdateInputSchema>;
 export type AkashTxDeleteInput = z.infer<typeof AkashTxDeleteInputSchema>;

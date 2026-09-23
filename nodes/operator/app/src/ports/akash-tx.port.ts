@@ -237,6 +237,19 @@ export interface AkashTxActuatorPort {
     olderThanMs: number;
     limit: number;
   }): Promise<AkashTxSweepReport>;
+  /**
+   * Bounded, read-only enumeration of every LIVE lease's log coordinates plus ONE short-lived
+   * logs-scoped provider token (bug.5240). This is the seam that makes "deployed via operator
+   * ⇒ logs observable" structural: coverage derives from the allocation ledger — the same
+   * durable receipt that proves the spend — so a lease that exists is a lease that can be
+   * tailed, with zero per-node configuration. No wallet slot, no Console mutation, no ledger
+   * write. Per-lease Console read failures skip that source (fail-open: observability must
+   * never wedge on one sick lease); only a token-mint failure refuses the whole call.
+   */
+  leaseLogSources(input: {
+    environment?: string;
+    limit?: number;
+  }): Promise<AkashTxLeaseLogSources>;
 }
 
 /** Per-pass counts for the sweeper's single structured log line. */
@@ -298,6 +311,58 @@ export interface AkashTxConsolePort {
     spec: ProvisionSpec;
   }): Promise<void>;
   release(input: { leaseId: string }): Promise<void>;
+  /**
+   * Read-only lease coordinates + declared service names for one paid handle (bug.5240).
+   * Feeds `leaseLogSources`; never mutates and never mints. `services` comes from the lease's
+   * own manifest status, so log coverage enumerates from the same record that deployed.
+   */
+  leaseLogDescriptor(input: {
+    leaseId: string;
+  }): Promise<AkashLeaseLogDescriptor>;
+  /**
+   * Wallet-signed, logs-scoped, short-TTL provider bearer (AEP-64 granular JWT). The ONLY
+   * capability the token grants is reading lease logs on the named providers — it can never
+   * spend, close, or mutate. Custody note: only the actuator can mint (it holds the Console
+   * key); consumers receive the ephemeral token, never the credential.
+   */
+  mintLeaseLogsToken(input: {
+    providers: readonly string[];
+    ttlSeconds: number;
+  }): Promise<string>;
+}
+
+/** Lease coordinates + service names for provider log reads. Read-only, provider-opaque. */
+export interface AkashLeaseLogDescriptor {
+  readonly gseq: number;
+  readonly oseq: number;
+  readonly providerAccount?: string;
+  /** Provider gateway base URI (https host the lease-logs endpoint lives on). */
+  readonly providerHostUri?: string;
+  /** SDL service names reported by the lease manifest status. */
+  readonly services: readonly string[];
+  readonly state: ProvisionState;
+}
+
+/** One pollable provider log source — everything a keyless reader needs for one lease. */
+export interface AkashTxLeaseLogSource {
+  readonly nodeId: string;
+  /** Workload slug (ProvisionSpec.name). Observability label, never identity. */
+  readonly workload: string;
+  readonly environment: string;
+  readonly dseq: string;
+  readonly gseq: number;
+  readonly oseq: number;
+  readonly providerAccount: string;
+  readonly providerHostUri: string;
+  readonly services: readonly string[];
+}
+
+/** Bounded snapshot of every live lease's log coordinates plus one shared ephemeral token. */
+export interface AkashTxLeaseLogSources {
+  readonly sources: readonly AkashTxLeaseLogSource[];
+  /** Logs-scoped JWT covering every provider above. Empty when `sources` is empty. */
+  readonly token: string;
+  readonly ttlSeconds: number;
 }
 
 export type AkashTxAllocationState =
@@ -312,6 +377,8 @@ export interface AkashTxAllocationRecord {
   readonly cogniKey: string;
   /** The identity this receipt is bound to. NOT NULL in the table: it always exists. */
   readonly identity: AkashTxWorkloadIdentity;
+  /** Workload label (ProvisionSpec.name, the node slug). Observability only, never identity. */
+  readonly workload: string;
   readonly environment: string;
   readonly state: AkashTxAllocationState;
   readonly allocationCursor?: string;

@@ -59,6 +59,7 @@ export type {
 } from "./ai-telemetry.port";
 export {
   type AkashAllocationProbe,
+  type AkashLeaseLogDescriptor,
   type AkashTxActuatorPort,
   type AkashTxAllocationLedgerPort,
   type AkashTxAllocationRecord,
@@ -67,6 +68,8 @@ export {
   type AkashTxCreateResult,
   AkashTxError,
   type AkashTxErrorCode,
+  type AkashTxLeaseLogSource,
+  type AkashTxLeaseLogSources,
   type AkashTxMigrationPhase,
   type AkashTxMigrationPort,
   type AkashTxMigrationStep,
@@ -185,6 +188,12 @@ export type {
   LangfuseTraceQuery,
   LangfuseTraceSummary,
 } from "./langfuse-reader.port";
+export type {
+  LeaseLogPushPort,
+  LeaseLogStream,
+  ProviderLeaseLogLine,
+  ProviderLeaseLogReaderPort,
+} from "./lease-log.port";
 // LlmError types re-exported for adapters (adapters can only import from ports)
 // Features should import directly from @/core
 export {

@@ -20,11 +20,14 @@
  *   - SELECTOR_LABELS_NARROW_ONLY: a caller `env`/`service`/`node` matcher must EQUAL the forced value
  *     (else `query_out_of_scope`); any other label matcher (`pod`, `stream`, `source`, …) is kept as an
  *     additional narrowing matcher.
- *   - APP_ONLY_ENVELOPE: `service` is fixed to `app` because the node app pod is the ONLY log source
- *     carrying the per-node `node` label today. Shared-infra services (scheduler-worker, temporal,
- *     litellm) are NOT node-attributable yet (they bind no `nodeId`), so they are deliberately out of
- *     scope — surfacing them here would leak cross-node lines. Multi-service/-scope access is the
- *     Phase 1 generic route. See docs/spec/grafana-observability-access.md §"Node-dev log scope envelope".
+ *   - PER_SERVICE_ENVELOPE (bug.5240, supersedes APP_ONLY_ENVELOPE): the default stream stays
+ *     `service="app"` — the operator-side source that has always carried the per-node `node` label.
+ *     A caller may select ANY OTHER service name, and that selection additionally forces
+ *     `source="lease"`: lease streams are labeled operator-side by the lease-log pump from
+ *     ledger-derived identity, so `node` is trustworthy there — while operator k3s streams beyond
+ *     `app` (actuator, scheduler-worker, …) stay out of reach exactly as before. Shared-infra
+ *     services are still NOT node-attributable; the Phase 1 generic route remains their path.
+ *     See docs/spec/grafana-observability-access.md §"Node-dev log scope envelope".
  * Side-effects: none (pure)
  * Links: docs/spec/grafana-observability-access.md, docs/design/substrate-grafana-observability.md,
  *   ./flight-status (FLIGHT_ENVS), task.5025
@@ -36,14 +39,22 @@ import { FLIGHT_ENVS, isFlightEnv } from "./flight-status";
 
 export { FLIGHT_ENVS, type FlightEnv, isFlightEnv };
 
-/** The only Loki `service` that carries the per-node `node` label today (the node's app pod). */
+/** The default Loki `service` for a node-scoped query (the operator-side `app` stream). */
 export const NODE_SCOPED_SERVICE = "app";
+
+/** The `source` label the lease-log pump stamps on every provider-lease stream (bug.5240). */
+export const LEASE_LOG_SOURCE = "lease";
 
 /** Defensive bound on the caller-supplied LogQL query (not a real LogQL limit). */
 export const MAX_QUERY_LENGTH = 2048;
 
-/** The selector labels the operator forces to the caller's node — a caller matcher may only match them. */
-const FORCED_LABELS = new Set(["env", "service", "node"]);
+/** SDL service names are DNS labels; anything else is refused before it reaches a selector. */
+const SERVICE_NAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** True when `value` is a well-formed SDL service name a caller may select. */
+export function isValidServiceName(value: string): boolean {
+  return SERVICE_NAME_RE.test(value);
+}
 
 export type ObservabilityQueryErrorCode =
   | "invalid_query"
@@ -69,21 +80,43 @@ interface LabelMatcher {
 }
 
 /**
- * Authorize + pin a caller LogQL query to one node's app stream.
+ * Authorize + pin a caller LogQL query to one node's streams.
  *
- * - empty query        → `{env, service="app", node}` (just this node's app lines)
- * - `{…} | pipeline`   → selector matchers validated (env/service/node forced, others narrow), pipeline kept
+ * - empty query        → `{env, service, node}` (+ `source="lease"` for a non-app service)
+ * - `{…} | pipeline`   → selector matchers validated (forced labels must equal, others narrow),
+ *                        pipeline kept
  * - `| pipeline`       → forced selector + the pipeline
  *
+ * `service` defaults to the operator-side `app` stream. Selecting any other declared service
+ * (bug.5240 — e.g. a lease sidecar) additionally forces `source="lease"`, so only the
+ * pump-shipped, ledger-labeled streams are reachable — never operator k3s streams.
+ *
  * The returned query is safe to run with the operator's read token: it can only ever match the
- * caller's node app stream, never another node, service, or env.
+ * caller's node streams, never another node, service scope, or env.
  */
 export function scopeNodeLogQL(input: {
   readonly env: FlightEnv;
   readonly nodeId: string;
   readonly query?: string | undefined;
+  readonly service?: string | undefined;
 }): string {
-  const forced = forcedSelectorParts(input.env, input.nodeId);
+  const service = input.service ?? NODE_SCOPED_SERVICE;
+  if (!isValidServiceName(service)) {
+    throw new ObservabilityQueryError(
+      "invalid_query",
+      "'service' must be a lowercase DNS-label service name"
+    );
+  }
+  const forcedValues: Record<string, string> = {
+    env: input.env,
+    service,
+    node: input.nodeId,
+    // PER_SERVICE_ENVELOPE: beyond `app`, only pump-labeled lease streams are node-attributable.
+    ...(service === NODE_SCOPED_SERVICE ? {} : { source: LEASE_LOG_SOURCE }),
+  };
+  const forced = Object.entries(forcedValues).map(
+    ([label, value]) => `${label}=${quote(value)}`
+  );
   const raw = (input.query ?? "").trim();
   if (raw === "") return `{${forced.join(", ")}}`;
 
@@ -119,16 +152,11 @@ export function scopeNodeLogQL(input: {
 
   const narrowing: string[] = [];
   for (const m of parseMatchers(matchersRaw)) {
-    if (!FORCED_LABELS.has(m.label)) {
+    const required = forcedValues[m.label];
+    if (required === undefined) {
       narrowing.push(`${m.label}${m.op}"${m.value}"`);
       continue;
     }
-    const required =
-      m.label === "env"
-        ? input.env
-        : m.label === "service"
-          ? NODE_SCOPED_SERVICE
-          : input.nodeId;
     if (m.op !== "=" || m.value !== required) {
       throw new ObservabilityQueryError(
         "query_out_of_scope",
@@ -140,14 +168,6 @@ export function scopeNodeLogQL(input: {
   const selector = `{${[...forced, ...narrowing].join(", ")}}`;
   const pipeline = pipelineRaw.trim();
   return pipeline === "" ? selector : `${selector} ${pipeline}`;
-}
-
-function forcedSelectorParts(env: FlightEnv, nodeId: string): string[] {
-  return [
-    `env=${quote(env)}`,
-    `service=${quote(NODE_SCOPED_SERVICE)}`,
-    `node=${quote(nodeId)}`,
-  ];
 }
 
 /** Parse the comma-separated label matchers inside a stream selector; reject anything unparseable. */

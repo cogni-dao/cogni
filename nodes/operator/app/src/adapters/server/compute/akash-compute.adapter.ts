@@ -48,6 +48,7 @@ import type {
   ProvisionState,
 } from "@cogni/ai-tools";
 import type {
+  AkashLeaseLogDescriptor,
   ComputeCostEvidencePort,
   ComputeResourceCostEvidence,
 } from "@/ports";
@@ -283,6 +284,8 @@ export class AkashComputeAdapter
   };
   private readonly sdlOptions: AkashSdlOptions;
   private readonly now: () => Date;
+  /** Provider gateway URIs by owner account — stable identity, cached per process. */
+  private readonly hostUriCache = new Map<string, string>();
 
   constructor(private readonly config: AkashComputeAdapterConfig) {
     this.baseUrl = (
@@ -546,6 +549,87 @@ export class AkashComputeAdapter
       undefined,
       this.writeTimeoutMs
     );
+  }
+
+  /** Read-only lease coordinates + service names for provider log reads (bug.5240). */
+  async leaseLogDescriptor(p: {
+    leaseId: string;
+  }): Promise<AkashLeaseLogDescriptor> {
+    const detail = await this.request<ConsoleDeploymentDetail>(
+      "GET",
+      `/v1/deployments/${encodeURIComponent(p.leaseId)}`
+    );
+    const leases = detail?.leases ?? [];
+    const lease = leases.find((l) => l.state === "active") ?? leases[0];
+    const owner =
+      typeof lease?.id?.provider === "string" ? lease.id.provider : undefined;
+    return {
+      gseq: typeof lease?.id?.gseq === "number" ? lease.id.gseq : 1,
+      oseq: typeof lease?.id?.oseq === "number" ? lease.id.oseq : 1,
+      ...(owner ? { providerAccount: owner } : {}),
+      ...(owner
+        ? await this.providerHostUri(owner).then((uri) =>
+            uri ? { providerHostUri: uri } : {}
+          )
+        : {}),
+      services: Object.keys(lease?.status?.services ?? {}),
+      state: mapState(detail?.deployment?.state, leases),
+    };
+  }
+
+  /**
+   * Logs-scoped granular JWT (AEP-64) over the managed wallet. The narrowest read capability
+   * the provider accepts — it can tail lease logs on the named providers and nothing else.
+   */
+  async mintLeaseLogsToken(p: {
+    providers: readonly string[];
+    ttlSeconds: number;
+  }): Promise<string> {
+    const minted = await this.request<{ token?: string }>(
+      "POST",
+      "/v1/create-jwt-token",
+      {
+        data: {
+          ttl: p.ttlSeconds,
+          leases: {
+            access: "granular",
+            permissions: p.providers.map((provider) => ({
+              provider,
+              access: "scoped",
+              scope: ["logs"],
+            })),
+          },
+        },
+      }
+    );
+    if (!minted?.token) {
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "Console create-jwt-token returned no token"
+      );
+    }
+    return minted.token;
+  }
+
+  /**
+   * Provider gateway base URI, cached for the process lifetime — a hostUri is DNS-stable
+   * infrastructure identity, and a restart is the refresh path.
+   */
+  private async providerHostUri(owner: string): Promise<string | undefined> {
+    const cached = this.hostUriCache.get(owner);
+    if (cached) return cached;
+    const provider = await this.request<{
+      hostUri?: string;
+      host_uri?: string;
+    }>("GET", `/v1/providers/${encodeURIComponent(owner)}`).catch(
+      () => undefined
+    );
+    const uri = provider?.hostUri ?? provider?.host_uri;
+    if (typeof uri === "string" && uri.length > 0) {
+      this.hostUriCache.set(owner, uri);
+      return uri;
+    }
+    return undefined;
   }
 
   private async listAllDeployments(): Promise<ConsoleDeploymentDetail[]> {
