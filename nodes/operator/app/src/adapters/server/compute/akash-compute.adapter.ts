@@ -267,6 +267,59 @@ const defaultSleep = (ms: number): Promise<void> =>
  * Akash Console compute adapter — read + write halves of ComputeResourcePort over the
  * managed-wallet Console API. One shared account funds every workload (v0 billing).
  */
+/**
+ * A bounded, non-echoing digest of a Console error body.
+ *
+ * Provider bodies can carry the SDL and resolved secrets, so NO free-text value is ever taken —
+ * the pre-existing no-echo guarantee is unchanged. Two things that cannot carry a secret ARE
+ * taken: the body's top-level KEY NAMES (schema, not data) and the values of a short allowlist
+ * of enum-like identifier fields. `message` is deliberately absent from that allowlist: it is
+ * free text and is exactly what the no-echo test forbids.
+ *
+ * Why take anything at all — "Console request failed with HTTP 422" and nothing else is
+ * undiagnosable from logs. poly's candidate-a lane retried that exact deterministic rejection
+ * ~1.5x/min for five days against a PAID API, and naming the cause required redeploying the
+ * actuator (bug.5247). Key names alone identify which error schema Console returned.
+ */
+const PROVIDER_DETAIL_VALUE_KEYS = ["code", "error", "type", "reason"] as const;
+const PROVIDER_DETAIL_MAX_CHARS = 200;
+const PROVIDER_BODY_MAX_CHARS = 2000;
+
+async function readProviderDetail(
+  response: Response
+): Promise<string | undefined> {
+  try {
+    const text = (await response.text()).slice(0, PROVIDER_BODY_MAX_CHARS);
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const record = parsed as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    const parts = keys.length > 0 ? [`keys=${keys.join(",")}`] : [];
+    for (const key of PROVIDER_DETAIL_VALUE_KEYS) {
+      const value = record[key];
+      // Identifier-shaped only. A long or spacey value is prose, not an enum — leave it.
+      if (
+        typeof value === "string" &&
+        value.length <= 48 &&
+        /^[\w.:-]+$/.test(value)
+      ) {
+        parts.push(`${key}=${value}`);
+      } else if (typeof value === "number") {
+        parts.push(`${key}=${value}`);
+      }
+    }
+    const joined = parts.join(" ");
+    return joined === ""
+      ? undefined
+      : joined.slice(0, PROVIDER_DETAIL_MAX_CHARS);
+  } catch {
+    // Unreadable or non-JSON body. Never a reason to fail the request path.
+    return undefined;
+  }
+}
+
 export class AkashComputeAdapter
   implements ComputeResourcePort, ComputeCostEvidencePort
 {
@@ -1185,11 +1238,17 @@ export class AkashComputeAdapter
         signal: controller.signal,
       });
       if (!response.ok) {
-        // Never retain provider bodies: they can echo the SDL and future resolved secrets.
-        await response.body?.cancel().catch(() => {});
+        // Provider bodies are still never retained — they echo the SDL and resolved secrets.
+        // What IS taken is a bounded, allowlisted scalar digest, because "HTTP 422" with no
+        // cause is undiagnosable from logs alone: poly's candidate lane retried a deterministic
+        // Console rejection ~1.5x/min for five days against a PAID API and nobody could say why
+        // without redeploying the actuator (bug.5247).
+        const detail = await readProviderDetail(response);
         throw new AkashComputeError(
           "HTTP_ERROR",
-          `Console request failed with HTTP ${response.status}`,
+          `Console request failed with HTTP ${response.status}${
+            detail ? ` (${detail})` : ""
+          }`,
           response.status
         );
       }

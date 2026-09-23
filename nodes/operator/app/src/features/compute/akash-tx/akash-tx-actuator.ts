@@ -169,6 +169,22 @@ export function mapConsoleFailure(
         message
       );
     }
+    // A 4xx is Console REFUSING to process the request, decided before anything was broadcast —
+    // the one mutating failure whose outcome is NOT unknown. Calling it `outcome_unknown` made
+    // the reconciler retry a deterministic rejection forever: poly's candidate-a lane looped
+    // ~1.5x/min for five days on a 422, burning lease spend each pass and flooding the XR watch
+    // stream until the circuit opened (bug.5247). 408 and 429 are excluded: those DID reach
+    // Console and may still land, so they keep the safe `outcome_unknown` answer.
+    if (
+      code === "HTTP_ERROR" &&
+      typeof named.httpStatus === "number" &&
+      named.httpStatus >= 400 &&
+      named.httpStatus < 500 &&
+      named.httpStatus !== 408 &&
+      named.httpStatus !== 429
+    ) {
+      return new AkashTxError("provider_rejected", message);
+    }
     if (code === "NO_BIDS" || code === "NO_ELIGIBLE_BIDS") {
       return new AkashTxError("provider_rejected", message);
     }
