@@ -114,12 +114,32 @@ would leak cross-node lines).
 **lease-log pump** (`infra/k8s/base/lease-log-pump`, riding wherever an akash-tx-actuator runs) closes
 that gap structurally: it enumerates every LIVE lease from the actuator's `lease-log-sources` op (the
 same durable receipt that proves the spend), reads each service's log window through the Console
-provider-proxy with a logs-scoped ephemeral JWT, and pushes to Loki with
-`{app="cogni-template", env, node=<uuid>, service=<sdl-service>, service_name=<slug>, source="lease"}`
-using the write-only `LOKI_LEASE_PUSH_*` credential. Coverage derives from the ledger — a lease that
-exists is a lease that is tailed, whatever image it runs and whether or not it ever became Ready. This
-supersedes the bug.5127 app-push lane (`spec.runtime.logPush` stays dormant; no push credential ever
-enters a lease environment).
+provider-proxy with a logs-scoped ephemeral JWT, and pushes to Loki using the write-only
+`LOKI_LEASE_PUSH_*` credential. Coverage derives from the ledger — a lease that exists is a lease
+that is tailed, whatever image it runs and whether or not it ever became Ready. This supersedes the
+bug.5127 app-push lane (`spec.runtime.logPush` stays dormant; no push credential ever enters a lease
+environment). Collection-at-the-platform-boundary is the canonical PaaS pattern — Heroku Logplex,
+Vercel/Netlify log drains, Fly's platform log shipper, and the Kubernetes node-agent (promtail/Alloy
+DaemonSet) all capture tenant stdout where the PLATFORM holds custody, never inside the tenant app.
+
+**STABLE_LEASE_STREAM_LABELS (the write-side context envelope — invariant):** every pump-shipped
+stream carries EXACTLY
+
+| label          | value                     | stability                                                             |
+| -------------- | ------------------------- | --------------------------------------------------------------------- |
+| `app`          | `cogni-template`          | constant                                                              |
+| `env`          | the receipt's environment | closed set (`FLIGHT_ENVS`)                                            |
+| `node`         | repo-spec node UUID       | immutable identity key (same value the read envelope pins)            |
+| `service`      | SDL service name          | stable per deployment declaration                                     |
+| `service_name` | mirrors `service`         | Grafana service-identity convention; matches the k8s lane (container) |
+| `source`       | `lease`                   | constant discriminator vs `k8s`/`k8s-events`                          |
+
+Few, low-cardinality, immutable-valued labels only (Grafana Loki label guidance; the OTel
+resource-vs-record split). The renameable node SLUG is deliberately NOT a label — mutable identity
+never enters a stream envelope; resolve slug↔UUID through the registry. No `stream` label — the
+provider merges stdout/stderr and the envelope must not assert what the source cannot guarantee.
+Adding or renaming a label here is a READ-CONTRACT change: it must update `scopeNodeLogQL`'s forced
+set and this table in the same PR.
 
 **Env envelope:** the readable envs are the canonical `FLIGHT_ENVS` (`candidate-a` · `preview` ·
 `production`) — the same set a node deploys through. The proxy imports that list rather than re-declaring

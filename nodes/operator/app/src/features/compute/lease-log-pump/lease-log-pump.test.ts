@@ -80,9 +80,13 @@ describe("LeaseLogPump.tick", () => {
         app: "cogni-template",
         env: "candidate-a",
         node: POLY_SOURCE.nodeId,
-        service_name: "poly",
         source: "lease",
       });
+      // STABLE_CONTEXT_ENVELOPE: service_name mirrors service; the renameable slug
+      // is never a label; no stream label is asserted.
+      expect(stream.labels.service_name).toBe(stream.labels.service);
+      expect(stream.labels).not.toHaveProperty("stream");
+      expect(Object.values(stream.labels)).not.toContain("poly");
     }
   });
 

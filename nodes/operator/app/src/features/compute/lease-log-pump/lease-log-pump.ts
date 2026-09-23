@@ -228,15 +228,20 @@ export class LeaseLogPump {
         values.push([tsNs.toString(), line] as const);
       }
 
+      // STABLE_CONTEXT_ENVELOPE: few, low-cardinality, immutable-valued labels only
+      // (Grafana Loki label guidance; OTel resource-attribute split). `node` (repo-spec
+      // UUID) is the identity key; the renameable slug is registry-resolvable and
+      // deliberately NOT a label; `service_name` mirrors `service` exactly as the k8s
+      // lane does (container name), never a second identity axis. No `stream` label —
+      // the provider merges stdout/stderr and the envelope must not assert otherwise.
       streams.push({
         labels: {
           app: "cogni-template",
           env: source.environment,
           node: source.nodeId,
           service,
-          service_name: source.workload,
+          service_name: service,
           source: "lease",
-          stream: "stdout",
         },
         values,
       });
