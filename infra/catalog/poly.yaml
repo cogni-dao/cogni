@@ -36,21 +36,18 @@ production_branch: deploy/production-poly
 # Each lane keeps its OWN idempotence key (`xcw:cogni-<env>:4b06359a-…:0`), derived from the
 # XR's own namespace — so these leases can never collide with each other or with production.
 # That is the property that would cost real money.
-envs: [candidate-a, preview, production]
+envs: [preview, production]
 deployment_provider:
-  candidate-a: akash
   preview: akash
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
 # actuator pays from the production account for every lane (NS3).
 compute_api:
-  candidate-a: crossplane
   preview: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 35
   preview: 0
   production: 0
 activity_env: production
