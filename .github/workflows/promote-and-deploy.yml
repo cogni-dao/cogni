@@ -446,6 +446,10 @@ jobs:
           OPERATOR_SOURCE_SHA: ${{ needs.decide.outputs.head_sha }}
           CATALOG_SOURCE_SHA: ${{ fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
           PREVIEW_SOURCE_SHA_MAP: ${{ github.workspace }}/preview-src/.promote-state/source-sha-by-app.json
+          # Did the CALLER name its targets? The operator API always dispatches ONE named
+          # node, and for a named node a missing image must fail loudly rather than skip
+          # into a green run (bug.5248). Empty = fleet fan-out, where skipping is correct.
+          EXPLICIT_TARGETS: ${{ inputs.nodes }}
         run: |
           set -euo pipefail
           # shellcheck source=scripts/ci/lib/image-tags.sh
@@ -510,7 +514,11 @@ jobs:
                 | grep -oP 'Digest:\s+\Ksha256:[a-f0-9]+' | head -1 || true)
             fi
             if [ -z "$digest_only" ]; then
-              echo "::warning::Image not found: $full_tag (not built — skipping $NODE)"
+              if [ "$(missing_image_action "$EXPLICIT_TARGETS")" = "fail" ]; then
+                echo "::error::Image not found: $full_tag — $NODE was named by the caller, so skipping it would report SUCCESS for a promote that did nothing (bug.5248). A catalog/GitOps-only merge builds no app image; promote a sha whose image exists."
+                exit 1
+              fi
+              echo "::warning::Image not found: $full_tag (fleet fan-out, $NODE not rebuilt — skipping)"
               echo "digest=" >> "$GITHUB_OUTPUT"
               echo "promoted=false" >> "$GITHUB_OUTPUT"
               exit 0
