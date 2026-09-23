@@ -504,11 +504,14 @@ spec:
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
-                        expectedSourceSha: {{ $desiredSha | quote }},
-                        {{- /* bug.5237: serving must be proven through the provider's
-                          host-routed path, not the bare lease ingress — a stale deployment
-                          still owning the hostname made the bare proof a lie. */}}
-                        publicHost: {{ $publicHost | quote }}{{ if $hasMigrationStep }},
+                        {{- /* bug.5237 PHASE 2 (deliberately NOT emitted yet): add
+                          `publicHost: {{ $publicHost }}` here so serving is proven through
+                          the provider's host-routed path. The actuator's observe schema is
+                          a strictObject — emitting the key before every environment's
+                          actuator image carries the phase-1 schema turns each observe into
+                          a 400 and freezes reconciliation fleet-wide. Flip this line only
+                          after the phase-1 actuator is deployed everywhere. */}}
+                        expectedSourceSha: {{ $desiredSha | quote }}{{ if $hasMigrationStep }},
                         workload: .payload.body.spec.name,
                         environment: .payload.body.environment,
                         migration: .payload.body.migrationStep{{ end }}
