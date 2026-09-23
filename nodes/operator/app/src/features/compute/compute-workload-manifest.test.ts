@@ -141,8 +141,9 @@ describe("buildComputeWorkloadManifest", () => {
     ).toThrow("digest-pinned OCI reference");
   });
 
-  it("rejects an incomplete runtime profile before rendering desired state", () => {
-    const incompleteBundle: ResolvedNodeArtifactBundle = {
+  it("supplies the profile's secret_refs so a spec that predates a key still renders (bug.5175)", () => {
+    // A stale spec that declares only AUTH_SECRET — the shape that blocked toks5 PR#2.
+    const staleBundle: ResolvedNodeArtifactBundle = {
       ...bundle,
       services: bundle.services.map(({ service, ...resolved }, index) => ({
         ...resolved,
@@ -153,17 +154,20 @@ describe("buildComputeWorkloadManifest", () => {
       })),
     };
 
-    expect(() =>
-      buildComputeWorkloadManifest({
-        slug: "toks4",
-        environment: "candidate-a",
-        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
-        bundle: incompleteBundle,
-        publicHost: "toks4-test.cognidao.org",
-        computeApi: "legacy",
-        leaseGeneration: 0,
-      })
-    ).toThrow(/cogni-node-app-v1 is missing secret_refs/);
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "candidate-a",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle: staleBundle,
+      publicHost: "toks4-test.cognidao.org",
+      computeApi: "legacy",
+      leaseGeneration: 0,
+    });
+
+    // No throw — the desired state carries the FULL profile contract, deduped.
+    expect(manifest.spec.workload.services[0]?.secretRefs).toEqual(
+      REQUIRED_SECRET_REFS
+    );
   });
 
   it("emits the legacy kind with no Crossplane-only policy fields", () => {

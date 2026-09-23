@@ -30,7 +30,8 @@ const spec = parseRepoSpec({
         visibility: "public",
         runtime_profile: "cogni-node-app-v1",
         bindings: { WORKER_URL: "worker" },
-        secret_refs: REQUIRED_SECRET_REFS,
+        // The node declares NO profile secret_refs — the operator supplies them at build time.
+        secret_refs: [],
         resources: { cpu_units: 1, memory_mi: 2048, storage_mi: 4096 },
       },
       {
@@ -88,6 +89,7 @@ describe("buildNodeServicesWorkloadSpec", () => {
         },
       ],
       env: { WORKER_URL: "http://worker:9100" },
+      // Supplied by the runtime profile even though the node declared none.
       secretRefs: REQUIRED_SECRET_REFS,
       runtimeProfile: "cogni-node-app-v1",
     });
@@ -162,8 +164,10 @@ describe("buildNodeServicesWorkloadSpec", () => {
     ).toThrow(/exactly one public cogni-node-app-v1 service/);
   });
 
-  it("rejects an incomplete explicit Cogni runtime profile", () => {
-    const incompleteBundle = {
+  it("supplies the profile's secret_refs, so a spec that omits (or predates) a key still flights (bug.5175)", () => {
+    // Simulate a stale spec: it declares only AUTH_SECRET and is missing every other profile key
+    // (the exact shape that made toks5 PR#2 unfliightable before this fix).
+    const staleBundle = {
       ...bundle,
       services: bundle.services.map(({ service, ...resolved }, index) => ({
         ...resolved,
@@ -174,11 +178,39 @@ describe("buildNodeServicesWorkloadSpec", () => {
       })),
     };
 
-    expect(() =>
-      buildNodeServicesWorkloadSpec({
-        slug: "incomplete-node",
-        bundle: incompleteBundle,
-      })
-    ).toThrow(/cogni-node-app-v1 is missing secret_refs/);
+    const workload = buildNodeServicesWorkloadSpec({
+      slug: "stale-node",
+      bundle: staleBundle,
+    });
+
+    // The workload receives the FULL profile contract, deduped — no throw, no missing key.
+    expect(workload.services[0]?.secretRefs).toEqual(REQUIRED_SECRET_REFS);
+  });
+
+  it("unions node-declared extras after the profile keys, deduped", () => {
+    const extraBundle = {
+      ...bundle,
+      services: bundle.services.map(({ service, ...resolved }, index) => ({
+        ...resolved,
+        service:
+          index === 0
+            ? {
+                ...service,
+                // A profile key re-listed (deduped) plus one genuine extra.
+                secretRefs: [{ key: "AUTH_SECRET" }, { key: "MY_EXTRA_KEY" }],
+              }
+            : service,
+      })),
+    };
+
+    const workload = buildNodeServicesWorkloadSpec({
+      slug: "extra-node",
+      bundle: extraBundle,
+    });
+
+    expect(workload.services[0]?.secretRefs).toEqual([
+      ...REQUIRED_SECRET_REFS,
+      { key: "MY_EXTRA_KEY" },
+    ]);
   });
 });

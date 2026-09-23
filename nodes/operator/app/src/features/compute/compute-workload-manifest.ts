@@ -26,6 +26,7 @@
  */
 
 import type { ResolvedNodeArtifactBundle } from "@cogni/repo-spec";
+import { resolveRuntimeProfileSecretRefs } from "@cogni/repo-spec";
 
 import type {
   ComputeWorkloadSpec,
@@ -34,7 +35,6 @@ import type {
 
 import type { NodeComputeApi } from "./node-compute-api";
 import type { DeploymentEnvironment } from "./node-deployment-provider";
-import { assertRuntimeProfileSecretRefs } from "./node-services-workload-spec";
 
 const DIGEST_PINNED_OCI_REF =
   /^[a-z0-9][a-z0-9._:-]*(?:\/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}$/;
@@ -220,8 +220,10 @@ export function buildComputeWorkloadManifest(
 
   const services: DeclaredProvisionServiceSpec[] = input.bundle.services.map(
     ({ artifact, service }) => {
-      assertRuntimeProfileSecretRefs({
-        serviceName: service.name,
+      // PROFILE_SUPPLIES_ITS_SECRET_REFS: the runtime profile's required keys are unioned in here,
+      // so a node's repo-spec never re-lists them and a spec that predates a newly-added profile
+      // key still materializes a complete workload (bug.5175).
+      const secretRefs = resolveRuntimeProfileSecretRefs({
         ...(service.runtimeProfile
           ? { runtimeProfile: service.runtimeProfile }
           : {}),
@@ -233,9 +235,7 @@ export function buildComputeWorkloadManifest(
         ...(service.runtimeProfile
           ? { runtimeProfile: service.runtimeProfile }
           : {}),
-        ...(service.secretRefs.length > 0
-          ? { secretRefs: service.secretRefs }
-          : {}),
+        ...(secretRefs.length > 0 ? { secretRefs } : {}),
         ...(service.command ? { command: service.command } : {}),
         ...(service.args ? { args: service.args } : {}),
         port: service.port,

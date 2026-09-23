@@ -108,22 +108,6 @@ payments_out:
   steward_wallet:
     address: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 
-providers:
-  openrouter:
-    api_host: https://openrouter.ai/api/v1
-    api_key_env: OPENROUTER_API_KEY
-  # cherryservers:
-  #   api_host: https://api.cherryservers.com/v1
-  #   api_key_env: CHERRY_API_TOKEN
-
-llm_proxy:
-  host_env: LITELLM_PROXY_URL
-  master_key_env: LITELLM_MASTER_KEY
-
-secrets:
-  manager:
-    type: env
-
 # PR review on/off + model selection. The operator reads THIS block from the
 # target repo, so each node controls its own review with no operator-side hardcode.
 #   enabled: false → operator skips review entirely (no Check Run, no comment).

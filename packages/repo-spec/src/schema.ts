@@ -755,6 +755,12 @@ export type NodeRegistryEntry = z.infer<typeof nodeRegistryEntrySchema>;
  */
 export const repoSpecSchema = z
   .object({
+    /**
+     * Repo-spec schema version (e.g. "0.1.4"). Modeled explicitly rather than tolerated by
+     * `.passthrough()` — every spec carries it, so it is a declared field, not undeclared drift.
+     */
+    schema_version: z.string().optional(),
+
     /** Unique node identity — scopes all ledger tables. Generated once at init, never changes. */
     node_id: z.string().uuid("node_id must be a valid UUID"),
 
@@ -896,6 +902,11 @@ export const repoSpecSchema = z
     /** Node registry — operator-only. Declares child nodes in the monorepo. */
     nodes: z.array(nodeRegistryEntrySchema).optional(),
   })
+  // `.passthrough()` (not `.strict()`) is deliberate: a sovereign fork may extend its OWN repo-spec
+  // with fields Cogni's schema does not know, and this parser runs at RUNTIME against every node's
+  // spec — rejecting an unknown key would break a fork mid-flight. Cogni-owned specs must NOT
+  // accumulate undeclared keys; that discipline is enforced by code review on this repo, and every
+  // field Cogni itself relies on is modeled above (so a Cogni block never rides passthrough).
   .passthrough();
 
 export type RepoSpec = z.infer<typeof repoSpecSchema>;

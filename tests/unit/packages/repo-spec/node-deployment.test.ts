@@ -20,13 +20,13 @@ import {
   missingRuntimeProfileSecretKeys,
   parseRepoSpec,
   renderNodeDeploymentYaml,
+  resolveRuntimeProfileSecretRefs,
 } from "@cogni/repo-spec";
 import {
   buildTestRepoSpec,
   buildTestRepoSpecYaml,
 } from "@cogni/repo-spec/testing";
 import { describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
 
 const APP = {
   name: "app",
@@ -374,36 +374,50 @@ describe("cogni-node-app-v1 deployment contract", () => {
     expect(extractNodeServices(buildTestRepoSpec())[0]?.secretRefs).toEqual([]);
   });
 
-  it("declares every key the runtime profile requires", () => {
+  it("keeps the profile's required keys as a capability contract, not a per-node list", () => {
     expect(COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS).toContain("EVM_RPC_URL");
-    expect(
-      COGNI_NODE_APP_V1_DEPLOYMENT.services[0]?.secret_refs.map(
-        (ref) => ref.key
-      )
-    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
-    expect(
-      missingRuntimeProfileSecretKeys({
-        runtimeProfile: "cogni-node-app-v1",
-        secretRefs: COGNI_NODE_APP_V1_DEPLOYMENT.services[0]?.secret_refs ?? [],
-      })
-    ).toEqual([]);
-    expect(
-      missingRuntimeProfileSecretKeys({
-        runtimeProfile: "cogni-node-app-v1",
-        secretRefs:
-          LEGACY_DEFAULT_NODE_DEPLOYMENT.services[0]?.secret_refs ?? [],
-      })
-    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
+    // The stock deployment no longer re-lists the profile's keys — the profile owns them (bug.5175).
+    expect(COGNI_NODE_APP_V1_DEPLOYMENT.services[0]?.secret_refs).toEqual([]);
     // A service without the profile owes nothing — the contract is capability-scoped.
     expect(missingRuntimeProfileSecretKeys({ secretRefs: [] })).toEqual([]);
+    // The query still reports every profile key as "not explicitly declared" on an empty list.
+    expect(
+      missingRuntimeProfileSecretKeys({
+        runtimeProfile: "cogni-node-app-v1",
+        secretRefs: [],
+      })
+    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
   });
 
-  it("renders a YAML block that round-trips through the schema", () => {
+  it("resolves a profiled service to the full contract, deduped, extras last", () => {
+    // Empty declaration → exactly the profile keys, in contract order.
+    expect(
+      resolveRuntimeProfileSecretRefs({
+        runtimeProfile: "cogni-node-app-v1",
+        secretRefs: [],
+      }).map((ref) => ref.key)
+    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
+
+    // A re-listed profile key is deduped; a genuine extra is appended after the profile keys.
+    expect(
+      resolveRuntimeProfileSecretRefs({
+        runtimeProfile: "cogni-node-app-v1",
+        secretRefs: [{ key: "EVM_RPC_URL" }, { key: "DOLTGRES_URL" }],
+      }).map((ref) => ref.key)
+    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS, "DOLTGRES_URL"]);
+
+    // A service with no recognized profile is returned unchanged (owns whatever it declared).
+    const custom = [{ key: "ONLY_THIS" }];
+    expect(resolveRuntimeProfileSecretRefs({ secretRefs: custom })).toEqual(
+      custom
+    );
+  });
+
+  it("renders a clean YAML block (no empty secret_refs) that round-trips through the schema", () => {
     const rendered = renderNodeDeploymentYaml();
-    expect(parseYaml(rendered)).toEqual({
-      deployment: COGNI_NODE_APP_V1_DEPLOYMENT,
-    });
-    // Authored as a node repo would: raw YAML text through the real parser.
+    // The block a node carries omits the empty secret_refs list — the profile supplies those keys.
+    expect(rendered).not.toContain("secret_refs");
+    // Through the real schema parser the default restores it, so it round-trips exactly.
     const spec = parseRepoSpec(buildTestRepoSpecYaml({ extra: rendered }));
     expect(spec.deployment).toEqual(COGNI_NODE_APP_V1_DEPLOYMENT);
   });
