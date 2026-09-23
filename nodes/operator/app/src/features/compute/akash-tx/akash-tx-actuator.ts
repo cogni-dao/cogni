@@ -78,6 +78,8 @@ import {
   type AkashTxCreateResult,
   AkashTxError,
   type AkashTxErrorCode,
+  type AkashTxLeaseLogSource,
+  type AkashTxLeaseLogSources,
   type AkashTxMigrationPhase,
   type AkashTxMigrationPort,
   type AkashTxMigrationStep,
@@ -186,6 +188,12 @@ export function mapConsoleFailure(
  * receipt is one grep away from the incident that produced it, in logs and in Postgres alike.
  */
 const ROLLED_BACK_FAILURE_CODE = "allocation_rolled_back";
+
+/**
+ * TTL for the logs-scoped provider JWT one `leaseLogSources` call returns. Long enough to
+ * cover a full pump poll cycle with margin, short enough that a leaked token dies in minutes.
+ */
+const LEASE_LOG_TOKEN_TTL_SECONDS = 300;
 
 /**
  * The dseq a failed create is PROVEN to have closed, if the client proved it.
@@ -923,6 +931,85 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     const report = { scanned: stale.length, rolledBack, adopted, held };
     if (stale.length > 0) this.log.warn(report, "akash_tx_allocation_sweep");
     return report;
+  }
+
+  async leaseLogSources(input: {
+    environment?: string;
+    limit?: number;
+  }): Promise<AkashTxLeaseLogSources> {
+    const limit = Math.min(Math.max(input.limit ?? 32, 1), 64);
+    let records: readonly AkashTxAllocationRecord[];
+    try {
+      records = await this.ledger.listAllocated({
+        ...(input.environment ? { environment: input.environment } : {}),
+        limit,
+      });
+    } catch (error) {
+      throw this.ledgerUnavailable(error, "*", "listAllocated");
+    }
+
+    const sources: AkashTxLeaseLogSource[] = [];
+    for (const record of records) {
+      if (!record.externalName) continue;
+      try {
+        const descriptor = await this.console.leaseLogDescriptor({
+          leaseId: record.externalName,
+        });
+        const providerAccount =
+          descriptor.providerAccount ?? record.providerAccount;
+        if (!providerAccount || !descriptor.providerHostUri) {
+          // Fail-open per source: a lease we cannot coordinate is skipped, never a wedge.
+          this.log.warn(
+            {
+              cogniKey: record.cogniKey,
+              externalName: record.externalName,
+              hasProvider: Boolean(providerAccount),
+              hasHostUri: Boolean(descriptor.providerHostUri),
+            },
+            "akash_tx_lease_log_source_unresolvable"
+          );
+          continue;
+        }
+        sources.push({
+          nodeId: record.identity.nodeId,
+          workload: record.workload,
+          environment: record.environment,
+          dseq: record.externalName,
+          gseq: descriptor.gseq,
+          oseq: descriptor.oseq,
+          providerAccount,
+          providerHostUri: descriptor.providerHostUri,
+          services: descriptor.services,
+        });
+      } catch (error) {
+        this.log.warn(
+          {
+            cogniKey: record.cogniKey,
+            externalName: record.externalName,
+            code:
+              error instanceof AkashTxError
+                ? error.code
+                : mapConsoleFailure(error, { mutating: false }).code,
+          },
+          "akash_tx_lease_log_source_skipped"
+        );
+      }
+    }
+
+    if (sources.length === 0) {
+      return { sources, token: "", ttlSeconds: 0 };
+    }
+
+    const providers = [...new Set(sources.map((s) => s.providerAccount))];
+    try {
+      const token = await this.console.mintLeaseLogsToken({
+        providers,
+        ttlSeconds: LEASE_LOG_TOKEN_TTL_SECONDS,
+      });
+      return { sources, token, ttlSeconds: LEASE_LOG_TOKEN_TTL_SECONDS };
+    } catch (error) {
+      throw mapConsoleFailure(error, { mutating: false });
+    }
   }
 
   private async describe(

@@ -82,6 +82,7 @@ export {
   type AkashComputeErrorCode,
 } from "./compute/akash-compute.adapter";
 export { DrizzleAkashTxAllocationLedger } from "./compute/akash-tx-allocation-ledger.adapter";
+export { AkashTxSourcesClient } from "./compute/akash-tx-sources.client";
 export {
   CherryComputeAdapter,
   type CherryComputeAdapterConfig,
@@ -116,6 +117,7 @@ export {
   createDefaultProviderOutcomeStore,
   DrizzleProviderOutcomeStore,
 } from "./compute/provider-outcome-store";
+export { ProviderProxyLogsClient } from "./compute/provider-proxy-logs.adapter";
 // Bounded, SSRF-safe workload probes. Exported for the dedicated actuator process,
 // which must prove "serving at the expected SHA" without importing an adapter internal.
 export {
@@ -170,6 +172,7 @@ export {
   resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
 export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
+export { HttpLokiPusher } from "./observability/loki-push.adapter";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";
 export { ViemTreasuryAdapter } from "./onchain/viem-treasury.adapter";

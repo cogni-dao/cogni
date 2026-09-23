@@ -62,6 +62,7 @@ interface AllocationRow {
   nodeId: string;
   compositeUid: string;
   compositeGeneration: number;
+  workload: string;
   environment: string;
   state: string;
   allocationCursor: string | null;
@@ -76,6 +77,7 @@ const SELECTION = {
   nodeId: akashTxAllocations.nodeId,
   compositeUid: akashTxAllocations.compositeUid,
   compositeGeneration: akashTxAllocations.compositeGeneration,
+  workload: akashTxAllocations.workload,
   environment: akashTxAllocations.environment,
   state: akashTxAllocations.state,
   allocationCursor: akashTxAllocations.allocationCursor,
@@ -93,6 +95,7 @@ function toRecord(row: AllocationRow): AkashTxAllocationRecord {
       compositeUid: row.compositeUid,
       compositeGeneration: row.compositeGeneration,
     },
+    workload: row.workload,
     environment: row.environment,
     state: row.state as AkashTxAllocationState,
     ...(row.allocationCursor ? { allocationCursor: row.allocationCursor } : {}),

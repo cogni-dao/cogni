@@ -63,6 +63,11 @@ RUN --mount=type=cache,id=next-cache,target=/app/nodes/operator/app/.next/cache,
 RUN pnpm --filter operator build:akash-tx-actuator \
     && pnpm --filter operator smoke:akash-tx-actuator-artifact
 
+# bug.5240 — the lease-log pump. Same pattern: a dedicated keyless process artifact riding
+# in the shared operator image, started by its own Deployment (infra/k8s/base/lease-log-pump).
+RUN pnpm --filter operator build:lease-log-pump \
+    && pnpm --filter operator smoke:lease-log-pump-artifact
+
 # Runner – lean production image
 FROM node:22-alpine AS runner
 WORKDIR /app
@@ -85,6 +90,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/standalo
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/static ./nodes/operator/app/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/public ./nodes/operator/app/public
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-akash-tx-actuator/akash-tx-actuator.mjs ./nodes/operator/app/akash-tx-actuator.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-lease-log-pump/lease-log-pump.mjs ./nodes/operator/app/lease-log-pump.mjs
 
 # Repo-spec: node-specific DAO config (node_id, chain, governance).
 # Each node MUST copy its own .cogni — NOT root (which is operator's identity).

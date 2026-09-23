@@ -28,6 +28,7 @@ import { describe, expect, it } from "vitest";
 
 import type {
   AkashAllocationProbe,
+  AkashLeaseLogDescriptor,
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
   AkashTxConsolePort,
@@ -148,6 +149,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       receiptId: `receipt-${input.cogniKey}`,
       cogniKey: input.cogniKey,
       identity: input.identity,
+      workload: input.workload,
       environment: input.environment,
       state: "preparing",
     };
@@ -309,6 +311,7 @@ function seedAllocated(
     receiptId: `receipt-${cogniKey}`,
     cogniKey,
     identity: IDENTITY,
+    workload: "operator",
     environment: "candidate-a",
     state: "allocated",
     externalName,
@@ -417,6 +420,10 @@ class FakeConsole implements AkashTxConsolePort {
   updateCalls = 0;
   releaseCalls: string[] = [];
   nextLeaseId = "7001";
+  /** Descriptors served by `leaseLogDescriptor`, keyed by leaseId (dseq). */
+  logDescriptors = new Map<string, AkashLeaseLogDescriptor>();
+  mintedTokenProviders: string[][] = [];
+  mintTokenError?: Error;
 
   constructor(private readonly options: FakeConsoleOptions = {}) {
     this.loseResponse = options.loseResponseAfterAllocation ?? false;
@@ -479,6 +486,23 @@ class FakeConsole implements AkashTxConsolePort {
 
   async release(input: { leaseId: string }): Promise<void> {
     this.releaseCalls.push(input.leaseId);
+  }
+
+  async leaseLogDescriptor(input: {
+    leaseId: string;
+  }): Promise<AkashLeaseLogDescriptor> {
+    const described = this.logDescriptors.get(input.leaseId);
+    if (!described) throw new Error(`no descriptor for ${input.leaseId}`);
+    return described;
+  }
+
+  async mintLeaseLogsToken(input: {
+    providers: readonly string[];
+    ttlSeconds: number;
+  }): Promise<string> {
+    this.mintedTokenProviders.push([...input.providers]);
+    if (this.mintTokenError) throw this.mintTokenError;
+    return "jwt-logs-token";
   }
 }
 
@@ -1779,6 +1803,7 @@ describe("AkashTxActuator.sweepStaleAllocations", () => {
       receiptId: `receipt-${input.cogniKey}`,
       cogniKey: input.cogniKey,
       identity: IDENTITY,
+      workload: "operator",
       environment: "candidate-a",
       state: "preparing",
       ...(input.allocationCursor
@@ -1915,6 +1940,81 @@ describe("AkashTxActuator.sweepStaleAllocations", () => {
     ledger.failReads = true;
 
     await expect(actuator.sweepStaleAllocations(STALE)).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+  });
+});
+
+describe("AkashTxActuator.leaseLogSources", () => {
+  const DESCRIPTOR = {
+    gseq: 1,
+    oseq: 1,
+    providerAccount: "akash1provider",
+    providerHostUri: "https://provider.example.com:8443",
+    services: ["app", "paper-trader"],
+    state: "active",
+  } as const;
+
+  it("enumerates every allocated lease with coordinates, services and ONE shared token", async () => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger, "k1", "7001");
+    seedAllocated(ledger, "k2", "7002");
+    api.logDescriptors.set("7001", { ...DESCRIPTOR });
+    api.logDescriptors.set("7002", { ...DESCRIPTOR, services: ["app"] });
+
+    const result = await actuator.leaseLogSources({});
+
+    expect(result.sources).toHaveLength(2);
+    expect(result.sources.map((s) => s.dseq).sort()).toEqual(["7001", "7002"]);
+    expect(result.sources[0]).toMatchObject({
+      workload: "operator",
+      environment: "candidate-a",
+      providerAccount: "akash1provider",
+      providerHostUri: "https://provider.example.com:8443",
+    });
+    expect(result.token).toBe("jwt-logs-token");
+    expect(result.ttlSeconds).toBeGreaterThan(0);
+    // One mint covering the deduped provider set — never one mint per lease.
+    expect(api.mintedTokenProviders).toEqual([["akash1provider"]]);
+  });
+
+  it("skips a lease whose descriptor cannot be resolved and keeps the rest (fail-open)", async () => {
+    const { actuator, ledger, api, log } = build();
+    seedAllocated(ledger, "k1", "7001");
+    seedAllocated(ledger, "k2", "7002");
+    api.logDescriptors.set("7002", { ...DESCRIPTOR });
+    // 7001 has no descriptor: the fake console throws for it.
+
+    const result = await actuator.leaseLogSources({});
+
+    expect(result.sources.map((s) => s.dseq)).toEqual(["7002"]);
+    expect(
+      log.lines.some((l) => l.marker === "akash_tx_lease_log_source_skipped")
+    ).toBe(true);
+  });
+
+  it("returns an empty snapshot without minting when nothing is allocated", async () => {
+    const { actuator, api } = build();
+    const result = await actuator.leaseLogSources({});
+    expect(result).toEqual({ sources: [], token: "", ttlSeconds: 0 });
+    expect(api.mintedTokenProviders).toEqual([]);
+  });
+
+  it("refuses the whole call when the token cannot be minted", async () => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger, "k1", "7001");
+    api.logDescriptors.set("7001", { ...DESCRIPTOR });
+    api.mintTokenError = new Error("console down");
+
+    await expect(actuator.leaseLogSources({})).rejects.toMatchObject({
+      name: "AkashTxError",
+    });
+  });
+
+  it("refuses when the ledger is unreadable", async () => {
+    const { actuator, ledger } = build();
+    ledger.failReads = true;
+    await expect(actuator.leaseLogSources({})).rejects.toMatchObject({
       code: "ledger_unavailable",
     });
   });

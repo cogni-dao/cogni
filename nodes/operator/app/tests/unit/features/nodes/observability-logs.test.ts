@@ -158,6 +158,88 @@ describe("scopeNodeLogQL", () => {
   });
 });
 
+describe("scopeNodeLogQL with ?service= (PER_SERVICE_ENVELOPE, bug.5240)", () => {
+  it("pins a non-app service to its lease stream (source forced)", () => {
+    expect(
+      scopeNodeLogQL({
+        env: "candidate-a",
+        nodeId: NODE,
+        service: "paper-trader",
+      })
+    ).toBe(
+      `{env="candidate-a", service="paper-trader", node="${NODE}", source="lease"}`
+    );
+  });
+
+  it("keeps a pipeline and narrowing labels on a service-scoped query", () => {
+    expect(
+      scopeNodeLogQL({
+        env: "candidate-a",
+        nodeId: NODE,
+        service: "paper-trader",
+        query: '{stream="stdout"} | json | level="error"',
+      })
+    ).toBe(
+      `{env="candidate-a", service="paper-trader", node="${NODE}", source="lease", stream="stdout"} | json | level="error"`
+    );
+  });
+
+  it("accepts a caller matcher that EQUALS the forced service/source", () => {
+    expect(
+      scopeNodeLogQL({
+        env: "candidate-a",
+        nodeId: NODE,
+        service: "paper-trader",
+        query: '{service="paper-trader", source="lease"}',
+      })
+    ).toBe(
+      `{env="candidate-a", service="paper-trader", node="${NODE}", source="lease"}`
+    );
+  });
+
+  it("REJECTS a source break-out on a service-scoped query (k8s streams stay unreachable)", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "candidate-a",
+        nodeId: NODE,
+        service: "paper-trader",
+        query: '{source="k8s"}',
+      })
+    ).toThrowError(expect.objectContaining({ code: "query_out_of_scope" }));
+  });
+
+  it("REJECTS a service mismatch between param and selector", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "candidate-a",
+        nodeId: NODE,
+        service: "paper-trader",
+        query: '{service="app"}',
+      })
+    ).toThrowError(expect.objectContaining({ code: "query_out_of_scope" }));
+  });
+
+  it("REJECTS a malformed service name before it reaches a selector", () => {
+    for (const bad of ["Upper", "has_underscore", "-lead", "trail-", 'a"b']) {
+      expect(() =>
+        scopeNodeLogQL({ env: "candidate-a", nodeId: NODE, service: bad })
+      ).toThrowError(expect.objectContaining({ code: "invalid_query" }));
+    }
+  });
+
+  it("still allows source as a NARROWING label on the default app scope", () => {
+    expect(
+      scopeNodeLogQL({
+        env: "candidate-a",
+        nodeId: NODE,
+        query: '{source="lease"}',
+      })
+    ).toBe(
+      `{env="candidate-a", service="app", node="${NODE}", source="lease"}`
+    );
+  });
+});
+
 describe("isFlightEnv (canonical env envelope, reused — not a local copy)", () => {
   it("accepts the deploy envs, rejects others", () => {
     expect(isFlightEnv("production")).toBe(true);
