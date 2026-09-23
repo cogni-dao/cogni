@@ -27,13 +27,21 @@ kernel OOM-killer / kubelet eviction fires and picks the **least-protected** pro
 
 | Singleton | Before | Why it was the victim | Consequence when killed |
 |---|---|---|---|
-| **OpenBao** (k8s) | Burstable QoS (`req 384Mi ≠ lim 1Gi`), no priority | kernel `oom_score_adj ≈ 833` on a 6 GB box → prime target | Shamir 1-of-1, no auto-unseal → **reseal → secret plane down until a human unseals** |
+| **OpenBao** (k8s) | Burstable QoS (`req 384Mi ≠ lim 1Gi`), no priority | kernel `oom_score_adj ≈ 938` on a ~6 GB box (`1000·(1 − 384Mi/6GB)`) → one of the most-killable procs | Shamir 1-of-1, no auto-unseal → **reseal → secret plane down until a human unseals** |
 | **OpenFGA** (compose) | no `mem_reservation`, no `oom_score_adj` | unprotected → freely OOM-eligible | authz plane down → `authz_unavailable` storms; every merge/promote 503s |
 | **postgres** (compose) | no reservation | unprotected; datastore for openfga/litellm/app | takes the whole control plane with it |
 
 They are **one root cause, not three independent "fainting helpers":** deploy-infra's memory
 spike knocks over whichever critical singleton is least protected. OpenBao's knock-over is the
 worst because a reseal is fatal (manual recovery), not a self-healing restart.
+
+> **Sibling failure mode (same disease, different mechanism):** the control plane also
+> self-starves via **kine SQLite bloat → k3s apiserver timeout → crossplane can't reconcile →
+> fleet-wide NXDOMAIN** (healed live 2026-09-23 by a kine compact, 6.4GB→131M). That is *not*
+> OOM — it is the recovery anchor starving under its own reconcile write load — so it is scoped
+> out of this doc. Both are tracked under the unified root cause on **story.5038**. #2386
+> (bug.5238 hash-gate, merged) cuts the reconcile thrash that regrows kine, so it compounds with
+> this PR.
 
 ## The fix (this PR) — make the critical singletons un-killable under pressure
 
@@ -42,8 +50,12 @@ Surgical, no cloud, no new infra:
 1. **OpenBao → Guaranteed QoS.** `cpu`/`memory` `request == limit` (500m / 1Gi) in
    `infra/k8s/argocd/openbao/values.yaml`. Guaranteed pods get kubelet-assigned
    `oom_score_adj = -997`, so the kernel kills essentially every other pod first. This is the
-   load-bearing change — it directly stops the recurring reseal. (cpu ceiling is generous so a
-   Raft vault under unseal/ESO load is never throttled.)
+   load-bearing change — it directly stops the recurring reseal. A cpu limit==request is
+   *required* for Guaranteed (a bigger memory request alone stays Burstable ≈833 — still
+   killable); 500m is ample for a mostly-idle vault, and a throttle would only mark it NotReady
+   (fails safe), never reseal it. **Caveat:** Guaranteed requires *every* container in the pod
+   (incl. chart-injected sidecars/init) to have request==limit — verify `qosClass: Guaranteed`
+   post-rollout or the -997 is silently lost.
 2. **OpenFGA → `mem_reservation: 256m` + `mem_limit: 768m` + `oom_score_adj: -800`** in the
    compose service. Soft floor the kernel honors + a "sacrifice others first" score.
 3. **postgres → `mem_reservation: 512m` + `oom_score_adj: -900`** (protected hardest, since

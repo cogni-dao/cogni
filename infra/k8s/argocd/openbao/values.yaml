@@ -59,23 +59,33 @@ server:
     # storageClass: omitted — defaults to cluster default (local-path on k3s).
 
   # bug.5011 ROOT CAUSE (2026-09-23): OpenBao was Burstable QoS (memory
-  # request 384Mi ≠ limit 1Gi). On the memory-oversubscribed 6GB box a Burstable
-  # pod's kernel oom_score_adj is ~1000·(1 − request/capacity) ≈ 833 — i.e. a
-  # PRIME OOM-kill target. So every deploy-infra reconcile (pull images + `up -d`
-  # ~12 compose services + `rollout restart` all node pods, concurrently) spiked
-  # host memory and the kernel OOM-killer picked OpenBao → Shamir 1-of-1 reseal
-  # → secret-plane outage until a human unseals. deploy-infra never touched the
-  # vault; it was the memory event that knocked over an unprotected singleton.
+  # request 384Mi ≠ limit 1Gi). A Burstable pod's kernel oom_score_adj is
+  # 1000·(1 − memRequest/nodeCapacity): at 384Mi on the ~6GB box that is ≈938 —
+  # i.e. one of the MOST-killable processes on the node. (Raising the request to
+  # 1Gi while still Burstable only reaches ≈833 — still a prime target; you
+  # cannot fix this with a bigger request, only with request==limit.) So every
+  # deploy-infra reconcile (pull images + `up -d` ~12 compose services +
+  # `rollout restart` all node pods, concurrently) spiked host memory and the
+  # kernel OOM-killer picked OpenBao → Shamir 1-of-1 reseal → secret-plane outage
+  # until a human unseals. deploy-infra never touched the vault; it was the
+  # memory event that knocked over an unprotected singleton.
   #
   # FIX: request == limit for BOTH cpu and memory → **Guaranteed QoS** →
   # kubelet sets oom_score_adj = -997, so the kernel kills essentially every
   # other pod first. This is the load-bearing change: it makes OpenBao
   # un-OOM-killable under host memory pressure, which is what actually stops the
-  # recurring reseal. cpu ceiling is generous (500m) so a Raft vault under
-  # unseal/ESO load is never CPU-throttled; bump if throttling ever appears.
+  # recurring reseal. A cpu limit==request is REQUIRED for Guaranteed; 500m is
+  # ample for a mostly-idle single-node vault — bump if an unseal/Raft burst ever
+  # CPU-throttles it (throttle → NotReady, not a reseal, so it fails safe).
   # Complementary, separate fixes: bigger box (removes oversubscription at the
   # source — infra spend) and Transit auto-unseal (makes any residual reseal
   # self-heal). See docs/design/control-plane-oom-protection.md.
+  #
+  # VERIFY AFTER ROLLOUT: `kubectl get pod openbao-0 -n openbao
+  # -o jsonpath='{.status.qosClass}'` MUST print `Guaranteed`. If a chart-injected
+  # sidecar/init container without request==limit downgrades the pod to Burstable,
+  # the -997 protection is lost — that is the one thing that would silently defeat
+  # this fix.
   resources:
     requests:
       cpu: 500m
