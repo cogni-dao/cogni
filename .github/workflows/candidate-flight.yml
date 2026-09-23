@@ -962,6 +962,12 @@ jobs:
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
           DOMAIN: ${{ vars.DOMAIN }}
+          # bug.5240 — secret-materialize's CI-derived bootstrap for the lease-log pump's
+          # push credential (LOKI_LEASE_PUSH_* fallback; promote-and-deploy already exposes
+          # these at job level). Create-if-absent: a later dedicated token wins.
+          GRAFANA_CLOUD_LOKI_URL: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+          GRAFANA_CLOUD_LOKI_USER: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
+          GRAFANA_CLOUD_LOKI_API_KEY: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: infra/catalog
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
