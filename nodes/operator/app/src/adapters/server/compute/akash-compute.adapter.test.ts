@@ -1279,6 +1279,58 @@ describe("AkashComputeAdapter failure containment", () => {
     expect(msg).toContain("422");
     expect(msg).not.toContain("invalid manifest");
     expect(msg).not.toContain("supersecret");
+    // Key NAMES are schema, not data — they cannot carry an SDL or a secret, and they are what
+    // makes a 422 diagnosable at all (bug.5247).
+    expect(msg).toContain("keys=echo,message");
+  });
+
+  it("names an identifier-shaped Console error code without echoing its prose (bug.5247)", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          '{"code":"INVALID_SDL","message":"service web: resources changed, AUTH_SECRET=supersecret"}',
+          { status: 422, statusText: "Unprocessable Entity" }
+        )
+    );
+    const err = await makeAdapter(fetchImpl)
+      .balances()
+      .catch((e: unknown) => e);
+    const msg = (err as AkashComputeError).message;
+    expect(msg).toContain("422");
+    expect(msg).toContain("code=INVALID_SDL");
+    expect(msg).not.toContain("resources changed");
+    expect(msg).not.toContain("supersecret");
+  });
+
+  it("takes nothing from a prose-valued allowlist field or a non-JSON body (bug.5247)", async () => {
+    // `error` is allowlisted, but this value is a sentence — prose, not an enum.
+    const prose = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          '{"error":"the SDL for web is invalid, token=supersecret"}',
+          {
+            status: 422,
+          }
+        )
+    );
+    const proseErr = await makeAdapter(prose)
+      .balances()
+      .catch((e: unknown) => e);
+    expect((proseErr as AkashComputeError).message).not.toContain(
+      "supersecret"
+    );
+    expect((proseErr as AkashComputeError).message).toContain("keys=error");
+
+    const html = vi.fn<typeof fetch>(
+      async () =>
+        new Response("<html>gateway error supersecret</html>", { status: 502 })
+    );
+    const htmlErr = await makeAdapter(html)
+      .balances()
+      .catch((e: unknown) => e);
+    expect((htmlErr as AkashComputeError).message).toBe(
+      "Console request failed with HTTP 502"
+    );
   });
 });
 

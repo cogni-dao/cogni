@@ -42,7 +42,11 @@ import type {
 } from "@/ports";
 import { AkashTxError } from "@/ports";
 
-import { AkashTxActuator, type AkashTxLogger } from "./akash-tx-actuator";
+import {
+  AkashTxActuator,
+  type AkashTxLogger,
+  mapConsoleFailure,
+} from "./akash-tx-actuator";
 
 const SPEC: ProvisionSpec = {
   name: "toks9",
@@ -2017,5 +2021,52 @@ describe("AkashTxActuator.leaseLogSources", () => {
     await expect(actuator.leaseLogSources({})).rejects.toMatchObject({
       code: "ledger_unavailable",
     });
+  });
+});
+
+describe("mapConsoleFailure — a 4xx is a decision, not an unknown (bug.5247)", () => {
+  // poly's candidate-a XCW looped `POST /v1/akash/update` -> Console 422 -> outcome_unknown ->
+  // retry, ~1.5x/min for five days, emitting a cost observation each pass and flooding the XR
+  // watch stream until Crossplane opened the circuit. Console refused BEFORE broadcasting, so
+  // the outcome was never unknown.
+  it.each([
+    400, 403, 409, 422,
+  ])("maps a mutating HTTP %i to the terminal provider_rejected", (status) => {
+    const mapped = mapConsoleFailure(consoleError("HTTP_ERROR", status), {
+      mutating: true,
+    });
+    expect(mapped.code).toBe("provider_rejected");
+  });
+
+  it.each([
+    408, 429,
+  ])("keeps HTTP %i as outcome_unknown — it reached Console and may still land", (status) => {
+    const mapped = mapConsoleFailure(consoleError("HTTP_ERROR", status), {
+      mutating: true,
+    });
+    expect(mapped.code).toBe("outcome_unknown");
+  });
+
+  it("leaves a mutating 5xx as outcome_unknown", () => {
+    expect(
+      mapConsoleFailure(consoleError("HTTP_ERROR", 503), { mutating: true })
+        .code
+    ).toBe("outcome_unknown");
+  });
+
+  it("still maps 404 to not_found, ahead of the 4xx rule", () => {
+    expect(
+      mapConsoleFailure(consoleError("HTTP_ERROR", 404), { mutating: true })
+        .code
+    ).toBe("not_found");
+  });
+
+  it("carries the adapter message through, so the Console detail reaches the log", () => {
+    const error = consoleError("HTTP_ERROR", 422);
+    error.message =
+      "Console request failed with HTTP 422 (keys=code,message code=INVALID_SDL)";
+    expect(mapConsoleFailure(error, { mutating: true }).message).toContain(
+      "code=INVALID_SDL"
+    );
   });
 });
