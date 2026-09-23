@@ -1359,6 +1359,54 @@ export class GitHubRepoWriter implements DeployPlanePort {
   }
 
   /**
+   * The raw read behind `readNodeDeployPin`, kept discriminated so the two callers can differ:
+   * `reconcileNodeInfra` must fail LOUDLY (a missing pin means it has no sha to replay), while
+   * `readNodeDeployPin` folds every non-answer into `null` so its caller can fall back to a birth
+   * pin. One read path, two contracts — never two copies of the branch/path/shape knowledge.
+   */
+  private async fetchDeployPin(input: {
+    parentOwner: string;
+    parentRepo: string;
+    env: string;
+    slug: string;
+  }): Promise<
+    { kind: "ok"; sha: string } | { kind: "missing" } | { kind: "invalid" }
+  > {
+    const text = await this.fetchFileText({
+      owner: input.parentOwner,
+      repo: input.parentRepo,
+      path: ".promote-state/source-sha-by-app.json",
+      ref: `deploy/${input.env}-${input.slug}`,
+    });
+    if (!text) return { kind: "missing" };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { kind: "invalid" };
+    }
+    const sha =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as Record<string, unknown>)[input.slug]
+        : undefined;
+    if (typeof sha !== "string" || !SOURCE_SHA_PATTERN.test(sha)) {
+      return { kind: "invalid" };
+    }
+    return { kind: "ok", sha };
+  }
+
+  /** @see DeployPlanePort.readNodeDeployPin — deployed truth, or null for a birth lane. */
+  async readNodeDeployPin(input: {
+    parentOwner: string;
+    parentRepo: string;
+    env: string;
+    slug: string;
+  }): Promise<string | null> {
+    const pin = await this.fetchDeployPin(input);
+    return pin.kind === "ok" ? pin.sha : null;
+  }
+
+  /**
    * Production infra reconcile with no app advancement. The current deploy-branch pin is resolved
    * by the operator App and replayed into the existing promote workflow; the caller supplies no SHA
    * or workflow ref. This keeps the dangerous shared-Compose lever source-addressed and fail-closed.
@@ -1371,41 +1419,27 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
 
     const { env, parentOwner, parentRepo, slug } = input;
-    const sourceMapText = await this.fetchFileText({
-      owner: parentOwner,
-      repo: parentRepo,
-      path: ".promote-state/source-sha-by-app.json",
-      ref: `deploy/${env}-${slug}`,
+    const pin = await this.fetchDeployPin({
+      parentOwner,
+      parentRepo,
+      env,
+      slug,
     });
-    if (!sourceMapText) {
+    if (pin.kind === "missing") {
       throw deployPlaneError(
         "deploy_state_missing",
         `production deploy state not found for ${slug}`,
         404
       );
     }
-
-    let sourceMap: unknown;
-    try {
-      sourceMap = JSON.parse(sourceMapText);
-    } catch {
+    if (pin.kind === "invalid") {
       throw deployPlaneError(
         "invalid_deploy_state",
         `invalid production deploy state for ${slug}`,
         409
       );
     }
-    const sourceSha =
-      typeof sourceMap === "object" && sourceMap !== null
-        ? (sourceMap as Record<string, unknown>)[slug]
-        : undefined;
-    if (typeof sourceSha !== "string" || !SOURCE_SHA_PATTERN.test(sourceSha)) {
-      throw deployPlaneError(
-        "invalid_deploy_state",
-        `production deploy state has no valid source SHA for ${slug}`,
-        409
-      );
-    }
+    const sourceSha = pin.sha;
 
     const catalogText = await this.fetchFileText({
       owner: parentOwner,

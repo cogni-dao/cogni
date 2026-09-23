@@ -27,12 +27,22 @@
  *     env holds the identities to create them (`run-node-substrate.sh` loops every lane its env
  *     custodies). So the custodian's own promote is dispatched — this facade never hands a lane's
  *     run the custodian's credentials, which is the down-trust inversion bug.5206 rejects.
+ *   - REPLAY_NEVER_ADVANCES (bug.5237): every dispatch here renders an env AT THE SHA THAT ENV IS
+ *     ALREADY RUNNING — `readNodeDeployPin(env)`, the pin promote/flight wrote on
+ *     `deploy/<env>-<slug>`. The catalog `source_sha` is BIRTH-ONLY metadata and is used only when
+ *     an env has no pin yet, exactly as `promoteNode` has always documented (bug.5043 retired it
+ *     as a deploy authority). Reading it otherwise made a lane add on ANY env silently revert
+ *     PRODUCTION to its birth sha: adding toks5 to candidate-a on 2026-09-23 re-promoted
+ *     toks5.cognidao.org from the proven d6bc40d1 back to 7c9b1e08, twice. Substrate still gets
+ *     created; the app never moves. Advancing an app stays the deploy verb's job, behind its
+ *     own human gate — the same line `node-preview-promote.server` refuses to cross.
  *   - NAME_AND_PATH_FOLLOW_THE_LANE: the render is dispatched for the LANE — candidate-a through
  *     the flight lever, preview/production through the promote lever. One existing dispatcher
  *     each; no fourth trigger (spec.node-ci-cd-contract § Lane vs control env).
  *   - ONE_EVENT: exactly one terminal `feature.lane_onboard.complete`, including the no-dispatch
- *     outcomes. A pre-prod lane add CAN dispatch a production promote — that must never be a
- *     mystery deploy, so it is findable in Loki by event name.
+ *     outcomes. A pre-prod lane add CAN dispatch a production render — a replay, never an
+ *     advance — and that must never be a mystery deploy, so it is findable in Loki by event name
+ *     and carries the sha each dispatch rendered.
  * Side-effects: IO (GitHub REST via DeployPlanePort). Fire-and-forget; never throws into the
  *   webhook, which 200s regardless.
  * Links: docs/spec/node-ci-cd-contract.md § Lane vs control env, task.5132,
@@ -188,23 +198,32 @@ async function onboardLane(
     const provider =
       row.deployment_provider?.[ctx.lane] === "akash" ? "akash" : "k3s";
     const controlEnv = controlEnvFor(ctx.lane, provider);
-    // The node's own commit for a remote-source row; the operator ref for an in-repo one. The
-    // catalog pin IS the deploy identity (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) — this facade
-    // renders what the catalog states, never a sha of its own choosing.
-    const sourceSha = row.source_sha;
+    // REPLAY_NEVER_ADVANCES — an env renders at the sha it is already running. The catalog row is
+    // the BIRTH pin, used only for an env that has never deployed (no `deploy/<env>-<slug>` pin).
+    const birthSha = row.source_sha;
+    const shaFor = async (renderEnv: string): Promise<string | undefined> =>
+      (await deployPlane.readNodeDeployPin({
+        parentOwner: ctx.owner,
+        parentRepo: ctx.repo,
+        env: renderEnv,
+        slug: ctx.slug,
+      })) ?? birthSha;
 
     let dispatched = 0;
 
     // SUBSTRATE_FOLLOWS_THE_CUSTODIAN — dispatch the custodian's own run first so its
     // `run-node-substrate.sh <controlEnv> <slug>` lane loop creates this lane's database,
-    // roles and Temporal namespace under the identities that own them.
-    if (controlEnv !== ctx.lane && sourceSha) {
+    // roles and Temporal namespace under the identities that own them. It is a REPLAY of the
+    // custodian's current pin: the substrate work happens, the custodian's app does not move.
+    const custodianSha =
+      controlEnv !== ctx.lane ? await shaFor(controlEnv) : undefined;
+    if (controlEnv !== ctx.lane && custodianSha) {
       await deployPlane.promoteNode({
         env: controlEnv as "preview" | "production",
         parentOwner: ctx.owner,
         parentRepo: ctx.repo,
         slug: ctx.slug,
-        sourceSha,
+        sourceSha: custodianSha,
       });
       dispatched += 1;
     }
@@ -212,13 +231,14 @@ async function onboardLane(
     // NAME_AND_PATH_FOLLOW_THE_LANE — render the lane's own desired state. candidate-a renders
     // through the flight lever (the same prepare→dispatch pair POST /vcs/flight uses, so the
     // GHCR preflight is not re-derived here); preview and production through the promote lever.
-    if (ctx.lane === "candidate-a" && row.node_id && sourceSha) {
+    const laneSha = await shaFor(ctx.lane);
+    if (ctx.lane === "candidate-a" && row.node_id && laneSha) {
       const prepared = await deployPlane.prepareNodeRefCandidateFlight({
         parentOwner: ctx.owner,
         parentRepo: ctx.repo,
         nodeId: row.node_id,
         slug: ctx.slug,
-        sourceSha,
+        sourceSha: laneSha,
       });
       await deployPlane.dispatchNodeRefCandidateFlight({
         owner: ctx.owner,
@@ -227,13 +247,13 @@ async function onboardLane(
         sourceSha: prepared.sourceSha,
       });
       dispatched += 1;
-    } else if (ctx.lane !== "candidate-a" && sourceSha) {
+    } else if (ctx.lane !== "candidate-a" && laneSha) {
       await deployPlane.promoteNode({
         env: ctx.lane,
         parentOwner: ctx.owner,
         parentRepo: ctx.repo,
         slug: ctx.slug,
-        sourceSha,
+        sourceSha: laneSha,
       });
       dispatched += 1;
     }
@@ -242,6 +262,9 @@ async function onboardLane(
       {
         ...base,
         controlEnv,
+        // REPLAY_NEVER_ADVANCES is only auditable if the rendered shas are in the event.
+        ...(custodianSha ? { custodianSha8: custodianSha.slice(0, 8) } : {}),
+        ...(laneSha ? { laneSha8: laneSha.slice(0, 8) } : {}),
         dispatched,
         outcome: dispatched > 0 ? "dispatched" : "skipped",
       },
