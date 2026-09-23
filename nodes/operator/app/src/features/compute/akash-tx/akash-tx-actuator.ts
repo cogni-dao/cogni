@@ -99,10 +99,17 @@ export interface AkashTxLogger {
   error(fields: Record<string, unknown>, message: string): void;
 }
 
-/** Single bounded serving proof (exact source SHA + fixed `/readyz`). Never loops. */
+/**
+ * Single bounded serving proof (exact source SHA + fixed `/readyz`). Never loops. When
+ * `publicHost` is present the proof must ALSO hold through the provider's host-routed path —
+ * `serving: true` for a hostnamed workload means the PUBLIC hostname answers with the exact
+ * SHA, not merely the bare lease ingress (bug.5237: a stale deployment owning the hostname
+ * made the bare-ingress proof a lie).
+ */
 export type AkashTxServingProbe = (input: {
   endpoints: readonly string[];
   expectedSourceSha: string;
+  publicHost?: string;
 }) => Promise<boolean>;
 
 export interface AkashTxActuatorDeps {
@@ -271,6 +278,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     cogniKey: string;
     externalName?: string;
     expectedSourceSha?: string;
+    publicHost?: string;
     migration?: AkashTxMigrationStep;
     workload?: string;
     environment?: string;
@@ -302,7 +310,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       return withMigration(
         await this.withServing(
           { found: true, resource },
-          input.expectedSourceSha
+          input.expectedSourceSha,
+          input.publicHost
         )
       );
     }
@@ -317,7 +326,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       return withMigration(
         await this.withServing(
           { found: true, resource },
-          input.expectedSourceSha
+          input.expectedSourceSha,
+          input.publicHost
         )
       );
     }
@@ -335,7 +345,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       return withMigration(
         await this.withServing(
           { found: true, resource, recovered: true },
-          input.expectedSourceSha
+          input.expectedSourceSha,
+          input.publicHost
         )
       );
     }
@@ -930,13 +941,18 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
   private async withServing(
     observation: AkashTxObservation,
-    expectedSourceSha: string | undefined
+    expectedSourceSha: string | undefined,
+    publicHost?: string
   ): Promise<AkashTxObservation> {
     const endpoints = observation.resource?.endpoints ?? [];
     if (!this.probe || !expectedSourceSha || endpoints.length === 0) {
       return observation;
     }
-    const serving = await this.probe({ endpoints, expectedSourceSha });
+    const serving = await this.probe({
+      endpoints,
+      expectedSourceSha,
+      ...(publicHost ? { publicHost } : {}),
+    });
     return { ...observation, serving };
   }
 

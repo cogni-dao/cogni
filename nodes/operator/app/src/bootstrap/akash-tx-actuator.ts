@@ -88,6 +88,7 @@ import {
   DrizzleComputeCostStore,
   DrizzleProviderOutcomeStore,
   KubernetesMigrationJobAdapter,
+  safeHostRoutedVersionProbe,
   safeReadyzProbe,
   safeVersionProbe,
 } from "@/adapters/server";
@@ -243,11 +244,24 @@ try {
  * byte-identical to the ComputeWorkload lifecycle adapter's `verifySource`. Never loops —
  * convergence polling is Crossplane's job.
  */
-const probe: AkashTxServingProbe = async ({ endpoints, expectedSourceSha }) => {
+const probe: AkashTxServingProbe = async ({
+  endpoints,
+  expectedSourceSha,
+  publicHost,
+}) => {
   for (const endpoint of endpoints) {
     if (
-      (await safeVersionProbe(endpoint, expectedSourceSha)) &&
-      (await safeReadyzProbe(endpoint))
+      !(await safeVersionProbe(endpoint, expectedSourceSha)) ||
+      !(await safeReadyzProbe(endpoint))
+    ) {
+      continue;
+    }
+    // A hostnamed workload is only serving when the provider's HOST-ROUTED path answers
+    // with the same exact SHA — the bare-ingress proof above cannot see a stale
+    // deployment still owning the public hostname (bug.5237).
+    if (!publicHost) return true;
+    if (
+      await safeHostRoutedVersionProbe(endpoint, publicHost, expectedSourceSha)
     ) {
       return true;
     }

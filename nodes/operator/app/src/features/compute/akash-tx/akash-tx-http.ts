@@ -140,6 +140,7 @@ function toObserveInput(parsed: AkashTxObserveInput) {
     ...(parsed.expectedSourceSha
       ? { expectedSourceSha: parsed.expectedSourceSha }
       : {}),
+    ...(parsed.publicHost ? { publicHost: parsed.publicHost } : {}),
     ...(parsed.migration
       ? {
           migration: {

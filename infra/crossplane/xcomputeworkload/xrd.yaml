@@ -473,3 +473,12 @@ spec:
                       }
                     message: { type: string, maxLength: 256 }
                 bootDeadlineAt: { type: string, format: date-time }
+                # BOOT EPOCH (bug.5244). The (bundle sha, leaseGeneration) attempt this
+                # XR's boot deadline is anchored to, and when that window opened. Latched
+                # by the composition so a NEW attempt gets a fresh window instead of
+                # inheriting the XR's age.
+                bootEpoch:
+                  type: object
+                  properties:
+                    key: { type: string, maxLength: 128 }
+                    at: { type: string, format: date-time }

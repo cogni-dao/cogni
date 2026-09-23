@@ -191,6 +191,37 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     );
   });
 
+  it("anchors the boot deadline to the current attempt, not the XR's age (bug.5244)", () => {
+    // Anchored to creationTimestamp, a never-served XR older than the deadline was a
+    // roach motel: $closeForBudget latched true, the lease Request stopped rendering, so
+    // no OBSERVE could ever set $prevSha and no spec change could revive the workload.
+    // The anchor must be the (bundle sha, leaseGeneration) attempt, latched via status.
+    expect(template).toContain(
+      '$bootKey := printf "%s:%d" $desiredSha $leaseGeneration'
+    );
+    expect(template).toContain('dig "status" "bootEpoch" "key" "" $xr');
+    // The window resets ONLY when the attempt key changes — a mere re-render of the same
+    // attempt must keep the recorded start, or the deadline could never fire at all.
+    expect(template).toContain(
+      'and (eq $prevBootKey $bootKey) (ne $prevBootAt "")'
+    );
+    // The latch is persisted where the next render reads it.
+    const bootEpoch = (statusSchema.bootEpoch as YamlObject)
+      .properties as YamlObject;
+    expect(Object.keys(bootEpoch)).toEqual(["key", "at"]);
+  });
+
+  it("stages the host-routed serving proof as an explicit two-phase rollout (bug.5237)", () => {
+    // A stale deployment still owning the public hostname made the bare-ingress serving
+    // probe a lie. The fix is OBSERVE handing the actuator the public hostname — but the
+    // actuator's observe schema is a strictObject, so emitting the key before every
+    // environment's actuator image accepts it would 400 every observe and freeze
+    // reconciliation fleet-wide. Phase 1 (this tree): the actuator accepts + probes
+    // `publicHost`; the composition documents the pending emission and must NOT send it.
+    expect(template).toContain("bug.5237 PHASE 2");
+    expect(templateCode).not.toContain("publicHost: {{ $publicHost | quote }}");
+  });
+
   it("declares the empty-birth schema policy WITHOUT claiming it gates payment", () => {
     const migration = specSchema.migration as YamlObject;
     const policy = (migration.properties as YamlObject).policy as YamlObject;

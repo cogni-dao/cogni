@@ -377,9 +377,29 @@ spec:
             {{- $bootDeadlineSeconds := int (dig "bootPolicy" "bootDeadlineSeconds" 1800 $spec) }}
             {{- $onDeadline := dig "bootPolicy" "onDeadline" "Hold" $spec }}
             {{- $createdAt := $meta.creationTimestamp }}
-            {{- $createdTime := toDate "2006-01-02T15:04:05Z07:00" $createdAt }}
-            {{- $ageSeconds := int (sub (now | unixEpoch) ($createdTime | unixEpoch)) }}
-            {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($createdTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
+            {{- /*
+              BOOT EPOCH (bug.5244). The deadline is anchored to the CURRENT boot attempt —
+              (bundle sha, leaseGeneration) — not the XR's creationTimestamp. Anchored to
+              creation, a never-served XR older than the deadline was a roach motel:
+              $closeForBudget latched true, the lease Request stopped rendering, so no
+              OBSERVE could ever set $prevSha and no spec change could un-close it. The
+              anchor is latched through status.bootEpoch: same key -> keep the recorded
+              start; key changed -> this render opens a fresh window. A first render (no
+              recorded epoch) keeps creationTimestamp, so every existing XR renders
+              byte-identically until its spec next changes.
+            */ -}}
+            {{- $bootKey := printf "%s:%d" $desiredSha $leaseGeneration }}
+            {{- $prevBootKey := dig "status" "bootEpoch" "key" "" $xr }}
+            {{- $prevBootAt := dig "status" "bootEpoch" "at" "" $xr }}
+            {{- $bootAnchorAt := $createdAt }}
+            {{- if and (eq $prevBootKey $bootKey) (ne $prevBootAt "") }}
+            {{- $bootAnchorAt = $prevBootAt }}
+            {{- else if ne $prevBootKey "" }}
+            {{- $bootAnchorAt = dateInZone "2006-01-02T15:04:05Z07:00" now "UTC" }}
+            {{- end }}
+            {{- $anchorTime := toDate "2006-01-02T15:04:05Z07:00" $bootAnchorAt }}
+            {{- $ageSeconds := int (sub (now | unixEpoch) ($anchorTime | unixEpoch)) }}
+            {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($anchorTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
             {{- $neverServed := and (not $serving) (eq $prevSha "") }}
             {{- $deadlineExceeded := and $neverServed (gt $ageSeconds $bootDeadlineSeconds) }}
             {{- $closeForBudget := and $deadlineExceeded (eq $onDeadline "Close") }}
@@ -484,6 +504,13 @@ spec:
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
+                        {{- /* bug.5237 PHASE 2 (deliberately NOT emitted yet): add
+                          `publicHost: {{ $publicHost }}` here so serving is proven through
+                          the provider's host-routed path. The actuator's observe schema is
+                          a strictObject — emitting the key before every environment's
+                          actuator image carries the phase-1 schema turns each observe into
+                          a 400 and freezes reconciliation fleet-wide. Flip this line only
+                          after the phase-1 actuator is deployed everywhere. */}}
                         expectedSourceSha: {{ $desiredSha | quote }}{{ if $hasMigrationStep }},
                         workload: .payload.body.spec.name,
                         environment: .payload.body.environment,
@@ -678,6 +705,9 @@ spec:
               phase: {{ $phase | quote }}
               serving: {{ and $active $serving }}
               bootDeadlineAt: {{ $bootDeadlineAt | quote }}
+              bootEpoch:
+                key: {{ $bootKey | quote }}
+                at: {{ $bootAnchorAt | quote }}
               {{- if ne $migrationPhase "" }}
               migration:
                 phase: {{ $migrationPhase | quote }}
