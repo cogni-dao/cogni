@@ -239,7 +239,7 @@ services:
     # almost everything else first) + a soft mem_reservation floor. NO hard
     # mem_limit — postgres sizes its own caches (shared_buffers/work_mem) and a
     # cgroup cap would OOM it mid-query instead of protecting it.
-    # See docs/design/control-plane-oom-protection.md.
+    # Root cause + fix: bug.5011 / #2387; hub `prod-oom-misdiagnosis-taxonomy`.
     mem_reservation: 512m
     oom_score_adj: -900
     labels:
@@ -335,7 +335,7 @@ services:
     # oom_score_adj -800 tells the kernel to sacrifice almost anything else
     # first. mem_limit is a generous ceiling (Go service, postgres-backed, light)
     # to catch a genuine leak without capping normal load.
-    # See docs/design/control-plane-oom-protection.md.
+    # Root cause + fix: bug.5011 / #2387; hub `prod-oom-misdiagnosis-taxonomy`.
     mem_reservation: 256m
     mem_limit: 768m
     oom_score_adj: -800

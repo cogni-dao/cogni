@@ -79,7 +79,8 @@ server:
   # CPU-throttles it (throttle → NotReady, not a reseal, so it fails safe).
   # Complementary, separate fixes: bigger box (removes oversubscription at the
   # source — infra spend) and Transit auto-unseal (makes any residual reseal
-  # self-heal). See docs/design/control-plane-oom-protection.md.
+  # self-heal). Root cause + fix: bug.5011 / #2387; hub finding
+  # `prod-oom-misdiagnosis-taxonomy` (exit-137 OOM row).
   #
   # VERIFY AFTER ROLLOUT: `kubectl get pod openbao-0 -n openbao
   # -o jsonpath='{.status.qosClass}'` MUST print `Guaranteed`. If a chart-injected
