@@ -25,6 +25,14 @@ resources:
   - ../../../base/akash-tx-actuator
   - ./akash-tx-actuator-external-secret.yaml
   - ./akash-tx-actuator-auth-external-secret.yaml
+  # bug.5240 — the keyless lease-log pump rides beside the actuator BECAUSE custody lives
+  # here: this cluster's actuator ledger receipts EVERY env's Akash lane (bug.5206/task.5132),
+  # so this one pump tails candidate-a + preview + production leases (UNFILTERED_ENUMERATION;
+  # each stream labeled from its receipt's own environment). bug.5142 mount ordering is
+  # satisfied IN the promote run that delivers this: node-substrate materialize seeds
+  # LOKI_LEASE_PUSH_* (CI-derived bootstrap, #2393) before the mount, and kubelet retries
+  # converge any race.
+  - ../../../base/lease-log-pump
 
 namePrefix: operator-
 
@@ -49,6 +57,23 @@ images:
     newTag: "prod-placeholder-operator"
 
 patches:
+  # bug.5240 — same BY-NAME env rule as the actuator patch below.
+  - target:
+      kind: Deployment
+      name: lease-log-pump
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: lease-log-pump
+      spec:
+        template:
+          spec:
+            containers:
+              - name: pump
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: production
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
   # merge on `name`), never by positional JSON-pointer index. A positional
   # `/env/N/value` patch silently repoints when the base list shifts — that exact
