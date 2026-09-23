@@ -47,22 +47,42 @@ export class HttpLokiPusher implements LeaseLogPushPort {
     const auth = Buffer.from(
       `${this.config.username}:${this.config.password}`
     ).toString("base64");
-    const response = await this.fetchImpl(this.config.url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Basic ${auth}`,
-      },
-      body,
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
-    if (!response.ok) {
-      // Loki error bodies are small and label-only; safe and load-bearing for diagnosis.
-      const detail = await response.text().catch(() => "");
-      throw new Error(
-        `Loki push failed with HTTP ${response.status}: ${detail.slice(0, 300)}`
-      );
+    // One in-call retry on a NETWORK failure (never on an HTTP error): with a poll-scale
+    // gap between pushes, keep-alive reuse hits the server's idle-close window and undici
+    // surfaces it as `fetch failed` — the live prod signature was strictly alternating
+    // fail/success ticks, each recovery re-shipping the whole window as duplicates
+    // (bug.5240 hardening). `connection: close` removes the stale-socket class entirely;
+    // the retry covers genuinely transient resets.
+    let lastFailure: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let response: Response;
+      try {
+        response = await this.fetchImpl(this.config.url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Basic ${auth}`,
+            connection: "close",
+          },
+          body,
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+      } catch (error) {
+        lastFailure = error;
+        continue;
+      }
+      if (!response.ok) {
+        // Loki error bodies are small and label-only; safe and load-bearing for diagnosis.
+        const detail = await response.text().catch(() => "");
+        throw new Error(
+          `Loki push failed with HTTP ${response.status}: ${detail.slice(0, 300)}`
+        );
+      }
+      await response.body?.cancel().catch(() => {});
+      return;
     }
-    await response.body?.cancel().catch(() => {});
+    throw lastFailure instanceof Error
+      ? lastFailure
+      : new Error("Loki push network failure");
   }
 }
