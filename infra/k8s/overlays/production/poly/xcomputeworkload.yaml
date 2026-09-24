@@ -11,13 +11,15 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:ced85edb198373a90bdcbc91f65038e1e2167a0a7c608a3400b5eb977355d099
+    ref: ghcr.io/cogni-dao/poly@sha256:126f48cd3d1a6542abd94239aa3cdaf181398564085492b29547cf02b0fc9cbf
     source:
       repository: cogni-dao/poly
-      sha: c6118023ee324b6c5db364232bdab04b7d5d84e5
+      sha: 242266ad474aee590e2fbafcad08a0431d350b45
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:b3a59954e2e59999522fdc69c00d4dd04e175c6c3c569a6dbe4d4f5d2b780aab
+        image: ghcr.io/cogni-dao/poly@sha256:a9b5a7d4bf42ea67de28b549b227d73f9435c3a95d0f2bdf923217975a809fae
+      - name: paper-trader
+        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:e91294995442434e808fba3d9b34205a1b4a43fbd298c24c38fbaee2df940db2
   workload:
     name: poly
     publicHost: poly.cognidao.org
@@ -33,13 +35,29 @@ spec:
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
+          - key: PAPER_ENFORCE_MODE
+          - key: POLYGON_RPC_URL
+          - key: PRIVY_USER_WALLETS_APP_ID
+          - key: PRIVY_USER_WALLETS_APP_SECRET
+          - key: PRIVY_USER_WALLETS_SIGNING_KEY
+          - key: POLY_WALLET_AEAD_KEY_ID
         port: 3200
         visibility: public
-        bindings: {}
+        bindings:
+          PAPER_SIDECAR_URL: paper-trader
         bindHost: 0.0.0.0
         cpuUnits: 2
         memoryMi: 2048
         storageMi: 4096
+      - name: paper-trader
+        artifact: paper-trader
+        port: 9100
+        visibility: private
+        bindings: {}
+        bindHost: 0.0.0.0
+        cpuUnits: 0.5
+        memoryMi: 384
+        storageMi: 1024
   migration:
     policy: RequireBeforeServing
   bootPolicy:
