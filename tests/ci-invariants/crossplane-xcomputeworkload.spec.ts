@@ -924,6 +924,56 @@ describe("XComputeWorkload public reachability (bug.5152)", () => {
   });
 });
 
+describe("XComputeWorkload DNS survives a promotion transition (bug.5188)", () => {
+  // Everything from the Cloudflare Request to the end of the template, prose-stripped: the
+  // assertions here pin the last-known-good DNS latch that keeps a promotion from withdrawing
+  // the live public record when the current observe carries an ERROR body with no endpoints.
+  const dnsBlock = templateCode.slice(
+    templateCode.indexOf("composition-resource-name: dns-record")
+  );
+
+  it("latches the last-known-good target from status, exactly like $prevSha/$prevResource", () => {
+    // provider-http overwrites status.response.body with the ERROR body of a failed mutation
+    // (see the lease-handle latch), which has no endpoints, so $dnsTarget collapses to "" while
+    // a promotion's migration runs. The last-served target is read back from status.dns.target
+    // and carried forward — the same posture the observed-bundle and lease-handle latches take.
+    expect(templateCode).toContain(
+      '$prevDnsTarget := dig "status" "dns" "target" ""'
+    );
+    expect(templateCode).toContain("$effectiveDnsTarget");
+  });
+
+  it("gates the composed dns-record child on the LATCHED target, never the collapsing one", () => {
+    // The render gate is what a transient endpoint-less observe used to fail: an omitted child
+    // is garbage-collected, which fires a real Cloudflare DELETE and takes the live proxied
+    // CNAME to NXDOMAIN. The gate must read the latched value so the child keeps rendering.
+    expect(templateCode).toContain(
+      'if and $dns (ne $effectiveDnsTarget "") $renderLease'
+    );
+    expect(templateCode).not.toContain(
+      'if and $dns (ne $dnsTarget "") $renderLease'
+    );
+  });
+
+  it("adopts a genuinely-new target only once the new revision actually serves", () => {
+    // PROVE_BEFORE_TRAFFIC: a different, non-empty $dnsTarget is only trusted while the workload
+    // is active AND serving. Until then the record keeps pointing at the last-known-good target,
+    // so a mid-flight endpoint change can never repoint the live name at a not-yet-serving lease.
+    expect(templateCode).toContain(
+      '{{- else if and (ne $prevDnsTarget "") (ne $dnsTarget $prevDnsTarget) (not (and $active $serving)) }}'
+    );
+  });
+
+  it("writes the latched target onto the Cloudflare record content", () => {
+    // The record the composite intends to hold must be the latched target, not the collapsed
+    // one — otherwise the CREATE/UPDATE body would publish "" the instant the observe errored.
+    expect(dnsBlock.length).toBeGreaterThan(0);
+    expect(templateCode).toContain(
+      '$cfPayload := dict "name" $publicHost "content" $effectiveDnsTarget'
+    );
+  });
+});
+
 /**
  * CATALOG_CARRIES_ONE_NAME (task.5122). The catalog is the SSOT for the replacement counter,
  * and the resolver (`resolveNodeLeaseGeneration`) reads ONLY `lease_generation` with NO legacy
