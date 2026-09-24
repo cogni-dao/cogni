@@ -3,11 +3,11 @@
 
 /**
  * Module: `@features/compute/lease-reactivation`
- * Purpose: Derive the lease generation a RE-activated (node, environment) must be authored with
- *   (story.5039 PR-B). The actuator's idempotence key is spent forever once a lease under it
- *   settles terminally, so re-adding an env whose ledger already holds a terminal receipt at the
- *   current generation MUST author a bumped `lease_generation` cell — else the next reconcile
- *   answers with a refusal and the workload never comes up.
+ * Purpose: Derive the lease replacement ordinal a RE-activated (node, environment) must be
+ *   authored with (story.5039 PR-B). The actuator's idempotence key is spent forever once a
+ *   lease under it settles terminally, so re-adding an env whose ledger already holds a terminal
+ *   receipt at the current generation MUST author a bumped `lease_generation` cell — else the
+ *   next reconcile answers with a refusal and the workload never comes up.
  * Scope: One pure function over the catalog's current generation + the ledger's receipts. No
  *   I/O, no git, no provider.
  * Invariants:
@@ -49,8 +49,11 @@ import type { AkashTxAllocationRecord } from "@/ports";
  * (LIVE_KEEPS_ITS_GENERATION). An add with an empty ledger stays at the catalog's generation —
  * 0 is byte-identical to a birth row.
  *
- * Receipts carry their generation as `identity.compositeGeneration` — the composite revision
- * durably bound to the receipt before the provider was contacted (IDENTITY_BEFORE_TRANSACTION).
+ * The receipt's replacement ordinal is the final component of `cogniKey`. It must never be
+ * confused with `identity.compositeGeneration`: that field is Kubernetes `metadata.generation`,
+ * a mutable reconciliation revision which can advance thousands of times while one paid lease
+ * keeps the same idempotence key. The Crossplane composition authors keys as
+ * `xcw:<namespace>:<node-id>:<leaseGeneration>`, so the suffix is the durable generation evidence.
  */
 export function requiredLeaseGeneration(input: {
   readonly catalogGeneration: number;
@@ -58,7 +61,13 @@ export function requiredLeaseGeneration(input: {
 }): number {
   let required = input.catalogGeneration;
   for (const receipt of input.receipts) {
-    const generation = receipt.identity.compositeGeneration;
+    const match = /^xcw:.+:(0|[1-9]\d*)$/.exec(receipt.cogniKey);
+    const generation = match ? Number(match[1]) : Number.NaN;
+    if (!Number.isSafeInteger(generation) || generation > 1_000_000) {
+      throw new Error(
+        `[lease-reactivation] receipt ${receipt.receiptId} has no valid lease generation suffix`
+      );
+    }
     if (receipt.state === "released" || receipt.state === "failed") {
       // Terminal: this generation's key is spent — the next activation needs the one after it.
       required = Math.max(required, generation + 1);
