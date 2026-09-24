@@ -38,24 +38,6 @@ export interface AkashSdlOptions {
 
 const PLACEMENT = "dcloud";
 
-/**
- * ZERO_DOWNTIME_ROLLING (bug.5188 axis-2) — the SINGLE source of truth for Akash replica
- * counts. `count` exists nowhere else in the codebase (not the XRD, Composition,
- * `@contracts/compute.akash-tx`, or catalog): this constant + `replicaCountFor` is the one
- * place. The service that owns public ingress runs `INGRESS_REPLICAS` so an in-place SDL update
- * rolls one replica at a time (the provider maps `count` → a k8s Deployment with a RollingUpdate
- * strategy) and the origin never drops — `count: 1` produced a ~40s HTTP 530 window during the
- * toks5 promote proof (bug.5188). Mesh/sidecar services stay at 1 (no public ingress to keep up).
- */
-export const INGRESS_REPLICAS = 2;
-
-/** Replica count for one service per ZERO_DOWNTIME_ROLLING — the ONLY place a count is decided. */
-export function replicaCountFor(
-  svc: ProvisionSpec["services"][number]
-): number {
-  return (svc.expose ?? []).some((e) => e.global) ? INGRESS_REPLICAS : 1;
-}
-
 /** Render a ProvisionSpec as an Akash SDL v2.0 YAML string. */
 export function buildAkashSdl(
   spec: ProvisionSpec,
@@ -106,7 +88,7 @@ export function buildAkashSdl(
     };
 
     deployment[svc.name] = {
-      [PLACEMENT]: { profile: svc.name, count: replicaCountFor(svc) },
+      [PLACEMENT]: { profile: svc.name, count: 1 },
     };
   }
 
