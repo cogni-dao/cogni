@@ -183,6 +183,15 @@ patches:
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
         value: "cogni-monorepo"
+      # Runtime catalog/deploy-state source. This is intentionally distinct from
+      # the disposable submodule PR target above: candidate serves the fleet
+      # declared by the canonical operator repo.
+      - op: add
+        path: /data/NODE_REGISTRY_CATALOG_OWNER
+        value: "cogni-dao"
+      - op: add
+        path: /data/NODE_REGISTRY_CATALOG_REPO
+        value: "cogni"
       - op: add
         path: /data/OPENFGA_API_URL
         value: "http://operator-openfga-external:8080"
