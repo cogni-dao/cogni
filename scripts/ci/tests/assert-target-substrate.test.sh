@@ -39,7 +39,14 @@ done
 shift
 [ "${1:-}" = "-s" ] && shift
 [ "${1:-}" = "--" ] && shift
-PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -s -- "$@"
+remote_args=()
+for arg in "$@"; do
+  if [ "${FAKE_SSH_DROP_EMPTY_ARGS:-}" = "1" ] && [ -z "$arg" ]; then
+    continue
+  fi
+  remote_args+=("$arg")
+done
+PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -s -- "${remote_args[@]}"
 EOF
 chmod +x "$FAKEBIN/ssh"
 
@@ -453,7 +460,7 @@ deployment:
     - name: echo
       secret_refs: []
 YAML
-env "${EXTERNAL_ENV[@]}" FAKE_EMPTY_WORKLOAD_SECRET=1 \
+env "${EXTERNAL_ENV[@]}" FAKE_EMPTY_WORKLOAD_SECRET=1 FAKE_SSH_DROP_EMPTY_ARGS=1 \
   bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-no-secret-refs.out"
 grep -q "all declared workload secret refs are materialized" "$TMPROOT/external-no-secret-refs.out"
 
