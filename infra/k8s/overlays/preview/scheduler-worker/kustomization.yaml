@@ -13,7 +13,7 @@ resources:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:479c3d47dd6bfe82d7a28ce9341b145c13f1b06341bac0cc7be1531e4160bc5f"
+    digest: "sha256:3f1ae3f7b12ef2af528a96a814ef54a70296f09c425bd96741d8bf2db13ec1dc"
 
 patches:
   # GENERATED sibling (render-scheduler-worker-endpoints.sh): this env's
