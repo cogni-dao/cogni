@@ -25,6 +25,7 @@ import {
   getContainer,
   resolveAppDb,
   resolveComputeCostStore,
+  resolveNodeDeploymentTopology,
   resolveNodeRegistry,
 } from "@/bootstrap/container";
 import { deriveNodeOperationsStatus } from "@/features/nodes/operations/status";
@@ -39,6 +40,7 @@ import {
 import { baseDomain, titleCaseSlug } from "@/shared/node-registry/resolve";
 
 type DeploymentModule = NodeOperationsOverview["modules"]["deployment"];
+type ServicesModule = NodeOperationsOverview["modules"]["services"];
 type GovernanceModule = NodeOperationsOverview["modules"]["governance"];
 
 const ENV_LABEL = {
@@ -46,6 +48,29 @@ const ENV_LABEL = {
   preview: "Preview",
   production: "Production",
 } as const;
+
+async function readServices(
+  reader: ReturnType<typeof resolveNodeDeploymentTopology> | null,
+  input: {
+    slug: string;
+    environment: (typeof FLIGHT_ENVS)[number] | null;
+  }
+): Promise<ServicesModule> {
+  if (!reader || input.environment === null) return { state: "unavailable" };
+  try {
+    const items = await reader.listServices({
+      slug: input.slug,
+      environment: input.environment,
+    });
+    return {
+      state: "available",
+      environment: input.environment,
+      items: [...items],
+    };
+  } catch {
+    return { state: "unavailable" };
+  }
+}
 
 async function readDeployment(
   row: {
@@ -234,6 +259,13 @@ export async function listAccessibleNodeOperations(
   const root = baseDomain(serverEnv());
   const deploymentEnvironment = currentDeploymentEnvironment();
   const currentNodeId = getNodeId();
+  let topologyReader: ReturnType<typeof resolveNodeDeploymentTopology> | null =
+    null;
+  try {
+    topologyReader = resolveNodeDeploymentTopology();
+  } catch {
+    // A missing GitHub App degrades only the declared Services module.
+  }
 
   const overviews = await Promise.all(
     owned.map(async (row): Promise<NodeOperationsOverview> => {
@@ -243,7 +275,7 @@ export async function listAccessibleNodeOperations(
         : summary?.href && /^https?:\/\//.test(summary.href)
           ? summary.href
           : null;
-      const [deployment, governance] = await Promise.all([
+      const [deployment, services, governance] = await Promise.all([
         readDeployment(
           {
             id: row.id,
@@ -253,6 +285,14 @@ export async function listAccessibleNodeOperations(
           },
           homepageUrl
         ),
+        readServices(topologyReader, {
+          slug: row.slug,
+          environment:
+            deploymentEnvironment &&
+            row.deployEnvs.includes(deploymentEnvironment)
+              ? deploymentEnvironment
+              : null,
+        }),
         readGovernance(row),
       ]);
       const cost = costByNode.get(row.id);
@@ -283,7 +323,7 @@ export async function listAccessibleNodeOperations(
         formationStatus: row.status as NodeStatus,
         relationship: "owner",
         detailUrl: `/nodes/${row.id}`,
-        modules: { deployment, compute, governance },
+        modules: { deployment, services, compute, governance },
       };
     })
   );

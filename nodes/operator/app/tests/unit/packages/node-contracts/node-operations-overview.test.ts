@@ -24,6 +24,18 @@ describe("nodes.operations-overview.v1", () => {
           providerConsumerAccountId: "must-not-leak",
           modules: {
             deployment: { state: "unavailable" },
+            services: {
+              state: "available",
+              environment: "candidate-a",
+              items: [
+                {
+                  name: "app",
+                  visibility: "public",
+                  image: "must-not-leak",
+                  secretRefs: ["must-not-leak"],
+                },
+              ],
+            },
             compute: { state: "unavailable", resourceId: "must-not-leak" },
             governance: { state: "unavailable" },
           },
@@ -33,6 +45,11 @@ describe("nodes.operations-overview.v1", () => {
 
     expect(parsed.nodes[0]).not.toHaveProperty("providerConsumerAccountId");
     expect(parsed.nodes[0]).not.toHaveProperty("manageUrl");
+    expect(parsed.nodes[0]?.modules.services).toEqual({
+      state: "available",
+      environment: "candidate-a",
+      items: [{ name: "app", visibility: "public" }],
+    });
     expect(parsed.nodes[0]?.modules.compute).toEqual({ state: "unavailable" });
   });
 });

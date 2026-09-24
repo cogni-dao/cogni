@@ -38,6 +38,14 @@ const node: NodeOperationsOverview = {
         },
       ],
     },
+    services: {
+      state: "available",
+      environment: "production",
+      items: [
+        { name: "app", visibility: "public" },
+        { name: "paper-trader", visibility: "private" },
+      ],
+    },
     compute: {
       state: "available",
       sponsorship: "cogni",
@@ -92,6 +100,24 @@ describe("NodeOperationsTable", () => {
     expect(screen.getAllByText(/Sponsored/).length).toBeGreaterThan(0);
     expect(container).not.toHaveTextContent(/akash|wallet|lease|dseq|receipt/i);
     expect(container).not.toHaveTextContent(/owner/i);
+  });
+
+  it("shows a multi-service node without inventing per-service health", async () => {
+    const user = userEvent.setup();
+    render(<NodeOperationsTable nodes={[node]} />);
+    await user.click(
+      screen.getAllByRole("button", {
+        name: "Show Alpha details",
+      })[0] as HTMLElement
+    );
+
+    const expanded = document.getElementById(`${node.id}-operations-desktop`);
+    expect(expanded).toHaveTextContent("Services2 · Production");
+    expect(expanded).toHaveTextContent("app");
+    expect(expanded).toHaveTextContent("Public");
+    expect(expanded).toHaveTextContent("paper-trader");
+    expect(expanded).toHaveTextContent("Private");
+    expect(expanded).not.toHaveTextContent(/service health|running/i);
   });
 
   it("renders one concise empty-state action", () => {

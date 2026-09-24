@@ -33,6 +33,8 @@ import {
   ChevronDown,
   CircleDashed,
   ExternalLink,
+  Globe2,
+  Network,
   Rocket,
   Search,
   Settings2,
@@ -85,6 +87,12 @@ const STATUS = {
   DeploymentStatus,
   { label: string; icon: typeof CheckCircle2; className: string }
 >;
+
+const ENVIRONMENT_LABEL = {
+  "candidate-a": "Test",
+  preview: "Preview",
+  production: "Production",
+} as const;
 
 function nodeStatusKey(node: NodeOperationsOverview): string {
   return node.modules.deployment.state === "available"
@@ -204,6 +212,7 @@ function NodeDetails({
   disclosureId?: string;
 }): ReactElement {
   const deployment = node.modules.deployment;
+  const services = node.modules.services;
   const governance = node.modules.governance;
   const rows = environmentRows(node);
 
@@ -241,6 +250,47 @@ function NodeDetails({
         </h3>
         {deployment.state === "available" ? (
           <DeploymentEnvironmentMatrix rows={rows} showCompute />
+        ) : (
+          <p className="text-muted-foreground text-sm">Unavailable</p>
+        )}
+      </section>
+
+      <section aria-labelledby={`${instanceId}-services`} className="space-y-3">
+        <div className="flex items-center gap-2">
+          <h3 id={`${instanceId}-services`} className="font-medium text-sm">
+            Services
+          </h3>
+          {services.state === "available" ? (
+            <span className="text-muted-foreground text-xs tabular-nums">
+              {services.items.length} ·{" "}
+              {ENVIRONMENT_LABEL[services.environment]}
+            </span>
+          ) : null}
+        </div>
+        {services.state === "available" ? (
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {services.items.map((service) => {
+              const VisibilityIcon =
+                service.visibility === "public" ? Globe2 : Network;
+              return (
+                <li
+                  key={service.name}
+                  className="flex min-h-11 items-center gap-3 rounded-md border bg-background px-3"
+                >
+                  <VisibilityIcon
+                    className="size-4 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 flex-1 truncate font-mono text-sm">
+                    {service.name}
+                  </span>
+                  <span className="text-muted-foreground text-xs">
+                    {service.visibility === "public" ? "Public" : "Private"}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         ) : (
           <p className="text-muted-foreground text-sm">Unavailable</p>
         )}

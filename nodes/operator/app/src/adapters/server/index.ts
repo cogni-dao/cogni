@@ -159,6 +159,10 @@ export {
   TemplateQueryError,
   type TemplateQueryErrorCode,
 } from "./metrics/mimir.adapter";
+export {
+  GitHubNodeDeploymentTopologyAdapter,
+  type NodeDeploymentFileReader,
+} from "./node-deployment/github-node-deployment-topology.adapter";
 export { HttpNodeProber } from "./node-flight/node-prober.adapter";
 export {
   LiveNodeRegistryAdapter,

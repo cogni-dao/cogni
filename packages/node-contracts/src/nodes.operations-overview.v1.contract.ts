@@ -30,6 +30,21 @@ export const nodeOperationsEnvironmentSchema = z.object({
   }),
 });
 
+export const nodeOperationsServicesSchema = z.discriminatedUnion("state", [
+  moduleUnavailableSchema,
+  z.object({
+    state: z.literal("available"),
+    /** Environment whose deployed Git branch supplied this topology. */
+    environment: z.enum(["candidate-a", "preview", "production"]),
+    items: z.array(
+      z.object({
+        name: z.string().min(1).max(63),
+        visibility: z.enum(["public", "private"]),
+      })
+    ),
+  }),
+]);
+
 export const nodeOperationsDeploymentModuleSchema = z.discriminatedUnion(
   "state",
   [
@@ -145,6 +160,8 @@ export const nodeOperationsOverviewSchema = z.object({
   detailUrl: z.string(),
   modules: z.object({
     deployment: nodeOperationsDeploymentModuleSchema,
+    /** Git-declared topology for this operator environment; independent from runtime probes. */
+    services: nodeOperationsServicesSchema,
     compute: nodeOperationsComputeModuleSchema,
     governance: nodeOperationsGovernanceModuleSchema,
     usage: nodeOperationsUsageModuleSchema.optional(),

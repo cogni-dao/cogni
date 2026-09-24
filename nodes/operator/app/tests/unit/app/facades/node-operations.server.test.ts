@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
 const reportByNodeIds = vi.hoisted(() => vi.fn());
 const listPublic = vi.hoisted(() => vi.fn());
 const listForeignEpochs = vi.hoisted(() => vi.fn());
+const listServices = vi.hoisted(() => vi.fn());
 
 const mockTx = {
   select: () => ({
@@ -44,6 +45,7 @@ vi.mock("@cogni/db-client", () => ({
 vi.mock("@/bootstrap/container", () => ({
   resolveAppDb: () => ({}),
   resolveComputeCostStore: () => ({ reportByNodeIds }),
+  resolveNodeDeploymentTopology: () => ({ listServices }),
   resolveNodeRegistry: () => ({ listPublic }),
   getContainer: () => ({
     deployCapability: undefined,
@@ -82,8 +84,13 @@ describe("listAccessibleNodeOperations", () => {
     reportByNodeIds.mockReset();
     listPublic.mockReset();
     listForeignEpochs.mockReset();
+    listServices.mockReset();
     listPublic.mockResolvedValue([]);
     listForeignEpochs.mockResolvedValue({ epochs: [] });
+    listServices.mockResolvedValue([
+      { name: "app", visibility: "public" },
+      { name: "paper-trader", visibility: "private" },
+    ]);
   });
 
   it("passes only owner-resolved ids to cost SQL and cannot return an unrelated node", async () => {
@@ -94,7 +101,7 @@ describe("listAccessibleNodeOperations", () => {
         status: "published",
         daoAddress: null,
         chainId: null,
-        deployEnvs: [],
+        deployEnvs: ["production"],
         createdAt: new Date("2026-09-15T00:00:00.000Z"),
       },
     ];
@@ -105,12 +112,24 @@ describe("listAccessibleNodeOperations", () => {
 
     expect(reportByNodeIds).toHaveBeenCalledExactlyOnceWith([NODE_A]);
     expect(output.nodes.map((node) => node.id)).toEqual([NODE_A]);
+    expect(listServices).toHaveBeenCalledExactlyOnceWith({
+      slug: "alpha",
+      environment: "production",
+    });
     expect(JSON.stringify(output)).not.toContain(NODE_B);
     expect(output.nodes[0]).toMatchObject({
       relationship: "owner",
       detailUrl: `/nodes/${NODE_A}`,
       thumbnailUrl: null,
       modules: {
+        services: {
+          state: "available",
+          environment: "production",
+          items: [
+            { name: "app", visibility: "public" },
+            { name: "paper-trader", visibility: "private" },
+          ],
+        },
         compute: { state: "available", environment: "production" },
       },
     });
@@ -123,5 +142,30 @@ describe("listAccessibleNodeOperations", () => {
     expect(reportByNodeIds).not.toHaveBeenCalled();
     expect(listPublic).not.toHaveBeenCalled();
     expect(listForeignEpochs).not.toHaveBeenCalled();
+    expect(listServices).not.toHaveBeenCalled();
+  });
+
+  it("degrades only service topology when the node repo cannot be read", async () => {
+    state.owned = [
+      {
+        id: NODE_A,
+        slug: "alpha",
+        status: "published",
+        daoAddress: null,
+        chainId: null,
+        deployEnvs: ["production"],
+        createdAt: new Date("2026-09-15T00:00:00.000Z"),
+      },
+    ];
+    reportByNodeIds.mockResolvedValue([]);
+    listServices.mockRejectedValue(new Error("unavailable"));
+
+    const output = await listAccessibleNodeOperations("user-a");
+
+    expect(output.nodes[0]?.modules.services).toEqual({ state: "unavailable" });
+    expect(output.nodes[0]?.modules.deployment).toMatchObject({
+      state: "available",
+      status: "setting_up",
+    });
   });
 });
