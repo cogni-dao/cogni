@@ -28,15 +28,19 @@ describe("node operations page boundary", () => {
     expect(dashboard).not.toContain("Active Work");
   });
 
-  it("uses operations first only for active nodes and preserves owner actions under Manage", () => {
+  it("uses one operations table with owner actions and no separate manage mode", () => {
     const page = source("app/(app)/nodes/[id]/page.tsx");
-    expect(page).toContain('status === "active"');
-    expect(page).toContain("<NodeOperationsDetail node={operationsNode} />");
-    expect(page).toContain("<NodeWizard");
-    expect(page).toContain("Manage node");
-    expect(page).toContain(
-      "<NodeDeployments nodeId={node.id} envs={deployEnvs} />"
+    const operations = source(
+      "features/nodes/operations/NodeOperationsTable.client.tsx"
     );
+    expect(page).toContain('status === "active"');
+    expect(page).toContain("<NodeOperationsDetail");
+    expect(page).toContain("deploymentControls=");
+    expect(page).toContain("<NodeWizard");
+    expect(page).not.toContain("Manage node");
+    expect(page).not.toContain("<details");
+    expect(operations).toContain("<DeploymentEnvironmentMatrix");
+    expect(operations).toContain("<NodeEnvToggle");
   });
 
   it("does not render the infrastructure placement selector", () => {

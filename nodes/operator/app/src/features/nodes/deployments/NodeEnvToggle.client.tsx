@@ -9,10 +9,10 @@
  *   reach includes the env, the control undeploys it (`present:false`); otherwise it deploys it
  *   (`present:true`). On success it surfaces the opened PR link (lands after the PR merges).
  *   Runtime placement is deliberately not exposed: it is an operator implementation detail.
- * Scope: A single client cell the server Deployments table renders per row. POSTs the env verb, shows
+ * Scope: A single client cell the node operations table renders per row. POSTs the env verb, shows
  *   pending state, and surfaces the PR link / no_changes / error inline. Reuses the app UI primitives.
  * Side-effects: IO (POST envs route, router.refresh)
- * Links: src/app/api/v1/nodes/[id]/envs/route.ts, src/features/nodes/deployments/NodeDeployments.tsx,
+ * Links: src/app/api/v1/nodes/[id]/envs/route.ts, src/features/nodes/operations/NodeOperationsTable.client.tsx,
  *   story.5020
  * @public
  */

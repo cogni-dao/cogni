@@ -49,6 +49,7 @@ import {
   DeploymentEnvironmentMatrix,
   type DeploymentEnvironmentRow,
 } from "@/features/nodes/deployments/DeploymentEnvironmentMatrix";
+import { NodeEnvToggle } from "@/features/nodes/deployments/NodeEnvToggle.client";
 import { formatComputeAmountsDisplay } from "./format-cost";
 import { isObservedEnvironmentHealthy } from "./status";
 
@@ -161,24 +162,48 @@ function computeLabel(node: NodeOperationsOverview): string {
   return formatComputeAmountsDisplay(compute.transferred);
 }
 
+interface NodeEnvironmentControl {
+  readonly env: string;
+  readonly inReach: boolean;
+}
+
 function environmentRows(
-  node: NodeOperationsOverview
+  node: NodeOperationsOverview,
+  controls?: {
+    readonly nodeId: string;
+    readonly environments: readonly NodeEnvironmentControl[];
+  }
 ): DeploymentEnvironmentRow[] {
   const deployment = node.modules.deployment;
   if (deployment.state === "unavailable") return [];
   const compute = node.modules.compute;
+  const controlsByEnvironment = new Map(
+    controls?.environments.map((control) => [control.env, control.inReach]) ??
+      []
+  );
 
-  return deployment.environments.map((environment) => ({
-    ...environment,
-    compute:
-      compute.state === "available" && compute.environment === environment.env
-        ? {
-            state: "available" as const,
-            amount: formatComputeAmountsDisplay(compute.transferred),
-            activeDeployments: compute.activeDeployments,
-          }
-        : { state: "unavailable" as const },
-  }));
+  return deployment.environments.map((environment) => {
+    const inReach = controlsByEnvironment.get(environment.env);
+    return {
+      ...environment,
+      compute:
+        compute.state === "available" && compute.environment === environment.env
+          ? {
+              state: "available" as const,
+              amount: formatComputeAmountsDisplay(compute.transferred),
+              activeDeployments: compute.activeDeployments,
+            }
+          : { state: "unavailable" as const },
+      action:
+        controls && inReach !== undefined ? (
+          <NodeEnvToggle
+            nodeId={controls.nodeId}
+            env={environment.env}
+            inReach={inReach}
+          />
+        ) : undefined,
+    };
+  });
 }
 
 function GovernanceMetric({
@@ -204,17 +229,24 @@ function NodeDetails({
   showHomepageLink = true,
   instanceId,
   disclosureId,
+  deploymentControls,
 }: {
   node: NodeOperationsOverview;
   showDetailLink?: boolean;
   showHomepageLink?: boolean;
   instanceId: string;
   disclosureId?: string;
+  deploymentControls?:
+    | {
+        readonly nodeId: string;
+        readonly environments: readonly NodeEnvironmentControl[];
+      }
+    | undefined;
 }): ReactElement {
   const deployment = node.modules.deployment;
   const services = node.modules.services;
   const governance = node.modules.governance;
-  const rows = environmentRows(node);
+  const rows = environmentRows(node, deploymentControls);
 
   const finalizedCredits =
     governance.state === "available" &&
@@ -642,8 +674,15 @@ export function NodeOperationsTable({
 
 export function NodeOperationsDetail({
   node,
+  deploymentControls,
 }: {
   readonly node: NodeOperationsOverview;
+  readonly deploymentControls?:
+    | {
+        readonly nodeId: string;
+        readonly environments: readonly NodeEnvironmentControl[];
+      }
+    | undefined;
 }): ReactElement {
   return (
     <section aria-labelledby="node-operations-title" className="space-y-4">
@@ -693,6 +732,7 @@ export function NodeOperationsDetail({
           showDetailLink={false}
           showHomepageLink={false}
           instanceId={`${node.id}-detail`}
+          deploymentControls={deploymentControls}
         />
       </Card>
     </section>

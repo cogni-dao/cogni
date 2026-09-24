@@ -4,7 +4,7 @@
 /**
  * Module: `@features/nodes/ResetDaoDangerZone.client`
  * Purpose: Owner-only destructive control to reset a node's DAO record so a fresh DAO can be re-formed.
- * Scope: Renders a compact "Danger zone" SectionCard (page-aligned with NodeAccess/NodeDeployments)
+ * Scope: Renders a compact "Danger zone" SectionCard below the node operations and access surfaces.
  *   with a two-step reveal — a single destructive button first, then a typed confirmation guard +
  *   final confirm/cancel. POSTs to the owner-only reset-dao route and refreshes the server page on
  *   success so the wizard returns to the DAO step.

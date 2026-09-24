@@ -31,7 +31,6 @@ import { PageContainer } from "@/components";
 import { NodeAccess } from "@/features/nodes/access/NodeAccess";
 import { listAccessRequests } from "@/features/nodes/access-requests";
 import { DistributionsCard } from "@/features/nodes/DistributionsCard.client";
-import { NodeDeployments } from "@/features/nodes/deployments/NodeDeployments";
 import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
 import { NodeOperationsDetail } from "@/features/nodes/operations/NodeOperationsTable.client";
@@ -225,7 +224,23 @@ export default async function NodeDashboardPage({
       </Link>
 
       {operationsNode ? (
-        <NodeOperationsDetail node={operationsNode} />
+        <NodeOperationsDetail
+          node={operationsNode}
+          deploymentControls={
+            operationsNode.modules.deployment.state === "available"
+              ? {
+                  nodeId: node.id,
+                  environments:
+                    operationsNode.modules.deployment.environments.map(
+                      (environment) => ({
+                        env: environment.env,
+                        inReach: environment.declared,
+                      })
+                    ),
+                }
+              : undefined
+          }
+        />
       ) : (
         <NodeWizard
           statusLabel={statusLabel}
@@ -249,44 +264,29 @@ export default async function NodeDashboardPage({
       )}
 
       {hasManagement ? (
-        <details className="group mx-auto mt-6 w-full max-w-3xl rounded-lg border bg-card">
-          <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between rounded-lg px-4 font-medium hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
-            Manage node
-            <span className="text-muted-foreground text-sm group-open:hidden">
-              Show
-            </span>
-            <span className="hidden text-muted-foreground text-sm group-open:inline">
-              Hide
-            </span>
-          </summary>
-          <div className="border-t p-4">
-            {deployEnvs ? (
-              <NodeDeployments nodeId={node.id} envs={deployEnvs} />
-            ) : null}
+        <div className="mx-auto mt-6 w-full max-w-3xl space-y-4">
+          {showDevelopers ? (
+            <NodeAccess nodeId={node.id} requests={accessRequests} />
+          ) : null}
 
-            {showDevelopers ? (
-              <NodeAccess nodeId={node.id} requests={accessRequests} />
-            ) : null}
+          {node.daoAddress != null && showDevelopers ? (
+            <DistributionsCard
+              nodeId={node.id}
+              slug={node.slug}
+              repoSpecUrl={repoSpecUrl}
+              tokenAddress={node.tokenAddress}
+              daoAddress={node.daoAddress}
+              pluginAddress={node.pluginAddress}
+              chainId={node.chainId}
+              distributionsActive={distributionsActive}
+              recordedDistributorAddress={recordedDistributorAddress}
+            />
+          ) : null}
 
-            {node.daoAddress != null && showDevelopers ? (
-              <DistributionsCard
-                nodeId={node.id}
-                slug={node.slug}
-                repoSpecUrl={repoSpecUrl}
-                tokenAddress={node.tokenAddress}
-                daoAddress={node.daoAddress}
-                pluginAddress={node.pluginAddress}
-                chainId={node.chainId}
-                distributionsActive={distributionsActive}
-                recordedDistributorAddress={recordedDistributorAddress}
-              />
-            ) : null}
-
-            {node.daoAddress != null || status !== "dao_pending" ? (
-              <ResetDaoDangerZone nodeId={node.id} slug={node.slug} />
-            ) : null}
-          </div>
-        </details>
+          {node.daoAddress != null || status !== "dao_pending" ? (
+            <ResetDaoDangerZone nodeId={node.id} slug={node.slug} />
+          ) : null}
+        </div>
       ) : null}
     </PageContainer>
   );
