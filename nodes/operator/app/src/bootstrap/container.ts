@@ -101,12 +101,14 @@ import {
   DrizzleThreadPersistenceAdapter,
   EvmRpcOnChainVerifierAdapter,
   GITHUB_ADAPTER_VERSION,
+  GitHubNodeDeploymentTopologyAdapter,
   GitHubWebhookNormalizer,
   getAppDb,
   LangfuseAdapter,
   LiteLlmAdapter,
   type MimirAdapterConfig,
   MimirMetricsAdapter,
+  PublicGitHubNodeDeploymentFileReader,
   RedisRunStreamAdapter,
   SplitPaymentRailGuardAdapter,
   SystemClock,
@@ -190,6 +192,7 @@ import type {
   AiTelemetryPort,
   Clock,
   ComputeCostReport,
+  ComputeCostStorePort,
   ConnectionBrokerPort,
   DataSourceRegistration,
   EpochsRead,
@@ -199,6 +202,7 @@ import type {
   MetricsQueryPort,
   ModelCatalogPort,
   ModelProviderResolverPort,
+  NodeDeploymentTopologyPort,
   NodeRegistryPort,
   OnChainVerifier,
   OperatorWalletPort,
@@ -237,6 +241,7 @@ import {
 } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env/server-env";
+import { resolveNodeCatalogSource } from "@/shared/node-registry/catalog-source";
 import { envForApex } from "@/shared/node-registry/deploy-hosts";
 import { baseDomain } from "@/shared/node-registry/resolve";
 import { makeLogger } from "@/shared/observability";
@@ -1204,6 +1209,41 @@ export function resolveAppDb(): Database {
  */
 export function resolveServiceDb(): Database {
   return getServiceDb();
+}
+
+let cachedComputeCostStore: ComputeCostStorePort | undefined;
+
+/**
+ * Resolve the read/write compute cost ledger behind its provider-neutral port.
+ * Dashboard callers must use `reportByNodeIds` after resolving principal access.
+ */
+export function resolveComputeCostStore(): ComputeCostStorePort {
+  cachedComputeCostStore ??= new DrizzleComputeCostStore(async () =>
+    resolveServiceDb()
+  );
+  return cachedComputeCostStore;
+}
+
+let cachedNodeDeploymentTopology: NodeDeploymentTopologyPort | undefined;
+
+/**
+ * Resolve the display-safe reader for the exact environment deploy state Argo consumes.
+ * The GitHub App is read-only at this seam; missing configuration is allowed to degrade the
+ * dashboard's Services module without affecting deployment, cost, or governance reads.
+ */
+export function resolveNodeDeploymentTopology(): NodeDeploymentTopologyPort {
+  const env = serverEnv();
+  const catalog = resolveNodeCatalogSource(env);
+  if (!catalog) {
+    throw new Error(
+      "node deployment topology requires a configured catalog source"
+    );
+  }
+  cachedNodeDeploymentTopology ??= new GitHubNodeDeploymentTopologyAdapter(
+    new PublicGitHubNodeDeploymentFileReader(),
+    catalog
+  );
+  return cachedNodeDeploymentTopology;
 }
 
 /**

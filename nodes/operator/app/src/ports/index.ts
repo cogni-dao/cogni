@@ -248,6 +248,10 @@ export type { ModelProviderResolverPort } from "./model-provider-resolver.port";
 export type { NodeAddressPort } from "./node-address.port";
 export { NodeAddressError } from "./node-address.port";
 export type {
+  NodeDeployedService,
+  NodeDeploymentTopologyPort,
+} from "./node-deployment-topology.port";
+export type {
   AssertLiveResult,
   EnvFlightStatus,
   FlightEnv,

@@ -189,10 +189,7 @@ export function DistributionsCard({
   }, [refetch]);
 
   return (
-    <SectionCard
-      title="Set up distributions"
-      className="mx-auto mt-4 w-full max-w-2xl"
-    >
+    <SectionCard title="Set up distributions" className="mt-4 w-full">
       <p className="text-muted-foreground text-sm">
         A one-time setup so <span className="font-medium">{slug}</span> can pay
         contributors in its DAO token. After setup, each epoch publishes in a
