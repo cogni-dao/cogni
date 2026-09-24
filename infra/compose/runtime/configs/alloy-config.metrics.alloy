@@ -19,7 +19,7 @@ discovery.relabel "docker_logs" {
 
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    regex         = "(app|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy-k8s-events|pdc-agent)"
+    regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy-k8s-events|pdc-agent)"
     action        = "keep"
   }
 
@@ -57,6 +57,24 @@ loki.source.docker "default" {
   targets       = discovery.relabel.docker_logs.output
   forward_to    = [loki.process.docker_logs.receiver]
   relabel_rules = discovery.relabel.docker_logs.rules
+}
+
+// Host-kernel evidence is required to distinguish a cgroup OOM, host OOM, and
+// an operator/admin SIGKILL. PostgreSQL only reports that a backend disappeared;
+// the kernel journal records why. Keep only kernel transport to avoid turning the
+// host journal into an unbounded, high-cardinality second application log plane.
+loki.source.journal "kernel" {
+  path           = "/var/log/journal"
+  matches        = "_TRANSPORT=kernel"
+  max_age        = "24h"
+  format_as_json = true
+  labels = {
+    app     = "cogni-template",
+    env     = sys.env("DEPLOY_ENVIRONMENT"),
+    service = "kernel",
+    source  = "journal",
+  }
+  forward_to = [loki.write.loki.receiver]
 }
 
 // =============================================================================

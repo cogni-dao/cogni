@@ -1555,8 +1555,19 @@ else
 fi
 
 log_info "[$(date -u +%H:%M:%S)] Installing db-backup systemd timer..."
-$RUNTIME_COMPOSE --profile backup stop db-backup 2>/dev/null || true
-$RUNTIME_COMPOSE --profile backup rm -f db-backup 2>/dev/null || true
+# Pause future triggers while replacing the unit, but never kill an in-progress
+# backup. The previous implementation stopped/remade the Compose container on
+# every reconcile and then launched another full dump inline. On production's
+# 17GB shared database that backup coincided exactly with the backend SIGKILL and
+# crash-recovery outage (bug.5252). One systemd service is now the sole executor.
+systemctl stop cogni-db-backup.timer 2>/dev/null || true
+backup_was_running=0
+if systemctl is-active --quiet cogni-db-backup.service; then
+  backup_was_running=1
+  log_info "db-backup service already active; preserving the in-progress backup"
+else
+  $RUNTIME_COMPOSE --profile backup rm -f db-backup 2>/dev/null || true
+fi
 DOCKER_BIN=$(command -v docker)
 BACKUP_INTERVAL_SECONDS="${DB_BACKUP_INTERVAL_SECONDS:-86400}"
 cat >/etc/systemd/system/cogni-db-backup.service <<SYSTEMD_SERVICE_EOF
@@ -1578,11 +1589,14 @@ cat >/etc/systemd/system/cogni-db-backup.timer <<SYSTEMD_TIMER_EOF
 Description=Run Cogni runtime Postgres logical backup
 
 [Timer]
-OnBootSec=15min
-OnUnitActiveSec=${BACKUP_INTERVAL_SECONDS}s
+# Relative to timer activation/completion, not machine boot. Reinstalling this
+# timer on a long-running VM must not turn an ordinary infra reconcile into an
+# immediate full-database read, and a slow backup must never compress the next
+# interval or overlap itself.
+OnActiveSec=${BACKUP_INTERVAL_SECONDS}s
+OnUnitInactiveSec=${BACKUP_INTERVAL_SECONDS}s
 AccuracySec=5min
 RandomizedDelaySec=5min
-Persistent=true
 Unit=cogni-db-backup.service
 
 [Install]
@@ -1590,28 +1604,21 @@ WantedBy=timers.target
 SYSTEMD_TIMER_EOF
 
 systemctl daemon-reload
-systemctl enable --now cogni-db-backup.timer
+systemctl enable cogni-db-backup.timer
 systemctl reset-failed cogni-db-backup.service 2>/dev/null || true
 log_info "db-backup timer installed with interval ${BACKUP_INTERVAL_SECONDS}s"
 
-log_info "Running db-backup validation backup..."
-# `up --force-recreate` keeps the Exited container briefly so alloy scrapes
-# `db_backup.completed` into Loki (relied on by candidate-flight-infra). The
-# explicit `rm -f` after prevents the next timer fire from colliding on the
-# container name; the systemd unit's ExecStartPost mirrors this for the timer.
-# A pre-cleanup at line ~888 + the existing top-level [FATAL] ERR trap handle
-# the case where validation aborts mid-flight and leaves a leftover. (bug.5169)
-# NON-FATAL: the inline validation backup is a smoke test, NOT a serving
-# prerequisite. The scheduled systemd timer (above) is the real backup. A flaky
-# / SIGKILLed (exit 137) validation MUST NOT abort deploy-infra and starve the
-# app layer (Step 7 creates the namespace + node-app Secrets + triggers Argo) —
-# that turns one backup hiccup into a cluster-wide outage (provision-env skill
-# Gotcha 13, candidate-a 2026-06-04). Warn + continue; the timer retries.
+# A full dump is behavioral validation, so run it only in candidate. Preview and
+# production reconciles install the exact same unit/config but do not exercise a
+# 17GB data-plane workload as a side effect of control-plane convergence.
 backup_validated=1
-if $RUNTIME_COMPOSE --profile backup up --force-recreate --no-deps --abort-on-container-exit --exit-code-from db-backup db-backup; then
-  $RUNTIME_COMPOSE --profile backup logs --tail 80 db-backup | grep -q 'db_backup.completed' \
-    || { log_warn "db-backup completed-marker missing after validation backup (non-fatal)"; backup_validated=0; }
-  $RUNTIME_COMPOSE --profile backup run --rm --no-deps --entrypoint bash db-backup -lc '
+if [[ "$DEPLOY_ENVIRONMENT" == candidate-* ]]; then
+  log_info "Running candidate db-backup validation through the singleton systemd service..."
+  if [[ "$backup_was_running" == 1 ]]; then
+    log_warn "db-backup already running; skipped duplicate candidate validation"
+    backup_validated=0
+  elif systemctl start cogni-db-backup.service; then
+    $RUNTIME_COMPOSE --profile backup run --rm --no-deps --entrypoint bash db-backup -lc '
     set -euo pipefail
     for cluster in app temporal; do
       latest=$(find "/backups/${cluster}" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
@@ -1619,16 +1626,19 @@ if $RUNTIME_COMPOSE --profile backup up --force-recreate --no-deps --abort-on-co
       test -s "${latest}/MANIFEST.sha256"
       echo "db-backup manifest verified: ${latest}/MANIFEST.sha256"
     done
-  ' || { log_warn "db-backup manifest verification failed (non-fatal)"; backup_validated=0; }
+    ' || { log_warn "db-backup manifest verification failed (non-fatal)"; backup_validated=0; }
+  else
+    log_warn "candidate db-backup validation failed — NON-FATAL; the scheduled timer will retry"
+    backup_validated=0
+  fi
 else
-  log_warn "db-backup validation backup did not exit clean (e.g. exit 137 on a loaded VM) — NON-FATAL; the scheduled timer will retry. Continuing so the app layer deploys."
-  backup_validated=0
+  log_info "Skipping inline full backup in ${DEPLOY_ENVIRONMENT}; scheduled singleton owns production backups"
 fi
-$RUNTIME_COMPOSE --profile backup rm -f db-backup 2>/dev/null || true
+systemctl start cogni-db-backup.timer
 if [[ "$backup_validated" == 1 ]]; then
-  emit_deployment_event "infra_deployment.db_backup_scheduled" "success" "db-backup timer installed and validation backup completed"
+  emit_deployment_event "infra_deployment.db_backup_scheduled" "success" "db-backup timer installed; candidate validation completed when applicable"
 else
-  emit_deployment_event "infra_deployment.db_backup_scheduled" "warning" "db-backup timer installed; inline validation backup did not fully verify (non-fatal — timer retries)"
+  emit_deployment_event "infra_deployment.db_backup_scheduled" "warning" "db-backup timer installed; candidate validation did not fully verify (non-fatal — timer retries)"
 fi
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

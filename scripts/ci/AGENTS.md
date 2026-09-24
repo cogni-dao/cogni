@@ -93,6 +93,7 @@ scripts/fetch_github_job_logs.sh  # Fetch job logs from GitHub Actions API (requ
 - `wait-for-candidate-ready.sh` scopes `/readyz` polling to `PROMOTED_APPS` when set, matching affected-only candidate-flight matrix cells.
 - PLATFORM env: native locally (fast), linux/amd64 in CI
 - `deploy.sh` uses checksum-gated restart for LiteLLM: compares SHA256 of config file against stored hash at `/var/lib/cogni/litellm-config.sha256`, restarts only if changed
+- `deploy-infra.sh` installs one systemd-owned `db-backup` executor. Candidate infra flights run the full backup as behavioral validation; preview/production reconciles only install/start the timer and never launch a full dump inline. `scripts/ci/tests/db-backup-reconcile-safety.test.sh` guards the serialization, environment gate, client resource bounds, and PostgreSQL/kernel log evidence (bug.5252).
 - `deploy.sh` runs `git-sync` as a bootstrap step before db-provision to populate `/repo` volume for brain tools
 - `deploy.sh` sources `seed-pnpm-store.sh` (Step 7.5) to idempotently seed the `pnpm_store` Docker volume from a GHCR store image
 - `deploy.sh` uses targeted pulls: only per-deploy images (app, migrator, scheduler-worker) and sandbox `:latest` images (pnpm-store) are explicitly pulled. The `:latest` pulls do a manifest check (~2s) and skip download if unchanged. Static/pinned images (postgres, litellm, alloy, temporal, autoheal, nginx, git-sync, busybox) use local Docker cache and are pulled by `compose up -d` only when missing.
