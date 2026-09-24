@@ -35,7 +35,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:6662077f095dc7e0d09f5e176b7b13c7d31e1eba8ae528954a02ca47d8c8426b"
+    digest: "sha256:82c91d14e905effa3494cbb6c374c9431100b573584c1dbdd2b5bce9741f7818"
 
 patches:
   # No akash-tx-actuator Deployment patch here: preview runs no akash writer
