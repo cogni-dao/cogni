@@ -153,6 +153,7 @@ export type {
 } from "./connection-broker.port";
 export type {
   CandidateFlightDispatchResult,
+  CandidateLease,
   CatalogForkTarget,
   CatalogNodeDefinition,
   DeployPlanePort,

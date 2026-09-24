@@ -51,6 +51,7 @@ import { z } from "zod";
 
 import type {
   CandidateFlightDispatchResult,
+  CandidateLease,
   CatalogForkTarget,
   CatalogNodeDefinition,
   DeployPlanePort,
@@ -395,6 +396,32 @@ const CANDIDATE_CONTROL_PLANE_SELF_PATH =
 const CANDIDATE_CONTROL_PLANE_SEED_PATH =
   "infra/k8s/argocd/control-plane/roots/candidate-a-control-plane-application.yaml";
 const CANDIDATE_INFRA_FILES_PAGE_LIMIT = 10;
+
+/**
+ * Read-only source of the candidate-slot lease (bug.5249). The candidate-slot-controller
+ * workflow WRITES this file on the deploy branch; the operator only READS it here to
+ * fast-reject a flight into a busy slot. Branch is `deploy/<slot>` (the slot-level lease,
+ * distinct from the per-node `deploy/<slot>-<node>` app deploy branches).
+ */
+const CANDIDATE_LEASE_PATH = "infra/control/candidate-lease.json" as const;
+const candidateLeaseBranch = (slot: string): string => `deploy/${slot}`;
+
+/**
+ * Wire format of `candidate-lease.json` (snake_case, as the workflow writes it). Tolerant
+ * by design: unknown keys pass, and every field but `slot`/`state` is optional so a
+ * released lease (`free`/`failed`) or a partially-written lease still parses. A parse
+ * failure yields the free/not-found sentinel (null) rather than throwing the flight.
+ */
+const CandidateLeaseFileSchema = z.object({
+  slot: z.string(),
+  state: z.enum(["leased", "free", "failed"]),
+  pr_number: z.number().optional(),
+  run_id: z.union([z.string(), z.number()]).optional(),
+  head_sha: z.string().optional(),
+  expires_at: z.string().optional(),
+  acquired_at: z.string().optional(),
+  status_url: z.string().optional(),
+});
 
 const CandidateControlPlaneApplicationSchema = z.strictObject({
   apiVersion: z.literal("argoproj.io/v1alpha1"),
@@ -1404,6 +1431,54 @@ export class GitHubRepoWriter implements DeployPlanePort {
   }): Promise<string | null> {
     const pin = await this.fetchDeployPin(input);
     return pin.kind === "ok" ? pin.sha : null;
+  }
+
+  /**
+   * @see DeployPlanePort.readCandidateLease — read-only slot-lease fast-reject source.
+   * Reuses the App-auth `fetchFileText` contents:read path (404 → null, else throws so the
+   * caller fails open). A present-but-malformed lease is normalized to null (free/not-found
+   * sentinel): a corrupt lease must never wedge a flight, and the workflow's acquire is the
+   * real gate. Snake_case wire fields are normalized to the camelCase port shape here.
+   */
+  async readCandidateLease(input: {
+    slot: string;
+    parentOwner: string;
+    parentRepo: string;
+  }): Promise<CandidateLease | null> {
+    const text = await this.fetchFileText({
+      owner: input.parentOwner,
+      repo: input.parentRepo,
+      path: CANDIDATE_LEASE_PATH,
+      ref: candidateLeaseBranch(input.slot),
+    });
+    if (!text) return null;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    const parsed = CandidateLeaseFileSchema.safeParse(raw);
+    if (!parsed.success) return null;
+    const lease = parsed.data;
+    // Conditional spread (not explicit `undefined`) to satisfy exactOptionalPropertyTypes:
+    // an absent wire field stays absent on the port shape rather than becoming `: undefined`.
+    return {
+      slot: lease.slot,
+      state: lease.state,
+      ...(lease.pr_number !== undefined ? { prNumber: lease.pr_number } : {}),
+      ...(lease.run_id !== undefined ? { runId: String(lease.run_id) } : {}),
+      ...(lease.head_sha !== undefined ? { headSha: lease.head_sha } : {}),
+      ...(lease.expires_at !== undefined
+        ? { expiresAt: lease.expires_at }
+        : {}),
+      ...(lease.acquired_at !== undefined
+        ? { acquiredAt: lease.acquired_at }
+        : {}),
+      ...(lease.status_url !== undefined
+        ? { statusUrl: lease.status_url }
+        : {}),
+    };
   }
 
   /**

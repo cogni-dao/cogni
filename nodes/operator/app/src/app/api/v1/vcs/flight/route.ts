@@ -7,15 +7,22 @@
  *   Supports node-ref flights for externally built artifact rows.
  *   The candidate slot controller (GitHub Actions workflow) owns the actual slot lease
  *   on the deploy branch — this endpoint does not replicate that logic.
- * Scope: Auth → artifact gate → dispatch. No lease table. No polling hacks.
+ * Scope: Auth → artifact gate → slot fast-reject → dispatch. No lease table. No polling hacks.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session. No open access.
  *   - ARTIFACT_GATE: Rejects before dispatch if the requested image tag is absent.
  *   - OPERATOR_DEPLOY_PLANE: Hosted flight dispatch goes through an operator-local port.
  *   - NODE_REF_CANDIDATE_ONLY: nodeRef dispatch targets candidate-a only; preview/prod promotion carries the resolved digest.
  *   - CONTRACTS_ARE_TRUTH: Input/output parsed through flightOperation contract.
- *   - NO_LEASE_SPLIT_BRAIN: Slot lease lives on the deploy branch (candidate-slot-controller);
- *     this route does not write a competing lease.
+ *   - NO_LEASE_SPLIT_BRAIN: The slot lease lives on the deploy branch and the
+ *     candidate-slot-controller GitHub Actions workflow is its SOLE writer/acquirer.
+ *     This route now does a READ-ONLY, best-effort fast-reject (bug.5249): it READS the
+ *     lease before dispatch and returns 409 when the slot is held by a still-live run,
+ *     instead of dispatching into an eviction. It never writes a competing lease, so this
+ *     is not a split brain — it is a fast-fail UX layer in front of the workflow's
+ *     authoritative acquire, exactly like `features/vcs/merge-gate.ts` sits in front of
+ *     GitHub branch protection. TOCTOU: best-effort only; the workflow acquire is the real
+ *     gate, and a lease-read infra failure fails OPEN (observability must never wedge a flight).
  * Side-effects: IO (DB read, GitHub REST API via DeployPlanePort)
  * Links: task.0370, packages/node-contracts/src/vcs.flight.v1.contract.ts,
  *   docs/spec/development-lifecycle.md
@@ -31,6 +38,7 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { evaluateFlightSlotGate } from "@/features/vcs/flight-slot-gate";
 import type { DeployPlanePort, PreparedNodeRefCandidateFlight } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
 import { type ServerEnv, serverEnv } from "@/shared/env";
@@ -392,6 +400,52 @@ export const POST = wrapRouteHandlerWithLogging(
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });
         throw error;
+      }
+
+      // FLIGHT_SLOT_FAST_REJECT (bug.5249): read-only, best-effort preflight — if the
+      // candidate-a slot is already held by a still-live flight, fast-fail with 409 instead
+      // of dispatching into an eviction. The candidate-slot-controller workflow remains the
+      // sole authoritative writer/acquirer of the lease (NO_LEASE_SPLIT_BRAIN); this only
+      // READS it. A lease-read infra failure fails OPEN (a stalled read must never wedge a
+      // flight) — the workflow's own acquire is the real gate. TOCTOU: best-effort only.
+      try {
+        const lease = await deployPlane.readCandidateLease({
+          slot: "candidate-a",
+          parentOwner: parentRepo.owner,
+          parentRepo: parentRepo.repo,
+        });
+        const rejection = evaluateFlightSlotGate(lease, Date.now());
+        if (rejection) {
+          logTerminal({
+            mode: "node_ref",
+            outcome: "error",
+            status: rejection.status,
+            errorCode: rejection.errorCode,
+            nodeId: prepared.nodeId,
+            slug: prepared.slug,
+            sourceSha8: prepared.sourceSha.slice(0, 8),
+          });
+          return NextResponse.json(
+            { error: rejection.error, errorCode: rejection.errorCode },
+            { status: rejection.status }
+          );
+        }
+      } catch (error) {
+        // Fail OPEN: observability must never wedge a flight. Log a warning and proceed;
+        // the workflow's acquire is the authoritative gate.
+        ctx.log.warn(
+          {
+            event: EVENT_NAMES.VCS_FLIGHT_REQUEST_COMPLETE,
+            reqId: ctx.reqId,
+            routeId: ctx.routeId,
+            durationMs: elapsedMs(startedAt),
+            errorCode: "slot_lease_read_failed",
+            githubStatus: githubStatus(error),
+            nodeId: prepared.nodeId,
+            slug: prepared.slug,
+          },
+          "candidate-a slot lease read failed; failing open and dispatching"
+        );
       }
 
       // vnext: this records dispatch acceptance only. Workflow started/completed/failed

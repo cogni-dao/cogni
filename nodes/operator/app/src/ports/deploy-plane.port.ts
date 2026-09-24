@@ -28,6 +28,32 @@ export interface CandidateFlightDispatchResult {
   readonly message: string;
 }
 
+/**
+ * A parsed candidate-slot lease read (read-only) from the deploy branch. The
+ * candidate-slot-controller GitHub Actions workflow is the SOLE writer/acquirer;
+ * the operator only READS this to fast-reject a flight into a busy slot (bug.5249).
+ * Wire format on the branch is snake_case; the adapter normalizes to camelCase at
+ * this port boundary. Optional fields are absent on a released lease.
+ */
+export interface CandidateLease {
+  /** Slot the lease governs, e.g. `candidate-a`. */
+  readonly slot: string;
+  /** `leased` while a run holds the slot; `free`/`failed` once released. */
+  readonly state: "leased" | "free" | "failed";
+  /** PR that owns the live lease (present when `state==="leased"`). */
+  readonly prNumber?: number;
+  /** GitHub Actions run holding the lease (present when `state==="leased"`). */
+  readonly runId?: string;
+  /** Head SHA the leased run is flighting. */
+  readonly headSha?: string;
+  /** ISO-8601 deadline after which the lease is TTL-reclaimable (not live). */
+  readonly expiresAt?: string;
+  /** ISO-8601 timestamp the lease was acquired. */
+  readonly acquiredAt?: string;
+  /** Status URL of the leased run. */
+  readonly statusUrl?: string;
+}
+
 export interface PrepareNodeRefCandidateFlightInput {
   readonly parentOwner: string;
   readonly parentRepo: string;
@@ -389,6 +415,25 @@ export interface DeployPlanePort {
     slug: string;
     sourceSha: string;
   }): Promise<CandidateFlightDispatchResult>;
+
+  /**
+   * READ-ONLY best-effort read of the candidate-slot lease from the deploy branch
+   * (`infra/control/candidate-lease.json` on `deploy/<slot>` of the flight parent repo),
+   * so the flight route can fast-reject a dispatch into a slot a live run already holds
+   * (bug.5249) instead of evicting it. This method NEVER writes: the candidate-slot-controller
+   * workflow remains the sole authoritative writer/acquirer of the lease (NO_LEASE_SPLIT_BRAIN).
+   * Returns `null` when the lease file is absent (404) — the slot is free / not yet provisioned;
+   * a 404 must never throw the flight. A non-404 infra error DOES throw, and the caller fails
+   * OPEN (observability must never wedge a flight); the workflow's own acquire is the real gate.
+   */
+  readCandidateLease(input: {
+    /** Slot to read, e.g. `candidate-a`. */
+    readonly slot: string;
+    /** Flight parent repo owner — `NODE_SUBMODULE_PARENT_OWNER`. */
+    readonly parentOwner: string;
+    /** Flight parent repo — `NODE_SUBMODULE_PARENT_REPO`. */
+    readonly parentRepo: string;
+  }): Promise<CandidateLease | null>;
 
   /**
    * Dispatch `pr-build.yml` (workflow_dispatch) in the BASE repo for a TRUSTED build of an approved
