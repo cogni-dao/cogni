@@ -2074,3 +2074,67 @@ describe("mapConsoleFailure — a 4xx is a decision, not an unknown (bug.5247)",
     );
   });
 });
+
+describe("mapConsoleFailure — resource_topology_changed from a structured reason (bug.5259)", () => {
+  // A promote that reshapes a LIVE lease (adds/removes a service, changes cpu/mem/count) gets a
+  // Console 422 whose body carries `code=deployment_resources_changed`. The compute adapter lifts
+  // that into a TYPED `consoleReasonCode` field; the classifier reads it directly — never a regex
+  // over the redacted message. Terminal exactly like provider_rejected; only the code differs.
+  const withReason = (
+    code: string,
+    httpStatus: number,
+    consoleReasonCode: string
+  ): Error =>
+    Object.assign(consoleError(code, httpStatus), { consoleReasonCode });
+
+  it("maps a 422 whose consoleReasonCode is deployment_resources_changed", () => {
+    const mapped = mapConsoleFailure(
+      withReason("HTTP_ERROR", 422, "deployment_resources_changed"),
+      { mutating: true }
+    );
+    expect(mapped.code).toBe("resource_topology_changed");
+    // Neutral operator copy — names the outcome, prescribes no manual lease ops.
+    expect(mapped.message).toBe("replacement rollout required");
+  });
+
+  it("matches the structured reason case-insensitively", () => {
+    expect(
+      mapConsoleFailure(
+        withReason("HTTP_ERROR", 422, "DEPLOYMENT_RESOURCES_CHANGED"),
+        { mutating: true }
+      ).code
+    ).toBe("resource_topology_changed");
+  });
+
+  it("leaves a 422 WITHOUT the structured reason as an unchanged provider_rejected", () => {
+    const error = withReason("HTTP_ERROR", 422, "INVALID_SDL");
+    error.message =
+      "Console request failed with HTTP 422 (keys=code,message code=INVALID_SDL)";
+    const mapped = mapConsoleFailure(error, { mutating: true });
+    expect(mapped.code).toBe("provider_rejected");
+    // The specialization must not swallow the original Console detail on the generic path.
+    expect(mapped.message).toContain("code=INVALID_SDL");
+  });
+
+  it("does NOT match a message that merely mentions the marker without the typed field", () => {
+    // Regex-on-message was the brittle path bug.5259 removed: a redacted digest that happens to
+    // echo the string must NOT trip the specialization — only the structured field does.
+    const error = consoleError("HTTP_ERROR", 422);
+    error.message =
+      "Console request failed with HTTP 422 (deployment_resources_changed)";
+    expect(mapConsoleFailure(error, { mutating: true }).code).toBe(
+      "provider_rejected"
+    );
+  });
+
+  it("only specializes a 4xx: the structured reason on a 5xx stays outcome_unknown", () => {
+    // A resource-change refusal is decided before broadcast (a 4xx). A 5xx still MAY have landed,
+    // so it keeps the safe idempotent-by-key answer regardless of the reason field.
+    expect(
+      mapConsoleFailure(
+        withReason("HTTP_ERROR", 503, "deployment_resources_changed"),
+        { mutating: true }
+      ).code
+    ).toBe("outcome_unknown");
+  });
+});

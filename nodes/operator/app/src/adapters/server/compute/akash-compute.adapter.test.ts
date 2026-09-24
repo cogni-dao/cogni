@@ -1300,6 +1300,27 @@ describe("AkashComputeAdapter failure containment", () => {
     expect(msg).toContain("code=INVALID_SDL");
     expect(msg).not.toContain("resources changed");
     expect(msg).not.toContain("supersecret");
+    // The structured `code` is also lifted onto a typed field, so classifiers match it directly
+    // instead of regexing the digest (bug.5259).
+    expect((err as AkashComputeError).consoleReasonCode).toBe("INVALID_SDL");
+  });
+
+  it("surfaces the structured deployment_resources_changed reason as a typed field (bug.5259)", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          '{"code":"deployment_resources_changed","message":"lease shape changed, AUTH_SECRET=supersecret"}',
+          { status: 422, statusText: "Unprocessable Entity" }
+        )
+    );
+    const err = await makeAdapter(fetchImpl)
+      .balances()
+      .catch((e: unknown) => e);
+    // A TYPED field the actuator classifier reads — not a message the classifier has to regex.
+    expect((err as AkashComputeError).consoleReasonCode).toBe(
+      "deployment_resources_changed"
+    );
+    expect((err as AkashComputeError).message).not.toContain("supersecret");
   });
 
   it("takes nothing from a prose-valued allowlist field or a non-JSON body (bug.5247)", async () => {
