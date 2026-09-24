@@ -31,9 +31,10 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: EVM_RPC_URL
+          - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
-          - key: LITELLM_VIRTUAL_KEY
         port: 3200
         visibility: public
         bindings:
@@ -52,10 +53,10 @@ spec:
         memoryMi: 128
         storageMi: 128
   migration:
-    policy: RequireBeforeTransaction
+    policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
-  leaseEpoch: 0
+  leaseGeneration: 0
   dns:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
