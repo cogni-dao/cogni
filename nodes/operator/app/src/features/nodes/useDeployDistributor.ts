@@ -3,26 +3,17 @@
 
 /**
  * Module: `@features/nodes/useDeployDistributor`
- * Purpose: Owner-wallet state machine that deploys the vendored `CumulativeMerkleDistributor(token)`,
- *   then transfers its ownership to the node DAO. Recording happens only after CAS authorization
- *   is independently verified by the final activation step.
- *   Also exports `useDistributorOnChain` — the READ-side chain truth for an already-known
- *   distributor address (`owner()==DAO`, `token()==token`), so the setup stepper derives the
- *   deploy step from ground truth instead of session state (story.5004).
- * Scope: Client-side wagmi wiring for `DistributionsCard.client`. Does NOT deploy from the server and
- *   does NOT hold any secret — the connected wallet signs every transaction.
+ * Purpose: Refresh-safe wallet ceremony for deploying the cumulative distributor and transferring
+ *   ownership to the node DAO. Public hashes may be recovered, but receipts and owner/token reads
+ *   are reconstructed from chain before the setup advances.
+ * Scope: Client-side wagmi writes, receipt reads, and bounded post-confirmation verification.
  * Invariants:
- *   - WALLET_DEPLOYS: the distributor is deployed + transferred by the OWNER'S wallet, never the
- *     operator. Constructor arg is the node token; ownership is transferred to the DAO.
- *   - DEPLOY_DOES_NOT_ACTIVATE: this hook never writes the repo-spec. A transferred distributor is
- *     necessary but insufficient; CAS publishing authorization must be verified before activation.
- *   - CHAIN_GATED: the caller gates the button on the connected chain matching the node chain (Base
- *     mainnet 8453 for toks2); this hook assumes the wallet is already on-chain.
- *   - ADDRESSES_ONLY: no token math — every value is an address/hash/bytes.
- * Side-effects: blockchain writes (deploy tx + transferOwnership tx via wallet).
- * Links: nodes/operator/app/src/features/nodes/DistributionsCard.client.tsx,
- *   nodes/operator/app/src/app/api/v1/nodes/[id]/activate-distributions/route.ts,
- *   packages/cogni-contracts/src/cumulative-merkle-distributor/{abi,bytecode}.ts
+ *   - WALLET_ACTIONS_ARE_EXPLICIT: a receipt never opens the next wallet transaction.
+ *   - CHAIN_IS_AUTHORITY: a cached hash is only a lookup key; owner/token reads prove completion.
+ *   - DEPLOY_SHAPE_STABLE: bytecode, constructor args, ownership call, and accounts are unchanged.
+ * Side-effects: connected-wallet transactions and public RPC reads.
+ * Links: src/features/nodes/DistributionsCard.client.tsx,
+ *   src/features/nodes/distribution-activation-recovery.ts
  * @public
  */
 
@@ -32,199 +23,332 @@ import {
   CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
   CUMULATIVE_MERKLE_DISTRIBUTOR_BYTECODE,
 } from "@cogni/cogni-contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useAccount,
   useDeployContract,
+  usePublicClient,
   useReadContracts,
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
 
-/** Coarse phase of the deploy → transfer-ownership pipeline. */
-export type DeployDistributorPhase =
-  | "idle"
-  | "deploying" // deploy tx submitted, awaiting receipt (→ contractAddress)
-  | "transferring" // transferOwnership(DAO) tx submitted, awaiting receipt
-  | "done"
-  | "error";
+import type {
+  ActivationActionGuard,
+  ActivationTransactionHashes,
+  ActivationTransactionKey,
+} from "@/features/nodes/distribution-activation-recovery";
 
-export interface DeployDistributorResult {
-  readonly phase: DeployDistributorPhase;
-  /** The distributor address the deploy receipt reported (checksummed by viem). */
-  readonly distributorAddress: `0x${string}` | null;
-  /** Deploy tx hash (for a Basescan link). */
-  readonly deployTx: `0x${string}` | undefined;
-  /** transferOwnership tx hash (for a Basescan link). */
-  readonly transferTx: `0x${string}` | undefined;
-  readonly error: string | null;
-  /** Kick off the flow: deploy `CumulativeMerkleDistributor(token)`. */
-  readonly deploy: () => void;
-  readonly reset: () => void;
+const VERIFY_ATTEMPTS = 4;
+const VERIFY_DELAY_MS = 750;
+
+export type ActivationTransactionStatus =
+  | "pending"
+  | "submitted"
+  | "confirming"
+  | "confirmed"
+  | "unknown"
+  | "failed";
+
+export interface ActivationTransactionState {
+  readonly hash: `0x${string}` | undefined;
+  readonly status: ActivationTransactionStatus;
 }
 
-/**
- * Drive the owner-wallet distributor-deploy flow for one node.
- *
- * @param tokenAddress the node's GovernanceERC20 (constructor arg).
- * @param daoAddress the DAO that receives ownership.
- */
+/** A missing transaction can start; a proven revert can be explicitly replaced. */
+export function canSubmitActivationTransaction(
+  transaction: ActivationTransactionState
+): boolean {
+  return !transaction.hash || transaction.status === "failed";
+}
+
+export type DistributorVerificationStatus =
+  | "idle"
+  | "checking"
+  | "needs_transfer"
+  | "verified"
+  | "mismatch"
+  | "unavailable";
+
+export interface DeployDistributorRecovery {
+  readonly hashes: ActivationTransactionHashes;
+  readonly onHash: (key: ActivationTransactionKey, hash: `0x${string}`) => void;
+  readonly runGuarded: ActivationActionGuard;
+}
+
+export interface DeployDistributorResult {
+  readonly distributorAddress: `0x${string}` | null;
+  readonly deployTransaction: ActivationTransactionState;
+  readonly transferTransaction: ActivationTransactionState;
+  readonly verificationStatus: DistributorVerificationStatus;
+  readonly error: string | null;
+  readonly deploy: () => Promise<void>;
+  readonly transferOwnership: () => Promise<void>;
+}
+
+function transactionStatus(params: {
+  hash: `0x${string}` | undefined;
+  receiptStatus: "success" | "reverted" | undefined;
+  isLoading: boolean;
+  hasError: boolean;
+}): ActivationTransactionStatus {
+  if (!params.hash) return "pending";
+  if (params.receiptStatus === "reverted") return "failed";
+  if (params.hasError) return "unknown";
+  if (params.receiptStatus === "success") return "confirmed";
+  return params.isLoading ? "confirming" : "submitted";
+}
+
+function addressesMatch(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+/** Drive two explicit wallet actions; recovered hashes never call either action. */
 export function useDeployDistributor(
   tokenAddress: `0x${string}`,
-  daoAddress: `0x${string}`
+  daoAddress: `0x${string}`,
+  chainId: number,
+  recovery: DeployDistributorRecovery
 ): DeployDistributorResult {
   const { address: account } = useAccount();
-  const [phase, setPhase] = useState<DeployDistributorPhase>("idle");
-  const [distributorAddress, setDistributorAddress] = useState<
-    `0x${string}` | null
-  >(null);
-  const [error, setError] = useState<string | null>(null);
+  const publicClient = usePublicClient({ chainId });
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [verificationStatus, setVerificationStatus] =
+    useState<DistributorVerificationStatus>("idle");
+  const verificationRun = useRef(0);
 
-  // Step 1: deploy the vendored distributor with the node token as ctor arg.
-  const {
-    deployContract,
-    data: deployTx,
-    error: deployError,
-    reset: resetDeploy,
-  } = useDeployContract();
-  const { data: deployReceipt, error: deployReceiptError } =
-    useWaitForTransactionReceipt({ hash: deployTx });
+  const deployTx = recovery.hashes.deployDistributor;
+  const transferTx = recovery.hashes.transferOwnership;
 
-  // Step 2: transfer ownership of the deployed distributor to the DAO.
-  const {
-    writeContract,
-    data: transferTx,
-    error: transferError,
-    reset: resetTransfer,
-  } = useWriteContract();
-  const { data: transferReceipt, error: transferReceiptError } =
-    useWaitForTransactionReceipt({ hash: transferTx });
+  const { deployContractAsync, error: deployError } = useDeployContract();
+  const { writeContractAsync, error: transferError } = useWriteContract();
+  const deployWait = useWaitForTransactionReceipt({ hash: deployTx });
+  const transferWait = useWaitForTransactionReceipt({ hash: transferTx });
 
-  const deploy = useCallback(() => {
-    if (!account) {
-      setError("Connect your wallet to deploy the distributor.");
-      setPhase("error");
-      return;
-    }
-    setError(null);
-    setDistributorAddress(null);
-    setPhase("deploying");
-    deployContract({
-      abi: CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
-      bytecode: CUMULATIVE_MERKLE_DISTRIBUTOR_BYTECODE,
-      args: [tokenAddress],
-      account,
-    });
-  }, [account, deployContract, tokenAddress]);
+  const distributorAddress =
+    deployWait.data?.status === "success"
+      ? (deployWait.data.contractAddress ?? null)
+      : null;
 
-  // Deploy confirmed → capture the distributor address, then transferOwnership(DAO).
+  const deployTransaction = useMemo<ActivationTransactionState>(
+    () => ({
+      hash: deployTx,
+      status: transactionStatus({
+        hash: deployTx,
+        receiptStatus: deployWait.data?.status,
+        isLoading: deployWait.isLoading,
+        hasError: Boolean(deployWait.error),
+      }),
+    }),
+    [deployTx, deployWait.data?.status, deployWait.isLoading, deployWait.error]
+  );
+  const transferTransaction = useMemo<ActivationTransactionState>(
+    () => ({
+      hash: transferTx,
+      status: transactionStatus({
+        hash: transferTx,
+        receiptStatus: transferWait.data?.status,
+        isLoading: transferWait.isLoading,
+        hasError: Boolean(transferWait.error),
+      }),
+    }),
+    [
+      transferTx,
+      transferWait.data?.status,
+      transferWait.isLoading,
+      transferWait.error,
+    ]
+  );
+
   useEffect(() => {
-    if (phase !== "deploying" || !deployReceipt) return;
-    // A mined-but-REVERTED deploy still yields a receipt — never treat it as success.
-    if (deployReceipt.status !== "success") {
-      setError("Distributor deploy transaction reverted on-chain.");
-      setPhase("error");
+    const run = ++verificationRun.current;
+    if (!deployTx) {
+      setVerificationStatus("idle");
       return;
     }
-    const deployed = deployReceipt.contractAddress;
-    if (!deployed) {
-      setError("Deploy receipt had no contract address.");
-      setPhase("error");
+    if (deployTransaction.status === "failed") {
+      setVerificationStatus("mismatch");
       return;
     }
-    setDistributorAddress(deployed);
-    setPhase("transferring");
-    writeContract({
-      abi: CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
-      address: deployed,
-      functionName: "transferOwnership",
-      args: [daoAddress],
-      ...(account ? { account } : {}),
-    });
-  }, [phase, deployReceipt, writeContract, daoAddress, account]);
+    if (!distributorAddress || !publicClient) {
+      setVerificationStatus("checking");
+      return;
+    }
+    if (transferTx && transferTransaction.status !== "confirmed") {
+      setVerificationStatus(
+        transferTransaction.status === "failed" ? "needs_transfer" : "checking"
+      );
+      return;
+    }
 
-  // transferOwnership confirmed → deployment plane is complete. Activation remains pending until
-  // the separate authorization plane is verified and the terminal record step succeeds.
-  useEffect(() => {
-    if (phase !== "transferring" || !transferReceipt || !distributorAddress) {
-      return;
-    }
-    // A mined-but-REVERTED transferOwnership must not advance to record — the DAO
-    // would not actually own the distributor.
-    if (transferReceipt.status !== "success") {
-      setError("transferOwnership transaction reverted on-chain.");
-      setPhase("error");
-      return;
-    }
-    setPhase("done");
-  }, [phase, transferReceipt, distributorAddress]);
-
-  // Surface wallet/receipt errors into the coarse phase.
-  useEffect(() => {
-    const wallet =
-      deployError ??
-      deployReceiptError ??
-      transferError ??
-      transferReceiptError;
-    if (wallet && phase !== "error" && phase !== "done") {
-      setError(wallet.message || "wallet transaction failed");
-      setPhase("error");
-    }
+    setVerificationStatus("checking");
+    const attempts =
+      transferTransaction.status === "confirmed" ? VERIFY_ATTEMPTS : 1;
+    void (async () => {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          const [owner, token] = await Promise.all([
+            publicClient.readContract({
+              abi: CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
+              address: distributorAddress,
+              functionName: "owner",
+            }),
+            publicClient.readContract({
+              abi: CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
+              address: distributorAddress,
+              functionName: "token",
+            }),
+          ]);
+          if (run !== verificationRun.current) return;
+          if (!addressesMatch(token, tokenAddress)) {
+            setVerificationStatus("mismatch");
+            return;
+          }
+          if (addressesMatch(owner, daoAddress)) {
+            setVerificationStatus("verified");
+            return;
+          }
+          if (!transferTx) {
+            setVerificationStatus("needs_transfer");
+            return;
+          }
+          if (attempt === attempts - 1) {
+            setVerificationStatus("mismatch");
+            return;
+          }
+        } catch {
+          if (run !== verificationRun.current) return;
+          if (attempt === attempts - 1) {
+            setVerificationStatus("unavailable");
+            return;
+          }
+        }
+        await wait(VERIFY_DELAY_MS);
+      }
+    })();
   }, [
-    deployError,
-    deployReceiptError,
-    transferError,
-    transferReceiptError,
-    phase,
+    daoAddress,
+    deployTransaction.status,
+    deployTx,
+    distributorAddress,
+    publicClient,
+    tokenAddress,
+    transferTransaction.status,
+    transferTx,
   ]);
 
-  const reset = useCallback(() => {
-    resetDeploy();
-    resetTransfer();
-    setDistributorAddress(null);
-    setError(null);
-    setPhase("idle");
-  }, [resetDeploy, resetTransfer]);
+  const deploy = useCallback(async () => {
+    if (!account || !canSubmitActivationTransaction(deployTransaction)) return;
+    setActionError(null);
+    try {
+      const hash = await recovery.runGuarded("deployDistributor", () =>
+        deployContractAsync({
+          abi: CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
+          bytecode: CUMULATIVE_MERKLE_DISTRIBUTOR_BYTECODE,
+          args: [tokenAddress],
+          account,
+        })
+      );
+      if (!hash) {
+        setActionError(
+          "Distributor deployment is already open in this browser."
+        );
+        return;
+      }
+      recovery.onHash("deployDistributor", hash);
+    } catch (error) {
+      setActionError(
+        error instanceof Error && error.message.includes("User rejected")
+          ? "Transaction cancelled."
+          : error instanceof Error
+            ? error.message
+            : "Distributor deployment failed."
+      );
+    }
+  }, [account, deployContractAsync, deployTransaction, recovery, tokenAddress]);
+
+  const transferOwnership = useCallback(async () => {
+    if (
+      !account ||
+      !distributorAddress ||
+      !canSubmitActivationTransaction(transferTransaction)
+    ) {
+      return;
+    }
+    setActionError(null);
+    try {
+      const hash = await recovery.runGuarded("transferOwnership", () =>
+        writeContractAsync({
+          abi: CUMULATIVE_MERKLE_DISTRIBUTOR_ABI,
+          address: distributorAddress,
+          functionName: "transferOwnership",
+          args: [daoAddress],
+          account,
+        })
+      );
+      if (!hash) {
+        setActionError("Ownership transfer is already open in this browser.");
+        return;
+      }
+      recovery.onHash("transferOwnership", hash);
+    } catch (error) {
+      setActionError(
+        error instanceof Error && error.message.includes("User rejected")
+          ? "Transaction cancelled."
+          : error instanceof Error
+            ? error.message
+            : "Ownership transfer failed."
+      );
+    }
+  }, [
+    account,
+    daoAddress,
+    distributorAddress,
+    recovery,
+    transferTransaction,
+    writeContractAsync,
+  ]);
+
+  const walletError = deployError ?? transferError;
+  const receiptError = deployWait.error ?? transferWait.error;
+  const error =
+    actionError ??
+    (walletError?.message?.includes("User rejected")
+      ? "Transaction cancelled."
+      : (walletError?.message ?? receiptError?.message ?? null));
 
   return {
-    phase,
     distributorAddress,
-    deployTx,
-    transferTx,
+    deployTransaction,
+    transferTransaction,
+    verificationStatus,
     error,
     deploy,
-    reset,
+    transferOwnership,
   };
 }
 
-/** Chain-read verdict for a known distributor address. */
 export interface DistributorOnChainState {
-  /**
-   * `idle` = no address to check; `loading` = reads in flight; `verified` = owner()==DAO AND
-   * token()==node token; `mismatch` = reads succeeded but the invariants DON'T hold (redeploy —
-   * never record/authorize against it); `unavailable` = reads failed (RPC hiccup) → make no claim.
-   */
   readonly status: "idle" | "loading" | "verified" | "mismatch" | "unavailable";
   readonly owner: `0x${string}` | null;
   readonly token: `0x${string}` | null;
 }
 
-/**
- * READ-side plane-1 ground truth: verify an already-known distributor address on-chain
- * (`owner()==DAO`, `token()==token`). Pure view calls — no wallet, no writes. The setup stepper
- * uses this so a refreshed page re-derives "deployed" from the chain, not from session state.
- */
+/** Live proof for a distributor address learned from the repo, an activation PR, or a receipt. */
 export function useDistributorOnChain(params: {
-  distributorAddress: `0x${string}` | null;
-  daoAddress: `0x${string}`;
-  tokenAddress: `0x${string}`;
-  chainId: number;
+  readonly distributorAddress: `0x${string}` | null;
+  readonly daoAddress: `0x${string}`;
+  readonly tokenAddress: `0x${string}`;
+  readonly chainId: number;
 }): DistributorOnChainState {
   const { distributorAddress, daoAddress, tokenAddress, chainId } = params;
   const enabled = distributorAddress !== null;
   const address =
     distributorAddress ?? "0x0000000000000000000000000000000000000000";
-
   const { data, isLoading, error } = useReadContracts({
     contracts: [
       {
@@ -245,7 +369,6 @@ export function useDistributorOnChain(params: {
 
   if (!enabled) return { status: "idle", owner: null, token: null };
   if (isLoading) return { status: "loading", owner: null, token: null };
-
   const ownerResult = data?.[0];
   const tokenResult = data?.[1];
   const owner =
@@ -256,12 +379,10 @@ export function useDistributorOnChain(params: {
     tokenResult?.status === "success" && typeof tokenResult.result === "string"
       ? (tokenResult.result as `0x${string}`)
       : null;
-
-  if (error || owner === null || token === null) {
+  if (error || !owner || !token) {
     return { status: "unavailable", owner, token };
   }
   const verified =
-    owner.toLowerCase() === daoAddress.toLowerCase() &&
-    token.toLowerCase() === tokenAddress.toLowerCase();
+    addressesMatch(owner, daoAddress) && addressesMatch(token, tokenAddress);
   return { status: verified ? "verified" : "mismatch", owner, token };
 }
