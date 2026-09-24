@@ -222,19 +222,30 @@ bao_exec() {
 # bug.5159 — a TRANSPORT failure (ssh drop, exec hiccup, OpenBao down) must never read
 # as an EMPTY BUCKET: that lie cascades into "key absent" errors downstream, and worse,
 # a false-empty cache would let materialize re-mint values that already exist. Only the
-# explicit "No value found" answer (a genuinely unborn path) maps to {}; anything else
-# is retried and then fatal, naming the transport.
+# unborn path — the "No value found" text (table mode) OR bao exit 2 that is NOT a 403 —
+# maps to {}; a 403-denied read or any other non-zero is retried and then fatal (bug.5159:
+# a false-empty would re-mint/clobber existing keys).
 prefetch_path() {
-  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt
+  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt rc
   raw=""
   for attempt in 1 2 3; do
-    if raw="$(bao_exec "" "kv get -format=json 'cogni/${env}/${svc}'" 2>&1)"; then
-      break
-    fi
+    raw="$(bao_exec "" "kv get -format=json 'cogni/${env}/${svc}'" 2>&1)" && break
+    rc=$?
+    # ABSENT vs TRANSPORT vs DENIED. An unborn path is safe to treat as {}; a TRANSPORT
+    # failure (bug.5159) or a permission-DENIED read must NOT be, or a false-empty cascades
+    # into re-minting/clobbering existing keys. Absent is signalled by the "No value found"
+    # text (table mode) OR bao's own exit status 2 ("no value found at path") — the ONLY
+    # thing an unborn path surfaces under -format=json, where kubectl exec relays it as
+    # "command terminated with exit code 2" and DROPS the text (bug.5206). CRUCIAL: bao ALSO
+    # exits 2 on a 403 permission-denied, so exit 2 maps to {} ONLY when the error is NOT a
+    # 403. ssh 255 / kubectl 1 / OpenBao-down are a DIFFERENT non-zero → retried, then fatal.
     case "$raw" in
       *"No value found"*) raw='{}'; break ;;
     esac
-    echo "[secret-materialize] OpenBao read cogni/${env}/${svc} attempt ${attempt}/3 failed: $(printf '%s' "$raw" | tail -1)" >&2
+    if [[ "$rc" -eq 2 ]] && ! printf '%s' "$raw" | grep -qiE 'permission denied|code: 403'; then
+      raw='{}'; break
+    fi
+    echo "[secret-materialize] OpenBao read cogni/${env}/${svc} attempt ${attempt}/3 failed (rc=${rc}): $(printf '%s' "$raw" | tail -1)" >&2
     [[ "$attempt" == 3 ]] && { echo "::error::secret-materialize: transport failure reading cogni/${env}/${svc} after 3 attempts — NOT an absent path (bug.5159)" >&2; exit 1; }
     sleep $((attempt * 5))
   done
