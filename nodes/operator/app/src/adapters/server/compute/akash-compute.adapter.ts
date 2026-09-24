@@ -59,7 +59,11 @@ import {
   type ScreenableBid,
   screenBids,
 } from "./akash-provider-screen";
-import { type AkashSdlOptions, buildAkashSdl } from "./akash-sdl";
+import {
+  type AkashSdlOptions,
+  buildAkashSdl,
+  replicaCountFor,
+} from "./akash-sdl";
 import type { ProviderOutcomeStore } from "./provider-outcome-store";
 import {
   type SafeVersionProbeResult,
@@ -606,12 +610,36 @@ export class AkashComputeAdapter
     spec: ProvisionSpec;
   }): Promise<void> {
     const sdl = buildAkashSdl(p.spec, this.sdlOptions);
+    this.logReplicaPlan(p.spec, "update");
     await this.request<ConsoleDeploymentDetail>(
       "PUT",
       `/v1/deployments/${encodeURIComponent(p.resourceId)}`,
       { data: { sdl } },
       this.writeTimeoutMs
     );
+  }
+
+  /**
+   * ZERO_DOWNTIME_ROLLING observability (bug.5188 axis-2): surface the rendered replica plan so a
+   * regression to a single-replica ingress service is LOUD in Loki, never silent. `count` is
+   * decided in exactly one place (`replicaCountFor`, akash-sdl.ts); this only reports it.
+   */
+  private logReplicaPlan(spec: ProvisionSpec, op: "create" | "update"): void {
+    for (const svc of spec.services) {
+      const ingress = (svc.expose ?? []).some((e) => e.global);
+      const count = replicaCountFor(svc);
+      this.log.info(
+        {
+          msg: "akash_replica_plan",
+          workload: spec.name,
+          op,
+          service: svc.name,
+          count,
+          ingress,
+        },
+        `akash_replica_plan ${spec.name}/${svc.name} op=${op} count=${count} ingress=${ingress}`
+      );
+    }
   }
 
   async release(p: { leaseId: string }): Promise<void> {
@@ -833,6 +861,7 @@ export class AkashComputeAdapter
     onAllocated?: (leaseId: string) => Promise<void>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
     const sdl = buildAkashSdl(p.spec, this.sdlOptions);
+    this.logReplicaPlan(p.spec, "create");
     const { dseq, provider } = await this.createAndLease(
       sdl,
       await this.loadScreeningContext(),
