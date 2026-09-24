@@ -218,7 +218,27 @@ export function buildComputeWorkloadManifest(
     );
   }
 
-  const services: DeclaredProvisionServiceSpec[] = input.bundle.services.map(
+  // PER_SERVICE_ENV_GATE (story.5043). A service may declare `envs:` to opt into a subset of
+  // deployment environments; absent = every environment (backward-compatible — this filter is a
+  // no-op for every service that omits it). A service whose `envs` is set and does NOT include
+  // THIS environment is dropped from the workload entirely, so e.g. a private paper-trader
+  // sidecar stays out of `production` and keeps prod a 1-service lease while still running in
+  // `candidate-a`/`preview`. The repo-spec schema forbids `envs` on the public service, so this
+  // can never gate out the sole public service — ONE_PUBLIC_SERVICE holds by construction.
+  const includedBundleServices = input.bundle.services.filter(
+    ({ service }) =>
+      service.envs === undefined || service.envs.includes(input.environment)
+  );
+  if (includedBundleServices.length === 0) {
+    // Unreachable while the schema keeps the public service ungated (it always survives); a
+    // defensive guard so a future schema change that broke that invariant fails loudly here
+    // rather than materializing an empty, serviceless workload.
+    throw new Error(
+      `[compute-workload-manifest] no service is deployable to ${input.environment}; every declared service is gated out by its envs allow-list`
+    );
+  }
+
+  const services: DeclaredProvisionServiceSpec[] = includedBundleServices.map(
     ({ artifact, service }) => {
       // PROFILE_SUPPLIES_ITS_SECRET_REFS: the runtime profile's required keys are unioned in here,
       // so a node's repo-spec never re-lists them and a spec that predates a newly-added profile
