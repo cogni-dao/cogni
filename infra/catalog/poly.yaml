@@ -7,7 +7,7 @@ image_tag_suffix: "-poly"
 migrator_tag_suffix: "-poly-migrate"
 source_repo: https://github.com/cogni-dao/poly.git
 image_repository: ghcr.io/cogni-dao/poly
-source_sha: 04d7e0647fc0ef1cc2b7b39336d7090dcfe6d833
+source_sha: 242266ad474aee590e2fbafcad08a0431d350b45
 candidate_a_branch: deploy/candidate-a-poly
 preview_branch: deploy/preview-poly
 production_branch: deploy/production-poly
@@ -51,7 +51,7 @@ compute_api:
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
   candidate-a: 36
-  preview: 1
+  preview: 2
   production: 0
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
