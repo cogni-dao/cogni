@@ -13,6 +13,8 @@
 #   4. Caddy runtime + access logs go to stdout for Alloy Docker collection.
 #   5. The edge-saturation metric set survives Alloy's strict allowlist.
 #   6. The derived node DB inventory includes every catalog node.
+#   7. Infra reconcile cannot inline/overlap production backups, and Postgres
+#      crash attribution remains observable.
 #
 # Run: bash scripts/ci/tests/render-caddyfile.test.sh
 set -euo pipefail
@@ -27,12 +29,12 @@ source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok — $*"; }
 
-echo "[1/6] Caddyfile.tmpl ↔ catalog drift gate"
+echo "[1/7] Caddyfile.tmpl ↔ catalog drift gate"
 bash scripts/ci/render-caddyfile.sh --check >/dev/null \
   || fail "render-caddyfile.sh --check: committed Caddyfile.tmpl is stale (run: pnpm gen:caddyfile)"
 pass "committed Caddyfile.tmpl matches the catalog"
 
-echo "[2/6] every type:node has an edge block (catalog-driven, no node special-cased)"
+echo "[2/7] every type:node has an edge block (catalog-driven, no node special-cased)"
 RENDERED="$(bash scripts/ci/render-caddyfile.sh)"
 for node in "${NODE_TARGETS[@]}"; do
   slug="$(printf '%s' "$node" | tr '[:lower:]-' '[:upper:]_')"
@@ -49,7 +51,7 @@ for node in "${NODE_TARGETS[@]}"; do
   fi
 done
 
-echo "[3/6] catalog node_port == overlay Service nodePort (no split-brain)"
+echo "[3/7] catalog node_port == overlay Service nodePort (no split-brain)"
 for node in "${NODE_TARGETS[@]}"; do
   cat_port="$(node_port_for_target "$node")"
   for env in candidate-a candidate-b preview production; do
@@ -64,7 +66,7 @@ for node in "${NODE_TARGETS[@]}"; do
   done
 done
 
-echo "[4/6] Caddy logs are collectible from container stdout"
+echo "[4/7] Caddy logs are collectible from container stdout"
 stdout_loggers="$(grep -c 'output stdout' <<<"$RENDERED")"
 expected_loggers="$(( ${#NODE_TARGETS[@]} + 1 ))"
 [ "$stdout_loggers" = "$expected_loggers" ] \
@@ -74,7 +76,7 @@ if grep -q 'output file /data/logs/caddy' <<<"$RENDERED"; then
 fi
 pass "global + per-site JSON logs emit to stdout"
 
-echo "[5/6] Alloy keeps edge saturation counters"
+echo "[5/7] Alloy keeps edge saturation counters"
 ALLOY_CONFIG="infra/compose/runtime/configs/alloy-config.metrics.alloy"
 for metric in \
   node_nf_conntrack_entries \
@@ -87,7 +89,7 @@ for metric in \
 done
 pass "conntrack, listen-overflow, SYN-cookie, and abort-on-memory counters are allowlisted"
 
-echo "[6/6] catalog node DB inventory includes every type:node"
+echo "[6/7] catalog node DB inventory includes every type:node"
 dbs="$(node_database_csv)"
 for node in "${NODE_TARGETS[@]}"; do
   expected_db="$(node_database_for_target "$node")"
@@ -96,5 +98,28 @@ for node in "${NODE_TARGETS[@]}"; do
     *) fail "derived DB inventory '$dbs' missing $expected_db for node '$node'" ;;
   esac
 done
+
+echo "[7/7] production reconcile never launches or overlaps a full database backup"
+DEPLOY_INFRA="scripts/ci/deploy-infra.sh"
+RUNTIME_COMPOSE="infra/compose/runtime/docker-compose.yml"
+grep -Fq 'if [[ "$DEPLOY_ENVIRONMENT" == candidate-* ]]; then' "$DEPLOY_INFRA" \
+  || fail "full backup validation is not candidate-gated"
+grep -Fq 'systemctl start cogni-db-backup.service' "$DEPLOY_INFRA" \
+  || fail "candidate validation bypasses the singleton systemd service"
+grep -Fq 'OnUnitInactiveSec=${BACKUP_INTERVAL_SECONDS}s' "$DEPLOY_INFRA" \
+  || fail "backup cadence is not completion-relative"
+! grep -Fq 'OnBootSec=' "$DEPLOY_INFRA" \
+  || fail "boot-relative timer can launch a full dump during ordinary reconcile"
+! grep -Fq '$RUNTIME_COMPOSE --profile backup stop db-backup' "$DEPLOY_INFRA" \
+  || fail "reconcile still kills an in-progress backup"
+grep -Fq 'mem_limit: 512m' "$RUNTIME_COMPOSE" \
+  || fail "backup client has no memory ceiling"
+grep -Fq 'oom_score_adj: 500' "$RUNTIME_COMPOSE" \
+  || fail "backup client is not preferred over serving state under memory pressure"
+grep -Fq 'loki.source.journal "kernel"' "$ALLOY_CONFIG" \
+  || fail "kernel OOM/SIGKILL evidence is not shipped to Loki"
+grep -Eq 'regex[[:space:]]*= .*postgres.*temporal-postgres' "$ALLOY_CONFIG" \
+  || fail "PostgreSQL stderr is not shipped to Loki"
+pass "backup execution is candidate-gated + serialized; Postgres/kernel evidence is retained"
 
 echo "PASS: render-caddyfile.test.sh"

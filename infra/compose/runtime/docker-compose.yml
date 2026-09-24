@@ -367,6 +367,15 @@ services:
   db-backup:
     image: postgres:15
     profiles: ["backup"]
+    # A logical backup is a best-effort recovery job, never a reason to evict the
+    # serving database or control plane. Bound the client and make it the first
+    # process sacrificed under host pressure. The PostgreSQL server remains
+    # uncapped and protected with oom_score_adj=-900 below.
+    mem_reservation: 128m
+    mem_limit: 512m
+    cpus: 0.50
+    pids_limit: 128
+    oom_score_adj: 500
     read_only: true
     cap_drop:
       - ALL
@@ -564,12 +573,19 @@ services:
       - ./configs/alloy-config.metrics.alloy:/etc/alloy/config.alloy:ro
       - alloy_data:/var/lib/alloy
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Persistent host journal gives Loki the kernel-side reason for SIGKILL/OOM.
+      # Production bootstrap configures persistent journald at this path.
+      - /var/log/journal:/var/log/journal:ro
       # Host mounts for prometheus.exporter.unix (node-level metrics)
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro
       # K8s pod logs for k3s log shipping (no-op on hosts without k3s)
       - /var/log/pods:/var/log/pods:ro
+    # Journal files are root/systemd-journal readable. Alloy already has the
+    # Docker socket and read-only host mounts; root grants read access only, while
+    # the container remains without host write mounts.
+    user: "0:0"
     command:
       - run
       - /etc/alloy/config.alloy
