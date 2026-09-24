@@ -11,7 +11,6 @@ kind: Kustomization
 namespace: argocd
 
 resources:
-  - candidate-a-poly-applicationset.yaml
   - candidate-a-toks5-applicationset.yaml
   - preview-poly-applicationset.yaml
   - preview-toks4-applicationset.yaml
