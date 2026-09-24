@@ -211,19 +211,34 @@ async function main(): Promise<void> {
       ? { runtime: { substrateHost: values["substrate-host"].trim() } }
       : {}),
   });
+  // Resolve profile-implied refs so the projected secrets match the workload the manifest
+  // builder emits — the runtime profile supplies the standard keys the spec no longer lists.
+  const resolvedSecretRefs = bundle.services.flatMap((service) =>
+    resolveRuntimeProfileSecretRefs({
+      ...(service.service.runtimeProfile
+        ? { runtimeProfile: service.service.runtimeProfile }
+        : {}),
+      secretRefs: service.service.secretRefs,
+    })
+  );
+  // Observability (stderr — stdout is the machine contract): make the EXACT set of secret keys
+  // this flight will project into the workload visible in the flight log. Key NAMES are public
+  // (they live in the git repo-spec); values never touch logs. This is the signal that turns a
+  // missing node-specific secret_ref (e.g. PAPER_ENFORCE_MODE) from a silent runtime no-op into
+  // a one-glance diff — "the flight materialized these keys, and yours isn't among them."
+  process.stderr.write(
+    `${JSON.stringify({
+      event: "compute.workload.secret_refs_resolved",
+      nodeSlug: catalogIdentity.slug,
+      environment,
+      keyCount: resolvedSecretRefs.length,
+      keys: resolvedSecretRefs.map((ref) => ref.key),
+    })}\n`
+  );
   const secretResources = buildComputeSecretResources({
     slug: catalogIdentity.slug,
     environment,
-    // Resolve profile-implied refs so the projected secrets match the workload the manifest
-    // builder emits — the runtime profile supplies the standard keys the spec no longer lists.
-    secretRefs: bundle.services.flatMap((service) =>
-      resolveRuntimeProfileSecretRefs({
-        ...(service.service.runtimeProfile
-          ? { runtimeProfile: service.service.runtimeProfile }
-          : {}),
-        secretRefs: service.service.secretRefs,
-      })
-    ),
+    secretRefs: resolvedSecretRefs,
   });
   // ONE_AUTHORITY_PER_WORKLOAD (task.5097). The kustomization lists exactly one compute
   // resource, and the deploy-branch writer rsyncs this directory with `--delete`, so the
