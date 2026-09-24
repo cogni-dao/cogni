@@ -227,6 +227,88 @@ describe("node deployment repo-spec", () => {
     );
   });
 
+  it("carries an optional per-service envs allow-list (story.5043)", () => {
+    const spec = buildTestRepoSpec({
+      deployment: {
+        services: [
+          APP,
+          {
+            name: "paper-trader",
+            artifact: { name: "paper-trader" },
+            port: 9100,
+            visibility: "private",
+            envs: ["candidate-a", "preview"],
+            resources: {
+              cpu_units: 0.5,
+              memory_mi: 1024,
+              storage_mi: 2048,
+            },
+          },
+        ],
+      },
+    });
+    expect(extractNodeServices(spec)[1]?.envs).toEqual([
+      "candidate-a",
+      "preview",
+    ]);
+    // A service that omits envs surfaces none — absent means every environment.
+    expect(extractNodeServices(spec)[0]).not.toHaveProperty("envs");
+  });
+
+  it("rejects an empty envs allow-list", () => {
+    expect(() =>
+      parseRepoSpec({
+        node_id: "00000000-0000-4000-8000-000000000001",
+        governance: {},
+        deployment: {
+          services: [
+            APP,
+            {
+              ...APP,
+              name: "paper-trader",
+              artifact: { name: "paper-trader" },
+              visibility: "private",
+              envs: [],
+            },
+          ],
+        },
+      })
+    ).toThrow(/Invalid repo-spec structure/);
+  });
+
+  it("rejects an unknown environment name in envs", () => {
+    expect(() =>
+      parseRepoSpec({
+        node_id: "00000000-0000-4000-8000-000000000001",
+        governance: {},
+        deployment: {
+          services: [
+            APP,
+            {
+              ...APP,
+              name: "paper-trader",
+              artifact: { name: "paper-trader" },
+              visibility: "private",
+              envs: ["staging"],
+            },
+          ],
+        },
+      })
+    ).toThrow(/Invalid repo-spec structure/);
+  });
+
+  it("rejects envs on the public service — it must reach every environment", () => {
+    expect(() =>
+      parseRepoSpec({
+        node_id: "00000000-0000-4000-8000-000000000001",
+        governance: {},
+        deployment: {
+          services: [{ ...APP, envs: ["candidate-a"] }],
+        },
+      })
+    ).toThrow(/public service must deploy to every environment/);
+  });
+
   it("rejects app compatibility on a private service", () => {
     expect(() =>
       buildTestRepoSpec({

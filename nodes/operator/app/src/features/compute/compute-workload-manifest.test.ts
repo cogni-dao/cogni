@@ -363,6 +363,95 @@ describe("buildComputeWorkloadManifest", () => {
     expect(leaseGeneration).toBe(0);
   });
 
+  /**
+   * PER_SERVICE_ENV_GATE (story.5043). A private sidecar may declare `envs:` to opt into a
+   * subset of deployment environments; a service whose `envs` excludes THIS environment is
+   * dropped from the workload entirely. This is what lets the poly node keep its paper-trader
+   * sidecar in candidate-a/preview while production stays a 1-service lease it can ship in place.
+   */
+  describe("per-service envs gate (story.5043)", () => {
+    const gatedBundle: ResolvedNodeArtifactBundle = {
+      ...bundle,
+      services: bundle.services.map((resolved) =>
+        resolved.service.name === "worker"
+          ? {
+              ...resolved,
+              service: {
+                ...resolved.service,
+                envs: ["candidate-a", "preview"] as const,
+              },
+            }
+          : resolved
+      ),
+    };
+
+    it.each([
+      "candidate-a",
+      "preview",
+    ] as const)("keeps a gated sidecar in an environment it lists (%s)", (environment) => {
+      const manifest = buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment,
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle: gatedBundle,
+        publicHost: `toks4-${environment}.cognidao.org`,
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+      });
+
+      expect(
+        manifest.spec.workload.services.map((service) => service.name)
+      ).toEqual(["web", "worker"]);
+    });
+
+    it("drops a gated sidecar from an environment it does not list (production)", () => {
+      const manifest = buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle: gatedBundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+      });
+
+      // Only the public app remains — a 1-service lease, and the one public service survives.
+      const names = manifest.spec.workload.services.map(
+        (service) => service.name
+      );
+      expect(names).toEqual(["web"]);
+      expect(
+        manifest.spec.workload.services.filter(
+          (service) => service.visibility === "public"
+        )
+      ).toHaveLength(1);
+    });
+
+    it("keeps every service that declares no envs in every environment", () => {
+      for (const environment of [
+        "candidate-a",
+        "preview",
+        "production",
+      ] as const) {
+        const manifest = buildComputeWorkloadManifest({
+          slug: "toks4",
+          environment,
+          bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+          bundle,
+          publicHost:
+            environment === "production"
+              ? "toks4.cognidao.org"
+              : `toks4-${environment}.cognidao.org`,
+          computeApi: "crossplane",
+          leaseGeneration: 0,
+        });
+        expect(
+          manifest.spec.workload.services.map((service) => service.name)
+        ).toEqual(["web", "worker"]);
+      }
+    });
+  });
+
   it("refuses DNS intent on the legacy authority, which resolves its own zone", () => {
     expect(() =>
       buildComputeWorkloadManifest({

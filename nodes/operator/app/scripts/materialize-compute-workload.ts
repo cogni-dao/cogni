@@ -23,11 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, promisify } from "node:util";
 
-import {
-  parseRepoSpec,
-  resolveNodeArtifactBundle,
-  resolveRuntimeProfileSecretRefs,
-} from "@cogni/repo-spec";
+import { parseRepoSpec, resolveNodeArtifactBundle } from "@cogni/repo-spec";
 import { parse, stringify } from "yaml";
 
 import {
@@ -211,15 +207,14 @@ async function main(): Promise<void> {
       ? { runtime: { substrateHost: values["substrate-host"].trim() } }
       : {}),
   });
-  // Resolve profile-implied refs so the projected secrets match the workload the manifest
-  // builder emits — the runtime profile supplies the standard keys the spec no longer lists.
-  const resolvedSecretRefs = bundle.services.flatMap((service) =>
-    resolveRuntimeProfileSecretRefs({
-      ...(service.service.runtimeProfile
-        ? { runtimeProfile: service.service.runtimeProfile }
-        : {}),
-      secretRefs: service.service.secretRefs,
-    })
+  // Read the resolved secret refs straight off the workload the manifest builder just emitted,
+  // so the projected secrets MATCH the workload exactly. The builder already unions each service's
+  // runtime-profile keys (PROFILE_SUPPLIES_ITS_SECRET_REFS) AND applies the per-service `envs`
+  // gate (story.5043), so a sidecar dropped from this environment contributes no service here and
+  // therefore no secret keys either — the projection can never re-introduce a gated-out service's
+  // secrets. This keeps the "projected secrets match the workload" invariant true by construction.
+  const resolvedSecretRefs = manifest.spec.workload.services.flatMap(
+    (service) => service.secretRefs ?? []
   );
   // Observability (stderr — stdout is the machine contract): make the EXACT set of secret keys
   // this flight will project into the workload visible in the flight log. Key NAMES are public
