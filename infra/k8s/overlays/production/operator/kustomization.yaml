@@ -54,7 +54,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:f76754597d659cbc44c196b2158062cea8e67c0b9ad51bbf0f07c099404496f2"
+    digest: "sha256:8bf9c940fb4e9b3394cdd478f9aabb58a6262145705261316abe825c05031022"
 
 patches:
   # bug.5240 — same BY-NAME env rule as the actuator patch below.
@@ -152,6 +152,14 @@ patches:
         value: "cogni-dao"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
+        value: "cogni"
+      # Explicit canonical runtime catalog/deploy-state source. Keep this
+      # separate from the repository that receives formation pin PRs.
+      - op: add
+        path: /data/NODE_REGISTRY_CATALOG_OWNER
+        value: "cogni-dao"
+      - op: add
+        path: /data/NODE_REGISTRY_CATALOG_REPO
         value: "cogni"
       - op: add
         path: /data/DOLTHUB_OWNER
