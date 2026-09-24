@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# story.5016 / task.5135 — the actuator runs the per-digest migration Job as a RELEASE step on
+# its unpaid OBSERVE tick, so it must be able to create and read that Job. It is NOT a gate: a
+# migration can no longer refuse a paid lease, which is why this Role is the actuator's ONLY
+# Kubernetes reach and why the PAID path now needs no Kubernetes access at all. FOLLOW-UP: with
+# the payment seam clean, the runner can leave the wallet-holding process and take this Role
+# with it.
+#
+# Derived from the adapter, not copied wholesale from compute-workload-controller's Role:
+# KubernetesMigrationJobAdapter calls readNamespacedJob (get), createNamespacedJob (create),
+# listNamespacedJob (list), deleteNamespacedJob (delete) and listNamespacedPod (list).
+# Everything else the controller holds — computeworkloads(+status/finalizers), leases, events,
+# the allocation ConfigMap — is deliberately ABSENT: Crossplane owns every CR here, this
+# process holds no Lease (its wallet slot is a Postgres unique index), and its receipts are
+# rows in Postgres, not a ConfigMap.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: akash-tx-actuator
+rules:
+  # A completed Job is the durable per-digest skip marker; delete is for superseded-digest GC
+  # and for re-creating a Job that failed on infrastructure rather than on the migration script.
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create, delete]
+  # bug.5118 — classifying a Failed migration Job as script-failure vs never-ran requires
+  # listing its pods by the `job-name` label to find a terminated migrate container with a
+  # non-zero exitCode. The adapter only ever LISTS; `get` is not granted.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: akash-tx-actuator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: akash-tx-actuator
+subjects:
+  - kind: ServiceAccount
+    name: akash-tx-actuator

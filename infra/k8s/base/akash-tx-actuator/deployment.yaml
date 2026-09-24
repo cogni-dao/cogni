@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# task.5102 — the Akash transaction actuator runtime. Modelled on
+# base/compute-workload-controller (same image, same projected-credential shape, same
+# per-env overlay wiring), with two deliberate differences called out below.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: akash-tx-actuator
+  annotations:
+    reloader.stakater.com/auto: "true"
+  labels:
+    app.kubernetes.io/name: akash-tx-actuator
+    app.kubernetes.io/part-of: cogni
+spec:
+  replicas: 1
+  # DIFFERENCE 1 vs the ComputeWorkload controller: a SURGE IS SAFE HERE. That controller is
+  # singleton because a second pod races the same coordination Lease. The actuator holds no
+  # Lease — the wallet slot is a partial unique index in Postgres
+  # (akash_tx_allocations_single_writer_idx), so two live replicas structurally cannot both
+  # spend. Since this one serves HTTP for Crossplane, availability across a rollout matters
+  # more than the controller's terminate-then-start. rollingUpdate is still spelled out
+  # explicitly so ArgoCD server-side-apply merges cleanly with any live object (bug.5110).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: akash-tx-actuator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: akash-tx-actuator
+        app.kubernetes.io/part-of: cogni
+    spec:
+      # DIFFERENCE 2: its OWN ServiceAccount, with the NARROWEST possible Role (rbac.yaml).
+      # Crossplane still owns every CR — this process reads no ComputeWorkload, holds no Lease
+      # and writes no events. What it does need (story.5016) is to run the per-digest DB
+      # migration Job its fail-closed migration gate demands before any paid transaction, so
+      # the Role grants batch/jobs [get,list,create,delete] and pods [list] and nothing more.
+      # A shared SA with compute-workload-controller would have handed it that controller's
+      # ComputeWorkload-patch and Lease rights for free; a separate identity is the point.
+      serviceAccountName: akash-tx-actuator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: actuator
+          image: ghcr.io/cogni-dao/cogni-template:placeholder
+          imagePullPolicy: IfNotPresent
+          command: [node, /app/nodes/operator/app/akash-tx-actuator.mjs]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+            # The environment this writer RUNS in. It must match the `environment` the
+            # Composition sends, which the Composition pins to `cogni-<env>` == the namespace.
+            # It is NOT the ledger scope: since bug.5187 the scope is
+            # `akash-console:<AKASH_ACTUATOR_ACCOUNT_ID>`, because one Console account must be
+            # ONE serialization slot however many environments its writer mints for. Keyed on
+            # the environment, two writers on one account produced two slots and never
+            # collided. Set BY NAME in every overlay (story.5016 Gate 0b).
+            - name: DEPLOY_ENVIRONMENT
+              value: replace-in-overlay
+            - name: AKASH_ALLOWED_PROVIDERS
+              value: ""
+            # NON-SECRET pinned wallet identity (story.5016 secret-boundary amendment 3).
+            # This is the PUBLIC Akash account/wallet address the actuator is authorized to
+            # spend from. It replaces the old "hold both Console keys and byte-compare them"
+            # check, which made the actuator possess the very credential it was isolating from.
+            #
+            # Plain config, deliberately NOT a secret and NOT a catalog entry: an on-chain
+            # address is public, and routing it through OpenBao would re-create the coupling
+            # this amendment removes. Set BY NAME in every overlay (story.5016 Gate 0b).
+            #
+            # Empty here on purpose. It is fail-closed human input, minted at the same moment
+            # as the fresh Console key: the actuator refuses to boot until an overlay pins it,
+            # and refuses again if the live Console account does not match.
+            - name: AKASH_ACTUATOR_ACCOUNT_ID
+              value: ""
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: akash-tx-credentials
+              mountPath: /var/run/secrets/akash-tx
+              readOnly: true
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: akash-tx-credentials
+          projected:
+            sources:
+              # TWO SOURCES, TWO BLAST RADII (story.5016 secret-boundary amendment 2).
+              #
+              # The wallet credential and the bearer token that unlocks it live in the
+              # actuator's OWN OpenBao bucket (cogni/<env>/akash-tx-actuator), projected by its
+              # OWN ExternalSecret into `akash-tx-actuator-env-secrets`. The operator app has no
+              # ExternalSecret, envFrom, or volume that names either — so an operator-app
+              # compromise structurally cannot read the Akash wallet. Previously both keys sat in
+              # cogni/<env>/operator, which the public app takes WHOLESALE via `dataFrom: extract`
+              # -> operator-env-secrets -> envFrom.
+              #
+              # Least privilege on purpose: an explicit `items:` list rather than an `envFrom`,
+              # so this process can only ever see the three values it needs.
+              #
+              # NOT optional. resolveAkashTxWallet refuses a missing
+              # AKASH_ACTUATOR_CONSOLE_API_KEY and the process exits rather than open a socket.
+              # A CrashLoopBackOff with a stable reason is the honest surface; a silently
+              # unauthenticated or mis-walleted actuator is not.
+              - secret:
+                  name: akash-tx-actuator-env-secrets
+                  items:
+                    # The operator sponsor wallet's Console credential — the ONE active writer.
+                    # AKASH_CONSOLE_API_KEY (the legacy ComputeWorkload controller's key) is
+                    # deliberately ABSENT: the actuator must never possess both wallets, and
+                    # separation is now a revocation fact asserted against the non-secret
+                    # AKASH_ACTUATOR_ACCOUNT_ID above, not a byte comparison.
+                    - key: AKASH_ACTUATOR_CONSOLE_API_KEY
+                      path: AKASH_ACTUATOR_CONSOLE_API_KEY
+                    # Bearer token the Composition presents as a provider-http placeholder
+                    # `{{ akash-tx-actuator-auth:<ns>:token }}`; the auth Secret is projected
+                    # from this same OpenBao key by the overlay's second ExternalSecret.
+                    # source: agent — generated by secret-materialize, never hand-typed.
+                    - key: AKASH_TX_ACTUATOR_TOKEN
+                      path: AKASH_TX_ACTUATOR_TOKEN
+              # Durable allocation ledger (akash_tx_allocations). App role, RLS-enforced.
+              # This one key legitimately comes from the operator bucket: the receipts table is
+              # operator-local schema in the operator's own Postgres. Scoped to exactly DATABASE_URL
+              # — the actuator gets the ledger, not the rest of the operator's credentials.
+              - secret:
+                  name: operator-env-secrets
+                  items:
+                    - key: DATABASE_URL
+                      path: DATABASE_URL

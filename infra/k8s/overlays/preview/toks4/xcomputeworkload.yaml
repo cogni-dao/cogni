@@ -1,5 +1,5 @@
 apiVersion: compute.cogni.io/v1alpha1
-kind: ComputeWorkload
+kind: XComputeWorkload
 metadata:
   name: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
   namespace: cogni-preview
@@ -31,9 +31,10 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: EVM_RPC_URL
+          - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
-          - key: LITELLM_VIRTUAL_KEY
         port: 3200
         visibility: public
         bindings:
@@ -51,3 +52,14 @@ spec:
         cpuUnits: 0.1
         memoryMi: 128
         storageMi: 128
+  migration:
+    policy: RequireBeforeServing
+  bootPolicy:
+    onDeadline: Close
+  leaseGeneration: 0
+  actuatorNamespace: cogni-production
+  dns:
+    provider: cloudflare
+    zoneId: 23220356c352c5831c6af57887b11a27
+  runtime:
+    substrateHost: cogni.vm.cognidao.org
