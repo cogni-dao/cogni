@@ -5,7 +5,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { GitHubNodeDeploymentTopologyAdapter } from "@/adapters/server";
+import {
+  GitHubNodeDeploymentTopologyAdapter,
+  PublicGitHubNodeDeploymentFileReader,
+} from "@/adapters/server";
 
 const POLY_DEPLOYMENT = `
 apiVersion: compute.cogni.io/v1alpha1
@@ -28,7 +31,7 @@ describe("GitHubNodeDeploymentTopologyAdapter", () => {
     const fetchFileText = vi.fn().mockResolvedValue(POLY_DEPLOYMENT);
     const adapter = new GitHubNodeDeploymentTopologyAdapter(
       { fetchFileText },
-      { owner: "cogni-test-org", repo: "cogni-monorepo" }
+      { owner: "cogni-dao", repo: "cogni" }
     );
 
     const result = await adapter.listServices({
@@ -40,8 +43,8 @@ describe("GitHubNodeDeploymentTopologyAdapter", () => {
       { name: "paper-trader", visibility: "private" },
     ]);
     expect(fetchFileText).toHaveBeenCalledExactlyOnceWith({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
+      owner: "cogni-dao",
+      repo: "cogni",
       path: "infra/k8s/overlays/candidate-a/poly/xcomputeworkload.yaml",
       ref: "deploy/candidate-a-poly",
     });
@@ -75,5 +78,58 @@ describe("GitHubNodeDeploymentTopologyAdapter", () => {
       })
     ).rejects.toThrow();
     expect(fetchFileText).not.toHaveBeenCalled();
+  });
+});
+
+describe("PublicGitHubNodeDeploymentFileReader", () => {
+  it("reads a slash-named deploy branch from the public reproducibility surface", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(POLY_DEPLOYMENT, { status: 200 }));
+    const reader = new PublicGitHubNodeDeploymentFileReader(fetchImpl);
+
+    await expect(
+      reader.fetchFileText({
+        owner: "cogni-dao",
+        repo: "cogni",
+        path: "infra/k8s/overlays/candidate-a/poly/xcomputeworkload.yaml",
+        ref: "deploy/candidate-a-poly",
+      })
+    ).resolves.toBe(POLY_DEPLOYMENT);
+    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(
+      "https://raw.githubusercontent.com/cogni-dao/cogni/refs/heads/deploy/candidate-a-poly/infra/k8s/overlays/candidate-a/poly/xcomputeworkload.yaml",
+      expect.objectContaining({ cache: "no-store", redirect: "error" })
+    );
+  });
+
+  it("maps a missing public declaration to null", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 404 }));
+    const reader = new PublicGitHubNodeDeploymentFileReader(fetchImpl);
+
+    await expect(
+      reader.fetchFileText({
+        owner: "cogni-dao",
+        repo: "cogni",
+        path: "infra/k8s/overlays/candidate-a/missing/xcomputeworkload.yaml",
+        ref: "deploy/candidate-a-missing",
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("rejects traversal before making a network request", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const reader = new PublicGitHubNodeDeploymentFileReader(fetchImpl);
+
+    await expect(
+      reader.fetchFileText({
+        owner: "cogni-dao",
+        repo: "cogni",
+        path: "../private",
+        ref: "main",
+      })
+    ).rejects.toThrow("invalid GitHub file path");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

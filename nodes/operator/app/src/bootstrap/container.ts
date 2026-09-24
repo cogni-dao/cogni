@@ -108,6 +108,7 @@ import {
   LiteLlmAdapter,
   type MimirAdapterConfig,
   MimirMetricsAdapter,
+  PublicGitHubNodeDeploymentFileReader,
   RedisRunStreamAdapter,
   SplitPaymentRailGuardAdapter,
   SystemClock,
@@ -1239,7 +1240,7 @@ export function resolveNodeDeploymentTopology(): NodeDeploymentTopologyPort {
     );
   }
   cachedNodeDeploymentTopology ??= new GitHubNodeDeploymentTopologyAdapter(
-    createOperatorDeployPlane(env),
+    new PublicGitHubNodeDeploymentFileReader(),
     catalog
   );
   return cachedNodeDeploymentTopology;
