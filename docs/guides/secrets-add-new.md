@@ -114,6 +114,32 @@ The set a flight actually projects is logged (names only, never values) as
 (§ Runtime Path, above). See [`packages/repo-spec/src/node-app-deployment.ts`](../../packages/repo-spec/src/node-app-deployment.ts)
 for the profile contract.
 
+## Known shortcoming — on Akash, a changed value is inert until a redeploy (no Reloader)
+
+Declaring the ref and writing the value gets the secret to the pod **at boot**.
+But **changing** a value later (a day-2 write, a rotation) does **not** reach a
+**running Akash pod on its own** — there is no Reloader on the Akash lane:
+
+| Lane      | Secret value change → running pod picks it up?                                                                                                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **k3s**   | **Automatic.** ESO syncs the k8s Secret, Stakater Reloader rolling-restarts the pod (`secrets-management.md` Invariant 11). Zero action.                                                               |
+| **Akash** | **No.** The pod is a lease reconciled by Argo CD off the `deploy/<env>-<node>` head (`BRANCH_HEAD_IS_LEASE`, `ci-cd.md` Axiom 18). Reloader does not watch leases — the running pod keeps its old env. |
+
+So after `POST /api/v1/nodes/<id>/secrets` (or any rotation) on an Akash node the
+value is stored but **inert** until the deploy-branch head moves. A same-SHA
+re-flight is an Argo CD **no-op** (identical content) and will NOT restart the
+pod. To make a changed value take effect, **force a new deploy head** — bump the
+source SHA (new image → new head) or otherwise change the deploy-branch content.
+
+**Verify, don't assume:** `secret written 200` ≠ `pod has the secret`. After the
+redeploy, read `/version` + the pod's own logs/behavior. (Proven live 2026-09-24:
+poly's `PAPER_ENFORCE_MODE` synced to OpenBao but the pre-sync pod ran on for
+minutes; a same-SHA re-flight changed nothing.)
+
+Tracked for a proper fix (an Akash Reloader-equivalent — auto-bump
+`leaseGeneration` on a value diff so Argo CD redeploys without an image rebuild):
+[`bug.5256`](https://cognidao.org/work/items/bug.5256).
+
 ## Authority Gate
 
 A secret decision has three orthogonal axes — `origin` / `custody` / `consumers`.
