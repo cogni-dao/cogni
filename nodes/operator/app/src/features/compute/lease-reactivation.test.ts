@@ -24,16 +24,17 @@ function receipt(
   over: Partial<AkashTxAllocationRecord> & {
     state: AkashTxAllocationRecord["state"];
     generation: number;
+    compositeGeneration?: number;
   }
 ): AkashTxAllocationRecord {
-  const { generation, ...rest } = over;
+  const { generation, compositeGeneration = generation, ...rest } = over;
   return {
     receiptId: "r-1",
     cogniKey: `xcw:cogni-candidate-a-blue:blue:${generation}`,
     identity: {
       nodeId: NODE_ID,
       compositeUid: "8e5d4c3b-2a19-4f08-b7c6-5d4e3f2a1b09",
-      compositeGeneration: generation,
+      compositeGeneration,
     },
     workload: "blue",
     environment: "candidate-a",
@@ -58,6 +59,23 @@ describe("requiredLeaseGeneration", () => {
         receipts: [receipt({ state: "released", generation: 0 })],
       })
     ).toBe(1);
+  });
+
+  it("derives from the immutable key suffix, never mutable Kubernetes metadata.generation", () => {
+    // Live incident: one gen-35 lease reached composite metadata.generation 3729 after repeated
+    // reconciles. Reading the latter generated an invalid 3730 catalog cell instead of 36.
+    expect(
+      requiredLeaseGeneration({
+        catalogGeneration: 0,
+        receipts: [
+          receipt({
+            state: "released",
+            generation: 35,
+            compositeGeneration: 3729,
+          }),
+        ],
+      })
+    ).toBe(36);
   });
 
   it("terminally FAILED gen-0 receipt → ADD derives generation 1 (task.5132)", () => {
@@ -131,5 +149,15 @@ describe("requiredLeaseGeneration", () => {
         ],
       })
     ).toBe(5);
+  });
+
+  it("refuses malformed receipt keys rather than guessing from mutable identity", () => {
+    const malformed = receipt({ state: "released", generation: 35 });
+    expect(() =>
+      requiredLeaseGeneration({
+        catalogGeneration: 0,
+        receipts: [{ ...malformed, cogniKey: "legacy-key" }],
+      })
+    ).toThrow(/no valid lease generation suffix/);
   });
 });
