@@ -1420,17 +1420,52 @@ patch_operator_openfga_config() {
     return 1
   fi
 
-  local jwt tok path patch_out patch_rc
-  jwt=$(timeout 10 kubectl create token openbao-operator -n default 2>/dev/null) || {
-    log_warn "could not mint openbao-operator token"
+  local jwt tok path patch_out patch_rc login_out login_rc login_reason max_attempts attempt sleep_seconds
+  tok=""
+  max_attempts=1
+  for attempt in 1 2 3; do
+    if ! jwt=$(timeout 10 kubectl create token openbao-operator -n default 2>&1); then
+      login_reason="service_account_token_mint"
+      max_attempts=3
+    else
+      set +e
+      login_out=$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+        bao write -field=token auth/kubernetes/login \
+        "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>&1)
+      login_rc=$?
+      set -e
+      if [[ $login_rc -eq 0 ]]; then
+        tok="$login_out"
+        break
+      fi
+
+      # Match the bounded policy used by every node-substrate login: server/control-plane
+      # transients get three attempts; a 403 gets exactly one fresh-JWT recheck. Unknown
+      # failures remain permanent. Never print login_out: a successful response is a token.
+      if grep -qiE 'context deadline exceeded|i/o timeout|TLS handshake timeout|connection (refused|reset)|Code: (429|500|502|503|504)' <<<"$login_out"; then
+        login_reason="server_transient"
+        max_attempts=3
+      elif grep -qiE 'Code: 403|permission denied' <<<"$login_out"; then
+        login_reason="permission_denied_recheck"
+        max_attempts=2
+      else
+        log_warn "OpenBao writer login failed permanently for ${DEPLOY_ENVIRONMENT}-writer"
+        return 1
+      fi
+    fi
+
+    if [[ $attempt -ge $max_attempts ]]; then
+      log_warn "OpenBao writer login exhausted ${max_attempts} attempt(s) for ${DEPLOY_ENVIRONMENT}-writer (${login_reason})"
+      return 1
+    fi
+    sleep_seconds=$((attempt * 5 + RANDOM % 5))
+    log_warn "OpenBao writer login ${login_reason} (attempt ${attempt}/${max_attempts}); retrying with a fresh JWT in ${sleep_seconds}s"
+    sleep "$sleep_seconds"
+  done
+  if [[ -z "$tok" ]]; then
+    log_warn "OpenBao writer login returned an empty token for ${DEPLOY_ENVIRONMENT}-writer"
     return 1
-  }
-  tok=$(timeout 10 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-    bao write -field=token auth/kubernetes/login \
-    "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>/dev/null) || {
-    log_warn "OpenBao writer login failed for ${DEPLOY_ENVIRONMENT}-writer"
-    return 1
-  }
+  fi
 
   # bug.5068 (prod outage 2026-07-02): `cogni/<env>/operator` is a SHARED bucket
   # holding ~35 keys (DATABASE_URL, AUTH_SECRET, LITELLM_MASTER_KEY, …). `bao kv put`
