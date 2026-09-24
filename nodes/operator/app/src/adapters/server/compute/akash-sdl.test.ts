@@ -36,6 +36,13 @@ const mesh: ProvisionServiceSpec = {
   storageMi: 256,
   expose: [{ port: 4000, as: 4000, global: false }],
 };
+const internal: ProvisionServiceSpec = {
+  name: "worker",
+  image: "ghcr.io/cogni-dao/w:sha-x",
+  cpuUnits: 1,
+  memoryMi: 128,
+  storageMi: 128,
+};
 
 type RenderedSdl = {
   deployment: Record<string, { dcloud: { count: number } }>;
@@ -50,7 +57,7 @@ describe("akash-sdl ZERO_DOWNTIME_ROLLING replica policy (bug.5188 axis-2)", () 
     expect(replicaCountFor(ingress)).toBe(INGRESS_REPLICAS);
     expect(replicaCountFor(mesh)).toBe(1);
     // Internal-only (no expose at all) is not an ingress → stays single-replica.
-    expect(replicaCountFor({ ...ingress, expose: undefined })).toBe(1);
+    expect(replicaCountFor(internal)).toBe(1);
   });
 
   it("buildAkashSdl renders count per the policy — the ONLY place count is set", () => {
@@ -58,7 +65,7 @@ describe("akash-sdl ZERO_DOWNTIME_ROLLING replica policy (bug.5188 axis-2)", () 
     const sdl = parse(
       buildAkashSdl(spec, { pricingDenom: "uakt", pricingAmount: 1000 })
     ) as RenderedSdl;
-    expect(sdl.deployment.app.dcloud.count).toBe(INGRESS_REPLICAS);
-    expect(sdl.deployment.sidecar.dcloud.count).toBe(1);
+    expect(sdl.deployment.app?.dcloud.count).toBe(INGRESS_REPLICAS);
+    expect(sdl.deployment.sidecar?.dcloud.count).toBe(1);
   });
 });

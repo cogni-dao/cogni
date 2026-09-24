@@ -168,7 +168,10 @@ export interface AkashComputeAdapterConfig {
    * compute_provider_outcomes insert failure never fails a live provision, but
    * it must land in logs loudly — silent drops gave provider screening amnesia.
    */
-  log?: { error(fields: Record<string, unknown>, message: string): void };
+  log?: {
+    error(fields: Record<string, unknown>, message: string): void;
+    info?(fields: Record<string, unknown>, message: string): void;
+  };
   /** SDL pricing knobs (max price per block per service). */
   pricing?: AkashSdlOptions;
   /** API base URL; defaults to the public Console API. */
@@ -341,6 +344,7 @@ export class AkashComputeAdapter
   private readonly outcomeStore: ProviderOutcomeStore;
   private readonly log: {
     error(fields: Record<string, unknown>, message: string): void;
+    info?(fields: Record<string, unknown>, message: string): void;
   };
   private readonly sdlOptions: AkashSdlOptions;
   private readonly now: () => Date;
@@ -628,7 +632,7 @@ export class AkashComputeAdapter
     for (const svc of spec.services) {
       const ingress = (svc.expose ?? []).some((e) => e.global);
       const count = replicaCountFor(svc);
-      this.log.info(
+      this.log.info?.(
         {
           msg: "akash_replica_plan",
           workload: spec.name,
