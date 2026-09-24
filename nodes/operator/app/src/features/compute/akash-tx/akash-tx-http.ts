@@ -70,6 +70,10 @@ const STATUS_BY_CODE: Readonly<Record<AkashTxErrorCode, number>> = {
   // The Composition treats 409 as retryable (`Progressing`), which is exactly right here.
   allocation_rolled_back: 409,
   provider_rejected: 422,
+  // A specialization of provider_rejected (bug.5259): same terminal 422 and no-retry contract, a
+  // distinct code so the XR condition names the live-lease topology change the operator resolves
+  // by REPLACING the lease, rather than an opaque rejection (bug.5257).
+  resource_topology_changed: 422,
   // Terminal, NOT a conflict to retry: no number of retries changes who consumed the resource.
   identity_conflict: 422,
   provider_unavailable: 502,

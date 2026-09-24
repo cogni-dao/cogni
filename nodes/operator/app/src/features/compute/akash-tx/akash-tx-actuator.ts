@@ -140,6 +140,32 @@ const NOOP_LOGGER: AkashTxLogger = {
 };
 
 /**
+ * Neutral operator copy for a live-lease resource/topology change (bug.5259). The blue/green
+ * replacement design ELIMINATES the manual deactivate/reactivate workflow, so the message names
+ * the outcome only — it never prescribes lease operations a human should run by hand.
+ */
+export const RESOURCE_TOPOLOGY_CHANGED_MESSAGE = "replacement rollout required";
+
+/**
+ * The structured Console reason for an in-place UPDATE that would reshape a LIVE lease. Matched
+ * against the TYPED `consoleReasonCode` field the compute adapter lifts out of the Console error
+ * body — not a regex over the redacted message digest (bug.5259).
+ */
+const RESOURCE_TOPOLOGY_CHANGED_REASON = "deployment_resources_changed";
+
+/**
+ * True when a Console failure carries the structured `deployment_resources_changed` reason —
+ * Console's refusal to reshape a LIVE lease in place. Reads the typed `consoleReasonCode`
+ * property the adapter surfaces (case-insensitive), never the message text.
+ */
+function indicatesResourceTopologyChange(consoleReasonCode?: unknown): boolean {
+  return (
+    typeof consoleReasonCode === "string" &&
+    consoleReasonCode.toLowerCase() === RESOURCE_TOPOLOGY_CHANGED_REASON
+  );
+}
+
+/**
  * Translate a provider client failure into a stable actuator code WITHOUT importing the
  * adapter (features must not reach into adapters/server). AkashComputeError carries
  * `name` + `code`, both of which are part of its published contract.
@@ -153,6 +179,7 @@ export function mapConsoleFailure(
     name?: unknown;
     code?: unknown;
     httpStatus?: unknown;
+    consoleReasonCode?: unknown;
   };
   const message = error instanceof Error ? error.message : "provider failure";
   if (named?.name === "AkashComputeError") {
@@ -183,6 +210,16 @@ export function mapConsoleFailure(
       named.httpStatus !== 408 &&
       named.httpStatus !== 429
     ) {
+      // A resource/topology change on a LIVE lease is a DISTINCT, machine-readable specialization
+      // of provider_rejected: same 422, same terminal no-retry contract, but a structured reason
+      // the Crossplane/XR path can act on (replacement rollout) instead of an opaque rejection
+      // (bug.5259). A 4xx WITHOUT the structured reason stays byte-identical provider_rejected.
+      if (indicatesResourceTopologyChange(named.consoleReasonCode)) {
+        return new AkashTxError(
+          "resource_topology_changed",
+          RESOURCE_TOPOLOGY_CHANGED_MESSAGE
+        );
+      }
       return new AkashTxError("provider_rejected", message);
     }
     if (code === "NO_BIDS" || code === "NO_ELIGIBLE_BIDS") {
