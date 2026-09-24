@@ -60,4 +60,20 @@ describe("GitHubNodeDeploymentTopologyAdapter", () => {
       adapter.listServices({ slug: "missing", environment: "candidate-a" })
     ).rejects.toThrow("deployed service topology is unavailable");
   });
+
+  it("rejects a non-slug path before reading Git", async () => {
+    const fetchFileText = vi.fn();
+    const adapter = new GitHubNodeDeploymentTopologyAdapter(
+      { fetchFileText },
+      { owner: "cogni-test-org", repo: "cogni-monorepo" }
+    );
+
+    await expect(
+      adapter.listServices({
+        slug: "../private",
+        environment: "candidate-a",
+      })
+    ).rejects.toThrow();
+    expect(fetchFileText).not.toHaveBeenCalled();
+  });
 });

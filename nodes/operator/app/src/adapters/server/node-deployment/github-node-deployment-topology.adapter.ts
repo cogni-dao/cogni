@@ -30,6 +30,10 @@ const deployedTopologySchema = z.object({
   }),
 });
 
+const deploymentSlugSchema = z
+  .string()
+  .regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/);
+
 export class GitHubNodeDeploymentTopologyAdapter
   implements NodeDeploymentTopologyPort
 {
@@ -42,11 +46,12 @@ export class GitHubNodeDeploymentTopologyAdapter
     readonly slug: string;
     readonly environment: "candidate-a" | "preview" | "production";
   }): Promise<readonly NodeDeployedService[]> {
+    const slug = deploymentSlugSchema.parse(input.slug);
     const text = await this.files.fetchFileText({
       owner: this.parent.owner,
       repo: this.parent.repo,
-      path: `infra/k8s/overlays/${input.environment}/${input.slug}/xcomputeworkload.yaml`,
-      ref: `deploy/${input.environment}-${input.slug}`,
+      path: `infra/k8s/overlays/${input.environment}/${slug}/xcomputeworkload.yaml`,
+      ref: `deploy/${input.environment}-${slug}`,
     });
     if (text === null) {
       throw new Error("deployed service topology is unavailable");
