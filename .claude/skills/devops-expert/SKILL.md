@@ -33,11 +33,27 @@ and treat its reviewed decision as the target architecture (`story.5024`):
 If current code differs, report the difference as an as-built gap. Do not weaken
 the north star to match the implementation.
 
+Before advising on Akash promotion, zero-downtime rollout, replica count, DNS
+cutover, or rollback, also read
+[`akash-promotion-north-star`](https://cognidao.org/knowledge/akash-promotion-north-star).
+Its ordering is load-bearing: measure provider behavior first; prove a new
+revision before traffic; mutate the provider once per revision; prefer native
+provider/Crossplane/Argo/ExternalDNS behavior over a bespoke rollout state
+machine; and prove rollback within 120 seconds with zero failed public requests.
+Replica count is workload topology and recurring cost, not a rollout strategy.
+
+For environment lifecycle and live-lane reasoning, recall these reviewed hub
+entries rather than inferring behavior from workflow names:
+
+- [`env-verb-activation`](https://cognidao.org/knowledge/env-verb-activation) — a catalog mutation is not proof that a lane serves.
+- [`unexecuted-lane-untested`](https://cognidao.org/knowledge/unexecuted-lane-untested) — CI-green without one real execution does not validate a new authority.
+- [`lane-is-not-control`](https://cognidao.org/knowledge/lane-is-not-control) — workload paths follow the lane; reconciler, payer, and shared-substrate identity follow the control environment.
+
 - **[CI/CD Platform Boundary & Freeze Policy](../../../docs/spec/cicd-platform-boundary.md) — READ FIRST when advising on ANY new deployment/platform behavior.** The deploy brain (`scripts/ci/*.sh` + `.github/workflows/*.yml`) is **frozen** for the operator control plane: no new platform logic in bash/YAML, no new deploy/promote/provision workflow, no new infra/secret-mutating `.sh`. `deploy-infra.sh` (2,167 lines) is a 🔴 DANGER ZONE on a line-count ratchet. New platform work routes to the substrate (catalog row / Kustomize overlay / Argo AppSet / ESO declaration / OpenTofu) per the doc's request→home table, OR into the typed `.ts` operator control plane (`DeployCapability` + `ComputeResourcePort` — the Akash compute lane is SHIPPED and is the home for node-app deployment behavior, see the Deployment-targets section below; never route compute-lane work into catalog-overlay/AppSet artifacts). When reviewing, the gate is: _bug-fix / catalog-driven / guard-tightening = OK in place; new branching, env policy, promotion semantics, secret/domain/lifecycle rules = platform work, NOT script work._ Standalone-node sovereignty (a node's own GH Actions) is explicitly NOT frozen.
 - [Multi-Repo Sync Contract](../../../docs/spec/repo-sync-contract.md) — operator-scope content lives in `Cogni-DAO/cogni` (HUB); `node-template` and each node repo are artifacts. `.cogni/sync-manifest.yaml` declares global excludes + per-artifact divergences; `.github/workflows/sync-drift-detector.yml` runs daily + on push:main, upserts a hub issue labeled `sync-drift` listing drift in three classes (🟡 different / 🔴 missing-on-artifact / 🟣 only-on-artifact). **Any review of a workflow / `infra/**`/`scripts/**`/`.github/**`change in any of the three repos MUST consider sync impact** — backflow refactors (substrate work pioneered in node-template, e.g. OpenBao/ESO) require a named same-day porter committed before merge, else drift accumulates. The`sync-drift` issue is the cross-repo dashboard.
 - [CI/CD Spec](../../../docs/spec/ci-cd.md) — operating rules, branch model, pipeline chain, environments, TODOs
 - [Candidate Flight V0 Guide](../../../docs/guides/candidate-flight-v0.md) — short operator guide for flying one selected PR to `candidate-a`
-- [CI/CD Spec — Axiom 18 `BRANCH_HEAD_IS_LEASE`](../../../docs/spec/ci-cd.md) — slot lease semantics: the per-`(env, node)` branch head is the lease (the old `acquire/release-candidate-slot.sh` + `candidate-lease.json` model is retired)
+- [CI/CD Spec — Axiom 18 `BRANCH_HEAD_IS_LEASE`](../../../docs/spec/ci-cd.md) — the per-`(env, node)` branch head is current deploy ownership and workflow concurrency serializes mutation. It is **not** a reviewer reservation after the workflow finishes: a later flight may replace the candidate before validation. The old `acquire/release-candidate-slot.sh` + `candidate-lease.json` model is retired.
 - [CI/CD Project Scorecard](../../../work/projects/proj.cicd-services-gitops.md) — pipeline health, active blockers
 - [`promote` skill](../promote/SKILL.md) — operator playbook for preview/prod promotion, lease semantics, monitoring poll-loop, and the bug.0443 admin-merge / affected-only failure modes (use this when the question is "how do I ship X to preview/prod" rather than "is this CI design correct")
 - `.github/workflows/` — actual workflow source (verify claims against code)
@@ -55,7 +71,7 @@ the north star to match the implementation.
 
 2. **Build once, promote by digest.** No rebuilds downstream. `@sha256:` refs, never mutable tags. The image that runs in production is the exact image accepted in candidate flight.
 
-3. **Deploy state lives in git, separate from code.** Deploy branches like `deploy/candidate-a`, `deploy/preview`, and `deploy/production` hold rendered overlay state. Provision scripts and CI write directly to deploy branches. Code branches never contain deploy state. Direct bot commits, never PRs.
+3. **Deploy state lives in git, separate from code.** Per-node branches `deploy/<env>-<slug>` hold rendered desired state and `.promote-state/source-sha-by-app.json`; rollup branches such as `deploy/preview` aggregate fleet state. This is true for Akash rows too, even though they have no k8s app overlay/AppSet. Provision scripts and CI write deploy branches directly. Code branches never contain deploy state. Direct bot commits, never PRs.
 
 4. **Standard CI is universal; candidate flight is explicit.** All PRs get normal CI/build. Only selected PRs enter candidate flight. Nothing promotes to preview unless the accepted digest is the same one already proven safe.
 
@@ -65,7 +81,7 @@ the north star to match the implementation.
 
 ## Deployment targets — Akash app lane vs Cherry state substrate
 
-**The standard (gated north star — `AKASH_IS_NODE_APP_TARGET`, [ci-cd.md](../../../docs/spec/ci-cd.md) Axioms 23–26):** node apps deploy as **app-only Akash workloads** through the operator compute API; the node wizard's default is `deploy_provider: akash` (born-on-Akash). The Cherry VM/k3s cluster is the **state substrate** (postgres/doltgres/redis/temporal/LiteLLM/scheduler-worker) plus the legacy node-app lane. Gate: the S0–S3 ladder is PROVEN — as of 2026-09-11 four nodes (toks4 3/3, levelup 2/2, node-template 3/3, poly 2/2 env-slots) run live on Akash via the pure API path, so the gate's precondition is met; the wizard default flip to `deploy_provider: akash` is pending as its own story. **That flip has LANDED** — story.5025 `BORN_ON_AKASH` means the wizard states placement at birth (toks5 is the proof row) and never inherits the k3s fallback, so "new nodes still birth on k3s" is STALE and following it produces a workload that cannot boot. **Absent placement is a hard failure, not a k3s fallback** (`NO_SILENT_DEFAULT`, story.5040 / ci-cd.md Axiom 23). The k3s app lane is DEPRECATED (Derek red line: never flip a node back to k3s; `place_k3s` is not a mitigation — fix forward), never advise extending it, and route every new deploy-plane behavior toward the Akash lane.
+**The standard (`AKASH_IS_NODE_APP_TARGET`, [ci-cd.md](../../../docs/spec/ci-cd.md) Axioms 23–26):** node apps deploy as **app-only Akash workloads** through the operator compute plane. `BORN_ON_AKASH` has landed: the wizard states `deploy_provider: akash` at birth (toks5 is the proof row) and never inherits a k3s fallback. The Cherry VM/k3s cluster remains the shared state substrate (Postgres, Doltgres, Redis, Temporal, LiteLLM, scheduler-worker) plus deprecated legacy app rows. **Absent placement is a hard failure, never a k3s fallback** (`NO_SILENT_DEFAULT`, story.5040). Never flip a node back to k3s as mitigation; fix the Akash lane forward.
 
 Mechanism (all shipped, task.5044 / PR #2077):
 
@@ -73,6 +89,8 @@ Mechanism (all shipped, task.5044 / PR #2077):
 - SDL renders internally in `akash-sdl.ts` and never escapes that dir. `INTERNAL_EXPOSE_IS_MESH`: multiple services in one lease reach each other by service name with no public expose — which is why an app-adjacent sidecar image is **an extra SDL service in the same lease**, never k8s pod injection (`SIDECAR_IS_SDL_SERVICE`; the injection lane was closed with PR #1884).
 - Workload spec: `features/compute/node-workload-spec.ts` — `APP_ONLY_NO_INFRA` (no DBs/queues/gateways as workload sidecars) + `SCOPED_CREDS_ONLY` (node-scoped DSNs, budget-capped LiteLLM virtual key, write-only Loki key — never fleet secrets).
 - **Health:** off-k3s there are no probes and no Argo selfHeal — `OPERATOR_OWNS_WORKLOAD_HEALTH` (Axiom 26): the operator plane polls lease + `/readyz` + `/version.buildSha` and replaces dead-provider workloads. Reconcile loop is specified-not-built (story.5016); flag any design that assumes an Akash workload self-heals today.
+- **Lease vocabulary:** one Akash lease is one rented `(node, environment)` workload bundle. A normal image update may update that lease in place; it does not inherently create a new rental. Catalog `lease_generation` is an internal **replacement ordinal** for a spent idempotence key, not a product generation, Kubernetes `metadata.generation`, or billing period. It advances only when a terminal receipt means the next activation must create a replacement.
+- **Zero-downtime shape:** do not prescribe permanent `count=2`, nor a `1→2→update→1` surge, without provider proof. Akash service count is immutable for the current deployment API, so changing it requires lease replacement. The North-Star fallback is blue/green: create a new single-replica lease dark, prove exact SHA/assets/useful work, atomically move traffic, retain the old lease for rollback, then close it. That creates intentional short overlap, not perpetual double spend or churn on every reconciliation.
 - **Do not confuse app compute with shared substrate.** Node app create/replace/scale belongs to the Akash compute API above. Merged production state/edge changes (`infra/compose/**`, Caddy/Alloy, VM-materialized bridge secrets) use `POST /api/v1/deploy/infra-reconcile` against the operator node. That route is temporarily production-promoter-gated as a two-phase OpenFGA bootstrap bridge; story.5028 owns the least-privilege destination `production_infra_promoter → can_reconcile_production_infra`. It is operator-GitHub-App-dispatched, preserves the current app pin, and accepts no caller workflow/ref/SHA/mode. Its repository target MUST come from env-scoped `NODE_SUBMODULE_PARENT_{OWNER,REPO}` so the candidate test App remains inside `cogni-test-org`. Never send an agent to personal `gh workflow run` or SSH for this normal reconcile path.
 - **Seam warning:** `bootstrap/capabilities/compute.ts` (the `COMPUTE_WRITE_PROVIDER` selection point) is owned by the crypto-rail workstream — advise around it, never through it.
 - Living design doc: hub entry `akash-node-deploy-v000` (+ `akash-provider-quality-mandate` for bid screening/boot SLO/blacklist); roadmap + task map: story.5016.
@@ -115,7 +133,7 @@ monorepo candidate-a.
 
 > **Workflows are thin; logic lives in `scripts/ci/`.** Every non-trivial step in `.github/workflows/*.yml` is `run: bash scripts/ci/<name>.sh`. Start from the workflow to see the _shape_ of the pipeline, then open the scripts to see what actually happens. Never write new inline-YAML logic when a script exists — extend the script.
 
-> **Node formation below describes the LEGACY k3s birth path** (AppSet + overlay footprint). The standard is born-on-Akash — wizard `deploy_provider: akash`, no AppSet/overlay footprint — gated on story.5016 (ci-cd.md Axiom 23); until the wizard flips, this is still what runs.
+> **Node formation below describes only the LEGACY k3s app path** (AppSet + overlay footprint). New sovereign nodes are born on Akash. They have no k3s app overlay/AppSet, but they still have provider-neutral desired state and a machine-written `deploy/<env>-<slug>` pin. Do not use the legacy renderer as the model for new node formation.
 >
 > **Node formation is the exception to "everything is a workflow."** A new node's PR is authored by the **operator GitHub App directly** via the Git Data API (`nodes/operator/app/src/shared/node-app-scaffold/` + `adapters/server/vcs/github-repo-write.ts`) — no dispatched Action (task.5092; see [node-formation.md](../../../docs/spec/node-formation.md#node-publish-operator-authored-pr)). Its per-node Argo AppSet (`infra/k8s/argocd/<env>-<node>-applicationset.yaml` — one object per `(env, node)` for structural lane isolation, `bug.0378`) is catalog-rendered by `scripts/ci/render-node-appset.sh` (`pnpm gen:node-appset`, drift-gated in the `unit` job). The TS scaffolder and the shell renderer share one template (`scripts/ci/node-applicationset.yaml.tmpl`), so their output is byte-identical. Its per-node Kustomize **overlay** is likewise catalog-rendered — `scripts/ci/render-node-overlays.sh` (`pnpm gen:node-overlays`, drift-gated), the byte-exact twin of the operator's mint-time `gens/overlay.ts`, applying the node-at-root migrate rewrite (`/app/nodes/<slug>/app` → `/app/app`). The drift gate is what stops a **stale operator** from minting an overlay that kustomize-builds but crash-loops `migrate` at flight (`bug.5008`).
 
@@ -153,7 +171,42 @@ to `NODE_SUBMODULE_PARENT_*`, uniform with `run-ci` and `flight` (`{ nodeRef: { 
 There is no PR-number-only / `nodeId`-less merge lane and no `codePr` flight; `NODE_SCOPED_NEVER_RETARGETS`
 keeps a typo'd slug a hard 404.
 
+### Operator API — one control surface, exact proof
+
+Use the operator API for normal CI/CD mutations; never replace these calls with a
+personal `gh workflow run`:
+
+| Intent                              | Call                                                   | Contract                                                                                                                           |
+| ----------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Flight any node, including operator | `POST /api/v1/vcs/flight {nodeRef:{nodeId,sourceSha}}` | Resolves the node repo from the catalog; the in-repo operator falls back to the parent monorepo. Requires a built immutable image. |
+| Promote preview/production          | `POST /api/v1/deploy/promote {nodeId,env,sourceSha}`   | Advances exactly the named lane. A named target with no image hard-fails; it must never skip into green.                           |
+| Merge                               | `POST /api/v1/vcs/merge {nodeId,prNumber,method}`      | Enqueues when branch protection uses a merge queue; poll until actually merged.                                                    |
+| Add/remove an environment           | `POST /api/v1/nodes/{id}/envs {env,present}`           | Authors a reviewable catalog PR. `present:true` derives placement and replacement ordinal; never silently defaults to k3s.         |
+
+`present:true` activates membership; it is **not** a promote. On merge, onboarding
+replays each affected environment at that environment's own existing
+`deploy/<env>-<slug>` pin. The catalog `source_sha` is birth-only fallback when no
+deploy pin exists. Substrate reconciliation may run, but app advancement remains
+the explicit flight/promote verb. This separation prevents a candidate or preview
+membership change from silently reverting production.
+
+Deployment truth has two parts and both must agree:
+
+1. `.promote-state/source-sha-by-app.json` on `deploy/<env>-<slug>` states the intended pin.
+2. The public host's `/version.buildSha` states what users actually receive; check every Cloudflare edge when edge behavior is in scope.
+
+Workflow status, controller status, `/readyz`, and a green dispatch are supporting
+signals only. A green run can still be a no-op, serve an old revision, or have no
+workload behind it. For candidate validation, assert the expected SHA immediately
+before exercising behavior because workflow concurrency ends when flight finishes;
+a later flight can legitimately replace the shared candidate host.
+
 ### Workflows (`.github/workflows/`) — pipeline entry points
+
+The job/script names below retain k3s history (`promote-k8s`, `overlay`,
+`wait-for-argocd`). Do not infer placement from those names. For an Akash row the
+same flight/promotion intent writes the per-node deploy pin and provider-neutral
+Crossplane desired state; it does not create a k3s app overlay or AppSet.
 
 | Workflow                                 | Trigger                                   | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ---------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -272,8 +325,10 @@ When reviewing code that touches CI/CD, deploy, or infra:
 
 ## Anti-patterns to flag
 
-- **Assuming a node app ships via overlay/AppSet.** Check the node's deploy lane first: Akash-lane nodes (`deploy_provider: akash`) have NO deploy branch, overlay, AppSet, or Argo Application — their deploy surface is the operator compute API (Deployment-targets section). Advising an overlay bump for one is a category error.
+- **Assuming an Akash app ships via a k3s overlay/AppSet.** Akash-lane nodes (`deploy_provider: akash`) have no k3s app overlay, node AppSet, or k3s app Deployment. They **do** have a machine-written `deploy/<env>-<slug>` branch containing the canonical SHA pin and provider-neutral desired state. Advising a k3s overlay bump is a category error; denying the deploy branch exists is also wrong.
 - **App-adjacent sidecars via k8s pod injection.** A node's second image is an extra service in the same Akash lease (`SIDECAR_IS_SDL_SERVICE`, ci-cd.md Axiom 25) — the overlay/kustomize injection lane was closed with PR #1884; don't resurrect it.
+- **Treating replica count as rollout strategy.** Permanent `count=2` spends roughly twice the ingress-service resources continuously; `1→2→1` is not an in-place surge when provider count is immutable. Follow `akash-promotion-north-star`: prove provider semantics, then use native rolling behavior if proven or create/prove/flip/retain-old blue/green leases if not.
+- **Calling candidate concurrency a review lease.** Per-node workflow concurrency prevents simultaneous deploy mutation, but the completed flight does not reserve the candidate host for a reviewer. Re-check `/version.buildSha` at validation start and fail closed if another flight replaced it.
 
 - Rebuilding in production instead of promoting proven digest
 - **Growing the frozen deploy brain** (see Freeze Policy, top). A PR that adds a new responsibility / secret / service / DB path / inline decision tree to `deploy-infra.sh`, a net-new infra-mutating `scripts/ci/*.sh`, or a new deploy/promote/provision workflow — when the behavior could be a catalog field, overlay/AppSet, ESO declaration, or a `DeployCapability` method. Flag it; route it per the request→home table. (Bug fixes + catalog-driven + guard-tightening are fine in place.)
@@ -291,6 +346,7 @@ When reviewing code that touches CI/CD, deploy, or infra:
 - Naming a generic deployable gate after one catalog shape. `node` checks are a
   branch under `assert-target-substrate.sh`, not the generic flight abstraction.
 - **Silent-success on no-op runs.** A workflow that exits 0 without doing the work paints a green check that operators misread as "deployed". Every no-op path must produce a visually-distinct outcome: exit-code convention (`1=error, 2=no-op`) + a gated follow-up job that surfaces as skipped, OR a loud `::warning::` + step summary. Never silently succeed after a skip.
+- **Using catalog `source_sha` as deployed truth.** It is the birth pin only. After first deployment, the environment's own `deploy/<env>-<slug>/.promote-state/source-sha-by-app.json` is intended truth; reading the catalog during lane onboarding can silently revert a live environment.
 - **Status / summary logic in YAML.** Decision logic (exit-code → status name, summary markdown, banner copy) belongs in `scripts/ci/*.sh`. Workflows call the script and gate jobs on its `$GITHUB_OUTPUT`. Inline `case $rc in ...` + `echo >> $GITHUB_STEP_SUMMARY` in YAML is a smell — move it into the script.
 - **`/readyz 200` treated as rollout proof.** `/readyz` is Service-level: answered by any running pod, old or new. Real rollout proof is **`/version.buildSha` matches the expected SHA** (`verify-buildsha.sh`; task.0345) — the ONLY provider-agnostic proof, and the only one that exists on the Akash lane. On the k3s lane, `kubectl rollout status` (`wait-for-in-cluster-services.sh`) or the new-RS replica-count assertion in `wait-for-argocd.sh` (`rollout_check`) are acceptable k8s-specific variants (never `/readyz`).
 - **Argo `health.status == Healthy` treated as rollout proof** (bug.0326). Argo's Healthy fires as soon as enough pods are Ready — including old-RS pods during a rolling update. `/readyz` from those pods returns the prior BUILD_SHA, so verify-buildsha fails on a green-upstream flight. `wait-for-argocd.sh` now asserts the new ReplicaSet has reached desired count (`rollout_check`: `updatedReplicas >= spec.replicas` AND `availableReplicas >= spec.replicas`) per promoted app after the Application-level Healthy check ([ci-cd.md Axiom 15](../../../docs/spec/ci-cd.md)); don't regress that to Application-health-only.
