@@ -33,6 +33,9 @@ describe("node operations page boundary", () => {
     const operations = source(
       "features/nodes/operations/NodeOperationsTable.client.tsx"
     );
+    const deployments = source(
+      "features/nodes/deployments/DeploymentEnvironmentMatrix.tsx"
+    );
     expect(page).toContain('status === "active"');
     expect(page).toContain("<NodeOperationsDetail");
     expect(page).toContain("deploymentControls=");
@@ -41,6 +44,23 @@ describe("node operations page boundary", () => {
     expect(page).not.toContain("<details");
     expect(operations).toContain("<DeploymentEnvironmentMatrix");
     expect(operations).toContain("<NodeEnvToggle");
+    expect(operations).not.toContain("-services");
+    expect(deployments).toContain("Inside this deployment");
+    expect(deployments).toContain("Sponsored compute");
+  });
+
+  it("keeps management cards on the same full-width detail grid", () => {
+    const page = source("app/(app)/nodes/[id]/page.tsx");
+    const access = source("features/nodes/access/NodeAccess.tsx");
+    const distributions = source("features/nodes/DistributionsCard.client.tsx");
+    const danger = source("features/nodes/ResetDaoDangerZone.client.tsx");
+
+    expect(page).toContain('className={operationsNode ? "max-w-6xl" : ""}');
+    expect(page).toContain('className="mt-6 w-full space-y-4"');
+    for (const card of [access, distributions, danger]) {
+      expect(card).not.toContain("max-w-2xl");
+      expect(card).not.toContain("max-w-3xl");
+    }
   });
 
   it("does not render the infrastructure placement selector", () => {

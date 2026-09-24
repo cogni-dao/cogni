@@ -3,6 +3,7 @@
 
 /** Read display-safe service topology from the exact environment deploy branch Argo consumes. */
 
+import { LEGACY_DEFAULT_NODE_DEPLOYMENT } from "@cogni/repo-spec";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
@@ -100,6 +101,10 @@ const deployedTopologySchema = z.object({
   }),
 });
 
+const kustomizationSchema = z.object({
+  resources: z.array(z.string()),
+});
+
 const deploymentSlugSchema = z
   .string()
   .regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/);
@@ -123,14 +128,38 @@ export class GitHubNodeDeploymentTopologyAdapter
       path: `infra/k8s/overlays/${input.environment}/${slug}/xcomputeworkload.yaml`,
       ref: `deploy/${input.environment}-${slug}`,
     });
-    if (text === null) {
-      throw new Error("deployed service topology is unavailable");
+    if (text !== null) {
+      const parsed = deployedTopologySchema.parse(parseYaml(text));
+      return parsed.spec.workload.services.map((service) => ({
+        name: service.name,
+        visibility: service.visibility,
+      }));
     }
 
-    const parsed = deployedTopologySchema.parse(parseYaml(text));
-    return parsed.spec.workload.services.map((service) => ({
-      name: service.name,
-      visibility: service.visibility,
-    }));
+    // The operator/control-plane lane still runs the standard node app on k3s and therefore has
+    // no XComputeWorkload. Its exact deploy branch names that shared base explicitly. Project the
+    // provider-neutral stock topology rather than falsely reporting that a healthy app has no
+    // service truth. This also covers any legacy k3s node lane that still consumes the same base.
+    const kustomization = await this.files.fetchFileText({
+      owner: this.parent.owner,
+      repo: this.parent.repo,
+      path: `infra/k8s/overlays/${input.environment}/${slug}/kustomization.yaml`,
+      ref: `deploy/${input.environment}-${slug}`,
+    });
+    if (kustomization !== null) {
+      const parsed = kustomizationSchema.parse(parseYaml(kustomization));
+      if (
+        parsed.resources.some((resource) =>
+          /(^|\/)base\/node-app$/.test(resource)
+        )
+      ) {
+        return LEGACY_DEFAULT_NODE_DEPLOYMENT.services.map((service) => ({
+          name: service.name,
+          visibility: service.visibility,
+        }));
+      }
+    }
+
+    throw new Error("deployed service topology is unavailable");
   }
 }

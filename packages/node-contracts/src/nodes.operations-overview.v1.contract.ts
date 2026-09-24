@@ -17,6 +17,40 @@ const moduleUnavailableSchema = z.object({
   state: z.literal("unavailable"),
 });
 
+const nativeAmountSchema = z.object({
+  amount: z.string(),
+  denom: z.string(),
+});
+
+export const nodeOperationsDeploymentServicesSchema = z.discriminatedUnion(
+  "state",
+  [
+    moduleUnavailableSchema,
+    z.object({
+      state: z.literal("available"),
+      items: z.array(
+        z.object({
+          name: z.string().min(1).max(63),
+          visibility: z.enum(["public", "private"]),
+        })
+      ),
+    }),
+  ]
+);
+
+export const nodeOperationsDeploymentComputeSchema = z.discriminatedUnion(
+  "state",
+  [
+    moduleUnavailableSchema,
+    z.object({
+      state: z.literal("available"),
+      sponsorship: z.literal("cogni"),
+      activeDeployments: z.number().int().nonnegative(),
+      transferred: z.array(nativeAmountSchema),
+    }),
+  ]
+);
+
 export const nodeOperationsEnvironmentSchema = z.object({
   env: z.enum(["candidate-a", "preview", "production"]),
   label: z.enum(["Test", "Preview", "Production"]),
@@ -28,22 +62,11 @@ export const nodeOperationsEnvironmentSchema = z.object({
     desired: z.number().int().nonnegative(),
     ready: z.number().int().nonnegative(),
   }),
+  /** Services inside this exact environment deployment. */
+  services: nodeOperationsDeploymentServicesSchema,
+  /** Sponsored compute consumed by this exact environment deployment. */
+  compute: nodeOperationsDeploymentComputeSchema,
 });
-
-export const nodeOperationsServicesSchema = z.discriminatedUnion("state", [
-  moduleUnavailableSchema,
-  z.object({
-    state: z.literal("available"),
-    /** Environment whose deployed Git branch supplied this topology. */
-    environment: z.enum(["candidate-a", "preview", "production"]),
-    items: z.array(
-      z.object({
-        name: z.string().min(1).max(63),
-        visibility: z.enum(["public", "private"]),
-      })
-    ),
-  }),
-]);
 
 export const nodeOperationsDeploymentModuleSchema = z.discriminatedUnion(
   "state",
@@ -63,23 +86,6 @@ export const nodeOperationsDeploymentModuleSchema = z.discriminatedUnion(
     }),
   ]
 );
-
-const nativeAmountSchema = z.object({
-  amount: z.string(),
-  denom: z.string(),
-});
-
-export const nodeOperationsComputeModuleSchema = z.discriminatedUnion("state", [
-  moduleUnavailableSchema,
-  z.object({
-    state: z.literal("available"),
-    sponsorship: z.literal("cogni"),
-    /** Cost evidence belongs only to the operator environment that observed it. */
-    environment: z.enum(["candidate-a", "preview", "production"]),
-    activeDeployments: z.number().int().nonnegative(),
-    transferred: z.array(nativeAmountSchema),
-  }),
-]);
 
 const unavailableMetricSchema = z.object({ state: z.literal("unavailable") });
 const availableCountMetricSchema = z.object({
@@ -160,9 +166,6 @@ export const nodeOperationsOverviewSchema = z.object({
   detailUrl: z.string(),
   modules: z.object({
     deployment: nodeOperationsDeploymentModuleSchema,
-    /** Git-declared topology for this operator environment; independent from runtime probes. */
-    services: nodeOperationsServicesSchema,
-    compute: nodeOperationsComputeModuleSchema,
     governance: nodeOperationsGovernanceModuleSchema,
     usage: nodeOperationsUsageModuleSchema.optional(),
   }),

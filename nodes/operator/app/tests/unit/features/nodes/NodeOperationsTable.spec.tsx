@@ -35,23 +35,21 @@ const node: NodeOperationsOverview = {
           sourceSha: "abcdef123456",
           buildSha: "abcdef123456",
           replicas: { desired: 1, ready: 1 },
+          services: {
+            state: "available",
+            items: [
+              { name: "app", visibility: "public" },
+              { name: "paper-trader", visibility: "private" },
+            ],
+          },
+          compute: {
+            state: "available",
+            sponsorship: "cogni",
+            activeDeployments: 1,
+            transferred: [{ amount: "341045", denom: "uact" }],
+          },
         },
       ],
-    },
-    services: {
-      state: "available",
-      environment: "production",
-      items: [
-        { name: "app", visibility: "public" },
-        { name: "paper-trader", visibility: "private" },
-      ],
-    },
-    compute: {
-      state: "available",
-      sponsorship: "cogni",
-      environment: "production",
-      activeDeployments: 1,
-      transferred: [{ amount: "341045", denom: "uact" }],
     },
     governance: {
       state: "available",
@@ -112,7 +110,7 @@ describe("NodeOperationsTable", () => {
     );
 
     const expanded = document.getElementById(`${node.id}-operations-desktop`);
-    expect(expanded).toHaveTextContent("Services2 · Production");
+    expect(expanded).toHaveTextContent("Inside this deployment");
     expect(expanded).toHaveTextContent("app");
     expect(expanded).toHaveTextContent("Public");
     expect(expanded).toHaveTextContent("paper-trader");
@@ -230,6 +228,8 @@ describe("NodeOperationsTable", () => {
               declared: false,
               health: "unknown" as const,
               buildSha: null,
+              services: { state: "unavailable" as const },
+              compute: { state: "unavailable" as const },
             },
             {
               ...node.modules.deployment.environments[0],
@@ -238,6 +238,8 @@ describe("NodeOperationsTable", () => {
               declared: false,
               health: "unknown" as const,
               buildSha: null,
+              services: { state: "unavailable" as const },
+              compute: { state: "unavailable" as const },
             },
             node.modules.deployment.environments[0],
           ],
@@ -266,7 +268,18 @@ describe("NodeOperationsTable", () => {
   it("does not report zero when compute evidence is unavailable", () => {
     const unavailable = {
       ...node,
-      modules: { ...node.modules, compute: { state: "unavailable" as const } },
+      modules: {
+        ...node.modules,
+        deployment: {
+          ...node.modules.deployment,
+          environments: node.modules.deployment.environments.map(
+            (environment) => ({
+              ...environment,
+              compute: { state: "unavailable" as const },
+            })
+          ),
+        },
+      },
     };
     render(<NodeOperationsTable nodes={[unavailable]} />);
     expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
@@ -280,7 +293,18 @@ describe("NodeOperationsTable", () => {
       slug: "beta",
       title: "Beta",
       detailUrl: "/nodes/22222222-2222-4222-8222-222222222222",
-      modules: { ...node.modules, compute: { state: "unavailable" as const } },
+      modules: {
+        ...node.modules,
+        deployment: {
+          ...node.modules.deployment,
+          environments: node.modules.deployment.environments.map(
+            (environment) => ({
+              ...environment,
+              compute: { state: "unavailable" as const },
+            })
+          ),
+        },
+      },
     };
     render(<NodeOperationsTable nodes={[node, unavailable]} />);
     expect(screen.queryByText(/2 nodes/)).not.toBeInTheDocument();

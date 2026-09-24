@@ -3,8 +3,15 @@
 
 /** Shared provider-neutral Test / Preview / Production deployment matrix. */
 
-import { AlertCircle, CheckCircle2, CircleDashed, Rocket } from "lucide-react";
-import type { ReactElement, ReactNode } from "react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  CircleDashed,
+  Globe2,
+  Network,
+  Rocket,
+} from "lucide-react";
+import { Fragment, type ReactElement, type ReactNode } from "react";
 
 import {
   Table,
@@ -23,6 +30,15 @@ export interface DeploymentEnvironmentRow {
   readonly health: "healthy" | "degraded" | "provisioning" | "unknown";
   readonly sourceSha: string | null;
   readonly buildSha: string | null;
+  readonly services:
+    | {
+        readonly state: "available";
+        readonly items: readonly {
+          readonly name: string;
+          readonly visibility: "public" | "private";
+        }[];
+      }
+    | { readonly state: "unavailable" };
   readonly compute?:
     | {
         readonly state: "available";
@@ -86,55 +102,100 @@ export function DeploymentEnvironmentMatrix({
   }
 
   const showActions = rows.some((row) => row.action !== undefined);
+  const columnCount = 3 + (showCompute ? 1 : 0) + (showActions ? 1 : 0);
 
   return (
     <div className="overflow-hidden rounded-md border">
-      <Table className="table-fixed">
+      <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-1/4 px-2">Environment</TableHead>
-            <TableHead className="w-1/3 px-2">Status</TableHead>
-            <TableHead className="w-1/6 px-2 text-right">Build</TableHead>
+            <TableHead className="px-2">Environment</TableHead>
+            <TableHead className="px-2">Status</TableHead>
+            <TableHead className="px-2 text-right">Build</TableHead>
             {showCompute ? (
-              <TableHead className="w-1/4 px-2 text-right">Sponsored</TableHead>
+              <TableHead className="px-2 text-right">
+                Sponsored compute
+              </TableHead>
             ) : null}
             {showActions ? (
-              <TableHead className="w-1/4 px-2 text-right">Action</TableHead>
+              <TableHead className="px-2 text-right">Action</TableHead>
             ) : null}
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((row) => (
-            <TableRow key={row.env}>
-              <TableCell className="px-2 font-medium text-xs sm:text-sm">
-                {row.label}
-              </TableCell>
-              <TableCell className="px-2 text-xs sm:text-sm">
-                <EnvironmentStatus row={row} />
-              </TableCell>
-              <TableCell className="px-2 text-right font-mono text-muted-foreground text-xs">
-                {row.buildSha?.slice(0, 7) ?? "—"}
-              </TableCell>
-              {showCompute ? (
-                <TableCell className="px-2 text-right text-xs tabular-nums">
-                  {row.compute?.state === "available" ? (
-                    <span>
-                      <span className="block font-medium">
-                        {row.compute.amount}
-                      </span>
-                      <span className="block text-muted-foreground">
-                        {row.compute.activeDeployments} active
-                      </span>
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground">Unavailable</span>
-                  )}
+            <Fragment key={row.env}>
+              <TableRow className="border-b-0">
+                <TableCell className="px-2 font-medium text-xs sm:text-sm">
+                  {row.label}
                 </TableCell>
+                <TableCell className="px-2 text-xs sm:text-sm">
+                  <EnvironmentStatus row={row} />
+                </TableCell>
+                <TableCell className="px-2 text-right font-mono text-muted-foreground text-xs">
+                  {row.buildSha?.slice(0, 7) ?? "—"}
+                </TableCell>
+                {showCompute ? (
+                  <TableCell className="px-2 text-right text-xs tabular-nums">
+                    {row.compute?.state === "available" ? (
+                      <span>
+                        <span className="block font-medium">
+                          {row.compute.amount}
+                        </span>
+                        <span className="block text-muted-foreground">
+                          Cogni-sponsored
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">Unavailable</span>
+                    )}
+                  </TableCell>
+                ) : null}
+                {showActions ? (
+                  <TableCell className="px-2 text-right">
+                    {row.action}
+                  </TableCell>
+                ) : null}
+              </TableRow>
+              {row.declared ? (
+                <TableRow className="bg-muted/10 hover:bg-muted/10">
+                  <TableCell className="px-2 pt-0 pb-3" colSpan={columnCount}>
+                    <div className="flex min-h-9 flex-wrap items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+                      <span className="mr-1 text-muted-foreground text-xs">
+                        Inside this deployment
+                      </span>
+                      {row.services.state === "available" ? (
+                        row.services.items.map((service) => {
+                          const VisibilityIcon =
+                            service.visibility === "public" ? Globe2 : Network;
+                          return (
+                            <span
+                              key={service.name}
+                              className="inline-flex min-h-7 items-center gap-1.5 rounded-md bg-muted px-2 font-mono text-xs"
+                            >
+                              <VisibilityIcon
+                                className="size-3.5 text-muted-foreground"
+                                aria-hidden="true"
+                              />
+                              {service.name}
+                              <span className="font-sans text-muted-foreground">
+                                {service.visibility === "public"
+                                  ? "Public"
+                                  : "Private"}
+                              </span>
+                            </span>
+                          );
+                        })
+                      ) : (
+                        <span className="text-muted-foreground text-xs">
+                          Unavailable
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
               ) : null}
-              {showActions ? (
-                <TableCell className="px-2 text-right">{row.action}</TableCell>
-              ) : null}
-            </TableRow>
+            </Fragment>
           ))}
         </TableBody>
       </Table>

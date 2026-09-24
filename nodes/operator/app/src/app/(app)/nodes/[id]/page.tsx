@@ -264,7 +264,7 @@ export default async function NodeDashboardPage({
       )}
 
       {hasManagement ? (
-        <div className="mx-auto mt-6 w-full max-w-3xl space-y-4">
+        <div className="mt-6 w-full space-y-4">
           {showDevelopers ? (
             <NodeAccess nodeId={node.id} requests={accessRequests} />
           ) : null}

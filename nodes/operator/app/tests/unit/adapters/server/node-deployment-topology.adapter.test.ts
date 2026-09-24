@@ -26,6 +26,14 @@ spec:
         port: 9100
 `;
 
+const OPERATOR_KUSTOMIZATION = `
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../base/node-app
+  - ../../../base/openfga-external
+`;
+
 describe("GitHubNodeDeploymentTopologyAdapter", () => {
   it("returns only service names and visibility from Poly's candidate deploy state", async () => {
     const fetchFileText = vi.fn().mockResolvedValue(POLY_DEPLOYMENT);
@@ -62,6 +70,27 @@ describe("GitHubNodeDeploymentTopologyAdapter", () => {
     await expect(
       adapter.listServices({ slug: "missing", environment: "candidate-a" })
     ).rejects.toThrow("deployed service topology is unavailable");
+  });
+
+  it("projects the standard app from an exact k3s deploy branch", async () => {
+    const fetchFileText = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(OPERATOR_KUSTOMIZATION);
+    const adapter = new GitHubNodeDeploymentTopologyAdapter(
+      { fetchFileText },
+      { owner: "cogni-dao", repo: "cogni" }
+    );
+
+    await expect(
+      adapter.listServices({ slug: "operator", environment: "candidate-a" })
+    ).resolves.toEqual([{ name: "app", visibility: "public" }]);
+    expect(fetchFileText).toHaveBeenNthCalledWith(2, {
+      owner: "cogni-dao",
+      repo: "cogni",
+      path: "infra/k8s/overlays/candidate-a/operator/kustomization.yaml",
+      ref: "deploy/candidate-a-operator",
+    });
   });
 
   it("rejects a non-slug path before reading Git", async () => {

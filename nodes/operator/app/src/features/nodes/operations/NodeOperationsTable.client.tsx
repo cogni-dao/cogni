@@ -33,8 +33,6 @@ import {
   ChevronDown,
   CircleDashed,
   ExternalLink,
-  Globe2,
-  Network,
   Rocket,
   Search,
   Settings2,
@@ -50,7 +48,7 @@ import {
   type DeploymentEnvironmentRow,
 } from "@/features/nodes/deployments/DeploymentEnvironmentMatrix";
 import { NodeEnvToggle } from "@/features/nodes/deployments/NodeEnvToggle.client";
-import { formatComputeAmountsDisplay } from "./format-cost";
+import { formatComputeAmountsDisplay, sumComputeAmounts } from "./format-cost";
 import { isObservedEnvironmentHealthy } from "./status";
 
 type DeploymentStatus = Extract<
@@ -88,12 +86,6 @@ const STATUS = {
   DeploymentStatus,
   { label: string; icon: typeof CheckCircle2; className: string }
 >;
-
-const ENVIRONMENT_LABEL = {
-  "candidate-a": "Test",
-  preview: "Preview",
-  production: "Production",
-} as const;
 
 function nodeStatusKey(node: NodeOperationsOverview): string {
   return node.modules.deployment.state === "available"
@@ -154,12 +146,32 @@ function hasServingProduction(node: NodeOperationsOverview): boolean {
 }
 
 function computeLabel(node: NodeOperationsOverview): string {
-  const compute = node.modules.compute;
-  if (compute.state === "unavailable") return "Unavailable";
-  if (compute.activeDeployments === 0 && compute.transferred.length === 0) {
+  if (node.modules.deployment.state === "unavailable") return "Unavailable";
+  const available = node.modules.deployment.environments.flatMap(
+    (environment) =>
+      environment.compute.state === "available" ? [environment.compute] : []
+  );
+  if (available.length === 0) return "Unavailable";
+  if (
+    available.every(
+      (compute) =>
+        compute.activeDeployments === 0 && compute.transferred.length === 0
+    )
+  ) {
     return "No compute";
   }
-  return formatComputeAmountsDisplay(compute.transferred);
+  return formatComputeAmountsDisplay(
+    sumComputeAmounts(available.map((compute) => compute.transferred))
+  );
+}
+
+function hasAvailableCompute(node: NodeOperationsOverview): boolean {
+  return (
+    node.modules.deployment.state === "available" &&
+    node.modules.deployment.environments.some(
+      (environment) => environment.compute.state === "available"
+    )
+  );
 }
 
 interface NodeEnvironmentControl {
@@ -176,7 +188,6 @@ function environmentRows(
 ): DeploymentEnvironmentRow[] {
   const deployment = node.modules.deployment;
   if (deployment.state === "unavailable") return [];
-  const compute = node.modules.compute;
   const controlsByEnvironment = new Map(
     controls?.environments.map((control) => [control.env, control.inReach]) ??
       []
@@ -187,11 +198,13 @@ function environmentRows(
     return {
       ...environment,
       compute:
-        compute.state === "available" && compute.environment === environment.env
+        environment.compute.state === "available"
           ? {
               state: "available" as const,
-              amount: formatComputeAmountsDisplay(compute.transferred),
-              activeDeployments: compute.activeDeployments,
+              amount: formatComputeAmountsDisplay(
+                environment.compute.transferred
+              ),
+              activeDeployments: environment.compute.activeDeployments,
             }
           : { state: "unavailable" as const },
       action:
@@ -244,7 +257,6 @@ function NodeDetails({
     | undefined;
 }): ReactElement {
   const deployment = node.modules.deployment;
-  const services = node.modules.services;
   const governance = node.modules.governance;
   const rows = environmentRows(node, deploymentControls);
 
@@ -282,47 +294,6 @@ function NodeDetails({
         </h3>
         {deployment.state === "available" ? (
           <DeploymentEnvironmentMatrix rows={rows} showCompute />
-        ) : (
-          <p className="text-muted-foreground text-sm">Unavailable</p>
-        )}
-      </section>
-
-      <section aria-labelledby={`${instanceId}-services`} className="space-y-3">
-        <div className="flex items-center gap-2">
-          <h3 id={`${instanceId}-services`} className="font-medium text-sm">
-            Services
-          </h3>
-          {services.state === "available" ? (
-            <span className="text-muted-foreground text-xs tabular-nums">
-              {services.items.length} ·{" "}
-              {ENVIRONMENT_LABEL[services.environment]}
-            </span>
-          ) : null}
-        </div>
-        {services.state === "available" ? (
-          <ul className="grid gap-2 sm:grid-cols-2">
-            {services.items.map((service) => {
-              const VisibilityIcon =
-                service.visibility === "public" ? Globe2 : Network;
-              return (
-                <li
-                  key={service.name}
-                  className="flex min-h-11 items-center gap-3 rounded-md border bg-background px-3"
-                >
-                  <VisibilityIcon
-                    className="size-4 shrink-0 text-muted-foreground"
-                    aria-hidden="true"
-                  />
-                  <span className="min-w-0 flex-1 truncate font-mono text-sm">
-                    {service.name}
-                  </span>
-                  <span className="text-muted-foreground text-xs">
-                    {service.visibility === "public" ? "Public" : "Private"}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
         ) : (
           <p className="text-muted-foreground text-sm">Unavailable</p>
         )}
@@ -442,7 +413,7 @@ function MobileNodeCard({ node }: { node: NodeOperationsOverview }) {
           <StatusLabel node={node} />
           <p className="mt-1 truncate font-medium text-sm tabular-nums">
             {computeLabel(node)}
-            {node.modules.compute.state === "available" ? (
+            {hasAvailableCompute(node) ? (
               <span className="ml-1 font-normal text-muted-foreground text-xs">
                 sponsored
               </span>
@@ -548,7 +519,7 @@ export function NodeOperationsTable({
         cell: ({ row, getValue }) => (
           <div>
             <p className="font-medium text-sm tabular-nums">{getValue()}</p>
-            {row.original.modules.compute.state === "available" ? (
+            {hasAvailableCompute(row.original) ? (
               <p className="text-muted-foreground text-xs">Sponsored</p>
             ) : null}
           </div>
@@ -715,18 +686,6 @@ export function NodeOperationsDetail({
       </div>
 
       <Card className="overflow-hidden">
-        <div className="grid grid-cols-2 gap-4 border-b p-4 md:p-5">
-          <div>
-            <p className="text-muted-foreground text-xs">Production</p>
-            <p className="mt-1 font-mono text-sm">{buildLabel(node)}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground text-xs">Compute</p>
-            <p className="mt-1 font-medium text-sm tabular-nums">
-              {computeLabel(node)}
-            </p>
-          </div>
-        </div>
         <NodeDetails
           node={node}
           showDetailLink={false}

@@ -84,7 +84,7 @@ export function ResetDaoDangerZone({ nodeId, slug }: Props): ReactElement {
   };
 
   return (
-    <SectionCard title="Danger zone" className="mx-auto mt-4 w-full max-w-2xl">
+    <SectionCard title="Danger zone" className="mt-4 w-full">
       <p className="text-muted-foreground text-sm">
         Clears this node's DAO record so you can re-form a fresh DAO. Does not
         touch the deployment repo.

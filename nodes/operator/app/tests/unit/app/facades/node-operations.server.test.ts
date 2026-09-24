@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({
   owned: [] as Array<{
     id: string;
     slug: string;
-    status: "published";
+    status: "active" | "published";
     daoAddress: null;
     chainId: null;
     deployEnvs: string[];
@@ -23,6 +23,7 @@ const reportByNodeIds = vi.hoisted(() => vi.fn());
 const listPublic = vi.hoisted(() => vi.fn());
 const listForeignEpochs = vi.hoisted(() => vi.fn());
 const listServices = vi.hoisted(() => vi.fn());
+const getDeployState = vi.hoisted(() => vi.fn());
 
 const mockTx = {
   select: () => ({
@@ -48,7 +49,7 @@ vi.mock("@/bootstrap/container", () => ({
   resolveNodeDeploymentTopology: () => ({ listServices }),
   resolveNodeRegistry: () => ({ listPublic }),
   getContainer: () => ({
-    deployCapability: undefined,
+    deployCapability: { getDeployState },
     epochsRead: { listEpochsForForeignNode: listForeignEpochs },
     attributionStore: { listEpochs: vi.fn() },
   }),
@@ -85,12 +86,25 @@ describe("listAccessibleNodeOperations", () => {
     listPublic.mockReset();
     listForeignEpochs.mockReset();
     listServices.mockReset();
+    getDeployState.mockReset();
     listPublic.mockResolvedValue([]);
     listForeignEpochs.mockResolvedValue({ epochs: [] });
     listServices.mockResolvedValue([
       { name: "app", visibility: "public" },
       { name: "paper-trader", visibility: "private" },
     ]);
+    getDeployState.mockImplementation(
+      ({ env, node }: { env: string; node: string }) =>
+        Promise.resolve({
+          env,
+          node,
+          sourceSha: "abc123",
+          digest: null,
+          buildSha: "abc123",
+          health: "healthy",
+          replicas: { desired: 1, ready: 1 },
+        })
+    );
   });
 
   it("passes only owner-resolved ids to cost SQL and cannot return an unrelated node", async () => {
@@ -98,7 +112,7 @@ describe("listAccessibleNodeOperations", () => {
       {
         id: NODE_A,
         slug: "alpha",
-        status: "published",
+        status: "active",
         daoAddress: null,
         chainId: null,
         deployEnvs: ["production"],
@@ -122,16 +136,26 @@ describe("listAccessibleNodeOperations", () => {
       detailUrl: `/nodes/${NODE_A}`,
       thumbnailUrl: null,
       modules: {
-        services: {
+        deployment: {
           state: "available",
-          environment: "production",
-          items: [
-            { name: "app", visibility: "public" },
-            { name: "paper-trader", visibility: "private" },
-          ],
         },
-        compute: { state: "available", environment: "production" },
       },
+    });
+    const production =
+      output.nodes[0]?.modules.deployment.state === "available"
+        ? output.nodes[0].modules.deployment.environments.find(
+            (environment) => environment.env === "production"
+          )
+        : undefined;
+    expect(production).toMatchObject({
+      services: {
+        state: "available",
+        items: [
+          { name: "app", visibility: "public" },
+          { name: "paper-trader", visibility: "private" },
+        ],
+      },
+      compute: { state: "available" },
     });
   });
 
@@ -150,7 +174,7 @@ describe("listAccessibleNodeOperations", () => {
       {
         id: NODE_A,
         slug: "alpha",
-        status: "published",
+        status: "active",
         daoAddress: null,
         chainId: null,
         deployEnvs: ["production"],
@@ -162,10 +186,15 @@ describe("listAccessibleNodeOperations", () => {
 
     const output = await listAccessibleNodeOperations("user-a");
 
-    expect(output.nodes[0]?.modules.services).toEqual({ state: "unavailable" });
     expect(output.nodes[0]?.modules.deployment).toMatchObject({
       state: "available",
-      status: "setting_up",
+      status: "healthy",
+      environments: expect.arrayContaining([
+        expect.objectContaining({
+          env: "production",
+          services: { state: "unavailable" },
+        }),
+      ]),
     });
   });
 });

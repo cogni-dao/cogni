@@ -40,8 +40,11 @@ import {
 import { baseDomain, titleCaseSlug } from "@/shared/node-registry/resolve";
 
 type DeploymentModule = NodeOperationsOverview["modules"]["deployment"];
-type ServicesModule = NodeOperationsOverview["modules"]["services"];
 type GovernanceModule = NodeOperationsOverview["modules"]["governance"];
+type DeploymentEnvironment = Extract<
+  DeploymentModule,
+  { state: "available" }
+>["environments"][number];
 
 const ENV_LABEL = {
   "candidate-a": "Test",
@@ -55,7 +58,7 @@ async function readServices(
     slug: string;
     environment: (typeof FLIGHT_ENVS)[number] | null;
   }
-): Promise<ServicesModule> {
+): Promise<DeploymentEnvironment["services"]> {
   if (!reader || input.environment === null) return { state: "unavailable" };
   try {
     const items = await reader.listServices({
@@ -64,7 +67,6 @@ async function readServices(
     });
     return {
       state: "available",
-      environment: input.environment,
       items: [...items],
     };
   } catch {
@@ -140,9 +142,55 @@ async function readDeployment(
         sourceSha: state.sourceSha,
         buildSha: state.buildSha,
         replicas: state.replicas,
+        services: { state: "unavailable" },
+        compute: { state: "unavailable" },
       };
     }),
   };
+}
+
+async function attachDeploymentDetails(input: {
+  deployment: DeploymentModule;
+  slug: string;
+  topologyReader: ReturnType<typeof resolveNodeDeploymentTopology> | null;
+  currentEnvironment: (typeof FLIGHT_ENVS)[number] | null;
+  cost:
+    | {
+        activeIntervals: number;
+        transferred: readonly { amount: string; denom: string }[];
+      }
+    | undefined;
+  costReadFailed: boolean;
+}): Promise<DeploymentModule> {
+  if (input.deployment.state === "unavailable") return input.deployment;
+  const noCostExpected =
+    input.deployment.status === "setting_up" ||
+    input.deployment.status === "not_deployed";
+  const environments = await Promise.all(
+    input.deployment.environments.map(
+      async (environment): Promise<DeploymentEnvironment> => ({
+        ...environment,
+        services: environment.declared
+          ? await readServices(input.topologyReader, {
+              slug: input.slug,
+              environment: environment.env,
+            })
+          : { state: "unavailable" },
+        compute:
+          environment.env !== input.currentEnvironment ||
+          input.costReadFailed ||
+          (!input.cost && !noCostExpected)
+            ? { state: "unavailable" }
+            : {
+                state: "available",
+                sponsorship: "cogni",
+                activeDeployments: input.cost?.activeIntervals ?? 0,
+                transferred: input.cost ? [...input.cost.transferred] : [],
+              },
+      })
+    )
+  );
+  return { ...input.deployment, environments };
 }
 
 async function readGovernance(row: {
@@ -275,7 +323,7 @@ export async function listAccessibleNodeOperations(
         : summary?.href && /^https?:\/\//.test(summary.href)
           ? summary.href
           : null;
-      const [deployment, services, governance] = await Promise.all([
+      const [baseDeployment, governance] = await Promise.all([
         readDeployment(
           {
             id: row.id,
@@ -285,33 +333,18 @@ export async function listAccessibleNodeOperations(
           },
           homepageUrl
         ),
-        readServices(topologyReader, {
-          slug: row.slug,
-          environment:
-            deploymentEnvironment &&
-            row.deployEnvs.includes(deploymentEnvironment)
-              ? deploymentEnvironment
-              : null,
-        }),
         readGovernance(row),
       ]);
       const cost = costByNode.get(row.id);
-      const noCostExpected =
-        deployment.state === "available" &&
-        (deployment.status === "setting_up" ||
-          deployment.status === "not_deployed");
-      const compute: NodeOperationsOverview["modules"]["compute"] =
-        costResult.status === "rejected" || deploymentEnvironment === null
-          ? { state: "unavailable" }
-          : !cost && !noCostExpected
-            ? { state: "unavailable" }
-            : {
-                state: "available",
-                sponsorship: "cogni",
-                environment: deploymentEnvironment,
-                activeDeployments: cost?.activeIntervals ?? 0,
-                transferred: cost ? [...cost.transferred] : [],
-              };
+      const deployment = await attachDeploymentDetails({
+        deployment: baseDeployment,
+        slug: row.slug,
+        topologyReader,
+        currentEnvironment: deploymentEnvironment,
+        cost,
+        costReadFailed:
+          costResult.status === "rejected" || deploymentEnvironment === null,
+      });
 
       return {
         id: row.id,
@@ -323,7 +356,7 @@ export async function listAccessibleNodeOperations(
         formationStatus: row.status as NodeStatus,
         relationship: "owner",
         detailUrl: `/nodes/${row.id}`,
-        modules: { deployment, services, compute, governance },
+        modules: { deployment, governance },
       };
     })
   );

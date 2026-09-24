@@ -23,20 +23,37 @@ describe("nodes.operations-overview.v1", () => {
           manageUrl: "/must-not-leak",
           providerConsumerAccountId: "must-not-leak",
           modules: {
-            deployment: { state: "unavailable" },
-            services: {
+            deployment: {
               state: "available",
-              environment: "candidate-a",
-              items: [
+              status: "healthy",
+              homepageUrl: null,
+              environments: [
                 {
-                  name: "app",
-                  visibility: "public",
-                  image: "must-not-leak",
-                  secretRefs: ["must-not-leak"],
+                  env: "candidate-a",
+                  label: "Test",
+                  declared: true,
+                  health: "healthy",
+                  sourceSha: null,
+                  buildSha: "abc123",
+                  replicas: { desired: 1, ready: 1 },
+                  services: {
+                    state: "available",
+                    items: [
+                      {
+                        name: "app",
+                        visibility: "public",
+                        image: "must-not-leak",
+                        secretRefs: ["must-not-leak"],
+                      },
+                    ],
+                  },
+                  compute: {
+                    state: "unavailable",
+                    resourceId: "must-not-leak",
+                  },
                 },
               ],
             },
-            compute: { state: "unavailable", resourceId: "must-not-leak" },
             governance: { state: "unavailable" },
           },
         },
@@ -45,11 +62,18 @@ describe("nodes.operations-overview.v1", () => {
 
     expect(parsed.nodes[0]).not.toHaveProperty("providerConsumerAccountId");
     expect(parsed.nodes[0]).not.toHaveProperty("manageUrl");
-    expect(parsed.nodes[0]?.modules.services).toEqual({
+    expect(
+      parsed.nodes[0]?.modules.deployment.state === "available"
+        ? parsed.nodes[0].modules.deployment.environments[0]?.services
+        : null
+    ).toEqual({
       state: "available",
-      environment: "candidate-a",
       items: [{ name: "app", visibility: "public" }],
     });
-    expect(parsed.nodes[0]?.modules.compute).toEqual({ state: "unavailable" });
+    expect(
+      parsed.nodes[0]?.modules.deployment.state === "available"
+        ? parsed.nodes[0].modules.deployment.environments[0]?.compute
+        : null
+    ).toEqual({ state: "unavailable" });
   });
 });
