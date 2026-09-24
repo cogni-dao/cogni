@@ -35,7 +35,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:1ad2455cdb54e986875052c3a9bbccba3fc6f8540ef054d7bbb57bdda78e15e7"
+    digest: "sha256:f3fcfbd12ffc4c1a6ad3de6c31e91ad8825b6ee96cda66e3983ce1bca09e1714"
 
 patches:
   # No akash-tx-actuator Deployment patch here: preview runs no akash writer
@@ -84,6 +84,14 @@ patches:
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
         value: "cogni-monorepo"
+      # Runtime catalog/deploy-state source. Preview opens formation PRs against
+      # the disposable mirror above but reads the canonical fleet declaration.
+      - op: add
+        path: /data/NODE_REGISTRY_CATALOG_OWNER
+        value: "cogni-dao"
+      - op: add
+        path: /data/NODE_REGISTRY_CATALOG_REPO
+        value: "cogni"
       - op: add
         path: /data/OPENFGA_API_URL
         value: "http://operator-openfga-external:8080"
