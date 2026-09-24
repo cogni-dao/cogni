@@ -397,6 +397,14 @@ prometheus.exporter.unix "default" {
   procfs_path = "/host/proc"
   sysfs_path  = "/host/sys"
   rootfs_path = "/host/root"
+
+  // Read the kine-size textfile metric emitted by k3s-kine-size-export.timer
+  // (bug.5243). The host rootfs is mounted read-only at /host/root, so the
+  // host path /var/lib/node_exporter/textfile is visible here.
+  enable_collectors = ["textfile"]
+  textfile {
+    directory = "/host/root/var/lib/node_exporter/textfile"
+  }
 }
 
 prometheus.scrape "cadvisor" {
@@ -427,7 +435,7 @@ prometheus.relabel "infra_metrics" {
   // Keep only allowlisted metric names (+ up for deadman alerts)
   rule {
     source_labels = ["__name__"]
-    regex         = "(container_memory_working_set_bytes|container_memory_rss|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_memory_MemAvailable_bytes|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|up)"
+    regex         = "(container_memory_working_set_bytes|container_memory_rss|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_memory_MemAvailable_bytes|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|node_k3s_kine_state_db_bytes|up)"
     action        = "keep"
   }
 

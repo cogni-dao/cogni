@@ -366,7 +366,63 @@ write_files:
       [Install]
       WantedBy=timers.target
 
+  # ── kine size exporter (early-warning for regrowth) ──────────────────────
+  # bug.5243: hourly compaction + crossplane leader-election-off cut the write
+  # rate, but nothing ALERTS if kine regrows toward the 512 MB starvation point.
+  # k3s/kine does NOT expose apiserver_storage_db_total_size_in_bytes (verified
+  # empty on prod), so we can't scrape it — instead emit the raw state.db size
+  # as a node_exporter textfile metric. Alloy's unix exporter reads this dir
+  # (host rootfs is mounted read-only at /host/root in the alloy container), the
+  # name is added to Alloy's keep-allowlist, and a Grafana rule alerts on it.
+  # Named node_* to match the existing scrape/relabel conventions.
+  - path: /usr/local/sbin/k3s-kine-size-export.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      DB=/var/lib/rancher/k3s/server/db/state.db
+      DIR=/var/lib/node_exporter/textfile
+      OUT="$DIR/kine.prom"
+      mkdir -p "$DIR"
+      SIZE=0
+      [ -f "$DB" ] && SIZE=$(stat -c %s "$DB")
+      # Atomic write (temp + mv) so a scrape never reads a half-written file.
+      TMP=$(mktemp "$DIR/.kine.XXXXXX")
+      {
+        echo "# HELP node_k3s_kine_state_db_bytes Size of the k3s kine (SQLite) datastore file in bytes."
+        echo "# TYPE node_k3s_kine_state_db_bytes gauge"
+        echo "node_k3s_kine_state_db_bytes $SIZE"
+      } > "$TMP"
+      mv -f "$TMP" "$OUT"
+
+  - path: /etc/systemd/system/k3s-kine-size-export.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Export k3s kine state.db size as a node_exporter textfile metric
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/k3s-kine-size-export.sh
+
+  - path: /etc/systemd/system/k3s-kine-size-export.timer
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Sample k3s kine size every minute for alerting
+
+      [Timer]
+      OnBootSec=1min
+      OnUnitActiveSec=1min
+
+      [Install]
+      WantedBy=timers.target
+
 runcmd:
   - bash /opt/cogni-bootstrap.sh
   - systemctl daemon-reload
   - systemctl enable --now k3s-kine-compact.timer
+  - systemctl enable --now k3s-kine-size-export.timer
