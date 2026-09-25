@@ -11,15 +11,13 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:a365d19f09eb84287da56b742b4378df22b70e0a50379be4e340347f7f7e6202
+    ref: ghcr.io/cogni-dao/poly@sha256:1ae2ffa685f8f0b0470dc5197ed7092d77a72843e9c599e3f99aaea8164ca8e3
     source:
       repository: cogni-dao/poly
-      sha: d6d35299a8a2449bdc606d0c1571c6fb49028254
+      sha: e049918c4c6f5a60a8c2137867f12bffdb9bf1b3
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:3a476cea533e1306f02b6f381139890c70c7f0baea465e43e7129cb8ef609f2f
-      - name: paper-trader
-        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:b54097ce1f58e82f70d6d005949cd9139681bf5d04ffe0a8a01a1fddc057f353
+        image: ghcr.io/cogni-dao/poly@sha256:af8ecb54bdc01d3d11450782de219a757372f5d8ed9650d6e5a6efcb5e014bb8
   workload:
     name: poly
     publicHost: poly.cognidao.org
@@ -43,8 +41,7 @@ spec:
           - key: POLY_WALLET_AEAD_KEY_ID
         port: 3200
         visibility: public
-        bindings:
-          PAPER_SIDECAR_URL: paper-trader
+        bindings: {}
         bindHost: 0.0.0.0
         cpuUnits: 2
         memoryMi: 2048
