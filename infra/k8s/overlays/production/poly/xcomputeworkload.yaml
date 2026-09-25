@@ -49,7 +49,7 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
-  leaseGeneration: 1
+  leaseGeneration: 2
   dns:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
