@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Least-privilege identity for the in-cluster Alloy collector (bug.5165).
+# It needs exactly two things:
+#   1. node discovery  (nodes: list/watch) to enumerate scrape targets, and
+#   2. nodes/proxy     (get) to reach each kubelet's /metrics + /metrics/cadvisor
+#      THROUGH the apiserver proxy (kubernetes.default.svc:443/api/v1/nodes/<n>/proxy/...).
+# Routing through the apiserver means we trust ONE TLS identity (the cluster CA the
+# ServiceAccount already carries) and authorize with ONE verb (nodes/proxy), instead
+# of dialing every kubelet IP:10250 with its self-signed serving cert. It scrapes
+# kube-state-metrics over plain in-cluster HTTP (no RBAC needed for that Service).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/part-of: cogni-observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-monitoring-alloy
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/part-of: cogni-observability
+rules:
+  # Target discovery.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  # Kubelet + cAdvisor scrape via the apiserver proxy.
+  - apiGroups: [""]
+    resources: [nodes/metrics, nodes/proxy]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-monitoring-alloy
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/part-of: cogni-observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8s-monitoring-alloy
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    # namespace is set by the kustomize namespace transformer (k8s-monitoring).
+    namespace: k8s-monitoring
