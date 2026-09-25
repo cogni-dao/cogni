@@ -171,4 +171,43 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
       assessComputeWorkloadReadiness({ expected: xExpected, live: failed })
     ).toEqual({ ready: false, reason: "phase_not_ready:ProviderRejected" });
   });
+
+  it("tolerates XRD-defaulted nested subfields the materializer omits (bug.5263)", () => {
+    // The candidate-a XRD defaults spec.bootPolicy.bootDeadlineSeconds and
+    // spec.runtime.logPush; k8s persists them onto the live composite even though
+    // the rendered manifest only declares them partially. A shallow per-key
+    // deep-equal treats those defaults as drift and wedges on desired_spec_pending.
+    const defaulted = xLive();
+    (defaulted.spec as Record<string, unknown>).bootPolicy = {
+      onDeadline: "Hold",
+      bootDeadlineSeconds: 1800,
+    };
+    (defaulted.spec as Record<string, unknown>).runtime = { logPush: false };
+    expect(
+      assessComputeWorkloadReadiness({ expected: xExpected, live: defaulted })
+    ).toEqual({ ready: true });
+  });
+
+  it("still rejects a drifted DEEPLY-nested declared value", () => {
+    const drifted = xLive();
+    (drifted.spec as Record<string, unknown>).bootPolicy = {
+      onDeadline: "Terminate",
+      bootDeadlineSeconds: 1800,
+    };
+    expect(
+      assessComputeWorkloadReadiness({ expected: xExpected, live: drifted })
+    ).toEqual({ ready: false, reason: "desired_spec_pending" });
+  });
+
+  it("tolerates the crossplane-added top-level compositionRef key (preserved)", () => {
+    // xLive() already injects spec.compositionRef; assert the tolerance explicitly
+    // so the extra-top-level-key behavior can never silently regress.
+    const withRef = xLive();
+    expect(
+      (withRef.spec as Record<string, unknown>).compositionRef
+    ).toBeDefined();
+    expect(
+      assessComputeWorkloadReadiness({ expected: xExpected, live: withRef })
+    ).toEqual({ ready: true });
+  });
 });
