@@ -531,4 +531,21 @@ export interface AkashTxAllocationLedgerPort {
     environment?: string;
     limit: number;
   }): Promise<readonly AkashTxAllocationRecord[]>;
+  /**
+   * Bounded enumeration of every NON-TERMINAL receipt for this wallet scope: `state IN
+   * ('preparing','allocated')` — the boot-window-inclusive log-source primitive (bug.5264).
+   * `listAllocated` above hides the `preparing` state, so a lease that has been created and is
+   * BOOTING but has not yet flipped to `allocated` (create in-flight, a handle recorded by an
+   * adopt/resolve pass, or a receipt stranded `preparing` by a lost create response) is
+   * INVISIBLE to it — and a node that boots but never serves is closed on its BootDeadline
+   * before the pump ever sees it, so its container logs are lost with no evidence of WHY. This
+   * view returns those live receipts (handle or not) so the lease-log pump can tail every
+   * paying lease during the boot window and a handleless live receipt is loggable rather than
+   * silently skipped. Read-only, hard-limited, oldest-touched first — it decides nothing.
+   */
+  listActive(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]>;
 }

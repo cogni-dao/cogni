@@ -45,7 +45,7 @@
  */
 
 import type { Database } from "@cogni/db-client";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import type {
   AkashTxAllocationLedgerPort,
@@ -518,6 +518,41 @@ export class DrizzleAkashTxAllocationLedger
           eq(akashTxAllocations.walletScope, this.walletScope),
           eq(akashTxAllocations.state, "allocated"),
           sql`${akashTxAllocations.externalName} is not null`,
+          ...(input.nodeId
+            ? [eq(akashTxAllocations.nodeId, input.nodeId)]
+            : []),
+          ...(input.environment
+            ? [eq(akashTxAllocations.environment, input.environment)]
+            : [])
+        )
+      )
+      .orderBy(akashTxAllocations.updatedAt)
+      .limit(input.limit);
+    return rows.map(toRecord);
+  }
+
+  /**
+   * The wallet's live (non-terminal) receipts: `state IN ('preparing','allocated')` — the
+   * boot-window-inclusive log-source primitive (bug.5264). Unlike `listAllocated` this keeps
+   * `preparing` receipts (create in-flight, or a handle bound by an adopt/resolve pass) and
+   * does NOT require a handle, so a lease that is BOOTING but not yet `allocated` — and would
+   * otherwise be closed on its BootDeadline before the pump ever enumerated it — is visible for
+   * log tailing, and a live handleless receipt is loggable rather than invisibly absent. Same
+   * scoping/ordering/limit discipline as `listAllocated`; a pure read that decides nothing.
+   */
+  async listActive(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]> {
+    const db = await this.getDb();
+    const rows = await db
+      .select(SELECTION)
+      .from(akashTxAllocations)
+      .where(
+        and(
+          eq(akashTxAllocations.walletScope, this.walletScope),
+          inArray(akashTxAllocations.state, ["preparing", "allocated"]),
           ...(input.nodeId
             ? [eq(akashTxAllocations.nodeId, input.nodeId)]
             : []),
