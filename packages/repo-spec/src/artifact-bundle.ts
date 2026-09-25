@@ -18,7 +18,7 @@ import {
   extractNodeServices,
   type NodeServiceConfig,
 } from "./accessors.js";
-import type { RepoSpec } from "./schema.js";
+import type { DeploymentEnvName, RepoSpec } from "./schema.js";
 
 const sourceShaSchema = z
   .string()
@@ -309,6 +309,78 @@ export function resolveNodeArtifactBundle(
     nodeId,
     source: bundle.source,
     artifacts: bundle.artifacts,
+    services,
+  };
+}
+
+/**
+ * Resolve a bundle for ONE deployment environment, honoring the per-service `envs` gate
+ * (story.5043) as a COMPLETE cascade so the rendered per-env manifest always satisfies the
+ * XComputeWorkload XRD's two cross-reference invariants
+ * (infra/crossplane/xcomputeworkload/xrd.yaml):
+ *
+ *   - "every bundle artifact must be used by at least one service"
+ *   - "every binding must target a different declared sibling service"
+ *
+ * A service whose `envs` allow-list does NOT include `environment` is DROPPED. Dropping a
+ * service alone is not enough (bug.5262): a naive filter leaves behind (a) any bundle artifact
+ * that only the dropped service referenced — now used by no service — and (b) any `bindings`
+ * entry on a REMAINING service that targeted the dropped one — now pointing at a non-declared
+ * sibling. Poly's `production` lane hit exactly this: excluding the `paper-trader` sidecar left
+ * an orphaned `paper-trader` artifact and the app's `PAPER_SIDECAR_URL: paper-trader` binding,
+ * so the rendered prod XR was INVALID and Argo's server-side-diff dry-run refused to sync it,
+ * freezing the node on a stale build. So this function also:
+ *
+ *   1. Drops any binding on a surviving service that targets a no-longer-declared service.
+ *   2. Drops any artifact no longer referenced by any surviving service.
+ *
+ * PURE + BYTE-IDENTICAL-WHERE-INCLUDED: no I/O. An environment that includes every service (the
+ * common case, and every service that omits `envs`) drops nothing — artifacts, services, and each
+ * service's bindings are preserved unchanged (a service whose bindings need no pruning is returned
+ * by reference), so this is a no-op for every ungated bundle.
+ */
+export function resolveNodeArtifactBundleForEnvironment(
+  bundle: ResolvedNodeArtifactBundle,
+  environment: DeploymentEnvName
+): ResolvedNodeArtifactBundle {
+  const includedServices = bundle.services.filter(
+    ({ service }) =>
+      service.envs === undefined || service.envs.includes(environment)
+  );
+
+  // The set of service names still declared in THIS environment. A binding may only target one
+  // of these (XRD: "every binding must target a different declared sibling service").
+  const declaredNames = new Set(
+    includedServices.map(({ service }) => service.name)
+  );
+
+  const services = includedServices.map((resolved) => {
+    const entries = Object.entries(resolved.service.bindings);
+    const kept = entries.filter(([, target]) => declaredNames.has(target));
+    // Preserve by reference when no binding was pruned — nothing changes for an env that
+    // includes the whole topology, so an ungated bundle round-trips unchanged.
+    if (kept.length === entries.length) return resolved;
+    return {
+      ...resolved,
+      service: {
+        ...resolved.service,
+        bindings: Object.fromEntries(kept),
+      },
+    };
+  });
+
+  // An artifact survives only if some surviving service still references it (XRD: "every bundle
+  // artifact must be used by at least one service"). A shared artifact referenced by another
+  // included service is NOT dropped.
+  const referencedArtifacts = new Set(services.map(({ artifact }) => artifact));
+  const artifacts = bundle.artifacts.filter((artifact) =>
+    referencedArtifacts.has(artifact.name)
+  );
+
+  return {
+    nodeId: bundle.nodeId,
+    source: bundle.source,
+    artifacts,
     services,
   };
 }

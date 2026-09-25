@@ -26,7 +26,10 @@
  */
 
 import type { ResolvedNodeArtifactBundle } from "@cogni/repo-spec";
-import { resolveRuntimeProfileSecretRefs } from "@cogni/repo-spec";
+import {
+  resolveNodeArtifactBundleForEnvironment,
+  resolveRuntimeProfileSecretRefs,
+} from "@cogni/repo-spec";
 
 import type {
   ComputeWorkloadSpec,
@@ -218,18 +221,22 @@ export function buildComputeWorkloadManifest(
     );
   }
 
-  // PER_SERVICE_ENV_GATE (story.5043). A service may declare `envs:` to opt into a subset of
-  // deployment environments; absent = every environment (backward-compatible — this filter is a
-  // no-op for every service that omits it). A service whose `envs` is set and does NOT include
-  // THIS environment is dropped from the workload entirely, so e.g. a private paper-trader
-  // sidecar stays out of `production` and keeps prod a 1-service lease while still running in
-  // `candidate-a`/`preview`. The repo-spec schema forbids `envs` on the public service, so this
-  // can never gate out the sole public service — ONE_PUBLIC_SERVICE holds by construction.
-  const includedBundleServices = input.bundle.services.filter(
-    ({ service }) =>
-      service.envs === undefined || service.envs.includes(input.environment)
+  // PER_SERVICE_ENV_GATE (story.5043 + bug.5262). A service may declare `envs:` to opt into a
+  // subset of deployment environments; absent = every environment (backward-compatible — this is a
+  // no-op for every service that omits it). `resolveNodeArtifactBundleForEnvironment` (pure, in
+  // @cogni/repo-spec) drops a gated-out service AND cascades the drop so the rendered manifest
+  // still satisfies the XRD's cross-reference invariants: it prunes any artifact the dropped
+  // service alone referenced and any surviving service's binding that targeted it. Without the
+  // cascade, excluding e.g. poly's private paper-trader sidecar from `production` left an orphaned
+  // `paper-trader` artifact + the app's `PAPER_SIDECAR_URL: paper-trader` binding, producing an
+  // INVALID XR that Argo's server-side-diff refused to sync (bug.5262). The repo-spec schema
+  // forbids `envs` on the public service, so this can never gate out the sole public service —
+  // ONE_PUBLIC_SERVICE holds by construction.
+  const envBundle = resolveNodeArtifactBundleForEnvironment(
+    input.bundle,
+    input.environment
   );
-  if (includedBundleServices.length === 0) {
+  if (envBundle.services.length === 0) {
     // Unreachable while the schema keeps the public service ungated (it always survives); a
     // defensive guard so a future schema change that broke that invariant fails loudly here
     // rather than materializing an empty, serviceless workload.
@@ -238,7 +245,7 @@ export function buildComputeWorkloadManifest(
     );
   }
 
-  const services: DeclaredProvisionServiceSpec[] = includedBundleServices.map(
+  const services: DeclaredProvisionServiceSpec[] = envBundle.services.map(
     ({ artifact, service }) => {
       // PROFILE_SUPPLIES_ITS_SECRET_REFS: the runtime profile's required keys are unioned in here,
       // so a node's repo-spec never re-lists them and a spec that predates a newly-added profile
@@ -310,7 +317,9 @@ export function buildComputeWorkloadManifest(
     bundle: {
       ref: input.bundleRef,
       source: input.bundle.source,
-      artifacts: input.bundle.artifacts,
+      // Env-resolved artifact set (bug.5262): an artifact only a gated-out service referenced is
+      // pruned here so "every bundle artifact must be used by at least one service" holds.
+      artifacts: envBundle.artifacts,
     },
     workload: { name: input.slug, publicHost: input.publicHost, services },
   };

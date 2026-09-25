@@ -71,6 +71,7 @@ export {
   type ResolvedNodeArtifactBundle,
   type ResolvedNodeServiceArtifact,
   resolveNodeArtifactBundle,
+  resolveNodeArtifactBundleForEnvironment,
 } from "./artifact-bundle.js";
 export {
   hasDeploymentActivationSpec,
