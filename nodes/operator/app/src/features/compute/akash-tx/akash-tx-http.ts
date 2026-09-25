@@ -74,16 +74,18 @@ export const AKASH_TX_MAX_BODY_BYTES = 1_048_576;
  * the Composition wraps each body-embedded secret placeholder in these two sentinels, and this
  * transport step re-escapes the raw bytes BETWEEN them into a valid JSON string fragment before
  * the body is parsed. jq never sees the value, so the sentinels (plain `[A-Za-z0-9_]`, untouched
- * by any JSON encoder) are the only reliable marker of where a raw splice landed. The high-entropy
- * nonce makes a collision with real secret content negligible.
+ * by any JSON encoder) are the only reliable marker of where a raw splice landed. The 128-bit
+ * (32 hex char) nonce makes a collision with real secret content negligible.
  *
  * ROLLOUT ORDER: this decode is a no-op on a body that carries no sentinels, so an actuator image
  * carrying it is safe to run against BOTH the old (unwrapped) and new (wrapped) Composition. The
  * Composition change must therefore reach an environment only AFTER this image — same phased
  * posture as the XRD's leaseGeneration rename and the bug.5237 host-routed probe.
  */
-export const AKASH_TX_SECRET_ENVELOPE_OPEN = "__COGNI_SECRET_BEGIN_5f2ab8c1__";
-export const AKASH_TX_SECRET_ENVELOPE_CLOSE = "__COGNI_SECRET_END_5f2ab8c1__";
+export const AKASH_TX_SECRET_ENVELOPE_OPEN =
+  "__COGNI_SECRET_BEGIN_5f2ab8c1a3e94d7b8f1c6029e4d5b70a__";
+export const AKASH_TX_SECRET_ENVELOPE_CLOSE =
+  "__COGNI_SECRET_END_5f2ab8c1a3e94d7b8f1c6029e4d5b70a__";
 
 // The sentinels contain no regex metacharacters, so they embed directly. `[\s\S]*?` is the
 // smallest run up to the FIRST close sentinel — a secret value would have to literally contain

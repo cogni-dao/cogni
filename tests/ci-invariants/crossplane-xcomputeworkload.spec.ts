@@ -561,10 +561,11 @@ describe("XComputeWorkload JSON-safe secret injection (bug.5262)", () => {
       ),
       "utf8"
     );
-    const httpOpen = /AKASH_TX_SECRET_ENVELOPE_OPEN = "([^"]+)"/.exec(
+    // Tolerate a formatter wrapping the assignment onto its own line (long 128-bit nonce).
+    const httpOpen = /AKASH_TX_SECRET_ENVELOPE_OPEN\s*=\s*"([^"]+)"/.exec(
       http
     )?.[1];
-    const httpClose = /AKASH_TX_SECRET_ENVELOPE_CLOSE = "([^"]+)"/.exec(
+    const httpClose = /AKASH_TX_SECRET_ENVELOPE_CLOSE\s*=\s*"([^"]+)"/.exec(
       http
     )?.[1];
     expect(httpOpen).toBe(openLiteral);

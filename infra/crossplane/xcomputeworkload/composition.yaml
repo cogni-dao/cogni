@@ -175,8 +175,8 @@ spec:
               JSON-parsed, and the actuator reads the bearer straight off the header.
               Still value-free: only the placeholder text is wrapped, never a secret value.
             */ -}}
-            {{- $secretOpen := "__COGNI_SECRET_BEGIN_5f2ab8c1__" }}
-            {{- $secretClose := "__COGNI_SECRET_END_5f2ab8c1__" }}
+            {{- $secretOpen := "__COGNI_SECRET_BEGIN_5f2ab8c1a3e94d7b8f1c6029e4d5b70a__" }}
+            {{- $secretClose := "__COGNI_SECRET_END_5f2ab8c1a3e94d7b8f1c6029e4d5b70a__" }}
 
             {{- /* ------------------------------------------------------------------
               LOWERING: full-fidelity XR -> the actuator's ProvisionSpec.
