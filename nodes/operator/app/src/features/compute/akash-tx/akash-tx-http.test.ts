@@ -659,12 +659,11 @@ describe("JSON-safe secret envelope (bug.5262)", () => {
   });
 
   it("parses the EXACT one-service empty-bindings UPDATE body a raw backslash+quote secret would break", async () => {
-    let received: { spec?: { services: { env?: Record<string, string> }[] } } =
-      {};
+    let receivedRpcUrl: string | undefined;
     const dispatch = dispatcherFor(
       stubActuator({
         update: async (input) => {
-          received = input;
+          receivedRpcUrl = input.spec.services[0]?.env?.POLYGON_RPC_URL;
           return { externalName: "7001", state: "active", endpoints: [] };
         },
       })
@@ -712,6 +711,6 @@ describe("JSON-safe secret envelope (bug.5262)", () => {
 
     // Before the fix this was 400 {"code":"invalid_request","message":"body must be JSON"}.
     expect(response.status).toBe(200);
-    expect(received.spec?.services[0]?.env?.POLYGON_RPC_URL).toBe(NASTY_SECRET);
+    expect(receivedRpcUrl).toBe(NASTY_SECRET);
   });
 });
