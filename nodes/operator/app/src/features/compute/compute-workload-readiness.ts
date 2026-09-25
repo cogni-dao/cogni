@@ -136,10 +136,13 @@ function assessXComputeWorkloadReadiness(input: {
   if (liveMetadata.deletionTimestamp !== undefined) {
     return { ready: false, reason: "deletion_pending" };
   }
-  for (const [key, value] of Object.entries(expectedSpec)) {
-    if (stableJson(liveSpec[key]) !== stableJson(value)) {
-      return { ready: false, reason: "desired_spec_pending" };
-    }
+  // expected ⊆ live at EVERY level, not just the top: the candidate-a XRD defaults
+  // nested subfields the materializer emits only partially (e.g.
+  // spec.bootPolicy.bootDeadlineSeconds, spec.runtime.logPush) and k8s persists
+  // them onto the live composite. A shallow per-key deep-equal treats those
+  // defaults as drift and wedges on desired_spec_pending forever (bug.5263).
+  if (!isDeepSubset(expectedSpec, liveSpec)) {
+    return { ready: false, reason: "desired_spec_pending" };
   }
   if (!status) {
     return { ready: false, reason: "status_pending" };
@@ -186,6 +189,34 @@ function assessXComputeWorkloadReadiness(input: {
     return { ready: false, reason: "ready_condition_pending" };
   }
   return { ready: true };
+}
+
+/**
+ * Recursive partial-subset check: is `expected` present, and equal, everywhere it
+ * is declared inside `live`? Honors the XComputeWorkload contract "expected ⊆ live":
+ * - objects: every expected key must recursively subset-match live[key] (extra live
+ *   keys — Crossplane's compositionRef/resourceRefs and XRD-defaulted subfields — are
+ *   tolerated at every depth, not just the top level);
+ * - arrays: same length, element-wise subset (services/expose are position-stable and
+ *   fully rendered by the materializer, so an added or dropped element IS real drift);
+ * - primitives (and null): strict value equality via stableJson.
+ */
+function isDeepSubset(expected: unknown, live: unknown): boolean {
+  const expectedRecord = asRecord(expected);
+  if (expectedRecord) {
+    const liveRecord = asRecord(live);
+    if (!liveRecord) return false;
+    return Object.entries(expectedRecord).every(([key, value]) =>
+      isDeepSubset(value, liveRecord[key])
+    );
+  }
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(live) || live.length !== expected.length) return false;
+    return expected.every((element, index) =>
+      isDeepSubset(element, live[index])
+    );
+  }
+  return stableJson(expected) === stableJson(live);
 }
 
 function asRecord(value: unknown): JsonRecord | undefined {
