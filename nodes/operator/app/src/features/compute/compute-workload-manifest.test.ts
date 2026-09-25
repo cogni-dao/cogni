@@ -444,6 +444,105 @@ describe("buildComputeWorkloadManifest", () => {
       expect(web?.bindings).toEqual({});
     });
 
+    // bug.5262, in the reviewer's own terms: the poly node ships a public `app` bound to a private
+    // `paper-trader` sidecar (`PAPER_SIDECAR_URL: paper-trader`) that is gated to the pre-prod
+    // lanes. candidate-a/preview must render BOTH services; production must render ONLY `app`, with
+    // the paper-trader artifact pruned and the now-dangling PAPER_SIDECAR_URL binding dropped.
+    const polyBundle: ResolvedNodeArtifactBundle = {
+      nodeId: NODE_ID,
+      source: { repository: "cogni-dao/poly", sha: SHA },
+      artifacts: [
+        { name: "app", image: `ghcr.io/cogni-dao/poly-app@sha256:${DIGEST}` },
+        {
+          name: "paper-trader",
+          image: `ghcr.io/cogni-dao/poly-paper-trader@sha256:${"e".repeat(64)}`,
+        },
+      ],
+      services: [
+        {
+          artifact: "app",
+          image: `ghcr.io/cogni-dao/poly-app@sha256:${DIGEST}`,
+          service: {
+            name: "app",
+            artifact: {
+              name: "app",
+              context: ".",
+              dockerfile: "Dockerfile",
+              target: "runner",
+            },
+            port: 3200,
+            visibility: "public",
+            runtimeProfile: "cogni-node-app-v1",
+            bindings: { PAPER_SIDECAR_URL: "paper-trader" },
+            secretRefs: REQUIRED_SECRET_REFS,
+            bindHost: "0.0.0.0",
+            internalUrl: "http://app:3200",
+            resources: { cpuUnits: 0.5, memoryMi: 1024, storageMi: 2048 },
+          },
+        },
+        {
+          artifact: "paper-trader",
+          image: `ghcr.io/cogni-dao/poly-paper-trader@sha256:${"e".repeat(64)}`,
+          service: {
+            name: "paper-trader",
+            artifact: {
+              name: "paper-trader",
+              context: ".",
+              dockerfile: "Dockerfile",
+              target: "paper-trader",
+            },
+            port: 9200,
+            visibility: "private",
+            envs: ["candidate-a", "preview"] as const,
+            bindings: {},
+            secretRefs: [],
+            bindHost: "0.0.0.0",
+            internalUrl: "http://paper-trader:9200",
+            resources: { cpuUnits: 0.25, memoryMi: 256, storageMi: 512 },
+          },
+        },
+      ],
+    };
+
+    it("renders app + paper-trader on candidate-a/preview and app-only on production (bug.5262)", () => {
+      for (const environment of ["candidate-a", "preview"] as const) {
+        const manifest = buildComputeWorkloadManifest({
+          slug: "poly",
+          environment,
+          bundleRef: `ghcr.io/cogni-dao/poly@sha256:${BUNDLE_DIGEST}`,
+          bundle: polyBundle,
+          publicHost: `poly-${environment}.cognidao.org`,
+          computeApi: "crossplane",
+          leaseGeneration: 0,
+        });
+        expect(
+          manifest.spec.workload.services.map((service) => service.name)
+        ).toEqual(["app", "paper-trader"]);
+        expect(
+          manifest.spec.workload.services.find((s) => s.name === "app")
+            ?.bindings
+        ).toEqual({ PAPER_SIDECAR_URL: "paper-trader" });
+      }
+
+      const prod = buildComputeWorkloadManifest({
+        slug: "poly",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/poly@sha256:${BUNDLE_DIGEST}`,
+        bundle: polyBundle,
+        publicHost: "poly.cognidao.org",
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+      });
+      // ONLY app — a 1-service lease.
+      expect(prod.spec.workload.services.map((s) => s.name)).toEqual(["app"]);
+      // No orphaned paper-trader artifact.
+      expect(prod.spec.bundle.artifacts.map((a) => a.name)).toEqual(["app"]);
+      // No dangling PAPER_SIDECAR_URL binding on the surviving app service.
+      expect(
+        prod.spec.workload.services.find((s) => s.name === "app")?.bindings
+      ).toEqual({});
+    });
+
     it("keeps every service that declares no envs in every environment", () => {
       for (const environment of [
         "candidate-a",

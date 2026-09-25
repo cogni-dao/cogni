@@ -481,8 +481,10 @@ describe("XComputeWorkload Composition (task.5096)", () => {
       template.match(/\{\{ [a-z0-9-]+:%s:[A-Z_]+ \}\}/g) ?? [];
     expect(placeholders.length).toBeGreaterThan(0);
     // The generic lowering of a declared secretRef, and the two named operator credentials.
+    // The placeholder is wrapped in the JSON-safe envelope (bug.5262) but still carries only the
+    // value-free `{{ name:ns:key }}` token, never a secret value.
     expect(template).toContain(
-      '$ref := printf "{{ %s:%s:%s }}" $secretName $ns .key'
+      '$ref := printf "%s{{ %s:%s:%s }}%s" $secretOpen $secretName $ns .key $secretClose'
     );
     expect(template).toContain(
       '$secretName := printf "%s-compute-env-secrets" $slug'
@@ -516,6 +518,139 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(template).toContain('$_ := set $e "COGNI_NODE_ID" $spec.nodeId');
     // Exactly-one-public-service exposure.
     expect(template).toContain('$public := eq $svc.visibility "public"');
+  });
+});
+
+/**
+ * JSON-SAFE SECRET INJECTION (bug.5262).
+ *
+ * provider-http (v1.0.15) resolves a `{{ name:ns:key }}` placeholder with a RAW `strings.ReplaceAll`
+ * of the secret bytes into the already-marshaled JSON body — the substitution is the FINAL step
+ * AFTER its jq body transform (internal/service/request/requestgen: `ApplyJQOnStr` then
+ * `PatchSecretsIntoString`), so jq never sees the value and there is no JSON-safe request-injection
+ * mode. A secret value with `"`, `\` or a control char (poly prod POLYGON_RPC_URL / PRIVY_*) splices
+ * in unescaped and makes the body invalid JSON, which 400'd the actuator fleet-wide. The Composition
+ * wraps every BODY-embedded placeholder in a sentinel envelope; the actuator re-escapes the raw bytes
+ * between the sentinels before parsing (resolveInjectedSecretEnvelopes in akash-tx-http.ts). These
+ * assertions pin that co-design from the source it is provable from.
+ */
+describe("XComputeWorkload JSON-safe secret injection (bug.5262)", () => {
+  // Extract the sentinel literals the Composition actually emits, so the assertions below cannot
+  // silently pass against a stale copy.
+  const openLiteral = /\$secretOpen := "([^"]+)"/.exec(template)?.[1];
+  const closeLiteral = /\$secretClose := "([^"]+)"/.exec(template)?.[1];
+
+  it("defines a sentinel envelope pair built from JSON-inert characters", () => {
+    expect(openLiteral).toBeTruthy();
+    expect(closeLiteral).toBeTruthy();
+    // A JSON encoder (Go json.Marshal in provider, sprig toJson in the template, gojq) leaves
+    // `[A-Za-z0-9_]` untouched — so the sentinel survives every re-encoding unchanged and is the
+    // one reliable marker of where a raw secret splice landed.
+    expect(openLiteral).toMatch(/^[A-Za-z0-9_]+$/);
+    expect(closeLiteral).toMatch(/^[A-Za-z0-9_]+$/);
+    expect(openLiteral).not.toBe(closeLiteral);
+  });
+
+  it("keeps the Composition's sentinels byte-identical to the actuator's decoder", () => {
+    // The two literals live in different languages; if they drift, the actuator silently injects
+    // the sentinel text into a node's env. Pin them together.
+    const http = readFileSync(
+      path.join(
+        REPO_ROOT,
+        "nodes/operator/app/src/features/compute/akash-tx/akash-tx-http.ts"
+      ),
+      "utf8"
+    );
+    const httpOpen = /AKASH_TX_SECRET_ENVELOPE_OPEN = "([^"]+)"/.exec(
+      http
+    )?.[1];
+    const httpClose = /AKASH_TX_SECRET_ENVELOPE_CLOSE = "([^"]+)"/.exec(
+      http
+    )?.[1];
+    expect(httpOpen).toBe(openLiteral);
+    expect(httpClose).toBe(closeLiteral);
+    // The actuator must actually run the decode before it parses the body.
+    expect(http).toContain(
+      "JSON.parse(resolveInjectedSecretEnvelopes(request.body"
+    );
+  });
+
+  it("wraps every BODY-embedded secret placeholder, but never a header-borne one", () => {
+    // Generic declared secretRef + the three opt-in Loki push credentials all land in the request
+    // body's env map, so all four are wrapped.
+    expect(template).toContain(
+      '$ref := printf "%s{{ %s:%s:%s }}%s" $secretOpen $secretName $ns .key $secretClose'
+    );
+    for (const key of [
+      "LOKI_LEASE_PUSH_URL",
+      "LOKI_LEASE_PUSH_USER",
+      "LOKI_LEASE_PUSH_TOKEN",
+    ]) {
+      expect(template).toContain(
+        `printf "%s{{ operator-env-secrets:%s:${key} }}%s" $secretOpen $writerNs $secretClose`
+      );
+    }
+    // The bearer + Cloudflare tokens ride in HTTP headers, which are never JSON-parsed, so they
+    // must NOT be wrapped — the actuator reads the bearer straight off the header.
+    expect(template).toContain(
+      '$authHeader := printf "Bearer {{ akash-tx-actuator-auth:%s:token }}" $writerNs'
+    );
+    expect(template).toContain(
+      '$cfToken := printf "Bearer {{ operator-env-secrets:%s:CLOUDFLARE_API_TOKEN }}" $writerNs'
+    );
+  });
+
+  it("emits an UPDATE body that stays valid JSON after a backslash+quote secret is spliced in", () => {
+    const open = openLiteral as string;
+    const close = closeLiteral as string;
+
+    // The single-service, empty-bindings shape the Composition lowers for a production `poly`
+    // workload (only `app`, no paper-trader sidecar). `env` carries the wrapped placeholder exactly
+    // as `toJson $payload` serializes it; the CREATE/UPDATE jq mapping passes `spec` through
+    // verbatim, so the actuator body is byte-identical to this object's `spec`.
+    const payload = {
+      cogniKey: "xcw:cogni-production:poly:0",
+      environment: "production",
+      spec: {
+        name: "poly",
+        services: [
+          {
+            name: "app",
+            image: `ghcr.io/cogni-dao/poly@sha256:${"c".repeat(64)}`,
+            env: {
+              HOST: "app",
+              // A declared secretRef lowers to `<open>{{ poly-compute-env-secrets:ns:KEY }}<close>`.
+              POLYGON_RPC_URL: `${open}{{ poly-compute-env-secrets:cogni-production:POLYGON_RPC_URL }}${close}`,
+            },
+          },
+        ],
+      },
+    };
+
+    // A real prod-shaped hazard: a literal double-quote, a real newline (control char), and a lone
+    // backslash forming an invalid escape.
+    const nasty = 'he said "hi"\n\\path';
+    const emittedBody = JSON.stringify(payload);
+    // provider-http's raw, unescaped splice of the resolved value (strings.ReplaceAll).
+    const wireBody = emittedBody.replace(
+      /\{\{ [^}]+ \}\}/,
+      nasty.replace(/\$/g, "$$$$")
+    );
+
+    // Without the fix the wire body is invalid JSON — this is the exact failure being reproduced.
+    expect(() => JSON.parse(wireBody)).toThrow();
+
+    // The actuator's decode (mirrored here; the real function is exercised in akash-tx-http.test.ts)
+    // re-escapes the bytes between the sentinels, and the body parses again.
+    const envelope = new RegExp(`${open}([\\s\\S]*?)${close}`, "g");
+    const decoded = wireBody.replace(envelope, (_m, raw: string) =>
+      JSON.stringify(raw).slice(1, -1)
+    );
+    const parsed = JSON.parse(decoded) as {
+      spec: { services: { env: Record<string, string> }[] };
+    };
+    expect(parsed.spec.services).toHaveLength(1);
+    expect(parsed.spec.services[0]?.env.POLYGON_RPC_URL).toBe(nasty);
   });
 });
 

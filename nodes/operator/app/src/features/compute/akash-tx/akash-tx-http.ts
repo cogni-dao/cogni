@@ -57,6 +57,55 @@ import type { AkashTxLogger } from "./akash-tx-actuator";
 /** Maximum accepted request body. A workload spec is kilobytes; anything larger is abuse. */
 export const AKASH_TX_MAX_BODY_BYTES = 1_048_576;
 
+/**
+ * JSON-SAFE SECRET ENVELOPE (bug.5262).
+ *
+ * The Composition is value-free: every secret it lowers onto this wire is a provider-http
+ * `{{ name:namespace:key }}` placeholder, and the OSS provider-http (v1.0.15) resolves those
+ * placeholders by a RAW `strings.ReplaceAll` of the secret bytes into the already-marshaled JSON
+ * body — the substitution is the FINAL step, AFTER its jq body transform, so no jq/template
+ * construction can escape the value, and provider-http offers no JSON-safe request-injection mode
+ * (`secretInjectionConfigs` is the reverse direction, response->Secret). A secret value that
+ * contains `"`, `\`, or a control character (poly prod `POLYGON_RPC_URL`, `PRIVY_*`) therefore
+ * splices in unescaped and turns the body into invalid JSON — the `JSON.parse` below then throws
+ * and every such node's Akash deploy 400s fleet-wide.
+ *
+ * The generic fix is a boundary co-design that does NOT change the wire's logical (zod) contract:
+ * the Composition wraps each body-embedded secret placeholder in these two sentinels, and this
+ * transport step re-escapes the raw bytes BETWEEN them into a valid JSON string fragment before
+ * the body is parsed. jq never sees the value, so the sentinels (plain `[A-Za-z0-9_]`, untouched
+ * by any JSON encoder) are the only reliable marker of where a raw splice landed. The high-entropy
+ * nonce makes a collision with real secret content negligible.
+ *
+ * ROLLOUT ORDER: this decode is a no-op on a body that carries no sentinels, so an actuator image
+ * carrying it is safe to run against BOTH the old (unwrapped) and new (wrapped) Composition. The
+ * Composition change must therefore reach an environment only AFTER this image — same phased
+ * posture as the XRD's leaseGeneration rename and the bug.5237 host-routed probe.
+ */
+export const AKASH_TX_SECRET_ENVELOPE_OPEN = "__COGNI_SECRET_BEGIN_5f2ab8c1__";
+export const AKASH_TX_SECRET_ENVELOPE_CLOSE = "__COGNI_SECRET_END_5f2ab8c1__";
+
+// The sentinels contain no regex metacharacters, so they embed directly. `[\s\S]*?` is the
+// smallest run up to the FIRST close sentinel — a secret value would have to literally contain
+// the nonce-bearing close token to truncate its own envelope.
+const AKASH_TX_SECRET_ENVELOPE_RE = new RegExp(
+  `${AKASH_TX_SECRET_ENVELOPE_OPEN}([\\s\\S]*?)${AKASH_TX_SECRET_ENVELOPE_CLOSE}`,
+  "g"
+);
+
+/**
+ * Re-escape every provider-http-injected secret value so a body that carried raw `"`, `\` or
+ * control characters parses as valid JSON. `JSON.stringify` produces a fully-escaped JSON string
+ * literal; slicing its surrounding quotes yields the escaped fragment that belongs inside the
+ * quotes the Composition already emitted around the placeholder. A body with no envelopes is
+ * returned unchanged.
+ */
+export function resolveInjectedSecretEnvelopes(body: string): string {
+  return body.replace(AKASH_TX_SECRET_ENVELOPE_RE, (_match, raw: string) =>
+    JSON.stringify(raw).slice(1, -1)
+  );
+}
+
 const STATUS_BY_CODE: Readonly<Record<AkashTxErrorCode, number>> = {
   invalid_request: 400,
   unauthorized: 401,
@@ -208,7 +257,9 @@ export function createAkashTxDispatcher(
 
     let payload: unknown;
     try {
-      payload = JSON.parse(request.body ?? "");
+      // bug.5262: un-escape provider-http's raw secret splices before parsing, so a secret value
+      // containing `"`, `\` or a control char cannot make an otherwise well-formed body invalid.
+      payload = JSON.parse(resolveInjectedSecretEnvelopes(request.body ?? ""));
     } catch {
       return errorResponse(
         new AkashTxError("invalid_request", "body must be JSON")
