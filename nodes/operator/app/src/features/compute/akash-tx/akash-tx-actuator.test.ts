@@ -304,6 +304,24 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       )
       .slice(0, input.limit);
   }
+
+  async listActive(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }) {
+    if (this.failReads) throw new Error("ledger down");
+    return [...this.rows.values()]
+      .filter(
+        (row) =>
+          (row.state === "preparing" || row.state === "allocated") &&
+          (input.nodeId === undefined ||
+            row.identity.nodeId === input.nodeId) &&
+          (input.environment === undefined ||
+            row.environment === input.environment)
+      )
+      .slice(0, input.limit);
+  }
 }
 
 function seedAllocated(
@@ -320,6 +338,25 @@ function seedAllocated(
     state: "allocated",
     externalName,
     providerAccount: "akash1provider",
+  });
+}
+
+/** A live lease whose receipt is still `preparing` — the boot window bug.5264 must cover. */
+function seedPreparing(
+  ledger: FakeLedger,
+  cogniKey: string,
+  externalName?: string
+): void {
+  ledger.rows.set(cogniKey, {
+    receiptId: `receipt-${cogniKey}`,
+    cogniKey,
+    identity: IDENTITY,
+    workload: "operator",
+    environment: "candidate-a",
+    state: "preparing",
+    ...(externalName
+      ? { externalName, providerAccount: "akash1provider" }
+      : {}),
   });
 }
 
@@ -2001,7 +2038,33 @@ describe("AkashTxActuator.leaseLogSources", () => {
     ).toBe(true);
   });
 
-  it("returns an empty snapshot without minting when nothing is allocated", async () => {
+  it("enumerates a still-`preparing` lease that already bound a handle (boot window, bug.5264)", async () => {
+    const { actuator, ledger, api } = build();
+    seedPreparing(ledger, "k1", "7001");
+    api.logDescriptors.set("7001", { ...DESCRIPTOR });
+
+    const result = await actuator.leaseLogSources({});
+
+    // Before bug.5264 this was 0: listAllocated hid `preparing`, so the booting lease's logs
+    // were lost when its BootDeadline closed the lease.
+    expect(result.sources.map((s) => s.dseq)).toEqual(["7001"]);
+  });
+
+  it("logs a live receipt that has no handle rather than silently skipping it (bug.5264)", async () => {
+    const { actuator, ledger, api, log } = build();
+    seedPreparing(ledger, "k1"); // preparing, no external handle yet
+    seedAllocated(ledger, "k2", "7002");
+    api.logDescriptors.set("7002", { ...DESCRIPTOR });
+
+    const result = await actuator.leaseLogSources({});
+
+    expect(result.sources.map((s) => s.dseq)).toEqual(["7002"]);
+    expect(
+      log.lines.some((l) => l.marker === "akash_tx_lease_log_source_no_handle")
+    ).toBe(true);
+  });
+
+  it("returns an empty snapshot without minting when nothing is active", async () => {
     const { actuator, api } = build();
     const result = await actuator.leaseLogSources({});
     expect(result).toEqual({ sources: [], token: "", ttlSeconds: 0 });

@@ -956,17 +956,34 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     const limit = Math.min(Math.max(input.limit ?? 32, 1), 64);
     let records: readonly AkashTxAllocationRecord[];
     try {
-      records = await this.ledger.listAllocated({
+      // bug.5264: enumerate every LIVE (non-terminal) receipt, not only `allocated` ones — a
+      // lease that boots but never serves is closed on its BootDeadline before its receipt ever
+      // flips past `preparing`, so tailing only `allocated` loses exactly the boot logs we need.
+      records = await this.ledger.listActive({
         ...(input.environment ? { environment: input.environment } : {}),
         limit,
       });
     } catch (error) {
-      throw this.ledgerUnavailable(error, "*", "listAllocated");
+      throw this.ledgerUnavailable(error, "*", "listActive");
     }
 
     const sources: AkashTxLeaseLogSource[] = [];
     for (const record of records) {
-      if (!record.externalName) continue;
+      if (!record.externalName) {
+        // A live receipt with no provider handle is unpumpable — but SILENCE here is the very
+        // failure bug.5264 is about, so name it: a booting lease stuck before its handle bound
+        // is now a queryable signal, not an absence.
+        this.log.warn(
+          {
+            cogniKey: record.cogniKey,
+            workload: record.workload,
+            environment: record.environment,
+            state: record.state,
+          },
+          "akash_tx_lease_log_source_no_handle"
+        );
+        continue;
+      }
       try {
         const descriptor = await this.console.leaseLogDescriptor({
           leaseId: record.externalName,
