@@ -85,16 +85,53 @@ deployable_nodes_for_env() {
   done | LC_ALL=C sort
 }
 
+# The canonical fleet repo — the fallback whenever origin can't be read or is
+# malformed. A malformed origin must NEVER leak a token or a broken URL into an
+# AppSet, so we fall back to this literal rather than emit garbage (bug.5235 GAP-4).
+CANONICAL_REPO_URL="https://github.com/cogni-dao/cogni.git"
+
+# Normalize any git remote URL to https://github.com/<owner>/<repo>.git, stripping
+# embedded credentials (https://x-access-token:TOKEN@github.com/...), collapsing the
+# SSH form (git@github.com:owner/repo.git), adding a missing `.git`, and lowercasing
+# owner/repo (GitHub is case-insensitive; a clone whose origin is `Cogni-DAO/cogni`
+# must still render byte-identical to the committed lowercase canonical). Anything
+# that isn't recognizably a github.com owner/repo falls back to CANONICAL_REPO_URL.
+normalize_repo_url() {
+  local raw="${1:-}" path owner rest repo
+  # Anchor on the host: credentials live BEFORE github.com, so taking everything
+  # after the last `github.com` drops them for both ssh (`:owner/repo`) and https
+  # (`/owner/repo`) forms in one step.
+  case "$raw" in
+    *github.com[:/]*) path="${raw##*github.com}" ;;
+    *) printf '%s\n' "$CANONICAL_REPO_URL"; return ;;
+  esac
+  path="${path#[:/]}"   # drop the single leading ':' or '/'
+  path="${path%.git}"   # drop a trailing .git if present
+  path="${path%/}"      # drop a trailing slash
+  owner="${path%%/*}"
+  rest="${path#*/}"
+  # Require EXACTLY owner/repo: a slash present, a non-empty repo, and no further
+  # path segments. Anything else is unexpected → fall back, never emit it.
+  if [ "$owner" = "$path" ] || [ -z "$owner" ] || [ -z "$rest" ] || [ "$rest" != "${rest%%/*}" ]; then
+    printf '%s\n' "$CANONICAL_REPO_URL"; return
+  fi
+  repo="$rest"
+  owner="$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')"
+  repo="$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')"
+  printf 'https://github.com/%s/%s.git\n' "$owner" "$repo"
+}
+
 # The git repo that HOSTS this env's deploy/<env>-<node> branches — i.e. where the
 # AppSet git generator + Application source resolve their revision. It is a property
-# of the HOSTING FLEET, not of any node: the canonical cogni-dao fleet hosts every
-# deploy branch in cogni-dao/cogni, so the default keeps every committed AppSet
-# byte-identical (and `--check` green) there. An ISOLATED fleet (e.g. cogni-test-org)
-# hosts a test-parent node's deploy branch in its OWN repo and overrides REPO_URL at
-# render/apply time so Argo resolves the right repo (bug.5235) — the same
-# default-preserving env-var idiom as FLEET_CONTROL_ENV (subtask.5007) and the
-# ${FORK_REPO} substrate-app substitution (register-substrate-apps.sh).
-REPO_URL="${REPO_URL:-https://github.com/cogni-dao/cogni.git}"
+# of the HOSTING FLEET, not of any node, and — because `--check` (the drift gate) and
+# `pnpm gen:node-appset` always run INSIDE the fleet repo being built — it is derived
+# from THAT repo's own `remote.origin.url`. The canonical cogni-dao fleet's origin is
+# cogni-dao/cogni, so every committed AppSet stays byte-identical (and `--check` green)
+# there; an ISOLATED fleet (e.g. cogni-test-org/cogni-monorepo) derives its OWN repo,
+# so its drift gate + committed AppSets carry that repo with zero per-fleet config and
+# survive fork-sync (bug.5235 GAP-4). An explicit REPO_URL=... still overrides — the
+# same default-preserving env-var idiom as FLEET_CONTROL_ENV (subtask.5007).
+REPO_URL="${REPO_URL:-$(normalize_repo_url "$(git -C "$REPO_ROOT" config --get remote.origin.url 2>/dev/null || true)")}"
 
 # Emit one ApplicationSet object for (env, node) by interpolating the shared
 # template. __ENV__/__NODE__ and __REPO_URL__ are substituted; `{{.name}}` (Argo
@@ -243,15 +280,19 @@ check() {
   echo "per-node ApplicationSet files + per-env appsets kustomizations are in sync with the catalog."
 }
 
-case "${1:-}" in
-  --check) check ;;
-  --write) write ;;
-  "")
-    echo "Usage: $0 [--check|--write] | $0 <env> <node>" >&2
-    exit 2
-    ;;
-  *)
-    [ -n "${2:-}" ] || { echo "Usage: $0 <env> <node>" >&2; exit 2; }
-    render_one "$1" "$2"
-    ;;
-esac
+# Dispatch only when executed, not when sourced — the unit test sources this file to
+# exercise normalize_repo_url directly (same idiom as sourcing lib/appset-paths.sh).
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  case "${1:-}" in
+    --check) check ;;
+    --write) write ;;
+    "")
+      echo "Usage: $0 [--check|--write] | $0 <env> <node>" >&2
+      exit 2
+      ;;
+    *)
+      [ -n "${2:-}" ] || { echo "Usage: $0 <env> <node>" >&2; exit 2; }
+      render_one "$1" "$2"
+      ;;
+  esac
+fi
