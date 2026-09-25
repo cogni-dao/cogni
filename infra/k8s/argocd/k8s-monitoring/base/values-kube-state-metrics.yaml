@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# kube-state-metrics chart values (chart 8.5.0 / KSM app v2.20.0). Minimal: KSM only
+# EXPOSES kube_* series on its Service; the sibling Alloy collector scrapes it and
+# remote-writes to Grafana Cloud (with its own allowlist), so no self-scrape
+# annotations / ServiceMonitor are needed here.
+
+# Stable Service name so the Alloy config can dial it by a fixed DNS name.
+fullnameOverride: kube-state-metrics
+
+# We scrape KSM ourselves; do not emit the self-metrics side Service.
+selfMonitor:
+  enabled: false
+
+# Small footprint — this rides on a single, RAM-constrained k3s node (see PR note
+# re: Wave-0B VM resize).
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 192Mi
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
