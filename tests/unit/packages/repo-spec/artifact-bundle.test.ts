@@ -11,9 +11,14 @@
  * @public
  */
 
+import type {
+  DeploymentEnvName,
+  ResolvedNodeArtifactBundle,
+} from "@cogni/repo-spec";
 import {
   buildNodeArtifactBundle,
   resolveNodeArtifactBundle,
+  resolveNodeArtifactBundleForEnvironment,
 } from "@cogni/repo-spec";
 import { buildTestRepoSpec, TEST_NODE_IDS } from "@cogni/repo-spec/testing";
 import { describe, expect, it } from "vitest";
@@ -251,5 +256,223 @@ describe("node artifact bundle", () => {
         { sourceSha: SOURCE_SHA, repository: "example/node" }
       )
     ).toThrow(/Service references missing artifact/);
+  });
+});
+
+/**
+ * bug.5262 — the per-service `envs` gate (story.5043) must CASCADE. Dropping a gated-out service
+ * without also pruning (a) the artifact only it referenced and (b) any surviving service's binding
+ * that targeted it produced an XComputeWorkload XR that violated the XRD's two cross-reference
+ * invariants, and Argo's server-side-diff refused to sync it — freezing poly's production deploy.
+ * These assertions mirror the XRD's exact CEL semantics
+ * (infra/crossplane/xcomputeworkload/xrd.yaml).
+ */
+describe("resolveNodeArtifactBundleForEnvironment (bug.5262 cascade)", () => {
+  /** XRD: "every bundle artifact must be used by at least one service". */
+  function everyArtifactUsed(bundle: ResolvedNodeArtifactBundle): boolean {
+    const referenced = new Set(bundle.services.map(({ artifact }) => artifact));
+    return bundle.artifacts.every((artifact) => referenced.has(artifact.name));
+  }
+  /** XRD: "every service must reference a declared bundle artifact". */
+  function everyServiceHasArtifact(
+    bundle: ResolvedNodeArtifactBundle
+  ): boolean {
+    const declared = new Set(bundle.artifacts.map((artifact) => artifact.name));
+    return bundle.services.every(({ artifact }) => declared.has(artifact));
+  }
+  /** XRD: "every binding must target a different declared sibling service". */
+  function everyBindingTargetsSibling(
+    bundle: ResolvedNodeArtifactBundle
+  ): boolean {
+    const declared = new Set(
+      bundle.services.map(({ service }) => service.name)
+    );
+    return bundle.services.every(({ service }) =>
+      Object.values(service.bindings).every(
+        (target) => target !== service.name && declared.has(target)
+      )
+    );
+  }
+
+  const APP_IMG = `ghcr.io/example/poly-app@sha256:${"1".repeat(64)}`;
+  const SIDECAR_IMG = `ghcr.io/example/poly-paper-trader@sha256:${"2".repeat(64)}`;
+
+  function serviceConfig(
+    overrides: Partial<
+      ResolvedNodeArtifactBundle["services"][number]["service"]
+    > & { name: string; port: number }
+  ): ResolvedNodeArtifactBundle["services"][number]["service"] {
+    return {
+      artifact: {
+        name: overrides.name,
+        context: ".",
+        dockerfile: "Dockerfile",
+      },
+      port: overrides.port,
+      visibility: "private",
+      bindings: {},
+      secretRefs: [],
+      bindHost: "0.0.0.0",
+      internalUrl: `http://${overrides.name}:${overrides.port}`,
+      resources: { cpuUnits: 0.5, memoryMi: 512, storageMi: 1024 },
+      ...overrides,
+    };
+  }
+
+  /** app (public) binds a paper-trader sidecar gated to candidate-a/preview only. */
+  function polyBundle(): ResolvedNodeArtifactBundle {
+    return {
+      nodeId: TEST_NODE_IDS.default,
+      source: { repository: "example/poly", sha: SOURCE_SHA },
+      artifacts: [
+        { name: "app", image: APP_IMG },
+        { name: "paper-trader", image: SIDECAR_IMG },
+      ],
+      services: [
+        {
+          artifact: "app",
+          image: APP_IMG,
+          service: serviceConfig({
+            name: "app",
+            port: 3200,
+            visibility: "public",
+            runtimeProfile: "cogni-node-app-v1",
+            bindings: { PAPER_SIDECAR_URL: "paper-trader" },
+          }),
+        },
+        {
+          artifact: "paper-trader",
+          image: SIDECAR_IMG,
+          service: serviceConfig({
+            name: "paper-trader",
+            port: 9200,
+            envs: ["candidate-a", "preview"],
+          }),
+        },
+      ],
+    };
+  }
+
+  it("drops a gated-out sidecar's artifact AND the inbound binding (production)", () => {
+    const resolved = resolveNodeArtifactBundleForEnvironment(
+      polyBundle(),
+      "production"
+    );
+
+    // The sidecar service is gone — a 1-service (public) lease.
+    expect(resolved.services.map(({ service }) => service.name)).toEqual([
+      "app",
+    ]);
+    // (a) its orphaned artifact is pruned...
+    expect(resolved.artifacts.map((artifact) => artifact.name)).toEqual([
+      "app",
+    ]);
+    // (b) ...and the app's now-dangling PAPER_SIDECAR_URL binding is pruned.
+    expect(resolved.services[0]?.service.bindings).toEqual({});
+
+    // Both XRD invariants now hold on the resolved prod bundle.
+    expect(everyArtifactUsed(resolved)).toBe(true);
+    expect(everyServiceHasArtifact(resolved)).toBe(true);
+    expect(everyBindingTargetsSibling(resolved)).toBe(true);
+  });
+
+  it.each([
+    "candidate-a",
+    "preview",
+  ] as const)("keeps the sidecar artifact and binding where it is included (%s)", (environment: DeploymentEnvName) => {
+    const resolved = resolveNodeArtifactBundleForEnvironment(
+      polyBundle(),
+      environment
+    );
+
+    expect(resolved.services.map(({ service }) => service.name)).toEqual([
+      "app",
+      "paper-trader",
+    ]);
+    expect(resolved.artifacts.map((artifact) => artifact.name)).toEqual([
+      "app",
+      "paper-trader",
+    ]);
+    expect(resolved.services[0]?.service.bindings).toEqual({
+      PAPER_SIDECAR_URL: "paper-trader",
+    });
+    expect(everyArtifactUsed(resolved)).toBe(true);
+    expect(everyBindingTargetsSibling(resolved)).toBe(true);
+  });
+
+  it("does not over-drop a shared artifact still used by an included service", () => {
+    // Two private workers SHARE one artifact ("worker"); only worker-b is gated out of production.
+    const WORKER_IMG = `ghcr.io/example/poly-worker@sha256:${"3".repeat(64)}`;
+    const shared: ResolvedNodeArtifactBundle = {
+      nodeId: TEST_NODE_IDS.default,
+      source: { repository: "example/poly", sha: SOURCE_SHA },
+      artifacts: [
+        { name: "app", image: APP_IMG },
+        { name: "worker", image: WORKER_IMG },
+      ],
+      services: [
+        {
+          artifact: "app",
+          image: APP_IMG,
+          service: serviceConfig({
+            name: "app",
+            port: 3200,
+            visibility: "public",
+          }),
+        },
+        {
+          artifact: "worker",
+          image: WORKER_IMG,
+          service: serviceConfig({ name: "worker-a", port: 9100 }),
+        },
+        {
+          artifact: "worker",
+          image: WORKER_IMG,
+          service: serviceConfig({
+            name: "worker-b",
+            port: 9101,
+            envs: ["candidate-a"],
+          }),
+        },
+      ],
+    };
+
+    const resolved = resolveNodeArtifactBundleForEnvironment(
+      shared,
+      "production"
+    );
+
+    // worker-b is dropped, but worker-a still references the shared "worker" artifact,
+    // so the artifact SURVIVES — no over-drop.
+    expect(resolved.services.map(({ service }) => service.name)).toEqual([
+      "app",
+      "worker-a",
+    ]);
+    expect(resolved.artifacts.map((artifact) => artifact.name)).toEqual([
+      "app",
+      "worker",
+    ]);
+    expect(everyArtifactUsed(resolved)).toBe(true);
+    expect(everyServiceHasArtifact(resolved)).toBe(true);
+  });
+
+  it("is a no-op for an ungated bundle (every service in every env)", () => {
+    const spec = multiServiceSpec();
+    const resolved = resolveNodeArtifactBundle(spec, completeBundle(), {
+      sourceSha: SOURCE_SHA,
+      repository: "example/node",
+    });
+    for (const environment of [
+      "candidate-a",
+      "preview",
+      "production",
+    ] as const) {
+      const perEnv = resolveNodeArtifactBundleForEnvironment(
+        resolved,
+        environment
+      );
+      expect(perEnv.artifacts).toEqual(resolved.artifacts);
+      expect(perEnv.services).toEqual(resolved.services);
+    }
   });
 });

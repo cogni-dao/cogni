@@ -402,6 +402,13 @@ describe("buildComputeWorkloadManifest", () => {
       expect(
         manifest.spec.workload.services.map((service) => service.name)
       ).toEqual(["web", "worker"]);
+      // Where the sidecar IS included, its artifact and the inbound binding are preserved.
+      expect(manifest.spec.bundle.artifacts.map((a) => a.name)).toEqual([
+        "web",
+        "worker",
+      ]);
+      const web = manifest.spec.workload.services.find((s) => s.name === "web");
+      expect(web?.bindings).toEqual({ WORKER_URL: "worker" });
     });
 
     it("drops a gated sidecar from an environment it does not list (production)", () => {
@@ -425,6 +432,16 @@ describe("buildComputeWorkloadManifest", () => {
           (service) => service.visibility === "public"
         )
       ).toHaveLength(1);
+
+      // bug.5262 — the exclusion CASCADES: dropping `worker` also prunes the orphaned `worker`
+      // artifact and the `web` service's now-dangling `WORKER_URL: worker` binding, so the
+      // rendered XR satisfies the XRD's two cross-reference invariants (no artifact used by zero
+      // services; no binding targeting a non-declared sibling) and Argo can sync it.
+      expect(manifest.spec.bundle.artifacts.map((a) => a.name)).toEqual([
+        "web",
+      ]);
+      const web = manifest.spec.workload.services.find((s) => s.name === "web");
+      expect(web?.bindings).toEqual({});
     });
 
     it("keeps every service that declares no envs in every environment", () => {
