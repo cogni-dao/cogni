@@ -24,8 +24,11 @@ import type { AkashTxActuatorPort } from "@/ports";
 import { AkashTxError } from "@/ports";
 
 import {
+  AKASH_TX_SECRET_ENVELOPE_CLOSE,
+  AKASH_TX_SECRET_ENVELOPE_OPEN,
   createAkashTxActuatorServer,
   createAkashTxDispatcher,
+  resolveInjectedSecretEnvelopes,
 } from "./akash-tx-http";
 
 const TOKEN = "test-token";
@@ -616,5 +619,98 @@ describe("lease-log-sources route (bug.5240)", () => {
       body: JSON.stringify({ limit: 0 }),
     });
     expect(response.status).toBe(400);
+  });
+});
+
+/**
+ * JSON-SAFE SECRET ENVELOPE (bug.5262).
+ *
+ * provider-http resolves a `{{ name:ns:key }}` placeholder with a RAW `strings.ReplaceAll` of the
+ * secret bytes into the already-marshaled JSON body, as the final step after its jq transform. A
+ * secret value carrying `"`, `\` or a control char therefore splices in UNESCAPED and turns the
+ * body into invalid JSON — before the fix this dispatcher's `JSON.parse` threw `body must be JSON`
+ * and 400'd the deploy (poly prod POLYGON_RPC_URL / PRIVY_*). The Composition now wraps each
+ * body-embedded placeholder in a sentinel envelope; this transport step re-escapes the raw bytes
+ * between the sentinels before parsing.
+ */
+describe("JSON-safe secret envelope (bug.5262)", () => {
+  // A value that hits every JSON hazard at once: a literal double-quote, a real newline (control
+  // char), and a lone backslash forming an invalid escape (`\p`).
+  const NASTY_SECRET = 'he said "hi"\n\\path';
+
+  /** Wrap a resolved secret value the way the raw provider-http splice lands it in the body. */
+  const wrap = (value: string): string =>
+    `${AKASH_TX_SECRET_ENVELOPE_OPEN}${value}${AKASH_TX_SECRET_ENVELOPE_CLOSE}`;
+
+  it("re-escapes a raw splice that would otherwise be invalid JSON", () => {
+    const rawBody = `{"env":{"POLYGON_RPC_URL":"${wrap(NASTY_SECRET)}"}}`;
+    // The un-decoded body is genuinely invalid — the quote/newline/backslash break it.
+    expect(() => JSON.parse(rawBody)).toThrow();
+    const parsed = JSON.parse(resolveInjectedSecretEnvelopes(rawBody));
+    expect(parsed.env.POLYGON_RPC_URL).toBe(NASTY_SECRET);
+  });
+
+  it("handles multiple envelopes and is a no-op without any", () => {
+    const body = `{"a":"${wrap('x"y\\z')}","b":"${wrap("p\tq")}","c":"plain"}`;
+    const parsed = JSON.parse(resolveInjectedSecretEnvelopes(body));
+    expect(parsed).toEqual({ a: 'x"y\\z', b: "p\tq", c: "plain" });
+    const clean = JSON.stringify({ cogniKey: "candidate-a/toks9/1" });
+    expect(resolveInjectedSecretEnvelopes(clean)).toBe(clean);
+  });
+
+  it("parses the EXACT one-service empty-bindings UPDATE body a raw backslash+quote secret would break", async () => {
+    let receivedRpcUrl: string | undefined;
+    const dispatch = dispatcherFor(
+      stubActuator({
+        update: async (input) => {
+          receivedRpcUrl = input.spec.services[0]?.env?.POLYGON_RPC_URL;
+          return { externalName: "7001", state: "active", endpoints: [] };
+        },
+      })
+    );
+
+    // The wire body exactly as the Composition emits it for a single `app` service whose bindings
+    // are empty (no paper-trader sidecar): `env` carries the sentinel-wrapped secret placeholder,
+    // and provider-http has already spliced the raw secret VALUE between the sentinels.
+    const updateBody = {
+      cogniKey: "xcw:cogni-production:poly:0",
+      externalName: "7001",
+      environment: "production",
+      identity: IDENTITY,
+      spec: {
+        name: "poly",
+        services: [
+          {
+            name: "app",
+            image: `ghcr.io/cogni-dao/poly@sha256:${"c".repeat(64)}`,
+            cpuUnits: 0.5,
+            memoryMi: 512,
+            storageMi: 1024,
+            env: {
+              HOST: "app",
+              POLYGON_RPC_URL: "__SECRET_POLYGON__",
+            },
+          },
+        ],
+      },
+    };
+    // Serialize, then simulate provider-http's raw, unescaped splice of the real value.
+    const wireBody = JSON.stringify(updateBody).replace(
+      "__SECRET_POLYGON__",
+      wrap(NASTY_SECRET)
+    );
+    // Sanity: that raw wire body really is invalid JSON, i.e. this is the failure being fixed.
+    expect(() => JSON.parse(wireBody)).toThrow();
+
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/update",
+      authorization: AUTH,
+      body: wireBody,
+    });
+
+    // Before the fix this was 400 {"code":"invalid_request","message":"body must be JSON"}.
+    expect(response.status).toBe(200);
+    expect(receivedRpcUrl).toBe(NASTY_SECRET);
   });
 });
