@@ -32,7 +32,11 @@ import { buildComputeSecretResources } from "./compute-workload-secret-manifests
 import { assertDeclaredNodeDeployment } from "./node-services-workload-spec";
 
 const SLUG = "my-node";
-const OWNER = "cogni-dao-test";
+// A spawned throwaway node is owned by cogni-test-org (the platform's own self-test org), which
+// is the owner axis `writerFor` routes to the candidate-a test wallet (akash-actuator-wallet-cutover
+// NS4). The prior placeholder `cogni-dao-test` was neither a real GitHub org nor a recognized
+// actuator-writer owner, so it made this spawn-path fixture unfaithful to production (bug.5263).
+const OWNER = "cogni-test-org";
 const SOURCE_SHA = "a".repeat(40);
 const IMAGE_DIGEST = "b".repeat(64);
 const BUNDLE_DIGEST = "c".repeat(64);
@@ -113,6 +117,12 @@ describe("scaffolded node is born Akash-capable", () => {
     expect(
       manifest.spec.workload.services[0]?.secretRefs?.map((ref) => ref.key)
     ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
+    // bug.5263: a cogni-test-org spawn on candidate-a must route to the candidate-a TEST wallet
+    // (`cogni-candidate-a`), where the actuator + its `akash-tx-actuator-auth` secret actually
+    // live — NOT `cogni-production`, which has no secret for this org and fails the lease create.
+    expect(
+      (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace
+    ).toBe("cogni-candidate-a");
   });
 
   it("projects every profile-supplied secret ref into an off-cluster workload secret", () => {

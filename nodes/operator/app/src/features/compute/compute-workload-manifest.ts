@@ -33,6 +33,8 @@ import type {
   DeclaredProvisionServiceSpec,
 } from "@/ports";
 
+import { writerFor } from "@/shared/node-registry/crossplane-control-plane";
+
 import type { NodeComputeApi } from "./node-compute-api";
 import type { DeploymentEnvironment } from "./node-deployment-provider";
 
@@ -49,14 +51,52 @@ const DIGEST_PINNED_OCI_REF =
  * lowering, so every rematerialize (flight, promote) migrates one more node onto the decoupled
  * path — there is no separate cutover to run.
  */
-/**
- * The namespace running the actuator that mints every real node's lease. Single value on
- * purpose: one Console account ⇒ one ledger ⇒ one active writer, so there is exactly one
- * place a paid transaction can originate (akash-actuator-wallet-cutover).
- */
-const PRODUCTION_ACTUATOR_NAMESPACE = "cogni-production";
-
 const MIGRATION_POLICY = "RequireBeforeServing" as const;
+
+/**
+ * WHICH actuator writer mints this lane's lease, expressed as the namespace that runs it —
+ * or `undefined` to OMIT the field and keep the Composition's default. bug.5263.
+ *
+ * The Composition defaults the writer lookup to the XR's OWN namespace (`cogni-<environment>`).
+ * That is correct only when an actuator with its `akash-tx-actuator-auth` secret actually runs
+ * there. A non-production XR is reconciled on a writer cluster where its own namespace runs no
+ * actuator, so desired state must name the writer's namespace explicitly or the lease `create`
+ * fails closed with `CannotCreateExternalResource: failed to get secret akash-tx-actuator-auth`.
+ *
+ * WHO PAYS is a function of the node's OWNER org, NOT the environment
+ * (akash-actuator-wallet-cutover NS3/NS4): every REAL (`cogni-dao`) node bills the production
+ * Console account in EVERY environment, while the candidate-a test account pays ONLY for
+ * `cogni-test-org` throwaway nodes that exist to self-test the platform. `writerFor(env, owner)`
+ * already encodes exactly this (owner+env → writer cluster), so we CONSULT it rather than
+ * hardcode a second mapping — `actuatorNamespace = "cogni-" + writer.cluster`. This is the whole
+ * bug.5263 fix: a cogni-test-org node on candidate-a resolves to `cogni-candidate-a` (the
+ * candidate-a test writer), while a cogni-dao node on candidate-a/preview resolves to
+ * `cogni-production` — byte-identical to before.
+ *
+ * PRODUCTION omits the field (returns `undefined`): the XR's own namespace is already
+ * `cogni-production`, so rendering is byte-identical to before this fix for every owner.
+ *
+ * FAIL CLOSED on an unknown/ambiguous owner: `writerFor` returns `undefined` and we THROW rather
+ * than default to a wallet, matching NO_SILENT_DEFAULT. Silently defaulting would bill the wrong
+ * Console account — a real-money hazard.
+ */
+function actuatorNamespaceForLane(
+  environment: DeploymentEnvironment,
+  ownerRepository: string
+): string | undefined {
+  if (environment === "production") return undefined;
+  // `ownerRepository` is a validated `owner/name`, so the owner org is the first segment. The
+  // `?? ownerRepository` fallback is unreachable at runtime (the string always contains `/`);
+  // it only satisfies noUncheckedIndexedAccess, and a malformed value fails closed below anyway.
+  const ownerOrg = ownerRepository.split("/")[0] ?? ownerRepository;
+  const writer = writerFor(environment, ownerOrg);
+  if (!writer) {
+    throw new Error(
+      `[compute-workload-manifest] no single actuator writer for environment '${environment}' owner '${ownerOrg}' — refusing to default a wallet (fail closed, akash-actuator-wallet-cutover)`
+    );
+  }
+  return `cogni-${writer.cluster}`;
+}
 
 /**
  * BOOT_SLO_OR_CLOSE, resolved from the one thing that already decides disposability: the
@@ -77,8 +117,9 @@ const MIGRATION_POLICY = "RequireBeforeServing" as const;
  *
  * This is deliberately NOT a caller flag: a per-request "is this disposable?" input is exactly
  * the seam through which a production workload would eventually get closed by a bad argument.
- * It keys on the same `environment === "production"` question as `actuatorNamespace` below —
- * one predicate, so a new non-production lane cannot arrive holding only half the policy.
+ * It keys on the same `environment === "production"` question `actuatorNamespaceForLane` uses to
+ * decide whether to OMIT the writer namespace — one predicate for the production/non-production
+ * split, so a new non-production lane cannot arrive holding only half the policy.
  */
 export function bootPolicyForEnvironment(
   environment: DeploymentEnvironment
@@ -302,6 +343,18 @@ export function buildComputeWorkloadManifest(
   }
 
   const namespace = `cogni-${input.environment}`;
+  // WHICH writer mints this lease, resolved from the OWNER of the bundle being deployed
+  // (bug.5263). Deriving the owner from `bundle.source.repository` — the code actually being
+  // shipped, already validated against the catalog `source_repo` — rather than a separate caller
+  // input is a real-money invariant: the wallet decision cannot desync from what is deployed.
+  // Crossplane-only; the legacy authority resolves its own writer in-cluster.
+  const actuatorNamespace =
+    input.computeApi === "crossplane"
+      ? actuatorNamespaceForLane(
+          input.environment,
+          input.bundle.source.repository
+        )
+      : undefined;
   // ONE identity, ONE bundle, ONE topology — shared verbatim by both authorities so the
   // Crossplane cutover can never silently change what is deployed, only who reconciles it.
   const spec: ComputeWorkloadSpec = {
@@ -350,22 +403,21 @@ export function buildComputeWorkloadManifest(
             // alias. Dual-writing would pin `leaseEpoch` into every ref forever and make the
             // alias unremovable.
             leaseGeneration: input.leaseGeneration,
-            // WHICH writer mints this lease (task.5132). A node app runs on AKASH, so its XR
-            // is pure desired state and the production cluster reconciles every akash node's
-            // non-production lane — the AppSet for it is rendered into appsets/production/.
-            // The actuator lives in `cogni-production` THERE, so a non-prod lane must say so:
-            // the Composition defaults the writer lookup to the XR's own namespace, which in
-            // that cluster is `cogni-candidate-a`/`cogni-preview` and runs no actuator, so the
-            // call would fail closed.
+            // WHICH writer mints this lease (task.5132, refined for owner routing in bug.5263).
+            // A node app runs on AKASH, so its XR is pure desired state reconciled on a writer
+            // cluster whose own `cogni-<env>` namespace may run no actuator — the Composition
+            // defaults the writer lookup to that namespace, so a non-prod lane must name the
+            // writer's namespace or the call fails closed with a missing actuator-auth secret.
             //
-            // Production omits it and keeps the default — identical rendering to before.
+            // WHO PAYS keys on the node's OWNER, not the env (see `actuatorNamespaceForLane`):
+            // cogni-dao → the production writer (`cogni-production`) in every env, cogni-test-org
+            // → the candidate-a test writer (`cogni-candidate-a`). Production omits the field and
+            // keeps the default — identical rendering to before, for every owner.
             //
             // The idempotence key is NOT affected: it still derives from the XR's own
             // namespace, which is what keeps a node's pre-prod lease from colliding with its
             // production one.
-            ...(input.environment === "production"
-              ? {}
-              : { actuatorNamespace: PRODUCTION_ACTUATOR_NAMESPACE }),
+            ...(actuatorNamespace ? { actuatorNamespace } : {}),
             ...(input.dns ? { dns: input.dns } : {}),
             ...(input.runtime ? { runtime: input.runtime } : {}),
           }
