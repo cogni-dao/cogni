@@ -51,15 +51,32 @@ namespace: argocd
 resources:`;
 
 /**
+ * The git repo that HOSTS an env's `deploy/<env>-<node>` branches — where the AppSet git generator
+ * + Application source resolve their revision. A property of the HOSTING FLEET, not of any node: the
+ * canonical cogni-dao fleet hosts every deploy branch in `cogni-dao/cogni`, so this default keeps a
+ * scaffolded AppSet byte-identical to the committed one (and the shell renderer's `--check` green)
+ * there. An ISOLATED fleet (e.g. cogni-test-org) hosts a test-parent node's deploy branch in its OWN
+ * repo and passes its `https://github.com/<owner>/<repo>.git` so Argo resolves the right repo
+ * (bug.5235). Byte-exact with the shell renderer's `REPO_URL` default.
+ */
+export const DEFAULT_APPSET_REPO_URL = "https://github.com/cogni-dao/cogni.git";
+
+/**
  * Substitute the per-`(env, slug)` ApplicationSet template, byte-exact to the shell renderer's
- * `sed -e s/__ENV__/…/g -e s/__NODE__/…/g`. Argo `{{.name}}` goTemplate markers are left intact.
+ * `sed -e s/__ENV__/…/g -e s/__NODE__/…/g -e s#__REPO_URL__#…#g`. Argo `{{.name}}` goTemplate
+ * markers are left intact. `repoURL` defaults to the canonical cogni-dao fleet host so a canonical
+ * render matches the committed AppSet; an isolated fleet passes its own hosting repo (bug.5235).
  */
 export function renderNodeAppset(
   template: string,
   slug: string,
-  env: string
+  env: string,
+  repoURL: string = DEFAULT_APPSET_REPO_URL
 ): string {
-  return template.replaceAll("__ENV__", env).replaceAll("__NODE__", slug);
+  return template
+    .replaceAll("__ENV__", env)
+    .replaceAll("__NODE__", slug)
+    .replaceAll("__REPO_URL__", repoURL);
 }
 
 /** One resource line's identity: WHICH env the workload is + WHICH node. */
