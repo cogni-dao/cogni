@@ -47,7 +47,7 @@ APPSETS_DIR="$ARGOCD_DIR/appsets"
 # shellcheck source=scripts/ci/lib/appset-paths.sh
 . "$SCRIPT_DIR/lib/appset-paths.sh"
 # Single source of truth for the AppSet shape — shared byte-for-byte with the
-# operator's TS node scaffolder (task.5092). Both interpolate __ENV__/__NODE__.
+# operator's TS node scaffolder (task.5092). Both interpolate __ENV__/__NODE__/__REPO_URL__.
 TEMPLATE="$SCRIPT_DIR/node-applicationset.yaml.tmpl"
 ENVS=(candidate-a preview production)
 
@@ -85,13 +85,24 @@ deployable_nodes_for_env() {
   done | LC_ALL=C sort
 }
 
+# The git repo that HOSTS this env's deploy/<env>-<node> branches — i.e. where the
+# AppSet git generator + Application source resolve their revision. It is a property
+# of the HOSTING FLEET, not of any node: the canonical cogni-dao fleet hosts every
+# deploy branch in cogni-dao/cogni, so the default keeps every committed AppSet
+# byte-identical (and `--check` green) there. An ISOLATED fleet (e.g. cogni-test-org)
+# hosts a test-parent node's deploy branch in its OWN repo and overrides REPO_URL at
+# render/apply time so Argo resolves the right repo (bug.5235) — the same
+# default-preserving env-var idiom as FLEET_CONTROL_ENV (subtask.5007) and the
+# ${FORK_REPO} substrate-app substitution (register-substrate-apps.sh).
+REPO_URL="${REPO_URL:-https://github.com/cogni-dao/cogni.git}"
+
 # Emit one ApplicationSet object for (env, node) by interpolating the shared
-# template. Only __ENV__ and __NODE__ are substituted; `{{.name}}` (Argo
-# goTemplate) is left intact. Node/env slugs never contain `/`, so the sed
-# delimiter is safe.
+# template. __ENV__/__NODE__ and __REPO_URL__ are substituted; `{{.name}}` (Argo
+# goTemplate) is left intact. Node/env slugs never contain `/`, so the `/` sed
+# delimiter is safe for them; __REPO_URL__ carries `/` so it uses a `#` delimiter.
 render_one() {
   local env="$1" node="$2"
-  sed -e "s/__ENV__/$env/g" -e "s/__NODE__/$node/g" "$TEMPLATE"
+  sed -e "s/__ENV__/$env/g" -e "s/__NODE__/$node/g" -e "s#__REPO_URL__#$REPO_URL#g" "$TEMPLATE"
 }
 
 env_dir() {

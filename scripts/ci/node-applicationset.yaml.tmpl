@@ -13,7 +13,7 @@ spec:
   goTemplate: true
   generators:
     - git:
-        repoURL: https://github.com/cogni-dao/cogni.git
+        repoURL: __REPO_URL__
         revision: deploy/__ENV__-__NODE__
         files:
           - path: "infra/catalog/__NODE__.yaml"
@@ -28,7 +28,7 @@ spec:
     spec:
       project: default
       source:
-        repoURL: https://github.com/cogni-dao/cogni.git
+        repoURL: __REPO_URL__
         targetRevision: "deploy/__ENV__-{{.name}}"
         path: "infra/k8s/overlays/__ENV__/{{.name}}"
       destination:
