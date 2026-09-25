@@ -157,6 +157,27 @@ spec:
             {{- $baseUrl := printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $writerNs }}
             {{- $authHeader := printf "Bearer {{ akash-tx-actuator-auth:%s:token }}" $writerNs }}
 
+            {{- /*
+              JSON-SAFE SECRET ENVELOPE (bug.5262). provider-http (v1.0.15) resolves a
+              `{{ name:namespace:key }}` placeholder with a RAW strings.ReplaceAll of the secret
+              bytes into the already-marshaled JSON body, AS THE FINAL STEP AFTER its jq body
+              transform (internal/service/request/requestgen: ApplyJQOnStr then
+              PatchSecretsIntoString). So jq never sees the value, there is no JSON-safe request
+              injection mode, and a value carrying `"`, `\` or a control char (poly prod
+              POLYGON_RPC_URL / PRIVY_*) splices in unescaped and turns the body into invalid
+              JSON — the actuator's JSON.parse then 400s the deploy fleet-wide.
+              Every secret lowered into the request BODY below is therefore wrapped in these
+              sentinels; the actuator re-escapes the raw bytes between them before parsing
+              (resolveInjectedSecretEnvelopes / AKASH_TX_SECRET_ENVELOPE_* in
+              akash-tx/akash-tx-http.ts — the two literals MUST stay identical, pinned by
+              tests/ci-invariants/crossplane-xcomputeworkload.spec.ts). Header-borne secrets (the
+              Authorization bearer, the Cloudflare token) are NOT wrapped: a header is never
+              JSON-parsed, and the actuator reads the bearer straight off the header.
+              Still value-free: only the placeholder text is wrapped, never a secret value.
+            */ -}}
+            {{- $secretOpen := "__COGNI_SECRET_BEGIN_5f2ab8c1a3e94d7b8f1c6029e4d5b70a__" }}
+            {{- $secretClose := "__COGNI_SECRET_END_5f2ab8c1a3e94d7b8f1c6029e4d5b70a__" }}
+
             {{- /* ------------------------------------------------------------------
               LOWERING: full-fidelity XR -> the actuator's ProvisionSpec.
               Port of toProvisionSpec() + legacyCogniAppEnv() in
@@ -220,7 +241,7 @@ spec:
               under its own name - byte-identical to legacyCogniAppEnv's destructure.
             */ -}}
             {{- range (dig "secretRefs" (list) $svc) }}
-            {{- $ref := printf "{{ %s:%s:%s }}" $secretName $ns .key }}
+            {{- $ref := printf "%s{{ %s:%s:%s }}%s" $secretOpen $secretName $ns .key $secretClose }}
             {{- if and $isApp (eq .key "DOLTGRES_URL") }}{{ $appDoltgres = true }}{{ end }}
             {{- if and $isApp (eq .key "LITELLM_VIRTUAL_KEY") }}
             {{- $_ := set $e "LITELLM_MASTER_KEY" $ref }}
@@ -239,9 +260,9 @@ spec:
             */ -}}
             {{- $_ := set $e "COGNI_NODE_ID" $spec.nodeId }}
             {{- if $logPush }}
-            {{- $_ := set $e "LOKI_PUSH_URL" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_URL }}" $writerNs) }}
-            {{- $_ := set $e "LOKI_PUSH_USER" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_USER }}" $writerNs) }}
-            {{- $_ := set $e "LOKI_PUSH_PASSWORD" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_TOKEN }}" $writerNs) }}
+            {{- $_ := set $e "LOKI_PUSH_URL" (printf "%s{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_URL }}%s" $secretOpen $writerNs $secretClose) }}
+            {{- $_ := set $e "LOKI_PUSH_USER" (printf "%s{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_USER }}%s" $secretOpen $writerNs $secretClose) }}
+            {{- $_ := set $e "LOKI_PUSH_PASSWORD" (printf "%s{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_TOKEN }}%s" $secretOpen $writerNs $secretClose) }}
             {{- $_ := set $e "LOKI_PUSH_SOURCE" "lease" }}
             {{- end }}
             {{- /* buildNodeAppIdentityEnv() - these deliberately win over every key above. */ -}}
