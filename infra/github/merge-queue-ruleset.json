@@ -51,5 +51,6 @@
         "check_response_timeout_minutes": 60
       }
     }
-  ]
+  ],
+  "bypass_actors": []
 }
