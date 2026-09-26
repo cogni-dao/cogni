@@ -386,8 +386,17 @@ jobs:
     # Run when build succeeded, or when it was skipped because no targets were
     # affected. Any build-leg failure should fail this PR check — don't ship a
     # manifest for a partially built PR.
+    #
+    # Fork-lane guard: `resolve` is gated to same-repo/push/merge_group/dispatch
+    # ("fork PRs handled by the operator G2 lane, not here"), so on a fork PR it
+    # is SKIPPED and its `image_tag`/`pr_number` outputs are empty. Without this
+    # guard, `always()` forced `manifest` to run anyway and hard-fail on
+    # `IMAGE_TAG is required`, red-flagging every fork/docs/workflow-only PR.
+    # Requiring resolve==success makes manifest cleanly SKIP on the fork lane —
+    # joining `resolve`/`build` as a non-blocking skip — instead of failing.
     if: |
       always() &&
+      needs.resolve.result == 'success' &&
       needs.detect.result == 'success' &&
       (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
