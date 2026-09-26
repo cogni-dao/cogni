@@ -1016,13 +1016,14 @@ describe("catalog lease generation naming", () => {
    * changed suffix answers "no existing resource" and mints a SECOND PAID LEASE, and a suffix
    * that reverted to 0 re-deads the node against a key the actuator already spent.
    */
-  it("keeps toks5 production on replacement generation 1 when that fleet row exists", () => {
+  it("keeps toks5 production on its explicit replacement generation when that fleet row exists", () => {
     const toks5Path = path.join(CATALOG_DIR, "toks5.yaml");
     if (!existsSync(toks5Path)) return;
 
     const toks5 = parse(readFileSync(toks5Path, "utf8")) as {
       lease_generation?: Record<string, number>;
     };
-    expect(toks5.lease_generation?.production).toBe(1);
+    // story.5047: bumped 1->2 to force a fresh mint delivering DOLTGRES_URL (knowledge heal).
+    expect(toks5.lease_generation?.production).toBe(2);
   });
 });
