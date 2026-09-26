@@ -47,6 +47,15 @@ export const COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS = [
   "AUTH_SECRET",
   "DATABASE_URL",
   "DATABASE_SERVICE_URL",
+  // The knowledge store + Doltgres work-items are part of cogni-node-app-v1 (container.ts
+  // builds knowledgeStorePort iff env.DOLTGRES_URL is set). It is composed into every node's
+  // bank (secret-materialize COMPOSED_DSN_KEYS) and reaches k3s pods via ESO dataFrom:extract,
+  // but the Akash lane's per-key ExternalSecret only requests the profile+secret_refs set — so
+  // omitting it here left every Akash node's knowledge routes 503 ("knowledge store not
+  // configured") fleet-wide (bug.5265; poly+beacon). Listing it also flips the reconciler's
+  // migrate-doltgres gate (secretRefs.some(DOLTGRES_URL)) ON for Akash, so knowledge_<node> is
+  // migrated before serving. DSN, not a password → off-cluster-allowed (like DATABASE_URL).
+  "DOLTGRES_URL",
   "EVM_RPC_URL",
   "LITELLM_VIRTUAL_KEY",
   "SCHEDULER_API_TOKEN",
