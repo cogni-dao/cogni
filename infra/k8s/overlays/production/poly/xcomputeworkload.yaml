@@ -11,13 +11,13 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:4611f5c1640d5e7d40ff84415db21b28f03aca7b215b7e7e4321a6610aec087d
+    ref: ghcr.io/cogni-dao/poly@sha256:1066324c7373d965b5fd25cd0ee596d14472f5c8b98405bcb6a22c9a2a9ea871
     source:
       repository: cogni-dao/poly
-      sha: 82e2fb9662ef955f839dae78a0067ce1e202adeb
+      sha: 8f371a7a58f01f307ca6b9c5d20f06f847f8b32b
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:5e00e7c2e8dccce19e2dc030749f851a0b7e839ddcc29a06bfe135a19a4085a7
+        image: ghcr.io/cogni-dao/poly@sha256:0dc584f7fae1aab94c7ee0bb1983dbf0a75c6d5704b2976dded34e4ceafc0c55
   workload:
     name: poly
     publicHost: poly.cognidao.org
@@ -39,6 +39,7 @@ spec:
           - key: PRIVY_USER_WALLETS_APP_SECRET
           - key: PRIVY_USER_WALLETS_SIGNING_KEY
           - key: POLY_WALLET_AEAD_KEY_ID
+          - key: POLY_WALLET_AEAD_KEY_HEX
         port: 3200
         visibility: public
         bindings: {}
