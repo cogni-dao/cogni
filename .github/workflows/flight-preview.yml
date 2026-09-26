@@ -1,5 +1,9 @@
 name: Flight Preview
 
+# run-name self-labels the flighted SHA in the Actions list (this is the preview
+# dispatcher). Display metadata only — freeze-safe.
+run-name: "Flight Preview → preview · ${{ inputs.sha || github.sha }}"
+
 # Triggered on every push to main (PR merged) or via workflow_dispatch(sha).
 # Resolves the merge's `sha-<mainSHA>` images (published by pr-build.yml on
 # merge_group AND push:main) and calls scripts/ci/flight-preview.sh, which
