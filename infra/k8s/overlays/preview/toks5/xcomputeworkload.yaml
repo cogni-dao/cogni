@@ -11,13 +11,13 @@ spec:
   nodeId: f66b260b-4633-41e2-8711-b7c1b8449cc1
   environment: preview
   bundle:
-    ref: ghcr.io/cogni-dao/toks5@sha256:4a014d29d4e6eae6e98c12a23939dd8cfaaaf069e1e75f4937aaab1028bd1804
+    ref: ghcr.io/cogni-dao/toks5@sha256:bf482d8f31573ccabfc9f399eafec1c8265cd3b2a7bb987d50614d32b01312df
     source:
       repository: cogni-dao/toks5
-      sha: 1215bfb1627448582d8ff4dee358d660658a173a
+      sha: 7c9b1e08d68839384d1db183d13bbcf33ff2fe7e
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/toks5@sha256:a228bf533d9c2125e2e701eb7f7c588d2db392b69bde5da39b787a25782fe281
+        image: ghcr.io/cogni-dao/toks5@sha256:ac482f4a942400e1176ddbee0ae027db7c321b02c2cb22f8fa8a665be8ddfb1e
   workload:
     name: toks5
     publicHost: toks5-preview.cognidao.org
@@ -29,6 +29,7 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DOLTGRES_URL
           - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
