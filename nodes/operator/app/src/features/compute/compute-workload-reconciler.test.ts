@@ -31,6 +31,7 @@ const BOOTABLE_APP_ENV = {
   AUTH_SECRET: "auth-secret",
   DATABASE_URL: "postgresql://app@candidate.vm.example/app",
   DATABASE_SERVICE_URL: "postgresql://service@candidate.vm.example/app",
+  DOLTGRES_URL: "postgresql://app@candidate.vm.example/knowledge",
   EVM_RPC_URL: "https://base-mainnet.example.test",
   LITELLM_VIRTUAL_KEY: "sk-virtual",
   SCHEDULER_API_TOKEN: "scheduler-token",
@@ -367,7 +368,12 @@ describe("reconcileComputeWorkload", () => {
       SCHEDULER_API_TOKEN: "scheduler-token",
       BILLING_INGEST_TOKEN: "billing-token",
     });
-    expect(env).not.toHaveProperty("DOLTGRES_URL");
+    // DOLTGRES_URL is now part of the cogni-node-app-v1 profile (bug.5265): the knowledge
+    // store + Doltgres work-items require it, so it is projected into the lease app env.
+    expect(env).toHaveProperty(
+      "DOLTGRES_URL",
+      "postgresql://app@candidate.vm.example/knowledge"
+    );
   });
 
   it("injects the write-only Loki push env into the lease app when configured (bug.5127)", async () => {
