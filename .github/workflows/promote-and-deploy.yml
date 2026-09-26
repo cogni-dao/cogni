@@ -1,5 +1,13 @@
 name: Promote and Deploy
 
+# run-name self-labels each run's lane in the Actions list so a preview run
+# (auto, from flight-preview.yml on merge) is distinguishable at a glance from a
+# production run (operator dispatchNodePromote), instead of being reverse-engineered
+# mid-incident. Display metadata only — no behavior, no branching (freeze-safe).
+# GitHub's workflow-runs API does not expose dispatch inputs, so run-name is the
+# only place (node, env, build_sha) becomes readable off a run.
+run-name: "Promote & Deploy · ${{ inputs.nodes || 'all-nodes' }} · ${{ inputs.environment }} · ${{ inputs.build_sha || inputs.source_sha || 'preview-forward' }}"
+
 # Spec: work/items/task.0376 (per-node lane isolation, preview + production matrix).
 # Companion to candidate-flight.yml (task.0372). Same primitive: matrix-fanned
 # per-node cells push to deploy/<env>-<node>; aggregator computes current-sha
