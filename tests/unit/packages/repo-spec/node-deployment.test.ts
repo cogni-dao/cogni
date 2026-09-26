@@ -484,9 +484,9 @@ describe("cogni-node-app-v1 deployment contract", () => {
     expect(
       resolveRuntimeProfileSecretRefs({
         runtimeProfile: "cogni-node-app-v1",
-        secretRefs: [{ key: "EVM_RPC_URL" }, { key: "DOLTGRES_URL" }],
+        secretRefs: [{ key: "EVM_RPC_URL" }, { key: "NODE_CUSTOM_SECRET" }],
       }).map((ref) => ref.key)
-    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS, "DOLTGRES_URL"]);
+    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS, "NODE_CUSTOM_SECRET"]);
 
     // A service with no recognized profile is returned unchanged (owns whatever it declared).
     const custom = [{ key: "ONLY_THIS" }];
