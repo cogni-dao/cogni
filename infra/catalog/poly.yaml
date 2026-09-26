@@ -58,7 +58,11 @@ lease_generation:
   # spent forever (actuator refuses a settled idempotence key), so the next activation
   # MUST present the one past them. Bump 0->3 so the promote of the #44 fix build mints
   # ONE fresh gen-3 lease (live-CLOB). Matches requiredLeaseGeneration over the ledger.
-  production: 3
+  # bug.5262 (2026-09-26) — promoting poly 8f371a7 (adds POLY_WALLET_AEAD_KEY_HEX secret_ref)
+  # did NOT cut over: an in-place Akash image UPDATE on live gen-3 left the provider serving
+  # old 82e2fb9 (34+ min; XR Ready but edge stale). In-place update is unreliable here. Bump
+  # 3->4 to force a fresh CREATE on 8f371a7 (reliable cutover); close gen-3 after gen-4 serves.
+  production: 4
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/poly/
