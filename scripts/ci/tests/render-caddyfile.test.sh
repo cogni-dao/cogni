@@ -99,7 +99,7 @@ for node in "${NODE_TARGETS[@]}"; do
   esac
 done
 
-echo "[7/7] production reconcile never launches or overlaps a full database backup"
+echo "[7/7] production reconcile contains backup load and retries the OpenBao login seam"
 DEPLOY_INFRA="scripts/ci/deploy-infra.sh"
 RUNTIME_COMPOSE="infra/compose/runtime/docker-compose.yml"
 grep -Fq 'if [[ "$DEPLOY_ENVIRONMENT" == candidate-* ]]; then' "$DEPLOY_INFRA" \
@@ -120,6 +120,12 @@ grep -Fq 'loki.source.journal "kernel"' "$ALLOY_CONFIG" \
   || fail "kernel OOM/SIGKILL evidence is not shipped to Loki"
 grep -Eq 'regex[[:space:]]*= .*postgres.*temporal-postgres' "$ALLOY_CONFIG" \
   || fail "PostgreSQL stderr is not shipped to Loki"
-pass "backup execution is candidate-gated + serialized; Postgres/kernel evidence is retained"
+grep -Fq 'login_reason="server_transient"' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer login has no bounded transient retry"
+grep -Fq 'login_reason="permission_denied_recheck"' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer login does not recheck a 403 with one fresh JWT"
+grep -Fq 'OpenBao writer login failed permanently' "$DEPLOY_INFRA" \
+  || fail "unknown OpenBao login failures do not fail closed"
+pass "backup execution is candidate-gated + serialized; OpenBao login retries are bounded and fail-closed"
 
 echo "PASS: render-caddyfile.test.sh"
