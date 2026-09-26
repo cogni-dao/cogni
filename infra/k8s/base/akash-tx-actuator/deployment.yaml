@@ -58,10 +58,13 @@ spec:
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef: { fieldPath: metadata.namespace }
-            # The ledger's wallet scope is `akash-console:<DEPLOY_ENVIRONMENT>`. It MUST match
-            # the `environment` the Composition sends, which the Composition itself pins to
-            # `cogni-<env>` == the namespace. Set BY NAME in every overlay (story.5016 Gate 0b:
-            # never a positional /env/N/value patch).
+            # The environment this writer RUNS in. It must match the `environment` the
+            # Composition sends, which the Composition pins to `cogni-<env>` == the namespace.
+            # It is NOT the ledger scope: since bug.5187 the scope is
+            # `akash-console:<AKASH_ACTUATOR_ACCOUNT_ID>`, because one Console account must be
+            # ONE serialization slot however many environments its writer mints for. Keyed on
+            # the environment, two writers on one account produced two slots and never
+            # collided. Set BY NAME in every overlay (story.5016 Gate 0b).
             - name: DEPLOY_ENVIRONMENT
               value: replace-in-overlay
             - name: AKASH_ALLOWED_PROVIDERS

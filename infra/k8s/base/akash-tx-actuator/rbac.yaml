@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 #
-# story.5016 — the actuator's migration gate is fail-CLOSED and the Composition lowers
-# `RequireBeforeTransaction` on every create/update of a cogni-node-app-v1 workload, so the
-# actuator must be able to run the per-digest migration Job itself. These are the ONLY
-# Kubernetes objects it touches.
+# story.5016 / task.5135 — the actuator runs the per-digest migration Job as a RELEASE step on
+# its unpaid OBSERVE tick, so it must be able to create and read that Job. It is NOT a gate: a
+# migration can no longer refuse a paid lease, which is why this Role is the actuator's ONLY
+# Kubernetes reach and why the PAID path now needs no Kubernetes access at all. FOLLOW-UP: with
+# the payment seam clean, the runner can leave the wallet-holding process and take this Role
+# with it.
 #
 # Derived from the adapter, not copied wholesale from compute-workload-controller's Role:
 # KubernetesMigrationJobAdapter calls readNamespacedJob (get), createNamespacedJob (create),
