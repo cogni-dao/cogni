@@ -234,7 +234,18 @@ jobs:
     # CI owns the schema + reproducible-render proof. Once it accepts the same
     # signed type, no runtime image can be affected, so this build lane and its
     # downstream required manifest context can be satisfied as skipped.
-    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
+    #
+    # Fork-lane guard (mirrors the manifest job): `resolve` is fork-skipped, so on
+    # a fork PR its checkout_repo/checkout_ref/pr_number outputs are empty. Without
+    # this guard, always() forced detect to run anyway — checking out the BASE repo
+    # at the triggering ref and diffing the wrong tree (green but meaningless, and
+    # one refactor from a hard-fail). Requiring resolve==success makes the whole
+    # pull_request build lane (detect→build→manifest) a clean skip on the fork lane,
+    # which is the intent: fork PRs build via the operator G2 (workflow_dispatch) lane.
+    if: |
+      always() &&
+      needs.resolve.result == 'success' &&
+      (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     outputs:
       has_targets: ${{ steps.detect.outputs.has_targets }}
