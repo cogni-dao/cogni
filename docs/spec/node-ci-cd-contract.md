@@ -138,13 +138,13 @@ Each was one team re-deriving the rule and picking the wrong half:
 | `cogni_poly` / `app_poly` collided with production's rows          | DB name omitted the lane suffix                   |
 | `production-db-reader` denied `cogni/candidate-a/poly`             | read policy scoped to lane only                   |
 | DoltHub mirror purge stripped production's creds on a lane promote | purge keyed on lane, not control env              |
-| `verify-candidate` polls forever with `not_observed`               | readiness host from lane, workload on control env |
+| `verify-candidate` polls forever with `resource_absent`            | readiness host from lane, workload on control env |
 | migration reports `succeeded` over an EMPTY lane database          | receipt namespace from control env, not lane      |
 
 The last one is instructive: the job is `environment: candidate-a` and passes
 `vm_host: ${{ secrets.VM_HOST }}`, so it SSHes to the candidate VM and asks for
 an object that only ever exists on production's cluster. `kubectl` returns
-`NotFound`, the poller reports `not_observed`, and the flight can never go green
+`NotFound`, the poller reports `resource_absent`, and the flight can never go green
 — a **structurally blind check**, not a flake.
 
 ### A receipt is scoped to what it proves

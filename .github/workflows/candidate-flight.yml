@@ -1558,7 +1558,7 @@ jobs:
 
       # A foreign-custodied lane's XCW lives on the CONTROL cluster (its AppSet is
       # rendered under appsets/<control-env>/), not on this candidate VM. Polling the
-      # candidate VM for it is a structurally guaranteed not_observed timeout
+      # candidate VM for it is a structurally guaranteed resource_absent timeout
       # (bug.5216, run 35281632015). Mirror the custody skip the AppSet-apply step
       # already does; for those lanes the external /version probe below is the gate.
       - name: Resolve lane custody
