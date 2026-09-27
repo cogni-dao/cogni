@@ -187,17 +187,44 @@ The current `user.delegates` relation is global—not scoped to tenant or graph.
 
 **P1 Scope:** Implement scoped delegation via `delegation` type with `{tenant, graph}` binding.
 
+### Known Limitation: env-management authority exceeds production-promote (destroy > deploy)
+
+The `env_manager` and `production_promoter` relations are orthogonal siblings, not a
+ladder — but the **destructiveness** each unlocks is inverted relative to the gate:
+
+| Operation                                 | Required relation     | Effect                                                                                                                                                      |
+| ----------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Promote a new SHA to a **running** prod   | `production_promoter` | additive, reversible (re-promote the prior digest)                                                                                                          |
+| **Remove the production env** from a node | `env_manager`         | tears prod down: `Argo prune → Crossplane REMOVE → actuator delete` of the env's **live paid Akash leases** (`DEACTIVATE_ENUMERATES_THE_MONEY`, story.5039) |
+
+So `env_manager` — the **lesser** authority that cannot promote a digest to production —
+can nonetheless **delete production entirely** via `POST /nodes/{id}/envs` remove
+(`MANAGE_ENVS_GATED`, `nodes/[id]/envs/route.ts`). The only guards on removal are
+structural, **not** production-specific: a node must remain in ≥1 env, and the current
+`activity_env` cannot be removed. Neither prevents an `env_manager` from removing
+`production` when it is neither the final env nor the activity env.
+
+**Status quo, by design intent** (env-topology management was scoped as its own narrow
+governance lane, distinct from digest promotion) **but the asymmetry is a latent
+privilege-inversion**: the more destructive action (teardown + paid-lease deletion) sits
+behind the weaker grant. A hardening step is to require **at least** `production_promoter`
+(or `admin`) to remove the `production` env, or to route production teardown through the
+full decommission lifecycle rather than the env verb. Tracked as a bug (see Related).
+
 ---
 
 ## Action→Relation Mapping
 
-| Action           | Resource Type     | OpenFGA Check                              | Error Code     |
-| ---------------- | ----------------- | ------------------------------------------ | -------------- |
-| `tool.execute`   | `tool:{id}`       | `check(actor, can_execute, tool:{id})`     | `authz_denied` |
-| `connection.use` | `connection:{id}` | `check(actor, can_use, connection:{id})`   | `authz_denied` |
-| `graph.invoke`   | `graph:{id}`      | `check(actor, can_invoke, graph:{id})`     | `authz_denied` |
-| `user.act_as`    | `user:{user_id}`  | `check(actor, delegates, user:{user_id})`  | `authz_denied` |
-| `node.flight`    | `node:{node_id}`  | `check(actor, can_flight, node:{node_id})` | `authz_denied` |
+| Action                    | Resource Type     | OpenFGA Check                                          | Error Code     |
+| ------------------------- | ----------------- | ------------------------------------------------------ | -------------- |
+| `tool.execute`            | `tool:{id}`       | `check(actor, can_execute, tool:{id})`                 | `authz_denied` |
+| `connection.use`          | `connection:{id}` | `check(actor, can_use, connection:{id})`               | `authz_denied` |
+| `graph.invoke`            | `graph:{id}`      | `check(actor, can_invoke, graph:{id})`                 | `authz_denied` |
+| `user.act_as`             | `user:{user_id}`  | `check(actor, delegates, user:{user_id})`              | `authz_denied` |
+| `node.flight`             | `node:{node_id}`  | `check(actor, can_flight, node:{node_id})`             | `authz_denied` |
+| `node.manage_envs`        | `node:{node_id}`  | `check(actor, can_manage_envs, node:{node_id})`        | `authz_denied` |
+| `node.promote_production` | `node:{node_id}`  | `check(actor, can_promote_production, node:{node_id})` | `authz_denied` |
+| `node.manage_secrets`     | `node:{node_id}`  | `check(actor, can_manage_secrets, node:{node_id})`     | `authz_denied` |
 
 **Delegation relation:** `user.delegates` grants agents the right to act on behalf of user. Dual-check queries `user.act_as` when `subject` is present.
 
@@ -206,6 +233,20 @@ developer authority for one node. In V0, registered external AI agents
 authenticate as user-backed machine principals (`user:{agent_user_id}`), so
 approval writes them as users. VNext can grant true `agent:{actor_id}`
 principals without changing the `node.flight` route check.
+
+**Node governance relations (`env_manager`, `production_promoter`, `secrets_manager`)**
+are **independent, orthogonal** sibling relations — each is `union(direct grant, admin)`,
+so only `admin` implies all three; none implies another. In particular
+`env_manager` does **not** confer `can_promote_production`, and
+`production_promoter` does **not** confer `can_manage_envs`. Which route each gates:
+
+| Relation              | Capability               | Gates                                                                                                                                                                                                    |
+| --------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `env_manager`         | `can_manage_envs`        | env activation **and deactivation** — `POST /nodes/{id}/envs` (add **or remove** any env), and `POST /deploy/promote env=preview` (source-addressed preview promote, story.5039 `PREVIEW_IS_MANUAL_TOO`) |
+| `production_promoter` | `can_promote_production` | `POST /deploy/promote env=production` only                                                                                                                                                               |
+| `secrets_manager`     | `can_manage_secrets`     | secret write/rotate for the node                                                                                                                                                                         |
+
+See the Known Limitation below — the `env_manager` / `production_promoter` split is **not** a strict ladder.
 
 ---
 
