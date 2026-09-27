@@ -22,6 +22,23 @@ patches:
   # env-specific ops below apply.
   - path: node-endpoints.patch.yaml
 
+  # bug.5188 — reclaim ~470MiB on the oversubscribed prod control VM (5.8GB,
+  # co-hosting the Compose stack + k3s). The base runs 2 replicas to kill the
+  # single-pod SPOF; in PRODUCTION at 0 users that HA margin is not worth the
+  # RAM on a VM that is starving its own control plane. Drop prod to 1 replica.
+  # Preview/candidate-a keep the base 2. See the base deployment comment for the
+  # coupling history (2026-06-25 fleet-502): the readiness coupling that made a
+  # worker outage a fleet outage has since been removed, and schedule lifecycle
+  # lives in the operator app (advisory-locked), so a single poller does not
+  # break correctness — reviewer to confirm no remaining hard 2-replica HA dep.
+  - target:
+      kind: Deployment
+      name: scheduler-worker
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
   - target:
       kind: ConfigMap
       name: scheduler-worker-config
