@@ -135,12 +135,16 @@ const DEFAULT_WRITE_TIMEOUT_MS = 8_000;
 const DEFAULT_WRITE_MAX_RETRIES = 2;
 const DEFAULT_WRITE_RETRY_BACKOFF_MS = 100;
 
-function openFgaClientConfig(
+export function openFgaClientConfig(
   config: OpenFgaAuthorizationAdapterConfig,
   storeId?: string
 ): ConstructorParameters<typeof OpenFgaClient>[0] {
   return {
     apiUrl: config.apiUrl,
+    // The adapter owns the only retry policy. Leaving the SDK default (3 retries
+    // on 429/5xx) active nests attempts beneath our non-cancelling deadline and
+    // can leave hidden writes running after the adapter has failed closed.
+    retryParams: { maxRetry: 0 },
     ...(storeId !== undefined ? { storeId } : {}),
     ...(config.apiToken !== undefined
       ? {
@@ -316,12 +320,9 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Retry a transient-failing async op with fixed backoff. OpenFGA's own SDKs retry
- * 3× on 429/5xx (min 100ms wait); our hand-rolled `withTimeout` race pre-empts that
- * built-in retry, so we restore it here for idempotent writes. A single cold-path
- * latency spike (connection re-establish — OpenFGA's documented p99 factor) that
- * crosses the per-attempt deadline is masked instead of surfacing a user-facing 503.
- * Only retries when `isTransientError`; deterministic 4xx fail on the first attempt.
+ * Retry a transient-failing async op with fixed backoff. The SDK's built-in retries
+ * are disabled at client construction so this is the sole retry policy. Only retries
+ * when `isTransientError`; deterministic 4xx fail on the first attempt.
  */
 async function withRetry<T>(
   fn: () => Promise<T>,
