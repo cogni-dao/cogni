@@ -211,3 +211,117 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
     ).toEqual({ ready: true });
   });
 });
+
+describe("bundle mismatch names the blocker (bug.5262)", () => {
+  // The two SHAs from the week-long poly production wedge: the gate waited on a
+  // bundle the status never named, and `bundle_not_observed` alone could not say
+  // whether the actuator was lagging or the workload was stuck on what it served.
+  const DESIRED = "8f371a7a58f01f307ca6b9c5d20f06f847f8b32b";
+  const SERVED = "ab472feda4720d36616103af6f4e7427c994a46e";
+
+  it("legacy ComputeWorkload: reason carries observed and expected shas", () => {
+    const want = {
+      ...expected,
+      spec: {
+        ...expected.spec,
+        bundle: { ref: "image@sha256:digest", source: { sha: DESIRED } },
+      },
+    };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want,
+        live: {
+          apiVersion: want.apiVersion,
+          kind: want.kind,
+          metadata: { ...want.metadata, generation: 2 },
+          spec: want.spec,
+          status: {
+            phase: "Ready",
+            observedGeneration: 2,
+            observedBundle: {
+              ref: "image@sha256:digest",
+              source: { sha: SERVED },
+            },
+            conditions: [
+              { type: "Ready", status: "True", observedGeneration: 2 },
+            ],
+          },
+        },
+      })
+    ).toEqual({
+      ready: false,
+      reason: "bundle_not_observed:observed=ab472fed:expected=8f371a7a",
+    });
+  });
+
+  it("XComputeWorkload: distinguishes a lagging actuator from a served-sha wedge", () => {
+    const spec = {
+      migration: { mode: "Skip" },
+      bootPolicy: { onDeadline: "Hold" },
+      bundle: { source: { sha: DESIRED } },
+    };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: {
+          apiVersion: "compute.cogni.io/v1alpha1",
+          kind: "XComputeWorkload",
+          metadata: { name: "4b06359a", namespace: "cogni-production" },
+          spec,
+        },
+        live: {
+          apiVersion: "compute.cogni.io/v1alpha1",
+          kind: "XComputeWorkload",
+          metadata: {
+            name: "4b06359a",
+            namespace: "cogni-production",
+            generation: 4,
+          },
+          spec: { ...spec, compositionRef: { name: "xcomputeworkload-akash" } },
+          status: {
+            phase: "Ready",
+            serving: true,
+            observedBundle: { source: { sha: SERVED } },
+            conditions: [
+              { type: "Synced", status: "True", observedGeneration: 4 },
+              { type: "Ready", status: "True", observedGeneration: 4 },
+            ],
+          },
+        },
+      })
+    ).toEqual({
+      ready: false,
+      reason: "bundle_not_observed:observed=ab472fed:expected=8f371a7a",
+    });
+  });
+
+  it("names an absent observedBundle rather than reporting a bare mismatch", () => {
+    const want = {
+      ...expected,
+      spec: {
+        ...expected.spec,
+        bundle: { ref: "image@sha256:digest", source: { sha: DESIRED } },
+      },
+    };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want,
+        live: {
+          apiVersion: want.apiVersion,
+          kind: want.kind,
+          metadata: { ...want.metadata, generation: 2 },
+          spec: want.spec,
+          status: {
+            phase: "Ready",
+            observedGeneration: 2,
+            conditions: [
+              { type: "Ready", status: "True", observedGeneration: 2 },
+            ],
+          },
+        },
+      })
+    ).toEqual({
+      ready: false,
+      reason: "bundle_not_observed:observed=none:expected=8f371a7a",
+    });
+  });
+});

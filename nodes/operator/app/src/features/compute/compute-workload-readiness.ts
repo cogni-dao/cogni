@@ -7,6 +7,27 @@ export type ComputeWorkloadReadiness =
   | { readonly ready: true }
   | { readonly ready: false; readonly reason: string };
 
+/**
+ * Name the two SHAs a bundle mismatch is actually about.
+ *
+ * Bare `bundle_not_observed` cannot distinguish "the actuator has not caught up yet"
+ * (wait) from "the cluster XR was never updated to want this bundle at all" (a wedged
+ * promote no amount of waiting fixes). Both sides are already in hand at the comparison,
+ * and telling them apart otherwise needs cluster access the promote gate does not have —
+ * which is why poly production sat for a week with `observedBundle` naming the SHA it was
+ * already serving (bug.5262). Same intent as the `phase_not_ready:<failureReason>` suffix
+ * below: a promote-gate timeout must name the actual blocker.
+ */
+function bundleMismatchReason(observed: unknown, expected: unknown): string {
+  const sha = (bundle: unknown): string => {
+    const value = asRecord(asRecord(bundle)?.source)?.sha;
+    return typeof value === "string" && value.length > 0
+      ? value.slice(0, 8)
+      : "none";
+  };
+  return `bundle_not_observed:observed=${sha(observed)}:expected=${sha(expected)}`;
+}
+
 /** Compare live controller state with the exact Git-rendered desired state. */
 export function assessComputeWorkloadReadiness(input: {
   readonly expected: unknown;
@@ -77,7 +98,10 @@ export function assessComputeWorkloadReadiness(input: {
     };
   }
   if (stableJson(status.observedBundle) !== stableJson(expectedBundle)) {
-    return { ready: false, reason: "bundle_not_observed" };
+    return {
+      ready: false,
+      reason: bundleMismatchReason(status.observedBundle, expectedBundle),
+    };
   }
 
   const conditions = Array.isArray(status.conditions) ? status.conditions : [];
@@ -160,7 +184,10 @@ function assessXComputeWorkloadReadiness(input: {
     expectedBundle !== undefined &&
     stableJson(status.observedBundle) !== stableJson(expectedBundle)
   ) {
-    return { ready: false, reason: "bundle_not_observed" };
+    return {
+      ready: false,
+      reason: bundleMismatchReason(status.observedBundle, expectedBundle),
+    };
   }
   if (status.phase !== "Ready") {
     const failureReason = asRecord(status.failure)?.reason;
