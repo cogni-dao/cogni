@@ -86,6 +86,15 @@ export type AkashTxErrorCode =
   | "outcome_unknown"
   /** Provider refused the request terminally (screening, rejected SDL, bad handle). */
   | "provider_rejected"
+  /**
+   * A specialization of `provider_rejected`: Console refused an in-place UPDATE because it would
+   * change a LIVE lease's resource topology (adds/removes a service, or changes cpu/mem/replica
+   * count) — its 4xx body carries `code=deployment_resources_changed`. Terminal and NON-retryable
+   * exactly like `provider_rejected` (bug.5247) — it is a rename of the cause, never a behaviour
+   * change. It exists only to name the one refusal an operator can actually fix by REPLACING the
+   * lease, so a node dev stops misreading an opaque wedge as an operator crash (bug.5257/bug.5259).
+   */
+  | "resource_topology_changed"
   /** Provider unreachable / timed out on a non-mutating call. */
   | "provider_unavailable"
   /** The referenced external resource does not exist at the provider. */

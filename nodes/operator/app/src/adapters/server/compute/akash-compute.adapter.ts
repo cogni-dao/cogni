@@ -285,18 +285,29 @@ const PROVIDER_DETAIL_VALUE_KEYS = ["code", "error", "type", "reason"] as const;
 const PROVIDER_DETAIL_MAX_CHARS = 200;
 const PROVIDER_BODY_MAX_CHARS = 2000;
 
-async function readProviderDetail(
-  response: Response
-): Promise<string | undefined> {
+/**
+ * The bounded, secret-free digest of a Console error body PLUS the structured `code` enum lifted
+ * out as a first-class field. `reasonCode` is the identifier-shaped `code` (e.g.
+ * `deployment_resources_changed`) — a typed provider reason classifiers match on directly, instead
+ * of regexing the folded digest (bug.5259). Both are allowlisted scalars; provider bodies (which
+ * echo the SDL and resolved secrets) are never retained.
+ */
+interface ProviderDetail {
+  readonly digest?: string;
+  readonly reasonCode?: string;
+}
+
+async function readProviderDetail(response: Response): Promise<ProviderDetail> {
   try {
     const text = (await response.text()).slice(0, PROVIDER_BODY_MAX_CHARS);
     const parsed: unknown = JSON.parse(text);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
+      return {};
     }
     const record = parsed as Record<string, unknown>;
     const keys = Object.keys(record).sort();
     const parts = keys.length > 0 ? [`keys=${keys.join(",")}`] : [];
+    let reasonCode: string | undefined;
     for (const key of PROVIDER_DETAIL_VALUE_KEYS) {
       const value = record[key];
       // Identifier-shaped only. A long or spacey value is prose, not an enum — leave it.
@@ -306,17 +317,22 @@ async function readProviderDetail(
         /^[\w.:-]+$/.test(value)
       ) {
         parts.push(`${key}=${value}`);
+        // The provider's machine reason lives under `code` — carry it as a typed field.
+        if (key === "code") reasonCode = value;
       } else if (typeof value === "number") {
         parts.push(`${key}=${value}`);
       }
     }
     const joined = parts.join(" ");
-    return joined === ""
-      ? undefined
-      : joined.slice(0, PROVIDER_DETAIL_MAX_CHARS);
+    const digest =
+      joined === "" ? undefined : joined.slice(0, PROVIDER_DETAIL_MAX_CHARS);
+    return {
+      ...(digest !== undefined ? { digest } : {}),
+      ...(reasonCode !== undefined ? { reasonCode } : {}),
+    };
   } catch {
     // Unreadable or non-JSON body. Never a reason to fail the request path.
-    return undefined;
+    return {};
   }
 }
 
@@ -1247,9 +1263,12 @@ export class AkashComputeAdapter
         throw new AkashComputeError(
           "HTTP_ERROR",
           `Console request failed with HTTP ${response.status}${
-            detail ? ` (${detail})` : ""
+            detail.digest ? ` (${detail.digest})` : ""
           }`,
-          response.status
+          response.status,
+          undefined,
+          undefined,
+          detail.reasonCode
         );
       }
       const json = (await response.json().catch(() => undefined)) as
@@ -1319,7 +1338,14 @@ export class AkashComputeError extends Error {
      * applies verbatim here. Callers use it to settle a durable receipt, so a false positive
      * would strand a paid lease; absent is always the safe answer.
      */
-    public readonly rolledBackDseq?: string
+    public readonly rolledBackDseq?: string,
+    /**
+     * The provider's structured machine reason — the identifier-shaped `code` from the Console
+     * error body (e.g. `deployment_resources_changed`), lifted out of the redacted digest so
+     * classifiers match a TYPED field instead of regexing the message (bug.5259). Allowlisted
+     * scalar only; never carries prose or secrets.
+     */
+    public readonly consoleReasonCode?: string
   ) {
     super(message);
     this.name = "AkashComputeError";

@@ -564,6 +564,33 @@ describe("akash-tx identity on the wire (task.5103)", () => {
   });
 });
 
+describe("resource_topology_changed maps to a terminal 422 (bug.5259)", () => {
+  it("maps the specialized rejection to 422, like provider_rejected", async () => {
+    const dispatch = dispatcherFor(
+      stubActuator({
+        create: async () => {
+          throw new AkashTxError(
+            "resource_topology_changed",
+            "replacement rollout required"
+          );
+        },
+      })
+    );
+
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: AUTH,
+      body: JSON.stringify(VALID_CREATE),
+    });
+
+    // Same terminal 422 as provider_rejected — a specialization, not a behaviour change — but a
+    // distinct code the Composition can put in a self-explaining XR condition.
+    expect(response.status).toBe(422);
+    expect(response.body).toMatchObject({ code: "resource_topology_changed" });
+  });
+});
+
 describe("lease-log-sources route (bug.5240)", () => {
   it("dispatches an authorized read and returns the snapshot", async () => {
     const sources = [
