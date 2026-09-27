@@ -167,5 +167,85 @@ if ! grep -q 'SOURCE_SHA_MAP has no entry' "${TMPROOT}/out-case6.log"; then
 fi
 echo "[PASS] NODES-missing-from-map-fails"
 
+# --- bug.5183: content-marker gate (VERIFY_BUNDLE_MARKER=1) ---
+# A fake curl that answers /version with EXPECTED, and the SHA-addressed static
+# marker (/__cogni-build/<sha>.txt) with whatever body a case seeds. This is the
+# whole point of the gate: /version can be honest while the served bundle is not.
+make_marker_curl() {
+  local marker_body="$1"
+  local script="${TMPROOT}/marker-curl-${RANDOM}.sh"
+  cat >"$script" <<EOF
+#!/usr/bin/env bash
+url="\$1"
+case "\$url" in
+  *__cogni-build*) printf '%s' "${marker_body}" ;;
+  *) printf '{"version":"0.1.0","buildSha":"%s","buildTime":"t"}' "${EXPECTED}" ;;
+esac
+EOF
+  chmod +x "$script"
+  echo "$script"
+}
+
+marker_map="${TMPROOT}/marker-map.json"
+cat >"$marker_map" <<EOF
+{ "operator": "${EXPECTED}" }
+EOF
+
+# --- Case 7: marker returns the flighted SHA → content proof passes ---
+fake7=$(make_marker_curl "${EXPECTED}")
+set +e
+CURL_CMD="$fake7" CUTOVER_TIMEOUT=10 CUTOVER_SLEEP=1 MARKER_TIMEOUT=5 MARKER_SLEEP=1 \
+  VERIFY_BUNDLE_MARKER=1 \
+  DOMAIN="example.test" SOURCE_SHA_MAP="$marker_map" \
+  bash "$VERIFY_SCRIPT" >"${TMPROOT}/out-case7.log" 2>&1
+ex7=$?
+set -e
+if [ "$ex7" -ne 0 ]; then
+  echo "[FAIL] marker-matches: expected exit 0, got ${ex7}"
+  cat "${TMPROOT}/out-case7.log"
+  exit 1
+fi
+echo "[PASS] marker-matches-served-bundle"
+
+# --- Case 8: /version honest but marker 404s (empty body) → HARD FAIL ---
+# This is the exact bug.5183 signature: /version reports the flighted SHA while
+# a different image serves the bundle, so the SHA-addressed marker is absent.
+fake8=$(make_marker_curl "")
+set +e
+CURL_CMD="$fake8" CUTOVER_TIMEOUT=10 CUTOVER_SLEEP=1 MARKER_TIMEOUT=3 MARKER_SLEEP=1 \
+  VERIFY_BUNDLE_MARKER=1 \
+  DOMAIN="example.test" SOURCE_SHA_MAP="$marker_map" \
+  bash "$VERIFY_SCRIPT" >"${TMPROOT}/out-case8.log" 2>&1
+ex8=$?
+set -e
+if [ "$ex8" -eq 0 ]; then
+  echo "[FAIL] marker-absent-must-fail: expected non-zero exit, got 0"
+  cat "${TMPROOT}/out-case8.log"
+  exit 1
+fi
+if ! grep -q 'static bundle marker' "${TMPROOT}/out-case8.log"; then
+  echo "[FAIL] marker-absent-must-fail: expected marker failure message"
+  cat "${TMPROOT}/out-case8.log"
+  exit 1
+fi
+echo "[PASS] marker-absent-fails-even-when-version-honest"
+
+# --- Case 9: marker disabled (default) → /version-only, no marker probe ---
+# Guards backward-compat: unaffected apps on older images (no marker) must not
+# false-fail when VERIFY_BUNDLE_MARKER is unset.
+fake9=$(make_marker_curl "")
+set +e
+CURL_CMD="$fake9" CUTOVER_TIMEOUT=10 CUTOVER_SLEEP=1 \
+  DOMAIN="example.test" SOURCE_SHA_MAP="$marker_map" \
+  bash "$VERIFY_SCRIPT" >"${TMPROOT}/out-case9.log" 2>&1
+ex9=$?
+set -e
+if [ "$ex9" -ne 0 ]; then
+  echo "[FAIL] marker-disabled-default: expected exit 0, got ${ex9}"
+  cat "${TMPROOT}/out-case9.log"
+  exit 1
+fi
+echo "[PASS] marker-disabled-by-default"
+
 echo ""
 echo "✅ verify-buildsha.test.sh — all cases passed"

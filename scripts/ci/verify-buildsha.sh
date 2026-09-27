@@ -23,6 +23,21 @@
 # Contract (both modes): `/version.buildSha` equals the expected SHA for this
 # node. Any mismatch is a hard failure regardless of prior workflow status.
 #
+# Content proof (bug.5183, opt-in via VERIFY_BUNDLE_MARKER=1): `/version` is a
+# force-dynamic server route reading APP_BUILD_SHA from env. It can report a SHA
+# that a DIFFERENT container/image is actually serving the client bundle from
+# (rollout split-brain, two concurrent instances, or a mislabelled APP_BUILD_SHA)
+# — so a green /version check is NOT proof the deployed STATIC bundle matches.
+# When VERIFY_BUNDLE_MARKER=1, after /version matches we ALSO fetch the
+# SHA-addressed static marker the image bakes at build time
+# (Dockerfile → public/__cogni-build/<sha>.txt) and require it to return the
+# expected SHA. That file lives in the served image's static layer at a
+# per-SHA-unique path, so it (a) proves the bytes the ORIGIN serves came from
+# the flighted image and (b) cannot be aliased by an immutable/edge cache from a
+# prior build. This is OPT-IN because affected-only promotes legitimately leave
+# some apps on older images that predate the marker; enable it only where every
+# probed app is a fresh build of this image (candidate-flight single-SHA mode).
+#
 # Endpoint choice (task.0345 / PR #978): we probe the dedicated `/version`
 # endpoint rather than `/readyz`. Rationale:
 #   - `/version` is unauthenticated and dependency-free (no env, secrets, RPC,
@@ -86,6 +101,14 @@ MARKER_DIR="${MARKER_DIR:-}"
 # and SHOULD fail loudly — do not inflate this number to mask pathologies.
 CUTOVER_TIMEOUT="${CUTOVER_TIMEOUT:-90}"
 CUTOVER_SLEEP="${CUTOVER_SLEEP:-5}"
+
+# bug.5183 content proof (opt-in). When VERIFY_BUNDLE_MARKER=1, each node that
+# passes the /version check is additionally required to serve its SHA-addressed
+# static marker (/__cogni-build/<sha>.txt). The origin is already up by then
+# (/version converged), so this is a short poll, not a cutover wait.
+VERIFY_BUNDLE_MARKER="${VERIFY_BUNDLE_MARKER:-}"
+MARKER_TIMEOUT="${MARKER_TIMEOUT:-30}"
+MARKER_SLEEP="${MARKER_SLEEP:-3}"
 
 # Only node-apps expose /version via HTTPS Ingress. scheduler-worker and
 # migrator are promoted-apps too but are in-cluster only — they're covered
@@ -234,19 +257,64 @@ check_node() {
   done
 }
 
+# bug.5183: fetch the SHA-addressed static marker baked into the image and
+# assert the ORIGIN returns the expected SHA as its body. Unlike /version (a
+# dynamic route that can be answered by a different container than the one
+# serving the bundle), the marker is a real file in the image's served static
+# layer at a per-SHA-unique path — a 200 with the matching SHA proves the bytes
+# the origin serves came from the flighted image, and the unique path means no
+# immutable/edge cache from a prior build can alias it. Returns 0 on match,
+# 1 on timeout. Reuses CURL_CMD (body-only), matching /version's injection model.
+check_bundle_marker() {
+  local node="$1" expected="$2" url="$3"
+  local deadline=$(( SECONDS + MARKER_TIMEOUT ))
+  local attempts=0 body="" got=""
+
+  while :; do
+    attempts=$((attempts + 1))
+    body=$($CURL_CMD "$url" 2>/dev/null || echo "")
+    got=$(printf '%s' "$body" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+
+    if [ "$got" = "$expected" ] && [ -n "$got" ]; then
+      echo "  ✅ ${node}: static bundle marker /__cogni-build/${expected:0:12}… confirms served image is the flighted SHA (attempt ${attempts})"
+      return 0
+    fi
+
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "  ❌ ${node}: static bundle marker ${url} did NOT return SHA ${expected:0:12} after ${MARKER_TIMEOUT}s / ${attempts} attempts (got: '${got:0:64}')."
+      echo "     /version reported the expected SHA but the served STATIC layer is not the flighted image — a different container/image is serving the client bundle (bug.5183 split-brain / stale-bundle signature)."
+      return 1
+    fi
+
+    sleep "$MARKER_SLEEP"
+  done
+}
+
 FAILED=0
 
 for node in "${NODE_ARR[@]}"; do
   expected="${EXPECTED_BY_NODE[$node]}"
-  url="https://$(host_for_node "$node" "$DOMAIN")/version"
+  host="$(host_for_node "$node" "$DOMAIN")"
+  url="https://${host}/version"
 
-  if check_node "$node" "$expected" "$url"; then
-    if [ -n "$MARKER_DIR" ]; then
-      mkdir -p "$MARKER_DIR"
-      printf 'true' > "${MARKER_DIR}/verified-${node}.txt"
-    fi
-  else
+  if ! check_node "$node" "$expected" "$url"; then
     FAILED=1
+    continue
+  fi
+
+  # bug.5183 content proof: prove the served STATIC bundle — not just the
+  # dynamic /version route — came from the flighted image.
+  if [ "$VERIFY_BUNDLE_MARKER" = "1" ]; then
+    marker_url="https://${host}/__cogni-build/${expected}.txt"
+    if ! check_bundle_marker "$node" "$expected" "$marker_url"; then
+      FAILED=1
+      continue
+    fi
+  fi
+
+  if [ -n "$MARKER_DIR" ]; then
+    mkdir -p "$MARKER_DIR"
+    printf 'true' > "${MARKER_DIR}/verified-${node}.txt"
   fi
 done
 
