@@ -362,7 +362,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
       templateCode.indexOf(
         "spec.leaseEpoch and spec.leaseGeneration disagree; refusing to choose an idempotence key"
       )
-    ).toBeLessThan(templateCode.indexOf('$baseCogniKey := printf'));
+    ).toBeLessThan(templateCode.indexOf("$baseCogniKey := printf"));
     expect(templateCode).toContain(
       '$leaseGeneration = int (get $spec "leaseGeneration")'
     );
@@ -805,9 +805,8 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
       'if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace")'
     );
     const onGiveUp = (
-      ((specSchema.bootPolicy as YamlObject).properties as YamlObject)
-        .onGiveUp as YamlObject
-    );
+      (specSchema.bootPolicy as YamlObject).properties as YamlObject
+    ).onGiveUp as YamlObject;
     expect(onGiveUp.enum).toEqual(["Hold"]);
     expect(onGiveUp.default).toBe("Hold");
     expect(template).toContain('$failReason = "LeaseClosed"');
