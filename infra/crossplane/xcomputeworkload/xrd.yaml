@@ -26,10 +26,11 @@
 #      at the TOP level of the schema. An XRD's openAPIV3Schema may only define `spec` and
 #      `status`, so that rule cannot live here. It is enforced instead by the Composition's
 #      first pipeline step, which refuses to render any managed resource when they disagree.
-#   2. `status.attempt` / `status.recoveryCount` / `status.failure.retryable` are GONE. They
-#      encoded the bespoke controller's retry budget and leader-epoch bookkeeping — exactly
-#      the generic reconciliation Crossplane now owns (retries, backoff, conditions,
-#      finalizers). Keeping them would re-create a second controller in a schema.
+#   2. `status.attempt` / `status.failure.retryable` are GONE. They encoded the bespoke
+#      controller's leader-epoch and transport-retry bookkeeping — generic reconciliation that
+#      Crossplane owns. The PAID replacement budget is deliberately retained as the smaller
+#      `status.recovery` block: Crossplane backoff cannot replace a terminally settled actuator
+#      key, and deleting that three-attempt budget created zero automatic recovery (bug.5287).
 #   3. `spec.migration`, `spec.dns`, `spec.bootPolicy`, `spec.runtime` and `spec.leaseGeneration` are
 #      NEW. Each was implicit policy inside the controller binary or, worse, derived from a
 #      SECRET VALUE. A declarative API reconciled by an OSS engine that never sees a secret has
@@ -338,6 +339,21 @@ spec:
                       type: string
                       enum: [Hold, Close]
                       default: Hold
+                    onGiveUp:
+                      description: >-
+                        What bounded lease recovery may do when the CURRENT key's lease is
+                        found closed (bug.5287). `Hold` (the PERMANENT default) parks the
+                        workload as LeaseClosed and spends nothing — a human bumps
+                        spec.leaseGeneration to mint a replacement. `Replace` (opt-in per
+                        (node, env), NEVER global) will authorize the bounded `:recover:<n>`
+                        re-mint — but it is deliberately NOT in this enum yet: the schema
+                        admits only Hold until provider-strike recording is re-homed in the
+                        actuator, so an early Replace catalog cell is rejected by the CRD
+                        instead of by prose. Widening the enum is that later change's whole
+                        diff surface.
+                      type: string
+                      enum: [Hold]
+                      default: Hold
                 leaseEpoch:
                   description: >-
                     DEPRECATED read-side alias for leaseGeneration, retained ONLY so the
@@ -357,19 +373,21 @@ spec:
                   maximum: 1000000
                 leaseGeneration:
                   description: >-
-                    Operator-driven replacement counter, and the ONLY varying component of the
-                    actuator's wallet-wide idempotence key
+                    Operator-driven BASE replacement counter for the actuator's wallet-wide
+                    idempotence key
                     (`xcw:<namespace>:<name>:<lease-generation>`).
-                    A key that changed on its own — per generation, per resourceVersion, per
-                    retry — would answer "no existing resource" after a promote and mint a
-                    SECOND PAID LEASE, so nothing in this system is allowed to bump it
-                    implicitly. NAME (task.5122): this field was `leaseEpoch`. `epoch` is
+                    A base key that changed on its own — per metadata generation, resourceVersion,
+                    or transport retry — would answer "no existing resource" after a promote and
+                    mint a SECOND PAID LEASE, so nothing in this system is allowed to bump this
+                    field implicitly. Crossplane may derive only the explicitly bounded
+                    `:recover:<1..3>` child keys after actor read-back proves the current key is
+                    terminally closed; that budget is exposed in status.recovery and hard-stops
+                    after three (bug.5287). NAME (task.5122): this field was `leaseEpoch`. `epoch` is
                     reserved for the attribution/distribution domain — contributor activity
                     windows, claimants, payouts — so a compute-lease replacement counter is a
                     GENERATION. The rename changed no VALUE; no idempotence key moved. A human or the materializer bumps it exactly when a terminally
-                    closed lease must be REPLACED (the actuator refuses to re-spend a settled
-                    key by design, which is what makes a stuck workload loud instead of
-                    expensive).
+                    closed generation has exhausted its bounded recovery budget and must be
+                    deliberately re-opened.
                   type: integer
                   minimum: 0
                   maximum: 1000000
@@ -472,11 +490,24 @@ spec:
                         pattern: "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
                       }
                     message: { type: string, maxLength: 256 }
+                # PAID RECOVERY BUDGET (bug.5287). Crossplane owns this state machine; it is not
+                # a shadow controller receipt. The tuple says exactly which operator-controlled
+                # leaseGeneration the count belongs to, the next/active recovery ordinal, the
+                # immutable cap, and the wallet-wide key currently being observed. An explicit
+                # leaseGeneration bump resets the block; reconcile ticks never do.
+                recovery:
+                  type: object
+                  properties:
+                    leaseGeneration:
+                      { type: integer, minimum: 0, maximum: 1000000 }
+                    count: { type: integer, minimum: 1, maximum: 3 }
+                    maxAttempts: { type: integer, enum: [3] }
+                    key: { type: string, minLength: 1, maxLength: 512 }
                 bootDeadlineAt: { type: string, format: date-time }
-                # BOOT EPOCH (bug.5244). The (bundle sha, leaseGeneration) attempt this
-                # XR's boot deadline is anchored to, and when that window opened. Latched
-                # by the composition so a NEW attempt gets a fresh window instead of
-                # inheriting the XR's age.
+                # BOOT EPOCH (bug.5244, bug.5287). The (bundle sha, leaseGeneration,
+                # optional recovery ordinal) attempt this XR's boot deadline is anchored to,
+                # and when that window opened. Latched by the composition so a NEW attempt gets
+                # a fresh window instead of inheriting the XR's age.
                 bootEpoch:
                   type: object
                   properties:

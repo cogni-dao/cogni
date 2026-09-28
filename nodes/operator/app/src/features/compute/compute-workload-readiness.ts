@@ -57,7 +57,8 @@ function bundleMismatchReason(observed: unknown, expected: unknown): string {
  * key survives the status merge and latches the previous reason — so "None" means
  * no failure, never `phase_not_ready:None`. This reader tolerance ships BEFORE the
  * composition emits the sentinel (akash-actuator-first-rollout: the reader accepts
- * the new shape before the writer produces it).
+ * the new shape before the writer produces it). Keep this compatibility arm until
+ * every deployed composition revision has stopped emitting the sentinel.
  */
 function phaseNotReadyReason(status: Record<string, unknown>): string {
   const failureReason = asRecord(status.failure)?.reason;

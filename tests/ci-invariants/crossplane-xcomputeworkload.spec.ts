@@ -16,8 +16,9 @@
  *     placeholder; a literal value in this directory is unrecoverable once it reaches git.
  *   - WIRE_IS_THE_5095_CONTRACT: @contracts/compute.akash-tx.v1 is a zod strictObject, so an
  *     extra key is a permanent 400 rather than a degraded mode.
- *   - KEY_IS_STABLE: the actuator's cogniKey is the wallet-wide idempotence boundary. A key
- *     built from anything that changes per reconcile mints a SECOND PAID LEASE.
+ *   - KEY_IS_BOUNDED: the actuator's cogniKey is the wallet-wide idempotence boundary. Its base
+ *     never changes per reconcile; only a terminal actor read-back may select one of three
+ *     deterministic recovery children.
  *   - CLOSED_IS_REMOVED: a released lease still resolves to a handle, so `found` alone would
  *     never go false and a deleted XR could never finish deleting.
  *   - NARROWEST_ACTIVATION: exactly one managed type is activated, and it is namespaced.
@@ -307,22 +308,35 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(template).toContain("$desiredSha := $spec.bundle.source.sha");
   });
 
-  it("keeps the idempotence key stable for the life of the workload", () => {
-    // namespace + name are immutable (name == nodeId). The ONLY varying component is
-    // spec.leaseGeneration, which nothing bumps implicitly — a key that changed per reconcile
-    // would report "no existing resource" after a promote and mint a SECOND PAID LEASE.
+  it("keeps the base idempotence key stable and bounds terminal recovery", () => {
+    // namespace + name are immutable (name == nodeId). The base varies only with the explicit
+    // spec.leaseGeneration; reconcile ticks and metadata generations cannot mint another lease.
     expect(template).toContain(
-      '$cogniKey := printf "xcw:%s:%s:%d" $ns $name $leaseGeneration'
+      '$baseCogniKey := printf "xcw:%s:%s:%d" $ns $name $leaseGeneration'
     );
-    // Scoped to the KEY, not the whole template: task.5103 legitimately reads
-    // metadata.generation for the spend receipt's provenance. What must never happen is that
-    // per-reconcile value leaking into the IDEMPOTENCE key, where it would report "no existing
-    // resource" after a promote and mint a SECOND PAID LEASE. The two uses are opposites — one
-    // records which revision asked, the other must not vary at all.
+    // Scoped to the BASE KEY, not the whole template: task.5103 legitimately reads
+    // metadata.generation for receipt provenance, but it must never leak into paid identity.
     const keyInputs = ["$ns", "$name", "$leaseGeneration"];
     const keyLiteral =
-      /\$cogniKey := printf "[^"]*"([^}]*)\}\}/.exec(templateCode)?.[1] ?? "";
+      /\$baseCogniKey := printf "[^"]*"([^}]*)\}\}/.exec(templateCode)?.[1] ??
+      "";
     expect(keyLiteral.trim().split(/\s+/)).toEqual(keyInputs);
+    // bug.5287: a settled actor key cannot be re-spent, so Crossplane may advance only through
+    // three deterministic children, and only after the response is tied to the CURRENT key and
+    // proves it closed. There is no clock/resourceVersion/reconcile-derived namespace.
+    expect(templateCode).toContain("$maxRecoveryAttempts := 3");
+    expect(templateCode).toContain(
+      '$currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount'
+    );
+    expect(templateCode).toContain(
+      "$closedForCurrentKey := and $closed (eq $responseKey $currentKey)"
+    );
+    expect(templateCode).toContain(
+      "$recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts)"
+    );
+    expect(templateCode).toContain(
+      "if and $closedForCurrentKey (not $recoveryExhausted)"
+    );
     // ZERO-DOWNTIME WIRE RENAME (task.5105 -> task.5122). NOTHING writes leaseEpoch any more
     // (see compute-workload-manifest.test.ts "never writes the deprecated leaseEpoch alias"),
     // but XRs committed on deploy/<env>-<node> refs BEFORE the rename still carry it, so the
@@ -348,7 +362,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
       templateCode.indexOf(
         "spec.leaseEpoch and spec.leaseGeneration disagree; refusing to choose an idempotence key"
       )
-    ).toBeLessThan(templateCode.indexOf("$cogniKey := printf"));
+    ).toBeLessThan(templateCode.indexOf("$baseCogniKey := printf"));
     expect(templateCode).toContain(
       '$leaseGeneration = int (get $spec "leaseGeneration")'
     );
@@ -766,6 +780,49 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     // server and takes the whole status write — and the refusal — down with it.
     expect(failureProps.message).toMatchObject({ maxLength: 256 });
     expect(template).toContain("$failMessage = substr 0 256 $refusalMessage");
+  });
+
+  it("emits failure unconditionally — 'None' sentinel clears a stale reason (bug.5287)", () => {
+    // Omitting the key does not clear it: the status merge preserves the previous value, so
+    // a recovered workload kept its stale failure.reason (ledger_unavailable under
+    // Progressing) latched for days on four XRs — status lied until someone bumped the
+    // generation. The composition therefore ALWAYS writes failure, with "None" as the
+    // cleared sentinel; compute-workload-readiness treats "None" as absent (reader
+    // tolerance shipped FIRST — akash-actuator-first-rollout).
+    expect(template).toContain('reason: "None"');
+    // The sentinel must satisfy the XRD reason pattern or the whole status write is rejected.
+    expect("None").toMatch(reasonPattern);
+  });
+
+  it("makes paid replacement opt-in and structurally unreachable (bug.5287 onGiveUp)", () => {
+    // TWO independent fences on the paid re-mint. (1) The composition only bumps the
+    // recovery key when bootPolicy.onGiveUp is Replace; Hold — the PERMANENT default —
+    // parks a closed lease as LeaseClosed with zero spend. (2) The XRD enum admits ONLY
+    // Hold until provider strikes are re-homed in the actuator, so an early Replace
+    // catalog cell is rejected by the CRD, not by prose ("if it's global, tier 4 happens
+    // by accident the moment someone adds a node").
+    expect(template).toContain(
+      'if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace")'
+    );
+    const onGiveUp = (
+      (specSchema.bootPolicy as YamlObject).properties as YamlObject
+    ).onGiveUp as YamlObject;
+    expect(onGiveUp.enum).toEqual(["Hold"]);
+    expect(onGiveUp.default).toBe("Hold");
+    expect(template).toContain('$failReason = "LeaseClosed"');
+  });
+
+  it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {
+    // A closed lease whose response key does not match the current key must PARK, not
+    // re-render: rendering under a settled key is refused by the actuator with
+    // akash_tx_create_refused_settled_key on EVERY reconcile forever. The held/foreign
+    // terms below are what stand between bounded recovery and unbounded churn.
+    expect(template).toContain(
+      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey)))"
+    );
+    expect(template).toContain(
+      '$heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace")'
+    );
   });
 
   it("derives retryability from the HTTP status, not a table of codes", () => {
