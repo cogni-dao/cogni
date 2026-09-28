@@ -77,6 +77,43 @@ export interface OrientationEntry {
   content: string;
 }
 
+/** Minimal read surface `resolveOrientation` needs from the knowledge store. */
+export interface OrientationLookupPort {
+  getKnowledge(
+    id: string
+  ): Promise<{ id: string; content: string } | null | undefined>;
+}
+
+/**
+ * Resolve the current-node orientation entry by direct id lookup.
+ *
+ * The domain scan that feeds the skills index only reads the newest
+ * PER_DOMAIN_LIMIT rows per domain, so once a domain outgrows the limit an
+ * older `<slug>-agent-orientation` entry silently drops out of the scan and
+ * the bundle reports it as unseeded (bug.5280). Direct lookup by exact id is
+ * the ground truth; the scan result is only a fallback for suffix-named
+ * entries, and the generic starter seed every node inherits comes last.
+ */
+export async function resolveOrientation(
+  port: OrientationLookupPort,
+  exactOrientationId: string,
+  scannedOrientationId: string | null
+): Promise<OrientationEntry | null> {
+  const candidates = [
+    exactOrientationId,
+    scannedOrientationId,
+    "cogni-agent-orientation",
+  ];
+  for (const id of candidates) {
+    if (!id) continue;
+    const entry = await port.getKnowledge(id);
+    if (entry) {
+      return { id: entry.id, content: entry.content };
+    }
+  }
+  return null;
+}
+
 export interface RenderBundleInput {
   node: string;
   name: string;

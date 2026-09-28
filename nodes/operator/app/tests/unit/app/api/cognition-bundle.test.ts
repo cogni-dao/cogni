@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import {
   renderBundleMarkdown,
+  resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
   SESSION_WATCH_GATE,
 } from "@/app/api/v1/cognition/_bundle";
@@ -166,5 +167,52 @@ describe("renderBundleMarkdown", () => {
 
     expect(markdown).toContain("## Orientation — recall this first");
     expect(markdown).toContain("No `operator-agent-orientation` entry yet");
+  });
+});
+
+describe("resolveOrientation", () => {
+  const port = (rows: Record<string, string>) => ({
+    getKnowledge: async (id: string) =>
+      id in rows ? { id, content: rows[id] } : null,
+  });
+
+  it("finds the exact-id entry even when the domain scan missed it (bug.5280)", async () => {
+    // Repro: domain outgrew PER_DOMAIN_LIMIT, so the scan never saw the old
+    // orientation row and passed scannedOrientationId=null. Direct lookup
+    // must still resolve it.
+    const result = await resolveOrientation(
+      port({ "operator-agent-orientation": "the map" }),
+      "operator-agent-orientation",
+      null
+    );
+    expect(result).toEqual({
+      id: "operator-agent-orientation",
+      content: "the map",
+    });
+  });
+
+  it("falls back to the scan-found suffix entry when the exact id is absent", async () => {
+    const result = await resolveOrientation(
+      port({ "legacy-agent-orientation": "older map" }),
+      "operator-agent-orientation",
+      "legacy-agent-orientation"
+    );
+    expect(result?.id).toBe("legacy-agent-orientation");
+  });
+
+  it("falls back to the generic starter seed last, else null", async () => {
+    const seeded = await resolveOrientation(
+      port({ "cogni-agent-orientation": "starter" }),
+      "operator-agent-orientation",
+      null
+    );
+    expect(seeded?.id).toBe("cogni-agent-orientation");
+
+    const empty = await resolveOrientation(
+      port({}),
+      "operator-agent-orientation",
+      null
+    );
+    expect(empty).toBeNull();
   });
 });
