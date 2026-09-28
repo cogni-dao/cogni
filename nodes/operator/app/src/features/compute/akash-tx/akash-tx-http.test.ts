@@ -241,6 +241,56 @@ describe("akash-tx dispatcher", () => {
     });
   });
 
+  it("logs host-routed serving truth without collapsing an absent probe to false", async () => {
+    const infos: Array<{ fields: Record<string, unknown>; msg: string }> = [];
+    const dispatch = createAkashTxDispatcher({
+      actuator: stubActuator({
+        observe: async () => ({
+          found: true,
+          resource: {
+            externalName: "7001",
+            state: "active",
+            endpoints: ["provider.example:80"],
+          },
+        }),
+      }),
+      token: TOKEN,
+      log: {
+        info: (fields: Record<string, unknown>, msg: string) =>
+          infos.push({ fields, msg }),
+        warn: () => {},
+        error: () => {},
+      },
+    });
+    const expectedSourceSha = "a".repeat(40);
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/observe",
+      authorization: AUTH,
+      body: JSON.stringify({
+        cogniKey: "xcw:cogni-preview:node-1:0",
+        expectedSourceSha,
+        publicHost: "node-preview.cognidao.org",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(infos).toEqual([
+      {
+        msg: "akash_tx_host_routed_probe_result",
+        fields: {
+          cogniKey: "xcw:cogni-preview:node-1:0",
+          publicHost: "node-preview.cognidao.org",
+          expectedSourceSha,
+          found: true,
+          resourceState: "active",
+          endpointCount: 1,
+          serving: null,
+        },
+      },
+    ]);
+  });
+
   it("maps an unresolved allocation to 409 and an unknown outcome to 502", async () => {
     const unresolved = dispatcherFor(
       stubActuator({

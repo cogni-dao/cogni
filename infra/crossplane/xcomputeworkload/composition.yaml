@@ -583,13 +583,12 @@ spec:
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
-                        {{- /* bug.5237 PHASE 2 (deliberately NOT emitted yet): add
-                          `publicHost: {{ $publicHost }}` here so serving is proven through
-                          the provider's host-routed path. The actuator's observe schema is
-                          a strictObject — emitting the key before every environment's
-                          actuator image carries the phase-1 schema turns each observe into
-                          a 400 and freezes reconciliation fleet-wide. Flip this line only
-                          after the phase-1 actuator is deployed everywhere. */}}
+                        {{- /* bug.5237 PHASE 2. Phase 1's strict-schema reader is deployed in
+                          every environment, so OBSERVE can now require the real host-routed
+                          path instead of mistaking a healthy bare ingress for the hostname
+                          that users reach. Keep this field on OBSERVE only: it is proof input,
+                          never paid-mutation input. */}}
+                        publicHost: {{ $publicHost | quote }},
                         expectedSourceSha: {{ $desiredSha | quote }}{{ if $hasMigrationStep }},
                         workload: .payload.body.spec.name,
                         environment: .payload.body.environment,
