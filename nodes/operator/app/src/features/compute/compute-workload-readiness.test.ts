@@ -95,6 +95,24 @@ describe("assessComputeWorkloadReadiness", () => {
       })
     ).toEqual({ ready: false, reason: "phase_not_ready" });
   });
+
+  it("treats the 'None' cleared-failure sentinel as no failure (bug.5287)", () => {
+    // The composition emits status.failure UNCONDITIONALLY (an omitted key survives
+    // the status merge and latches the stale reason), with "None" as the cleared
+    // sentinel. It must read as absent, never as phase_not_ready:None.
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: live({
+          status: {
+            ...live().status,
+            phase: "Progressing",
+            failure: { reason: "None", message: "" },
+          },
+        }),
+      })
+    ).toEqual({ ready: false, reason: "phase_not_ready" });
+  });
 });
 
 describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () => {
@@ -170,6 +188,18 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
     expect(
       assessComputeWorkloadReadiness({ expected: xExpected, live: failed })
     ).toEqual({ ready: false, reason: "phase_not_ready:ProviderRejected" });
+  });
+
+  it("treats the 'None' cleared-failure sentinel as no failure on the composite too (bug.5287)", () => {
+    const progressing = xLive();
+    (progressing.status as Record<string, unknown>).phase = "Progressing";
+    (progressing.status as Record<string, unknown>).failure = {
+      reason: "None",
+      message: "",
+    };
+    expect(
+      assessComputeWorkloadReadiness({ expected: xExpected, live: progressing })
+    ).toEqual({ ready: false, reason: "phase_not_ready" });
   });
 
   it("tolerates XRD-defaulted nested subfields the materializer omits (bug.5263)", () => {
