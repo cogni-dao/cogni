@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# PRODUCTION ONLY: one worker, because this env has no users and no headroom.
+# Mirrors main (#2455). Applied directly to this deploy branch because the change is pure
+# k8s config and needs no image: the promote path refused at promote-k8s (no scheduler-worker
+# image exists at main HEAD, affected-only CI did not rebuild it), while Argo selfHeal reads
+# THIS branch and reverted a kubectl scale within 25s.
+#
+# Measured 2026-09-28 on the control VM: memory 121% of allocatable, 124Mi free, load 10-32,
+# coredns restarted 26x/24h, k3s apiserver intermittently `connection refused`, operator
+# flapping 502, allocation ledger returning ledger_unavailable, merge endpoint 500s. The two
+# scheduler-worker pods measured 502Mi + 437Mi. Production has ZERO users, so that redundancy
+# was buying nothing while starving the control plane that every node depends on.
+#
+# The base's replicas: 2 anti-SPOF rationale stays correct for any env with traffic and is
+# unchanged. REVERT when production carries real traffic or the VM is resized.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-worker
+spec:
+  replicas: 1
