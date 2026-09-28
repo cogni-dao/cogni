@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# PRODUCTION ONLY: one worker, because this env has no users and no headroom.
+#
+# The base declares replicas: 2 to kill the single-pod SPOF, and that rationale is
+# correct for an env with traffic — it stays the default everywhere else. In production
+# it is currently self-defeating: the two pods consume ~940Mi (502Mi + 437Mi measured)
+# on a 5.9Gi control VM that also carries k3s, Argo, Crossplane, Temporal, Postgres and
+# the operator app. Measured 2026-09-28: memory 121% of allocatable with 142Mi free,
+# load average 32.84, coredns restarted 26x/24h, and the k3s apiserver intermittently
+# answering `connection refused` — during which a routine operator pod replacement took
+# cognidao.org to 502.
+#
+# A node with no memory headroom is a LARGER availability risk than a single-pod SPOF:
+# the SPOF costs one restart, starvation degrades every workload on the box including
+# the control plane that would reschedule that pod. Production also has zero users, so
+# the redundancy is currently buying nothing.
+#
+# Temporal workers polling one task queue scale horizontally with no leader election, so
+# dropping to one poller changes no semantics — only redundancy. REVERT THIS FILE (and its
+# patches entry) the moment production carries real traffic or the VM is resized.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-worker
+spec:
+  replicas: 1

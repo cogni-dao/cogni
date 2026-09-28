@@ -22,6 +22,9 @@ patches:
   # env-specific ops below apply.
   - path: node-endpoints.patch.yaml
 
+  # Production has no users and no memory headroom - see the file header.
+  - path: replicas.patch.yaml
+
   - target:
       kind: ConfigMap
       name: scheduler-worker-config
