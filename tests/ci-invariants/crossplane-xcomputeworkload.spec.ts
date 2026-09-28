@@ -362,7 +362,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
       templateCode.indexOf(
         "spec.leaseEpoch and spec.leaseGeneration disagree; refusing to choose an idempotence key"
       )
-    ).toBeLessThan(templateCode.indexOf("$cogniKey := printf"));
+    ).toBeLessThan(templateCode.indexOf('$baseCogniKey := printf'));
     expect(templateCode).toContain(
       '$leaseGeneration = int (get $spec "leaseGeneration")'
     );
@@ -780,6 +780,18 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     // server and takes the whole status write — and the refusal — down with it.
     expect(failureProps.message).toMatchObject({ maxLength: 256 });
     expect(template).toContain("$failMessage = substr 0 256 $refusalMessage");
+  });
+
+  it("emits failure unconditionally — 'None' sentinel clears a stale reason (bug.5287)", () => {
+    // Omitting the key does not clear it: the status merge preserves the previous value, so
+    // a recovered workload kept its stale failure.reason (ledger_unavailable under
+    // Progressing) latched for days on four XRs — status lied until someone bumped the
+    // generation. The composition therefore ALWAYS writes failure, with "None" as the
+    // cleared sentinel; compute-workload-readiness treats "None" as absent (reader
+    // tolerance shipped FIRST — akash-actuator-first-rollout).
+    expect(template).toContain('reason: "None"');
+    // The sentinel must satisfy the XRD reason pattern or the whole status write is rejected.
+    expect("None").toMatch(reasonPattern);
   });
 
   it("derives retryability from the HTTP status, not a table of codes", () => {

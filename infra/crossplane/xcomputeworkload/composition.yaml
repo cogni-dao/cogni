@@ -823,6 +823,16 @@ spec:
               failure:
                 reason: {{ $failReason | quote }}
                 message: {{ $failMessage | quote }}
+              {{- else }}
+              {{- /* UNCONDITIONAL EMISSION (bug.5287). Omitting the key does not clear it:
+                    status merge preserves the previous value, so a recovered workload kept
+                    its stale failure.reason (ledger_unavailable under Progressing) latched
+                    for days. "None" is the cleared-failure sentinel — always written, never
+                    omitted; compute-workload-readiness treats it as absent. Matches the
+                    XRD reason pattern ^[A-Za-z_][A-Za-z0-9_]{0,127}$. */}}
+              failure:
+                reason: "None"
+                message: ""
               {{- end }}
     - step: ready
       functionRef:
