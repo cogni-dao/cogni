@@ -25,6 +25,30 @@ import type {
 } from "@cogni/node-contracts";
 
 /**
+ * Hard ceiling for model-visible SessionStart context.
+ *
+ * Codex's repo hook opts out of its approximate token spill so the middle of
+ * the orientation can never disappear. That is safe only while the producer
+ * enforces a strict bound. Keep the shell loader's value identical: the API
+ * rejects growth at the source, and the loader independently protects stale
+ * or foreign caches.
+ */
+export const SESSION_COGNITION_MAX_BYTES = 16 * 1024;
+
+/** Reject an oversized bundle rather than silently removing arbitrary text. */
+export function assertBundleWithinBudget(markdown: string): void {
+  // Shell command substitution strips trailing newlines; the presenter then
+  // restores exactly one. Count that exact model-visible stdout shape here.
+  const presented = `${markdown.replace(/\n+$/, "")}\n`;
+  const bytes = new TextEncoder().encode(presented).byteLength;
+  if (bytes > SESSION_COGNITION_MAX_BYTES) {
+    throw new Error(
+      `Session cognition bundle is ${bytes} bytes; maximum is ${SESSION_COGNITION_MAX_BYTES}`
+    );
+  }
+}
+
+/**
  * The irreducible session contract. This is the ONLY cognition that is
  * code-owned rather than hub-delivered: it must survive an empty or unreachable
  * hub so every session still bootstraps. Everything expandable (skills, guides,

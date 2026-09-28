@@ -26,9 +26,49 @@
 # (cognidao.org — CI/CD only: flight, deploy, secrets; never used by this loader).
 set -u
 
+SESSION_COGNITION_MAX_BYTES=16384
 CACHE_FILE=".cogni/.cognition-cache.md"
 REFRESH_TTL_SECONDS=900   # only refresh in the background if cache older than this
 FETCH_TIMEOUT=6           # bound the foreground first-boot fetch
+
+# Hooks may start from a subdirectory. Resolve every repo-relative path from the
+# git root so credentials, repo-spec, and the durable cache never depend on cwd.
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$REPO_ROOT" || exit 0
+
+# Older Cogni setups installed a user-level Codex hook. Codex runs matching
+# user + project hooks concurrently. Both presenters take the same short-lived
+# per-thread lock, so exactly one writes this event's developer context; the
+# winner releases it immediately for later resume/clear/compact events.
+if [ -n "${CODEX_THREAD_ID:-}" ]; then
+  safe_thread_id="$(printf '%s' "$CODEX_THREAD_ID" | tr -cd '[:alnum:]_-')"
+  COGNI_HOOK_LOCK="${TMPDIR:-/tmp}/cogni-cognition-${safe_thread_id}.lock"
+  mkdir "$COGNI_HOOK_LOCK" 2>/dev/null || exit 0
+  trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
+fi
+
+bundle_bytes() {
+  # Match the exact stdout shape below: command substitution removes trailing
+  # newlines and presentation restores exactly one.
+  printf '%s\n' "$1" | LC_ALL=C wc -c | tr -d '[:space:]'
+}
+
+bundle_fits_budget() {
+  [ "$(bundle_bytes "$1")" -le "$SESSION_COGNITION_MAX_BYTES" ]
+}
+
+oversized_bundle_notice() {
+  actual_bytes="$1"
+  source_name="$2"
+  cat <<EOF
+COGNI COGNITION — bundle rejected before injection
+
+The $source_name bundle is $actual_bytes bytes, above the strict
+$SESSION_COGNITION_MAX_BYTES-byte SessionStart ceiling. Nothing was truncated
+or partially injected. Reduce the node orientation/index at $URL, then restart
+or resume the agent.
+EOF
+}
 
 read_env_file_value() {
   var_name="$1"
@@ -98,14 +138,20 @@ refresh_in_background() {
   cache_is_stale || return 0
   (
     fresh="$(fetch_bundle)"
-    [ -n "$fresh" ] && write_cache_atomic "$fresh"
+    [ -n "$fresh" ] && bundle_fits_budget "$fresh" && write_cache_atomic "$fresh"
   ) >/dev/null 2>&1 &
 }
 
 # PRESENTATION — local-first. If we have ever oriented, boot is offline-safe and
 # a hub outage is invisible; we just refresh in the background for next time.
 if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
-  cat "$CACHE_FILE"
+  cached="$(cat "$CACHE_FILE")"
+  if bundle_fits_budget "$cached"; then
+    printf '%s\n' "$cached"
+    refresh_in_background
+    exit 0
+  fi
+  oversized_bundle_notice "$(bundle_bytes "$cached")" "cached"
   refresh_in_background
   exit 0
 fi
@@ -114,6 +160,10 @@ fi
 # the foreground, and the only one that can surface a notice. Bounded fetch.
 bundle="$(fetch_bundle)"
 if [ -n "$bundle" ]; then
+  if ! bundle_fits_budget "$bundle"; then
+    oversized_bundle_notice "$(bundle_bytes "$bundle")" "fetched"
+    exit 0
+  fi
   write_cache_atomic "$bundle"
   printf '%s\n' "$bundle"
   exit 0
@@ -132,7 +182,7 @@ bundle from:
 This is a setup step, not an outage. To bootstrap:
 - register a NODE agent via /api/v1/agent/register
 - save COGNI_NODE_API_KEY in the clone-root .env.cogni
-- for Codex, run pnpm codex:cognition:install once and trust the hook via /hooks
+- for Codex, review and trust the repo's SessionStart hook via /hooks
 
 Then restart or resume the agent. (Once it loads once, it is cached locally and
 survives hub outages.)
