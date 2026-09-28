@@ -1051,7 +1051,7 @@ jobs:
           WORKLOAD_FILE="$(compute_workload_manifest_file "$NODE" "$ENVIRONMENT")"
           echo "path=${GITHUB_WORKSPACE}/deploy-branch/infra/k8s/overlays/${ENVIRONMENT}/${NODE}/${WORKLOAD_FILE}" >> "$GITHUB_OUTPUT"
 
-      # An Akash lane may be reconciled by a different environment's cluster
+      # bug.5282: an Akash lane may be reconciled by a different environment's cluster
       # (preview is normally custodied by production). This job only has the
       # promoted environment's SSH credential, so polling that VM is guaranteed
       # to report resource_absent even when the control cluster is reconciling it.
