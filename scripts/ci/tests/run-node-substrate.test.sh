@@ -90,12 +90,14 @@ if grep -q '^reconcile' "$ORDER"; then
   echo "reconcile must NOT run after materialize failure" >&2; exit 1
 fi
 
-# ── Case 3: reconcile failure propagates ─────────────────────────────────────
+# ── Case 3: TARGET reconcile failure propagates ──────────────────────────────
+#    (k3snode has a fixture catalog row; a node WITHOUT one would exit 1 on the
+#    missing-catalog guard instead and pass this case for the wrong reason.)
 mk_stub "$TMPROOT/mat.sh" materialize 0
 mk_stub "$TMPROOT/rec.sh" reconcile 3
 if RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
    RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
-     bash "$RUNNER" production poly >/dev/null 2>&1; then
+     bash "$RUNNER" production k3snode >/dev/null 2>&1; then
   echo "runner must fail when reconcile fails" >&2; exit 1
 fi
 
@@ -211,5 +213,92 @@ want="materialize production k3snode|reconcile production k3snode"
 [ "$got" = "$want" ] || { echo "a k3s row must be untouched by the control-env split:
   got:  $got
   want: $want" >&2; exit 1; }
+
+# ── Case 9: SIBLING_NEVER_FAILS_THE_TARGET (bug.5278/bug.5269). A custodied
+#    sibling lane's reconcile failure must degrade THAT lane loudly (::warning::
+#    + step summary) and leave the run GREEN: remaining siblings still reconcile,
+#    the provider assert still runs. ────────────────────────────────────────────
+mk_stub "$TMPROOT/mat.sh" materialize 0
+cat > "$TMPROOT/rec.sh" <<EOF
+#!/usr/bin/env bash
+echo "reconcile \$1 \$2" >> "$ORDER"
+if [ "\$1" = "candidate-a" ]; then exit 3; fi
+exit 0
+EOF
+chmod +x "$TMPROOT/rec.sh"
+mk_stub "$TMPROOT/assert.sh" assert 0
+: > "$ORDER"
+SUMMARY_MD="$TMPROOT/step-summary.md"
+: > "$SUMMARY_MD"
+RUN_OUT="$TMPROOT/case9.out"
+if ! DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+   GITHUB_STEP_SUMMARY="$SUMMARY_MD" \
+   RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+   RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+   RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+     bash "$RUNNER" production polyfix >"$RUN_OUT" 2>&1; then
+  echo "a SIBLING lane reconcile failure must NOT fail the target's run:" >&2
+  cat "$RUN_OUT" >&2; exit 1
+fi
+got="$(paste -sd'|' - < "$ORDER")"
+want="materialize production polyfix|materialize candidate-a polyfix|materialize preview polyfix|reconcile production polyfix|reconcile candidate-a polyfix|reconcile preview polyfix|assert production polyfix"
+[ "$got" = "$want" ] || { echo "a degraded sibling must not stop later lanes or the assert:
+  got:  $got
+  want: $want" >&2; exit 1; }
+grep -q '::warning::.*candidate-a/polyfix reconcile failed (rc=3)' "$RUN_OUT" \
+  || { echo "sibling degradation must emit a ::warning:: naming lane+phase+rc" >&2; cat "$RUN_OUT" >&2; exit 1; }
+grep -q '\[substrate-degraded\] lane=candidate-a node=polyfix phase=reconcile rc=3' "$RUN_OUT" \
+  || { echo "sibling degradation must emit a greppable [substrate-degraded] line" >&2; cat "$RUN_OUT" >&2; exit 1; }
+grep -q 'candidate-a (reconcile, rc=3)' "$SUMMARY_MD" \
+  || { echo "degraded lanes must be listed in GITHUB_STEP_SUMMARY" >&2; cat "$SUMMARY_MD" >&2; exit 1; }
+
+# ── Case 10: a SIBLING materialize failure is non-fatal too — the target lane
+#    and every custodied reconcile still run (max substrate convergence). ───────
+cat > "$TMPROOT/mat.sh" <<EOF
+#!/usr/bin/env bash
+echo "materialize \$1 \$2" >> "$ORDER"
+if [ "\$1" = "candidate-a" ]; then exit 7; fi
+exit 0
+EOF
+chmod +x "$TMPROOT/mat.sh"
+mk_stub "$TMPROOT/rec.sh" reconcile 0
+: > "$ORDER"
+RUN_OUT="$TMPROOT/case10.out"
+if ! DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+   RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+   RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+   RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+     bash "$RUNNER" production polyfix >"$RUN_OUT" 2>&1; then
+  echo "a SIBLING lane materialize failure must NOT fail the target's run:" >&2
+  cat "$RUN_OUT" >&2; exit 1
+fi
+got="$(paste -sd'|' - < "$ORDER")"
+[ "$got" = "$want" ] || { echo "a degraded sibling materialize must not stop the target or later lanes:
+  got:  $got
+  want: $want" >&2; exit 1; }
+grep -q '::warning::.*candidate-a/polyfix materialize failed (rc=7)' "$RUN_OUT" \
+  || { echo "sibling materialize degradation must emit a ::warning::" >&2; cat "$RUN_OUT" >&2; exit 1; }
+
+# ── Case 11: the TARGET lane stays FATAL on the akash control-env shape — only
+#    SIBLINGS are non-fatal. ────────────────────────────────────────────────────
+mk_stub "$TMPROOT/mat.sh" materialize 0
+cat > "$TMPROOT/rec.sh" <<EOF
+#!/usr/bin/env bash
+echo "reconcile \$1 \$2" >> "$ORDER"
+if [ "\$1" = "production" ]; then exit 5; fi
+exit 0
+EOF
+chmod +x "$TMPROOT/rec.sh"
+: > "$ORDER"
+if DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+   RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+   RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+   RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+     bash "$RUNNER" production polyfix >/dev/null 2>&1; then
+  echo "a TARGET lane reconcile failure must still fail the runner" >&2; exit 1
+fi
+if grep -q '^assert' "$ORDER"; then
+  echo "the provider assert must NOT run after a fatal target reconcile" >&2; exit 1
+fi
 
 echo "PASS: run-node-substrate.test.sh"
