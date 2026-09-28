@@ -213,13 +213,71 @@ const getDb = async (): Promise<Database> => db;
  * answer is permanently 0 the moment 0048 has applied (the constraint makes any other value
  * impossible), so this costs one query and then nothing.
  */
-const legacyScopedReceipts = await db
-  .select({ count: sql<number>`count(*)::int` })
-  .from(akashTxAllocations)
-  .where(
-    sql`${akashTxAllocations.walletScope} !~ ${ACCOUNT_WALLET_SCOPE_PATTERN}`
-  )
-  .then(([row]) => row?.count ?? 0);
+/**
+ * RETRY THE TRANSPORT, NEVER THE VERDICT (bug.5277).
+ *
+ * The gate below must stay fatal when the ledger is UNMIGRATED — that is a safety property and
+ * it is not what this retry touches. But the query throwing because Postgres is momentarily
+ * unreachable is NOT a safety violation, and exiting on it is what killed this actuator ~3s into
+ * startup every time `node-substrate` ran `compose up` on shared Postgres and it answered
+ * `FATAL 57P03 Consistent recovery state has not been yet reached`. Restarts climbed 5 -> 8 in
+ * twenty minutes. While the actuator was down its ledger reads failed, Crossplane could not
+ * determine the result of its creates, and provider-http latched
+ * `crossplane.io/external-create-pending` and refused to proceed — leaving candidate-a
+ * undeployable for FIVE DAYS with one Request pending since 2026-09-23.
+ *
+ * This file already states the intent further down, at the sweeper: "a Console or ledger outage
+ * must never take the actuator". The boot probe was the single path that violated it.
+ *
+ * So: retry the CONNECTION with backoff, and still refuse to serve if the answer, once we can
+ * obtain one, says the ledger is unmigrated. Exhausting the budget is itself fatal — an actuator
+ * that cannot read its ledger must not spend.
+ */
+const LEDGER_PROBE_ATTEMPTS = 10;
+const LEDGER_PROBE_BACKOFF_MS = 3_000;
+
+async function countLegacyScopedReceipts(): Promise<number> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= LEDGER_PROBE_ATTEMPTS; attempt += 1) {
+    try {
+      return await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(akashTxAllocations)
+        .where(
+          sql`${akashTxAllocations.walletScope} !~ ${ACCOUNT_WALLET_SCOPE_PATTERN}`
+        )
+        .then(([row]) => row?.count ?? 0);
+    } catch (error) {
+      lastError = error;
+      if (attempt === LEDGER_PROBE_ATTEMPTS) break;
+      log.warn(
+        {
+          attempt,
+          attempts: LEDGER_PROBE_ATTEMPTS,
+          environment,
+          namespace,
+          cause: error instanceof Error ? error.message : String(error),
+        },
+        "akash_tx_actuator_ledger_probe_retry"
+      );
+      await new Promise((resolve) =>
+        setTimeout(resolve, LEDGER_PROBE_BACKOFF_MS * attempt)
+      );
+    }
+  }
+  log.fatal(
+    {
+      attempts: LEDGER_PROBE_ATTEMPTS,
+      environment,
+      namespace,
+      cause: lastError instanceof Error ? lastError.message : String(lastError),
+    },
+    "akash_tx_actuator_ledger_probe_unreachable"
+  );
+  throw lastError;
+}
+
+const legacyScopedReceipts = await countLegacyScopedReceipts();
 
 try {
   assertLedgerIsAccountScoped(legacyScopedReceipts);
