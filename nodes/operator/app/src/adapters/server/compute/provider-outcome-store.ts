@@ -59,15 +59,21 @@ export class DrizzleProviderOutcomeStore implements ProviderOutcomeStore {
 
   async record(rec: ProviderOutcomeRecord): Promise<void> {
     const db = await this.getDb();
-    await db.insert(computeProviderOutcomes).values({
-      computeProvider: rec.computeProvider,
-      providerAccount: rec.providerAccount,
-      outcome: rec.outcome,
-      leaseId: rec.leaseId ?? null,
-      workload: rec.workload ?? null,
-      bootSeconds: rec.bootSeconds ?? null,
-      detail: rec.detail ?? null,
-    });
+    // task.5153 — the live-path writers (recovery-entry strike, serving-proof boot_ok)
+    // legitimately retry across Crossplane reconcile ticks; the partial unique index
+    // (lease_id, outcome) makes the replay a no-op instead of history inflation.
+    await db
+      .insert(computeProviderOutcomes)
+      .values({
+        computeProvider: rec.computeProvider,
+        providerAccount: rec.providerAccount,
+        outcome: rec.outcome,
+        leaseId: rec.leaseId ?? null,
+        workload: rec.workload ?? null,
+        bootSeconds: rec.bootSeconds ?? null,
+        detail: rec.detail ?? null,
+      })
+      .onConflictDoNothing();
   }
 
   async stats(

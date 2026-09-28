@@ -74,6 +74,7 @@ export {
   type AkashTxMigrationPort,
   type AkashTxMigrationStep,
   type AkashTxObservation,
+  type AkashTxProviderOutcomesPort,
   type AkashTxResource,
   type AkashTxStaleAllocation,
   type AkashTxSweepReport,

@@ -831,12 +831,19 @@ export class AkashComputeAdapter
      * unrecorded dseq is a paid lease nobody can ever find.
      */
     onAllocated?: (leaseId: string) => Promise<void>;
+    /**
+     * Ledger-derived tried set for this generation's attempt family (task.5153).
+     * Crossplane re-invokes create per recovery ordinal, so anything in-memory here
+     * is empty on every call — which re-picked the same dead provider on every
+     * bounded-recovery attempt. The caller derives this from allocation receipts.
+     */
+    excludedProviders?: ReadonlySet<string>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
     const sdl = buildAkashSdl(p.spec, this.sdlOptions);
     const { dseq, provider } = await this.createAndLease(
       sdl,
       await this.loadScreeningContext(),
-      new Set<string>(),
+      new Set<string>(p.excludedProviders ?? []),
       p.onAllocated
         ? async (resource) => {
             await p.onAllocated?.(resource.leaseId);

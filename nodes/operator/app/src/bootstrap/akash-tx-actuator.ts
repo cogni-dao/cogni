@@ -404,6 +404,11 @@ const actuator = new AkashTxActuator({
   costEvidence: consoleClient,
   costStore: new DrizzleComputeCostStore(getDb),
   providerConsumerAccountId: wallet.expectedAccountId,
+  // task.5153 — the actuator is now the LIVE writer of provider strikes/boot outcomes
+  // (recovery-entry + serving-proof), feeding the same durable history the Console
+  // adapter's screening reads above. One store instance would also do; a second handle
+  // on the same table is harmless and keeps the seams independent.
+  outcomes: new DrizzleProviderOutcomeStore(getDb),
   log,
   probe,
   /**
