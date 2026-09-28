@@ -141,8 +141,9 @@ describe("buildComputeWorkloadManifest", () => {
     ).toThrow("digest-pinned OCI reference");
   });
 
-  it("rejects an incomplete runtime profile before rendering desired state", () => {
-    const incompleteBundle: ResolvedNodeArtifactBundle = {
+  it("supplies the profile's secret_refs so a spec that predates a key still renders (bug.5175)", () => {
+    // A stale spec that declares only AUTH_SECRET — the shape that blocked toks5 PR#2.
+    const staleBundle: ResolvedNodeArtifactBundle = {
       ...bundle,
       services: bundle.services.map(({ service, ...resolved }, index) => ({
         ...resolved,
@@ -153,17 +154,20 @@ describe("buildComputeWorkloadManifest", () => {
       })),
     };
 
-    expect(() =>
-      buildComputeWorkloadManifest({
-        slug: "toks4",
-        environment: "candidate-a",
-        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
-        bundle: incompleteBundle,
-        publicHost: "toks4-test.cognidao.org",
-        computeApi: "legacy",
-        leaseGeneration: 0,
-      })
-    ).toThrow(/cogni-node-app-v1 is missing secret_refs/);
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "candidate-a",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle: staleBundle,
+      publicHost: "toks4-test.cognidao.org",
+      computeApi: "legacy",
+      leaseGeneration: 0,
+    });
+
+    // No throw — the desired state carries the FULL profile contract, deduped.
+    expect(manifest.spec.workload.services[0]?.secretRefs).toEqual(
+      REQUIRED_SECRET_REFS
+    );
   });
 
   it("emits the legacy kind with no Crossplane-only policy fields", () => {
@@ -359,6 +363,112 @@ describe("buildComputeWorkloadManifest", () => {
     expect(leaseGeneration).toBe(0);
   });
 
+  /**
+   * PER_SERVICE_ENV_GATE (story.5043). A private sidecar may declare `envs:` to opt into a
+   * subset of deployment environments; a service whose `envs` excludes THIS environment is
+   * dropped from the workload entirely. This is what lets the poly node keep its paper-trader
+   * sidecar in candidate-a/preview while production stays a 1-service lease it can ship in place.
+   */
+  describe("per-service envs gate (story.5043)", () => {
+    const gatedBundle: ResolvedNodeArtifactBundle = {
+      ...bundle,
+      services: bundle.services.map((resolved) =>
+        resolved.service.name === "worker"
+          ? {
+              ...resolved,
+              service: {
+                ...resolved.service,
+                envs: ["candidate-a", "preview"] as const,
+              },
+            }
+          : resolved
+      ),
+    };
+
+    it.each([
+      "candidate-a",
+      "preview",
+    ] as const)("keeps a gated sidecar in an environment it lists (%s)", (environment) => {
+      const manifest = buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment,
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle: gatedBundle,
+        publicHost: `toks4-${environment}.cognidao.org`,
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+      });
+
+      expect(
+        manifest.spec.workload.services.map((service) => service.name)
+      ).toEqual(["web", "worker"]);
+      // Where the sidecar IS included, its artifact and the inbound binding are preserved.
+      expect(manifest.spec.bundle.artifacts.map((a) => a.name)).toEqual([
+        "web",
+        "worker",
+      ]);
+      const web = manifest.spec.workload.services.find((s) => s.name === "web");
+      expect(web?.bindings).toEqual({ WORKER_URL: "worker" });
+    });
+
+    it("drops a gated sidecar from an environment it does not list (production)", () => {
+      const manifest = buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle: gatedBundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+      });
+
+      // Only the public app remains — a 1-service lease, and the one public service survives.
+      const names = manifest.spec.workload.services.map(
+        (service) => service.name
+      );
+      expect(names).toEqual(["web"]);
+      expect(
+        manifest.spec.workload.services.filter(
+          (service) => service.visibility === "public"
+        )
+      ).toHaveLength(1);
+
+      // bug.5262 — the exclusion CASCADES: dropping `worker` also prunes the orphaned `worker`
+      // artifact and the `web` service's now-dangling `WORKER_URL: worker` binding, so the
+      // rendered XR satisfies the XRD's two cross-reference invariants (no artifact used by zero
+      // services; no binding targeting a non-declared sibling) and Argo can sync it.
+      expect(manifest.spec.bundle.artifacts.map((a) => a.name)).toEqual([
+        "web",
+      ]);
+      const web = manifest.spec.workload.services.find((s) => s.name === "web");
+      expect(web?.bindings).toEqual({});
+    });
+
+    it("keeps every service that declares no envs in every environment", () => {
+      for (const environment of [
+        "candidate-a",
+        "preview",
+        "production",
+      ] as const) {
+        const manifest = buildComputeWorkloadManifest({
+          slug: "toks4",
+          environment,
+          bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+          bundle,
+          publicHost:
+            environment === "production"
+              ? "toks4.cognidao.org"
+              : `toks4-${environment}.cognidao.org`,
+          computeApi: "crossplane",
+          leaseGeneration: 0,
+        });
+        expect(
+          manifest.spec.workload.services.map((service) => service.name)
+        ).toEqual(["web", "worker"]);
+      }
+    });
+  });
+
   it("refuses DNS intent on the legacy authority, which resolves its own zone", () => {
     expect(() =>
       buildComputeWorkloadManifest({
@@ -497,5 +607,193 @@ describe("actuator namespace (task.5132)", () => {
       computeApi: "crossplane",
     });
     expect(manifest.metadata.namespace).toBe("cogni-candidate-a");
+  });
+});
+
+/**
+ * ACTUATOR NAMESPACE IS OWNER-ROUTED (bug.5263). WHO PAYS is a function of the node's OWNER org,
+ * not the environment (akash-actuator-wallet-cutover NS3/NS4): every REAL cogni-dao node bills
+ * the production Console account in every environment, while the candidate-a TEST account pays
+ * ONLY for cogni-test-org throwaway nodes that self-test the platform. The materializer resolves
+ * this via `writerFor(env, owner)`, deriving the owner from the bundle's own source repository.
+ *
+ * The load-bearing safety property proven here: this change reroutes ONLY cogni-test-org nodes to
+ * the candidate-a test wallet. NO cogni-dao (real, paid) node's rendering changes.
+ */
+describe("actuator namespace owner routing (bug.5263)", () => {
+  const bundleForOwner = (repository: string): ResolvedNodeArtifactBundle => ({
+    ...bundle,
+    source: { repository, sha: SHA },
+  });
+
+  // (a) THE FIX. A cogni-test-org node on candidate-a bills the candidate-a TEST writer, whose
+  // actuator + `akash-tx-actuator-auth` secret live in `cogni-candidate-a`. Before this it
+  // resolved to `cogni-production` and failed closed with a missing secret.
+  it("routes a cogni-test-org candidate-a node to the candidate-a test writer", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "spawny-boi",
+      environment: "candidate-a",
+      bundleRef: `ghcr.io/cogni-test-org/spawny-boi@sha256:${BUNDLE_DIGEST}`,
+      bundle: bundleForOwner("cogni-test-org/spawny-boi"),
+      publicHost: "spawny-boi-test.cognidao.org",
+      computeApi: "crossplane",
+      leaseGeneration: 0,
+    });
+    expect(
+      (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace
+    ).toBe("cogni-candidate-a");
+  });
+
+  it("routes a cogni-test-org preview node to the candidate-a test writer (NS4)", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "spawny-boi",
+      environment: "preview",
+      bundleRef: `ghcr.io/cogni-test-org/spawny-boi@sha256:${BUNDLE_DIGEST}`,
+      bundle: bundleForOwner("cogni-test-org/spawny-boi"),
+      publicHost: "spawny-boi-preview.cognidao.org",
+      computeApi: "crossplane",
+      leaseGeneration: 0,
+    });
+    expect(
+      (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace
+    ).toBe("cogni-candidate-a");
+  });
+
+  // (b) MUST NOT REROUTE REAL NODES. A cogni-dao node on candidate-a still bills PRODUCTION.
+  it("keeps a cogni-dao candidate-a node on the production writer (unchanged)", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "candidate-a",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle: bundleForOwner("cogni-dao/toks4"),
+      publicHost: "toks4-test.cognidao.org",
+      computeApi: "crossplane",
+      leaseGeneration: 0,
+    });
+    expect(
+      (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace
+    ).toBe("cogni-production");
+  });
+
+  // (c) A cogni-dao node on preview still bills PRODUCTION (unchanged).
+  it("keeps a cogni-dao preview node on the production writer (unchanged)", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "preview",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle: bundleForOwner("cogni-dao/toks4"),
+      publicHost: "toks4-preview.cognidao.org",
+      computeApi: "crossplane",
+      leaseGeneration: 0,
+    });
+    expect(
+      (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace
+    ).toBe("cogni-production");
+  });
+
+  // (d) Production OMITS the field for EVERY owner — the XR's own ns is already cogni-production.
+  it("omits actuatorNamespace in production for every owner (unchanged)", () => {
+    for (const repository of ["cogni-dao/toks4", "cogni-test-org/spawny-boi"]) {
+      const manifest = buildComputeWorkloadManifest({
+        slug: "node",
+        environment: "production",
+        bundleRef: `ghcr.io/${repository}@sha256:${BUNDLE_DIGEST}`,
+        bundle: bundleForOwner(repository),
+        publicHost: "node.cognidao.org",
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+      });
+      expect(
+        (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace,
+        repository
+      ).toBeUndefined();
+    }
+  });
+
+  // FAIL CLOSED. An owner with no single writer must be refused, never defaulted to a wallet —
+  // silently defaulting would bill the wrong Console account (NO_SILENT_DEFAULT).
+  it("fails closed on an unknown owner rather than defaulting a wallet", () => {
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "mystery",
+        environment: "candidate-a",
+        bundleRef: `ghcr.io/some-rando-org/mystery@sha256:${BUNDLE_DIGEST}`,
+        bundle: bundleForOwner("some-rando-org/mystery"),
+        publicHost: "mystery-test.cognidao.org",
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+      })
+    ).toThrow(/refusing to default a wallet/);
+  });
+
+  // (e) BYTE-IDENTICAL. The FULL cogni-dao candidate-a crossplane manifest is exactly what it
+  // was before owner routing existed (actuatorNamespace: cogni-production). This is the real-money
+  // guarantee that no paid node's desired state shifted.
+  it("renders a cogni-dao candidate-a manifest byte-identical to the pre-fix output", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "candidate-a",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle: bundleForOwner("cogni-dao/toks4"),
+      publicHost: "toks4-test.cognidao.org",
+      computeApi: "crossplane",
+      leaseGeneration: 0,
+    });
+    expect(manifest).toEqual({
+      apiVersion: "compute.cogni.io/v1alpha1",
+      kind: "XComputeWorkload",
+      metadata: {
+        name: NODE_ID,
+        namespace: "cogni-candidate-a",
+        labels: {
+          "cogni.io/node-id": NODE_ID,
+          "cogni.io/environment": "candidate-a",
+          "cogni.io/node": "toks4",
+        },
+      },
+      spec: {
+        nodeId: NODE_ID,
+        environment: "candidate-a",
+        bundle: {
+          ref: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+          source: { repository: "cogni-dao/toks4", sha: SHA },
+          artifacts: bundle.artifacts,
+        },
+        workload: {
+          name: "toks4",
+          publicHost: "toks4-test.cognidao.org",
+          services: [
+            {
+              name: "web",
+              artifact: "web",
+              runtimeProfile: "cogni-node-app-v1",
+              secretRefs: REQUIRED_SECRET_REFS,
+              port: 3200,
+              visibility: "public",
+              bindings: { WORKER_URL: "worker" },
+              bindHost: "0.0.0.0",
+              cpuUnits: 0.5,
+              memoryMi: 1024,
+              storageMi: 2048,
+            },
+            {
+              name: "worker",
+              artifact: "worker",
+              port: 9100,
+              visibility: "private",
+              bindings: {},
+              bindHost: "0.0.0.0",
+              cpuUnits: 0.25,
+              memoryMi: 256,
+              storageMi: 512,
+            },
+          ],
+        },
+        migration: { policy: "RequireBeforeServing" },
+        bootPolicy: { onDeadline: "Close" },
+        leaseGeneration: 0,
+        actuatorNamespace: "cogni-production",
+      },
+    });
   });
 });

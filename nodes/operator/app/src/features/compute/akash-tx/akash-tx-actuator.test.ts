@@ -19,6 +19,7 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -27,6 +28,7 @@ import { describe, expect, it } from "vitest";
 
 import type {
   AkashAllocationProbe,
+  AkashLeaseLogDescriptor,
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
   AkashTxConsolePort,
@@ -40,7 +42,11 @@ import type {
 } from "@/ports";
 import { AkashTxError } from "@/ports";
 
-import { AkashTxActuator, type AkashTxLogger } from "./akash-tx-actuator";
+import {
+  AkashTxActuator,
+  type AkashTxLogger,
+  mapConsoleFailure,
+} from "./akash-tx-actuator";
 
 const SPEC: ProvisionSpec = {
   name: "toks9",
@@ -147,6 +153,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       receiptId: `receipt-${input.cogniKey}`,
       cogniKey: input.cogniKey,
       identity: input.identity,
+      workload: input.workload,
       environment: input.environment,
       state: "preparing",
     };
@@ -210,6 +217,15 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       ...(input.providerAccount
         ? { providerAccount: row.providerAccount ?? input.providerAccount }
         : {}),
+    });
+  }
+
+  async recordAppliedSdlHash(input: { cogniKey: string; sdlHash: string }) {
+    const row = this.rows.get(input.cogniKey);
+    if (!row) throw new Error("unknown key");
+    this.rows.set(input.cogniKey, {
+      ...row,
+      lastAppliedSdlHash: input.sdlHash,
     });
   }
 
@@ -288,6 +304,24 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       )
       .slice(0, input.limit);
   }
+
+  async listActive(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }) {
+    if (this.failReads) throw new Error("ledger down");
+    return [...this.rows.values()]
+      .filter(
+        (row) =>
+          (row.state === "preparing" || row.state === "allocated") &&
+          (input.nodeId === undefined ||
+            row.identity.nodeId === input.nodeId) &&
+          (input.environment === undefined ||
+            row.environment === input.environment)
+      )
+      .slice(0, input.limit);
+  }
 }
 
 function seedAllocated(
@@ -299,10 +333,30 @@ function seedAllocated(
     receiptId: `receipt-${cogniKey}`,
     cogniKey,
     identity: IDENTITY,
+    workload: "operator",
     environment: "candidate-a",
     state: "allocated",
     externalName,
     providerAccount: "akash1provider",
+  });
+}
+
+/** A live lease whose receipt is still `preparing` — the boot window bug.5264 must cover. */
+function seedPreparing(
+  ledger: FakeLedger,
+  cogniKey: string,
+  externalName?: string
+): void {
+  ledger.rows.set(cogniKey, {
+    receiptId: `receipt-${cogniKey}`,
+    cogniKey,
+    identity: IDENTITY,
+    workload: "operator",
+    environment: "candidate-a",
+    state: "preparing",
+    ...(externalName
+      ? { externalName, providerAccount: "akash1provider" }
+      : {}),
   });
 }
 
@@ -375,6 +429,10 @@ class FakeCost implements ComputeCostEvidencePort, ComputeCostStorePort {
   async reportByNode() {
     return [];
   }
+
+  async reportByNodeIds(_nodeIds: readonly string[]) {
+    return [];
+  }
 }
 
 function costDeps(cost = new FakeCost()) {
@@ -407,6 +465,10 @@ class FakeConsole implements AkashTxConsolePort {
   updateCalls = 0;
   releaseCalls: string[] = [];
   nextLeaseId = "7001";
+  /** Descriptors served by `leaseLogDescriptor`, keyed by leaseId (dseq). */
+  logDescriptors = new Map<string, AkashLeaseLogDescriptor>();
+  mintedTokenProviders: string[][] = [];
+  mintTokenError?: Error;
 
   constructor(private readonly options: FakeConsoleOptions = {}) {
     this.loseResponse = options.loseResponseAfterAllocation ?? false;
@@ -458,8 +520,34 @@ class FakeConsole implements AkashTxConsolePort {
     this.updateCalls += 1;
   }
 
+  /**
+   * Deterministic stand-in for the adapter's `sha256(buildAkashSdl(spec))`: identical spec →
+   * identical hash, any spec change → a different hash. That is the exact property the actuator's
+   * no-op gate relies on, so hashing the spec directly is a faithful fake.
+   */
+  sdlHash(spec: ProvisionSpec): string {
+    return createHash("sha256").update(JSON.stringify(spec)).digest("hex");
+  }
+
   async release(input: { leaseId: string }): Promise<void> {
     this.releaseCalls.push(input.leaseId);
+  }
+
+  async leaseLogDescriptor(input: {
+    leaseId: string;
+  }): Promise<AkashLeaseLogDescriptor> {
+    const described = this.logDescriptors.get(input.leaseId);
+    if (!described) throw new Error(`no descriptor for ${input.leaseId}`);
+    return described;
+  }
+
+  async mintLeaseLogsToken(input: {
+    providers: readonly string[];
+    ttlSeconds: number;
+  }): Promise<string> {
+    this.mintedTokenProviders.push([...input.providers]);
+    if (this.mintTokenError) throw this.mintTokenError;
+    return "jwt-logs-token";
   }
 }
 
@@ -975,6 +1063,31 @@ describe("AkashTxActuator.observe", () => {
     expect(probes).toBe(1);
   });
 
+  it("hands the probe the public hostname so serving is proven host-routed (bug.5237)", async () => {
+    const ledger = new FakeLedger();
+    const api = new FakeConsole();
+    let seenPublicHost: string | undefined;
+    const actuator = new AkashTxActuator({
+      console: api,
+      ledger,
+      log: recordingLogger(),
+      ...costDeps(),
+      probe: async ({ publicHost }) => {
+        seenPublicHost = publicHost;
+        return false;
+      },
+    });
+    seedAllocated(ledger);
+    const observation = await actuator.observe({
+      cogniKey: "k1",
+      externalName: "7001",
+      expectedSourceSha: "a".repeat(40),
+      publicHost: "toks5.cognidao.org",
+    });
+    expect(observation.serving).toBe(false);
+    expect(seenPublicHost).toBe("toks5.cognidao.org");
+  });
+
   it("never probes when no expected sha is supplied", async () => {
     const ledger = new FakeLedger();
     const api = new FakeConsole();
@@ -1025,6 +1138,81 @@ describe("AkashTxActuator.update / delete", () => {
     expect(api.allocateCalls).toBe(spent.allocate);
     // And no second receipt: the identity re-bind lands on the SAME row the create opened.
     expect(ledger.rows.size).toBe(1);
+  });
+
+  it("no-ops a byte-identical re-PUT and leaves the receipt hash untouched (bug.5238)", async () => {
+    const { actuator, api, ledger } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+
+    // First update applies the SDL once and records its hash on the receipt.
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(api.updateCalls).toBe(1);
+    const recordedHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
+    expect(recordedHash).toBe(api.sdlHash(SPEC));
+
+    // Reconciling again with the SAME spec must NOT re-PUT — that is the thrash the fix stops.
+    const resource = await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(resource.externalName).toBe("7001");
+    expect(api.updateCalls).toBe(1);
+    // The receipt hash is unchanged — the no-op wrote nothing.
+    expect(ledger.rows.get("k1")?.lastAppliedSdlHash).toBe(recordedHash);
+  });
+
+  it("still PUTs and updates the hash when a genuine spec change yields a different SDL (bug.5238 anti-over-gate)", async () => {
+    const { actuator, api, ledger } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(api.updateCalls).toBe(1);
+    const firstHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
+
+    // A real promote: new image sha → different SDL → different hash → the PUT MUST still fire.
+    const nextSpec: ProvisionSpec = {
+      ...SPEC,
+      services: SPEC.services.map((service) => ({
+        ...service,
+        image: "ghcr.io/cogni-dao/toks9:sha-def",
+      })),
+    };
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: nextSpec,
+    });
+    expect(api.updateCalls).toBe(2);
+    const secondHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
+    expect(secondHash).toBe(api.sdlHash(nextSpec));
+    expect(secondHash).not.toBe(firstHash);
   });
 
   it("releases the provider resource and settles the key", async () => {
@@ -1660,6 +1848,7 @@ describe("AkashTxActuator.sweepStaleAllocations", () => {
       receiptId: `receipt-${input.cogniKey}`,
       cogniKey: input.cogniKey,
       identity: IDENTITY,
+      workload: "operator",
       environment: "candidate-a",
       state: "preparing",
       ...(input.allocationCursor
@@ -1798,5 +1987,153 @@ describe("AkashTxActuator.sweepStaleAllocations", () => {
     await expect(actuator.sweepStaleAllocations(STALE)).rejects.toMatchObject({
       code: "ledger_unavailable",
     });
+  });
+});
+
+describe("AkashTxActuator.leaseLogSources", () => {
+  const DESCRIPTOR = {
+    gseq: 1,
+    oseq: 1,
+    providerAccount: "akash1provider",
+    providerHostUri: "https://provider.example.com:8443",
+    services: ["app", "paper-trader"],
+    state: "active",
+  } as const;
+
+  it("enumerates every allocated lease with coordinates, services and ONE shared token", async () => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger, "k1", "7001");
+    seedAllocated(ledger, "k2", "7002");
+    api.logDescriptors.set("7001", { ...DESCRIPTOR });
+    api.logDescriptors.set("7002", { ...DESCRIPTOR, services: ["app"] });
+
+    const result = await actuator.leaseLogSources({});
+
+    expect(result.sources).toHaveLength(2);
+    expect(result.sources.map((s) => s.dseq).sort()).toEqual(["7001", "7002"]);
+    expect(result.sources[0]).toMatchObject({
+      workload: "operator",
+      environment: "candidate-a",
+      providerAccount: "akash1provider",
+      providerHostUri: "https://provider.example.com:8443",
+    });
+    expect(result.token).toBe("jwt-logs-token");
+    expect(result.ttlSeconds).toBeGreaterThan(0);
+    // One mint covering the deduped provider set — never one mint per lease.
+    expect(api.mintedTokenProviders).toEqual([["akash1provider"]]);
+  });
+
+  it("skips a lease whose descriptor cannot be resolved and keeps the rest (fail-open)", async () => {
+    const { actuator, ledger, api, log } = build();
+    seedAllocated(ledger, "k1", "7001");
+    seedAllocated(ledger, "k2", "7002");
+    api.logDescriptors.set("7002", { ...DESCRIPTOR });
+    // 7001 has no descriptor: the fake console throws for it.
+
+    const result = await actuator.leaseLogSources({});
+
+    expect(result.sources.map((s) => s.dseq)).toEqual(["7002"]);
+    expect(
+      log.lines.some((l) => l.marker === "akash_tx_lease_log_source_skipped")
+    ).toBe(true);
+  });
+
+  it("enumerates a still-`preparing` lease that already bound a handle (boot window, bug.5264)", async () => {
+    const { actuator, ledger, api } = build();
+    seedPreparing(ledger, "k1", "7001");
+    api.logDescriptors.set("7001", { ...DESCRIPTOR });
+
+    const result = await actuator.leaseLogSources({});
+
+    // Before bug.5264 this was 0: listAllocated hid `preparing`, so the booting lease's logs
+    // were lost when its BootDeadline closed the lease.
+    expect(result.sources.map((s) => s.dseq)).toEqual(["7001"]);
+  });
+
+  it("logs a live receipt that has no handle rather than silently skipping it (bug.5264)", async () => {
+    const { actuator, ledger, api, log } = build();
+    seedPreparing(ledger, "k1"); // preparing, no external handle yet
+    seedAllocated(ledger, "k2", "7002");
+    api.logDescriptors.set("7002", { ...DESCRIPTOR });
+
+    const result = await actuator.leaseLogSources({});
+
+    expect(result.sources.map((s) => s.dseq)).toEqual(["7002"]);
+    expect(
+      log.lines.some((l) => l.marker === "akash_tx_lease_log_source_no_handle")
+    ).toBe(true);
+  });
+
+  it("returns an empty snapshot without minting when nothing is active", async () => {
+    const { actuator, api } = build();
+    const result = await actuator.leaseLogSources({});
+    expect(result).toEqual({ sources: [], token: "", ttlSeconds: 0 });
+    expect(api.mintedTokenProviders).toEqual([]);
+  });
+
+  it("refuses the whole call when the token cannot be minted", async () => {
+    const { actuator, ledger, api } = build();
+    seedAllocated(ledger, "k1", "7001");
+    api.logDescriptors.set("7001", { ...DESCRIPTOR });
+    api.mintTokenError = new Error("console down");
+
+    await expect(actuator.leaseLogSources({})).rejects.toMatchObject({
+      name: "AkashTxError",
+    });
+  });
+
+  it("refuses when the ledger is unreadable", async () => {
+    const { actuator, ledger } = build();
+    ledger.failReads = true;
+    await expect(actuator.leaseLogSources({})).rejects.toMatchObject({
+      code: "ledger_unavailable",
+    });
+  });
+});
+
+describe("mapConsoleFailure — a 4xx is a decision, not an unknown (bug.5247)", () => {
+  // poly's candidate-a XCW looped `POST /v1/akash/update` -> Console 422 -> outcome_unknown ->
+  // retry, ~1.5x/min for five days, emitting a cost observation each pass and flooding the XR
+  // watch stream until Crossplane opened the circuit. Console refused BEFORE broadcasting, so
+  // the outcome was never unknown.
+  it.each([
+    400, 403, 409, 422,
+  ])("maps a mutating HTTP %i to the terminal provider_rejected", (status) => {
+    const mapped = mapConsoleFailure(consoleError("HTTP_ERROR", status), {
+      mutating: true,
+    });
+    expect(mapped.code).toBe("provider_rejected");
+  });
+
+  it.each([
+    408, 429,
+  ])("keeps HTTP %i as outcome_unknown — it reached Console and may still land", (status) => {
+    const mapped = mapConsoleFailure(consoleError("HTTP_ERROR", status), {
+      mutating: true,
+    });
+    expect(mapped.code).toBe("outcome_unknown");
+  });
+
+  it("leaves a mutating 5xx as outcome_unknown", () => {
+    expect(
+      mapConsoleFailure(consoleError("HTTP_ERROR", 503), { mutating: true })
+        .code
+    ).toBe("outcome_unknown");
+  });
+
+  it("still maps 404 to not_found, ahead of the 4xx rule", () => {
+    expect(
+      mapConsoleFailure(consoleError("HTTP_ERROR", 404), { mutating: true })
+        .code
+    ).toBe("not_found");
+  });
+
+  it("carries the adapter message through, so the Console detail reaches the log", () => {
+    const error = consoleError("HTTP_ERROR", 422);
+    error.message =
+      "Console request failed with HTTP 422 (keys=code,message code=INVALID_SDL)";
+    expect(mapConsoleFailure(error, { mutating: true }).message).toContain(
+      "code=INVALID_SDL"
+    );
   });
 });

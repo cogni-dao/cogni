@@ -146,7 +146,7 @@ export function NodeAccess({ nodeId, requests }: Props): ReactElement {
   const isEmpty = pending.length === 0 && approved.length === 0;
 
   return (
-    <SectionCard title="Agents" className="mx-auto mt-4 w-full max-w-2xl">
+    <SectionCard title="Agents" className="mt-4 w-full">
       <p className="text-muted-foreground text-sm">
         Approve external agents to act on this node. Each row shows the exact
         capabilities the agent's role grants.

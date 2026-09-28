@@ -1,0 +1,79 @@
+# Grafana unified-alerting provisioning — k3s kine (SQLite) datastore size.
+#
+# WHY: bug.5243 — the single k3s control VM self-starves when kine regrows toward
+# ~512 MB: apiserver slows, crossplane crashloops, the fleet flaps NXDOMAIN. The
+# prevention (crossplane leader-election off + hourly compaction, gate 256 MB) is
+# live, but nothing ALERTED on regrowth. These rules make regrowth loud BEFORE it
+# starves the apiserver.
+#
+# METRIC: node_k3s_kine_state_db_bytes — emitted as a node_exporter textfile
+# metric by k3s-kine-size-export.timer on the VM (k3s/kine does NOT expose
+# apiserver_storage_db_total_size_in_bytes — verified empty on prod 2026-09-23),
+# scraped by Alloy's unix exporter, kept through the metric allowlist, and
+# remote-written to Grafana Cloud Mimir.
+#
+# APPLY: Grafana Git Sync does not sync alerting (see ./README.md). Apply via the
+# alerting provisioning API or Terraform. Replace <FOLDER_UID> with the target
+# folder and confirm a contact point on the notification policy. Datasource UID
+# `grafanacloud-prom` is the production Mimir source.
+apiVersion: 1
+groups:
+  - orgId: 1
+    folder: <FOLDER_UID>
+    name: kine-datastore
+    interval: 1m
+    rules:
+      # CRITICAL: kine has crossed the 512 MB DoD ceiling — apiserver starvation
+      # is imminent. Compaction gate is 256 MB, so sustained >512 MB means the
+      # write rate is outrunning hourly compaction (regression) — investigate the
+      # write driver (crossplane leader-election back on? provider-http poll?).
+      - uid: kine-state-db-over-512mb
+        title: k3s kine datastore >512 MB — control-plane starvation imminent
+        condition: THRESHOLD
+        for: 10m
+        data:
+          - refId: SIZE
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              expr: 'max(node_k3s_kine_state_db_bytes{env="production"})'
+              instant: true
+              refId: SIZE
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: SIZE
+              conditions:
+                - evaluator: { type: gt, params: [536870912] }
+              refId: THRESHOLD
+        labels: { severity: critical, plane: control }
+        annotations:
+          summary: "kine state.db is {{ $values.SIZE }} bytes (>512 MB) on production — apiserver starvation risk (bug.5243)."
+      # WARNING: early signal — kine past 384 MB and climbing. Gate is 256 MB so
+      # this means growth between compactions is elevated; catch it before 512 MB.
+      - uid: kine-state-db-over-384mb
+        title: k3s kine datastore >384 MB — regrowth, watch the write driver
+        condition: THRESHOLD
+        for: 30m
+        data:
+          - refId: SIZE
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              expr: 'max(node_k3s_kine_state_db_bytes{env="production"})'
+              instant: true
+              refId: SIZE
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: SIZE
+              conditions:
+                - evaluator: { type: gt, params: [402653184] }
+              refId: THRESHOLD
+        labels: { severity: warning, plane: control }
+        annotations:
+          summary: "kine state.db is {{ $values.SIZE }} bytes (>384 MB) on production — regrowth (bug.5243)."

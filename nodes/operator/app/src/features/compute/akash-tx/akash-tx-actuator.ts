@@ -52,6 +52,11 @@
  *     therefore gets its lease and fails READINESS against the composite's boot SLO — loud and
  *     bounded — which is what bug.5116 actually needed. The paid path consequently needs no
  *     database-adjacent capability at all.
+ *   - IDENTICAL_SDL_IS_A_NO_OP (bug.5238): `update` PUTs the SDL only when it hashes differently
+ *     from the last one applied (persisted on the receipt). A PUT is idempotent for the
+ *     escrow/handle but re-triggers a provider redeploy every time, so re-PUTting a byte-
+ *     identical SDL thrashes a not-yet-serving node; the gate skips only that case and any real
+ *     spec change still applies + records the new hash.
  *   - REFUSAL_IS_OBSERVABLE: every refusal emits a structured log line before it throws
  *     (bug.5115: a wallet block that only reached CR status was invisible for hours).
  * Side-effects: IO (Akash Console transactions via the injected client; durable allocation and
@@ -73,6 +78,8 @@ import {
   type AkashTxCreateResult,
   AkashTxError,
   type AkashTxErrorCode,
+  type AkashTxLeaseLogSource,
+  type AkashTxLeaseLogSources,
   type AkashTxMigrationPhase,
   type AkashTxMigrationPort,
   type AkashTxMigrationStep,
@@ -94,10 +101,17 @@ export interface AkashTxLogger {
   error(fields: Record<string, unknown>, message: string): void;
 }
 
-/** Single bounded serving proof (exact source SHA + fixed `/readyz`). Never loops. */
+/**
+ * Single bounded serving proof (exact source SHA + fixed `/readyz`). Never loops. When
+ * `publicHost` is present the proof must ALSO hold through the provider's host-routed path —
+ * `serving: true` for a hostnamed workload means the PUBLIC hostname answers with the exact
+ * SHA, not merely the bare lease ingress (bug.5237: a stale deployment owning the hostname
+ * made the bare-ingress proof a lie).
+ */
 export type AkashTxServingProbe = (input: {
   endpoints: readonly string[];
   expectedSourceSha: string;
+  publicHost?: string;
 }) => Promise<boolean>;
 
 export interface AkashTxActuatorDeps {
@@ -155,6 +169,22 @@ export function mapConsoleFailure(
         message
       );
     }
+    // A 4xx is Console REFUSING to process the request, decided before anything was broadcast —
+    // the one mutating failure whose outcome is NOT unknown. Calling it `outcome_unknown` made
+    // the reconciler retry a deterministic rejection forever: poly's candidate-a lane looped
+    // ~1.5x/min for five days on a 422, burning lease spend each pass and flooding the XR watch
+    // stream until the circuit opened (bug.5247). 408 and 429 are excluded: those DID reach
+    // Console and may still land, so they keep the safe `outcome_unknown` answer.
+    if (
+      code === "HTTP_ERROR" &&
+      typeof named.httpStatus === "number" &&
+      named.httpStatus >= 400 &&
+      named.httpStatus < 500 &&
+      named.httpStatus !== 408 &&
+      named.httpStatus !== 429
+    ) {
+      return new AkashTxError("provider_rejected", message);
+    }
     if (code === "NO_BIDS" || code === "NO_ELIGIBLE_BIDS") {
       return new AkashTxError("provider_rejected", message);
     }
@@ -174,6 +204,12 @@ export function mapConsoleFailure(
  * receipt is one grep away from the incident that produced it, in logs and in Postgres alike.
  */
 const ROLLED_BACK_FAILURE_CODE = "allocation_rolled_back";
+
+/**
+ * TTL for the logs-scoped provider JWT one `leaseLogSources` call returns. Long enough to
+ * cover a full pump poll cycle with margin, short enough that a leaked token dies in minutes.
+ */
+const LEASE_LOG_TOKEN_TTL_SECONDS = 300;
 
 /**
  * The dseq a failed create is PROVEN to have closed, if the client proved it.
@@ -266,6 +302,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     cogniKey: string;
     externalName?: string;
     expectedSourceSha?: string;
+    publicHost?: string;
     migration?: AkashTxMigrationStep;
     workload?: string;
     environment?: string;
@@ -297,7 +334,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       return withMigration(
         await this.withServing(
           { found: true, resource },
-          input.expectedSourceSha
+          input.expectedSourceSha,
+          input.publicHost
         )
       );
     }
@@ -312,7 +350,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       return withMigration(
         await this.withServing(
           { found: true, resource },
-          input.expectedSourceSha
+          input.expectedSourceSha,
+          input.publicHost
         )
       );
     }
@@ -330,7 +369,8 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       return withMigration(
         await this.withServing(
           { found: true, resource, recovered: true },
-          input.expectedSourceSha
+          input.expectedSourceSha,
+          input.publicHost
         )
       );
     }
@@ -564,7 +604,33 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       "akash_tx_receipt_rebound"
     );
 
-    // PUT on a handle we already own is idempotent by construction.
+    // IDENTICAL_SDL_IS_A_NO_OP (bug.5238). A PUT is idempotent for the escrow/handle, but NOT
+    // on the provider: Console re-triggers a redeploy on EVERY PUT, so re-PUTting the byte-
+    // identical SDL restarts a rollout the workload may not have finished — a not-yet-serving
+    // node (beacon) is denied the stable window it needs and the composition re-renders update
+    // forever. Skip the PUT when the desired SDL hashes to the last one we applied. Only a
+    // byte-identical SDL is gated: any real change (new image sha, changed spec) hashes
+    // differently, so a genuine promote is NEVER silently skipped.
+    const desiredSdlHash = this.console.sdlHash(input.spec);
+    if (bound.record.lastAppliedSdlHash === desiredSdlHash) {
+      this.log.info(
+        {
+          cogniKey: input.cogniKey,
+          externalName: input.externalName,
+          sdlHash: desiredSdlHash,
+        },
+        "akash_tx_update_noop_identical_sdl"
+      );
+      return this.describe(
+        input.externalName,
+        bound.record.providerAccount,
+        bound.record
+      );
+    }
+
+    // Different (or first-ever) SDL: apply it, then record the hash so the next reconcile that
+    // carries the same SDL no-ops. Recorded AFTER a successful PUT — persisting before would make
+    // a failed apply skip forever.
     try {
       await this.console.updateAllocated({
         resourceId: input.externalName,
@@ -583,8 +649,16 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
       throw mapped;
     }
+    await this.ledger.recordAppliedSdlHash({
+      cogniKey: input.cogniKey,
+      sdlHash: desiredSdlHash,
+    });
     this.log.info(
-      { cogniKey: input.cogniKey, externalName: input.externalName },
+      {
+        cogniKey: input.cogniKey,
+        externalName: input.externalName,
+        sdlHash: desiredSdlHash,
+      },
       "akash_tx_updated"
     );
     return this.describe(
@@ -875,6 +949,102 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     return report;
   }
 
+  async leaseLogSources(input: {
+    environment?: string;
+    limit?: number;
+  }): Promise<AkashTxLeaseLogSources> {
+    const limit = Math.min(Math.max(input.limit ?? 32, 1), 64);
+    let records: readonly AkashTxAllocationRecord[];
+    try {
+      // bug.5264: enumerate every LIVE (non-terminal) receipt, not only `allocated` ones — a
+      // lease that boots but never serves is closed on its BootDeadline before its receipt ever
+      // flips past `preparing`, so tailing only `allocated` loses exactly the boot logs we need.
+      records = await this.ledger.listActive({
+        ...(input.environment ? { environment: input.environment } : {}),
+        limit,
+      });
+    } catch (error) {
+      throw this.ledgerUnavailable(error, "*", "listActive");
+    }
+
+    const sources: AkashTxLeaseLogSource[] = [];
+    for (const record of records) {
+      if (!record.externalName) {
+        // A live receipt with no provider handle is unpumpable — but SILENCE here is the very
+        // failure bug.5264 is about, so name it: a booting lease stuck before its handle bound
+        // is now a queryable signal, not an absence.
+        this.log.warn(
+          {
+            cogniKey: record.cogniKey,
+            workload: record.workload,
+            environment: record.environment,
+            state: record.state,
+          },
+          "akash_tx_lease_log_source_no_handle"
+        );
+        continue;
+      }
+      try {
+        const descriptor = await this.console.leaseLogDescriptor({
+          leaseId: record.externalName,
+        });
+        const providerAccount =
+          descriptor.providerAccount ?? record.providerAccount;
+        if (!providerAccount || !descriptor.providerHostUri) {
+          // Fail-open per source: a lease we cannot coordinate is skipped, never a wedge.
+          this.log.warn(
+            {
+              cogniKey: record.cogniKey,
+              externalName: record.externalName,
+              hasProvider: Boolean(providerAccount),
+              hasHostUri: Boolean(descriptor.providerHostUri),
+            },
+            "akash_tx_lease_log_source_unresolvable"
+          );
+          continue;
+        }
+        sources.push({
+          nodeId: record.identity.nodeId,
+          workload: record.workload,
+          environment: record.environment,
+          dseq: record.externalName,
+          gseq: descriptor.gseq,
+          oseq: descriptor.oseq,
+          providerAccount,
+          providerHostUri: descriptor.providerHostUri,
+          services: descriptor.services,
+        });
+      } catch (error) {
+        this.log.warn(
+          {
+            cogniKey: record.cogniKey,
+            externalName: record.externalName,
+            code:
+              error instanceof AkashTxError
+                ? error.code
+                : mapConsoleFailure(error, { mutating: false }).code,
+          },
+          "akash_tx_lease_log_source_skipped"
+        );
+      }
+    }
+
+    if (sources.length === 0) {
+      return { sources, token: "", ttlSeconds: 0 };
+    }
+
+    const providers = [...new Set(sources.map((s) => s.providerAccount))];
+    try {
+      const token = await this.console.mintLeaseLogsToken({
+        providers,
+        ttlSeconds: LEASE_LOG_TOKEN_TTL_SECONDS,
+      });
+      return { sources, token, ttlSeconds: LEASE_LOG_TOKEN_TTL_SECONDS };
+    } catch (error) {
+      throw mapConsoleFailure(error, { mutating: false });
+    }
+  }
+
   private async describe(
     externalName: string,
     providerAccount?: string,
@@ -891,13 +1061,18 @@ export class AkashTxActuator implements AkashTxActuatorPort {
 
   private async withServing(
     observation: AkashTxObservation,
-    expectedSourceSha: string | undefined
+    expectedSourceSha: string | undefined,
+    publicHost?: string
   ): Promise<AkashTxObservation> {
     const endpoints = observation.resource?.endpoints ?? [];
     if (!this.probe || !expectedSourceSha || endpoints.length === 0) {
       return observation;
     }
-    const serving = await this.probe({ endpoints, expectedSourceSha });
+    const serving = await this.probe({
+      endpoints,
+      expectedSourceSha,
+      ...(publicHost ? { publicHost } : {}),
+    });
     return { ...observation, serving };
   }
 

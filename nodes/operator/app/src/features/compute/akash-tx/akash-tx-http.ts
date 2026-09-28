@@ -41,6 +41,7 @@ import {
   type AkashTxCreateInput,
   AkashTxCreateInputSchema,
   AkashTxDeleteInputSchema,
+  AkashTxLeaseLogSourcesInputSchema,
   type AkashTxObserveInput,
   AkashTxObserveInputSchema,
   AkashTxUpdateInputSchema,
@@ -140,6 +141,7 @@ function toObserveInput(parsed: AkashTxObserveInput) {
     ...(parsed.expectedSourceSha
       ? { expectedSourceSha: parsed.expectedSourceSha }
       : {}),
+    ...(parsed.publicHost ? { publicHost: parsed.publicHost } : {}),
     ...(parsed.migration
       ? {
           migration: {
@@ -254,6 +256,18 @@ export function createAkashTxDispatcher(
           const input = AkashTxDeleteInputSchema.parse(payload);
           await deps.actuator.delete(input);
           return { status: 200, body: { deleted: true } };
+        }
+        case "/v1/akash/lease-log-sources": {
+          // Read-only (bug.5240): enumerates live-lease log coordinates and mints a
+          // logs-scoped ephemeral JWT. No wallet slot, no ledger write, no Console mutation.
+          const input = AkashTxLeaseLogSourcesInputSchema.parse(payload);
+          return {
+            status: 200,
+            body: await deps.actuator.leaseLogSources({
+              ...(input.environment ? { environment: input.environment } : {}),
+              ...(input.limit ? { limit: input.limit } : {}),
+            }),
+          };
         }
         default:
           return errorResponse(

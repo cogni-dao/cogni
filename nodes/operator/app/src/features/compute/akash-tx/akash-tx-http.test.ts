@@ -89,6 +89,7 @@ function stubActuator(
       adopted: 0,
       held: 0,
     }),
+    leaseLogSources: async () => ({ sources: [], token: "", ttlSeconds: 0 }),
     ...overrides,
   };
 }
@@ -560,5 +561,60 @@ describe("akash-tx identity on the wire (task.5103)", () => {
 
     expect(response.status).toBe(422);
     expect(response.body).toMatchObject({ code: "identity_conflict" });
+  });
+});
+
+describe("lease-log-sources route (bug.5240)", () => {
+  it("dispatches an authorized read and returns the snapshot", async () => {
+    const sources = [
+      {
+        nodeId: "4b06359a-a859-4399-888e-a8c7a6696f7e",
+        workload: "poly",
+        environment: "candidate-a",
+        dseq: "7001",
+        gseq: 1,
+        oseq: 1,
+        providerAccount: "akash1provider",
+        providerHostUri: "https://provider.example.com:8443",
+        services: ["app", "paper-trader"],
+      },
+    ];
+    const dispatch = dispatcherFor(
+      stubActuator({
+        leaseLogSources: async (input) => {
+          expect(input).toEqual({ environment: "candidate-a" });
+          return { sources, token: "jwt", ttlSeconds: 300 };
+        },
+      })
+    );
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/lease-log-sources",
+      authorization: `Bearer ${TOKEN}`,
+      body: JSON.stringify({ environment: "candidate-a" }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ token: "jwt", ttlSeconds: 300 });
+  });
+
+  it("rejects an unauthenticated read", async () => {
+    const dispatch = dispatcherFor(stubActuator());
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/lease-log-sources",
+      body: "{}",
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it("rejects a malformed input", async () => {
+    const dispatch = dispatcherFor(stubActuator());
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/lease-log-sources",
+      authorization: `Bearer ${TOKEN}`,
+      body: JSON.stringify({ limit: 0 }),
+    });
+    expect(response.status).toBe(400);
   });
 });

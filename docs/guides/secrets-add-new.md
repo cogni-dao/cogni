@@ -76,6 +76,70 @@ GitHub Environment secrets are not the live source for ESO-backed pods. They
 carry CI-only/bootstrap access credentials or sealed staging values for a
 workflow that writes OpenBao.
 
+## Runtime Path — off-cluster (Akash): the key MUST be declared in `secret_refs`
+
+The ESO `envFrom` flow above is the **k3s** lane. On **Akash / off-cluster
+compute the value in OpenBao is not enough** — the workload only receives the
+secret keys its service explicitly lists, so writing the value is **two-part**:
+
+```text
+1. DECLARE the key  ->  nodes/<node>/.cogni/repo-spec.yaml
+                        deployment.services[].secret_refs: [{ key: <KEY> }]
+                        (this is what maps the key into the Akash container env)
+2. WRITE the value  ->  OpenBao cogni/<env>/<node>/<KEY>   (the rest of this guide)
+```
+
+Miss step 1 and the value sits in the vault forever while the pod boots without
+it — a **silent no-op**, not an error (the class that stalled poly's copy-trade:
+`PAPER_ENFORCE_MODE` was in the vault but absent from `secret_refs`).
+
+Which keys you must declare:
+
+- **Profile keys are implied — do NOT list them.** A service with
+  `runtime_profile: cogni-node-app-v1` automatically receives the profile's
+  boot-contract keys (`AUTH_SECRET`, `DATABASE_URL`, `DATABASE_SERVICE_URL`,
+  `EVM_RPC_URL`, `LITELLM_VIRTUAL_KEY`, `SCHEDULER_API_TOKEN`,
+  `BILLING_INGEST_TOKEN`) — the operator unions them in at build time
+  (`resolveRuntimeProfileSecretRefs`, `@cogni/repo-spec`). Re-listing them is
+  redundant and was pruned fleet-wide (cogni #2401).
+- **Node-specific keys you MUST declare** — anything beyond the profile
+  (paper-trading flags, wallet creds, CLOB/mirror keys, a node's own vendor
+  token) only reaches the pod if it appears in that service's `secret_refs`.
+
+The set a flight actually projects is logged (names only, never values) as
+`compute.workload.secret_refs_resolved` on stderr of `materialize-compute-workload`
+— read it in the flight log to confirm your key is in the mounted set.
+
+`secret_refs` carries **key names only, never values** — values live in OpenBao
+(§ Runtime Path, above). See [`packages/repo-spec/src/node-app-deployment.ts`](../../packages/repo-spec/src/node-app-deployment.ts)
+for the profile contract.
+
+## Known shortcoming — on Akash, a changed value is inert until a redeploy (no Reloader)
+
+Declaring the ref and writing the value gets the secret to the pod **at boot**.
+But **changing** a value later (a day-2 write, a rotation) does **not** reach a
+**running Akash pod on its own** — there is no Reloader on the Akash lane:
+
+| Lane      | Secret value change → running pod picks it up?                                                                                                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **k3s**   | **Automatic.** ESO syncs the k8s Secret, Stakater Reloader rolling-restarts the pod (`secrets-management.md` Invariant 11). Zero action.                                                               |
+| **Akash** | **No.** The pod is a lease reconciled by Argo CD off the `deploy/<env>-<node>` head (`BRANCH_HEAD_IS_LEASE`, `ci-cd.md` Axiom 18). Reloader does not watch leases — the running pod keeps its old env. |
+
+So after `POST /api/v1/nodes/<id>/secrets` (or any rotation) on an Akash node the
+value is stored but **inert** until the deploy-branch head moves. A same-SHA
+re-flight is an Argo CD **no-op** (identical content) and will NOT restart the
+pod. To make a changed value take effect, **force a new deploy head** — bump the
+source SHA (new image → new head) or otherwise change the deploy-branch content.
+
+**Verify, don't assume:** `secret written 200` ≠ `pod has the secret`. After the
+redeploy, read `/version` + the pod's own logs/behavior. (Proven live 2026-09-24:
+poly's `PAPER_ENFORCE_MODE` synced to OpenBao but the pre-sync pod ran on for
+minutes; a same-SHA re-flight changed nothing.)
+
+Tracked for a proper fix (an Akash Reloader-equivalent — auto-bump
+`leaseGeneration` on a value diff so Argo CD redeploys without an image rebuild):
+[`bug.5256`](https://cognidao.org/work/items/bug.5256).
+
 ## Authority Gate
 
 A secret decision has three orthogonal axes — `origin` / `custody` / `consumers`.

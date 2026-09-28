@@ -29,6 +29,16 @@ spec:
         replicas: 1
         revisionHistoryLimit: 2
 
+        # Leader election coordinates multiple replicas; with replicas: 1 it
+        # fences nothing but renews a Lease every ~2s. On k3s' kine (SQLite)
+        # datastore that Lease was MEASURED as ~45% of all datastore writes and
+        # the #1 driver of kine bloat -> apiserver starvation (bug.5243). Disable
+        # it on both singletons — there is no second replica to fence against.
+        # https://docs.crossplane.io/latest/guides/pods/#leader-election
+        leaderElection: false
+        rbacManager:
+          leaderElection: false
+
         image:
           repository: xpkg.crossplane.io/crossplane/crossplane@sha256:c5d773aa940041475e2cf6b9adf3512cb382b1a6b889f53ed791192ed8ada75b
           ignoreTag: true

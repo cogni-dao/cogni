@@ -38,6 +38,8 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
+
 import type {
   ComputeBalance,
   ComputeResourcePort,
@@ -46,6 +48,7 @@ import type {
   ProvisionState,
 } from "@cogni/ai-tools";
 import type {
+  AkashLeaseLogDescriptor,
   ComputeCostEvidencePort,
   ComputeResourceCostEvidence,
 } from "@/ports";
@@ -67,6 +70,9 @@ import {
 
 const PROVIDER = "akash";
 const MICRO = 1_000_000;
+/** Lease-log descriptor cache TTL — long enough to amortize polling, short enough that an
+ * in-place SDL update's changed service set surfaces within minutes. */
+const DESCRIPTOR_CACHE_TTL_MS = 5 * 60_000;
 
 /** Overclock Labs audit account — the `signedBy` anchor Console itself screens on. */
 export const AKASH_OVERCLOCK_AUDITOR =
@@ -261,6 +267,59 @@ const defaultSleep = (ms: number): Promise<void> =>
  * Akash Console compute adapter — read + write halves of ComputeResourcePort over the
  * managed-wallet Console API. One shared account funds every workload (v0 billing).
  */
+/**
+ * A bounded, non-echoing digest of a Console error body.
+ *
+ * Provider bodies can carry the SDL and resolved secrets, so NO free-text value is ever taken —
+ * the pre-existing no-echo guarantee is unchanged. Two things that cannot carry a secret ARE
+ * taken: the body's top-level KEY NAMES (schema, not data) and the values of a short allowlist
+ * of enum-like identifier fields. `message` is deliberately absent from that allowlist: it is
+ * free text and is exactly what the no-echo test forbids.
+ *
+ * Why take anything at all — "Console request failed with HTTP 422" and nothing else is
+ * undiagnosable from logs. poly's candidate-a lane retried that exact deterministic rejection
+ * ~1.5x/min for five days against a PAID API, and naming the cause required redeploying the
+ * actuator (bug.5247). Key names alone identify which error schema Console returned.
+ */
+const PROVIDER_DETAIL_VALUE_KEYS = ["code", "error", "type", "reason"] as const;
+const PROVIDER_DETAIL_MAX_CHARS = 200;
+const PROVIDER_BODY_MAX_CHARS = 2000;
+
+async function readProviderDetail(
+  response: Response
+): Promise<string | undefined> {
+  try {
+    const text = (await response.text()).slice(0, PROVIDER_BODY_MAX_CHARS);
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const record = parsed as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    const parts = keys.length > 0 ? [`keys=${keys.join(",")}`] : [];
+    for (const key of PROVIDER_DETAIL_VALUE_KEYS) {
+      const value = record[key];
+      // Identifier-shaped only. A long or spacey value is prose, not an enum — leave it.
+      if (
+        typeof value === "string" &&
+        value.length <= 48 &&
+        /^[\w.:-]+$/.test(value)
+      ) {
+        parts.push(`${key}=${value}`);
+      } else if (typeof value === "number") {
+        parts.push(`${key}=${value}`);
+      }
+    }
+    const joined = parts.join(" ");
+    return joined === ""
+      ? undefined
+      : joined.slice(0, PROVIDER_DETAIL_MAX_CHARS);
+  } catch {
+    // Unreadable or non-JSON body. Never a reason to fail the request path.
+    return undefined;
+  }
+}
+
 export class AkashComputeAdapter
   implements ComputeResourcePort, ComputeCostEvidencePort
 {
@@ -281,6 +340,24 @@ export class AkashComputeAdapter
   };
   private readonly sdlOptions: AkashSdlOptions;
   private readonly now: () => Date;
+  /** Provider gateway URIs by owner account — stable identity, cached per process. */
+  private readonly hostUriCache = new Map<string, string>();
+  /**
+   * Lease-log descriptors by dseq, short-TTL. Coordinates are stable for a lease's life
+   * (an in-place SDL update can change `services`, hence the TTL rather than forever), and
+   * the pump re-enumerates every poll — without this cache the wallet-writer would spend a
+   * Console GET per lease per poll on answers that almost never change.
+   */
+  private readonly descriptorCache = new Map<
+    string,
+    { value: AkashLeaseLogDescriptor; expiresAtMs: number }
+  >();
+  /** Last minted logs JWT, reused for an identical provider set until ~80% of its TTL. */
+  private leaseLogsToken?: {
+    providersKey: string;
+    token: string;
+    expiresAtMs: number;
+  };
 
   constructor(private readonly config: AkashComputeAdapterConfig) {
     this.baseUrl = (
@@ -505,9 +582,24 @@ export class AkashComputeAdapter
   }
 
   /**
+   * sha256 hex of the exact SDL bytes `updateAllocated` would PUT for this spec — same render,
+   * same pricing options. Pure and deterministic, so the actuator can compare it to the receipt's
+   * last-applied hash and skip a byte-identical re-PUT (bug.5238): Console re-triggers a provider
+   * redeploy on EVERY PUT, and re-deploying a not-yet-serving node denies it a stable window.
+   * Kept here, next to `buildAkashSdl` + `sdlOptions`, so SDL construction never crosses the port.
+   */
+  sdlHash(spec: ProvisionSpec): string {
+    return createHash("sha256")
+      .update(buildAkashSdl(spec, this.sdlOptions))
+      .digest("hex");
+  }
+
+  /**
    * In-place SDL replacement on a handle we already own. Spends no new escrow and mints no
-   * new handle, so it needs no allocation receipt — the PUT is idempotent by construction.
-   * Returns as soon as Console accepts it; convergence is the caller's level problem.
+   * new handle, so it needs no allocation receipt. The PUT is idempotent for the ESCROW/HANDLE,
+   * but NOT on the provider: Console re-triggers a redeploy on every PUT regardless of whether
+   * the SDL changed, so the caller (actuator) must hash-gate an identical re-PUT — see `sdlHash`
+   * and bug.5238. Returns as soon as Console accepts it; convergence is the caller's level problem.
    */
   async updateAllocated(p: {
     resourceId: string;
@@ -529,6 +621,112 @@ export class AkashComputeAdapter
       undefined,
       this.writeTimeoutMs
     );
+  }
+
+  /** Read-only lease coordinates + service names for provider log reads (bug.5240). */
+  async leaseLogDescriptor(p: {
+    leaseId: string;
+  }): Promise<AkashLeaseLogDescriptor> {
+    const cached = this.descriptorCache.get(p.leaseId);
+    if (cached && cached.expiresAtMs > this.now().getTime()) {
+      return cached.value;
+    }
+    const detail = await this.request<ConsoleDeploymentDetail>(
+      "GET",
+      `/v1/deployments/${encodeURIComponent(p.leaseId)}`
+    );
+    const leases = detail?.leases ?? [];
+    const lease = leases.find((l) => l.state === "active") ?? leases[0];
+    const owner =
+      typeof lease?.id?.provider === "string" ? lease.id.provider : undefined;
+    const descriptor: AkashLeaseLogDescriptor = {
+      gseq: typeof lease?.id?.gseq === "number" ? lease.id.gseq : 1,
+      oseq: typeof lease?.id?.oseq === "number" ? lease.id.oseq : 1,
+      ...(owner ? { providerAccount: owner } : {}),
+      ...(owner
+        ? await this.providerHostUri(owner).then((uri) =>
+            uri ? { providerHostUri: uri } : {}
+          )
+        : {}),
+      services: Object.keys(lease?.status?.services ?? {}),
+      state: mapState(detail?.deployment?.state, leases),
+    };
+    this.descriptorCache.set(p.leaseId, {
+      value: descriptor,
+      expiresAtMs: this.now().getTime() + DESCRIPTOR_CACHE_TTL_MS,
+    });
+    return descriptor;
+  }
+
+  /**
+   * Logs-scoped granular JWT (AEP-64) over the managed wallet. The narrowest read capability
+   * the provider accepts — it can tail lease logs on the named providers and nothing else.
+   */
+  async mintLeaseLogsToken(p: {
+    providers: readonly string[];
+    ttlSeconds: number;
+  }): Promise<string> {
+    const providersKey = [...p.providers].sort().join(",");
+    const nowMs = this.now().getTime();
+    if (
+      this.leaseLogsToken &&
+      this.leaseLogsToken.providersKey === providersKey &&
+      this.leaseLogsToken.expiresAtMs > nowMs
+    ) {
+      return this.leaseLogsToken.token;
+    }
+    const minted = await this.request<{ token?: string }>(
+      "POST",
+      "/v1/create-jwt-token",
+      {
+        data: {
+          ttl: p.ttlSeconds,
+          leases: {
+            access: "granular",
+            permissions: p.providers.map((provider) => ({
+              provider,
+              access: "scoped",
+              scope: ["logs"],
+            })),
+          },
+        },
+      }
+    );
+    if (!minted?.token) {
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "Console create-jwt-token returned no token"
+      );
+    }
+    // Reuse until 80% of the TTL: a consumer that got this token still has ≥20% of its
+    // life to spend it, and the wallet-writer stops minting once per caller poll.
+    this.leaseLogsToken = {
+      providersKey,
+      token: minted.token,
+      expiresAtMs: nowMs + p.ttlSeconds * 800,
+    };
+    return minted.token;
+  }
+
+  /**
+   * Provider gateway base URI, cached for the process lifetime — a hostUri is DNS-stable
+   * infrastructure identity, and a restart is the refresh path.
+   */
+  private async providerHostUri(owner: string): Promise<string | undefined> {
+    const cached = this.hostUriCache.get(owner);
+    if (cached) return cached;
+    const provider = await this.request<{
+      hostUri?: string;
+      host_uri?: string;
+    }>("GET", `/v1/providers/${encodeURIComponent(owner)}`).catch(
+      () => undefined
+    );
+    const uri = provider?.hostUri ?? provider?.host_uri;
+    if (typeof uri === "string" && uri.length > 0) {
+      this.hostUriCache.set(owner, uri);
+      return uri;
+    }
+    return undefined;
   }
 
   private async listAllDeployments(): Promise<ConsoleDeploymentDetail[]> {
@@ -1040,11 +1238,17 @@ export class AkashComputeAdapter
         signal: controller.signal,
       });
       if (!response.ok) {
-        // Never retain provider bodies: they can echo the SDL and future resolved secrets.
-        await response.body?.cancel().catch(() => {});
+        // Provider bodies are still never retained — they echo the SDL and resolved secrets.
+        // What IS taken is a bounded, allowlisted scalar digest, because "HTTP 422" with no
+        // cause is undiagnosable from logs alone: poly's candidate lane retried a deterministic
+        // Console rejection ~1.5x/min for five days against a PAID API and nobody could say why
+        // without redeploying the actuator (bug.5247).
+        const detail = await readProviderDetail(response);
         throw new AkashComputeError(
           "HTTP_ERROR",
-          `Console request failed with HTTP ${response.status}`,
+          `Console request failed with HTTP ${response.status}${
+            detail ? ` (${detail})` : ""
+          }`,
           response.status
         );
       }

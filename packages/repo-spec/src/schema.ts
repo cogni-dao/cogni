@@ -244,6 +244,21 @@ const serviceNameSchema = z
     "service and artifact names must be DNS-safe lowercase tokens (max 63 chars)"
   );
 
+/**
+ * Deployment environments a service may be gated to (story.5043). Mirrors the operator's
+ * `DeploymentEnvironment` (node-deployment-provider.ts); repo-spec is a lower-level package
+ * and cannot import from the operator app, so the canonical list is restated here. A drift
+ * between the two would only ever ADD an env the operator can target but a service cannot yet
+ * name — caught by review, never silent.
+ */
+export const deploymentEnvNameSchema = z.enum([
+  "candidate-a",
+  "preview",
+  "production",
+]);
+
+export type DeploymentEnvName = z.infer<typeof deploymentEnvNameSchema>;
+
 const serviceEnvKeySchema = z
   .string()
   .regex(
@@ -329,6 +344,17 @@ export const nodeServiceSpecSchema = z
     args: z.array(z.string().max(1024)).max(32).optional(),
     port: z.number().int().min(1).max(65535),
     visibility: z.enum(["public", "private"]),
+    /**
+     * Optional per-service deployment-environment allow-list (story.5043). ABSENT = deploy to
+     * every environment (fully backward-compatible; every existing service omits it). When
+     * present it must be a NON-EMPTY list of valid environment names; the service is then
+     * materialized ONLY into the listed environments and DROPPED from the workload in the rest.
+     * This is how a private sidecar (e.g. a paper-trader) stays out of `production` so prod
+     * remains a 1-service lease while the sidecar still runs in `candidate-a`/`preview`. Only a
+     * PRIVATE service may carry it — the sole public service must reach every environment, so
+     * gating it out would break ONE_PUBLIC_SERVICE (rejected in the deployment refinement below).
+     */
+    envs: z.array(deploymentEnvNameSchema).min(1).optional(),
     /** Explicit non-provider compatibility selector; absent stays generic. */
     runtime_profile: nodeServiceRuntimeProfileSchema.optional(),
     /**
@@ -425,6 +451,18 @@ export const nodeDeploymentSchema = z
           path: ["services", index, "runtime_profile"],
           message:
             "cogni-node-app-v1 runtime_profile requires the public service",
+        });
+      }
+      // ONE_PUBLIC_SERVICE guard (story.5043): the sole public service must materialize in
+      // every environment, so it may not carry an `envs:` allow-list. Only private sidecars
+      // opt into a subset of environments — a public `envs:` could gate out the one service
+      // the workload cannot exist without.
+      if (service.visibility === "public" && service.envs) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["services", index, "envs"],
+          message:
+            "the public service must deploy to every environment and cannot declare `envs`",
         });
       }
       Object.entries(service.bindings).forEach(([envName, target]) => {
@@ -755,6 +793,12 @@ export type NodeRegistryEntry = z.infer<typeof nodeRegistryEntrySchema>;
  */
 export const repoSpecSchema = z
   .object({
+    /**
+     * Repo-spec schema version (e.g. "0.1.4"). Modeled explicitly rather than tolerated by
+     * `.passthrough()` — every spec carries it, so it is a declared field, not undeclared drift.
+     */
+    schema_version: z.string().optional(),
+
     /** Unique node identity — scopes all ledger tables. Generated once at init, never changes. */
     node_id: z.string().uuid("node_id must be a valid UUID"),
 
@@ -896,6 +940,11 @@ export const repoSpecSchema = z
     /** Node registry — operator-only. Declares child nodes in the monorepo. */
     nodes: z.array(nodeRegistryEntrySchema).optional(),
   })
+  // `.passthrough()` (not `.strict()`) is deliberate: a sovereign fork may extend its OWN repo-spec
+  // with fields Cogni's schema does not know, and this parser runs at RUNTIME against every node's
+  // spec — rejecting an unknown key would break a fork mid-flight. Cogni-owned specs must NOT
+  // accumulate undeclared keys; that discipline is enforced by code review on this repo, and every
+  // field Cogni itself relies on is modeled above (so a Cogni block never rides passthrough).
   .passthrough();
 
 export type RepoSpec = z.infer<typeof repoSpecSchema>;

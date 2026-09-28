@@ -207,12 +207,33 @@ async function main(): Promise<void> {
       ? { runtime: { substrateHost: values["substrate-host"].trim() } }
       : {}),
   });
+  // Read the resolved secret refs straight off the workload the manifest builder just emitted,
+  // so the projected secrets MATCH the workload exactly. The builder already unions each service's
+  // runtime-profile keys (PROFILE_SUPPLIES_ITS_SECRET_REFS) AND applies the per-service `envs`
+  // gate (story.5043), so a sidecar dropped from this environment contributes no service here and
+  // therefore no secret keys either — the projection can never re-introduce a gated-out service's
+  // secrets. This keeps the "projected secrets match the workload" invariant true by construction.
+  const resolvedSecretRefs = manifest.spec.workload.services.flatMap(
+    (service) => service.secretRefs ?? []
+  );
+  // Observability (stderr — stdout is the machine contract): make the EXACT set of secret keys
+  // this flight will project into the workload visible in the flight log. Key NAMES are public
+  // (they live in the git repo-spec); values never touch logs. This is the signal that turns a
+  // missing node-specific secret_ref (e.g. PAPER_ENFORCE_MODE) from a silent runtime no-op into
+  // a one-glance diff — "the flight materialized these keys, and yours isn't among them."
+  process.stderr.write(
+    `${JSON.stringify({
+      event: "compute.workload.secret_refs_resolved",
+      nodeSlug: catalogIdentity.slug,
+      environment,
+      keyCount: resolvedSecretRefs.length,
+      keys: resolvedSecretRefs.map((ref) => ref.key),
+    })}\n`
+  );
   const secretResources = buildComputeSecretResources({
     slug: catalogIdentity.slug,
     environment,
-    secretRefs: bundle.services.flatMap(
-      (service) => service.service.secretRefs
-    ),
+    secretRefs: resolvedSecretRefs,
   });
   // ONE_AUTHORITY_PER_WORKLOAD (task.5097). The kustomization lists exactly one compute
   // resource, and the deploy-branch writer rsyncs this directory with `--delete`, so the

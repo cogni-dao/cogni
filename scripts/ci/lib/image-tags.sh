@@ -571,3 +571,27 @@ node_billing_endpoint_csv() {
     sep=","
   done
 }
+
+# missing_image_action <explicit_targets_csv>
+#
+# What a MISSING in-repo image means, decided by whether the CALLER NAMED its targets.
+#
+# A fleet fan-out (`nodes` empty ⇒ every target) legitimately reaches nodes that this
+# affected-only build never rebuilt; skipping those is correct and always was. But the
+# operator API dispatches ONE named node (`nodes: input.slug`, github-repo-write.ts), and
+# for that caller a skip is a LIE: the run goes green, verify-deploy self-confirms the pin
+# it already had, and the promote silently did nothing. That is how an operator production
+# promote of a catalog-only merge — which builds no app image — reported success while the
+# host stayed on its previous sha (bug.5248, the bug.5121 silent-no-op family).
+#
+# Remote-source artifacts already hard-fail on a missing image unconditionally; this makes
+# the in-repo branch answer the same question the same way whenever a target was asked for
+# by name.
+#
+# Echoes `fail` or `skip`.
+missing_image_action() {
+  case "${1:-}" in
+    "") printf 'skip\n' ;;
+    *) printf 'fail\n' ;;
+  esac
+}

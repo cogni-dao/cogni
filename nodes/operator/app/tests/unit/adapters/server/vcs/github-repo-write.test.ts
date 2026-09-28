@@ -42,10 +42,13 @@ vi.mock("@octokit/core", () => ({
 
 import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import {
+  diffMergeQueueRuleset,
   diffRulesetAgainstPolicy,
+  envManagerCommitMessage,
   GitHubRepoWriter,
   MERGE_QUEUE_RULESET_NAME,
   nodeMainPolicyRulesetPayload,
+  parseMergeQueueRulesetFixture,
   rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
 import {
@@ -79,6 +82,56 @@ const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
 });
 const TEST_NODE_REPO_POLICY = parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON);
 const NODE_MAIN_POLICY_RULESET_NAME = TEST_NODE_REPO_POLICY.ruleset.name;
+
+describe("envManagerCommitMessage", () => {
+  it("signs the reserved change type and canonical changed-path hash into trailers", () => {
+    expect(
+      envManagerCommitMessage({
+        subject: "feat(node): add blue to preview",
+        node: "blue",
+        env: "preview",
+        action: "add",
+        paths: [
+          "infra/k8s/overlays/preview/blue/kustomization.yaml",
+          "infra/catalog/blue.yaml",
+          "infra/catalog/blue.yaml",
+        ],
+      })
+    ).toBe(`feat(node): add blue to preview
+
+Cogni-Change-Type: cogni.env-manager.v1
+Cogni-Node: blue
+Cogni-Environment: preview
+Cogni-Action: add
+Cogni-Changed-Paths-SHA256: 5ea8c8b4211282862f6994711022e66f653acad1ce626590338e1b2fdfdf2866`);
+  });
+});
+
+const TEST_MERGE_QUEUE_POLICY = {
+  _comment: ["test fixture"],
+  name: MERGE_QUEUE_RULESET_NAME,
+  target: "branch",
+  enforcement: "active",
+  conditions: {
+    ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] },
+  },
+  rules: [
+    {
+      type: "merge_queue",
+      parameters: {
+        grouping_strategy: "ALLGREEN",
+        merge_method: "SQUASH",
+        min_entries_to_merge: 1,
+        max_entries_to_merge: 5,
+        max_entries_to_build: 5,
+        min_entries_to_merge_wait_minutes: 0,
+        check_response_timeout_minutes: 60,
+      },
+    },
+  ],
+  bypass_actors: [],
+} as const;
+const TEST_MERGE_QUEUE_POLICY_JSON = JSON.stringify(TEST_MERGE_QUEUE_POLICY);
 
 function statusError(
   status: number,
@@ -2372,9 +2425,16 @@ owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
   });
 });
 
+const observedPromoteDispatch = () => ({
+  workflow_run_id: 98765,
+  run_url: "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/98765",
+  html_url: "https://github.com/Cogni-DAO/cogni/actions/runs/98765",
+});
+
 describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
   const DISPATCH =
     "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
+  const COMPARE = "GET /repos/{owner}/{repo}/compare/{basehead}";
   const childSha = "0123456789012345678901234567890123456789";
   const staleCatalog =
     "name: habitat\ntype: node\npath_prefix: nodes/ghcr/\nsource_repo: https://github.com/Cogni-DAO/habitat.git\nimage_repository: ghcr.io/cogni-dao/habitat\nsource_sha: ffffffffffffffffffffffffffffffffffffffff\n";
@@ -2383,16 +2443,30 @@ describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
     routeHandlers = {
       // Catalog row is read only to validate existence/identity — never written.
       "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
-        expect(params.path).toBe("infra/catalog/habitat.yaml");
-        expect(params.ref).toBe("main");
-        return {
-          type: "file",
-          encoding: "base64",
-          sha: "catalog-blob",
-          content: Buffer.from(staleCatalog, "utf-8").toString("base64"),
-        };
+        if (params.path === "infra/catalog/habitat.yaml") {
+          expect(params.ref).toBe("main");
+          return {
+            type: "file",
+            encoding: "base64",
+            sha: "catalog-blob",
+            content: Buffer.from(staleCatalog, "utf-8").toString("base64"),
+          };
+        }
+        expect(params).toMatchObject({
+          path: ".promote-state/source-sha-by-app.json",
+          ref: "deploy/preview-habitat",
+        });
+        throw statusError(404, "Not Found");
       },
-      [DISPATCH]: () => ({}),
+      [COMPARE]: (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "habitat",
+          basehead: `${childSha}...main`,
+        });
+        return { status: "ahead" };
+      },
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     const result = await makeWriter().promoteNode({
@@ -2416,6 +2490,7 @@ describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
     expect(dispatch?.params).toMatchObject({
       workflow_id: "promote-and-deploy.yml",
       ref: "main",
+      headers: { "X-GitHub-Api-Version": "2026-03-10" },
       inputs: {
         environment: "preview",
         nodes: "habitat",
@@ -2445,7 +2520,7 @@ describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
         err.status = 404;
         throw err;
       },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     await expect(
@@ -2465,6 +2540,7 @@ describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
 describe("GitHubRepoWriter.promoteNode (env=production)", () => {
   const DISPATCH =
     "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
+  const COMPARE = "GET /repos/{owner}/{repo}/compare/{basehead}";
   const childSha = "0123456789012345678901234567890123456789";
   // REMOTE-SOURCE (fork) catalog: has source_repo + a stale source_sha pin.
   const forkCatalog =
@@ -2476,16 +2552,30 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
   it("source-addresses node_source_sha for a REMOTE-SOURCE (fork) node — no stale catalog pin, no source_sha (bug.5043)", async () => {
     routeHandlers = {
       "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
-        expect(params.path).toBe("infra/catalog/beacon.yaml");
-        expect(params.ref).toBe("main");
-        return {
-          type: "file",
-          encoding: "base64",
-          sha: "catalog-blob",
-          content: Buffer.from(forkCatalog, "utf-8").toString("base64"),
-        };
+        if (params.path === "infra/catalog/beacon.yaml") {
+          expect(params.ref).toBe("main");
+          return {
+            type: "file",
+            encoding: "base64",
+            sha: "catalog-blob",
+            content: Buffer.from(forkCatalog, "utf-8").toString("base64"),
+          };
+        }
+        expect(params).toMatchObject({
+          path: ".promote-state/source-sha-by-app.json",
+          ref: "deploy/production-beacon",
+        });
+        throw statusError(404, "Not Found");
       },
-      [DISPATCH]: () => ({}),
+      [COMPARE]: (params) => {
+        expect(params).toMatchObject({
+          owner: "cogni-dao",
+          repo: "beacon",
+          basehead: `${childSha}...main`,
+        });
+        return { status: "ahead" };
+      },
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     const result = await makeWriter().promoteNode({
@@ -2529,15 +2619,29 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
   it("passes source_sha (checkout ref) for an IN-REPO node — no node_source_sha, behavior unchanged", async () => {
     routeHandlers = {
       "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
-        expect(params.path).toBe("infra/catalog/operator.yaml");
-        return {
-          type: "file",
-          encoding: "base64",
-          sha: "catalog-blob",
-          content: Buffer.from(inRepoCatalog, "utf-8").toString("base64"),
-        };
+        if (params.path === "infra/catalog/operator.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            sha: "catalog-blob",
+            content: Buffer.from(inRepoCatalog, "utf-8").toString("base64"),
+          };
+        }
+        expect(params).toMatchObject({
+          path: ".promote-state/source-sha-by-app.json",
+          ref: "deploy/production-operator",
+        });
+        throw statusError(404, "Not Found");
       },
-      [DISPATCH]: () => ({}),
+      [COMPARE]: (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          basehead: `${childSha}...main`,
+        });
+        return { status: "ahead" };
+      },
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     const result = await makeWriter().promoteNode({
@@ -2571,7 +2675,7 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
         err.status = 404;
         throw err;
       },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     await expect(
@@ -2585,6 +2689,206 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
     ).rejects.toThrow(/catalog/i);
 
     expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+
+  it("rejects an off-main source SHA without dispatching", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        if (params.path === "infra/catalog/beacon.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(forkCatalog, "utf-8").toString("base64"),
+          };
+        }
+        throw statusError(404, "Not Found");
+      },
+      [COMPARE]: () => ({ status: "diverged" }),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    await expect(
+      makeWriter().promoteNode({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "beacon",
+        sourceSha: childSha,
+      })
+    ).rejects.toMatchObject({ code: "non_forward_promotion", status: 409 });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+
+  it("rejects a backward on-main promotion unless allowRollback is explicit", async () => {
+    const currentSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        if (params.path === "infra/catalog/beacon.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(forkCatalog, "utf-8").toString("base64"),
+          };
+        }
+        return {
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from(
+            JSON.stringify({ beacon: currentSha }),
+            "utf-8"
+          ).toString("base64"),
+        };
+      },
+      [COMPARE]: (params) => {
+        if (params.basehead === `${currentSha}...${childSha}`) {
+          return { status: "behind" };
+        }
+        return { status: "ahead" };
+      },
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    await expect(
+      makeWriter().promoteNode({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "beacon",
+        sourceSha: childSha,
+      })
+    ).rejects.toMatchObject({ code: "non_forward_promotion", status: 409 });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+
+    requests.length = 0;
+    await expect(
+      makeWriter().promoteNode({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "beacon",
+        sourceSha: childSha,
+        allowRollback: true,
+      })
+    ).resolves.toMatchObject({ status: "dispatched" });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(true);
+  });
+
+  it("repairs a legacy off-main pin to an on-main target", async () => {
+    const poisonedSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        if (params.path === "infra/catalog/beacon.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(forkCatalog, "utf-8").toString("base64"),
+          };
+        }
+        return {
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from(
+            JSON.stringify({ beacon: poisonedSha }),
+            "utf-8"
+          ).toString("base64"),
+        };
+      },
+      [COMPARE]: (params) =>
+        params.basehead === `${poisonedSha}...main`
+          ? { status: "diverged" }
+          : { status: "ahead" },
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    await expect(
+      makeWriter().promoteNode({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "beacon",
+        sourceSha: childSha,
+      })
+    ).resolves.toMatchObject({ status: "dispatched" });
+  });
+});
+
+describe("GitHubRepoWriter.promoteNodeFromPreview", () => {
+  const DISPATCH =
+    "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
+  const COMPARE = "GET /repos/{owner}/{repo}/compare/{basehead}";
+  const previewSha = "cccccccccccccccccccccccccccccccccccccccc";
+  const productionSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const forkCatalog =
+    "name: beacon\ntype: node\npath_prefix: nodes/beacon/\nsource_repo: https://github.com/cogni-dao/beacon.git\nimage_repository: ghcr.io/cogni-dao/beacon\n";
+
+  function installPreviewForwardHandlers(targetStatus = "ahead"): void {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        if (params.path === "infra/catalog/beacon.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(forkCatalog, "utf-8").toString("base64"),
+          };
+        }
+        const ref = String(params.ref);
+        const sha =
+          ref === "deploy/preview-beacon" ? previewSha : productionSha;
+        return {
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from(
+            JSON.stringify({ beacon: sha }),
+            "utf-8"
+          ).toString("base64"),
+        };
+      },
+      [COMPARE]: (params) =>
+        params.basehead === `${previewSha}...main`
+          ? { status: targetStatus }
+          : { status: "ahead" },
+      [DISPATCH]: observedPromoteDispatch,
+    };
+  }
+
+  it("guards preview's source pin then preserves preview-forward digest dispatch", async () => {
+    installPreviewForwardHandlers();
+
+    await expect(
+      makeWriter().promoteNodeFromPreview({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "beacon",
+      })
+    ).resolves.toMatchObject({ dispatched: true });
+
+    const dispatch = requests.find((request) => request.route === DISPATCH);
+    expect(dispatch?.params).toMatchObject({
+      inputs: {
+        environment: "production",
+        nodes: "beacon",
+        skip_infra: "true",
+      },
+    });
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).source_sha
+    ).toBeUndefined();
+    expect(
+      (dispatch?.params.inputs as Record<string, string>).node_source_sha
+    ).toBeUndefined();
+  });
+
+  it("rejects a poisoned off-main preview pin before workflow dispatch", async () => {
+    installPreviewForwardHandlers("diverged");
+
+    await expect(
+      makeWriter().promoteNodeFromPreview({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "beacon",
+      })
+    ).rejects.toMatchObject({ code: "non_forward_promotion", status: 409 });
+    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
   });
 });
 
@@ -3623,7 +3927,14 @@ const DISPATCH_ROUTE =
 
 describe("GitHubRepoWriter.dispatchNodePromote", () => {
   it("dispatches promote-and-deploy with skip_infra=true (APP_PROMOTE_IS_NO_INFRA)", async () => {
-    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+    routeHandlers = {
+      [DISPATCH_ROUTE]: () => ({
+        workflow_run_id: 12345,
+        run_url:
+          "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12345",
+        html_url: "https://github.com/Cogni-DAO/cogni/actions/runs/12345",
+      }),
+    };
 
     const result = await makeWriter().dispatchNodePromote({
       owner: "Cogni-DAO",
@@ -3633,6 +3944,7 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
     });
 
     expect(result.dispatched).toBe(true);
+    expect(result.runId).toBe(12345);
     const dispatch = requests.find(
       (request) => request.route === DISPATCH_ROUTE
     );
@@ -3657,7 +3969,14 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
   });
 
   it("forwards source_sha only when provided (catalog-pin nodes omit it)", async () => {
-    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+    routeHandlers = {
+      [DISPATCH_ROUTE]: () => ({
+        workflow_run_id: 12346,
+        run_url:
+          "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12346",
+        html_url: "https://github.com/Cogni-DAO/cogni/actions/runs/12346",
+      }),
+    };
 
     await makeWriter().dispatchNodePromote({
       owner: "Cogni-DAO",
@@ -3679,7 +3998,14 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
   });
 
   it("forwards node_source_sha when provided (source-addressed preview promote)", async () => {
-    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+    routeHandlers = {
+      [DISPATCH_ROUTE]: () => ({
+        workflow_run_id: 12347,
+        run_url:
+          "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12347",
+        html_url: "https://github.com/Cogni-DAO/cogni/actions/runs/12347",
+      }),
+    };
 
     await makeWriter().dispatchNodePromote({
       owner: "Cogni-DAO",
@@ -3699,6 +4025,23 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
     expect(
       (dispatch?.params.inputs as Record<string, string>).source_sha
     ).toBeUndefined();
+  });
+
+  it("fails closed when GitHub does not return a promotion run identity", async () => {
+    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+
+    await expect(
+      makeWriter().dispatchNodePromote({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        env: "preview",
+        slug: "habitat",
+        nodeSourceSha: "def4560000000000000000000000000000000000",
+      })
+    ).rejects.toMatchObject({
+      code: "promote_run_identity_missing",
+      status: 502,
+    });
   });
 });
 
@@ -4852,5 +5195,176 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
         isInRepoNode: false,
       })
     ).rejects.toMatchObject({ code: "node_repo_policy_missing", status: 409 });
+  });
+});
+
+describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
+  const OWNER = "cogni-dao";
+  const REPO = "cogni";
+  const expected = parseMergeQueueRulesetFixture(TEST_MERGE_QUEUE_POLICY_JSON);
+
+  const policyFile = () => ({
+    type: "file",
+    encoding: "base64",
+    content: Buffer.from(TEST_MERGE_QUEUE_POLICY_JSON).toString("base64"),
+  });
+
+  it("repairs only the stale queue wait, then proves the write by readback", async () => {
+    storedRulesets.clear();
+    const drifted = structuredClone(expected);
+    const parameters = drifted.rules[0]?.parameters;
+    if (!parameters) throw new Error("test queue parameters missing");
+    parameters.min_entries_to_merge_wait_minutes = 5;
+
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyFile,
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: MERGE_QUEUE_RULESET_NAME },
+      ],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        storedRulesets.has(41)
+          ? readStoredRuleset(params)
+          : { id: 41, ...drifted },
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        recordRuleset(params),
+    };
+
+    await expect(
+      makeWriter().reconcileMergeQueuePolicy({
+        policyOwner: OWNER,
+        policyRepo: REPO,
+        targetOwner: OWNER,
+        targetRepo: REPO,
+      })
+    ).resolves.toEqual({
+      status: "applied",
+      rulesetName: MERGE_QUEUE_RULESET_NAME,
+      policyRef: "main",
+      mismatches: [
+        "merge_queue.min_entries_to_merge_wait_minutes is 5, expected 0",
+      ],
+      waitMinutes: 0,
+    });
+
+    const write = requests.find(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(write?.params).toMatchObject({
+      owner: OWNER,
+      repo: REPO,
+      ruleset_id: 41,
+      ...expected,
+    });
+  });
+
+  it("is a zero-write no-op when live GitHub already matches main", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyFile,
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: MERGE_QUEUE_RULESET_NAME },
+      ],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": () => ({
+        id: 41,
+        ...expected,
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileMergeQueuePolicy({
+        policyOwner: OWNER,
+        policyRepo: REPO,
+        targetOwner: OWNER,
+        targetRepo: REPO,
+      })
+    ).resolves.toEqual({
+      status: "compliant",
+      rulesetName: MERGE_QUEUE_RULESET_NAME,
+      policyRef: "main",
+      mismatches: [],
+      waitMinutes: 0,
+    });
+    expect(requests.some((request) => request.route.startsWith("PUT "))).toBe(
+      false
+    );
+    expect(requests.some((request) => request.route.startsWith("POST "))).toBe(
+      false
+    );
+  });
+
+  it("rejects a policy with a bypass actor before reading or writing target rulesets", async () => {
+    const unsafe = {
+      ...TEST_MERGE_QUEUE_POLICY,
+      bypass_actors: [
+        { actor_id: 2994706, actor_type: "Integration", bypass_mode: "always" },
+      ],
+    };
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": () => ({
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(JSON.stringify(unsafe)).toString("base64"),
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileMergeQueuePolicy({
+        policyOwner: OWNER,
+        policyRepo: REPO,
+        targetOwner: OWNER,
+        targetRepo: REPO,
+      })
+    ).rejects.toMatchObject({
+      code: "merge_queue_policy_invalid",
+      status: 409,
+    });
+    expect(
+      requests.filter((request) => request.route.includes("/rulesets"))
+    ).toEqual([]);
+  });
+
+  it("surfaces missing App administration permission as protection_unavailable", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyFile,
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: MERGE_QUEUE_RULESET_NAME },
+      ],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": () => ({
+        id: 41,
+        ...expected,
+        enforcement: "disabled",
+      }),
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": () =>
+        Promise.reject(
+          statusError(403, "Resource not accessible by integration")
+        ),
+    };
+
+    await expect(
+      makeWriter().reconcileMergeQueuePolicy({
+        policyOwner: OWNER,
+        policyRepo: REPO,
+        targetOwner: OWNER,
+        targetRepo: REPO,
+      })
+    ).rejects.toMatchObject({ code: "protection_unavailable", status: 502 });
+  });
+
+  it("diffs the queue's exact safety and latency parameters", () => {
+    expect(
+      diffMergeQueueRuleset(
+        {
+          ...expected,
+          bypass_actors: [
+            {
+              actor_id: 2994706,
+              actor_type: "Integration",
+              bypass_mode: "always",
+            },
+          ],
+        },
+        expected
+      )
+    ).toContain("1 bypass actor(s) present, expected none");
   });
 });

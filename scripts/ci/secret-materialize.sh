@@ -154,6 +154,18 @@ export PAYMENT_NODES="${PAYMENT_NODES:-poly}"
 [[ -n "${DOMAIN:-}" ]] || fail "DOMAIN is required (derive-env keys build the node FQDN)"
 export DOMAIN
 
+# bug.5240 — CI-derived bootstrap for the lease-log pump's Loki push credential.
+# The lease-log pump (operator control plane) needs LOKI_LEASE_PUSH_{URL,USER,TOKEN} at
+# cogni/<env>/operator or its projected mount fails (bug.5142 ordering). Until a human
+# mints the DEDICATED logs:write token the catalog asks for, fall back to the CI Loki
+# credential the workflows already hold — same trust plane (the token never leaves the
+# operator control plane; the app-push lane that shipped it into leases is superseded).
+# Passthrough seeding below is create-if-absent, so a later `pnpm secrets:set` with a
+# dedicated token is never clobbered. Empty CI env ⇒ the keys are simply skipped.
+export LOKI_LEASE_PUSH_URL="${LOKI_LEASE_PUSH_URL:-${GRAFANA_CLOUD_LOKI_URL:-}}"
+export LOKI_LEASE_PUSH_USER="${LOKI_LEASE_PUSH_USER:-${GRAFANA_CLOUD_LOKI_USER:-}}"
+export LOKI_LEASE_PUSH_TOKEN="${LOKI_LEASE_PUSH_TOKEN:-${GRAFANA_CLOUD_LOKI_API_KEY:-}}"
+
 # shellcheck source=../setup/lib/reconcile-secrets.sh
 # Provides NODE_BASELINE_KEYS, derive_secret, and _resolve_node_value
 # (preserve-existing + per-node generate; no blind ancestor scan). External

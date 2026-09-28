@@ -302,14 +302,11 @@ export async function POST(
       );
     }
 
-    // 5. Fire-and-forget dispatches after successful verification.
-    // Runs async — errors logged, never block webhook response.
+    // 5. Dispatches after successful verification. Review/sync hooks remain async, but node
+    // preview promotion is awaited through native workflow-run identity: this webhook is not
+    // acknowledged until the deploy-plane write is observed (bug.5010).
     if (source === "github" && eventType === "pull_request") {
       dispatchPrReview(verified.payload, env, log);
-      // Node-merge → preview tie: a merged spawned-node PR dispatches promote-and-deploy
-      // at env=preview SOURCE-ADDRESSED by the PR head sha, pin on deploy/preview, ZERO
-      // writes to main (PREVIEW_VIA_SOURCE_ADDRESSED_PROMOTE, task.5022).
-      dispatchNodePreviewPromote(verified.payload, env, log);
       // Env-membership merge → lane reconcile: the `POST /nodes/{id}/envs` verb's own PR
       // landing is what provisions the lane's substrate (as its custodian) and renders its
       // desired state. Matches only that verb's branch on the parent monorepo; every other
@@ -319,6 +316,10 @@ export async function POST(
 
     // node-template merge→main → mirror canonical content to every child fork (one PR each).
     if (source === "github" && eventType === "push") {
+      // A default-branch push is the merge-queue-safe node preview signal. GitHub may omit the
+      // pull_request closed/merged delivery for a queued merge (Poly #65); the canonical main
+      // advance still identifies the exact on-main SHA.
+      await dispatchNodePreviewPromote(verified.payload, env, log);
       dispatchCanonicalForkSync(verified.payload, env, log);
     }
 
@@ -386,7 +387,6 @@ export async function POST(
       eventType === "pull_request"
     ) {
       dispatchPrReview(verifiedPayload, env, log);
-      dispatchNodePreviewPromote(verifiedPayload, env, log);
     }
 
     if (

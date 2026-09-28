@@ -26,6 +26,7 @@ const NODE_ID = "22222222-2222-4222-8222-222222222222";
 const mockDeployPlane = vi.hoisted(() => ({
   dispatchNodePromote: vi.fn(),
   promoteNode: vi.fn(),
+  promoteNodeFromPreview: vi.fn(),
 }));
 const authzState = vi.hoisted(() => ({
   decision: undefined as
@@ -165,6 +166,11 @@ describe("POST /api/v1/deploy/promote", () => {
       sourceAddressing: "remote_source",
       workflowUrl: "https://github.com/test-owner/test-repo/actions",
     });
+    mockDeployPlane.promoteNodeFromPreview.mockResolvedValue({
+      dispatched: true,
+      workflowUrl: "https://github.com/test-owner/test-repo/actions",
+      message: "Promote dispatched: sigh → production.",
+    });
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -203,13 +209,19 @@ describe("POST /api/v1/deploy/promote", () => {
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
   });
 
-  it("returns 200 and dispatches the raw catalog-pin path when no sourceSha (preview-forward mode)", async () => {
+  it("returns 200 and dispatches the guarded preview-forward path when no sourceSha", async () => {
     const res = await post({ nodeId: NODE_ID, env: "production" });
     expect(res.status).toBe(200);
-    expect(mockDeployPlane.dispatchNodePromote).toHaveBeenCalledWith(
-      expect.objectContaining({ env: "production", slug: "sigh" })
+    expect(mockDeployPlane.promoteNodeFromPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentOwner: "test-owner",
+        parentRepo: "test-repo",
+        slug: "sigh",
+        allowRollback: false,
+      })
     );
     expect(mockDeployPlane.promoteNode).not.toHaveBeenCalled();
+    expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
   });
 
   it("routes to the SOURCE-ADDRESSED path (promoteNode, env=production) when a sourceSha is supplied (ONE_PROMOTION_PRIMITIVE)", async () => {
@@ -223,6 +235,7 @@ describe("POST /api/v1/deploy/promote", () => {
         parentRepo: "test-repo",
         slug: "sigh",
         sourceSha,
+        allowRollback: false,
       })
     );
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
@@ -250,9 +263,22 @@ describe("POST /api/v1/deploy/promote", () => {
         parentRepo: "test-repo",
         slug: "sigh",
         sourceSha,
+        allowRollback: false,
       })
     );
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+  });
+
+  it("preserves the manual catalog-pin preview path when sourceSha is omitted", async () => {
+    const res = await post({ nodeId: NODE_ID, env: "preview" });
+    expect(res.status).toBe(200);
+    expect(mockDeployPlane.dispatchNodePromote).toHaveBeenCalledWith({
+      owner: "test-owner",
+      repo: "test-repo",
+      env: "preview",
+      slug: "sigh",
+    });
+    expect(mockDeployPlane.promoteNodeFromPreview).not.toHaveBeenCalled();
   });
 
   it("returns 403 authz_denied for preview when node.manage_envs is denied and does NOT dispatch", async () => {
@@ -277,7 +303,7 @@ describe("POST /api/v1/deploy/promote", () => {
   });
 
   it("returns typed 502 dispatch_failed when dispatch throws (not a raw 500)", async () => {
-    mockDeployPlane.dispatchNodePromote.mockRejectedValue(
+    mockDeployPlane.promoteNodeFromPreview.mockRejectedValue(
       new Error("GitHub App not installed on owner/repo (HTTP 404).")
     );
     const res = await post({ nodeId: NODE_ID, env: "production" });
@@ -285,5 +311,43 @@ describe("POST /api/v1/deploy/promote", () => {
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe("dispatch_failed");
     expect(body.message).toContain("not installed");
+  });
+
+  it("passes an explicit rollback override only after the normal RBAC gate", async () => {
+    const sourceSha = "0123456789012345678901234567890123456789";
+    const res = await post({
+      nodeId: NODE_ID,
+      env: "production",
+      sourceSha,
+      allowRollback: true,
+    });
+    expect(res.status).toBe(200);
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "node.promote_production" })
+    );
+    expect(mockDeployPlane.promoteNode).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceSha, allowRollback: true })
+    );
+  });
+
+  it("returns typed 409 non_forward_promotion without falling through to dispatch", async () => {
+    mockDeployPlane.promoteNode.mockRejectedValue(
+      Object.assign(new Error("target is not on main"), {
+        code: "non_forward_promotion",
+        status: 409,
+      })
+    );
+    const res = await post({
+      nodeId: NODE_ID,
+      env: "production",
+      sourceSha: "0123456789012345678901234567890123456789",
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "non_forward_promotion",
+      message: "target is not on main",
+    });
+    expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+    expect(mockDeployPlane.promoteNodeFromPreview).not.toHaveBeenCalled();
   });
 });

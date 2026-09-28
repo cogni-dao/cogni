@@ -86,4 +86,14 @@ export interface ComputeCostStorePort {
   }): Promise<void>;
   close(input: { allocationReceiptId: string }): Promise<void>;
   reportByNode(): Promise<readonly ComputeCostReport[]>;
+  /**
+   * Return reports for an already-authorized node set.
+   *
+   * Callers must resolve access before invoking this method. Implementations must push the
+   * node-id restriction into the backing query; fleet-wide reads followed by application-side
+   * filtering are not an acceptable implementation of this boundary.
+   */
+  reportByNodeIds(
+    nodeIds: readonly string[]
+  ): Promise<readonly ComputeCostReport[]>;
 }

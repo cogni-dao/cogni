@@ -113,11 +113,12 @@ ${daoLines}
 ${input.knowledgeRemote ? renderKnowledgeBlock(input.knowledgeRemote) : ""}
 
 # App-tier workload this node runs, in the node's own words: services, ports,
-# resources, exactly one \`public\` service, and the value-free logical secret
-# names its runtime needs. This is provider-neutral — the parent catalog, not
-# this file, decides whether an environment lands on k3s or off-cluster compute.
+# resources, and exactly one \`public\` service. This is provider-neutral — the
+# parent catalog, not this file, decides whether an environment lands on k3s or
+# off-cluster compute.
 # The \`cogni-node-app-v1\` runtime_profile pins the Cogni Next.js app contract;
-# a service that declares it MUST declare every secret_ref listed below.
+# the operator supplies that profile's standard secrets automatically, so you only
+# add \`secret_refs\` here for a secret BEYOND the profile.
 # Add sibling services here (private by default) as this node grows.
 ${renderNodeDeploymentYaml().trimEnd()}
 

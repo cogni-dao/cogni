@@ -113,6 +113,12 @@ export interface NodeServiceConfig {
   readonly args?: readonly string[];
   readonly port: number;
   readonly visibility: "public" | "private";
+  /**
+   * Per-service deployment-environment allow-list (story.5043). Absent = deploy to every
+   * environment. When present, the manifest builder DROPS this service from any environment
+   * not listed here (see buildComputeWorkloadManifest).
+   */
+  readonly envs?: readonly ("candidate-a" | "preview" | "production")[];
   readonly runtimeProfile?: "cogni-node-app-v1";
   readonly bindings: Readonly<Record<string, string>>;
   readonly secretRefs: readonly { readonly key: string }[];
@@ -178,6 +184,7 @@ export function extractNodeServices(
     ...(service.args ? { args: service.args } : {}),
     port: service.port,
     visibility: service.visibility,
+    ...(service.envs ? { envs: service.envs } : {}),
     ...(service.runtime_profile
       ? { runtimeProfile: service.runtime_profile }
       : {}),

@@ -24,6 +24,7 @@ const REPO_ROOT = path.resolve(__dirname, "../..");
 const CATALOG_DIR = path.join(REPO_ROOT, "infra/catalog");
 const APPSETS_DIR = path.join(REPO_ROOT, "infra/k8s/argocd/appsets");
 const OVERLAYS_DIR = path.join(REPO_ROOT, "infra/k8s/overlays");
+const FLEET_CONTROL_ENV = process.env.FLEET_CONTROL_ENV || "production";
 
 interface CatalogEntry {
   name: string;
@@ -55,8 +56,8 @@ function nodeRows(): CatalogEntry[] {
  * desired state and the PAYING cluster holds it; k3s rows stay with their own env's Argo.
  */
 function reconcilingCluster(env: string, provider: string | undefined): string {
-  if (env === "production") return "production";
-  return provider === "akash" ? "production" : env;
+  if (env === FLEET_CONTROL_ENV) return FLEET_CONTROL_ENV;
+  return provider === "akash" ? FLEET_CONTROL_ENV : env;
 }
 
 const ROWS = nodeRows();

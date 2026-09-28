@@ -111,6 +111,13 @@ All types are `readonly`. The root entry (`@cogni/work-items`) exports pure type
 | `claim`             | `id, runId, command`              | Set governance lock (no revision check)    |
 | `release`           | `id, runId`                       | Clear governance lock if runId matches     |
 
+> **HTTP wire (v1).** The `patch` command maps to `PATCH /api/v1/work/items/{id}` with body
+> `{ "set": { <field>: <value>, ... } }` — the SQL-style `UPDATE … SET` envelope. The operation
+> is PATCH but the payload wrapper is **`set`, not `patch`** (mirrors the port's `set` field). v0
+> carries no `expectedRevision`. The wrapper is a strict object, so a stray key (e.g. a guessed
+> `patch`) 400s with the bad key named rather than being silently ignored. Canonical shape lives in
+> `packages/node-contracts/src/work.items.patch.v1.contract.ts`.
+
 ### Adapter Contract
 
 Any adapter implementing `WorkItemQueryPort + WorkItemCommandPort` must satisfy:

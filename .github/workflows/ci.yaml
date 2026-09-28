@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read # Signed env-manager classifier reads PR identity + exact file list
   actions: read # Required for CI telemetry to fetch job logs
   packages: read # Required for pulling migrator images from GHCR
 
@@ -26,10 +27,77 @@ env:
   TEMPORAL_ADDRESS: localhost:7233
   TEMPORAL_NAMESPACE: cogni-test
   TEMPORAL_TASK_QUEUE: scheduler-tasks
+  # FLEET_CONTROL_ENV (subtask.5007): the appset drift gate renders per the fleet's control
+  # env. Default 'production' (cogni-dao); an isolated fleet (cogni-test-org) sets the repo
+  # var to 'candidate-a' so its committed appsets tree matches. Read by control_env_for.
+  FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
 
 jobs:
+  env_manager_fast_path:
+    name: env-manager-fast-path
+    runs-on: ubuntu-latest
+    outputs:
+      eligible: ${{ steps.classify.outputs.eligible }}
+      claimed: ${{ steps.classify.outputs.claimed }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+
+      - id: classify
+        name: Verify signed env-manager change type
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER_PR: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA_PR: ${{ github.event.pull_request.head.sha }}
+          MQ_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          MQ_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MQ_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          classifier='scripts/ci/classify-env-manager-fast-path.sh'
+          if git cat-file -e "origin/main:$classifier" 2>/dev/null; then
+            # TRUSTED_CLASSIFIER: never let the PR execute the code that decides
+            # whether that same PR may skip heavy checks.
+            git show "origin/main:$classifier" | bash
+          elif [ "$(git diff --name-status origin/main...HEAD -- "$classifier")" = "$(printf 'A\t%s' "$classifier")" ]; then
+            # One-time bootstrap: this PR adds the classifier, so it MUST take
+            # full CI. Deletion/drift is not a bootstrap and fails above.
+            echo 'eligible=false' >> "$GITHUB_OUTPUT"
+            echo 'claimed=false' >> "$GITHUB_OUTPUT"
+            echo 'reason=classifier-bootstrap' >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::trusted env-manager classifier is missing from main"
+            exit 1
+          fi
+
+      # Tiny, deterministic proof for the one reserved generator type. These
+      # are the checks that can actually invalidate an env-manager tree; app
+      # typechecks, unit tests, component containers, and image builds cannot.
+      - name: Validate changed catalog
+        if: steps.classify.outputs.eligible == 'true'
+        run: |
+          pipx install 'check-jsonschema==0.37.1'
+          check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml
+          bash scripts/ci/next-free-node-port.sh --check
+
+      - name: Verify generated deployment tree
+        if: steps.classify.outputs.eligible == 'true'
+        run: |
+          bash scripts/ci/render-scheduler-worker-endpoints.sh --check
+          bash scripts/ci/render-node-appset.sh --check
+          bash scripts/ci/render-node-overlays.sh --check
+
   # Fast gate: install → typecheck → lint
   static:
+    needs: env_manager_fast_path
+    # A skipped required job is satisfied by GitHub and by the operator's
+    # getCiStatus contract. Invalid/unavailable classifier results still run
+    # this job so the enforcement step fails closed.
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -44,6 +112,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Enforce env-manager classifier result
+        env:
+          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
+          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+        run: |
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
+          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
+            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
+          fi
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -255,6 +336,8 @@ jobs:
   # exists to prevent. The hermetic UNIT proof stays here on PR CI (see the shell-tests job).
 
   unit:
+    needs: env_manager_fast_path
+    if: always() && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140): unit does its own install + packages:build
     # and consumes NO artifact from static, so gating on it only serialized
@@ -279,6 +362,19 @@ jobs:
           # `git merge-base origin/main HEAD`; the default shallow clone (depth=1)
           # leaves origin/main unreachable and forces a runtime fetch.
           fetch-depth: 0
+
+      - name: Enforce env-manager classifier result
+        env:
+          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
+          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+        run: |
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
+          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
+            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
+          fi
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -338,7 +434,7 @@ jobs:
       - name: Image Updater scope (bug.0344)
         run: bash scripts/ci/check-image-updater-scope.sh
 
-      # task.5140 — the hermetic scripts/ci/tests/*.test.sh suite (22 pure-bash
+      # task.5140 — the hermetic scripts/ci/tests/*.test.sh suite (23 pure-bash
       # deploy/secrets/substrate regression tests) runs in ONE parallel primitive
       # instead of ~22 serial steps (was ~3-4 min serial → ~40-60s). The
       # authoritative test list, the mutator-vs-parallel concurrency tiers (a few
@@ -382,33 +478,13 @@ jobs:
       # when neither the operator app nor a package it depends on changed, and
       # runs FULL on merge_group/push (the required-check backstop that catches
       # any PR-time affected miss before merge). Logic + fail-safe live in
-      # scripts/ci/run-unit-tests.sh (SCRIPTS_ARE_THE_API). Coverage stays a
-      # single-flip: ENABLE_SONAR=true runs the full instrumented path so the
-      # sonar job below has an artifact.
+      # scripts/ci/run-unit-tests.sh (SCRIPTS_ARE_THE_API): ROOT config always
+      # full + operator config affected-scoped on PRs, full on merge_group/push.
       - name: Unit + contract tests
         env:
           CI_EVENT: ${{ github.event_name }}
           TURBO_SCM_BASE: origin/main
-        run: |
-          if [ "${{ vars.ENABLE_SONAR }}" = "true" ]; then
-            pnpm test:ci:coverage
-          else
-            bash scripts/ci/run-unit-tests.sh
-          fi
-
-      # Only produced (and consumed by the sonar job) when Sonar is enabled;
-      # skipped otherwise, so the coverage-free run above can't false-fail on
-      # if-no-files-found.
-      - name: Upload coverage reports
-        if: vars.ENABLE_SONAR == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: coverage-${{ github.sha }}
-          path: |
-            coverage/lcov.info
-            coverage/coverage-summary.json
-          retention-days: 1
-          if-no-files-found: error
+        run: bash scripts/ci/run-unit-tests.sh
 
       - name: CI Telemetry
         if: always()
@@ -423,7 +499,8 @@ jobs:
     # Skip on merge_group: not in required-status-checks (see infra/github/branch-protection.json),
     # so the queue doesn't gate on it. Re-running on the rebased candidate burns ~3 min for marginal
     # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
-    if: github.event_name != 'merge_group'
+    needs: env_manager_fast_path
+    if: always() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140) — component does its own install + build and
     # shares no artifact with static; running in parallel keeps it off the
@@ -441,6 +518,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Enforce env-manager classifier result
+        env:
+          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
+          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
+          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+        run: |
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
+          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
+            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
+          fi
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -485,58 +575,8 @@ jobs:
           loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
           loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
           job_status: ${{ job.status }}
-
-  sonar:
-    runs-on: ubuntu-latest
-    needs: unit
-    # Sonar has no meaning on the merge_group ref; skip to save runtime.
-    if: vars.ENABLE_SONAR == 'true' && needs.unit.result == 'success' && github.event_name != 'merge_group'
-    permissions:
-      contents: read
-      pull-requests: write # Required for PR decoration
-      actions: read # Required for CI telemetry
-
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          fetch-depth: 0 # Required for SonarCloud git blame
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Download coverage artifact
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
-        with:
-          name: coverage-${{ github.sha }}
-          path: coverage/
-
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@884b79409bbd464b2a59edc326a4b77dc56b2195 # v5.0.0
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarcloud.io
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
-
-      - name: CI Telemetry
-        if: always()
-        uses: ./.github/actions/loki-ci-telemetry
-        with:
-          loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
-          loki_user: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
-          loki_token: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
-          job_status: ${{ job.status }}
-
-  sonar-disabled:
-    runs-on: ubuntu-latest
-    needs: unit
-    if: vars.ENABLE_SONAR != 'true' && needs.unit.result == 'success' && github.event_name != 'merge_group'
-    steps:
-      - name: SonarCloud disabled
-        run: |
-          echo "::notice title=SonarCloud disabled::Set repository variable ENABLE_SONAR=true to restore the PR-time scan."
-          {
-            echo "### SonarCloud disabled"
-            echo ""
-            echo "Set repository variable \`ENABLE_SONAR=true\` to restore the PR-time scan."
-          } >> "$GITHUB_STEP_SUMMARY"
+# NOTE: the SonarCloud jobs (`sonar` + `sonar-disabled`) and the coverage-upload
+# step were removed — Sonar is disabled fleet-wide (repo var ENABLE_SONAR unset),
+# neither job is a required check, and `sonar-disabled` only echoed a notice. If
+# Sonar returns, re-add the job + wire `test:ci:coverage` (still in package.json)
+# back into the Unit step behind the `ENABLE_SONAR` flag.

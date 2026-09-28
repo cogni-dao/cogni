@@ -5,7 +5,7 @@
  * Module: `@tests/unit/app/_facades/deploy/node-preview-promote`
  * Purpose: Unit tests for the node-merge → preview tie facade.
  * Scope: Mocked deploy plane + service DB only; no real GitHub/DB I/O.
- * Invariants: MERGED_ONLY, SPAWNED_NODES_ONLY, PIN_IS_PR_HEAD_SHA.
+ * Invariants: MAIN_ADVANCE_ONLY, SPAWNED_NODES_ONLY, PIN_IS_MAIN_SHA, OBSERVED_DISPATCH.
  * Side-effects: none
  * Links: src/app/_facades/deploy/node-preview-promote.server.ts
  * @internal
@@ -54,16 +54,16 @@ const log = {
   // biome-ignore lint/suspicious/noExplicitAny: minimal pino Logger stub
 } as any;
 
-function mergedPayload(
+function mainPushPayload(
   over: Record<string, unknown> = {}
 ): Record<string, unknown> {
   return {
-    action: "closed",
-    repository: { name: "habitat", owner: { login: "Cogni-DAO" } },
-    pull_request: {
-      number: 7,
-      merged: true,
-      head: { sha: "a".repeat(40) },
+    ref: "refs/heads/main",
+    after: "e".repeat(40),
+    repository: {
+      name: "habitat",
+      default_branch: "main",
+      owner: { login: "Cogni-DAO" },
     },
     ...over,
   };
@@ -74,25 +74,29 @@ async function flush(): Promise<void> {
 }
 
 beforeEach(() => {
-  promoteNode.mockReset();
+  vi.clearAllMocks();
   nodeRows = [];
 });
 
 describe("dispatchNodePreviewPromote", () => {
-  it("pins the PR head SHA when a registered node's PR merges (PIN_IS_PR_HEAD_SHA)", async () => {
+  it("promotes the exact SHA from a default-branch push (merge-queue fallback)", async () => {
     nodeRows = [
       { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
     ];
     promoteNode.mockResolvedValue({
       status: "dispatched",
       env: "preview",
-      sourceSha: "a".repeat(40),
+      sourceSha: "e".repeat(40),
       sourceAddressing: "remote_source",
       workflowUrl:
-        "https://github.com/Cogni-DAO/node-template/actions/workflows/promote-and-deploy.yml",
+        "https://github.com/Cogni-DAO/cogni/actions/workflows/promote-and-deploy.yml",
+      runId: 12345,
+      runUrl: "https://github.com/Cogni-DAO/cogni/actions/runs/12345",
+      runApiUrl:
+        "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12345",
     });
 
-    dispatchNodePreviewPromote(mergedPayload(), ENV, log);
+    dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
     await flush();
 
     expect(promoteNode).toHaveBeenCalledWith({
@@ -100,36 +104,63 @@ describe("dispatchNodePreviewPromote", () => {
       parentOwner: "Cogni-DAO",
       parentRepo: "node-template",
       slug: "habitat",
-      sourceSha: "a".repeat(40),
+      sourceSha: "e".repeat(40),
     });
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_preview_promote.complete",
+        nodeId: "node-1",
+        slug: "habitat",
+        repo: "Cogni-DAO/habitat",
+        sourceSha: "e".repeat(40),
+        sourceSha8: "e".repeat(8),
+        trigger: "push",
+        status: "dispatched",
+        runId: 12345,
+        runUrl: "https://github.com/Cogni-DAO/cogni/actions/runs/12345",
+        runApiUrl:
+          "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12345",
+      }),
+      expect.any(String)
+    );
   });
 
-  it("ignores a closed-but-unmerged PR (MERGED_ONLY)", async () => {
+  it("ignores a push that is not to the repository default branch", async () => {
     nodeRows = [
       { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
     ];
+
     dispatchNodePreviewPromote(
-      mergedPayload({
-        pull_request: {
-          number: 7,
-          merged: false,
-          head: { sha: "a".repeat(40) },
-        },
-      }),
+      mainPushPayload({ ref: "refs/heads/feature/not-main" }),
       ENV,
       log
     );
     await flush();
+
     expect(promoteNode).not.toHaveBeenCalled();
   });
 
-  it("ignores a non-closed action", async () => {
+  it("rejects when GitHub does not create an observable promotion run", async () => {
     nodeRows = [
       { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
     ];
-    dispatchNodePreviewPromote(mergedPayload({ action: "opened" }), ENV, log);
-    await flush();
-    expect(promoteNode).not.toHaveBeenCalled();
+    promoteNode.mockRejectedValueOnce(new Error("run identity missing"));
+
+    await expect(
+      dispatchNodePreviewPromote(mainPushPayload(), ENV, log)
+    ).rejects.toThrow("run identity missing");
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_preview_promote.complete",
+        repo: "Cogni-DAO/habitat",
+        sourceSha: "e".repeat(40),
+        sourceSha8: "e".repeat(8),
+        trigger: "push",
+        status: "failed",
+        error: "Error: run identity missing",
+      }),
+      "node preview promote failed"
+    );
   });
 
   it("does NOT dispatch for a node that has no preview env (bug.5203)", async () => {
@@ -138,7 +169,7 @@ describe("dispatchNodePreviewPromote", () => {
     // conclusion: beacon (run 35175805389) and toks5 (run 35176388003) each merged a fix,
     // showed success, and deployed nothing.
     nodeRows = [{ id: "node-1", slug: "habitat", deployEnvs: ["production"] }];
-    dispatchNodePreviewPromote(mergedPayload(), ENV, log);
+    dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
     await flush();
     expect(promoteNode).not.toHaveBeenCalled();
   });
@@ -148,7 +179,7 @@ describe("dispatchNodePreviewPromote", () => {
     // production would ship unreviewed code past the human gate that makes production a
     // manual dispatch, so the skip must never become a production promote.
     nodeRows = [{ id: "node-1", slug: "habitat", deployEnvs: ["production"] }];
-    dispatchNodePreviewPromote(mergedPayload(), ENV, log);
+    dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
     await flush();
     expect(promoteNode).not.toHaveBeenCalled();
     expect(
@@ -162,16 +193,24 @@ describe("dispatchNodePreviewPromote", () => {
 
   it("treats a missing deploy_envs projection as NOT in preview (fail closed)", async () => {
     nodeRows = [{ id: "node-1", slug: "habitat", deployEnvs: null }];
-    dispatchNodePreviewPromote(mergedPayload(), ENV, log);
+    dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
     await flush();
     expect(promoteNode).not.toHaveBeenCalled();
   });
 
   it("ignores an unregistered repo — flight-preview owns in-repo nodes (SPAWNED_NODES_ONLY)", async () => {
     nodeRows = [];
-    dispatchNodePreviewPromote(mergedPayload(), ENV, log);
+    dispatchNodePreviewPromote(mainPushPayload(), ENV, log);
     await flush();
     expect(promoteNode).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_preview_promote.complete",
+        sourceSha: "e".repeat(40),
+        status: "skipped_unregistered_repo",
+      }),
+      expect.any(String)
+    );
   });
 
   it("dispatches for node-template — the external-repo carve-out is retired (task.5087)", async () => {
@@ -194,12 +233,12 @@ describe("dispatchNodePreviewPromote", () => {
         "https://github.com/Cogni-DAO/node-template/actions/workflows/promote-and-deploy.yml",
     });
     dispatchNodePreviewPromote(
-      mergedPayload({
-        repository: { name: "node-template", owner: { login: "Cogni-DAO" } },
-        pull_request: {
-          number: 9,
-          merged: true,
-          head: { sha: "b".repeat(40) },
+      mainPushPayload({
+        after: "d".repeat(40),
+        repository: {
+          name: "node-template",
+          default_branch: "main",
+          owner: { login: "Cogni-DAO" },
         },
       }),
       ENV,
@@ -211,20 +250,29 @@ describe("dispatchNodePreviewPromote", () => {
       parentOwner: "Cogni-DAO",
       parentRepo: "node-template",
       slug: "node-template",
-      sourceSha: "b".repeat(40),
+      sourceSha: "d".repeat(40),
     });
   });
 
-  it("no-ops when the deploy-plane GitHub App is unconfigured", async () => {
+  it("fails loudly when the deploy-plane GitHub App is unconfigured", async () => {
     nodeRows = [
       { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
     ];
-    dispatchNodePreviewPromote(
-      mergedPayload(),
-      { ...ENV, GH_REVIEW_APP_ID: undefined },
-      log
-    );
-    await flush();
+    await expect(
+      dispatchNodePreviewPromote(
+        mainPushPayload(),
+        { ...ENV, GH_REVIEW_APP_ID: undefined },
+        log
+      )
+    ).rejects.toThrow("GitHub App credentials missing");
     expect(promoteNode).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_preview_promote.complete",
+        sourceSha: "e".repeat(40),
+        status: "failed",
+      }),
+      expect.any(String)
+    );
   });
 });

@@ -54,6 +54,9 @@ service_count="$(yq -N '.deployment.services | length' "$repo_spec")"
   || fail "external-compute target '$node' must declare deployment.services"
 required_keys="$(yq -r '(.deployment.services[]?.secret_refs[]?.key // "") | select(. != "")' "$repo_spec" | sort -u)"
 required_keys_csv="$(paste -sd, - <<<"$required_keys")"
+# OpenSSH serializes the remote command as shell text, so an empty argv entry is
+# not preserved. Keep this slot non-empty or every later remote positional shifts.
+required_keys_arg="${required_keys_csv:-__none__}"
 
 egress_cidrs="$(yq -r '.compute_egress_cidrs[]?.cidr' "$catalog_file" | sort -u)"
 [ -n "$egress_cidrs" ] \
@@ -81,12 +84,13 @@ read -r -a ssh_opts <<< "$ssh_opts_raw"
 # The shared helper buffers this heredoc and retries only the OpenBao Kubernetes
 # login transient; stable 403 authz drift still fails after one fresh-JWT check.
 cogni_openbao_kubernetes_login_retry "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
-  "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_csv" "$egress_cidrs_csv" \
+  "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_arg" "$egress_cidrs_csv" \
   "$egress_allowlist" "$compute_api" <<'REMOTE'
 set -euo pipefail
 env_name="$1"
 node="$2"
 required_keys_csv="$3"
+[ "$required_keys_csv" = "__none__" ] && required_keys_csv=""
 egress_cidrs_csv="$4"
 egress_allowlist="$5"
 authority="$6"

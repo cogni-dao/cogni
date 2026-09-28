@@ -36,6 +36,18 @@ const main = () => {
   }
 
   const declaredArtifacts = new Set(manifest.artifacts.map((a) => a.repo));
+  const testParents = manifest.artifacts.filter(
+    (a) => a.role === "test-parent"
+  );
+  if (testParents.length > 1) {
+    fail(
+      `more than one artifact declares \`role: test-parent\` (${testParents
+        .map((a) => a.repo)
+        .join(
+          ", "
+        )}) — scripts/ci/sync-test-parent.mjs syncs exactly one mirror`
+    );
+  }
   const errors = [];
   const seen = new Set();
 
@@ -51,14 +63,28 @@ const main = () => {
       );
     }
     seen.add(d.artifact);
-    const hasOmit =
-      Array.isArray(d.omit_from_artifact) && d.omit_from_artifact.length > 0;
-    const hasOnly =
-      Array.isArray(d.artifact_only) && d.artifact_only.length > 0;
-    if (!hasOmit && !hasOnly) {
+    const nonEmpty = (key) => Array.isArray(d[key]) && d[key].length > 0;
+    if (
+      !nonEmpty("omit_from_artifact") &&
+      !nonEmpty("artifact_only") &&
+      !nonEmpty("content_may_differ")
+    ) {
       errors.push(
-        `divergences[${i}] for "${d.artifact}" must list at least one of omit_from_artifact or artifact_only — empty divergence has no meaning`
+        `divergences[${i}] for "${d.artifact}" must list at least one of omit_from_artifact, artifact_only or content_may_differ — empty divergence has no meaning`
       );
+    }
+    // A LITERAL path twin-listed in omit_from_artifact AND artifact_only is the v1 workaround for
+    // "same file, both sides, different content" — and it suppresses the 🔴 missing signal as well
+    // as the 🟡 different one, so a deleted canonical file goes unnoticed. `content_may_differ` is
+    // the category for that now. A WILDCARD twin-listing is a different, legitimate shape: two
+    // disjoint sets under one glob (each repo owns its own roster rows), where no specific path is
+    // required, so it is left alone.
+    for (const glob of d.omit_from_artifact ?? []) {
+      if (!glob.includes("*") && (d.artifact_only ?? []).includes(glob)) {
+        errors.push(
+          `divergences[${i}] for "${d.artifact}": "${glob}" is twin-listed in omit_from_artifact AND artifact_only. Declare it in content_may_differ instead — twin-listing a literal path also hides its absence.`
+        );
+      }
     }
   }
 

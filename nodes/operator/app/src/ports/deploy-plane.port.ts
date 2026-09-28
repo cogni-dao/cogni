@@ -28,6 +28,14 @@ export interface CandidateFlightDispatchResult {
   readonly message: string;
 }
 
+/** A workflow dispatch GitHub has acknowledged with a concrete Actions run. */
+export interface ObservedWorkflowDispatchResult
+  extends CandidateFlightDispatchResult {
+  readonly runId: number;
+  readonly runUrl: string;
+  readonly runApiUrl: string;
+}
+
 export interface PrepareNodeRefCandidateFlightInput {
   readonly parentOwner: string;
   readonly parentRepo: string;
@@ -51,11 +59,21 @@ export interface PromoteNodeInput {
   readonly parentRepo: string;
   readonly slug: string;
   /**
-   * Node-repo commit SHA to promote — the build the node's PR CI published as `sha-<sourceSha>`.
-   * For a REMOTE-SOURCE (fork) node this source-addresses the image (`node_source_sha`). For an
-   * IN-REPO node it is the operator checkout ref (`source_sha`); never crossed between the two.
+   * Canonical commit SHA on the source repository's main branch. For a REMOTE-SOURCE (fork) node
+   * this source-addresses the image (`node_source_sha`). For an IN-REPO node it is the operator
+   * checkout ref (`source_sha`); never crossed between the two.
    */
   readonly sourceSha: string;
+  /** Explicit authorized escape hatch for a deliberate rollback to an older commit on main. */
+  readonly allowRollback?: boolean;
+}
+
+export interface PromoteNodeFromPreviewInput {
+  readonly parentOwner: string;
+  readonly parentRepo: string;
+  readonly slug: string;
+  /** Explicit authorized escape hatch for a deliberate rollback to an older commit on main. */
+  readonly allowRollback?: boolean;
 }
 
 export interface NodePromoteResult {
@@ -72,6 +90,10 @@ export interface NodePromoteResult {
   /** `remote_source` when source-addressed by node sha; `in_repo` when passing the checkout ref. */
   readonly sourceAddressing: "remote_source" | "in_repo";
   readonly workflowUrl: string;
+  /** Native run identity proves GitHub created the workflow run; a bare 204 is not success. */
+  readonly runId: number;
+  readonly runUrl: string;
+  readonly runApiUrl: string;
 }
 
 export type ReconcileNodeInfraInput =
@@ -425,6 +447,33 @@ export interface DeployPlanePort {
   promoteNode(input: PromoteNodeInput): Promise<NodePromoteResult>;
 
   /**
+   * Promote preview's exact digest to production after validating its recorded source SHA against
+   * the node repository and current production pin. The workflow remains preview-forward so the
+   * accepted digest is copied rather than rebuilt or re-resolved from a mutable tag.
+   */
+  promoteNodeFromPreview(
+    input: PromoteNodeFromPreviewInput
+  ): Promise<CandidateFlightDispatchResult>;
+
+  /**
+   * The sha an environment is ACTUALLY running for one node: `<slug>` in
+   * `.promote-state/source-sha-by-app.json` on `deploy/<env>-<slug>` — the pin every promote and
+   * every candidate flight writes (`scripts/ci/update-source-sha-map.sh`). This is the ONLY
+   * runtime-readable statement of deployed truth: promotion writes ZERO commits to `main`, so
+   * `main` cannot carry it (task.5022 retired that firehose).
+   *
+   * Returns `null` when the node has never deployed to that env — a BIRTH lane, the one case where
+   * the catalog row's `source_sha` is a legitimate stand-in. Anywhere else, reading the catalog for
+   * a deploy sha reverts a live env to its birth pin (bug.5043, re-observed as bug.5237).
+   */
+  readNodeDeployPin(input: {
+    parentOwner: string;
+    parentRepo: string;
+    env: string;
+    slug: string;
+  }): Promise<string | null>;
+
+  /**
    * Existing deploy authority for shared infrastructure. Production replays the current app pin
    * through the full-infra workflow. Candidate-a classifies a reviewed PR into exactly one lane:
    * Compose/edge dispatches the existing candidate infra workflow, while control-plane changes
@@ -451,5 +500,5 @@ export interface DeployPlanePort {
     slug: string;
     sourceSha?: string;
     nodeSourceSha?: string;
-  }): Promise<CandidateFlightDispatchResult>;
+  }): Promise<ObservedWorkflowDispatchResult>;
 }

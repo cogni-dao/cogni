@@ -115,8 +115,10 @@ spec:
               that controller decided observe-then-create itself. Under Crossplane, provider-http
               asks "does the resource for this key exist?" - a key that changed per reconcile
               would answer "no" after every promote and mint a SECOND PAID LEASE. namespace and
-              name are both immutable (name == nodeId), so the only varying component is
-              spec.leaseGeneration, which NOTHING bumps implicitly.
+              name are both immutable (name == nodeId), so spec.leaseGeneration is the only
+              operator-controlled varying component. bug.5287 adds only the bounded
+              `:recover:<1..3>` child namespace after actor read-back proves the current key is
+              closed; transport retries and reconcile ticks never vary either identity.
 
               leaseEpoch is the PRE-task.5122 name, and is READ HERE ONLY - no caller writes it
               any more (the materializer emits leaseGeneration exclusively). It stays served
@@ -153,7 +155,8 @@ spec:
               Default is $ns, so every existing production XR renders byte-identically. */}}
             {{- $writerNs := $ns }}
             {{- if (dig "actuatorNamespace" "" $spec) }}{{ $writerNs = get $spec "actuatorNamespace" }}{{ end }}
-            {{- $cogniKey := printf "xcw:%s:%s:%d" $ns $name $leaseGeneration }}
+            {{- $baseCogniKey := printf "xcw:%s:%s:%d" $ns $name $leaseGeneration }}
+            {{- $cogniKey := $baseCogniKey }}
             {{- $baseUrl := printf "http://akash-tx-actuator.%s.svc.cluster.local:8080" $writerNs }}
             {{- $authHeader := printf "Bearer {{ akash-tx-actuator-auth:%s:token }}" $writerNs }}
 
@@ -345,14 +348,58 @@ spec:
             {{- $refusalMessage := dig "message" "" $resp }}
             {{- $refusalRetryable := or (eq $respStatus 409) (ge $respStatus 500) }}
             {{- $prevResource := dig "status" "resource" (dict) $xr }}
-            {{- $found := dig "found" false $resp }}
-            {{- $res := dig "resource" (dict) $resp }}
+            {{- /* OBSERVE wraps the resource; CREATE/UPDATE return it directly. Normalize both
+              shapes so a replayed settled key cannot masquerade as an empty response and spin
+              forever. */ -}}
+            {{- $res := dig "resource" $resp $resp }}
             {{- $state := dig "state" "unknown" $res }}
             {{- $endpoints := dig "endpoints" (list) $res }}
             {{- $externalName := dig "externalName" "" $res }}
+            {{- $found := dig "found" (ne $externalName "") $resp }}
             {{- $serving := dig "serving" false $resp }}
             {{- $active := and $found (eq $state "active") }}
             {{- $closed := and $found (eq $state "closed") }}
+
+            {{- /*
+              BOUNDED RECOVERY (bug.5287). A settled key is deliberately never re-spent by the
+              actuator. The retired controller handled that fact with recoverBounded(3); dropping
+              the budget during the Crossplane port changed "one authority" into "zero automatic
+              recovery". Keep leaseGeneration as the operator-controlled base identity, then use
+              at most three deterministic recovery keys beneath that generation. A recovery is
+              opened ONLY after the actor read-back for the CURRENT key proves state=closed. The
+              provider's requestDetails body ties the response to its key, preventing a stale
+              closed response from consuming all three attempts while the managed Request update
+              is still propagating.
+
+              The count is generation-scoped. An explicit leaseGeneration bump resets it to zero;
+              no resourceVersion, wall clock, or reconcile tick can manufacture another paid key.
+            */ -}}
+            {{- $maxRecoveryAttempts := 3 }}
+            {{- $recoveryCount := 0 }}
+            {{- $recoveryLeaseGeneration := int (dig "status" "recovery" "leaseGeneration" -1 $xr) }}
+            {{- if eq $recoveryLeaseGeneration $leaseGeneration }}
+            {{- $recoveryCount = int (dig "status" "recovery" "count" 0 $xr) }}
+            {{- end }}
+            {{- $currentKey := $baseCogniKey }}
+            {{- if gt $recoveryCount 0 }}
+            {{- $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}
+            {{- end }}
+            {{- $responseKey := "" }}
+            {{- if $leaseObs }}
+            {{- $requestBodyRaw := dig "status" "requestDetails" "body" "" $leaseObs.resource }}
+            {{- if ne $requestBodyRaw "" }}
+            {{- $requestBody := fromJson $requestBodyRaw }}
+            {{- $responseKey = dig "cogniKey" "" $requestBody }}
+            {{- end }}
+            {{- end }}
+            {{- $closedForCurrentKey := and $closed (eq $responseKey $currentKey) }}
+            {{- $recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts) }}
+            {{- if and $closedForCurrentKey (not $recoveryExhausted) }}
+            {{- $recoveryCount = add1 $recoveryCount }}
+            {{- $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}
+            {{- end }}
+            {{- $cogniKey = $currentKey }}
+            {{- $_ := set $payload "cogniKey" $cogniKey }}
 
             {{- /*
               THE RELEASE STEP, READ BACK (task.5135). Only an OBSERVE answer carries a phase —
@@ -377,21 +424,42 @@ spec:
             {{- $bootDeadlineSeconds := int (dig "bootPolicy" "bootDeadlineSeconds" 1800 $spec) }}
             {{- $onDeadline := dig "bootPolicy" "onDeadline" "Hold" $spec }}
             {{- $createdAt := $meta.creationTimestamp }}
-            {{- $createdTime := toDate "2006-01-02T15:04:05Z07:00" $createdAt }}
-            {{- $ageSeconds := int (sub (now | unixEpoch) ($createdTime | unixEpoch)) }}
-            {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($createdTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
+            {{- /*
+              BOOT EPOCH (bug.5244). The deadline is anchored to the CURRENT boot attempt —
+              (bundle sha, leaseGeneration) — not the XR's creationTimestamp. Anchored to
+              creation, a never-served XR older than the deadline was a roach motel:
+              $closeForBudget latched true, the lease Request stopped rendering, so no
+              OBSERVE could ever set $prevSha and no spec change could un-close it. The
+              anchor is latched through status.bootEpoch: same key -> keep the recorded
+              start; key changed -> this render opens a fresh window. A first render (no
+              recorded epoch) keeps creationTimestamp, so every existing XR renders
+              byte-identically until its spec next changes.
+            */ -}}
+            {{- $bootKey := printf "%s:%d" $desiredSha $leaseGeneration }}
+            {{- if gt $recoveryCount 0 }}{{ $bootKey = printf "%s:recover:%d" $bootKey $recoveryCount }}{{ end }}
+            {{- $prevBootKey := dig "status" "bootEpoch" "key" "" $xr }}
+            {{- $prevBootAt := dig "status" "bootEpoch" "at" "" $xr }}
+            {{- $bootAnchorAt := $createdAt }}
+            {{- if and (eq $prevBootKey $bootKey) (ne $prevBootAt "") }}
+            {{- $bootAnchorAt = $prevBootAt }}
+            {{- else if ne $prevBootKey "" }}
+            {{- $bootAnchorAt = dateInZone "2006-01-02T15:04:05Z07:00" now "UTC" }}
+            {{- end }}
+            {{- $anchorTime := toDate "2006-01-02T15:04:05Z07:00" $bootAnchorAt }}
+            {{- $ageSeconds := int (sub (now | unixEpoch) ($anchorTime | unixEpoch)) }}
+            {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($anchorTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
             {{- $neverServed := and (not $serving) (eq $prevSha "") }}
             {{- $deadlineExceeded := and $neverServed (gt $ageSeconds $bootDeadlineSeconds) }}
             {{- $closeForBudget := and $deadlineExceeded (eq $onDeadline "Close") }}
 
             {{- /*
-              A CLOSED lease is TERMINAL for this XR, and the composed Request stops being
-              rendered. Re-creating under the same key would ask the actuator to re-spend a
-              settled key (it refuses by design, FAIL_CLOSED), so hammering it would only burn
-              provider calls. Replacement is an explicit spec.leaseGeneration bump.
+              A CLOSED lease opens the next bounded recovery key. Only the third closed recovery
+              is terminal; at that point the composed Request stops rendering and the XR exposes
+              RecoveryLimitExceeded. This is the Crossplane-owned equivalent of the retired
+              controller's recoverBounded(3), without an unbounded retry loop or implicit base
+              generation bump.
             */ -}}
-            {{- $terminallyClosed := and $closed (not $closeForBudget) }}
-            {{- $renderLease := not (or $closeForBudget $terminallyClosed) }}
+            {{- $renderLease := not (or $closeForBudget $recoveryExhausted) }}
 
             {{- /*
               BOOT GRACE. `serving` is the convergence signal, so a not-yet-serving workload
@@ -498,6 +566,13 @@ spec:
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
+                        {{- /* bug.5237 PHASE 2 (deliberately NOT emitted yet): add
+                          `publicHost: {{ $publicHost }}` here so serving is proven through
+                          the provider's host-routed path. The actuator's observe schema is
+                          a strictObject — emitting the key before every environment's
+                          actuator image carries the phase-1 schema turns each observe into
+                          a 400 and freezes reconciliation fleet-wide. Flip this line only
+                          after the phase-1 actuator is deployed everywhere. */}}
                         expectedSourceSha: {{ $desiredSha | quote }}{{ if $hasMigrationStep }},
                         workload: .payload.body.spec.name,
                         environment: .payload.body.environment,
@@ -680,10 +755,14 @@ spec:
             {{- $phase = "Progressing" }}
             {{- $failReason = $refusalCode }}
             {{- $failMessage = substr 0 256 $refusalMessage }}
-            {{- else if $terminallyClosed }}
+            {{- else if $recoveryExhausted }}
             {{- $phase = "Failed" }}
-            {{- $failReason = "LeaseClosed" }}
-            {{- $failMessage = printf "lease %s is closed; bump spec.leaseGeneration to mint a replacement (the actuator refuses to re-spend a settled key)" $externalName }}
+            {{- $failReason = "RecoveryLimitExceeded" }}
+            {{- $failMessage = printf "lease recovery exhausted after %d attempts for generation %d; no further paid mutation will be attempted" $recoveryCount $leaseGeneration }}
+            {{- else if gt $recoveryCount 0 }}
+            {{- $phase = "Progressing" }}
+            {{- $failReason = "LeaseRecoveryInProgress" }}
+            {{- $failMessage = printf "lease recovery attempt %d of %d for generation %d" $recoveryCount $maxRecoveryAttempts $leaseGeneration }}
             {{- end }}
             ---
             apiVersion: {{ $xr.apiVersion }}
@@ -692,6 +771,16 @@ spec:
               phase: {{ $phase | quote }}
               serving: {{ and $active $serving }}
               bootDeadlineAt: {{ $bootDeadlineAt | quote }}
+              bootEpoch:
+                key: {{ $bootKey | quote }}
+                at: {{ $bootAnchorAt | quote }}
+              {{- if gt $recoveryCount 0 }}
+              recovery:
+                leaseGeneration: {{ $leaseGeneration }}
+                count: {{ $recoveryCount }}
+                maxAttempts: {{ $maxRecoveryAttempts }}
+                key: {{ $cogniKey | quote }}
+              {{- end }}
               {{- if ne $migrationPhase "" }}
               migration:
                 phase: {{ $migrationPhase | quote }}

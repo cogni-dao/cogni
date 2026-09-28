@@ -37,7 +37,14 @@ cd "$repo_root"
 REPO_URL="${REPO_URL:-https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git}"
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+# Cleanup must NEVER change the job's exit code. The script cd's into
+# "$work/whole" below and git leaves background writers touching .git/objects,
+# so a bare `rm -rf "$work"` in the EXIT trap can race and fail
+# ("Directory not empty") — which under `set -e` became the job's exit status
+# and turned every preview promote RED after the rollup had already succeeded.
+# cd out of the temp tree first, and swallow any teardown error (the runner is
+# ephemeral and reclaims /tmp regardless).
+trap 'cd / && rm -rf "$work" 2>/dev/null || true' EXIT
 
 # --depth=50: rebase-retry on push contention needs enough history to find
 # the merge-base of our local commit and origin's advanced tip. depth=1

@@ -56,7 +56,7 @@ async function main(): Promise<void> {
       ? "xcomputeworkload"
       : "computeworkload";
   const deadline = Date.now() + timeoutSeconds * 1_000;
-  let lastReason = "not_observed";
+  let lastReason = "not_yet_polled";
 
   while (Date.now() < deadline) {
     const observation = await readLiveWorkload({
@@ -86,9 +86,33 @@ async function main(): Promise<void> {
     );
     await delay(5_000);
   }
+  const hint = timeoutHint(lastReason);
   throw new Error(
-    `[compute-workload-ready] timed out for ${namespace}/${name}: ${lastReason}`
+    `[compute-workload-ready] timed out for ${namespace}/${name}: ${lastReason}${
+      hint ? ` - ${hint}` : ""
+    }`
   );
+}
+
+/**
+ * A timeout must name the OWNER of the failure, not just the last symptom. These reasons
+ * look alike in a log and have completely different fixes: an absent resource is a
+ * desired-state/Argo problem that waiting can NEVER resolve, while a bundle mismatch is the
+ * actuator still working. poly spent a week being "waited on" for the first while everyone
+ * read it as the second (bug.5262).
+ */
+function timeoutHint(reason: string): string {
+  if (reason.startsWith("bundle_not_observed")) {
+    return "the workload EXISTS but has not observed the desired bundle - the actuator has not applied this revision";
+  }
+  const hints: Readonly<Record<string, string>> = {
+    resource_absent:
+      "the workload DOES NOT EXIST in this namespace - Git declares it but Argo has not applied it, so waiting can never succeed; inspect the per-node Application sync state",
+    read_forbidden: "the gate's credential may not read this resource",
+    control_plane_unreachable: "the control-plane host did not answer",
+    read_timeout: "the control-plane read timed out",
+  };
+  return hints[reason] ?? "";
 }
 
 async function readLiveWorkload(input: {
@@ -134,7 +158,7 @@ function classifyReadFailure(error: unknown): string {
   const detail = record(error);
   const stderr = typeof detail?.stderr === "string" ? detail.stderr : "";
   if (detail?.killed === true) return "read_timeout";
-  if (/\bnot found\b/i.test(stderr)) return "not_observed";
+  if (/\bnot found\b/i.test(stderr)) return "resource_absent";
   if (/\bforbidden\b|\bunauthorized\b/i.test(stderr)) return "read_forbidden";
   if (
     /connection (?:refused|reset|timed out)|no route to host|could not resolve hostname|kex_exchange_identification/i.test(

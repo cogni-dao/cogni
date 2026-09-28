@@ -89,18 +89,16 @@ runs:
         set -euo pipefail
         # The environment VM's public DNS alias — the host the shared substrate answers on
         # (5432/5435/6379/4000/7233, see scripts/ci/render-compute-egress-allowlist.sh). Derived
-        # by the SAME primitive that provisioning used to CREATE that A record
-        # (scripts/setup/bootstrap.sh calls vm_host_for_env with the same two arguments), so the
+        # by the SAME primitive that operator provisioning used to CREATE that A record
+        # (provision-test-vm.sh calls cogni_vm_host_for_env with the same two arguments), so the
         # materializer can only ever name a record env provisioning already published. Not a
         # decision and not new logic: one call to the one existing declaration of the convention.
-        # shellcheck source=scripts/setup/lib/fork-identity.sh
-        source scripts/setup/lib/fork-identity.sh
-        # fork_identity_slug() falls back to "node-template" when it cannot read a git origin.
-        # That fallback is fine where it was written (a laptop bootstrap prints what it chose);
-        # here it would name a host that does not resolve and the node would simply have no
-        # Temporal. Fail instead — a deploy lane has no business guessing its own identity.
-        git -C "$APP_SOURCE_ROOT" remote get-url origin >/dev/null 2>&1 || [ -n "${FORK_SLUG:-}" ] \
-          || { echo "::error::cannot derive the deployment slug: $APP_SOURCE_ROOT has no git origin and FORK_SLUG is unset"; exit 1; }
+        # The parent repository name is not deployment identity: the production-shaped test
+        # parent is `cogni-monorepo`, but it deploys onto the same `cogni-<env>.vm` operator
+        # substrate provision-test-vm.sh created. Deriving from git origin would therefore mint
+        # an NXDOMAIN substrate host on the exact test lane meant to prove this action.
+        # shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
+        source scripts/setup/lib/cogni-deployment-identity.sh
         # THE SUBSTRATE IS THE RECONCILING CLUSTER'S, NOT THE LANE'S (bug.5206).
         # `substrateHost` is what the Composition turns into TEMPORAL_ADDRESS, REDIS_URL and
         # LITELLM_BASE_URL (composition.yaml:169). The DSNs the same lane receives are composed
@@ -110,7 +108,7 @@ runs:
         # shellcheck source=scripts/ci/lib/appset-paths.sh
         CATALOG_DIR="${APP_SOURCE_ROOT}/infra/catalog" . scripts/ci/lib/appset-paths.sh
         SUBSTRATE_ENV="$(CATALOG_DIR="${APP_SOURCE_ROOT}/infra/catalog" control_env_for "$DEPLOYMENT_ENVIRONMENT" "$NODE")"
-        SUBSTRATE_HOST="$(vm_host_for_env "$SUBSTRATE_ENV" "${FORK_DOMAIN_ROOT:?}" "$(fork_identity_slug "$APP_SOURCE_ROOT")")"
+        SUBSTRATE_HOST="$(cogni_vm_host_for_env "$SUBSTRATE_ENV" "${FORK_DOMAIN_ROOT:?}" "$(cogni_deployment_slug)")"
         if [ "$SUBSTRATE_ENV" != "$DEPLOYMENT_ENVIRONMENT" ]; then
           echo "::notice::${NODE}'s ${DEPLOYMENT_ENVIRONMENT} lane is reconciled by '${SUBSTRATE_ENV}' — its shared substrate is that cluster's (bug.5206)"
         fi

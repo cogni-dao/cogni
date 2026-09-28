@@ -45,7 +45,7 @@
  */
 
 import type { Database } from "@cogni/db-client";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import type {
   AkashTxAllocationLedgerPort,
@@ -62,11 +62,13 @@ interface AllocationRow {
   nodeId: string;
   compositeUid: string;
   compositeGeneration: number;
+  workload: string;
   environment: string;
   state: string;
   allocationCursor: string | null;
   externalName: string | null;
   providerAccount: string | null;
+  lastAppliedSdlHash: string | null;
 }
 
 const SELECTION = {
@@ -75,11 +77,13 @@ const SELECTION = {
   nodeId: akashTxAllocations.nodeId,
   compositeUid: akashTxAllocations.compositeUid,
   compositeGeneration: akashTxAllocations.compositeGeneration,
+  workload: akashTxAllocations.workload,
   environment: akashTxAllocations.environment,
   state: akashTxAllocations.state,
   allocationCursor: akashTxAllocations.allocationCursor,
   externalName: akashTxAllocations.externalName,
   providerAccount: akashTxAllocations.providerAccount,
+  lastAppliedSdlHash: akashTxAllocations.lastAppliedSdlHash,
 };
 
 function toRecord(row: AllocationRow): AkashTxAllocationRecord {
@@ -91,11 +95,15 @@ function toRecord(row: AllocationRow): AkashTxAllocationRecord {
       compositeUid: row.compositeUid,
       compositeGeneration: row.compositeGeneration,
     },
+    workload: row.workload,
     environment: row.environment,
     state: row.state as AkashTxAllocationState,
     ...(row.allocationCursor ? { allocationCursor: row.allocationCursor } : {}),
     ...(row.externalName ? { externalName: row.externalName } : {}),
     ...(row.providerAccount ? { providerAccount: row.providerAccount } : {}),
+    ...(row.lastAppliedSdlHash
+      ? { lastAppliedSdlHash: row.lastAppliedSdlHash }
+      : {}),
   };
 }
 
@@ -372,6 +380,38 @@ export class DrizzleAkashTxAllocationLedger
   }
 
   /**
+   * Persist the sha256 of the SDL just applied for this key (bug.5238). Advisory metadata: it
+   * touches neither the wallet slot, the state machine, nor any write-once identity column, so it
+   * carries no state predicate beyond the key — the update path only ever calls it on a receipt
+   * it has already bound. Called AFTER a successful `updateAllocated`, so a lost PUT re-applies
+   * next reconcile rather than being skipped forever.
+   */
+  async recordAppliedSdlHash(input: {
+    cogniKey: string;
+    sdlHash: string;
+  }): Promise<void> {
+    const db = await this.getDb();
+    const updated = await db
+      .update(akashTxAllocations)
+      .set({
+        lastAppliedSdlHash: input.sdlHash,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(akashTxAllocations.walletScope, this.walletScope),
+          eq(akashTxAllocations.cogniKey, input.cogniKey)
+        )
+      )
+      .returning({ cogniKey: akashTxAllocations.cogniKey });
+    if (updated.length === 0) {
+      throw new Error(
+        "cannot record an applied SDL hash for a key with no receipt"
+      );
+    }
+  }
+
+  /**
    * Receipts that have held the wallet slot longer than any single transaction can take.
    * A pure read that decides nothing: age makes a row eligible to be INVESTIGATED, never
    * settled (NO_TIME_BASED_RELEASE). Oldest first and hard-limited, so one pass is bounded.
@@ -478,6 +518,41 @@ export class DrizzleAkashTxAllocationLedger
           eq(akashTxAllocations.walletScope, this.walletScope),
           eq(akashTxAllocations.state, "allocated"),
           sql`${akashTxAllocations.externalName} is not null`,
+          ...(input.nodeId
+            ? [eq(akashTxAllocations.nodeId, input.nodeId)]
+            : []),
+          ...(input.environment
+            ? [eq(akashTxAllocations.environment, input.environment)]
+            : [])
+        )
+      )
+      .orderBy(akashTxAllocations.updatedAt)
+      .limit(input.limit);
+    return rows.map(toRecord);
+  }
+
+  /**
+   * The wallet's live (non-terminal) receipts: `state IN ('preparing','allocated')` — the
+   * boot-window-inclusive log-source primitive (bug.5264). Unlike `listAllocated` this keeps
+   * `preparing` receipts (create in-flight, or a handle bound by an adopt/resolve pass) and
+   * does NOT require a handle, so a lease that is BOOTING but not yet `allocated` — and would
+   * otherwise be closed on its BootDeadline before the pump ever enumerated it — is visible for
+   * log tailing, and a live handleless receipt is loggable rather than invisibly absent. Same
+   * scoping/ordering/limit discipline as `listAllocated`; a pure read that decides nothing.
+   */
+  async listActive(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]> {
+    const db = await this.getDb();
+    const rows = await db
+      .select(SELECTION)
+      .from(akashTxAllocations)
+      .where(
+        and(
+          eq(akashTxAllocations.walletScope, this.walletScope),
+          inArray(akashTxAllocations.state, ["preparing", "allocated"]),
           ...(input.nodeId
             ? [eq(akashTxAllocations.nodeId, input.nodeId)]
             : []),

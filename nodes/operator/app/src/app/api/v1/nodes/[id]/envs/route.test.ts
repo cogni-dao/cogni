@@ -302,9 +302,11 @@ describe("POST /api/v1/nodes/[id]/envs — money loop (story.5039 PR-B)", () => 
       { ...RECEIPT, state: "released", environment: "candidate-a" },
       {
         ...RECEIPT,
+        cogniKey: "xcw:cogni-candidate-a-blue:blue:2",
         state: "allocated",
         environment: "candidate-a",
-        identity: { ...RECEIPT.identity, compositeGeneration: 2 },
+        // Kubernetes reconciliation revision is unrelated to the lease replacement ordinal.
+        identity: { ...RECEIPT.identity, compositeGeneration: 99 },
       },
     ]);
     const res = await post({ env: "candidate-a", present: true });

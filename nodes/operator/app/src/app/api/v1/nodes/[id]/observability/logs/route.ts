@@ -182,13 +182,16 @@ export async function GET(
 
   // Authorize the caller's full LogQL query against this node. `?query=` takes the SAME LogQL a dev
   // writes for loki-query.sh / the MCP; the operator forces env/service/node and lets other labels
-  // only narrow. Empty query → just this node's app stream.
+  // only narrow. `?service=` selects one declared service's lease stream (bug.5240 — non-app
+  // services additionally pin source="lease"); empty → this node's app stream.
   let query: string;
   try {
     query = scopeNodeLogQL({
       env,
       nodeId: node.nodeId,
       query: params.get("query") ?? undefined,
+      // Explicitly empty degrades to the default app scope, like the other params.
+      service: params.get("service")?.trim() || undefined,
     });
   } catch (err) {
     if (err instanceof ObservabilityQueryError) {

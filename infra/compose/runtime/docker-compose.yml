@@ -233,6 +233,15 @@ services:
   postgres:
     image: postgres:15
     restart: unless-stopped
+    # bug.5011 root cause: postgres is the shared datastore for openfga, litellm
+    # and the app — if the kernel OOM-kills it under a deploy-infra memory spike,
+    # the whole control plane fails. Protect it hardest: oom_score_adj -900 (kill
+    # almost everything else first) + a soft mem_reservation floor. NO hard
+    # mem_limit — postgres sizes its own caches (shared_buffers/work_mem) and a
+    # cgroup cap would OOM it mid-query instead of protecting it.
+    # Root cause + fix: bug.5011 / #2387; hub `prod-oom-misdiagnosis-taxonomy`.
+    mem_reservation: 512m
+    oom_score_adj: -900
     labels:
       # bug.5105: stateful stores are never autohealed. autoheal restarting a
       # database mid-recovery means recovery never finishes — that loop took the
@@ -319,6 +328,17 @@ services:
     # Public-NIC traffic is dropped by infra/provision/cherry/harden-docker-public-ports.sh.
     ports:
       - "8080:8080"
+    # bug.5011 root cause: OpenFGA (the authz singleton) had NO memory
+    # reservation, so a deploy-infra memory spike on the oversubscribed 6GB box
+    # let the kernel OOM-kill it (the "OpenFGA gone" outages — authz_unavailable
+    # storms). mem_reservation is a soft floor the kernel honors under pressure;
+    # oom_score_adj -800 tells the kernel to sacrifice almost anything else
+    # first. mem_limit is a generous ceiling (Go service, postgres-backed, light)
+    # to catch a genuine leak without capping normal load.
+    # Root cause + fix: bug.5011 / #2387; hub `prod-oom-misdiagnosis-taxonomy`.
+    mem_reservation: 256m
+    mem_limit: 768m
+    oom_score_adj: -800
     command: run
     environment:
       - OPENFGA_DATASTORE_ENGINE=postgres
@@ -347,6 +367,15 @@ services:
   db-backup:
     image: postgres:15
     profiles: ["backup"]
+    # A logical backup is a best-effort recovery job, never a reason to evict the
+    # serving database or control plane. Bound the client and make it the first
+    # process sacrificed under host pressure. The PostgreSQL server remains
+    # uncapped and protected with oom_score_adj=-900 below.
+    mem_reservation: 128m
+    mem_limit: 512m
+    cpus: 0.50
+    pids_limit: 128
+    oom_score_adj: 500
     read_only: true
     cap_drop:
       - ALL
@@ -544,12 +573,19 @@ services:
       - ./configs/alloy-config.metrics.alloy:/etc/alloy/config.alloy:ro
       - alloy_data:/var/lib/alloy
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Persistent host journal gives Loki the kernel-side reason for SIGKILL/OOM.
+      # Production bootstrap configures persistent journald at this path.
+      - /var/log/journal:/var/log/journal:ro
       # Host mounts for prometheus.exporter.unix (node-level metrics)
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro
       # K8s pod logs for k3s log shipping (no-op on hosts without k3s)
       - /var/log/pods:/var/log/pods:ro
+    # Journal files are root/systemd-journal readable. Alloy already has the
+    # Docker socket and read-only host mounts; root grants read access only, while
+    # the container remains without host write mounts.
+    user: "0:0"
     command:
       - run
       - /etc/alloy/config.alloy

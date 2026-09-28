@@ -51,6 +51,11 @@ declare -ga NODE_BASELINE_KEYS=(
   POSTHOG_API_KEY POSTHOG_HOST OPENROUTER_API_KEY
   EVM_RPC_URL POLYGON_RPC_URL
   DOMAIN APP_BASE_URL NEXTAUTH_URL
+  # bug.5240 — lease-log pump push credential (catalog service: operator, so the
+  # generic service gate below fans these to the operator bank ONLY). Values
+  # pass through the human/env branch; secret-materialize maps a CI-held
+  # bootstrap fallback (GRAFANA_CLOUD_LOKI_*) into them, create-if-absent.
+  LOKI_LEASE_PUSH_URL LOKI_LEASE_PUSH_USER LOKI_LEASE_PUSH_TOKEN
   # External integrations (source: human, gate-by-presence). _node_gets_key
   # gates each against the catalog: _shared/llm/web reach every node; PRIVY_*
   # (appliesTo: payments) + PRIVY_USER_WALLETS_* (service: poly) drop from

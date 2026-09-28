@@ -20,6 +20,7 @@ import {
   extractNodeServices,
   parseRepoSpec,
   resolveNodeArtifactBundle,
+  resolveRuntimeProfileSecretRefs,
 } from "@cogni/repo-spec";
 import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { describe, expect, it } from "vitest";
@@ -28,13 +29,14 @@ import { renderRepoSpec } from "@/shared/node-app-scaffold/gens/repo-spec";
 
 import { buildComputeWorkloadManifest } from "./compute-workload-manifest";
 import { buildComputeSecretResources } from "./compute-workload-secret-manifests";
-import {
-  assertDeclaredNodeDeployment,
-  assertRuntimeProfileSecretRefs,
-} from "./node-services-workload-spec";
+import { assertDeclaredNodeDeployment } from "./node-services-workload-spec";
 
 const SLUG = "my-node";
-const OWNER = "cogni-dao-test";
+// A spawned throwaway node is owned by cogni-test-org (the platform's own self-test org), which
+// is the owner axis `writerFor` routes to the candidate-a test wallet (akash-actuator-wallet-cutover
+// NS4). The prior placeholder `cogni-dao-test` was neither a real GitHub org nor a recognized
+// actuator-writer owner, so it made this spawn-path fixture unfaithful to production (bug.5263).
+const OWNER = "cogni-test-org";
 const SOURCE_SHA = "a".repeat(40);
 const IMAGE_DIGEST = "b".repeat(64);
 const BUNDLE_DIGEST = "c".repeat(64);
@@ -83,16 +85,15 @@ describe("scaffolded node is born Akash-capable", () => {
     const [app] = extractNodeServices(scaffolded);
     expect(app?.runtimeProfile).toBe("cogni-node-app-v1");
     expect(app?.visibility).toBe("public");
-    expect(app?.secretRefs.map((ref) => ref.key)).toEqual([
-      ...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
-    ]);
-    expect(() =>
-      assertRuntimeProfileSecretRefs({
-        serviceName: app?.name ?? "app",
+    // The minted spec lists NO profile refs — the profile owns that contract, not the node.
+    expect(app?.secretRefs).toEqual([]);
+    // Resolved at build time, the app receives the complete profile secret contract.
+    expect(
+      resolveRuntimeProfileSecretRefs({
         runtimeProfile: app?.runtimeProfile,
         secretRefs: app?.secretRefs ?? [],
-      })
-    ).not.toThrow();
+      }).map((ref) => ref.key)
+    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
   });
 
   it("declares complete resources for every service", () => {
@@ -116,17 +117,30 @@ describe("scaffolded node is born Akash-capable", () => {
     expect(
       manifest.spec.workload.services[0]?.secretRefs?.map((ref) => ref.key)
     ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
+    // bug.5263: a cogni-test-org spawn on candidate-a must route to the candidate-a TEST wallet
+    // (`cogni-candidate-a`), where the actuator + its `akash-tx-actuator-auth` secret actually
+    // live — NOT `cogni-production`, which has no secret for this org and fails the lease create.
+    expect(
+      (manifest.spec as unknown as Record<string, unknown>).actuatorNamespace
+    ).toBe("cogni-candidate-a");
   });
 
-  it("projects every declared secret ref into an off-cluster workload secret", () => {
+  it("projects every profile-supplied secret ref into an off-cluster workload secret", () => {
+    // Mirror the production materialize path: resolve profile-implied refs before projecting.
     const resources = buildComputeSecretResources({
       slug: SLUG,
       environment: "candidate-a",
-      secretRefs: resolveScaffoldedBundle().services.flatMap(
-        (service) => service.service.secretRefs
+      secretRefs: resolveScaffoldedBundle().services.flatMap((service) =>
+        resolveRuntimeProfileSecretRefs({
+          ...(service.service.runtimeProfile
+            ? { runtimeProfile: service.service.runtimeProfile }
+            : {}),
+          secretRefs: service.service.secretRefs,
+        })
       ),
     });
-    // No declared key is rejected by the off-cluster-workload provenance denylist.
+    // The scaffolded node declares no refs, yet the profile supplies a full contract to project,
+    // and no key is rejected by the off-cluster-workload provenance denylist.
     expect(resources).not.toHaveLength(0);
   });
 });
@@ -159,9 +173,8 @@ describe("a node missing the deployment block fails early, not terminally", () =
     expect(message).toContain(SOURCE_SHA);
     expect(message).toContain("deployment:");
     expect(message).toContain("runtime_profile: cogni-node-app-v1");
-    for (const key of COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS) {
-      expect(message).toContain(`- key: ${key}`);
-    }
+    // The pasted block no longer lists the profile's secret_refs — the profile supplies them.
+    expect(message).not.toContain("- key:");
   });
 
   it("keeps the k3s lane on the unchanged fallback", () => {

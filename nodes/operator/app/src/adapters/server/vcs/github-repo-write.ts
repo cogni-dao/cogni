@@ -35,6 +35,7 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
 import {
   extractNodeId,
   hasDeclaredNodeDeployment,
@@ -57,8 +58,10 @@ import type {
   MirrorCanonicalFilesResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
+  ObservedWorkflowDispatchResult,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
+  PromoteNodeFromPreviewInput,
   PromoteNodeInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
@@ -118,6 +121,22 @@ import {
   parseNodeRepoPolicy,
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+
+const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
+
+export function envManagerCommitMessage(input: {
+  readonly subject: string;
+  readonly node: string;
+  readonly env: NodeFormationEnv;
+  readonly action: "add" | "remove";
+  readonly paths: readonly string[];
+}): string {
+  const canonicalPaths = [...new Set(input.paths)].sort();
+  const pathsSha256 = createHash("sha256")
+    .update(`${canonicalPaths.join("\n")}\n`)
+    .digest("hex");
+  return `${input.subject}\n\nCogni-Change-Type: ${ENV_MANAGER_CHANGE_TYPE}\nCogni-Node: ${input.node}\nCogni-Environment: ${input.env}\nCogni-Action: ${input.action}\nCogni-Changed-Paths-SHA256: ${pathsSha256}`;
+}
 
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
@@ -659,6 +678,7 @@ export function qualifyUpstreamPrRefs(
 
 /** The canonical name of the merge-queue ruleset (matches infra/github/merge-queue-ruleset.json). */
 export const MERGE_QUEUE_RULESET_NAME = "main-merge-queue";
+export const MERGE_QUEUE_RULESET_PATH = "infra/github/merge-queue-ruleset.json";
 
 /** Subset of GET /repos/{owner}/{repo}/rulesets/{id} that we replicate onto a node repo. */
 interface RulesetResponse {
@@ -694,6 +714,136 @@ export interface RulesetWritePayload {
     actor_type: string;
     bypass_mode: string;
   }>;
+}
+
+export interface ReconcileMergeQueuePolicyResult {
+  readonly status: "compliant" | "applied";
+  readonly rulesetName: string;
+  readonly policyRef: string;
+  readonly mismatches: readonly string[];
+  readonly waitMinutes: number;
+}
+
+const mergeQueueRulesetFixtureSchema = z
+  .object({
+    name: z.literal(MERGE_QUEUE_RULESET_NAME),
+    target: z.literal("branch"),
+    enforcement: z.literal("active"),
+    conditions: z.object({
+      ref_name: z.object({
+        include: z
+          .array(z.string())
+          .refine((refs) => refs.includes("~DEFAULT_BRANCH")),
+        exclude: z.array(z.string()),
+      }),
+    }),
+    rules: z
+      .array(
+        z.object({
+          type: z.literal("merge_queue"),
+          parameters: z.object({
+            grouping_strategy: z.literal("ALLGREEN"),
+            merge_method: z.literal("SQUASH"),
+            min_entries_to_merge: z.number().int().min(1),
+            max_entries_to_merge: z.number().int().min(1),
+            max_entries_to_build: z.number().int().min(1),
+            min_entries_to_merge_wait_minutes: z.number().int().min(0),
+            check_response_timeout_minutes: z.number().int().min(1),
+          }),
+        })
+      )
+      .length(1),
+    // QUEUE_BYPASS_FORBIDDEN: generated env PRs still share derived files. Until those files
+    // move to reconcile-time rendering, bypassing serialized rebase/recheck can lose an update.
+    bypass_actors: z.array(z.never()).length(0),
+  })
+  .passthrough();
+
+/** Parse the git-owned queue policy and reject any shape that weakens serialization. */
+export function parseMergeQueueRulesetFixture(
+  text: string
+): RulesetWritePayload {
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`invalid merge-queue policy JSON: ${String(error)}`);
+  }
+  const parsed = mergeQueueRulesetFixtureSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error(
+      `invalid merge-queue policy: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`
+    );
+  }
+  return rulesetGetToPutPayload(parsed.data as RulesetResponse);
+}
+
+/** Compare only the safety- and latency-bearing queue fields asserted by the fixture. */
+export function diffMergeQueueRuleset(
+  active: RulesetResponse,
+  expected: RulesetWritePayload
+): readonly string[] {
+  const problems: string[] = [];
+  if (active.name !== expected.name) {
+    problems.push(
+      `name is ${JSON.stringify(active.name)}, expected ${JSON.stringify(expected.name)}`
+    );
+  }
+  if (active.target !== expected.target) {
+    problems.push(
+      `target is ${JSON.stringify(active.target)}, expected ${JSON.stringify(expected.target)}`
+    );
+  }
+  if (active.enforcement !== expected.enforcement) {
+    problems.push(
+      `enforcement is ${JSON.stringify(active.enforcement)}, expected ${JSON.stringify(expected.enforcement)}`
+    );
+  }
+
+  const sameSet = (left: readonly string[], right: readonly string[]) =>
+    left.length === right.length &&
+    left.every((value) => right.includes(value));
+  const gotRefs = active.conditions?.ref_name;
+  const wantRefs = expected.conditions.ref_name;
+  if (!sameSet(gotRefs?.include ?? [], wantRefs.include)) {
+    problems.push(
+      `conditions.ref_name.include is ${JSON.stringify(gotRefs?.include ?? [])}, expected ${JSON.stringify(wantRefs.include)}`
+    );
+  }
+  if (!sameSet(gotRefs?.exclude ?? [], wantRefs.exclude)) {
+    problems.push(
+      `conditions.ref_name.exclude is ${JSON.stringify(gotRefs?.exclude ?? [])}, expected ${JSON.stringify(wantRefs.exclude)}`
+    );
+  }
+
+  const activeRules = active.rules ?? [];
+  const activeQueue = activeRules.find((rule) => rule.type === "merge_queue");
+  const expectedQueue = expected.rules[0];
+  if (!activeQueue) {
+    problems.push("merge_queue rule is absent");
+  } else {
+    const got = activeQueue.parameters ?? {};
+    const want = expectedQueue?.parameters ?? {};
+    for (const [key, value] of Object.entries(want)) {
+      if (JSON.stringify(got[key]) !== JSON.stringify(value)) {
+        problems.push(
+          `merge_queue.${key} is ${JSON.stringify(got[key])}, expected ${JSON.stringify(value)}`
+        );
+      }
+    }
+  }
+  const unexpectedRules = activeRules
+    .filter((rule) => rule.type !== "merge_queue")
+    .map((rule) => rule.type);
+  if (unexpectedRules.length > 0) {
+    problems.push(`unexpected rules present: ${unexpectedRules.join(", ")}`);
+  }
+  if ((active.bypass_actors ?? []).length > 0) {
+    problems.push(
+      `${active.bypass_actors?.length ?? 0} bypass actor(s) present, expected none`
+    );
+  }
+  return problems;
 }
 
 /**
@@ -1136,7 +1286,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * SOURCE_ADDRESSED_LIKE_CANDIDATE_FLIGHT: for a REMOTE-SOURCE (fork) node the node image sha
    * rides the dispatch as `node_source_sha` — the same source-addressing candidate-flight.yml
    * already uses. promote-and-deploy's "Resolve digest for this node" remote-source branch PREFERS
-   * that input over the `yq '.source_sha' infra/catalog/<slug>.yaml` read, so the node head sha
+   * that input over the `yq '.source_sha' infra/catalog/<slug>.yaml` read, so the canonical node sha
    * resolves the image directly. The pin is recorded where deploy state belongs —
    * `.promote-state/source-sha-by-app.json` on `deploy/<env>` (update-source-sha-map.sh) — never on
    * `main`. The operator App's main-write privilege is reserved for governance/code merges, not
@@ -1149,15 +1299,24 @@ export class GitHubRepoWriter implements DeployPlanePort {
    *     for promotion (the stale-pin vestige bug.5043 retired).
    *   - IN-REPO (no `source_repo`, e.g. operator/poly): pass `source_sha = sourceSha` (the operator
    *     checkout ref); in-repo nodes are not source-addressed by node sha.
-   * A missing/mismatched row is a real misconfiguration (404/409). Image existence is NOT gated
-   * in-app: the GitHub Packages API false-negatives on private node images (git-app-expert), so the
-   * workflow's own "image not found" hard-fail is the loud backstop.
+   * A missing/mismatched row is a real misconfiguration (404/409). Before dispatch, the target must
+   * be on source main and must move forward from the environment's current pin unless an authorized
+   * caller explicitly allows rollback. Image existence is NOT gated in-app: the GitHub Packages API
+   * false-negatives on private node images (git-app-expert), so the workflow's own "image not found"
+   * hard-fail is the loud backstop.
    *
    * (This replaces the stalling pin-PR — and its successor direct-main-commit — that polluted
    * `main` with a deploy-state firehose: PRs #1699/#1700/#1711, task.5022.)
    */
   async promoteNode(input: PromoteNodeInput): Promise<NodePromoteResult> {
-    const { env, parentOwner, parentRepo, slug, sourceSha } = input;
+    const {
+      env,
+      parentOwner,
+      parentRepo,
+      slug,
+      sourceSha,
+      allowRollback = false,
+    } = input;
     if (!SOURCE_SHA_PATTERN.test(sourceSha)) {
       throw deployPlaneError(
         "invalid_source_sha",
@@ -1166,30 +1325,21 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
-    // Confirm the catalog row exists + identifies this slug, and read ONLY `source_repo`'s presence
-    // (the remote-source vs in-repo discriminator). We never read `source_sha` for resolution.
-    const catalogText = await this.fetchFileText({
-      owner: parentOwner,
-      repo: parentRepo,
-      path: `infra/catalog/${slug}.yaml`,
-      ref: "main",
+    const source = await this.resolvePromotionSource({
+      parentOwner,
+      parentRepo,
+      slug,
     });
-    if (!catalogText) {
-      throw deployPlaneError(
-        "catalog_missing",
-        `node catalog entry not found for ${slug}`,
-        404
-      );
-    }
-    const row = PromoteDiscriminatorSchema.safeParse(parseYaml(catalogText));
-    if (!row.success || row.data.name !== slug) {
-      throw deployPlaneError(
-        "invalid_catalog",
-        `invalid node catalog entry for ${slug}`,
-        409
-      );
-    }
-    const isRemoteSource = row.data.source_repo !== undefined;
+    await this.assertForwardPromotion({
+      parentOwner,
+      parentRepo,
+      slug,
+      env,
+      sourceOwner: source.owner,
+      sourceRepo: source.repo,
+      sourceSha,
+      allowRollback,
+    });
 
     const dispatch = await this.dispatchNodePromote({
       owner: parentOwner,
@@ -1198,16 +1348,248 @@ export class GitHubRepoWriter implements DeployPlanePort {
       slug,
       // REMOTE-SOURCE: source-address the node image (no source_sha — operator checkout ref stays
       // main). IN-REPO: source_sha is the operator checkout ref.
-      ...(isRemoteSource ? { nodeSourceSha: sourceSha } : { sourceSha }),
+      ...(source.isRemoteSource ? { nodeSourceSha: sourceSha } : { sourceSha }),
     });
 
     return {
       status: "dispatched",
       env,
       sourceSha,
-      sourceAddressing: isRemoteSource ? "remote_source" : "in_repo",
+      sourceAddressing: source.isRemoteSource ? "remote_source" : "in_repo",
       workflowUrl: dispatch.workflowUrl,
+      runId: dispatch.runId,
+      runUrl: dispatch.runUrl,
+      runApiUrl: dispatch.runApiUrl,
     };
+  }
+
+  async promoteNodeFromPreview(
+    input: PromoteNodeFromPreviewInput
+  ): Promise<CandidateFlightDispatchResult> {
+    const { parentOwner, parentRepo, slug, allowRollback = false } = input;
+    const previewPin = await this.fetchDeployPin({
+      parentOwner,
+      parentRepo,
+      env: "preview",
+      slug,
+    });
+    if (previewPin.kind !== "ok") {
+      throw deployPlaneError(
+        "preview_pin_missing",
+        `preview deploy pin is missing or invalid for ${slug}`,
+        409
+      );
+    }
+    const source = await this.resolvePromotionSource({
+      parentOwner,
+      parentRepo,
+      slug,
+    });
+    await this.assertForwardPromotion({
+      parentOwner,
+      parentRepo,
+      slug,
+      env: "production",
+      sourceOwner: source.owner,
+      sourceRepo: source.repo,
+      sourceSha: previewPin.sha,
+      allowRollback,
+    });
+    return this.dispatchNodePromote({
+      owner: parentOwner,
+      repo: parentRepo,
+      env: "production",
+      slug,
+    });
+  }
+
+  private async resolvePromotionSource(input: {
+    parentOwner: string;
+    parentRepo: string;
+    slug: string;
+  }): Promise<{
+    owner: string;
+    repo: string;
+    isRemoteSource: boolean;
+  }> {
+    const catalogText = await this.fetchFileText({
+      owner: input.parentOwner,
+      repo: input.parentRepo,
+      path: `infra/catalog/${input.slug}.yaml`,
+      ref: "main",
+    });
+    if (!catalogText) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${input.slug}`,
+        404
+      );
+    }
+    const row = PromoteDiscriminatorSchema.safeParse(parseYaml(catalogText));
+    if (!row.success || row.data.name !== input.slug) {
+      throw deployPlaneError(
+        "invalid_catalog",
+        `invalid node catalog entry for ${input.slug}`,
+        409
+      );
+    }
+    if (row.data.source_repo === undefined) {
+      return {
+        owner: input.parentOwner,
+        repo: input.parentRepo,
+        isRemoteSource: false,
+      };
+    }
+    const source = parseGithubRepoUrl(row.data.source_repo);
+    return { ...source, isRemoteSource: true };
+  }
+
+  private async compareCommits(input: {
+    owner: string;
+    repo: string;
+    base: string;
+    head: string;
+  }): Promise<"ahead" | "behind" | "diverged" | "identical" | "missing"> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    let data: unknown;
+    try {
+      const response = await octokit.request(
+        "GET /repos/{owner}/{repo}/compare/{basehead}",
+        {
+          owner: input.owner,
+          repo: input.repo,
+          basehead: `${input.base}...${input.head}`,
+        }
+      );
+      data = response.data;
+    } catch (error) {
+      if ((error as { status?: unknown }).status === 404) return "missing";
+      throw error;
+    }
+    const status = (data as { status?: unknown }).status;
+    if (
+      status === "ahead" ||
+      status === "behind" ||
+      status === "diverged" ||
+      status === "identical"
+    ) {
+      return status;
+    }
+    throw deployPlaneError(
+      "compare_unavailable",
+      `GitHub returned no ancestry status for ${input.owner}/${input.repo}`,
+      502
+    );
+  }
+
+  private async assertForwardPromotion(input: {
+    parentOwner: string;
+    parentRepo: string;
+    slug: string;
+    env: "preview" | "production";
+    sourceOwner: string;
+    sourceRepo: string;
+    sourceSha: string;
+    allowRollback: boolean;
+  }): Promise<void> {
+    const targetToMain = await this.compareCommits({
+      owner: input.sourceOwner,
+      repo: input.sourceRepo,
+      base: input.sourceSha,
+      head: "main",
+    });
+    if (targetToMain !== "ahead" && targetToMain !== "identical") {
+      throw deployPlaneError(
+        "non_forward_promotion",
+        `refusing ${input.slug} ${input.env} promotion: target ${input.sourceSha} is not on main`,
+        409
+      );
+    }
+
+    const currentPin = await this.fetchDeployPin({
+      parentOwner: input.parentOwner,
+      parentRepo: input.parentRepo,
+      env: input.env,
+      slug: input.slug,
+    });
+    if (
+      input.allowRollback ||
+      currentPin.kind !== "ok" ||
+      currentPin.sha === input.sourceSha
+    ) {
+      return;
+    }
+
+    const currentToMain = await this.compareCommits({
+      owner: input.sourceOwner,
+      repo: input.sourceRepo,
+      base: currentPin.sha,
+      head: "main",
+    });
+    // A previously poisoned off-main pin is allowed to converge exactly once to any on-main target.
+    if (currentToMain !== "ahead" && currentToMain !== "identical") return;
+
+    const currentToTarget = await this.compareCommits({
+      owner: input.sourceOwner,
+      repo: input.sourceRepo,
+      base: currentPin.sha,
+      head: input.sourceSha,
+    });
+    if (currentToTarget !== "ahead" && currentToTarget !== "identical") {
+      throw deployPlaneError(
+        "non_forward_promotion",
+        `refusing ${input.slug} ${input.env} promotion: target ${input.sourceSha} does not descend from current pin ${currentPin.sha}`,
+        409
+      );
+    }
+  }
+
+  /**
+   * The raw read behind `readNodeDeployPin`, kept discriminated so the two callers can differ:
+   * `reconcileNodeInfra` must fail LOUDLY (a missing pin means it has no sha to replay), while
+   * `readNodeDeployPin` folds every non-answer into `null` so its caller can fall back to a birth
+   * pin. One read path, two contracts — never two copies of the branch/path/shape knowledge.
+   */
+  private async fetchDeployPin(input: {
+    parentOwner: string;
+    parentRepo: string;
+    env: string;
+    slug: string;
+  }): Promise<
+    { kind: "ok"; sha: string } | { kind: "missing" } | { kind: "invalid" }
+  > {
+    const text = await this.fetchFileText({
+      owner: input.parentOwner,
+      repo: input.parentRepo,
+      path: ".promote-state/source-sha-by-app.json",
+      ref: `deploy/${input.env}-${input.slug}`,
+    });
+    if (!text) return { kind: "missing" };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { kind: "invalid" };
+    }
+    const sha =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as Record<string, unknown>)[input.slug]
+        : undefined;
+    if (typeof sha !== "string" || !SOURCE_SHA_PATTERN.test(sha)) {
+      return { kind: "invalid" };
+    }
+    return { kind: "ok", sha };
+  }
+
+  /** @see DeployPlanePort.readNodeDeployPin — deployed truth, or null for a birth lane. */
+  async readNodeDeployPin(input: {
+    parentOwner: string;
+    parentRepo: string;
+    env: string;
+    slug: string;
+  }): Promise<string | null> {
+    const pin = await this.fetchDeployPin(input);
+    return pin.kind === "ok" ? pin.sha : null;
   }
 
   /**
@@ -1223,41 +1605,27 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
 
     const { env, parentOwner, parentRepo, slug } = input;
-    const sourceMapText = await this.fetchFileText({
-      owner: parentOwner,
-      repo: parentRepo,
-      path: ".promote-state/source-sha-by-app.json",
-      ref: `deploy/${env}-${slug}`,
+    const pin = await this.fetchDeployPin({
+      parentOwner,
+      parentRepo,
+      env,
+      slug,
     });
-    if (!sourceMapText) {
+    if (pin.kind === "missing") {
       throw deployPlaneError(
         "deploy_state_missing",
         `production deploy state not found for ${slug}`,
         404
       );
     }
-
-    let sourceMap: unknown;
-    try {
-      sourceMap = JSON.parse(sourceMapText);
-    } catch {
+    if (pin.kind === "invalid") {
       throw deployPlaneError(
         "invalid_deploy_state",
         `invalid production deploy state for ${slug}`,
         409
       );
     }
-    const sourceSha =
-      typeof sourceMap === "object" && sourceMap !== null
-        ? (sourceMap as Record<string, unknown>)[slug]
-        : undefined;
-    if (typeof sourceSha !== "string" || !SOURCE_SHA_PATTERN.test(sourceSha)) {
-      throw deployPlaneError(
-        "invalid_deploy_state",
-        `production deploy state has no valid source SHA for ${slug}`,
-        409
-      );
-    }
+    const sourceSha = pin.sha;
 
     const catalogText = await this.fetchFileText({
       owner: parentOwner,
@@ -1759,7 +2127,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     slug: string;
     sourceSha?: string;
     nodeSourceSha?: string;
-  }): Promise<CandidateFlightDispatchResult> {
+  }): Promise<ObservedWorkflowDispatchResult> {
     const octokit = await this.getOctokit(input.owner, input.repo);
     const inputs: Record<string, string> = {
       environment: input.env,
@@ -1780,9 +2148,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // NO catalog write to operator main. Absent (production) ⇒ workflow reads the
     // catalog pin, behavior unchanged.
     if (input.nodeSourceSha) inputs.node_source_sha = input.nodeSourceSha;
-    // workflow_dispatch is fire-and-forget (GitHub queues + returns 204); bound it
-    // so a slow/stuck GitHub call can't hang the promote route with no deadline.
-    await octokit.request(
+    // The versioned dispatch API returns the created run identity. A bare 204 only proves
+    // GitHub accepted a request, not that a workflow run exists; fail closed unless the run
+    // can be named and followed (OBSERVED_DISPATCH, bug.5010).
+    const response = (await octokit.request(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
       {
         owner: input.owner,
@@ -1790,13 +2159,39 @@ export class GitHubRepoWriter implements DeployPlanePort {
         workflow_id: "promote-and-deploy.yml",
         ref: "main",
         inputs,
+        headers: { "X-GitHub-Api-Version": "2026-03-10" },
         request: { signal: AbortSignal.timeout(15_000) },
       }
-    );
+    )) as unknown as {
+      readonly data: {
+        readonly workflow_run_id?: number;
+        readonly run_url?: string;
+        readonly html_url?: string;
+      };
+    };
+    const runId = response.data.workflow_run_id;
+    const runApiUrl = response.data.run_url;
+    const runUrl = response.data.html_url;
+    if (
+      typeof runId !== "number" ||
+      !Number.isSafeInteger(runId) ||
+      runId <= 0 ||
+      typeof runApiUrl !== "string" ||
+      typeof runUrl !== "string"
+    ) {
+      throw deployPlaneError(
+        "promote_run_identity_missing",
+        "GitHub did not return the promotion workflow run identity",
+        502
+      );
+    }
     return {
       dispatched: true,
       workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/promote-and-deploy.yml`,
       message: `Promote dispatched: ${input.slug} → ${input.env}.`,
+      runId,
+      runUrl,
+      runApiUrl,
     };
   }
 
@@ -2780,9 +3175,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
       plan.ops
     );
 
-    const message = `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
+    const title = `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
+    const message = envManagerCommitMessage({
+      subject: title,
+      node: slug,
+      env,
+      action: present ? "add" : "remove",
+      paths: entries.map((entry) => entry.path),
+    });
     const branch = `cogni-operator/node-env-${slug}-${env}`;
-    const title = message;
     const body = this.envPrBody(plan.kind, slug, env, plan.nextEnvs);
 
     const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
@@ -3585,6 +3986,168 @@ export class GitHubRepoWriter implements DeployPlanePort {
           "protection_unavailable",
           `operator GitHub App cannot administer rulesets on ${owner}/${repo} (HTTP 403); ` +
             "repository `administration: write` permission is required to apply branch protection",
+          502
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Reconcile the git-owned merge-queue policy onto a node's GitHub repository.
+   *
+   * The policy is read from the deployment parent at an explicit ref, validated to retain
+   * ALLGREEN serialization with zero bypass actors, then applied idempotently with readback.
+   * This is the runtime authority bridge for config-as-code: agents hold node-scoped RBAC, while
+   * the operator App alone holds `administration:write`. It deliberately updates only the named
+   * merge-queue ruleset; required checks remain owned by the independent protection policy.
+   */
+  async reconcileMergeQueuePolicy(input: {
+    policyOwner: string;
+    policyRepo: string;
+    policyRef?: string;
+    targetOwner: string;
+    targetRepo: string;
+  }): Promise<ReconcileMergeQueuePolicyResult> {
+    const policyRef = input.policyRef ?? "main";
+    const policyText = await this.fetchFileText({
+      owner: input.policyOwner,
+      repo: input.policyRepo,
+      path: MERGE_QUEUE_RULESET_PATH,
+      ref: policyRef,
+    });
+    if (policyText === null) {
+      throw deployPlaneError(
+        "merge_queue_policy_missing",
+        `${input.policyOwner}/${input.policyRepo}@${policyRef} is missing ${MERGE_QUEUE_RULESET_PATH}`,
+        409
+      );
+    }
+
+    let expected: RulesetWritePayload;
+    try {
+      expected = parseMergeQueueRulesetFixture(policyText);
+    } catch (error) {
+      throw deployPlaneError(
+        "merge_queue_policy_invalid",
+        error instanceof Error ? error.message : String(error),
+        409
+      );
+    }
+    const expectedQueue = expected.rules[0]?.parameters ?? {};
+    const waitMinutes = Number(expectedQueue.min_entries_to_merge_wait_minutes);
+
+    const octokit = await this.getOctokit(input.targetOwner, input.targetRepo);
+    try {
+      const { data: summaries } = await octokit.request(
+        "GET /repos/{owner}/{repo}/rulesets",
+        { owner: input.targetOwner, repo: input.targetRepo }
+      );
+      const existing = (
+        summaries as ReadonlyArray<{ id: number; name: string }>
+      ).find((ruleset) => ruleset.name === MERGE_QUEUE_RULESET_NAME);
+
+      let mismatches: readonly string[];
+      if (existing) {
+        const { data: active } = await octokit.request(
+          "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+          {
+            owner: input.targetOwner,
+            repo: input.targetRepo,
+            ruleset_id: existing.id,
+          }
+        );
+        mismatches = diffMergeQueueRuleset(active as RulesetResponse, expected);
+        if (mismatches.length === 0) {
+          return {
+            status: "compliant",
+            rulesetName: MERGE_QUEUE_RULESET_NAME,
+            policyRef,
+            mismatches: [],
+            waitMinutes,
+          };
+        }
+      } else {
+        mismatches = [`ruleset "${MERGE_QUEUE_RULESET_NAME}" absent`];
+      }
+
+      const written = existing
+        ? await this.requestRaw(
+            octokit,
+            "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+            {
+              owner: input.targetOwner,
+              repo: input.targetRepo,
+              ruleset_id: existing.id,
+              ...expected,
+            }
+          )
+        : await this.requestRaw(
+            octokit,
+            "POST /repos/{owner}/{repo}/rulesets",
+            {
+              owner: input.targetOwner,
+              repo: input.targetRepo,
+              ...expected,
+            }
+          );
+      const rulesetId = existing?.id ?? written?.id;
+      if (typeof rulesetId !== "number") {
+        throw new Error(
+          `merge-queue policy write returned no ruleset id for ${input.targetOwner}/${input.targetRepo}`
+        );
+      }
+
+      const { data: readback } = await octokit.request(
+        "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+        {
+          owner: input.targetOwner,
+          repo: input.targetRepo,
+          ruleset_id: rulesetId,
+        }
+      );
+      const readbackMismatches = diffMergeQueueRuleset(
+        readback as RulesetResponse,
+        expected
+      );
+      if (readbackMismatches.length > 0) {
+        throw new Error(
+          `merge-queue policy readback mismatch on ${input.targetOwner}/${input.targetRepo}: ${readbackMismatches.join("; ")}`
+        );
+      }
+
+      this.log.info(
+        {
+          targetOwner: input.targetOwner,
+          targetRepo: input.targetRepo,
+          policyOwner: input.policyOwner,
+          policyRepo: input.policyRepo,
+          policyRef,
+          mismatches,
+          waitMinutes,
+        },
+        "merge-queue policy reconciled"
+      );
+      return {
+        status: "applied",
+        rulesetName: MERGE_QUEUE_RULESET_NAME,
+        policyRef,
+        mismatches,
+        waitMinutes,
+      };
+    } catch (error) {
+      const status = (error as { status?: number })?.status;
+      if (status === 403) {
+        throw deployPlaneError(
+          "protection_unavailable",
+          `operator GitHub App cannot administer rulesets on ${input.targetOwner}/${input.targetRepo} (HTTP 403); repository administration:write is required`,
+          502
+        );
+      }
+      if (status === 422) {
+        throw deployPlaneError(
+          "merge_queue_policy_rejected",
+          `GitHub rejected the merge-queue policy on ${input.targetOwner}/${input.targetRepo} (HTTP 422)`,
           502
         );
       }

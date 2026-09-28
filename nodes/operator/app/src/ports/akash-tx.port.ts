@@ -204,6 +204,8 @@ export interface AkashTxActuatorPort {
     cogniKey: string;
     externalName?: string;
     expectedSourceSha?: string;
+    /** Public hostname; presence upgrades the serving proof to the host-routed path. */
+    publicHost?: string;
     /** Attach the release-side migration step to this tick. Never blocks the observation. */
     migration?: AkashTxMigrationStep;
     /** Workload slug + environment, required only when `migration` is attached. */
@@ -237,6 +239,19 @@ export interface AkashTxActuatorPort {
     olderThanMs: number;
     limit: number;
   }): Promise<AkashTxSweepReport>;
+  /**
+   * Bounded, read-only enumeration of every LIVE lease's log coordinates plus ONE short-lived
+   * logs-scoped provider token (bug.5240). This is the seam that makes "deployed via operator
+   * ⇒ logs observable" structural: coverage derives from the allocation ledger — the same
+   * durable receipt that proves the spend — so a lease that exists is a lease that can be
+   * tailed, with zero per-node configuration. No wallet slot, no Console mutation, no ledger
+   * write. Per-lease Console read failures skip that source (fail-open: observability must
+   * never wedge on one sick lease); only a token-mint failure refuses the whole call.
+   */
+  leaseLogSources(input: {
+    environment?: string;
+    limit?: number;
+  }): Promise<AkashTxLeaseLogSources>;
 }
 
 /** Per-pass counts for the sweeper's single structured log line. */
@@ -284,12 +299,72 @@ export interface AkashTxConsolePort {
    */
   findAllocationSince(cursor: string): Promise<AkashAllocationProbe>;
   status(input: { leaseId: string }): Promise<ProvisionOutput>;
+  /**
+   * sha256 hex of the exact SDL bytes `updateAllocated(spec)` would PUT for this spec — the same
+   * `buildAkashSdl` render, pricing options and all. Pure and deterministic: identical spec →
+   * identical hash. It lives on this port (not the actuator) so SDL construction and the pricing
+   * options it needs stay inside the adapter and never cross the seam. The actuator compares it
+   * to the receipt's `lastAppliedSdlHash` to no-op a byte-identical re-PUT (bug.5238).
+   */
+  sdlHash(spec: ProvisionSpec): string;
   /** In-place SDL replacement on a known handle. Returns once the provider accepted it. */
   updateAllocated(input: {
     resourceId: string;
     spec: ProvisionSpec;
   }): Promise<void>;
   release(input: { leaseId: string }): Promise<void>;
+  /**
+   * Read-only lease coordinates + declared service names for one paid handle (bug.5240).
+   * Feeds `leaseLogSources`; never mutates and never mints. `services` comes from the lease's
+   * own manifest status, so log coverage enumerates from the same record that deployed.
+   */
+  leaseLogDescriptor(input: {
+    leaseId: string;
+  }): Promise<AkashLeaseLogDescriptor>;
+  /**
+   * Wallet-signed, logs-scoped, short-TTL provider bearer (AEP-64 granular JWT). The ONLY
+   * capability the token grants is reading lease logs on the named providers — it can never
+   * spend, close, or mutate. Custody note: only the actuator can mint (it holds the Console
+   * key); consumers receive the ephemeral token, never the credential.
+   */
+  mintLeaseLogsToken(input: {
+    providers: readonly string[];
+    ttlSeconds: number;
+  }): Promise<string>;
+}
+
+/** Lease coordinates + service names for provider log reads. Read-only, provider-opaque. */
+export interface AkashLeaseLogDescriptor {
+  readonly gseq: number;
+  readonly oseq: number;
+  readonly providerAccount?: string;
+  /** Provider gateway base URI (https host the lease-logs endpoint lives on). */
+  readonly providerHostUri?: string;
+  /** SDL service names reported by the lease manifest status. */
+  readonly services: readonly string[];
+  readonly state: ProvisionState;
+}
+
+/** One pollable provider log source — everything a keyless reader needs for one lease. */
+export interface AkashTxLeaseLogSource {
+  readonly nodeId: string;
+  /** Workload slug (ProvisionSpec.name). Observability label, never identity. */
+  readonly workload: string;
+  readonly environment: string;
+  readonly dseq: string;
+  readonly gseq: number;
+  readonly oseq: number;
+  readonly providerAccount: string;
+  readonly providerHostUri: string;
+  readonly services: readonly string[];
+}
+
+/** Bounded snapshot of every live lease's log coordinates plus one shared ephemeral token. */
+export interface AkashTxLeaseLogSources {
+  readonly sources: readonly AkashTxLeaseLogSource[];
+  /** Logs-scoped JWT covering every provider above. Empty when `sources` is empty. */
+  readonly token: string;
+  readonly ttlSeconds: number;
 }
 
 export type AkashTxAllocationState =
@@ -304,11 +379,19 @@ export interface AkashTxAllocationRecord {
   readonly cogniKey: string;
   /** The identity this receipt is bound to. NOT NULL in the table: it always exists. */
   readonly identity: AkashTxWorkloadIdentity;
+  /** Workload label (ProvisionSpec.name, the node slug). Observability only, never identity. */
+  readonly workload: string;
   readonly environment: string;
   readonly state: AkashTxAllocationState;
   readonly allocationCursor?: string;
   readonly externalName?: string;
   readonly providerAccount?: string;
+  /**
+   * sha256 hex of the SDL bytes last PUT to the provider for this receipt (bug.5238). Undefined
+   * until the first in-place update; the create path never sets it. The update path no-ops a
+   * re-PUT when the desired SDL hashes to this value.
+   */
+  readonly lastAppliedSdlHash?: string;
 }
 
 /** A receipt that has held the wallet slot longer than any single transaction can take. */
@@ -380,6 +463,16 @@ export interface AkashTxAllocationLedgerPort {
     providerAccount?: string;
   }): Promise<void>;
   /**
+   * Persist the sha256 of the SDL just PUT for this key, so the next in-place update can no-op a
+   * byte-identical re-PUT (bug.5238). Called ONLY after `updateAllocated` succeeds — persisting
+   * before the PUT would make a failed apply skip forever. Advisory metadata, never identity: it
+   * does not touch the wallet slot, node_id, composite_uid, or the handle.
+   */
+  recordAppliedSdlHash(input: {
+    cogniKey: string;
+    sdlHash: string;
+  }): Promise<void>;
+  /**
    * Settle a receipt that never bound a paid resource, releasing the wallet-wide slot.
    *
    * Legal ONLY when nothing can still be billing under this key — i.e. the caller holds
@@ -434,6 +527,23 @@ export interface AkashTxAllocationLedgerPort {
    * Read-only, hard-limited, oldest-touched first — it decides nothing.
    */
   listReceipts(input: {
+    nodeId?: string;
+    environment?: string;
+    limit: number;
+  }): Promise<readonly AkashTxAllocationRecord[]>;
+  /**
+   * Bounded enumeration of every NON-TERMINAL receipt for this wallet scope: `state IN
+   * ('preparing','allocated')` — the boot-window-inclusive log-source primitive (bug.5264).
+   * `listAllocated` above hides the `preparing` state, so a lease that has been created and is
+   * BOOTING but has not yet flipped to `allocated` (create in-flight, a handle recorded by an
+   * adopt/resolve pass, or a receipt stranded `preparing` by a lost create response) is
+   * INVISIBLE to it — and a node that boots but never serves is closed on its BootDeadline
+   * before the pump ever sees it, so its container logs are lost with no evidence of WHY. This
+   * view returns those live receipts (handle or not) so the lease-log pump can tail every
+   * paying lease during the boot window and a handleless live receipt is loggable rather than
+   * silently skipped. Read-only, hard-limited, oldest-touched first — it decides nothing.
+   */
+  listActive(input: {
     nodeId?: string;
     environment?: string;
     limit: number;

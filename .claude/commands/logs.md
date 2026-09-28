@@ -112,10 +112,18 @@ For CI failures, use `env="ci"`:
 > | param           | default         | bounds                                     | meaning                                                                                                                                            |
 > | --------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 > | `env`           | — (required)    | `candidate-a` \| `preview` \| `production` | which deploy env to read                                                                                                                           |
+> | `service`       | `app`           | lowercase DNS label                        | which of YOUR declared `deployment.services` to read (bug.5240). Non-`app` pins `{service=<name>, source="lease"}` — the pump-shipped lease stream |
 > | `query`         | node app stream | ≤2048 chars                                | the full LogQL (same string as MCP / `loki-query.sh`)                                                                                              |
 > | `limit`         | `100`           | 1–1000                                     | max lines returned (newest-first)                                                                                                                  |
 > | `minutes`       | `60`            | 1–1440                                     | **relative** window: last N minutes back from now                                                                                                  |
 > | `start` / `end` | —               | span ≤24h                                  | **absolute** window — RFC3339 (`2026-06-24T00:00:00Z`) or epoch-ms; missing `end`→now, missing `start`→`end-1h`. Overrides `minutes` when present. |
+>
+> **Multi-service nodes (bug.5240):** every service you declare in `deployment.services` is tailed
+> by the operator-side lease-log pump — no log config in your repo, no credential in your runtime,
+> crashlooping containers included. Read a sidecar with `?service=<name>`, e.g.
+> `?env=candidate-a&service=paper-trader&query=| json | level="error"`. Streams carry the stable
+> envelope `{env, node=<uuid>, service, source="lease"}`; a `lease_log_pump_attached` marker line
+> distinguishes "service is silent" from "pump never attached".
 >
 > Absolute beats relative; either form is capped at a 24h span (mirrors the operator-scope read budget).
 > A bad instant, `start ≥ end`, or a >24h span → `400 invalid_window`. Example — one historical hour:

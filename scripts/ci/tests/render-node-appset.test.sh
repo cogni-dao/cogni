@@ -102,11 +102,13 @@ done
 pass "--check deterministic across 5 runs"
 
 # 4. FAIL-CLOSED — a deployable row missing `envs:` aborts the env-set render
-# (no silent all-env fallback). Point the renderer at a fixture catalog whose
-# poly row has had `envs:` stripped.
+# (no silent all-env fallback). Point the renderer at a hermetic fixture catalog
+# containing one deployable row with no `envs:` field.
 tmp_catalog="$(mktemp -d)"
-cp infra/catalog/*.yaml "$tmp_catalog/"
-yq -i 'del(.envs)' "$tmp_catalog/poly.yaml"
+cat > "$tmp_catalog/fixture-node.yaml" <<'YAML'
+name: fixture-node
+candidate_a_branch: deploy/candidate-a-fixture-node
+YAML
 set +e
 out="$(CATALOG_DIR="$tmp_catalog" bash "$RENDER" --check 2>&1)"
 rc=$?
@@ -151,20 +153,41 @@ YAML
 # shellcheck source=scripts/ci/lib/appset-paths.sh
 CATALOG_DIR="$fixture" source scripts/ci/lib/appset-paths.sh
 
+# Exercise the real unset default independently of repository-level fleet vars.
+control_env_default() (
+  unset FLEET_CONTROL_ENV
+  CATALOG_DIR="$fixture" control_env_for "$@"
+)
+
 for env in candidate-a preview; do
-  got="$(CATALOG_DIR="$fixture" control_env_for "$env" toks5)"
+  got="$(control_env_default "$env" toks5)"
   [ "$got" = "production" ] || fail "akash toks5 in $env should be reconciled by production, got $got"
 done
 pass "akash node's non-prod lanes are reconciled by the production cluster"
 
 for env in candidate-a preview; do
-  got="$(CATALOG_DIR="$fixture" control_env_for "$env" operator)"
+  got="$(control_env_default "$env" operator)"
   [ "$got" = "$env" ] || fail "k3s operator in $env must stay in $env, got $got"
 done
 pass "k3s rows stay with their own env's cluster"
 
-got="$(CATALOG_DIR="$fixture" control_env_for production toks5)"
+got="$(control_env_default production toks5)"
 [ "$got" = "production" ] || fail "production must be reconciled by production, got $got"
 pass "production is unchanged for every row"
+
+# FLEET_CONTROL_ENV (subtask.5007) — an ISOLATED fleet with no production cluster (e.g.
+# cogni-test-org) reconciles + pays for akash lanes from its OWN control env, so a test
+# flight never reaches for production authority. The default (FLEET_CONTROL_ENV unset =>
+# production) is exercised by EVERY assertion above, so those double as the
+# DEFAULT-PRESERVING guard that cogni-dao behaviour is byte-identical.
+for env in candidate-a preview production; do
+  got="$(FLEET_CONTROL_ENV=candidate-a CATALOG_DIR="$fixture" control_env_for "$env" toks5)"
+  [ "$got" = "candidate-a" ] || fail "isolated fleet: akash toks5 $env must reconcile via candidate-a, got $got"
+done
+pass "FLEET_CONTROL_ENV=candidate-a routes every akash lane to the isolated control plane"
+
+got="$(FLEET_CONTROL_ENV=candidate-a CATALOG_DIR="$fixture" control_env_for candidate-a operator)"
+[ "$got" = "candidate-a" ] || fail "isolated fleet: k3s operator candidate-a must stay candidate-a, got $got"
+pass "FLEET_CONTROL_ENV leaves k3s rows on their own env"
 
 echo "PASS: render-node-appset.test.sh"

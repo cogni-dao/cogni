@@ -53,6 +53,8 @@ done
 FORK_ROOT="${FORK_DOMAIN_ROOT:-cognidao.org}"
 # shellcheck source=scripts/setup/lib/fork-identity.sh
 source "$REPO_ROOT/scripts/setup/lib/fork-identity.sh"
+# shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
+source "$REPO_ROOT/scripts/setup/lib/cogni-deployment-identity.sh"
 # Deploy envs come from `deployment_provider`'s own key set in the catalog schema —
 # the same derivation the renderer uses, so no env list is maintained here either.
 mapfile -t DEPLOY_ENVS < <(yq -N -p json -o yaml '.properties.deployment_provider.properties | keys | .[]' infra/catalog/_schema.json)
@@ -213,13 +215,10 @@ check_scheduler_vm_alias() {
   pass "$env scheduler-worker ExternalNames -> $expected"
 }
 
-check_scheduler_vm_alias candidate-a cogni-candidate-a.vm.cognidao.org
-# preview + production use the canonical cogni_vm_host_for_env alias — the bare
-# {preview,production}.vm.cognidao.org records point at DEAD VMs (84.32.110.92 /
-# 84.32.110.202). PR #1486 migrated preview; this migrates production
-# (cogni.vm.cognidao.org → 84.32.25.152, the live prod VM).
-check_scheduler_vm_alias preview cogni-preview.vm.cognidao.org
-check_scheduler_vm_alias production cogni.vm.cognidao.org
+SUBSTRATE_SLUG="$(cogni_deployment_slug)"
+for env in "${DEPLOY_ENVS[@]}"; do
+  check_scheduler_vm_alias "$env" "$(cogni_vm_host_for_env "$env" "$FORK_ROOT" "$SUBSTRATE_SLUG")"
+done
 
 echo "[5/5] the Crossplane materializer's substrate host IS that same env VM alias"
 # story.5016 step 8. `spec.runtime.substrateHost` is the one value the Crossplane authority
@@ -232,11 +231,12 @@ echo "[5/5] the Crossplane materializer's substrate host IS that same env VM ali
 ACTION_YML=".github/actions/materialize-compute-workload/action.yml"
 grep -q -- '--substrate-host' "$ACTION_YML" \
   || fail "$ACTION_YML stopped passing --substrate-host; a Crossplane-born node would get no Temporal/Redis/LiteLLM env"
-SUBSTRATE_SLUG="$(fork_identity_slug "$REPO_ROOT")"
+grep -q -- 'cogni_deployment_slug' "$ACTION_YML" \
+  || fail "$ACTION_YML derives operator substrate identity from the parent repo name instead of the provisioned deployment"
 for env in "${DEPLOY_ENVS[@]}"; do
   file="infra/k8s/overlays/$env/scheduler-worker/kustomization.yaml"
   [ -f "$file" ] || { echo "  skip - $env scheduler-worker overlay missing"; continue; }
-  expected="$(vm_host_for_env "$env" "$FORK_ROOT" "$SUBSTRATE_SLUG")"
+  expected="$(cogni_vm_host_for_env "$env" "$FORK_ROOT" "$SUBSTRATE_SLUG")"
   apex="$(domain_for_env "$env" "$FORK_ROOT" || true)"
   [ "$expected" != "$apex" ] \
     || fail "$env substrate host resolved to the Cloudflare-proxied public apex '$apex', which drops 7233/6379/4000"
@@ -244,7 +244,7 @@ for env in "${DEPLOY_ENVS[@]}"; do
   [ "${#external_names[@]}" -gt 0 ] || fail "$file has no ExternalName entries"
   for name in "${external_names[@]}"; do
     [ "$name" = "$expected" ] \
-      || fail "vm_host_for_env($env) = $expected but $file dials $name — a Crossplane node would be wired to a different substrate than the cluster uses"
+      || fail "cogni_vm_host_for_env($env) = $expected but $file dials $name — a Crossplane node would be wired to a different substrate than the cluster uses"
   done
   pass "$env materializer substrate host -> $expected"
 done

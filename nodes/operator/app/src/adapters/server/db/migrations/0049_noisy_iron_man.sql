@@ -1,0 +1,1 @@
+ALTER TABLE "akash_tx_allocations" ADD COLUMN "last_applied_sdl_hash" text;

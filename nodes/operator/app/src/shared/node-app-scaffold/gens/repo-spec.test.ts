@@ -21,6 +21,7 @@ import {
   extractNodeServices,
   hasDeclaredNodeDeployment,
   parseRepoSpec,
+  resolveRuntimeProfileSecretRefs,
 } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -184,11 +185,19 @@ describe("renderRepoSpec — BORN_DEPLOYABLE", () => {
     }
   });
 
-  it("declares every secret_ref the cogni-node-app-v1 runtime profile requires", () => {
+  it("mints a clean block: no per-node profile refs, resolved to the full contract at build time", () => {
     const [app] = extractNodeServices(parsed);
     expect(app?.runtimeProfile).toBe("cogni-node-app-v1");
-    expect(app?.secretRefs.map((ref) => ref.key)).toEqual([
-      ...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
-    ]);
+    // The minted spec does not re-list the profile's keys (bug.5175 prune)...
+    expect(app?.secretRefs).toEqual([]);
+    // ...and the raw minted YAML never contains them either.
+    expect(rendered).not.toContain("EVM_RPC_URL");
+    // The profile supplies the complete contract when the workload is built.
+    expect(
+      resolveRuntimeProfileSecretRefs({
+        runtimeProfile: app?.runtimeProfile,
+        secretRefs: app?.secretRefs ?? [],
+      }).map((ref) => ref.key)
+    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
   });
 });

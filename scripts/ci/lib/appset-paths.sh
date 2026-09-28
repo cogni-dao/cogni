@@ -32,12 +32,19 @@ set -euo pipefail
 : "${CATALOG_DIR:=infra/catalog}"
 APPSETS_REL_DIR="infra/k8s/argocd/appsets"
 
-# Which env's cluster reconciles (env, node)? Production for an akash node's non-production
-# lane; the env itself otherwise. Absent `deployment_provider.<env>` means the k3s default,
-# so an un-placed row is NEVER relocated — placement must be stated to move.
+# Which env's cluster reconciles (env, node)? The FLEET CONTROL ENV reconciles an akash
+# node's foreign lanes; the env itself otherwise. The control env DEFAULTS to `production`
+# — the cogni-dao fleet, where "the production operator controls test, preview AND
+# production deployments for every node." An ISOLATED fleet with no production cluster
+# (e.g. cogni-test-org) exports FLEET_CONTROL_ENV=candidate-a so its OWN control plane
+# reconciles + pays for akash lanes and a test flight never reaches for production
+# authority (subtask.5007). Unset => production => cogni-dao behaviour is byte-identical.
+# Absent `deployment_provider.<env>` means the k3s default, so an un-placed row is NEVER
+# relocated — placement must be stated to move.
 control_env_for() {
   local env="$1" node="$2" provider catalog_dir="${CATALOG_DIR:-infra/catalog}"
-  if [ "$env" = "production" ]; then printf 'production\n'; return 0; fi
+  local fleet_control="${FLEET_CONTROL_ENV:-production}"
+  if [ "$env" = "$fleet_control" ]; then printf '%s\n' "$fleet_control"; return 0; fi
   # THE CATALOG IS WHAT ANSWERS THIS. Its absence is not a default — it is a question we
   # cannot answer. `yq` on a missing file yields "" with EXIT 0, and `set -euo pipefail` does
   # NOT abort that inside `$( )`, so the row below silently answered "reconciled here" and
@@ -49,7 +56,7 @@ control_env_for() {
     return 1
   }
   provider="$(yq -r ".deployment_provider.\"$env\" // \"\"" "$catalog_dir/$node.yaml")"
-  if [ "$provider" = "akash" ]; then printf 'production\n'; else printf '%s\n' "$env"; fi
+  if [ "$provider" = "akash" ]; then printf '%s\n' "$fleet_control"; else printf '%s\n' "$env"; fi
 }
 
 # Repo-relative ApplicationSet path. Filename keeps the WORKLOAD env so one Argo namespace

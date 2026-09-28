@@ -9,13 +9,19 @@ name: Sync Drift Detector
 # Triggers:
 # - schedule: daily at 14:00 UTC (07:00 PT) — picks up overnight drift.
 # - workflow_dispatch: manual trigger for ad-hoc runs / contract tests.
-# - push to main when the manifest or detector script itself changes —
-#   any change to the contract should re-run the report immediately.
+# - push to main (ANY path) — a `role: test-parent` mirror is only "continuously current" if every
+#   canonical merge re-evaluates it. Scoping this to the manifest + detector was right when the
+#   only artifacts were loosely-coupled forks; it is wrong for a near-1:1 mirror, where the drift
+#   is created by the very merges this trigger used to ignore.
+#
+# An artifact declaring `on_missing: fail` makes the detector exit non-zero when a required
+# canonical path is absent there. The issue is STILL upserted first (REPORT_ALWAYS_PRINTS), so the
+# red build always points at a readable report.
 #
 # Permissions:
 # - contents: read — checkout this repo
 # - issues: write — upsert the tracking issue
-# (No write to artifact repos — that is v0.2.)
+# (No write to artifact repos — the refresh PR is test-parent-sync.yml, which runs as the App.)
 
 on:
   schedule:
@@ -23,11 +29,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - ".cogni/sync-manifest.yaml"
-      - ".cogni/sync-manifest.schema.json"
-      - "scripts/ci/detect-sync-drift.mjs"
-      - ".github/workflows/sync-drift-detector.yml"
 
 permissions:
   contents: read
@@ -61,12 +62,17 @@ jobs:
         env:
           HUB_DIR: ${{ github.workspace }}
           HUB_REF: HEAD
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          set -o pipefail
-          node scripts/ci/detect-sync-drift.mjs | tee /tmp/drift-report.md
-          # Extract drift count for the issue title
-          COUNT=$(tail -3 /tmp/drift-report.md | grep -oE '\*\*[0-9]+\*\*' | tr -d '*' | head -1)
+          # The detector's own exit code is the verdict (MISSING_MAY_BE_FATAL); capture it rather
+          # than letting `set -e` skip the issue upsert that explains the failure.
+          # `bash -e` would abort the step on the detector's non-zero verdict, so absorb it here.
+          STATUS=0
+          node scripts/ci/detect-sync-drift.mjs > /tmp/drift-report.md || STATUS=$?
+          cat /tmp/drift-report.md
+          COUNT=$(grep -oE 'Total drift across all checked artifacts: \*\*[0-9]+\*\*' /tmp/drift-report.md | grep -oE '[0-9]+' | head -1)
           echo "count=${COUNT:-0}" >> "$GITHUB_OUTPUT"
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
 
       - name: Upsert hub sync-drift tracking issue
         env:
@@ -98,3 +104,10 @@ jobs:
             gh issue create --title "$TITLE" --label sync-drift --body-file /tmp/issue-body.md
             echo "🆕 opened new sync-drift issue"
           fi
+
+      - name: Fail loudly on an absent required canonical path
+        if: steps.run.outputs.status != '0'
+        run: |
+          echo "::error::A required canonical path is missing on an artifact declaring \`on_missing: fail\`."
+          echo "See the upserted \`sync-drift\` issue for the path list, then run the Test Parent Sync workflow."
+          exit 1

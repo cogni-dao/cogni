@@ -7,6 +7,48 @@ export type ComputeWorkloadReadiness =
   | { readonly ready: true }
   | { readonly ready: false; readonly reason: string };
 
+/**
+ * Project a bundle onto the fields `XComputeWorkload.status.observedBundle` can actually hold.
+ *
+ * The XRD declares that status field as EXACTLY `{ref, source}` — it structurally cannot carry
+ * `spec.bundle.artifacts`. Deep-comparing the two whole objects therefore reported
+ * `bundle_not_observed` FOREVER for every node whose bundle lists artifacts, so verify-deploy
+ * could never go green no matter how correct the deploy was: poly production sat red while
+ * observed and expected named the SAME sha (`51bd530c`), which is what exposed this (bug.5262).
+ *
+ * `ref` (the immutable bundle digest) plus `source` (repository + revision) fully identify the
+ * deployed revision; `artifacts` is derived detail the status contract deliberately omits.
+ *
+ * The LEGACY ComputeWorkload CRD declares `artifacts` on BOTH spec.bundle and
+ * status.observedBundle, so its comparison is already correct and is deliberately left whole.
+ */
+function observedBundleView(bundle: unknown): unknown {
+  const record = asRecord(bundle);
+  if (!record) return bundle;
+  return { ref: record.ref, source: record.source };
+}
+
+/**
+ * Name the two SHAs a bundle mismatch is actually about.
+ *
+ * Bare `bundle_not_observed` cannot distinguish "the actuator has not caught up yet"
+ * (wait) from "the cluster XR was never updated to want this bundle at all" (a wedged
+ * promote no amount of waiting fixes). Both sides are already in hand at the comparison,
+ * and telling them apart otherwise needs cluster access the promote gate does not have —
+ * which is why poly production sat for a week with `observedBundle` naming the SHA it was
+ * already serving (bug.5262). Same intent as the `phase_not_ready:<failureReason>` suffix
+ * below: a promote-gate timeout must name the actual blocker.
+ */
+function bundleMismatchReason(observed: unknown, expected: unknown): string {
+  const sha = (bundle: unknown): string => {
+    const value = asRecord(asRecord(bundle)?.source)?.sha;
+    return typeof value === "string" && value.length > 0
+      ? value.slice(0, 8)
+      : "none";
+  };
+  return `bundle_not_observed:observed=${sha(observed)}:expected=${sha(expected)}`;
+}
+
 /** Compare live controller state with the exact Git-rendered desired state. */
 export function assessComputeWorkloadReadiness(input: {
   readonly expected: unknown;
@@ -77,7 +119,10 @@ export function assessComputeWorkloadReadiness(input: {
     };
   }
   if (stableJson(status.observedBundle) !== stableJson(expectedBundle)) {
-    return { ready: false, reason: "bundle_not_observed" };
+    return {
+      ready: false,
+      reason: bundleMismatchReason(status.observedBundle, expectedBundle),
+    };
   }
 
   const conditions = Array.isArray(status.conditions) ? status.conditions : [];
@@ -136,10 +181,13 @@ function assessXComputeWorkloadReadiness(input: {
   if (liveMetadata.deletionTimestamp !== undefined) {
     return { ready: false, reason: "deletion_pending" };
   }
-  for (const [key, value] of Object.entries(expectedSpec)) {
-    if (stableJson(liveSpec[key]) !== stableJson(value)) {
-      return { ready: false, reason: "desired_spec_pending" };
-    }
+  // expected ⊆ live at EVERY level, not just the top: the candidate-a XRD defaults
+  // nested subfields the materializer emits only partially (e.g.
+  // spec.bootPolicy.bootDeadlineSeconds, spec.runtime.logPush) and k8s persists
+  // them onto the live composite. A shallow per-key deep-equal treats those
+  // defaults as drift and wedges on desired_spec_pending forever (bug.5263).
+  if (!isDeepSubset(expectedSpec, liveSpec)) {
+    return { ready: false, reason: "desired_spec_pending" };
   }
   if (!status) {
     return { ready: false, reason: "status_pending" };
@@ -153,11 +201,27 @@ function assessXComputeWorkloadReadiness(input: {
     return { ready: false, reason: "invalid_generation" };
   }
   const expectedBundle = expectedSpec.bundle;
-  if (
-    expectedBundle !== undefined &&
-    stableJson(status.observedBundle) !== stableJson(expectedBundle)
-  ) {
-    return { ready: false, reason: "bundle_not_observed" };
+  if (expectedBundle !== undefined) {
+    // FAIL CLOSED on an unobserved bundle. Projecting both sides onto {ref, source} fixes the
+    // false NEGATIVE that artifacts caused, but it must not introduce a false POSITIVE: if
+    // `status.observedBundle` is absent/empty (never reconciled) and the expected bundle happens
+    // to carry no ref/source either, both sides project to {} and compare EQUAL — reporting a
+    // deploy that never happened as Ready. A gate may only pass on POSITIVE evidence, so the
+    // observed side must name a revision before any match counts. (Hole found in review of
+    // #2454 by the poly node dev, reproduced by test before fixing.)
+    const observedSha = asRecord(asRecord(status.observedBundle)?.source)?.sha;
+    const observedNamesARevision =
+      typeof observedSha === "string" && observedSha.length > 0;
+    if (
+      !observedNamesARevision ||
+      stableJson(observedBundleView(status.observedBundle)) !==
+        stableJson(observedBundleView(expectedBundle))
+    ) {
+      return {
+        ready: false,
+        reason: bundleMismatchReason(status.observedBundle, expectedBundle),
+      };
+    }
   }
   if (status.phase !== "Ready") {
     const failureReason = asRecord(status.failure)?.reason;
@@ -186,6 +250,34 @@ function assessXComputeWorkloadReadiness(input: {
     return { ready: false, reason: "ready_condition_pending" };
   }
   return { ready: true };
+}
+
+/**
+ * Recursive partial-subset check: is `expected` present, and equal, everywhere it
+ * is declared inside `live`? Honors the XComputeWorkload contract "expected ⊆ live":
+ * - objects: every expected key must recursively subset-match live[key] (extra live
+ *   keys — Crossplane's compositionRef/resourceRefs and XRD-defaulted subfields — are
+ *   tolerated at every depth, not just the top level);
+ * - arrays: same length, element-wise subset (services/expose are position-stable and
+ *   fully rendered by the materializer, so an added or dropped element IS real drift);
+ * - primitives (and null): strict value equality via stableJson.
+ */
+function isDeepSubset(expected: unknown, live: unknown): boolean {
+  const expectedRecord = asRecord(expected);
+  if (expectedRecord) {
+    const liveRecord = asRecord(live);
+    if (!liveRecord) return false;
+    return Object.entries(expectedRecord).every(([key, value]) =>
+      isDeepSubset(value, liveRecord[key])
+    );
+  }
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(live) || live.length !== expected.length) return false;
+    return expected.every((element, index) =>
+      isDeepSubset(element, live[index])
+    );
+  }
+  return stableJson(expected) === stableJson(live);
 }
 
 function asRecord(value: unknown): JsonRecord | undefined {

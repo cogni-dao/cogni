@@ -71,6 +71,7 @@ export {
   type ResolvedNodeArtifactBundle,
   type ResolvedNodeServiceArtifact,
   resolveNodeArtifactBundle,
+  resolveNodeArtifactBundleForEnvironment,
 } from "./artifact-bundle.js";
 export {
   hasDeploymentActivationSpec,
@@ -82,6 +83,7 @@ export {
   LEGACY_DEFAULT_NODE_DEPLOYMENT,
   missingRuntimeProfileSecretKeys,
   renderNodeDeploymentYaml,
+  resolveRuntimeProfileSecretRefs,
 } from "./node-app-deployment.js";
 export { parseRepoSpec } from "./parse.js";
 export {
@@ -99,6 +101,8 @@ export {
   aiRuleGateSchema,
   type CreditsTopupSpec,
   creditsTopupSpecSchema,
+  type DeploymentEnvName,
+  deploymentEnvNameSchema,
   type GateConfig,
   type GovernanceScheduleSpec,
   type GovernanceSpec,

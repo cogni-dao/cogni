@@ -13,6 +13,7 @@
 
 import { redirect } from "next/navigation";
 
+import { listAccessibleNodeOperations } from "@/app/_facades/nodes/operations.server";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { DashboardView } from "./view";
 
@@ -22,5 +23,6 @@ export default async function DashboardPage() {
     redirect("/");
   }
 
-  return <DashboardView />;
+  const initialNodes = await listAccessibleNodeOperations(user.id);
+  return <DashboardView initialNodes={initialNodes} />;
 }

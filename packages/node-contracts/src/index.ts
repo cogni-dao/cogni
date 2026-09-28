@@ -80,6 +80,8 @@ export * from "./meta.livez.read.v1.contract";
 export * from "./meta.readyz.read.v1.contract";
 export * from "./meta.route-manifest.read.v1.contract";
 export * from "./meta.version.read.v1.contract";
+// ── Nodes ──────────────────────────────────────────────────────────────────
+export * from "./nodes.operations-overview.v1.contract";
 // ── Payments ────────────────────────────────────────────────────────────────
 export * from "./payments.credits.summary.v1.contract";
 export * from "./payments.intent.v1.contract";

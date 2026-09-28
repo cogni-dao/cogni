@@ -91,19 +91,55 @@ credential the per-node check can't govern. The proxy makes them unnecessary.
 
 What a node developer can read is bounded by what is **node-attributable**. Stated so it does not drift:
 
-| Source                                | `service`          | Node-attributable?                                                                                                       | In the proxy?                                                                                                                             |
-| ------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Node app pod                          | `app`              | ✅ carries the `node` stream label                                                                                       | **Yes** — the MVP                                                                                                                         |
-| Graph execution worker                | `scheduler-worker` | ❌ **not today** — `makeLogger()` binds no `nodeId`; it is node-aware (one Worker per nodeId) so it _could_, but doesn't | **No** — until it binds `nodeId` (follow-up), then add it to the proxy's allowed services with a forced `\| json \| nodeId="<id>"` filter |
-| Temporal / LiteLLM / Caddy / Postgres | shared infra       | ❌ **never** per-line node-attributable (not node-aware)                                                                 | **No** — an operator-only debugging surface; a node dev escalates to the operator                                                         |
-| CI / build failures                   | `env="ci"`         | not node-scoped (per-PR)                                                                                                 | **No** — the dev sees their PR's checks on GitHub                                                                                         |
+| Source                                          | `service`                                       | Node-attributable?                                                                                                         | In the proxy?                                                                                                                             |
+| ----------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Node app pod / operator-side lines              | `app`                                           | ✅ carries the `node` stream label                                                                                         | **Yes** — the MVP (default)                                                                                                               |
+| Akash lease containers (every declared service) | the SDL service name (`app`, `paper-trader`, …) | ✅ `source="lease"` streams are labeled operator-side by the **lease-log pump** from allocation-ledger identity (bug.5240) | **Yes** — `?service=<name>` pins `{service=<name>, source="lease", node=<id>}`                                                            |
+| Graph execution worker                          | `scheduler-worker`                              | ❌ **not today** — `makeLogger()` binds no `nodeId`; it is node-aware (one Worker per nodeId) so it _could_, but doesn't   | **No** — until it binds `nodeId` (follow-up), then add it to the proxy's allowed services with a forced `\| json \| nodeId="<id>"` filter |
+| Temporal / LiteLLM / Caddy / Postgres           | shared infra                                    | ❌ **never** per-line node-attributable (not node-aware)                                                                   | **No** — an operator-only debugging surface; a node dev escalates to the operator                                                         |
+| CI / build failures                             | `env="ci"`                                      | not node-scoped (per-PR)                                                                                                   | **No** — the dev sees their PR's checks on GitHub                                                                                         |
 
-**Envelope rule:** the proxy serves only services that carry per-node attribution. Today that is `app`
-(via the `node` label) — a caller `service=` matcher must equal `app` or the query is rejected
-`query_out_of_scope`. The next rung is binding `nodeId` into node-aware shared services
-(`scheduler-worker` first) so their per-node lines become reachable by widening the `service` allowlist
-in `scopeNodeLogQL` — **not** by trusting a caller-supplied selector to a shared service (that would leak
-cross-node lines).
+**Envelope rule (PER_SERVICE_ENVELOPE, bug.5240 — supersedes the app-only rule):** the proxy serves
+only streams that carry per-node attribution. The default scope stays `service="app"`. A caller may
+select any other **declared** service via `?service=` (or an equal selector matcher), and that scope
+additionally **forces** `source="lease"`: lease streams are shipped and labeled by the operator-side
+lease-log pump from the actuator's allocation ledger, so their `node` label is trustworthy — while
+operator k3s streams beyond `app` (actuator, scheduler-worker, …) stay unreachable exactly as before.
+A `service=`/`source=` matcher that conflicts with the pinned scope is rejected `query_out_of_scope`.
+The next rung for shared services is unchanged: bind `nodeId` into node-aware services
+(`scheduler-worker` first) — **not** trusting a caller-supplied selector to a shared service (that
+would leak cross-node lines).
+
+**Lease log collection (bug.5240):** Akash workloads run no Alloy and no daemonset. The
+**lease-log pump** (`infra/k8s/base/lease-log-pump`, riding wherever an akash-tx-actuator runs) closes
+that gap structurally: it enumerates every LIVE lease from the actuator's `lease-log-sources` op (the
+same durable receipt that proves the spend), reads each service's log window through the Console
+provider-proxy with a logs-scoped ephemeral JWT, and pushes to Loki using the write-only
+`LOKI_LEASE_PUSH_*` credential. Coverage derives from the ledger — a lease that exists is a lease
+that is tailed, whatever image it runs and whether or not it ever became Ready. This supersedes the
+bug.5127 app-push lane (`spec.runtime.logPush` stays dormant; no push credential ever enters a lease
+environment). Collection-at-the-platform-boundary is the canonical PaaS pattern — Heroku Logplex,
+Vercel/Netlify log drains, Fly's platform log shipper, and the Kubernetes node-agent (promtail/Alloy
+DaemonSet) all capture tenant stdout where the PLATFORM holds custody, never inside the tenant app.
+
+**STABLE_LEASE_STREAM_LABELS (the write-side context envelope — invariant):** every pump-shipped
+stream carries EXACTLY
+
+| label          | value                     | stability                                                             |
+| -------------- | ------------------------- | --------------------------------------------------------------------- |
+| `app`          | `cogni-template`          | constant                                                              |
+| `env`          | the receipt's environment | closed set (`FLIGHT_ENVS`)                                            |
+| `node`         | repo-spec node UUID       | immutable identity key (same value the read envelope pins)            |
+| `service`      | SDL service name          | stable per deployment declaration                                     |
+| `service_name` | mirrors `service`         | Grafana service-identity convention; matches the k8s lane (container) |
+| `source`       | `lease`                   | constant discriminator vs `k8s`/`k8s-events`                          |
+
+Few, low-cardinality, immutable-valued labels only (Grafana Loki label guidance; the OTel
+resource-vs-record split). The renameable node SLUG is deliberately NOT a label — mutable identity
+never enters a stream envelope; resolve slug↔UUID through the registry. No `stream` label — the
+provider merges stdout/stderr and the envelope must not assert what the source cannot guarantee.
+Adding or renaming a label here is a READ-CONTRACT change: it must update `scopeNodeLogQL`'s forced
+set and this table in the same PR.
 
 **Env envelope:** the readable envs are the canonical `FLIGHT_ENVS` (`candidate-a` · `preview` ·
 `production`) — the same set a node deploys through. The proxy imports that list rather than re-declaring

@@ -171,4 +171,318 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
       assessComputeWorkloadReadiness({ expected: xExpected, live: failed })
     ).toEqual({ ready: false, reason: "phase_not_ready:ProviderRejected" });
   });
+
+  it("tolerates XRD-defaulted nested subfields the materializer omits (bug.5263)", () => {
+    // The candidate-a XRD defaults spec.bootPolicy.bootDeadlineSeconds and
+    // spec.runtime.logPush; k8s persists them onto the live composite even though
+    // the rendered manifest only declares them partially. A shallow per-key
+    // deep-equal treats those defaults as drift and wedges on desired_spec_pending.
+    const defaulted = xLive();
+    (defaulted.spec as Record<string, unknown>).bootPolicy = {
+      onDeadline: "Hold",
+      bootDeadlineSeconds: 1800,
+    };
+    (defaulted.spec as Record<string, unknown>).runtime = { logPush: false };
+    expect(
+      assessComputeWorkloadReadiness({ expected: xExpected, live: defaulted })
+    ).toEqual({ ready: true });
+  });
+
+  it("still rejects a drifted DEEPLY-nested declared value", () => {
+    const drifted = xLive();
+    (drifted.spec as Record<string, unknown>).bootPolicy = {
+      onDeadline: "Terminate",
+      bootDeadlineSeconds: 1800,
+    };
+    expect(
+      assessComputeWorkloadReadiness({ expected: xExpected, live: drifted })
+    ).toEqual({ ready: false, reason: "desired_spec_pending" });
+  });
+
+  it("tolerates the crossplane-added top-level compositionRef key (preserved)", () => {
+    // xLive() already injects spec.compositionRef; assert the tolerance explicitly
+    // so the extra-top-level-key behavior can never silently regress.
+    const withRef = xLive();
+    expect(
+      (withRef.spec as Record<string, unknown>).compositionRef
+    ).toBeDefined();
+    expect(
+      assessComputeWorkloadReadiness({ expected: xExpected, live: withRef })
+    ).toEqual({ ready: true });
+  });
+});
+
+describe("bundle mismatch names the blocker (bug.5262)", () => {
+  // The two SHAs from the week-long poly production wedge: the gate waited on a
+  // bundle the status never named, and `bundle_not_observed` alone could not say
+  // whether the actuator was lagging or the workload was stuck on what it served.
+  const DESIRED = "8f371a7a58f01f307ca6b9c5d20f06f847f8b32b";
+  const SERVED = "ab472feda4720d36616103af6f4e7427c994a46e";
+
+  it("legacy ComputeWorkload: reason carries observed and expected shas", () => {
+    const want = {
+      ...expected,
+      spec: {
+        ...expected.spec,
+        bundle: { ref: "image@sha256:digest", source: { sha: DESIRED } },
+      },
+    };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want,
+        live: {
+          apiVersion: want.apiVersion,
+          kind: want.kind,
+          metadata: { ...want.metadata, generation: 2 },
+          spec: want.spec,
+          status: {
+            phase: "Ready",
+            observedGeneration: 2,
+            observedBundle: {
+              ref: "image@sha256:digest",
+              source: { sha: SERVED },
+            },
+            conditions: [
+              { type: "Ready", status: "True", observedGeneration: 2 },
+            ],
+          },
+        },
+      })
+    ).toEqual({
+      ready: false,
+      reason: "bundle_not_observed:observed=ab472fed:expected=8f371a7a",
+    });
+  });
+
+  it("XComputeWorkload: distinguishes a lagging actuator from a served-sha wedge", () => {
+    const spec = {
+      migration: { mode: "Skip" },
+      bootPolicy: { onDeadline: "Hold" },
+      bundle: { source: { sha: DESIRED } },
+    };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: {
+          apiVersion: "compute.cogni.io/v1alpha1",
+          kind: "XComputeWorkload",
+          metadata: { name: "4b06359a", namespace: "cogni-production" },
+          spec,
+        },
+        live: {
+          apiVersion: "compute.cogni.io/v1alpha1",
+          kind: "XComputeWorkload",
+          metadata: {
+            name: "4b06359a",
+            namespace: "cogni-production",
+            generation: 4,
+          },
+          spec: { ...spec, compositionRef: { name: "xcomputeworkload-akash" } },
+          status: {
+            phase: "Ready",
+            serving: true,
+            observedBundle: { source: { sha: SERVED } },
+            conditions: [
+              { type: "Synced", status: "True", observedGeneration: 4 },
+              { type: "Ready", status: "True", observedGeneration: 4 },
+            ],
+          },
+        },
+      })
+    ).toEqual({
+      ready: false,
+      reason: "bundle_not_observed:observed=ab472fed:expected=8f371a7a",
+    });
+  });
+
+  it("names an absent observedBundle rather than reporting a bare mismatch", () => {
+    const want = {
+      ...expected,
+      spec: {
+        ...expected.spec,
+        bundle: { ref: "image@sha256:digest", source: { sha: DESIRED } },
+      },
+    };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want,
+        live: {
+          apiVersion: want.apiVersion,
+          kind: want.kind,
+          metadata: { ...want.metadata, generation: 2 },
+          spec: want.spec,
+          status: {
+            phase: "Ready",
+            observedGeneration: 2,
+            conditions: [
+              { type: "Ready", status: "True", observedGeneration: 2 },
+            ],
+          },
+        },
+      })
+    ).toEqual({
+      ready: false,
+      reason: "bundle_not_observed:observed=none:expected=8f371a7a",
+    });
+  });
+});
+
+describe("XComputeWorkload bundle artifacts must not block readiness (bug.5262)", () => {
+  // The real poly production shapes: spec.bundle lists artifacts, status.observedBundle
+  // structurally cannot (the XRD declares it as {ref, source}). Deep-comparing whole objects
+  // made verify-deploy unpassable for EVERY node with artifacts.
+  const SHA = "51bd530ca207d46a1188ee252e8f4a071b78ef53";
+  const REF =
+    "ghcr.io/cogni-dao/poly@sha256:2fe0b4a3385779071347ba8c92d9f81b4a9e126be312e9e12d622c4c694faa13";
+  const bundle = {
+    ref: REF,
+    source: { repository: "cogni-dao/poly", sha: SHA },
+    artifacts: [
+      {
+        name: "app",
+        image:
+          "ghcr.io/cogni-dao/poly@sha256:f398616800cc98ff7bf750985bd9c7f5eacf6e392a9d236921ebec20d78031bd",
+      },
+    ],
+  };
+  const spec = { migration: { mode: "Skip" }, bundle };
+  const xr = (observedBundle: unknown) => ({
+    apiVersion: "compute.cogni.io/v1alpha1",
+    kind: "XComputeWorkload",
+    metadata: {
+      name: "4b06359a",
+      namespace: "cogni-production",
+      generation: 7,
+    },
+    spec: { ...spec, compositionRef: { name: "xcomputeworkload-akash" } },
+    status: {
+      phase: "Ready",
+      serving: true,
+      observedBundle,
+      conditions: [
+        { type: "Synced", status: "True", observedGeneration: 7 },
+        { type: "Ready", status: "True", observedGeneration: 7 },
+      ],
+    },
+  });
+  const expected = {
+    apiVersion: "compute.cogni.io/v1alpha1",
+    kind: "XComputeWorkload",
+    metadata: { name: "4b06359a", namespace: "cogni-production" },
+    spec,
+  };
+
+  it("is READY when observedBundle omits artifacts but ref+source match", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: xr({
+          ref: REF,
+          source: { repository: "cogni-dao/poly", sha: SHA },
+        }),
+      })
+    ).toEqual({ ready: true });
+  });
+
+  it("still rejects a genuinely different revision", () => {
+    const other = "ab472feda4720d36616103af6f4e7427c994a46e";
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: xr({
+          ref: REF,
+          source: { repository: "cogni-dao/poly", sha: other },
+        }),
+      })
+    ).toEqual({
+      ready: false,
+      reason: `bundle_not_observed:observed=ab472fed:expected=51bd530c`,
+    });
+  });
+
+  it("still rejects a different bundle ref at the same sha", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: xr({
+          ref: "ghcr.io/cogni-dao/poly@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          source: { repository: "cogni-dao/poly", sha: SHA },
+        }),
+      }).ready
+    ).toBe(false);
+  });
+});
+
+describe("XR gate must never pass on an unobserved bundle (review of #2454)", () => {
+  const SHA = "51bd530ca207d46a1188ee252e8f4a071b78ef53";
+  const REF =
+    "ghcr.io/cogni-dao/poly@sha256:2fe0b4a3385779071347ba8c92d9f81b4a9e126be312e9e12d622c4c694faa13";
+  const full = {
+    ref: REF,
+    source: { repository: "cogni-dao/poly", sha: SHA },
+    artifacts: [{ name: "app", image: "ghcr.io/x@sha256:abc" }],
+  };
+  const live = (
+    specBundle: unknown,
+    observedBundle: unknown,
+    omit = false
+  ) => ({
+    apiVersion: "compute.cogni.io/v1alpha1",
+    kind: "XComputeWorkload",
+    metadata: { name: "n", namespace: "cogni-production", generation: 3 },
+    spec: { bundle: specBundle, compositionRef: { name: "c" } },
+    status: {
+      phase: "Ready",
+      serving: true,
+      ...(omit ? {} : { observedBundle }),
+      conditions: [
+        { type: "Synced", status: "True", observedGeneration: 3 },
+        { type: "Ready", status: "True", observedGeneration: 3 },
+      ],
+    },
+  });
+  const want = (specBundle: unknown) => ({
+    apiVersion: "compute.cogni.io/v1alpha1",
+    kind: "XComputeWorkload",
+    metadata: { name: "n", namespace: "cogni-production" },
+    spec: { bundle: specBundle },
+  });
+
+  it("absent observedBundle is not ready", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want(full),
+        live: live(full, undefined, true),
+      }).ready
+    ).toBe(false);
+  });
+
+  it("empty observedBundle is not ready", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want(full),
+        live: live(full, {}),
+      }).ready
+    ).toBe(false);
+  });
+
+  it("observedBundle with empty ref+source is not ready", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want(full),
+        live: live(full, { ref: "", source: {} }),
+      }).ready
+    ).toBe(false);
+  });
+
+  it("an artifacts-only expected bundle cannot pass on an empty observed bundle", () => {
+    const artifactsOnly = {
+      artifacts: [{ name: "app", image: "ghcr.io/x@sha256:abc" }],
+    };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want(artifactsOnly),
+        live: live(artifactsOnly, {}),
+      }).ready
+    ).toBe(false);
+  });
 });

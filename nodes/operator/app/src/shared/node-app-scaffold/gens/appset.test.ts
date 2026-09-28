@@ -61,6 +61,20 @@ const BEFORE = `${HEADER}
   - candidate-a-operator-applicationset.yaml
 `;
 
+// Template carrying __REPO_URL__ on both the git generator and the Application source, mirroring
+// scripts/ci/node-applicationset.yaml.tmpl — the byte-for-byte shared file (bug.5235).
+const REPO_URL_TEMPLATE = `spec:
+  generators:
+    - git:
+        repoURL: __REPO_URL__
+        revision: deploy/__ENV__-__NODE__
+  template:
+    spec:
+      source:
+        repoURL: __REPO_URL__
+        targetRevision: "deploy/__ENV__-{{.name}}"
+`;
+
 describe("renderNodeAppset", () => {
   it("substitutes __ENV__/__NODE__ globally and leaves {{.name}} intact", () => {
     expect(renderNodeAppset(TEMPLATE, "foo", "candidate-a")).toBe(
@@ -75,6 +89,45 @@ spec:
   template:
     metadata:
       name: "candidate-a-{{.name}}"
+`
+    );
+  });
+
+  it("defaults __REPO_URL__ to the canonical cogni-dao fleet host (byte-identical committed AppSet)", () => {
+    expect(renderNodeAppset(REPO_URL_TEMPLATE, "foo", "candidate-a")).toBe(
+      `spec:
+  generators:
+    - git:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        revision: deploy/candidate-a-foo
+  template:
+    spec:
+      source:
+        repoURL: https://github.com/cogni-dao/cogni.git
+        targetRevision: "deploy/candidate-a-{{.name}}"
+`
+    );
+  });
+
+  it("substitutes __REPO_URL__ with an isolated fleet's hosting repo on every occurrence (bug.5235)", () => {
+    expect(
+      renderNodeAppset(
+        REPO_URL_TEMPLATE,
+        "spawny-boi",
+        "candidate-a",
+        "https://github.com/cogni-test-org/cogni.git"
+      )
+    ).toBe(
+      `spec:
+  generators:
+    - git:
+        repoURL: https://github.com/cogni-test-org/cogni.git
+        revision: deploy/candidate-a-spawny-boi
+  template:
+    spec:
+      source:
+        repoURL: https://github.com/cogni-test-org/cogni.git
+        targetRevision: "deploy/candidate-a-{{.name}}"
 `
     );
   });

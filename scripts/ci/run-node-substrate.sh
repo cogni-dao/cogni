@@ -112,13 +112,38 @@ esac
 
 echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (${DEPLOYMENT_PROVIDER}): materialize → reconcile → provider assert"
 
+# Snapshot the catalog-derived lanes before invoking children. Both children use SSH helpers
+# that intentionally buffer stdin for retry; feeding this loop through stdin let the first lane
+# consume every remaining lane (task.5132).
+custodied_lanes=()
+while IFS= read -r lane; do
+  [ -n "$lane" ] && custodied_lanes+=("$lane")
+done < <(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
+echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} custodies lanes of ${TARGET_NODE}: [${custodied_lanes[*]}]"
+
+# ── SIBLING_NEVER_FAILS_THE_TARGET (bug.5278/bug.5269) ──────────────────────────
+# Production custodies candidate-a/preview substrate for akash nodes (bug.5206/
+# task.5132), so sibling lanes MUST keep being reconciled from this run — but a
+# sibling-lane failure degrades THAT lane loudly instead of aborting a promote
+# whose target lane already completed. The TARGET lane stays fatal. Every
+# degradation is a ::warning:: at the point of failure, a greppable
+# [substrate-degraded] line, and a step-summary roll-up — never a silent pass.
+# Freeze note: this is promotion semantics in .sh — a NARROW exception logged on
+# bug.5281; the durable home is the typed deploy plane (task.5097/task.5098).
+degraded_lanes=()
+lane_degraded() {
+  # lane_degraded <lane> <phase> <rc>
+  degraded_lanes+=("$1 ($2, rc=$3)")
+  echo "::warning::run-node-substrate: SIBLING lane ${1}/${TARGET_NODE} ${2} failed (rc=${3}) — lane left DEGRADED; the ${DEPLOY_ENVIRONMENT} target lane is unaffected (bug.5278)" >&2
+  echo "[substrate-degraded] lane=${1} node=${TARGET_NODE} phase=${2} rc=${3} run=${GITHUB_RUN_ID:-local}"
+}
+
 if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   bash "$MATERIALIZE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
   # Then every OTHER lane of this node that THIS cluster reconciles. Catalog-derived, so a
   # lane added by a catalog edit is materialized with no code change, and a node with no
   # such lane (every k3s row, every production-only node) enumerates nothing.
-  while read -r lane; do
-    [ -n "$lane" ] || continue
+  for lane in "${custodied_lanes[@]}"; do
     # DOMAIN builds the derive-env FQDN keys (APP_BASE_URL, NEXTAUTH_URL). It arrives scoped
     # to THIS env, so materializing another lane with it would silently stamp
     # `poly.cognidao.org` into the candidate-a bank — a wrong value written confidently,
@@ -131,15 +156,16 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
       candidate-a) lane_domain="test.$DOMAIN_ROOT" ;;
     esac
     [ -n "$lane_domain" ] || {
-      echo "::error::run-node-substrate: no public domain mapping for lane '$lane' — refusing to materialize its bank with ${DEPLOY_ENVIRONMENT}'s DOMAIN, which would stamp wrong FQDNs (bug.5206)" >&2
-      exit 1
+      # An unmappable SIBLING lane must not stamp wrong FQDNs (bug.5206) — but it
+      # also must not abort the target's promote: degrade the lane and move on.
+      lane_degraded "$lane" "domain-mapping (refusing ${DEPLOY_ENVIRONMENT}'s DOMAIN, bug.5206)" 1
+      continue
     }
     echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} reconciles ${lane}/${TARGET_NODE} — materializing that lane's secrets into THIS vault (bug.5206), domain ${lane_domain}"
     SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" DOMAIN="$lane_domain" \
-      bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE"
-  done <<EOF
-$(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
-EOF
+      bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE" \
+      || lane_degraded "$lane" materialize $?
+  done
 else
   # A FOREIGN-CUSTODIED LANE HAS NO SUBSTRATE ON ITS OWN VM, so its own flight reconciles
   # NOTHING here (bug.5206). Everything reconcile would provision — the vault bank, the
@@ -173,8 +199,7 @@ DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
 # The lane names the database (`cogni_<node>_<lane>`, bug.5207) while the identity this runs
 # under stays the cluster's. Empty for every row today, so nothing new runs.
 if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
-  while read -r lane; do
-    [ -n "$lane" ] || continue
+  for lane in "${custodied_lanes[@]}"; do
     lane_domain=""
     case "$lane" in
       production)  lane_domain="$DOMAIN_ROOT" ;;
@@ -182,19 +207,34 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
       candidate-a) lane_domain="test.$DOMAIN_ROOT" ;;
     esac
     [ -n "$lane_domain" ] || {
-      echo "::error::run-node-substrate: no public domain mapping for lane '$lane' (bug.5206)" >&2
-      exit 1
+      lane_degraded "$lane" "domain-mapping (bug.5206)" 1
+      continue
     }
     echo "[run-node-substrate] reconciling ${lane}/${TARGET_NODE}'s substrate on THIS cluster (task.5132)"
     DEPLOYMENT_PROVIDER=akash DOMAIN="$lane_domain" \
-      bash "$RECONCILE_BIN" "$lane" "$TARGET_NODE"
-  done <<EOF
-$(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
-EOF
+      bash "$RECONCILE_BIN" "$lane" "$TARGET_NODE" \
+      || lane_degraded "$lane" reconcile $?
+  done
 fi
 if [ "$DEPLOYMENT_PROVIDER" = "akash" ] && [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   TARGET="$TARGET_NODE" DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
     bash "$ASSERT_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+fi
+
+# Degraded-lane roll-up: loud (::warning:: + step summary), never fatal. A lane
+# listed here did NOT converge and will rot until its next successful reconcile —
+# the [substrate-degraded] lines above are the greppable durable record.
+if [ "${#degraded_lanes[@]}" -gt 0 ]; then
+  echo "::warning::run-node-substrate: ${#degraded_lanes[@]} custodied sibling-lane operation(s) DEGRADED for ${TARGET_NODE}: ${degraded_lanes[*]} (bug.5278)" >&2
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo "## ⚠️ Degraded custodied sibling lanes — ${TARGET_NODE}"
+      echo ""
+      echo "The \`${DEPLOY_ENVIRONMENT}\` target lane completed. These custodied sibling-lane substrate operations failed and were left DEGRADED (siblings never fail the target, bug.5278; custody rationale bug.5206/task.5132). Each lane stays degraded until a later run reconciles it:"
+      echo ""
+      for d in "${degraded_lanes[@]}"; do echo "- ${d}"; done
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
 fi
 
 echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}: provider preflight ready"

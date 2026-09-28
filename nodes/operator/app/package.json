@@ -7,6 +7,8 @@
     "build": "next build",
     "build:akash-tx-actuator": "tsup --config tsup.akash-tx-actuator.config.ts",
     "smoke:akash-tx-actuator-artifact": "node scripts/smoke-akash-tx-actuator-artifact.mjs",
+    "build:lease-log-pump": "tsup --config tsup.lease-log-pump.config.ts",
+    "smoke:lease-log-pump-artifact": "node scripts/smoke-lease-log-pump-artifact.mjs",
     "start": "next start -p 3000 -H 0.0.0.0",
     "lint": "biome check . && eslint src/app src/components src/features src/styles --report-unused-disable-directives --max-warnings=0 --no-error-on-unmatched-pattern",
     "typecheck": "tsc -p tsconfig.app.json --noEmit",

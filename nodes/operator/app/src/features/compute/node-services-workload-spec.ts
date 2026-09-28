@@ -6,7 +6,9 @@
  * Purpose: Assemble an atomically resolved node artifact bundle into one provider-neutral workload.
  * Scope: Pure declaration+digest mapping; no registry, secret, provider, or lifecycle I/O.
  * Invariants: DIGEST_PINNED, ONE_PUBLIC_SERVICE, PRIVATE_IS_NON_GLOBAL, BIND_ALL_INTERFACES, NO_RAW_ENV_INPUT,
- *   DECLARED_NOT_DEFAULTED — off-cluster compute refuses the legacy no-secrets fallback and says what to add.
+ *   DECLARED_NOT_DEFAULTED — off-cluster compute refuses a node with no `deployment:` block and says what to add.
+ *   PROFILE_SUPPLIES_ITS_SECRET_REFS — the `cogni-node-app-v1` profile's required keys are unioned into the
+ *   workload at build time (`resolveRuntimeProfileSecretRefs`), so a node never re-lists them (bug.5175).
  * Side-effects: none
  * Links: story.5016, task.5065, task.5079, @cogni/repo-spec artifact bundle
  * @internal
@@ -15,10 +17,10 @@
 import type { ProvisionServiceSpec, ProvisionSpec } from "@cogni/ai-tools";
 import {
   hasDeclaredNodeDeployment,
-  missingRuntimeProfileSecretKeys,
   type RepoSpec,
   type ResolvedNodeArtifactBundle,
   renderNodeDeploymentYaml,
+  resolveRuntimeProfileSecretRefs,
 } from "@cogni/repo-spec";
 
 export interface NodeServicesWorkloadInput {
@@ -58,11 +60,12 @@ export { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
 /**
  * Gate 1 — the earliest operator-owned read of a node's own repo-spec.
  *
- * A node with no `deployment:` block silently inherits the legacy default, whose `secret_refs`
- * are empty by design (the k3s lane injects env through its ExternalSecret overlay instead).
- * That default cannot boot an off-cluster workload, and accepting it here converts a
- * one-line repo-spec omission into a terminal reconcile failure hours later. So: refuse now,
- * and hand the author the exact block to paste. Capability-scoped — no node is named.
+ * A node with no `deployment:` block has no declared app-tier topology — services, artifact build
+ * instructions, ports, and resources — that off-cluster placement needs; it would silently ride
+ * the k3s legacy default (whose env arrives via an ExternalSecret overlay, absent off-cluster).
+ * Accepting it here converts a one-line repo-spec omission into a terminal reconcile failure hours
+ * later. So: refuse now, and hand the author the exact block to paste. The profile's standard
+ * secret_refs are NOT the author's job — the operator supplies them at build time. Capability-scoped.
  */
 export function assertDeclaredNodeDeployment(input: {
   readonly spec: RepoSpec;
@@ -74,29 +77,10 @@ export function assertDeclaredNodeDeployment(input: {
   throw new Error(
     [
       `[node-workload] ${input.slug}: off-cluster compute requires a \`deployment:\` block in the node's own .cogni/repo-spec.yaml${at}, and none is declared.`,
-      "Without it the node falls back to a legacy default that declares NO secret_refs, so the workload would be created with no runtime environment and fail terminally at reconcile.",
+      "Without it the node falls back to a legacy default with no declared app-tier topology, so the workload would be created with no runtime shape and fail terminally at reconcile.",
       "Add this block to .cogni/repo-spec.yaml (this is exactly what the node scaffold emits for a new node) and re-run:",
       "",
       renderNodeDeploymentYaml().trimEnd(),
-    ].join("\n")
-  );
-}
-
-/** Gate 2 — fail before desired-state mutation when the declared profile omits a requirement. */
-export function assertRuntimeProfileSecretRefs(input: {
-  readonly serviceName?: string | undefined;
-  readonly runtimeProfile?: "cogni-node-app-v1" | undefined;
-  readonly secretRefs: readonly { readonly key: string }[];
-}): void {
-  const missing = missingRuntimeProfileSecretKeys(input);
-  if (missing.length === 0) return;
-  const path = `deployment.services[name=${input.serviceName ?? "app"}].secret_refs`;
-  throw new Error(
-    [
-      `[node-workload] cogni-node-app-v1 is missing secret_refs: ${missing.join(", ")}`,
-      `Declare them in the node's .cogni/repo-spec.yaml under ${path}:`,
-      "",
-      ...missing.map((key) => `  - key: ${key}`),
     ].join("\n")
   );
 }
@@ -108,8 +92,10 @@ export function buildNodeServicesWorkloadSpec(
   return {
     name: input.slug,
     services: input.bundle.services.map(({ service, image }) => {
-      assertRuntimeProfileSecretRefs({
-        serviceName: service.name,
+      // PROFILE_SUPPLIES_ITS_SECRET_REFS: union the profile's required keys with any extras the
+      // node declared, so a node need not re-list them and a spec authored before a key was added
+      // to the profile still flights (bug.5175).
+      const secretRefs = resolveRuntimeProfileSecretRefs({
         ...(service.runtimeProfile
           ? { runtimeProfile: service.runtimeProfile }
           : {}),
@@ -134,7 +120,7 @@ export function buildNodeServicesWorkloadSpec(
       return {
         name: service.name,
         image,
-        secretRefs: service.secretRefs,
+        secretRefs,
         ...(service.runtimeProfile
           ? { runtimeProfile: service.runtimeProfile }
           : {}),

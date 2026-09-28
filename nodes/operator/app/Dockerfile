@@ -63,6 +63,11 @@ RUN --mount=type=cache,id=next-cache,target=/app/nodes/operator/app/.next/cache,
 RUN pnpm --filter operator build:akash-tx-actuator \
     && pnpm --filter operator smoke:akash-tx-actuator-artifact
 
+# bug.5240 — the lease-log pump. Same pattern: a dedicated keyless process artifact riding
+# in the shared operator image, started by its own Deployment (infra/k8s/base/lease-log-pump).
+RUN pnpm --filter operator build:lease-log-pump \
+    && pnpm --filter operator smoke:lease-log-pump-artifact
+
 # Runner – lean production image
 FROM node:22-alpine AS runner
 WORKDIR /app
@@ -85,6 +90,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/standalo
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/static ./nodes/operator/app/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/public ./nodes/operator/app/public
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-akash-tx-actuator/akash-tx-actuator.mjs ./nodes/operator/app/akash-tx-actuator.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-lease-log-pump/lease-log-pump.mjs ./nodes/operator/app/lease-log-pump.mjs
 
 # Repo-spec: node-specific DAO config (node_id, chain, governance).
 # Each node MUST copy its own .cogni — NOT root (which is operator's identity).
@@ -111,6 +117,23 @@ COPY --from=builder --chown=nextjs:nodejs /app/config/mcp.servers.json ./nodes/o
 # No default: if CI forgets to pass the arg, APP_BUILD_SHA is empty and the pod visibly reports it.
 ARG BUILD_SHA
 ENV APP_BUILD_SHA=$BUILD_SHA
+
+# bug.5183: SHA-addressed static bundle marker. `/version` is a force-dynamic
+# server route reading APP_BUILD_SHA — it can report a SHA that a DIFFERENT
+# container/image (rollout split-brain, two concurrent instances) is actually
+# serving the client bundle from, so /version.buildSha alone is not proof the
+# deployed STATIC layer matches. This marker is a real file baked into the
+# served public/ tree of THIS image at a SHA-unique path, so an outside-cluster
+# gate (scripts/ci/verify-buildsha.sh, VERIFY_BUNDLE_MARKER=1) can fetch
+# /__cogni-build/<sha>.txt and prove the bytes the origin serves came from the
+# flighted image. Path is unique per SHA → immutable/edge caches can never
+# cross-build alias it (the second, independent defect in bug.5183). Written as
+# nextjs so the runtime user can read it; skipped when BUILD_SHA is empty.
+RUN if [ -n "$BUILD_SHA" ]; then \
+      mkdir -p ./nodes/operator/app/public/__cogni-build && \
+      printf '%s' "$BUILD_SHA" > "./nodes/operator/app/public/__cogni-build/${BUILD_SHA}.txt" && \
+      chown -R nextjs:nodejs ./nodes/operator/app/public/__cogni-build; \
+    fi
 
 USER nextjs
 
