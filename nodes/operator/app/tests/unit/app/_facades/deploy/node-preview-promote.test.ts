@@ -5,7 +5,7 @@
  * Module: `@tests/unit/app/_facades/deploy/node-preview-promote`
  * Purpose: Unit tests for the node-merge → preview tie facade.
  * Scope: Mocked deploy plane + service DB only; no real GitHub/DB I/O.
- * Invariants: MERGED_ONLY, SPAWNED_NODES_ONLY, PIN_IS_PR_HEAD_SHA.
+ * Invariants: MERGED_ONLY, SPAWNED_NODES_ONLY, PIN_IS_MERGE_COMMIT_SHA.
  * Side-effects: none
  * Links: src/app/_facades/deploy/node-preview-promote.server.ts
  * @internal
@@ -64,6 +64,7 @@ function mergedPayload(
       number: 7,
       merged: true,
       head: { sha: "a".repeat(40) },
+      merge_commit_sha: "c".repeat(40),
     },
     ...over,
   };
@@ -79,14 +80,14 @@ beforeEach(() => {
 });
 
 describe("dispatchNodePreviewPromote", () => {
-  it("pins the PR head SHA when a registered node's PR merges (PIN_IS_PR_HEAD_SHA)", async () => {
+  it("pins the merge commit SHA when a registered node's PR merges (PIN_IS_MERGE_COMMIT_SHA)", async () => {
     nodeRows = [
       { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
     ];
     promoteNode.mockResolvedValue({
       status: "dispatched",
       env: "preview",
-      sourceSha: "a".repeat(40),
+      sourceSha: "c".repeat(40),
       sourceAddressing: "remote_source",
       workflowUrl:
         "https://github.com/Cogni-DAO/node-template/actions/workflows/promote-and-deploy.yml",
@@ -100,7 +101,7 @@ describe("dispatchNodePreviewPromote", () => {
       parentOwner: "Cogni-DAO",
       parentRepo: "node-template",
       slug: "habitat",
-      sourceSha: "a".repeat(40),
+      sourceSha: "c".repeat(40),
     });
   });
 
@@ -114,6 +115,7 @@ describe("dispatchNodePreviewPromote", () => {
           number: 7,
           merged: false,
           head: { sha: "a".repeat(40) },
+          merge_commit_sha: "c".repeat(40),
         },
       }),
       ENV,
@@ -130,6 +132,29 @@ describe("dispatchNodePreviewPromote", () => {
     dispatchNodePreviewPromote(mergedPayload({ action: "opened" }), ENV, log);
     await flush();
     expect(promoteNode).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a merged webhook omits merge_commit_sha", async () => {
+    nodeRows = [
+      { id: "node-1", slug: "habitat", deployEnvs: ["preview", "production"] },
+    ];
+    dispatchNodePreviewPromote(
+      mergedPayload({
+        pull_request: {
+          number: 7,
+          merged: true,
+          head: { sha: "a".repeat(40) },
+        },
+      }),
+      ENV,
+      log
+    );
+    await flush();
+    expect(promoteNode).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: expect.any(String) }),
+      expect.stringContaining("missing merge_commit_sha")
+    );
   });
 
   it("does NOT dispatch for a node that has no preview env (bug.5203)", async () => {
@@ -200,6 +225,7 @@ describe("dispatchNodePreviewPromote", () => {
           number: 9,
           merged: true,
           head: { sha: "b".repeat(40) },
+          merge_commit_sha: "d".repeat(40),
         },
       }),
       ENV,
@@ -211,7 +237,7 @@ describe("dispatchNodePreviewPromote", () => {
       parentOwner: "Cogni-DAO",
       parentRepo: "node-template",
       slug: "node-template",
-      sourceSha: "b".repeat(40),
+      sourceSha: "d".repeat(40),
     });
   });
 

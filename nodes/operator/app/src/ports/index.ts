@@ -162,6 +162,7 @@ export type {
   NodePromoteResult,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
+  PromoteNodeFromPreviewInput,
   PromoteNodeInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,

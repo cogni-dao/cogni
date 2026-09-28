@@ -60,6 +60,7 @@ import type {
   NodePromoteResult,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
+  PromoteNodeFromPreviewInput,
   PromoteNodeInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
@@ -1284,7 +1285,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * SOURCE_ADDRESSED_LIKE_CANDIDATE_FLIGHT: for a REMOTE-SOURCE (fork) node the node image sha
    * rides the dispatch as `node_source_sha` — the same source-addressing candidate-flight.yml
    * already uses. promote-and-deploy's "Resolve digest for this node" remote-source branch PREFERS
-   * that input over the `yq '.source_sha' infra/catalog/<slug>.yaml` read, so the node head sha
+   * that input over the `yq '.source_sha' infra/catalog/<slug>.yaml` read, so the canonical node sha
    * resolves the image directly. The pin is recorded where deploy state belongs —
    * `.promote-state/source-sha-by-app.json` on `deploy/<env>` (update-source-sha-map.sh) — never on
    * `main`. The operator App's main-write privilege is reserved for governance/code merges, not
@@ -1297,15 +1298,24 @@ export class GitHubRepoWriter implements DeployPlanePort {
    *     for promotion (the stale-pin vestige bug.5043 retired).
    *   - IN-REPO (no `source_repo`, e.g. operator/poly): pass `source_sha = sourceSha` (the operator
    *     checkout ref); in-repo nodes are not source-addressed by node sha.
-   * A missing/mismatched row is a real misconfiguration (404/409). Image existence is NOT gated
-   * in-app: the GitHub Packages API false-negatives on private node images (git-app-expert), so the
-   * workflow's own "image not found" hard-fail is the loud backstop.
+   * A missing/mismatched row is a real misconfiguration (404/409). Before dispatch, the target must
+   * be on source main and must move forward from the environment's current pin unless an authorized
+   * caller explicitly allows rollback. Image existence is NOT gated in-app: the GitHub Packages API
+   * false-negatives on private node images (git-app-expert), so the workflow's own "image not found"
+   * hard-fail is the loud backstop.
    *
    * (This replaces the stalling pin-PR — and its successor direct-main-commit — that polluted
    * `main` with a deploy-state firehose: PRs #1699/#1700/#1711, task.5022.)
    */
   async promoteNode(input: PromoteNodeInput): Promise<NodePromoteResult> {
-    const { env, parentOwner, parentRepo, slug, sourceSha } = input;
+    const {
+      env,
+      parentOwner,
+      parentRepo,
+      slug,
+      sourceSha,
+      allowRollback = false,
+    } = input;
     if (!SOURCE_SHA_PATTERN.test(sourceSha)) {
       throw deployPlaneError(
         "invalid_source_sha",
@@ -1314,30 +1324,21 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
-    // Confirm the catalog row exists + identifies this slug, and read ONLY `source_repo`'s presence
-    // (the remote-source vs in-repo discriminator). We never read `source_sha` for resolution.
-    const catalogText = await this.fetchFileText({
-      owner: parentOwner,
-      repo: parentRepo,
-      path: `infra/catalog/${slug}.yaml`,
-      ref: "main",
+    const source = await this.resolvePromotionSource({
+      parentOwner,
+      parentRepo,
+      slug,
     });
-    if (!catalogText) {
-      throw deployPlaneError(
-        "catalog_missing",
-        `node catalog entry not found for ${slug}`,
-        404
-      );
-    }
-    const row = PromoteDiscriminatorSchema.safeParse(parseYaml(catalogText));
-    if (!row.success || row.data.name !== slug) {
-      throw deployPlaneError(
-        "invalid_catalog",
-        `invalid node catalog entry for ${slug}`,
-        409
-      );
-    }
-    const isRemoteSource = row.data.source_repo !== undefined;
+    await this.assertForwardPromotion({
+      parentOwner,
+      parentRepo,
+      slug,
+      env,
+      sourceOwner: source.owner,
+      sourceRepo: source.repo,
+      sourceSha,
+      allowRollback,
+    });
 
     const dispatch = await this.dispatchNodePromote({
       owner: parentOwner,
@@ -1346,16 +1347,197 @@ export class GitHubRepoWriter implements DeployPlanePort {
       slug,
       // REMOTE-SOURCE: source-address the node image (no source_sha — operator checkout ref stays
       // main). IN-REPO: source_sha is the operator checkout ref.
-      ...(isRemoteSource ? { nodeSourceSha: sourceSha } : { sourceSha }),
+      ...(source.isRemoteSource ? { nodeSourceSha: sourceSha } : { sourceSha }),
     });
 
     return {
       status: "dispatched",
       env,
       sourceSha,
-      sourceAddressing: isRemoteSource ? "remote_source" : "in_repo",
+      sourceAddressing: source.isRemoteSource ? "remote_source" : "in_repo",
       workflowUrl: dispatch.workflowUrl,
     };
+  }
+
+  async promoteNodeFromPreview(
+    input: PromoteNodeFromPreviewInput
+  ): Promise<CandidateFlightDispatchResult> {
+    const { parentOwner, parentRepo, slug, allowRollback = false } = input;
+    const previewPin = await this.fetchDeployPin({
+      parentOwner,
+      parentRepo,
+      env: "preview",
+      slug,
+    });
+    if (previewPin.kind !== "ok") {
+      throw deployPlaneError(
+        "preview_pin_missing",
+        `preview deploy pin is missing or invalid for ${slug}`,
+        409
+      );
+    }
+    const source = await this.resolvePromotionSource({
+      parentOwner,
+      parentRepo,
+      slug,
+    });
+    await this.assertForwardPromotion({
+      parentOwner,
+      parentRepo,
+      slug,
+      env: "production",
+      sourceOwner: source.owner,
+      sourceRepo: source.repo,
+      sourceSha: previewPin.sha,
+      allowRollback,
+    });
+    return this.dispatchNodePromote({
+      owner: parentOwner,
+      repo: parentRepo,
+      env: "production",
+      slug,
+    });
+  }
+
+  private async resolvePromotionSource(input: {
+    parentOwner: string;
+    parentRepo: string;
+    slug: string;
+  }): Promise<{
+    owner: string;
+    repo: string;
+    isRemoteSource: boolean;
+  }> {
+    const catalogText = await this.fetchFileText({
+      owner: input.parentOwner,
+      repo: input.parentRepo,
+      path: `infra/catalog/${input.slug}.yaml`,
+      ref: "main",
+    });
+    if (!catalogText) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `node catalog entry not found for ${input.slug}`,
+        404
+      );
+    }
+    const row = PromoteDiscriminatorSchema.safeParse(parseYaml(catalogText));
+    if (!row.success || row.data.name !== input.slug) {
+      throw deployPlaneError(
+        "invalid_catalog",
+        `invalid node catalog entry for ${input.slug}`,
+        409
+      );
+    }
+    if (row.data.source_repo === undefined) {
+      return {
+        owner: input.parentOwner,
+        repo: input.parentRepo,
+        isRemoteSource: false,
+      };
+    }
+    const source = parseGithubRepoUrl(row.data.source_repo);
+    return { ...source, isRemoteSource: true };
+  }
+
+  private async compareCommits(input: {
+    owner: string;
+    repo: string;
+    base: string;
+    head: string;
+  }): Promise<"ahead" | "behind" | "diverged" | "identical" | "missing"> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    let data: unknown;
+    try {
+      const response = await octokit.request(
+        "GET /repos/{owner}/{repo}/compare/{basehead}",
+        {
+          owner: input.owner,
+          repo: input.repo,
+          basehead: `${input.base}...${input.head}`,
+        }
+      );
+      data = response.data;
+    } catch (error) {
+      if ((error as { status?: unknown }).status === 404) return "missing";
+      throw error;
+    }
+    const status = (data as { status?: unknown }).status;
+    if (
+      status === "ahead" ||
+      status === "behind" ||
+      status === "diverged" ||
+      status === "identical"
+    ) {
+      return status;
+    }
+    throw deployPlaneError(
+      "compare_unavailable",
+      `GitHub returned no ancestry status for ${input.owner}/${input.repo}`,
+      502
+    );
+  }
+
+  private async assertForwardPromotion(input: {
+    parentOwner: string;
+    parentRepo: string;
+    slug: string;
+    env: "preview" | "production";
+    sourceOwner: string;
+    sourceRepo: string;
+    sourceSha: string;
+    allowRollback: boolean;
+  }): Promise<void> {
+    const targetToMain = await this.compareCommits({
+      owner: input.sourceOwner,
+      repo: input.sourceRepo,
+      base: input.sourceSha,
+      head: "main",
+    });
+    if (targetToMain !== "ahead" && targetToMain !== "identical") {
+      throw deployPlaneError(
+        "non_forward_promotion",
+        `refusing ${input.slug} ${input.env} promotion: target ${input.sourceSha} is not on main`,
+        409
+      );
+    }
+
+    const currentPin = await this.fetchDeployPin({
+      parentOwner: input.parentOwner,
+      parentRepo: input.parentRepo,
+      env: input.env,
+      slug: input.slug,
+    });
+    if (
+      input.allowRollback ||
+      currentPin.kind !== "ok" ||
+      currentPin.sha === input.sourceSha
+    ) {
+      return;
+    }
+
+    const currentToMain = await this.compareCommits({
+      owner: input.sourceOwner,
+      repo: input.sourceRepo,
+      base: currentPin.sha,
+      head: "main",
+    });
+    // A previously poisoned off-main pin is allowed to converge exactly once to any on-main target.
+    if (currentToMain !== "ahead" && currentToMain !== "identical") return;
+
+    const currentToTarget = await this.compareCommits({
+      owner: input.sourceOwner,
+      repo: input.sourceRepo,
+      base: currentPin.sha,
+      head: input.sourceSha,
+    });
+    if (currentToTarget !== "ahead" && currentToTarget !== "identical") {
+      throw deployPlaneError(
+        "non_forward_promotion",
+        `refusing ${input.slug} ${input.env} promotion: target ${input.sourceSha} does not descend from current pin ${currentPin.sha}`,
+        409
+      );
+    }
   }
 
   /**

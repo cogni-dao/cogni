@@ -5,7 +5,7 @@
  * Module: `@app/_facades/deploy/node-preview-promote.server`
  * Purpose: Node-merge → preview tie. On a spawned node-repo PR merge, promote the node to
  *   preview the same way production promotes — the operator dispatches promote-and-deploy at
- *   env=preview SOURCE-ADDRESSED by the merged node head sha (`node_source_sha`), writing ZERO
+ *   env=preview SOURCE-ADDRESSED by the merged node commit sha (`node_source_sha`), writing ZERO
  *   commits to main. Gives node spawns the same merge→preview model in-repo nodes get, out of
  *   the box.
  * Scope: Webhook-triggered facade. Resolves the node, delegates the source-addressed dispatch
@@ -19,9 +19,9 @@
  *     monorepo catalog — task.5087 retired its external-repo carve-out) promotes preview
  *     through this hook.
  *   - MERGED_ONLY: fires on `pull_request` action=closed with `merged===true`.
- *   - PIN_IS_PR_HEAD_SHA: pins the PR head SHA — the build the node's PR CI published as
- *     `sha-<headSha>` (the SHA candidate-a already flights). The squash-merge commit on the
- *     node's main has no guaranteed image.
+ *   - PIN_IS_MERGE_COMMIT_SHA: pins the canonical merge commit on node main. Merge-queue CI builds
+ *     that commit before merge; a missing image fails loudly downstream instead of deploying an
+ *     off-main PR head that can silently roll preview and production backward.
  *   - V0_NO_RBAC: a node cleared auth to reach candidate-a; preview-on-merge rides that grant.
  *     A `node.promote` gate is vNext if a node can earn preview without candidate-a.
  * Side-effects: IO (DB read, GitHub REST/GraphQL via DeployPlanePort). Fire-and-forget.
@@ -42,7 +42,7 @@ interface MergedPrContext {
   readonly owner: string;
   readonly repo: string;
   readonly prNumber: number;
-  readonly headSha: string;
+  readonly mergeCommitSha: string;
 }
 
 /** Narrow a GitHub `pull_request` webhook payload to a merged-PR context, or null. */
@@ -54,20 +54,19 @@ function extractMergedPr(
   const repo = payload.repository as Record<string, unknown> | undefined;
   if (!pr || !repo || pr.merged !== true) return null;
 
-  const head = pr.head as Record<string, unknown> | undefined;
   const repoOwner = (repo.owner as Record<string, unknown> | undefined)?.login;
   const repoName = repo.name;
   const prNumber = pr.number;
-  const headSha = head?.sha;
+  const mergeCommitSha = pr.merge_commit_sha;
   if (
     typeof repoOwner !== "string" ||
     typeof repoName !== "string" ||
     typeof prNumber !== "number" ||
-    typeof headSha !== "string"
+    typeof mergeCommitSha !== "string"
   ) {
     return null;
   }
-  return { owner: repoOwner, repo: repoName, prNumber, headSha };
+  return { owner: repoOwner, repo: repoName, prNumber, mergeCommitSha };
 }
 
 /**
@@ -80,7 +79,20 @@ export function dispatchNodePreviewPromote(
   log: Logger
 ): void {
   const ctx = extractMergedPr(payload);
-  if (!ctx) return;
+  if (!ctx) {
+    const pr = payload.pull_request as Record<string, unknown> | undefined;
+    if (
+      payload.action === "closed" &&
+      pr?.merged === true &&
+      typeof pr.merge_commit_sha !== "string"
+    ) {
+      log.warn(
+        { event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE },
+        "node preview promote refused — merged webhook missing merge_commit_sha"
+      );
+    }
+    return;
+  }
 
   if (!env.GH_REVIEW_APP_ID || !env.GH_REVIEW_APP_PRIVATE_KEY_BASE64) {
     log.debug(
@@ -149,7 +161,7 @@ async function promoteNodeToPreview(
           slug: node.slug,
           repo: `${ctx.owner}/${ctx.repo}`,
           prNumber: ctx.prNumber,
-          sourceSha8: ctx.headSha.slice(0, 8),
+          sourceSha8: ctx.mergeCommitSha.slice(0, 8),
           status: "skipped_no_preview_env",
           deployEnvs,
         },
@@ -166,7 +178,7 @@ async function promoteNodeToPreview(
       parentOwner,
       parentRepo,
       slug: node.slug,
-      sourceSha: ctx.headSha,
+      sourceSha: ctx.mergeCommitSha,
     });
 
     // Operator-local event (not in @cogni/node-shared's EventName) → log via the plain
@@ -179,7 +191,7 @@ async function promoteNodeToPreview(
         slug: node.slug,
         repo: `${ctx.owner}/${ctx.repo}`,
         prNumber: ctx.prNumber,
-        sourceSha8: ctx.headSha.slice(0, 8),
+        sourceSha8: ctx.mergeCommitSha.slice(0, 8),
         status: result.status,
         workflowUrl: result.workflowUrl,
       },
@@ -191,7 +203,7 @@ async function promoteNodeToPreview(
         event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
         repo: `${ctx.owner}/${ctx.repo}`,
         prNumber: ctx.prNumber,
-        sourceSha8: ctx.headSha.slice(0, 8),
+        sourceSha8: ctx.mergeCommitSha.slice(0, 8),
         error: String(error),
       },
       "node preview promote failed"
