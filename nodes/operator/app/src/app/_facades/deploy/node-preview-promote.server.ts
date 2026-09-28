@@ -12,19 +12,22 @@
  *   to the operator deploy plane (ONE_PROMOTION_PRIMITIVE; task.5022 — no main write; the pin
  *   lands on deploy/preview).
  * Invariants:
- *   - SPAWNED_NODES_ONLY: acts only when the merged-PR repo resolves to a registered node
+ *   - SPAWNED_NODES_ONLY: acts only when the pushed repo resolves to a registered node
  *     row by slug. The parent monorepo and in-repo nodes are unregistered here, so their
  *     merges never double-process — flight-preview.yml owns them. Every registered node
  *     (including node-template, a seeded registry row since story.5009 that deploys via the
  *     monorepo catalog — task.5087 retired its external-repo carve-out) promotes preview
  *     through this hook.
- *   - MERGED_ONLY: fires on `pull_request` action=closed with `merged===true`.
- *   - PIN_IS_MERGE_COMMIT_SHA: pins the canonical merge commit on node main. Merge-queue CI builds
- *     that commit before merge; a missing image fails loudly downstream instead of deploying an
+ *   - MAIN_ADVANCE_ONLY: the webhook route invokes this on `push`; only a push to the repository's
+ *     declared default branch advances preview. One canonical signal avoids duplicate dispatches
+ *     while covering direct and merge-queue merges (bug.5010 / Poly #65).
+ *   - PIN_IS_MAIN_SHA: pins the canonical commit observed on node main. Merge-queue CI builds that
+ *     commit before merge; a missing image fails loudly downstream instead of deploying an
  *     off-main PR head that can silently roll preview and production backward.
  *   - V0_NO_RBAC: a node cleared auth to reach candidate-a; preview-on-merge rides that grant.
  *     A `node.promote` gate is vNext if a node can earn preview without candidate-a.
- * Side-effects: IO (DB read, GitHub REST/GraphQL via DeployPlanePort). Fire-and-forget.
+ * Side-effects: IO (DB read, GitHub REST/GraphQL via DeployPlanePort). The caller awaits the
+ * observed workflow run identity before acknowledging the webhook.
  * Links: docs/spec/ci-cd.md, docs/spec/node-ci-cd-contract.md,
  *   src/ports/deploy-plane.port.ts, .github/workflows/promote-and-deploy.yml
  * @public
@@ -38,80 +41,59 @@ import { nodes } from "@/shared/db/nodes";
 import type { ServerEnv } from "@/shared/env";
 import { EVENT_NAMES } from "@/shared/observability";
 
-interface MergedPrContext {
+interface NodeMainAdvanceContext {
   readonly owner: string;
   readonly repo: string;
-  readonly prNumber: number;
-  readonly mergeCommitSha: string;
+  readonly sourceSha: string;
+  readonly trigger: "push";
 }
 
-/** Narrow a GitHub `pull_request` webhook payload to a merged-PR context, or null. */
-function extractMergedPr(
+/** Narrow a GitHub `push` payload to a default-branch advance, or null. */
+function extractMainPush(
   payload: Record<string, unknown>
-): MergedPrContext | null {
-  if (payload.action !== "closed") return null;
-  const pr = payload.pull_request as Record<string, unknown> | undefined;
+): NodeMainAdvanceContext | null {
   const repo = payload.repository as Record<string, unknown> | undefined;
-  if (!pr || !repo || pr.merged !== true) return null;
-
+  if (!repo) return null;
   const repoOwner = (repo.owner as Record<string, unknown> | undefined)?.login;
   const repoName = repo.name;
-  const prNumber = pr.number;
-  const mergeCommitSha = pr.merge_commit_sha;
+  const defaultBranch = repo.default_branch;
+  const ref = payload.ref;
+  const after = payload.after;
   if (
     typeof repoOwner !== "string" ||
     typeof repoName !== "string" ||
-    typeof prNumber !== "number" ||
-    typeof mergeCommitSha !== "string"
+    typeof defaultBranch !== "string" ||
+    ref !== `refs/heads/${defaultBranch}` ||
+    typeof after !== "string" ||
+    !/^[0-9a-f]{40}$/i.test(after) ||
+    /^0{40}$/.test(after)
   ) {
     return null;
   }
-  return { owner: repoOwner, repo: repoName, prNumber, mergeCommitSha };
+  return {
+    owner: repoOwner,
+    repo: repoName,
+    sourceSha: after,
+    trigger: "push",
+  };
 }
 
 /**
- * Dispatch a node-merge preview promotion from a GitHub `pull_request` webhook payload.
- * Fire-and-forget: errors are logged, never thrown (the webhook 200s regardless).
+ * Dispatch a node preview promotion from a GitHub default-branch advance.
+ * Failures are logged and rethrown so the webhook route cannot acknowledge an unobserved dispatch.
  */
-export function dispatchNodePreviewPromote(
+export async function dispatchNodePreviewPromote(
   payload: Record<string, unknown>,
   env: ServerEnv,
   log: Logger
-): void {
-  const ctx = extractMergedPr(payload);
-  if (!ctx) {
-    const pr = payload.pull_request as Record<string, unknown> | undefined;
-    if (
-      payload.action === "closed" &&
-      pr?.merged === true &&
-      typeof pr.merge_commit_sha !== "string"
-    ) {
-      log.warn(
-        { event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE },
-        "node preview promote refused — merged webhook missing merge_commit_sha"
-      );
-    }
-    return;
-  }
-
-  if (!env.GH_REVIEW_APP_ID || !env.GH_REVIEW_APP_PRIVATE_KEY_BASE64) {
-    log.debug(
-      "node preview promote skipped — GH_REVIEW_APP_ID/PRIVATE_KEY not configured"
-    );
-    return;
-  }
-  if (!env.NODE_SUBMODULE_PARENT_OWNER || !env.NODE_SUBMODULE_PARENT_REPO) {
-    log.debug(
-      "node preview promote skipped — NODE_SUBMODULE_PARENT_{OWNER,REPO} not configured"
-    );
-    return;
-  }
-
-  void promoteNodeToPreview(ctx, env, log);
+): Promise<void> {
+  const ctx = extractMainPush(payload);
+  if (!ctx) return;
+  await promoteNodeToPreview(ctx, env, log);
 }
 
 async function promoteNodeToPreview(
-  ctx: MergedPrContext,
+  ctx: NodeMainAdvanceContext,
   env: ServerEnv,
   log: Logger
 ): Promise<void> {
@@ -125,7 +107,7 @@ async function promoteNodeToPreview(
       })
       .from(nodes)
       // A wizard node's fork is named after its slug (`forkFromTemplate` → `name: slug`), and the
-      // seeded node-template row's repo name == its slug — so the merged-PR repo name == the node
+      // seeded node-template row's repo name == its slug — so the pushed repo name == the node
       // slug. `nodes.repoOwner/repoName` may be the PARENT deploy monorepo, NOT the node's own
       // source repo — so resolve by slug. Every registered node deploys via the monorepo catalog
       // (node-template's own-repo carve-out retired by task.5087), so any row that resolves here
@@ -135,7 +117,34 @@ async function promoteNodeToPreview(
     const node = rows[0];
     // SPAWNED_NODES_ONLY: an unregistered repo (parent monorepo, in-repo node) is handled
     // by flight-preview.yml directly — nothing to do here.
-    if (!node) return;
+    if (!node) {
+      log.info(
+        {
+          event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
+          repo: `${ctx.owner}/${ctx.repo}`,
+          sourceSha: ctx.sourceSha,
+          sourceSha8: ctx.sourceSha.slice(0, 8),
+          trigger: ctx.trigger,
+          status: "skipped_unregistered_repo",
+        },
+        "node preview promote skipped — repository is not a registered node"
+      );
+      return;
+    }
+
+    // A registered node's default-branch advance owes an observable dispatch. Configuration
+    // absence is a failed write, not a successful no-op: throw so the webhook route returns 500
+    // and the terminal failure event below carries the exact repo/SHA correlation fields.
+    if (!env.GH_REVIEW_APP_ID || !env.GH_REVIEW_APP_PRIVATE_KEY_BASE64) {
+      throw new Error(
+        "node preview promote is not configured: GitHub App credentials missing"
+      );
+    }
+    if (!env.NODE_SUBMODULE_PARENT_OWNER || !env.NODE_SUBMODULE_PARENT_REPO) {
+      throw new Error(
+        "node preview promote is not configured: node submodule parent missing"
+      );
+    }
 
     // DISPATCH THE ENV THE CATALOG DECLARES, never a hardcoded one (bug.5203). This facade
     // was written when spawned nodes had a preview slot; #2238 retired every one of them, so
@@ -160,8 +169,9 @@ async function promoteNodeToPreview(
           nodeId: node.id,
           slug: node.slug,
           repo: `${ctx.owner}/${ctx.repo}`,
-          prNumber: ctx.prNumber,
-          sourceSha8: ctx.mergeCommitSha.slice(0, 8),
+          sourceSha: ctx.sourceSha,
+          sourceSha8: ctx.sourceSha.slice(0, 8),
+          trigger: ctx.trigger,
           status: "skipped_no_preview_env",
           deployEnvs,
         },
@@ -170,30 +180,34 @@ async function promoteNodeToPreview(
       return;
     }
 
-    const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER as string;
-    const parentRepo = env.NODE_SUBMODULE_PARENT_REPO as string;
+    const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER;
+    const parentRepo = env.NODE_SUBMODULE_PARENT_REPO;
 
     const result = await createOperatorDeployPlane(env).promoteNode({
       env: "preview",
       parentOwner,
       parentRepo,
       slug: node.slug,
-      sourceSha: ctx.mergeCommitSha,
+      sourceSha: ctx.sourceSha,
     });
 
     // Operator-local event (not in @cogni/node-shared's EventName) → log via the plain
-    // logger, the same pattern as NODE_ACCESS_REQUEST_COMPLETE. No reqId: this is a
-    // fire-and-forget webhook dispatch, not a request-scoped handler.
+    // logger, the same pattern as NODE_ACCESS_REQUEST_COMPLETE. The native run identity is the
+    // receipt that lets operators follow the exact write this webhook acknowledged.
     log.info(
       {
         event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
         nodeId: node.id,
         slug: node.slug,
         repo: `${ctx.owner}/${ctx.repo}`,
-        prNumber: ctx.prNumber,
-        sourceSha8: ctx.mergeCommitSha.slice(0, 8),
+        sourceSha: ctx.sourceSha,
+        sourceSha8: ctx.sourceSha.slice(0, 8),
+        trigger: ctx.trigger,
         status: result.status,
         workflowUrl: result.workflowUrl,
+        runId: result.runId,
+        runUrl: result.runUrl,
+        runApiUrl: result.runApiUrl,
       },
       EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE
     );
@@ -202,11 +216,14 @@ async function promoteNodeToPreview(
       {
         event: EVENT_NAMES.NODE_PREVIEW_PROMOTE_COMPLETE,
         repo: `${ctx.owner}/${ctx.repo}`,
-        prNumber: ctx.prNumber,
-        sourceSha8: ctx.mergeCommitSha.slice(0, 8),
+        sourceSha: ctx.sourceSha,
+        sourceSha8: ctx.sourceSha.slice(0, 8),
+        trigger: ctx.trigger,
+        status: "failed",
         error: String(error),
       },
       "node preview promote failed"
     );
+    throw error;
   }
 }

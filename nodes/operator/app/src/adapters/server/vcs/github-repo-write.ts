@@ -58,6 +58,7 @@ import type {
   MirrorCanonicalFilesResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
+  ObservedWorkflowDispatchResult,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeFromPreviewInput,
@@ -1356,6 +1357,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
       sourceSha,
       sourceAddressing: source.isRemoteSource ? "remote_source" : "in_repo",
       workflowUrl: dispatch.workflowUrl,
+      runId: dispatch.runId,
+      runUrl: dispatch.runUrl,
+      runApiUrl: dispatch.runApiUrl,
     };
   }
 
@@ -2123,7 +2127,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     slug: string;
     sourceSha?: string;
     nodeSourceSha?: string;
-  }): Promise<CandidateFlightDispatchResult> {
+  }): Promise<ObservedWorkflowDispatchResult> {
     const octokit = await this.getOctokit(input.owner, input.repo);
     const inputs: Record<string, string> = {
       environment: input.env,
@@ -2144,9 +2148,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // NO catalog write to operator main. Absent (production) ⇒ workflow reads the
     // catalog pin, behavior unchanged.
     if (input.nodeSourceSha) inputs.node_source_sha = input.nodeSourceSha;
-    // workflow_dispatch is fire-and-forget (GitHub queues + returns 204); bound it
-    // so a slow/stuck GitHub call can't hang the promote route with no deadline.
-    await octokit.request(
+    // The versioned dispatch API returns the created run identity. A bare 204 only proves
+    // GitHub accepted a request, not that a workflow run exists; fail closed unless the run
+    // can be named and followed (OBSERVED_DISPATCH, bug.5010).
+    const response = (await octokit.request(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
       {
         owner: input.owner,
@@ -2154,13 +2159,39 @@ export class GitHubRepoWriter implements DeployPlanePort {
         workflow_id: "promote-and-deploy.yml",
         ref: "main",
         inputs,
+        headers: { "X-GitHub-Api-Version": "2026-03-10" },
         request: { signal: AbortSignal.timeout(15_000) },
       }
-    );
+    )) as unknown as {
+      readonly data: {
+        readonly workflow_run_id?: number;
+        readonly run_url?: string;
+        readonly html_url?: string;
+      };
+    };
+    const runId = response.data.workflow_run_id;
+    const runApiUrl = response.data.run_url;
+    const runUrl = response.data.html_url;
+    if (
+      typeof runId !== "number" ||
+      !Number.isSafeInteger(runId) ||
+      runId <= 0 ||
+      typeof runApiUrl !== "string" ||
+      typeof runUrl !== "string"
+    ) {
+      throw deployPlaneError(
+        "promote_run_identity_missing",
+        "GitHub did not return the promotion workflow run identity",
+        502
+      );
+    }
     return {
       dispatched: true,
       workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/promote-and-deploy.yml`,
       message: `Promote dispatched: ${input.slug} → ${input.env}.`,
+      runId,
+      runUrl,
+      runApiUrl,
     };
   }
 
