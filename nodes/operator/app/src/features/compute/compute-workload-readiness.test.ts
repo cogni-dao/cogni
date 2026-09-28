@@ -325,3 +325,89 @@ describe("bundle mismatch names the blocker (bug.5262)", () => {
     });
   });
 });
+
+describe("XComputeWorkload bundle artifacts must not block readiness (bug.5262)", () => {
+  // The real poly production shapes: spec.bundle lists artifacts, status.observedBundle
+  // structurally cannot (the XRD declares it as {ref, source}). Deep-comparing whole objects
+  // made verify-deploy unpassable for EVERY node with artifacts.
+  const SHA = "51bd530ca207d46a1188ee252e8f4a071b78ef53";
+  const REF =
+    "ghcr.io/cogni-dao/poly@sha256:2fe0b4a3385779071347ba8c92d9f81b4a9e126be312e9e12d622c4c694faa13";
+  const bundle = {
+    ref: REF,
+    source: { repository: "cogni-dao/poly", sha: SHA },
+    artifacts: [
+      {
+        name: "app",
+        image:
+          "ghcr.io/cogni-dao/poly@sha256:f398616800cc98ff7bf750985bd9c7f5eacf6e392a9d236921ebec20d78031bd",
+      },
+    ],
+  };
+  const spec = { migration: { mode: "Skip" }, bundle };
+  const xr = (observedBundle: unknown) => ({
+    apiVersion: "compute.cogni.io/v1alpha1",
+    kind: "XComputeWorkload",
+    metadata: {
+      name: "4b06359a",
+      namespace: "cogni-production",
+      generation: 7,
+    },
+    spec: { ...spec, compositionRef: { name: "xcomputeworkload-akash" } },
+    status: {
+      phase: "Ready",
+      serving: true,
+      observedBundle,
+      conditions: [
+        { type: "Synced", status: "True", observedGeneration: 7 },
+        { type: "Ready", status: "True", observedGeneration: 7 },
+      ],
+    },
+  });
+  const expected = {
+    apiVersion: "compute.cogni.io/v1alpha1",
+    kind: "XComputeWorkload",
+    metadata: { name: "4b06359a", namespace: "cogni-production" },
+    spec,
+  };
+
+  it("is READY when observedBundle omits artifacts but ref+source match", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: xr({
+          ref: REF,
+          source: { repository: "cogni-dao/poly", sha: SHA },
+        }),
+      })
+    ).toEqual({ ready: true });
+  });
+
+  it("still rejects a genuinely different revision", () => {
+    const other = "ab472feda4720d36616103af6f4e7427c994a46e";
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: xr({
+          ref: REF,
+          source: { repository: "cogni-dao/poly", sha: other },
+        }),
+      })
+    ).toEqual({
+      ready: false,
+      reason: `bundle_not_observed:observed=ab472fed:expected=51bd530c`,
+    });
+  });
+
+  it("still rejects a different bundle ref at the same sha", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: xr({
+          ref: "ghcr.io/cogni-dao/poly@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          source: { repository: "cogni-dao/poly", sha: SHA },
+        }),
+      }).ready
+    ).toBe(false);
+  });
+});

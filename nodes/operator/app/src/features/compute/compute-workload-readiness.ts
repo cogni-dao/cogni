@@ -8,6 +8,27 @@ export type ComputeWorkloadReadiness =
   | { readonly ready: false; readonly reason: string };
 
 /**
+ * Project a bundle onto the fields `XComputeWorkload.status.observedBundle` can actually hold.
+ *
+ * The XRD declares that status field as EXACTLY `{ref, source}` — it structurally cannot carry
+ * `spec.bundle.artifacts`. Deep-comparing the two whole objects therefore reported
+ * `bundle_not_observed` FOREVER for every node whose bundle lists artifacts, so verify-deploy
+ * could never go green no matter how correct the deploy was: poly production sat red while
+ * observed and expected named the SAME sha (`51bd530c`), which is what exposed this (bug.5262).
+ *
+ * `ref` (the immutable bundle digest) plus `source` (repository + revision) fully identify the
+ * deployed revision; `artifacts` is derived detail the status contract deliberately omits.
+ *
+ * The LEGACY ComputeWorkload CRD declares `artifacts` on BOTH spec.bundle and
+ * status.observedBundle, so its comparison is already correct and is deliberately left whole.
+ */
+function observedBundleView(bundle: unknown): unknown {
+  const record = asRecord(bundle);
+  if (!record) return bundle;
+  return { ref: record.ref, source: record.source };
+}
+
+/**
  * Name the two SHAs a bundle mismatch is actually about.
  *
  * Bare `bundle_not_observed` cannot distinguish "the actuator has not caught up yet"
@@ -182,7 +203,8 @@ function assessXComputeWorkloadReadiness(input: {
   const expectedBundle = expectedSpec.bundle;
   if (
     expectedBundle !== undefined &&
-    stableJson(status.observedBundle) !== stableJson(expectedBundle)
+    stableJson(observedBundleView(status.observedBundle)) !==
+      stableJson(observedBundleView(expectedBundle))
   ) {
     return {
       ready: false,
