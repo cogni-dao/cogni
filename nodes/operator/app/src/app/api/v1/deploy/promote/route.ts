@@ -14,6 +14,9 @@
  *     SAME method preview uses (different env + authz only). It reads the catalog row to discriminate
  *     remote-source (fork) vs in-repo and dispatches by `node_source_sha` (fork) or `source_sha`
  *     (in-repo). Production no longer deploys a stale catalog `source_sha` pin for fork nodes (bug.5043).
+ *   - FORWARD_ONLY_BY_DEFAULT: source-addressed and production preview-forward promotes refuse an
+ *     off-main or backward source pin before workflow dispatch. `allowRollback:true` is explicit and
+ *     remains behind the same env-specific RBAC gate.
  * Side-effects: IO (authz check, GitHub workflow_dispatch)
  * Links: docs/spec/node-ci-cd-contract.md § Env-promotion progression, docs/spec/rbac.md, docs/spec/cicd-platform-boundary.md
  * @public
@@ -42,6 +45,8 @@ const promoteInput = z.object({
   // production: the RBAC-gated manual dispatch, unchanged.
   env: z.enum(["preview", "production"]),
   sourceSha: z.string().optional(),
+  // Deliberate rollback is explicit and still requires the normal env-specific RBAC grant.
+  allowRollback: z.boolean().optional().default(false),
 });
 
 export const POST = wrapRouteHandlerWithLogging(
@@ -57,7 +62,7 @@ export const POST = wrapRouteHandlerWithLogging(
     if (!parsed.success) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
-    const { nodeId, env, sourceSha } = parsed.data;
+    const { nodeId, env, sourceSha, allowRollback } = parsed.data;
 
     const db = resolveServiceDb();
     const nodeRows = await db
@@ -117,7 +122,8 @@ export const POST = wrapRouteHandlerWithLogging(
       // to discriminate remote-source (fork → node_source_sha) from in-repo (operator/poly →
       // source_sha). Without a sha, production preview-forwards the current `deploy/preview` digest —
       // the raw dispatch (neither source_sha nor node_source_sha) trips the workflow's
-      // preview-forward branch. A promote that resolves ZERO targets (env not in the node's catalog
+      // preview-forward branch after the typed plane validates preview's recorded provenance. A
+      // promote that resolves ZERO targets (env not in the node's catalog
       // envs) still refuses loudly downstream (bug.5203, #2296) — no pre-filtering here.
       const result =
         sourceSha !== undefined
@@ -127,33 +133,50 @@ export const POST = wrapRouteHandlerWithLogging(
               parentRepo: repo,
               slug: node.slug,
               sourceSha,
+              allowRollback,
             })
-          : await deployPlane.dispatchNodePromote({
-              owner,
-              repo,
-              env,
-              slug: node.slug,
-            });
+          : env === "production"
+            ? await deployPlane.promoteNodeFromPreview({
+                parentOwner: owner,
+                parentRepo: repo,
+                slug: node.slug,
+                allowRollback,
+              })
+            : await deployPlane.dispatchNodePromote({
+                owner,
+                repo,
+                env,
+                slug: node.slug,
+              });
       return NextResponse.json(result, { status: 200 });
     } catch (error) {
       // Authz already passed; a dispatch failure (e.g. operator App not installed
       // on the target repo, GitHub timeout) is a downstream fault, not a 500.
       const message =
         error instanceof Error ? error.message : "dispatch failed";
+      const typed = error as { code?: unknown; status?: unknown };
+      const typedCode =
+        typeof typed.code === "string" ? typed.code : "dispatch_failed";
+      const typedStatus =
+        typeof typed.status === "number" &&
+        typed.status >= 400 &&
+        typed.status < 500
+          ? typed.status
+          : 502;
       ctx.log.warn(
         {
           reqId: ctx.reqId,
           routeId: ctx.routeId,
           nodeId: node.id,
           slug: node.slug,
-          errorCode: "dispatch_failed",
+          errorCode: typedCode,
           err: message,
         },
         "deploy.promote dispatch failed"
       );
       return NextResponse.json(
-        { error: "dispatch_failed", message },
-        { status: 502 }
+        { error: typedStatus === 502 ? "dispatch_failed" : typedCode, message },
+        { status: typedStatus }
       );
     }
   }

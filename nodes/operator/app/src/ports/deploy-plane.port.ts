@@ -51,11 +51,21 @@ export interface PromoteNodeInput {
   readonly parentRepo: string;
   readonly slug: string;
   /**
-   * Node-repo commit SHA to promote — the build the node's PR CI published as `sha-<sourceSha>`.
-   * For a REMOTE-SOURCE (fork) node this source-addresses the image (`node_source_sha`). For an
-   * IN-REPO node it is the operator checkout ref (`source_sha`); never crossed between the two.
+   * Canonical commit SHA on the source repository's main branch. For a REMOTE-SOURCE (fork) node
+   * this source-addresses the image (`node_source_sha`). For an IN-REPO node it is the operator
+   * checkout ref (`source_sha`); never crossed between the two.
    */
   readonly sourceSha: string;
+  /** Explicit authorized escape hatch for a deliberate rollback to an older commit on main. */
+  readonly allowRollback?: boolean;
+}
+
+export interface PromoteNodeFromPreviewInput {
+  readonly parentOwner: string;
+  readonly parentRepo: string;
+  readonly slug: string;
+  /** Explicit authorized escape hatch for a deliberate rollback to an older commit on main. */
+  readonly allowRollback?: boolean;
 }
 
 export interface NodePromoteResult {
@@ -423,6 +433,15 @@ export interface DeployPlanePort {
    * Writes ZERO commits to `main`. `skip_infra=true` (APP_PROMOTE_IS_NO_INFRA) is set by the dispatch.
    */
   promoteNode(input: PromoteNodeInput): Promise<NodePromoteResult>;
+
+  /**
+   * Promote preview's exact digest to production after validating its recorded source SHA against
+   * the node repository and current production pin. The workflow remains preview-forward so the
+   * accepted digest is copied rather than rebuilt or re-resolved from a mutable tag.
+   */
+  promoteNodeFromPreview(
+    input: PromoteNodeFromPreviewInput
+  ): Promise<CandidateFlightDispatchResult>;
 
   /**
    * The sha an environment is ACTUALLY running for one node: `<slug>` in
