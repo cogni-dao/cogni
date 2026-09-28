@@ -411,3 +411,78 @@ describe("XComputeWorkload bundle artifacts must not block readiness (bug.5262)"
     ).toBe(false);
   });
 });
+
+describe("XR gate must never pass on an unobserved bundle (review of #2454)", () => {
+  const SHA = "51bd530ca207d46a1188ee252e8f4a071b78ef53";
+  const REF =
+    "ghcr.io/cogni-dao/poly@sha256:2fe0b4a3385779071347ba8c92d9f81b4a9e126be312e9e12d622c4c694faa13";
+  const full = {
+    ref: REF,
+    source: { repository: "cogni-dao/poly", sha: SHA },
+    artifacts: [{ name: "app", image: "ghcr.io/x@sha256:abc" }],
+  };
+  const live = (
+    specBundle: unknown,
+    observedBundle: unknown,
+    omit = false
+  ) => ({
+    apiVersion: "compute.cogni.io/v1alpha1",
+    kind: "XComputeWorkload",
+    metadata: { name: "n", namespace: "cogni-production", generation: 3 },
+    spec: { bundle: specBundle, compositionRef: { name: "c" } },
+    status: {
+      phase: "Ready",
+      serving: true,
+      ...(omit ? {} : { observedBundle }),
+      conditions: [
+        { type: "Synced", status: "True", observedGeneration: 3 },
+        { type: "Ready", status: "True", observedGeneration: 3 },
+      ],
+    },
+  });
+  const want = (specBundle: unknown) => ({
+    apiVersion: "compute.cogni.io/v1alpha1",
+    kind: "XComputeWorkload",
+    metadata: { name: "n", namespace: "cogni-production" },
+    spec: { bundle: specBundle },
+  });
+
+  it("absent observedBundle is not ready", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want(full),
+        live: live(full, undefined, true),
+      }).ready
+    ).toBe(false);
+  });
+
+  it("empty observedBundle is not ready", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want(full),
+        live: live(full, {}),
+      }).ready
+    ).toBe(false);
+  });
+
+  it("observedBundle with empty ref+source is not ready", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want(full),
+        live: live(full, { ref: "", source: {} }),
+      }).ready
+    ).toBe(false);
+  });
+
+  it("an artifacts-only expected bundle cannot pass on an empty observed bundle", () => {
+    const artifactsOnly = {
+      artifacts: [{ name: "app", image: "ghcr.io/x@sha256:abc" }],
+    };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: want(artifactsOnly),
+        live: live(artifactsOnly, {}),
+      }).ready
+    ).toBe(false);
+  });
+});

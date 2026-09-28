@@ -201,15 +201,27 @@ function assessXComputeWorkloadReadiness(input: {
     return { ready: false, reason: "invalid_generation" };
   }
   const expectedBundle = expectedSpec.bundle;
-  if (
-    expectedBundle !== undefined &&
-    stableJson(observedBundleView(status.observedBundle)) !==
-      stableJson(observedBundleView(expectedBundle))
-  ) {
-    return {
-      ready: false,
-      reason: bundleMismatchReason(status.observedBundle, expectedBundle),
-    };
+  if (expectedBundle !== undefined) {
+    // FAIL CLOSED on an unobserved bundle. Projecting both sides onto {ref, source} fixes the
+    // false NEGATIVE that artifacts caused, but it must not introduce a false POSITIVE: if
+    // `status.observedBundle` is absent/empty (never reconciled) and the expected bundle happens
+    // to carry no ref/source either, both sides project to {} and compare EQUAL — reporting a
+    // deploy that never happened as Ready. A gate may only pass on POSITIVE evidence, so the
+    // observed side must name a revision before any match counts. (Hole found in review of
+    // #2454 by the poly node dev, reproduced by test before fixing.)
+    const observedSha = asRecord(asRecord(status.observedBundle)?.source)?.sha;
+    const observedNamesARevision =
+      typeof observedSha === "string" && observedSha.length > 0;
+    if (
+      !observedNamesARevision ||
+      stableJson(observedBundleView(status.observedBundle)) !==
+        stableJson(observedBundleView(expectedBundle))
+    ) {
+      return {
+        ready: false,
+        reason: bundleMismatchReason(status.observedBundle, expectedBundle),
+      };
+    }
   }
   if (status.phase !== "Ready") {
     const failureReason = asRecord(status.failure)?.reason;
