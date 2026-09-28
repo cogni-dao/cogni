@@ -2425,6 +2425,12 @@ owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
   });
 });
 
+const observedPromoteDispatch = () => ({
+  workflow_run_id: 98765,
+  run_url: "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/98765",
+  html_url: "https://github.com/Cogni-DAO/cogni/actions/runs/98765",
+});
+
 describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
   const DISPATCH =
     "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
@@ -2460,7 +2466,7 @@ describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
         });
         return { status: "ahead" };
       },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     const result = await makeWriter().promoteNode({
@@ -2484,6 +2490,7 @@ describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
     expect(dispatch?.params).toMatchObject({
       workflow_id: "promote-and-deploy.yml",
       ref: "main",
+      headers: { "X-GitHub-Api-Version": "2026-03-10" },
       inputs: {
         environment: "preview",
         nodes: "habitat",
@@ -2513,7 +2520,7 @@ describe("GitHubRepoWriter.promoteNode (env=preview)", () => {
         err.status = 404;
         throw err;
       },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     await expect(
@@ -2568,7 +2575,7 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
         });
         return { status: "ahead" };
       },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     const result = await makeWriter().promoteNode({
@@ -2634,7 +2641,7 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
         });
         return { status: "ahead" };
       },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     const result = await makeWriter().promoteNode({
@@ -2668,7 +2675,7 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
         err.status = 404;
         throw err;
       },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     await expect(
@@ -2697,7 +2704,7 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
         throw statusError(404, "Not Found");
       },
       [COMPARE]: () => ({ status: "diverged" }),
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     await expect(
@@ -2738,7 +2745,7 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
         }
         return { status: "ahead" };
       },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     await expect(
@@ -2790,7 +2797,7 @@ describe("GitHubRepoWriter.promoteNode (env=production)", () => {
         params.basehead === `${poisonedSha}...main`
           ? { status: "diverged" }
           : { status: "ahead" },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
 
     await expect(
@@ -2840,7 +2847,7 @@ describe("GitHubRepoWriter.promoteNodeFromPreview", () => {
         params.basehead === `${previewSha}...main`
           ? { status: targetStatus }
           : { status: "ahead" },
-      [DISPATCH]: () => ({}),
+      [DISPATCH]: observedPromoteDispatch,
     };
   }
 
@@ -3920,7 +3927,14 @@ const DISPATCH_ROUTE =
 
 describe("GitHubRepoWriter.dispatchNodePromote", () => {
   it("dispatches promote-and-deploy with skip_infra=true (APP_PROMOTE_IS_NO_INFRA)", async () => {
-    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+    routeHandlers = {
+      [DISPATCH_ROUTE]: () => ({
+        workflow_run_id: 12345,
+        run_url:
+          "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12345",
+        html_url: "https://github.com/Cogni-DAO/cogni/actions/runs/12345",
+      }),
+    };
 
     const result = await makeWriter().dispatchNodePromote({
       owner: "Cogni-DAO",
@@ -3930,6 +3944,7 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
     });
 
     expect(result.dispatched).toBe(true);
+    expect(result.runId).toBe(12345);
     const dispatch = requests.find(
       (request) => request.route === DISPATCH_ROUTE
     );
@@ -3954,7 +3969,14 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
   });
 
   it("forwards source_sha only when provided (catalog-pin nodes omit it)", async () => {
-    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+    routeHandlers = {
+      [DISPATCH_ROUTE]: () => ({
+        workflow_run_id: 12346,
+        run_url:
+          "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12346",
+        html_url: "https://github.com/Cogni-DAO/cogni/actions/runs/12346",
+      }),
+    };
 
     await makeWriter().dispatchNodePromote({
       owner: "Cogni-DAO",
@@ -3976,7 +3998,14 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
   });
 
   it("forwards node_source_sha when provided (source-addressed preview promote)", async () => {
-    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+    routeHandlers = {
+      [DISPATCH_ROUTE]: () => ({
+        workflow_run_id: 12347,
+        run_url:
+          "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12347",
+        html_url: "https://github.com/Cogni-DAO/cogni/actions/runs/12347",
+      }),
+    };
 
     await makeWriter().dispatchNodePromote({
       owner: "Cogni-DAO",
@@ -3996,6 +4025,23 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
     expect(
       (dispatch?.params.inputs as Record<string, string>).source_sha
     ).toBeUndefined();
+  });
+
+  it("fails closed when GitHub does not return a promotion run identity", async () => {
+    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+
+    await expect(
+      makeWriter().dispatchNodePromote({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        env: "preview",
+        slug: "habitat",
+        nodeSourceSha: "def4560000000000000000000000000000000000",
+      })
+    ).rejects.toMatchObject({
+      code: "promote_run_identity_missing",
+      status: 502,
+    });
   });
 });
 

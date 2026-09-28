@@ -28,6 +28,14 @@ export interface CandidateFlightDispatchResult {
   readonly message: string;
 }
 
+/** A workflow dispatch GitHub has acknowledged with a concrete Actions run. */
+export interface ObservedWorkflowDispatchResult
+  extends CandidateFlightDispatchResult {
+  readonly runId: number;
+  readonly runUrl: string;
+  readonly runApiUrl: string;
+}
+
 export interface PrepareNodeRefCandidateFlightInput {
   readonly parentOwner: string;
   readonly parentRepo: string;
@@ -82,6 +90,10 @@ export interface NodePromoteResult {
   /** `remote_source` when source-addressed by node sha; `in_repo` when passing the checkout ref. */
   readonly sourceAddressing: "remote_source" | "in_repo";
   readonly workflowUrl: string;
+  /** Native run identity proves GitHub created the workflow run; a bare 204 is not success. */
+  readonly runId: number;
+  readonly runUrl: string;
+  readonly runApiUrl: string;
 }
 
 export type ReconcileNodeInfraInput =
@@ -488,5 +500,5 @@ export interface DeployPlanePort {
     slug: string;
     sourceSha?: string;
     nodeSourceSha?: string;
-  }): Promise<CandidateFlightDispatchResult>;
+  }): Promise<ObservedWorkflowDispatchResult>;
 }

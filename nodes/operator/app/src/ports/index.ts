@@ -160,6 +160,7 @@ export type {
   MirrorCanonicalFilesResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
+  ObservedWorkflowDispatchResult,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeFromPreviewInput,
