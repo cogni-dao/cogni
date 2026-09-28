@@ -11,15 +11,15 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: preview
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:f56597dbf6dd102348fb586678c25029a470044b77a50ed4aa952a2baac8c163
+    ref: ghcr.io/cogni-dao/poly@sha256:82ae951df66477e53fa8c741dc72dafdcaabdf8b6454a77ce4c0eecdb2e34d9a
     source:
       repository: cogni-dao/poly
-      sha: 9f66ed55fd6987ef52ce541ef544e7b013f3e6dc
+      sha: 51f1cb8750e634f512c1ea6aef51172f6c0fe16a
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:05bc3133ef0a01cbad5638e83fcc852b07003fa1f599a9f935b4d68208d72838
+        image: ghcr.io/cogni-dao/poly@sha256:c6d454514d6d1cf3d33e2a231b1c720cc5578c66fd1150380ed083d6c6c92ebb
       - name: paper-trader
-        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:70abb8b99c0ad52aadf66d9b048d7a50de9e8f6ba447478cba7b47d8151c4d06
+        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:bdde13323a055c48f327929ae9bb57ac22aa937552f5ab03cc1e894ae203928d
   workload:
     name: poly
     publicHost: poly-preview.cognidao.org
