@@ -13,9 +13,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  assertBundleWithinBudget,
   renderBundleMarkdown,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
+  SESSION_COGNITION_MAX_BYTES,
   SESSION_WATCH_GATE,
 } from "@/app/api/v1/cognition/_bundle";
 
@@ -167,6 +169,17 @@ describe("renderBundleMarkdown", () => {
 
     expect(markdown).toContain("## Orientation — recall this first");
     expect(markdown).toContain("No `operator-agent-orientation` entry yet");
+  });
+
+  it("fails closed before a SessionStart bundle can exceed its strict byte budget", () => {
+    // The presenter appends one final newline to the body.
+    const atBudget = "x".repeat(SESSION_COGNITION_MAX_BYTES - 1);
+    const overBudget = `${atBudget}x`;
+
+    expect(() => assertBundleWithinBudget(atBudget)).not.toThrow();
+    expect(() => assertBundleWithinBudget(overBudget)).toThrow(
+      `maximum is ${SESSION_COGNITION_MAX_BYTES}`
+    );
   });
 });
 

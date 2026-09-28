@@ -28,6 +28,9 @@ derives the node URL from `.cogni/repo-spec.yaml` `intent.name` and reads `.env.
 itself; no per-session URL or key export is required after bootstrap. Operator
 keys such as `COGNI_API_KEY_PROD` are for CI/CD authority and are not sufficient
 for session cognition; bootstrap must write `COGNI_NODE_API_KEY`.
+The loader presents a bounded local cache and refreshes it asynchronously. Its
+16 KiB ceiling is fail-closed: an oversized bundle is rejected whole, never
+silently truncated in the middle of an instruction.
 **Codex needs a one-time trust** of the `.codex/` layer (approve via `/hooks`). Conductor/other
 runtimes: run the self-serve `curl` above. Why this shape: see
 [`docs/spec/node-baas-architecture.md`](docs/spec/node-baas-architecture.md) § Cognition Substrate.
