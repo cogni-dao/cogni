@@ -339,6 +339,21 @@ spec:
                       type: string
                       enum: [Hold, Close]
                       default: Hold
+                    onGiveUp:
+                      description: >-
+                        What bounded lease recovery may do when the CURRENT key's lease is
+                        found closed (bug.5287). `Hold` (the PERMANENT default) parks the
+                        workload as LeaseClosed and spends nothing — a human bumps
+                        spec.leaseGeneration to mint a replacement. `Replace` (opt-in per
+                        (node, env), NEVER global) will authorize the bounded `:recover:<n>`
+                        re-mint — but it is deliberately NOT in this enum yet: the schema
+                        admits only Hold until provider-strike recording is re-homed in the
+                        actuator, so an early Replace catalog cell is rejected by the CRD
+                        instead of by prose. Widening the enum is that later change's whole
+                        diff surface.
+                      type: string
+                      enum: [Hold]
+                      default: Hold
                 leaseEpoch:
                   description: >-
                     DEPRECATED read-side alias for leaseGeneration, retained ONLY so the

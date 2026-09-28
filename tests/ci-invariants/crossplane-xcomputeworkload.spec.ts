@@ -794,6 +794,38 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect("None").toMatch(reasonPattern);
   });
 
+  it("makes paid replacement opt-in and structurally unreachable (bug.5287 onGiveUp)", () => {
+    // TWO independent fences on the paid re-mint. (1) The composition only bumps the
+    // recovery key when bootPolicy.onGiveUp is Replace; Hold — the PERMANENT default —
+    // parks a closed lease as LeaseClosed with zero spend. (2) The XRD enum admits ONLY
+    // Hold until provider strikes are re-homed in the actuator, so an early Replace
+    // catalog cell is rejected by the CRD, not by prose ("if it's global, tier 4 happens
+    // by accident the moment someone adds a node").
+    expect(template).toContain(
+      'if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace")'
+    );
+    const onGiveUp = (
+      ((specSchema.bootPolicy as YamlObject).properties as YamlObject)
+        .onGiveUp as YamlObject
+    );
+    expect(onGiveUp.enum).toEqual(["Hold"]);
+    expect(onGiveUp.default).toBe("Hold");
+    expect(template).toContain('$failReason = "LeaseClosed"');
+  });
+
+  it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {
+    // A closed lease whose response key does not match the current key must PARK, not
+    // re-render: rendering under a settled key is refused by the actuator with
+    // akash_tx_create_refused_settled_key on EVERY reconcile forever. The held/foreign
+    // terms below are what stand between bounded recovery and unbounded churn.
+    expect(template).toContain(
+      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey)))"
+    );
+    expect(template).toContain(
+      '$heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace")'
+    );
+  });
+
   it("derives retryability from the HTTP status, not a table of codes", () => {
     // The actuator documents 409 as "conflict, come back later with the same key" and 5xx as
     // unproven; every other 4xx is terminal for this desired state. A code table here would

@@ -394,10 +394,22 @@ spec:
             {{- end }}
             {{- $closedForCurrentKey := and $closed (eq $responseKey $currentKey) }}
             {{- $recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts) }}
-            {{- if and $closedForCurrentKey (not $recoveryExhausted) }}
+            {{- /* PAID REPLACEMENT IS OPT-IN (bug.5287 review). bootPolicy.onGiveUp gates the
+              re-mint: Hold (the permanent default) NEVER spends on a replacement — a closed
+              lease parks as LeaseClosed until a human bumps spec.leaseGeneration. The XRD enum
+              is [Hold]-only until provider strikes are re-homed in the actuator (PR D), so
+              recovery is unreachable by TWO independent mechanisms: this gate, and the schema
+              rejecting a premature `Replace` catalog cell. */ -}}
+            {{- $onGiveUp := dig "bootPolicy" "onGiveUp" "Hold" $spec }}
+            {{- if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace") }}
             {{- $recoveryCount = add1 $recoveryCount }}
             {{- $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}
             {{- end }}
+            {{- /* A closed lease we are NOT actively replacing must park, not re-render:
+              re-rendering under a settled key is refused by the actuator every reconcile
+              forever (Axiom 26 churn). Held ⇒ the lease closed under the CURRENT key and
+              onGiveUp is not Replace. */ -}}
+            {{- $heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace") }}
             {{- $cogniKey = $currentKey }}
             {{- $_ := set $payload "cogniKey" $cogniKey }}
 
@@ -459,7 +471,12 @@ spec:
               controller's recoverBounded(3), without an unbounded retry loop or implicit base
               generation bump.
             */ -}}
-            {{- $renderLease := not (or $closeForBudget $recoveryExhausted) }}
+            {{- /* Never render under a settled key (Axiom 26): a closed lease renders again
+              ONLY through a Replace-bumped fresh recovery key. $heldClosed parks Hold nodes;
+              the (closed && not-current-key) term fences the foreign/stale-key shape, where
+              $responseKey is absent or names another key and the guard would otherwise fail
+              open into refused-create churn every reconcile. */ -}}
+            {{- $renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey))) }}
 
             {{- /*
               BOOT GRACE. `serving` is the convergence signal, so a not-yet-serving workload
@@ -755,6 +772,12 @@ spec:
             {{- $phase = "Progressing" }}
             {{- $failReason = $refusalCode }}
             {{- $failMessage = substr 0 256 $refusalMessage }}
+            {{- else if $heldClosed }}
+            {{- /* Ordered BEFORE recoveryExhausted: if someone flips Replace back to Hold
+              mid-recovery, the human choice (Hold) names the state. */ -}}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "LeaseClosed" }}
+            {{- $failMessage = printf "lease %s is closed and bootPolicy.onGiveUp is Hold; bump spec.leaseGeneration to mint a replacement (no paid recovery is attempted under Hold)" $externalName }}
             {{- else if $recoveryExhausted }}
             {{- $phase = "Failed" }}
             {{- $failReason = "RecoveryLimitExceeded" }}
