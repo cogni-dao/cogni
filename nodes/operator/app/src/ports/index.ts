@@ -65,6 +65,7 @@ export {
   type AkashTxAllocationRecord,
   type AkashTxAllocationState,
   type AkashTxConsolePort,
+  type AkashTxProviderOutcomesPort,
   type AkashTxCreateResult,
   AkashTxError,
   type AkashTxErrorCode,
