@@ -219,9 +219,29 @@ export function createAkashTxDispatcher(
       switch (request.path) {
         case "/v1/akash/observe": {
           const input = AkashTxObserveInputSchema.parse(payload);
+          const observation = await deps.actuator.observe(
+            toObserveInput(input)
+          );
+          if (input.publicHost) {
+            // One structured, non-secret receipt per host-routed observation. `null` is
+            // deliberate: it distinguishes "probe could not run" (no endpoints) from a
+            // real negative result, which matters when this signal gates recovery.
+            deps.log?.info(
+              {
+                cogniKey: input.cogniKey,
+                publicHost: input.publicHost,
+                expectedSourceSha: input.expectedSourceSha ?? null,
+                found: observation.found,
+                resourceState: observation.resource?.state ?? null,
+                endpointCount: observation.resource?.endpoints.length ?? 0,
+                serving: observation.serving ?? null,
+              },
+              "akash_tx_host_routed_probe_result"
+            );
+          }
           return {
             status: 200,
-            body: await deps.actuator.observe(toObserveInput(input)),
+            body: observation,
           };
         }
         case "/v1/akash/create": {

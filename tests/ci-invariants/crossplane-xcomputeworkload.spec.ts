@@ -212,15 +212,15 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     expect(Object.keys(bootEpoch)).toEqual(["key", "at"]);
   });
 
-  it("stages the host-routed serving proof as an explicit two-phase rollout (bug.5237)", () => {
+  it("emits the host-routed serving proof after the phase-1 reader rollout (bug.5237)", () => {
     // A stale deployment still owning the public hostname made the bare-ingress serving
     // probe a lie. The fix is OBSERVE handing the actuator the public hostname — but the
     // actuator's observe schema is a strictObject, so emitting the key before every
     // environment's actuator image accepts it would 400 every observe and freeze
-    // reconciliation fleet-wide. Phase 1 (this tree): the actuator accepts + probes
-    // `publicHost`; the composition documents the pending emission and must NOT send it.
+    // reconciliation fleet-wide. Phase 1 deployed that strict-schema reader fleet-wide;
+    // phase 2 now emits `publicHost` and must never regress to bare-ingress truth.
     expect(template).toContain("bug.5237 PHASE 2");
-    expect(templateCode).not.toContain("publicHost: {{ $publicHost | quote }}");
+    expect(templateCode).toContain("publicHost: {{ $publicHost | quote }}");
   });
 
   it("declares the empty-birth schema policy WITHOUT claiming it gates payment", () => {
