@@ -95,6 +95,21 @@ describe("assessComputeWorkloadReadiness", () => {
       })
     ).toEqual({ ready: false, reason: "phase_not_ready" });
   });
+
+  it("treats the explicit cleared-failure sentinel as absent (bug.5287)", () => {
+    expect(
+      assessComputeWorkloadReadiness({
+        expected,
+        live: live({
+          status: {
+            ...live().status,
+            phase: "Progressing",
+            failure: { reason: "None", message: "" },
+          },
+        }),
+      })
+    ).toEqual({ ready: false, reason: "phase_not_ready" });
+  });
 });
 
 describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () => {
@@ -170,6 +185,21 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
     expect(
       assessComputeWorkloadReadiness({ expected: xExpected, live: failed })
     ).toEqual({ ready: false, reason: "phase_not_ready:ProviderRejected" });
+  });
+
+  it("treats the composite's explicit cleared-failure sentinel as absent (bug.5287)", () => {
+    const progressing = xLive();
+    (progressing.status as Record<string, unknown>).phase = "Progressing";
+    (progressing.status as Record<string, unknown>).failure = {
+      reason: "None",
+      message: "",
+    };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: xExpected,
+        live: progressing,
+      })
+    ).toEqual({ ready: false, reason: "phase_not_ready" });
   });
 
   it("tolerates XRD-defaulted nested subfields the materializer omits (bug.5263)", () => {

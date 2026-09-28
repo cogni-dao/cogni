@@ -49,6 +49,21 @@ function bundleMismatchReason(observed: unknown, expected: unknown): string {
   return `bundle_not_observed:observed=${sha(observed)}:expected=${sha(expected)}`;
 }
 
+/**
+ * Preserve named controller failures while treating the Crossplane writer's explicit clear
+ * sentinel as absent. Reader tolerance must land before the composition starts emitting `None`:
+ * promote jobs execute this source at their own head SHA while the composition follows `main`,
+ * so the two protocol halves deploy on different clocks (bug.5287).
+ */
+function phaseNotReadyReason(status: JsonRecord): string {
+  const failureReason = asRecord(status.failure)?.reason;
+  return typeof failureReason === "string" &&
+    failureReason.length > 0 &&
+    failureReason !== "None"
+    ? `phase_not_ready:${failureReason}`
+    : "phase_not_ready";
+}
+
 /** Compare live controller state with the exact Git-rendered desired state. */
 export function assessComputeWorkloadReadiness(input: {
   readonly expected: unknown;
@@ -109,14 +124,7 @@ export function assessComputeWorkloadReadiness(input: {
   if (status.phase !== "Ready") {
     // Surface the controller's terminal failure reason (e.g. MigrationFailed) so
     // a promote-gate timeout names the actual blocker instead of a generic phase.
-    const failureReason = asRecord(status.failure)?.reason;
-    return {
-      ready: false,
-      reason:
-        typeof failureReason === "string" && failureReason.length > 0
-          ? `phase_not_ready:${failureReason}`
-          : "phase_not_ready",
-    };
+    return { ready: false, reason: phaseNotReadyReason(status) };
   }
   if (stableJson(status.observedBundle) !== stableJson(expectedBundle)) {
     return {
@@ -224,14 +232,7 @@ function assessXComputeWorkloadReadiness(input: {
     }
   }
   if (status.phase !== "Ready") {
-    const failureReason = asRecord(status.failure)?.reason;
-    return {
-      ready: false,
-      reason:
-        typeof failureReason === "string" && failureReason.length > 0
-          ? `phase_not_ready:${failureReason}`
-          : "phase_not_ready",
-    };
+    return { ready: false, reason: phaseNotReadyReason(status) };
   }
   if (status.serving !== true) {
     return { ready: false, reason: "not_serving" };
