@@ -351,6 +351,13 @@
       "when": 1790128888437,
       "tag": "0049_noisy_iron_man",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790637542881,
+      "tag": "0050_oval_madripoor",
+      "breakpoints": true
     }
   ]
 }

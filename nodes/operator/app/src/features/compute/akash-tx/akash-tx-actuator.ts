@@ -84,6 +84,7 @@ import {
   type AkashTxMigrationPort,
   type AkashTxMigrationStep,
   type AkashTxObservation,
+  type AkashTxProviderOutcomesPort,
   type AkashTxResource,
   type AkashTxStaleAllocation,
   type AkashTxSweepReport,
@@ -131,6 +132,11 @@ export interface AkashTxActuatorDeps {
   readonly costStore: ComputeCostStorePort;
   /** Pinned raw Akash deployment/escrow owner; not a Cogni user/DAO/payer identity. */
   readonly providerConsumerAccountId: string;
+  /**
+   * Provider strike/boot-outcome writer (task.5153). Omitted → screening still reads
+   * whatever history exists, but recovery attempts record nothing (test/degraded mode).
+   */
+  readonly outcomes?: AkashTxProviderOutcomesPort;
 }
 
 const NOOP_LOGGER: AkashTxLogger = {
@@ -239,6 +245,19 @@ function identityFields(
   };
 }
 
+/**
+ * Split a cogniKey into its generation base and bounded-recovery ordinal (task.5153).
+ * `xcw:<ns>:<node>:<gen>` → ordinal 0; `…:recover:<n>` → ordinal n off the same base.
+ */
+function parseRecoveryKey(cogniKey: string): {
+  baseKey: string;
+  ordinal: number;
+} {
+  const match = /^(.+):recover:(\d+)$/.exec(cogniKey);
+  if (!match) return { baseKey: cogniKey, ordinal: 0 };
+  return { baseKey: match[1] as string, ordinal: Number(match[2]) };
+}
+
 /** True when a receipt already binds a DIFFERENT consumer than the one now asking to spend. */
 function identityDiffers(
   record: AkashTxAllocationRecord,
@@ -286,6 +305,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly costEvidence: ComputeCostEvidencePort;
   private readonly costStore: ComputeCostStorePort;
   private readonly providerConsumerAccountId: string;
+  private readonly outcomes?: AkashTxProviderOutcomesPort;
+  /**
+   * Per-process load-shed for boot_ok writes on every observe tick — correctness comes
+   * from the DB's unique (lease_id, outcome), never from this cache (task.5153).
+   */
+  private readonly bootOkRecorded = new Set<string>();
 
   constructor(deps: AkashTxActuatorDeps) {
     this.console = deps.console;
@@ -296,6 +321,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     this.costEvidence = deps.costEvidence;
     this.costStore = deps.costStore;
     this.providerConsumerAccountId = deps.providerConsumerAccountId;
+    if (deps.outcomes) this.outcomes = deps.outcomes;
   }
 
   async observe(input: {
@@ -477,6 +503,71 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
     }
 
+    // task.5153 — LEDGER-DERIVED TRIED SET + STRIKE ON RECOVERY ENTRY. Crossplane
+    // re-invokes create per bounded-recovery ordinal, so any in-memory exclusion set is
+    // empty on every call and re-picks the same dead provider three times. The durable
+    // record of "who we already tried this generation" ALREADY EXISTS as this key
+    // family's allocation receipts (base and :recover:<n> share the base prefix), so the
+    // set is derived, never duplicated. Reaching ordinal n also PROVES ordinal n-1's
+    // provider failed to serve — that is the strike, recorded against the prior lease
+    // with DB-side exactly-once (unique (lease_id, outcome)). A new leaseGeneration is a
+    // new base key: clean set, per the recovery contract.
+    const recovery = parseRecoveryKey(input.cogniKey);
+    let excludedProviders: ReadonlySet<string> | undefined;
+    if (recovery.ordinal > 0) {
+      const receipts = await this.ledger.listReceipts({
+        nodeId: input.identity.nodeId,
+        environment: input.environment,
+        limit: 50,
+      });
+      const family = receipts.filter(
+        (r) =>
+          r.cogniKey === recovery.baseKey ||
+          r.cogniKey.startsWith(`${recovery.baseKey}:recover:`)
+      );
+      excludedProviders = new Set(
+        family
+          .filter((r) => r.cogniKey !== input.cogniKey && r.providerAccount)
+          .map((r) => r.providerAccount as string)
+      );
+      const prevKey =
+        recovery.ordinal === 1
+          ? recovery.baseKey
+          : `${recovery.baseKey}:recover:${recovery.ordinal - 1}`;
+      const prev = family.find((r) => r.cogniKey === prevKey);
+      if (this.outcomes && prev?.providerAccount && prev.externalName) {
+        try {
+          await this.outcomes.record({
+            computeProvider: "akash",
+            providerAccount: prev.providerAccount,
+            outcome: "slo_timeout",
+            leaseId: prev.externalName,
+            workload: input.spec.name,
+            detail: `bounded recovery: ${input.cogniKey} superseding ${prevKey}`,
+          });
+          this.log.info(
+            {
+              cogniKey: input.cogniKey,
+              strikedProvider: prev.providerAccount,
+              strikedLease: prev.externalName,
+              excludedCount: excludedProviders.size,
+            },
+            "akash_tx_provider_strike_recorded"
+          );
+        } catch (error) {
+          // BEST_EFFORT: a strike write must never block a paid recovery attempt.
+          this.log.warn(
+            {
+              cogniKey: input.cogniKey,
+              strikedProvider: prev.providerAccount,
+              error: String(error),
+            },
+            "akash_tx_provider_strike_write_failed"
+          );
+        }
+      }
+    }
+
     const cursor = await this.readCursor();
     await this.prepare(input.cogniKey, cursor);
     this.log.info(
@@ -493,6 +584,9 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     try {
       allocated = await this.console.allocateAndLease({
         spec: input.spec,
+        ...(excludedProviders && excludedProviders.size > 0
+          ? { excludedProviders }
+          : {}),
         // Durability of the handle is a precondition of every later step: the client closes
         // the deployment if this throws, because an unrecorded dseq is a lease nobody can find.
         onAllocated: async (leaseId) => {
@@ -1073,7 +1167,33 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       expectedSourceSha,
       ...(publicHost ? { publicHost } : {}),
     });
+    // task.5153 — a positive host-routed serving proof is the live path's boot_ok. Fire and
+    // forget with a per-process cache; exactly-once lives in the DB unique (lease_id, outcome).
+    if (serving === true && observation.resource) {
+      void this.recordBootOk(observation.resource);
+    }
     return { ...observation, serving };
+  }
+
+  private async recordBootOk(resource: AkashTxResource): Promise<void> {
+    if (!this.outcomes || !resource.providerAccount) return;
+    if (this.bootOkRecorded.has(resource.externalName)) return;
+    this.bootOkRecorded.add(resource.externalName);
+    try {
+      await this.outcomes.record({
+        computeProvider: "akash",
+        providerAccount: resource.providerAccount,
+        outcome: "boot_ok",
+        leaseId: resource.externalName,
+      });
+    } catch (error) {
+      // BEST_EFFORT: never let outcome IO shade an observation. Allow a later retry.
+      this.bootOkRecorded.delete(resource.externalName);
+      this.log.warn(
+        { externalName: resource.externalName, error: String(error) },
+        "akash_tx_boot_ok_write_failed"
+      );
+    }
   }
 
   private async readCursor(): Promise<string> {

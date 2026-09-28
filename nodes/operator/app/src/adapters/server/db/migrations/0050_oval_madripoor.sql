@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "compute_provider_outcomes_lease_outcome_uq" ON "compute_provider_outcomes" USING btree ("lease_id","outcome") WHERE "compute_provider_outcomes"."lease_id" IS NOT NULL;

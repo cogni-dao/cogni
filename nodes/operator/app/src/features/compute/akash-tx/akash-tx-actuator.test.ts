@@ -2137,3 +2137,168 @@ describe("mapConsoleFailure — a 4xx is a decision, not an unknown (bug.5247)",
     );
   });
 });
+
+/**
+ * task.5153 — ledger-derived provider exclusions + actuator-owned strike recording.
+ * The load-bearing property: exclusions survive across SEPARATE actuator instances,
+ * because Crossplane re-invokes create per recovery ordinal in fresh calls and the
+ * previous implementation's in-memory `new Set()` was empty on every one of them —
+ * which re-picked the same dead provider for the entire bounded-recovery budget.
+ */
+describe("AkashTxActuator provider strikes (task.5153)", () => {
+  class FakeOutcomes {
+    readonly records: {
+      computeProvider: string;
+      providerAccount: string;
+      outcome: "boot_ok" | "slo_timeout";
+      leaseId?: string;
+      workload?: string;
+      detail?: string;
+    }[] = [];
+    failWrites = false;
+    async record(rec: (typeof this.records)[number]): Promise<void> {
+      if (this.failWrites) throw new Error("outcomes store down");
+      this.records.push(rec);
+    }
+  }
+
+  class CapturingConsole extends FakeConsole {
+    lastExcluded: ReadonlySet<string> | undefined;
+    override async allocateAndLease(input: {
+      spec: ProvisionSpec;
+      onAllocated?: (leaseId: string) => Promise<void>;
+      excludedProviders?: ReadonlySet<string>;
+    }): Promise<{ leaseId: string; providerAccount: string }> {
+      this.lastExcluded = input.excludedProviders;
+      return super.allocateAndLease(input);
+    }
+  }
+
+  const BASE_KEY = "xcw:cogni-preview:node-9:4";
+
+  function strikeBuild(outcomes: FakeOutcomes, ledger = new FakeLedger()) {
+    const api = new CapturingConsole();
+    const log = recordingLogger();
+    const costs = costDeps();
+    const actuator = new AkashTxActuator({
+      console: api,
+      ledger,
+      log,
+      costEvidence: costs.costEvidence,
+      costStore: costs.costStore,
+      providerConsumerAccountId: costs.providerConsumerAccountId,
+      outcomes,
+    });
+    return { actuator, ledger, api, log };
+  }
+
+  it("derives exclusions from receipts across separate actuator instances and strikes the prior provider", async () => {
+    const outcomes = new FakeOutcomes();
+    const ledger = new FakeLedger();
+
+    // Attempt 0: a fresh instance creates the base-key lease on akash1provider.
+    const first = strikeBuild(outcomes, ledger);
+    await first.actuator.create({
+      cogniKey: BASE_KEY,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(first.api.lastExcluded).toBeUndefined();
+    expect(outcomes.records).toHaveLength(0);
+
+    // Recovery ordinal 1 arrives on a BRAND-NEW instance (fresh process, empty memory):
+    // the tried set must come from the ledger, and reaching :recover:1 IS the proof that
+    // attempt 0's provider failed — the strike names its lease.
+    const second = strikeBuild(outcomes, ledger);
+    await second.actuator.create({
+      cogniKey: `${BASE_KEY}:recover:1`,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect([...(second.api.lastExcluded ?? [])]).toEqual(["akash1provider"]);
+    expect(outcomes.records).toEqual([
+      expect.objectContaining({
+        computeProvider: "akash",
+        providerAccount: "akash1provider",
+        outcome: "slo_timeout",
+        leaseId: "7001",
+        workload: SPEC.name,
+      }),
+    ]);
+    expect(
+      second.log.lines.some(
+        (l) => l.marker === "akash_tx_provider_strike_recorded"
+      )
+    ).toBe(true);
+  });
+
+  it("a strike-write failure degrades loudly and never blocks the paid recovery attempt", async () => {
+    const outcomes = new FakeOutcomes();
+    const ledger = new FakeLedger();
+    const first = strikeBuild(outcomes, ledger);
+    await first.actuator.create({
+      cogniKey: BASE_KEY,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+
+    outcomes.failWrites = true;
+    const second = strikeBuild(outcomes, ledger);
+    const result = await second.actuator.create({
+      cogniKey: `${BASE_KEY}:recover:1`,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    expect(result.externalName).toBe("7001");
+    expect([...(second.api.lastExcluded ?? [])]).toEqual(["akash1provider"]);
+    expect(
+      second.log.lines.some(
+        (l) => l.marker === "akash_tx_provider_strike_write_failed"
+      )
+    ).toBe(true);
+  });
+
+  it("records boot_ok once per lease on a positive serving proof", async () => {
+    const outcomes = new FakeOutcomes();
+    const ledger = new FakeLedger();
+    const api = new FakeConsole();
+    const costs = costDeps();
+    const actuator = new AkashTxActuator({
+      console: api,
+      ledger,
+      log: recordingLogger(),
+      costEvidence: costs.costEvidence,
+      costStore: costs.costStore,
+      providerConsumerAccountId: costs.providerConsumerAccountId,
+      probe: async () => true,
+      outcomes,
+    });
+    await actuator.create({
+      cogniKey: BASE_KEY,
+      environment: "preview",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    await actuator.observe({
+      cogniKey: BASE_KEY,
+      externalName: "7001",
+      expectedSourceSha: "abc123",
+    });
+    await actuator.observe({
+      cogniKey: BASE_KEY,
+      externalName: "7001",
+      expectedSourceSha: "abc123",
+    });
+    const bootOks = outcomes.records.filter((r) => r.outcome === "boot_ok");
+    expect(bootOks).toEqual([
+      expect.objectContaining({
+        providerAccount: "akash1provider",
+        leaseId: "7001",
+      }),
+    ]);
+  });
+});

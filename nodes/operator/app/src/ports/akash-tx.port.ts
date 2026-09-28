@@ -276,6 +276,26 @@ export type AkashAllocationProbe =
   | { outcome: "ambiguous"; dseqs: readonly string[] };
 
 /**
+ * Append-only provider boot-outcome writer (task.5153) — the actuator-owned re-home of
+ * dead-provider strike recording. The legacy controller's `provisionOnce` was the ONLY
+ * writer of `compute_provider_outcomes`; the live Crossplane path recorded nothing, so
+ * the blacklist screened against a table nothing fed and bounded recovery would re-mint
+ * onto the same dead provider. Structurally satisfied by DrizzleProviderOutcomeStore.
+ * Exactly-once is enforced DB-side (unique (lease_id, outcome)), not by callers.
+ */
+export interface AkashTxProviderOutcomesPort {
+  record(rec: {
+    readonly computeProvider: string;
+    readonly providerAccount: string;
+    readonly outcome: "boot_ok" | "slo_timeout";
+    readonly leaseId?: string;
+    readonly workload?: string;
+    readonly bootSeconds?: number;
+    readonly detail?: string;
+  }): Promise<void>;
+}
+
+/**
  * The Console transaction client the actuator needs. Structurally satisfied by
  * AkashComputeAdapter — SDL construction, provider screening, and bid/lease mechanics stay
  * inside that adapter and never cross this seam.
@@ -287,6 +307,13 @@ export interface AkashTxConsolePort {
   allocateAndLease(input: {
     spec: ProvisionSpec;
     onAllocated?: (leaseId: string) => Promise<void>;
+    /**
+     * Providers to exclude from bid screening — the LEDGER-DERIVED tried set for this
+     * generation's attempt family (task.5153). Crossplane re-invokes create per recovery
+     * ordinal, so an in-memory set is empty on every call and re-picks the same dead
+     * provider forever; the caller derives this from durable allocation receipts instead.
+     */
+    excludedProviders?: ReadonlySet<string>;
   }): Promise<{ leaseId: string; providerAccount: string }>;
   /**
    * Classify the wallet beyond a pre-transaction baseline into exactly one of three worlds:
