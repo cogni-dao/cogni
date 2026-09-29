@@ -190,4 +190,42 @@ got="$(FLEET_CONTROL_ENV=candidate-a CATALOG_DIR="$fixture" control_env_for cand
 [ "$got" = "candidate-a" ] || fail "isolated fleet: k3s operator candidate-a must stay candidate-a, got $got"
 pass "FLEET_CONTROL_ENV leaves k3s rows on their own env"
 
+# 6. REPO_URL_FROM_ORIGIN (bug.5235 GAP-4) — the AppSet repoURL defaults to the
+#    fleet's OWN git origin, NORMALIZED to https://github.com/<owner>/<repo>.git with
+#    any embedded credential stripped and ssh/no-.git/case variants collapsed. A
+#    malformed origin must fall back to the canonical literal, never emit a token or a
+#    broken URL into an AppSet. Source the renderer (guarded dispatch) for the func.
+# shellcheck source=scripts/ci/render-node-appset.sh
+source scripts/ci/render-node-appset.sh
+CANON="https://github.com/cogni-dao/cogni.git"
+
+norm_is() {  # <input> <expected> <label>
+  local got; got="$(normalize_repo_url "$1")"
+  [ "$got" = "$2" ] || fail "normalize '$1' => '$got', expected '$2' ($3)"
+  pass "normalize $3"
+}
+
+norm_is "https://github.com/cogni-dao/cogni.git" "$CANON" "canonical https passes through"
+norm_is "https://github.com/cogni-dao/cogni"     "$CANON" "adds a missing .git"
+norm_is "git@github.com:cogni-dao/cogni.git"     "$CANON" "collapses the ssh form"
+norm_is "git@github.com:cogni-dao/cogni"         "$CANON" "collapses ssh form without .git"
+norm_is "https://x-access-token:ghs_SECRETTOKEN@github.com/cogni-dao/cogni.git" "$CANON" "strips embedded x-access-token credentials"
+norm_is "https://user:pass@github.com/cogni-dao/cogni.git" "$CANON" "strips user:pass credentials"
+norm_is "https://github.com/Cogni-DAO/Cogni.git" "$CANON" "lowercases owner/repo (case-insensitive)"
+norm_is "https://github.com/cogni-test-org/cogni-monorepo.git" \
+        "https://github.com/cogni-test-org/cogni-monorepo.git" "derives an isolated test-parent fleet repo"
+norm_is "https://x-access-token:TOK@github.com/cogni-test-org/cogni-monorepo" \
+        "https://github.com/cogni-test-org/cogni-monorepo.git" "test-parent: strips creds + adds .git"
+
+# Fallback: anything unrecognizable must yield the canonical literal, and CRITICALLY
+# must never leak a token substring into the output.
+for bad in "" "not-a-url" "https://gitlab.com/cogni-dao/cogni.git" \
+           "https://x-access-token:LEAKME@example.com/a/b.git" \
+           "https://github.com/only-owner" "https://github.com/a/b/c.git"; do
+  got="$(normalize_repo_url "$bad")"
+  [ "$got" = "$CANON" ] || fail "malformed origin '$bad' must fall back to canonical, got '$got'"
+  case "$got" in *LEAKME*|*TOK*|*SECRET*) fail "token leaked into fallback output: '$got'";; esac
+done
+pass "malformed/foreign origins fall back to canonical with no token leak"
+
 echo "PASS: render-node-appset.test.sh"
