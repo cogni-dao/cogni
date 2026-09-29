@@ -422,7 +422,22 @@ spec:
             */ -}}
             {{- $prevMigrationPhase := dig "status" "migration" "phase" "" $xr }}
             {{- $migrationPhase := dig "migration" "phase" $prevMigrationPhase $resp }}
-            {{- $migrationFailed := eq $migrationPhase "failed" }}
+            {{- /*
+              FAILURE IS NEVER LATCHED (bug.5309). $migrationPhase above deliberately falls
+              back to the PREVIOUS phase so status.migration does not blink out on the ticks
+              that carry no migration answer — that latch is for DISPLAY and is correct. But
+              deciding the XR is terminally Failed from a latched value makes one transient
+              `failed` permanent: the actuator then reports `succeeded` on every later tick and
+              the XR keeps re-emitting MigrationFailed forever, because a response WITHOUT a
+              migration phase re-reads the stale `failed` out of its own status.
+              Observed on toks4 candidate-a: Job succeeded=1/failed=0, pod logged
+              "migrate complete: 1 migration(s) applied + verified", database present, actuator
+              logged akash_tx_migration_succeeded x6 — and the XR sat Failed/MigrationFailed
+              with an empty observedBundle and a 404 edge, with no path forward.
+              So the TERMINAL decision reads the CURRENT response only. No fresh `failed`, no
+              failure. Same correction shape as bug.5301's DNS gate and #2464's None sentinel.
+            */ -}}
+            {{- $migrationFailed := eq (dig "migration" "phase" "" $resp) "failed" }}
 
             {{- /*
               LATCHED observed bundle. Only a workload that actually SERVED its exact source sha

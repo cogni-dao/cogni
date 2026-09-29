@@ -261,6 +261,24 @@ describe("XComputeWorkload composite API (task.5096)", () => {
 });
 
 describe("XComputeWorkload Composition (task.5096)", () => {
+  it("never latches a migration failure into a terminal phase (bug.5309)", () => {
+    // The DISPLAY latch is correct and must stay: status.migration.phase falls back to the
+    // previous phase so it does not blink out on ticks carrying no migration answer.
+    expect(templateCode).toContain(
+      '$migrationPhase := dig "migration" "phase" $prevMigrationPhase $resp'
+    );
+    // The TERMINAL decision must read the CURRENT response only. Deciding from the latched
+    // $migrationPhase made one transient failure permanent: toks4 candidate-a sat
+    // Failed/MigrationFailed with a succeeded Job, a present database and the actuator
+    // logging akash_tx_migration_succeeded, and could never recover.
+    expect(templateCode).toContain(
+      '$migrationFailed := eq (dig "migration" "phase" "" $resp) "failed"'
+    );
+    expect(templateCode).not.toMatch(
+      /\$migrationFailed\s*:=\s*eq\s+\$migrationPhase/
+    );
+  });
+
   it("delegates all generic reconciliation to pinned OSS functions", () => {
     expect(compositionSpec.mode).toBe("Pipeline");
     expect(
@@ -627,7 +645,9 @@ describe("XComputeWorkload migration decoupling (task.5135)", () => {
     // The loudness half of the fix. A migration that will never succeed must not hide behind a
     // retryable refusal's "Progressing" — that is what an indefinite silent stall looks like.
     expect(template).toContain(
-      '$migrationFailed := eq $migrationPhase "failed"'
+      // bug.5309: the terminal decision reads the CURRENT response, never the latched
+      // $migrationPhase — latching it made one transient failure permanent.
+      '$migrationFailed := eq (dig "migration" "phase" "" $resp) "failed"'
     );
     expect(template).toContain("{{- else if $migrationFailed }}");
     expect(template).toContain('$failReason = "MigrationFailed"');
