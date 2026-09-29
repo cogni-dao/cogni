@@ -84,7 +84,7 @@ The branch model, deploy-state model, and axioms below are the live contract —
     **Uniform substrate across the lifecycle — selection convergence (in-flight).** The lane runs the same per-node logic everywhere, but the _selection_ of which nodes get it currently differs per workflow (candidate-flight's node-formation/node-ref gates vs promote's `has_node_targets`). That divergence let `candidate-a` and `preview` reconcile substrate differently — so a node "validated" on candidate-a did not match preview/prod behavior. The target is **identical substrate behavior at every lifecycle stage** (spawn → candidate-a flight → merge→preview → promote→prod): one shared per-node substrate **runner** (`materialize → reconcile → provision` for a single node) called by every lane with the **same** rule — _the deployable nodes this flight touches get their substrate_ — so "node-formation" stops being a special case. The runner extraction + selection convergence is the active cleanup; until it lands, treat any per-env substrate-selection difference as a bug, not a contract.
 
 23. **`AKASH_IS_NODE_APP_TARGET`** (story.5016). Akash is a standard node-app deployment target selected per environment by the catalog's `deployment_provider`. Node apps run as **app-only decentralized-compute workloads**: the existing flight/promotion workflow resolves the immutable node artifact, materializes provider-neutral desired state into the node's deploy branch, and Argo delivers it to **Crossplane**, which reconciles the `XComputeWorkload` composite through the private **`akash-tx-actuator`** — the sole writer that calls `ComputeResourcePort` / `AkashComputeAdapter` (the legacy leader-elected in-cluster `compute-workload-controller` was RETIRED, story.5016; deleted from the tree). CI and public REST routes never write provider state. Absent placement is a HARD FAILURE, never a silent fallback (`NO_SILENT_DEFAULT`, story.5040). A node row missing `deployment_provider`, `compute_api`, or `lease_generation` for an environment it declares must halt the render with the missing cell named — it must NOT fall through to the deprecated k3s app lane. The old "absent placement remains k3s for backwards compatibility" clause is WITHDRAWN: every fleet row now declares `akash`, so there is nothing left to be compatible with, and the fallback silently produced workloads that could never boot (bug.5177, bug.5182, bug.5179, bug.5146). The node wizard's future default is `deployment_provider: akash` (born-on-Akash) after the full environment ladder is proven. See [`cicd-platform-boundary.md`](./cicd-platform-boundary.md) for the port/adapter contract.
-24. **`CHERRY_IS_STATE_SUBSTRATE`**. The Cherry VM/k3s cluster is the **state substrate**: postgres, doltgres, redis, temporal, LiteLLM, and the shared scheduler-worker — plus the legacy node-app lane until migration completes. Akash workloads carry no infra: databases, queues, or model gateways as workload sidecars are the rejected anti-pattern (`APP_ONLY_NO_INFRA`, `infra/crossplane/xcomputeworkload/xrd.yaml` — the composite API has no vocabulary for a database, queue or model gateway, so the anti-pattern is unrepresentable rather than merely rejected; workload sizing is owned by `packages/repo-spec/src/node-app-deployment.ts`). State stays on Cherry; apps dial it over allowlisted egress with node-scoped, budget-capped credentials only (`SCOPED_CREDS_ONLY`).
+24. **`CHERRY_IS_STATE_SUBSTRATE`**. The Cherry VM/k3s cluster is the **state substrate**: postgres, doltgres, redis, temporal, LiteLLM, and the shared scheduler-worker — plus the legacy node-app lane until migration completes. Akash workloads carry no infra: databases, queues, or model gateways as workload sidecars are the rejected anti-pattern (`APP_ONLY_NO_INFRA`, `infra/crossplane/xcomputeworkload/xrd.yaml` — the composite API has no vocabulary for a database, queue or model gateway, so the anti-pattern is unrepresentable rather than merely rejected). State stays on Cherry; apps dial it over allowlisted egress with node-scoped, budget-capped credentials only (`SCOPED_CREDS_ONLY`).
 25. **`SIDECAR_IS_SDL_SERVICE`**. An app-adjacent sidecar image (a node publishing a second deployable from the same `source_repo/sourceSha`) ships as an **additional service in the same Akash lease** — the SDL renderer meshes non-global exposes by service name (`INTERNAL_EXPOSE_IS_MESH`), preserving no-public-expose isolation. Sidecars are never injected into k8s pods via overlay/kustomize machinery (that lane was closed with PR #1884; reference contract: `cogni-dao/poly#10`).
 26. **`OPERATOR_OWNS_WORKLOAD_HEALTH`**. Off-k3s there are no provider-side Argo
     probes or self-heal. Git/Argo therefore applies provider-neutral
@@ -106,20 +106,17 @@ metadata.generation`; uncertain mutations fail closed rather than blindly duplic
     `argocd-*` ConfigMap — pinned by
     `tests/ci-invariants/argocd-core-configmap-ownership.spec.ts`. A lease dying silently is a contract violation
     of this axiom, not an operational surprise. Health endpoints contract:
-    [`health-probes.md`](./health-probes.md).
-
-    **`NO_HOMEGROWN_CONTROL_PLANE`** (task.5098). Crossplane **is** the Axiom 26
-    implementation. Generic reconciliation — watches, retries, backoff,
-    status/conditions, finalizers, composition, deletion policy, leader election — is
-    **bought, never written**. A new bespoke in-cluster controller, reconcile loop, or
-    second desired-state registry for compute is **prohibited**. The one Cogni-owned
-    process on this path is the `akash-tx-actuator`, and it is a **service, not a
-    controller**: four bounded operations, no watch, no timer, no finalizer, no retry
-    loop, no leader election. The bespoke `compute-workload-controller` that once held
-    this was written, frozen, and deleted (story.5016 → task.5098); it is the worked
-    example of the cost, not a template. Its deletion removed 7,571 lines and
-    introduced zero type errors — the measure of how little it was load-bearing by the
-    end.
+    [`health-probes.md`](./health-probes.md). **`NO_HOMEGROWN_CONTROL_PLANE`** (task.5098):
+    Crossplane **is** the Axiom 26 implementation. Generic reconciliation — watches,
+    retries, backoff, status/conditions, finalizers, composition, deletion policy,
+    leader election — is **bought, never written**. A new bespoke in-cluster
+    controller, reconcile loop, or second desired-state registry for compute is
+    **prohibited**. The one Cogni-owned process on this path is the
+    `akash-tx-actuator`, and it is a **service, not a controller**: four bounded
+    operations, no watch, no timer, no finalizer, no retry loop, no leader election.
+    The bespoke `compute-workload-controller` that once held this was written,
+    frozen, and deleted (story.5016 → task.5098); it is the worked example of the
+    cost, not a template.
 
 ### Story.5016 GitOps corrections
 

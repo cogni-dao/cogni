@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import type { ProvisionState } from "@cogni/ai-tools";
-
 export interface ComputeWorkloadSource {
   readonly repository: string;
   readonly sha: string;
