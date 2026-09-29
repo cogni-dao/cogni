@@ -38,7 +38,7 @@ intent:
   # substrate at session start. brand: self-hosted thumbnail + monogram tint. All projected to
   # /.well-known/agent.json so the operator gallery reads identity from repo-spec, never hardcodes it.
   hook: "Optimizing the tooling + CICD for node-template spawns"
-  mission: "Empower decentralized communities to build, ship, and govern reliable AI-native software — and credit every contributor fairly. Operator makes spawning a crypto-native community AI one click: the whole backend substrate, plug-and-play, so each node builds its mission, not its plumbing."
+  mission: "Empower decentralized communities to build, ship, and govern trustworthy AI-native software, fast — and credit every contributor fairly. One click spawns a crypto-native community AI with its whole backend already running, so each node builds its mission, not its plumbing — and grows into the living expert on its niche."
   brand:
     # `icon` is the SSOT for the node's mark (gallery card, og:image). It is polymorphic: a Lucide
     # NAME (most nodes) OR a hosted image path (a real logo). The operator IS Cogni, so its mark is
