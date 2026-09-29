@@ -103,10 +103,10 @@ describe("renderBundleMarkdown", () => {
     expect(markdown).toContain("- Recall before write, refine over extend.");
     // No second-recall footer: the bootstrap IS the orientation.
     expect(markdown).not.toContain("for the full context");
-    // Map comes before the constitution.
-    expect(markdown.indexOf("## Orientation — recall this first")).toBeLessThan(
-      markdown.indexOf("## Tooling invariants")
-    );
+    // ONE VOICE (task.5155): a served orientation IS the constitution — the
+    // code-owned invariants + watch-gate must NOT render alongside it.
+    expect(markdown).not.toContain("## Tooling invariants");
+    expect(markdown).not.toContain("<watch-gate");
   });
 
   // The bundle is served to every harness (Claude Code, Codex, OpenAI, plain
@@ -169,6 +169,10 @@ describe("renderBundleMarkdown", () => {
 
     expect(markdown).toContain("## Orientation — recall this first");
     expect(markdown).toContain("No `operator-agent-orientation` entry yet");
+    // Fallback constitution: with no orientation the code-owned invariants +
+    // watch-gate DO render — a session on an empty hub still gets the rules.
+    expect(markdown).toContain("## Tooling invariants");
+    expect(markdown).toContain("<watch-gate");
   });
 
   it("fails closed before a SessionStart bundle can exceed its strict byte budget", () => {

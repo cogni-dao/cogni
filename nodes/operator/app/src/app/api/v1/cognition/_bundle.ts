@@ -8,8 +8,9 @@
  *   that frames hub-delivered skills + domain pointers for a SessionStart hook.
  * Scope: Pure functions + the invariants constant. No I/O, no env, no container.
  * Invariants:
- *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: the constant is the one piece of
- *     cognition that must render even when the hub is empty/unreachable.
+ *   - ONE_VOICE: a served orientation entry IS the constitution — the
+ *     code-owned invariants + watch-gate render ONLY when no orientation
+ *     exists (empty/unseeded hub fallback), never alongside it (task.5155).
  *   - ORIENTATION_LOADED_IN_FULL: renders pointers (id + title + recall path)
  *     for skills/domains, but the current-node `<slug>-agent-orientation` entry
  *     is rendered IN FULL — the bootstrap IS the agent's operating map, so the
@@ -221,6 +222,25 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
         `_No \`${name}-agent-orientation\` entry yet. Recall the hub, then seed one — the current-node operating map for agents (what this node is, where authority lives, what's safe, what to recall next) — and refine it as the repo changes._`,
       ];
 
+  // ONE VOICE: when the hub serves an orientation, it IS the constitution —
+  // the code-owned invariants + watch-gate would restate it in different words
+  // (the two-constitution bundle agents flailed past, task.5155). They render
+  // ONLY as the empty-hub fallback, their original design intent.
+  const fallbackConstitution = orientation
+    ? []
+    : [
+        "",
+        "## Tooling invariants",
+        "",
+        invariants,
+        "",
+        `_Your candidate (flight + validate target): \`https://${candidateHost}\` · Loki namespace \`cogni-candidate-a\`._`,
+        "",
+        "## Watch an async gate — CI · flight · deploy",
+        "",
+        SESSION_WATCH_GATE,
+      ];
+
   return [
     `# ${name} — Cogni Session Cognition`,
     "",
@@ -229,16 +249,7 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     `> Delivered at session start from ${origin}/api/v1/cognition — replaces git-synced AGENTS.md sprawl. (node \`${node}\` · build \`${buildSha}\`)`,
     "",
     ...orientationLines,
-    "",
-    "## Tooling invariants",
-    "",
-    invariants,
-    "",
-    `_Your candidate (flight + validate target): \`https://${candidateHost}\` · Loki namespace \`cogni-candidate-a\`._`,
-    "",
-    "## Watch an async gate — CI · flight · deploy",
-    "",
-    SESSION_WATCH_GATE,
+    ...fallbackConstitution,
     "",
     "## Skills index (recall full content from the hub before acting)",
     "",
