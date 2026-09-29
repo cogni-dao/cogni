@@ -10,7 +10,7 @@ implements:
   - proj.repo-sync
 owner: derekg1729
 created: 2026-05-26
-verified: 2026-05-26
+verified: 2026-09-29
 tags:
   - ci-cd
   - deployment
@@ -77,7 +77,7 @@ Define the contract that:
 
 12. **SYNC_IS_A_REVIEWED_PR**: the refresh opens ONE pull request as the operator GitHub App, parented on the mirror's own `main` so it is conflict-free by construction. It never pushes or force-pushes `main`, and hub `production`/`staging` secret material is declared hub-only so it cannot enter the mirror's tree by construction rather than by convention.
 
-13. **THREE_TIER_FORK_SYNC**: The `node-template → fork` propagation (a different axis from hub↔artifact drift above) is **three** tiers, by content kind: **Tier 1 — flight contract** (force-overwritten), **Tier 2 — foundational substrate** (node-template-authoritative overlay → always auto-mergeable), **Tier 3 — node identity/presentation** (NEVER synced — `node-template` is a starter). For Tier 2, **node-template wins** every shared (non-`node_local`) path; the upstream branch is parented on the fork tip so the PR is conflict-free by construction (`TIER2_NODE_TEMPLATE_AUTHORITATIVE` + `TIER2_IS_ALWAYS_MERGEABLE`). The Tier-3 set is **declared as data** in `.cogni/sync-manifest.yaml`'s `node_local:` block (read at runtime from the template's own copy, `TIER3_IS_DATA`), and is left as the fork's own version (never overlaid). Operator mission: _build their mission (Tier 3, node-owned), not their plumbing (Tier 1+2, synced)_. See § Three-Tier Fork Sync.
+13. **AUTOMATIC_FORK_SOURCE_SYNC_IS_DISABLED**: a `node-template` default-branch push MUST NOT create or update branches or PRs in child node repositories. The webhook recognizes the push and emits `node_template_fork_sync_disabled`, but never resolves the deploy plane. This fail-closed stop was imposed by bug.5304 after the old template-authoritative overlay rewrote product paths in every active fork and deleted Poly's rendered copy-trading dashboard. Until versioned package, reusable-workflow, and fail-closed migration lanes replace it, cross-repo updates are ordinary reviewed per-node PRs.
 
 14. **OWNER_APP_BOUNDARY_FAILS_CLOSED**: every `role: test-parent` artifact declares the non-secret GitHub App ID + slug allowed to write its owner. The workflow mints with that manifest ID, masks decoded key material before workflow output, and verifies the returned App slug before any repository write. It never selects an App ID from a generic environment secret. A stale cross-environment keypair therefore fails authentication instead of widening authority or writing to the wrong org.
 
@@ -136,42 +136,43 @@ This is the inverse of the v1 (schema=1) form, which enumerated `scope[]` of inc
 
 See the live file for current content. The schema is the durable contract; if doc and live drift, the schema wins.
 
-The manifest also carries a top-level **`node_local:`** glob block — the Tier-3 declaration consumed by § Three-Tier Fork Sync below. It is a **different axis** from `divergences[]`: `divergences` is the hub↔artifact drift model (consumed by the drift-detector); `node_local` is the node-template→fork carve-out (consumed by the operator's fork-sync at runtime). A path may legitimately appear in neither, one, or both.
+The manifest still carries the legacy top-level **`node_local:`** glob block for schema compatibility and historical fork ownership declarations. Automatic node-template→fork source sync is disabled, so no runtime writer consumes this block. `divergences[]` remains the active hub↔artifact drift-detector axis.
 
 ---
 
-## Three-Tier Fork Sync
+## Automatic Fork Source Sync (Disabled)
 
-The hub↔artifact drift model above is the **detector** axis (surfacing). The **`node-template → spawned fork`** propagation is a separate, actively-pushing axis: on a push to `node-template`'s default branch the operator GitHub App opens sync PRs on every child fork (`dispatchCanonicalForkSync` → `fanOutForkSync`). It is **three tiers, by content kind:**
+The hub↔artifact drift model above remains an active **detector** axis. Automatic
+`node-template → spawned fork` source propagation is not active.
 
-| Tier                                 | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Mechanism                                                                                                                                          | Mergeability                                                                      |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| **1 — Flight contract**              | **Roots:** `.github/workflows/{ci.yaml,pr-build.yml,pr-lint.yaml}`, `scripts/check-node-ci-workflow.mjs` (`CI_CONTRACT_PATHS`) + the identity substrate (`IDENTITY_SUBSTRATE_PATHS`). **Delivered:** their transitive closure at the source SHA — every `scripts/**` a canonical workflow invokes and every module a canonical contract barrel re-exports (`TIER1_IS_CLOSED`)                                                                                                                                                                           | Surgical force-overwrite (`syncCanonicalFilesToFork`)                                                                                              | byte-safe, lands even when Tier 2 conflicts                                       |
-| **2 — Foundational substrate**       | the rest of the node's plumbing: `app/src/app/api/**`, `app/src/shared/**`, `app/src/bootstrap/**`, `graphs/**`, `packages/**`, base `k8s/`, etc. — everything **not** Tier 1 or Tier 3                                                                                                                                                                                                                                                                                                                                                                 | node-template-authoritative overlay onto the fork tip (`syncTemplateUpstreamToFork`): node-template wins shared files; fork-unique files preserved | **conflict-free → always auto-mergeable** (branch is a descendant of fork `main`) |
-| **3 — Node identity / presentation** | the node's _face_: homepage (`app/src/app/(public)/page.tsx`), home feature surface (`app/src/features/home/**`), branding/theme/assets, `.cogni/repo-spec.yaml`, persona — declared in `.cogni/sync-manifest.yaml#node_local`. **Scope is the face, NOT the shell**: generic `(public)/` chrome (`layout.tsx`, `error.tsx`, `loading.tsx`) and platform routes (`propose/merge/**`) are Tier 2 — carving the whole `(public)/**` out strands forks at stale shells that break against changed shared components (e.g. `AppHeader`'s `brandMark` prop). | **NEVER synced.** Left as the fork's own version (never overlaid)                                                                                  | n/a — opens no PR                                                                 |
+`dispatchCanonicalForkSync` still narrows verified GitHub payloads to a node-template default-branch
+push so production records the event. Its terminal behavior is deliberately limited to one structured
+warning, `node_template_fork_sync_disabled`; it does not instantiate `OperatorDeployPlanePort`, enumerate
+forks, read `node_local`, create branches, or open PRs.
 
-### Invariants
+### Incident evidence
 
-- **`TIER1_IS_CLOSED`**: the Tier-1 lists in the operator are **roots**, not the delivered set. `syncCanonicalFilesToFork` walks them to a fixpoint at the source SHA (`nodes/operator/app/src/shared/node-app-scaffold/canonical-path-closure.ts`) so a canonical workflow ships with the `scripts/**` it invokes, and a canonical contract barrel ships with the modules it re-exports plus the package build manifest that compiles them. A node-template PR that adds a CI script or a `packages/repo-spec` module needs **no operator change**. Derivation is deliberately **bounded** (`CLOSURE_IS_BOUNDED`): only canonical workflows, `scripts/**`, and `packages/<pkg>/**` expand — the app's `@/…` graph is never followed, because the app is Tier-2 substrate and following it would drag the whole tree into the force-overwrite tier. A path reached by a real module edge is **required** (absent at source ⇒ the sync fails closed); a path reached by a textual workflow reference is best-effort. _Why this invariant exists:_ the list used to be hand-maintained, and the PR that added `oras push`-of-an-OCI-bundle to `pr-build.yml` shipped every fork a workflow calling four `scripts/ci/*.mjs` it never delivered and an `index.ts` re-exporting an `artifact-bundle.ts` it never delivered — every fork's build broke and none could publish an Akash-consumable bundle (task.5078). Same failure class as a second reader of a catalog SSOT.
-- **`TIER3_IS_DATA`**: the Tier-3 set is **declared**, not hardcoded in the operator. It lives in `node-template`'s `.cogni/sync-manifest.yaml#node_local` and is read at runtime from the template at the pushed SHA (`OperatorDeployPlanePort.resolveNodeLocalPaths`). A node-template PR that adds a new presentation directory declares it node-local **in the same PR**. A hardcoded floor (`nodes/operator/app/src/shared/node-app-scaffold/node-local-paths.ts`, `DEFAULT_NODE_LOCAL_PATHS`) is used only when the template manifest omits the block, so the carve-out is never empty.
-- **`TIER2_NODE_TEMPLATE_AUTHORITATIVE`**: for shared substrate (everything not Tier 1 or Tier 3), **node-template wins**. The Tier-2 commit overlays node-template's blob (mode preserved) onto the fork tip for every non-`node_local` path that differs. This is what dissolves the recurring conflict class: a fork that drifted in a shared path — e.g. a fix hand-ported to the fork _and_ to node-template independently (`ONE_FIX_ONE_LINEAGE`), re-authored with a different comment → cosmetic conflict — is simply overwritten with node-template's version. Fork-_unique_ shared files (present on the fork, absent upstream) are preserved; node-template's _deletions_ of shared files do not propagate (a fork keeps what node-template removed). A fork that must own a shared path declares it `node_local` (Tier 3).
-- **`TIER3_NEVER_SYNCED`**: `node-template` is a **starter**, not a parent — its identity/presentation must never overwrite a fork's. `node_local` paths are left as the fork's `main` version (never overlaid); an upstream-introduced `node_local` file the fork lacks is simply not added.
-- **`TIER2_IS_ALWAYS_MERGEABLE`**: the upstream branch is built as a merge commit parented on **both** the fork tip and `templateSha`, so it is a **descendant of fork `main`**. The same-repo PR (head=branch → base=`main`) is therefore conflict-free **by construction** — no fork-owner conflict resolution, even when the fork drifted in shared paths. (The prior design carved only Tier 3 and relied on forks never editing Tier 2; hand-ported fixes broke that assumption — see § Why this shape.)
-- **`TIERS_DECOUPLED`**: per-tier, per-fork error isolation — a Tier-1 failure never blocks Tier 2 and vice versa.
+The retired mechanism had two writing tiers: a force-overwrite closure for CI/identity files and a
+catch-all template-authoritative overlay for everything not declared `node_local`. The overlay began
+with each fork's tree, replaced every differing non-`node_local` blob with the template blob, and
+parented the result on the fork tip. That made the result conflict-free by construction by suppressing
+the very divergence signal that should have stopped the write.
 
-### Why this shape (the #30 symptom)
+In the 2026-09-27/28 sync wave, every active fork received product-path rewrites. Poly PR #32
+(`d685fc8`) replaced its dashboard and deleted all rendered copy-trading surfaces one day after they
+shipped. Beacon lost platform-connection UI; LevelUp and Toks5 lost fork-specific governance/profile
+behavior; Toks4 also received product-path changes. This disproved both
+`TIER2_NODE_TEMPLATE_AUTHORITATIVE` and `TIER2_IS_ALWAYS_MERGEABLE` as safe invariants.
 
-Before this, Tier 2 merged the _whole repo_, so a node-template homepage PR ([node-template#30](https://github.com/Cogni-DAO/node-template/pull/30)) swept node-local presentation into every fork. The resulting fork PRs (oss/beacon) came up **DIRTY** — conflicted on the forks' own homepages — _and_ carried real cognition-substrate edits (`app/src/app/api/v1/cognition/_bundle.ts`, `packages/knowledge-base/src/seeds/base.ts`) in the same PR. You could neither merge (forces unwanted homepage) nor close (drops substrate). Splitting substrate (Tier 2, synced) from identity (Tier 3, node-owned) dissolves the bind: the substrate flows automatically; the homepage stays the fork's.
+### Current operating rule
 
-### Mechanism
-
-Approach: **node-template-authoritative overlay, parented on the fork tip** (`buildUpstreamMergeCommit`). The living branch `cogni-operator/node-template-upstream` is materialized as a merge commit whose:
-
-- **base tree** is the fork's `main` tree (so fork-unique files + Tier-3 ride along untouched);
-- **overlay** replaces every non-`node_local` blob that differs with node-template's version, mode preserved (node-template wins Tier-2 — `TIER2_NODE_TEMPLATE_AUTHORITATIVE`);
-- **parents** are `[forkMain, templateSha]` — making the branch a descendant of fork `main`, so the PR is conflict-free by construction (`TIER2_IS_ALWAYS_MERGEABLE`).
-
-When nothing in Tier-2 differs the branch points at the fork tip and the PR no-ops to `up_to_date`. This replaces the earlier "restore-Tier-3-inside-a-three-way-merge" approach, which preserved fork Tier-2 edits and therefore **conflicted** whenever a fork drifted in a shared path (the `ONE_FIX_ONE_LINEAGE` hand-port case).
+- A template push creates **zero** fork source-sync branches and PRs.
+- Existing adapter primitives (`syncCanonicalFilesToFork`, `syncTemplateUpstreamToFork`) are dormant
+  removal debt, not an authorized alternate entry point.
+- Cross-repo fixes use explicit, ordinary per-node PRs while package/workflow/migration distribution is
+  built. Product ownership is never inferred from absence in an exception list.
+- Compatibility is not source equality: a node's supported platform version and conformance behavior
+  determine health. A divergent source tree that satisfies the contract is decoupled, not stale.
 
 ---
 
