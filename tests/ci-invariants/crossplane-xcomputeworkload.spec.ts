@@ -1004,12 +1004,19 @@ describe("XComputeWorkload DNS survives a promotion transition (bug.5188)", () =
     // The render gate is what a transient endpoint-less observe used to fail: an omitted child
     // is garbage-collected, which fires a real Cloudflare DELETE and takes the live proxied
     // CNAME to NXDOMAIN. The gate must read the latched value so the child keeps rendering.
-    expect(templateCode).toContain(
-      'if and $dns (ne $effectiveDnsTarget "") $renderLease'
-    );
-    expect(templateCode).not.toContain(
-      'if and $dns (ne $dnsTarget "") $renderLease'
-    );
+    expect(templateCode).toContain('if and $dns (ne $effectiveDnsTarget "")');
+    expect(templateCode).not.toContain('if and $dns (ne $dnsTarget "")');
+  });
+
+  it("never couples DNS publication to lease liveness (bug.5301)", () => {
+    // Third instance of this hazard class: an omitted dns-record child is a REAL Cloudflare
+    // DELETE. bug.5188 defended the mid-promote collapse with the last-known-good latch, but
+    // the gate still shared $renderLease — so every terminal lease condition (budget close,
+    // recovery exhaustion, Hold-park, foreign-key closure) took the public hostname to
+    // NXDOMAIN (beacon/node-template, 2026-09-28). Once onGiveUp: Replace is armed, closure
+    // is ROUTINE and each recovery cycle would open an NXDOMAIN window. The hostname
+    // withdraws only on genuine XR deletion via finalization.
+    expect(templateCode).not.toMatch(/if and \$dns [^\n]*\$renderLease/);
   });
 
   it("adopts a genuinely-new target only once the new revision actually serves", () => {

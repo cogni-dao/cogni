@@ -641,7 +641,15 @@ spec:
             {{- end }}
 
             {{- /* ---------- composed: DNS intent ---------- */ -}}
-            {{- if and $dns (ne $effectiveDnsTarget "") $renderLease }}
+            {{- /* LEASE LIVENESS AND DNS PUBLICATION ARE DIFFERENT CONCERNS (bug.5301). This
+              gate used to include $renderLease, so EVERY terminal lease condition (budget
+              close, recovery exhaustion, Hold-parked or foreign-key closure) also GC-deleted
+              the public hostname -> live Cloudflare DELETE -> NXDOMAIN (beacon/node-template,
+              2026-09-28). With Replace armed, closure becomes routine and every recovery cycle
+              would open an NXDOMAIN window. The record now withdraws only on genuine XR
+              deletion via normal finalization — the same class of hazard the last-known-good
+              latch above already defends for the mid-promote case. */ -}}
+            {{- if and $dns (ne $effectiveDnsTarget "") }}
             {{- $cfBase := printf "https://api.cloudflare.com/client/v4/zones/%s/dns_records" $dns.zoneId }}
             {{- $cfToken := printf "Bearer {{ operator-env-secrets:%s:CLOUDFLARE_API_TOKEN }}" $writerNs }}
             {{- $cfPayload := dict "name" $publicHost "content" $effectiveDnsTarget }}
