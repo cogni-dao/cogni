@@ -11,13 +11,13 @@ spec:
   nodeId: f97f68f2-8406-4a3b-b5a9-d579b779f19d
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/beacon@sha256:52dae7d97847b93b65a37cf7612156fb18a4d08fbe35ce52288727fec89de087
+    ref: ghcr.io/cogni-dao/beacon@sha256:7ca75deedc27e16e6f817a8ad982784e5565dd854a364955954582cea6f0dd26
     source:
       repository: cogni-dao/beacon
-      sha: f9d25b63f4c9bfea1362a6057b5bc48e273a47af
+      sha: b9ab46c182d98c091bb44f181b87ece93f468823
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/beacon@sha256:519a9e5758e5e61491db3415040758d29189419b6cce4bf533c487949a726148
+        image: ghcr.io/cogni-dao/beacon@sha256:11eccd83478b38ef04b5d95a5811827cee58b28b19467586424d94db7c4c0bf2
   workload:
     name: beacon
     publicHost: beacon.cognidao.org
@@ -29,6 +29,7 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DOLTGRES_URL
           - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
@@ -44,7 +45,7 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
-  leaseGeneration: 0
+  leaseGeneration: 2
   dns:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
