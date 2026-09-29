@@ -1088,6 +1088,8 @@ describe("catalog lease generation naming", () => {
       lease_generation?: Record<string, number>;
     };
     // story.5047: bumped 1->2 to force a fresh mint delivering DOLTGRES_URL (knowledge heal).
-    expect(toks5.lease_generation?.production).toBe(2);
+    // bug.5302: bumped 2->3 — the gen-2 lease died in the 2026-09-29 account-depletion
+    // event (escrow drained fleet-wide); 3 is the funded replacement mint.
+    expect(toks5.lease_generation?.production).toBe(3);
   });
 });
