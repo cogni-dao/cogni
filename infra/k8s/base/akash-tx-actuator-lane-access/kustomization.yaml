@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# NO `namespace:` and NO `namePrefix:` here on purpose: every object states the lane namespace it
+# belongs to, and the subject must keep the name the production overlay already gave the SA.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - lane-access.yaml
