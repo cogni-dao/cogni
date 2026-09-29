@@ -195,6 +195,13 @@ patches:
       - op: add
         path: /data/OPENFGA_API_URL
         value: "http://operator-openfga-external:8080"
+      # App-side READ pin (story.5039 lease views + task.5132 env-verb generation
+      # evidence): createLeaseReadCapability returns undefined without it, so the
+      # ADD verb cannot derive lease_generation and fails closed. Same PUBLIC
+      # value the akash-tx-actuator Deployment pins above — not a secret.
+      - op: add
+        path: /data/AKASH_ACTUATOR_ACCOUNT_ID
+        value: "akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt"
       # Node self-serve secret writes — the operator's OpenBao writer role (the
       # SA + projected token are wired on the Deployment below). OPENBAO_ADDR
       # defaults to the in-cluster ClusterIP, so only the role name is set here.
