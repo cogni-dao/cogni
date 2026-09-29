@@ -11,13 +11,13 @@ spec:
   nodeId: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/node-template@sha256:e461a8ce7a67e88a8af1e7fdb3286abf147da34ac2eb39f9a561034b7e4ac441
+    ref: ghcr.io/cogni-dao/node-template@sha256:e5dbd0d6e0f3b869b34152af6a1c803a056dfc1b7da050a8da1fc9c53b35cf4a
     source:
       repository: cogni-dao/node-template
-      sha: f39ed6f159e43c7a50779b406c81ecd24fd4bae5
+      sha: 38508d33d9fa4e7771496b2a61d48bdfdb0d44e5
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/node-template@sha256:2b038a7e0dfb2997729836d1789f53f990fc73500b192256c7cf534faad9756e
+        image: ghcr.io/cogni-dao/node-template@sha256:67fe43b6d876a3b99c335f8ce83ad488cfbe60624d97d846e31916ad93e55871
   workload:
     name: node-template
     publicHost: node-template.cognidao.org
@@ -29,6 +29,8 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DOLTGRES_URL
+          - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
@@ -40,10 +42,10 @@ spec:
         memoryMi: 2048
         storageMi: 4096
   migration:
-    policy: RequireBeforeTransaction
+    policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
-  leaseEpoch: 0
+  leaseGeneration: 2
   dns:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
