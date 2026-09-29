@@ -179,6 +179,8 @@ export interface EnvPlanCurrent {
   readonly templateExternalSecretByEnv?: Readonly<Record<string, string>>;
   /** The shared `node-applicationset.yaml.tmpl` (only needed on ADD). */
   readonly appsetTemplate?: string | undefined;
+  /** Repo that hosts this fleet's deploy branches (only needed on ADD). */
+  readonly appsetRepoUrl?: string | undefined;
   /**
    * Current appsets kustomizations, keyed by CONTROL env (bug.5204) — the adapter fetches the
    * kustomization of the env whose cluster reconciles the AppSet. On ADD that is
@@ -414,12 +416,13 @@ function planAdd(args: {
     templateExternalSecret === undefined ||
     appsetsKustomization === undefined ||
     current.appsetTemplate === undefined ||
+    current.appsetRepoUrl === undefined ||
     current.port === undefined ||
     current.nodePort === undefined
   ) {
     throw new EnvPlanError(
       "env_render_inputs_missing",
-      `cannot render add of '${env}' for '${slug}': missing template overlay, external-secret, appset template, control-env ('${shape.controlEnv}') kustomization, or ports.`,
+      `cannot render add of '${env}' for '${slug}': missing template overlay, external-secret, appset template/repo URL, control-env ('${shape.controlEnv}') kustomization, or ports.`,
       422
     );
   }
@@ -487,7 +490,12 @@ function planAdd(args: {
     {
       op: "upsert",
       path: appsetPath(shape.controlEnv, env, slug),
-      content: renderNodeAppset(current.appsetTemplate, slug, env),
+      content: renderNodeAppset(
+        current.appsetTemplate,
+        slug,
+        env,
+        current.appsetRepoUrl
+      ),
     },
     {
       op: "upsert",

@@ -92,6 +92,7 @@ const APPSET_TEMPLATE = `metadata:
 spec:
   generators:
     - git:
+        repoURL: __REPO_URL__
         files:
           - path: "infra/catalog/__NODE__.yaml"
 `;
@@ -153,6 +154,7 @@ function baseCurrent(envs: readonly string[]): EnvPlanCurrent {
     templateOverlayByEnv,
     templateExternalSecretByEnv,
     appsetTemplate: APPSET_TEMPLATE,
+    appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
     appsetsKustomizationByEnv,
     port: 3200,
     nodePort: 31100,
@@ -365,6 +367,7 @@ path_prefix: nodes/node-template/
       templateOverlayByEnv,
       templateExternalSecretByEnv,
       appsetTemplate: APPSET_TEMPLATE,
+      appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
       appsetsKustomizationByEnv,
       port: 3200,
       nodePort: 30200,
@@ -676,6 +679,7 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
     templateOverlayByEnv: { "candidate-a": TEMPLATE_OVERLAY },
     templateExternalSecretByEnv: { "candidate-a": TEMPLATE_EXTERNAL_SECRET },
     appsetTemplate: APPSET_TEMPLATE,
+    appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
     appsetsKustomizationByEnv: {
       production: kustWith("production", ["blue", "operator"]),
     },
@@ -692,6 +696,7 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
       templateOverlayByEnv: { production: TEMPLATE_OVERLAY },
       templateExternalSecretByEnv: { production: TEMPLATE_EXTERNAL_SECRET },
       appsetTemplate: APPSET_TEMPLATE,
+      appsetRepoUrl: "https://github.com/cogni-test-org/cogni-monorepo.git",
       appsetsKustomizationByEnv: {
         "candidate-a": kustWith("candidate-a", ["blue", "operator"]),
       },
@@ -714,6 +719,15 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
     expect(paths(res.ops)).toContain(
       appsetPath("candidate-a", "production", SLUG)
     );
+    const appsetOp = res.ops.find(
+      (op) => op.path === appsetPath("candidate-a", "production", SLUG)
+    );
+    expect(appsetOp?.op).toBe("upsert");
+    if (appsetOp?.op === "upsert") {
+      expect(appsetOp.content).toContain(
+        "repoURL: https://github.com/cogni-test-org/cogni-monorepo.git"
+      );
+    }
     expect(paths(res.ops)).toContain(appsetsKustomizationPath("candidate-a"));
     expect(paths(res.ops)).not.toContain(
       appsetPath("production", "production", SLUG)

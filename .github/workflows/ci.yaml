@@ -31,6 +31,9 @@ env:
   # env. Default 'production' (cogni-dao); an isolated fleet (cogni-test-org) sets the repo
   # var to 'candidate-a' so its committed appsets tree matches. Read by control_env_for.
   FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+  # The repo that owns this fleet's deploy/* branches. Canonical keeps the same URL;
+  # the isolated test fleet renders its own repo instead of cogni-dao/cogni.
+  REPO_URL: https://github.com/${{ github.repository }}.git
 
 jobs:
   env_manager_fast_path:

@@ -3471,6 +3471,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         templateOverlayByEnv,
         templateExternalSecretByEnv,
         appsetTemplate,
+        appsetRepoUrl: `https://github.com/${owner}/${repo}.git`,
         appsetsKustomizationByEnv,
         port,
         nodePort,
@@ -4890,7 +4891,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
       await addBlob(
         appsetPath(controlEnv, env, slug),
-        renderNodeAppset(appsetTemplate, slug, env)
+        renderNodeAppset(
+          appsetTemplate,
+          slug,
+          env,
+          `https://github.com/${owner}/${repo}.git`
+        )
       );
       const argocdKustomization =
         kustomizationByControlEnv.get(controlEnv) ??
