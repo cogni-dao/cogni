@@ -50,7 +50,7 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 36
+  candidate-a: 37
   preview: 2
   # bug.5262 — prod's keys :0/:1/:2 were all minted then terminally CLOSED during
   # the PAPER_ENFORCE_MODE recovery (three crash-looped leases on the pre-#44 build,
