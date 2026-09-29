@@ -636,6 +636,20 @@ describe("planEnvAddShape (ADD_DERIVES_PLACEMENT, story.5039)", () => {
     ).toBe("production");
   });
 
+  it("uses candidate-a as the control env for an isolated test fleet", () => {
+    expect(
+      planEnvAddShape(
+        externallyBuiltCatalog(["candidate-a"], "cogni-test-org"),
+        "production",
+        "candidate-a"
+      )
+    ).toEqual({
+      placement: "akash",
+      computeApi: "crossplane",
+      controlEnv: "candidate-a",
+    });
+  });
+
   it("throws compute_authority_unavailable (422) when no actuator writer resolves for the owner org", () => {
     // An org outside the CROSSPLANE_ACTUATOR_WRITERS map — the schema makes an akash env without
     // compute_api INVALID, so the verb must refuse loudly rather than author an unmergeable PR.
@@ -670,6 +684,40 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
     schedulerEndpointPatchByEnv: {
       "candidate-a": schedulerPatchFixture(`http://${SLUG}-node-app:3000`),
     },
+  });
+
+  it("writes a test-fleet production lane under candidate-a's control directory", () => {
+    const current: EnvPlanCurrent = {
+      catalog: externallyBuiltCatalog(["candidate-a"], "cogni-test-org"),
+      templateOverlayByEnv: { production: TEMPLATE_OVERLAY },
+      templateExternalSecretByEnv: { production: TEMPLATE_EXTERNAL_SECRET },
+      appsetTemplate: APPSET_TEMPLATE,
+      appsetsKustomizationByEnv: {
+        "candidate-a": kustWith("candidate-a", ["blue", "operator"]),
+      },
+      port: 3200,
+      nodePort: 31100,
+      schedulerEndpointPatchByEnv: {
+        production: schedulerPatchFixture(`http://${SLUG}-node-app:3000`),
+      },
+    };
+
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "production",
+      present: true,
+      current,
+      fleetControlEnv: "candidate-a",
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(paths(res.ops)).toContain(
+      appsetPath("candidate-a", "production", SLUG)
+    );
+    expect(paths(res.ops)).toContain(appsetsKustomizationPath("candidate-a"));
+    expect(paths(res.ops)).not.toContain(
+      appsetPath("production", "production", SLUG)
+    );
   });
 
   it("emits the FULL activation artifact set: catalog cells + control-env appset + scheduler route", () => {

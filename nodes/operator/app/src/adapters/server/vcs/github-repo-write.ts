@@ -141,6 +141,8 @@ export function envManagerCommitMessage(input: {
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
   readonly privateKey: string;
+  /** Cluster that reconciles externally placed lanes; production by default, candidate-a in test. */
+  readonly fleetControlEnv?: NodeFormationEnv;
   /**
    * Flag-gated DNS reverse/forward reconcile (story.5020 W4). v0 ships false — the env-membership verb
    * only LOGS the intended Cloudflare change. When true, the live CloudflareAdapter prune/upsert path is
@@ -3111,7 +3113,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
     let shape: EnvAddShape | undefined;
     if (present) {
       try {
-        shape = planEnvAddShape(catalog, env);
+        shape = planEnvAddShape(
+          catalog,
+          env,
+          this.config.fleetControlEnv ?? "production"
+        );
       } catch (err) {
         if (err instanceof EnvPlanError) {
           throw deployPlaneError(err.code, err.message, err.status);
@@ -3150,6 +3156,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         present,
         current,
         leaseGeneration,
+        fleetControlEnv: this.config.fleetControlEnv,
       });
     } catch (err) {
       if (err instanceof EnvPlanError) {
@@ -3477,7 +3484,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // the env's scheduler-worker route to the in-cluster default, so fetch that env's patch too.
     // (Caddy is per-node env-independent state and NOT touched by an env remove.)
     const removeProvider = parseCatalogPlacement(catalog)[env] ?? "k3s";
-    const removeControlEnv = controlEnvFor(env, removeProvider);
+    const removeControlEnv = controlEnvFor(
+      env,
+      removeProvider,
+      this.config.fleetControlEnv ?? "production"
+    );
     appsetsKustomizationByEnv[removeControlEnv] = await this.readFileOnMain(
       octokit,
       owner,
@@ -4872,7 +4883,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // (env, slug) pair folds into the same evolving content — two blobs for one path would race.
     const kustomizationByControlEnv = new Map<string, string>();
     for (const env of NODE_FORMATION_ENVS) {
-      const controlEnv = controlEnvFor(env, birthPlacement[env] ?? "k3s");
+      const controlEnv = controlEnvFor(
+        env,
+        birthPlacement[env] ?? "k3s",
+        this.config.fleetControlEnv ?? "production"
+      );
       await addBlob(
         appsetPath(controlEnv, env, slug),
         renderNodeAppset(appsetTemplate, slug, env)

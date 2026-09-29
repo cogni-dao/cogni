@@ -84,6 +84,12 @@ export const serverSchema = z.object({
   // Deployment environment (for observability labels and analytics filtering)
   DEPLOY_ENVIRONMENT: z.string().optional(),
 
+  // Cluster that reconciles externally placed lanes for this fleet. The canonical fleet uses
+  // production; the isolated test fleet uses candidate-a and never reaches production authority.
+  FLEET_CONTROL_ENV: z
+    .enum(["candidate-a", "preview", "production"])
+    .default("production"),
+
   // Build SHA for observability (canonical source for /metrics, /readyz, agent.json)
   APP_BUILD_SHA: z.string().optional(),
 

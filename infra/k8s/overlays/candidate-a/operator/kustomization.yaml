@@ -139,6 +139,11 @@ patches:
       - op: add
         path: /data/DEPLOY_ENVIRONMENT
         value: "candidate-a"
+      # Isolated test fleet: candidate-a owns and pays for every external lane. The env-manager's
+      # TS generator must use the same control env as CI's trusted path classifier.
+      - op: add
+        path: /data/FLEET_CONTROL_ENV
+        value: "candidate-a"
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-candidate-a"
