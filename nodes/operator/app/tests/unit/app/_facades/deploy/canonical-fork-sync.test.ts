@@ -3,27 +3,22 @@
 
 /**
  * Module: `@cogni/tests/unit/app/_facades/deploy/canonical-fork-sync`
- * Purpose: Unit-prove the push guard + the three-tier fan-out (CI overwrite + substrate merge with the
- *   Tier-3 carve-out threaded in), incl. per-tier per-fork error isolation.
- * Scope: Pure `extractTemplateMainPush` + `fanOutForkSync` with a fake deploy plane. No GitHub/DB.
- * Links: src/app/_facades/deploy/canonical-fork-sync.server.ts
+ * Purpose: Prove template pushes terminate in an observable no-write state while automatic fork source
+ *   sync is disabled.
+ * Scope: Pure payload narrowing + structured logging. No GitHub, DB, or deploy-plane fake exists because
+ *   the production facade must not resolve or call one.
+ * Links: src/app/_facades/deploy/canonical-fork-sync.server.ts, bug.5304
  * @internal
  */
 
+import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  dispatchCanonicalForkSync,
   extractTemplateMainPush,
-  type ForkSyncTarget,
-  fanOutForkSync,
-  type TemplateMainPush,
 } from "@/app/_facades/deploy/canonical-fork-sync.server";
-import type {
-  DeployPlanePort,
-  MirrorCanonicalFilesResult,
-  SyncTemplateUpstreamInput,
-  SyncTemplateUpstreamResult,
-} from "@/ports";
+import type { ServerEnv } from "@/shared/env";
 
 const pushPayload = (over: Record<string, unknown> = {}) => ({
   ref: "refs/heads/main",
@@ -37,8 +32,20 @@ const pushPayload = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+function fakeLogger(): Logger {
+  return {
+    warn: vi.fn(),
+  } as unknown as Logger;
+}
+
+function env(templateOwner?: string): ServerEnv {
+  return {
+    ...(templateOwner ? { NODE_TEMPLATE_OWNER: templateOwner } : {}),
+  } as ServerEnv;
+}
+
 describe("extractTemplateMainPush", () => {
-  it("accepts a node-template default-branch push and captures the branch", () => {
+  it("accepts a node-template default-branch push", () => {
     expect(extractTemplateMainPush(pushPayload(), "Cogni-DAO")).toEqual({
       sourceOwner: "Cogni-DAO",
       sourceRepo: "node-template",
@@ -47,7 +54,7 @@ describe("extractTemplateMainPush", () => {
     });
   });
 
-  it("rejects a different owner (env-driven identity)", () => {
+  it("rejects a different owner", () => {
     expect(extractTemplateMainPush(pushPayload(), "cogni-test-org")).toBeNull();
   });
 
@@ -74,101 +81,33 @@ describe("extractTemplateMainPush", () => {
   });
 });
 
-const CTX: TemplateMainPush = {
-  sourceOwner: "Cogni-DAO",
-  sourceRepo: "node-template",
-  defaultBranch: "main",
-  afterSha: "a".repeat(40),
-};
+describe("dispatchCanonicalForkSync", () => {
+  it("records a recognized push without resolving a deploy plane or writing a fork", () => {
+    const log = fakeLogger();
 
-const TARGETS: ForkSyncTarget[] = [
-  { owner: "cogni-test-org", name: "blue", slug: "blue" },
-  { owner: "cogni-test-org", name: "oss", slug: "oss" },
-];
+    dispatchCanonicalForkSync(pushPayload(), env("Cogni-DAO"), log);
 
-const NODE_LOCAL = ["app/src/app/(public)/**", ".cogni/repo-spec.yaml"];
-
-function fakePlane(over: {
-  ci?: (repo: string) => Promise<MirrorCanonicalFilesResult>;
-  upstream?: (
-    i: SyncTemplateUpstreamInput
-  ) => Promise<SyncTemplateUpstreamResult>;
-}): DeployPlanePort {
-  return {
-    syncCanonicalFilesToFork: vi.fn((i: { targetRepo: string }) =>
-      (
-        over.ci ??
-        (async () => ({ status: "no_changes", branch: "b", changedPaths: [] }))
-      )(i.targetRepo)
-    ),
-    syncTemplateUpstreamToFork: vi.fn((i: SyncTemplateUpstreamInput) =>
-      (over.upstream ?? (async () => ({ status: "up_to_date" })))(i)
-    ),
-  } as unknown as DeployPlanePort;
-}
-
-describe("fanOutForkSync — three tiers, per-tier per-fork isolation", () => {
-  it("records both PR-opening tiers per fork and threads Tier-3 globs into the merge", async () => {
-    const plane = fakePlane({
-      ci: async (repo) => ({
-        status: "pr_opened",
-        branch: "cogni-operator/sync-canonical-abcd1234",
-        prNumber: 1,
-        prUrl: `https://github.com/cogni-test-org/${repo}/pull/1`,
-        changedPaths: [".github/workflows/ci.yaml"],
-      }),
-      upstream: async (i) => ({
-        status: "pr_opened",
-        prNumber: 2,
-        prUrl: `https://github.com/cogni-test-org/${i.forkRepo}/pull/2`,
-      }),
-    });
-    const entries = await fanOutForkSync(plane, CTX, TARGETS, NODE_LOCAL);
-    expect(entries).toHaveLength(2);
-    expect(entries.every((e) => e.ci === "pr_opened")).toBe(true);
-    expect(entries.every((e) => e.template === "pr_opened")).toBe(true);
-    expect(entries[0]?.ciPrUrl).toContain("/pull/1");
-    expect(entries[0]?.templatePrUrl).toContain("/pull/2");
-    // Tier 3 is DATA: the resolved node-local globs flow into every fork's Tier-2 merge.
-    expect(plane.syncTemplateUpstreamToFork).toHaveBeenCalledWith(
-      expect.objectContaining({ nodeLocalPaths: NODE_LOCAL })
+    expect(log.warn).toHaveBeenCalledOnce();
+    expect(log.warn).toHaveBeenCalledWith(
+      {
+        event: "node_template_fork_sync_disabled",
+        source: "Cogni-DAO/node-template@aaaaaaaa",
+        reason: "automatic fork source sync is retired after bug.5304",
+      },
+      "node_template_fork_sync_disabled"
     );
   });
 
-  it("Tier 1 failure does NOT block Tier 2 (decoupled), and vice versa", async () => {
-    const plane = fakePlane({
-      ci: async (repo) => {
-        if (repo === "blue") throw new Error("App not installed");
-        return { status: "no_changes", branch: "b", changedPaths: [] };
-      },
-      upstream: async (i) => {
-        if (i.forkRepo === "oss")
-          throw new Error("merge conflict compute failed");
-        return { status: "pr_opened", prNumber: 9, prUrl: "u" };
-      },
-    });
-    const entries = await fanOutForkSync(plane, CTX, TARGETS, NODE_LOCAL);
-    const blue = entries.find((e) => e.target.endsWith("/blue"));
-    const oss = entries.find((e) => e.target.endsWith("/oss"));
-    // blue: Tier 1 failed but Tier 2 still ran and opened.
-    expect(blue?.ci).toBe("failed");
-    expect(blue?.template).toBe("pr_opened");
-    // oss: Tier 1 fine, Tier 2 failed — isolated.
-    expect(oss?.ci).toBe("no_changes");
-    expect(oss?.template).toBe("failed");
-    expect(plane.syncCanonicalFilesToFork).toHaveBeenCalledTimes(2);
-    expect(plane.syncTemplateUpstreamToFork).toHaveBeenCalledTimes(2);
-  });
+  it("stays silent for unrelated pushes or an unconfigured template owner", () => {
+    const log = fakeLogger();
 
-  it("up_to_date upstream is a clean Tier-2 outcome", async () => {
-    const plane = fakePlane({}); // defaults: ci no_changes, upstream up_to_date
-    const entries = await fanOutForkSync(
-      plane,
-      CTX,
-      [TARGETS[0] as ForkSyncTarget],
-      NODE_LOCAL
+    dispatchCanonicalForkSync(
+      pushPayload({ repository: { name: "poly" } }),
+      env("Cogni-DAO"),
+      log
     );
-    expect(entries[0]?.template).toBe("up_to_date");
-    expect(entries[0]?.templatePrUrl).toBeUndefined();
+    dispatchCanonicalForkSync(pushPayload(), env(), log);
+
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });

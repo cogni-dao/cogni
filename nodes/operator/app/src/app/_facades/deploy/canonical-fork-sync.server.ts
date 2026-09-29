@@ -3,120 +3,31 @@
 
 /**
  * Module: `@app/_facades/deploy/canonical-fork-sync.server`
- * Purpose: node-template merge→main → fork sync. On a push to node-template's default branch, push
- *   THREE tiers to every active child fork: (1) surgical overwrite of the CI/contract files AND the
- *   node-template-authoritative IDENTITY SUBSTRATE (repo-spec parser + agent.json/header/og projection),
- *   required + always applies (never blocked by an app merge conflict); (2) an upstream-merge PR carrying
- *   the remaining foundational substrate (app/graphs/runtime/packages),
- *   with Tier 3 carved OUT so it is conflict-free + always auto-mergeable; (3) node identity/presentation
- *   (homepage, branding, repo-spec, persona) — NEVER synced, node-template is a starter only.
- * Scope: Webhook-triggered facade (sibling of dispatchNodePreviewPromote). Resolves spawned-node forks from
- *   the `nodes` table; delegates per-fork writes to the operator deploy plane. No new trigger, no token —
- *   the operator GitHub App webhook (HMAC-verified upstream) is the trigger.
+ * Purpose: Recognize node-template default-branch pushes while automatic fork source sync is disabled.
+ * Scope: Webhook-triggered facade. It performs no GitHub, database, or deploy-plane writes.
  * Invariants:
- *   - TRIGGER_IS_TEMPLATE_MAIN_PUSH: fires only on `push` to `NODE_TEMPLATE_OWNER/node-template`'s default branch.
- *   - TARGETS_FROM_PARENT_CATALOG: targets = `source_repo` rows in the parent monorepo's `infra/catalog`
- *     (`NODE_SUBMODULE_PARENT_{OWNER,REPO}`), read via the App. Env-aligned (cogni-test-org/cogni-monorepo
- *     on candidate-a → cogni-test-org forks the App can write; Cogni-DAO/cogni on prod → Cogni-DAO forks).
- *     node-template (source) + operator (hub) excluded. NOT the `nodes` table (wizard-spawn state, may not
- *     hold catalog-declared forks) and NOT the node registry (its repo is the parent monorepo / hardcoded).
- *   - TIER1_IS_CLOSED (repo-sync-contract): the Tier-1 lists below are ROOTS. The adapter expands them
- *     to their transitive closure at the source SHA, so a workflow and the scripts it invokes — and a
- *     contract barrel and the modules it re-exports — always land in the SAME sync. A node-template PR
- *     that adds a CI script or a repo-spec module needs no operator change.
- *   - TIERS_DECOUPLED (node-ci-cd-contract): Tier 1 surgically overwrites the flight-contract files so a
- *     CI fix lands cleanly even when Tier 2's substrate merge conflicts; Tier 2 preserves fork
- *     customizations (`FORK_FREEDOM`, `POLICY_STAYS_LOCAL`) via the shared merge-base. Per-tier,
- *     per-fork error isolation.
- *   - TIER3_NEVER_SYNCED (repo-sync-contract): node identity/presentation (`node_local` globs declared in
- *     node-template's sync-manifest) is restored to the fork's own version inside Tier 2's merge — never
- *     overwritten. Carving it OUT is exactly what makes Tier 1 + Tier 2 always auto-mergeable.
- * Side-effects: IO (DB read via service db, GitHub Git Data API writes via the deploy plane). Fire-and-forget.
- * Links: src/ports/deploy-plane.port.ts, src/adapters/server/vcs/github-repo-write.ts,
- *   src/app/api/internal/webhooks/[source]/route.ts, docs/spec/node-ci-cd-contract.md, docs/spec/repo-sync-contract.md
+ *   - AUTOMATIC_FORK_SOURCE_SYNC_DISABLED: a template push never creates or updates a fork branch/PR.
+ *   - OBSERVABLE_NO_WRITE: a recognized push emits one structured event so the disabled lane is visible.
+ *   - TRIGGER_IS_TEMPLATE_MAIN_PUSH: unrelated repositories and non-default branches remain silent.
+ * Side-effects: structured log only.
+ * Links: src/app/api/internal/webhooks/[source]/route.ts, docs/spec/repo-sync-contract.md,
+ *   bug.5304
  * @public
  */
 
 import type { Logger } from "pino";
-import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
-import type { DeployPlanePort } from "@/ports";
 import type { ServerEnv } from "@/shared/env";
 
 const TEMPLATE_REPO = "node-template";
 
-/**
- * Tier 1 — the required, byte-for-byte-safe CI/contract ROOTS. A fork drifting here breaks the operator's
- * flight contract (`node-ci-cd-contract` §Forward path: the fork must publish `image_repository:sha-<sha>`
- * via its build→GHCR workflow + pass its merge gate). Surgically overwritten so the fix always lands —
- * never blocked by app-level merge conflicts. Tier 2 (app/graphs/runtime) is a separate upstream-merge PR.
- *
- * These are ROOTS, not the delivered set: `syncCanonicalFilesToFork` expands them to their transitive
- * closure at the source SHA (`resolveCanonicalPathClosure`, TIER1_IS_CLOSED) — every `scripts/**` a
- * canonical workflow invokes, and every module a canonical contract barrel re-exports. Do NOT hand-add
- * a path that the closure already reaches; a hand-maintained list is exactly what shipped forks a
- * `pr-build.yml` calling `scripts/ci/*.mjs` it never delivered (task.5078).
- */
-export const CI_CONTRACT_PATHS = [
-  ".github/workflows/ci.yaml",
-  ".github/workflows/pr-build.yml",
-  ".github/workflows/pr-lint.yaml",
-  "scripts/check-node-ci-workflow.mjs",
-] as const;
-
-/**
- * Tier 1b — the node-template-authoritative IDENTITY SUBSTRATE: the repo-spec parser + the projection
- * that turns a node's `intent.brand.{icon,color}` into its `/.well-known/agent.json` (which the operator
- * gallery reads) and its own header/og mark. This code is identical across every node (it carries NO
- * node-specific content — a node customizes via its Tier-3 `repo-spec.yaml`, never this), so it ships in
- * the SURGICAL overwrite set, not the fragile Tier-2 app merge. Without this, a fork can set `brand.icon`
- * but never PROJECT it → the gallery shows a monogram forever. CI-gated like the rest of Tier 1.
- *
- * `packages/repo-spec/src/index.ts` is a ROOT whose siblings (`artifact-bundle.ts`, `parse.ts`, …) arrive
- * via the closure — the barrel's own re-exports declare them. The `app/**` entries below are hand-listed
- * on purpose: the closure deliberately never walks the app's `@/…` graph (CLOSURE_IS_BOUNDED), because
- * that graph is the whole tree and it belongs to Tier 2.
- */
-export const IDENTITY_SUBSTRATE_PATHS = [
-  "packages/repo-spec/src/schema.ts",
-  "packages/repo-spec/src/accessors.ts",
-  "packages/repo-spec/src/index.ts",
-  "app/src/shared/config/repoSpec.server.ts",
-  "app/src/shared/brand/brandIcons.tsx",
-  "app/src/app/.well-known/agent.json/route.ts",
-  "app/src/app/opengraph-image.tsx",
-  "app/src/features/layout/components/AppHeader.tsx",
-  "app/src/app/(public)/layout.tsx",
-] as const;
-
 export interface TemplateMainPush {
   readonly sourceOwner: string;
   readonly sourceRepo: string;
-  /** Default branch name (e.g. `main`) — the Tier-2 upstream merge head. */
   readonly defaultBranch: string;
-  /** The pushed commit SHA on the default branch — the Tier-1 canonical content version. */
   readonly afterSha: string;
 }
 
-export interface ForkSyncTarget {
-  readonly owner: string;
-  readonly name: string;
-  readonly slug: string;
-}
-
-export interface ForkSyncLedgerEntry {
-  readonly target: string;
-  /** Tier 1 — CI/contract overwrite. */
-  readonly ci: "pr_opened" | "no_changes" | "failed";
-  readonly ciPrUrl?: string;
-  /** Tier 2 — optional upstream app/graphs merge PR. */
-  readonly template: "pr_opened" | "up_to_date" | "failed";
-  readonly templatePrUrl?: string;
-}
-
-/**
- * Narrow a GitHub `push` webhook payload to a node-template default-branch push, or null.
- * Identity is env-driven (`NODE_TEMPLATE_OWNER`) so it works on candidate-a (cogni-test-org) and prod.
- */
+/** Narrow a GitHub push payload to a node-template default-branch push, or null. */
 export function extractTemplateMainPush(
   payload: Record<string, unknown>,
   templateOwner: string
@@ -143,72 +54,11 @@ export function extractTemplateMainPush(
 }
 
 /**
- * All tiers per fork, error-isolated. Injected `deployPlane` keeps this unit-testable with no GitHub/DB.
- * `nodeLocalPaths` (Tier 3 — node identity/presentation, resolved once from node-template's manifest)
- * is threaded into every fork's Tier-2 merge so the upstream PR carries substrate only.
- */
-export async function fanOutForkSync(
-  deployPlane: DeployPlanePort,
-  ctx: TemplateMainPush,
-  targets: readonly ForkSyncTarget[],
-  nodeLocalPaths: readonly string[]
-): Promise<readonly ForkSyncLedgerEntry[]> {
-  const out: ForkSyncLedgerEntry[] = [];
-  for (const t of targets) {
-    const target = `${t.owner}/${t.name}`;
-
-    // Tier 1 — surgical CI/contract overwrite (required).
-    let ci: ForkSyncLedgerEntry["ci"] = "failed";
-    let ciPrUrl: string | undefined;
-    try {
-      const r = await deployPlane.syncCanonicalFilesToFork({
-        sourceOwner: ctx.sourceOwner,
-        sourceRepo: ctx.sourceRepo,
-        sourceRef: ctx.afterSha,
-        targetOwner: t.owner,
-        targetRepo: t.name,
-        slug: t.slug,
-        canonicalPaths: [...CI_CONTRACT_PATHS, ...IDENTITY_SUBSTRATE_PATHS],
-      });
-      ci = r.status;
-      if (r.status === "pr_opened") ciPrUrl = r.prUrl;
-    } catch {
-      ci = "failed";
-    }
-
-    // Tier 2 — optional upstream app/graphs merge PR (independent of Tier 1's outcome).
-    let template: ForkSyncLedgerEntry["template"] = "failed";
-    let templatePrUrl: string | undefined;
-    try {
-      const r = await deployPlane.syncTemplateUpstreamToFork({
-        templateOwner: ctx.sourceOwner,
-        templateRepo: ctx.sourceRepo,
-        templateSha: ctx.afterSha,
-        forkOwner: t.owner,
-        forkRepo: t.name,
-        forkBranch: "main",
-        nodeLocalPaths,
-      });
-      template = r.status;
-      if (r.status === "pr_opened") templatePrUrl = r.prUrl;
-    } catch {
-      template = "failed";
-    }
-
-    out.push({
-      target,
-      ci,
-      ...(ciPrUrl ? { ciPrUrl } : {}),
-      template,
-      ...(templatePrUrl ? { templatePrUrl } : {}),
-    });
-  }
-  return out;
-}
-
-/**
- * Dispatch a fork sync from a GitHub `push` webhook payload.
- * Fire-and-forget: errors are logged, never thrown (the webhook 200s regardless).
+ * Deliberate fail-closed terminal for the retired automatic source-sync lane.
+ *
+ * Keep this recognition seam until the webhook caller and dormant deploy-plane methods are removed in
+ * the package/codemod migration. It proves a production template push was observed without retaining a
+ * hidden switch that could reactivate fleet writes.
  */
 export function dispatchCanonicalForkSync(
   payload: Record<string, unknown>,
@@ -219,75 +69,13 @@ export function dispatchCanonicalForkSync(
   const ctx = extractTemplateMainPush(payload, env.NODE_TEMPLATE_OWNER);
   if (!ctx) return;
 
-  if (!env.GH_REVIEW_APP_ID || !env.GH_REVIEW_APP_PRIVATE_KEY_BASE64) {
-    log.debug(
-      "canonical fork sync skipped — GH_REVIEW_APP_ID/PRIVATE_KEY not configured"
-    );
-    return;
-  }
-  if (!env.NODE_SUBMODULE_PARENT_OWNER || !env.NODE_SUBMODULE_PARENT_REPO) {
-    log.debug(
-      "canonical fork sync skipped — NODE_SUBMODULE_PARENT_{OWNER,REPO} not configured"
-    );
-    return;
-  }
-
-  void syncToAllForks(
-    ctx,
-    env.NODE_SUBMODULE_PARENT_OWNER,
-    env.NODE_SUBMODULE_PARENT_REPO,
-    env,
-    log
+  const event = "node_template_fork_sync_disabled";
+  log.warn(
+    {
+      event,
+      source: `${ctx.sourceOwner}/${ctx.sourceRepo}@${ctx.afterSha.slice(0, 8)}`,
+      reason: "automatic fork source sync is retired after bug.5304",
+    },
+    event
   );
-}
-
-async function syncToAllForks(
-  ctx: TemplateMainPush,
-  parentOwner: string,
-  parentRepo: string,
-  env: ServerEnv,
-  log: Logger
-): Promise<void> {
-  const event = "node_template_fork_sync_complete";
-  try {
-    const plane = createOperatorDeployPlane(env);
-    const targets = await plane.listCatalogForkTargets({
-      parentOwner,
-      parentRepo,
-    });
-
-    // Tier-3 globs are DATA: resolved once from node-template's own sync-manifest at the pushed SHA,
-    // then carved out of every fork's Tier-2 merge (TIER3_IS_DATA, spec.repo-sync-contract).
-    const nodeLocalPaths = await plane.resolveNodeLocalPaths({
-      sourceOwner: ctx.sourceOwner,
-      sourceRepo: ctx.sourceRepo,
-      sourceRef: ctx.afterSha,
-    });
-
-    const entries = await fanOutForkSync(plane, ctx, targets, nodeLocalPaths);
-
-    log.info(
-      {
-        event,
-        source: `${ctx.sourceOwner}/${ctx.sourceRepo}@${ctx.afterSha.slice(0, 8)}`,
-        forks: targets.length,
-        ciOpened: entries.filter((e) => e.ci === "pr_opened").length,
-        ciFailed: entries.filter((e) => e.ci === "failed").length,
-        templateOpened: entries.filter((e) => e.template === "pr_opened")
-          .length,
-        templateFailed: entries.filter((e) => e.template === "failed").length,
-        entries,
-      },
-      event
-    );
-  } catch (error) {
-    log.error(
-      {
-        event,
-        source: `${ctx.sourceOwner}/${ctx.sourceRepo}@${ctx.afterSha.slice(0, 8)}`,
-        error: String(error),
-      },
-      "canonical fork sync failed"
-    );
-  }
 }
