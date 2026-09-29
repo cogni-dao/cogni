@@ -163,7 +163,8 @@ spec:
             {{- /* ------------------------------------------------------------------
               LOWERING: full-fidelity XR -> the actuator's ProvisionSpec.
               Port of toProvisionSpec() + legacyCogniAppEnv() in
-              features/compute/compute-workload-reconciler.ts.
+              the retired features/compute/compute-workload-reconciler.ts (deleted in
+              task.5098; read it at commit 4d6fb62d if you need the original).
             ------------------------------------------------------------------ */ -}}
             {{- $images := dict }}
             {{- range $spec.bundle.artifacts }}{{ $_ := set $images .name .image }}{{ end }}

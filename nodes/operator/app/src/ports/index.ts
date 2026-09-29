@@ -113,40 +113,25 @@ export type {
   ComputeResourceCostIdentity,
 } from "./compute-cost.port";
 export { ComputeCostInvariantError } from "./compute-cost.port";
-export {
-  COMPUTE_WORKLOAD_ATTEMPT_ANNOTATION,
-  COMPUTE_WORKLOAD_FINALIZER,
-  type ComputeWorkload,
-  type ComputeWorkloadArtifact,
-  type ComputeWorkloadAttempt,
-  type ComputeWorkloadAttemptReceipt,
-  type ComputeWorkloadBundle,
-  type ComputeWorkloadCondition,
-  type ComputeWorkloadPhase,
-  type ComputeWorkloadSecretRef,
-  type ComputeWorkloadSource,
-  type ComputeWorkloadSpec,
-  type ComputeWorkloadStatus,
-  computeWorkloadIdempotencyKey,
-  type DeclaredProvisionServiceSpec,
-  type DeclaredProvisionSpec,
-  decodeAttemptReceipt,
-  encodeAttemptReceipt,
+export type {
+  ComputeWorkloadArtifact,
+  ComputeWorkloadBundle,
+  ComputeWorkloadSecretRef,
+  ComputeWorkloadSource,
+  ComputeWorkloadSpec,
+  DeclaredProvisionServiceSpec,
+  DeclaredProvisionSpec,
 } from "./compute-workload.types";
-export type { ComputeWorkloadDnsPort } from "./compute-workload-dns.port";
 export {
   ComputeLifecycleError,
   type ComputeLifecycleFailureKind,
   type ComputeLifecycleFailureReason,
-  type ComputeWorkloadLifecyclePort,
 } from "./compute-workload-lifecycle.port";
 export type {
   ComputeWorkloadMigrationInput,
   ComputeWorkloadMigrationPhase,
   ComputeWorkloadMigrationPort,
 } from "./compute-workload-migration.port";
-export type { ComputeWorkloadSecretResolverPort } from "./compute-workload-secret-resolver.port";
-export type { ComputeWorkloadStatePort } from "./compute-workload-state.port";
 export type {
   ConnectionBrokerPort,
   ConnectionScope,

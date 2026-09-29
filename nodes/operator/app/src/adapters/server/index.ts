@@ -91,24 +91,6 @@ export {
 } from "./compute/cherry-compute.adapter";
 export { DrizzleComputeCostStore } from "./compute/compute-cost-store.adapter";
 export {
-  CloudflareComputeWorkloadDnsAdapter,
-  DormantComputeWorkloadDnsAdapter,
-} from "./compute/compute-workload-dns.adapter";
-export {
-  ComputeWorkloadLifecycleAdapter,
-  DormantComputeWorkloadLifecycleAdapter,
-} from "./compute/compute-workload-lifecycle.adapter";
-export { ComputeWorkloadSecretResolverAdapter } from "./compute/compute-workload-secret-resolver.adapter";
-export {
-  DEFAULT_LEASE_DURATION_SECONDS,
-  KubernetesComputeWorkloadStateAdapter,
-  KubernetesLeaseLeaderElector,
-  LeaseRenewError,
-  type LeaseRenewFailureReason,
-  type LeaseRenewOutcome,
-  renewLeadershipOrFence,
-} from "./compute/kubernetes-compute-workload.adapter";
-export {
   DormantComputeWorkloadMigrationAdapter,
   KubernetesMigrationJobAdapter,
   migrationJobName,

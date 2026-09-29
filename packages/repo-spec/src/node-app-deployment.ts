@@ -37,7 +37,7 @@ import type { NodeDeploymentSpec, NodeServiceSpec } from "./schema.js";
  * re-list these keys in its repo-spec — the operator unions them in at workload-build time
  * (`resolveRuntimeProfileSecretRefs`). The values themselves live only in the node's own
  * `cogni/<env>/<node>/*` scope and are resolved at the provider-I/O boundary; the value-presence
- * gate (`compute-workload-reconciler`) already reads THIS constant, never the spec's ref list.
+ * gate (`features/compute/compute-workload-manifest.ts`) already reads THIS constant, never the spec's ref list.
  *
  * The profile also implies the fork-image migration layout — `/app/app/migrate.mjs` +
  * `/app/app/migrations` (plus `migrate-doltgres.mjs` when `DOLTGRES_URL` is declared) — which
