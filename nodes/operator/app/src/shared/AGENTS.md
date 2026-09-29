@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
+- **Last reviewed:** 2026-09-29 (isolated fleet control-env configuration)
 
 ## Purpose
 
@@ -52,7 +53,7 @@ App-local building blocks that cannot be extracted to `@cogni/node-shared` (env,
   - CSS utility (`util/cn.ts`) — clsx + tailwind-merge
   - React hook (`hooks/useIsMobile.ts`)
 - **Re-exports from `@cogni/node-shared`:** observability barrels, web3 barrels, util barrels combine app-local + package exports
-- **Env/Config keys:** `PINO_LOG_LEVEL`, `DATABASE_URL`, `LITELLM_*`, `APP_ENV`, `NODE_ENV`, `OPENFGA_API_URL`, `OPENFGA_STORE_ID`, `OPENFGA_AUTHORIZATION_MODEL_ID`, `OPENFGA_API_TOKEN`
+- **Env/Config keys:** `PINO_LOG_LEVEL`, `DATABASE_URL`, `LITELLM_*`, `APP_ENV`, `NODE_ENV`, `FLEET_CONTROL_ENV`, `OPENFGA_API_URL`, `OPENFGA_STORE_ID`, `OPENFGA_AUTHORIZATION_MODEL_ID`, `OPENFGA_API_TOKEN`
 
 ## Responsibilities
 
