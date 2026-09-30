@@ -54,14 +54,16 @@ spec:
   migration:
     policy: RequireBeforeServing
   bootPolicy:
-    onDeadline: Hold
-  leaseGeneration: 14
+    onDeadline: Close
+    onGiveUp: Replace
+  leaseGeneration: 15
   placement:
     requiredCountries:
       - BG
       - FI
       - NL
       - PT
+      - RO
   dns:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
