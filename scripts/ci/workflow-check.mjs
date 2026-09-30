@@ -24,11 +24,13 @@ const manualWorkflows = [
   "candidate-flight.yml",
   "candidate-flight-infra.yml",
   "flight-preview.yml",
+  "pr-build.yml",
   "promote-and-deploy.yml",
+  "publish-repo-spec.yml",
   "release.yml",
   "stack-test.yml",
 ];
-const nonDispatchWorkflows = ["ci.yaml", "pr-lint.yaml", "pr-build.yml"];
+const nonDispatchWorkflows = ["ci.yaml", "pr-lint.yaml"];
 
 let failures = 0;
 

@@ -62,6 +62,8 @@ Pure parsing and typed extraction for `.cogni/repo-spec.yaml` — the governance
   - `buildTestRepoSpecYaml(opts?)` — YAML string variant for tests that round-trip through `parseRepoSpec`
   - `buildTestRule(overrides?)` / `buildTestRuleYaml()` — `Rule` fixture builders
 
+The `/testing` subpath is supported public test tooling. It ships in the package tarball so external node tests can share deterministic fixtures, but it remains isolated from the production root export.
+
 ## Ports
 
 - **Uses ports:** none
@@ -95,6 +97,7 @@ pnpm --filter @cogni/repo-spec build
 
 - Update this file when public exports change
 - Coordinate with node-operator-contract.md spec invariants
+- Public releases follow `docs/spec/packages-architecture.md`: immutable semver, packed-artifact verification, public npm, and provenance
 
 ## Notes
 
