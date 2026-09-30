@@ -814,6 +814,23 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect("None").toMatch(reasonPattern);
   });
 
+  it("reports a settled-key closed lease as LeaseClosed, not a Progressing lie (task.5156)", () => {
+    // The render side PARKS a closed lease observed under a non-current key (the Axiom 26 fence
+    // above). The status side must tell the same truth. $heldClosed only catches
+    // $closedForCurrentKey, so before this branch a closed-under-foreign-key lease with no
+    // recovery in flight missed every fail branch and fell through to the default
+    // Progressing/reason:"None" — status claimed a permanently-parked lease was still coming up.
+    expect(template).toContain("{{- else if $closed }}");
+    // Ordered strictly AFTER the active-recovery branch, or it would swallow
+    // LeaseRecoveryInProgress and report a recovering lease as terminally closed.
+    const chain = template.slice(
+      template.lastIndexOf('{{- $phase := "Progressing" }}')
+    );
+    expect(chain.indexOf("LeaseRecoveryInProgress")).toBeLessThan(
+      chain.indexOf("{{- else if $closed }}")
+    );
+  });
+
   it("makes paid replacement opt-in and structurally unreachable (bug.5287 onGiveUp)", () => {
     // TWO independent fences on the paid re-mint. (1) The composition only bumps the
     // recovery key when bootPolicy.onGiveUp is Replace; Hold — the PERMANENT default —
