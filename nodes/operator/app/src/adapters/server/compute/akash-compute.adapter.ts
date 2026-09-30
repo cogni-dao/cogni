@@ -55,6 +55,7 @@ import type {
 import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
+  countrySourcesDisagree,
   effectiveCountryCode,
   formatBidRejections,
   formatBidRoster,
@@ -221,6 +222,8 @@ interface ConsoleProvider {
   uptime7d?: number;
   leaseCount?: number;
   ipCountryCode?: string | null;
+  /** The provider's own signed on-chain location declaration. Preferred over GeoIP. */
+  country?: string | null;
 }
 
 interface ConsoleLease {
@@ -1240,10 +1243,28 @@ export class AkashComputeAdapter
         isValidVersion: p.isValidVersion === true,
         uptime7d: Number(p.uptime7d ?? 0),
         activeLeases: Number(p.leaseCount ?? 0),
-        // Corrected at the SOURCE so every downstream consumer — the hard country filter,
+        // Resolved at the SOURCE so every downstream consumer — the hard country filter,
         // the latency preference, and the bid roster — reads one consistent country.
-        countryCode: effectiveCountryCode(p.owner, p.ipCountryCode),
+        countryCode: effectiveCountryCode({
+          declared: p.country,
+          geoIp: p.ipCountryCode,
+        }),
       });
+      if (
+        countrySourcesDisagree({ declared: p.country, geoIp: p.ipCountryCode })
+      ) {
+        // Not an error. This is the ONLY way we notice a stale GeoIP without re-running a
+        // manual audit, and a silently-wrong country refuses a provider for a country it is
+        // not in (story.5050).
+        this.log?.warn?.(
+          {
+            provider: p.owner,
+            declaredCountry: p.country,
+            geoIpCountry: p.ipCountryCode,
+          },
+          "akash_provider_country_source_disagreement"
+        );
+      }
     }
     const outcomes = await this.outcomeStore
       .stats(PROVIDER)

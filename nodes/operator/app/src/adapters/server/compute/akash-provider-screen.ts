@@ -56,46 +56,55 @@ export interface AkashProviderInfo {
 }
 
 /**
- * Providers whose Console-advertised `ipCountryCode` is demonstrably WRONG, corrected to the
- * country their ingress address actually resolves to.
+ * The country to screen a provider on.
  *
- * WHY A MAP AND NOT A LOOKUP: the screener must stay a pure function over data we already
- * hold; resolving geo-IP at bid time would put a third-party network call inside a 90s
- * auction window and fail the whole placement when that service rate-limits. The registry is
- * the right source — it is just wrong for these entries, so we correct it at the seam with
- * the evidence recorded, rather than teaching every caller to distrust the field.
+ * TWO FIELDS, ONE OF WHICH IS GUESSWORK. An Akash provider **declares** its location as a
+ * signed on-chain attribute (`country`, `city`, `location-region`) — that is the operator's
+ * own statement about where the datacenter is. Console *also* exposes `ipCountryCode`, which
+ * is a **GeoIP lookup of the ingress address** and is a guess about a different thing.
  *
- * REQUIRED_FAILS_CLOSED is unaffected: an override only ever replaces one concrete country
- * with another concrete country. It can never turn an unknown into a known, so a provider we
- * cannot place is still refused.
+ * Prefer the declaration. The GeoIP field is wrong in the field and wrong in a way that is
+ * invisible: `akash15pkdke…96hr` declares `country=NL, city=AMS,
+ * datacenter=eu-west-ams-1, hosting-provider=Overclock`, and its ingress geolocates to
+ * `GB / England / 51.5072,-0.1276` — central London, which is the default coordinate a
+ * registrant gets when nothing better is known. Screened on GeoIP it is refused
+ * `required_country` for a country it is not in; it was the only custom-domain-capable NL
+ * provider on the network (story.5050).
  *
- * Verified 2026-09-30 against ipinfo.io and ip-api.com, both agreeing:
+ * WHY NOT A CORRECTION TABLE: an override map keyed by owner address is a second
+ * hand-maintained enumeration, and it rots the same way `AKASH_ALLOWED_PROVIDERS` has.
+ * Reading the declared field fixes the whole class and auto-tracks every provider that
+ * registers after today, with no human edit.
  *
- * | provider | Console says | ingress resolves to | evidence |
- * | --- | --- | --- | --- |
- * | `akash15pkd…96hr` | GB | **NL** Amsterdam | `provider.h100.ams.val.akash.pub` → `24.144.74.0/24` (round-robins, e.g. `.158`/`.160`), AS394996, Amsterdam. That is the SAME /24 and ASN as `24.144.74.27`, already recorded in `infra/catalog/poly.yaml` as "Netherlands provider egress". The host name itself says `ams`. |
- * | `akash15tl6…mdhk` | US | **CA** Toronto | `provider.hurricane.akash.pub` → `184.105.162.170`, Toronto. 74 active leases. |
- *
- * Recorded for both even though only the first is presently allowlisted: the US→CA entry is
- * the one most likely to matter later, because Ontario is separately restricted by the very
- * kind of API that drives these placement requirements.
+ * NEITHER FIELD IS PROOF OF EGRESS. Both describe ingress/registration. Per
+ * `REQUIRED_IS_A_POOL_NARROWER_NOT_A_PROOF` the only thing that establishes the identity a
+ * workload presents to a third party is a probe from inside the lease.
  */
-export const PROVIDER_COUNTRY_OVERRIDES: ReadonlyMap<string, string> = new Map([
-  ["akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr", "NL"],
-  ["akash15tl6v6gd0nte0syyxnv57zmmspgju4c3xfmdhk", "CA"],
-]);
+export function effectiveCountryCode(input: {
+  /** The provider's own signed on-chain declaration. Preferred. */
+  readonly declared?: string | null | undefined;
+  /** GeoIP of the ingress address. Fallback only. */
+  readonly geoIp?: string | null | undefined;
+}): string | null {
+  const norm = (v: string | null | undefined): string | null => {
+    const t = v?.trim().toUpperCase();
+    return t && /^[A-Z]{2}$/.test(t) ? t : null;
+  };
+  return norm(input.declared) ?? norm(input.geoIp);
+}
 
 /**
- * The country to screen a provider on: the corrected value when we have proven the registry
- * wrong, otherwise whatever the registry says.
+ * True when the two sources disagree, so the caller can log it. A disagreement is not an
+ * error — it is the signal that a provider's GeoIP is stale, and it is the only way we would
+ * ever notice the next one without re-running a manual audit.
  */
-export function effectiveCountryCode(
-  owner: string,
-  advertised: string | null | undefined
-): string | null {
-  return (
-    PROVIDER_COUNTRY_OVERRIDES.get(owner) ?? advertised?.toUpperCase() ?? null
-  );
+export function countrySourcesDisagree(input: {
+  readonly declared?: string | null | undefined;
+  readonly geoIp?: string | null | undefined;
+}): boolean {
+  const d = effectiveCountryCode({ declared: input.declared });
+  const g = effectiveCountryCode({ declared: input.geoIp });
+  return d !== null && g !== null && d !== g;
 }
 
 /** One provider's aggregated boot-outcome history (from compute_provider_outcomes). */

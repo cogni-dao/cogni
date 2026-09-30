@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   type AkashProviderInfo,
   BLACKLIST_TTL_MS,
+  countrySourcesDisagree,
   effectiveCountryCode,
   formatBidRejections,
   formatBidRoster,
@@ -463,39 +464,48 @@ describe("bid roster", () => {
   });
 });
 
-describe("provider country overrides", () => {
-  // story.5050: the Akash registry advertises akash15pkd… as GB while its ingress resolves
-  // into 24.144.74.0/24 / AS394996 in Amsterdam — the same /24 poly already records as
-  // "Netherlands provider egress". Screening it on the advertised label refuses a provider
-  // for a country it is not in, and it was the only custom-domain-capable NL provider.
-  it("corrects a provider the registry advertises in the wrong country", () => {
-    expect(
-      effectiveCountryCode("akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr", "GB")
-    ).toBe("NL");
+describe("provider country resolution", () => {
+  // story.5050: akash15pkdke… DECLARES country=NL, city=AMS, datacenter=eu-west-ams-1 on
+  // chain, while its ingress GeoIPs to GB/London (51.5072,-0.1276 — a registrant default).
+  // Screening on GeoIP refused the only custom-domain-capable NL provider on the network.
+  it("prefers the provider's own declaration over GeoIP", () => {
+    expect(effectiveCountryCode({ declared: "NL", geoIp: "GB" })).toBe("NL");
   });
 
-  it("passes an unoverridden provider through, uppercased", () => {
-    expect(effectiveCountryCode("akash1whoever", "pt")).toBe("PT");
+  it("falls back to GeoIP when nothing is declared", () => {
+    expect(effectiveCountryCode({ declared: null, geoIp: "pt" })).toBe("PT");
+    expect(effectiveCountryCode({ geoIp: "PT" })).toBe("PT");
   });
 
-  it("keeps an unknown country unknown — an override never invents one", () => {
+  it("keeps unknown unknown — resolution never invents a country", () => {
     // REQUIRED_FAILS_CLOSED depends on this: null must stay null so the bid is refused.
-    expect(effectiveCountryCode("akash1whoever", null)).toBeNull();
-    expect(effectiveCountryCode("akash1whoever", undefined)).toBeNull();
+    expect(effectiveCountryCode({ declared: null, geoIp: null })).toBeNull();
+    expect(effectiveCountryCode({})).toBeNull();
   });
 
-  it("refuses an overridden provider whose TRUE country is still not permitted", () => {
-    const { ranked, rejections } = screenFull([bid("akash15pkd", 5)], {
-      providers: new Map([
-        ["akash15pkd", info("akash15pkd", { countryCode: "NL" })],
-      ]),
-      requiredCountryCodes: ["PT"],
-    });
-    expect(ranked).toHaveLength(0);
-    expect(rejections.required_country).toBe(1);
+  it("rejects malformed values from EITHER source rather than trusting them", () => {
+    // A provider can declare anything; a free-text region must not become a country code.
+    expect(effectiveCountryCode({ declared: "eu-west", geoIp: "NL" })).toBe(
+      "NL"
+    );
+    expect(
+      effectiveCountryCode({ declared: "Netherlands", geoIp: "" })
+    ).toBeNull();
   });
 
-  it("admits it once its TRUE country is permitted", () => {
+  it("flags a disagreement so a stale GeoIP is visible without a manual audit", () => {
+    expect(countrySourcesDisagree({ declared: "NL", geoIp: "GB" })).toBe(true);
+    expect(countrySourcesDisagree({ declared: "NL", geoIp: "NL" })).toBe(false);
+  });
+
+  it("does not flag when only one source is usable", () => {
+    expect(countrySourcesDisagree({ declared: "NL", geoIp: null })).toBe(false);
+    expect(countrySourcesDisagree({ declared: "eu-west", geoIp: "GB" })).toBe(
+      false
+    );
+  });
+
+  it("admits the provider once its declared country is permitted", () => {
     const { ranked } = screenFull([bid("akash15pkd", 5)], {
       providers: new Map([
         ["akash15pkd", info("akash15pkd", { countryCode: "NL" })],
