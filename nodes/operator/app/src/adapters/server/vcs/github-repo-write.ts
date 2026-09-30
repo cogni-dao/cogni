@@ -51,11 +51,8 @@ import { z } from "zod";
 
 import type {
   CandidateFlightDispatchResult,
-  CatalogForkTarget,
   CatalogNodeDefinition,
   DeployPlanePort,
-  MirrorCanonicalFilesInput,
-  MirrorCanonicalFilesResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
   ObservedWorkflowDispatchResult,
@@ -66,10 +63,7 @@ import type {
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,
-  SyncTemplateUpstreamInput,
-  SyncTemplateUpstreamResult,
 } from "@/ports";
-import { resolveCanonicalPathClosure } from "@/shared/node-app-scaffold/canonical-path-closure";
 import {
   appsetPath,
   appsetsKustomizationPath,
@@ -106,10 +100,6 @@ import {
   updateSchedulerEndpointHost,
 } from "@/shared/node-app-scaffold/gens";
 import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
-import {
-  makeNodeLocalMatcher,
-  parseNodeLocalPaths,
-} from "@/shared/node-app-scaffold/node-local-paths";
 import {
   controlEnvFor,
   NODE_DEPLOYMENT_PROVIDERS,
@@ -477,13 +467,6 @@ const NODE_REPO_REQUIRED_WORKFLOWS = [
   ".github/workflows/pr-lint.yaml",
 ] as const;
 
-// Stable, SHA-free branches → ONE living PR per fork per tier, force-updated on each node-template
-// merge (Dependabot/Renovate pattern: rebase-in-place, never delete+recreate). Keyed by the sync
-// concern, not the source SHA, so a new template release refreshes the same PR instead of opening a new one.
-const SYNC_BRANCH = "cogni-operator/node-template-sync";
-const UPSTREAM_BRANCH = "cogni-operator/node-template-upstream";
-const CHANGELOG_MAX = 30;
-
 const CatalogEntrySchema = z.object({
   name: z.string(),
   type: z.literal("node"),
@@ -585,9 +568,6 @@ function parseCatalogPorts(
   return { port: Number(portMatch[1]), nodePort: Number(nodePortMatch[1]) };
 }
 
-/** Slugs that are catalog `type: node` but are never fork-sync targets. */
-const FORK_SYNC_EXCLUDED_SLUGS = new Set(["node-template", "operator"]);
-
 /** The declared placement vocabulary — one list, shared with the runtime address resolver. */
 const NODE_DEPLOYMENT_PROVIDER_SCHEMA = z.enum(NODE_DEPLOYMENT_PROVIDERS);
 
@@ -631,50 +611,10 @@ function parseRepoSpecNodeId(repoSpecYaml: string): string {
   return RepoSpecIdentitySchema.parse(parseYaml(repoSpecYaml)).node_id;
 }
 
-/**
- * Pure: one `infra/catalog/<slug>.yaml` body → a fork target, or null. Null when the row is not a
- * `type: node` with a parseable `source_repo`, or the slug is the source/hub. Exported for unit tests.
- */
-export function catalogYamlToForkTarget(
-  slug: string,
-  yamlText: string
-): CatalogForkTarget | null {
-  if (FORK_SYNC_EXCLUDED_SLUGS.has(slug)) return null;
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(yamlText);
-  } catch {
-    return null;
-  }
-  const row = parsed as { type?: unknown; source_repo?: unknown };
-  if (row?.type !== "node" || typeof row.source_repo !== "string") return null;
-  try {
-    const { owner, repo } = parseGithubRepoUrl(row.source_repo);
-    return { owner, name: repo, slug };
-  } catch {
-    return null;
-  }
-}
-
 // Node-content rename/delete (NODE_RENAME_PATHS / NODE_DELETE_PATHS) is gone with the inline
 // `buildNodeSubtree`: a submodule node's app files live in its own repo (minted via
 // `forkFromTemplate`). The operator writes only node identity plus the ESO-first leaf files that
 // must be visible after the repo is mounted as `nodes/<slug>`.
-
-/**
- * Qualify bare `#NN` PR/issue refs in a node-template commit subject to the source repo.
- * A bare `#NN` in a FORK's PR body auto-links to the FORK's own #NN (GitHub same-repo
- * resolution) — almost always a closed/unrelated PR, e.g. node-template's `(#25)` linking
- * to beacon#25. `owner/repo#NN` resolves to node-template instead. Refs already qualified
- * (`foo/bar#NN`) are left untouched (the char before `#` is then a word char). Exported for tests.
- */
-export function qualifyUpstreamPrRefs(
-  subject: string,
-  owner: string,
-  repo: string
-): string {
-  return subject.replace(/(^|[^\w/-])#(\d+)\b/g, `$1${owner}/${repo}#$2`);
-}
 
 /** The canonical name of the merge-queue ruleset (matches infra/github/merge-queue-ruleset.json). */
 export const MERGE_QUEUE_RULESET_NAME = "main-merge-queue";
@@ -2296,174 +2236,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
   }
 
-  async syncCanonicalFilesToFork(
-    input: MirrorCanonicalFilesInput
-  ): Promise<MirrorCanonicalFilesResult> {
-    const {
-      sourceOwner,
-      sourceRepo,
-      sourceRef,
-      targetOwner,
-      targetRepo,
-      slug,
-      canonicalPaths,
-    } = input;
-
-    const srcOctokit = await this.getOctokit(sourceOwner, sourceRepo);
-    const tgtOctokit = await this.getOctokit(targetOwner, targetRepo);
-
-    // Resolve the canonical content version → a deterministic, idempotent head branch.
-    const sourceSha = await this.resolveCommitSha(
-      srcOctokit,
-      sourceOwner,
-      sourceRepo,
-      sourceRef
-    );
-    const shortSha = sourceSha.slice(0, 8);
-    const branch = SYNC_BRANCH;
-
-    // Expand the DECLARED roots to their transitive Tier-1 closure at source@sourceSha
-    // (TIER1_IS_CLOSED): the scripts a canonical workflow invokes and the modules a canonical
-    // contract barrel re-exports must ship in the SAME sync, or the fork gets a workflow that
-    // calls missing scripts and a barrel that re-exports a missing module (task.5078).
-    const closure = await resolveCanonicalPathClosure({
-      roots: canonicalPaths,
-      read: (path) =>
-        this.readFileAtRef(
-          srcOctokit,
-          sourceOwner,
-          sourceRepo,
-          path,
-          sourceSha
-        ),
-      onMissingRequired: (path) => {
-        throw deployPlaneError(
-          "canonical_missing",
-          `canonical file ${path} not found in ${sourceOwner}/${sourceRepo}@${shortSha}`,
-          422
-        );
-      },
-    });
-
-    // Diff each resolved file against the fork's main; keep changed-only.
-    const changedPaths: string[] = [];
-    const entries: GitTreeEntry[] = [];
-    for (const { path, content: sourceContent } of closure) {
-      const targetContent = await this.readFileAtRef(
-        tgtOctokit,
-        targetOwner,
-        targetRepo,
-        path,
-        "main"
-      );
-      if (targetContent === sourceContent) continue;
-      changedPaths.push(path);
-      const blobSha = await this.createBlob(
-        tgtOctokit,
-        targetOwner,
-        targetRepo,
-        sourceContent
-      );
-      entries.push({ path, mode: "100644", type: "blob", sha: blobSha });
-    }
-
-    if (entries.length === 0) {
-      return { status: "no_changes", branch, changedPaths: [] };
-    }
-
-    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
-      tgtOctokit,
-      targetOwner,
-      targetRepo
-    );
-    const fileList = changedPaths.map((p) => `- \`${p}\``).join("\n");
-    const title = "chore: sync CI + contract files from node-template";
-    const body =
-      `Syncs this fork's canonical files to \`${sourceOwner}/${sourceRepo}@${shortSha}\`. ` +
-      `One PR, force-updated on each node-template release — not a new PR per change.\n\n` +
-      `Files overwritten to match canonical (${changedPaths.length}):\n${fileList}\n\n` +
-      `_Maintained automatically by cogni-operator._`;
-    const { prNumber, prUrl } = await this.commitTreeAndOpenPr(
-      tgtOctokit,
-      targetOwner,
-      targetRepo,
-      slug,
-      {
-        baseCommitSha,
-        baseTreeSha,
-        entries,
-        message: `chore: sync canonical files from ${sourceOwner}/${sourceRepo}@${shortSha}`,
-        branch,
-        pr: { title, body },
-      }
-    );
-    // Living PR: openOrFindPr only sets title/body on CREATE, so refresh them on the reused PR.
-    await this.updatePrBody(
-      tgtOctokit,
-      targetOwner,
-      targetRepo,
-      prNumber,
-      title,
-      body
-    );
-    return { status: "pr_opened", branch, prNumber, prUrl, changedPaths };
-  }
-
-  async resolveNodeLocalPaths(input: {
-    sourceOwner: string;
-    sourceRepo: string;
-    sourceRef: string;
-  }): Promise<readonly string[]> {
-    const manifest = await this.fetchFileText({
-      owner: input.sourceOwner,
-      repo: input.sourceRepo,
-      path: ".cogni/sync-manifest.yaml",
-      ref: input.sourceRef,
-    });
-    return parseNodeLocalPaths(manifest);
-  }
-
-  async listCatalogForkTargets(input: {
-    parentOwner: string;
-    parentRepo: string;
-  }): Promise<readonly CatalogForkTarget[]> {
-    const { parentOwner, parentRepo } = input;
-    const octokit = await this.getOctokit(parentOwner, parentRepo);
-    let entries: Array<{ name: string; type: string }>;
-    try {
-      const { data } = await octokit.request(
-        "GET /repos/{owner}/{repo}/contents/{path}",
-        {
-          owner: parentOwner,
-          repo: parentRepo,
-          path: "infra/catalog",
-          ref: "main",
-        }
-      );
-      entries = Array.isArray(data)
-        ? (data as Array<{ name: string; type: string }>)
-        : [];
-    } catch (error) {
-      if ((error as { status?: number })?.status === 404) return [];
-      throw error;
-    }
-    const targets: CatalogForkTarget[] = [];
-    for (const entry of entries) {
-      if (entry.type !== "file" || !entry.name.endsWith(".yaml")) continue;
-      const slug = entry.name.replace(/\.yaml$/, "");
-      if (FORK_SYNC_EXCLUDED_SLUGS.has(slug)) continue;
-      const text = await this.fetchFileText({
-        owner: parentOwner,
-        repo: parentRepo,
-        path: `infra/catalog/${entry.name}`,
-      });
-      if (!text) continue;
-      const target = catalogYamlToForkTarget(slug, text);
-      if (target) targets.push(target);
-    }
-    return targets;
-  }
-
   async listCatalogNodes(input: {
     parentOwner: string;
     parentRepo: string;
@@ -2574,132 +2346,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
 
     return definitions;
-  }
-
-  async syncTemplateUpstreamToFork(
-    input: SyncTemplateUpstreamInput
-  ): Promise<SyncTemplateUpstreamResult> {
-    const {
-      templateOwner,
-      templateRepo,
-      templateSha,
-      forkOwner,
-      forkRepo,
-      forkBranch,
-      nodeLocalPaths,
-    } = input;
-    // Same-org cross-fork PRs can't disambiguate by `owner:branch` (template + fork share an owner →
-    // GitHub resolves head to the base repo → false "up to date"). Instead materialize the upstream
-    // commit as a branch IN the fork (the SHA is reachable via the shared fork network), then open a
-    // SAME-repo PR head=that branch → base=fork main. The diff is exactly the un-merged upstream deltas.
-    // Living PR: one stable branch force-updated to the latest node-template tip (Dependabot pattern).
-    // Same-org cross-fork PRs can't disambiguate by `owner:branch`, so materialize the upstream commit
-    // as a branch IN the fork (reachable via the shared fork network) + a SAME-repo PR head→base.
-    const octokit = await this.getOctokit(forkOwner, forkRepo);
-    // Build the always-mergeable Tier-2 merge commit: base on the fork tip, overlay node-template's
-    // shared (non-node-local) blobs so node-template wins Tier-2, leave Tier-3 (node_local) the fork's,
-    // and parent on the fork tip so the upstream branch is a descendant of fork main → the PR is always
-    // conflict-free (TIER2_IS_ALWAYS_MERGEABLE, spec.repo-sync-contract). No fork-owner conflict resolution.
-    const branchSha = await this.buildUpstreamMergeCommit(
-      octokit,
-      forkOwner,
-      forkRepo,
-      forkBranch,
-      templateSha,
-      nodeLocalPaths ?? []
-    );
-    await this.upsertRef(
-      octokit,
-      forkOwner,
-      forkRepo,
-      UPSTREAM_BRANCH,
-      branchSha
-    );
-    const title = "chore: merge node-template upstream";
-
-    let pr: { number: number; html_url: string };
-    try {
-      const { data } = await octokit.request(
-        "POST /repos/{owner}/{repo}/pulls",
-        {
-          owner: forkOwner,
-          repo: forkRepo,
-          title,
-          body: title,
-          head: UPSTREAM_BRANCH,
-          base: forkBranch,
-        }
-      );
-      pr = data;
-    } catch (err) {
-      if ((err as { status?: number })?.status !== 422) throw err;
-      const { data: existing } = await octokit.request(
-        "GET /repos/{owner}/{repo}/pulls",
-        {
-          owner: forkOwner,
-          repo: forkRepo,
-          state: "open",
-          head: `${forkOwner}:${UPSTREAM_BRANCH}`,
-          per_page: 1,
-        }
-      );
-      const found = existing[0];
-      // No commits between the branch and fork main, and no open PR → fork already current.
-      if (!found) return { status: "up_to_date" };
-      pr = found;
-    }
-
-    // Body = the node-template commit changelog this PR carries (lint'd PR titles → clean enumeration).
-    const subjects = await this.prCommitSubjects(
-      octokit,
-      forkOwner,
-      forkRepo,
-      pr.number
-    );
-    const log = subjects.length
-      ? subjects
-          .map(
-            (s) => `- ${qualifyUpstreamPrRefs(s, templateOwner, templateRepo)}`
-          )
-          .join("\n")
-      : "_(no commits — see the Commits tab)_";
-    const body =
-      `Merges node-template's Tier-2 substrate into this fork. node-template is authoritative for ` +
-      `shared substrate (Tier-2, auto-updated); your node identity/presentation (Tier-3, \`node_local\`) ` +
-      `and fork-unique files are preserved. Always conflict-free — safe to merge as-is. ` +
-      `One PR, force-updated as node-template advances.\n\n` +
-      `Up to \`${templateOwner}/${templateRepo}@${templateSha.slice(0, 8)}\` — node-template changes:\n` +
-      `${log}\n\n` +
-      `_Maintained automatically by cogni-operator._`;
-    await this.updatePrBody(
-      octokit,
-      forkOwner,
-      forkRepo,
-      pr.number,
-      title,
-      body
-    );
-    return { status: "pr_opened", prNumber: pr.number, prUrl: pr.html_url };
-  }
-
-  /** First line of each commit on a PR (lint'd subjects → changelog), newest-capped. */
-  private async prCommitSubjects(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    prNumber: number
-  ): Promise<string[]> {
-    try {
-      const { data } = await octokit.request(
-        "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
-        { owner, repo, pull_number: prNumber, per_page: CHANGELOG_MAX }
-      );
-      return (data as Array<{ commit: { message: string } }>)
-        .map((c) => c.commit.message.split("\n")[0]?.trim() ?? "")
-        .filter(Boolean);
-    } catch {
-      return [];
-    }
   }
 
   /** Refresh a living PR's title + body (openOrFindPr only sets them on create). */
@@ -3852,7 +3498,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * repo's OWN `main` (`.cogni/repo-policy.json`) — the revision whose workflows must emit the
    * required contexts. Nodes minted before the policy file existed (poly/toks4) fall back to
    * canonical `<owner>/node-template@main` (TEMPLATE_POLICY_IS_SSOT — the identical pre-flight
-   * source birth uses), which fork-sync keeps their workflows aligned with.
+   * source birth uses).
    *
    * Idempotent + read-mostly: a repo whose ACTIVE ruleset already satisfies the policy
    * (`diffRulesetAgainstPolicy` = ∅) returns `compliant` with ZERO writes. Only a missing or
@@ -4483,116 +4129,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
       }
     }
     return count;
-  }
-
-  /**
-   * Build the always-mergeable Tier-2 sync commit, realizing the three-tier model
-   * (spec.repo-sync-contract): **node-template is AUTHORITATIVE for Tier-2** ("foundational
-   * substrate, auto-updated") while the **fork OWNS Tier-3** (`node_local` identity/presentation,
-   * never touched). Construction:
-   *   - start from the FORK's `forkBranch` tree as the base, so fork-unique files survive;
-   *   - overlay node-template's blob (preserving its mode — scripts stay executable) for every
-   *     NON-node-local path that differs → node-template wins shared files
-   *     (`TIER2_NODE_TEMPLATE_AUTHORITATIVE`). This is what resolves the recurring conflict class:
-   *     a fork that drifted in a shared path (e.g. a hand-ported fix re-authored with a different
-   *     comment — `ONE_FIX_ONE_LINEAGE`) is simply overwritten with node-template's version;
-   *   - leave node-local paths as the fork's (`TIER3_NEVER_SYNCED`);
-   *   - parent the commit on BOTH the fork tip AND `templateSha`, so the upstream branch is a
-   *     descendant of fork `main`. The same-repo PR head=branch → base=forkBranch is therefore
-   *     ALWAYS conflict-free (`TIER2_IS_ALWAYS_MERGEABLE`), no fork-owner conflict resolution.
-   * Limitation: node-template's *deletions* of shared files do not propagate (a fork keeps a shared
-   * file node-template removed) — we never delete from the fork tree here, to protect fork-unique files.
-   * @returns the merge commit SHA, or the fork tip SHA when nothing in Tier-2 differs (PR no-ops → up_to_date).
-   */
-  private async buildUpstreamMergeCommit(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    forkBranch: string,
-    templateSha: string,
-    nodeLocalPaths: readonly string[]
-  ): Promise<string> {
-    const isNodeLocal = nodeLocalPaths.length
-      ? makeNodeLocalMatcher(nodeLocalPaths)
-      : () => false;
-
-    // Fork tip → base tree (fork-unique files + Tier-3 ride along untouched).
-    const forkMainSha = await this.resolveCommitSha(
-      octokit,
-      owner,
-      repo,
-      forkBranch
-    );
-    const { tipTreeSha: forkTreeSha, blobs: forkBlobs } =
-      await this.listTreeBlobsAtCommit(octokit, owner, repo, forkMainSha);
-
-    // Upstream tip → recursive tree WITH modes (overlay source; node-template wins Tier-2).
-    const { data: upstreamCommit } = await octokit.request(
-      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
-      { owner, repo, commit_sha: templateSha }
-    );
-    const { data: upstreamTree } = await octokit.request(
-      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
-      { owner, repo, tree_sha: upstreamCommit.tree.sha, recursive: "1" }
-    );
-
-    const entries: GitTreeEntry[] = [];
-    for (const e of upstreamTree.tree) {
-      if (e.type !== "blob" || !e.path || !e.sha || !e.mode) continue;
-      if (isNodeLocal(e.path)) continue; // Tier-3 stays the fork's.
-      if (forkBlobs.get(e.path) === e.sha) continue; // already identical.
-      entries.push({
-        path: e.path,
-        mode: e.mode as GitTreeEntry["mode"],
-        type: "blob",
-        sha: e.sha,
-      });
-    }
-
-    // Nothing in Tier-2 differs → fork already current; caller's PR-open no-ops to up_to_date.
-    if (entries.length === 0) return forkMainSha;
-
-    const { data: tree } = await octokit.request(
-      "POST /repos/{owner}/{repo}/git/trees",
-      { owner, repo, base_tree: forkTreeSha, tree: entries }
-    );
-    const { data: commit } = await octokit.request(
-      "POST /repos/{owner}/{repo}/git/commits",
-      {
-        owner,
-        repo,
-        message:
-          "chore: merge node-template upstream (Tier-2 substrate; Tier-3 identity preserved)",
-        tree: tree.sha,
-        parents: [forkMainSha, templateSha],
-      }
-    );
-    return commit.sha;
-  }
-
-  /** Resolve a commit SHA → its tip tree SHA + recursive blob map (`path → blob sha`). */
-  private async listTreeBlobsAtCommit(
-    octokit: Octokit,
-    owner: string,
-    repo: string,
-    commitSha: string
-  ): Promise<{ tipTreeSha: string; blobs: Map<string, string> }> {
-    const { data: commit } = await octokit.request(
-      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
-      { owner, repo, commit_sha: commitSha }
-    );
-    const tipTreeSha = commit.tree.sha;
-    const { data: tree } = await octokit.request(
-      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
-      { owner, repo, tree_sha: tipTreeSha, recursive: "1" }
-    );
-    const blobs = new Map<string, string>();
-    for (const entry of tree.tree) {
-      if (entry.type === "blob" && entry.path && entry.sha) {
-        blobs.set(entry.path, entry.sha);
-      }
-    }
-    return { tipTreeSha, blobs };
   }
 
   /**

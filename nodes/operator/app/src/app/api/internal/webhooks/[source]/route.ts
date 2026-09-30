@@ -17,7 +17,6 @@
  */
 
 import { NextResponse } from "next/server";
-import { dispatchCanonicalForkSync } from "@/app/_facades/deploy/canonical-fork-sync.server";
 import { dispatchLaneOnboard } from "@/app/_facades/deploy/lane-onboard.server";
 import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
 import { dispatchPrReview } from "@/app/_facades/review/dispatch.server";
@@ -302,7 +301,7 @@ export async function POST(
       );
     }
 
-    // 5. Dispatches after successful verification. Review/sync hooks remain async, but node
+    // 5. Dispatches after successful verification. Review hooks remain async, but node
     // preview promotion is awaited through native workflow-run identity: this webhook is not
     // acknowledged until the deploy-plane write is observed (bug.5010).
     if (source === "github" && eventType === "pull_request") {
@@ -314,13 +313,11 @@ export async function POST(
       dispatchLaneOnboard(verified.payload, env, log);
     }
 
-    // node-template merge→main → mirror canonical content to every child fork (one PR each).
     if (source === "github" && eventType === "push") {
       // A default-branch push is the merge-queue-safe node preview signal. GitHub may omit the
       // pull_request closed/merged delivery for a queued merge (Poly #65); the canonical main
       // advance still identifies the exact on-main SHA.
       await dispatchNodePreviewPromote(verified.payload, env, log);
-      dispatchCanonicalForkSync(verified.payload, env, log);
     }
 
     if (source === "alchemy") {
@@ -387,14 +384,6 @@ export async function POST(
       eventType === "pull_request"
     ) {
       dispatchPrReview(verifiedPayload, env, log);
-    }
-
-    if (
-      verifiedPayload !== null &&
-      source === "github" &&
-      eventType === "push"
-    ) {
-      dispatchCanonicalForkSync(verifiedPayload, env, log);
     }
 
     if (verifiedPayload !== null && source === "alchemy") {
