@@ -245,7 +245,11 @@ jobs:
       group: reconcile-appset-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    environment: ${{ needs.decide.outputs.environment }}
+    # Argo lives in the CONTROL cluster. For an Akash lane there is no lane cluster, so
+    # reading the lane environment's VM credentials either produces an empty VM_HOST
+    # (isolated test fleets) or points at a cluster that can never observe the workload.
+    # This is the same lane-vs-control split used by promote-k8s below.
+    environment: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') || needs.decide.outputs.environment }}
     steps:
       # Checkout the head ref — the per-node AppSet YAML is catalog-derived CI
       # control plane (CATALOG_IS_SSOT), and a node ADDED in this promote carries
@@ -260,10 +264,10 @@ jobs:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
         run: |
+          set -euo pipefail
           if [ -z "$VM_HOST" ]; then
-            echo "⚠️ No VM_HOST — skipping AppSet reconcile"
-            echo "has_vm=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::VM_HOST is required for AppSet reconcile"
+            exit 1
           fi
           echo "has_vm=true" >> "$GITHUB_OUTPUT"
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -284,14 +288,6 @@ jobs:
           # non-production lane is reconciled by the PRODUCTION cluster (task.5132).
           # shellcheck source=scripts/ci/lib/appset-paths.sh
           . scripts/ci/lib/appset-paths.sh
-          CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$NODE")"
-          if [ "$CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]; then
-            # The ${CONTROL_ENV} app-of-apps reconciles appsets/${CONTROL_ENV}/ from main
-            # with prune, so the object arrives declaratively. This job holds only THIS
-            # env's SSH credential and must not reach a higher-trust cluster.
-            echo "::notice::$NODE's $DEPLOY_ENVIRONMENT lane is reconciled by '$CONTROL_ENV' — its AppSet is owned by that cluster's app-of-apps. Skipping the imperative apply."
-            exit 0
-          fi
           APPSET_FILE="$(appset_rel_path "$DEPLOY_ENVIRONMENT" "$NODE")"
           if [ ! -f "$APPSET_FILE" ]; then
             echo "::error::$APPSET_FILE missing at head — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
@@ -318,7 +314,7 @@ jobs:
           # Anti-resurrection: orphan-delete the retired shared `cogni-<env>` AppSet
           # (keeps its live Applications), then apply the per-node object.
           # shellcheck disable=SC2086
-          retry ssh $SSH_OPTS root@"$VM_HOST" "kubectl delete applicationset cogni-${DEPLOY_ENVIRONMENT} -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml -n argocd && rm -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml"
+          retry ssh $SSH_OPTS root@"$VM_HOST" "kubectl delete applicationset cogni-${DEPLOY_ENVIRONMENT} -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml -n argocd && kubectl -n argocd annotate applicationset cogni-${DEPLOY_ENVIRONMENT}-${NODE} argocd.argoproj.io/application-set-refresh='true' --overwrite && rm -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml"
 
   # Per-node public DNS for preview + production — mirrors candidate-flight.yml's
   # reconcile-dns. DNS is env-level + idempotent (no-op for existing nodes); a node
