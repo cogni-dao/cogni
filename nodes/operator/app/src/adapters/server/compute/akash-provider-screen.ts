@@ -168,11 +168,35 @@ export type BidRejectionReason =
   | "quality"
   | "price_outlier";
 
+/**
+ * One bid's screening outcome, kept per-provider rather than aggregated.
+ *
+ * WHY THIS EXISTS: `rejections` counts are enough to name a cause but not enough to ACT on
+ * one. `not_allowlisted=5` cannot distinguish "five providers we have never heard of bid"
+ * from "the one provider we are waiting on bid and we refuse it ourselves" — and because
+ * attribution is first-match-wins, a struck provider outside the country set is reported as
+ * `required_country`, hiding its strikes entirely. Widening a gate on aggregate counts is
+ * therefore a guess; eight consecutive poly auctions were re-rolled blind for exactly this
+ * reason (story.5050). The roster makes an auction's outcome attributable to an ADDRESS.
+ */
+export interface BidVerdict {
+  /** Provider account address (akash1…). */
+  readonly provider: string;
+  /** Bid price per block in chain micro-units. */
+  readonly priceAmount: number;
+  /** Provider's advertised ingress country, or null when metadata did not load. */
+  readonly countryCode: string | null;
+  /** The filter that refused this bid, or undefined when it survived screening. */
+  readonly rejection?: BidRejectionReason | undefined;
+}
+
 export interface ScreenedBids {
   /** Survivors, best-first. */
   readonly ranked: readonly ScreenableBid[];
   /** Count of refused bids per reason. Zero-valued reasons are omitted. */
   readonly rejections: Readonly<Partial<Record<BidRejectionReason, number>>>;
+  /** Every bid seen this round with its verdict, in arrival order. */
+  readonly roster: readonly BidVerdict[];
 }
 
 /**
@@ -244,6 +268,7 @@ export function screenBids(input: ScreenBidsInput): ScreenedBids {
   };
 
   const eligible: ScreenableBid[] = [];
+  const roster: BidVerdict[] = [];
   for (const bid of bids) {
     const reason = rejectionFor(bid, {
       providers,
@@ -252,6 +277,12 @@ export function screenBids(input: ScreenBidsInput): ScreenedBids {
       allowedProviders,
       requiredCountries,
       nowMs,
+    });
+    roster.push({
+      provider: bid.provider,
+      priceAmount: bid.priceAmount,
+      countryCode: providers.get(bid.provider)?.countryCode ?? null,
+      ...(reason ? { rejection: reason } : {}),
     });
     if (reason) count(reason);
     else eligible.push(bid);
@@ -263,6 +294,16 @@ export function screenBids(input: ScreenBidsInput): ScreenedBids {
   const screened = eligible.filter((bid) => {
     if (!outliers.has(bid.provider)) return true;
     count("price_outlier");
+    // The roster entry was written before outlier detection could run (it needs the
+    // eligible cohort), so amend it rather than leaving a refused bid looking like a
+    // survivor. Same first-match-wins attribution as every other reason.
+    const at = roster.findIndex(
+      (r) => r.provider === bid.provider && r.rejection === undefined
+    );
+    const entry = at === -1 ? undefined : roster[at];
+    if (entry) {
+      roster[at] = { ...entry, rejection: "price_outlier" };
+    }
     return false;
   });
 
@@ -289,7 +330,30 @@ export function screenBids(input: ScreenBidsInput): ScreenedBids {
     return 0;
   });
 
-  return { ranked, rejections };
+  return { ranked, rejections, roster };
+}
+
+/**
+ * Render the per-bid roster for an error message, e.g.
+ * `akash1hgu…4ezk PT 9.34 required_country, akash19tp…t48 CH 6.00 ok`.
+ *
+ * Addresses are elided in the middle: the first 9 and last 4 characters identify a provider
+ * unambiguously against the allowlist while keeping a 7-bid roster inside one log line.
+ */
+export function formatBidRoster(roster: ScreenedBids["roster"]): string {
+  if (roster.length === 0) return "none";
+  return roster
+    .map((r) => {
+      const addr =
+        r.provider.length > 17
+          ? `${r.provider.slice(0, 9)}…${r.provider.slice(-4)}`
+          : r.provider;
+      const price = Number.isFinite(r.priceAmount)
+        ? r.priceAmount.toFixed(2)
+        : "n/a";
+      return `${addr} ${r.countryCode ?? "??"} ${price} ${r.rejection ?? "ok"}`;
+    })
+    .join(", ");
 }
 
 /** Render rejection counts for an error message, e.g. `required_country=3, quality=1`. */
