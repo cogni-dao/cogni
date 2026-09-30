@@ -52,7 +52,9 @@ import { z } from "zod";
 import type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
+  ClassifyEnvManagerPrInput,
   DeployPlanePort,
+  EnvManagerPrClassificationResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
   ObservedWorkflowDispatchResult,
@@ -112,6 +114,7 @@ import {
   parseNodeRepoPolicy,
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
 
 const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
 
@@ -1257,6 +1260,40 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     // REMOTE-SOURCE node (fork): resolve its own source repo.
     return parseGithubRepoUrl(discriminator.data.source_repo);
+  }
+
+  async classifyEnvManagerPr(
+    input: ClassifyEnvManagerPrInput
+  ): Promise<EnvManagerPrClassificationResult> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+
+    // Fetch the PR to read its HEAD branch ref + HEAD SHA.
+    const { data: pr } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        pull_number: input.prNumber,
+      }
+    );
+
+    // Fetch the HEAD commit for its message trailers + App signature verification + parents.
+    const { data: commit } = await octokit.request(
+      "GET /repos/{owner}/{repo}/commits/{ref}",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        ref: pr.head.sha,
+      }
+    );
+
+    return classifyEnvManagerCommit({
+      headRef: pr.head.ref,
+      commitMessage: commit.commit.message,
+      verified: commit.commit.verification?.verified === true,
+      verificationReason: commit.commit.verification?.reason ?? null,
+      parentCount: commit.parents?.length ?? 0,
+    });
   }
 
   /**

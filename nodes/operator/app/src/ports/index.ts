@@ -140,7 +140,9 @@ export type {
 export type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
+  ClassifyEnvManagerPrInput,
   DeployPlanePort,
+  EnvManagerPrClassificationResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
   ObservedWorkflowDispatchResult,
