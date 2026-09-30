@@ -172,6 +172,17 @@ behavior; Toks4 also received product-path changes. This disproved both
 - Compatibility is not source equality: a node's supported platform version and conformance behavior
   determine health. A divergent source tree that satisfies the contract is decoupled, not stale.
 
+### Distribution lanes
+
+The replacement for fork source sync is not a smaller file allowlist:
+
+1. Shared pure behavior ships as a curated public `@cogni/*` package. Consumers advance through exact-version dependency PRs.
+2. Shared CI behavior ships as a pinned reusable workflow with a thin node-owned caller.
+3. A physical tree migration that cannot use either boundary is a rare reviewed codemod: exact paths, precondition hashes, transactional/idempotent application, and whole-migration abort on divergence.
+4. Product routes, features, branding, graphs, environment choices, and runtime wiring remain node-owned and have no propagation lane.
+
+Codemod frequency is a boundary-health metric: repeated physical migrations require package extraction. Node health is determined by a supported compatibility cohort and conformance, never by comparing its tree to `node-template`.
+
 ---
 
 ## Test-Parent Mirror

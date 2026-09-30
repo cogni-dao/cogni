@@ -55,7 +55,7 @@ Define a phased path from "single monorepo with all nodes" to "private/sovereign
 - **Operator-hosted node tenancy** (Railway-like) — deferred to Phase 3.
 - **Per-node compute metering / billing** — deferred to Phase 4 (Akash north star).
 - **Shared k3s + cross-repo deploy plane** — explicitly rejected for v0. v0 nodes that want privacy run their own VMs.
-- **`packages/` extraction to a registry (npm / GH Packages)** — deferred. v0 vendors shared packages into the fork at fork time and accepts drift.
+- **Blanket `packages/` extraction** — rejected. Curated PURE_LIBRARY contracts may publish to public npm; node-owned source and the source-export app shell remain repository-local.
 
 ## Design
 
@@ -176,7 +176,7 @@ Phase 0 substantially landed in a single day. What follows captures actual outco
 
 #### Deviations from spec
 
-1. **No vendoring.** Spec step 0.7 said: "prune root `packages/` to poly's transitive deps, vendor any cross-node packages." We did the opposite — `cogni-poly` keeps ALL shared `packages/` as-is, no pruning, no vendoring. Derek directive: "no overengineering anything vendored." Drift between cogni's `packages/` and cogni-poly's `packages/` is accepted; the schema-drift mitigation is manual discipline (only ~190 lines of knowledge schema lives in the shared base).
+1. **Historical package copies are migration debt.** Spec step 0.7 said: "prune root `packages/` to poly's transitive deps, vendor any cross-node packages." The initial split instead retained package copies. bug.5304 proved that template overlays cannot safely repair their drift. Stable cross-repository contracts now move behind curated public packages and exact dependency PRs; remaining copies migrate one reviewed boundary at a time.
 2. **Inline pattern for the single cross-node shared package.** `@cogni/node-template-knowledge` lived under `nodes/node-template/packages/knowledge/` and was imported by poly. After the strip removed `nodes/node-template/`, the four imports were inlined into `@cogni/poly-knowledge` rather than carving out a new shared `packages/knowledge-base/`. Single-tenant repo doesn't need a shared base. Same pattern should NOT propagate to `cogni` (multi-node — operator + resy + node-template still share). Closed by [task.5047](https://cognidao.org/work/items/task.5047) (cogni PR #1335): `@cogni/node-template-knowledge` → `@cogni/knowledge-base` at `packages/knowledge-base/`.
 3. **GitHub redirect settled in minutes, not 24h.** Spec budgeted 24h for the slug to be reusable. Empirically it was reusable same-day. Future renames can compress the schedule.
 4. **node-template lineage = fork of cogni (not mirror of cogni-poly).** Two-commit history: a snapshot marker pointing at cogni's `17d0153f`, then a single "strip cogni → single-node node-template + post-strip cleanup" commit. `git merge upstream/main` from cogni works naturally because the only divergence is the stripped paths (`nodes/{operator,poly,resy}`, `services/scheduler-worker`).

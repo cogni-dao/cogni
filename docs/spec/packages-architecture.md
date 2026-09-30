@@ -5,7 +5,7 @@ title: Packages Architecture
 status: active
 spec_state: draft
 trust: draft
-summary: Internal @cogni/* packages — pure TypeScript libraries with strict isolation boundaries, composite builds, and ESM-only exports.
+summary: Curated @cogni/* libraries — pure TypeScript boundaries consumed in-workspace or released as immutable public packages for sovereign nodes.
 read_when: Creating a new package, debugging package builds, or working with @cogni/* imports.
 owner: derekg1729
 created: 2026-02-06
@@ -17,19 +17,19 @@ tags: [infra, meta]
 
 ## Context
 
-The `packages/` directory contains **cross-node** internal packages — pure TypeScript libraries with no `src/` or `services/` imports, consumed by two or more nodes. Each package declares its target environment (isomorphic or node-only) via tsconfig/tsup. These enable future repo splits and clean dependency boundaries.
+The `packages/` directory contains **cross-node** packages — pure TypeScript libraries with no `src/` or `services/` imports, consumed by two or more nodes. Each package declares its target environment (isomorphic or node-only) via tsconfig/tsup. Packages remain workspace-private by default; a reviewed subset is released as immutable public packages when sovereign repositories need the same behavior without copying source.
 
 **Single-node packages live under `nodes/<X>/packages/`** — same shape rules as cross-node packages, but ownership is scoped so changes don't trip `single-node-scope`. See [Node CI/CD Contract § Node-owned packages](./node-ci-cd-contract.md#node-owned-packages) for the carve-out rule, naming convention (`@cogni/<node>-<bare-name>`), and the carve-out playbook.
 
 ## Goal
 
-Provide a shared-library layer (`@cogni/*` workspace packages) with strict isolation from the app (`src/`) and services (`services/`), built via TypeScript project references and consumed via `dist/` exports.
+Provide a shared-library layer (`@cogni/*`) with strict isolation from the app (`src/`) and services (`services/`), built via TypeScript project references and consumed through curated `dist/` exports. The same boundary supports workspace development and exact-version cross-repository distribution.
 
 ## Non-Goals
 
 - Deployable services with process lifecycle (those belong in `services/`)
 - Feature-specific UI (feature wrappers, layouts, route components — those belong in `src/features/` or `src/components/kit/`)
-- Published npm packages (all packages are `private: true` workspace-only)
+- Publishing every workspace package. Publication is explicit and limited to stable, pure, cross-repository contracts.
 
 **Carve-out for baseline UI primitive packages.** A package MAY contain framework-agnostic vendored UI primitives (e.g. shadcn/Radix wrappers, reui table kit) when **all** of the following hold:
 
@@ -53,6 +53,40 @@ Provide a shared-library layer (`@cogni/*` workspace packages) with strict isola
 6. **DIST_EXPORTS**: Package `exports` field points to `dist/` for runtime resolution. App resolves `@cogni/*` via `package.json` exports, not tsconfig path aliases.
 
 7. **PURE_LIBRARY**: A package has no process lifecycle — no listening network ports, no worker loops, no Docker images, no env vars, no health checks. If it needs any of these, it's a service. (Note: port _interfaces_ like `OperatorWalletPort` belong in packages — this rule is about network ports.)
+
+8. **PUBLICATION_IS_CURATED**: Packages are `private: true` unless a reviewed design names them as a cross-repository contract. A public package has explicit semver, license, repository, public-registry, and file-allowlist metadata.
+
+9. **PUBLIC_ARTIFACT_IS_THE_CONTRACT**: CI verifies the packed tarball, not only workspace imports. Every exported production subpath and supported test-only subpath must resolve from a clean, unauthenticated tarball install.
+
+10. **EXACT_CROSS_REPO_VERSIONS**: Sovereign repositories pin exact `@cogni/*` versions. Version advancement is an ordinary reviewed dependency PR; source-tree equality with `node-template` is not a health signal.
+
+11. **OIDC_RELEASE_AUTHORITY**: Normal public releases come from a reviewed `main` commit on a GitHub-hosted runner using npm trusted publishing and provenance. No long-lived npm write token is part of the steady-state release lane. A package's first publication may use a one-time, narrowly scoped bootstrap credential because npm cannot attach a trusted publisher before the package exists; that credential is revoked after trust is established.
+
+### Cross-Repository Distribution
+
+Classify shared changes by delivery lane:
+
+| Change                                                     | Delivery lane                                                                      |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Pure runtime behavior or contract                          | Curated public `@cogni/*` package; exact dependency bump in each consumer          |
+| CI implementation                                          | Pinned reusable workflow with a thin repository-owned caller                       |
+| Physical tree migration                                    | Rare, reviewed codemod with exact paths and precondition hashes; divergence aborts |
+| Routes, product features, branding, graphs, runtime wiring | Node-owned; never propagated from `node-template`                                  |
+
+Automatic template-to-fork source writing is forbidden. Frequent codemods are evidence that the package boundary is incomplete, not a reason to recreate source sync. Compatibility is a declared platform cohort plus conformance behavior.
+
+### Public Package Release Contract
+
+A curated public package release must:
+
+1. use an explicit semver committed in the package manifest;
+2. pack only its declared runtime/type/license files;
+3. install and exercise that exact tarball in a clean consumer before publication;
+4. fail if the requested version differs from the manifest or already exists;
+5. publish only from `main`, then anonymously install and exercise the registry version;
+6. preserve provenance linking the public artifact to its workflow and source commit.
+
+Test fixtures may ship through an explicit `/testing` subpath when they are pure, deterministic, and documented as test-only. Their presence does not expand the production root export.
 
 ## Design
 

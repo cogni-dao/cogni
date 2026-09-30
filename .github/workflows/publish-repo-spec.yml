@@ -1,0 +1,128 @@
+name: Repo Spec Package
+
+# Pull requests prove the exact public tarball without publishing it. A reviewed
+# main commit can then be released explicitly. 0.1.0 is the one-time npm package
+# bootstrap; later versions use npm trusted publishing (OIDC) with no write token.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/publish-repo-spec.yml"
+      - "packages/repo-spec/**"
+      - "scripts/ci/workflow-check.mjs"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact package.json version to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify packed artifact
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+
+      - name: Install repo-spec dependencies
+        run: pnpm install --frozen-lockfile --filter @cogni/repo-spec...
+
+      - name: Build repo-spec runtime and declarations
+        run: |
+          pnpm --filter @cogni/repo-spec build
+          pnpm --filter @cogni/repo-spec exec tsc --build tsconfig.json
+
+      - name: Pack and exercise clean consumer
+        id: package
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: >-
+          node packages/repo-spec/scripts/verify-package.mjs pack
+          --output-dir package-artifact
+          --expected-version "$EXPECTED_VERSION"
+
+      - name: Preserve verified tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: repo-spec-${{ steps.package.outputs.version }}
+          path: package-artifact/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish immutable version
+    if: github.event_name == 'workflow_dispatch' && needs.verify.result == 'success'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Install Node for npm trusted publishing
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+          registry-url: https://registry.npmjs.org
+
+      - name: Pin OIDC-capable npm CLI
+        run: npm install --global npm@11.15.0
+
+      - name: Download verified tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: repo-spec-${{ needs.verify.outputs.version }}
+          path: package-artifact
+
+      - name: Enforce main-only immutable release
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: |
+          [ "$GITHUB_REF_NAME" = main ] || { echo "::error::package releases must run from main"; exit 1; }
+          node packages/repo-spec/scripts/verify-package.mjs assert-unpublished \
+            --expected-version "$EXPECTED_VERSION"
+
+      - name: Bootstrap @cogni/repo-spec@0.1.0
+        if: inputs.version == '0.1.0'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: |
+          [ -n "$NODE_AUTH_TOKEN" ] || { echo "::error::0.1.0 requires the one-time npm bootstrap token"; exit 1; }
+          npm publish "package-artifact/cogni-repo-spec-${{ inputs.version }}.tgz" \
+            --access public --provenance
+          {
+            echo "### One-time npm bootstrap follow-up"
+            echo ""
+            echo "Configure this workflow as the package's npm trusted publisher, then revoke and delete NPM_BOOTSTRAP_TOKEN."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish through npm trusted publishing
+        if: inputs.version != '0.1.0'
+        run: >-
+          npm publish "package-artifact/cogni-repo-spec-${{ inputs.version }}.tgz"
+          --access public --provenance
+
+      - name: Prove anonymous registry consumer
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: >-
+          node packages/repo-spec/scripts/verify-package.mjs verify-registry
+          --expected-version "$EXPECTED_VERSION"

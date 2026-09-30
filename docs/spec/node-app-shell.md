@@ -234,7 +234,7 @@ nodes/
 
 ## Goal
 
-Enable nodes as thin app shells that compose a shared layout/provider framework with node-specific features and overrides. Platform fixes to the shell land once; nodes get them via `workspace:*`. Feature UIs remain node-owned to support independent product evolution.
+Enable nodes as thin app shells that compose a shared layout/provider framework with node-specific features and overrides. In the monorepo, packages resolve through `workspace:*`; sovereign repositories consume curated capability packages at exact public versions. Feature UIs remain node-owned to support independent product evolution.
 
 ## Non-Goals
 
@@ -242,7 +242,7 @@ Enable nodes as thin app shells that compose a shared layout/provider framework 
 - Centralizing feature UIs, route trees, or product flows in the shared shell
 - Replacing capability libraries — `@cogni/ai-core`, `@cogni/db-client`, etc. keep PURE_LIBRARY pattern
 - Operator aggregation plane (separate concern per multi-node-tenancy spec)
-- Published npm packages (all packages remain `private: true`)
+- Publishing the source-export `@cogni/node-app` shell or treating every workspace package as public. Only reviewed PURE_LIBRARY capability packages may use the public release contract in `packages-architecture.md`.
 
 ## Invariants
 

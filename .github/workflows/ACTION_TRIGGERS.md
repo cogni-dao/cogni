@@ -131,14 +131,15 @@ Event-driven only:
 
 - `ci.yaml` — `pull_request`, `merge_group`, `push`
 - `pr-lint.yaml` — `pull_request`
-- `pr-build.yml` — `pull_request`
 
 Manual levers:
 
 - `candidate-flight.yml`
 - `candidate-flight-infra.yml`
 - `flight-preview.yml`
+- `pr-build.yml`
 - `promote-and-deploy.yml`
+- `publish-repo-spec.yml`
 - `release.yml`
 - `stack-test.yml`
 

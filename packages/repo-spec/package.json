@@ -1,7 +1,23 @@
 {
   "name": "@cogni/repo-spec",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Pure parser, schemas, and typed accessors for Cogni node repo specifications.",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cogni-DAO/cogni.git",
+    "directory": "packages/repo-spec"
+  },
+  "homepage": "https://github.com/Cogni-DAO/cogni/tree/main/packages/repo-spec",
+  "bugs": {
+    "url": "https://github.com/Cogni-DAO/cogni/issues"
+  },
+  "keywords": [
+    "cogni",
+    "configuration",
+    "schema",
+    "zod"
+  ],
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -18,8 +34,17 @@
   },
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsup",
     "postbuild": "node -e \"const fs=require('fs'); if(!fs.existsSync('dist/index.js')){console.error('ERROR: dist/index.js missing'); process.exit(1)}\"",
