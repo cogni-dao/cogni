@@ -67,3 +67,11 @@ node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
+  - cidr: 213.146.212.69/32
+    comment: Portugal provider egress (story.5050)
+  - cidr: 77.76.13.0/24
+    comment: Bulgaria provider rotating egress range (story.5050)
+  - cidr: 95.217.58.106/32
+    comment: Finland provider egress (story.5050)
+  - cidr: 24.144.74.27/32
+    comment: Netherlands provider egress (story.5050)
