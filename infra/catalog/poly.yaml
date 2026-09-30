@@ -50,11 +50,12 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 37
+  candidate-a: 38
   preview: 2
-  production: 9
+  production: 14
 required_placement_countries:
-  production: [BG, NL, PT]
+  candidate-a: [BE]
+  production: [BG, FI, NL, PT]
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/poly/
