@@ -195,12 +195,21 @@ const SUBSTRATE_HOSTNAME =
  * additions are policies the bespoke controller held as compiled-in behaviour and a declarative
  * API has to state (see infra/crossplane/xcomputeworkload/xrd.yaml).
  */
+/**
+ * story.5050 — HARD placement requirement. Absent = unconstrained, which is what every
+ * existing lease runs under, so this field stays inert for every row without the catalog cell.
+ */
+export interface XComputeWorkloadPlacement {
+  readonly requiredCountries: readonly string[];
+}
+
 export interface XComputeWorkloadSpec extends ComputeWorkloadSpec {
   readonly migration: { readonly policy: typeof MIGRATION_POLICY };
   readonly bootPolicy: XComputeWorkloadBootPolicy;
   readonly leaseGeneration: number;
   readonly dns?: XComputeWorkloadDns;
   readonly runtime?: XComputeWorkloadRuntime;
+  readonly placement?: XComputeWorkloadPlacement;
 }
 
 export interface ComputeWorkloadManifest {
@@ -234,6 +243,17 @@ export interface BuildComputeWorkloadManifestInput {
    * counter is a GENERATION. The rename moved no VALUE, so no idempotence key moved.
    */
   readonly leaseGeneration: number;
+  /**
+   * story.5050 — ISO 3166-1 alpha-2 countries this workload's lease MAY be minted in, read
+   * from the node's own catalog row (`required_placement_countries.<env>`). Absent/empty =
+   * unconstrained, which is what every existing lease runs under.
+   *
+   * It is a REQUIREMENT, not the fleet-wide latency preference: the actuator FILTERS bids on
+   * it and fails closed on an unknown provider country. It binds only on a fresh mint, because
+   * Akash refuses in-place placement change — so changing it needs a `leaseGeneration` bump,
+   * and the XRD marks the field immutable to make that explicit rather than silently inert.
+   */
+  readonly requiredPlacementCountries?: readonly string[];
   /**
    * DNS intent for the Crossplane authority only — the legacy controller resolves its own zone
    * from an in-cluster secret, so passing it there would be desired state nothing reads.
@@ -331,6 +351,18 @@ export function buildComputeWorkloadManifest(
     );
   }
 
+  // A placement requirement the legacy controller cannot read would be desired state nothing
+  // enforces — the node would place anywhere while the catalog claims it is constrained, which
+  // is the exact silent-unconstrained failure this feature exists to prevent. Refuse instead.
+  if (
+    input.computeApi !== "crossplane" &&
+    (input.requiredPlacementCountries?.length ?? 0) > 0
+  ) {
+    throw new Error(
+      "[compute-workload-manifest] required_placement_countries is enforced only by the crossplane authority; the legacy controller screens no bids and would place the workload anywhere"
+    );
+  }
+
   if (input.runtime) {
     if (!SUBSTRATE_HOSTNAME.test(input.runtime.substrateHost)) {
       throw new Error(
@@ -412,6 +444,16 @@ export function buildComputeWorkloadManifest(
             // alias. Dual-writing would pin `leaseEpoch` into every ref forever and make the
             // alias unremovable.
             leaseGeneration: input.leaseGeneration,
+            // Absent stays ABSENT, unlike leaseGeneration above: the actuator fails closed on
+            // this field, so emitting an empty list would refuse every bid and read as "no
+            // provider bid for this workload" rather than as a placement policy.
+            ...((input.requiredPlacementCountries?.length ?? 0) > 0
+              ? {
+                  placement: {
+                    requiredCountries: input.requiredPlacementCountries,
+                  },
+                }
+              : {}),
             // WHICH writer mints this lease (task.5132, refined for owner routing in bug.5263).
             // A node app runs on AKASH, so its XR is pure desired state reconciled on a writer
             // cluster whose own `cogni-<env>` namespace may run no actuator — the Composition

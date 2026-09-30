@@ -84,11 +84,12 @@ export const serverSchema = z.object({
   // Deployment environment (for observability labels and analytics filtering)
   DEPLOY_ENVIRONMENT: z.string().optional(),
 
-  // Cluster that reconciles externally placed lanes for this fleet. The canonical fleet uses
-  // production; the isolated test fleet uses candidate-a and never reaches production authority.
-  FLEET_CONTROL_ENV: z
-    .enum(["candidate-a", "preview", "production"])
-    .default("production"),
+  // Fleet control env — which env's cluster reconciles akash lanes (bug.5204). The TS twin of
+  // scripts/ci/lib/appset-paths.sh `control_env_for` (`FLEET_CONTROL_ENV:-production`). Unset =>
+  // `production` (cogni-dao fleet, byte-identical). An ISOLATED fleet with no production cluster
+  // (e.g. cogni-test-org) sets this to its own control env (candidate-a) so the env-membership
+  // verb's PR-authoring targets appsets/<control-env>/ instead of the nonexistent appsets/production/.
+  FLEET_CONTROL_ENV: z.string().optional(),
 
   // Build SHA for observability (canonical source for /metrics, /readyz, agent.json)
   APP_BUILD_SHA: z.string().optional(),

@@ -131,14 +131,19 @@ export function envManagerCommitMessage(input: {
 export interface GitHubRepoWriterConfig {
   readonly appId: string;
   readonly privateKey: string;
-  /** Cluster that reconciles externally placed lanes; production by default, candidate-a in test. */
-  readonly fleetControlEnv?: NodeFormationEnv;
   /**
    * Flag-gated DNS reverse/forward reconcile (story.5020 W4). v0 ships false — the env-membership verb
    * only LOGS the intended Cloudflare change. When true, the live CloudflareAdapter prune/upsert path is
    * exercised (NOT wired with creds in this PR — vNext/W3b). Defaults false.
    */
   readonly dnsReverseReconcile?: boolean;
+  /**
+   * THE FLEET CONTROL ENV (`FLEET_CONTROL_ENV`, `controlEnvFor`) — the env whose cluster reconciles
+   * akash lanes, so the env whose `appsets/<control-env>/` dir the env-verb writes into (bug.5204/
+   * bug.5235). Resolved from `serverEnv().FLEET_CONTROL_ENV` by the factory. Undefined =>
+   * `production` (cogni-dao fleet, byte-identical); an isolated test fleet passes `candidate-a`.
+   */
+  readonly fleetControlEnv?: string | undefined;
 }
 
 export interface OpenNodeAppPrInput {
@@ -184,7 +189,11 @@ export interface OpenNodeEnvPrInput {
 export interface OpenNodeEnvPrDerived {
   readonly placement: PlacementProvider;
   readonly computeApi: "crossplane" | null;
-  readonly controlEnv: NodeFormationEnv;
+  /**
+   * The env whose cluster reconciles the derived lane (`controlEnvFor`). A `string`, not a
+   * NodeFormationEnv literal: on an isolated fleet the FLEET CONTROL ENV can be `candidate-a`.
+   */
+  readonly controlEnv: string;
   readonly leaseGeneration: number;
 }
 
@@ -2759,11 +2768,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     let shape: EnvAddShape | undefined;
     if (present) {
       try {
-        shape = planEnvAddShape(
-          catalog,
-          env,
-          this.config.fleetControlEnv ?? "production"
-        );
+        shape = planEnvAddShape(catalog, env, this.config.fleetControlEnv);
       } catch (err) {
         if (err instanceof EnvPlanError) {
           throw deployPlaneError(err.code, err.message, err.status);
@@ -3134,7 +3139,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     const removeControlEnv = controlEnvFor(
       env,
       removeProvider,
-      this.config.fleetControlEnv ?? "production"
+      this.config.fleetControlEnv
     );
     appsetsKustomizationByEnv[removeControlEnv] = await this.readFileOnMain(
       octokit,
@@ -4423,7 +4428,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       const controlEnv = controlEnvFor(
         env,
         birthPlacement[env] ?? "k3s",
-        this.config.fleetControlEnv ?? "production"
+        this.config.fleetControlEnv
       );
       await addBlob(
         appsetPath(controlEnv, env, slug),

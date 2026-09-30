@@ -102,14 +102,25 @@ export function providerForEnv(
  * reconciles it. k3s rows genuinely run IN their env's cluster and stay there — and because an
  * absent `deployment_provider.<env>` is the k3s default (K3S_IS_DEFAULT), an un-placed row is
  * NEVER relocated; placement must be stated to move.
+ *
+ * `fleetControlEnv` is THE FLEET CONTROL ENV — the env whose cluster reconciles akash lanes,
+ * exactly `control_env_for`'s `fleet_control="${FLEET_CONTROL_ENV:-production}"`. On the cogni-dao
+ * fleet it is `production` (or omitted, which preserves that byte-identical default); an ISOLATED
+ * fleet with no production cluster (cogni-test-org exports `FLEET_CONTROL_ENV=candidate-a`)
+ * reconciles + pays for its own akash lanes, so its appsets live under `appsets/candidate-a/` and
+ * the verb's PR-authoring must target THAT dir, not the nonexistent `appsets/production/`
+ * (bug.5204/bug.5235). PURE by contract: the fleet control env is a PARAMETER, never a process.env
+ * read here — every akash-write-path caller resolves `serverEnv().FLEET_CONTROL_ENV` and passes it.
+ * Omitting it preserves today's `production` behaviour so existing callers/tests are unaffected.
  */
 export function controlEnvFor<E extends string>(
   environment: E,
   provider: NodeDeploymentProvider,
-  fleetControlEnv: E | FlightEnv = "production"
-): E | FlightEnv {
-  if (environment === fleetControlEnv) return environment;
-  return provider === "akash" ? fleetControlEnv : environment;
+  fleetControlEnv?: string
+): E | string {
+  if (environment === "production") return environment;
+  if (provider !== "akash") return environment;
+  return fleetControlEnv?.trim() || "production";
 }
 
 export interface NodeAppBaseUrlInput {

@@ -197,11 +197,8 @@ async function onboardLane(
 
     const provider =
       row.deployment_provider?.[ctx.lane] === "akash" ? "akash" : "k3s";
-    // The fleet, not the lane name, owns Akash custody. Production fleets default to
-    // `production`; the isolated test fleet explicitly selects `candidate-a`. Omitting the
-    // configured fleet control here made a test-fleet production add reach for a production
-    // cluster that does not exist, even though every generated AppSet correctly lived under
-    // appsets/candidate-a.
+    // The FLEET CONTROL ENV owns the akash lane's control cluster (bug.5204/bug.5235): on an
+    // isolated fleet (FLEET_CONTROL_ENV=candidate-a) the custodian is candidate-a, not production.
     const controlEnv = controlEnvFor(ctx.lane, provider, env.FLEET_CONTROL_ENV);
     // REPLAY_NEVER_ADVANCES — an env renders at the sha it is already running. The catalog row is
     // the BIRTH pin, used only for an env that has never deployed (no `deploy/<env>-<slug>` pin).

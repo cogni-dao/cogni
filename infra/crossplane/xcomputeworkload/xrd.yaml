@@ -316,6 +316,46 @@ spec:
                     zoneId:
                       type: string
                       pattern: "^[0-9a-f]{32}$"
+                placement:
+                  description: >-
+                    story.5050 — HARD placement requirement for this workload: the ISO 3166-1
+                    alpha-2 countries its lease MAY be minted in. Distinct from the operator's
+                    fleet-wide latency PREFERENCE, which only RANKS providers: this FILTERS
+                    bids, so a provider outside the set never wins. It exists because a
+                    workload can have an outbound dependency that geo-fences by IP while the
+                    latency preference pulls toward the shared substrate's own neighbourhood,
+                    and for the Baltics substrate those two axes point in opposite directions.
+
+                    REQUIRED_FAILS_CLOSED: the actuator refuses a bid whose provider country is
+                    unknown or whose provider metadata is unavailable, unlike the fail-open
+                    preference path — a requirement that cannot be evaluated is not satisfied.
+
+                    NOT_A_GUARANTEE: the country compared is a provider's advertised/INGRESS
+                    identity, which is measurably not the EGRESS identity its workload presents
+                    to a third party (two providers in two advertised countries have shared one
+                    egress NAT). This narrows the candidate pool; only the workload's own
+                    outbound probe proves reachability.
+
+                    Absent = unconstrained, which is what every existing lease runs under.
+                    Immutable: Akash refuses in-place placement change, so a new requirement can
+                    only bind on a fresh mint behind a spec.leaseGeneration bump — accepting an
+                    edit here would otherwise read as applied desired state that nothing applies.
+                  type: object
+                  required: [requiredCountries]
+                  x-kubernetes-validations:
+                    - {
+                        rule: "self == oldSelf",
+                        message: placement is immutable; bump leaseGeneration to re-place,
+                      }
+                  properties:
+                    requiredCountries:
+                      type: array
+                      minItems: 1
+                      maxItems: 32
+                      x-kubernetes-list-type: set
+                      items:
+                        type: string
+                        pattern: "^[A-Z]{2}$"
                 bootPolicy:
                   description: >-
                     BOOT_SLO_OR_CLOSE. task.5095 explicitly left give-up policy unowned, so a

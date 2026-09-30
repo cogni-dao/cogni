@@ -86,10 +86,39 @@ export interface ProvisionServiceSpec {
 }
 
 /** A complete provisionable workload: one or more co-located services. */
+/**
+ * Hard constraint on WHERE a workload may be placed, expressed in provider-agnostic units
+ * (ISO 3166-1 alpha-2), never provider units — each adapter maps it onto its own marketplace.
+ *
+ * This is a REQUIREMENT, not a preference. It exists because a workload can have an outbound
+ * dependency that geo-fences by IP, and a latency-driven placement preference pulls in the
+ * opposite direction (co-locating near the shared substrate lands in jurisdictions a
+ * geo-fenced API refuses). Preference ranks; this refuses.
+ *
+ * REQUIRED_FAILS_CLOSED: a candidate outside the set, or one whose country an adapter cannot
+ * determine, is REFUSED. A requirement that cannot be evaluated is not satisfied. This
+ * deliberately inverts the fail-open rule that governs placement *preferences*.
+ *
+ * NOT_A_GUARANTEE: country data describes a provider's advertised/ingress identity, which is
+ * measurably not the same as the egress identity its workload presents to a third party
+ * (two Akash providers in different advertised countries have shared one egress NAT). This
+ * narrows the candidate pool; only the workload's own outbound probe proves reachability.
+ */
+export interface ProvisionPlacement {
+  /**
+   * Country codes the workload MAY be placed in. Non-empty = hard requirement.
+   * Omit the field entirely for unconstrained placement; an empty array is not a valid
+   * way to say "anywhere" (it would refuse everything).
+   */
+  readonly requiredCountryCodes: readonly string[];
+}
+
 export interface ProvisionSpec {
   /** Workload label for observability (e.g. the node slug). */
   readonly name: string;
   readonly services: readonly ProvisionServiceSpec[];
+  /** Hard placement constraints. Absent = unconstrained. */
+  readonly placement?: ProvisionPlacement;
 }
 
 /** Lifecycle state of a provisioned workload, uniform across providers. */

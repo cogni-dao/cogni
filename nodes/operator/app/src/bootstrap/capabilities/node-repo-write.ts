@@ -29,5 +29,6 @@ export function createNodeRepoWriter(env: ServerEnv): GitHubRepoWriter {
     privateKey,
     fleetControlEnv: env.FLEET_CONTROL_ENV,
     dnsReverseReconcile: env.DNS_REVERSE_RECONCILE,
+    fleetControlEnv: env.FLEET_CONTROL_ENV,
   });
 }
