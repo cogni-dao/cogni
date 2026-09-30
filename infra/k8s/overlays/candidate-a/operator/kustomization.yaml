@@ -148,11 +148,6 @@ patches:
       - op: add
         path: /data/FLEET_CONTROL_ENV
         value: "candidate-a"
-      # Public Akash workload zone for the disposable test fleet. This is deliberately separate
-      # from NEXTAUTH_URL/test.cognidao.org, which is the shared k3s operator control endpoint.
-      - op: add
-        path: /data/FORK_DOMAIN_ROOT
-        value: "cogni-testing.org"
       # PUBLIC, non-secret Akash account the actuator spends from (same value pinned on the
       # akash-tx-actuator container above). The OPERATOR APP needs it too: the env-membership
       # verb (`POST /api/v1/nodes/{id}/envs`) derives lease_generation by reading the allocation
