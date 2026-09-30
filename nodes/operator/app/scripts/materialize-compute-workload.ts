@@ -460,6 +460,28 @@ function parseStringArray(value: string, flag: string): string[] {
   return parsed as string[];
 }
 
+/** `repo@sha256:…` -> `repo`. The digest ref is the only carrier of the repository on the explicit path. */
+function repositoryFromDigestRef(ref: string): string {
+  const at = ref.lastIndexOf("@");
+  if (at <= 0) {
+    throw new Error(
+      `[materialize-compute-workload] --bundle-ref must be an immutable digest reference (repo@sha256:…), received ${ref}`
+    );
+  }
+  return ref.slice(0, at);
+}
+
+/** `repo@sha256:…` -> `sha256:…`. */
+function digestFromRef(ref: string): string {
+  const at = ref.lastIndexOf("@");
+  if (at <= 0) {
+    throw new Error(
+      `[materialize-compute-workload] --bundle-ref must be an immutable digest reference (repo@sha256:…), received ${ref}`
+    );
+  }
+  return ref.slice(at + 1);
+}
+
 async function resolveBundleInput(input: {
   readonly bundleFile: string | undefined;
   readonly bundleRef: string | undefined;
@@ -468,10 +490,60 @@ async function resolveBundleInput(input: {
 }): Promise<{ readonly ref: string; readonly payload: unknown }> {
   if (input.bundleFile || input.bundleRef) {
     const bundleFile = required(input.bundleFile, "--bundle");
-    return {
-      ref: required(input.bundleRef, "--bundle-ref"),
-      payload: JSON.parse(await readFile(bundleFile, "utf8")) as unknown,
-    };
+    const ref = required(input.bundleRef, "--bundle-ref");
+    const payload = JSON.parse(await readFile(bundleFile, "utf8")) as unknown;
+    /*
+      BUNDLE_REF_MATCHES_SOURCE_SHA (bug.5310). resolveNodeArtifactBundle validates the
+      PAYLOAD exhaustively — source sha, repository, node_id, service-by-service equality.
+      It never sees `ref`, which is the digest the workload ACTUALLY RUNS. On this explicit
+      path the caller supplies both independently and nothing compares them, so a stale
+      --bundle-ref pins the XR to one image while spec.bundle.source.sha demands proof of a
+      different commit. Exact-SHA readiness is then UNSATISFIABLE BY CONSTRUCTION: the
+      workload can never serve a sha whose code it is not running, the boot deadline closes
+      the lease at bootDeadlineSeconds, and every individual validation passed on the way in,
+      so the failure is silent.
+
+      Observed on toks4 candidate-a: spec.bundle.source.sha 48d7eaa7 (payload validated OK)
+      against spec.bundle.ref sha256:5fd701b1…, which is the digest of NEITHER 48d7eaa7
+      (sha256:aa50d1e7…) NOR the lane's previous bundle (sha256:16b3ddb1…). One burned lease
+      per flight, guaranteed.
+
+      The `--bundle-repository` path below cannot have this defect: it DERIVES the digest by
+      resolving `<repo>:sha-<sourceSha>`, so the two agree by construction. This makes the
+      explicit path prove the same property instead of trusting the caller.
+    */
+    const repository = repositoryFromDigestRef(ref);
+    const expectedTagRef = buildNodeBundleTagRef({
+      repository,
+      sourceSha: input.sourceSha,
+    });
+    /*
+      FAIL ONLY ON POSITIVE EVIDENCE. This path runs on every flight, so a hard failure when
+      the tag simply cannot be resolved (registry blip, bundle published under another tag,
+      oras absent) would break flights fleet-wide to catch a bug that has not occurred. An
+      unresolvable tag is therefore a LOUD WARNING and the flight proceeds; only a digest we
+      successfully resolved AND that disagrees is a refusal.
+    */
+    let expectedDigest = "";
+    try {
+      const { stdout: resolved } = await execFileAsync("oras", [
+        "resolve",
+        expectedTagRef,
+      ]);
+      expectedDigest = resolved.trim();
+    } catch (error) {
+      process.stderr.write(
+        `::warning::BUNDLE_REF_UNVERIFIED: could not resolve ${expectedTagRef} to cross-check --bundle-ref (${String(error)}). Proceeding; the ref is trusted as supplied.\n`
+      );
+    }
+    const suppliedDigest = digestFromRef(ref);
+    if (expectedDigest && expectedDigest !== suppliedDigest) {
+      throw new Error(
+        `[materialize-compute-workload] BUNDLE_REF_MISMATCH: --bundle-ref pins ${suppliedDigest} but source sha ${input.sourceSha} resolves to ${expectedDigest}. ` +
+          "The workload would run one commit's image while being asked to prove another, which exact-SHA readiness can never satisfy (bug.5310)."
+      );
+    }
+    return { ref, payload };
   }
 
   const repository = required(input.bundleRepository, "--bundle-repository");
