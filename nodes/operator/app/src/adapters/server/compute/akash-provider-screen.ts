@@ -34,6 +34,19 @@
  *     underbidding-zombie tell).
  *   - BLACKLIST_IS_DERIVED: 24h TTL per SLO failure, permanent at 3 strikes — computed from
  *     append-only outcome history, cleared by deleting rows (never stored state).
+ *   - PIN_IS_A_PREFERENCE_NOT_A_GATE (story.5050): `allowedProviders` is an OPTIONAL PIN, not
+ *     the authorization boundary. `undefined` AND the EMPTY set both mean "no pin — screen on
+ *     policy alone"; ONLY a non-empty set narrows the pool. This deliberately INVERTS the
+ *     original fail-closed reading, under which an empty list refused every bid. The reason
+ *     is that a hand-maintained address enumeration is not a gate, it is a snapshot that
+ *     rots: measured against the live registry on 2026-09-30, only 6 of the 11 pinned
+ *     addresses could still win a bid at all — three declare `featEndpointCustomDomain=false`
+ *     and two were offline — and the pin, not the Akash market, is what held one node to a
+ *     single vendor across ten dry auctions. The boundary that matters is the conjunction of
+ *     gates that each fire on their own merits: the on-chain `signedBy` audit anchor asserted
+ *     in the SDL, the node catalog's fail-closed `requiredCountryCodes`, `passesQualityFilter`
+ *     (which subsumes `isAudited`), the price-outlier exclusion, and the derived strike
+ *     blacklist. Removing the pin removes NONE of those.
  * Side-effects: none (pure)
  * Links: ./akash-compute.adapter (caller), ./provider-outcome-store (history source),
  *   knowledge hub `akash-provider-quality-mandate`, task.5051, task.5049 (DEV2 findings)
@@ -140,9 +153,15 @@ export interface ScreenBidsInput {
    */
   readonly requiredCountryCodes: readonly string[];
   /**
-   * Providers the operator's fleet-wide boundary permits. `undefined` = no boundary
-   * configured. Applied HERE rather than at the call site so an empty survivor set can name
-   * this filter as the cause instead of silently shrinking the input.
+   * OPTIONAL operator-owned provider PIN. `undefined` OR EMPTY = NO PIN: every bid is judged
+   * on policy alone (audit anchor, required country, quality, price, strikes). A NON-EMPTY
+   * set is a hard narrowing — only those addresses may be leased — so an operator can still
+   * force a set for an incident, a migration, or an egress-coupled substrate.
+   *
+   * This is NOT a fail-closed gate. An empty value used to refuse every bid; it no longer
+   * does (PIN_IS_A_PREFERENCE_NOT_A_GATE). Applied HERE rather than at the call site so an
+   * empty survivor set can still name this filter as the cause instead of silently shrinking
+   * the input.
    */
   readonly allowedProviders?: ReadonlySet<string> | undefined;
   /** Providers already tried (and failed) within the current provision attempt loop. */
@@ -268,7 +287,15 @@ function rejectionFor(
   }
 ): BidRejectionReason | undefined {
   if (ctx.excludedProviders.has(bid.provider)) return "already_tried";
-  if (ctx.allowedProviders && !ctx.allowedProviders.has(bid.provider)) {
+  // PIN_IS_A_PREFERENCE_NOT_A_GATE: an EMPTY pin is NO pin, not "refuse everything". The
+  // `.size > 0` is the whole inversion — read it as "only a pin an operator actually wrote
+  // can narrow the pool"; a blanked overlay value now falls through to the policy gates
+  // below instead of closing the auction.
+  if (
+    ctx.allowedProviders !== undefined &&
+    ctx.allowedProviders.size > 0 &&
+    !ctx.allowedProviders.has(bid.provider)
+  ) {
     return "not_allowlisted";
   }
   const info = ctx.providers.get(bid.provider);

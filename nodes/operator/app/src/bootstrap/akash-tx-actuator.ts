@@ -337,8 +337,13 @@ const preferredProviders = (runtimeEnv.AKASH_PREFERRED_PROVIDERS ?? "")
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
-// An empty configured boundary intentionally rejects every provider; provider-enabled
-// environments must opt in their reachable accounts (same contract as the controller).
+// OPTIONAL PIN, NOT A GATE (story.5050). An empty or unset value means "no pin" — bids are
+// screened on policy alone: the SDL `signedBy` audit anchor, the node catalog's fail-closed
+// `required_placement_countries`, the quality filter, price-outlier exclusion, and the derived
+// strike blacklist. It used to mean "refuse every provider", which is why a blanked overlay
+// value (d69e5c29) could close every auction fleet-wide and why an 11-address enumeration,
+// 5 slots of which had gone dead, was the real single-vendor constraint. A NON-EMPTY value
+// still narrows leasing to exactly those accounts, so an operator can force a set on demand.
 const allowedProviders = (runtimeEnv.AKASH_ALLOWED_PROVIDERS ?? "")
   .split(",")
   .map((value) => value.trim())

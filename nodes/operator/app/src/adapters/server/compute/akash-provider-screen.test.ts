@@ -258,6 +258,91 @@ describe("screenBids ranking", () => {
   });
 });
 
+describe("screenBids provider pin (PIN_IS_A_PREFERENCE_NOT_A_GATE)", () => {
+  // story.5050. The allowlist is retired as a GATE and kept only as a PIN. These pin the
+  // INVERSION — an empty pin used to refuse every bid, which is how a blanked overlay value
+  // (d69e5c29) closed auctions fleet-wide and how a rotting 11-address enumeration, 5 slots
+  // of which had gone dead, became the real single-vendor constraint.
+  it("an EMPTY pin is NO pin — every bid is still screened, none are refused for it", () => {
+    const out = screenFull(
+      [bid("akash1stranger", 100), bid("akash1other", 90)],
+      {
+        allowedProviders: new Set<string>(),
+      }
+    );
+    expect(out.ranked.map((b) => b.provider)).toEqual([
+      "akash1other",
+      "akash1stranger",
+    ]);
+    expect(out.rejections).toEqual({});
+  });
+
+  it("an OMITTED pin is NO pin (unchanged)", () => {
+    const out = screenFull([bid("akash1stranger", 100)]);
+    expect(out.ranked.map((b) => b.provider)).toEqual(["akash1stranger"]);
+    expect(out.rejections).toEqual({});
+  });
+
+  it("a NON-EMPTY pin still hard-narrows the pool", () => {
+    const out = screenFull(
+      [bid("akash1pinned", 900), bid("akash1stranger", 1)],
+      {
+        allowedProviders: new Set(["akash1pinned"]),
+      }
+    );
+    expect(out.ranked.map((b) => b.provider)).toEqual(["akash1pinned"]);
+    expect(out.rejections).toEqual({ not_allowlisted: 1 });
+  });
+
+  it("a NON-EMPTY pin that nobody matches still empties the set and names itself", () => {
+    const out = screenFull([bid("akash1stranger", 100)], {
+      allowedProviders: new Set(["akash1absent"]),
+    });
+    expect(out.ranked).toEqual([]);
+    expect(out.rejections).toEqual({ not_allowlisted: 1 });
+    expect(out.roster[0]).toMatchObject({ rejection: "not_allowlisted" });
+  });
+
+  it("removing the pin removes NO other gate — quality, country and strikes still refuse", () => {
+    const out = screenFull(
+      [bid("akash1pt", 100), bid("akash1weak", 100), bid("akash1struck", 100)],
+      {
+        allowedProviders: new Set<string>(),
+        providers: new Map([
+          ["akash1pt", info("akash1pt", { countryCode: "PT" })],
+          [
+            "akash1weak",
+            info("akash1weak", { countryCode: "PT", isAudited: false }),
+          ],
+          ["akash1struck", info("akash1struck", { countryCode: "PT" })],
+        ]),
+        outcomes: new Map([
+          [
+            "akash1struck",
+            { successes: 0, failures: 3, lastFailureAtMs: NOW - HOUR },
+          ],
+        ]),
+        requiredCountryCodes: ["PT"],
+      }
+    );
+    expect(out.ranked.map((b) => b.provider)).toEqual(["akash1pt"]);
+    expect(out.rejections).toEqual({ blacklisted: 1, quality: 1 });
+    expect(out.rejections.not_allowlisted).toBeUndefined();
+  });
+
+  it("an empty pin does not mask the node's fail-closed country requirement", () => {
+    const out = screenFull([bid("akash1be", 100)], {
+      allowedProviders: new Set<string>(),
+      providers: new Map([
+        ["akash1be", info("akash1be", { countryCode: "BE" })],
+      ]),
+      requiredCountryCodes: ["PT"],
+    });
+    expect(out.ranked).toEqual([]);
+    expect(out.rejections).toEqual({ required_country: 1 });
+  });
+});
+
 describe("screenBids required placement (REQUIRED_FAILS_CLOSED)", () => {
   const providers = new Map([
     ["akash1pt", info("akash1pt", { countryCode: "PT" })],
