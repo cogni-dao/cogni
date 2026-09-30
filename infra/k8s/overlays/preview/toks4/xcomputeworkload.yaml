@@ -11,15 +11,15 @@ spec:
   nodeId: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
   environment: preview
   bundle:
-    ref: ghcr.io/cogni-dao/toks4@sha256:2b2491a3b84fbbb6fe51a8f8700ed14dc374b84fb5977ee0fd9f792d7a399488
+    ref: ghcr.io/cogni-dao/toks4@sha256:6b1bd55ee860feb9a49c20f6140f7c5dd862fba0b4595f3525489aaa81708bb1
     source:
       repository: cogni-dao/toks4
-      sha: 73482da19fe4bef19933536507293b66b00e879a
+      sha: 31611782e356909366dc8a2a66aa8b3c9d3f4351
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/toks4@sha256:0d5d08aca4d9302a082c8c5b67ea8912c7e5ca1f622b9a8e18e0c2f0c0cf3794
+        image: ghcr.io/cogni-dao/toks4@sha256:b1eef87a3b879a03d8f683d389089cbf4b647fdf28dd3a4c50e57fa6818fe2a4
       - name: echo-sidecar
-        image: ghcr.io/cogni-dao/toks4-echo-sidecar@sha256:986e439ed32bec4bd32289186aea7dee01f6f76798ca083f2fe2da02134da96e
+        image: ghcr.io/cogni-dao/toks4-echo-sidecar@sha256:70c20615b124db237e57915f7b6793adfde329ddd89138398bbfec851382e47d
   workload:
     name: toks4
     publicHost: toks4-preview.cognidao.org
