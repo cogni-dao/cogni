@@ -60,23 +60,24 @@ describe("candidate-a manifest source", () => {
       "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') || vars.DOMAIN }}";
 
     expect(
-      namedStep("node-substrate", "Run node substrate (materialize -> reconcile)")
-        .env?.DOMAIN
+      namedStep(
+        "node-substrate",
+        "Run node substrate (materialize -> reconcile)"
+      ).env?.DOMAIN
     ).toBe(targetDomain);
     expect(
       namedStep("assert-substrate", "Assert target substrate").env?.DOMAIN
     ).toBe(targetDomain);
     expect(
-      namedStep("verify-candidate", "Wait for candidate readiness").env
-        ?.DOMAIN
+      namedStep("verify-candidate", "Wait for candidate readiness").env?.DOMAIN
     ).toBe(targetDomain);
     expect(
       namedStep("verify-candidate", "Verify buildSha on endpoint (per-node)")
         .env?.DOMAIN
     ).toBe(targetDomain);
     expect(
-      namedStep("verify-candidate", "Run candidate smoke checks (per-node)")
-        .env?.DOMAIN
+      namedStep("verify-candidate", "Run candidate smoke checks (per-node)").env
+        ?.DOMAIN
     ).toBe(targetDomain);
     expect(
       namedStep("assert-substrate", "Assert target substrate").env?.CHECK_DNS
