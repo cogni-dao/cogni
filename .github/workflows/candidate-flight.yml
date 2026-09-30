@@ -618,14 +618,18 @@ jobs:
 
           for _ in $(seq 1 60); do
             state="$(ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" \
-              "kubectl -n argocd get application cogni-candidate-a-control-plane -o jsonpath='{.spec.source.repoURL}{\"|\"}{.spec.source.targetRevision}{\"|\"}{.status.sync.revision}{\"|\"}{.status.sync.status}{\"|\"}{.status.health.status}'")"
-            if [[ "$state" == "${desired_repo}|main|${EXPECTED_REVISION}|Synced|Healthy" ]]; then
-              echo "Isolated control-plane root synced: $state"
+              "kubectl -n argocd get application cogni-candidate-a-control-plane -o jsonpath='{.spec.source.repoURL}{\"|\"}{.spec.source.targetRevision}{\"|\"}{.status.sync.revision}{\"|\"}{.status.sync.status}{\"|\"}{.status.health.status}{\"|\"}{.status.operationState.phase}'")"
+            # Argo's API drops directory.recurse:false as a default, so this
+            # self-managing Application can remain OutOfSync after a successful
+            # apply. Exact source + revision + health + operation success are
+            # the convergence proof; sync.status is diagnostic only.
+            if [[ "$state" == "${desired_repo}|main|${EXPECTED_REVISION}|"*'|Healthy|Succeeded' ]]; then
+              echo "Isolated control-plane root converged: $state"
               break
             fi
             sleep 5
           done
-          if [[ "$state" != "${desired_repo}|main|${EXPECTED_REVISION}|Synced|Healthy" ]]; then
+          if [[ "$state" != "${desired_repo}|main|${EXPECTED_REVISION}|"*'|Healthy|Succeeded' ]]; then
             echo "::error::isolated control-plane root did not converge: $state"
             exit 1
           fi

@@ -134,7 +134,8 @@ describe("candidate-a manifest source", () => {
     expect(root.run).toContain(
       "targetRevision: deploy/candidate-a-control-plane#targetRevision: main"
     );
-    expect(root.run).toContain("${EXPECTED_REVISION}|Synced|Healthy");
+    expect(root.run).toContain(".status.operationState.phase");
+    expect(root.run).toContain("|Healthy|Succeeded");
   });
 
   it("selects the flighted source SHA for an in-repo node-ref", () => {
