@@ -145,8 +145,10 @@ export interface AkashComputeAdapterConfig {
    */
   preferredProviders?: readonly string[];
   /**
-   * Optional operator-owned hard provider boundary. When present, only these
-   * provider accounts may be leased; an empty list rejects every bid.
+   * Optional operator-owned provider PIN. A NON-EMPTY list narrows leasing to exactly those
+   * accounts. Absent OR EMPTY means NO pin — bids are judged on policy alone
+   * (PIN_IS_A_PREFERENCE_NOT_A_GATE in ./akash-provider-screen, story.5050). It used to be a
+   * fail-closed boundary where an empty list rejected every bid; it is not one now.
    */
   allowedProviders?: readonly string[];
   /**
@@ -1022,9 +1024,13 @@ export class AkashComputeAdapter
   ): Promise<ConsoleBidId> {
     const deadline = Date.now() + this.bidTimeoutMs;
     const preferred = this.config.preferredProviders ?? [];
-    const allowed = this.config.allowedProviders
-      ? new Set(this.config.allowedProviders)
-      : undefined;
+    // An EMPTY configured list collapses to `undefined` == no pin. Spelled out because `[]`
+    // is TRUTHY: the old `config.allowedProviders ? new Set(...)` turned an empty list into
+    // an empty Set, i.e. "no provider is permitted", which refused every bid in silence.
+    const allowed =
+      this.config.allowedProviders && this.config.allowedProviders.length > 0
+        ? new Set(this.config.allowedProviders)
+        : undefined;
     let sawAnyBid = false;
     // Carried out of the loop so NO_ELIGIBLE_BIDS can name WHICH filter refused everything.
     // Three independent filters can each empty the set; a static reason list sent operators

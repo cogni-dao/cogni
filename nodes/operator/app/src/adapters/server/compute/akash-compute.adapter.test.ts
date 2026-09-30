@@ -1020,6 +1020,24 @@ describe("AkashComputeAdapter allowedProviders", () => {
     expect(h.leased).toEqual([{ dseq: "1", provider: allowed }]);
   });
 
+  // story.5050: `[]` is TRUTHY, so the old `config.allowedProviders ? new Set(...)` turned an
+  // empty list into an empty Set == "no provider is permitted" and refused every bid in
+  // silence. An empty pin is now NO pin, which is the whole point of retiring the allowlist
+  // as a gate — an unset/blanked AKASH_ALLOWED_PROVIDERS must place, not close the auction.
+  it("treats an EMPTY allowedProviders list as no pin and leases the best screened bid", async () => {
+    const h = harness({
+      providers: [providerEntry(allowed), providerEntry(stranger)],
+      bids: (dseq) => [bidEntry(dseq, stranger, "1")],
+    });
+
+    await makeAdapter(h.fetchImpl, {
+      bidTimeoutMs: 0,
+      allowedProviders: [],
+    }).provision({ env: "t", spec: SPEC });
+
+    expect(h.leased).toEqual([{ dseq: "1", provider: stranger }]);
+  });
+
   it("fails closed without leasing a fallback when no allowed provider bids", async () => {
     const h = harness({
       providers: [providerEntry(allowed), providerEntry(stranger)],

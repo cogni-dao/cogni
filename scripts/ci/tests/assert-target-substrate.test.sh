@@ -404,7 +404,11 @@ case "$*" in
   *"get composition xcomputeworkload-akash"*) exit 0 ;;
   *"get clusterproviderconfigs.http.m.crossplane.io cogni-http"*) exit 0 ;;
   *"get deployment operator-akash-tx-actuator"*status.availableReplicas*) echo 1; exit 0 ;;
-  *"get deployment operator-akash-tx-actuator"*AKASH_ALLOWED_PROVIDERS*)
+  *"get deployment operator-akash-tx-actuator"*AKASH_ALLOWED_PROVIDERS*.name}*)
+    echo AKASH_ALLOWED_PROVIDERS
+    exit 0
+    ;;
+  *"get deployment operator-akash-tx-actuator"*AKASH_ALLOWED_PROVIDERS*.value}*)
     echo akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
     exit 0
     ;;
@@ -476,7 +480,7 @@ grep -q "all declared workload secret refs are materialized" "$TMPROOT/external-
 
 grep -q "compute_api=crossplane" "$TMPROOT/external-success.out"
 grep -q "cogni-candidate-a/operator-akash-tx-actuator is available" "$TMPROOT/external-success.out"
-grep -q "AKASH_ALLOWED_PROVIDERS is non-empty" "$TMPROOT/external-success.out"
+grep -q "AKASH_ALLOWED_PROVIDERS is declared" "$TMPROOT/external-success.out"
 if grep -q "compute workload controller" "$TMPROOT/external-success.out"; then
   echo "expected the crossplane path to assert no legacy controller" >&2
   exit 1
@@ -568,7 +572,14 @@ case "$*" in
     echo 1
     exit 0
     ;;
-  *"get deployment operator-akash-tx-actuator"*AKASH_ALLOWED_PROVIDERS*)
+  # story.5050: the pin's VALUE may legitimately be empty, so the two reads are faked
+  # separately — DECLARED-ness (by name) is the assertion, the value is only reported.
+  *"get deployment operator-akash-tx-actuator"*AKASH_ALLOWED_PROVIDERS*.name}*)
+    [ "${FAKE_UNDECLARED_ALLOWED_PROVIDERS:-}" = 1 ] && exit 0
+    echo AKASH_ALLOWED_PROVIDERS
+    exit 0
+    ;;
+  *"get deployment operator-akash-tx-actuator"*AKASH_ALLOWED_PROVIDERS*.value}*)
     [ "${FAKE_EMPTY_ALLOWED_PROVIDERS:-}" = 1 ] && exit 0
     echo akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
     exit 0
@@ -619,7 +630,7 @@ grep -q "ClusterProviderConfig/cogni-http exists" "$TMPROOT/xcw-success.out"
 grep -q "cogni-candidate-a/operator-akash-tx-actuator is available" "$TMPROOT/xcw-success.out"
 grep -q "Secret cogni-candidate-a/akash-tx-actuator-auth carries key 'token'" "$TMPROOT/xcw-success.out"
 grep -q "Secret cogni-candidate-a/akash-tx-actuator-env-secrets exists" "$TMPROOT/xcw-success.out"
-grep -q "AKASH_ALLOWED_PROVIDERS is non-empty" "$TMPROOT/xcw-success.out"
+grep -q "AKASH_ALLOWED_PROVIDERS is declared on cogni-candidate-a/operator-akash-tx-actuator (pinned to 1 provider(s))" "$TMPROOT/xcw-success.out"
 # Authority-independent checks still run on the crossplane path.
 grep -q "all declared workload secret refs are materialized" "$TMPROOT/xcw-success.out"
 grep -q "catalog compute egress CIDRs are installed" "$TMPROOT/xcw-success.out"
@@ -658,7 +669,29 @@ xcw_expect_fail actuator-unavailable "akash transaction actuator is not availabl
 xcw_expect_fail missing-auth-secret "Secret cogni-candidate-a/akash-tx-actuator-auth is missing" FAKE_MISSING_AUTH_SECRET=1
 xcw_expect_fail missing-auth-token-key "carries no 'token' key" FAKE_MISSING_AUTH_TOKEN_KEY=1
 xcw_expect_fail missing-actuator-env-secret "Secret cogni-candidate-a/akash-tx-actuator-env-secrets is missing" FAKE_MISSING_ACTUATOR_ENV_SECRET=1
-xcw_expect_fail empty-allowed-providers "AKASH_ALLOWED_PROVIDERS is empty or unset on cogni-candidate-a/operator-akash-tx-actuator" FAKE_EMPTY_ALLOWED_PROVIDERS=1
+# story.5050: DECLARED-ness is the assertion, not a non-empty value. An overlay that
+# stopped merging the base actuator env contract by name is still a loud stop...
+xcw_expect_fail undeclared-allowed-providers "AKASH_ALLOWED_PROVIDERS is not declared on cogni-candidate-a/operator-akash-tx-actuator" FAKE_UNDECLARED_ALLOWED_PROVIDERS=1
+
+# ...but a DECLARED-and-EMPTY pin is a SUPPORTED configuration and must PASS, reporting that
+# placement rests on the policy gates alone. This is the crux of the allowlist retirement:
+# before story.5050 this very input was the guard's one hard failure.
+env "${XCW_ENV[@]}" FAKE_EMPTY_ALLOWED_PROVIDERS=1 bash scripts/ci/assert-target-substrate.sh \
+  >"$TMPROOT/xcw-unpinned.out" 2>&1 || {
+  echo "expected an empty AKASH_ALLOWED_PROVIDERS to PASS (empty == no pin, story.5050)" >&2
+  cat "$TMPROOT/xcw-unpinned.out" >&2
+  exit 1
+}
+grep -q "AKASH_ALLOWED_PROVIDERS is declared on cogni-candidate-a/operator-akash-tx-actuator (no provider pin" "$TMPROOT/xcw-unpinned.out" || {
+  echo "expected the unpinned run to report that there is no provider pin" >&2
+  cat "$TMPROOT/xcw-unpinned.out" >&2
+  exit 1
+}
+grep -q "External compute preconditions ready for toks5" "$TMPROOT/xcw-unpinned.out" || {
+  echo "expected the unpinned run to reach the final readiness line" >&2
+  cat "$TMPROOT/xcw-unpinned.out" >&2
+  exit 1
+}
 
 # An unknown authority is a loud stop, never a silent fall-through to legacy.
 BAD_SRC="$TMPROOT/bad-authority-src"
