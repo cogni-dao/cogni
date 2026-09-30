@@ -28,6 +28,13 @@ const WORKFLOW = readFileSync(
   path.join(REPO_ROOT, ".github/workflows/candidate-flight.yml"),
   "utf8"
 );
+const CANDIDATE_OPERATOR_OVERLAY = readFileSync(
+  path.join(
+    REPO_ROOT,
+    "infra/k8s/overlays/candidate-a/operator/kustomization.yaml"
+  ),
+  "utf8"
+);
 
 interface WorkflowStep {
   name?: string;
@@ -83,6 +90,12 @@ describe("candidate-a manifest source", () => {
       namedStep("assert-substrate", "Assert target substrate").env?.CHECK_DNS
     ).toBe(
       "${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ZONE_ID != '' && 'true' || 'false' }}"
+    );
+    expect(CANDIDATE_OPERATOR_OVERLAY).toContain(
+      "path: /data/FORK_DOMAIN_ROOT"
+    );
+    expect(CANDIDATE_OPERATOR_OVERLAY).toContain(
+      'value: "cogni-testing.org"'
     );
   });
 

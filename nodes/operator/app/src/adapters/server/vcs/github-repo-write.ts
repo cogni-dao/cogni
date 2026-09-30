@@ -147,6 +147,8 @@ export interface GitHubRepoWriterConfig {
    * `production` (cogni-dao fleet, byte-identical); an isolated test fleet passes `candidate-a`.
    */
   readonly fleetControlEnv?: string | undefined;
+  /** Public workload zone for generated node routes; canonical defaults to cognidao.org. */
+  readonly forkDomainRoot?: string | undefined;
 }
 
 export interface OpenNodeAppPrInput {
@@ -2962,6 +2964,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       catalog,
       templateOverlayByEnv: {},
       appsetsKustomizationByEnv: {},
+      publicDomainRoot: this.config.forkDomainRoot,
       schedulerEndpointPatchByEnv: {
         [env]: await this.readFileOnMain(
           octokit,
@@ -3160,6 +3163,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         templateExternalSecretByEnv,
         appsetTemplate,
         appsetRepoUrl: `https://github.com/${owner}/${repo}.git`,
+        publicDomainRoot: this.config.forkDomainRoot,
         appsetsKustomizationByEnv,
         port,
         nodePort,
@@ -3196,6 +3200,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     return {
       catalog,
       templateOverlayByEnv,
+      publicDomainRoot: this.config.forkDomainRoot,
       appsetsKustomizationByEnv,
       schedulerEndpointPatchByEnv: removeSchedulerPatchByEnv,
     };

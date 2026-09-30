@@ -71,6 +71,12 @@ initContainers:
   migrate: exec node /app/app/migrate.mjs /app/app/migrations
 `;
 
+const TEST_FLEET_TEMPLATE_OVERLAY = `${TEMPLATE_OVERLAY}publicOrigin:
+  - op: add
+    path: /data/NEXTAUTH_URL
+    value: "https://node-template-preview.cognidao.org"
+`;
+
 // node-template overlay's external-secret.yaml (the ESO producer). renderOverlayFile only
 // slug/port-renames it — node-template → blue everywhere, no migrate guard.
 const TEMPLATE_EXTERNAL_SECRET = `apiVersion: external-secrets.io/v1
@@ -706,10 +712,11 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
   it("writes a test-fleet preview lane under candidate-a's control directory", () => {
     const current: EnvPlanCurrent = {
       catalog: externallyBuiltCatalog(["candidate-a"], "cogni-test-org"),
-      templateOverlayByEnv: { preview: TEMPLATE_OVERLAY },
+      templateOverlayByEnv: { preview: TEST_FLEET_TEMPLATE_OVERLAY },
       templateExternalSecretByEnv: { preview: TEMPLATE_EXTERNAL_SECRET },
       appsetTemplate: APPSET_TEMPLATE,
       appsetRepoUrl: "https://github.com/cogni-test-org/cogni-monorepo.git",
+      publicDomainRoot: "cogni-testing.org",
       appsetsKustomizationByEnv: {
         "candidate-a": kustWith("candidate-a", ["blue", "operator"]),
       },
@@ -739,6 +746,24 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
     if (appsetOp?.op === "upsert") {
       expect(appsetOp.content).toContain(
         "repoURL: https://github.com/cogni-test-org/cogni-monorepo.git"
+      );
+    }
+    const overlayOp = res.ops.find(
+      (op) => op.path === overlayPath("preview", SLUG)
+    );
+    expect(overlayOp?.op).toBe("upsert");
+    if (overlayOp?.op === "upsert") {
+      expect(overlayOp.content).toContain(
+        'value: "https://blue-preview.cogni-testing.org"'
+      );
+    }
+    const schedulerOp = res.ops.find(
+      (op) => op.path === schedulerEndpointPatchPath("preview")
+    );
+    expect(schedulerOp?.op).toBe("upsert");
+    if (schedulerOp?.op === "upsert") {
+      expect(schedulerOp.content).toContain(
+        `${SLUG}=https://${SLUG}-preview.cogni-testing.org`
       );
     }
     expect(paths(res.ops)).toContain(appsetsKustomizationPath("candidate-a"));

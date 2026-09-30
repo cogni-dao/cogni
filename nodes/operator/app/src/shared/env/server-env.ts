@@ -80,6 +80,9 @@ export const serverSchema = z.object({
   APP_ENV: z.enum(["test", "production"]),
   APP_BASE_URL: z.string().url().optional(),
   DOMAIN: z.string().optional(),
+  // Public workload zone owned by this fleet. Canonical deployments omit it and keep cognidao.org;
+  // the isolated test operator sets cogni-testing.org for generated node routes and overlays.
+  FORK_DOMAIN_ROOT: z.string().min(1).optional(),
 
   // Deployment environment (for observability labels and analytics filtering)
   DEPLOY_ENVIRONMENT: z.string().optional(),
