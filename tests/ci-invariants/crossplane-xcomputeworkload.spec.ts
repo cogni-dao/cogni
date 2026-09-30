@@ -1127,6 +1127,10 @@ describe("catalog lease generation naming", () => {
     // story.5047: bumped 1->2 to force a fresh mint delivering DOLTGRES_URL (knowledge heal).
     // bug.5302: bumped 2->3 — the gen-2 lease died in the 2026-09-29 account-depletion
     // event (escrow drained fleet-wide); 3 is the funded replacement mint.
-    expect(toks5.lease_generation?.production).toBe(3);
+    // bug.5287: bumped 3->4 — the gen-3 lease reached the chain and bills but its workload
+    // never came up; the actuator replay path treats that partial receipt as settled and
+    // returns the dead handle forever (64x create_replayed, 0 create-family). A fresh key
+    // cannot replay, so 4 forces createAndLease. Durable fix: task.5157 (settled/serving gate).
+    expect(toks5.lease_generation?.production).toBe(4);
   });
 });
