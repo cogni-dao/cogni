@@ -55,7 +55,10 @@ import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { requiredLeaseGeneration } from "@/features/compute/lease-reactivation";
+import {
+  replacementLeaseGeneration,
+  requiredLeaseGeneration,
+} from "@/features/compute/lease-reactivation";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import type { AkashTxAllocationRecord } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
@@ -123,10 +126,12 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       env: targetEnv,
       present,
       placement,
+      countries,
     } = (body ?? {}) as {
       env?: unknown;
       present?: unknown;
       placement?: unknown;
+      countries?: unknown;
     };
     if (typeof targetEnv !== "string" || !VALID_ENVS.has(targetEnv)) {
       return NextResponse.json(
@@ -142,12 +147,28 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // straight onto akash) is deliberately out of v1 scope; deploy first, then place.
     const hasPresent = present !== undefined;
     const hasPlacement = placement !== undefined;
-    if (hasPresent === hasPlacement) {
+    const hasCountries = countries !== undefined;
+    if ([hasPresent, hasPlacement, hasCountries].filter(Boolean).length !== 1) {
       return NextResponse.json(
         {
           error: "invalid body",
           reason:
-            "provide exactly one of `present` (boolean, deploy reach) or `placement` (k3s|akash, serving lane)",
+            "provide exactly one of `present` (boolean, deploy reach), `placement` (k3s|akash, serving lane), or `countries` (ISO 3166-1 alpha-2 list, required placement region)",
+        },
+        { status: 400 }
+      );
+    }
+    if (
+      hasCountries &&
+      (!Array.isArray(countries) ||
+        countries.length === 0 ||
+        !countries.every((c) => typeof c === "string" && /^[A-Z]{2}$/.test(c)))
+    ) {
+      return NextResponse.json(
+        {
+          error: "invalid countries",
+          reason:
+            'countries must be a non-empty array of ISO 3166-1 alpha-2 codes (e.g. ["PT","NL"]). Omit the field entirely for unconstrained placement — an empty list would refuse every provider bid.',
         },
         { status: 400 }
       );
@@ -263,6 +284,92 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         env: targetEnv,
         placement,
         result,
+      });
+    }
+
+    // REGION verb (story.5050): require this env's workload to be placed in `countries`.
+    // Reads the SAME ledger evidence the ADD does, for the same reason and with the same
+    // fail-closed posture: the requirement only binds on a fresh mint (Akash refuses in-place
+    // placement change), so the plan must move `lease_generation` with the cell — and
+    // GENERATION_IS_NOT_CALLER_INPUT means that value has to come from receipt evidence, never
+    // from the request body. Without a readable ledger this verb would have to guess a
+    // generation, and guessing is what re-presented a spent key on the live incident (task.5132).
+    if (hasCountries) {
+      const regionLeaseRead = getContainer().leaseReadCapability;
+      if (!regionLeaseRead) {
+        return NextResponse.json(
+          {
+            error: "generation_evidence_unavailable",
+            reason:
+              "AKASH_ACTUATOR_ACCOUNT_ID is not pinned on this runtime — the region verb cannot derive the lease_generation the requirement must bind on without reading the allocation ledger",
+          },
+          { status: 503 }
+        );
+      }
+      let regionReceipts: readonly AkashTxAllocationRecord[];
+      try {
+        regionReceipts = await regionLeaseRead.listReceipts({
+          nodeId: node.id,
+          environment: targetEnv,
+          limit: LEASE_ENUMERATION_LIMIT,
+        });
+      } catch (err) {
+        ctx.log.warn(
+          {
+            nodeId: node.id,
+            env: targetEnv,
+            errorCode: "generation_evidence_unavailable",
+            causeMessage: err instanceof Error ? err.message : "unknown",
+          },
+          "node_envs_lease_read_failed"
+        );
+        return NextResponse.json(
+          {
+            error: "generation_evidence_unavailable",
+            reason:
+              "the allocation-ledger read failed — the region verb refuses to guess the lease_generation its requirement must bind on",
+          },
+          { status: 503 }
+        );
+      }
+
+      let result: Awaited<ReturnType<typeof writer.openNodeRegionPr>>;
+      try {
+        result = await writer.openNodeRegionPr({
+          owner,
+          repo,
+          slug: node.slug,
+          env: targetEnv as NodeFormationEnv,
+          countries: countries as readonly string[],
+          // REPLACEMENT, not reactivation — see replacementLeaseGeneration's header. The
+          // catalog's own generation is 0 here because the ledger receipts already carry every
+          // generation this (node, env) has ever minted, and this must bump past all of them.
+          leaseGeneration: replacementLeaseGeneration({
+            catalogGeneration: 0,
+            receipts: regionReceipts,
+          }),
+        });
+      } catch (err) {
+        const status = (err as { status?: number })?.status;
+        const code = (err as { code?: string })?.code;
+        const reason = err instanceof Error ? err.message : "unknown";
+        return NextResponse.json(
+          { error: "node region write failed", errorCode: code, reason },
+          { status: typeof status === "number" ? status : 502 }
+        );
+      }
+      return NextResponse.json({
+        node: { id: node.id, slug: node.slug },
+        env: targetEnv,
+        countries,
+        result,
+        // REPLACEMENT_ABANDONS_A_PAID_LEASE: name the money this displaces. A region change
+        // mints a NEW lease, so any lease still `allocated` here keeps billing until the
+        // Argo prune -> Crossplane REMOVE -> actuator delete chain closes it, and an
+        // unenumerated one bills invisibly (bug.5189).
+        displacedLeases: regionReceipts
+          .filter((r) => r.state === "allocated")
+          .map((r) => ({ cogniKey: r.cogniKey, receiptId: r.receiptId })),
       });
     }
 
