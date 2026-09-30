@@ -5,7 +5,11 @@
  * Module: `@features/review/gate-orchestrator`
  * Purpose: Deterministic gate runner that processes gates in order with timeout and crash isolation.
  * Scope: Orchestrates gate evaluation. Does not own graph executor or GitHub client lifecycle.
- * Invariants: Gates run in declared order. Per-gate timeout (120s default). Crash → neutral. Aggregation: fail > neutral > pass.
+ * Invariants: Gates run in declared order. Per-gate timeout (120s default). Aggregation: fail > neutral > pass.
+ *   - FAIL_ON_ERROR_IS_HONOURED (bug.5327): when the target repo-spec sets `fail_on_error: true`, a gate that
+ *     could NOT be evaluated (crash/timeout/graph error) resolves to `fail`, not `neutral`. This config was
+ *     parsed and then read by nobody, so a repo that had explicitly asked for loud failures got six days of
+ *     silent `neutral` while the review plane was insolvent.
  * Side-effects: IO (delegates to gates which may call LLM)
  * Links: task.0153
  * @public
@@ -36,6 +40,12 @@ export interface OrchestratorDeps {
   /** Resolves a rule_file name to a parsed Rule. */
   readonly loadRule: (ruleFile: string) => Rule;
   readonly gateTimeoutMs?: number;
+  /**
+   * From the TARGET repo-spec's `fail_on_error`. When true, a gate that could not be evaluated
+   * (`errored`) becomes `fail` instead of `neutral`. Defaults to false to preserve prior behaviour
+   * for specs that never opted in.
+   */
+  readonly failOnError?: boolean;
 }
 
 /**
@@ -51,7 +61,25 @@ export async function runGates(
   const timeoutMs = deps.gateTimeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
 
   for (const gate of gates) {
-    const result = await runSingleGate(gate, evidence, deps, timeoutMs);
+    const raw = await runSingleGate(gate, evidence, deps, timeoutMs);
+    // FAIL_ON_ERROR_IS_HONOURED: escalate inability (never a real verdict) when the spec asked for it.
+    const result: GateResult =
+      raw.errored === true && deps.failOnError === true
+        ? { ...raw, status: "fail" }
+        : raw;
+    if (raw.errored === true) {
+      deps.log.error(
+        {
+          gateId: raw.gateId,
+          gateType: raw.gateType,
+          errorCode: raw.errorCode ?? "unknown",
+          failOnError: deps.failOnError === true,
+          escalatedToFail: result.status === "fail",
+          summary: raw.summary,
+        },
+        "Review gate could not be evaluated"
+      );
+    }
     gateResults.push(result);
   }
 
@@ -93,7 +121,9 @@ async function runSingleGate(
       gateId,
       gateType: gate.type,
       status: "neutral",
-      summary: `Gate crashed: ${error instanceof Error ? error.message : String(error)}`,
+      errored: true,
+      errorCode: "gate_crashed",
+      summary: `Gate could not be evaluated (crashed): ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }
@@ -146,7 +176,9 @@ function timeout(
         gateId,
         gateType: "timeout",
         status: "neutral",
-        summary: `Gate timed out after ${ms / 1000}s`,
+        errored: true,
+        errorCode: "gate_timeout",
+        summary: `Gate could not be evaluated (timed out after ${ms / 1000}s)`,
       });
     }, ms);
   });

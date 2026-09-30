@@ -37,6 +37,7 @@ import {
   type LangfusePort,
   type LlmService,
 } from "@/ports";
+import { isModelFreeFromCache } from "@/shared/ai/model-catalog.server";
 import type { RequestContext } from "@/shared/observability";
 import { makeLogger } from "@/shared/observability";
 
@@ -314,6 +315,12 @@ export class InProcCompletionUnitAdapter {
         inputTokens: result.usage?.promptTokens,
         outputTokens: result.usage?.completionTokens,
         ...(result.model && { model: result.model }),
+        // FREE_TIER_RESOLVED_BY_PRODUCER (bug.5266): `result.model` is the CATALOG id here
+        // (providerMeta.model = resolvedModel), so the lookup is valid at this boundary. Cache miss
+        // (`null`) stays undefined → treated as paid downstream (fail-to-charge, never fail-to-free).
+        ...(result.model && isModelFreeFromCache(result.model) !== null
+          ? { isFreeTier: isModelFreeFromCache(result.model) as boolean }
+          : {}),
         // BYO_ZERO_PLATFORM_COST: respect any cost the adapter reports, default to 0.
         costUsd: result.providerCostUsd ?? 0,
       };

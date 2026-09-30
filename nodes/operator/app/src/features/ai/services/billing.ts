@@ -11,6 +11,7 @@
  *   - COST_AUTHORITY_IS_LITELLM: All LLM cost/tokens used for billing originate from LiteLLM (callback or spend/logs). App code never infers cost.
  *   - RECEIPT_WRITES_REQUIRE_CALL_ID_AND_COST: A receipt is written iff usageUnitId exists AND costUsd is a number (0 allowed). Missing cost never writes.
  *   - NO_PLACEHOLDER_RECEIPTS: Never write $0/empty receipts as placeholders for non-free calls. Defer until authoritative cost arrives.
+ *   - FREE_IS_FREE_ON_BOTH_LEGS: `is_free` is a charging-policy flag. A free model charges 0 here, matching the preflight waiver (bug.5266); the provider cost is still recorded so COGS stays observable.
  *   - IDEMPOTENCY_KEY_IS_LITELLM_CALL_ID: source_reference = runId/attempt/usageUnitId; DB constraint prevents duplicates
  * Side-effects: IO (writes charge receipt via AccountService)
  * Notes: Per GRAPH_EXECUTION.md, COMPLETION_REFACTOR_PLAN.md P2 extraction
@@ -132,7 +133,37 @@ export async function commitUsageFact(
     }
 
     // RECEIPT_WRITES_REQUIRE_CALL_ID_AND_COST: cost known — calculate charge, write receipt
-    const { chargedCredits, userCostUsd } = calculateDefaultLlmCharge(costUsd);
+    //
+    // FREE_IS_FREE_ON_BOTH_LEGS (bug.5266): `is_free` is a CHARGING-POLICY flag, not a claim that
+    // the upstream provider bills us nothing. `gpt-oss-120b` is the designated free tier
+    // (`default_free: true`) yet OpenRouter genuinely charges for it (~$0.04/1M in), so the preflight
+    // waived the charge (`isModelFree` → 0n) while this writer billed the real cost — draining
+    // accounts to NEGATIVE on the supposedly free tier. Both legs must obey one flag: a free model
+    // charges the account 0 and the operator absorbs the provider cost as COGS. The provider cost is
+    // still recorded on the receipt (`responseCostUsd`) so COGS stays observable — this suppresses
+    // the CHARGE, never the evidence.
+    //
+    // The flag is resolved by the PRODUCER (`FREE_TIER_RESOLVED_BY_PRODUCER`) and never re-derived
+    // here: `model` is a human display name on the callback path ("GPT-OSS 120B"), so a catalog
+    // lookup keyed on it silently misses and the waiver would no-op on the exact path that bills.
+    const isFree = fact.isFreeTier ?? false;
+    const { chargedCredits: pricedCredits, userCostUsd: pricedUsd } =
+      calculateDefaultLlmCharge(costUsd);
+    const chargedCredits = isFree ? 0n : pricedCredits;
+    const userCostUsd = pricedUsd;
+
+    if (isFree && pricedCredits > 0n) {
+      log.info(
+        {
+          runId,
+          ingressRequestId,
+          model,
+          providerCostUsd: costUsd,
+          waivedCredits: pricedCredits.toString(),
+        },
+        "Free-tier model reported non-zero provider cost — charging 0, absorbing as COGS"
+      );
+    }
 
     log.debug(
       {
@@ -140,6 +171,7 @@ export async function commitUsageFact(
         ingressRequestId,
         providerCostUsd: costUsd,
         userCostUsd,
+        isFree,
         chargedCredits: chargedCredits.toString(),
       },
       "commitUsageFact: cost calculation complete"

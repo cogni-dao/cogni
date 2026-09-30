@@ -57,7 +57,7 @@ import { createInstallationOctokit } from "./github-auth";
 const CHECK_RUN_NAME = "Cogni Git PR Review";
 const DEFAULT_REVIEW_MODELREF = {
   providerKey: "platform",
-  modelId: "gpt-4o-mini",
+  modelId: "gpt-oss-120b",
 } as const;
 const MAX_PATCH_BYTES_PER_FILE = 100_000;
 const MAX_TOTAL_PATCH_BYTES = 500_000;
