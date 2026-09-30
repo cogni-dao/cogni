@@ -705,6 +705,80 @@ describe("AkashComputeAdapter", () => {
     );
   });
 
+  /**
+   * story.5050 END TO END. The requirement rides the ProvisionSpec, so this is the assertion
+   * that the adapter's threading (`withPlacement`) actually reaches bid screening. Without it
+   * the catalog cell, XRD field, Composition lowering and wire contract are all inert and a
+   * geo-constrained node still places in a refused jurisdiction — silently.
+   */
+  it("refuses a provider outside the spec's required countries, even when it is the only cheap bid", async () => {
+    const h = harness({
+      providers: [
+        providerEntry("akash1be", { ipCountryCode: "BE" }),
+        providerEntry("akash1pt", { ipCountryCode: "PT" }),
+      ],
+      bids: (dseq) => [
+        bidEntry(dseq, "akash1be", "100"),
+        bidEntry(dseq, "akash1pt", "900"),
+      ],
+    });
+
+    const out = await makeAdapter(h.fetchImpl).provision({
+      env: "shared",
+      spec: { ...SPEC, placement: { requiredCountryCodes: ["PT"] } },
+    });
+
+    expect(out.state).toBe("active");
+    // The cheaper Belgian bid would have won on price alone; the requirement filtered it.
+    expect(h.leased).toEqual([{ dseq: "1", provider: "akash1pt" }]);
+  });
+
+  /**
+   * The requirement must be inert when undeclared, or this feature changes placement for the
+   * whole fleet the moment it ships.
+   */
+  it("leaves placement unchanged when the spec declares no requirement", async () => {
+    const h = harness({
+      providers: [
+        providerEntry("akash1be", { ipCountryCode: "BE" }),
+        providerEntry("akash1pt", { ipCountryCode: "PT" }),
+      ],
+      bids: (dseq) => [
+        bidEntry(dseq, "akash1be", "100"),
+        bidEntry(dseq, "akash1pt", "900"),
+      ],
+    });
+
+    await makeAdapter(h.fetchImpl).provision({ env: "shared", spec: SPEC });
+
+    expect(h.leased).toEqual([{ dseq: "1", provider: "akash1be" }]);
+  });
+
+  /**
+   * REQUIRED_FAILS_CLOSED, and the error must NAME the requirement. An operator reading
+   * "none passed provider screening" after a 90s window previously had no way to tell a
+   * jurisdiction refusal from a blanked provider allowlist (the `d69e5c29` class).
+   */
+  it("fails closed and names the requirement when no bid satisfies it", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1be", { ipCountryCode: "BE" })],
+      bids: (dseq) => [bidEntry(dseq, "akash1be", "100")],
+    });
+
+    const err = await makeAdapter(h.fetchImpl)
+      .provision({
+        env: "shared",
+        spec: { ...SPEC, placement: { requiredCountryCodes: ["PT"] } },
+      })
+      .catch((e: unknown) => e as { code: string; message: string });
+
+    expect(err.code).toBe("NO_ELIGIBLE_BIDS");
+    expect(err.message).toContain("required_country=1");
+    expect(err.message).toContain("required placement countries: PT");
+    // The deployment is closed so escrow refunds rather than paying for a refused placement.
+    expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
+  });
+
   it("throws NO_BIDS when the bid window elapses without an open bid", async () => {
     const h = harness();
     await expect(

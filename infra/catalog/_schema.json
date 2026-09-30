@@ -116,6 +116,11 @@
       "then": { "required": ["deployment_provider"] }
     },
     {
+      "$comment": "story.5050 — a required placement country only constrains a marketplace bid, so it is only meaningful where deployment_provider already routes the row off-cluster. It also names the providers whose egress must already be allowlisted, so the row owes compute_egress_cidrs too: admitting a provider whose NAT is absent there boots a workload that then cannot reach the env VM's substrate ports (the bug.5191 class), which reads as a mystery outage rather than a config error.",
+      "if": { "required": ["required_placement_countries"] },
+      "then": { "required": ["deployment_provider", "compute_egress_cidrs"] }
+    },
+    {
       "$comment": "bug.5177 — candidate-a no longer ships base/compute-workload-controller (story.5016 step 9 deleted it to hold ONE_WALLET_ONE_ACTIVE_WRITER). LEGACY_IS_DEFAULT means an omitted compute_api.candidate-a resolves to that deleted controller, so an akash-placed candidate-a row without an explicit cell fails 100% of its flights with a confusing 'controller is not available'. node-template and toks4 were both silently broken this way. Make the cell REQUIRED where it is load-bearing rather than defaulting to an authority the environment does not ship.",
       "if": {
         "required": ["envs", "deployment_provider"],
@@ -246,6 +251,17 @@
         "candidate-a": { "type": "integer", "minimum": 0, "maximum": 1000000 },
         "preview": { "type": "integer", "minimum": 0, "maximum": 1000000 },
         "production": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+      },
+      "minProperties": 1
+    },
+    "required_placement_countries": {
+      "type": "object",
+      "description": "story.5050 — per-environment HARD placement requirement: the ISO 3166-1 alpha-2 country codes this row's workload MAY be placed in. Distinct from the fleet-wide latency PREFERENCE (AkashComputeAdapter's substrate co-location list, which only RANKS): this cell FILTERS bids, so a provider outside the set never wins. It exists because a workload can have an outbound dependency that geo-fences by IP while the latency preference pulls toward the substrate's own neighbourhood — for the Baltics substrate those two axes point in opposite directions (BE/DE/PL/SK/FR are all co-located AND all Polymarket-restricted). REQUIRED_FAILS_CLOSED: a bid whose provider country is unknown, or whose provider metadata is unavailable, is REFUSED — the opposite of the preference path's FAIL_OPEN_ON_MISSING_METADATA rule, because a requirement that cannot be evaluated is not satisfied. NOT_A_GUARANTEE: provider country describes ADVERTISED/INGRESS identity, which is measurably not the egress identity the workload presents to a third party (two Akash providers in different advertised countries have shared one egress NAT), so this narrows the candidate pool and only the workload's own outbound probe proves reachability. An omitted environment is unconstrained; an empty array is rejected rather than read as 'anywhere', because fail-closed semantics would make it refuse every bid. Binds only on a fresh CREATE — the XR renders from the catalog at promote time and Akash refuses in-place placement change, so a change here needs a lease_generation bump. Coupled to compute_egress_cidrs: every provider this admits must already be allowlisted there, or the workload boots and then cannot reach the env VM's substrate ports.",
+      "additionalProperties": false,
+      "properties": {
+        "candidate-a": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } },
+        "preview": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } },
+        "production": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } }
       },
       "minProperties": 1
     },

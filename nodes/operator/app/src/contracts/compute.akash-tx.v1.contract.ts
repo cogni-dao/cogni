@@ -115,10 +115,24 @@ export const AkashTxDeprecatedMigrationSchema = z.object({
   policy: z.enum(["Skip", "RequireBeforeTransaction", "RequireBeforeServing"]),
 });
 
+/**
+ * Hard placement requirement for this workload (story.5050). Provider-agnostic ISO 3166-1
+ * alpha-2 — a CONSTRAINT, not a provider identity, so it does not breach the wire's rule that
+ * bids, providers, SDL and dseq never appear here. `min(1)` mirrors the catalog: an empty list
+ * is a typo, never a wildcard, and the actuator fails closed so it would refuse every bid.
+ */
+export const AkashTxPlacementSchema = z.strictObject({
+  requiredCountryCodes: z
+    .array(z.string().regex(/^[A-Z]{2}$/))
+    .min(1)
+    .max(32),
+});
+
 /** The provider-agnostic workload contract (mirrors ProvisionSpec). */
 export const AkashTxSpecSchema = z.strictObject({
   name: ServiceNameSchema,
   services: z.array(AkashTxServiceSpecSchema).min(1),
+  placement: AkashTxPlacementSchema.optional(),
 });
 
 /** Caller-owned idempotency key. Must embed the caller's resource revision. */

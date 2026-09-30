@@ -46,6 +46,7 @@ import {
   resolvePromoteDeploymentTargets,
 } from "@/features/compute/node-deployment-targets";
 import { resolveNodeLeaseGeneration } from "@/features/compute/node-lease-generation";
+import { resolveNodeRequiredPlacement } from "@/features/compute/node-required-placement";
 import { assertDeclaredNodeDeployment } from "@/features/compute/node-services-workload-spec";
 import { hostForNode } from "@/shared/node-registry/resolve";
 
@@ -181,6 +182,12 @@ async function main(): Promise<void> {
   // never a CLI flag: a generation a caller could pass would be a generation automation could
   // bump, and NOTHING may bump it implicitly. Absent cell resolves to 0.
   const leaseGeneration = resolveNodeLeaseGeneration({ catalog, environment });
+  // Node-owned HARD placement requirement, same operator-reviewed row and never a CLI flag: a
+  // requirement a caller could pass would be a requirement a flight could relax. Absent = [].
+  const requiredPlacementCountries = resolveNodeRequiredPlacement({
+    catalog,
+    environment,
+  });
   const dnsZoneId = values["dns-zone-id"]?.trim();
   if (dnsZoneId && !CLOUDFLARE_ZONE_ID.test(dnsZoneId)) {
     throw new Error(
@@ -199,6 +206,9 @@ async function main(): Promise<void> {
     ),
     computeApi,
     leaseGeneration,
+    ...(requiredPlacementCountries.length > 0
+      ? { requiredPlacementCountries }
+      : {}),
     // DNS intent is Crossplane-only: the legacy controller resolves its own zone in-cluster.
     ...(computeApi === "crossplane" && dnsZoneId
       ? { dns: { provider: "cloudflare" as const, zoneId: dnsZoneId } }

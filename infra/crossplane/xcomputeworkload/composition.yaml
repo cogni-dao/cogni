@@ -21,7 +21,7 @@
 # THE WIRE IS THE 5095 CONTRACT, NOT THIS API. @contracts/compute.akash-tx.v1 is a zod
 # strictObject: an unknown key is a 400, never a silently ignored field. So the pipeline LOWERS
 # the full-fidelity XR (bundle artifacts, bindings, secret refs, runtime profile, visibility)
-# onto exactly `{cogniKey, environment, spec:{name, services[]}}`. Every lowering rule below is
+# onto exactly `{cogniKey, environment, spec:{name, services[], placement?}}`. Every lowering rule below is
 # a port of `toProvisionSpec` + `legacyCogniAppEnv` in the bespoke controller, and the two must
 # stay byte-comparable — that equality is what makes this a migration rather than a rewrite.
 #
@@ -318,7 +318,19 @@ spec:
             {{- end }}
             {{- $hasLegacyMigration := gt (len $legacyMigration) 0 }}
 
-            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services) }}
+            {{- /*
+              story.5050 — lower the XR's HARD placement requirement onto the wire. The wire
+              renames `requiredCountries` to `requiredCountryCodes` because the zod contract
+              speaks ISO codes explicitly; both are strictObjects, so a typo here is a 400 and
+              never a silently unconstrained lease. Absent stays ABSENT: sending an empty list
+              would fail closed in the actuator and refuse every bid.
+            */ -}}
+            {{- $specDict := dict "name" $slug "services" $services }}
+            {{- $requiredCountries := dig "placement" "requiredCountries" (list) $spec }}
+            {{- if gt (len $requiredCountries) 0 }}
+            {{- $_ := set $specDict "placement" (dict "requiredCountryCodes" $requiredCountries) }}
+            {{- end }}
+            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" $specDict }}
             {{- if $hasMigrationStep }}{{ $_ := set $payload "migrationStep" $migrationStep }}{{ end }}
             {{- if $hasLegacyMigration }}{{ $_ := set $payload "migration" $legacyMigration }}{{ end }}
 
