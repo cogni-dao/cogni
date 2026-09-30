@@ -21,7 +21,6 @@ const fakes = vi.hoisted(() => ({
   deliver: vi.fn(),
   review: vi.fn(),
   preview: vi.fn(),
-  sync: vi.fn(),
   signal: vi.fn(),
 }));
 
@@ -65,9 +64,6 @@ vi.mock("@/app/_facades/review/dispatch.server", () => ({
 }));
 vi.mock("@/app/_facades/deploy/node-preview-promote.server", () => ({
   dispatchNodePreviewPromote: fakes.preview,
-}));
-vi.mock("@/app/_facades/deploy/canonical-fork-sync.server", () => ({
-  dispatchCanonicalForkSync: fakes.sync,
 }));
 vi.mock("@/features/governance/services/signal-dispatch", () => ({
   dispatchSignalExecution: fakes.signal,
@@ -125,7 +121,6 @@ describe("POST internal webhook verification boundary", () => {
     expect(fakes.deliver).not.toHaveBeenCalled();
     expect(fakes.review).not.toHaveBeenCalled();
     expect(fakes.preview).not.toHaveBeenCalled();
-    expect(fakes.sync).not.toHaveBeenCalled();
     expect(fakes.signal).not.toHaveBeenCalled();
   });
 
@@ -161,7 +156,6 @@ describe("POST internal webhook verification boundary", () => {
       expect.anything(),
       logger
     );
-    expect(fakes.sync).toHaveBeenCalledOnce();
     expect(fakes.review).not.toHaveBeenCalled();
   });
 

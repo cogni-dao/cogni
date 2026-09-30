@@ -77,7 +77,7 @@ Define the contract that:
 
 12. **SYNC_IS_A_REVIEWED_PR**: the refresh opens ONE pull request as the operator GitHub App, parented on the mirror's own `main` so it is conflict-free by construction. It never pushes or force-pushes `main`, and hub `production`/`staging` secret material is declared hub-only so it cannot enter the mirror's tree by construction rather than by convention.
 
-13. **AUTOMATIC_FORK_SOURCE_SYNC_IS_DISABLED**: a `node-template` default-branch push MUST NOT create or update branches or PRs in child node repositories. The webhook recognizes the push and emits `node_template_fork_sync_disabled`, but never resolves the deploy plane. This fail-closed stop was imposed by bug.5304 after the old template-authoritative overlay rewrote product paths in every active fork and deleted Poly's rendered copy-trading dashboard. Until versioned package, reusable-workflow, and fail-closed migration lanes replace it, cross-repo updates are ordinary reviewed per-node PRs.
+13. **AUTOMATIC_FORK_SOURCE_SYNC_DOES_NOT_EXIST**: a `node-template` default-branch push MUST NOT create or update branches or PRs in child node repositories. The webhook has no fork-sync dispatcher, the deploy plane exposes no fork source-writing methods, and CI rejects reintroduction of the retired symbols/branches. This removal followed bug.5304, where the old template-authoritative overlay rewrote product paths in every active fork and deleted Poly's rendered copy-trading dashboard. Cross-repo delivery uses versioned packages, pinned reusable workflows, or rare fail-closed codemods; until a lane exists, changes are ordinary reviewed per-node PRs.
 
 14. **OWNER_APP_BOUNDARY_FAILS_CLOSED**: every `role: test-parent` artifact declares the non-secret GitHub App ID + slug allowed to write its owner. The workflow mints with that manifest ID, masks decoded key material before workflow output, and verifies the returned App slug before any repository write. It never selects an App ID from a generic environment secret. A stale cross-environment keypair therefore fails authentication instead of widening authority or writing to the wrong org.
 
@@ -145,10 +145,9 @@ The manifest still carries the legacy top-level **`node_local:`** glob block for
 The hub↔artifact drift model above remains an active **detector** axis. Automatic
 `node-template → spawned fork` source propagation is not active.
 
-`dispatchCanonicalForkSync` still narrows verified GitHub payloads to a node-template default-branch
-push so production records the event. Its terminal behavior is deliberately limited to one structured
-warning, `node_template_fork_sync_disabled`; it does not instantiate `OperatorDeployPlanePort`, enumerate
-forks, read `node_local`, create branches, or open PRs.
+No runtime seam remains: webhook handling does not recognize template pushes as a distribution event,
+the deploy-plane port has no fork source-writing verbs, and the GitHub adapter contains no implementation
+capable of manufacturing a fleet PR.
 
 ### Incident evidence
 
@@ -167,8 +166,7 @@ behavior; Toks4 also received product-path changes. This disproved both
 ### Current operating rule
 
 - A template push creates **zero** fork source-sync branches and PRs.
-- Existing adapter primitives (`syncCanonicalFilesToFork`, `syncTemplateUpstreamToFork`) are dormant
-  removal debt, not an authorized alternate entry point.
+- Retired writer names and their living branch names are forbidden by a structural CI guard.
 - Cross-repo fixes use explicit, ordinary per-node PRs while package/workflow/migration distribution is
   built. Product ownership is never inferred from absence in an exception list.
 - Compatibility is not source equality: a node's supported platform version and conformance behavior
