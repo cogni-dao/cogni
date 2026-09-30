@@ -199,6 +199,45 @@ If the service needs node identity (`node_id`, `scope_id`, `chain_id`) or govern
 
 Workers must stop claiming new jobs immediately on SIGTERM regardless of orchestrator — do not rely on external routing semantics.
 
+### 4b. Observability — prove your logs are findable
+
+> **Why this step exists:** log shipping is automatic, so it is easy to assume observability is free. It is not. The part that breaks is **discoverability** — a service whose logs ship under a label nobody can guess is operationally invisible, and the next agent debugging it will conclude the pipeline is broken and go hunting a gap that does not exist. This step costs two minutes and prevents that.
+
+**What is automatic:** anything a pod writes to stdout/stderr in a shipped namespace reaches Loki via Grafana Alloy. You wire nothing per service. Shipped namespaces today: `cogni-{candidate-a,preview,production}`, `crossplane-system`, `argocd`, `external-secrets`, `kube-system`, `openbao`.
+
+**What is NOT automatic:**
+
+- [ ] **Log JSON, not prose.** One object per line. Loki's `| json` filter is how every query narrows; a prose line is greppable but not filterable, so it can never be correlated by `reqId` or aggregated by `msg`.
+- [ ] **Carry a stable `msg` (or `event`) key.** This is the only tier-1 observability signal — the marker that proves a _specific behaviour_ ran, not merely that the pod took traffic. `/validate-candidate` grants 🟢 for a feature-specific marker and 🟡 for ambient traffic, so an unnamed event caps every future validation of your service at 🟡.
+- [ ] **Include the identifiers an operator would filter by** — the work's own key (`cogniKey`, `nodeId`, `reqId`, `workload`), plus `sourceRef`/`buildSha` when the line describes deployed state. A line that names its subject can prove causation; one that does not cannot. Grouping an error by `sourceRef` is what excluded a suspected regression in bug.5319: every serving SHA showed the same rate, so the error predated the build under test.
+- [ ] **Log the RESULT of an outbound call, not only the attempt.** "request sent" with no paired outcome line is the worst observability shape there is — it looks instrumented while hiding every failure, and a retry loop of unpaired "sent" lines is indistinguishable from success. This exact shape hid a rejected Akash lease CREATE behind a silent 60s retry loop.
+
+**The label contract — `service` is NOT your logical component name.** It is derived from the container, so the name you reason about and the name you query can differ. This is the trap:
+
+| Label       | Value                                      | Notes                                                                                                                                                                                                                       |
+| ----------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `env`       | `candidate-a` \| `preview` \| `production` | The CLUSTER, not the workload's lane. A non-production lane of a `cogni-dao` node is reconciled on the PRODUCTION cluster (NS3 owner routing), so its logs carry `env="production"` with `namespace="cogni-candidate-a"`.   |
+| `namespace` | `cogni-<env>`, `crossplane-system`, …      | Where the pod runs.                                                                                                                                                                                                         |
+| `service`   | the **container** name                     | Crossplane's reconcile decisions are `service="package-runtime"` (the provider pod), NOT `service="crossplane"` — that label exists but is nearly silent, so the obvious query returns nothing and looks like a blind spot. |
+| `pod`       | `<workload>-<hash>`                        | Use for single-replica correlation.                                                                                                                                                                                         |
+
+> **Name your container so `service` is guessable from the component.** If it cannot be, record the real label in this guide's §11 documentation step — an undiscoverable label is a permanent tax on every future incident.
+
+**Verification — do not mark the service done until this returns lines:**
+
+```bash
+# 1. Your service ships at all (replace <svc>)
+scripts/loki-query.sh '{service="<svc>"}' 10 5
+
+# 2. Your feature-specific marker is filterable — the tier-1 signal
+scripts/loki-query.sh '{service="<svc>"} | json | msg="<your.event.name>"' 10 5
+
+# 3. Discover the real label values rather than guessing them
+scripts/loki-query.sh '{namespace="<ns>"}' 10 1   # then read the stream labels
+```
+
+If step 1 returns lines but step 2 does not, your service is shipping and still unobservable for validation purposes — fix the `msg` key before shipping.
+
 ### 5. Entry Point with Signal Handling
 
 - [ ] Create `src/main.ts`:
@@ -515,6 +554,9 @@ pnpm --filter @cogni/<name>-service test
 
 # Docker build succeeds
 docker build -f services/<name>/Dockerfile -t <name>-local .
+
+# Logs are shipping AND the feature marker is filterable (see 4b)
+scripts/loki-query.sh '{service="<svc>"} | json | msg="<your.event.name>"' 10 5
 
 # Import boundaries enforced
 pnpm check

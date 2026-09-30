@@ -624,6 +624,146 @@ function planRemove(args: {
   return { kind: "remove", ops, nextEnvs: remaining };
 }
 
+/** Result of {@link buildRegionPlan} — the node-owned region requirement (story.5050). */
+export type RegionDeltaResult =
+  | { readonly kind: "no_changes" }
+  | {
+      readonly kind: "set_region";
+      readonly ops: readonly EnvPlanOp[];
+      /** The generation the requirement will bind on — DERIVED, never caller input. */
+      readonly leaseGeneration: number;
+    };
+
+/**
+ * Pure: compute the file-delta for requiring `{ slug, env }` to be placed in `countries`
+ * (story.5050) — the region verb on the env verb.
+ *
+ * WHY THIS IS A VERB AND NOT A CATALOG PR. A node with a geo-fenced outbound dependency cannot
+ * satisfy its own product contract from an arbitrary jurisdiction (bug.5270: 200/200 of poly's
+ * production CLOB orders were refused 403 from Belgium). Before this, the only way to express that
+ * was a hand-edited monorepo catalog PR — so the node could not CHOOSE anything; an operator with
+ * repo access chose for it. This makes the choice a repeatable, RBAC-gated, self-serve control
+ * whose output is still the same reviewed catalog commit.
+ *
+ * Invariants:
+ *   - REGION_REQUIRES_AKASH: only a marketplace placement screens bids, so the cell is meaningless
+ *     on a k3s-placed env and would be desired state nothing enforces. Fail closed.
+ *   - REGION_BINDS_ON_A_FRESH_MINT: Akash refuses in-place placement change, so a new requirement
+ *     takes effect only on a new lease. The plan therefore ALWAYS moves `lease_generation` with the
+ *     cell — a region edit that left the generation alone would be silently inert, which is the
+ *     "a verb that succeeds and does nothing is BROKEN" failure.
+ *   - GENERATION_IS_NOT_CALLER_INPUT: the generation is derived from ledger-receipt evidence by the
+ *     caller (`requiredLeaseGeneration`) and passed in; this function never synthesizes one.
+ *   - EGRESS_COUPLING_OR_REFUSE: the row must already declare `compute_egress_cidrs`, because a
+ *     provider admitted by this requirement whose NAT is absent there boots a workload that then
+ *     cannot reach the env VM's substrate ports — a mystery outage, not a config error (the
+ *     bug.5191 class). Mirrors the same rule in `infra/catalog/_schema.json`.
+ *   - NOT_A_GUARANTEE: the screener compares a provider's ADVERTISED/ingress country, which is not
+ *     proven to equal the egress identity its workload presents to a third party. This narrows the
+ *     candidate pool; only the workload's own outbound probe proves reachability.
+ */
+export function buildRegionPlan(input: {
+  readonly slug: string;
+  readonly env: NodeFormationEnv;
+  /** ISO 3166-1 alpha-2 codes the workload MAY be placed in. Non-empty. */
+  readonly countries: readonly string[];
+  /** Derived from allocation-ledger evidence by the caller. */
+  readonly leaseGeneration: number;
+  readonly current: EnvPlanCurrent;
+}): RegionDeltaResult {
+  const { slug, env, countries, leaseGeneration, current } = input;
+
+  if (countries.length === 0) {
+    throw new EnvPlanError(
+      "region_required",
+      `cannot set a placement region for '${env}' on '${slug}': no countries given. Omitting the requirement is how you say unconstrained; an empty set would refuse every bid.`,
+      422
+    );
+  }
+  const invalid = countries.filter((c) => !/^[A-Z]{2}$/.test(c));
+  if (invalid.length > 0) {
+    throw new EnvPlanError(
+      "region_invalid",
+      `cannot set a placement region for '${env}' on '${slug}': ${invalid.join(", ")} are not ISO 3166-1 alpha-2 country codes.`,
+      422
+    );
+  }
+  if (new Set(countries).size !== countries.length) {
+    throw new EnvPlanError(
+      "region_invalid",
+      `cannot set a placement region for '${env}' on '${slug}': duplicate country codes.`,
+      422
+    );
+  }
+
+  const currentEnvs = parseCatalogEnvs(current.catalog);
+  if (!currentEnvs.includes(env)) {
+    throw new EnvPlanError(
+      "env_not_deployed",
+      `cannot set a placement region for '${env}' on '${slug}': the node is not deployed to that environment. Add the env first (present:true).`,
+      422
+    );
+  }
+
+  // REGION_REQUIRES_AKASH — a k3s env is served by the in-cluster overlay; no bids are screened,
+  // so the cell would be desired state nothing reads.
+  if (parseCatalogPlacement(current.catalog)[env] !== "akash") {
+    throw new EnvPlanError(
+      "region_requires_akash",
+      `cannot set a placement region for '${env}' on '${slug}': that env is not placed on akash, and only a marketplace placement screens provider bids. Place it first (placement:"akash").`,
+      422
+    );
+  }
+
+  // EGRESS_COUPLING_OR_REFUSE — see the invariant above.
+  if (!/^compute_egress_cidrs:/m.test(current.catalog)) {
+    throw new EnvPlanError(
+      "region_requires_egress_cidrs",
+      `cannot set a placement region for '${env}' on '${slug}': the catalog row declares no compute_egress_cidrs, so a provider this requirement admits could boot and then be unable to reach the environment's substrate ports.`,
+      422
+    );
+  }
+
+  const value = `[${[...countries].sort().join(", ")}]`;
+  let nextCatalog = setCatalogPlacementCell(
+    current.catalog,
+    "required_placement_countries",
+    env,
+    value
+  );
+
+  // REGION_BINDS_ON_A_FRESH_MINT. Only move the generation when the requirement itself actually
+  // changed — re-requesting the held region must stay idempotent rather than mint a paid lease.
+  if (nextCatalog === current.catalog) {
+    return { kind: "no_changes" };
+  }
+  // NEVER GO BACKWARDS. The caller derives its generation from allocation-ledger receipts, but an
+  // EMPTY ledger yields 0 while the catalog may already sit at a higher generation (receipts are
+  // prunable; the committed cell is not). Taking the caller's value blindly would author a cell
+  // LOWER than the current one — re-presenting a generation whose key is already spent, which the
+  // actuator refuses (`akash_tx_create_refused_settled_key`) and which reads as a dead node.
+  // The catalog is only in scope HERE, so the floor belongs here.
+  const catalogGeneration = Number(
+    parseCatalogPlacementMap(current.catalog, "lease_generation")[env] ?? 0
+  );
+  const nextGeneration = Math.max(
+    leaseGeneration,
+    Number.isSafeInteger(catalogGeneration) ? catalogGeneration + 1 : 1
+  );
+  nextCatalog = setCatalogPlacementCell(
+    nextCatalog,
+    "lease_generation",
+    env,
+    String(nextGeneration)
+  );
+
+  return {
+    kind: "set_region",
+    ops: [{ op: "upsert", path: CATALOG_PATH(slug), content: nextCatalog }],
+    leaseGeneration: nextGeneration,
+  };
+}
+
 export type PlacementDeltaResult =
   | { readonly kind: "no_changes" }
   | {

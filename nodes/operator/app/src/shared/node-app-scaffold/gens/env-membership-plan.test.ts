@@ -22,6 +22,7 @@ import {
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
   buildPlacementPlan,
+  buildRegionPlan,
   CATALOG_PATH,
   type EnvDeltaResult,
   type EnvPlanCurrent,
@@ -1584,5 +1585,146 @@ data:
       (o) => o.path === schedulerEndpointPatchPath("candidate-a")
     );
     expect(schedulerOp?.op).toBe("upsert");
+  });
+});
+
+/** An akash-placed, egress-declaring row — the region verb's precondition. */
+const akashPlaced = (env: string): EnvPlanCurrent => {
+  const base = externallyBuilt([env]);
+  return {
+    ...base,
+    catalog: `${base.catalog}deployment_provider:\n  ${env}: akash\nlease_generation:\n  ${env}: 1\ncompute_egress_cidrs:\n  - cidr: 80.200.246.35/32\n    comment: zencloud BE\n`,
+  };
+};
+
+/** Narrow an EnvPlanOp to its upsert content — the region plan only ever emits upserts. */
+const upsertContent = (op: EnvPlanOp): string => {
+  if (op.op !== "upsert") throw new Error(`expected an upsert, got ${op.op}`);
+  return op.content;
+};
+
+describe("buildRegionPlan (story.5050)", () => {
+  it("writes the requirement AND moves lease_generation in the SAME commit", () => {
+    const res = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["PT"],
+      leaseGeneration: 2,
+      current: akashPlaced("preview"),
+    });
+    if (res.kind !== "set_region")
+      throw new Error(`expected set_region, got ${res.kind}`);
+    // ONE file: the region requirement constrains which provider may win a bid, not which lane
+    // or address serves the env, so no overlay/appset/scheduler hunk may appear.
+    expect(res.ops).toHaveLength(1);
+    const next = parseYaml(upsertContent(res.ops[0]!)) as Record<
+      string,
+      unknown
+    >;
+    expect(next["required_placement_countries"]).toEqual({ preview: ["PT"] });
+    // REGION_BINDS_ON_A_FRESH_MINT — without this the verb would succeed and do nothing.
+    expect(next["lease_generation"]).toEqual({ preview: 2 });
+    expect(res.leaseGeneration).toBe(2);
+  });
+
+  it("sorts countries so the same requirement is one canonical commit", () => {
+    const res = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["NL", "PT"],
+      leaseGeneration: 2,
+      current: akashPlaced("preview"),
+    });
+    if (res.kind !== "set_region") throw new Error("expected set_region");
+    const next = parseYaml(upsertContent(res.ops[0]!)) as Record<
+      string,
+      unknown
+    >;
+    expect(next["required_placement_countries"]).toEqual({
+      preview: ["NL", "PT"],
+    });
+  });
+
+  /** IDEMPOTENT — and load-bearing: a no-op must not move the generation and mint a paid lease. */
+  it("is a no-op when the region is already held, minting nothing", () => {
+    const held = akashPlaced("preview");
+    const first = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["PT"],
+      leaseGeneration: 2,
+      current: held,
+    });
+    if (first.kind !== "set_region") throw new Error("expected set_region");
+    const again = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["PT"],
+      leaseGeneration: 9,
+      current: { ...held, catalog: upsertContent(first.ops[0]!) },
+    });
+    expect(again.kind).toBe("no_changes");
+  });
+
+  /** REGION_REQUIRES_AKASH — a k3s env screens no bids, so the cell would be inert desired state. */
+  it("refuses a k3s-placed env rather than writing a cell nothing reads", () => {
+    expect(() =>
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries: ["PT"],
+        leaseGeneration: 1,
+        current: externallyBuilt(["preview"]),
+      })
+    ).toThrow(/not placed on akash/);
+  });
+
+  /** EGRESS_COUPLING_OR_REFUSE — mirrors infra/catalog/_schema.json; see bug.5191. */
+  it("refuses when the row declares no compute_egress_cidrs", () => {
+    const noEgress = akashPlaced("preview");
+    expect(() =>
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries: ["PT"],
+        leaseGeneration: 2,
+        current: {
+          ...noEgress,
+          catalog: noEgress.catalog.replace(
+            /compute_egress_cidrs:[\s\S]*$/,
+            ""
+          ),
+        },
+      })
+    ).toThrow(/no compute_egress_cidrs/);
+  });
+
+  it("refuses an env the node is not deployed to", () => {
+    expect(() =>
+      buildRegionPlan({
+        slug: SLUG,
+        env: "production",
+        countries: ["PT"],
+        leaseGeneration: 1,
+        current: akashPlaced("preview"),
+      })
+    ).toThrow(/not deployed to that environment/);
+  });
+
+  it.each([
+    ["empty", [] as string[], /no countries given/],
+    ["lowercase", ["pt"], /not ISO 3166-1 alpha-2/],
+    ["three-letter", ["PRT"], /not ISO 3166-1 alpha-2/],
+    ["duplicated", ["PT", "PT"], /duplicate country codes/],
+  ])("refuses a %s country set", (_label, countries, re) => {
+    expect(() =>
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries,
+        leaseGeneration: 2,
+        current: akashPlaced("preview"),
+      })
+    ).toThrow(re);
   });
 });
