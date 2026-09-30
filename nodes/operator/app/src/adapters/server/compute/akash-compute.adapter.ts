@@ -1238,7 +1238,9 @@ export class AkashComputeAdapter
     const outcomes = await this.outcomeStore
       .stats(PROVIDER)
       .catch(() => new Map<string, ProviderOutcomeStats>());
-    return { providers, outcomes };
+    // Unconstrained by default so this seam is TOTAL: a caller that forgets `withPlacement`
+    // gets today's behaviour, never an undefined requirement the screener would crash on.
+    return { providers, outcomes, requiredCountryCodes: [] };
   }
 
   /** Best-effort outcome append (OUTCOME_STORE_IS_ADVISORY). */

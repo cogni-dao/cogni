@@ -765,16 +765,18 @@ describe("AkashComputeAdapter", () => {
       bids: (dseq) => [bidEntry(dseq, "akash1be", "100")],
     });
 
-    const err = await makeAdapter(h.fetchImpl)
-      .provision({
-        env: "shared",
-        spec: { ...SPEC, placement: { requiredCountryCodes: ["PT"] } },
-      })
-      .catch((e: unknown) => e as { code: string; message: string });
+    // ONE provision; the rejected promise is asserted twice (awaiting it again does not
+    // re-run it), so `h.deletes` below still describes a single deployment.
+    const rejected = makeAdapter(h.fetchImpl).provision({
+      env: "shared",
+      spec: { ...SPEC, placement: { requiredCountryCodes: ["PT"] } },
+    });
 
-    expect(err.code).toBe("NO_ELIGIBLE_BIDS");
-    expect(err.message).toContain("required_country=1");
-    expect(err.message).toContain("required placement countries: PT");
+    await expect(rejected).rejects.toMatchObject({ code: "NO_ELIGIBLE_BIDS" });
+    // Both halves matter: the COUNT says which filter refused, the requirement says what it
+    // was measured against. Either alone still sends an operator hunting the wrong filter.
+    await expect(rejected).rejects.toThrow(/required_country=1/);
+    await expect(rejected).rejects.toThrow(/required placement countries: PT/);
     // The deployment is closed so escrow refunds rather than paying for a refused placement.
     expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
   });
