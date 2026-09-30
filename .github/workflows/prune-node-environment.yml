@@ -21,6 +21,11 @@ on:
         description: "Exact node slug"
         required: true
         type: string
+      orphan_dseq:
+        description: "Optional known orphan Akash dseq to close and verify after prune"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -38,6 +43,7 @@ jobs:
         env:
           NODE: ${{ inputs.node }}
           LANE: ${{ inputs.environment }}
+          ORPHAN_DSEQ: ${{ inputs.orphan_dseq }}
         run: |
           set -euo pipefail
           case "$LANE" in candidate-a|preview|production) ;; *) exit 1 ;; esac
@@ -45,6 +51,10 @@ jobs:
             echo "::error::invalid node slug"
             exit 1
           }
+          if [ -n "$ORPHAN_DSEQ" ] && ! [[ "$ORPHAN_DSEQ" =~ ^[0-9]+$ ]]; then
+            echo "::error::invalid orphan dseq"
+            exit 1
+          fi
 
       - name: Setup SSH
         env:
@@ -83,3 +93,21 @@ jobs:
           set -euo pipefail
           ssh $SSH_OPTS root@"$VM_HOST" \
             "! kubectl get applicationset \"cogni-${LANE}-${NODE}\" -n argocd >/dev/null 2>&1 && ! kubectl get application \"${LANE}-${NODE}\" -n argocd >/dev/null 2>&1"
+
+      - name: Checkout recovery tool
+        if: inputs.orphan_dseq != ''
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+
+      - name: Close and prove explicitly named orphan lease
+        if: inputs.orphan_dseq != ''
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          DSEQ: ${{ inputs.orphan_dseq }}
+          LANE: ${{ inputs.environment }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+        run: |
+          set -euo pipefail
+          namespace="cogni-${LANE}"
+          ssh $SSH_OPTS root@"$VM_HOST" \
+            "KUBECONFIG=/etc/rancher/k3s/k3s.yaml NAMESPACE='$namespace' bash -s -- --dseq '$DSEQ'" \
+            < scripts/ops/recover-orphaned-akash-lease.sh
