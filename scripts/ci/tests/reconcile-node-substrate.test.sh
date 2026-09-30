@@ -22,7 +22,7 @@ mkdir -p \
   "$BAO_ROOT/cogni/candidate-a/node-template"
 
 cat > "$REMOTE_ROOT/opt/cogni-template-edge/.env" <<'EOF'
-DOMAIN=test.cognidao.org
+DOMAIN=stale.example.invalid
 OPERATOR_UPSTREAM=host.docker.internal:30080
 EOF
 cat > "$REMOTE_ROOT/opt/cogni-template-edge/docker-compose.yml" <<'EOF'
@@ -275,6 +275,11 @@ if [ "$after_keys" != "APP_DB_PASSWORD,APP_DB_SERVICE_PASSWORD,DOLTGRES_PASSWORD
 fi
 # operator is the primary (apex) host → the edge route key is OPERATOR_UPSTREAM
 # (host.docker.internal:<node_port>), not <SLUG>_DOMAIN.
+grep -q '^DOMAIN=test.cognidao.org$' "$REMOTE_ROOT/opt/cogni-template-edge/.env"
+if grep -q 'stale.example.invalid' "$REMOTE_ROOT/opt/cogni-template-edge/.env"; then
+  echo "k3s edge reconcile left the old environment domain in place" >&2
+  exit 1
+fi
 grep -q '^OPERATOR_UPSTREAM=host.docker.internal:30000$' "$REMOTE_ROOT/opt/cogni-template-edge/.env"
 grep -q 'COGNI_NODE_DBS=cogni_operator$' "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
 # Per-node single-node db-provision: COGNI_NODE_DBS overridden to THIS node + the

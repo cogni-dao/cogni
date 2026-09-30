@@ -457,6 +457,11 @@ if [[ "$DEPLOYMENT_PROVIDER" == "k3s" ]]; then
   mv '/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl' \"\$caddyfile\"
 
   touch \"\$edge_env\"
+  if grep -qE '^DOMAIN=' \"\$edge_env\"; then
+    sed -i.bak 's|^DOMAIN=.*$|DOMAIN=${DOMAIN}|' \"\$edge_env\"
+  else
+    printf '%s=%s\\n' 'DOMAIN' '${DOMAIN}' >> \"\$edge_env\"
+  fi
   if grep -qE '^${edge_key}=' \"\$edge_env\"; then
     sed -i.bak 's|^${edge_key}=.*$|${edge_key}=${edge_value}|' \"\$edge_env\"
   else
