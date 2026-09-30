@@ -99,14 +99,20 @@ runs:
         # an NXDOMAIN substrate host on the exact test lane meant to prove this action.
         # shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
         source scripts/setup/lib/cogni-deployment-identity.sh
-        # Public identity follows the LANE, even when this action runs with the CONTROL env's
-        # GitHub environment (and therefore sees that env's DOMAIN variable). Derive the lane
-        # domain from the repository's zone root; otherwise candidate + preview emit the same
-        # publicHost and their Crossplane DNS requests fight over one Cloudflare record.
-        LANE_DOMAIN="$(cogni_operator_domain_for_env "$DEPLOYMENT_ENVIRONMENT" "${FORK_DOMAIN_ROOT:?}")" || {
-          echo "::error::cannot derive public domain for lane '$DEPLOYMENT_ENVIRONMENT'"
-          exit 1
-        }
+        # Public identity follows the LANE, even when an Akash preview promote runs with the
+        # CONTROL env's GitHub environment. DOMAIN is that fleet's configured public apex
+        # (`cognidao.org` in canonical, `cogni-testing.org` in the isolated test fleet);
+        # FORK_DOMAIN_ROOT is independently the VM/substrate DNS root and may intentionally
+        # remain canonical in a test parent. Preview is the only foreign public-domain lane;
+        # candidate-a and production callers already supply their configured lane DOMAIN.
+        if [ "$DEPLOYMENT_ENVIRONMENT" = "preview" ]; then
+          LANE_DOMAIN="$(cogni_operator_domain_for_env preview "${DOMAIN:?}")" || {
+            echo "::error::cannot derive public domain for lane '$DEPLOYMENT_ENVIRONMENT'"
+            exit 1
+          }
+        else
+          LANE_DOMAIN="${DOMAIN:?}"
+        fi
         if [ "$DOMAIN" != "$LANE_DOMAIN" ]; then
           echo "::notice::Ignoring control-env DOMAIN '$DOMAIN'; workload public identity follows lane '$DEPLOYMENT_ENVIRONMENT' as '$LANE_DOMAIN'"
         fi

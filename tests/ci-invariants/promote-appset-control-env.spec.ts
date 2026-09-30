@@ -73,10 +73,13 @@ describe("promote AppSet control-env wiring (task.5141)", () => {
 
   it("keeps the workload hostname on the lane when secrets follow control", () => {
     expect(materializerAction).toContain(
-      'cogni_operator_domain_for_env "$DEPLOYMENT_ENVIRONMENT" "${FORK_DOMAIN_ROOT:?}"'
+      'cogni_operator_domain_for_env preview "${DOMAIN:?}"'
     );
     expect(materializerAction).toContain('--domain "$LANE_DOMAIN"');
     expect(materializerAction).not.toContain('--domain "$DOMAIN"');
+    expect(materializerAction).not.toContain(
+      'cogni_operator_domain_for_env "$DEPLOYMENT_ENVIRONMENT" "${FORK_DOMAIN_ROOT:?}"'
+    );
   });
 
   it("observes the workload on control while probing the lane hostname", () => {
@@ -87,6 +90,9 @@ describe("promote AppSet control-env wiring (task.5141)", () => {
     expect(verifyJob).not.toContain("steps.custody.outputs.control_env");
     expect(verifyJob).toContain(
       "DOMAIN: ${{ steps.public-domain.outputs.domain }}"
+    );
+    expect(verifyJob).toContain(
+      'cogni_operator_domain_for_env preview "${DOMAIN:?}"'
     );
   });
 });

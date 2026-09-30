@@ -1036,7 +1036,6 @@ jobs:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
       VM_HOST: ${{ secrets.VM_HOST }}
       DOMAIN: ${{ vars.DOMAIN }}
-      FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
       DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
     steps:
       - name: Checkout (workspace root for composite actions)
@@ -1077,10 +1076,14 @@ jobs:
         run: |
           set -euo pipefail
           source app-src/scripts/setup/lib/cogni-deployment-identity.sh
-          LANE_DOMAIN="$(cogni_operator_domain_for_env "$DEPLOY_ENVIRONMENT" "${FORK_DOMAIN_ROOT:?}")" || {
-            echo "::error::cannot derive public domain for lane '$DEPLOY_ENVIRONMENT'"
-            exit 1
-          }
+          if [ "$DEPLOY_ENVIRONMENT" = "preview" ]; then
+            LANE_DOMAIN="$(cogni_operator_domain_for_env preview "${DOMAIN:?}")" || {
+              echo "::error::cannot derive public domain for lane '$DEPLOY_ENVIRONMENT'"
+              exit 1
+            }
+          else
+            LANE_DOMAIN="${DOMAIN:?}"
+          fi
           echo "domain=$LANE_DOMAIN" >> "$GITHUB_OUTPUT"
 
       - name: Setup SSH
