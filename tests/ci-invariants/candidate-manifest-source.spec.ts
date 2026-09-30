@@ -12,7 +12,8 @@
  *   REMOTE_NODE_SOURCE_STAYS_SEPARATE: a remote node's source SHA is not used
  *     as a parent-monorepo checkout ref.
  *   CONTROL_DOMAIN_STAYS_SEPARATE: a test parent's Akash workload zone never
- *     replaces the k3s operator/control domain during substrate or public checks.
+ *     replaces its explicitly configured k3s operator/control domain during
+ *     substrate or public checks.
  * Side-effects: IO (reads .github/workflows/candidate-flight.yml)
  * Links: docs/spec/ci-cd.md axioms 17-20, docs/spec/node-ci-cd-contract.md artifact contract
  * @public
@@ -64,7 +65,7 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 describe("candidate-a manifest source", () => {
   it("keeps the k3s control domain separate from an isolated Akash workload zone", () => {
     const targetDomain =
-      "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') || vars.DOMAIN }}";
+      "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}";
 
     expect(
       namedStep(
