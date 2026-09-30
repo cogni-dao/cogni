@@ -703,11 +703,11 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
     },
   });
 
-  it("writes a test-fleet production lane under candidate-a's control directory", () => {
+  it("writes a test-fleet preview lane under candidate-a's control directory", () => {
     const current: EnvPlanCurrent = {
       catalog: externallyBuiltCatalog(["candidate-a"], "cogni-test-org"),
-      templateOverlayByEnv: { production: TEMPLATE_OVERLAY },
-      templateExternalSecretByEnv: { production: TEMPLATE_EXTERNAL_SECRET },
+      templateOverlayByEnv: { preview: TEMPLATE_OVERLAY },
+      templateExternalSecretByEnv: { preview: TEMPLATE_EXTERNAL_SECRET },
       appsetTemplate: APPSET_TEMPLATE,
       appsetRepoUrl: "https://github.com/cogni-test-org/cogni-monorepo.git",
       appsetsKustomizationByEnv: {
@@ -716,13 +716,13 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
       port: 3200,
       nodePort: 31100,
       schedulerEndpointPatchByEnv: {
-        production: schedulerPatchFixture(`http://${SLUG}-node-app:3000`),
+        preview: schedulerPatchFixture(`http://${SLUG}-node-app:3000`),
       },
     };
 
     const res = buildEnvDeltaPlan({
       slug: SLUG,
-      env: "production",
+      env: "preview",
       present: true,
       current,
       fleetControlEnv: "candidate-a",
@@ -730,10 +730,10 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
     if (res.kind === "no_changes") throw new Error("unexpected no_changes");
 
     expect(paths(res.ops)).toContain(
-      appsetPath("candidate-a", "production", SLUG)
+      appsetPath("candidate-a", "preview", SLUG)
     );
     const appsetOp = res.ops.find(
-      (op) => op.path === appsetPath("candidate-a", "production", SLUG)
+      (op) => op.path === appsetPath("candidate-a", "preview", SLUG)
     );
     expect(appsetOp?.op).toBe("upsert");
     if (appsetOp?.op === "upsert") {
@@ -743,7 +743,7 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
     }
     expect(paths(res.ops)).toContain(appsetsKustomizationPath("candidate-a"));
     expect(paths(res.ops)).not.toContain(
-      appsetPath("production", "production", SLUG)
+      appsetPath("production", "preview", SLUG)
     );
   });
 

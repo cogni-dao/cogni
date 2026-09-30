@@ -222,21 +222,21 @@ describe("dispatchLaneOnboard — dispatch selection", () => {
     deployPins = { "candidate-a": CANDIDATE_PIN };
 
     dispatchLaneOnboard(
-      mergedPayload("cogni-operator/node-env-toks5-production"),
+      mergedPayload("cogni-operator/node-env-toks5-preview"),
       { ...ENV, FLEET_CONTROL_ENV: "candidate-a" },
       log
     );
     await settle();
 
-    // The candidate control plane reconciles the new production lane first; the lane render
-    // still follows through the production promote primitive.
+    // The candidate control plane reconciles the new preview lane first; the lane render
+    // still follows through the preview promote primitive.
     expect(prepareNodeRefCandidateFlight).toHaveBeenCalledWith(
       expect.objectContaining({ sourceSha: CANDIDATE_PIN })
     );
     expect(dispatchNodeRefCandidateFlight).toHaveBeenCalledTimes(1);
     expect(promoteNode).toHaveBeenCalledTimes(1);
     expect(promoteNode.mock.calls[0]?.[0]).toMatchObject({
-      env: "production",
+      env: "preview",
       sourceSha: BIRTH_SHA,
     });
     expect(log.info).toHaveBeenCalledWith(

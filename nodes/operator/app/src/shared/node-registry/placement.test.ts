@@ -23,7 +23,7 @@ import {
 
 describe("controlEnvFor", () => {
   it("routes external lanes through the configured fleet control env", () => {
-    expect(controlEnvFor("production", "akash", "candidate-a")).toBe(
+    expect(controlEnvFor("preview", "akash", "candidate-a")).toBe(
       "candidate-a"
     );
     expect(controlEnvFor("preview", "k3s", "candidate-a")).toBe("preview");
