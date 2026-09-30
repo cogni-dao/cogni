@@ -50,19 +50,12 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 37
+  candidate-a: 38
   preview: 2
-  # bug.5262 — prod's keys :0/:1/:2 were all minted then terminally CLOSED during
-  # the PAPER_ENFORCE_MODE recovery (three crash-looped leases on the pre-#44 build,
-  # closed + escrow-settled via recover-orphaned-akash-lease.sh). Each settled key is
-  # spent forever (actuator refuses a settled idempotence key), so the next activation
-  # MUST present the one past them. Bump 0->3 so the promote of the #44 fix build mints
-  # ONE fresh gen-3 lease (live-CLOB). Matches requiredLeaseGeneration over the ledger.
-  # bug.5262 (2026-09-26) — promoting poly 8f371a7 (adds POLY_WALLET_AEAD_KEY_HEX secret_ref)
-  # did NOT cut over: an in-place Akash image UPDATE on live gen-3 left the provider serving
-  # old 82e2fb9 (34+ min; XR Ready but edge stale). In-place update is unreliable here. Bump
-  # 3->4 to force a fresh CREATE on 8f371a7 (reliable cutover); close gen-3 after gen-4 serves.
-  production: 5
+  production: 10
+required_placement_countries:
+  candidate-a: [BE]
+  production: [BG, FI, NL, PT]
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/poly/
@@ -75,3 +68,11 @@ node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
+  - cidr: 213.146.212.69/32
+    comment: Portugal provider egress (story.5050)
+  - cidr: 77.76.13.0/24
+    comment: Bulgaria provider rotating egress range (story.5050)
+  - cidr: 95.217.58.106/32
+    comment: Finland provider egress (story.5050)
+  - cidr: 24.144.74.27/32
+    comment: Netherlands provider egress (story.5050)
