@@ -1573,6 +1573,71 @@ describe("buildRegionPlan (story.5050)", () => {
     });
   });
 
+  /**
+   * THE REGRESSION THIS EXISTS FOR (observed live, PR #2496): `setCatalogPlacementCell` rewrites a
+   * block from its parsed map and DROPS the comments inside it, so a text comparison reads an
+   * identical request as a change. Because this verb bumps `lease_generation`, that is not a
+   * harmless extra PR — it mints a PAID LEASE on every repeat call and deletes the row's reviewed
+   * rationale. Idempotency must compare the PARSED cell value.
+   */
+  it("is a no-op when the held region matches, even with comments inside the block", () => {
+    const withComments = akashPlaced("preview");
+    const commented = {
+      ...withComments,
+      catalog: withComments.catalog.replace(
+        "required_placement_countries:\n  preview:",
+        "required_placement_countries:\n  # why we chose these\n  preview:"
+      ),
+    };
+    const seeded = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["PT"],
+      leaseGeneration: 2,
+      current: commented,
+    });
+    if (seeded.kind !== "set_region") throw new Error("expected set_region");
+    const withComment = {
+      ...commented,
+      catalog: upsertContent(seeded.ops[0]!).replace(
+        "required_placement_countries:",
+        "required_placement_countries:\n  # rationale a human wrote"
+      ),
+    };
+    expect(
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries: ["PT"],
+        leaseGeneration: 99,
+        current: withComment,
+      }).kind
+    ).toBe("no_changes");
+  });
+
+  it("is a no-op regardless of the order the countries are given in", () => {
+    const seeded = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["NL", "PT"],
+      leaseGeneration: 2,
+      current: akashPlaced("preview"),
+    });
+    if (seeded.kind !== "set_region") throw new Error("expected set_region");
+    expect(
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries: ["PT", "NL"],
+        leaseGeneration: 99,
+        current: {
+          ...akashPlaced("preview"),
+          catalog: upsertContent(seeded.ops[0]!),
+        },
+      }).kind
+    ).toBe("no_changes");
+  });
+
   /** IDEMPOTENT — and load-bearing: a no-op must not move the generation and mint a paid lease. */
   it("is a no-op when the region is already held, minting nothing", () => {
     const held = akashPlaced("preview");
