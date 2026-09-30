@@ -378,6 +378,23 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(templateCode).toContain(
       "$closedForCurrentKey := and $closed (eq $responseKey $currentKey)"
     );
+    // An explicit base-generation bump must select a NEW provider-http Request child. Updating
+    // the old child invokes UPDATE, which cannot mint the replacement the generation promises.
+    // The latch is absent on existing XRs, preserving their static child with zero rollout churn.
+    expect(templateCode).toContain(
+      '$leaseRequestGeneration := int (dig "status" "leaseRequestGeneration" -1 $xr)'
+    );
+    expect(templateCode).toContain(
+      '$leaseResourceName = printf "akash-lease-g%d" $leaseGeneration'
+    );
+    expect(templateCode).toContain(
+      "gotemplating.fn.crossplane.io/composition-resource-name: {{ $leaseResourceName }}"
+    );
+    expect(statusSchema.leaseRequestGeneration).toMatchObject({
+      type: "integer",
+      minimum: 0,
+      maximum: 1000000,
+    });
     expect(templateCode).toContain(
       "$recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts)"
     );
@@ -588,7 +605,7 @@ describe("XComputeWorkload migration decoupling (task.5135)", () => {
    */
   function leaseMappings(): Record<string, string> {
     const leaseBlock = template.slice(
-      template.indexOf("composition-resource-name: akash-lease"),
+      template.indexOf("composition-resource-name: {{ $leaseResourceName }}"),
       template.indexOf("composition-resource-name: dns-record")
     );
     expect(leaseBlock.length).toBeGreaterThan(0);
@@ -742,7 +759,7 @@ describe("XComputeWorkload spend attribution (task.5103)", () => {
     // mints no lease, but it still mutates a PAID resource, so it says whose it is.
     expect(template).toContain('"identity" $identity');
     const leaseBlock = template.slice(
-      template.indexOf("composition-resource-name: akash-lease"),
+      template.indexOf("composition-resource-name: {{ $leaseResourceName }}"),
       template.indexOf("composition-resource-name: dns-record")
     );
     const mappings = Object.fromEntries(
@@ -879,10 +896,8 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
   });
 
   it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {
-    // A closed lease whose response key does not match the current key must PARK, not
-    // re-render: rendering under a settled key is refused by the actuator with
-    // akash_tx_create_refused_settled_key on EVERY reconcile forever. The held/foreign
-    // terms below are what stand between bounded recovery and unbounded churn.
+    // Closed current and foreign keys remain parked exactly as before. A different explicit base
+    // generation is handled by selecting a NEW generation-qualified child above this fence.
     expect(template).toContain(
       "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey)))"
     );
