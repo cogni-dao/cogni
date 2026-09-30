@@ -56,6 +56,7 @@ import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
   formatBidRejections,
+  formatBidRoster,
   type ProviderOutcomeStats,
   type ScreenableBid,
   type ScreenedBids,
@@ -1020,6 +1021,7 @@ export class AkashComputeAdapter
     // Three independent filters can each empty the set; a static reason list sent operators
     // hunting the wrong one for a full bid window.
     let lastRejections: ScreenedBids["rejections"] = {};
+    let lastRoster: ScreenedBids["roster"] = [];
     for (;;) {
       const bids = await this.request<ConsoleBid[]>(
         "GET",
@@ -1041,7 +1043,7 @@ export class AkashComputeAdapter
           priceAmount: Number(b.bid?.price?.amount ?? Number.POSITIVE_INFINITY),
         });
       }
-      const { ranked, rejections } = screenBids({
+      const { ranked, rejections, roster } = screenBids({
         bids: screenable,
         providers: screening.providers,
         outcomes: screening.outcomes,
@@ -1053,6 +1055,7 @@ export class AkashComputeAdapter
         nowMs: Date.now(),
       });
       lastRejections = rejections;
+      lastRoster = roster;
       const best = ranked[0];
       // A preferred provider that survived screening wins immediately; anyone else
       // waits out the window so late (often better) bids can compete.
@@ -1070,6 +1073,10 @@ export class AkashComputeAdapter
             "NO_ELIGIBLE_BIDS",
             `bids arrived for dseq ${dseq} but none passed provider screening ` +
               `[refused: ${formatBidRejections(lastRejections)}]` +
+              // The roster names the ADDRESSES so a dry auction is actionable without
+              // re-running it: counts alone cannot tell "nobody eligible bid" from
+              // "we refused the provider we were waiting for" (story.5050).
+              ` [bids: ${formatBidRoster(lastRoster)}]` +
               (screening.requiredCountryCodes.length > 0
                 ? ` (required placement countries: ${screening.requiredCountryCodes.join(", ")})`
                 : "")

@@ -6,6 +6,7 @@ import {
   type AkashProviderInfo,
   BLACKLIST_TTL_MS,
   formatBidRejections,
+  formatBidRoster,
   isProviderBlacklisted,
   type ProviderOutcomeStats,
   passesQualityFilter,
@@ -389,5 +390,74 @@ describe("screenBids rejection accounting (EVERY_REJECTION_IS_COUNTED)", () => {
     expect(formatBidRejections({ required_country: 3, quality: 1 })).toBe(
       "required_country=3, quality=1"
     );
+  });
+});
+
+describe("bid roster", () => {
+  // story.5050: eight poly auctions were re-rolled on aggregate counts alone. These pin the
+  // property that made that possible — a refused bid must stay attributable to an ADDRESS.
+  it("records every bid seen, survivors and refusals alike", () => {
+    const { roster } = screenFull([bid("akash-a", 5), bid("akash-b", 9)], {
+      allowedProviders: new Set(["akash-a"]),
+    });
+    expect(roster).toHaveLength(2);
+    expect(roster[0]).toMatchObject({ provider: "akash-a", priceAmount: 5 });
+    expect(roster[0]?.rejection).toBeUndefined();
+    expect(roster[1]).toMatchObject({
+      provider: "akash-b",
+      rejection: "not_allowlisted",
+    });
+  });
+
+  it("carries the country that the aggregate count cannot express", () => {
+    const { roster } = screenFull([bid("akash-a", 5)], {
+      providers: new Map([["akash-a", info("akash-a", { countryCode: "PT" })]]),
+      requiredCountryCodes: ["BG"],
+    });
+    expect(roster[0]).toMatchObject({
+      countryCode: "PT",
+      rejection: "required_country",
+    });
+  });
+
+  it("reports an unknown country as null rather than guessing", () => {
+    const { roster } = screenFull([bid("akash-a", 5)]);
+    expect(roster[0]?.countryCode).toBeNull();
+  });
+
+  it("amends the entry of a bid refused as a price outlier after the fact", () => {
+    // Outlier detection runs on the eligible cohort, so it cannot be decided in the
+    // first pass; a refused outlier must not be left looking like a survivor.
+    const { roster, rejections } = screenFull([
+      bid("akash-a", 1),
+      bid("akash-b", 100),
+      bid("akash-c", 101),
+      bid("akash-d", 102),
+    ]);
+    expect(rejections.price_outlier).toBe(1);
+    const outlier = roster.find((r) => r.provider === "akash-a");
+    expect(outlier?.rejection).toBe("price_outlier");
+    expect(
+      roster.filter((r) => r.rejection === undefined).map((r) => r.provider)
+    ).toEqual(["akash-b", "akash-c", "akash-d"]);
+  });
+
+  it("renders an actionable line, eliding the middle of each address", () => {
+    const line = formatBidRoster([
+      {
+        provider: "akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk",
+        priceAmount: 9.34,
+        countryCode: "PT",
+        rejection: "required_country",
+      },
+      { provider: "akash1short", priceAmount: 6, countryCode: null },
+    ]);
+    expect(line).toBe(
+      "akash1hgu…4ezk PT 9.34 required_country, akash1short ?? 6.00 ok"
+    );
+  });
+
+  it("renders an empty roster as none", () => {
+    expect(formatBidRoster([])).toBe("none");
   });
 });
