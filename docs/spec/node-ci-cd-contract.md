@@ -138,7 +138,7 @@ Each was one team re-deriving the rule and picking the wrong half:
 | `cogni_poly` / `app_poly` collided with production's rows          | DB name omitted the lane suffix                   |
 | `production-db-reader` denied `cogni/candidate-a/poly`             | read policy scoped to lane only                   |
 | DoltHub mirror purge stripped production's creds on a lane promote | purge keyed on lane, not control env              |
-| promote reported green but no Application appeared                 | AppSet job read lane VM creds, not control env     |
+| promote reported green but no Application appeared                 | AppSet job read lane VM creds, not control env    |
 | `verify-candidate` polls forever with `resource_absent`            | readiness host from lane, workload on control env |
 | migration reports `succeeded` over an EMPTY lane database          | receipt namespace from control env, not lane      |
 
