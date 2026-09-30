@@ -1438,10 +1438,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
   async pruneNodeEnvironment(
     input: PruneNodeEnvironmentInput
   ): Promise<ObservedWorkflowDispatchResult> {
-    const octokit = await this.getOctokit(
-      input.parentOwner,
-      input.parentRepo
-    );
+    const octokit = await this.getOctokit(input.parentOwner, input.parentRepo);
     const response = (await octokit.request(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
       {
