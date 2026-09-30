@@ -19,7 +19,13 @@ discovery.relabel "docker_logs" {
 
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy-k8s-events|pdc-agent)"
+    # bug.5293: `alloy` itself was absent here, so the collector could not report its
+    # OWN failures. A component that fails to build (bad exporter argument, unreachable
+    # DSN) emits no targets and therefore no `up` series — indistinguishable from
+    # "never configured" — while alloy stays healthy for every other component. That
+    # is a silent observability hole in the thing whose job is observability, and it
+    # cost a full deploy cycle to diagnose blind. Ship alloy's own stdout.
+    regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy|alloy-k8s-events|pdc-agent)"
     action        = "keep"
   }
 
@@ -471,25 +477,26 @@ prometheus.exporter.postgres "default" {
     "postgresql://" + sys.env("APP_DB_READONLY_USER") + ":" + sys.env("APP_DB_READONLY_PASSWORD") + "@postgres:5432/postgres?sslmode=disable",
   ]
 
-  // One DSN + autodiscovery, NOT a DSN per database: with multiple
-  // data_source_names Alloy applies `enabled_collectors` only to the FIRST
-  // entry, which would silently un-bound the others.
+  // One DSN + autodiscovery, NOT a DSN per database — per-database DSNs would
+  // multiply connections against the very instance we are trying to unburden.
   autodiscovery {
     enabled           = true
     database_denylist = ["template0", "template1"]
   }
 
-  // Bounded collectors only. `database` + `stat_database` carry the per-tenant
-  // signal; locks/stat_activity/wal/replication/settings are instance-scoped.
-  enabled_collectors = [
-    "database",
-    "stat_database",
-    "locks",
-    "stat_activity",
-    "wal",
-    "replication",
-    "settings",
-  ]
+  // NO `enabled_collectors` here, deliberately. The first attempt pinned an
+  // explicit collector list; the component then produced ZERO targets, so
+  // `prometheus.scrape` emitted nothing at all — not even an `up` series — which
+  // is indistinguishable from "never configured" (bug.5293, deploy
+  // 36786133722: alloy recreated + config hash changed + alloy healthy, yet no
+  // `postgres` job and no `pg_*` series existed). An un-buildable exporter is
+  // silent, not loud.
+  //
+  // It was also redundant: the `infra_metrics` allowlist below is the real
+  // cardinality gate — it keeps ONLY the named `pg_*` families, so every
+  // per-relation series (`pg_stat_user_tables_*`, `pg_statio_*`) is dropped
+  // before remote_write whether its collector ran or not. One gate, at the point
+  // where the Grafana Cloud series bill is actually decided, beats two.
 }
 
 prometheus.scrape "postgres" {
