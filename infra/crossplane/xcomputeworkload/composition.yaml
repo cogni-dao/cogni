@@ -809,6 +809,18 @@ spec:
             {{- $phase = "Progressing" }}
             {{- $failReason = "LeaseRecoveryInProgress" }}
             {{- $failMessage = printf "lease recovery attempt %d of %d for generation %d" $recoveryCount $maxRecoveryAttempts $leaseGeneration }}
+            {{- else if $closed }}
+            {{- /* A lease observed closed under a NON-current recovery key (settled/foreign key).
+              $heldClosed above only catches $closedForCurrentKey, and every recovery branch
+              above has already claimed the active-recovery cases ($recoveryCount > 0), so what
+              reaches here is a settled, parked closed lease with no recovery in flight. Without
+              this branch the chain fell through to the default Progressing/reason:"None" and lied
+              that a permanently-closed lease was still coming up. $renderLease already PARKS this
+              case (Axiom 26 fence: (and $closed (not $closedForCurrentKey))); status must tell the
+              same truth. Terminal until a human bumps spec.leaseGeneration. */ -}}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "LeaseClosed" }}
+            {{- $failMessage = printf "lease %s is closed under a settled recovery key; bump spec.leaseGeneration to mint a replacement" $externalName }}
             {{- end }}
             ---
             apiVersion: {{ $xr.apiVersion }}
