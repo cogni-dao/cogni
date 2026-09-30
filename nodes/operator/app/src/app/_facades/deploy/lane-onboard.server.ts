@@ -197,7 +197,16 @@ async function onboardLane(
 
     const provider =
       row.deployment_provider?.[ctx.lane] === "akash" ? "akash" : "k3s";
-    const controlEnv = controlEnvFor(ctx.lane, provider);
+    // The fleet, not the lane name, owns Akash custody. Production fleets default to
+    // `production`; the isolated test fleet explicitly selects `candidate-a`. Omitting the
+    // configured fleet control here made a test-fleet production add reach for a production
+    // cluster that does not exist, even though every generated AppSet correctly lived under
+    // appsets/candidate-a.
+    const controlEnv = controlEnvFor(
+      ctx.lane,
+      provider,
+      env.FLEET_CONTROL_ENV
+    );
     // REPLAY_NEVER_ADVANCES — an env renders at the sha it is already running. The catalog row is
     // the BIRTH pin, used only for an env that has never deployed (no `deploy/<env>-<slug>` pin).
     const birthSha = row.source_sha;
@@ -215,48 +224,49 @@ async function onboardLane(
     // `run-node-substrate.sh <controlEnv> <slug>` lane loop creates this lane's database,
     // roles and Temporal namespace under the identities that own them. It is a REPLAY of the
     // custodian's current pin: the substrate work happens, the custodian's app does not move.
-    const custodianSha =
-      controlEnv !== ctx.lane ? await shaFor(controlEnv) : undefined;
-    if (controlEnv !== ctx.lane && custodianSha) {
+    const dispatchReplay = async (
+      renderEnv: Lane,
+      sourceSha: string
+    ): Promise<void> => {
+      if (renderEnv === "candidate-a") {
+        if (!row.node_id) return;
+        const prepared = await deployPlane.prepareNodeRefCandidateFlight({
+          parentOwner: ctx.owner,
+          parentRepo: ctx.repo,
+          nodeId: row.node_id,
+          slug: ctx.slug,
+          sourceSha,
+        });
+        await deployPlane.dispatchNodeRefCandidateFlight({
+          owner: ctx.owner,
+          repo: ctx.repo,
+          slug: prepared.slug,
+          sourceSha: prepared.sourceSha,
+        });
+        dispatched += 1;
+        return;
+      }
       await deployPlane.promoteNode({
-        env: controlEnv as "preview" | "production",
+        env: renderEnv,
         parentOwner: ctx.owner,
         parentRepo: ctx.repo,
         slug: ctx.slug,
-        sourceSha: custodianSha,
+        sourceSha,
       });
       dispatched += 1;
+    };
+
+    const custodianSha =
+      controlEnv !== ctx.lane ? await shaFor(controlEnv) : undefined;
+    if (controlEnv !== ctx.lane && custodianSha) {
+      await dispatchReplay(controlEnv as Lane, custodianSha);
     }
 
     // NAME_AND_PATH_FOLLOW_THE_LANE — render the lane's own desired state. candidate-a renders
     // through the flight lever (the same prepare→dispatch pair POST /vcs/flight uses, so the
     // GHCR preflight is not re-derived here); preview and production through the promote lever.
     const laneSha = await shaFor(ctx.lane);
-    if (ctx.lane === "candidate-a" && row.node_id && laneSha) {
-      const prepared = await deployPlane.prepareNodeRefCandidateFlight({
-        parentOwner: ctx.owner,
-        parentRepo: ctx.repo,
-        nodeId: row.node_id,
-        slug: ctx.slug,
-        sourceSha: laneSha,
-      });
-      await deployPlane.dispatchNodeRefCandidateFlight({
-        owner: ctx.owner,
-        repo: ctx.repo,
-        slug: prepared.slug,
-        sourceSha: prepared.sourceSha,
-      });
-      dispatched += 1;
-    } else if (ctx.lane !== "candidate-a" && laneSha) {
-      await deployPlane.promoteNode({
-        env: ctx.lane,
-        parentOwner: ctx.owner,
-        parentRepo: ctx.repo,
-        slug: ctx.slug,
-        sourceSha: laneSha,
-      });
-      dispatched += 1;
-    }
+    if (laneSha) await dispatchReplay(ctx.lane, laneSha);
 
     log.info(
       {

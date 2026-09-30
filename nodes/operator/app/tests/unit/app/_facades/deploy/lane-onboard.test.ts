@@ -50,6 +50,7 @@ const ENV = {
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: "a2V5",
   NODE_SUBMODULE_PARENT_OWNER: "Cogni-DAO",
   NODE_SUBMODULE_PARENT_REPO: "cogni",
+  FLEET_CONTROL_ENV: "production",
   // biome-ignore lint/suspicious/noExplicitAny: partial ServerEnv is sufficient for this facade
 } as any;
 
@@ -215,6 +216,37 @@ describe("dispatchLaneOnboard — dispatch selection", () => {
 
     expect(promoteNode).toHaveBeenCalledTimes(1);
     expect(promoteNode.mock.calls[0]?.[0]).toMatchObject({ env: "preview" });
+  });
+
+  it("uses candidate-a as the Akash custodian for an isolated test fleet", async () => {
+    deployPins = { "candidate-a": CANDIDATE_PIN };
+
+    dispatchLaneOnboard(
+      mergedPayload("cogni-operator/node-env-toks5-production"),
+      { ...ENV, FLEET_CONTROL_ENV: "candidate-a" },
+      log
+    );
+    await settle();
+
+    // The candidate control plane reconciles the new production lane first; the lane render
+    // still follows through the production promote primitive.
+    expect(prepareNodeRefCandidateFlight).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceSha: CANDIDATE_PIN })
+    );
+    expect(dispatchNodeRefCandidateFlight).toHaveBeenCalledTimes(1);
+    expect(promoteNode).toHaveBeenCalledTimes(1);
+    expect(promoteNode.mock.calls[0]?.[0]).toMatchObject({
+      env: "production",
+      sourceSha: BIRTH_SHA,
+    });
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        controlEnv: "candidate-a",
+        dispatched: 2,
+        outcome: "dispatched",
+      }),
+      "feature.lane_onboard.complete"
+    );
   });
 
   it("CATALOG_AFTER_MERGE_DECIDES: a REMOVE dispatches nothing", async () => {
