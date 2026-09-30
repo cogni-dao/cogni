@@ -27,7 +27,8 @@ export function createNodeRepoWriter(env: ServerEnv): GitHubRepoWriter {
   return new GitHubRepoWriter({
     appId: env.GH_REVIEW_APP_ID,
     privateKey,
-    dnsReverseReconcile: env.DNS_REVERSE_RECONCILE,
     fleetControlEnv: env.FLEET_CONTROL_ENV,
+    forkDomainRoot: env.FORK_DOMAIN_ROOT,
+    dnsReverseReconcile: env.DNS_REVERSE_RECONCILE,
   });
 }

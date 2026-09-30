@@ -171,6 +171,40 @@ function actuatorAccountId(environment: string): string {
 }
 
 /**
+ * The same public account pin exposed to the operator app for read-only allocation-ledger
+ * queries. Without it, env ADD fails closed before opening its signed PR because generation
+ * evidence is unavailable.
+ */
+function operatorLeaseReadAccountId(environment: string): string {
+  const overlay = parse(
+    readFileSync(
+      path.join(
+        REPO_ROOT,
+        `infra/k8s/overlays/${environment}/operator/kustomization.yaml`
+      ),
+      "utf8"
+    )
+  ) as { patches?: { target?: YamlObject; patch?: string }[] };
+
+  const patch = overlay.patches?.find(
+    (entry) =>
+      entry.target?.kind === "ConfigMap" &&
+      entry.target?.name === "node-app-config"
+  )?.patch;
+  if (!patch) return "";
+
+  const operations = parse(patch) as {
+    path?: string;
+    value?: string;
+  }[];
+  return (
+    operations.find(
+      (operation) => operation.path === "/data/AKASH_ACTUATOR_ACCOUNT_ID"
+    )?.value ?? ""
+  );
+}
+
+/**
  * The OpenBao path an environment's actuator ExternalSecret pulls its Console credential from,
  * or "" when that environment ships no actuator ExternalSecret at all.
  *
@@ -364,6 +398,15 @@ describe("Crossplane substrate boundary (task.5094, task.5096, task.5097)", () =
         [...CROSSPLANE_CONTROL_PLANE_ENVS],
         `${environment} pins a wallet but installs no control plane`
       ).toContain(environment);
+    }
+  });
+
+  it("gives each funded operator app the actuator's public account pin for ledger reads", () => {
+    for (const environment of CROSSPLANE_ACTUATOR_WALLET_ENVS) {
+      expect(
+        operatorLeaseReadAccountId(environment),
+        `${environment} env ADD cannot derive lease generation without the app-side account pin`
+      ).toBe(actuatorAccountId(environment));
     }
   });
 

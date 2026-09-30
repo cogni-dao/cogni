@@ -9,7 +9,9 @@
  * Invariants:
  *   - POLICY_FROM_GIT: desired state is `infra/github/merge-queue-ruleset.json` on parent `main`.
  *   - APP_IS_PRIVILEGE_BRIDGE: callers hold node-scoped RBAC, never GitHub administration tokens.
- *   - SERIALIZATION_PRESERVED: the adapter rejects non-ALLGREEN policy or any bypass actor.
+ *   - NARROW_BYPASS: the adapter rejects every git-authored bypass actor, then injects only the
+ *     executing review App. `/vcs/merge` spends that privilege only for a classified, signed
+ *     `cogni.env-manager.v1` PR; ordinary PRs remain serialized by the queue.
  *   - READBACK_OR_FAIL: a successful response means GitHub returned the desired active policy.
  * Side-effects: GitHub ruleset write only when live state differs from committed policy.
  * Links: task.5141, docs/spec/merge-queue-config.md

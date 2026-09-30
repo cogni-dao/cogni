@@ -19,9 +19,9 @@
  *     `cogni-operator/node-env-<slug>-<env>` (github-repo-write.ts `nodeEnvBranch`) on the
  *     parent monorepo. Every other merge — the overwhelming majority — is a no-op.
  *   - CATALOG_AFTER_MERGE_DECIDES: ADD vs REMOVE is read from the MERGED catalog `envs:`, never
- *     inferred from the branch name (both actions use the same branch). A remove dispatches
- *     nothing: Argo's keystone prunes the lane, and rendering a lane that just left would
- *     resurrect it.
+ *     inferred from the branch name (both actions use the same branch). A remove dispatches the
+ *     narrow prune workflow against the lane's control cluster; it never renders/promotes the
+ *     lane that just left (which would resurrect it).
  *   - SUBSTRATE_FOLLOWS_THE_CUSTODIAN: when `controlEnvFor(lane) !== lane` the lane's database,
  *     roles and Temporal namespace live in the custodian's cluster, and only a run that IS that
  *     env holds the identities to create them (`run-node-substrate.sh` loops every lane its env
@@ -53,8 +53,12 @@
 import type { Logger } from "pino";
 import { parse as parseYaml } from "yaml";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
+import type { DeployPlanePort } from "@/ports";
 import type { ServerEnv } from "@/shared/env";
-import { controlEnvFor } from "@/shared/node-registry/placement";
+import {
+  controlEnvFor,
+  type NodeDeploymentProvider,
+} from "@/shared/node-registry/placement";
 import { EVENT_NAMES } from "@/shared/observability";
 
 /** The verb's branch: `cogni-operator/node-env-<slug>-<env>` (github-repo-write.ts). */
@@ -69,6 +73,12 @@ interface LaneOnboardContext {
   readonly prNumber: number;
   readonly slug: string;
   readonly lane: Lane;
+  /**
+   * The PR's base commit (`pull_request.base.sha`) — the PRE-MERGE catalog. A REMOVE reads the
+   * removed lane's OWN `deployment_provider.<lane>` cell here, because the post-merge catalog on
+   * `main` has already dropped that cell (see the REMOVE path). Null when the webhook omits it.
+   */
+  readonly baseSha: string | null;
 }
 
 /**
@@ -91,6 +101,7 @@ function extractLaneOnboard(
   const repoName = repo.name;
   const prNumber = pr.number;
   const headRef = (pr.head as Record<string, unknown> | undefined)?.ref;
+  const baseSha = (pr.base as Record<string, unknown> | undefined)?.sha;
   if (
     typeof repoOwner !== "string" ||
     typeof repoName !== "string" ||
@@ -118,6 +129,7 @@ function extractLaneOnboard(
     prNumber,
     slug: match[1],
     lane: match[2] as Lane,
+    baseSha: typeof baseSha === "string" ? baseSha : null,
   };
 }
 
@@ -127,6 +139,34 @@ interface CatalogRow {
   readonly node_id?: string;
   readonly source_sha?: string;
   readonly deployment_provider?: Readonly<Record<string, string>>;
+}
+
+/**
+ * The REMOVED lane's OWN deployment provider, read from the PRE-MERGE catalog (`ctx.baseSha`).
+ * The post-merge catalog has already dropped `deployment_provider.<lane>`, so it can no longer tell
+ * whether the departing lane was akash — the fact that decides whether its paid lease must be pruned
+ * from the fleet custodian. A cell-absent lane is k3s (K3S_IS_DEFAULT, symmetric with how ADD
+ * records placement). If the base catalog cannot be read at all, default to `akash`: pruning a k3s
+ * lane from the custodian is a harmless no-op, but treating an akash lane as k3s orphans a paid lease.
+ */
+async function removedLaneProvider(
+  ctx: LaneOnboardContext,
+  deployPlane: DeployPlanePort
+): Promise<NodeDeploymentProvider> {
+  if (!ctx.baseSha) return "akash";
+  try {
+    const preMergeText = await deployPlane.fetchFileText({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      path: `infra/catalog/${ctx.slug}.yaml`,
+      ref: ctx.baseSha,
+    });
+    if (!preMergeText) return "akash";
+    const preRow = parseYaml(preMergeText) as CatalogRow;
+    return preRow.deployment_provider?.[ctx.lane] === "akash" ? "akash" : "k3s";
+  } catch {
+    return "akash";
+  }
 }
 
 export function dispatchLaneOnboard(
@@ -185,11 +225,52 @@ async function onboardLane(
     }
 
     const row = parseYaml(catalogText) as CatalogRow;
-    // CATALOG_AFTER_MERGE_DECIDES — a REMOVE leaves the lane out of `envs:`; Argo's keystone
-    // prunes it and there is nothing to reconcile.
+    // CATALOG_AFTER_MERGE_DECIDES — a REMOVE leaves the lane out of `envs:`. The generated
+    // AppSet disappeared from git, but the live per-node AppSet is not guaranteed to be watched
+    // by a main-tracking keystone (observed test-org #97: the paid lease remained orphaned).
+    // Dispatch the one-object prune against the control cluster; never promote a retired lane.
     if (!row.envs?.includes(ctx.lane)) {
+      // CONTROL_ENV_FOLLOWS_THE_REMOVED_LANE (bug.5141 orphan-lease): resolve the control env from
+      // the REMOVED lane's OWN provider, NOT from whatever providers survive in the post-merge
+      // catalog. The merge dropped this lane's `deployment_provider.<lane>` cell, so scanning the
+      // post-merge row mis-classifies the last akash lane as k3s → controlEnvFor returns the lane
+      // itself → the prune SSHes to the wrong cluster and the paid Akash lease is orphaned. Read the
+      // removed cell from the PRE-MERGE catalog (`base.sha`), exactly as the CI twin resolves a
+      // REMOVE from the base catalog. If it cannot be read, default to `akash` so the prune targets
+      // the custodian rather than silently leaking a lease.
+      const provider = await removedLaneProvider(ctx, deployPlane);
+      const resolvedControlEnv = controlEnvFor(
+        ctx.lane,
+        provider,
+        env.FLEET_CONTROL_ENV
+      );
+      if (
+        resolvedControlEnv !== "candidate-a" &&
+        resolvedControlEnv !== "preview" &&
+        resolvedControlEnv !== "production"
+      ) {
+        throw Object.assign(
+          new Error(`invalid fleet control environment: ${resolvedControlEnv}`),
+          { code: "invalid_control_environment" }
+        );
+      }
+      const controlEnv: Lane = resolvedControlEnv;
+      const result = await deployPlane.pruneNodeEnvironment({
+        parentOwner: ctx.owner,
+        parentRepo: ctx.repo,
+        slug: ctx.slug,
+        env: ctx.lane,
+        controlEnv,
+      });
       log.info(
-        { ...base, dispatched: 0, outcome: "removed" },
+        {
+          ...base,
+          controlEnv,
+          dispatched: 1,
+          outcome: "removed",
+          runId: result.runId,
+          workflowUrl: result.workflowUrl,
+        },
         EVENT_NAMES.LANE_ONBOARD_COMPLETE
       );
       return;
@@ -217,48 +298,49 @@ async function onboardLane(
     // `run-node-substrate.sh <controlEnv> <slug>` lane loop creates this lane's database,
     // roles and Temporal namespace under the identities that own them. It is a REPLAY of the
     // custodian's current pin: the substrate work happens, the custodian's app does not move.
-    const custodianSha =
-      controlEnv !== ctx.lane ? await shaFor(controlEnv) : undefined;
-    if (controlEnv !== ctx.lane && custodianSha) {
+    const dispatchReplay = async (
+      renderEnv: Lane,
+      sourceSha: string
+    ): Promise<void> => {
+      if (renderEnv === "candidate-a") {
+        if (!row.node_id) return;
+        const prepared = await deployPlane.prepareNodeRefCandidateFlight({
+          parentOwner: ctx.owner,
+          parentRepo: ctx.repo,
+          nodeId: row.node_id,
+          slug: ctx.slug,
+          sourceSha,
+        });
+        await deployPlane.dispatchNodeRefCandidateFlight({
+          owner: ctx.owner,
+          repo: ctx.repo,
+          slug: prepared.slug,
+          sourceSha: prepared.sourceSha,
+        });
+        dispatched += 1;
+        return;
+      }
       await deployPlane.promoteNode({
-        env: controlEnv as "preview" | "production",
+        env: renderEnv,
         parentOwner: ctx.owner,
         parentRepo: ctx.repo,
         slug: ctx.slug,
-        sourceSha: custodianSha,
+        sourceSha,
       });
       dispatched += 1;
+    };
+
+    const custodianSha =
+      controlEnv !== ctx.lane ? await shaFor(controlEnv) : undefined;
+    if (controlEnv !== ctx.lane && custodianSha) {
+      await dispatchReplay(controlEnv as Lane, custodianSha);
     }
 
     // NAME_AND_PATH_FOLLOW_THE_LANE — render the lane's own desired state. candidate-a renders
     // through the flight lever (the same prepare→dispatch pair POST /vcs/flight uses, so the
     // GHCR preflight is not re-derived here); preview and production through the promote lever.
     const laneSha = await shaFor(ctx.lane);
-    if (ctx.lane === "candidate-a" && row.node_id && laneSha) {
-      const prepared = await deployPlane.prepareNodeRefCandidateFlight({
-        parentOwner: ctx.owner,
-        parentRepo: ctx.repo,
-        nodeId: row.node_id,
-        slug: ctx.slug,
-        sourceSha: laneSha,
-      });
-      await deployPlane.dispatchNodeRefCandidateFlight({
-        owner: ctx.owner,
-        repo: ctx.repo,
-        slug: prepared.slug,
-        sourceSha: prepared.sourceSha,
-      });
-      dispatched += 1;
-    } else if (ctx.lane !== "candidate-a" && laneSha) {
-      await deployPlane.promoteNode({
-        env: ctx.lane,
-        parentOwner: ctx.owner,
-        parentRepo: ctx.repo,
-        slug: ctx.slug,
-        sourceSha: laneSha,
-      });
-      dispatched += 1;
-    }
+    if (laneSha) await dispatchReplay(ctx.lane, laneSha);
 
     log.info(
       {

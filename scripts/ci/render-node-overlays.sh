@@ -144,7 +144,7 @@ template_files() {
 # silently (the exact bug.5008 failure). Sibling files (external-secret.yaml) carry
 # no migrate command, so that guard applies only to the kustomization.
 render_file() {
-  local env="$1" node="$2" file="${3:-kustomization.yaml}" tpl np port tmp
+  local env="$1" node="$2" file="${3:-kustomization.yaml}" tpl np port tmp public_domain_root
   tpl="$(template_dir "$env")/$file"
   [ -f "$tpl" ] || { echo "[ERROR] missing template overlay file $tpl" >&2; return 1; }
   np="$(node_field "$node" node_port)"
@@ -152,10 +152,18 @@ render_file() {
   [ -n "$np" ] && [ -n "$port" ] \
     || { echo "[ERROR] $node: catalog has no node_port/port" >&2; return 1; }
   tmp="$(mktemp)"
-  SLUG="$node" NODEPORT="$np" PORT="$port" perl -0777 -pe '
+  public_domain_root="${FORK_DOMAIN_ROOT:-cognidao.org}"
+  SLUG="$node" NODEPORT="$np" PORT="$port" PUBLIC_DOMAIN_ROOT="$public_domain_root" perl -0777 -pe '
     s/node-template/$ENV{SLUG}/g;
     s/\b30200\b/$ENV{NODEPORT}/g;
     s/\b3200\b/$ENV{PORT}/g;
+    if ($ENV{PUBLIC_DOMAIN_ROOT} ne "cognidao.org") {
+      s{(path:\s*/data/NEXTAUTH_URL\s*\n\s*value:\s*"https://)([^"\n]+)(")}{
+        my ($prefix, $host, $suffix) = ($1, $2, $3);
+        $host =~ s/\.cognidao\.org$/.$ENV{PUBLIC_DOMAIN_ROOT}/;
+        "$prefix$host$suffix";
+      }eg;
+    }
   ' "$tpl" > "$tmp"
   if [ "$file" = "kustomization.yaml" ] \
      && ! grep -q 'exec node /app/app/migrate.mjs /app/app/migrations' "$tmp"; then

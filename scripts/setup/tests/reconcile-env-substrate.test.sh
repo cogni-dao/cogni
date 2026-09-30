@@ -52,7 +52,7 @@ if [ "$1" = "exec" ]; then
   printf '%s\n' "bao $bao_args" >> "$CMDLOG"
   case "$bao_args" in
     "secrets list"*|"auth list"*) echo '{}' ;;   # nothing enabled → exercise enable path
-    "policy write"*) cat >/dev/null ;;            # consume HCL on stdin
+    "policy write"*) cat >> "$CMDLOG" ;;          # capture HCL without values (policy only)
   esac
   exit 0
 fi
@@ -61,11 +61,13 @@ EOF
 chmod +x "$FAKEBIN/kubectl"
 
 run() {
+  target_env="${1:-production}"
+  fleet_control_env="${2:-production}"
   : > "$TMPROOT/cmd.log"
-  env VM_IP=fake GH_REPO=Cogni-DAO/cogni \
+  env VM_IP=fake GH_REPO=Cogni-DAO/cogni FLEET_CONTROL_ENV="$fleet_control_env" \
     SSH_OPTS="-o StrictHostKeyChecking=no" OPENBAO_ROOT_TOKEN=fake-root \
     PATH="$FAKEBIN:$PATH" \
-    bash "$SUT" production >/dev/null 2>&1
+    bash "$SUT" "$target_env" >/dev/null 2>&1
 }
 
 # ── Run 1: fresh env (no SAs) — must CREATE both SAs + bind all roles ─────────
@@ -86,5 +88,11 @@ if grep -q "kubectl create sa" "$TMPROOT/cmd.log"; then
 fi
 # roles still upserted on re-run (that is the desired reconcile, harmless)
 grep -q "bao write auth/kubernetes/role/production-db-reader" "$TMPROOT/cmd.log" || { echo "re-run should still upsert roles" >&2; exit 1; }
+
+# ── Isolated fleet: candidate-a is the payer and must own every lane prefix ──
+run candidate-a candidate-a
+grep -q 'path "cogni/data/preview/\*"' "$TMPROOT/cmd.log" || { echo "isolated fleet control must custody preview secrets" >&2; exit 1; }
+grep -q 'path "cogni/data/production/\*"' "$TMPROOT/cmd.log" || { echo "isolated fleet control must custody production secrets" >&2; exit 1; }
+grep -q "bao write auth/kubernetes/role/candidate-a-writer" "$TMPROOT/cmd.log" || { echo "isolated fleet must bind candidate-a writer" >&2; exit 1; }
 
 echo "PASS: reconcile-env-substrate.test.sh"

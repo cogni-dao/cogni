@@ -28,6 +28,8 @@
  *     (bug.5142). The security half is pinned separately: each credential still has a
  *     throwing refusal in the boot path.
  *   - ENTRYPOINT_EXISTS: the Deployment's command path is the path the Dockerfile copies.
+ *   - PAID_TRANSACTION_DRAINS_ON_ROLLOUT: process + pod grace exceed the complete
+ *     create/bid/lease transaction, so a rollout cannot strand a handle before provider bind.
  *   - LEAST_KUBERNETES_PRIVILEGE: the actuator runs as its OWN ServiceAccount, bound to a
  *     namespaced Role that grants exactly the migration prover's calls (batch/jobs
  *     get+list+create+delete, pods list) and NOTHING else — no computeworkloads, no leases, no
@@ -263,6 +265,23 @@ describe("akash-tx-actuator runtime", () => {
     expect(manifests).not.toMatch(/kind:\s*Ingress/);
     expect(manifests).not.toMatch(/nodePort/);
     expect(service.spec).not.toHaveProperty("externalIPs");
+  });
+
+  it("drains a complete paid transaction before Kubernetes may kill the pod", () => {
+    const podSpec = (
+      deployment.spec as {
+        template: { spec: { terminationGracePeriodSeconds?: number } };
+      }
+    ).template.spec;
+    const boot = read("nodes/operator/app/src/bootstrap/akash-tx-actuator.ts");
+
+    // Adapter worst case is 30s create + 90s bid screen + 30s lease. The process gets
+    // another 30s of margin, and Kubernetes gets a further 30s beyond the process fallback.
+    expect(boot).toContain("const ACTUATOR_DRAIN_TIMEOUT_MS = 180_000;");
+    expect(boot).toContain(
+      "setTimeout(() => process.exit(0), ACTUATOR_DRAIN_TIMEOUT_MS)"
+    );
+    expect(podSpec.terminationGracePeriodSeconds).toBe(210);
   });
 
   it("receives only the three credentials it needs, as files, from two blast radii", () => {

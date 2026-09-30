@@ -234,7 +234,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // Fast-fail only. The ENFORCING gate is the `<env>-node-secrets-writer` OpenBao
     // policy (provision-env-vm.sh §5b.4d / reconcile-env-substrate.sh, kept in sync):
     // a token whose policy lacks the lane prefix cannot write it whatever this says.
-    if (!canWriteSecretsLane(deployEnv, requestedEnv)) {
+    if (!canWriteSecretsLane(deployEnv, requestedEnv, env.FLEET_CONTROL_ENV)) {
       logTerminal({
         outcome: "error",
         status: 409,

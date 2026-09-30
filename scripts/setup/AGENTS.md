@@ -37,7 +37,7 @@ Setup automation for contributor, fork, and deployment bootstrap paths.
 
 - **Exports:** none
 - **CLI (if any):** `pnpm bootstrap`, `bash scripts/setup/provision-env-vm.sh <preview|production|candidate-*> [--yes]`
-- **Env/Config keys:** `DEPLOY_ENV`, `FORK_DOMAIN_ROOT`, `CHERRY_AUTH_TOKEN`, `CHERRY_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `GITHUB_ADMIN_PAT`, `GITHUB_ADMIN_USERNAME`
+- **Env/Config keys:** `DEPLOY_ENV`, `FLEET_CONTROL_ENV`, `FORK_DOMAIN_ROOT`, `CHERRY_AUTH_TOKEN`, `CHERRY_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `GITHUB_ADMIN_PAT`, `GITHUB_ADMIN_USERNAME`
 - **Files considered API:** `bootstrap.sh`, `provision-env-vm.sh`, `lib/fork-identity.sh`, `lib/cogni-deployment-identity.sh`, `lib/reconcile-secrets.sh`
 
 ## Responsibilities

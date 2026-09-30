@@ -332,7 +332,7 @@ clear_finalizer() {
 FAILED=0
 
 recover() {
-  local name="$1" dseq="$2"
+  local name="$1" dseq="$2" rec receipt_state
   echo "=== recovering ${name:+workload=$name }dseq=${dseq:-<unresolved>}"
 
   if [ -z "$dseq" ]; then
@@ -349,7 +349,19 @@ recover() {
 
   # Step 1+2. Already-closed is the idempotent happy path: verify, never re-close.
   if verify_closed "$dseq"; then
-    echo "    already closed — no write needed (idempotent)."
+    rec="$(in_pod receipt "$dseq")"
+    receipt_state="$(jget "$rec" state)"
+    if [ "$receipt_state" = "allocated" ]; then
+      echo "    provider is closed but the durable receipt is still allocated; reconciling it via the sanctioned writer…"
+      close_lease "$dseq" || { FAILED=1; return; }
+      echo "    re-reading Console after ledger reconciliation…"
+      if ! verify_closed "$dseq"; then
+        echo "    REFUSING to clear any finalizer: closure of $dseq is UNPROVEN." >&2
+        FAILED=1; return
+      fi
+    else
+      echo "    already closed — no write needed (idempotent)."
+    fi
   elif [ "$DRY_RUN" = "1" ]; then
     echo "    DRY_RUN: would close $dseq, then re-verify. Stopping before any write."
     FAILED=1; return

@@ -52,7 +52,9 @@ import { z } from "zod";
 import type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
+  ClassifyEnvManagerPrInput,
   DeployPlanePort,
+  EnvManagerPrClassificationResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
   ObservedWorkflowDispatchResult,
@@ -60,6 +62,7 @@ import type {
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeFromPreviewInput,
   PromoteNodeInput,
+  PruneNodeEnvironmentInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,
@@ -112,6 +115,7 @@ import {
   parseNodeRepoPolicy,
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
 
 const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
 
@@ -145,6 +149,8 @@ export interface GitHubRepoWriterConfig {
    * `production` (cogni-dao fleet, byte-identical); an isolated test fleet passes `candidate-a`.
    */
   readonly fleetControlEnv?: string | undefined;
+  /** Public workload zone for generated node routes; canonical defaults to cognidao.org. */
+  readonly forkDomainRoot?: string | undefined;
 }
 
 export interface OpenNodeAppPrInput {
@@ -735,8 +741,9 @@ const mergeQueueRulesetFixtureSchema = z
         })
       )
       .length(1),
-    // QUEUE_BYPASS_FORBIDDEN: generated env PRs still share derived files. Until those files
-    // move to reconcile-time rendering, bypassing serialized rebase/recheck can lose an update.
+    // The git fixture never names an installation-specific actor. Runtime reconciliation injects
+    // exactly the executing review App as the sole bypass actor; arbitrary git-authored bypasses
+    // remain forbidden.
     bypass_actors: z.array(z.never()).length(0),
   })
   .passthrough();
@@ -820,9 +827,17 @@ export function diffMergeQueueRuleset(
   if (unexpectedRules.length > 0) {
     problems.push(`unexpected rules present: ${unexpectedRules.join(", ")}`);
   }
-  if ((active.bypass_actors ?? []).length > 0) {
+  const bypassKey = (actor: {
+    readonly actor_id?: number | null;
+    readonly actor_type?: string;
+    readonly bypass_mode?: string;
+  }): string =>
+    `${actor.actor_type ?? "RepositoryRole"}:${actor.actor_id ?? "null"}:${actor.bypass_mode ?? "always"}`;
+  const gotBypass = (active.bypass_actors ?? []).map(bypassKey).sort();
+  const wantBypass = expected.bypass_actors.map(bypassKey).sort();
+  if (JSON.stringify(gotBypass) !== JSON.stringify(wantBypass)) {
     problems.push(
-      `${active.bypass_actors?.length ?? 0} bypass actor(s) present, expected none`
+      `bypass_actors are ${JSON.stringify(gotBypass)}, expected ${JSON.stringify(wantBypass)}`
     );
   }
   return problems;
@@ -1259,6 +1274,112 @@ export class GitHubRepoWriter implements DeployPlanePort {
     return parseGithubRepoUrl(discriminator.data.source_repo);
   }
 
+  async classifyEnvManagerPr(
+    input: ClassifyEnvManagerPrInput
+  ): Promise<EnvManagerPrClassificationResult> {
+    const octokit = await this.getOctokit(input.owner, input.repo);
+
+    // Resolve THIS deployment's operator App bot identity (login + user id) from the App itself —
+    // NEVER hardcoded. The shell twin (classify-env-manager-fast-path.sh) keys the trusted bot on
+    // the repository; in-app we key it on the executing App, which is the same trust boundary per
+    // deployment (prod operator → cogni-operator[bot]; test operator → cogni-operator-test[bot]).
+    const botIdentity = await this.resolveOperatorBotIdentity(octokit);
+
+    // Fetch the PR to read its HEAD branch ref + HEAD SHA + identity facts (state, base, opener,
+    // head repo, commit count).
+    const { data: pr } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        pull_number: input.prNumber,
+      }
+    );
+
+    // Fetch the HEAD commit for its message trailers + App signature verification + parents + author.
+    const { data: commit } = await octokit.request(
+      "GET /repos/{owner}/{repo}/commits/{ref}",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        ref: pr.head.sha,
+      }
+    );
+
+    return classifyEnvManagerCommit({
+      headRef: pr.head.ref,
+      commitMessage: commit.commit.message,
+      verified: commit.commit.verification?.verified === true,
+      verificationReason: commit.commit.verification?.reason ?? null,
+      parentCount: commit.parents?.length ?? 0,
+      prState: pr.state ?? null,
+      baseRef: pr.base?.ref ?? null,
+      prUserLogin: pr.user?.login ?? null,
+      prUserId: pr.user?.id ?? null,
+      prUserType: pr.user?.type ?? null,
+      headRepoFullName: pr.head.repo?.full_name ?? null,
+      commitCount: pr.commits ?? 0,
+      // `.author` is the linked GitHub account for the commit (a Bot for App-authored commits),
+      // distinct from `.commit.author` (the raw git author name/email) — parity with the shell twin.
+      commitAuthorLogin: commit.author?.login ?? null,
+      commitAuthorId: commit.author?.id ?? null,
+      expectedBotLogin: botIdentity.login,
+      expectedBotId: botIdentity.id,
+      expectedHeadRepoFullName: `${input.owner}/${input.repo}`,
+    });
+  }
+
+  private operatorBotIdentity?: { login: string; id: number };
+
+  /**
+   * Resolve the executing operator App's bot identity (`<slug>[bot]` login + numeric user id) —
+   * the SoD anchor `classifyEnvManagerCommit` compares the PR opener and HEAD-commit author
+   * against. Read from the App itself (`GET /app` for the slug, then `GET /users/<slug>[bot]` for
+   * the bot user id), NEVER hardcoded, so it self-selects per deployment exactly like the shell
+   * twin selects a bot per repository. Cached per adapter instance (the identity is stable).
+   */
+  private async resolveOperatorBotIdentity(
+    octokit: Octokit
+  ): Promise<{ login: string; id: number }> {
+    if (this.operatorBotIdentity) return this.operatorBotIdentity;
+    // `GET /app` is App-JWT scoped (not installation scoped), so authenticate as the App.
+    const { token } = await this.appAuth({ type: "app" });
+    const appResponse = await fetch("https://api.github.com/app", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!appResponse.ok) {
+      throw deployPlaneError(
+        "operator_bot_identity_unresolved",
+        `could not resolve operator App identity (GET /app HTTP ${appResponse.status})`,
+        502
+      );
+    }
+    const app = (await appResponse.json()) as { slug?: string };
+    if (!app.slug) {
+      throw deployPlaneError(
+        "operator_bot_identity_unresolved",
+        "operator App response is missing a slug",
+        502
+      );
+    }
+    const login = `${app.slug}[bot]`;
+    const { data: user } = await octokit.request("GET /users/{username}", {
+      username: login,
+    });
+    if (typeof user.id !== "number") {
+      throw deployPlaneError(
+        "operator_bot_identity_unresolved",
+        `operator bot user ${login} has no numeric id`,
+        502
+      );
+    }
+    this.operatorBotIdentity = { login, id: user.id };
+    return this.operatorBotIdentity;
+  }
+
   /**
    * Promote a node to preview OR production — ONE code path, ONE_PROMOTION_PRIMITIVE
    * (PROMOTION_RUNS_AS_THE_OPERATOR). The rung differs ONLY by the dispatched `env` and the
@@ -1383,6 +1504,59 @@ export class GitHubRepoWriter implements DeployPlanePort {
       env: "production",
       slug,
     });
+  }
+
+  /** @see DeployPlanePort.pruneNodeEnvironment */
+  async pruneNodeEnvironment(
+    input: PruneNodeEnvironmentInput
+  ): Promise<ObservedWorkflowDispatchResult> {
+    const octokit = await this.getOctokit(input.parentOwner, input.parentRepo);
+    const response = (await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner: input.parentOwner,
+        repo: input.parentRepo,
+        workflow_id: "prune-node-environment.yml",
+        ref: "main",
+        inputs: {
+          environment: input.env,
+          control_environment: input.controlEnv,
+          node: input.slug,
+        },
+        headers: { "X-GitHub-Api-Version": "2026-03-10" },
+        request: { signal: AbortSignal.timeout(15_000) },
+      }
+    )) as unknown as {
+      readonly data: {
+        readonly workflow_run_id?: number;
+        readonly run_url?: string;
+        readonly html_url?: string;
+      };
+    };
+    const runId = response.data.workflow_run_id;
+    const runApiUrl = response.data.run_url;
+    const runUrl = response.data.html_url;
+    if (
+      typeof runId !== "number" ||
+      !Number.isSafeInteger(runId) ||
+      runId <= 0 ||
+      typeof runApiUrl !== "string" ||
+      typeof runUrl !== "string"
+    ) {
+      throw deployPlaneError(
+        "prune_env_run_identity_missing",
+        "GitHub did not return the environment-prune workflow run identity",
+        502
+      );
+    }
+    return {
+      dispatched: true,
+      workflowUrl: `https://github.com/${input.parentOwner}/${input.parentRepo}/actions/workflows/prune-node-environment.yml`,
+      message: `Environment prune dispatched: ${input.slug} from ${input.env}.`,
+      runId,
+      runUrl,
+      runApiUrl,
+    };
   }
 
   private async resolvePromotionSource(input: {
@@ -2956,6 +3130,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       catalog,
       templateOverlayByEnv: {},
       appsetsKustomizationByEnv: {},
+      publicDomainRoot: this.config.forkDomainRoot,
       schedulerEndpointPatchByEnv: {
         [env]: await this.readFileOnMain(
           octokit,
@@ -3258,6 +3433,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
         templateOverlayByEnv,
         templateExternalSecretByEnv,
         appsetTemplate,
+        appsetRepoUrl: `https://github.com/${owner}/${repo}.git`,
+        publicDomainRoot: this.config.forkDomainRoot,
         appsetsKustomizationByEnv,
         port,
         nodePort,
@@ -3294,6 +3471,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     return {
       catalog,
       templateOverlayByEnv,
+      publicDomainRoot: this.config.forkDomainRoot,
       appsetsKustomizationByEnv,
       schedulerEndpointPatchByEnv: removeSchedulerPatchByEnv,
     };
@@ -3795,7 +3973,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * Reconcile the git-owned merge-queue policy onto a node's GitHub repository.
    *
    * The policy is read from the deployment parent at an explicit ref, validated to retain
-   * ALLGREEN serialization with zero bypass actors, then applied idempotently with readback.
+   * ALLGREEN serialization with zero git-authored bypass actors, then the executing review App
+   * is injected as the sole installation-specific bypass actor and the result is applied with
+   * readback. The merge route uses that privilege only for a classified signed env-manager PR.
    * This is the runtime authority bridge for config-as-code: agents hold node-scoped RBAC, while
    * the operator App alone holds `administration:write`. It deliberately updates only the named
    * merge-queue ruleset; required checks remain owned by the independent protection policy.
@@ -3822,9 +4002,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
-    let expected: RulesetWritePayload;
+    let fixture: RulesetWritePayload;
     try {
-      expected = parseMergeQueueRulesetFixture(policyText);
+      fixture = parseMergeQueueRulesetFixture(policyText);
     } catch (error) {
       throw deployPlaneError(
         "merge_queue_policy_invalid",
@@ -3832,6 +4012,24 @@ export class GitHubRepoWriter implements DeployPlanePort {
         409
       );
     }
+    const reviewAppId = Number(this.config.appId);
+    if (!Number.isSafeInteger(reviewAppId) || reviewAppId <= 0) {
+      throw deployPlaneError(
+        "merge_queue_bypass_app_invalid",
+        "GH_REVIEW_APP_ID must be a positive integer before queue bypass can be reconciled",
+        503
+      );
+    }
+    const expected: RulesetWritePayload = {
+      ...fixture,
+      bypass_actors: [
+        {
+          actor_id: reviewAppId,
+          actor_type: "Integration",
+          bypass_mode: "always",
+        },
+      ],
+    };
     const expectedQueue = expected.rules[0]?.parameters ?? {};
     const waitMinutes = Number(expectedQueue.min_entries_to_merge_wait_minutes);
 
@@ -4567,7 +4765,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
       await addBlob(
         appsetPath(controlEnv, env, slug),
-        renderNodeAppset(appsetTemplate, slug, env)
+        renderNodeAppset(
+          appsetTemplate,
+          slug,
+          env,
+          `https://github.com/${owner}/${repo}.git`
+        )
       );
       const argocdKustomization =
         kustomizationByControlEnv.get(controlEnv) ??

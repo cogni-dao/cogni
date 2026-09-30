@@ -68,6 +68,9 @@ env:
   # FORK_FREEDOM: owner-derived so a fork pushes to its OWN GHCR namespace (image-tags.sh
   # lowercases). Canonical Cogni-DAO → cogni-dao (unchanged); cogni-test-org → its own ns.
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
+  # Keep the trusted classifier on the same control-env map as CI and the live
+  # operator. The isolated test fleet sets this repository variable to candidate-a.
+  FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
 
 jobs:
   env_manager_fast_path:

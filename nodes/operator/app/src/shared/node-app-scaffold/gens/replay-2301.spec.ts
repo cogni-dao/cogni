@@ -94,6 +94,7 @@ function currentFor(
       ),
     },
     appsetTemplate: template,
+    appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
     appsetsKustomizationByEnv: { production: kustomization },
     ...catalogPorts(catalog),
     schedulerEndpointPatchByEnv: { [env]: patch },

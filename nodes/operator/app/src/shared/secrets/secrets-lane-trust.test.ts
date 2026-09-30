@@ -27,6 +27,18 @@ describe("canWriteSecretsLane (bug.5196)", () => {
     expect(canWriteSecretsLane("preview", "preview")).toBe(true);
   });
 
+  it("lets an isolated fleet declare candidate-a as its multi-lane custodian", () => {
+    expect(
+      canWriteSecretsLane("candidate-a", "candidate-a", "candidate-a")
+    ).toBe(true);
+    expect(canWriteSecretsLane("candidate-a", "preview", "candidate-a")).toBe(
+      true
+    );
+    expect(
+      canWriteSecretsLane("candidate-a", "production", "candidate-a")
+    ).toBe(true);
+  });
+
   it("denies by default for an environment that never opted in", () => {
     expect(canWriteSecretsLane("staging", "production")).toBe(false);
     expect(canWriteSecretsLane("", "production")).toBe(false);

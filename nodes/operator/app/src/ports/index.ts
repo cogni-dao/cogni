@@ -140,7 +140,9 @@ export type {
 export type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
+  ClassifyEnvManagerPrInput,
   DeployPlanePort,
+  EnvManagerPrClassificationResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
   ObservedWorkflowDispatchResult,
@@ -148,6 +150,7 @@ export type {
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeFromPreviewInput,
   PromoteNodeInput,
+  PruneNodeEnvironmentInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,

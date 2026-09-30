@@ -11,6 +11,13 @@
  *     flighted revision rather than the workflow's main revision.
  *   REMOTE_NODE_SOURCE_STAYS_SEPARATE: a remote node's source SHA is not used
  *     as a parent-monorepo checkout ref.
+ *   CONTROL_DOMAIN_STAYS_SEPARATE: a test parent's Akash workload zone never
+ *     replaces its explicitly configured k3s operator/control domain during
+ *     substrate or public checks.
+ *   DEPLOY_REPO_OWNS_APPSET: AppSet reconciliation renders repoURL for the
+ *     repository that owns the deploy branch instead of the canonical default.
+ *   ISOLATED_FLEET_ROOT_IS_LOCAL: a non-canonical candidate reconciles the
+ *     apply-once control-plane root to its own protected main before AppSets.
  * Side-effects: IO (reads .github/workflows/candidate-flight.yml)
  * Links: docs/spec/ci-cd.md axioms 17-20, docs/spec/node-ci-cd-contract.md artifact contract
  * @public
@@ -24,6 +31,13 @@ import yaml from "yaml";
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const WORKFLOW = readFileSync(
   path.join(REPO_ROOT, ".github/workflows/candidate-flight.yml"),
+  "utf8"
+);
+const CANDIDATE_OPERATOR_OVERLAY = readFileSync(
+  path.join(
+    REPO_ROOT,
+    "infra/k8s/overlays/candidate-a/operator/kustomization.yaml"
+  ),
   "utf8"
 );
 
@@ -53,6 +67,77 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
+  it("keeps the k3s control domain separate from an isolated Akash workload zone", () => {
+    const targetDomain =
+      "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}";
+
+    expect(
+      namedStep(
+        "node-substrate",
+        "Run node substrate (materialize -> reconcile)"
+      ).env?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("assert-substrate", "Assert target substrate").env?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("verify-candidate", "Wait for candidate readiness").env?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("verify-candidate", "Verify buildSha on endpoint (per-node)")
+        .env?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("verify-candidate", "Run candidate smoke checks (per-node)").env
+        ?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("assert-substrate", "Assert target substrate").env?.CHECK_DNS
+    ).toBe(
+      "${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ZONE_ID != '' && 'true' || 'false' }}"
+    );
+    expect(CANDIDATE_OPERATOR_OVERLAY).toContain(
+      "path: /data/FORK_DOMAIN_ROOT"
+    );
+    expect(CANDIDATE_OPERATOR_OVERLAY).toContain('value: "cogni-testing.org"');
+  });
+
+  it("renders the live AppSet for the repository that owns the deploy branch", () => {
+    const apply = namedStep(
+      "reconcile-appset",
+      "Apply candidate-a-${{ matrix.node }}-applicationset.yaml"
+    ).run;
+
+    expect(apply).toBeTypeOf("string");
+    expect(apply).toContain(
+      'REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"'
+    );
+    expect(apply).toContain(
+      'bash ci-src/scripts/ci/render-node-appset.sh candidate-a "$NODE" >"$RENDERED_APPSET"'
+    );
+    expect(apply).toContain(
+      'ci_ssh_retry scp "${ssh_opts[@]}" "$RENDERED_APPSET"'
+    );
+  });
+
+  it("reconciles an isolated fleet root before applying its AppSet", () => {
+    const root = namedStep(
+      "reconcile-appset",
+      "Reconcile isolated fleet control-plane root"
+    );
+
+    expect(root.if).toBe("steps.ssh-setup.outputs.has_vm == 'true'");
+    expect(root.run).toContain('== "cogni-dao/cogni"');
+    expect(root.run).toContain(
+      'desired_repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"'
+    );
+    expect(root.run).toContain(
+      "targetRevision: deploy/candidate-a-control-plane#targetRevision: main"
+    );
+    expect(root.run).toContain(".status.operationState.phase");
+    expect(root.run).toContain("|Healthy|Succeeded");
+  });
+
   it("selects the flighted source SHA for an in-repo node-ref", () => {
     const meta = namedStep("decide", "Resolve PR metadata").run;
 

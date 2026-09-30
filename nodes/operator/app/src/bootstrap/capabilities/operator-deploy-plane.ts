@@ -28,5 +28,6 @@ export function createOperatorDeployPlane(env: ServerEnv): DeployPlanePort {
     appId: env.GH_REVIEW_APP_ID,
     privateKey,
     fleetControlEnv: env.FLEET_CONTROL_ENV,
+    forkDomainRoot: env.FORK_DOMAIN_ROOT,
   });
 }
