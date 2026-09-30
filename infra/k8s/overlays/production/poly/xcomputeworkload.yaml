@@ -55,10 +55,9 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
-  leaseGeneration: 12
+  leaseGeneration: 13
   placement:
     requiredCountries:
-      - NL
       - PT
   dns:
     provider: cloudflare
