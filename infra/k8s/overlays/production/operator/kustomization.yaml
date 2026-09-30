@@ -98,10 +98,26 @@ patches:
                       fieldRef: { fieldPath: metadata.namespace }
                   - name: DEPLOY_ENVIRONMENT
                     value: production
-                  # Same allowlist as the legacy controller above and as candidate-a's proven
-                  # lease: the zencloud provider that already hosts every production slot.
+                  # The providers this writer may lease from, fleet-wide. It is a HARD filter
+                  # (AkashComputeAdapter.selectBid), and it governs EVERY cogni-dao node in
+                  # EVERY environment — NS3 routes all real nodes to this production writer —
+                  # so candidate-a and preview placements are screened here too, not by their
+                  # own overlays. Set BY NAME via strategic merge, never a positional
+                  # `/env/N/value` patch: that exact failure (d69e5c29) blanked this list
+                  # fleet-wide and an empty allowlist rejects every bid, silently.
+                  #
+                  # zencloud (BE, Antwerp, AS5432 Proximus) hosts every production slot today.
+                  # digital frontier (PT, Evora, AS5626 Onitelecom) is added for story.5050:
+                  # Belgium is a Polymarket API-restricted jurisdiction, so a node with a
+                  # geo-fenced outbound dependency cannot satisfy its own product contract from
+                  # the BE provider (bug.5270 — 200/200 prod CLOB orders refused 403).
+                  #
+                  # WIDENING THIS LIST MOVES NOTHING BY ITSELF. Placement binds only on a fresh
+                  # mint, so every existing lease is untouched; and which of these two a given
+                  # node MAY use is now the node's own catalog cell
+                  # (`required_placement_countries.<env>`), which FILTERS bids fail-closed.
                   - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm,akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk
                   - name: AKASH_ACTUATOR_ACCOUNT_ID
                     # PUBLIC, non-secret Akash account address of the operator sponsor wallet.
                     # Asserted at boot by assertActuatorWalletAccount() against Console
