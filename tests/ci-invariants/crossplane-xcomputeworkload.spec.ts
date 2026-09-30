@@ -1173,6 +1173,28 @@ describe("catalog lease generation naming", () => {
 describe("XComputeWorkload placement requirement (story.5050)", () => {
   const placement = specSchema.placement as Record<string, never> &
     Record<string, unknown>;
+  const placementRule = (
+    (specObjectSchema["x-kubernetes-validations"] ?? []) as {
+      rule: string;
+      message: string;
+    }[]
+  ).find((rule) => /placement may change/.test(rule.message));
+
+  /**
+   * Truth table for the transition contract expressed by placementRule. Kubernetes is the CEL
+   * runtime, so candidate-a remains the executable integration proof; this pins both semantic
+   * directions that the old field-scoped presence assertion could not distinguish.
+   */
+  function allowsPlacementTransition(input: {
+    samePlacement: boolean;
+    oldGeneration?: number;
+    oldEpoch?: number;
+    newGeneration?: number;
+  }): boolean {
+    if (input.samePlacement) return true;
+    if (input.newGeneration === undefined) return false;
+    return input.newGeneration > (input.oldGeneration ?? input.oldEpoch ?? 0);
+  }
 
   /**
    * Akash refuses in-place placement change, so an accepted edit without a fresh key would be
@@ -1181,20 +1203,44 @@ describe("XComputeWorkload placement requirement (story.5050)", () => {
    * atomic placement + leaseGeneration bump while rejecting a placement-only edit.
    */
   it("allows re-placement only alongside a leaseGeneration bump", () => {
-    const rules = (specObjectSchema["x-kubernetes-validations"] ?? []) as {
-      rule: string;
-      message: string;
-    }[];
-    const placementRule = rules.find((r) =>
-      /placement may change/.test(r.message)
+    expect(placementRule?.rule.replace(/\s+/g, " ").trim()).toBe(
+      "(!has(self.placement) && !has(oldSelf.placement)) || " +
+        "(has(self.placement) && has(oldSelf.placement) && self.placement == oldSelf.placement) || " +
+        "(has(self.leaseGeneration) && self.leaseGeneration > " +
+        "(has(oldSelf.leaseGeneration) ? oldSelf.leaseGeneration : " +
+        "(has(oldSelf.leaseEpoch) ? oldSelf.leaseEpoch : 0)))"
     );
-    expect(placementRule?.rule).toContain(
-      "self.placement == oldSelf.placement"
-    );
-    expect(placementRule?.rule).toContain("self.leaseGeneration >");
-    expect(placementRule?.rule).toContain("oldSelf.leaseGeneration");
-    expect(placementRule?.rule).toContain("oldSelf.leaseEpoch");
     expect(placement["x-kubernetes-validations"]).toBeUndefined();
+  });
+
+  it.each([
+    {
+      case: "admits present-to-different-present with a generation increase",
+      input: { samePlacement: false, oldGeneration: 6, newGeneration: 7 },
+      expected: true,
+    },
+    {
+      case: "rejects present-to-different-present without a generation increase",
+      input: { samePlacement: false, oldGeneration: 6, newGeneration: 6 },
+      expected: false,
+    },
+    {
+      case: "rejects a generation decrease that could replay a spent key",
+      input: { samePlacement: false, oldGeneration: 6, newGeneration: 5 },
+      expected: false,
+    },
+    {
+      case: "admits an unchanged placement without spending a generation",
+      input: { samePlacement: true, oldGeneration: 6, newGeneration: 6 },
+      expected: true,
+    },
+    {
+      case: "compares against the legacy epoch while upgrading an older XR",
+      input: { samePlacement: false, oldEpoch: 6, newGeneration: 7 },
+      expected: true,
+    },
+  ])("$case", ({ input, expected }) => {
+    expect(allowsPlacementTransition(input)).toBe(expected);
   });
 
   /**
