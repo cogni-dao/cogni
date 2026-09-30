@@ -27,5 +27,6 @@ export function createOperatorDeployPlane(env: ServerEnv): DeployPlanePort {
   return new GitHubRepoWriter({
     appId: env.GH_REVIEW_APP_ID,
     privateKey,
+    fleetControlEnv: env.FLEET_CONTROL_ENV,
   });
 }

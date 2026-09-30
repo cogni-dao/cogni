@@ -139,6 +139,15 @@ patches:
       - op: add
         path: /data/DEPLOY_ENVIRONMENT
         value: "candidate-a"
+      # FLEET CONTROL ENV (bug.5204/bug.5235) — the env whose cluster reconciles akash lanes, the
+      # TS twin of scripts/ci/lib/appset-paths.sh `control_env_for` (FLEET_CONTROL_ENV). This is the
+      # ISOLATED cogni-test-org fleet with NO production cluster, so its OWN control plane
+      # (candidate-a) reconciles + pays for akash lanes and the env-membership verb authors its
+      # AppSets under appsets/candidate-a/, not the nonexistent appsets/production/. Unset on the
+      # cogni-dao fleet => production (byte-identical).
+      - op: add
+        path: /data/FLEET_CONTROL_ENV
+        value: "candidate-a"
       # PUBLIC, non-secret Akash account the actuator spends from (same value pinned on the
       # akash-tx-actuator container above). The OPERATOR APP needs it too: the env-membership
       # verb (`POST /api/v1/nodes/{id}/envs`) derives lease_generation by reading the allocation
