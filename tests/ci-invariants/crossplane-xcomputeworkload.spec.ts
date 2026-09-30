@@ -1148,6 +1148,12 @@ describe("catalog lease generation naming", () => {
     // never came up; the actuator replay path treats that partial receipt as settled and
     // returns the dead handle forever (64x create_replayed, 0 create-family). A fresh key
     // cannot replay, so 4 forces createAndLease. Durable fix: task.5157 (settled/serving gate).
-    expect(toks5.lease_generation?.production).toBe(4);
+    // bug.5287: bumped 4->5 — gen-4's fresh createAndLease reached allocation_recorded then
+    // hit manifest_not_delivered (HTTP 404, deployment closed, escrow refunding, rolled back
+    // before akash_tx_leased). Its receipt is stuck allocated+external_name over a verified-
+    // closed lease, so a retry under :4 would replay the dead handle (task.5157 case c). toks5's
+    // SDL is identical to healthy toks4, so gen-4's 404 reads as transient; 5 is a fresh key
+    // that re-enters createAndLease to retry the manifest delivery.
+    expect(toks5.lease_generation?.production).toBe(5);
   });
 });
