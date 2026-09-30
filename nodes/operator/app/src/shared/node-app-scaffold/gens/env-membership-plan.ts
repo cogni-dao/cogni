@@ -724,19 +724,39 @@ export function buildRegionPlan(input: {
     );
   }
 
-  const value = `[${[...countries].sort().join(", ")}]`;
+  const wanted = [...countries].sort();
+
+  // IDEMPOTENT, COMPARED ON THE PARSED VALUE — never on the serialized file.
+  //
+  // `setCatalogPlacementCell` rewrites a whole block from its parsed map, which DROPS any comment
+  // lines inside that block. So a call requesting the region the row already holds still produces
+  // a different string, and a text comparison would read that as a change. This verb bumps
+  // `lease_generation`, so "not idempotent" here does not mean a redundant PR — it means EVERY
+  // repeat call mints a PAID LEASE and silently deletes the reviewed rationale from the catalog.
+  // Observed live on toks4 before this guard existed (PR #2496, closed).
+  const held = parseCatalogPlacementMap(
+    current.catalog,
+    "required_placement_countries"
+  )[env];
+  const heldCountries = (held ?? "")
+    .replace(/^\[|\]$/g, "")
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .sort();
+  if (
+    heldCountries.length === wanted.length &&
+    heldCountries.every((c, i) => c === wanted[i])
+  ) {
+    return { kind: "no_changes" };
+  }
+
   let nextCatalog = setCatalogPlacementCell(
     current.catalog,
     "required_placement_countries",
     env,
-    value
+    `[${wanted.join(", ")}]`
   );
-
-  // REGION_BINDS_ON_A_FRESH_MINT. Only move the generation when the requirement itself actually
-  // changed — re-requesting the held region must stay idempotent rather than mint a paid lease.
-  if (nextCatalog === current.catalog) {
-    return { kind: "no_changes" };
-  }
   // NEVER GO BACKWARDS. The caller derives its generation from allocation-ledger receipts, but an
   // EMPTY ledger yields 0 while the catalog may already sit at a higher generation (receipts are
   // prunable; the committed cell is not). Taking the caller's value blindly would author a cell

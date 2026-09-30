@@ -74,12 +74,11 @@ const templateCode = template
 
 const xrdSpec = xrd.spec as YamlObject;
 const version = (xrdSpec.versions as YamlObject[])[0] as YamlObject;
-const specSchema = (
-  (
-    ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
-      .properties as YamlObject
-  ).spec as YamlObject
-).properties as YamlObject;
+const specObjectSchema = (
+  ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
+    .properties as YamlObject
+).spec as YamlObject;
+const specSchema = specObjectSchema.properties as YamlObject;
 const statusSchema = (
   (
     ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
@@ -379,6 +378,23 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(templateCode).toContain(
       "$closedForCurrentKey := and $closed (eq $responseKey $currentKey)"
     );
+    // An explicit base-generation bump must select a NEW provider-http Request child. Updating
+    // the old child invokes UPDATE, which cannot mint the replacement the generation promises.
+    // The latch is absent on existing XRs, preserving their static child with zero rollout churn.
+    expect(templateCode).toContain(
+      '$leaseRequestGeneration := int (dig "status" "leaseRequestGeneration" -1 $xr)'
+    );
+    expect(templateCode).toContain(
+      '$leaseResourceName = printf "akash-lease-g%d" $leaseGeneration'
+    );
+    expect(templateCode).toContain(
+      "gotemplating.fn.crossplane.io/composition-resource-name: {{ $leaseResourceName }}"
+    );
+    expect(statusSchema.leaseRequestGeneration).toMatchObject({
+      type: "integer",
+      minimum: 0,
+      maximum: 1000000,
+    });
     expect(templateCode).toContain(
       "$recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts)"
     );
@@ -589,7 +605,7 @@ describe("XComputeWorkload migration decoupling (task.5135)", () => {
    */
   function leaseMappings(): Record<string, string> {
     const leaseBlock = template.slice(
-      template.indexOf("composition-resource-name: akash-lease"),
+      template.indexOf("composition-resource-name: {{ $leaseResourceName }}"),
       template.indexOf("composition-resource-name: dns-record")
     );
     expect(leaseBlock.length).toBeGreaterThan(0);
@@ -743,7 +759,7 @@ describe("XComputeWorkload spend attribution (task.5103)", () => {
     // mints no lease, but it still mutates a PAID resource, so it says whose it is.
     expect(template).toContain('"identity" $identity');
     const leaseBlock = template.slice(
-      template.indexOf("composition-resource-name: akash-lease"),
+      template.indexOf("composition-resource-name: {{ $leaseResourceName }}"),
       template.indexOf("composition-resource-name: dns-record")
     );
     const mappings = Object.fromEntries(
@@ -880,10 +896,8 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
   });
 
   it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {
-    // A closed lease whose response key does not match the current key must PARK, not
-    // re-render: rendering under a settled key is refused by the actuator with
-    // akash_tx_create_refused_settled_key on EVERY reconcile forever. The held/foreign
-    // terms below are what stand between bounded recovery and unbounded churn.
+    // Closed current and foreign keys remain parked exactly as before. A different explicit base
+    // generation is handled by selecting a NEW generation-qualified child above this fence.
     expect(template).toContain(
       "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey)))"
     );
@@ -1174,19 +1188,74 @@ describe("catalog lease generation naming", () => {
 describe("XComputeWorkload placement requirement (story.5050)", () => {
   const placement = specSchema.placement as Record<string, never> &
     Record<string, unknown>;
-
-  /**
-   * Akash refuses in-place placement change, so an accepted edit would be desired state
-   * nothing applies — the node keeps serving from its old jurisdiction while the XR claims
-   * otherwise. Immutability makes "bump leaseGeneration" the only way to re-place.
-   */
-  it("is immutable, so a re-placement must go through a leaseGeneration bump", () => {
-    const rules = (placement["x-kubernetes-validations"] ?? []) as {
+  const placementRule = (
+    (specObjectSchema["x-kubernetes-validations"] ?? []) as {
       rule: string;
       message: string;
-    }[];
-    expect(rules.map((r) => r.rule)).toContain("self == oldSelf");
-    expect(JSON.stringify(rules)).toMatch(/leaseGeneration/);
+    }[]
+  ).find((rule) => /placement may change/.test(rule.message));
+
+  /**
+   * Truth table for the transition contract expressed by placementRule. Kubernetes is the CEL
+   * runtime, so candidate-a remains the executable integration proof; this pins both semantic
+   * directions that the old field-scoped presence assertion could not distinguish.
+   */
+  function allowsPlacementTransition(input: {
+    samePlacement: boolean;
+    oldGeneration?: number;
+    oldEpoch?: number;
+    newGeneration?: number;
+  }): boolean {
+    if (input.samePlacement) return true;
+    if (input.newGeneration === undefined) return false;
+    return input.newGeneration > (input.oldGeneration ?? input.oldEpoch ?? 0);
+  }
+
+  /**
+   * Akash refuses in-place placement change, so an accepted edit without a fresh key would be
+   * desired state nothing applies — the node keeps serving from its old jurisdiction while the
+   * XR claims otherwise. The rule must live at spec scope so it can admit the env-manager's
+   * atomic placement + leaseGeneration bump while rejecting a placement-only edit.
+   */
+  it("allows re-placement only alongside a leaseGeneration bump", () => {
+    expect(placementRule?.rule.replace(/\s+/g, " ").trim()).toBe(
+      "(!has(self.placement) && !has(oldSelf.placement)) || " +
+        "(has(self.placement) && has(oldSelf.placement) && self.placement == oldSelf.placement) || " +
+        "(has(self.leaseGeneration) && self.leaseGeneration > " +
+        "(has(oldSelf.leaseGeneration) ? oldSelf.leaseGeneration : " +
+        "(has(oldSelf.leaseEpoch) ? oldSelf.leaseEpoch : 0)))"
+    );
+    expect(placement["x-kubernetes-validations"]).toBeUndefined();
+  });
+
+  it.each([
+    {
+      case: "admits present-to-different-present with a generation increase",
+      input: { samePlacement: false, oldGeneration: 6, newGeneration: 7 },
+      expected: true,
+    },
+    {
+      case: "rejects present-to-different-present without a generation increase",
+      input: { samePlacement: false, oldGeneration: 6, newGeneration: 6 },
+      expected: false,
+    },
+    {
+      case: "rejects a generation decrease that could replay a spent key",
+      input: { samePlacement: false, oldGeneration: 6, newGeneration: 5 },
+      expected: false,
+    },
+    {
+      case: "admits an unchanged placement without spending a generation",
+      input: { samePlacement: true, oldGeneration: 6, newGeneration: 6 },
+      expected: true,
+    },
+    {
+      case: "compares against the legacy epoch while upgrading an older XR",
+      input: { samePlacement: false, oldEpoch: 6, newGeneration: 7 },
+      expected: true,
+    },
+  ])("$case", ({ input, expected }) => {
+    expect(allowsPlacementTransition(input)).toBe(expected);
   });
 
   /**
