@@ -476,8 +476,34 @@ spec:
             {{- $anchorTime := toDate "2006-01-02T15:04:05Z07:00" $bootAnchorAt }}
             {{- $ageSeconds := int (sub (now | unixEpoch) ($anchorTime | unixEpoch)) }}
             {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($anchorTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
-            {{- $neverServed := and (not $serving) (eq $prevSha "") }}
-            {{- $deadlineExceeded := and $neverServed (gt $ageSeconds $bootDeadlineSeconds) }}
+            {{- /*
+              THE DEADLINE MUST BIND TO THE CURRENT ATTEMPT, NOT TO "EVER SERVED ANYTHING"
+              (bug.5287, the arc's original finding). `$prevSha` is the LATCHED
+              status.observedBundle.source.sha, so `eq $prevSha ""` could only ever be true on
+              a workload's very first boot. Once an XR had recorded ANY bundle the old
+              predicate was permanently false, the deadline could never fire again, and
+              BOOT_SLO_OR_CLOSE was structurally unreachable for the rest of that XR's life.
+
+              Observed on toks5 production: three generations, `bootDeadlineAt` hours past,
+              `failure.reason = None`, a lease billing with no workload and no terminal state —
+              because `observedBundle` still carried `cf5de44c…` from a generation that once
+              served. Combined with the actuator replaying a settled-but-never-served receipt
+              (task.5157), such a workload is unbounded in BOTH directions: nothing re-creates
+              it and nothing closes it.
+
+              `$hasServedDesired` (computed above) asks the right question: has THIS attempt's
+              sha actually served? A live serving workload is unaffected; a never-served XR
+              behaves exactly as before. What changes is that an XR which served an OLD sha and
+              never served the current one can now reach its deadline instead of hanging.
+
+              DELIBERATELY NOT WIDENED: an XR whose `observedBundle` EQUALS the desired sha —
+              served once, then stopped — still does not trip the deadline. Catching that needs
+              a trustworthy live-serving signal, and `serving` yields false negatives (toks4
+              production served HTTP 200 for 13 days while its XR read serving=false). Closing
+              a live node on a false negative is worse than leaving that case to a human; it
+              waits on bug.5237's host-routed probe.
+            */ -}}
+            {{- $deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds) }}
             {{- $closeForBudget := and $deadlineExceeded (eq $onDeadline "Close") }}
 
             {{- /*
