@@ -191,7 +191,7 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       // bug.5287: the deadline binds to the CURRENT attempt via $hasServedDesired.
       // The retired '$neverServed' form keyed on a LATCHED field, so it could only ever be
       // true on a first boot and made BOOT_SLO_OR_CLOSE unreachable thereafter.
-      '$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)'
+      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
     );
   });
 
@@ -269,7 +269,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // deadline on it made BOOT_SLO_OR_CLOSE unreachable for the rest of an XR's life — toks5
     // production billed three generations with bootDeadlineAt hours past and reason=None.
     expect(templateCode).toContain(
-      '$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)'
+      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
     );
     // no live template expression may reference the retired predicate
     const live = templateCode
