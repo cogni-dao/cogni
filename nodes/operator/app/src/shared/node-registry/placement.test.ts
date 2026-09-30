@@ -18,6 +18,7 @@ import {
   controlEnvFor,
   nodeAppBaseUrl,
   providerForEnv,
+  substrateHostEnvFor,
   toNodeDeploymentPlacement,
 } from "./placement";
 
@@ -168,5 +169,52 @@ describe("controlEnvFor (bug.5204/bug.5235 — FLEET_CONTROL_ENV twin of appset-
     expect(controlEnvFor("candidate-a", "akash", " candidate-a ")).toBe(
       "candidate-a"
     );
+  });
+});
+
+describe("substrateHostEnvFor — the third axis (bug.5299)", () => {
+  it("is INERT when the cell is absent: identical to controlEnvFor for every lane/provider", () => {
+    for (const env of ["candidate-a", "preview", "production"] as const) {
+      for (const provider of ["k3s", "akash"] as const) {
+        expect(substrateHostEnvFor(env, provider)).toBe(
+          controlEnvFor(env, provider)
+        );
+        // and on an isolated fleet
+        expect(
+          substrateHostEnvFor(env, provider, undefined, "candidate-a")
+        ).toBe(controlEnvFor(env, provider, "candidate-a"));
+      }
+    }
+  });
+
+  it("treats empty / whitespace as unset (never as a relocation)", () => {
+    expect(substrateHostEnvFor("candidate-a", "akash", "")).toBe("production");
+    expect(substrateHostEnvFor("candidate-a", "akash", "   ")).toBe(
+      "production"
+    );
+    expect(substrateHostEnvFor("candidate-a", "akash", undefined)).toBe(
+      "production"
+    );
+  });
+
+  it("relocates the DB host to the stated env while the CONTROL env stays put", () => {
+    // This is the whole point: the database leaves the production host, but payment and the
+    // lease do not move — controlEnvFor is unchanged for the same lane.
+    expect(substrateHostEnvFor("candidate-a", "akash", "candidate-a")).toBe(
+      "candidate-a"
+    );
+    expect(controlEnvFor("candidate-a", "akash")).toBe("production");
+
+    expect(substrateHostEnvFor("preview", "akash", "preview")).toBe("preview");
+    expect(controlEnvFor("preview", "akash")).toBe("production");
+  });
+
+  it("FAILS CLOSED on a malformed cell — a typo must never silently mean 'the control env'", () => {
+    expect(() =>
+      substrateHostEnvFor("candidate-a", "akash", "staging")
+    ).toThrow(/invalid substrate_host_env 'staging'/);
+    expect(() =>
+      substrateHostEnvFor("candidate-a", "akash", "PRODUCTION")
+    ).toThrow(/invalid substrate_host_env/);
   });
 });

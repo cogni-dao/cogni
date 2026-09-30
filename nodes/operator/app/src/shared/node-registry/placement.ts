@@ -123,6 +123,56 @@ export function controlEnvFor<E extends string>(
   return fleetControlEnv?.trim() || "production";
 }
 
+/**
+ * WHERE a lane's write-heavy Postgres substrate physically lives — and therefore the host its
+ * composed DSN points at (bug.5299). A THIRD axis, distinct from the two above it:
+ *
+ *   `controlEnvFor`        — which cluster RECONCILES the lane's XR, holds its OpenBao bank, and
+ *                            dials the lease actuator.
+ *   `writerFor(env,owner)` — which Console account PAYS (see `./crossplane-control-plane`).
+ *   THIS                   — which VM hosts the database.
+ *
+ * Payment and the Akash lease do NOT move with it: repointing a DSN is an in-place workload
+ * update, never a lease replacement. That separation is what lets a non-production lane's
+ * database leave the production host without touching money or leases.
+ *
+ * As-built, production hosts 13 databases because it is the fleet control env and therefore
+ * custodian of every akash node's `candidate-a` and `preview` lane (bug.5206/task.5132) — measured
+ * 2026-09-30: `cogni_poly_candidate_a` alone held 7 live connections and 761 MB on the box serving
+ * users, violating `ENV_IS_A_FAILURE_DOMAIN` (docs/spec/multi-node-tenancy.md).
+ *
+ * ABSENT = the lane's control env, i.e. today's behaviour byte-for-byte. The cell is INERT until a
+ * row states it, so the fleet is unaffected and bug.5299 can migrate ONE (node, lane) at a time
+ * instead of fleet-wide.
+ *
+ * WHY THIS LIVES IN TYPESCRIPT AND NOT IN `appset-paths.sh`: this is env POLICY, and
+ * `docs/spec/cicd-platform-boundary.md` is explicit — "if the request needs a new `if` ... it is
+ * platform work, not script work". The shell render family is 🟡 FREEZE EXPANSION ("converge,
+ * don't extend"). A first draft of this resolver was added to `appset-paths.sh` and removed for
+ * exactly that reason; the typed operator plane is the declared home.
+ *
+ * PURE by contract, like its siblings: the catalog cell is a PARAMETER, never a file read here.
+ */
+export function substrateHostEnvFor<E extends string>(
+  environment: E,
+  provider: NodeDeploymentProvider,
+  declaredSubstrateHostEnv?: string | undefined,
+  fleetControlEnv?: string
+): E | string {
+  const declared = declaredSubstrateHostEnv?.trim();
+  if (declared) {
+    if (!isFlightEnvKey(declared)) {
+      // Fail closed. A typo must never silently fall back to "the control env" — that is how a
+      // lane's database quietly stays on the production host while the catalog claims it moved.
+      throw new Error(
+        `[placement] invalid substrate_host_env '${declared}' for environment '${environment}': expected candidate-a | preview | production`
+      );
+    }
+    return declared;
+  }
+  return controlEnvFor(environment, provider, fleetControlEnv);
+}
+
 export interface NodeAppBaseUrlInput {
   readonly slug: string;
   readonly provider: NodeDeploymentProvider;
