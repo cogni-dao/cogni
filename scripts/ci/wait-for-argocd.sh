@@ -342,6 +342,27 @@ get_app_revision() {
 request_hard_refresh() {
   local app_name="$1"
   local out
+  # A hard-refresh alone CANNOT clear a sync operation wedged on a revision that
+  # was force-pushed away — the deploy branch is rsync'd + force-pushed each
+  # flight, so an in-flight operation pinned to an older tip becomes unfetchable:
+  # repo-server can never resolve that commit, the operation never completes, and
+  # status.sync.revision stays stuck at the dangling rev forever (candidate-a
+  # ArgoCD apps wedged this way — bug.5330). Terminate a stuck operation whose
+  # target revision != EXPECTED before refreshing, so the next reconcile
+  # re-resolves the branch HEAD. This restores the operation-clearing that the
+  # PreSync-hook retirement removed (task.0370), for the force-push wedge class.
+  # Only fires inside the kick loop (app already mismatched for ACTIVE_SYNC_AFTER+),
+  # and only when the pinned rev is NOT the one we want — never interrupts a valid
+  # in-progress sync toward EXPECTED.
+  local op_rev
+  op_rev=$(kubectl -n argocd get application "$app_name" \
+    -o jsonpath='{.status.operationState.operation.sync.revision}' 2>/dev/null \
+    | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' || true)
+  if [ -n "$op_rev" ] && [ "$op_rev" != "$EXPECTED_SHA" ]; then
+    echo "    ⚠️  ${app_name}: terminating stuck sync operation on ${op_rev:0:8} (!= expected ${EXPECTED_SHA:0:8}) before hard-refresh" >&2
+    kubectl -n argocd patch application "$app_name" --type=merge -p \
+      '{"operation":null}' >/dev/null 2>&1 || true
+  fi
   if ! out=$(kubectl -n argocd patch application "$app_name" --type=merge -p \
     '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}' 2>&1); then
     echo "    ⚠️  hard-refresh annotation patch failed for ${app_name}: $out" >&2
