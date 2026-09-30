@@ -93,17 +93,17 @@ stash() {
   BACKUPS+=("$path::$bak")
 }
 
-echo "[1/7] committed wizard overlays ↔ node-template + catalog drift gate"
+echo "[1/8] committed wizard overlays ↔ node-template + catalog drift gate"
 bash "$RENDER" --check >/dev/null \
   || fail "$RENDER --check: a committed wizard overlay is stale (run: pnpm gen:node-overlays)"
 pass "all wizard-born overlays match the renderer"
 
-echo "[2/7] renderer is byte-exact to the committed mint output"
+echo "[2/8] renderer is byte-exact to the committed mint output"
 diff <(bash "$RENDER" "$FE" "$FN") "infra/k8s/overlays/$FE/$FN/kustomization.yaml" >/dev/null \
   || fail "render $FE $FN != committed overlay (renderer drifted from gens/overlay.ts)"
 pass "$FE/$FN render is byte-identical to committed"
 
-echo "[3/7] render targets node-at-root layout + ESO secret"
+echo "[3/8] render targets node-at-root layout + ESO secret"
 OUT="$(bash "$RENDER" "$FE" "$FN")"
 grep -q 'exec node /app/app/migrate.mjs /app/app/migrations' <<<"$OUT" \
   || fail "$FN render missing the node-at-root Postgres migrate override"
@@ -129,7 +129,20 @@ grep -q 'node-template' <<<"$ES" \
   || fail "$FN overlay dir is missing the committed external-secret.yaml (run: pnpm gen:node-overlays)"
 pass "$FN render is node-at-root + ESO-targeted (kustomization + external-secret producer)"
 
-echo "[4/7] FALSIFYING: a hand-staled overlay turns --check red"
+echo "[4/8] isolated-fleet domain rewrites only the public NEXTAUTH_URL"
+FORK_OUT="$(FORK_DOMAIN_ROOT=cogni-testing.org bash "$RENDER" "$FE" "$FN")"
+NEXTAUTH_BLOCK="$(grep -A1 'path: /data/NEXTAUTH_URL' <<<"$FORK_OUT")"
+grep -q 'cogni-testing\.org"' <<<"$NEXTAUTH_BLOCK" \
+  || fail "$FN fork render did not rewrite NEXTAUTH_URL to cogni-testing.org"
+grep -q 'cognidao\.org"' <<<"$NEXTAUTH_BLOCK" \
+  && fail "$FN fork render left the canonical NEXTAUTH_URL in place"
+grep -q 'externalName: .*\.vm\.cognidao\.org' <<<"$FORK_OUT" \
+  || fail "$FN fork render changed or lost canonical VM service discovery"
+grep -q 'externalName: .*\.vm\.cogni-testing\.org' <<<"$FORK_OUT" \
+  && fail "$FN fork render rewrote VM service discovery with the public domain"
+pass "fork render rewrites public NEXTAUTH_URL and preserves VM discovery"
+
+echo "[5/8] FALSIFYING: a hand-staled overlay turns --check red"
 STALE="infra/k8s/overlays/$FE/$FN/kustomization.yaml"
 stash "$STALE"
 # Revert the migrate runner to the monorepo path the stale operator shipped.
@@ -140,7 +153,7 @@ fi
 pass "--check correctly fails on a staled migrate path"
 restore; BACKUPS=()
 
-echo "[5/7] fail-closed: a template missing the node-at-root migrate command aborts the render"
+echo "[6/8] fail-closed: a template missing the node-at-root migrate command aborts the render"
 TPL="infra/k8s/overlays/$FE/node-template/kustomization.yaml"
 stash "$TPL"
 # Drop the node-at-root Postgres migrate override op (the guard's anchor).
@@ -151,7 +164,7 @@ fi
 pass "render aborts fail-closed when the migrate command is absent"
 restore; BACKUPS=()
 
-echo "[6/7] declarative decommission: orphan overlay dir → --check red, --write prunes it"
+echo "[7/8] declarative decommission: orphan overlay dir → --check red, --write prunes it"
 # Simulate the fixture node's catalog row leaving by moving its catalog yaml aside;
 # its committed overlay dirs become orphans. Restore the row AND any pruned overlay
 # dirs from git afterward so the tree is left pristine regardless of assertion outcome.
@@ -191,7 +204,7 @@ bash "$RENDER" --check >/dev/null \
 trap restore EXIT
 pass "tree restored pristine after decommission test"
 
-echo "[7/7] ATOMIC_PER_ENV: a node dropping ONE env prunes only that env's overlay; --check green"
+echo "[8/8] ATOMIC_PER_ENV: a node dropping ONE env prunes only that env's overlay; --check green"
 # Regression for story.5020 W4: render-node-overlays used to loop wizard_nodes ×
 # ENVS unconditionally (CANDIDATE_A_ALWAYS), so the env-membership verb removing a
 # node from ONE env left --check demanding the (correctly-deleted) overlay. The
