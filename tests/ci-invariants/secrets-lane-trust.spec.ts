@@ -58,9 +58,7 @@ describe("secrets lane trust (bug.5196)", () => {
 
   it("matches the TS table the route fast-fails on", () => {
     const fromTs = [...SECRETS_LANE_TRUST.production].sort();
-    const m = read(SCRIPTS[0]).match(
-      FLEET_CONTROL_BLOCK
-    ) as RegExpMatchArray;
+    const m = read(SCRIPTS[0]).match(FLEET_CONTROL_BLOCK) as RegExpMatchArray;
     expect(m[1].trim().split(/\s+/).sort()).toEqual(fromTs);
   });
 
@@ -75,9 +73,9 @@ describe("secrets lane trust (bug.5196)", () => {
     expect(
       canWriteSecretsLane("candidate-a", "production", "candidate-a")
     ).toBe(true);
-    expect(
-      canWriteSecretsLane("preview", "production", "candidate-a")
-    ).toBe(false);
+    expect(canWriteSecretsLane("preview", "production", "candidate-a")).toBe(
+      false
+    );
 
     // The shell mirrors it: only DEPLOY_ENV == FLEET_CONTROL_ENV gets the wider set.
     for (const s of SCRIPTS) {
