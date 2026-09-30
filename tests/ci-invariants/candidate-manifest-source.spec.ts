@@ -11,6 +11,8 @@
  *     flighted revision rather than the workflow's main revision.
  *   REMOTE_NODE_SOURCE_STAYS_SEPARATE: a remote node's source SHA is not used
  *     as a parent-monorepo checkout ref.
+ *   CONTROL_DOMAIN_STAYS_SEPARATE: a test parent's Akash workload zone never
+ *     replaces the k3s operator/control domain during substrate or public checks.
  * Side-effects: IO (reads .github/workflows/candidate-flight.yml)
  * Links: docs/spec/ci-cd.md axioms 17-20, docs/spec/node-ci-cd-contract.md artifact contract
  * @public
@@ -53,6 +55,36 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
+  it("keeps the k3s control domain separate from an isolated Akash workload zone", () => {
+    const targetDomain =
+      "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') || vars.DOMAIN }}";
+
+    expect(
+      namedStep("node-substrate", "Run node substrate (materialize -> reconcile)")
+        .env?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("assert-substrate", "Assert target substrate").env?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("verify-candidate", "Wait for candidate readiness").env
+        ?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("verify-candidate", "Verify buildSha on endpoint (per-node)")
+        .env?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("verify-candidate", "Run candidate smoke checks (per-node)")
+        .env?.DOMAIN
+    ).toBe(targetDomain);
+    expect(
+      namedStep("assert-substrate", "Assert target substrate").env?.CHECK_DNS
+    ).toBe(
+      "${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ZONE_ID != '' && 'true' || 'false' }}"
+    );
+  });
+
   it("selects the flighted source SHA for an in-repo node-ref", () => {
     const meta = namedStep("decide", "Resolve PR metadata").run;
 

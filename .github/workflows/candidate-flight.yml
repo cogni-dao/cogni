@@ -763,10 +763,18 @@ jobs:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
-          DOMAIN: ${{ vars.DOMAIN }}
+          # The isolated test parent uses DOMAIN for Akash workload identity
+          # (cogni-testing.org), while its k3s control plane remains at
+          # test.<FORK_DOMAIN_ROOT>. Never feed the workload zone to operator
+          # substrate/edge checks.
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') || vars.DOMAIN }}
           FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          # An isolated Akash test parent must not receive the production-zone
+          # token just to inspect its already-live k3s operator record. The
+          # public readiness/buildSha gates below still fail closed on DNS/TLS.
+          CHECK_DNS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ZONE_ID != '' && 'true' || 'false' }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: app-src/infra/catalog
           ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS: 60
@@ -977,7 +985,7 @@ jobs:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
-          DOMAIN: ${{ vars.DOMAIN }}
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') || vars.DOMAIN }}
           # bug.5240 — secret-materialize's CI-derived bootstrap for the lease-log pump's
           # push credential (LOKI_LEASE_PUSH_* fallback; promote-and-deploy already exposes
           # these at job level). Create-if-absent: a later dedicated token wins.
@@ -1603,7 +1611,7 @@ jobs:
       - name: Wait for candidate readiness
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
         env:
-          DOMAIN: ${{ vars.DOMAIN }}
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') || vars.DOMAIN }}
           PROMOTED_APPS: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-candidate-ready.sh
@@ -1620,7 +1628,7 @@ jobs:
       - name: Verify buildSha on endpoint (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
-          DOMAIN: ${{ vars.DOMAIN }}
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') || vars.DOMAIN }}
           SOURCE_SHA_MAP: deploy-branch/.promote-state/source-sha-by-app.json
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.node_source_sha || needs.decide.outputs.head_sha }}
           NODES: ${{ matrix.node }}
@@ -1637,7 +1645,7 @@ jobs:
       - name: Run candidate smoke checks (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
-          DOMAIN: ${{ vars.DOMAIN }}
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') || vars.DOMAIN }}
           PROMOTED_APPS: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/smoke-candidate.sh
