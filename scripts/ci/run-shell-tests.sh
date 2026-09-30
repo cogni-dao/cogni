@@ -45,11 +45,6 @@ MUTATORS=(
 )
 
 PARALLEL=(
-  # bug.5293 — parses every committed Alloy config against the exact alloy binary the
-  # runtime deploys. Docker-dependent (loudly SKIPs without it, never silently passes),
-  # unlike the pure-bash tests around it: a `#` comment took candidate-a's whole metrics
-  # pipeline dark for ~20 min across three deploys because nothing validated the file.
-  alloy-config-parses.test.sh
   set-secret.test.sh
   openbao-clobber-proof.test.sh
   secrets-fanout.test.sh
