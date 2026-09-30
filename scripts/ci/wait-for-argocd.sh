@@ -293,7 +293,9 @@ dump_pod_diagnostics() {
   echo ""
   echo "  ── pod diagnostics for ${app_name} (${deployment}/${namespace}) ──"
 
-  echo "  ▸ pods + container statuses:"
+  # bug.5331 — say what this query COVERS. Zero rows here means "no pods carry app=<deployment>",
+  # NOT "the namespace is empty" — reading it as the latter produced a false fleet-outage claim.
+  echo "  ▸ pods matching app=${deployment} in ${namespace} (label-scoped; empty != namespace empty):"
   kubectl -n "$namespace" get pods -l "app=${deployment}" -o custom-columns=\
 'NAME:.metadata.name,READY:.status.containerStatuses[*].ready,STATE:.status.containerStatuses[*].state,RESTARTS:.status.containerStatuses[*].restartCount,REASON:.status.containerStatuses[*].state.waiting.reason,LAST-TERM-REASON:.status.containerStatuses[*].lastState.terminated.reason' 2>&1 | sed 's/^/    /' || true
 
@@ -422,7 +424,22 @@ wait_for_app() {
     sleep 10
   done
 
-  echo "  ❌ ${app_name} timed out (rev=${REV:0:8} health=${HEALTH} phase=${SYNC_PHASE})"
+  # bug.5331 — NAME THE OWNER, NOT THE LAST SYMPTOM (hub rule promote-gate-failure-owners).
+  # "timed out (rev=X health=Healthy phase=Succeeded)" reads as a contradiction and sent three
+  # agents hunting a phantom outage for 90 minutes. It is not contradictory: Argo had COMPLETED a
+  # sync at the PREVIOUS revision and never advanced to ours. Classify it so the reader knows who
+  # fixes it.
+  local owner_line
+  if [ "$REV" = "$EXPECTED_SHA" ]; then
+    # Right revision, still not ready → genuinely lagging, or the workload is unhealthy.
+    owner_line="NOT_READY_AT_EXPECTED_REV — Argo is on the expected revision but never became ready. Owner: the workload (see pod diagnostics below)."
+  elif [ -z "$REV" ]; then
+    owner_line="REVISION_UNREADABLE — could not read status.sync.revision. Owner: unknown; a FAILED READ is not a negative, do not conclude 'absent' from this."
+  else
+    owner_line="STALE_SYNC — Argo is synced to ${REV:0:8} but we pushed ${EXPECTED_SHA:0:8}: desired state advanced, the cluster did NOT. Waiting will not help. Owner: Argo/the sync itself — check for a sync hook stuck in Running below (a blocked hook pins the app at its last completed sync)."
+  fi
+  echo "  ❌ ${app_name} timed out: observed=${REV:0:8} expected=${EXPECTED_SHA:0:8} health=${HEALTH} phase=${SYNC_PHASE}"
+  echo "     ▸ ${owner_line}"
   kubectl -n argocd get application "$app_name" -o jsonpath='{.status.sync.status} {.status.health.status} phase={.status.operationState.phase} msg={.status.operationState.message}{"\n"}' 2>/dev/null || true
   echo "  ▸ Argo sync result resources:"
   kubectl -n argocd get application "$app_name" \
@@ -443,7 +460,9 @@ done
 
 if [ $FAILED -ne 0 ]; then
   echo ""
-  echo "❌ ArgoCD reconcile failed for one or more apps"
+  # bug.5331 — "reconcile failed" is the SYMPTOM. The per-app line above names the owner
+  # (STALE_SYNC vs NOT_READY_AT_EXPECTED_REV vs REVISION_UNREADABLE); read that first.
+  echo "❌ ArgoCD did not reach ${EXPECTED_SHA:0:8} for one or more apps — see the per-app owner line above"
   # Only dump apps we're waiting for, not all argocd apps
   for app in "${APPS[@]}"; do
     APP_NAME="${DEPLOY_ENVIRONMENT}-${app}"
