@@ -1410,7 +1410,10 @@ jobs:
       - name: Checkout app source (PR catalog + base manifests)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          ref: ${{ needs.decide.outputs.head_sha }}
+          # PR flights reconcile the PR's catalog/manifests. Node-ref flights reconcile the
+          # target fleet's workflow source; an in-repo operator SHA can come from canonical and
+          # must not replace an isolated fork's catalog/domain state.
+          ref: ${{ inputs.pr_number != '' && needs.decide.outputs.head_sha || github.sha }}
           path: app-src
 
       - name: Reconcile scheduler-worker routing (propagate to per-env deploy branch)
