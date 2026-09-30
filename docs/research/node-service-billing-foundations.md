@@ -105,19 +105,33 @@ future is real.** Fixing this costs nothing and is a prerequisite for the rest.
 
 ## Findings
 
-### Option A — Accounts are subjects, not users (generalize `billing_accounts`)
+### Option A — Build the economic layer `identity-model.md` already specifies (`actors`)
 
-- **What**: `owner_user_id` → nullable; add `owner_kind ∈ {user, node, scope, system}` + `owner_ref`,
-  with a partial unique index per `(owner_kind, owner_ref)`. A node gets an account.
-- **Pros**: Smallest possible diff that makes a node a payer. **Every** existing path already keys on
-  `billing_account_id` — preflight, `credit_ledger`, `charge_receipts`, `virtual_keys`, `connections`,
-  `execution_grants`, RLS — so they all work unchanged. No new subsystem.
-- **Cons**: Touches the FK target every other table points at; needs a careful migration + RLS review.
-  Tempting to let it imply liability — it must not (see Option B).
-- **OSS tools**: This is the AWS Organizations _payer account_ shape; GnuCash / `ledger` / `beancount`
-  all model accounts as subjects rather than users. No library needed — it is a schema decision.
-- **Fit**: Directly satisfies task.5071's `billing_account = payment tenancy` axis, which is currently
-  a lie (it is _user_ tenancy).
+> **This option replaces an earlier draft of this doc that proposed making `billing_accounts`
+> polymorphic (`owner_kind ∈ {user,node,scope,system}`). That draft was a design error. Recorded as
+> R0 below rather than deleted, because the error is instructive.**
+
+- **What**: `identity-model.md` already defines the economic subject — **`actor_id`**, _"economic
+  subject (earns, spends, attributed)"_, with kinds **`user | agent | system | org`**, living in
+  `actors.id` with `actor_bindings` (wallets, external refs) and **`budget_allocations`** (FK
+  `actor_id`). A node's treasury is an **`org` actor**, not a billing account. Set the
+  already-planned `charge_receipts.actor_id` column.
+- **The catch — it is specified but entirely unbuilt.** Verified: no `actors` / `actor_bindings` /
+  `budget_allocations` table exists in `packages/db-schema/src/` or any migration, and
+  `charge_receipts` has no `actor_id` (the spec's own scoping table marks it _"Column (planned)"_).
+  The economic layer of the identity model is aspirational.
+- **Pros**: Invents nothing. No new vocabulary (the spec's **synonym prohibition** forbids
+  `org_id`/`account_id`/`tenant_id`/`contributor_id` as new terms — a polymorphic billing-account
+  owner would have smuggled one in). `billing_accounts` stays untouched and human-1:1, so **the RLS
+  blast radius disappears** — the new tables are greenfield and get a correct policy on day one.
+  `actors.kind` already includes `agent`, so "an agent spends on a node's behalf" is expressible
+  without a model change, matching the proven `node.developer: [user, agent]` precedent.
+- **Cons**: Three new tables instead of one altered column — more surface, but _specified_ surface.
+  Requires deciding which runs are node-initiated vs user-initiated (see W3).
+- **OSS tools**: none needed; this is building an existing internal spec.
+- **Fit**: Restores the invariant `task.5071` asserted and the code currently violates —
+  `billing_account = payment tenancy`, `actor = economic subject`. Today the _only_ spendable subject
+  is a human's tenant, which is why a webhook-driven review run had to bill the system tenant.
 
 ### Option B — Explicit, effective-dated payer bindings
 
@@ -201,6 +215,76 @@ price_credits_per_unit, capability}]`) — a node-controlled surface, consistent
 - **Fit**: x402 is the right rail **between** organizations and for agent-to-agent payment. It is the
   wrong replacement for intra-fleet accounting and for human pre-auth.
 
+## E2E workflows
+
+The architecture above is only real if it produces concrete behaviour for concrete actors. Six
+workflows; each row marks what exists today.
+
+### W1 — A human spawns a node (today's free v0)
+
+| #   | Step                                                                                                                                                                                                                    | Today                                              |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| 1   | Human (`user_id` + their `billing_account_id`) runs the wizard → `nodes` row, `nodes.id` **is** the `node_id`                                                                                                           | ✅                                                 |
+| 2   | Node gets an **`org` actor**; its `node_id` is recorded in `actor_bindings` (per `BINDING_IS_THE_MULTI_ENV_KEY` — resolve through the binding, never hardcode a per-env surrogate)                                      | ❌                                                 |
+| 3   | A **sponsorship** row, effective-dated: this org actor's costs are borne by the `system` actor. `authorized_by` = the operator admin principal, `reason = free-v0`. Liability is a row, never inferred from who clicked | ❌                                                 |
+| 4   | Node page shows: _"Sponsored by Cogni · you owe $0.00 · compute to date 4.53 ACT"_                                                                                                                                      | ❌ — cost is invisible to the human who spawned it |
+
+This is what `akash-cicd-pareto-map`'s "free v0, cost per DAO" means made legible: free stops being
+_absent accounting_ and becomes _explicit, auditable sponsorship_.
+
+### W2 — The node consumes compute
+
+1. Actuator opens an Akash lease → `akash_tx_allocations` receipt + `compute_cost_intervals` ✅ (task.5071)
+2. **NEW**: the interval projects a **`charge_envelope`** row — subject = the node's org actor, `cost_native` = uact, `evidence_ref` = the receipt, idempotent on `(provider, resource_id, interval)`. The cost table itself stays identity-free, exactly as its header demands
+3. **NEW**: the envelope resolves its payer through the sponsorship **effective at the interval's time** — so a payer change mid-month attributes correctly instead of retroactively rewriting history
+4. **NEW**: if the payer is the node's own actor and `budget_allocations` is exceeded → **alarm, then the ladder**. Never silently close the lease — that is precisely the 2026-09-28 failure `insolvency-looks-like-infra` records
+5. **NEW**: `GET /api/v1/nodes/{id}/spend` → per service, per env, who paid, budget remaining
+
+### W3 — The node's own LLM spend (this is what broke PR review)
+
+1. Node app calls LiteLLM with `x-litellm-spend-logs-metadata: {node_id}` ✅
+2. `CogniNodeRouter` → `<node>/api/internal/billing/ingest` → `charge_receipts` ✅
+3. **NEW**: set the already-planned `charge_receipts.actor_id`. A **node-initiated** run (a schedule, a
+   webhook-driven PR review) attributes to the node's **org actor**. A **user-initiated** run attributes
+   to that user's actor. `billing_account_id` stays the tenant — **no overload**
+
+> **This is the whole Q1 bug, stated structurally.** A PR-review run is node-initiated, but no
+> node-shaped spender exists — so it fell to the `system` tenant: a human-shaped billing account with
+> no owner watching it, no budget, and no top-up path. It drained, and because `NEUTRAL` reads as
+> _fine_, nobody learned for six days. With an org actor + a sponsorship + a low-water alarm, day one
+> would have paged.
+
+### W4 — `beacon` sells a metered service to `poly`
+
+1. **beacon declares, in its OWN repo-spec** (a node-controlled surface, `SINGLE_HOME`):
+   `services_offered: [{id: signal-feed, unit: request, price_credits: 1000, capability: beacon.signal.read}]`
+2. **poly's `treasurer`** (human **or** agent) accepts an entitlement:
+   `service_entitlements(consumer_actor = poly org, provider_actor = beacon org, offering_id, budget_cap_credits, valid_from/to)`. **The cap is the pre-auth** — poly can never be surprised
+3. poly's runtime calls beacon as its node principal. beacon checks OpenFGA + the entitlement, serves, emits a usage event
+4. Envelope: subject = poly org actor, counterparty = beacon org actor, cost = units × price
+5. **Settlement is an adapter.** Intra-fleet → a two-legged ledger transfer (debit poly, credit beacon): instant, free, reversible, no chain. Cross-org → **x402 USDC on Base**. Same envelope both ways
+6. Both sides see it: poly's page _"beacon/signal-feed — 12,400 credits, 62% of cap"_; beacon's page lists poly as a customer
+
+### W5 — Who may administer a node's spend (humans **and** agents)
+
+Reuses the existing machinery rather than inventing any:
+
+| Concern         | Mechanism                                                                                                                                                                               |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Relations       | `node:<node_id>` gains `treasurer` + `spender`, both typed `[user, agent]` — the same principal-agnostic shape already proven by `node.developer: [user, agent]`                        |
+| `treasurer` may | set a budget cap · authorize a sponsorship change · grant/revoke an entitlement · trigger top-up                                                                                        |
+| `spender` may   | incur cost within the cap                                                                                                                                                               |
+| Grant flow      | the **existing** access-request → approve path (`POST /api/v1/nodes/{id}/developers` precedent), not a new endpoint                                                                     |
+| Cross-env       | the grant resolves through a stable binding (wallet / GitHub login), never a per-env `user_id` — `BINDING_IS_THE_MULTI_ENV_KEY`                                                         |
+| Boundary        | `treasurer` is operational RBAC. It is **not** DAO governance authority and **not** the distribution executor — `identity-model.md` keeps those three planes distinct, and so must this |
+
+### W6 — Staying funded (the reliability question)
+
+1. The node's `actor_bindings` already carry its Privy wallet + Split (from `node-payments-empowerment`)
+2. Envelope-derived balance crosses `low_water_credits` → **alarm** (the P0 control) → policy fires
+3. `topup_source`, in ascending sovereignty: (a) extend operator sponsorship — a new effective-dated row, auditable; (b) the node's **own** Split balance → its wallet → credits, node-signed and non-custodial; (c) a human's card / USDC
+4. If top-up fails: **paid model → free model → queue → deny**, each step emitting an event. The review plane should have taken step 2 automatically. Silence is the one unacceptable branch
+
 ## Recommendation
 
 **A + B + D now, as one keystone. C's invariant cheaply. E after. F as an adapter, never as an
@@ -237,10 +321,13 @@ This is the _second_ time insolvency presented as infra. Cheapest branch of the 
 > tenant** — a worse failure, because it also breaks `credits_summary` (ZodError on negative). Fix
 > the free lane first, or ship both in one PR.
 
-**P1 — Keystone: accounts are subjects; liability is a binding.** (Options A + B, one migration)
-`billing_accounts.owner_kind`/`owner_ref`; `payer_bindings` effective-dated; `credit_ledger`
-authoritative with a drift check (Option C's invariant, not its engine). Creating a node must **not**
-create liability — the binding is a separate, authorized act.
+**P1 — Keystone: build the specified economic layer.** (Options A + B)
+`actors` (`kind = user|agent|system|org`) + `actor_bindings` + `budget_allocations`; the node's
+treasury is an **`org` actor**; effective-dated **sponsorship** rows carry liability; set
+`charge_receipts.actor_id`; `credit_ledger` authoritative with a drift check (Option C's invariant,
+not its engine). **`billing_accounts` is not touched** — it stays payment tenancy, human-1:1, per the
+prohibited-overloading table. Creating a node must **not** create liability; the sponsorship row is a
+separate, authorized act.
 
 **P2 — One charge envelope.** (Option D) `charge_receipts` + `compute_cost_intervals` project into it;
 compute becomes a real debit through the payer binding; `/compute/balances` returns a per-node balance.
@@ -264,27 +351,77 @@ workload class. The review plane should have _degraded to the free model_, not g
 - **Intra-fleet node→node billing does not touch chain.** Faster, free, reversible. Cost: it is
   operator-trusted bookkeeping, not trustless settlement. Correct for v0; x402 is the exit.
 
+## Design review verdict
+
+Run against this doc's own recommendation. Split, because P0 and P1+ are separable and deserve
+different verdicts.
+
+| Dimension              | P0 (stop the bleeding) | P1+ (the foundation)       | Rationale                                                                                                                                                               |
+| ---------------------- | ---------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Simplicity             | **PASS**               | **PASS** (was CONCERN)     | P0 is a config pin + a validation + an alarm. R0's correction made P1 _smaller_: build 3 specified tables instead of altering the FK target every other table points at |
+| OSS-First              | **PASS**               | **CONCERN**                | Meters stay OSS (LiteLLM, Akash chain). Declining TigerBeetle/Formance is defensible at this stage but is how bespoke ledgers accrete — see R3                          |
+| Architecture Alignment | **PASS**               | **PASS** (was **FAIL**)    | The first draft violated `identity-model.md` § Prohibited Overloading twice (R0). Corrected to the spec's own `actor_id`/`kind=org`                                     |
+| Boundary Placement     | **PASS**               | **FAIL**                   | Unresolved. Billing spans app + `scheduler-worker` + Temporal activities; port placement is undecided and app-local would break the compute path — R2                   |
+| Content Boundaries     | **CONCERN**            | **CONCERN**                | The P0–P4 roadmap lives in a research doc; it belongs in a project once one owns this line                                                                              |
+| Scope Discipline       | **PASS**               | **PASS**                   | Split into `story.5056` (foundation) / `bug.5327` (outage) / `bug.5328` (broken guard) rather than one bundle                                                           |
+| Risk Surface           | **PASS**               | **CONCERN** (was **FAIL**) | R0's correction removes the cross-tenant-leak landmine entirely by not touching `billing_accounts`. Residual: get `actors` RLS closed on day one (R1)                   |
+
+### Verdict
+
+- **P0 — APPROVE**, with the R4 ordering binding: `bug.5266` lands **before or with** the model
+  re-pin. It is independent of every open P1 question, and the outage is live.
+- **P1+ — REQUEST CHANGES.** Two blockers before implementation: **R2** (decide port placement; a
+  shared package, not app-local) and **R1** (`actors` RLS deny-all by default, with tests). **R5**
+  (node-initiated vs user-initiated classification) needs an explicit rule at the launcher boundary.
+- **P3 (node↔node services) — NEEDS DISCUSSION**, not engineering. Open Questions 1 and 3 are
+  strategy calls only Derek can make: the ledger's denomination, and whether the operator becomes a
+  counterparty in its own economy.
+
+**Honest note on this review's own value:** the single most valuable finding (R0) came from Derek
+asking whether the design had been checked against `identity-model.md` — not from the review pass. The
+review had already "passed" Architecture Alignment while the recommendation violated a hard constraint
+in a spec it never read. **A review that does not read the governing spec is not a review.**
+
 ## Blocking risks in this recommendation (found in design review)
 
 These are defects **in the plan above**, not in the as-built system. Named here so they are not
 rediscovered during implementation.
 
-### R1 — `owner_user_id` nullable silently breaks every transitive RLS policy, and the obvious patch is a cross-tenant leak
+### R0 — The first draft of this recommendation violated a hard constraint (kept, not hidden)
 
-`0004_enable_rls.sql` states its own invariant in a comment: _"Since no row has `owner_user_id` =
-NULL, unset context returns zero rows (silent deny)."_ P1 makes that column nullable, so:
+The earlier draft proposed `billing_accounts.owner_user_id` nullable + `owner_kind ∈
+{user,node,scope,system}` + `owner_ref`. `identity-model.md` § Prohibited Overloading forbids exactly
+that, in two independent ways:
 
-| Policy shape                                                                                                                                                                                                   | Effect on a node-owned account (`owner_user_id IS NULL`)                                                                                  |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Direct, on `billing_accounts`: `owner_user_id = current_setting(...)`                                                                                                                                          | `NULL = x` → `NULL` → still denied. **Accidentally safe.**                                                                                |
-| Transitive, on `virtual_keys` / `credit_ledger` / `charge_receipts` / `payment_attempts` / `connections`: `billing_account_id IN (SELECT id FROM billing_accounts WHERE owner_user_id = current_setting(...))` | The subquery can **never** match → **no `app_user` principal can read a node's own ledger at all.** Functional dead-end, discovered late. |
-| The tempting "fix": `... OR owner_user_id IS NULL`                                                                                                                                                             | Exposes **every** node account to **every** authenticated user. **This is the landmine.**                                                 |
+| Rule                                                                                                                                                                        | Violation                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| _"`billing_account_id` must never be used for … deployment identity. It is payment tenancy only."_                                                                          | `owner_ref = node_id` **is** deployment identity inside the tenancy key                           |
+| **Synonym prohibition**: _"Do not introduce `org_id`, `account_id`, `tenant_id`, `project_id`, or `contributor_id` as new terms. The six keys above are the complete set."_ | A polymorphic owner smuggles in an `org`-shaped key alongside `actor_id`, which already covers it |
 
-**Required shape:** node-owned accounts get a **separate, additive** policy path authorized by node
-membership (the OpenFGA plane) or restricted to `app_service` — never a nullable-owner fallback
-inside the existing `app_user` policies. The migration must add RLS tests that assert a node account
-is invisible to an unrelated user _and_ visible to its own node principal. Treat this as the
-highest-risk part of P1, not an afterthought.
+It also contradicted the relationship `node_id (1) ──── (N) billing_account_id` — _"a node **serves**
+multiple tenants"_. A billing account is a tenant **inside** a node, so a node cannot coherently
+_own_ one.
+
+**Root cause of my error: I designed from the code schema and never read the identity spec.**
+`packages/db-schema` contains no `actors` table, so "there is no non-human spender" read as a missing
+_primitive_ rather than an unbuilt _specified_ one. The correct move — build `actors(kind=org)` — is
+strictly smaller and touches no existing RLS. **Generalisable lesson: when a primitive appears
+missing, check whether it is specified-but-unbuilt before inventing a replacement.**
+
+### R1 — `actors` RLS must be designed closed on day one (greenfield, not a migration hazard)
+
+R0's correction **removes** the nullable-owner RLS landmine entirely (`billing_accounts` is untouched,
+so every existing direct and transitive policy is unaffected). The residual risk moves to the new
+tables, where it is far cheaper:
+
+- Per `RLS_COVERAGE`, `actors` has an FK to `users` (for `kind=user`) ⇒ RLS **must** be `ENABLE +
+FORCE`. A table read only by the `app_service` BYPASSRLS role satisfies this with **deny-all — no
+  policy** (fail-closed), which is the correct v0 shape.
+- The mistake to avoid is the mirror of R0's: a policy like `owner_user_id = current_setting(...) OR
+user_id IS NULL` would expose **every org actor to every authenticated user**. If an `app_user` read
+  path is ever needed, authorize it through **node membership in OpenFGA**, not a NULL fallback.
+- Ship tests asserting: an org actor is invisible to an unrelated `app_user`, and visible to its own
+  node principal.
 
 ### R2 — Boundary placement is unspecified, and billing has >1 runtime
 
@@ -302,6 +439,15 @@ Honest self-assessment of the OSS-first call. Declining TigerBeetle/Formance is 
 plus a reconcile query. But this is the same reasoning that produces a homegrown ledger by accretion.
 **Re-litigate before a third cost source or a second fleet lands**, and keep postings shaped so a
 TigerBeetle/Formance import stays mechanical.
+
+### R5 — Node-initiated vs user-initiated is a judgement call, not a lookup
+
+W3 hinges on classifying a run. A webhook-driven PR review is clearly node-initiated; a human chatting
+in the node's UI is clearly user-initiated. An **agent** holding a node grant and running a scheduled
+graph is the ambiguous middle, and `identity-model.md` flags the adjacent unresolved question itself
+(the on-behalf-of earnings-ownership policy, OPEN since 2026-08-15). Pick the rule explicitly at the
+launcher boundary — where `subjectId` is already attached by trusted server launchers — and never
+infer it downstream from whichever credential happened to arrive.
 
 ### R4 — `story.5056` has no `done =` yet
 
