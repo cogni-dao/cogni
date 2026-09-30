@@ -19,12 +19,10 @@ discovery.relabel "docker_logs" {
 
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    # bug.5293: `alloy` itself was absent here, so the collector could not report its
-    # OWN failures. A component that fails to build (bad exporter argument, unreachable
-    # DSN) emits no targets and therefore no `up` series — indistinguishable from
-    # "never configured" — while alloy stays healthy for every other component. That
-    # is a silent observability hole in the thing whose job is observability, and it
-    # cost a full deploy cycle to diagnose blind. Ship alloy's own stdout.
+    # bug.5293: `alloy` was absent here, so the collector could not report its OWN
+    # failures. A bad exporter block crash-looped alloy on candidate-a and the only
+    # evidence was a `docker ps` line buried in a deploy log — its logs were never
+    # shipped. Ship alloy's own stdout so the next config error is greppable.
     regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy|alloy-k8s-events|pdc-agent)"
     action        = "keep"
   }
@@ -448,78 +446,6 @@ prometheus.scrape "node" {
 }
 
 // =============================================================================
-// PostgreSQL — the shared state substrate (bug.5293 / bug.5117 / bug.5188)
-// =============================================================================
-// Until this block existed there were NO Postgres metrics at all: app, worker,
-// openfga, cadvisor and node were scraped, and the one stateful service every
-// node and the operator depend on was unobserved. The cost of that was measured
-// on 2026-09-30 — ~73 postmaster crash-recoveries/24h, each 30-60s of operator
-// 502s, and the cause could not be named because nothing recorded the database's
-// own state. `control-plane-foundation-first`: observability precedes machinery.
-//
-// PER-TENANT FOR FREE. `pg_stat_database` is already one row per database, so
-// every node's DB (and every new node's, with no per-node work) arrives labelled
-// by `datname`: TPS, cache-hit, temp spill, deadlocks, connection count. That is
-// the signal `DB-per-node is identity isolation, not resource isolation` needs to
-// compute a graduation threshold, and the shares that prove a lane is noisy.
-//
-// CARDINALITY IS DELIBERATELY BOUNDED. `datname` is bounded by tenant count, so
-// it is safe. `stat_user_tables`/`statio_user_tables` are NOT enabled: they are
-// per-relation, so they scale N tenants x T tables x 3 envs and are the documented
-// cardinality bomb. Turn them on per-investigation, never fleet-wide. The
-// `infra_metrics` allowlist below is the second gate.
-//
-// CREDENTIAL. Connects as `app_readonly` — SELECT-only, `default_transaction_read_only`,
-// already provisioned per env — granted `pg_monitor` by provision.sh so it can read
-// the `pg_stat_*` views without superuser. Least privilege, no new secret.
-prometheus.exporter.postgres "default" {
-  data_source_names = [
-    "postgresql://" + sys.env("APP_DB_READONLY_USER") + ":" + sys.env("APP_DB_READONLY_PASSWORD") + "@postgres:5432/postgres?sslmode=disable",
-  ]
-
-  // NO `autodiscovery` block, deliberately — and this is the fix, not a
-  // simplification (bug.5293, deploys 36786133722 + 36788232213).
-  //
-  // WHY IT IS NOT NEEDED: `pg_stat_database` is a CLUSTER-WIDE view. A single
-  // connection to the `postgres` database already returns ONE ROW PER DATABASE,
-  // which is the entire per-tenant signal this block exists to collect.
-  // Autodiscovery only matters for per-RELATION collectors, and those are exactly
-  // what we refuse to enable (tenants x tables x envs cardinality).
-  //
-  // WHY IT WAS HARMFUL: with autodiscovery on, the component must first QUERY the
-  // instance to enumerate databases before it can compute `.targets`. If that
-  // query fails for any reason, the component yields an EMPTY target list, and
-  // `prometheus.scrape` over zero targets emits NOTHING — not even `up 0`. Both
-  // deploys landed correctly (alloy recreated, config hash changed, alloy healthy,
-  // `GRANT pg_monitor TO app_readonly` verified present on candidate-a) and still
-  // produced no `postgres` job at all, which is indistinguishable from "never
-  // configured". A static DSN gives a STATIC target, so the scrape always emits an
-  // `up` series: a broken exporter becomes `up 0` + `pg_up 0` — loud, not silent.
-  //
-  // NO `enabled_collectors` here either, deliberately. The first attempt pinned an
-  // explicit collector list; the component then produced ZERO targets, so
-  // `prometheus.scrape` emitted nothing at all — not even an `up` series — which
-  // is indistinguishable from "never configured" (bug.5293, deploy
-  // 36786133722: alloy recreated + config hash changed + alloy healthy, yet no
-  // `postgres` job and no `pg_*` series existed). An un-buildable exporter is
-  // silent, not loud.
-  //
-  // It was also redundant: the `infra_metrics` allowlist below is the real
-  // cardinality gate — it keeps ONLY the named `pg_*` families, so every
-  // per-relation series (`pg_stat_user_tables_*`, `pg_statio_*`) is dropped
-  // before remote_write whether its collector ran or not. One gate, at the point
-  // where the Grafana Cloud series bill is actually decided, beats two.
-}
-
-prometheus.scrape "postgres" {
-  targets         = prometheus.exporter.postgres.default.targets
-  forward_to      = [prometheus.relabel.infra_metrics.receiver]
-  scrape_interval = "30s"
-  scrape_timeout  = "10s"
-  job_name        = "postgres"
-}
-
-// =============================================================================
 // Metric Allowlist + Label Policy
 // =============================================================================
 // Only keep metrics we actually alert on or dashboard. Drop everything else
@@ -531,13 +457,7 @@ prometheus.relabel "infra_metrics" {
   // Keep only allowlisted metric names (+ up for deadman alerts)
   rule {
     source_labels = ["__name__"]
-    // bug.5293: the pg_* families are the per-tenant (datname-labelled) signal —
-    // connection saturation, rollback ratio, cache-hit, temp spill, deadlocks and
-    // per-database size shares. Deliberately EXCLUDES every pg_stat_user_tables /
-    // pg_statio_* metric: those are per-relation and would scale with
-    // tenants x tables x envs. Keep this list tight; it is the last gate before
-    // remote_write and therefore the Grafana Cloud series bill.
-    regex         = "(container_memory_working_set_bytes|container_memory_rss|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_memory_MemAvailable_bytes|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|node_k3s_kine_state_db_bytes|pg_up|pg_exporter_last_scrape_error|pg_stat_database_numbackends|pg_stat_database_xact_commit|pg_stat_database_xact_rollback|pg_stat_database_blks_hit|pg_stat_database_blks_read|pg_stat_database_temp_files|pg_stat_database_temp_bytes|pg_stat_database_deadlocks|pg_stat_database_conflicts|pg_stat_database_tup_returned|pg_stat_database_tup_fetched|pg_database_size_bytes|pg_settings_max_connections|pg_settings_work_mem_bytes|pg_locks_count|pg_stat_activity_max_tx_duration|pg_stat_replication_pg_wal_lsn_diff|pg_stat_wal_records|up)"
+    regex         = "(container_memory_working_set_bytes|container_memory_rss|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_memory_MemAvailable_bytes|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|node_k3s_kine_state_db_bytes|up)"
     action        = "keep"
   }
 

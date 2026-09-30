@@ -602,12 +602,6 @@ services:
       - PROMETHEUS_USERNAME=${PROMETHEUS_USERNAME:-}
       - COGNI_DEFAULT_NODE_ID=${COGNI_DEFAULT_NODE_ID:-}
       - PROMETHEUS_PASSWORD=${PROMETHEUS_PASSWORD:-}
-      # Postgres metrics identity (bug.5293). Read-only, pg_monitor-granted role;
-      # alloy is on the `internal` network so it dials postgres:5432 directly.
-      # Absent value => the exporter fails its own scrape and `pg_up` reports 0,
-      # which is a visible signal rather than a silent gap in DB observability.
-      - APP_DB_READONLY_USER=${APP_DB_READONLY_USER:-app_readonly}
-      - APP_DB_READONLY_PASSWORD=${APP_DB_READONLY_PASSWORD:-}
 
   alloy-k8s-events:
     image: grafana/alloy:v1.9.2
