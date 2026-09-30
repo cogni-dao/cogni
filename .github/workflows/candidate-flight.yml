@@ -36,6 +36,8 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
   SLOT: candidate-a
   OVERLAY_ENV: candidate-a
+  # Public workload zone for fork-aware generated scheduler routes.
+  FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
   # FLEET_CONTROL_ENV (subtask.5007): the env whose cluster reconciles + pays for akash
   # lanes. Default 'production' (cogni-dao fleet); an isolated fleet (cogni-test-org) sets
   # the repo var to 'candidate-a' so its own control plane owns akash lanes and no test
