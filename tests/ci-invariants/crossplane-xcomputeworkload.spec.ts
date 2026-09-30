@@ -120,6 +120,9 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       "leaseGeneration",
       "migration",
       "nodeId",
+      // story.5050 — node-owned HARD placement requirement. Optional and immutable, so no
+      // existing XR changes and a new requirement can only bind on a fresh mint.
+      "placement",
       "runtime",
       "workload",
     ]);
@@ -323,10 +326,20 @@ describe("XComputeWorkload Composition (task.5096)", () => {
 
   it("sends the actuator its exact strict-contract wire shape", () => {
     // @contracts/compute.akash-tx.v1 accepts EXACTLY {cogniKey, environment, spec}; the spec
-    // is `{name, services[]}`. An extra key is a 400 forever, never a partially-honoured call.
-    expect(template).toContain(
-      '$payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services)'
+    // is `{name, services[], placement?}`. An extra key is a 400 forever, never a
+    // partially-honoured call — so the spec dict must be assembled from exactly those keys.
+    expect(templateCode).toContain(
+      '$specDict := dict "name" $slug "services" $services'
     );
+    expect(templateCode).toContain(
+      '$payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" $specDict'
+    );
+    // story.5050 is the ONLY conditional key the spec dict may gain. Anything else set on it
+    // would reach the strict contract as an unknown field and 400 every create.
+    const specDictWrites = [
+      ...templateCode.matchAll(/set \$specDict "([a-zA-Z]+)"/g),
+    ].map((m) => m[1]);
+    expect(specDictWrites).toEqual(["placement"]);
     // The four bounded ops map 1:1 onto provider-http's four actions — no Cogni code decides
     // WHEN to act.
     for (const [action, route] of [
@@ -1155,5 +1168,56 @@ describe("catalog lease generation naming", () => {
     // SDL is identical to healthy toks4, so gen-4's 404 reads as transient; 5 is a fresh key
     // that re-enters createAndLease to retry the manifest delivery.
     expect(toks5.lease_generation?.production).toBe(5);
+  });
+});
+
+describe("XComputeWorkload placement requirement (story.5050)", () => {
+  const placement = specSchema.placement as Record<string, never> &
+    Record<string, unknown>;
+
+  /**
+   * Akash refuses in-place placement change, so an accepted edit would be desired state
+   * nothing applies — the node keeps serving from its old jurisdiction while the XR claims
+   * otherwise. Immutability makes "bump leaseGeneration" the only way to re-place.
+   */
+  it("is immutable, so a re-placement must go through a leaseGeneration bump", () => {
+    const rules = (placement["x-kubernetes-validations"] ?? []) as {
+      rule: string;
+      message: string;
+    }[];
+    expect(rules.map((r) => r.rule)).toContain("self == oldSelf");
+    expect(JSON.stringify(rules)).toMatch(/leaseGeneration/);
+  });
+
+  /**
+   * EMPTY_IS_A_TYPO_NOT_A_WILDCARD. The actuator fails closed on this field, so an empty list
+   * would refuse every bid and present as "no provider bid for this workload" — the most
+   * expensive possible way to learn about a typo. The API server must reject it first.
+   */
+  it("rejects an empty country list rather than accepting a lease-refusing wildcard", () => {
+    const countries = (
+      placement["properties"] as Record<string, Record<string, unknown>>
+    )["requiredCountries"];
+    expect(countries["minItems"]).toBe(1);
+    expect(countries["x-kubernetes-list-type"]).toBe("set");
+    expect((countries["items"] as Record<string, unknown>)["pattern"]).toBe(
+      "^[A-Z]{2}$"
+    );
+  });
+
+  /**
+   * The wire is a zod strictObject, so the Composition must lower the XR field onto the
+   * contract's own name. A rename drift here is a 400 at create time, not a silently
+   * unconstrained lease — but only if the lowering exists at all.
+   */
+  it("lowers onto the actuator wire under the contract's name", () => {
+    expect(templateCode).toContain(
+      '$requiredCountries := dig "placement" "requiredCountries" (list) $spec'
+    );
+    expect(templateCode).toContain(
+      'set $specDict "placement" (dict "requiredCountryCodes" $requiredCountries)'
+    );
+    // Absent must stay ABSENT: an empty list on the wire fails closed in the actuator.
+    expect(templateCode).toContain("{{- if gt (len $requiredCountries) 0 }}");
   });
 });

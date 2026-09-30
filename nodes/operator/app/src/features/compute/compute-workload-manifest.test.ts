@@ -218,6 +218,65 @@ describe("buildComputeWorkloadManifest", () => {
   });
 
   /**
+   * story.5050. Unlike leaseGeneration — emitted even at 0 so the desired state states its own
+   * key — an absent placement requirement must be OMITTED. The actuator fails closed on this
+   * field, so `requiredCountries: []` would refuse every bid and surface as "no provider bid
+   * for this workload" rather than as a placement policy.
+   */
+  it("omits the placement requirement entirely when the catalog declares none", () => {
+    for (const requiredPlacementCountries of [undefined, []]) {
+      const manifest = buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+        ...(requiredPlacementCountries ? { requiredPlacementCountries } : {}),
+      });
+      expect(manifest.spec).not.toHaveProperty("placement");
+    }
+  });
+
+  it("carries a declared placement requirement onto the composite", () => {
+    const manifest = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "production",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle,
+      publicHost: "toks4.cognidao.org",
+      computeApi: "crossplane",
+      leaseGeneration: 0,
+      requiredPlacementCountries: ["PT", "NL"],
+    });
+    expect(manifest.spec).toMatchObject({
+      placement: { requiredCountries: ["PT", "NL"] },
+    });
+  });
+
+  /**
+   * The legacy controller screens no bids, so a requirement routed there is desired state
+   * nothing enforces: the catalog would claim the node is constrained while it places
+   * anywhere. That silent-unconstrained outcome is the whole failure this feature prevents,
+   * so refuse rather than ignore — the same rule leaseGeneration already follows.
+   */
+  it("refuses a placement requirement on the legacy authority instead of ignoring it", () => {
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "legacy",
+        leaseGeneration: 0,
+        requiredPlacementCountries: ["PT"],
+      })
+    ).toThrow(/enforced only by the crossplane authority/);
+  });
+
+  /**
    * THE REPLACEMENT PATH (story.5016). The actuator refuses to re-spend a settled idempotence
    * key (`akash_tx_create_refused_settled_key`), so a terminally closed lease makes its
    * (node, environment) unrecreatable until the generation moves — and the generation is
