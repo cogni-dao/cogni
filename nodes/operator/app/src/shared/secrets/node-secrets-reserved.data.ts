@@ -177,7 +177,7 @@ export const OFF_CLUSTER_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   // it spends every node's budget. A workload gets the node-scoped
   // `LITELLM_VIRTUAL_KEY` instead — the cogni-node-app-v1 runtime profile
   // renames that virtual key to LITELLM_MASTER_KEY inside the container
-  // (compute-workload-reconciler.ts), so the real master key never leaves here.
+  // (now infra/crossplane/xcomputeworkload/composition.yaml), so the real master key never leaves here.
   "LITELLM_MASTER_KEY",
   "OPENROUTER_API_KEY",
   // Fleet-shared DoltHub credentials (`tier: A1, service: _shared`, same shape

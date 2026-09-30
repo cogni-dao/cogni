@@ -21,7 +21,7 @@
 # THE WIRE IS THE 5095 CONTRACT, NOT THIS API. @contracts/compute.akash-tx.v1 is a zod
 # strictObject: an unknown key is a 400, never a silently ignored field. So the pipeline LOWERS
 # the full-fidelity XR (bundle artifacts, bindings, secret refs, runtime profile, visibility)
-# onto exactly `{cogniKey, environment, spec:{name, services[]}}`. Every lowering rule below is
+# onto exactly `{cogniKey, environment, spec:{name, services[], placement?}}`. Every lowering rule below is
 # a port of `toProvisionSpec` + `legacyCogniAppEnv` in the bespoke controller, and the two must
 # stay byte-comparable — that equality is what makes this a migration rather than a rewrite.
 #
@@ -163,7 +163,8 @@ spec:
             {{- /* ------------------------------------------------------------------
               LOWERING: full-fidelity XR -> the actuator's ProvisionSpec.
               Port of toProvisionSpec() + legacyCogniAppEnv() in
-              features/compute/compute-workload-reconciler.ts.
+              the retired features/compute/compute-workload-reconciler.ts (deleted in
+              task.5098; read it at commit 4d6fb62d if you need the original).
             ------------------------------------------------------------------ */ -}}
             {{- $images := dict }}
             {{- range $spec.bundle.artifacts }}{{ $_ := set $images .name .image }}{{ end }}
@@ -317,7 +318,19 @@ spec:
             {{- end }}
             {{- $hasLegacyMigration := gt (len $legacyMigration) 0 }}
 
-            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services) }}
+            {{- /*
+              story.5050 — lower the XR's HARD placement requirement onto the wire. The wire
+              renames `requiredCountries` to `requiredCountryCodes` because the zod contract
+              speaks ISO codes explicitly; both are strictObjects, so a typo here is a 400 and
+              never a silently unconstrained lease. Absent stays ABSENT: sending an empty list
+              would fail closed in the actuator and refuse every bid.
+            */ -}}
+            {{- $specDict := dict "name" $slug "services" $services }}
+            {{- $requiredCountries := dig "placement" "requiredCountries" (list) $spec }}
+            {{- if gt (len $requiredCountries) 0 }}
+            {{- $_ := set $specDict "placement" (dict "requiredCountryCodes" $requiredCountries) }}
+            {{- end }}
+            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" $specDict }}
             {{- if $hasMigrationStep }}{{ $_ := set $payload "migrationStep" $migrationStep }}{{ end }}
             {{- if $hasLegacyMigration }}{{ $_ := set $payload "migration" $legacyMigration }}{{ end }}
 
@@ -394,10 +407,22 @@ spec:
             {{- end }}
             {{- $closedForCurrentKey := and $closed (eq $responseKey $currentKey) }}
             {{- $recoveryExhausted := and $closedForCurrentKey (ge $recoveryCount $maxRecoveryAttempts) }}
-            {{- if and $closedForCurrentKey (not $recoveryExhausted) }}
+            {{- /* PAID REPLACEMENT IS OPT-IN (bug.5287 review). bootPolicy.onGiveUp gates the
+              re-mint: Hold (the permanent default) NEVER spends on a replacement — a closed
+              lease parks as LeaseClosed until a human bumps spec.leaseGeneration. The XRD enum
+              is [Hold]-only until provider strikes are re-homed in the actuator (PR D), so
+              recovery is unreachable by TWO independent mechanisms: this gate, and the schema
+              rejecting a premature `Replace` catalog cell. */ -}}
+            {{- $onGiveUp := dig "bootPolicy" "onGiveUp" "Hold" $spec }}
+            {{- if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace") }}
             {{- $recoveryCount = add1 $recoveryCount }}
             {{- $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}
             {{- end }}
+            {{- /* A closed lease we are NOT actively replacing must park, not re-render:
+              re-rendering under a settled key is refused by the actuator every reconcile
+              forever (Axiom 26 churn). Held ⇒ the lease closed under the CURRENT key and
+              onGiveUp is not Replace. */ -}}
+            {{- $heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace") }}
             {{- $cogniKey = $currentKey }}
             {{- $_ := set $payload "cogniKey" $cogniKey }}
 
@@ -409,7 +434,22 @@ spec:
             */ -}}
             {{- $prevMigrationPhase := dig "status" "migration" "phase" "" $xr }}
             {{- $migrationPhase := dig "migration" "phase" $prevMigrationPhase $resp }}
-            {{- $migrationFailed := eq $migrationPhase "failed" }}
+            {{- /*
+              FAILURE IS NEVER LATCHED (bug.5309). $migrationPhase above deliberately falls
+              back to the PREVIOUS phase so status.migration does not blink out on the ticks
+              that carry no migration answer — that latch is for DISPLAY and is correct. But
+              deciding the XR is terminally Failed from a latched value makes one transient
+              `failed` permanent: the actuator then reports `succeeded` on every later tick and
+              the XR keeps re-emitting MigrationFailed forever, because a response WITHOUT a
+              migration phase re-reads the stale `failed` out of its own status.
+              Observed on toks4 candidate-a: Job succeeded=1/failed=0, pod logged
+              "migrate complete: 1 migration(s) applied + verified", database present, actuator
+              logged akash_tx_migration_succeeded x6 — and the XR sat Failed/MigrationFailed
+              with an empty observedBundle and a 404 edge, with no path forward.
+              So the TERMINAL decision reads the CURRENT response only. No fresh `failed`, no
+              failure. Same correction shape as bug.5301's DNS gate and #2464's None sentinel.
+            */ -}}
+            {{- $migrationFailed := eq (dig "migration" "phase" "" $resp) "failed" }}
 
             {{- /*
               LATCHED observed bundle. Only a workload that actually SERVED its exact source sha
@@ -448,8 +488,34 @@ spec:
             {{- $anchorTime := toDate "2006-01-02T15:04:05Z07:00" $bootAnchorAt }}
             {{- $ageSeconds := int (sub (now | unixEpoch) ($anchorTime | unixEpoch)) }}
             {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($anchorTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
-            {{- $neverServed := and (not $serving) (eq $prevSha "") }}
-            {{- $deadlineExceeded := and $neverServed (gt $ageSeconds $bootDeadlineSeconds) }}
+            {{- /*
+              THE DEADLINE MUST BIND TO THE CURRENT ATTEMPT, NOT TO "EVER SERVED ANYTHING"
+              (bug.5287, the arc's original finding). `$prevSha` is the LATCHED
+              status.observedBundle.source.sha, so `eq $prevSha ""` could only ever be true on
+              a workload's very first boot. Once an XR had recorded ANY bundle the old
+              predicate was permanently false, the deadline could never fire again, and
+              BOOT_SLO_OR_CLOSE was structurally unreachable for the rest of that XR's life.
+
+              Observed on toks5 production: three generations, `bootDeadlineAt` hours past,
+              `failure.reason = None`, a lease billing with no workload and no terminal state —
+              because `observedBundle` still carried `cf5de44c…` from a generation that once
+              served. Combined with the actuator replaying a settled-but-never-served receipt
+              (task.5157), such a workload is unbounded in BOTH directions: nothing re-creates
+              it and nothing closes it.
+
+              `$hasServedDesired` (computed above) asks the right question: has THIS attempt's
+              sha actually served? A live serving workload is unaffected; a never-served XR
+              behaves exactly as before. What changes is that an XR which served an OLD sha and
+              never served the current one can now reach its deadline instead of hanging.
+
+              DELIBERATELY NOT WIDENED: an XR whose `observedBundle` EQUALS the desired sha —
+              served once, then stopped — still does not trip the deadline. Catching that needs
+              a trustworthy live-serving signal, and `serving` yields false negatives (toks4
+              production served HTTP 200 for 13 days while its XR read serving=false). Closing
+              a live node on a false negative is worse than leaving that case to a human; it
+              waits on bug.5237's host-routed probe.
+            */ -}}
+            {{- $deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds) }}
             {{- $closeForBudget := and $deadlineExceeded (eq $onDeadline "Close") }}
 
             {{- /*
@@ -459,7 +525,12 @@ spec:
               controller's recoverBounded(3), without an unbounded retry loop or implicit base
               generation bump.
             */ -}}
-            {{- $renderLease := not (or $closeForBudget $recoveryExhausted) }}
+            {{- /* Never render under a settled key (Axiom 26): a closed lease renders again
+              ONLY through a Replace-bumped fresh recovery key. $heldClosed parks Hold nodes;
+              the (closed && not-current-key) term fences the foreign/stale-key shape, where
+              $responseKey is absent or names another key and the guard would otherwise fail
+              open into refused-create churn every reconcile. */ -}}
+            {{- $renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey))) }}
 
             {{- /*
               BOOT GRACE. `serving` is the convergence signal, so a not-yet-serving workload
@@ -566,13 +637,12 @@ spec:
                     body: |
                       {
                         cogniKey: .payload.body.cogniKey,
-                        {{- /* bug.5237 PHASE 2 (deliberately NOT emitted yet): add
-                          `publicHost: {{ $publicHost }}` here so serving is proven through
-                          the provider's host-routed path. The actuator's observe schema is
-                          a strictObject — emitting the key before every environment's
-                          actuator image carries the phase-1 schema turns each observe into
-                          a 400 and freezes reconciliation fleet-wide. Flip this line only
-                          after the phase-1 actuator is deployed everywhere. */}}
+                        {{- /* bug.5237 PHASE 2. Phase 1's strict-schema reader is deployed in
+                          every environment, so OBSERVE can now require the real host-routed
+                          path instead of mistaking a healthy bare ingress for the hostname
+                          that users reach. Keep this field on OBSERVE only: it is proof input,
+                          never paid-mutation input. */}}
+                        publicHost: {{ $publicHost | quote }},
                         expectedSourceSha: {{ $desiredSha | quote }}{{ if $hasMigrationStep }},
                         workload: .payload.body.spec.name,
                         environment: .payload.body.environment,
@@ -625,7 +695,15 @@ spec:
             {{- end }}
 
             {{- /* ---------- composed: DNS intent ---------- */ -}}
-            {{- if and $dns (ne $effectiveDnsTarget "") $renderLease }}
+            {{- /* LEASE LIVENESS AND DNS PUBLICATION ARE DIFFERENT CONCERNS (bug.5301). This
+              gate used to include $renderLease, so EVERY terminal lease condition (budget
+              close, recovery exhaustion, Hold-parked or foreign-key closure) also GC-deleted
+              the public hostname -> live Cloudflare DELETE -> NXDOMAIN (beacon/node-template,
+              2026-09-28). With Replace armed, closure becomes routine and every recovery cycle
+              would open an NXDOMAIN window. The record now withdraws only on genuine XR
+              deletion via normal finalization — the same class of hazard the last-known-good
+              latch above already defends for the mid-promote case. */ -}}
+            {{- if and $dns (ne $effectiveDnsTarget "") }}
             {{- $cfBase := printf "https://api.cloudflare.com/client/v4/zones/%s/dns_records" $dns.zoneId }}
             {{- $cfToken := printf "Bearer {{ operator-env-secrets:%s:CLOUDFLARE_API_TOKEN }}" $writerNs }}
             {{- $cfPayload := dict "name" $publicHost "content" $effectiveDnsTarget }}
@@ -755,6 +833,12 @@ spec:
             {{- $phase = "Progressing" }}
             {{- $failReason = $refusalCode }}
             {{- $failMessage = substr 0 256 $refusalMessage }}
+            {{- else if $heldClosed }}
+            {{- /* Ordered BEFORE recoveryExhausted: if someone flips Replace back to Hold
+              mid-recovery, the human choice (Hold) names the state. */ -}}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "LeaseClosed" }}
+            {{- $failMessage = printf "lease %s is closed and bootPolicy.onGiveUp is Hold; bump spec.leaseGeneration to mint a replacement (no paid recovery is attempted under Hold)" $externalName }}
             {{- else if $recoveryExhausted }}
             {{- $phase = "Failed" }}
             {{- $failReason = "RecoveryLimitExceeded" }}
@@ -763,6 +847,18 @@ spec:
             {{- $phase = "Progressing" }}
             {{- $failReason = "LeaseRecoveryInProgress" }}
             {{- $failMessage = printf "lease recovery attempt %d of %d for generation %d" $recoveryCount $maxRecoveryAttempts $leaseGeneration }}
+            {{- else if $closed }}
+            {{- /* A lease observed closed under a NON-current recovery key (settled/foreign key).
+              $heldClosed above only catches $closedForCurrentKey, and every recovery branch
+              above has already claimed the active-recovery cases ($recoveryCount > 0), so what
+              reaches here is a settled, parked closed lease with no recovery in flight. Without
+              this branch the chain fell through to the default Progressing/reason:"None" and lied
+              that a permanently-closed lease was still coming up. $renderLease already PARKS this
+              case (Axiom 26 fence: (and $closed (not $closedForCurrentKey))); status must tell the
+              same truth. Terminal until a human bumps spec.leaseGeneration. */ -}}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "LeaseClosed" }}
+            {{- $failMessage = printf "lease %s is closed under a settled recovery key; bump spec.leaseGeneration to mint a replacement" $externalName }}
             {{- end }}
             ---
             apiVersion: {{ $xr.apiVersion }}
@@ -823,6 +919,16 @@ spec:
               failure:
                 reason: {{ $failReason | quote }}
                 message: {{ $failMessage | quote }}
+              {{- else }}
+              {{- /* UNCONDITIONAL EMISSION (bug.5287). Omitting the key does not clear it:
+                    status merge preserves the previous value, so a recovered workload kept
+                    its stale failure.reason (ledger_unavailable under Progressing) latched
+                    for days. "None" is the cleared-failure sentinel — always written, never
+                    omitted; compute-workload-readiness treats it as absent. Matches the
+                    XRD reason pattern ^[A-Za-z_][A-Za-z0-9_]{0,127}$. */}}
+              failure:
+                reason: "None"
+                message: ""
               {{- end }}
     - step: ready
       functionRef:

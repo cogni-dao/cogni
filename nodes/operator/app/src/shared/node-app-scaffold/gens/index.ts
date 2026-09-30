@@ -53,6 +53,7 @@ export {
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
   buildPlacementPlan,
+  buildRegionPlan,
   CANONICAL_DOMAIN_ROOT,
   CATALOG_PATH,
   type EnvAddShape,
@@ -64,6 +65,7 @@ export {
   overlayPath,
   type PlacementDeltaResult,
   planEnvAddShape,
+  type RegionDeltaResult,
   schedulerEndpointPatchPath,
 } from "./env-membership-plan";
 export {

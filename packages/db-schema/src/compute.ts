@@ -27,6 +27,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -66,6 +67,13 @@ export const computeProviderOutcomes = pgTable(
       table.providerAccount,
       table.createdAt
     ),
+    // task.5153 — DB-side exactly-once for the live-path writers (strike-on-recovery-entry
+    // and boot_ok-on-serving-proof both retry across Crossplane reconcile ticks; the store
+    // inserts with ON CONFLICT DO NOTHING against this). Partial: legacy rows may share a
+    // NULL lease_id.
+    uniqueIndex("compute_provider_outcomes_lease_outcome_uq")
+      .on(table.leaseId, table.outcome)
+      .where(sql`${table.leaseId} IS NOT NULL`),
     check(
       "compute_provider_outcomes_outcome_check",
       sql`${table.outcome} IN ('boot_ok', 'slo_timeout')`

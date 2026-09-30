@@ -55,8 +55,10 @@ import type {
 import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
+  formatBidRejections,
   type ProviderOutcomeStats,
   type ScreenableBid,
+  type ScreenedBids,
   screenBids,
 } from "./akash-provider-screen";
 import { type AkashSdlOptions, buildAkashSdl } from "./akash-sdl";
@@ -258,6 +260,13 @@ interface ConsoleDeploymentList {
 interface ScreeningContext {
   providers: ReadonlyMap<string, AkashProviderInfo>;
   outcomes: ReadonlyMap<string, ProviderOutcomeStats>;
+  /**
+   * Node-owned HARD placement requirement for THIS workload (story.5050), threaded here
+   * rather than through three call signatures because this struct already IS the screening
+   * input bundle. Empty = unconstrained. Unlike the adapter-level latency preference this is
+   * per-provision: it comes off the ProvisionSpec, which comes off the node's catalog row.
+   */
+  requiredCountryCodes: readonly string[];
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -424,7 +433,10 @@ export class AkashComputeAdapter
     spec: ProvisionSpec;
   }): Promise<ProvisionOutput> {
     const sdl = buildAkashSdl(p.spec, this.sdlOptions);
-    const screening = await this.loadScreeningContext();
+    const screening = this.withPlacement(
+      await this.loadScreeningContext(),
+      p.spec
+    );
     const tried = new Set<string>();
     let finalBootFailureStage: BootFailureStage = "status_unavailable";
     for (let attempt = 1; attempt <= this.maxProviderAttempts; attempt++) {
@@ -470,7 +482,7 @@ export class AkashComputeAdapter
       sdl,
       p.spec.name,
       p.expectedSourceSha,
-      await this.loadScreeningContext(),
+      this.withPlacement(await this.loadScreeningContext(), p.spec),
       new Set<string>(),
       onAllocated
     );
@@ -831,12 +843,19 @@ export class AkashComputeAdapter
      * unrecorded dseq is a paid lease nobody can ever find.
      */
     onAllocated?: (leaseId: string) => Promise<void>;
+    /**
+     * Ledger-derived tried set for this generation's attempt family (task.5153).
+     * Crossplane re-invokes create per recovery ordinal, so anything in-memory here
+     * is empty on every call — which re-picked the same dead provider on every
+     * bounded-recovery attempt. The caller derives this from allocation receipts.
+     */
+    excludedProviders?: ReadonlySet<string>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
     const sdl = buildAkashSdl(p.spec, this.sdlOptions);
     const { dseq, provider } = await this.createAndLease(
       sdl,
-      await this.loadScreeningContext(),
-      new Set<string>(),
+      this.withPlacement(await this.loadScreeningContext(), p.spec),
+      new Set<string>(p.excludedProviders ?? []),
       p.onAllocated
         ? async (resource) => {
             await p.onAllocated?.(resource.leaseId);
@@ -997,6 +1016,10 @@ export class AkashComputeAdapter
       ? new Set(this.config.allowedProviders)
       : undefined;
     let sawAnyBid = false;
+    // Carried out of the loop so NO_ELIGIBLE_BIDS can name WHICH filter refused everything.
+    // Three independent filters can each empty the set; a static reason list sent operators
+    // hunting the wrong one for a full bid window.
+    let lastRejections: ScreenedBids["rejections"] = {};
     for (;;) {
       const bids = await this.request<ConsoleBid[]>(
         "GET",
@@ -1018,17 +1041,18 @@ export class AkashComputeAdapter
           priceAmount: Number(b.bid?.price?.amount ?? Number.POSITIVE_INFINITY),
         });
       }
-      const ranked = screenBids({
-        bids: allowed
-          ? screenable.filter((bid) => allowed.has(bid.provider))
-          : screenable,
+      const { ranked, rejections } = screenBids({
+        bids: screenable,
         providers: screening.providers,
         outcomes: screening.outcomes,
         preferredProviders: preferred,
         preferredCountryCodes: this.preferredCountryCodes,
+        requiredCountryCodes: screening.requiredCountryCodes,
+        allowedProviders: allowed,
         excludedProviders: tried,
         nowMs: Date.now(),
       });
+      lastRejections = rejections;
       const best = ranked[0];
       // A preferred provider that survived screening wins immediately; anyone else
       // waits out the window so late (often better) bids can compete.
@@ -1045,7 +1069,10 @@ export class AkashComputeAdapter
           throw new AkashComputeError(
             "NO_ELIGIBLE_BIDS",
             `bids arrived for dseq ${dseq} but none passed provider screening ` +
-              "(audited + online + uptime7d > 0.95 + active leases, no blacklist, no 2σ underbids)"
+              `[refused: ${formatBidRejections(lastRejections)}]` +
+              (screening.requiredCountryCodes.length > 0
+                ? ` (required placement countries: ${screening.requiredCountryCodes.join(", ")})`
+                : "")
           );
         }
         throw new AkashComputeError(
@@ -1164,7 +1191,30 @@ export class AkashComputeAdapter
     }
   }
 
-  /** Load provider metadata + outcome history, each best-effort (advisory inputs only). */
+  /**
+   * Attach the workload's own HARD placement requirement to a marketplace screening read.
+   *
+   * Kept as its own seam so every provision path picks the requirement up the SAME way: a
+   * path that forgot it would silently place a geo-constrained node anywhere, which is
+   * exactly the failure this feature exists to stop (story.5050).
+   */
+  private withPlacement(
+    screening: ScreeningContext,
+    spec: ProvisionSpec
+  ): ScreeningContext {
+    return {
+      ...screening,
+      requiredCountryCodes: spec.placement?.requiredCountryCodes ?? [],
+    };
+  }
+
+  /**
+   * Load provider metadata + outcome history, each best-effort (advisory inputs only).
+   *
+   * `requiredCountryCodes` is deliberately NOT read here: it is per-workload catalog policy,
+   * not a marketplace read, so a caller attaches it from the ProvisionSpec. Defaulting it to
+   * `[]` keeps an unconstrained workload on exactly today's behaviour.
+   */
   private async loadScreeningContext(): Promise<ScreeningContext> {
     const providers = new Map<string, AkashProviderInfo>();
     const list = await this.request<ConsoleProvider[]>(
@@ -1188,7 +1238,9 @@ export class AkashComputeAdapter
     const outcomes = await this.outcomeStore
       .stats(PROVIDER)
       .catch(() => new Map<string, ProviderOutcomeStats>());
-    return { providers, outcomes };
+    // Unconstrained by default so this seam is TOTAL: a caller that forgets `withPlacement`
+    // gets today's behaviour, never an undefined requirement the screener would crash on.
+    return { providers, outcomes, requiredCountryCodes: [] };
   }
 
   /** Best-effort outcome append (OUTCOME_STORE_IS_ADVISORY). */

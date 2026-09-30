@@ -74,12 +74,11 @@ const templateCode = template
 
 const xrdSpec = xrd.spec as YamlObject;
 const version = (xrdSpec.versions as YamlObject[])[0] as YamlObject;
-const specSchema = (
-  (
-    ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
-      .properties as YamlObject
-  ).spec as YamlObject
-).properties as YamlObject;
+const specObjectSchema = (
+  ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
+    .properties as YamlObject
+).spec as YamlObject;
+const specSchema = specObjectSchema.properties as YamlObject;
 const statusSchema = (
   (
     ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
@@ -120,6 +119,9 @@ describe("XComputeWorkload composite API (task.5096)", () => {
       "leaseGeneration",
       "migration",
       "nodeId",
+      // story.5050 — node-owned HARD placement requirement. Optional and immutable, so no
+      // existing XR changes and a new requirement can only bind on a fresh mint.
+      "placement",
       "runtime",
       "workload",
     ]);
@@ -188,7 +190,10 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     expect(template).toContain("BootDeadlineExceeded");
     // Only a workload that NEVER served may be closed for budget.
     expect(template).toContain(
-      '$neverServed := and (not $serving) (eq $prevSha "")'
+      // bug.5287: the deadline binds to the CURRENT attempt via $hasServedDesired.
+      // The retired '$neverServed' form keyed on a LATCHED field, so it could only ever be
+      // true on a first boot and made BOOT_SLO_OR_CLOSE unreachable thereafter.
+      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
     );
   });
 
@@ -212,15 +217,15 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     expect(Object.keys(bootEpoch)).toEqual(["key", "at"]);
   });
 
-  it("stages the host-routed serving proof as an explicit two-phase rollout (bug.5237)", () => {
+  it("emits the host-routed serving proof after the phase-1 reader rollout (bug.5237)", () => {
     // A stale deployment still owning the public hostname made the bare-ingress serving
     // probe a lie. The fix is OBSERVE handing the actuator the public hostname — but the
     // actuator's observe schema is a strictObject, so emitting the key before every
     // environment's actuator image accepts it would 400 every observe and freeze
-    // reconciliation fleet-wide. Phase 1 (this tree): the actuator accepts + probes
-    // `publicHost`; the composition documents the pending emission and must NOT send it.
+    // reconciliation fleet-wide. Phase 1 deployed that strict-schema reader fleet-wide;
+    // phase 2 now emits `publicHost` and must never regress to bare-ingress truth.
     expect(template).toContain("bug.5237 PHASE 2");
-    expect(templateCode).not.toContain("publicHost: {{ $publicHost | quote }}");
+    expect(templateCode).toContain("publicHost: {{ $publicHost | quote }}");
   });
 
   it("declares the empty-birth schema policy WITHOUT claiming it gates payment", () => {
@@ -261,6 +266,38 @@ describe("XComputeWorkload composite API (task.5096)", () => {
 });
 
 describe("XComputeWorkload Composition (task.5096)", () => {
+  it("binds the boot deadline to the current attempt, not to ever-served (bug.5287)", () => {
+    // $prevSha is LATCHED, so `eq $prevSha ""` is only ever true on a first boot. Keying the
+    // deadline on it made BOOT_SLO_OR_CLOSE unreachable for the rest of an XR's life — toks5
+    // production billed three generations with bootDeadlineAt hours past and reason=None.
+    expect(templateCode).toContain(
+      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
+    );
+    // no live template expression may reference the retired predicate
+    const live = templateCode
+      .split("\n")
+      .filter((l) => l.includes("$neverServed") && l.includes("{{-"));
+    expect(live).toEqual([]);
+  });
+
+  it("never latches a migration failure into a terminal phase (bug.5309)", () => {
+    // The DISPLAY latch is correct and must stay: status.migration.phase falls back to the
+    // previous phase so it does not blink out on ticks carrying no migration answer.
+    expect(templateCode).toContain(
+      '$migrationPhase := dig "migration" "phase" $prevMigrationPhase $resp'
+    );
+    // The TERMINAL decision must read the CURRENT response only. Deciding from the latched
+    // $migrationPhase made one transient failure permanent: toks4 candidate-a sat
+    // Failed/MigrationFailed with a succeeded Job, a present database and the actuator
+    // logging akash_tx_migration_succeeded, and could never recover.
+    expect(templateCode).toContain(
+      '$migrationFailed := eq (dig "migration" "phase" "" $resp) "failed"'
+    );
+    expect(templateCode).not.toMatch(
+      /\$migrationFailed\s*:=\s*eq\s+\$migrationPhase/
+    );
+  });
+
   it("delegates all generic reconciliation to pinned OSS functions", () => {
     expect(compositionSpec.mode).toBe("Pipeline");
     expect(
@@ -288,10 +325,20 @@ describe("XComputeWorkload Composition (task.5096)", () => {
 
   it("sends the actuator its exact strict-contract wire shape", () => {
     // @contracts/compute.akash-tx.v1 accepts EXACTLY {cogniKey, environment, spec}; the spec
-    // is `{name, services[]}`. An extra key is a 400 forever, never a partially-honoured call.
-    expect(template).toContain(
-      '$payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services)'
+    // is `{name, services[], placement?}`. An extra key is a 400 forever, never a
+    // partially-honoured call — so the spec dict must be assembled from exactly those keys.
+    expect(templateCode).toContain(
+      '$specDict := dict "name" $slug "services" $services'
     );
+    expect(templateCode).toContain(
+      '$payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" $specDict'
+    );
+    // story.5050 is the ONLY conditional key the spec dict may gain. Anything else set on it
+    // would reach the strict contract as an unknown field and 400 every create.
+    const specDictWrites = [
+      ...templateCode.matchAll(/set \$specDict "([a-zA-Z]+)"/g),
+    ].map((m) => m[1]);
+    expect(specDictWrites).toEqual(["placement"]);
     // The four bounded ops map 1:1 onto provider-http's four actions — no Cogni code decides
     // WHEN to act.
     for (const [action, route] of [
@@ -362,7 +409,7 @@ describe("XComputeWorkload Composition (task.5096)", () => {
       templateCode.indexOf(
         "spec.leaseEpoch and spec.leaseGeneration disagree; refusing to choose an idempotence key"
       )
-    ).toBeLessThan(templateCode.indexOf("$cogniKey := printf"));
+    ).toBeLessThan(templateCode.indexOf("$baseCogniKey := printf"));
     expect(templateCode).toContain(
       '$leaseGeneration = int (get $spec "leaseGeneration")'
     );
@@ -627,7 +674,9 @@ describe("XComputeWorkload migration decoupling (task.5135)", () => {
     // The loudness half of the fix. A migration that will never succeed must not hide behind a
     // retryable refusal's "Progressing" — that is what an indefinite silent stall looks like.
     expect(template).toContain(
-      '$migrationFailed := eq $migrationPhase "failed"'
+      // bug.5309: the terminal decision reads the CURRENT response, never the latched
+      // $migrationPhase — latching it made one transient failure permanent.
+      '$migrationFailed := eq (dig "migration" "phase" "" $resp) "failed"'
     );
     expect(template).toContain("{{- else if $migrationFailed }}");
     expect(template).toContain('$failReason = "MigrationFailed"');
@@ -780,6 +829,66 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     // server and takes the whole status write — and the refusal — down with it.
     expect(failureProps.message).toMatchObject({ maxLength: 256 });
     expect(template).toContain("$failMessage = substr 0 256 $refusalMessage");
+  });
+
+  it("emits failure unconditionally — 'None' sentinel clears a stale reason (bug.5287)", () => {
+    // Omitting the key does not clear it: the status merge preserves the previous value, so
+    // a recovered workload kept its stale failure.reason (ledger_unavailable under
+    // Progressing) latched for days on four XRs — status lied until someone bumped the
+    // generation. The composition therefore ALWAYS writes failure, with "None" as the
+    // cleared sentinel; compute-workload-readiness treats "None" as absent (reader
+    // tolerance shipped FIRST — akash-actuator-first-rollout).
+    expect(template).toContain('reason: "None"');
+    // The sentinel must satisfy the XRD reason pattern or the whole status write is rejected.
+    expect("None").toMatch(reasonPattern);
+  });
+
+  it("reports a settled-key closed lease as LeaseClosed, not a Progressing lie (task.5156)", () => {
+    // The render side PARKS a closed lease observed under a non-current key (the Axiom 26 fence
+    // above). The status side must tell the same truth. $heldClosed only catches
+    // $closedForCurrentKey, so before this branch a closed-under-foreign-key lease with no
+    // recovery in flight missed every fail branch and fell through to the default
+    // Progressing/reason:"None" — status claimed a permanently-parked lease was still coming up.
+    expect(template).toContain("{{- else if $closed }}");
+    // Ordered strictly AFTER the active-recovery branch, or it would swallow
+    // LeaseRecoveryInProgress and report a recovering lease as terminally closed.
+    const chain = template.slice(
+      template.lastIndexOf('{{- $phase := "Progressing" }}')
+    );
+    expect(chain.indexOf("LeaseRecoveryInProgress")).toBeLessThan(
+      chain.indexOf("{{- else if $closed }}")
+    );
+  });
+
+  it("makes paid replacement opt-in and structurally unreachable (bug.5287 onGiveUp)", () => {
+    // TWO independent fences on the paid re-mint. (1) The composition only bumps the
+    // recovery key when bootPolicy.onGiveUp is Replace; Hold — the PERMANENT default —
+    // parks a closed lease as LeaseClosed with zero spend. (2) The XRD enum admits ONLY
+    // Hold until provider strikes are re-homed in the actuator, so an early Replace
+    // catalog cell is rejected by the CRD, not by prose ("if it's global, tier 4 happens
+    // by accident the moment someone adds a node").
+    expect(template).toContain(
+      'if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace")'
+    );
+    const onGiveUp = (
+      (specSchema.bootPolicy as YamlObject).properties as YamlObject
+    ).onGiveUp as YamlObject;
+    expect(onGiveUp.enum).toEqual(["Hold"]);
+    expect(onGiveUp.default).toBe("Hold");
+    expect(template).toContain('$failReason = "LeaseClosed"');
+  });
+
+  it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {
+    // A closed lease whose response key does not match the current key must PARK, not
+    // re-render: rendering under a settled key is refused by the actuator with
+    // akash_tx_create_refused_settled_key on EVERY reconcile forever. The held/foreign
+    // terms below are what stand between bounded recovery and unbounded churn.
+    expect(template).toContain(
+      "$renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey)))"
+    );
+    expect(template).toContain(
+      '$heldClosed := and $closedForCurrentKey (ne $onGiveUp "Replace")'
+    );
   });
 
   it("derives retryability from the HTTP status, not a table of codes", () => {
@@ -961,12 +1070,19 @@ describe("XComputeWorkload DNS survives a promotion transition (bug.5188)", () =
     // The render gate is what a transient endpoint-less observe used to fail: an omitted child
     // is garbage-collected, which fires a real Cloudflare DELETE and takes the live proxied
     // CNAME to NXDOMAIN. The gate must read the latched value so the child keeps rendering.
-    expect(templateCode).toContain(
-      'if and $dns (ne $effectiveDnsTarget "") $renderLease'
-    );
-    expect(templateCode).not.toContain(
-      'if and $dns (ne $dnsTarget "") $renderLease'
-    );
+    expect(templateCode).toContain('if and $dns (ne $effectiveDnsTarget "")');
+    expect(templateCode).not.toContain('if and $dns (ne $dnsTarget "")');
+  });
+
+  it("never couples DNS publication to lease liveness (bug.5301)", () => {
+    // Third instance of this hazard class: an omitted dns-record child is a REAL Cloudflare
+    // DELETE. bug.5188 defended the mid-promote collapse with the last-known-good latch, but
+    // the gate still shared $renderLease — so every terminal lease condition (budget close,
+    // recovery exhaustion, Hold-park, foreign-key closure) took the public hostname to
+    // NXDOMAIN (beacon/node-template, 2026-09-28). Once onGiveUp: Replace is armed, closure
+    // is ROUTINE and each recovery cycle would open an NXDOMAIN window. The hostname
+    // withdraws only on genuine XR deletion via finalization.
+    expect(templateCode).not.toMatch(/if and \$dns [^\n]*\$renderLease/);
   });
 
   it("adopts a genuinely-new target only once the new revision actually serves", () => {
@@ -1038,6 +1154,124 @@ describe("catalog lease generation naming", () => {
       lease_generation?: Record<string, number>;
     };
     // story.5047: bumped 1->2 to force a fresh mint delivering DOLTGRES_URL (knowledge heal).
-    expect(toks5.lease_generation?.production).toBe(2);
+    // bug.5302: bumped 2->3 — the gen-2 lease died in the 2026-09-29 account-depletion
+    // event (escrow drained fleet-wide); 3 is the funded replacement mint.
+    // bug.5287: bumped 3->4 — the gen-3 lease reached the chain and bills but its workload
+    // never came up; the actuator replay path treats that partial receipt as settled and
+    // returns the dead handle forever (64x create_replayed, 0 create-family). A fresh key
+    // cannot replay, so 4 forces createAndLease. Durable fix: task.5157 (settled/serving gate).
+    // bug.5287: bumped 4->5 — gen-4's fresh createAndLease reached allocation_recorded then
+    // hit manifest_not_delivered (HTTP 404, deployment closed, escrow refunding, rolled back
+    // before akash_tx_leased). Its receipt is stuck allocated+external_name over a verified-
+    // closed lease, so a retry under :4 would replay the dead handle (task.5157 case c). toks5's
+    // SDL is identical to healthy toks4, so gen-4's 404 reads as transient; 5 is a fresh key
+    // that re-enters createAndLease to retry the manifest delivery.
+    expect(toks5.lease_generation?.production).toBe(5);
+  });
+});
+
+describe("XComputeWorkload placement requirement (story.5050)", () => {
+  const placement = specSchema.placement as Record<string, never> &
+    Record<string, unknown>;
+  const placementRule = (
+    (specObjectSchema["x-kubernetes-validations"] ?? []) as {
+      rule: string;
+      message: string;
+    }[]
+  ).find((rule) => /placement may change/.test(rule.message));
+
+  /**
+   * Truth table for the transition contract expressed by placementRule. Kubernetes is the CEL
+   * runtime, so candidate-a remains the executable integration proof; this pins both semantic
+   * directions that the old field-scoped presence assertion could not distinguish.
+   */
+  function allowsPlacementTransition(input: {
+    samePlacement: boolean;
+    oldGeneration?: number;
+    oldEpoch?: number;
+    newGeneration?: number;
+  }): boolean {
+    if (input.samePlacement) return true;
+    if (input.newGeneration === undefined) return false;
+    return input.newGeneration > (input.oldGeneration ?? input.oldEpoch ?? 0);
+  }
+
+  /**
+   * Akash refuses in-place placement change, so an accepted edit without a fresh key would be
+   * desired state nothing applies — the node keeps serving from its old jurisdiction while the
+   * XR claims otherwise. The rule must live at spec scope so it can admit the env-manager's
+   * atomic placement + leaseGeneration bump while rejecting a placement-only edit.
+   */
+  it("allows re-placement only alongside a leaseGeneration bump", () => {
+    expect(placementRule?.rule.replace(/\s+/g, " ").trim()).toBe(
+      "(!has(self.placement) && !has(oldSelf.placement)) || " +
+        "(has(self.placement) && has(oldSelf.placement) && self.placement == oldSelf.placement) || " +
+        "(has(self.leaseGeneration) && self.leaseGeneration > " +
+        "(has(oldSelf.leaseGeneration) ? oldSelf.leaseGeneration : " +
+        "(has(oldSelf.leaseEpoch) ? oldSelf.leaseEpoch : 0)))"
+    );
+    expect(placement["x-kubernetes-validations"]).toBeUndefined();
+  });
+
+  it.each([
+    {
+      case: "admits present-to-different-present with a generation increase",
+      input: { samePlacement: false, oldGeneration: 6, newGeneration: 7 },
+      expected: true,
+    },
+    {
+      case: "rejects present-to-different-present without a generation increase",
+      input: { samePlacement: false, oldGeneration: 6, newGeneration: 6 },
+      expected: false,
+    },
+    {
+      case: "rejects a generation decrease that could replay a spent key",
+      input: { samePlacement: false, oldGeneration: 6, newGeneration: 5 },
+      expected: false,
+    },
+    {
+      case: "admits an unchanged placement without spending a generation",
+      input: { samePlacement: true, oldGeneration: 6, newGeneration: 6 },
+      expected: true,
+    },
+    {
+      case: "compares against the legacy epoch while upgrading an older XR",
+      input: { samePlacement: false, oldEpoch: 6, newGeneration: 7 },
+      expected: true,
+    },
+  ])("$case", ({ input, expected }) => {
+    expect(allowsPlacementTransition(input)).toBe(expected);
+  });
+
+  /**
+   * EMPTY_IS_A_TYPO_NOT_A_WILDCARD. The actuator fails closed on this field, so an empty list
+   * would refuse every bid and present as "no provider bid for this workload" — the most
+   * expensive possible way to learn about a typo. The API server must reject it first.
+   */
+  it("rejects an empty country list rather than accepting a lease-refusing wildcard", () => {
+    const countries = (
+      placement["properties"] as Record<string, Record<string, unknown>>
+    )["requiredCountries"];
+    expect(countries["minItems"]).toBe(1);
+    expect(countries["x-kubernetes-list-type"]).toBe("set");
+    expect((countries["items"] as Record<string, unknown>)["pattern"]).toBe(
+      "^[A-Z]{2}$"
+    );
+  });
+
+  /**
+   * The wire is a zod strictObject, so the Composition must lower the XR field onto the
+   * contract's own name. A rename drift here is a 400 at create time, not a silently
+   * unconstrained lease — but only if the lowering exists at all.
+   */
+  it("lowers onto the actuator wire under the contract's name", () => {
+    expect(templateCode).toContain(
+      '$requiredCountries := dig "placement" "requiredCountries" (list) $spec'
+    );
+    expect(templateCode).toContain(
+      'set $specDict "placement" (dict "requiredCountryCodes" $requiredCountries)'
+    );
+    // Absent must stay ABSENT: an empty list on the wire fails closed in the actuator.
+    expect(templateCode).toContain("{{- if gt (len $requiredCountries) 0 }}");
   });
 });

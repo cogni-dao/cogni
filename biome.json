@@ -25,5 +25,17 @@
     ],
     "ignoreUnknown": false
   },
-  "extends": ["./biome/base.json", "./biome/app.json", "./biome/tests.json"]
+  "extends": ["./biome/base.json", "./biome/app.json", "./biome/tests.json"],
+  "overrides": [
+    {
+      "includes": ["tests/ci-invariants/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noTemplateCurlyInString": "off"
+          }
+        }
+      }
+    }
+  ]
 }

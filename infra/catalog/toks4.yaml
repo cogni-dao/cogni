@@ -22,8 +22,9 @@ production_branch: deploy/production-toks4
 # self-test on cogni-test-org throwaway nodes. BILLING_FOLLOWS_OWNER: toks4 is a real
 # cogni-dao fleet node, so every environment it runs in must bill the PRODUCTION sponsor
 # account (akash10auj…). Production is this node's only slot.
-envs: [preview, production]
+envs: [candidate-a, preview, production]
 deployment_provider:
+  candidate-a: akash
   preview: akash
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction
@@ -32,13 +33,22 @@ deployment_provider:
 # materializes this cell (ONE_AUTHORITY_PER_WORKLOAD; rsync --delete evicts the
 # legacy manifest in the same commit).
 compute_api:
+  candidate-a: crossplane
   preview: crossplane
   production: crossplane
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  preview: 0
-  production: 1
+  # story.5050 1->2: placement binds only on a fresh CREATE (Akash refuses in-place
+  # placement change), so the new required_placement_countries cell below is inert until
+  # this generation moves. The candidate-a lease is disposable — bootPolicy for every
+  # non-production lane is onDeadline:Close — so a mint that cannot serve closes itself.
+  # story.5050 2->3: gen-2 was created then CLOSED with zero leases (escrow refunded) because
+  # a one-country requirement had one eligible provider and it did not bid. Widening the set
+  # needs a fresh mint to take effect — placement binds only on CREATE.
+  candidate-a: 3
+  preview: 1
+  production: 2
 # task.5130 — ACTIVITY_ENV_IS_DEPLOYED (_schema.json): the singleton activity authority
 # must be a member of `envs`, and candidate-a just left. Production is the only remaining
 # slot, and it is also the only environment that can ever earn a receipt — GitHub App
@@ -46,6 +56,28 @@ lease_generation:
 # unable to ingest one (bug.5079, see levelup.yaml). Nothing is lost by moving it: toks4's
 # candidate-a authority never ingested, and never could.
 activity_env: production
+# story.5050 — HARD placement requirement, candidate-a only: this node is the FLEET PROBE for
+# whether an Akash provider's EGRESS identity matches its advertised INGRESS country. That
+# question blocks poly's product (bug.5270: Belgium is Polymarket API-restricted, 200/200 prod
+# CLOB orders refused 403) and nobody can answer it from outside, because only the operator can
+# mint the lease. toks4 answers it at candidate-a cost instead of poly's production cost.
+#
+# THE HYPOTHESIS UNDER TEST: egress == ingress for these providers. Evidence for it is that the
+# `80.200.246.35/32` below is simultaneously zencloud's INGRESS address (provider.zencloud.eu)
+# and the value this catalog has long carried as its EGRESS NAT. Evidence cited against it —
+# a "shared NAT 80.199.246.35" — does not survive: that address is AS3292 TDC in DENMARK, a
+# jurisdiction Polymarket does NOT restrict, so it cannot explain the observed 403, while
+# 80.200.246.35 is AS5432 Proximus in Belgium, which does. The two are different ASNs in
+# different countries and cannot be one shared NAT; one digit apart, it reads as a transcription
+# error. THE TEST: if this lease boots in PT and reaches the substrate, egress is inside the /32
+# below and the hypothesis holds — which makes region placement the correct fix for poly.
+required_placement_countries:
+  # THE SET, not one country (story.5050). Requiring only [PT] closed a deployment with
+  # `refused: not_allowlisted=5, required_country=1` — the filter behaved exactly right and
+  # nothing could win, because the single eligible PT provider did not bid that round. Every
+  # code here is a Polymarket-PERMITTED jurisdiction with an Overclock-audited, currently
+  # lease-serving provider allowlisted on the production writer.
+  candidate-a: [BG, CH, FI, NL, PT]
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/toks4/
 node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
@@ -56,4 +88,14 @@ node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
   - cidr: 80.200.246.35/32
-    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
+    comment: egress NAT of Akash provider zencloud, BE Antwerp AS5432 Proximus (story.5016)
+  - cidr: 213.146.212.69/32
+    comment: egress of Akash provider digital frontier PT Evora AS5626 (story.5050)
+  - cidr: 77.76.13.0/24
+    comment: egress of Akash provider digital frontier BG Sofia, a /24 because the host round-robins (story.5050)
+  - cidr: 84.234.20.39/32
+    comment: egress of Akash provider DSTM CH Zurich (story.5050)
+  - cidr: 95.217.58.106/32
+    comment: egress of Akash provider digital frontier FI Helsinki (story.5050)
+  - cidr: 24.144.74.27/32
+    comment: egress of Akash provider overclock NL Amsterdam (story.5050)

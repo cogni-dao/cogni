@@ -247,11 +247,16 @@ export type EnvAddShape =
       readonly computeApi: null;
       readonly controlEnv: NodeFormationEnv;
     }
-  /** Externally built row: akash placement, crossplane authority, production reconciles non-prod. */
+  /**
+   * Externally built row: akash placement, crossplane authority, the FLEET CONTROL ENV reconciles
+   * the non-production lane. `controlEnv` is a `string` because the fleet control env is fleet
+   * config (`FLEET_CONTROL_ENV`, `controlEnvFor`) — `production` on cogni-dao, `candidate-a` on an
+   * isolated test fleet — not necessarily one of this repo's own NodeFormationEnv literals.
+   */
   | {
       readonly placement: "akash";
       readonly computeApi: "crossplane";
-      readonly controlEnv: NodeFormationEnv;
+      readonly controlEnv: string;
     };
 
 /**
@@ -266,7 +271,8 @@ export type EnvAddShape =
  */
 export function planEnvAddShape(
   catalog: string,
-  env: NodeFormationEnv
+  env: NodeFormationEnv,
+  fleetControlEnv?: string
 ): EnvAddShape {
   if (!hasCatalogSourceRepo(catalog)) {
     // In-repo row: no external artifact plane, so the k3s lane — and no placement cells, which
@@ -287,7 +293,7 @@ export function planEnvAddShape(
   return {
     placement: "akash",
     computeApi: "crossplane",
-    controlEnv: controlEnvFor(env, "akash"),
+    controlEnv: controlEnvFor(env, "akash", fleetControlEnv),
   };
 }
 
@@ -319,8 +325,16 @@ export function buildEnvDeltaPlan(input: {
   readonly current: EnvPlanCurrent;
   /** Explicit akash lease replacement counter for the added env (defaults 0 — a fresh lease). */
   readonly leaseGeneration?: number | undefined;
+  /**
+   * THE FLEET CONTROL ENV (`FLEET_CONTROL_ENV`, `controlEnvFor`) — the env whose cluster reconciles
+   * an akash lane, so the env whose `appsets/<control-env>/` dir the AppSet is written into/deleted
+   * from (bug.5204/bug.5235). Omitted => `production` (cogni-dao fleet, byte-identical); an isolated
+   * test fleet passes `candidate-a`. PURE: the adapter resolves it from env and threads it here.
+   */
+  readonly fleetControlEnv?: string | undefined;
 }): EnvDeltaResult {
-  const { slug, env, present, current, leaseGeneration } = input;
+  const { slug, env, present, current, leaseGeneration, fleetControlEnv } =
+    input;
 
   // OPERATOR_SELF_HOSTS_THE_VERB — the control plane cannot remove its own deployment.
   if (!present && slug === OPERATOR_SLUG) {
@@ -342,9 +356,17 @@ export function buildEnvDeltaPlan(input: {
       activityEnv,
       current,
       leaseGeneration,
+      fleetControlEnv,
     });
   }
-  return planRemove({ slug, env, currentEnvs, activityEnv, current });
+  return planRemove({
+    slug,
+    env,
+    currentEnvs,
+    activityEnv,
+    current,
+    fleetControlEnv,
+  });
 }
 
 function planAdd(args: {
@@ -354,9 +376,17 @@ function planAdd(args: {
   activityEnv: NodeFormationEnv;
   current: EnvPlanCurrent;
   leaseGeneration?: number | undefined;
+  fleetControlEnv?: string | undefined;
 }): EnvDeltaResult {
-  const { slug, env, currentEnvs, activityEnv, current, leaseGeneration } =
-    args;
+  const {
+    slug,
+    env,
+    currentEnvs,
+    activityEnv,
+    current,
+    leaseGeneration,
+    fleetControlEnv,
+  } = args;
 
   // Idempotent: already present → no PR.
   if (currentEnvs.includes(env)) {
@@ -377,7 +407,8 @@ function planAdd(args: {
 
   // ADD_DERIVES_PLACEMENT — the shape (placement + compute authority + control env) is a function
   // of the catalog row, never caller input. Throws compute_authority_unavailable before any render.
-  const shape = planEnvAddShape(current.catalog, env);
+  // The FLEET CONTROL ENV selects the akash lane's appset dir (bug.5204/bug.5235).
+  const shape = planEnvAddShape(current.catalog, env, fleetControlEnv);
 
   const templateOverlay = current.templateOverlayByEnv[env];
   const templateExternalSecret = current.templateExternalSecretByEnv?.[env];
@@ -486,8 +517,10 @@ function planRemove(args: {
   currentEnvs: NodeFormationEnv[];
   activityEnv: NodeFormationEnv;
   current: EnvPlanCurrent;
+  fleetControlEnv?: string | undefined;
 }): EnvDeltaResult {
-  const { slug, env, currentEnvs, activityEnv, current } = args;
+  const { slug, env, currentEnvs, activityEnv, current, fleetControlEnv } =
+    args;
 
   // Idempotent: already absent → no PR.
   if (!currentEnvs.includes(env)) {
@@ -521,7 +554,7 @@ function planRemove(args: {
   // written into. An absent cell is the k3s default, whose control env is the workload env.
   const provider: PlacementProvider =
     parseCatalogPlacement(current.catalog)[env] ?? "k3s";
-  const controlEnv = controlEnvFor(env, provider);
+  const controlEnv = controlEnvFor(env, provider, fleetControlEnv);
 
   const appsetsKustomization = current.appsetsKustomizationByEnv[controlEnv];
   if (appsetsKustomization === undefined) {
@@ -579,6 +612,166 @@ function planRemove(args: {
     if (schedulerOp) ops.push(schedulerOp);
   }
   return { kind: "remove", ops, nextEnvs: remaining };
+}
+
+/** Result of {@link buildRegionPlan} — the node-owned region requirement (story.5050). */
+export type RegionDeltaResult =
+  | { readonly kind: "no_changes" }
+  | {
+      readonly kind: "set_region";
+      readonly ops: readonly EnvPlanOp[];
+      /** The generation the requirement will bind on — DERIVED, never caller input. */
+      readonly leaseGeneration: number;
+    };
+
+/**
+ * Pure: compute the file-delta for requiring `{ slug, env }` to be placed in `countries`
+ * (story.5050) — the region verb on the env verb.
+ *
+ * WHY THIS IS A VERB AND NOT A CATALOG PR. A node with a geo-fenced outbound dependency cannot
+ * satisfy its own product contract from an arbitrary jurisdiction (bug.5270: 200/200 of poly's
+ * production CLOB orders were refused 403 from Belgium). Before this, the only way to express that
+ * was a hand-edited monorepo catalog PR — so the node could not CHOOSE anything; an operator with
+ * repo access chose for it. This makes the choice a repeatable, RBAC-gated, self-serve control
+ * whose output is still the same reviewed catalog commit.
+ *
+ * Invariants:
+ *   - REGION_REQUIRES_AKASH: only a marketplace placement screens bids, so the cell is meaningless
+ *     on a k3s-placed env and would be desired state nothing enforces. Fail closed.
+ *   - REGION_BINDS_ON_A_FRESH_MINT: Akash refuses in-place placement change, so a new requirement
+ *     takes effect only on a new lease. The plan therefore ALWAYS moves `lease_generation` with the
+ *     cell — a region edit that left the generation alone would be silently inert, which is the
+ *     "a verb that succeeds and does nothing is BROKEN" failure.
+ *   - GENERATION_IS_NOT_CALLER_INPUT: the generation is derived from ledger-receipt evidence by the
+ *     caller (`requiredLeaseGeneration`) and passed in; this function never synthesizes one.
+ *   - EGRESS_COUPLING_OR_REFUSE: the row must already declare `compute_egress_cidrs`, because a
+ *     provider admitted by this requirement whose NAT is absent there boots a workload that then
+ *     cannot reach the env VM's substrate ports — a mystery outage, not a config error (the
+ *     bug.5191 class). Mirrors the same rule in `infra/catalog/_schema.json`.
+ *   - NOT_A_GUARANTEE: the screener compares a provider's ADVERTISED/ingress country, which is not
+ *     proven to equal the egress identity its workload presents to a third party. This narrows the
+ *     candidate pool; only the workload's own outbound probe proves reachability.
+ */
+export function buildRegionPlan(input: {
+  readonly slug: string;
+  readonly env: NodeFormationEnv;
+  /** ISO 3166-1 alpha-2 codes the workload MAY be placed in. Non-empty. */
+  readonly countries: readonly string[];
+  /** Derived from allocation-ledger evidence by the caller. */
+  readonly leaseGeneration: number;
+  readonly current: EnvPlanCurrent;
+}): RegionDeltaResult {
+  const { slug, env, countries, leaseGeneration, current } = input;
+
+  if (countries.length === 0) {
+    throw new EnvPlanError(
+      "region_required",
+      `cannot set a placement region for '${env}' on '${slug}': no countries given. Omitting the requirement is how you say unconstrained; an empty set would refuse every bid.`,
+      422
+    );
+  }
+  const invalid = countries.filter((c) => !/^[A-Z]{2}$/.test(c));
+  if (invalid.length > 0) {
+    throw new EnvPlanError(
+      "region_invalid",
+      `cannot set a placement region for '${env}' on '${slug}': ${invalid.join(", ")} are not ISO 3166-1 alpha-2 country codes.`,
+      422
+    );
+  }
+  if (new Set(countries).size !== countries.length) {
+    throw new EnvPlanError(
+      "region_invalid",
+      `cannot set a placement region for '${env}' on '${slug}': duplicate country codes.`,
+      422
+    );
+  }
+
+  const currentEnvs = parseCatalogEnvs(current.catalog);
+  if (!currentEnvs.includes(env)) {
+    throw new EnvPlanError(
+      "env_not_deployed",
+      `cannot set a placement region for '${env}' on '${slug}': the node is not deployed to that environment. Add the env first (present:true).`,
+      422
+    );
+  }
+
+  // REGION_REQUIRES_AKASH — a k3s env is served by the in-cluster overlay; no bids are screened,
+  // so the cell would be desired state nothing reads.
+  if (parseCatalogPlacement(current.catalog)[env] !== "akash") {
+    throw new EnvPlanError(
+      "region_requires_akash",
+      `cannot set a placement region for '${env}' on '${slug}': that env is not placed on akash, and only a marketplace placement screens provider bids. Place it first (placement:"akash").`,
+      422
+    );
+  }
+
+  // EGRESS_COUPLING_OR_REFUSE — see the invariant above.
+  if (!/^compute_egress_cidrs:/m.test(current.catalog)) {
+    throw new EnvPlanError(
+      "region_requires_egress_cidrs",
+      `cannot set a placement region for '${env}' on '${slug}': the catalog row declares no compute_egress_cidrs, so a provider this requirement admits could boot and then be unable to reach the environment's substrate ports.`,
+      422
+    );
+  }
+
+  const wanted = [...countries].sort();
+
+  // IDEMPOTENT, COMPARED ON THE PARSED VALUE — never on the serialized file.
+  //
+  // `setCatalogPlacementCell` rewrites a whole block from its parsed map, which DROPS any comment
+  // lines inside that block. So a call requesting the region the row already holds still produces
+  // a different string, and a text comparison would read that as a change. This verb bumps
+  // `lease_generation`, so "not idempotent" here does not mean a redundant PR — it means EVERY
+  // repeat call mints a PAID LEASE and silently deletes the reviewed rationale from the catalog.
+  // Observed live on toks4 before this guard existed (PR #2496, closed).
+  const held = parseCatalogPlacementMap(
+    current.catalog,
+    "required_placement_countries"
+  )[env];
+  const heldCountries = (held ?? "")
+    .replace(/^\[|\]$/g, "")
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .sort();
+  if (
+    heldCountries.length === wanted.length &&
+    heldCountries.every((c, i) => c === wanted[i])
+  ) {
+    return { kind: "no_changes" };
+  }
+
+  let nextCatalog = setCatalogPlacementCell(
+    current.catalog,
+    "required_placement_countries",
+    env,
+    `[${wanted.join(", ")}]`
+  );
+  // NEVER GO BACKWARDS. The caller derives its generation from allocation-ledger receipts, but an
+  // EMPTY ledger yields 0 while the catalog may already sit at a higher generation (receipts are
+  // prunable; the committed cell is not). Taking the caller's value blindly would author a cell
+  // LOWER than the current one — re-presenting a generation whose key is already spent, which the
+  // actuator refuses (`akash_tx_create_refused_settled_key`) and which reads as a dead node.
+  // The catalog is only in scope HERE, so the floor belongs here.
+  const catalogGeneration = Number(
+    parseCatalogPlacementMap(current.catalog, "lease_generation")[env] ?? 0
+  );
+  const nextGeneration = Math.max(
+    leaseGeneration,
+    Number.isSafeInteger(catalogGeneration) ? catalogGeneration + 1 : 1
+  );
+  nextCatalog = setCatalogPlacementCell(
+    nextCatalog,
+    "lease_generation",
+    env,
+    String(nextGeneration)
+  );
+
+  return {
+    kind: "set_region",
+    ops: [{ op: "upsert", path: CATALOG_PATH(slug), content: nextCatalog }],
+    leaseGeneration: nextGeneration,
+  };
 }
 
 export type PlacementDeltaResult =

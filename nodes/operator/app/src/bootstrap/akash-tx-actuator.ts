@@ -93,6 +93,12 @@ import {
   safeVersionProbe,
 } from "@/adapters/server";
 import {
+  checkConsoleBalance,
+  classifyConsoleBalance,
+  parseLowWaterUsd,
+  reportConsoleBalance,
+} from "@/features/compute/akash-tx/akash-balance-watch";
+import {
   AkashTxActuator,
   type AkashTxServingProbe,
 } from "@/features/compute/akash-tx/akash-tx-actuator";
@@ -359,10 +365,29 @@ const consoleClient = new AkashComputeAdapter({
  * public, git-reviewable account id proves the thing that matters. Any failure (mismatch, empty
  * account set, or Console unreachable) exits non-zero: an unproven wallet is not a degraded mode.
  */
+/**
+ * Low-water balance alarm (story.5013, bug.5302): the account silently hit $0 and the fleet's
+ * leases died over hours with no warning. Threshold is plain env config (USD major units);
+ * absent/invalid falls back to a sane default rather than to no alarm.
+ */
+const balanceLowWaterUsd = parseLowWaterUsd(runtimeEnv.AKASH_BALANCE_LOW_WATER);
+
 try {
-  assertActuatorWalletAccount(
-    wallet.expectedAccountId,
-    await consoleClient.balances()
+  const bootBalances = await consoleClient.balances();
+  assertActuatorWalletAccount(wallet.expectedAccountId, bootBalances);
+  // The wallet-verification read IS a balance observation — classify it for free, so the
+  // alarm state is known from the first boot line, not only after the first interval tick.
+  reportConsoleBalance(
+    classifyConsoleBalance(
+      bootBalances,
+      wallet.expectedAccountId,
+      balanceLowWaterUsd
+    ),
+    {
+      expectedAccountId: wallet.expectedAccountId,
+      lowWaterUsd: balanceLowWaterUsd,
+      log,
+    }
   );
   log.info(
     {
@@ -404,6 +429,11 @@ const actuator = new AkashTxActuator({
   costEvidence: consoleClient,
   costStore: new DrizzleComputeCostStore(getDb),
   providerConsumerAccountId: wallet.expectedAccountId,
+  // task.5153 — the actuator is now the LIVE writer of provider strikes/boot outcomes
+  // (recovery-entry + serving-proof), feeding the same durable history the Console
+  // adapter's screening reads above. One store instance would also do; a second handle
+  // on the same table is harmless and keeps the seams independent.
+  outcomes: new DrizzleProviderOutcomeStore(getDb),
   log,
   probe,
   /**
@@ -481,9 +511,28 @@ const sweepTimer = setInterval(() => {
 // Never hold the process open for a recovery pass.
 sweepTimer.unref();
 
+/**
+ * Balance observation cadence. The depletion took hours to kill the fleet, so 15 minutes
+ * gives many alertable lines inside the reaction window without adding meaningful Console
+ * read load. Failures are logged and swallowed inside `checkConsoleBalance` — a Console
+ * outage must never take the wallet writer down (same doctrine as the sweeper above).
+ */
+const BALANCE_CHECK_INTERVAL_MS = 15 * 60_000;
+
+const balanceTimer = setInterval(() => {
+  void checkConsoleBalance({
+    readBalances: () => consoleClient.balances(),
+    expectedAccountId: wallet.expectedAccountId,
+    lowWaterUsd: balanceLowWaterUsd,
+    log,
+  });
+}, BALANCE_CHECK_INTERVAL_MS);
+balanceTimer.unref();
+
 function shutdown(signal: string): void {
   log.info({ signal }, "akash_tx_actuator_stopping");
   clearInterval(sweepTimer);
+  clearInterval(balanceTimer);
   // In-flight requests are already idempotent by key, so a bounded drain is enough: a
   // dropped response is recoverable from the durable receipt, a double-spend is not.
   server.close(() => process.exit(0));

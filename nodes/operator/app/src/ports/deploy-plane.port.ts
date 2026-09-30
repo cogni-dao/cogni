@@ -151,83 +151,6 @@ export type NodeInfraReconcileResult =
       readonly prUrl: string;
     };
 
-export interface MirrorCanonicalFilesInput {
-  /** Canonical source repo owner (the template), e.g. `Cogni-DAO`. */
-  readonly sourceOwner: string;
-  /** Canonical source repo, e.g. `node-template`. */
-  readonly sourceRepo: string;
-  /** Source ref to read canonical content at — a 40-char SHA or a branch name (e.g. `main`). */
-  readonly sourceRef: string;
-  /** Target fork repo owner (a catalog `source_repo` row owner). */
-  readonly targetOwner: string;
-  /** Target fork repo (a catalog `source_repo` row repo). */
-  readonly targetRepo: string;
-  /** Target node slug — used only for the mirror PR title/labelling. */
-  readonly slug: string;
-  /**
-   * Canonical ROOTS to mirror byte-for-byte. Any operator-scope node-template content the caller
-   * declares — CI workflows, scripts, package manifests, configs. The DELIVERED set is these roots
-   * plus their transitive closure at `sourceRef` (TIER1_IS_CLOSED): the scripts a canonical workflow
-   * invokes and the modules a canonical contract barrel re-exports ship in the same commit, so a
-   * caller never has to hand-track them.
-   */
-  readonly canonicalPaths: readonly string[];
-}
-
-export type MirrorCanonicalFilesResult =
-  | {
-      readonly status: "no_changes";
-      readonly branch: string;
-      readonly changedPaths: readonly string[];
-    }
-  | {
-      readonly status: "pr_opened";
-      readonly branch: string;
-      readonly prNumber: number;
-      readonly prUrl: string;
-      readonly changedPaths: readonly string[];
-    };
-
-export interface SyncTemplateUpstreamInput {
-  /** Template (upstream/parent) repo owner, e.g. `Cogni-DAO` — for PR copy only. */
-  readonly templateOwner: string;
-  /** Template repo, e.g. `node-template` — for PR copy only. */
-  readonly templateRepo: string;
-  /** The upstream commit SHA to merge (node-template's pushed main tip). Reachable in the fork network. */
-  readonly templateSha: string;
-  /** Fork (child node) repo owner. */
-  readonly forkOwner: string;
-  /** Fork repo = node slug. */
-  readonly forkRepo: string;
-  /** Fork base branch the upstream merges into, e.g. `main`. */
-  readonly forkBranch: string;
-  /**
-   * Tier-3 (node identity / presentation) globs to carve OUT of the upstream merge — the fork's own
-   * version of these paths is restored before the PR opens, so node-template's starter
-   * presentation/branding/identity never overwrites a fork's. Declared in node-template's
-   * `.cogni/sync-manifest.yaml#node_local` (TIER3_IS_DATA); the caller resolves it and passes it here.
-   * Empty/omitted ⇒ no carve-out (legacy whole-repo merge behavior).
-   */
-  readonly nodeLocalPaths?: readonly string[];
-}
-
-export type SyncTemplateUpstreamResult =
-  | { readonly status: "up_to_date" }
-  | {
-      readonly status: "pr_opened";
-      readonly prNumber: number;
-      readonly prUrl: string;
-    };
-
-export interface CatalogForkTarget {
-  /** Fork repo owner, parsed from the catalog row's `source_repo`. */
-  readonly owner: string;
-  /** Fork repo name. */
-  readonly name: string;
-  /** Catalog slug (the `<slug>.yaml` filename). */
-  readonly slug: string;
-}
-
 /**
  * Merged catalog intent needed to project one node into every environment's local registry.
  * The stable values come from git; `ownerWallet` is resolved to a different users.id per DB.
@@ -280,22 +203,9 @@ export interface DeployPlanePort {
   ): Promise<PreparedNodeRefCandidateFlight>;
 
   /**
-   * Enumerate the child node FORKS from the parent monorepo's `infra/catalog/*.yaml` `source_repo` rows
-   * (read via the App — the catalog is absent on the operator's runtime disk). This is the env-aligned
-   * SSOT: the parent is `NODE_SUBMODULE_PARENT_{OWNER,REPO}` (cogni-test-org/cogni-monorepo on candidate-a,
-   * Cogni-DAO/cogni on prod), so the forks are exactly the repos the env's App can write. Excludes
-   * `node-template` (the mirror source) and `operator` (the hub). Used to target the fork sync — NOT the
-   * `nodes` table (wizard-spawn state, may not contain catalog-declared forks) and NOT the node registry.
-   */
-  listCatalogForkTargets(input: {
-    readonly parentOwner: string;
-    readonly parentRepo: string;
-  }): Promise<readonly CatalogForkTarget[]>;
-
-  /**
-   * App-read every merged `type:node` catalog row for registry projection. Unlike the
-   * fork-sync target list this includes operator + node-template and fails loud on a
-   * malformed node row: one bad file must never be mistaken for an empty catalog.
+   * App-read every merged `type:node` catalog row for registry projection. Includes operator +
+   * node-template and fails loud on a malformed node row: one bad file must never be mistaken for
+   * an empty catalog.
    */
   listCatalogNodes(input: {
     readonly parentOwner: string;
@@ -303,60 +213,6 @@ export interface DeployPlanePort {
     /** Exact deployed operator revision whose catalog is being projected. */
     readonly sourceRef: string;
   }): Promise<readonly CatalogNodeDefinition[]>;
-
-  /**
-   * Tier 2 (optional, customization-preserving): open a cross-fork PR `templateOwner:templateBranch`
-   * → the fork's base branch, so node-template's app/graphs/runtime improvements reach the fork as a
-   * **merge** the fork reviews — never an overwrite. Relies on the shared merge-base a node fork keeps
-   * with node-template (node-ci-cd-contract §Forward path), so the PR carries only upstream deltas and
-   * preserves fork customizations (`FORK_FREEDOM`, `POLICY_STAYS_LOCAL`). `up_to_date` when no commits
-   * separate the fork from upstream. Distinct from `syncCanonicalFilesToFork` (Tier 1): that surgically
-   * overwrites the flight-contract files so a CI fix lands cleanly even when this merge conflicts.
-   *
-   * THREE_TIER_CARVE_OUT (spec.repo-sync-contract): `nodeLocalPaths` (Tier 3 — node identity /
-   * presentation) are restored to the FORK's version before the PR opens, so the upstream PR carries
-   * only Tier-2 substrate (`build their mission, not their plumbing`). With Tier 3 out of the diff the
-   * merge stops conflicting on node-local UI/branding/identity, so Tier 1 + Tier 2 are always
-   * auto-mergeable. node-template is a starter only — its presentation never overwrites a fork's.
-   */
-  syncTemplateUpstreamToFork(
-    input: SyncTemplateUpstreamInput
-  ): Promise<SyncTemplateUpstreamResult>;
-
-  /**
-   * Forward-mirror a declared canonical file set from the template repo to one fork repo,
-   * opening (or updating) exactly one PR. The set is whatever `canonicalPaths` the caller
-   * declares — any operator-scope node-template content (CI workflows, scripts, package
-   * manifests, configs), not CI alone. Reads each `canonicalPaths` entry at `sourceRef`,
-   * diffs against the fork's `main`, and commits only the changed files as a single tree.
-   *
-   * Invariants:
-   *   - FORWARD_MIRROR_INDEPENDENT_OF_DETECTOR: this is the node-template→forks axis. It does NOT
-   *     consume the hub↔artifact `sync-drift-detector` signal; `node-template` is the mirror SOURCE,
-   *     never a detector artifact. Keep the two propagation directions decoupled.
-   *   - BRANCH_IS_IDEMPOTENCY_KEY: the head branch is derived from the resolved source SHA, so a
-   *     re-run on the same canonical version updates the same PR instead of opening a second one.
-   *   - CHANGED_ONLY: byte-identical files produce no tree entry; an all-identical fork is `no_changes`.
-   *   - TIER1_IS_CLOSED: `canonicalPaths` are ROOTS. The implementation expands them to a fixpoint at
-   *     `sourceRef` so the mirrored set is self-consistent — a delivered workflow's scripts and a
-   *     delivered barrel's re-exports are delivered too (task.5078).
-   */
-  syncCanonicalFilesToFork(
-    input: MirrorCanonicalFilesInput
-  ): Promise<MirrorCanonicalFilesResult>;
-
-  /**
-   * Resolve the Tier-3 (node identity / presentation) globs from the template repo's
-   * `.cogni/sync-manifest.yaml#node_local` at `sourceRef` (TIER3_IS_DATA — declared in node-template,
-   * read at runtime). Falls back to the hardcoded default floor when the manifest is missing or carries
-   * no `node_local:` block, so the carve-out is always at least the obvious presentation surface.
-   * The facade resolves this once per sync and threads it into every fork's Tier-2 merge.
-   */
-  resolveNodeLocalPaths(input: {
-    readonly sourceOwner: string;
-    readonly sourceRepo: string;
-    readonly sourceRef: string;
-  }): Promise<readonly string[]>;
 
   /**
    * Resolve a node's OWN source repo (`{owner, repo}`) from the parent monorepo's

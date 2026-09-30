@@ -434,7 +434,7 @@ jobs:
       - name: Image Updater scope (bug.0344)
         run: bash scripts/ci/check-image-updater-scope.sh
 
-      # task.5140 — the hermetic scripts/ci/tests/*.test.sh suite (23 pure-bash
+      # task.5140 — the hermetic scripts/ci/tests/*.test.sh suite (25 pure-bash
       # deploy/secrets/substrate regression tests) runs in ONE parallel primitive
       # instead of ~22 serial steps (was ~3-4 min serial → ~40-60s). The
       # authoritative test list, the mutator-vs-parallel concurrency tiers (a few

@@ -49,6 +49,26 @@ function bundleMismatchReason(observed: unknown, expected: unknown): string {
   return `bundle_not_observed:observed=${sha(observed)}:expected=${sha(expected)}`;
 }
 
+/**
+ * Not-Ready reason for both authority kinds, surfacing the controller's failure
+ * reason (e.g. MigrationFailed) so a promote-gate timeout names the actual blocker
+ * instead of a generic phase. "None" is the composition's cleared-failure sentinel
+ * (bug.5287): `status.failure` is emitted UNCONDITIONALLY there because an omitted
+ * key survives the status merge and latches the previous reason — so "None" means
+ * no failure, never `phase_not_ready:None`. This reader tolerance ships BEFORE the
+ * composition emits the sentinel (akash-actuator-first-rollout: the reader accepts
+ * the new shape before the writer produces it). Keep this compatibility arm until
+ * every deployed composition revision has stopped emitting the sentinel.
+ */
+function phaseNotReadyReason(status: Record<string, unknown>): string {
+  const failureReason = asRecord(status.failure)?.reason;
+  return typeof failureReason === "string" &&
+    failureReason.length > 0 &&
+    failureReason !== "None"
+    ? `phase_not_ready:${failureReason}`
+    : "phase_not_ready";
+}
+
 /** Compare live controller state with the exact Git-rendered desired state. */
 export function assessComputeWorkloadReadiness(input: {
   readonly expected: unknown;
@@ -107,16 +127,7 @@ export function assessComputeWorkloadReadiness(input: {
     return { ready: false, reason: "generation_pending" };
   }
   if (status.phase !== "Ready") {
-    // Surface the controller's terminal failure reason (e.g. MigrationFailed) so
-    // a promote-gate timeout names the actual blocker instead of a generic phase.
-    const failureReason = asRecord(status.failure)?.reason;
-    return {
-      ready: false,
-      reason:
-        typeof failureReason === "string" && failureReason.length > 0
-          ? `phase_not_ready:${failureReason}`
-          : "phase_not_ready",
-    };
+    return { ready: false, reason: phaseNotReadyReason(status) };
   }
   if (stableJson(status.observedBundle) !== stableJson(expectedBundle)) {
     return {
@@ -224,14 +235,7 @@ function assessXComputeWorkloadReadiness(input: {
     }
   }
   if (status.phase !== "Ready") {
-    const failureReason = asRecord(status.failure)?.reason;
-    return {
-      ready: false,
-      reason:
-        typeof failureReason === "string" && failureReason.length > 0
-          ? `phase_not_ready:${failureReason}`
-          : "phase_not_ready",
-    };
+    return { ready: false, reason: phaseNotReadyReason(status) };
   }
   if (status.serving !== true) {
     return { ready: false, reason: "not_serving" };
