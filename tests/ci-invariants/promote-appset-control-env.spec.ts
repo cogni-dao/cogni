@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/ci-invariants/promote-appset-control-env`
  * Purpose: Pins the lane/control boundary for AppSet reconciliation during promote.
- * Scope: Static YAML read only; no workflow dispatch or cluster access.
+ * Scope: Static YAML read only. Does NOT dispatch workflows or access a cluster.
  * Invariants:
  *   - APPSET_IDENTITY_FOLLOWS_CONTROL_ENV: Akash reconciliation reads the fleet
  *     control environment's VM credentials, while k3s stays on the workload lane.
