@@ -62,6 +62,7 @@ import type {
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeFromPreviewInput,
   PromoteNodeInput,
+  PruneNodeEnvironmentInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,
@@ -740,8 +741,9 @@ const mergeQueueRulesetFixtureSchema = z
         })
       )
       .length(1),
-    // QUEUE_BYPASS_FORBIDDEN: generated env PRs still share derived files. Until those files
-    // move to reconcile-time rendering, bypassing serialized rebase/recheck can lose an update.
+    // The git fixture never names an installation-specific actor. Runtime reconciliation injects
+    // exactly the executing review App as the sole bypass actor; arbitrary git-authored bypasses
+    // remain forbidden.
     bypass_actors: z.array(z.never()).length(0),
   })
   .passthrough();
@@ -825,9 +827,17 @@ export function diffMergeQueueRuleset(
   if (unexpectedRules.length > 0) {
     problems.push(`unexpected rules present: ${unexpectedRules.join(", ")}`);
   }
-  if ((active.bypass_actors ?? []).length > 0) {
+  const bypassKey = (actor: {
+    readonly actor_id?: number | null;
+    readonly actor_type?: string;
+    readonly bypass_mode?: string;
+  }): string =>
+    `${actor.actor_type ?? "RepositoryRole"}:${actor.actor_id ?? "null"}:${actor.bypass_mode ?? "always"}`;
+  const gotBypass = (active.bypass_actors ?? []).map(bypassKey).sort();
+  const wantBypass = expected.bypass_actors.map(bypassKey).sort();
+  if (JSON.stringify(gotBypass) !== JSON.stringify(wantBypass)) {
     problems.push(
-      `${active.bypass_actors?.length ?? 0} bypass actor(s) present, expected none`
+      `bypass_actors are ${JSON.stringify(gotBypass)}, expected ${JSON.stringify(wantBypass)}`
     );
   }
   return problems;
@@ -1422,6 +1432,62 @@ export class GitHubRepoWriter implements DeployPlanePort {
       env: "production",
       slug,
     });
+  }
+
+  /** @see DeployPlanePort.pruneNodeEnvironment */
+  async pruneNodeEnvironment(
+    input: PruneNodeEnvironmentInput
+  ): Promise<ObservedWorkflowDispatchResult> {
+    const octokit = await this.getOctokit(
+      input.parentOwner,
+      input.parentRepo
+    );
+    const response = (await octokit.request(
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+      {
+        owner: input.parentOwner,
+        repo: input.parentRepo,
+        workflow_id: "prune-node-environment.yml",
+        ref: "main",
+        inputs: {
+          environment: input.env,
+          control_environment: input.controlEnv,
+          node: input.slug,
+        },
+        headers: { "X-GitHub-Api-Version": "2026-03-10" },
+        request: { signal: AbortSignal.timeout(15_000) },
+      }
+    )) as unknown as {
+      readonly data: {
+        readonly workflow_run_id?: number;
+        readonly run_url?: string;
+        readonly html_url?: string;
+      };
+    };
+    const runId = response.data.workflow_run_id;
+    const runApiUrl = response.data.run_url;
+    const runUrl = response.data.html_url;
+    if (
+      typeof runId !== "number" ||
+      !Number.isSafeInteger(runId) ||
+      runId <= 0 ||
+      typeof runApiUrl !== "string" ||
+      typeof runUrl !== "string"
+    ) {
+      throw deployPlaneError(
+        "prune_env_run_identity_missing",
+        "GitHub did not return the environment-prune workflow run identity",
+        502
+      );
+    }
+    return {
+      dispatched: true,
+      workflowUrl: `https://github.com/${input.parentOwner}/${input.parentRepo}/actions/workflows/prune-node-environment.yml`,
+      message: `Environment prune dispatched: ${input.slug} from ${input.env}.`,
+      runId,
+      runUrl,
+      runApiUrl,
+    };
   }
 
   private async resolvePromotionSource(input: {
@@ -3838,7 +3904,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * Reconcile the git-owned merge-queue policy onto a node's GitHub repository.
    *
    * The policy is read from the deployment parent at an explicit ref, validated to retain
-   * ALLGREEN serialization with zero bypass actors, then applied idempotently with readback.
+   * ALLGREEN serialization with zero git-authored bypass actors, then the executing review App
+   * is injected as the sole installation-specific bypass actor and the result is applied with
+   * readback. The merge route uses that privilege only for a classified signed env-manager PR.
    * This is the runtime authority bridge for config-as-code: agents hold node-scoped RBAC, while
    * the operator App alone holds `administration:write`. It deliberately updates only the named
    * merge-queue ruleset; required checks remain owned by the independent protection policy.
@@ -3865,9 +3933,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
-    let expected: RulesetWritePayload;
+    let fixture: RulesetWritePayload;
     try {
-      expected = parseMergeQueueRulesetFixture(policyText);
+      fixture = parseMergeQueueRulesetFixture(policyText);
     } catch (error) {
       throw deployPlaneError(
         "merge_queue_policy_invalid",
@@ -3875,6 +3943,24 @@ export class GitHubRepoWriter implements DeployPlanePort {
         409
       );
     }
+    const reviewAppId = Number(this.config.appId);
+    if (!Number.isSafeInteger(reviewAppId) || reviewAppId <= 0) {
+      throw deployPlaneError(
+        "merge_queue_bypass_app_invalid",
+        "GH_REVIEW_APP_ID must be a positive integer before queue bypass can be reconciled",
+        503
+      );
+    }
+    const expected: RulesetWritePayload = {
+      ...fixture,
+      bypass_actors: [
+        {
+          actor_id: reviewAppId,
+          actor_type: "Integration",
+          bypass_mode: "always",
+        },
+      ],
+    };
     const expectedQueue = expected.rules[0]?.parameters ?? {};
     const waitMinutes = Number(expectedQueue.min_entries_to_merge_wait_minutes);
 

@@ -37,9 +37,11 @@
  *     row), never the body (anti-spoof).
  *   - BRANCH_PROTECTION_IS_AUTHORITY: GitHub independently rejects a non-green merge (405); the
  *     `evaluateMergeGate` pre-check is fast-fail UX + clear errors, not the sole gate.
- *   - MERGED_XOR_ENQUEUED: `mergePr` is queue-tolerant — when the base requires a merge queue it
- *     enqueues (returns `enqueued`, no `sha`; merge completes async on the rebased candidate),
- *     else it direct-merges (`merged` + `sha`). Both are 200; only neither is a failure.
+ *   - SIGNED_ENV_PR_BYPASSES_QUEUE: only the `env_manager` authorization path above requests a
+ *     direct merge. GitHub still enforces every classic required check; the queue ruleset grants
+ *     its sole bypass to the executing App, while this route grants use of that bypass only after
+ *     the reserved branch + trailers + App-signature classifier and target-node RBAC both pass.
+ *     Ordinary PRs remain queue-tolerant: required queue → `enqueued`, otherwise direct merge.
  *   - NO_SEPARATION_OF_DUTIES (V0): autonomous self-merge on green is intended ("no human required
  *     for routine merges"); a second-reviewer policy is vNext. The operator-App execution boundary
  *     is the structural control today.
@@ -253,11 +255,19 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
-    // 6. Merge — direct when no queue is required, else added to the merge queue
-    //    (async). Classify failure on the surfaced GitHub HTTP status.
+    // 6. Merge. The signed env-manager path is the ONE queue bypass: it has already passed the
+    //    App-signature classifier + target-node RBAC above, and all required checks are green.
+    //    Every ordinary PR remains queue-tolerant. GitHub independently rejects the direct call
+    //    unless the executing App is the queue ruleset's configured bypass actor.
     let result: Awaited<ReturnType<typeof vcs.mergePr>>;
     try {
-      result = await vcs.mergePr({ owner, repo, prNumber, method });
+      result = await vcs.mergePr({
+        owner,
+        repo,
+        prNumber,
+        method,
+        ...(authzPath === "env_manager" ? { bypassQueue: true } : {}),
+      });
     } catch (error) {
       const g = classifyGithubOpError(error);
       return fail(g.status, g.errorCode, g.error, prCtx);

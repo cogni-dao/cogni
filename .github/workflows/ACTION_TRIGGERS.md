@@ -139,6 +139,7 @@ Manual levers:
 - `candidate-flight-infra.yml`
 - `flight-preview.yml`
 - `promote-and-deploy.yml`
+- `prune-node-environment.yml` — operator-dispatched after a signed env-manager REMOVE merges
 - `release.yml`
 - `stack-test.yml`
 

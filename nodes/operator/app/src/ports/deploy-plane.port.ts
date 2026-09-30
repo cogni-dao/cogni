@@ -76,6 +76,15 @@ export interface PromoteNodeFromPreviewInput {
   readonly allowRollback?: boolean;
 }
 
+export interface PruneNodeEnvironmentInput {
+  readonly parentOwner: string;
+  readonly parentRepo: string;
+  readonly slug: string;
+  readonly env: "candidate-a" | "preview" | "production";
+  /** GitHub environment whose VM owns this lane's Argo/Crossplane control plane. */
+  readonly controlEnv: "candidate-a" | "preview" | "production";
+}
+
 export interface NodePromoteResult {
   /**
    * Always `dispatched`: every rung source-addresses the node sha on the dispatch (no main write,
@@ -344,6 +353,15 @@ export interface DeployPlanePort {
   promoteNodeFromPreview(
     input: PromoteNodeFromPreviewInput
   ): Promise<CandidateFlightDispatchResult>;
+
+  /**
+   * Remove one retired lane from its control cluster. Env-membership REMOVE deletes the generated
+   * AppSet from git; this workflow bridge deletes the live per-node AppSet/Application so Argo
+   * prunes the workload and Crossplane closes any paid lease. It never changes another lane.
+   */
+  pruneNodeEnvironment(
+    input: PruneNodeEnvironmentInput
+  ): Promise<ObservedWorkflowDispatchResult>;
 
   /**
    * The sha an environment is ACTUALLY running for one node: `<slug>` in

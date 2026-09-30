@@ -303,7 +303,7 @@ export class GitHubVcsAdapter implements VcsCapability {
   }
 
   /**
-   * Merge a PR — queue-tolerant. When the base branch requires a merge queue,
+   * Merge a PR — queue-tolerant by default. When the base branch requires a merge queue,
    * GitHub `405`s a direct `PUT .../merge`, so we instead enable auto-merge
    * (`enablePullRequestAutoMerge`), which GitHub routes through the queue: the
    * merge happens asynchronously on the queue's rebased candidate (`enqueued`,
@@ -313,13 +313,17 @@ export class GitHubVcsAdapter implements VcsCapability {
    * we never have to disambiguate a `405`.
    *
    * MERGED_XOR_ENQUEUED: the merge gate (caller) has already asserted the PR is
-   * green; this method only chooses the execution path by queue requirement.
+   * green; this method only chooses the execution path by queue requirement. A caller that has
+   * already proved a narrower signed change type may request `bypassQueue`; in that case the App
+   * uses the ordinary merge endpoint and GitHub independently enforces that the App is an allowed
+   * ruleset bypass actor. Required classic-protection checks still apply.
    */
   async mergePr(params: {
     owner: string;
     repo: string;
     prNumber: number;
     method: "squash" | "merge" | "rebase";
+    bypassQueue?: boolean;
   }): Promise<MergeResult> {
     const octokit = await this.getOctokit(params.owner, params.repo);
 
@@ -338,12 +342,14 @@ export class GitHubVcsAdapter implements VcsCapability {
       return this.toMergeFailure(error);
     }
 
-    const queueEnabled = await this.isMergeQueueEnabled(
-      octokit,
-      params.owner,
-      params.repo,
-      baseRef
-    );
+    const queueEnabled = params.bypassQueue
+      ? false
+      : await this.isMergeQueueEnabled(
+          octokit,
+          params.owner,
+          params.repo,
+          baseRef
+        );
 
     if (queueEnabled) {
       try {

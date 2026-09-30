@@ -15,6 +15,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const promoteNode = vi.fn(async () => ({ status: "dispatched" }));
+const pruneNodeEnvironment = vi.fn(async () => ({
+  dispatched: true,
+  runId: 99,
+  runUrl: "https://github.com/x/y/actions/runs/99",
+  runApiUrl: "https://api.github.com/repos/x/y/actions/runs/99",
+  workflowUrl:
+    "https://github.com/x/y/actions/workflows/prune-node-environment.yml",
+}));
 const prepareNodeRefCandidateFlight = vi.fn(async () => ({
   nodeId: "f66b260b",
   slug: "toks5",
@@ -36,6 +44,7 @@ const readNodeDeployPin = vi.fn(
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
   createOperatorDeployPlane: () => ({
     promoteNode,
+    pruneNodeEnvironment,
     prepareNodeRefCandidateFlight,
     dispatchNodeRefCandidateFlight,
     fetchFileText,
@@ -249,7 +258,7 @@ describe("dispatchLaneOnboard — dispatch selection", () => {
     );
   });
 
-  it("CATALOG_AFTER_MERGE_DECIDES: a REMOVE dispatches nothing", async () => {
+  it("CATALOG_AFTER_MERGE_DECIDES: a REMOVE dispatches only the narrow prune", async () => {
     catalogText = [
       "name: toks5",
       "node_id: f66b260b-a859-4399-888e-a8c7a6696f7e",
@@ -268,9 +277,46 @@ describe("dispatchLaneOnboard — dispatch selection", () => {
 
     expect(promoteNode).not.toHaveBeenCalled();
     expect(dispatchNodeRefCandidateFlight).not.toHaveBeenCalled();
+    expect(pruneNodeEnvironment).toHaveBeenCalledWith({
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "toks5",
+      env: "preview",
+      controlEnv: "production",
+    });
     expect(log.info).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "removed", dispatched: 0 }),
+      expect.objectContaining({
+        outcome: "removed",
+        dispatched: 1,
+        runId: 99,
+      }),
       "feature.lane_onboard.complete"
+    );
+  });
+
+  it("prunes an isolated fleet's removed Akash lane from candidate-a control", async () => {
+    catalogText = [
+      "name: toks5",
+      "node_id: f66b260b-a859-4399-888e-a8c7a6696f7e",
+      `source_sha: ${"c".repeat(40)}`,
+      "envs: [candidate-a, production]",
+      "deployment_provider:",
+      "  candidate-a: akash",
+      "  production: akash",
+    ].join("\n");
+
+    dispatchLaneOnboard(
+      mergedPayload("cogni-operator/node-env-toks5-preview"),
+      { ...ENV, FLEET_CONTROL_ENV: "candidate-a" },
+      log
+    );
+    await settle();
+
+    expect(pruneNodeEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: "preview",
+        controlEnv: "candidate-a",
+      })
     );
   });
 });

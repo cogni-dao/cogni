@@ -3,8 +3,8 @@
 
 /**
  * Module: `@tests/unit/adapters/server/vcs/github-vcs-merge-pr`
- * Purpose: Unit-cover the queue-tolerant `mergePr` branching — direct merge when the
- *   base branch requires no merge queue, enqueue (auto-merge) when it does.
+ * Purpose: Unit-cover the `mergePr` branching — direct merge when the base branch requires no
+ *   queue, enqueue when it does, and the explicitly authorized direct-merge bypass.
  * Scope: Mocked Octokit (`request` + `graphql`) + `fetch`; no real GitHub I/O.
  * Invariants: MERGED_XOR_ENQUEUED — exactly one of `merged` | `enqueued` is set.
  * Side-effects: none
@@ -140,6 +140,34 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
     expect(requestRoutes).not.toContain(MERGE_ROUTE);
     // queue-detect + enable-auto-merge both ran.
     expect(graphqlQueries.length).toBe(2);
+  });
+
+  it("direct-merges a caller-authorized bypass without querying or entering the queue", async () => {
+    onRequest = (route) => {
+      if (route === PR_GET_ROUTE) {
+        return { base: { ref: "main" }, node_id: "PR_node_1" };
+      }
+      if (route === MERGE_ROUTE) {
+        return { merged: true, sha: "fast-path", message: "Merged" };
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+
+    const result = await adapter().mergePr({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      method: "squash",
+      bypassQueue: true,
+    });
+
+    expect(result).toMatchObject({
+      merged: true,
+      enqueued: false,
+      sha: "fast-path",
+    });
+    expect(requestRoutes).toContain(MERGE_ROUTE);
+    expect(graphqlQueries).toEqual([]);
   });
 
   it("surfaces a 405 as a structured failure (neither merged nor enqueued)", async () => {

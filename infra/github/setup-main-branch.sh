@@ -45,6 +45,17 @@ jq 'with_entries(select(.key | startswith("_") | not))' "$SCRIPT_DIR/branch-prot
 RULESET_NAME="$(jq -r '.name' "$SCRIPT_DIR/merge-queue-ruleset.json")"
 echo "    [3/3] merge queue ruleset ($RULESET_NAME)"
 RULESET_PAYLOAD="$(jq 'with_entries(select(.key | startswith("_") | not))' "$SCRIPT_DIR/merge-queue-ruleset.json")"
+# The fixture is portable and therefore names no installation-specific actor. When this manual
+# setup path is used for an operator-managed repo, inject that repo's review App as the sole queue
+# bypass actor. `/vcs/merge` spends the bypass only for a classified signed env-manager PR; classic
+# required checks remain independent. Runtime convergence performs the same injection automatically.
+if [ -n "${COGNI_REVIEW_APP_ID:-}" ]; then
+  [[ "$COGNI_REVIEW_APP_ID" =~ ^[1-9][0-9]*$ ]] || {
+    echo "ERROR: COGNI_REVIEW_APP_ID must be a positive integer" >&2
+    exit 1
+  }
+  RULESET_PAYLOAD="$(printf '%s' "$RULESET_PAYLOAD" | jq --argjson app_id "$COGNI_REVIEW_APP_ID" '.bypass_actors = [{actor_id: $app_id, actor_type: "Integration", bypass_mode: "always"}]')"
+fi
 EXISTING_RULESET_ID="$(gh api "repos/$REPO/rulesets" --jq ".[] | select(.name == \"$RULESET_NAME\") | .id" 2>/dev/null | head -1 || true)"
 if [ -n "$EXISTING_RULESET_ID" ]; then
   printf '%s' "$RULESET_PAYLOAD" \

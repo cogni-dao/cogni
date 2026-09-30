@@ -19,9 +19,9 @@
  *     `cogni-operator/node-env-<slug>-<env>` (github-repo-write.ts `nodeEnvBranch`) on the
  *     parent monorepo. Every other merge — the overwhelming majority — is a no-op.
  *   - CATALOG_AFTER_MERGE_DECIDES: ADD vs REMOVE is read from the MERGED catalog `envs:`, never
- *     inferred from the branch name (both actions use the same branch). A remove dispatches
- *     nothing: Argo's keystone prunes the lane, and rendering a lane that just left would
- *     resurrect it.
+ *     inferred from the branch name (both actions use the same branch). A remove dispatches the
+ *     narrow prune workflow against the lane's control cluster; it never renders/promotes the
+ *     lane that just left (which would resurrect it).
  *   - SUBSTRATE_FOLLOWS_THE_CUSTODIAN: when `controlEnvFor(lane) !== lane` the lane's database,
  *     roles and Temporal namespace live in the custodian's cluster, and only a run that IS that
  *     env holds the identities to create them (`run-node-substrate.sh` loops every lane its env
@@ -185,11 +185,47 @@ async function onboardLane(
     }
 
     const row = parseYaml(catalogText) as CatalogRow;
-    // CATALOG_AFTER_MERGE_DECIDES — a REMOVE leaves the lane out of `envs:`; Argo's keystone
-    // prunes it and there is nothing to reconcile.
+    // CATALOG_AFTER_MERGE_DECIDES — a REMOVE leaves the lane out of `envs:`. The generated
+    // AppSet disappeared from git, but the live per-node AppSet is not guaranteed to be watched
+    // by a main-tracking keystone (observed test-org #97: the paid lease remained orphaned).
+    // Dispatch the one-object prune against the control cluster; never promote a retired lane.
     if (!row.envs?.includes(ctx.lane)) {
+      const remainingProviders = Object.values(
+        row.deployment_provider ?? {}
+      );
+      const provider = remainingProviders.includes("akash") ? "akash" : "k3s";
+      const resolvedControlEnv = controlEnvFor(
+        ctx.lane,
+        provider,
+        env.FLEET_CONTROL_ENV
+      );
+      if (
+        resolvedControlEnv !== "candidate-a" &&
+        resolvedControlEnv !== "preview" &&
+        resolvedControlEnv !== "production"
+      ) {
+        throw Object.assign(
+          new Error(`invalid fleet control environment: ${resolvedControlEnv}`),
+          { code: "invalid_control_environment" }
+        );
+      }
+      const controlEnv: Lane = resolvedControlEnv;
+      const result = await deployPlane.pruneNodeEnvironment({
+        parentOwner: ctx.owner,
+        parentRepo: ctx.repo,
+        slug: ctx.slug,
+        env: ctx.lane,
+        controlEnv,
+      });
       log.info(
-        { ...base, dispatched: 0, outcome: "removed" },
+        {
+          ...base,
+          controlEnv,
+          dispatched: 1,
+          outcome: "removed",
+          runId: result.runId,
+          workflowUrl: result.workflowUrl,
+        },
         EVENT_NAMES.LANE_ONBOARD_COMPLETE
       );
       return;

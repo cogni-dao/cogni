@@ -441,6 +441,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      bypassQueue: true,
     });
   });
 
