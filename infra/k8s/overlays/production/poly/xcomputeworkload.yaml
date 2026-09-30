@@ -55,10 +55,11 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
-  leaseGeneration: 9
+  leaseGeneration: 10
   placement:
     requiredCountries:
       - BG
+      - FI
       - NL
       - PT
   dns:
