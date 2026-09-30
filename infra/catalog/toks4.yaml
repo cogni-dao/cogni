@@ -39,7 +39,7 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 0
+  candidate-a: 1
   preview: 1
   production: 2
 # task.5130 — ACTIVITY_ENV_IS_DEPLOYED (_schema.json): the singleton activity authority
