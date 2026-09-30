@@ -36,6 +36,7 @@ import {
   NODE_BUNDLE_PAYLOAD_FILE,
   verifyNodeBundleManifest,
 } from "@/features/compute/node-artifact-bundle-oci";
+import { resolveNodeBootRecovery } from "@/features/compute/node-boot-recovery";
 import { resolveNodeComputeApi } from "@/features/compute/node-compute-api";
 import {
   deploymentEnvironmentSchema,
@@ -188,6 +189,9 @@ async function main(): Promise<void> {
     catalog,
     environment,
   });
+  // story.5050 — whether a never-serving lease is held for a human or closed so the bounded
+  // re-mint can try the NEXT provider. Same operator-reviewed row, never a CLI flag.
+  const bootRecovery = resolveNodeBootRecovery({ catalog, environment });
   const dnsZoneId = values["dns-zone-id"]?.trim();
   if (dnsZoneId && !CLOUDFLARE_ZONE_ID.test(dnsZoneId)) {
     throw new Error(
@@ -209,6 +213,7 @@ async function main(): Promise<void> {
     ...(requiredPlacementCountries.length > 0
       ? { requiredPlacementCountries }
       : {}),
+    bootRecovery,
     // DNS intent is Crossplane-only: the legacy controller resolves its own zone in-cluster.
     ...(computeApi === "crossplane" && dnsZoneId
       ? { dns: { provider: "cloudflare" as const, zoneId: dnsZoneId } }

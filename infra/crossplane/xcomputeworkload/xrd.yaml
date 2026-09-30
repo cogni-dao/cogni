@@ -394,12 +394,19 @@ spec:
                         spec.leaseGeneration to mint a replacement. `Replace` (opt-in per
                         (node, env), NEVER global) will authorize the bounded `:recover:<n>`
                         re-mint — but it is deliberately NOT in this enum yet: the schema
-                        admits only Hold until provider-strike recording is re-homed in the
-                        actuator, so an early Replace catalog cell is rejected by the CRD
-                        instead of by prose. Widening the enum is that later change's whole
-                        diff surface.
+                        admitted only Hold until provider-strike recording was re-homed in
+                        the actuator. That prerequisite SHIPPED (task.5153 — the actuator now
+                        writes `akash_tx_provider_strike_recorded`), so `Replace` is admitted
+                        now. This widening is that later change.
+
+                        `Replace` authorizes the bounded `:recover:<1..3>` re-mint the
+                        Composition already implements: on each attempt the ledger-derived
+                        excluded set skips the provider that just failed, so the retry lands on
+                        a DIFFERENT provider instead of re-picking the dead one. Opt-in per
+                        (node, environment) through the catalog's `boot_recovery` cell, never
+                        global, and never a per-request argument.
                       type: string
-                      enum: [Hold]
+                      enum: [Hold, Replace]
                       default: Hold
                 leaseEpoch:
                   description: >-
