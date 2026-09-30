@@ -12,6 +12,8 @@
  *     a green no-op.
  *   - FOREIGN_LANES_ARE_APPLIED: the control cluster receives and refreshes the
  *     lane-named AppSet instead of returning a green no-op.
+ *   - MIGRATION_ACCESS_FOLLOWS_CONTROL_ENV: the same selected cluster receives
+ *     narrow RoleBindings for migrations in the lanes it custodies.
  * Side-effects: IO (reads the workflow file)
  * Links: task.5141, docs/spec/node-ci-cd-contract.md § Lane vs control env
  * @public
@@ -32,10 +34,10 @@ const MATERIALIZER_ACTION = path.resolve(
 );
 const materializerAction = readFileSync(MATERIALIZER_ACTION, "utf8");
 const reconcileJob = body.match(
-  /^  reconcile-appset:\n([\s\S]*?)(?=^  [a-z][a-z0-9-]+:\n)/m
+  /^ {2}reconcile-appset:\n([\s\S]*?)(?=^ {2}[a-z][a-z0-9-]+:\n)/m
 )?.[0];
 const verifyJob = body.match(
-  /^  verify-deploy:\n([\s\S]*?)(?=^  [a-z][a-z0-9-]+:\n)/m
+  /^ {2}verify-deploy:\n([\s\S]*?)(?=^ {2}[a-z][a-z0-9-]+:\n)/m
 )?.[0];
 
 describe("promote AppSet control-env wiring (task.5141)", () => {
@@ -43,6 +45,10 @@ describe("promote AppSet control-env wiring (task.5141)", () => {
     expect(reconcileJob).toBeDefined();
     expect(reconcileJob).toContain(
       "environment: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') || needs.decide.outputs.environment }}"
+    );
+    expect(reconcileJob).toContain("Reconcile fleet-control migration access");
+    expect(reconcileJob).toContain(
+      'bash scripts/ci/render-akash-tx-actuator-lane-access.sh "$FLEET_CONTROL_ENV"'
     );
   });
 

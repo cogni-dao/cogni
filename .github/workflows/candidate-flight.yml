@@ -583,6 +583,22 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
+      - name: Reconcile fleet-control migration access
+        if: steps.ssh-setup.outputs.has_vm == 'true' && fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a'
+        env:
+          FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+        run: |
+          set -euo pipefail
+          # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
+          . ci-src/scripts/ci/lib/ssh-retry.sh
+          access_file="$RUNNER_TEMP/akash-tx-actuator-lane-access.yaml"
+          bash app-src/scripts/ci/render-akash-tx-actuator-lane-access.sh "$FLEET_CONTROL_ENV" >"$access_file"
+          read -r -a ssh_opts <<< "$SSH_OPTS"
+          ci_ssh_retry scp "${ssh_opts[@]}" "$access_file" "root@${VM_HOST}:/tmp/akash-tx-actuator-lane-access.yaml"
+          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "kubectl apply -f /tmp/akash-tx-actuator-lane-access.yaml && rm -f /tmp/akash-tx-actuator-lane-access.yaml"
+
       - name: Apply candidate-a-${{ matrix.node }}-applicationset.yaml
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
