@@ -19,10 +19,13 @@ discovery.relabel "docker_logs" {
 
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    # bug.5293: `alloy` was absent here, so the collector could not report its OWN
-    # failures. A bad exporter block crash-looped alloy on candidate-a and the only
-    # evidence was a `docker ps` line buried in a deploy log — its logs were never
-    # shipped. Ship alloy's own stdout so the next config error is greppable.
+    // bug.5293: `alloy` was absent here, so the collector could not report its OWN
+    // failures. A config error crash-looped alloy on candidate-a and the only evidence
+    // was a `docker ps` line buried in a deploy log, because its logs were never
+    // shipped. Ship alloy's own stdout so the next config error is greppable.
+    // NOTE: River comments are `//`. A `#` comment is an ILLEGAL CHARACTER that makes
+    // the whole file unparseable and exits alloy 1 — which is exactly how this file
+    // took candidate-a's metrics pipeline dark for ~20 minutes.
     regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy|alloy-k8s-events|pdc-agent)"
     action        = "keep"
   }
