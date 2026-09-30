@@ -10,9 +10,8 @@
  *     self-managing copy inside control-plane/candidate-a/ parse to the same
  *     identity, source, destination and syncPolicy, so Argo adopts the seeded
  *     Application instead of fighting it.
- *   CONTROL_PLANE_TRACKS_THE_DEPLOY_REF: the root tracks
- *     deploy/candidate-a-control-plane, never main, so a reviewed-but-unmerged
- *     control-plane shape is flightable on candidate-a.
+ *   CONTROL_PLANE_TRACKS_ITS_FLEET_REF: the canonical root tracks the reviewed
+ *     deploy ref, while an isolated fleet tracks its own protected main.
  *   CONTROL_PLANE_OWNS_ONLY_ITS_ENV_DIR: the root's source path is scoped to
  *     infra/k8s/argocd/control-plane/candidate-a, preventing a foreign-env fan-out.
  * Side-effects: IO (reads the two candidate-a control-plane Application manifests)
@@ -26,6 +25,7 @@ import { describe, expect, it } from "vitest";
 import yaml from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
+const CANONICAL_REPO_URL = "https://github.com/cogni-dao/cogni.git";
 const CONTROL_PLANE_REF = "deploy/candidate-a-control-plane";
 const CONTROL_PLANE_PATH = "infra/k8s/argocd/control-plane/candidate-a";
 const SELF_PATH = `${CONTROL_PLANE_PATH}/candidate-a-control-plane-application.yaml`;
@@ -42,7 +42,7 @@ interface ControlPlaneApplication {
   };
   spec?: {
     project?: unknown;
-    source?: { targetRevision?: unknown; path?: unknown };
+    source?: { repoURL?: unknown; targetRevision?: unknown; path?: unknown };
     destination?: unknown;
     syncPolicy?: unknown;
   };
@@ -86,9 +86,14 @@ describe("candidate-a control-plane self-management", () => {
     expect(seed.spec?.project).toEqual(self.spec?.project);
   });
 
-  it("tracks the candidate-a control-plane deploy ref, not main", () => {
-    expect(self.spec?.source?.targetRevision).toBe(CONTROL_PLANE_REF);
-    expect(seed.spec?.source?.targetRevision).toBe(CONTROL_PLANE_REF);
+  it("tracks the canonical deploy ref or an isolated fleet's protected main", () => {
+    const expectedRevision =
+      self.spec?.source?.repoURL === CANONICAL_REPO_URL
+        ? CONTROL_PLANE_REF
+        : "main";
+
+    expect(self.spec?.source?.targetRevision).toBe(expectedRevision);
+    expect(seed.spec?.source?.targetRevision).toBe(expectedRevision);
   });
 
   it("owns only the candidate-a control-plane directory", () => {
