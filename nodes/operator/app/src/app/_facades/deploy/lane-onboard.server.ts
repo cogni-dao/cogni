@@ -202,11 +202,7 @@ async function onboardLane(
     // configured fleet control here made a test-fleet production add reach for a production
     // cluster that does not exist, even though every generated AppSet correctly lived under
     // appsets/candidate-a.
-    const controlEnv = controlEnvFor(
-      ctx.lane,
-      provider,
-      env.FLEET_CONTROL_ENV
-    );
+    const controlEnv = controlEnvFor(ctx.lane, provider, env.FLEET_CONTROL_ENV);
     // REPLAY_NEVER_ADVANCES — an env renders at the sha it is already running. The catalog row is
     // the BIRTH pin, used only for an env that has never deployed (no `deploy/<env>-<slug>` pin).
     const birthSha = row.source_sha;
