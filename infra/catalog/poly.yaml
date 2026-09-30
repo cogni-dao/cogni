@@ -74,5 +74,9 @@ compute_egress_cidrs:
     comment: Bulgaria provider rotating egress range (story.5050)
   - cidr: 95.217.58.106/32
     comment: Finland provider egress (story.5050)
+  - cidr: 95.217.139.177/32
+    comment: RHITE Finland provider endpoint; workload egress must still be proven (story.5050)
   - cidr: 24.144.74.27/32
     comment: Netherlands provider egress (story.5050)
+  - cidr: 109.102.6.188/32
+    comment: Froggy Servers Romania provider endpoint; workload egress must still be proven (story.5050)
