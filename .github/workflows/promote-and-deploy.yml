@@ -585,9 +585,15 @@ jobs:
           git fetch origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
           if git rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
             git checkout -B "${PER_NODE_BRANCH}" "origin/${PER_NODE_BRANCH}"
-          else
+          elif git rev-parse --verify --quiet "refs/remotes/origin/${UMBRELLA_BRANCH}" >/dev/null; then
             echo "::warning::Per-node branch ${PER_NODE_BRANCH} missing — bootstrapping from ${UMBRELLA_BRANCH}"
             git checkout -B "${PER_NODE_BRANCH}" "origin/${UMBRELLA_BRANCH}"
+          else
+            # A fleet may have no legacy umbrella branch at all (the isolated test fleet is
+            # intentionally born per-node). The reviewed main tree is the correct first seed;
+            # the next step replaces deploy state from app-src before anything is pushed.
+            echo "::warning::Neither ${PER_NODE_BRANCH} nor ${UMBRELLA_BRANCH} exists — bootstrapping the new lane from main"
+            git checkout -B "${PER_NODE_BRANCH}" origin/main
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

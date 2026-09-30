@@ -1445,10 +1445,12 @@ HCL
   # identity per Console account. Up-trust stays refused. No `delete` capability — destroy
   # requires admin escalation per CC6.1.
   # ⚠️ KEEP IN SYNC with scripts/setup/reconcile-env-substrate.sh (SECRET_LANES).
-  case "${DEPLOY_ENV}" in
-    production) SECRET_LANES="candidate-a preview production" ;;
-    *)          SECRET_LANES="${DEPLOY_ENV}" ;;
-  esac
+  FLEET_CONTROL_ENV="${FLEET_CONTROL_ENV:-production}"
+  if [[ "${DEPLOY_ENV}" == "${FLEET_CONTROL_ENV}" ]]; then
+    SECRET_LANES="candidate-a preview production"
+  else
+    SECRET_LANES="${DEPLOY_ENV}"
+  fi
   WRITER_HCL=""
   for _lane in ${SECRET_LANES}; do
     WRITER_HCL="${WRITER_HCL}

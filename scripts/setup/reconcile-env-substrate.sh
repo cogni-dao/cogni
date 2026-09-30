@@ -131,20 +131,22 @@ bao_exec "write auth/kubernetes/role/eso-reader \
 # identities below — they had drifted: #2290 gave the lane set to node-secrets-writer only,
 # so `production-writer` (the role secret-materialize.sh actually mints) still could not
 # write cogni/data/candidate-a/*, and the first poly candidate-a mint died there.
-#   production  -> candidate-a, preview, production   (the PAYING cluster custodies every
+#   fleet control -> candidate-a, preview, production (the PAYING cluster custodies every
 #                  lane, because the Composition interpolates each lane's secrets into the
 #                  lease production's Console account is billed for)
 #   preview     -> preview only
-#   candidate-a -> candidate-a only
+#   candidate-a -> candidate-a only, unless this isolated fleet declares it as control
 # Up-trust is refused forever. This WIDENS AN EXISTING IDENTITY, it does not add one:
 # NS3 allows exactly one writer identity per Console account, so `production-writer` holding
 # a lane it already reconciles and pays for is correct, while a `candidate-a-writer` role
 # living in production's vault would be a second writer and is forbidden.
 # MUST MIRROR nodes/operator/app/src/shared/secrets/secrets-lane-trust.data.ts.
-case "${DEPLOY_ENV}" in
-  production) SECRET_LANES="candidate-a preview production" ;;
-  *)          SECRET_LANES="${DEPLOY_ENV}" ;;
-esac
+FLEET_CONTROL_ENV="${FLEET_CONTROL_ENV:-production}"
+if [[ "${DEPLOY_ENV}" == "${FLEET_CONTROL_ENV}" ]]; then
+  SECRET_LANES="candidate-a preview production"
+else
+  SECRET_LANES="${DEPLOY_ENV}"
+fi
 
 # ── <env>-writer (openbao-writer SA; additive bind keeps openbao-operator) ───
 log "writing ${DEPLOY_ENV}-writer policy + role (SA openbao-writer + openbao-operator); lanes: ${SECRET_LANES}"
