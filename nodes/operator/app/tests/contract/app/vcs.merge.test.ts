@@ -445,6 +445,50 @@ describe("POST /api/v1/vcs/merge", () => {
     });
   });
 
+  it("signed env PR prefers manage_envs bypass when the principal also has operator flight", async () => {
+    grant(OPERATOR_NODE_ID);
+    grantManageEnvs(NODE_ID);
+    mockResolveNodeRepo.mockResolvedValue({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+    });
+    mockClassifyEnvManagerPr.mockResolvedValue({
+      isEnvManagerPr: true,
+      targetNodeRef: NODE_SLUG,
+    });
+
+    const res = await post({ prNumber: 42, nodeId: "operator" });
+    expect(res.status).toBe(200);
+    expect(fakeVcs.mergePr).toHaveBeenCalledWith({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      prNumber: 42,
+      method: "squash",
+      bypassQueue: true,
+    });
+  });
+
+  it("signed env PR needs target manage_envs to bypass even with operator flight", async () => {
+    grant(OPERATOR_NODE_ID);
+    mockResolveNodeRepo.mockResolvedValue({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+    });
+    mockClassifyEnvManagerPr.mockResolvedValue({
+      isEnvManagerPr: true,
+      targetNodeRef: NODE_SLUG,
+    });
+
+    const res = await post({ prNumber: 42, nodeId: "operator" });
+    expect(res.status).toBe(200);
+    expect(fakeVcs.mergePr).toHaveBeenCalledWith({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      prNumber: 42,
+      method: "squash",
+    });
+  });
+
   it("env_manager CANNOT merge a NORMAL (non-env-manager) operator PR — still needs node.flight", async () => {
     grantManageEnvs(NODE_ID);
     mockResolveNodeRepo.mockResolvedValue({

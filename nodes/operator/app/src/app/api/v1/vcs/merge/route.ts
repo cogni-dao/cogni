@@ -177,18 +177,20 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
-    // 3a. Authorization path. `can_flight` on the named node is the default gate. If that is DENIED,
-    //     an env-manager exception applies: the `POST /nodes/{id}/envs` verb authors an App-signed
-    //     `cogni.env-manager.v1` catalog PR into the operator's parent monorepo, so merging it would
-    //     otherwise require `can_flight` on the operator. Instead, when the PR classifies as a signed
-    //     env-membership PR, authorize via `node.manage_envs` on the TARGET node (the `Cogni-Node`
-    //     trailer). The App signature is the anti-spoof: a human cannot forge it, so a look-alike
-    //     branch+trailers cannot steal this path. Classification failure fails CLOSED to the flight
-    //     denial (403) — never weakening the default gate.
-    let authzPath: "env_manager" | "node_flight";
-    if (flightRbac.ok) {
-      authzPath = "node_flight";
-    } else {
+    // 3a. Authorization path. `can_flight` on the named node is the default gate. A signed
+    //     env-membership PR in the parent monorepo takes the NARROWER env-manager path whenever the
+    //     principal also holds `node.manage_envs` on its TARGET node — even if that principal happens
+    //     to hold `node.flight` on the operator too. Otherwise a privileged operator session would
+    //     silently select the ordinary queue path and make the signed fast path unreachable.
+    //
+    //     The App signature is the anti-spoof: a human cannot forge it, so a look-alike
+    //     branch+trailers cannot steal this path. Classification or target-RBAC failure falls back to
+    //     `node.flight` only when that independent authority already passed; otherwise it fails closed.
+    let authzPath: "env_manager" | "node_flight" | undefined;
+    const targetsParentMonorepo =
+      owner.toLowerCase() === parentOwner.toLowerCase() &&
+      repo.toLowerCase() === parentRepo.toLowerCase();
+    if (targetsParentMonorepo) {
       let classification: Awaited<
         ReturnType<typeof deployPlane.classifyEnvManagerPr>
       >;
@@ -201,24 +203,29 @@ export const POST = wrapRouteHandlerWithLogging(
       } catch {
         classification = { isEnvManagerPr: false };
       }
-      if (!classification.isEnvManagerPr || !classification.targetNodeRef) {
-        // Not an env-manager PR → the ordinary `node.flight` gate stands (403).
+      if (classification.isEnvManagerPr && classification.targetNodeRef) {
+        const envRbac = await resolveNodeAndAuthorize({
+          id: classification.targetNodeRef,
+          userId: sessionUser.id,
+          action: "node.manage_envs",
+        });
+        if (envRbac.ok) {
+          authzPath = "env_manager";
+        } else if (!flightRbac.ok) {
+          return fail(
+            envRbac.status,
+            envRbac.errorCode,
+            mapRbacError(envRbac.errorCode),
+            { prNumber }
+          );
+        }
+      }
+    }
+    if (!authzPath) {
+      if (!flightRbac.ok) {
         return fail(403, "authz_denied", "not authorized", { prNumber });
       }
-      const envRbac = await resolveNodeAndAuthorize({
-        id: classification.targetNodeRef,
-        userId: sessionUser.id,
-        action: "node.manage_envs",
-      });
-      if (!envRbac.ok) {
-        return fail(
-          envRbac.status,
-          envRbac.errorCode,
-          mapRbacError(envRbac.errorCode),
-          { prNumber }
-        );
-      }
-      authzPath = "env_manager";
+      authzPath = "node_flight";
     }
 
     // 4. VcsCapability configured? (stub throws on use — detect structurally.)
