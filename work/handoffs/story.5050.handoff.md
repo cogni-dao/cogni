@@ -30,7 +30,7 @@ and is live in production. What remains is finishing one cutover and closing the
 - **E2E validation signal**, in order:
   1. `curl -s https://poly.cognidao.org/version` advances off `b51b840c` to the promoted sha.
   2. From **inside the pod**: `curl -s https://polymarket.com/api/geoblock` → `{"blocked":false,…}`.
-     This is the only thing that *measures* egress; country selection merely narrows the pool.
+     This is the only thing that _measures_ egress; country selection merely narrows the pool.
   3. One poly CLOB order accepted (no 403) and a row in `poly_copy_trade_fills` — the bug.5270
      outcome.
 - Deploy proof for operator changes: flight through `POST /api/v1/vcs/flight`, confirm
