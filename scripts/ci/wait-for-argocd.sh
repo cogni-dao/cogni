@@ -377,6 +377,7 @@ wait_for_app() {
   local deadline=$((SECONDS + timeout_seconds))
   local next_kick=$((SECONDS + ACTIVE_SYNC_AFTER))
   local kick_count=0
+  local deleted_once=0
   local deployment deployment_status
 
   deployment=$(resolve_deployment "$app_name")
@@ -438,6 +439,24 @@ wait_for_app() {
       echo "    ⚡ ${app_name}: Argo hard-refresh kick #${kick_count}"
       request_hard_refresh "$app_name"
       next_kick=$((SECONDS + SYNC_KICK_INTERVAL))
+
+      # Escalation (bug.5330): op-terminate + hard-refresh CANNOT fix an
+      # Application whose targetRevision is itself pinned to a force-pushed-away
+      # rev — it reports Synced/Healthy at a dangling commit ArgoCD will never
+      # advance (candidate-a-operator stuck at 50f6637c). After the refresh
+      # kicks fail to move the revision toward EXPECTED, delete the Application
+      # ONCE (`--cascade=orphan` keeps the running pods — no outage) so its
+      # owning ApplicationSet regenerates it fresh against the current
+      # deploy-branch template and re-adopts the live resources.
+      # Guard is tight: a normal rollout has rev==EXPECTED (only health lagging)
+      # and never reaches here, so this cannot disrupt a healthy prod promote.
+      if [ "$deleted_once" -eq 0 ] && [ "$kick_count" -ge 2 ] &&
+         ! rev_includes_expected "$REV" "$EXPECTED_SHA"; then
+        echo "    ♻️  ${app_name}: still pinned at ${REV:0:8} after ${kick_count} kicks — deleting the Application so its AppSet recreates it fresh (bug.5330)" >&2
+        kubectl -n argocd delete application "$app_name" \
+          --cascade=orphan --ignore-not-found >/dev/null 2>&1 || true
+        deleted_once=1
+      fi
     fi
 
     sleep 10
