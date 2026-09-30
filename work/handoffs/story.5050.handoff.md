@@ -141,7 +141,7 @@ bump vs. incumbent), bug.5323 (refused mint invisible to CI and unreadable by th
 - **An attempt logged without an outcome is worse than silence.** provider-http logs
   `http request sent` and never the response; that hid a rejected paid CREATE behind a retry loop.
   Read the effect (ledger row, chain state), not the attempt.
-- **Price is the final tiebreak** and the only reliability input above it is a *boolean*
+- **Price is the final tiebreak** and the only reliability input above it is a _boolean_
   "has ≥1 prior success" — which is why a broken provider at 6.0 beat a working one at 9.34 seven
   times. A bid well below the others is a signal, not a bargain.
 - **Run `biome check` repo-wide**, not on `src/` + `tests/` — `scripts/` bit me in CI.
