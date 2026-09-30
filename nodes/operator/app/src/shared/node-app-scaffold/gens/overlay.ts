@@ -49,12 +49,7 @@ export function renderOverlay(
   publicDomainRoot?: string
 ): string {
   const rendered = rewriteNextAuthDomain(
-    applyOverlayTransforms(
-      templateOverlay,
-      slug,
-      nodePort,
-      port
-    ),
+    applyOverlayTransforms(templateOverlay, slug, nodePort, port),
     publicDomainRoot
   );
   if (!rendered.includes(NODE_AT_ROOT_MIGRATE_CMD)) {

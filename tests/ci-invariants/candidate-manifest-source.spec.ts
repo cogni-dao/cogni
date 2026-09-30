@@ -94,9 +94,7 @@ describe("candidate-a manifest source", () => {
     expect(CANDIDATE_OPERATOR_OVERLAY).toContain(
       "path: /data/FORK_DOMAIN_ROOT"
     );
-    expect(CANDIDATE_OPERATOR_OVERLAY).toContain(
-      'value: "cogni-testing.org"'
-    );
+    expect(CANDIDATE_OPERATOR_OVERLAY).toContain('value: "cogni-testing.org"');
   });
 
   it("selects the flighted source SHA for an in-repo node-ref", () => {
