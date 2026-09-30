@@ -90,7 +90,7 @@ patches:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
                   - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+                    value: ""
                   # HUMAN GATE (story.5016 secret-boundary amendment 3). The PUBLIC Akash
                   # account/wallet address the actuator is authorized to spend from — pinned
                   # here as plain config because it is not a secret and must be reviewable in
