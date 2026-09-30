@@ -129,6 +129,29 @@ patches:
                   #   akash1rja3y2c… Pronto-AI        UA
                   #   akash1v0f04wr… ithub            UA Kyiv
                   #   akash127x6cuk… RHITE            FI Helsinki
+                  #   akash15pkdke… h100/val         NL Amsterdam (story.5050)
+                  # That last one is the reason this list moved again. Console advertises it
+                  # as GB, but the provider DECLARES `country=NL, city=AMS,
+                  # datacenter=eu-west-ams-1, hosting-provider=Overclock` on chain. Only the
+                  # GeoIP of its ingress says GB, at 51.5072,-0.1276 — central London, the
+                  # default coordinate a registrant gets when nothing better is known. The
+                  # screener now reads the DECLARED field and falls back to GeoIP, logging
+                  # `akash_provider_country_source_disagreement` when they differ; there is no
+                  # per-owner correction table, because that would rot exactly like this list
+                  # does. Audited, online, uptime7d=1.0, 28 leases, customDomain=TRUE.
+                  #
+                  # WHY THIS LIST IS THE REAL CAP, AND SHOULD BE RETIRED AS A GATE: of the
+                  # eleven entries above, FIVE are dead — overclock NL, Froggy RO and DSTM CH
+                  # declare featEndpointCustomDomain=FALSE (every node has a publicHost, so
+                  # they can only win a lease and 404 — that was bug.5325, a declared
+                  # capability we never read), and ithub UA + RHITE FI are offline. Network-
+                  # wide there are 28 audited + online + custom-domain-capable providers and
+                  # only 6 of our 11 qualify, so this enumeration — not the market — is what
+                  # held poly to a single vendor (digital frontier, in three cities) across
+                  # ten dry auctions. Every gate that actually matters already fires
+                  # independently: on-chain audit, the node-catalog country requirement, the
+                  # capability screen, quality, price-outlier and strike blacklisting. Keep
+                  # this only as an optional pin; policy should not be an enumeration.
                   # DSTM's larger CH box is deliberately ABSENT: it reports 0 active leases, and
                   # the screener's quality filter requires activeLeases>0 as proof of registry
                   # egress, so allowlisting it would only add a bid that is refused anyway.
@@ -143,7 +166,7 @@ patches:
                   # node MAY use is now the node's own catalog cell
                   # (`required_placement_countries.<env>`), which FILTERS bids fail-closed.
                   - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm,akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash19tp6w64zvdvdh26pv5lyf4f40llnqthgfy0t48,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x,akash1svfr9xarfkcxwdnx32nvl8cs9rfruu4nd56c4f,akash1s3hq36mpas4nmkqasn7fgwhs9968cgl3u5esnw,akash1cvcfyadrm6gcghzspyhacw924c90lwnjkhcglm,akash1rja3y2ctj3tzmesvh0zfhzzx95rfjw405hwt8d,akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h,akash127x6cuk44ul3azferg8wy9fju686kcf6x2dhz7
+                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm,akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash19tp6w64zvdvdh26pv5lyf4f40llnqthgfy0t48,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x,akash1svfr9xarfkcxwdnx32nvl8cs9rfruu4nd56c4f,akash1s3hq36mpas4nmkqasn7fgwhs9968cgl3u5esnw,akash1cvcfyadrm6gcghzspyhacw924c90lwnjkhcglm,akash1rja3y2ctj3tzmesvh0zfhzzx95rfjw405hwt8d,akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h,akash127x6cuk44ul3azferg8wy9fju686kcf6x2dhz7,akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr
                   - name: AKASH_ACTUATOR_ACCOUNT_ID
                     # PUBLIC, non-secret Akash account address of the operator sponsor wallet.
                     # Asserted at boot by assertActuatorWalletAccount() against Console

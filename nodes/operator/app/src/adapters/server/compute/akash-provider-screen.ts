@@ -55,6 +55,58 @@ export interface AkashProviderInfo {
   readonly countryCode: string | null;
 }
 
+/**
+ * The country to screen a provider on.
+ *
+ * TWO FIELDS, ONE OF WHICH IS GUESSWORK. An Akash provider **declares** its location as a
+ * signed on-chain attribute (`country`, `city`, `location-region`) — that is the operator's
+ * own statement about where the datacenter is. Console *also* exposes `ipCountryCode`, which
+ * is a **GeoIP lookup of the ingress address** and is a guess about a different thing.
+ *
+ * Prefer the declaration. The GeoIP field is wrong in the field and wrong in a way that is
+ * invisible: `akash15pkdke…96hr` declares `country=NL, city=AMS,
+ * datacenter=eu-west-ams-1, hosting-provider=Overclock`, and its ingress geolocates to
+ * `GB / England / 51.5072,-0.1276` — central London, which is the default coordinate a
+ * registrant gets when nothing better is known. Screened on GeoIP it is refused
+ * `required_country` for a country it is not in; it was the only custom-domain-capable NL
+ * provider on the network (story.5050).
+ *
+ * WHY NOT A CORRECTION TABLE: an override map keyed by owner address is a second
+ * hand-maintained enumeration, and it rots the same way `AKASH_ALLOWED_PROVIDERS` has.
+ * Reading the declared field fixes the whole class and auto-tracks every provider that
+ * registers after today, with no human edit.
+ *
+ * NEITHER FIELD IS PROOF OF EGRESS. Both describe ingress/registration. Per
+ * `REQUIRED_IS_A_POOL_NARROWER_NOT_A_PROOF` the only thing that establishes the identity a
+ * workload presents to a third party is a probe from inside the lease.
+ */
+export function effectiveCountryCode(input: {
+  /** The provider's own signed on-chain declaration. Preferred. */
+  readonly declared?: string | null | undefined;
+  /** GeoIP of the ingress address. Fallback only. */
+  readonly geoIp?: string | null | undefined;
+}): string | null {
+  const norm = (v: string | null | undefined): string | null => {
+    const t = v?.trim().toUpperCase();
+    return t && /^[A-Z]{2}$/.test(t) ? t : null;
+  };
+  return norm(input.declared) ?? norm(input.geoIp);
+}
+
+/**
+ * True when the two sources disagree, so the caller can log it. A disagreement is not an
+ * error — it is the signal that a provider's GeoIP is stale, and it is the only way we would
+ * ever notice the next one without re-running a manual audit.
+ */
+export function countrySourcesDisagree(input: {
+  readonly declared?: string | null | undefined;
+  readonly geoIp?: string | null | undefined;
+}): boolean {
+  const d = effectiveCountryCode({ declared: input.declared });
+  const g = effectiveCountryCode({ declared: input.geoIp });
+  return d !== null && g !== null && d !== g;
+}
+
 /** One provider's aggregated boot-outcome history (from compute_provider_outcomes). */
 export interface ProviderOutcomeStats {
   readonly successes: number;

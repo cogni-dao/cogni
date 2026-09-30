@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   type AkashProviderInfo,
   BLACKLIST_TTL_MS,
+  countrySourcesDisagree,
+  effectiveCountryCode,
   formatBidRejections,
   formatBidRoster,
   isProviderBlacklisted,
@@ -459,5 +461,57 @@ describe("bid roster", () => {
 
   it("renders an empty roster as none", () => {
     expect(formatBidRoster([])).toBe("none");
+  });
+});
+
+describe("provider country resolution", () => {
+  // story.5050: akash15pkdke… DECLARES country=NL, city=AMS, datacenter=eu-west-ams-1 on
+  // chain, while its ingress GeoIPs to GB/London (51.5072,-0.1276 — a registrant default).
+  // Screening on GeoIP refused the only custom-domain-capable NL provider on the network.
+  it("prefers the provider's own declaration over GeoIP", () => {
+    expect(effectiveCountryCode({ declared: "NL", geoIp: "GB" })).toBe("NL");
+  });
+
+  it("falls back to GeoIP when nothing is declared", () => {
+    expect(effectiveCountryCode({ declared: null, geoIp: "pt" })).toBe("PT");
+    expect(effectiveCountryCode({ geoIp: "PT" })).toBe("PT");
+  });
+
+  it("keeps unknown unknown — resolution never invents a country", () => {
+    // REQUIRED_FAILS_CLOSED depends on this: null must stay null so the bid is refused.
+    expect(effectiveCountryCode({ declared: null, geoIp: null })).toBeNull();
+    expect(effectiveCountryCode({})).toBeNull();
+  });
+
+  it("rejects malformed values from EITHER source rather than trusting them", () => {
+    // A provider can declare anything; a free-text region must not become a country code.
+    expect(effectiveCountryCode({ declared: "eu-west", geoIp: "NL" })).toBe(
+      "NL"
+    );
+    expect(
+      effectiveCountryCode({ declared: "Netherlands", geoIp: "" })
+    ).toBeNull();
+  });
+
+  it("flags a disagreement so a stale GeoIP is visible without a manual audit", () => {
+    expect(countrySourcesDisagree({ declared: "NL", geoIp: "GB" })).toBe(true);
+    expect(countrySourcesDisagree({ declared: "NL", geoIp: "NL" })).toBe(false);
+  });
+
+  it("does not flag when only one source is usable", () => {
+    expect(countrySourcesDisagree({ declared: "NL", geoIp: null })).toBe(false);
+    expect(countrySourcesDisagree({ declared: "eu-west", geoIp: "GB" })).toBe(
+      false
+    );
+  });
+
+  it("admits the provider once its declared country is permitted", () => {
+    const { ranked } = screenFull([bid("akash15pkd", 5)], {
+      providers: new Map([
+        ["akash15pkd", info("akash15pkd", { countryCode: "NL" })],
+      ]),
+      requiredCountryCodes: ["BG", "FI", "NL", "PT", "RO"],
+    });
+    expect(ranked.map((b) => b.provider)).toEqual(["akash15pkd"]);
   });
 });

@@ -55,6 +55,8 @@ import type {
 import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
+  countrySourcesDisagree,
+  effectiveCountryCode,
   formatBidRejections,
   formatBidRoster,
   type ProviderOutcomeStats,
@@ -167,7 +169,11 @@ export interface AkashComputeAdapterConfig {
    * compute_provider_outcomes insert failure never fails a live provision, but
    * it must land in logs loudly — silent drops gave provider screening amnesia.
    */
-  log?: { error(fields: Record<string, unknown>, message: string): void };
+  log?: {
+    error(fields: Record<string, unknown>, message: string): void;
+    /** Optional: a country-source disagreement is advisory, not a failure (story.5050). */
+    warn?(fields: Record<string, unknown>, message: string): void;
+  };
   /** SDL pricing knobs (max price per block per service). */
   pricing?: AkashSdlOptions;
   /** API base URL; defaults to the public Console API. */
@@ -220,6 +226,8 @@ interface ConsoleProvider {
   uptime7d?: number;
   leaseCount?: number;
   ipCountryCode?: string | null;
+  /** The provider's own signed on-chain location declaration. Preferred over GeoIP. */
+  country?: string | null;
 }
 
 interface ConsoleLease {
@@ -347,6 +355,7 @@ export class AkashComputeAdapter
   private readonly outcomeStore: ProviderOutcomeStore;
   private readonly log: {
     error(fields: Record<string, unknown>, message: string): void;
+    warn?(fields: Record<string, unknown>, message: string): void;
   };
   private readonly sdlOptions: AkashSdlOptions;
   private readonly now: () => Date;
@@ -1239,8 +1248,28 @@ export class AkashComputeAdapter
         isValidVersion: p.isValidVersion === true,
         uptime7d: Number(p.uptime7d ?? 0),
         activeLeases: Number(p.leaseCount ?? 0),
-        countryCode: p.ipCountryCode ?? null,
+        // Resolved at the SOURCE so every downstream consumer — the hard country filter,
+        // the latency preference, and the bid roster — reads one consistent country.
+        countryCode: effectiveCountryCode({
+          declared: p.country,
+          geoIp: p.ipCountryCode,
+        }),
       });
+      if (
+        countrySourcesDisagree({ declared: p.country, geoIp: p.ipCountryCode })
+      ) {
+        // Not an error. This is the ONLY way we notice a stale GeoIP without re-running a
+        // manual audit, and a silently-wrong country refuses a provider for a country it is
+        // not in (story.5050).
+        this.log?.warn?.(
+          {
+            provider: p.owner,
+            declaredCountry: p.country,
+            geoIpCountry: p.ipCountryCode,
+          },
+          "akash_provider_country_source_disagreement"
+        );
+      }
     }
     const outcomes = await this.outcomeStore
       .stats(PROVIDER)
