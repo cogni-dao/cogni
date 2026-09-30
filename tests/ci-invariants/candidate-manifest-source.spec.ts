@@ -14,6 +14,8 @@
  *   CONTROL_DOMAIN_STAYS_SEPARATE: a test parent's Akash workload zone never
  *     replaces its explicitly configured k3s operator/control domain during
  *     substrate or public checks.
+ *   DEPLOY_REPO_OWNS_APPSET: AppSet reconciliation renders repoURL for the
+ *     repository that owns the deploy branch instead of the canonical default.
  * Side-effects: IO (reads .github/workflows/candidate-flight.yml)
  * Links: docs/spec/ci-cd.md axioms 17-20, docs/spec/node-ci-cd-contract.md artifact contract
  * @public
@@ -96,6 +98,24 @@ describe("candidate-a manifest source", () => {
       "path: /data/FORK_DOMAIN_ROOT"
     );
     expect(CANDIDATE_OPERATOR_OVERLAY).toContain('value: "cogni-testing.org"');
+  });
+
+  it("renders the live AppSet for the repository that owns the deploy branch", () => {
+    const apply = namedStep(
+      "reconcile-appset",
+      "Apply candidate-a-${{ matrix.node }}-applicationset.yaml"
+    ).run;
+
+    expect(apply).toBeTypeOf("string");
+    expect(apply).toContain(
+      'REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"'
+    );
+    expect(apply).toContain(
+      'bash ci-src/scripts/ci/render-node-appset.sh candidate-a "$NODE" >"$RENDERED_APPSET"'
+    );
+    expect(apply).toContain(
+      'ci_ssh_retry scp "${ssh_opts[@]}" "$RENDERED_APPSET"'
+    );
   });
 
   it("selects the flighted source SHA for an in-repo node-ref", () => {

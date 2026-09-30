@@ -631,8 +631,17 @@ jobs:
             echo "::error::$APPSET_FILE missing at head_sha — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
             exit 1
           fi
+          # DEPLOY_REPO_OWNS_APPSET: committed AppSets default to the canonical
+          # fleet so the canonical tree stays byte-stable. At apply time render
+          # this one object for the repository whose deploy/<env>-<node> branch
+          # this workflow just wrote. Isolated test parents must never make Argo
+          # follow the canonical repo and silently ignore their deploy branch.
+          RENDERED_APPSET="$RUNNER_TEMP/appset-${NODE}.yaml"
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
+            CATALOG_DIR="${GITHUB_WORKSPACE}/app-src/infra/catalog" \
+            bash ci-src/scripts/ci/render-node-appset.sh candidate-a "$NODE" >"$RENDERED_APPSET"
           read -r -a ssh_opts <<< "$SSH_OPTS"
-          ci_ssh_retry scp "${ssh_opts[@]}" "$APPSET_FILE" "root@${VM_HOST}:/tmp/appset-${NODE}.yaml"
+          ci_ssh_retry scp "${ssh_opts[@]}" "$RENDERED_APPSET" "root@${VM_HOST}:/tmp/appset-${NODE}.yaml"
           # Anti-resurrection: the legacy shared `cogni-candidate-a` AppSet is
           # retired. Orphan-delete (never prune its live Applications) so it can
           # never reappear to re-clobber this lane, then apply the per-node object.
