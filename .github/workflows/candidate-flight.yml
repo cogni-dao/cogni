@@ -585,6 +585,51 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
+      - name: Reconcile isolated fleet control-plane root
+        if: steps.ssh-setup.outputs.has_vm == 'true'
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" == "cogni-dao/cogni" ]]; then
+            echo "Canonical fleet keeps its reviewed deploy/candidate-a-control-plane root."
+            exit 0
+          fi
+          # ISOLATED_FLEET_ROOT_IS_LOCAL: the apply-once root and its
+          # self-managing copy must follow the isolated parent's protected main.
+          # Otherwise the canonical root immediately overwrites this job's
+          # test-repo AppSet and Argo never sees the test deploy branch.
+          desired_repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          root_seed="ci-src/infra/k8s/argocd/control-plane/roots/candidate-a-control-plane-application.yaml"
+          rendered_root="$RUNNER_TEMP/candidate-a-control-plane-root.yaml"
+          sed -E \
+            -e "s#https://github\\.com/[Cc]ogni-[Dd][Aa][Oo]/cogni\\.git#${desired_repo}#g" \
+            -e 's#targetRevision: deploy/candidate-a-control-plane#targetRevision: main#g' \
+            "$root_seed" >"$rendered_root"
+
+          # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
+          . ci-src/scripts/ci/lib/ssh-retry.sh
+          read -r -a ssh_opts <<< "$SSH_OPTS"
+          ci_ssh_retry scp "${ssh_opts[@]}" "$rendered_root" "root@${VM_HOST}:/tmp/candidate-a-control-plane-root.yaml"
+          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" \
+            "kubectl apply -f /tmp/candidate-a-control-plane-root.yaml -n argocd && kubectl -n argocd annotate application cogni-candidate-a-control-plane argocd.argoproj.io/refresh=hard --overwrite && rm -f /tmp/candidate-a-control-plane-root.yaml"
+
+          for _ in $(seq 1 60); do
+            state="$(ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" \
+              "kubectl -n argocd get application cogni-candidate-a-control-plane -o jsonpath='{.spec.source.repoURL}{\"|\"}{.spec.source.targetRevision}{\"|\"}{.status.sync.revision}{\"|\"}{.status.sync.status}{\"|\"}{.status.health.status}'")"
+            if [[ "$state" == "${desired_repo}|main|${EXPECTED_REVISION}|Synced|Healthy" ]]; then
+              echo "Isolated control-plane root synced: $state"
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$state" != "${desired_repo}|main|${EXPECTED_REVISION}|Synced|Healthy" ]]; then
+            echo "::error::isolated control-plane root did not converge: $state"
+            exit 1
+          fi
+
       - name: Reconcile fleet-control migration access
         if: steps.ssh-setup.outputs.has_vm == 'true' && fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a'
         env:

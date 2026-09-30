@@ -16,6 +16,8 @@
  *     substrate or public checks.
  *   DEPLOY_REPO_OWNS_APPSET: AppSet reconciliation renders repoURL for the
  *     repository that owns the deploy branch instead of the canonical default.
+ *   ISOLATED_FLEET_ROOT_IS_LOCAL: a non-canonical candidate reconciles the
+ *     apply-once control-plane root to its own protected main before AppSets.
  * Side-effects: IO (reads .github/workflows/candidate-flight.yml)
  * Links: docs/spec/ci-cd.md axioms 17-20, docs/spec/node-ci-cd-contract.md artifact contract
  * @public
@@ -116,6 +118,23 @@ describe("candidate-a manifest source", () => {
     expect(apply).toContain(
       'ci_ssh_retry scp "${ssh_opts[@]}" "$RENDERED_APPSET"'
     );
+  });
+
+  it("reconciles an isolated fleet root before applying its AppSet", () => {
+    const root = namedStep(
+      "reconcile-appset",
+      "Reconcile isolated fleet control-plane root"
+    );
+
+    expect(root.if).toBe("steps.ssh-setup.outputs.has_vm == 'true'");
+    expect(root.run).toContain('== "cogni-dao/cogni"');
+    expect(root.run).toContain(
+      'desired_repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"'
+    );
+    expect(root.run).toContain(
+      "targetRevision: deploy/candidate-a-control-plane#targetRevision: main"
+    );
+    expect(root.run).toContain("${EXPECTED_REVISION}|Synced|Healthy");
   });
 
   it("selects the flighted source SHA for an in-repo node-ref", () => {
