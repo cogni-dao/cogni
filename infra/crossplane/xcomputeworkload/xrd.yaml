@@ -550,6 +550,13 @@ spec:
                     count: { type: integer, minimum: 1, maximum: 3 }
                     maxAttempts: { type: integer, enum: [3] }
                     key: { type: string, minLength: 1, maxLength: 512 }
+                # Latches the generation-qualified provider-http Request child after the first
+                # explicit base-generation replacement. Existing XRs omit it and retain the
+                # historical static child name, so rolling out this field causes zero fleet-wide
+                # Request churn. Once present, a later generation bump selects a fresh child and
+                # therefore the CREATE action instead of trying to UPDATE a settled lease.
+                leaseRequestGeneration:
+                  { type: integer, minimum: 0, maximum: 1000000 }
                 bootDeadlineAt: { type: string, format: date-time }
                 # BOOT EPOCH (bug.5244, bug.5287). The (bundle sha, leaseGeneration,
                 # optional recovery ordinal) attempt this XR's boot deadline is anchored to,
