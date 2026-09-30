@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -8,7 +7,7 @@
  * Purpose: Build release evidence from the exact npm tarball and anonymous registry install.
  * Scope: Package-release CI only. Does not publish, mutate source, or use npm credentials.
  * Invariants: PACKED_ARTIFACT_IS_CONTRACT, ANONYMOUS_CONSUMER_PROOF, TESTING_SUBPATH_IS_TEST_ONLY.
- * Side-effects: Creates bounded temporary consumer directories and a requested tarball output directory.
+ * Side-effects: IO (creates bounded temporary consumer directories and a requested tarball output directory).
  * Links: docs/spec/packages-architecture.md, task.5158
  * @internal
  */
