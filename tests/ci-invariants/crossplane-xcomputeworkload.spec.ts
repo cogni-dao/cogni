@@ -74,12 +74,11 @@ const templateCode = template
 
 const xrdSpec = xrd.spec as YamlObject;
 const version = (xrdSpec.versions as YamlObject[])[0] as YamlObject;
-const specSchema = (
-  (
-    ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
-      .properties as YamlObject
-  ).spec as YamlObject
-).properties as YamlObject;
+const specObjectSchema = (
+  ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
+    .properties as YamlObject
+).spec as YamlObject;
+const specSchema = specObjectSchema.properties as YamlObject;
 const statusSchema = (
   (
     ((version.schema as YamlObject).openAPIV3Schema as YamlObject)
@@ -1182,7 +1181,7 @@ describe("XComputeWorkload placement requirement (story.5050)", () => {
    * atomic placement + leaseGeneration bump while rejecting a placement-only edit.
    */
   it("allows re-placement only alongside a leaseGeneration bump", () => {
-    const rules = (specSchema["x-kubernetes-validations"] ?? []) as {
+    const rules = (specObjectSchema["x-kubernetes-validations"] ?? []) as {
       rule: string;
       message: string;
     }[];
