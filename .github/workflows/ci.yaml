@@ -34,6 +34,9 @@ env:
   # The repo that owns this fleet's deploy/* branches. Canonical keeps the same URL;
   # the isolated test fleet renders its own repo instead of cogni-dao/cogni.
   REPO_URL: https://github.com/${{ github.repository }}.git
+  # Public workload zone used by catalog-derived scheduler endpoints. Canonical keeps the
+  # cognidao.org default; isolated fleets set the repo variable to their own Cloudflare zone.
+  FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
 
 jobs:
   env_manager_fast_path:
