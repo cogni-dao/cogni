@@ -247,11 +247,16 @@ export type EnvAddShape =
       readonly computeApi: null;
       readonly controlEnv: NodeFormationEnv;
     }
-  /** Externally built row: akash placement, crossplane authority, production reconciles non-prod. */
+  /**
+   * Externally built row: akash placement, crossplane authority, the FLEET CONTROL ENV reconciles
+   * the non-production lane. `controlEnv` is a `string` because the fleet control env is fleet
+   * config (`FLEET_CONTROL_ENV`, `controlEnvFor`) — `production` on cogni-dao, `candidate-a` on an
+   * isolated test fleet — not necessarily one of this repo's own NodeFormationEnv literals.
+   */
   | {
       readonly placement: "akash";
       readonly computeApi: "crossplane";
-      readonly controlEnv: NodeFormationEnv;
+      readonly controlEnv: string;
     };
 
 /**
@@ -266,7 +271,8 @@ export type EnvAddShape =
  */
 export function planEnvAddShape(
   catalog: string,
-  env: NodeFormationEnv
+  env: NodeFormationEnv,
+  fleetControlEnv?: string
 ): EnvAddShape {
   if (!hasCatalogSourceRepo(catalog)) {
     // In-repo row: no external artifact plane, so the k3s lane — and no placement cells, which
@@ -287,7 +293,7 @@ export function planEnvAddShape(
   return {
     placement: "akash",
     computeApi: "crossplane",
-    controlEnv: controlEnvFor(env, "akash"),
+    controlEnv: controlEnvFor(env, "akash", fleetControlEnv),
   };
 }
 
@@ -319,8 +325,16 @@ export function buildEnvDeltaPlan(input: {
   readonly current: EnvPlanCurrent;
   /** Explicit akash lease replacement counter for the added env (defaults 0 — a fresh lease). */
   readonly leaseGeneration?: number | undefined;
+  /**
+   * THE FLEET CONTROL ENV (`FLEET_CONTROL_ENV`, `controlEnvFor`) — the env whose cluster reconciles
+   * an akash lane, so the env whose `appsets/<control-env>/` dir the AppSet is written into/deleted
+   * from (bug.5204/bug.5235). Omitted => `production` (cogni-dao fleet, byte-identical); an isolated
+   * test fleet passes `candidate-a`. PURE: the adapter resolves it from env and threads it here.
+   */
+  readonly fleetControlEnv?: string | undefined;
 }): EnvDeltaResult {
-  const { slug, env, present, current, leaseGeneration } = input;
+  const { slug, env, present, current, leaseGeneration, fleetControlEnv } =
+    input;
 
   // OPERATOR_SELF_HOSTS_THE_VERB — the control plane cannot remove its own deployment.
   if (!present && slug === OPERATOR_SLUG) {
@@ -342,9 +356,17 @@ export function buildEnvDeltaPlan(input: {
       activityEnv,
       current,
       leaseGeneration,
+      fleetControlEnv,
     });
   }
-  return planRemove({ slug, env, currentEnvs, activityEnv, current });
+  return planRemove({
+    slug,
+    env,
+    currentEnvs,
+    activityEnv,
+    current,
+    fleetControlEnv,
+  });
 }
 
 function planAdd(args: {
@@ -354,9 +376,17 @@ function planAdd(args: {
   activityEnv: NodeFormationEnv;
   current: EnvPlanCurrent;
   leaseGeneration?: number | undefined;
+  fleetControlEnv?: string | undefined;
 }): EnvDeltaResult {
-  const { slug, env, currentEnvs, activityEnv, current, leaseGeneration } =
-    args;
+  const {
+    slug,
+    env,
+    currentEnvs,
+    activityEnv,
+    current,
+    leaseGeneration,
+    fleetControlEnv,
+  } = args;
 
   // Idempotent: already present → no PR.
   if (currentEnvs.includes(env)) {
@@ -377,7 +407,8 @@ function planAdd(args: {
 
   // ADD_DERIVES_PLACEMENT — the shape (placement + compute authority + control env) is a function
   // of the catalog row, never caller input. Throws compute_authority_unavailable before any render.
-  const shape = planEnvAddShape(current.catalog, env);
+  // The FLEET CONTROL ENV selects the akash lane's appset dir (bug.5204/bug.5235).
+  const shape = planEnvAddShape(current.catalog, env, fleetControlEnv);
 
   const templateOverlay = current.templateOverlayByEnv[env];
   const templateExternalSecret = current.templateExternalSecretByEnv?.[env];
@@ -486,8 +517,10 @@ function planRemove(args: {
   currentEnvs: NodeFormationEnv[];
   activityEnv: NodeFormationEnv;
   current: EnvPlanCurrent;
+  fleetControlEnv?: string | undefined;
 }): EnvDeltaResult {
-  const { slug, env, currentEnvs, activityEnv, current } = args;
+  const { slug, env, currentEnvs, activityEnv, current, fleetControlEnv } =
+    args;
 
   // Idempotent: already absent → no PR.
   if (!currentEnvs.includes(env)) {
@@ -521,7 +554,7 @@ function planRemove(args: {
   // written into. An absent cell is the k3s default, whose control env is the workload env.
   const provider: PlacementProvider =
     parseCatalogPlacement(current.catalog)[env] ?? "k3s";
-  const controlEnv = controlEnvFor(env, provider);
+  const controlEnv = controlEnvFor(env, provider, fleetControlEnv);
 
   const appsetsKustomization = current.appsetsKustomizationByEnv[controlEnv];
   if (appsetsKustomization === undefined) {

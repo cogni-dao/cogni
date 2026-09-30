@@ -197,7 +197,9 @@ async function onboardLane(
 
     const provider =
       row.deployment_provider?.[ctx.lane] === "akash" ? "akash" : "k3s";
-    const controlEnv = controlEnvFor(ctx.lane, provider);
+    // The FLEET CONTROL ENV owns the akash lane's control cluster (bug.5204/bug.5235): on an
+    // isolated fleet (FLEET_CONTROL_ENV=candidate-a) the custodian is candidate-a, not production.
+    const controlEnv = controlEnvFor(ctx.lane, provider, env.FLEET_CONTROL_ENV);
     // REPLAY_NEVER_ADVANCES — an env renders at the sha it is already running. The catalog row is
     // the BIRTH pin, used only for an env that has never deployed (no `deploy/<env>-<slug>` pin).
     const birthSha = row.source_sha;

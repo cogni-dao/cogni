@@ -137,6 +137,13 @@ export interface GitHubRepoWriterConfig {
    * exercised (NOT wired with creds in this PR — vNext/W3b). Defaults false.
    */
   readonly dnsReverseReconcile?: boolean;
+  /**
+   * THE FLEET CONTROL ENV (`FLEET_CONTROL_ENV`, `controlEnvFor`) — the env whose cluster reconciles
+   * akash lanes, so the env whose `appsets/<control-env>/` dir the env-verb writes into (bug.5204/
+   * bug.5235). Resolved from `serverEnv().FLEET_CONTROL_ENV` by the factory. Undefined =>
+   * `production` (cogni-dao fleet, byte-identical); an isolated test fleet passes `candidate-a`.
+   */
+  readonly fleetControlEnv?: string | undefined;
 }
 
 export interface OpenNodeAppPrInput {
@@ -182,7 +189,11 @@ export interface OpenNodeEnvPrInput {
 export interface OpenNodeEnvPrDerived {
   readonly placement: PlacementProvider;
   readonly computeApi: "crossplane" | null;
-  readonly controlEnv: NodeFormationEnv;
+  /**
+   * The env whose cluster reconciles the derived lane (`controlEnvFor`). A `string`, not a
+   * NodeFormationEnv literal: on an isolated fleet the FLEET CONTROL ENV can be `candidate-a`.
+   */
+  readonly controlEnv: string;
   readonly leaseGeneration: number;
 }
 
@@ -2757,7 +2768,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     let shape: EnvAddShape | undefined;
     if (present) {
       try {
-        shape = planEnvAddShape(catalog, env);
+        shape = planEnvAddShape(catalog, env, this.config.fleetControlEnv);
       } catch (err) {
         if (err instanceof EnvPlanError) {
           throw deployPlaneError(err.code, err.message, err.status);
@@ -2796,6 +2807,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         present,
         current,
         leaseGeneration,
+        fleetControlEnv: this.config.fleetControlEnv,
       });
     } catch (err) {
       if (err instanceof EnvPlanError) {
@@ -3123,7 +3135,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // the env's scheduler-worker route to the in-cluster default, so fetch that env's patch too.
     // (Caddy is per-node env-independent state and NOT touched by an env remove.)
     const removeProvider = parseCatalogPlacement(catalog)[env] ?? "k3s";
-    const removeControlEnv = controlEnvFor(env, removeProvider);
+    const removeControlEnv = controlEnvFor(
+      env,
+      removeProvider,
+      this.config.fleetControlEnv
+    );
     appsetsKustomizationByEnv[removeControlEnv] = await this.readFileOnMain(
       octokit,
       owner,
@@ -4408,7 +4424,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // (env, slug) pair folds into the same evolving content — two blobs for one path would race.
     const kustomizationByControlEnv = new Map<string, string>();
     for (const env of NODE_FORMATION_ENVS) {
-      const controlEnv = controlEnvFor(env, birthPlacement[env] ?? "k3s");
+      const controlEnv = controlEnvFor(
+        env,
+        birthPlacement[env] ?? "k3s",
+        this.config.fleetControlEnv
+      );
       await addBlob(
         appsetPath(controlEnv, env, slug),
         renderNodeAppset(appsetTemplate, slug, env)

@@ -636,6 +636,34 @@ describe("planEnvAddShape (ADD_DERIVES_PLACEMENT, story.5039)", () => {
     ).toBe("production");
   });
 
+  it("threads the FLEET CONTROL ENV into an akash non-production lane's control env (isolated fleet, bug.5235)", () => {
+    // cogni-test-org exports FLEET_CONTROL_ENV=candidate-a — its own control plane reconciles the
+    // akash lane, so the derived control env is candidate-a, NOT production.
+    expect(
+      planEnvAddShape(
+        externallyBuiltCatalog(["production"]),
+        "candidate-a",
+        "candidate-a"
+      )
+    ).toEqual({
+      placement: "akash",
+      computeApi: "crossplane",
+      controlEnv: "candidate-a",
+    });
+  });
+
+  it("omitting the FLEET CONTROL ENV keeps the akash control env at production (cogni-dao, byte-identical)", () => {
+    // An empty/whitespace value is treated as unset — still the production default.
+    expect(
+      planEnvAddShape(externallyBuiltCatalog(["production"]), "candidate-a", "")
+        .controlEnv
+    ).toBe("production");
+    expect(
+      planEnvAddShape(externallyBuiltCatalog(["production"]), "candidate-a")
+        .controlEnv
+    ).toBe("production");
+  });
+
   it("throws compute_authority_unavailable (422) when no actuator writer resolves for the owner org", () => {
     // An org outside the CROSSPLANE_ACTUATOR_WRITERS map — the schema makes an akash env without
     // compute_api INVALID, so the verb must refuse loudly rather than author an unmergeable PR.
@@ -747,6 +775,68 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
         "lease_generation:\n  candidate-a: 3\n"
       );
     }
+  });
+
+  it("authors the akash lane's AppSet under the FLEET CONTROL ENV's dir on an isolated fleet (bug.5235)", () => {
+    const base = akashAddCurrent();
+    // Isolated fleet (FLEET_CONTROL_ENV=candidate-a): candidate-a IS the control env, so the
+    // kustomization the adapter fetches — and the one this plan folds into — is candidate-a's.
+    const current: EnvPlanCurrent = {
+      ...base,
+      appsetsKustomizationByEnv: {
+        "candidate-a": kustWith("candidate-a", ["operator"]),
+      },
+    };
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: true,
+      current,
+      fleetControlEnv: "candidate-a",
+    });
+    expect(res.kind).toBe("add");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    // The AppSet + its kustomization live under appsets/candidate-a/ — NOT the nonexistent
+    // appsets/production/ (the 422 GitRPC::BadObjectState this fix removes).
+    expect(paths(res.ops)).toContain(
+      appsetPath("candidate-a", "candidate-a", SLUG)
+    );
+    expect(paths(res.ops)).toContain(appsetsKustomizationPath("candidate-a"));
+    expect(paths(res.ops)).not.toContain(
+      appsetPath("production", "candidate-a", SLUG)
+    );
+    expect(paths(res.ops)).not.toContain(
+      appsetsKustomizationPath("production")
+    );
+
+    const kustOp = res.ops.find(
+      (o) => o.path === appsetsKustomizationPath("candidate-a")
+    );
+    expect(kustOp?.op).toBe("upsert");
+    if (kustOp?.op === "upsert") {
+      expect(kustOp.content).toContain(
+        `candidate-a-${SLUG}-applicationset.yaml`
+      );
+    }
+  });
+
+  it("keeps the akash lane under appsets/production/ when no FLEET CONTROL ENV is set (cogni-dao, byte-identical)", () => {
+    // The default-fleet path: omitting fleetControlEnv reproduces today's production-reconciled
+    // shape exactly — the AppSet dir stays appsets/production/.
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: true,
+      current: akashAddCurrent(),
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+    expect(paths(res.ops)).toContain(
+      appsetPath("production", "candidate-a", SLUG)
+    );
+    expect(paths(res.ops)).not.toContain(
+      appsetPath("candidate-a", "candidate-a", SLUG)
+    );
   });
 
   it("throws env_render_inputs_missing naming the CONTROL env when its kustomization is absent", () => {
@@ -1233,6 +1323,46 @@ describe("buildEnvDeltaPlan — akash REMOVE (REMOVE_COMPLETES_THE_ROW, story.50
     if (schedulerOp?.op === "upsert") {
       expect(schedulerOp.content).toContain(
         `${SLUG}=http://${SLUG}-node-app:3000,${NODE_ID}=http://${SLUG}-node-app:3000`
+      );
+    }
+  });
+
+  it("deletes the akash lane's AppSet from the FLEET CONTROL ENV's dir on an isolated fleet (bug.5235)", () => {
+    const base = akashRemoveCurrent();
+    // Isolated fleet (FLEET_CONTROL_ENV=candidate-a): the AppSet was written under
+    // appsets/candidate-a/, so the remove must delete from there and regenerate that kustomization.
+    const CAND_KUST = `${KUST_HEADER}\n  - candidate-a-${SLUG}-applicationset.yaml\n  - candidate-a-operator-applicationset.yaml\n`;
+    const current: EnvPlanCurrent = {
+      ...base,
+      appsetsKustomizationByEnv: { "candidate-a": CAND_KUST },
+    };
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: false,
+      current,
+      fleetControlEnv: "candidate-a",
+    });
+    expect(res.kind).toBe("remove");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(deletes(res.ops)).toContain(
+      appsetPath("candidate-a", "candidate-a", SLUG)
+    );
+    expect(deletes(res.ops)).not.toContain(
+      appsetPath("production", "candidate-a", SLUG)
+    );
+
+    const kustOp = res.ops.find(
+      (o) => o.path === appsetsKustomizationPath("candidate-a")
+    );
+    expect(kustOp?.op).toBe("upsert");
+    if (kustOp?.op === "upsert") {
+      expect(kustOp.content).not.toContain(
+        `candidate-a-${SLUG}-applicationset.yaml`
+      );
+      expect(kustOp.content).toContain(
+        "candidate-a-operator-applicationset.yaml"
       );
     }
   });
