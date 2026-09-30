@@ -12,6 +12,8 @@
  *   - PREVIEW_IS_MANUAL_TOO: env=preview is accepted, gated on `node.manage_envs`; production keeps
  *     `node.promote_production` unchanged; any other env is 400.
  *   - DISPATCH_FAILURE_IS_TYPED: a thrown dispatch returns 502 dispatch_failed, never a raw 500.
+ *   - ENV_SCOPED_PARENT: every dispatch uses `NODE_SUBMODULE_PARENT_OWNER/REPO`; no production
+ *     repo hardcode can leak into a test operator.
  * Side-effects: none
  * Links: nodes/operator/app/src/app/api/v1/deploy/promote/route.ts, docs/spec/rbac.md
  * @internal
@@ -47,6 +49,10 @@ const dbState = vi.hoisted(() => ({
   call: 0,
 }));
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
+const envState = vi.hoisted(() => ({
+  NODE_SUBMODULE_PARENT_OWNER: "test-owner" as string | undefined,
+  NODE_SUBMODULE_PARENT_REPO: "test-repo" as string | undefined,
+}));
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
   debug: vi.fn(),
@@ -95,11 +101,8 @@ vi.mock("@/bootstrap/otel", () => ({
     }) => Promise<unknown>
   ) => handler({ traceId: "trace-1", span: { setAttribute: vi.fn() } }),
 }));
-vi.mock("@/shared/config/repoSpec.server", () => ({
-  getGithubRepo: () => ({ owner: "test-owner", repo: "test-repo" }),
-}));
 vi.mock("@/shared/env", () => ({
-  serverEnv: () => ({}),
+  serverEnv: () => envState,
 }));
 vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: () => mockGetSessionUser(),
@@ -143,6 +146,8 @@ describe("POST /api/v1/deploy/promote", () => {
     dbState.node = { id: NODE_ID, slug: "sigh" };
     dbState.billing = { id: "billing-1" };
     dbState.call = 0;
+    envState.NODE_SUBMODULE_PARENT_OWNER = "test-owner";
+    envState.NODE_SUBMODULE_PARENT_REPO = "test-repo";
     authzState.decision = "authz_allowed";
     authzState.check.mockImplementation(async () => ({
       decision: authzState.decision === "authz_allowed" ? "allow" : "deny",
@@ -207,6 +212,18 @@ describe("POST /api/v1/deploy/promote", () => {
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "authz_denied" });
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 when the environment-scoped deployment parent is missing", async () => {
+    envState.NODE_SUBMODULE_PARENT_REPO = undefined;
+    const res = await post({ nodeId: NODE_ID, env: "preview" });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      error: "promote_target_not_configured",
+    });
+    expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+    expect(mockDeployPlane.promoteNode).not.toHaveBeenCalled();
+    expect(mockDeployPlane.promoteNodeFromPreview).not.toHaveBeenCalled();
   });
 
   it("returns 200 and dispatches the guarded preview-forward path when no sourceSha", async () => {
