@@ -169,7 +169,11 @@ export interface AkashComputeAdapterConfig {
    * compute_provider_outcomes insert failure never fails a live provision, but
    * it must land in logs loudly — silent drops gave provider screening amnesia.
    */
-  log?: { error(fields: Record<string, unknown>, message: string): void };
+  log?: {
+    error(fields: Record<string, unknown>, message: string): void;
+    /** Optional: a country-source disagreement is advisory, not a failure (story.5050). */
+    warn?(fields: Record<string, unknown>, message: string): void;
+  };
   /** SDL pricing knobs (max price per block per service). */
   pricing?: AkashSdlOptions;
   /** API base URL; defaults to the public Console API. */
@@ -351,6 +355,7 @@ export class AkashComputeAdapter
   private readonly outcomeStore: ProviderOutcomeStore;
   private readonly log: {
     error(fields: Record<string, unknown>, message: string): void;
+    warn?(fields: Record<string, unknown>, message: string): void;
   };
   private readonly sdlOptions: AkashSdlOptions;
   private readonly now: () => Date;
