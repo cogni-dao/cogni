@@ -103,11 +103,11 @@ jobs:
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           DSEQ: ${{ inputs.orphan_dseq }}
-          LANE: ${{ inputs.environment }}
+          CONTROL_ENV: ${{ inputs.control_environment }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
         run: |
           set -euo pipefail
-          namespace="cogni-${LANE}"
+          namespace="cogni-${CONTROL_ENV}"
           ssh $SSH_OPTS root@"$VM_HOST" \
             "KUBECONFIG=/etc/rancher/k3s/k3s.yaml NAMESPACE='$namespace' bash -s -- --dseq '$DSEQ'" \
             < scripts/ops/recover-orphaned-akash-lease.sh
