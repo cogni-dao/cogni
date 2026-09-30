@@ -53,7 +53,11 @@ Cogni runs multiple sovereign nodes (operator, poly, resy) on shared infrastruct
 ## Non-Goals
 
 - Runtime plugin system (nodes are separate Next.js apps, not dynamically loaded modules)
-- Per-node Postgres servers (V1 uses per-node databases on a shared server)
+- Per-node Postgres servers **as the default shape**. The default stays one shared server per
+  environment with one database per node. A *graduated* node (see `NODE_GRADUATION_ON_THRESHOLD`)
+  moving to dedicated capacity is explicitly IN scope — it is the sanctioned exception, not the norm.
+  _(Amended 2026-09-30, bug.5299/bug.5293: the original blanket non-goal was written before any node
+  crossed the critical/noisy threshold. poly has.)_
 - Federation protocol design (V3 concern, not this spec)
 - Operator repo extraction (ROADMAP Phase 6, gated on paying customer)
 
@@ -66,6 +70,10 @@ All invariants are detailed in their respective sections below. Summary:
 | SHARED_IDENTITY_ISOLATED_SESSIONS | Auth Model               |
 | ORIGIN_SCOPED_COOKIES             | Auth Model               |
 | SSO_THEN_LOCAL_SESSION            | Auth Model               |
+| ENV_IS_A_FAILURE_DOMAIN           | Data Isolation           |
+| MUTUAL_NONINTERFERENCE            | Data Isolation           |
+| NODE_GRADUATION_ON_THRESHOLD      | Data Isolation           |
+| SUBSTRATE_COST_DECLARED_AT_BIRTH  | Data Isolation           |
 | DB_PER_NODE                       | Data Isolation           |
 | DB_IS_BOUNDARY                    | Data Isolation           |
 | NODE_LOCAL_METERING_PRIMARY       | Data Isolation           |
@@ -124,7 +132,11 @@ All invariants are detailed in their respective sections below. Summary:
 
 | Invariant                         | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| DB_PER_NODE                       | 1 Postgres server, 1 database per node. Each node has its own database, its own migrations, its own schema version.                                                                                                                                                                                                                                                                                                                        |
+| ENV_IS_A_FAILURE_DOMAIN           | **production, preview and candidate-a MUST NOT share a database failure domain.** A lane's databases, provisioning jobs and workloads live on that lane's own host. A non-production lane must be structurally unable to consume production's connections, disk, I/O or page cache. Violated as-built: production hosts 13 databases including every node's `_candidate_a` and `_preview` lane, because the fleet control env custodies all lanes (bug.5206/task.5132). Restoring this is the FIRST correction (bug.5299) and it covers **all** nodes, not only the noisiest. |
+| MUTUAL_NONINTERFERENCE            | **A node must not be able to crash the operator, and the operator must not be able to crash a node.** Shared substrate is permitted; a shared *blast radius* is not. Proven violated 2026-09-30: poly's workload on the shared production Postgres coincided with ~73 postmaster crash-recoveries/24h, each taking every operator route to 502 — and the same crashes broke poly. Mitigate by bounding the shared resource, never by degrading a node's mission (do not delete a node's data, disable its production function, or hand-tune engine settings to throttle it). |
+| NODE_GRADUATION_ON_THRESHOLD      | A node that crosses the critical/noisy threshold **graduates to dedicated database capacity**; it is not throttled in place. The threshold is a declared, measured trigger (relative share of host memory/IO, sustained temp-file spill, connection share, or designation as mission-critical) — not a judgement call in an incident. Graduation REQUIRES a proven backup **and a proven restore** before cutover. First graduate: poly production (measured 2026-09-30 at 4.3 GB in one table ≈ 73% of a 5.9 GB host, ~20 GB block reads and 487 MB temp spill per stats window). |
+| SUBSTRATE_COST_DECLARED_AT_BIRTH  | A node's substrate cost must be **declared and bounded when the node is born** — connection ceiling, statement/idle timeouts, and a data-retention policy for append-only tables. Birth currently provisions unbounded databases, connections and disk with no quota, no retention and no per-node visibility, so cost scales `O(nodes × lanes)` against fixed capacity. Unbounded-by-default is the defect that makes every future spawn a latent incident. |
+| DB_PER_NODE                       | 1 Postgres server per environment, 1 database per node. Each node has its own database, its own migrations, its own schema version. Per-environment, not per-fleet (see `ENV_IS_A_FAILURE_DOMAIN`); the shared-server default yields to `NODE_GRADUATION_ON_THRESHOLD` for a graduated node.                                                                                                                                                 |
 | DB_IS_BOUNDARY                    | The database itself is the node boundary. No `node_id` columns needed in node-local tables — the DB already scopes to this node. User/account-scoped RLS within the node is still legitimate and expected.                                                                                                                                                                                                                                 |
 | NODE_LOCAL_METERING_PRIMARY       | Each node's local billing/metering data is authoritative. Operator aggregation is derived, never the source of truth. If operator aggregate diverges from node-local, **node-local wins**.                                                                                                                                                                                                                                                 |
 | MISSING_NODE_ID_DEFAULTS_OPERATOR | If `node_id` is absent from callback metadata (e.g., direct LiteLLM call, legacy client), the custom callback defaults to the operator node and logs a warning. This prevents silent data loss while making misrouted callbacks detectable.                                                                                                                                                                                                |

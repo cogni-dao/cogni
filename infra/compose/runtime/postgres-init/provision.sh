@@ -201,6 +201,16 @@ if [ "$INFRA_ONLY" != "1" ]; then
   PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 <<SQL
 ALTER ROLE "$APP_READONLY_USER" SET default_transaction_read_only = on;
 ALTER ROLE "$APP_READONLY_USER" SET statement_timeout = '30s';
+-- bug.5293: this role is also the metrics identity. Alloy's
+-- prometheus.exporter.postgres connects as it to read pg_stat_database (one row
+-- per node database — the per-tenant signal) plus the instance-scoped pg_stat_*
+-- views. Those views withhold other sessions' rows from an unprivileged role, so
+-- without pg_monitor the exporter silently reports a partial picture rather than
+-- failing. pg_monitor is the PostgreSQL-native predefined role for exactly this
+-- (pg_read_all_stats + pg_read_all_settings + pg_stat_scan_tables) and grants NO
+-- table data access, so it does not widen this role beyond observability.
+-- Idempotent: GRANT of an already-held role membership is a no-op.
+GRANT pg_monitor TO "$APP_READONLY_USER";
 SQL
 fi
 
