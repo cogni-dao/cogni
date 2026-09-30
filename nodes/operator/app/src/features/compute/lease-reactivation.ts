@@ -55,6 +55,44 @@ import type { AkashTxAllocationRecord } from "@/ports";
  * keeps the same idempotence key. The Crossplane composition authors keys as
  * `xcw:<namespace>:<node-id>:<leaseGeneration>`, so the suffix is the durable generation evidence.
  */
+/**
+ * The generation a REPLACEMENT of this (node, environment) must state in the catalog.
+ *
+ * WHY THIS IS NOT `requiredLeaseGeneration` (story.5050). That function implements
+ * LIVE_KEEPS_ITS_GENERATION: a live `allocated` receipt re-states ITS generation so an activation
+ * can replay/adopt the running resource instead of abandoning a billing lease. That is correct for
+ * reactivation and WRONG for replacement. A placement change cannot adopt the running lease —
+ * Akash refuses in-place placement change, so the requirement only binds on a lease minted fresh.
+ * Re-stating the live generation would leave the catalog cell unchanged and the verb would succeed
+ * while doing nothing, which is the "a verb that succeeds and does nothing is BROKEN" failure.
+ *
+ * So this bumps past EVERY generation the ledger has seen, live ones included.
+ *
+ * REPLACEMENT_ABANDONS_A_PAID_LEASE: that is the deliberate cost, and callers MUST surface the
+ * displaced `allocated` receipts to the requester rather than silently orphan them — an
+ * unclosed lease bills invisibly (bug.5189). This function reports the generation; enumerating
+ * the money is the caller's job, exactly as the env REMOVE verb already does.
+ */
+export function replacementLeaseGeneration(input: {
+  readonly catalogGeneration: number;
+  readonly receipts: readonly AkashTxAllocationRecord[];
+}): number {
+  let required = input.catalogGeneration;
+  for (const receipt of input.receipts) {
+    const match = /^xcw:.+:(0|[1-9]\d*)$/.exec(receipt.cogniKey);
+    const generation = match ? Number(match[1]) : Number.NaN;
+    if (!Number.isSafeInteger(generation) || generation > 1_000_000) {
+      throw new Error(
+        `[lease-reactivation] receipt ${receipt.receiptId} has no valid lease generation suffix`
+      );
+    }
+    // `preparing` is mid-transaction: not evidence, and NOT safe to leapfrog either — a key being
+    // minted right now must not be re-presented, so it counts the same as a spent one.
+    required = Math.max(required, generation + 1);
+  }
+  return required;
+}
+
 export function requiredLeaseGeneration(input: {
   readonly catalogGeneration: number;
   readonly receipts: readonly AkashTxAllocationRecord[];

@@ -178,6 +178,9 @@ export const CATALOG_PLACEMENT_KEYS = [
   "deployment_provider",
   "compute_api",
   "lease_generation",
+  // story.5050 — the node-owned HARD placement requirement. Last in the order because it is the
+  // only OPTIONAL cell: a row without it is unconstrained, which is what every existing row is.
+  "required_placement_countries",
 ] as const;
 export type CatalogPlacementKey = (typeof CATALOG_PLACEMENT_KEYS)[number];
 
@@ -186,6 +189,12 @@ const PLACEMENT_VALUE_RES: Readonly<Record<CatalogPlacementKey, RegExp>> = {
   deployment_provider: /^(?:k3s|akash)$/,
   compute_api: /^(?:legacy|crossplane)$/,
   lease_generation: /^(?:0|[1-9][0-9]*)$/,
+  // A YAML flow sequence of ISO 3166-1 alpha-2 codes, e.g. `[PT, NL]`. Kept on ONE line so the
+  // existing single-line-per-env block machinery still owns the edit — a block sequence would
+  // need a second indent level this module deliberately does not model. Rejects `[]`: the
+  // consumer fails closed, so an empty requirement would refuse every bid (see the cell's
+  // own EMPTY_IS_A_TYPO_NOT_A_WILDCARD note in infra/catalog/_schema.json).
+  required_placement_countries: /^\[[A-Z]{2}(?:, ?[A-Z]{2})*\]$/,
 };
 
 /**
@@ -196,8 +205,10 @@ const PLACEMENT_VALUE_RES: Readonly<Record<CatalogPlacementKey, RegExp>> = {
  */
 const placementBlockRe = (key: CatalogPlacementKey): RegExp =>
   new RegExp(`^${key}:[^\\S\\r\\n]*\\n((?:[ \\t]+[^\\n]*(?:\\n|$))*)`, "m");
+// The value group accepts a bare scalar OR a one-line flow sequence (story.5050). Widening it is
+// inert for the scalar keys — none of their vocabularies contain a bracket.
 const PLACEMENT_ENTRY_RE =
-  /^[ \t]+([a-z-]+):[^\S\r\n]*([a-z0-9]+)[^\S\r\n]*(?:#.*)?$/;
+  /^[ \t]+([a-z-]+):[^\S\r\n]*(\[[^\]\n]*\]|[a-z0-9]+)[^\S\r\n]*(?:#.*)?$/;
 const SOURCE_REPO_LINE_RE = /^source_repo:[^\S\r\n]*(\S+)[^\S\r\n]*$/m;
 
 /** True when the catalog row declares a `source_repo:` (an external build plane exists). */
