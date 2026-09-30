@@ -36,6 +36,7 @@ import {
   NODE_BUNDLE_PAYLOAD_FILE,
   verifyNodeBundleManifest,
 } from "@/features/compute/node-artifact-bundle-oci";
+import { resolveNodeBootRecovery } from "@/features/compute/node-boot-recovery";
 import { resolveNodeComputeApi } from "@/features/compute/node-compute-api";
 import {
   deploymentEnvironmentSchema,
@@ -46,7 +47,6 @@ import {
   resolvePromoteDeploymentTargets,
 } from "@/features/compute/node-deployment-targets";
 import { resolveNodeLeaseGeneration } from "@/features/compute/node-lease-generation";
-import { resolveNodeBootRecovery } from "@/features/compute/node-boot-recovery";
 import { resolveNodeRequiredPlacement } from "@/features/compute/node-required-placement";
 import { assertDeclaredNodeDeployment } from "@/features/compute/node-services-workload-spec";
 import { hostForNode } from "@/shared/node-registry/resolve";
