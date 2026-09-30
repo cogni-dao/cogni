@@ -19,10 +19,19 @@
  *     (produced by `envManagerCommitMessage`).
  *   - APP_SIGNATURE_IS_ANTI_SPOOF: the HEAD commit MUST be App-signed — `verified === true`,
  *     `reason === "valid"`, and exactly ONE parent — the same check `classify-env-manager-fast-
- *     path.sh` enforces. A human cannot forge the operator App's signature, so this is the line
- *     that stops a look-alike branch+trailers from stealing the env-manager authz path.
- *   - FAIL_CLOSED: any missing/duplicate trailer, unsigned commit, or branch mismatch returns
- *     `{ isEnvManagerPr: false }` — the caller then keeps the ordinary `node.flight` gate.
+ *     path.sh` enforces. A verified signature is NECESSARY but NOT SUFFICIENT: GitHub marks a
+ *     commit signed with ANY contributor's own verified key `verified:true`, so signature alone
+ *     would let a `node.manage_envs` holder open a fork PR with the reserved branch+trailers +
+ *     their own GPG key and steal `bypassQueue`. The identity gate below closes that.
+ *   - IDENTITY_IS_THE_OPERATOR_BOT (parity with classify-env-manager-fast-path.sh:170-192): the PR
+ *     MUST be OPEN, based on `main`, OPENED by the exact operator App bot (`login`/`id`/`type:Bot`),
+ *     with its HEAD branch on the MONOREPO ITSELF (never a fork, case-insensitive full_name match)
+ *     and exactly ONE commit; and the signed HEAD commit's own GitHub author MUST be that same
+ *     operator bot (`login`/`id`). The bot identity + monorepo are resolved by the adapter (App
+ *     `GET /app` slug → bot user), never hardcoded here — the classifier stays pure.
+ *   - FAIL_CLOSED: any missing/duplicate trailer, unsigned commit, branch mismatch, fork head,
+ *     non-bot opener/author, wrong base, or multi-commit PR returns `{ isEnvManagerPr: false }` —
+ *     the caller then keeps the ordinary `node.flight` gate.
  * Side-effects: none (pure)
  * Links: nodes/operator/app/src/app/api/v1/vcs/merge/route.ts,
  *   nodes/operator/app/src/app/_facades/deploy/lane-onboard.server.ts,
@@ -44,7 +53,7 @@ export const ENV_MANAGER_VERB_BRANCH =
 /** A valid node slug (mirrors the fast-path script's `^[a-z0-9][a-z0-9-]{0,62}$`). */
 const NODE_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
-/** Already-fetched facts about a PR's HEAD commit — the adapter supplies these. */
+/** Already-fetched facts about a PR + its HEAD commit — the adapter supplies these. */
 export interface EnvManagerCommitFacts {
   /** PR head branch ref (e.g. `cogni-operator/node-env-spawny-boi-candidate-a`). */
   readonly headRef: string;
@@ -56,6 +65,36 @@ export interface EnvManagerCommitFacts {
   readonly verificationReason: string | null;
   /** Number of parents of the HEAD commit (a single-parent commit → 1). */
   readonly parentCount: number;
+
+  // --- PR identity (parity with classify-env-manager-fast-path.sh:170-181). ---
+  /** PR `.state` — MUST be `"open"`. */
+  readonly prState: string | null;
+  /** PR `.base.ref` — MUST be `"main"`. */
+  readonly baseRef: string | null;
+  /** PR `.user.login` — MUST equal the operator bot login. */
+  readonly prUserLogin: string | null;
+  /** PR `.user.id` — MUST equal the operator bot id. */
+  readonly prUserId: number | null;
+  /** PR `.user.type` — MUST be `"Bot"`. */
+  readonly prUserType: string | null;
+  /** PR `.head.repo.full_name` — MUST be the monorepo itself (case-insensitive), never a fork. */
+  readonly headRepoFullName: string | null;
+  /** PR `.commits` — MUST be exactly 1. */
+  readonly commitCount: number;
+
+  // --- HEAD commit GitHub author (parity with classify-env-manager-fast-path.sh:183-189). ---
+  /** HEAD commit `.author.login` (linked GitHub account) — MUST equal the operator bot login. */
+  readonly commitAuthorLogin: string | null;
+  /** HEAD commit `.author.id` (linked GitHub account) — MUST equal the operator bot id. */
+  readonly commitAuthorId: number | null;
+
+  // --- Trusted expectations resolved by the adapter (NOT hardcoded, keeps the classifier pure). ---
+  /** The operator App bot login this deployment trusts (`<app-slug>[bot]`). */
+  readonly expectedBotLogin: string;
+  /** The operator App bot user id this deployment trusts. */
+  readonly expectedBotId: number;
+  /** The monorepo `<owner>/<repo>` the signed PR's head MUST live on (compared case-insensitively). */
+  readonly expectedHeadRepoFullName: string;
 }
 
 /** Outcome of classification: whether it is an env-manager PR and, if so, its target node. */
@@ -106,6 +145,36 @@ export function classifyEnvManagerCommit(
     facts.verified !== true ||
     facts.verificationReason !== "valid" ||
     facts.parentCount !== 1
+  ) {
+    return { isEnvManagerPr: false };
+  }
+
+  // IDENTITY_IS_THE_OPERATOR_BOT (PR side) — parity with classify-env-manager-fast-path.sh:170-181.
+  // A verified signature alone is insufficient: only the exact operator App bot, on an OPEN PR into
+  // `main`, from a HEAD branch on the monorepo itself (never a fork), carrying exactly ONE commit,
+  // may claim this authz path. Fail closed if the adapter could not resolve a bot id.
+  if (
+    !Number.isInteger(facts.expectedBotId) ||
+    facts.expectedBotLogin.length === 0 ||
+    facts.prState !== "open" ||
+    facts.baseRef !== "main" ||
+    facts.prUserLogin !== facts.expectedBotLogin ||
+    facts.prUserId !== facts.expectedBotId ||
+    facts.prUserType !== "Bot" ||
+    facts.headRepoFullName === null ||
+    facts.headRepoFullName.toLowerCase() !==
+      facts.expectedHeadRepoFullName.toLowerCase() ||
+    facts.commitCount !== 1
+  ) {
+    return { isEnvManagerPr: false };
+  }
+
+  // IDENTITY_IS_THE_OPERATOR_BOT (commit side) — parity with classify-env-manager-fast-path.sh:183-189.
+  // The signed HEAD commit's own linked GitHub author MUST be that same operator bot: a valid
+  // signature from any other verified key (a contributor's GPG key on a look-alike commit) is not enough.
+  if (
+    facts.commitAuthorLogin !== facts.expectedBotLogin ||
+    facts.commitAuthorId !== facts.expectedBotId
   ) {
     return { isEnvManagerPr: false };
   }

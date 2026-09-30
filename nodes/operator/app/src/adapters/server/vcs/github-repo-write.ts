@@ -1279,7 +1279,14 @@ export class GitHubRepoWriter implements DeployPlanePort {
   ): Promise<EnvManagerPrClassificationResult> {
     const octokit = await this.getOctokit(input.owner, input.repo);
 
-    // Fetch the PR to read its HEAD branch ref + HEAD SHA.
+    // Resolve THIS deployment's operator App bot identity (login + user id) from the App itself —
+    // NEVER hardcoded. The shell twin (classify-env-manager-fast-path.sh) keys the trusted bot on
+    // the repository; in-app we key it on the executing App, which is the same trust boundary per
+    // deployment (prod operator → cogni-operator[bot]; test operator → cogni-operator-test[bot]).
+    const botIdentity = await this.resolveOperatorBotIdentity(octokit);
+
+    // Fetch the PR to read its HEAD branch ref + HEAD SHA + identity facts (state, base, opener,
+    // head repo, commit count).
     const { data: pr } = await octokit.request(
       "GET /repos/{owner}/{repo}/pulls/{pull_number}",
       {
@@ -1289,7 +1296,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       }
     );
 
-    // Fetch the HEAD commit for its message trailers + App signature verification + parents.
+    // Fetch the HEAD commit for its message trailers + App signature verification + parents + author.
     const { data: commit } = await octokit.request(
       "GET /repos/{owner}/{repo}/commits/{ref}",
       {
@@ -1305,7 +1312,72 @@ export class GitHubRepoWriter implements DeployPlanePort {
       verified: commit.commit.verification?.verified === true,
       verificationReason: commit.commit.verification?.reason ?? null,
       parentCount: commit.parents?.length ?? 0,
+      prState: pr.state ?? null,
+      baseRef: pr.base?.ref ?? null,
+      prUserLogin: pr.user?.login ?? null,
+      prUserId: pr.user?.id ?? null,
+      prUserType: pr.user?.type ?? null,
+      headRepoFullName: pr.head.repo?.full_name ?? null,
+      commitCount: pr.commits ?? 0,
+      // `.author` is the linked GitHub account for the commit (a Bot for App-authored commits),
+      // distinct from `.commit.author` (the raw git author name/email) — parity with the shell twin.
+      commitAuthorLogin: commit.author?.login ?? null,
+      commitAuthorId: commit.author?.id ?? null,
+      expectedBotLogin: botIdentity.login,
+      expectedBotId: botIdentity.id,
+      expectedHeadRepoFullName: `${input.owner}/${input.repo}`,
     });
+  }
+
+  private operatorBotIdentity?: { login: string; id: number };
+
+  /**
+   * Resolve the executing operator App's bot identity (`<slug>[bot]` login + numeric user id) —
+   * the SoD anchor `classifyEnvManagerCommit` compares the PR opener and HEAD-commit author
+   * against. Read from the App itself (`GET /app` for the slug, then `GET /users/<slug>[bot]` for
+   * the bot user id), NEVER hardcoded, so it self-selects per deployment exactly like the shell
+   * twin selects a bot per repository. Cached per adapter instance (the identity is stable).
+   */
+  private async resolveOperatorBotIdentity(
+    octokit: Octokit
+  ): Promise<{ login: string; id: number }> {
+    if (this.operatorBotIdentity) return this.operatorBotIdentity;
+    // `GET /app` is App-JWT scoped (not installation scoped), so authenticate as the App.
+    const { token } = await this.appAuth({ type: "app" });
+    const appResponse = await fetch("https://api.github.com/app", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!appResponse.ok) {
+      throw deployPlaneError(
+        "operator_bot_identity_unresolved",
+        `could not resolve operator App identity (GET /app HTTP ${appResponse.status})`,
+        502
+      );
+    }
+    const app = (await appResponse.json()) as { slug?: string };
+    if (!app.slug) {
+      throw deployPlaneError(
+        "operator_bot_identity_unresolved",
+        "operator App response is missing a slug",
+        502
+      );
+    }
+    const login = `${app.slug}[bot]`;
+    const { data: user } = await octokit.request("GET /users/{username}", {
+      username: login,
+    });
+    if (typeof user.id !== "number") {
+      throw deployPlaneError(
+        "operator_bot_identity_unresolved",
+        `operator bot user ${login} has no numeric id`,
+        502
+      );
+    }
+    this.operatorBotIdentity = { login, id: user.id };
+    return this.operatorBotIdentity;
   }
 
   /**
