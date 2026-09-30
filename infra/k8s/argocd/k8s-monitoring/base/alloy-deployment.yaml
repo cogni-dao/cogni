@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Grafana Alloy — the in-cluster Kubernetes state collector (bug.5165).
+# Single replica: it only scrapes + remote-writes; at-least-once ships tolerate a
+# brief gap on restart, and a second replica would double every series. Reloader
+# rolls it when the grafana-cloud-metrics Secret rotates.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alloy
+  annotations:
+    reloader.stakater.com/auto: "true"
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/part-of: cogni-observability
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alloy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alloy
+        app.kubernetes.io/part-of: cogni-observability
+    spec:
+      serviceAccountName: alloy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 473
+        runAsGroup: 473
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: alloy
+          image: grafana/alloy:v1.19.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - run
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/tmp/alloy
+            - /etc/alloy/config.alloy
+          env:
+            # The environment this collector runs in — stamped as the `env` metric
+            # label. Set BY NAME in every overlay (never a positional patch).
+            - name: DEPLOY_ENVIRONMENT
+              value: replace-in-overlay
+          # Grafana Cloud Mimir credentials (ESO -> OpenBao cogni/<env>/_shared).
+          # NOT optional: a collector that cannot ship must CrashLoop loudly.
+          envFrom:
+            - secretRef:
+                name: grafana-cloud-metrics
+          ports:
+            - name: http
+              containerPort: 12345
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: storage
+              mountPath: /tmp/alloy
+          resources:
+            requests: { cpu: 25m, memory: 128Mi }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          livenessProbe:
+            httpGet: { path: /-/ready, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /-/ready, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: storage
+          emptyDir: {}

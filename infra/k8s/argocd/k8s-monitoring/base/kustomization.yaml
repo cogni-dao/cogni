@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# In-cluster Kubernetes state collector (bug.5165) — env-agnostic base.
+# Ships k3s container-level state to the SAME Grafana Cloud Mimir the Compose Alloy
+# uses, so an OOMKilled / restart / terminated-reason / unschedulable pod is readable
+# in one query instead of SSH-and-guess. See README.md for the dedupe rationale.
+#
+# Rendered per env by overlays/<env>/ (which pin DEPLOY_ENVIRONMENT + the OpenBao
+# secret path) and delivered through a control-plane Argo CD Application.
+#
+# Validation (helm-in-kustomize; NOT run by CI's check-gitops-manifests.sh, which
+# builds only infra/k8s/overlays/* without --enable-helm):
+#   kustomize build --enable-helm infra/k8s/argocd/k8s-monitoring/overlays/candidate-a
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: k8s-monitoring
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - alloy-config.yaml
+  - alloy-deployment.yaml
+  - external-secret.yaml
+
+helmCharts:
+  - name: kube-state-metrics
+    repo: https://prometheus-community.github.io/helm-charts
+    version: 8.5.0
+    releaseName: kube-state-metrics
+    namespace: k8s-monitoring
+    includeCRDs: false
+    valuesFile: values-kube-state-metrics.yaml

@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Argo CD Application — in-cluster Kubernetes state collector (bug.5165), production.
+# See control-plane/candidate-a/k8s-monitoring-application.yaml for the full rationale.
+# This is the env bug.5165 was filed against: prod crashes were SSH-and-guess because
+# Grafana Cloud had node_exporter but no kube-state-metrics / kubelet-cAdvisor series.
+#
+# targetRevision: main — the production root app-of-apps tracks main (shared source,
+# zero per-env templating), mirroring crossplane-xcomputeworkload for production.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: k8s-monitoring
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/k8s/argocd/k8s-monitoring/overlays/production
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: k8s-monitoring
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
