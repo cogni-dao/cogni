@@ -55,10 +55,9 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
-  leaseGeneration: 10
+  leaseGeneration: 11
   placement:
     requiredCountries:
-      - BG
       - FI
       - NL
       - PT
