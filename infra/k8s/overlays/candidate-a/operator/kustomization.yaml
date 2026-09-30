@@ -139,16 +139,6 @@ patches:
       - op: add
         path: /data/DEPLOY_ENVIRONMENT
         value: "candidate-a"
-      # PUBLIC, non-secret Akash account the actuator spends from (same value pinned on the
-      # akash-tx-actuator container above). The OPERATOR APP needs it too: the env-membership
-      # verb (`POST /api/v1/nodes/{id}/envs`) derives lease_generation by reading the allocation
-      # ledger through createLeaseReadCapability (compute-leases.ts), which returns undefined —
-      # and the ADD verb 503s `generation_evidence_unavailable` (EVIDENCE_OR_REFUSE, task.5132) —
-      # unless AKASH_ACTUATOR_ACCOUNT_ID is on the app runtime. Without this the whole
-      # env-manager test-org deploy e2e (task.5141/story.5039) is blocked at the verb layer.
-      - op: add
-        path: /data/AKASH_ACTUATOR_ACCOUNT_ID
-        value: "akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt"
       - op: replace
         path: /data/TEMPORAL_NAMESPACE
         value: "cogni-candidate-a"
