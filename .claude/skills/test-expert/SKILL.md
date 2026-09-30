@@ -109,6 +109,27 @@ If the user is about to mock the database, push back — use **Component** with 
 
 When the user's question is "does the machine-agent API actually work end-to-end against canary or a local stack?" — that's **validation**, not testing. See `docs/guides/agent-api-validation.md`: a curl-based checklist for discover → register → execute graph → list runs → stream events. It's a human/agent-driven probe, not a CI suite. Point at that guide when the user is validating the agent API surface rather than writing a unit/component/stack test.
 
+## CICD / operator-plane changes MUST be proven on candidate-a via the test-org env-manager e2e
+
+**Rule (bug-chain-earned, 2026-09-30):** a change to the CI/CD or operator control plane — the env-membership verb, the merge route, `controlEnvFor`/placement, the flight/promote path, `lane-onboard`, the fast-path classifier, any operator overlay/config — is **not done on a green PR CI alone**. It must be proven on **candidate-a** by driving the real product path with a `cogni-test-org` node (spawny-boi) as an **`env_manager` principal**, and the proof must be a **`/validate-candidate` scorecard posted as a PR comment** — not a claim in chat. "Green CI" and "a SHA deployed" are deploy proof, not function proof; capture the BROKEN signal, flight, then read the FIXED behavior back live.
+
+**The proven end-to-end lane** (env_manager perms only, through `test.cognidao.org`, zero personal `gh`):
+
+1. Grant: register on `test.cognidao.org` (public seam) → `POST /nodes/<uuid>/access-requests {"role":"env_manager"}` → owner approves (owner **browser** session; Bearer can't approve). `env_manager` → `can_manage_envs`.
+2. Verb authors a **signed** catalog PR: `POST /api/v1/nodes/<uuid>/envs {env, present}` (or `{env, placement}`) → the `cogni-operator-test` App opens `cogni-operator/node-env-<slug>-<env>` with `Cogni-Change-Type: cogni.env-manager.v1` trailers.
+3. **Signed fast-path CI**: `env-manager-fast-path` classifies the App-signed commit → heavy jobs (unit/component/static/manifest) SKIP; branch protection is satisfied by the skips.
+4. `env_manager` merges its OWN PR: `POST /api/v1/vcs/merge {prNumber, method, nodeId:"operator"}` — the merge resolves the repo via `nodeId:operator` (→ the monorepo where the catalog PR lives), authorized by `node.manage_envs` on the target node (NOT `can_flight`). Merge queue can silently drop — verify the PR actually reached MERGED.
+5. `lane-onboard` webhook (on merge of a `node-env-*` PR) auto-dispatches `candidate-flight` → Argo → the node serves.
+6. Read the FIXED behavior back: `<slug>.cogni-testing.org/version`+`/readyz`, `source=lease` Loki logs, and the `feature.lane_onboard.complete` event.
+
+**Non-obvious breaks this lane hides (all real, found driving it):**
+- The env-verb ADD 503s `generation_evidence_unavailable` unless `AKASH_ACTUATOR_ACCOUNT_ID` is pinned on the **operator app** runtime (not just the actuator container) — it reads the allocation ledger to derive `lease_generation`.
+- `controlEnvFor` (placement.ts) hardcodes `production` for akash; on an isolated fleet it must honor `FLEET_CONTROL_ENV` (the TS twin of `scripts/ci/lib/appset-paths.sh` `control_env_for`), else the verb's PR-authoring writes `appsets/production/…` while the files live under `appsets/<control-env>/…` → `422 GitRPC::BadObjectState`.
+- Merge authz: an env_manager who authored a PR in the operator monorepo needs `node.manage_envs` on the **target** node to merge it (the merge route classifies App-signed `cogni.env-manager.v1` PRs); a plain `can_flight` grant on the operator over-grants.
+- The shared candidate-a slot has ONE flight lease and is contended across sessions — a concurrent flight EVICTS your validation SHA. Confirm `test.cognidao.org/version` still equals your PR head at scorecard time (validate at HEAD, re-flight if evicted). The remove/add verb reuse the SAME branch `cogni-operator/node-env-<slug>-<env>` — rapid toggles churn PRs.
+
+**Trap:** the test-parent's heavy jobs (unit/component/static) are frequently broken; the whole point of the signed fast-path is to SKIP them. If the fast-path classifier falls back to `eligible=false`, those broken jobs RUN and BLOCK the merge — that's a fast-path/classifier regression to fix, not a reason to bypass the gate.
+
 ## Environment e2e test lane — GitHub App + DoltHub + flight
 
 This is the production-like lane for questions such as "can the operator really birth a node and flight it?" It is not covered by local vitest, stack tests, or Playwright. Treat it as a disposable mini-prod environment driven by the same deploy code.
