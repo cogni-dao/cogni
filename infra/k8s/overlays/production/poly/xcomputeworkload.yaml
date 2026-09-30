@@ -11,13 +11,13 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:4c2dc2e1b4c3031aa55c5c746f9c79dc76b25c5273c7e509533a242c1e7623cd
+    ref: ghcr.io/cogni-dao/poly@sha256:16f8566dd3a667e569fe97ffc8c56667b4a891a4455d28e87271ef3541fa9ec2
     source:
       repository: cogni-dao/poly
-      sha: b51b840c7368c2667c2a778e5f462cef46d96307
+      sha: 8d784ca009215cd9a36b49fe0b2a4957b7923b7f
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:b204221eefa64568a175d0dedac29cfcf3948a2ec8b4bd3787957223dc12c707
+        image: ghcr.io/cogni-dao/poly@sha256:cbb9fc5bd5ddeaafd431c9f4ad739b95d0c8bcad2d6fb2fe6d58f9dccddb70b4
   workload:
     name: poly
     publicHost: poly.cognidao.org
@@ -36,6 +36,8 @@ spec:
           - key: BILLING_INGEST_TOKEN
           - key: PAPER_ENFORCE_MODE
           - key: POLYGON_RPC_URL
+          - key: POLY_WALLET_RECOVERY_OPS_TOKEN
+          - key: INTERNAL_OPS_TOKEN
           - key: PRIVY_USER_WALLETS_APP_ID
           - key: PRIVY_USER_WALLETS_APP_SECRET
           - key: PRIVY_USER_WALLETS_SIGNING_KEY
@@ -53,7 +55,14 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
-  leaseGeneration: 5
+  leaseGeneration: 6
+  placement:
+    requiredCountries:
+      - BG
+      - CH
+      - FI
+      - NL
+      - PT
   dns:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
