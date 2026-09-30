@@ -139,11 +139,8 @@ export type {
 } from "./connection-broker.port";
 export type {
   CandidateFlightDispatchResult,
-  CatalogForkTarget,
   CatalogNodeDefinition,
   DeployPlanePort,
-  MirrorCanonicalFilesInput,
-  MirrorCanonicalFilesResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
   ObservedWorkflowDispatchResult,
@@ -154,8 +151,6 @@ export type {
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,
-  SyncTemplateUpstreamInput,
-  SyncTemplateUpstreamResult,
 } from "./deploy-plane.port";
 export type { EpochsRead } from "./epochs-read.port";
 export { EpochsReadError } from "./epochs-read.port";

@@ -10,9 +10,9 @@ ongoing source upstream for sovereign node repositories.
 
 ## Hard stop
 
-On a push to node-template's default branch, the operator recognizes the event
-and logs `node_template_fork_sync_disabled`. It creates **zero** fork branches
-and PRs. Both former write tiers are unauthorized:
+The operator has no template-push fork-sync dispatcher or source-writing port.
+A node-template push creates **zero** fork branches and PRs. Both former write
+tiers were deleted, not merely disabled:
 
 - `syncCanonicalFilesToFork` — force-overwrote a transitive CI/identity closure.
 - `syncTemplateUpstreamToFork` — overlaid every non-`node_local` template blob
@@ -61,5 +61,4 @@ behind.
 ## References
 
 - Contract: `docs/spec/repo-sync-contract.md` § Automatic Fork Source Sync (Disabled)
-- Runtime terminal: `nodes/operator/app/src/app/_facades/deploy/canonical-fork-sync.server.ts`
 - Hub knowledge: `fork-sync-product-clobber`
