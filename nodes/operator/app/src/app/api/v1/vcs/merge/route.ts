@@ -21,6 +21,16 @@
  *     legacy lane. NOTE: gating the single most IRREVERSIBLE repo action (merge-to-main) on
  *     `can_flight` is a deliberate least-privilege MVP concession — a dedicated `can_merge` role +
  *     probation tier is the COMMITTED vNext. The seam FAILS CLOSED (503) when no authority is configured.
+ *   - ENV_MANAGER_SELF_MERGE: an `env_manager` may merge ITS OWN env-membership PR without
+ *     `can_flight`. The `POST /nodes/{id}/envs` verb authors an App-signed `cogni.env-manager.v1`
+ *     catalog PR into the operator's PARENT MONOREPO, so `nodeId:operator` (→ monorepo) is the only
+ *     way to address it — which otherwise demands `can_flight` on the operator. When `can_flight` is
+ *     DENIED and the PR classifies as a signed env-membership PR (`classifyEnvManagerPr`: reserved
+ *     branch family + `Cogni-Change-Type`/`Cogni-Node` trailers + an App SIGNATURE), the merge is
+ *     authorized instead by `node.manage_envs` on the TARGET node (the `Cogni-Node` trailer). Repo
+ *     resolution is UNCHANGED (still `nodeId:operator` → monorepo); only WHO may authorize changes.
+ *     The App signature is the anti-spoof line — a human cannot forge it — and classification fails
+ *     CLOSED to the `can_flight` denial, so the default gate is never weakened (task.5141).
  *   - NODE_SCOPED_NEVER_RETARGETS: only a KNOWN in-repo node (operator) retargets to the monorepo; a
  *     typo'd / unknown slug hard-404s (`catalog_missing`), never a silent retarget.
  *   - NO_REPO_FROM_AGENT: owner/repo are operator-resolved via `resolveNodeRepo` (the node's catalog
@@ -95,37 +105,42 @@ export const POST = wrapRouteHandlerWithLogging(
     }
     const { prNumber, method, nodeId } = parsed.data;
 
-    // 2. RBAC — the ONE node-authz seam, reusing can_flight, against the named node (the operator is
-    //    addressed by its own `nodeId` like any node — see NODE_SCOPED). Fails closed (503) when no
-    //    authority is configured.
-    const rbac = await resolveNodeAndAuthorize({
+    const mapRbacError = (errorCode: string): string =>
+      errorCode === "authz_unavailable"
+        ? "authorization unavailable"
+        : errorCode === "node_not_found"
+          ? "node not found"
+          : "not authorized";
+
+    // 2. RBAC — the node-authz seam, against the named node (the operator is addressed by its own
+    //    `nodeId` like any node — see NODE_SCOPED). The DEFAULT gate reuses `can_flight`. It fails
+    //    closed (503) when no authority is configured. An env-manager exception (step 3) lets an
+    //    `env_manager` merge ITS OWN signed env-membership PR via `node.manage_envs` — see below.
+    const flightRbac = await resolveNodeAndAuthorize({
       id: nodeId,
       userId: sessionUser.id,
       action: "node.flight",
     });
-    if (!rbac.ok) {
-      const error =
-        rbac.errorCode === "authz_unavailable"
-          ? "authorization unavailable"
-          : rbac.errorCode === "node_not_found"
-            ? "node not found"
-            : "not authorized";
-      return fail(rbac.status, rbac.errorCode, error, { prNumber });
+    // A node that does not resolve, or authz that is unavailable, is terminal for BOTH paths — the
+    // env-manager exception can only RESCUE a `can_flight` denial, never manufacture a node or an
+    // authority. Only `authz_denied` falls through to the env-manager classification.
+    if (!flightRbac.ok && flightRbac.errorCode !== "authz_denied") {
+      return fail(
+        flightRbac.status,
+        flightRbac.errorCode,
+        mapRbacError(flightRbac.errorCode),
+        { prNumber }
+      );
     }
+    // The node resolved in every remaining case, so a slug is always present.
+    const slug = flightRbac.ok ? flightRbac.node.slug : (flightRbac.slug ?? "");
 
-    // 3. VcsCapability configured? (stub throws on use — detect structurally.)
-    const vcs = getContainer().vcsCapability;
-    if (vcs === stubVcsCapability) {
-      return fail(503, "vcs_not_configured", "VCS not configured", {
-        prNumber,
-      });
-    }
-
-    // 4. Merge target (operator-resolved, anti-spoof): ONE resolution path for every node via
+    // 3. Merge target (operator-resolved, anti-spoof): ONE resolution path for every node via
     //    `resolveNodeRepo`. An in-repo node (the operator, no catalog `source_repo`) resolves to the
     //    parent monorepo; a remote-source node to its own `source_repo`. A typo'd / unknown slug
     //    hard-404s (`catalog_missing`) — NEVER a silent retarget (NODE_SCOPED_NEVER_RETARGETS). There
-    //    is no env-direct lane and no per-site operator special-case.
+    //    is no env-direct lane and no per-site operator special-case. WHERE the PR lives never changes
+    //    with the authz path — only WHO may authorize does.
     const env = serverEnv();
     const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER;
     const parentRepo = env.NODE_SUBMODULE_PARENT_REPO;
@@ -137,13 +152,14 @@ export const POST = wrapRouteHandlerWithLogging(
         { prNumber }
       );
     }
+    const deployPlane = createOperatorDeployPlane(env);
     let owner: string;
     let repo: string;
     try {
-      const nodeRepo = await createOperatorDeployPlane(env).resolveNodeRepo({
+      const nodeRepo = await deployPlane.resolveNodeRepo({
         parentOwner,
         parentRepo,
-        slug: rbac.node.slug,
+        slug,
       });
       owner = nodeRepo.owner;
       repo = nodeRepo.repo;
@@ -155,8 +171,60 @@ export const POST = wrapRouteHandlerWithLogging(
         code === "catalog_missing"
           ? "node repo not resolvable from catalog"
           : "node repo could not be resolved",
-        { prNumber, slug: rbac.node.slug }
+        { prNumber, slug }
       );
+    }
+
+    // 3a. Authorization path. `can_flight` on the named node is the default gate. If that is DENIED,
+    //     an env-manager exception applies: the `POST /nodes/{id}/envs` verb authors an App-signed
+    //     `cogni.env-manager.v1` catalog PR into the operator's parent monorepo, so merging it would
+    //     otherwise require `can_flight` on the operator. Instead, when the PR classifies as a signed
+    //     env-membership PR, authorize via `node.manage_envs` on the TARGET node (the `Cogni-Node`
+    //     trailer). The App signature is the anti-spoof: a human cannot forge it, so a look-alike
+    //     branch+trailers cannot steal this path. Classification failure fails CLOSED to the flight
+    //     denial (403) — never weakening the default gate.
+    let authzPath: "env_manager" | "node_flight";
+    if (flightRbac.ok) {
+      authzPath = "node_flight";
+    } else {
+      let classification: Awaited<
+        ReturnType<typeof deployPlane.classifyEnvManagerPr>
+      >;
+      try {
+        classification = await deployPlane.classifyEnvManagerPr({
+          owner,
+          repo,
+          prNumber,
+        });
+      } catch {
+        classification = { isEnvManagerPr: false };
+      }
+      if (!classification.isEnvManagerPr || !classification.targetNodeRef) {
+        // Not an env-manager PR → the ordinary `node.flight` gate stands (403).
+        return fail(403, "authz_denied", "not authorized", { prNumber });
+      }
+      const envRbac = await resolveNodeAndAuthorize({
+        id: classification.targetNodeRef,
+        userId: sessionUser.id,
+        action: "node.manage_envs",
+      });
+      if (!envRbac.ok) {
+        return fail(
+          envRbac.status,
+          envRbac.errorCode,
+          mapRbacError(envRbac.errorCode),
+          { prNumber }
+        );
+      }
+      authzPath = "env_manager";
+    }
+
+    // 4. VcsCapability configured? (stub throws on use — detect structurally.)
+    const vcs = getContainer().vcsCapability;
+    if (vcs === stubVcsCapability) {
+      return fail(503, "vcs_not_configured", "VCS not configured", {
+        prNumber,
+      });
     }
 
     // 5. CI / state gate (fast-fail; GitHub branch protection is the real backstop).
@@ -216,6 +284,7 @@ export const POST = wrapRouteHandlerWithLogging(
         status: 200,
         prNumber,
         prAuthor: ci.author,
+        authzPath,
         enqueued,
         mergeSha8: result.sha?.slice(0, 8),
         durationMs: durationMs(),
