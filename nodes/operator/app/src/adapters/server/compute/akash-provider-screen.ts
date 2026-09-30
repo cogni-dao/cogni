@@ -55,6 +55,49 @@ export interface AkashProviderInfo {
   readonly countryCode: string | null;
 }
 
+/**
+ * Providers whose Console-advertised `ipCountryCode` is demonstrably WRONG, corrected to the
+ * country their ingress address actually resolves to.
+ *
+ * WHY A MAP AND NOT A LOOKUP: the screener must stay a pure function over data we already
+ * hold; resolving geo-IP at bid time would put a third-party network call inside a 90s
+ * auction window and fail the whole placement when that service rate-limits. The registry is
+ * the right source — it is just wrong for these entries, so we correct it at the seam with
+ * the evidence recorded, rather than teaching every caller to distrust the field.
+ *
+ * REQUIRED_FAILS_CLOSED is unaffected: an override only ever replaces one concrete country
+ * with another concrete country. It can never turn an unknown into a known, so a provider we
+ * cannot place is still refused.
+ *
+ * Verified 2026-09-30 against ipinfo.io and ip-api.com, both agreeing:
+ *
+ * | provider | Console says | ingress resolves to | evidence |
+ * | --- | --- | --- | --- |
+ * | `akash15pkd…96hr` | GB | **NL** Amsterdam | `provider.h100.ams.val.akash.pub` → `24.144.74.0/24` (round-robins, e.g. `.158`/`.160`), AS394996, Amsterdam. That is the SAME /24 and ASN as `24.144.74.27`, already recorded in `infra/catalog/poly.yaml` as "Netherlands provider egress". The host name itself says `ams`. |
+ * | `akash15tl6…mdhk` | US | **CA** Toronto | `provider.hurricane.akash.pub` → `184.105.162.170`, Toronto. 74 active leases. |
+ *
+ * Recorded for both even though only the first is presently allowlisted: the US→CA entry is
+ * the one most likely to matter later, because Ontario is separately restricted by the very
+ * kind of API that drives these placement requirements.
+ */
+export const PROVIDER_COUNTRY_OVERRIDES: ReadonlyMap<string, string> = new Map([
+  ["akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr", "NL"],
+  ["akash15tl6v6gd0nte0syyxnv57zmmspgju4c3xfmdhk", "CA"],
+]);
+
+/**
+ * The country to screen a provider on: the corrected value when we have proven the registry
+ * wrong, otherwise whatever the registry says.
+ */
+export function effectiveCountryCode(
+  owner: string,
+  advertised: string | null | undefined
+): string | null {
+  return (
+    PROVIDER_COUNTRY_OVERRIDES.get(owner) ?? advertised?.toUpperCase() ?? null
+  );
+}
+
 /** One provider's aggregated boot-outcome history (from compute_provider_outcomes). */
 export interface ProviderOutcomeStats {
   readonly successes: number;

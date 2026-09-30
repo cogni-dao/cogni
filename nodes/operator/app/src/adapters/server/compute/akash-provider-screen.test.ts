@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   type AkashProviderInfo,
   BLACKLIST_TTL_MS,
+  effectiveCountryCode,
   formatBidRejections,
   formatBidRoster,
   isProviderBlacklisted,
@@ -459,5 +460,48 @@ describe("bid roster", () => {
 
   it("renders an empty roster as none", () => {
     expect(formatBidRoster([])).toBe("none");
+  });
+});
+
+describe("provider country overrides", () => {
+  // story.5050: the Akash registry advertises akash15pkd… as GB while its ingress resolves
+  // into 24.144.74.0/24 / AS394996 in Amsterdam — the same /24 poly already records as
+  // "Netherlands provider egress". Screening it on the advertised label refuses a provider
+  // for a country it is not in, and it was the only custom-domain-capable NL provider.
+  it("corrects a provider the registry advertises in the wrong country", () => {
+    expect(
+      effectiveCountryCode("akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr", "GB")
+    ).toBe("NL");
+  });
+
+  it("passes an unoverridden provider through, uppercased", () => {
+    expect(effectiveCountryCode("akash1whoever", "pt")).toBe("PT");
+  });
+
+  it("keeps an unknown country unknown — an override never invents one", () => {
+    // REQUIRED_FAILS_CLOSED depends on this: null must stay null so the bid is refused.
+    expect(effectiveCountryCode("akash1whoever", null)).toBeNull();
+    expect(effectiveCountryCode("akash1whoever", undefined)).toBeNull();
+  });
+
+  it("refuses an overridden provider whose TRUE country is still not permitted", () => {
+    const { ranked, rejections } = screenFull([bid("akash15pkd", 5)], {
+      providers: new Map([
+        ["akash15pkd", info("akash15pkd", { countryCode: "NL" })],
+      ]),
+      requiredCountryCodes: ["PT"],
+    });
+    expect(ranked).toHaveLength(0);
+    expect(rejections.required_country).toBe(1);
+  });
+
+  it("admits it once its TRUE country is permitted", () => {
+    const { ranked } = screenFull([bid("akash15pkd", 5)], {
+      providers: new Map([
+        ["akash15pkd", info("akash15pkd", { countryCode: "NL" })],
+      ]),
+      requiredCountryCodes: ["BG", "FI", "NL", "PT", "RO"],
+    });
+    expect(ranked.map((b) => b.provider)).toEqual(["akash15pkd"]);
   });
 });

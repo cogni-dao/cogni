@@ -55,6 +55,7 @@ import type {
 import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
+  effectiveCountryCode,
   formatBidRejections,
   formatBidRoster,
   type ProviderOutcomeStats,
@@ -1239,7 +1240,9 @@ export class AkashComputeAdapter
         isValidVersion: p.isValidVersion === true,
         uptime7d: Number(p.uptime7d ?? 0),
         activeLeases: Number(p.leaseCount ?? 0),
-        countryCode: p.ipCountryCode ?? null,
+        // Corrected at the SOURCE so every downstream consumer — the hard country filter,
+        // the latency preference, and the bid roster — reads one consistent country.
+        countryCode: effectiveCountryCode(p.owner, p.ipCountryCode),
       });
     }
     const outcomes = await this.outcomeStore
