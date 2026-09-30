@@ -215,6 +215,49 @@ price_credits_per_unit, capability}]`) — a node-controlled surface, consistent
 - **Fit**: x402 is the right rail **between** organizations and for agent-to-agent payment. It is the
   wrong replacement for intra-fleet accounting and for human pre-auth.
 
+## North star (owner-ruled 2026-09-30) — and it was already specified
+
+> **This section supersedes parts of the Recommendation below. Kept rather than rewritten so the
+> correction is legible.**
+
+Two owner rulings closed the two strategy questions this doc left open:
+
+| ruling                                                                                          | consequence                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Settle in USDC, not credits**                                                                 | A credit balance lives in ONE node's Postgres, so billing another node in credits needs a database both can write — making its owner a central bank. USDC on Base is the only ledger sovereign nodes already share. Credits stay as the node-local **human** on-ramp |
+| **Operator is not special** — it is node #1 selling service #1, and beacon will sell back to it | No operator-only billing path, no privileged table. If a design needs operator to hold other nodes' balances, it is centralised and wrong                                                                                                                            |
+
+**These were already specified, and I proposed a design without reading the spec that holds them.**
+[`docs/spec/node-operator-x402.md`](../spec/node-operator-x402.md) states
+`NO_FINANCIAL_INTERMEDIATION` ("Operator never sits in a payment path"),
+`NODE_HAS_RECEIVING_ADDRESS` (a node's on-chain identity is its wallet), `METERING_IS_LOCAL`, and
+`OPERATOR_SHARES_CODE_NOT_SERVICES`. Its own Open Question 1 asked the operator-revenue question
+Derek just answered, and its Open Question 4 (node signer) is answered by
+[`node-payments-empowerment`](../design/node-payments-empowerment.md)'s Privy owner-quorum. **That
+spec is the authority; this document is gap analysis against it.**
+
+And `decentralized-user-identity.md` supplies the identity half: `user_id` is **node-local**, "the
+only portable fact is the GitHub provider id authenticated… not a portable person identity or a
+**cross-node account**," with cross-node verification deferred to federation (DID/PEX, P2). So the
+portable payer identity is the **wallet binding** — `BINDING_IS_THE_MULTI_ENV_KEY` generalised from
+cross-env to cross-node.
+
+### ❌ Correction: "intra-fleet settles as a ledger transfer" was wrong
+
+An earlier draft of this doc proposed that node↔node settlement inside our own fleet be a two-legged
+ledger transfer ("instant, free, no chain"). **That is a central bank.** It presumes one database
+authoritative over both parties, which contradicts `NO_FINANCIAL_INTERMEDIATION` and the "operator is
+not special" ruling. There is no "intra-fleet" exemption: **every node is external to every other
+node.** One rail — USDC — for all node↔node settlement.
+
+### 🔴 The real gap: the buy side
+
+`node-operator-x402.md` and `x402-e2e.md` both specify a node **being paid** (receive-only in P0).
+**Neither specifies a node PAYING another node.** For "beacon sells to poly" the missing pieces are:
+an outbound x402 signer (custody already solved non-custodially), a **spend cap** per counterparty, a
+**price list** a buyer can read, and a **`treasurer`/`spender`** OpenFGA relation. That gap — not a
+new ledger — is what `story.5056` should build. Recorded in `node-operator-x402.md` § Open Questions.
+
 ## E2E workflows
 
 The architecture above is only real if it produces concrete behaviour for concrete actors. Six
@@ -262,7 +305,7 @@ _absent accounting_ and becomes _explicit, auditable sponsorship_.
    `service_entitlements(consumer_actor = poly org, provider_actor = beacon org, offering_id, budget_cap_credits, valid_from/to)`. **The cap is the pre-auth** — poly can never be surprised
 3. poly's runtime calls beacon as its node principal. beacon checks OpenFGA + the entitlement, serves, emits a usage event
 4. Envelope: subject = poly org actor, counterparty = beacon org actor, cost = units × price
-5. **Settlement is an adapter.** Intra-fleet → a two-legged ledger transfer (debit poly, credit beacon): instant, free, reversible, no chain. Cross-org → **x402 USDC on Base**. Same envelope both ways
+5. **Settlement is USDC via x402, both ways** (corrected — see the North star section). There is no intra-fleet exemption: poly's node wallet pays beacon's node wallet per request. No shared database row anywhere in the settlement path — that is the test that proves the design is decentralised
 6. Both sides see it: poly's page _"beacon/signal-feed — 12,400 credits, 62% of cap"_; beacon's page lists poly as a customer
 
 ### W5 — Who may administer a node's spend (humans **and** agents)
