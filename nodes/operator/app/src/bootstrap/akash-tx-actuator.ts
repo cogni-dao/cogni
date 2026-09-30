@@ -529,14 +529,25 @@ const balanceTimer = setInterval(() => {
 }, BALANCE_CHECK_INTERVAL_MS);
 balanceTimer.unref();
 
+/**
+ * A paid allocation call can spend 30s creating, 90s screening bids, then 30s
+ * opening the lease.  The deployment handle is durably published between the
+ * first and second phases, so killing the process during bid screening leaves
+ * an active deployment with no provider to resume.  Drain longer than that
+ * complete transaction; the pod's terminationGracePeriodSeconds is pinned
+ * above this value by the runtime invariant test.
+ */
+const ACTUATOR_DRAIN_TIMEOUT_MS = 180_000;
+
 function shutdown(signal: string): void {
   log.info({ signal }, "akash_tx_actuator_stopping");
   clearInterval(sweepTimer);
   clearInterval(balanceTimer);
-  // In-flight requests are already idempotent by key, so a bounded drain is enough: a
-  // dropped response is recoverable from the durable receipt, a double-spend is not.
+  // Stop accepting new work and let the one wallet transaction already in flight finish.
+  // The durable receipt prevents a second writer; finishing this request prevents a rollout
+  // from stranding its handle between deployment creation and provider lease selection.
   server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 5_000).unref();
+  setTimeout(() => process.exit(0), ACTUATOR_DRAIN_TIMEOUT_MS).unref();
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
