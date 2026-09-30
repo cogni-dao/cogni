@@ -422,7 +422,22 @@ spec:
             */ -}}
             {{- $prevMigrationPhase := dig "status" "migration" "phase" "" $xr }}
             {{- $migrationPhase := dig "migration" "phase" $prevMigrationPhase $resp }}
-            {{- $migrationFailed := eq $migrationPhase "failed" }}
+            {{- /*
+              FAILURE IS NEVER LATCHED (bug.5309). $migrationPhase above deliberately falls
+              back to the PREVIOUS phase so status.migration does not blink out on the ticks
+              that carry no migration answer — that latch is for DISPLAY and is correct. But
+              deciding the XR is terminally Failed from a latched value makes one transient
+              `failed` permanent: the actuator then reports `succeeded` on every later tick and
+              the XR keeps re-emitting MigrationFailed forever, because a response WITHOUT a
+              migration phase re-reads the stale `failed` out of its own status.
+              Observed on toks4 candidate-a: Job succeeded=1/failed=0, pod logged
+              "migrate complete: 1 migration(s) applied + verified", database present, actuator
+              logged akash_tx_migration_succeeded x6 — and the XR sat Failed/MigrationFailed
+              with an empty observedBundle and a 404 edge, with no path forward.
+              So the TERMINAL decision reads the CURRENT response only. No fresh `failed`, no
+              failure. Same correction shape as bug.5301's DNS gate and #2464's None sentinel.
+            */ -}}
+            {{- $migrationFailed := eq (dig "migration" "phase" "" $resp) "failed" }}
 
             {{- /*
               LATCHED observed bundle. Only a workload that actually SERVED its exact source sha
@@ -461,8 +476,34 @@ spec:
             {{- $anchorTime := toDate "2006-01-02T15:04:05Z07:00" $bootAnchorAt }}
             {{- $ageSeconds := int (sub (now | unixEpoch) ($anchorTime | unixEpoch)) }}
             {{- $bootDeadlineAt := dateInZone "2006-01-02T15:04:05Z07:00" ($anchorTime | dateModify (printf "%ds" $bootDeadlineSeconds)) "UTC" }}
-            {{- $neverServed := and (not $serving) (eq $prevSha "") }}
-            {{- $deadlineExceeded := and $neverServed (gt $ageSeconds $bootDeadlineSeconds) }}
+            {{- /*
+              THE DEADLINE MUST BIND TO THE CURRENT ATTEMPT, NOT TO "EVER SERVED ANYTHING"
+              (bug.5287, the arc's original finding). `$prevSha` is the LATCHED
+              status.observedBundle.source.sha, so `eq $prevSha ""` could only ever be true on
+              a workload's very first boot. Once an XR had recorded ANY bundle the old
+              predicate was permanently false, the deadline could never fire again, and
+              BOOT_SLO_OR_CLOSE was structurally unreachable for the rest of that XR's life.
+
+              Observed on toks5 production: three generations, `bootDeadlineAt` hours past,
+              `failure.reason = None`, a lease billing with no workload and no terminal state —
+              because `observedBundle` still carried `cf5de44c…` from a generation that once
+              served. Combined with the actuator replaying a settled-but-never-served receipt
+              (task.5157), such a workload is unbounded in BOTH directions: nothing re-creates
+              it and nothing closes it.
+
+              `$hasServedDesired` (computed above) asks the right question: has THIS attempt's
+              sha actually served? A live serving workload is unaffected; a never-served XR
+              behaves exactly as before. What changes is that an XR which served an OLD sha and
+              never served the current one can now reach its deadline instead of hanging.
+
+              DELIBERATELY NOT WIDENED: an XR whose `observedBundle` EQUALS the desired sha —
+              served once, then stopped — still does not trip the deadline. Catching that needs
+              a trustworthy live-serving signal, and `serving` yields false negatives (toks4
+              production served HTTP 200 for 13 days while its XR read serving=false). Closing
+              a live node on a false negative is worse than leaving that case to a human; it
+              waits on bug.5237's host-routed probe.
+            */ -}}
+            {{- $deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds) }}
             {{- $closeForBudget := and $deadlineExceeded (eq $onDeadline "Close") }}
 
             {{- /*
@@ -794,6 +835,18 @@ spec:
             {{- $phase = "Progressing" }}
             {{- $failReason = "LeaseRecoveryInProgress" }}
             {{- $failMessage = printf "lease recovery attempt %d of %d for generation %d" $recoveryCount $maxRecoveryAttempts $leaseGeneration }}
+            {{- else if $closed }}
+            {{- /* A lease observed closed under a NON-current recovery key (settled/foreign key).
+              $heldClosed above only catches $closedForCurrentKey, and every recovery branch
+              above has already claimed the active-recovery cases ($recoveryCount > 0), so what
+              reaches here is a settled, parked closed lease with no recovery in flight. Without
+              this branch the chain fell through to the default Progressing/reason:"None" and lied
+              that a permanently-closed lease was still coming up. $renderLease already PARKS this
+              case (Axiom 26 fence: (and $closed (not $closedForCurrentKey))); status must tell the
+              same truth. Terminal until a human bumps spec.leaseGeneration. */ -}}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "LeaseClosed" }}
+            {{- $failMessage = printf "lease %s is closed under a settled recovery key; bump spec.leaseGeneration to mint a replacement" $externalName }}
             {{- end }}
             ---
             apiVersion: {{ $xr.apiVersion }}

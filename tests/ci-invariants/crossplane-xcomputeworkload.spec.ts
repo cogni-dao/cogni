@@ -188,7 +188,10 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     expect(template).toContain("BootDeadlineExceeded");
     // Only a workload that NEVER served may be closed for budget.
     expect(template).toContain(
-      '$neverServed := and (not $serving) (eq $prevSha "")'
+      // bug.5287: the deadline binds to the CURRENT attempt via $hasServedDesired.
+      // The retired '$neverServed' form keyed on a LATCHED field, so it could only ever be
+      // true on a first boot and made BOOT_SLO_OR_CLOSE unreachable thereafter.
+      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
     );
   });
 
@@ -261,6 +264,38 @@ describe("XComputeWorkload composite API (task.5096)", () => {
 });
 
 describe("XComputeWorkload Composition (task.5096)", () => {
+  it("binds the boot deadline to the current attempt, not to ever-served (bug.5287)", () => {
+    // $prevSha is LATCHED, so `eq $prevSha ""` is only ever true on a first boot. Keying the
+    // deadline on it made BOOT_SLO_OR_CLOSE unreachable for the rest of an XR's life — toks5
+    // production billed three generations with bootDeadlineAt hours past and reason=None.
+    expect(templateCode).toContain(
+      "$deadlineExceeded := and (not $hasServedDesired) (gt $ageSeconds $bootDeadlineSeconds)"
+    );
+    // no live template expression may reference the retired predicate
+    const live = templateCode
+      .split("\n")
+      .filter((l) => l.includes("$neverServed") && l.includes("{{-"));
+    expect(live).toEqual([]);
+  });
+
+  it("never latches a migration failure into a terminal phase (bug.5309)", () => {
+    // The DISPLAY latch is correct and must stay: status.migration.phase falls back to the
+    // previous phase so it does not blink out on ticks carrying no migration answer.
+    expect(templateCode).toContain(
+      '$migrationPhase := dig "migration" "phase" $prevMigrationPhase $resp'
+    );
+    // The TERMINAL decision must read the CURRENT response only. Deciding from the latched
+    // $migrationPhase made one transient failure permanent: toks4 candidate-a sat
+    // Failed/MigrationFailed with a succeeded Job, a present database and the actuator
+    // logging akash_tx_migration_succeeded, and could never recover.
+    expect(templateCode).toContain(
+      '$migrationFailed := eq (dig "migration" "phase" "" $resp) "failed"'
+    );
+    expect(templateCode).not.toMatch(
+      /\$migrationFailed\s*:=\s*eq\s+\$migrationPhase/
+    );
+  });
+
   it("delegates all generic reconciliation to pinned OSS functions", () => {
     expect(compositionSpec.mode).toBe("Pipeline");
     expect(
@@ -627,7 +662,9 @@ describe("XComputeWorkload migration decoupling (task.5135)", () => {
     // The loudness half of the fix. A migration that will never succeed must not hide behind a
     // retryable refusal's "Progressing" — that is what an indefinite silent stall looks like.
     expect(template).toContain(
-      '$migrationFailed := eq $migrationPhase "failed"'
+      // bug.5309: the terminal decision reads the CURRENT response, never the latched
+      // $migrationPhase — latching it made one transient failure permanent.
+      '$migrationFailed := eq (dig "migration" "phase" "" $resp) "failed"'
     );
     expect(template).toContain("{{- else if $migrationFailed }}");
     expect(template).toContain('$failReason = "MigrationFailed"');
@@ -792,6 +829,23 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     expect(template).toContain('reason: "None"');
     // The sentinel must satisfy the XRD reason pattern or the whole status write is rejected.
     expect("None").toMatch(reasonPattern);
+  });
+
+  it("reports a settled-key closed lease as LeaseClosed, not a Progressing lie (task.5156)", () => {
+    // The render side PARKS a closed lease observed under a non-current key (the Axiom 26 fence
+    // above). The status side must tell the same truth. $heldClosed only catches
+    // $closedForCurrentKey, so before this branch a closed-under-foreign-key lease with no
+    // recovery in flight missed every fail branch and fell through to the default
+    // Progressing/reason:"None" — status claimed a permanently-parked lease was still coming up.
+    expect(template).toContain("{{- else if $closed }}");
+    // Ordered strictly AFTER the active-recovery branch, or it would swallow
+    // LeaseRecoveryInProgress and report a recovering lease as terminally closed.
+    const chain = template.slice(
+      template.lastIndexOf('{{- $phase := "Progressing" }}')
+    );
+    expect(chain.indexOf("LeaseRecoveryInProgress")).toBeLessThan(
+      chain.indexOf("{{- else if $closed }}")
+    );
   });
 
   it("makes paid replacement opt-in and structurally unreachable (bug.5287 onGiveUp)", () => {
@@ -1090,6 +1144,16 @@ describe("catalog lease generation naming", () => {
     // story.5047: bumped 1->2 to force a fresh mint delivering DOLTGRES_URL (knowledge heal).
     // bug.5302: bumped 2->3 — the gen-2 lease died in the 2026-09-29 account-depletion
     // event (escrow drained fleet-wide); 3 is the funded replacement mint.
-    expect(toks5.lease_generation?.production).toBe(3);
+    // bug.5287: bumped 3->4 — the gen-3 lease reached the chain and bills but its workload
+    // never came up; the actuator replay path treats that partial receipt as settled and
+    // returns the dead handle forever (64x create_replayed, 0 create-family). A fresh key
+    // cannot replay, so 4 forces createAndLease. Durable fix: task.5157 (settled/serving gate).
+    // bug.5287: bumped 4->5 — gen-4's fresh createAndLease reached allocation_recorded then
+    // hit manifest_not_delivered (HTTP 404, deployment closed, escrow refunding, rolled back
+    // before akash_tx_leased). Its receipt is stuck allocated+external_name over a verified-
+    // closed lease, so a retry under :4 would replay the dead handle (task.5157 case c). toks5's
+    // SDL is identical to healthy toks4, so gen-4's 404 reads as transient; 5 is a fresh key
+    // that re-enters createAndLease to retry the manifest delivery.
+    expect(toks5.lease_generation?.production).toBe(5);
   });
 });
