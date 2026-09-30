@@ -59,6 +59,35 @@ control_env_for() {
   if [ "$provider" = "akash" ]; then printf '%s\n' "$fleet_control"; else printf '%s\n' "$env"; fi
 }
 
+# bug.5299 — WHERE a lane's write-heavy Postgres substrate physically lives, and therefore the host
+# its composed DSN points at (`reconcile-secrets.sh` builds `...@<VM_IP>:5432/<db>` from the VM it
+# provisions against). This is a THIRD axis, distinct from `control_env_for` (which cluster RECONCILES
+# the lane's XR, holds its OpenBao bank, and dials the lease actuator) and from `writerFor(env, owner)`
+# (the paying Console account). Payment and the Akash lease do NOT move with it: repointing the DSN is
+# an in-place workload update, never a lease replacement.
+#
+# Read from the per-(env,node) catalog cell `substrate_host_env.<env>`. ABSENT => the lane's control
+# env (`control_env_for`) => today's behavior, byte-identical — so this resolver is INERT for every
+# existing row and moves nothing until a cell is stated. A declared value must be a real deploy env
+# (schema-enforced too); anything else is fail-closed, never a silent default. Missing catalog file is
+# deferred to `control_env_for`, which owns that fail-closed contract (and the fleet-control-env
+# early-return that needs no file).
+substrate_host_env_for() {
+  local env="$1" node="$2" declared catalog_dir="${CATALOG_DIR:-infra/catalog}"
+  if [ -f "$catalog_dir/$node.yaml" ]; then
+    declared="$(yq -r ".substrate_host_env.\"$env\" // \"\"" "$catalog_dir/$node.yaml")"
+    case "$declared" in
+      "") : ;; # unset — fall through to the control env (today's behavior)
+      candidate-a | preview | production) printf '%s\n' "$declared"; return 0 ;;
+      *)
+        echo "::error::substrate_host_env_for: invalid substrate_host_env.${env}='${declared}' in $catalog_dir/$node.yaml (bug.5299) — must be candidate-a|preview|production." >&2
+        return 1
+        ;;
+    esac
+  fi
+  control_env_for "$env" "$node"
+}
+
 # Repo-relative ApplicationSet path. Filename keeps the WORKLOAD env so one Argo namespace
 # can hold a node's candidate-a, preview and production AppSets without colliding.
 appset_rel_path() {
