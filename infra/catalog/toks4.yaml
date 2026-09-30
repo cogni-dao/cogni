@@ -43,7 +43,10 @@ lease_generation:
   # placement change), so the new required_placement_countries cell below is inert until
   # this generation moves. The candidate-a lease is disposable — bootPolicy for every
   # non-production lane is onDeadline:Close — so a mint that cannot serve closes itself.
-  candidate-a: 2
+  # story.5050 2->3: gen-2 was created then CLOSED with zero leases (escrow refunded) because
+  # a one-country requirement had one eligible provider and it did not bid. Widening the set
+  # needs a fresh mint to take effect — placement binds only on CREATE.
+  candidate-a: 3
   preview: 1
   production: 2
 # task.5130 — ACTIVITY_ENV_IS_DEPLOYED (_schema.json): the singleton activity authority
@@ -69,7 +72,12 @@ activity_env: production
 # error. THE TEST: if this lease boots in PT and reaches the substrate, egress is inside the /32
 # below and the hypothesis holds — which makes region placement the correct fix for poly.
 required_placement_countries:
-  candidate-a: [PT]
+  # THE SET, not one country (story.5050). Requiring only [PT] closed a deployment with
+  # `refused: not_allowlisted=5, required_country=1` — the filter behaved exactly right and
+  # nothing could win, because the single eligible PT provider did not bid that round. Every
+  # code here is a Polymarket-PERMITTED jurisdiction with an Overclock-audited, currently
+  # lease-serving provider allowlisted on the production writer.
+  candidate-a: [BG, CH, FI, NL, PT]
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/toks4/
 node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
@@ -82,4 +90,12 @@ compute_egress_cidrs:
   - cidr: 80.200.246.35/32
     comment: egress NAT of Akash provider zencloud, BE Antwerp AS5432 Proximus (story.5016)
   - cidr: 213.146.212.69/32
-    comment: provisional egress of Akash provider digital frontier PT Evora AS5626 (story.5050)
+    comment: egress of Akash provider digital frontier PT Evora AS5626 (story.5050)
+  - cidr: 77.76.13.0/24
+    comment: egress of Akash provider digital frontier BG Sofia, a /24 because the host round-robins (story.5050)
+  - cidr: 84.234.20.39/32
+    comment: egress of Akash provider DSTM CH Zurich (story.5050)
+  - cidr: 95.217.58.106/32
+    comment: egress of Akash provider digital frontier FI Helsinki (story.5050)
+  - cidr: 24.144.74.27/32
+    comment: egress of Akash provider overclock NL Amsterdam (story.5050)
