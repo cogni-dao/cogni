@@ -53,8 +53,12 @@
 import type { Logger } from "pino";
 import { parse as parseYaml } from "yaml";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
+import type { DeployPlanePort } from "@/ports";
 import type { ServerEnv } from "@/shared/env";
-import { controlEnvFor } from "@/shared/node-registry/placement";
+import {
+  controlEnvFor,
+  type NodeDeploymentProvider,
+} from "@/shared/node-registry/placement";
 import { EVENT_NAMES } from "@/shared/observability";
 
 /** The verb's branch: `cogni-operator/node-env-<slug>-<env>` (github-repo-write.ts). */
@@ -69,6 +73,12 @@ interface LaneOnboardContext {
   readonly prNumber: number;
   readonly slug: string;
   readonly lane: Lane;
+  /**
+   * The PR's base commit (`pull_request.base.sha`) — the PRE-MERGE catalog. A REMOVE reads the
+   * removed lane's OWN `deployment_provider.<lane>` cell here, because the post-merge catalog on
+   * `main` has already dropped that cell (see the REMOVE path). Null when the webhook omits it.
+   */
+  readonly baseSha: string | null;
 }
 
 /**
@@ -91,6 +101,7 @@ function extractLaneOnboard(
   const repoName = repo.name;
   const prNumber = pr.number;
   const headRef = (pr.head as Record<string, unknown> | undefined)?.ref;
+  const baseSha = (pr.base as Record<string, unknown> | undefined)?.sha;
   if (
     typeof repoOwner !== "string" ||
     typeof repoName !== "string" ||
@@ -118,6 +129,7 @@ function extractLaneOnboard(
     prNumber,
     slug: match[1],
     lane: match[2] as Lane,
+    baseSha: typeof baseSha === "string" ? baseSha : null,
   };
 }
 
@@ -127,6 +139,34 @@ interface CatalogRow {
   readonly node_id?: string;
   readonly source_sha?: string;
   readonly deployment_provider?: Readonly<Record<string, string>>;
+}
+
+/**
+ * The REMOVED lane's OWN deployment provider, read from the PRE-MERGE catalog (`ctx.baseSha`).
+ * The post-merge catalog has already dropped `deployment_provider.<lane>`, so it can no longer tell
+ * whether the departing lane was akash — the fact that decides whether its paid lease must be pruned
+ * from the fleet custodian. A cell-absent lane is k3s (K3S_IS_DEFAULT, symmetric with how ADD
+ * records placement). If the base catalog cannot be read at all, default to `akash`: pruning a k3s
+ * lane from the custodian is a harmless no-op, but treating an akash lane as k3s orphans a paid lease.
+ */
+async function removedLaneProvider(
+  ctx: LaneOnboardContext,
+  deployPlane: DeployPlanePort
+): Promise<NodeDeploymentProvider> {
+  if (!ctx.baseSha) return "akash";
+  try {
+    const preMergeText = await deployPlane.fetchFileText({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      path: `infra/catalog/${ctx.slug}.yaml`,
+      ref: ctx.baseSha,
+    });
+    if (!preMergeText) return "akash";
+    const preRow = parseYaml(preMergeText) as CatalogRow;
+    return preRow.deployment_provider?.[ctx.lane] === "akash" ? "akash" : "k3s";
+  } catch {
+    return "akash";
+  }
 }
 
 export function dispatchLaneOnboard(
@@ -190,8 +230,15 @@ async function onboardLane(
     // by a main-tracking keystone (observed test-org #97: the paid lease remained orphaned).
     // Dispatch the one-object prune against the control cluster; never promote a retired lane.
     if (!row.envs?.includes(ctx.lane)) {
-      const remainingProviders = Object.values(row.deployment_provider ?? {});
-      const provider = remainingProviders.includes("akash") ? "akash" : "k3s";
+      // CONTROL_ENV_FOLLOWS_THE_REMOVED_LANE (bug.5141 orphan-lease): resolve the control env from
+      // the REMOVED lane's OWN provider, NOT from whatever providers survive in the post-merge
+      // catalog. The merge dropped this lane's `deployment_provider.<lane>` cell, so scanning the
+      // post-merge row mis-classifies the last akash lane as k3s → controlEnvFor returns the lane
+      // itself → the prune SSHes to the wrong cluster and the paid Akash lease is orphaned. Read the
+      // removed cell from the PRE-MERGE catalog (`base.sha`), exactly as the CI twin resolves a
+      // REMOVE from the base catalog. If it cannot be read, default to `akash` so the prune targets
+      // the custodian rather than silently leaking a lease.
+      const provider = await removedLaneProvider(ctx, deployPlane);
       const resolvedControlEnv = controlEnvFor(
         ctx.lane,
         provider,

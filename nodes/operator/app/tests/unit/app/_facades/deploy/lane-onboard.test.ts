@@ -34,7 +34,11 @@ const dispatchNodeRefCandidateFlight = vi.fn(async () => ({
   workflowUrl: "https://github.com/x/y/actions",
 }));
 let catalogText: string | null = null;
-const fetchFileText = vi.fn(async () => catalogText);
+/** The PRE-MERGE catalog (read at `base.sha`) — a REMOVE resolves the removed lane's own provider here. */
+let preMergeCatalog: string | null = null;
+const fetchFileText = vi.fn(async (input: { ref?: string }) =>
+  input.ref && input.ref !== "main" ? preMergeCatalog : catalogText
+);
 /** `deploy/<env>-<slug>` pins by env — what each env is ACTUALLY running. */
 let deployPins: Record<string, string> = {};
 const readNodeDeployPin = vi.fn(
@@ -112,6 +116,7 @@ const CANDIDATE_PIN = "2".repeat(40);
 beforeEach(() => {
   vi.clearAllMocks();
   catalogText = AKASH_ROW;
+  preMergeCatalog = null;
   deployPins = {};
 });
 
@@ -291,6 +296,63 @@ describe("dispatchLaneOnboard — dispatch selection", () => {
         runId: 99,
       }),
       "feature.lane_onboard.complete"
+    );
+  });
+
+  it("resolves REMOVE control env from the removed lane's OWN provider, not the post-merge catalog (bug.5141)", async () => {
+    // The orphan-lease shape: the removed lane (preview) was the LAST akash lane. Post-merge the
+    // catalog has NO akash cells left, so deriving provider from the surviving cells mis-reads it as
+    // k3s → controlEnvFor would return the lane itself (preview) and the paid lease is orphaned.
+    // Post-merge: preview gone, only a k3s candidate-a remains.
+    catalogText = [
+      "name: toks5",
+      "node_id: f66b260b-a859-4399-888e-a8c7a6696f7e",
+      `source_sha: ${"c".repeat(40)}`,
+      "envs: [candidate-a, production]",
+      "deployment_provider:",
+      "  candidate-a: k3s",
+    ].join("\n");
+    // Pre-merge (base.sha): preview WAS akash — the fact the post-merge row can no longer show.
+    preMergeCatalog = [
+      "name: toks5",
+      "node_id: f66b260b-a859-4399-888e-a8c7a6696f7e",
+      `source_sha: ${"c".repeat(40)}`,
+      "envs: [candidate-a, preview, production]",
+      "deployment_provider:",
+      "  candidate-a: k3s",
+      "  preview: akash",
+    ].join("\n");
+
+    dispatchLaneOnboard(
+      mergedPayload("cogni-operator/node-env-toks5-preview", {
+        pull_request: {
+          number: 2360,
+          merged: true,
+          head: {
+            ref: "cogni-operator/node-env-toks5-preview",
+            sha: "a".repeat(40),
+          },
+          base: { sha: "b".repeat(40) },
+        },
+      }),
+      ENV,
+      log
+    );
+    await settle();
+
+    // Fixed: prune from the custodian (production), NOT the lane (preview).
+    expect(pruneNodeEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: "preview",
+        controlEnv: "production",
+      })
+    );
+    // Proof it read the pre-merge catalog at base.sha.
+    expect(fetchFileText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "infra/catalog/toks5.yaml",
+        ref: "b".repeat(40),
+      })
     );
   });
 
