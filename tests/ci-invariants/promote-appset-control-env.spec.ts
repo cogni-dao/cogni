@@ -26,8 +26,16 @@ const WORKFLOW = path.resolve(
   "../../.github/workflows/promote-and-deploy.yml"
 );
 const body = readFileSync(WORKFLOW, "utf8");
+const MATERIALIZER_ACTION = path.resolve(
+  __dirname,
+  "../../.github/actions/materialize-compute-workload/action.yml"
+);
+const materializerAction = readFileSync(MATERIALIZER_ACTION, "utf8");
 const reconcileJob = body.match(
   /^  reconcile-appset:\n([\s\S]*?)(?=^  [a-z][a-z0-9-]+:\n)/m
+)?.[0];
+const verifyJob = body.match(
+  /^  verify-deploy:\n([\s\S]*?)(?=^  [a-z][a-z0-9-]+:\n)/m
 )?.[0];
 
 describe("promote AppSet control-env wiring (task.5141)", () => {
@@ -54,6 +62,25 @@ describe("promote AppSet control-env wiring (task.5141)", () => {
     );
     expect(reconcileJob).not.toContain(
       "its AppSet is owned by that cluster's app-of-apps. Skipping"
+    );
+  });
+
+  it("keeps the workload hostname on the lane when secrets follow control", () => {
+    expect(materializerAction).toContain(
+      'cogni_operator_domain_for_env "$DEPLOYMENT_ENVIRONMENT" "${FORK_DOMAIN_ROOT:?}"'
+    );
+    expect(materializerAction).toContain('--domain "$LANE_DOMAIN"');
+    expect(materializerAction).not.toContain('--domain "$DOMAIN"');
+  });
+
+  it("observes the workload on control while probing the lane hostname", () => {
+    expect(verifyJob).toBeDefined();
+    expect(verifyJob).toContain(
+      "if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'"
+    );
+    expect(verifyJob).not.toContain("steps.custody.outputs.control_env");
+    expect(verifyJob).toContain(
+      "DOMAIN: ${{ steps.public-domain.outputs.domain }}"
     );
   });
 });

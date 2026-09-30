@@ -99,6 +99,17 @@ runs:
         # an NXDOMAIN substrate host on the exact test lane meant to prove this action.
         # shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
         source scripts/setup/lib/cogni-deployment-identity.sh
+        # Public identity follows the LANE, even when this action runs with the CONTROL env's
+        # GitHub environment (and therefore sees that env's DOMAIN variable). Derive the lane
+        # domain from the repository's zone root; otherwise candidate + preview emit the same
+        # publicHost and their Crossplane DNS requests fight over one Cloudflare record.
+        LANE_DOMAIN="$(cogni_operator_domain_for_env "$DEPLOYMENT_ENVIRONMENT" "${FORK_DOMAIN_ROOT:?}")" || {
+          echo "::error::cannot derive public domain for lane '$DEPLOYMENT_ENVIRONMENT'"
+          exit 1
+        }
+        if [ "$DOMAIN" != "$LANE_DOMAIN" ]; then
+          echo "::notice::Ignoring control-env DOMAIN '$DOMAIN'; workload public identity follows lane '$DEPLOYMENT_ENVIRONMENT' as '$LANE_DOMAIN'"
+        fi
         # THE SUBSTRATE IS THE RECONCILING CLUSTER'S, NOT THE LANE'S (bug.5206).
         # `substrateHost` is what the Composition turns into TEMPORAL_ADDRESS, REDIS_URL and
         # LITELLM_BASE_URL (composition.yaml:169). The DSNs the same lane receives are composed
@@ -122,7 +133,7 @@ runs:
           --repo-spec "${GITHUB_WORKSPACE}/.compute-node-source/.cogni/repo-spec.yaml" \
           --bundle-repository "$BUNDLE_REPOSITORY" \
           --source-sha "$SOURCE_SHA" \
-          --domain "$DOMAIN" \
+          --domain "$LANE_DOMAIN" \
           --substrate-host "$SUBSTRATE_HOST" \
           ${DNS_ZONE_ID:+--dns-zone-id "$DNS_ZONE_ID"} \
           --output-dir "$COMPUTE_OVERLAY"
