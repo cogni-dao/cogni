@@ -877,22 +877,28 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     );
   });
 
-  it("makes paid replacement opt-in and structurally unreachable (bug.5287 onGiveUp)", () => {
-    // TWO independent fences on the paid re-mint. (1) The composition only bumps the
-    // recovery key when bootPolicy.onGiveUp is Replace; Hold — the PERMANENT default —
-    // parks a closed lease as LeaseClosed with zero spend. (2) The XRD enum admits ONLY
-    // Hold until provider strikes are re-homed in the actuator, so an early Replace
-    // catalog cell is rejected by the CRD, not by prose ("if it's global, tier 4 happens
-    // by accident the moment someone adds a node").
+  it("keeps paid replacement OPT-IN and BOUNDED now that Replace is admitted (story.5050)", () => {
+    // The second fence has moved, not vanished. This test previously pinned `enum: [Hold]`
+    // because provider-strike recording did not yet live in the actuator — without it, a retry
+    // re-picked the provider that had just failed. task.5153 re-homed strikes (the actuator emits
+    // `akash_tx_provider_strike_recorded`), which is the stated precondition the XRD named, so
+    // Replace is admitted. What must NOT weaken:
+    //   - Hold stays the DEFAULT, so admitting Replace changes no existing row.
+    //   - The composition still gates the recovery-key bump on onGiveUp == Replace.
+    //   - The bump stays BOUNDED by $recoveryExhausted; Replace must never mean unbounded spend.
+    //   - Hold still parks a closed lease as LeaseClosed with zero spend.
     expect(template).toContain(
       'if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace")'
     );
     const onGiveUp = (
       (specSchema.bootPolicy as YamlObject).properties as YamlObject
     ).onGiveUp as YamlObject;
-    expect(onGiveUp.enum).toEqual(["Hold"]);
+    expect(onGiveUp.enum).toEqual(["Hold", "Replace"]);
     expect(onGiveUp.default).toBe("Hold");
     expect(template).toContain('$failReason = "LeaseClosed"');
+    // The retry is only useful because it lands ELSEWHERE — the excluded set is what makes a
+    // bounded re-mint progress instead of re-picking the dead provider three times.
+    expect(templateCode).toContain("$desiredRecoveryPrefix");
   });
 
   it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {

@@ -210,7 +210,7 @@ describe("buildComputeWorkloadManifest", () => {
     // so every rematerialize migrates one more node onto the decoupled path.
     expect(manifest.spec).toMatchObject({
       migration: { policy: "RequireBeforeServing" },
-      bootPolicy: { onDeadline: "Hold" },
+      bootPolicy: { onDeadline: "Hold", onGiveUp: "Hold" },
       leaseGeneration: 2,
       dns: { provider: "cloudflare", zoneId: "0".repeat(32) },
       runtime: { substrateHost: "cogni.vm.cognidao.org" },
@@ -546,6 +546,38 @@ describe("buildComputeWorkloadManifest", () => {
 
 describe("bootPolicyForEnvironment", () => {
   /**
+   * story.5050 — the whole point: `auto` must open BOTH gates. Recovery is unreachable unless the
+   * lease is CLOSED (`onDeadline`), and closing without `Replace` just discards it. Either half
+   * alone is a silent no-op, and `Replace` with `onDeadline: Hold` is worse than honest Hold — a
+   * workload that holds a dead lease forever while advertising self-healing.
+   */
+  it("derives BOTH gates from one cell, production included", () => {
+    expect(bootPolicyForEnvironment("production", "auto")).toEqual({
+      onDeadline: "Close",
+      onGiveUp: "Replace",
+    });
+    // HOLD_IS_DEFAULT — byte-identical to behaviour before the cell existed.
+    for (const env of ["candidate-a", "preview", "production"] as const) {
+      const held = bootPolicyForEnvironment(env, "hold");
+      expect(held.onGiveUp).toBe("Hold");
+      expect(held.onDeadline).toBe(env === "production" ? "Hold" : "Close");
+      expect(bootPolicyForEnvironment(env)).toEqual(held);
+    }
+  });
+
+  /** No caller may ever reach the half-policy the invariant forbids. */
+  it("cannot express Replace without Close", () => {
+    for (const env of ["candidate-a", "preview", "production"] as const) {
+      for (const recovery of ["hold", "auto"] as const) {
+        const policy = bootPolicyForEnvironment(env, recovery);
+        if (policy.onGiveUp === "Replace") {
+          expect(policy.onDeadline).toBe("Close");
+        }
+      }
+    }
+  });
+
+  /**
    * BOOT_SLO_OR_CLOSE. `onDeadline` fires only when `status.serving` never became true within
    * `bootDeadlineSeconds` of the XR's CREATION — a lane that never served once. Nothing ran,
    * so there is nothing to inspect, so no non-production lane pays rent for it.
@@ -558,9 +590,11 @@ describe("bootPolicyForEnvironment", () => {
   it("closes a never-served lease in every non-production environment", () => {
     expect(bootPolicyForEnvironment("candidate-a")).toEqual({
       onDeadline: "Close",
+      onGiveUp: "Hold",
     });
     expect(bootPolicyForEnvironment("preview")).toEqual({
       onDeadline: "Close",
+      onGiveUp: "Hold",
     });
   });
 
@@ -571,6 +605,7 @@ describe("bootPolicyForEnvironment", () => {
   it("holds a never-served production lease as incident evidence", () => {
     expect(bootPolicyForEnvironment("production")).toEqual({
       onDeadline: "Hold",
+      onGiveUp: "Hold",
     });
   });
 
@@ -849,7 +884,7 @@ describe("actuator namespace owner routing (bug.5263)", () => {
           ],
         },
         migration: { policy: "RequireBeforeServing" },
-        bootPolicy: { onDeadline: "Close" },
+        bootPolicy: { onDeadline: "Close", onGiveUp: "Hold" },
         leaseGeneration: 0,
         actuatorNamespace: "cogni-production",
       },
