@@ -35,6 +35,17 @@ import type { DeploymentEnvironment } from "./node-deployment-provider";
 /** Mirrors the catalog schema's own enum. */
 const bootRecoveryCellSchema = z.enum(["hold", "auto"]);
 
+/**
+ * Read-only probe of the placement cell. Deliberately permissive — this module must not become a
+ * second validator of a field `node-required-placement` already owns and fails closed on. An
+ * unreadable value here simply means "not constrained", and the real resolver will reject it.
+ */
+const catalogPlacementProbeSchema = z
+  .object({
+    required_placement_countries: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough();
+
 const catalogBootRecoverySchema = z
   .object({
     boot_recovery: z
@@ -68,5 +79,33 @@ export function resolveNodeBootRecovery(input: {
       `[boot-recovery] Invalid catalog boot_recovery: ${parsed.error.message}`
     );
   }
-  return parsed.data.boot_recovery?.[input.environment] ?? "hold";
+  const declared = parsed.data.boot_recovery?.[input.environment];
+  if (declared) return declared;
+
+  // CONSTRAINED_PLACEMENT_IMPLIES_AUTO_SEARCH.
+  //
+  // A row that declares `required_placement_countries` has deliberately narrowed its provider
+  // pool, which makes a bad draw LIKELY rather than exceptional: the eligible set is small, and a
+  // single provider that wins a bid and then fails to serve stalls the lane until a human
+  // intervenes (bug.5325 — eight consecutive auctions on poly). `hold` is the right default for an
+  // unconstrained row, where the marketplace is wide and a failure is genuinely an incident worth
+  // preserving. It is the WRONG default for a constrained one, where holding is the trap.
+  //
+  // So the posture is DERIVED from the constraint instead of demanding a second, separate opt-in
+  // that a node could forget — and forgetting it is indistinguishable from the bug it prevents.
+  // An explicit cell still wins, so a constrained row can opt back into `hold` for forensics.
+  return hasRequiredPlacement(input.catalog, input.environment)
+    ? "auto"
+    : "hold";
+}
+
+/** Does this row constrain `environment`'s placement to a country set? */
+function hasRequiredPlacement(
+  catalog: unknown,
+  environment: DeploymentEnvironment
+): boolean {
+  const parsed = catalogPlacementProbeSchema.safeParse(catalog);
+  if (!parsed.success) return false;
+  const cell = parsed.data.required_placement_countries?.[environment];
+  return Array.isArray(cell) && cell.length > 0;
 }

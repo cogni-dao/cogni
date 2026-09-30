@@ -27,6 +27,51 @@ describe("resolveNodeBootRecovery", () => {
     ).toBe("hold");
   });
 
+  /**
+   * CONSTRAINED_PLACEMENT_IMPLIES_AUTO_SEARCH — the whole reason poly needs no third change.
+   * A row that narrowed its provider pool gets automatic provider search DERIVED, because a
+   * second separate opt-in is one a node can forget, and forgetting it is indistinguishable
+   * from the bug it prevents (bug.5325).
+   */
+  it("derives auto for a row that constrained its placement", () => {
+    expect(
+      resolveNodeBootRecovery({
+        catalog: { required_placement_countries: { production: ["PT", "RO"] } },
+        environment: "production",
+      })
+    ).toBe("auto");
+    // Per-env: an unconstrained env on the SAME row stays hold.
+    expect(
+      resolveNodeBootRecovery({
+        catalog: { required_placement_countries: { production: ["PT"] } },
+        environment: "preview",
+      })
+    ).toBe("hold");
+  });
+
+  /** An explicit cell still wins, so a constrained row can keep forensics if it wants. */
+  it("lets an explicit hold override the derivation", () => {
+    expect(
+      resolveNodeBootRecovery({
+        catalog: {
+          required_placement_countries: { production: ["PT"] },
+          boot_recovery: { production: "hold" },
+        },
+        environment: "production",
+      })
+    ).toBe("hold");
+  });
+
+  /** The probe must not become a second validator of a field another module owns. */
+  it("treats an unreadable placement cell as unconstrained rather than throwing", () => {
+    expect(
+      resolveNodeBootRecovery({
+        catalog: { required_placement_countries: { production: "PT" } },
+        environment: "production",
+      })
+    ).toBe("hold");
+  });
+
   it("resolves each environment independently", () => {
     const catalog = { boot_recovery: { production: "auto", preview: "hold" } };
     expect(
