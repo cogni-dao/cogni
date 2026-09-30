@@ -477,14 +477,26 @@ prometheus.exporter.postgres "default" {
     "postgresql://" + sys.env("APP_DB_READONLY_USER") + ":" + sys.env("APP_DB_READONLY_PASSWORD") + "@postgres:5432/postgres?sslmode=disable",
   ]
 
-  // One DSN + autodiscovery, NOT a DSN per database — per-database DSNs would
-  // multiply connections against the very instance we are trying to unburden.
-  autodiscovery {
-    enabled           = true
-    database_denylist = ["template0", "template1"]
-  }
-
-  // NO `enabled_collectors` here, deliberately. The first attempt pinned an
+  // NO `autodiscovery` block, deliberately — and this is the fix, not a
+  // simplification (bug.5293, deploys 36786133722 + 36788232213).
+  //
+  // WHY IT IS NOT NEEDED: `pg_stat_database` is a CLUSTER-WIDE view. A single
+  // connection to the `postgres` database already returns ONE ROW PER DATABASE,
+  // which is the entire per-tenant signal this block exists to collect.
+  // Autodiscovery only matters for per-RELATION collectors, and those are exactly
+  // what we refuse to enable (tenants x tables x envs cardinality).
+  //
+  // WHY IT WAS HARMFUL: with autodiscovery on, the component must first QUERY the
+  // instance to enumerate databases before it can compute `.targets`. If that
+  // query fails for any reason, the component yields an EMPTY target list, and
+  // `prometheus.scrape` over zero targets emits NOTHING — not even `up 0`. Both
+  // deploys landed correctly (alloy recreated, config hash changed, alloy healthy,
+  // `GRANT pg_monitor TO app_readonly` verified present on candidate-a) and still
+  // produced no `postgres` job at all, which is indistinguishable from "never
+  // configured". A static DSN gives a STATIC target, so the scrape always emits an
+  // `up` series: a broken exporter becomes `up 0` + `pg_up 0` — loud, not silent.
+  //
+  // NO `enabled_collectors` here either, deliberately. The first attempt pinned an
   // explicit collector list; the component then produced ZERO targets, so
   // `prometheus.scrape` emitted nothing at all — not even an `up` series — which
   // is indistinguishable from "never configured" (bug.5293, deploy
