@@ -190,7 +190,7 @@ async function onboardLane(
     // by a main-tracking keystone (observed test-org #97: the paid lease remained orphaned).
     // Dispatch the one-object prune against the control cluster; never promote a retired lane.
     if (!row.envs?.includes(ctx.lane)) {
-  const remainingProviders = Object.values(row.deployment_provider ?? {});
+      const remainingProviders = Object.values(row.deployment_provider ?? {});
       const provider = remainingProviders.includes("akash") ? "akash" : "k3s";
       const resolvedControlEnv = controlEnvFor(
         ctx.lane,
