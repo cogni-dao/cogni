@@ -125,6 +125,15 @@ function toSpec(parsed: AkashTxCreateInput["spec"]): ProvisionSpec {
           }
         : {}),
     })),
+    // Absent stays absent: an empty requirement would fail closed and refuse every bid,
+    // so "no cell in the catalog" must not become "requiredCountryCodes: []" here.
+    ...(parsed.placement
+      ? {
+          placement: {
+            requiredCountryCodes: parsed.placement.requiredCountryCodes,
+          },
+        }
+      : {}),
   };
 }
 

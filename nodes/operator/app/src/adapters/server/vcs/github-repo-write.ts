@@ -69,6 +69,7 @@ import {
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
   buildPlacementPlan,
+  buildRegionPlan,
   CANONICAL_DOMAIN_ROOT,
   type EnvAddShape,
   type EnvPlanCurrent,
@@ -137,6 +138,13 @@ export interface GitHubRepoWriterConfig {
    * exercised (NOT wired with creds in this PR — vNext/W3b). Defaults false.
    */
   readonly dnsReverseReconcile?: boolean;
+  /**
+   * THE FLEET CONTROL ENV (`FLEET_CONTROL_ENV`, `controlEnvFor`) — the env whose cluster reconciles
+   * akash lanes, so the env whose `appsets/<control-env>/` dir the env-verb writes into (bug.5204/
+   * bug.5235). Resolved from `serverEnv().FLEET_CONTROL_ENV` by the factory. Undefined =>
+   * `production` (cogni-dao fleet, byte-identical); an isolated test fleet passes `candidate-a`.
+   */
+  readonly fleetControlEnv?: string | undefined;
 }
 
 export interface OpenNodeAppPrInput {
@@ -182,7 +190,11 @@ export interface OpenNodeEnvPrInput {
 export interface OpenNodeEnvPrDerived {
   readonly placement: PlacementProvider;
   readonly computeApi: "crossplane" | null;
-  readonly controlEnv: NodeFormationEnv;
+  /**
+   * The env whose cluster reconciles the derived lane (`controlEnvFor`). A `string`, not a
+   * NodeFormationEnv literal: on an isolated fleet the FLEET CONTROL ENV can be `candidate-a`.
+   */
+  readonly controlEnv: string;
   readonly leaseGeneration: number;
 }
 
@@ -214,6 +226,36 @@ export interface OpenNodePlacementPrInput {
   /** Target placement lane: `akash` = ComputeWorkload CR lane; `k3s` = the overlay/AppSet default. */
   readonly placement: PlacementProvider;
 }
+
+/** Input to {@link GitHubRepoWriter.openNodeRegionPr}: require ONE env's workload to be placed in `countries`. */
+export interface OpenNodeRegionPrInput {
+  /** Owner of the OPERATOR monorepo (the catalog lives here, exactly like `openNodePlacementPr`). */
+  readonly owner: string;
+  /** The OPERATOR monorepo name. */
+  readonly repo: string;
+  /** Node slug whose `infra/catalog/<slug>.yaml` `required_placement_countries` map is edited. */
+  readonly slug: string;
+  /** The env whose region requirement is set. Must already be in reach AND placed on akash. */
+  readonly env: NodeFormationEnv;
+  /** ISO 3166-1 alpha-2 codes the workload MAY be placed in. Non-empty. */
+  readonly countries: readonly string[];
+  /**
+   * The generation the requirement binds on — DERIVED from allocation-ledger evidence by the
+   * caller (GENERATION_IS_NOT_CALLER_INPUT), never taken from a REST body.
+   */
+  readonly leaseGeneration: number;
+}
+
+/** Result of {@link GitHubRepoWriter.openNodeRegionPr}: a PR (opened or reused), or idempotent no-op. */
+export type OpenNodeRegionPrResult =
+  | {
+      readonly status: "pr_opened";
+      readonly action: "set_region";
+      readonly prNumber: number;
+      readonly prUrl: string;
+      readonly leaseGeneration: number;
+    }
+  | { readonly status: "no_changes" };
 
 /** Result of {@link GitHubRepoWriter.openNodePlacementPr}: a PR (opened or reused), or idempotent no-op. */
 export type OpenNodePlacementPrResult =
@@ -2757,7 +2799,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     let shape: EnvAddShape | undefined;
     if (present) {
       try {
-        shape = planEnvAddShape(catalog, env);
+        shape = planEnvAddShape(catalog, env, this.config.fleetControlEnv);
       } catch (err) {
         if (err instanceof EnvPlanError) {
           throw deployPlaneError(err.code, err.message, err.status);
@@ -2796,6 +2838,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         present,
         current,
         leaseGeneration,
+        fleetControlEnv: this.config.fleetControlEnv,
       });
     } catch (err) {
       if (err instanceof EnvPlanError) {
@@ -2972,6 +3015,111 @@ export class GitHubRepoWriter implements DeployPlanePort {
   }
 
   /**
+   * story.5050 — the REGION verb: require `{slug, env}`'s workload to be placed in `countries`.
+   *
+   * Mirrors `openNodePlacementPr` exactly (same base resolution, same reviewed-PR authoring path,
+   * same catalog-is-SSoT contract) and differs only in WHICH cells the plan edits. Reads ONLY the
+   * catalog: the region requirement touches no overlay, no AppSet, and no scheduler routing —
+   * it constrains which provider may win a bid, not which lane or address serves the env.
+   */
+  async openNodeRegionPr(
+    input: OpenNodeRegionPrInput
+  ): Promise<OpenNodeRegionPrResult> {
+    const { owner, repo, slug, env, countries, leaseGeneration } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+
+    const catalog = await this.fetchFileText({
+      owner,
+      repo,
+      path: `infra/catalog/${slug}.yaml`,
+      ref: "main",
+    });
+    if (catalog === null) {
+      throw deployPlaneError(
+        "node_not_in_catalog",
+        `infra/catalog/${slug}.yaml not found on main; '${slug}' is not a registered node.`,
+        404
+      );
+    }
+
+    const current: EnvPlanCurrent = {
+      catalog,
+      templateOverlayByEnv: {},
+      appsetsKustomizationByEnv: {},
+    };
+
+    let plan: ReturnType<typeof buildRegionPlan>;
+    try {
+      plan = buildRegionPlan({
+        slug,
+        env,
+        countries,
+        leaseGeneration,
+        current,
+      });
+    } catch (err) {
+      if (err instanceof EnvPlanError) {
+        throw deployPlaneError(err.code, err.message, err.status);
+      }
+      throw err;
+    }
+
+    if (plan.kind === "no_changes") {
+      return { status: "no_changes" };
+    }
+
+    const entries = await this.planOpsToTreeEntries(
+      octokit,
+      owner,
+      repo,
+      plan.ops
+    );
+
+    const rendered = [...countries].sort().join(", ");
+    const message = `feat(node): require ${slug} ${env} placement in ${rendered}`;
+    const branch = `cogni-operator/node-region-${slug}-${env}`;
+    const body = [
+      `Requires \`${slug}\`'s **${env}** workload to be placed in **${rendered}** (ISO 3166-1 alpha-2).`,
+      "",
+      "Authored by the operator region verb (`POST /api/v1/nodes/{id}/envs` with `{env, countries}`), so the node chooses its own jurisdiction instead of an operator hand-editing this catalog.",
+      "",
+      `- \`required_placement_countries.${env}\` is a HARD filter: a bid from a provider outside the set never wins, and a bid whose provider country cannot be determined is REFUSED (fail-closed).`,
+      `- \`lease_generation.${env}\` moves to **${plan.leaseGeneration}** in the same commit. Akash refuses in-place placement change, so without that bump this requirement would be silently inert.`,
+      "",
+      "NOT A GUARANTEE: the screener compares a provider's advertised/ingress country, which is not proven to equal the egress identity its workload presents to a third party. This narrows the candidate pool; only the workload's own outbound probe proves reachability.",
+    ].join("\n");
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries,
+      message,
+      branch,
+      pr: { title: message, body },
+    });
+    await this.updatePrBody(
+      octokit,
+      owner,
+      repo,
+      result.prNumber,
+      message,
+      body
+    );
+    return {
+      status: "pr_opened",
+      action: "set_region",
+      prNumber: result.prNumber,
+      prUrl: result.prUrl,
+      leaseGeneration: plan.leaseGeneration,
+    };
+  }
+
+  /**
    * AKASH_REQUIRES_DEPLOYMENT_BLOCK: the node's OWN repo-spec (not the operator monorepo catalog)
    * must have authored a `deployment:` block before its env can flip onto the external
    * ComputeWorkload lane. The legacy fallback declares no `secret_refs`, which is correct for the
@@ -3123,7 +3271,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // the env's scheduler-worker route to the in-cluster default, so fetch that env's patch too.
     // (Caddy is per-node env-independent state and NOT touched by an env remove.)
     const removeProvider = parseCatalogPlacement(catalog)[env] ?? "k3s";
-    const removeControlEnv = controlEnvFor(env, removeProvider);
+    const removeControlEnv = controlEnvFor(
+      env,
+      removeProvider,
+      this.config.fleetControlEnv
+    );
     appsetsKustomizationByEnv[removeControlEnv] = await this.readFileOnMain(
       octokit,
       owner,
@@ -4408,7 +4560,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // (env, slug) pair folds into the same evolving content — two blobs for one path would race.
     const kustomizationByControlEnv = new Map<string, string>();
     for (const env of NODE_FORMATION_ENVS) {
-      const controlEnv = controlEnvFor(env, birthPlacement[env] ?? "k3s");
+      const controlEnv = controlEnvFor(
+        env,
+        birthPlacement[env] ?? "k3s",
+        this.config.fleetControlEnv
+      );
       await addBlob(
         appsetPath(controlEnv, env, slug),
         renderNodeAppset(appsetTemplate, slug, env)

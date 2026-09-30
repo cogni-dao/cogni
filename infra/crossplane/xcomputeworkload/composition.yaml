@@ -21,7 +21,7 @@
 # THE WIRE IS THE 5095 CONTRACT, NOT THIS API. @contracts/compute.akash-tx.v1 is a zod
 # strictObject: an unknown key is a 400, never a silently ignored field. So the pipeline LOWERS
 # the full-fidelity XR (bundle artifacts, bindings, secret refs, runtime profile, visibility)
-# onto exactly `{cogniKey, environment, spec:{name, services[]}}`. Every lowering rule below is
+# onto exactly `{cogniKey, environment, spec:{name, services[], placement?}}`. Every lowering rule below is
 # a port of `toProvisionSpec` + `legacyCogniAppEnv` in the bespoke controller, and the two must
 # stay byte-comparable — that equality is what makes this a migration rather than a rewrite.
 #
@@ -318,13 +318,59 @@ spec:
             {{- end }}
             {{- $hasLegacyMigration := gt (len $legacyMigration) 0 }}
 
-            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" (dict "name" $slug "services" $services) }}
+            {{- /*
+              story.5050 — lower the XR's HARD placement requirement onto the wire. The wire
+              renames `requiredCountries` to `requiredCountryCodes` because the zod contract
+              speaks ISO codes explicitly; both are strictObjects, so a typo here is a 400 and
+              never a silently unconstrained lease. Absent stays ABSENT: sending an empty list
+              would fail closed in the actuator and refuse every bid.
+            */ -}}
+            {{- $specDict := dict "name" $slug "services" $services }}
+            {{- $requiredCountries := dig "placement" "requiredCountries" (list) $spec }}
+            {{- if gt (len $requiredCountries) 0 }}
+            {{- $_ := set $specDict "placement" (dict "requiredCountryCodes" $requiredCountries) }}
+            {{- end }}
+            {{- $payload := dict "cogniKey" $cogniKey "environment" $env "identity" $identity "spec" $specDict }}
             {{- if $hasMigrationStep }}{{ $_ := set $payload "migrationStep" $migrationStep }}{{ end }}
             {{- if $hasLegacyMigration }}{{ $_ := set $payload "migration" $legacyMigration }}{{ end }}
 
             {{- /* ---------- observed state ---------- */ -}}
             {{- $observedResources := default (dict) .observed.resources }}
-            {{- $leaseObs := index $observedResources "akash-lease" }}
+            {{- /*
+              GENERATION_BUMP_REPLACES_THE_REQUEST (story.5050). provider-http chooses CREATE
+              only for a NEW managed Request; changing the payload of the existing Request chooses
+              UPDATE, which cannot mint a replacement lease. Keep the historical static child name
+              for every XR that has not crossed this seam (zero fleet churn), then latch a
+              generation-qualified name the first time an observed response belongs to an older
+              base generation. Later explicit bumps advance that name directly. The old child is
+              garbage-collected through its normal REMOVE path while the new child enters through
+              CREATE with the fresh wallet-wide key.
+
+              This is deliberately NOT blue/green: the singleton XR still owns both child turnover
+              and DNS, so bug.5322 remains open. It only makes the already-supported explicit
+              replacement transaction executable after a terminally closed generation.
+            */ -}}
+            {{- $leaseRequestGeneration := int (dig "status" "leaseRequestGeneration" -1 $xr) }}
+            {{- $leaseResourceName := "akash-lease" }}
+            {{- if ge $leaseRequestGeneration 0 }}
+            {{- $leaseResourceName = printf "akash-lease-g%d" $leaseRequestGeneration }}
+            {{- end }}
+            {{- $initialLeaseObs := index $observedResources $leaseResourceName }}
+            {{- $initialResponseKey := "" }}
+            {{- if $initialLeaseObs }}
+            {{- $initialRequestBodyRaw := dig "status" "requestDetails" "body" "" $initialLeaseObs.resource }}
+            {{- if ne $initialRequestBodyRaw "" }}
+            {{- $initialRequestBody := fromJson $initialRequestBodyRaw }}
+            {{- $initialResponseKey = dig "cogniKey" "" $initialRequestBody }}
+            {{- end }}
+            {{- end }}
+            {{- $desiredRecoveryPrefix := printf "%s:recover:" $baseCogniKey }}
+            {{- $initialResponseMatchesDesiredGeneration := or (eq $initialResponseKey $baseCogniKey) (hasPrefix $desiredRecoveryPrefix $initialResponseKey) }}
+            {{- if or (and (ge $leaseRequestGeneration 0) (ne $leaseRequestGeneration $leaseGeneration)) (and (lt $leaseRequestGeneration 0) (ne $initialResponseKey "") (not $initialResponseMatchesDesiredGeneration)) }}
+            {{- $leaseRequestGeneration = $leaseGeneration }}
+            {{- $leaseResourceName = printf "akash-lease-g%d" $leaseGeneration }}
+            {{- end }}
+            {{- $leaseObs := index $observedResources $leaseResourceName }}
             {{- $resp := dict }}
             {{- $respStatus := 0 }}
             {{- if $leaseObs }}
@@ -517,7 +563,8 @@ spec:
               ONLY through a Replace-bumped fresh recovery key. $heldClosed parks Hold nodes;
               the (closed && not-current-key) term fences the foreign/stale-key shape, where
               $responseKey is absent or names another key and the guard would otherwise fail
-              open into refused-create churn every reconcile. */ -}}
+              open into refused-create churn every reconcile. An explicit BASE generation bump
+              selects a new generation-qualified child above before this fence is evaluated. */ -}}
             {{- $renderLease := not (or $closeForBudget $recoveryExhausted $heldClosed (and $closed (not $closedForCurrentKey))) }}
 
             {{- /*
@@ -593,7 +640,7 @@ spec:
             kind: Request
             metadata:
               annotations:
-                gotemplating.fn.crossplane.io/composition-resource-name: akash-lease
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ $leaseResourceName }}
                 {{- if and $active $serving }}
                 gotemplating.fn.crossplane.io/ready: "True"
                 {{- end }}
@@ -864,6 +911,9 @@ spec:
                 count: {{ $recoveryCount }}
                 maxAttempts: {{ $maxRecoveryAttempts }}
                 key: {{ $cogniKey | quote }}
+              {{- end }}
+              {{- if ge $leaseRequestGeneration 0 }}
+              leaseRequestGeneration: {{ $leaseRequestGeneration }}
               {{- end }}
               {{- if ne $migrationPhase "" }}
               migration:

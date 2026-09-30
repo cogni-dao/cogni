@@ -5,10 +5,12 @@ import { describe, expect, it } from "vitest";
 import {
   type AkashProviderInfo,
   BLACKLIST_TTL_MS,
+  formatBidRejections,
   isProviderBlacklisted,
   type ProviderOutcomeStats,
   passesQualityFilter,
   type ScreenableBid,
+  type ScreenedBids,
   screenBids,
 } from "./akash-provider-screen";
 
@@ -35,20 +37,28 @@ function bid(provider: string, priceAmount: number): ScreenableBid {
   return { provider, priceAmount };
 }
 
-function screen(
+function screenFull(
   bids: ScreenableBid[],
   over: Partial<Parameters<typeof screenBids>[0]> = {}
-): readonly ScreenableBid[] {
+): ScreenedBids {
   return screenBids({
     bids,
     providers: new Map(),
     outcomes: new Map(),
     preferredProviders: [],
     preferredCountryCodes: [],
+    requiredCountryCodes: [],
     excludedProviders: new Set(),
     nowMs: NOW,
     ...over,
   });
+}
+
+function screen(
+  bids: ScreenableBid[],
+  over: Partial<Parameters<typeof screenBids>[0]> = {}
+): readonly ScreenableBid[] {
+  return screenFull(bids, over).ranked;
 }
 
 describe("passesQualityFilter", () => {
@@ -242,5 +252,142 @@ describe("screenBids ranking", () => {
       "akash1hist",
       "akash1near",
     ]);
+  });
+});
+
+describe("screenBids required placement (REQUIRED_FAILS_CLOSED)", () => {
+  const providers = new Map([
+    ["akash1pt", info("akash1pt", { countryCode: "PT" })],
+    ["akash1be", info("akash1be", { countryCode: "BE" })],
+  ]);
+
+  it("REFUSES a provider outside the required set even when it is cheaper and preferred", () => {
+    const out = screen([bid("akash1be", 10), bid("akash1pt", 900)], {
+      providers,
+      requiredCountryCodes: ["PT"],
+      preferredProviders: ["akash1be"],
+    });
+    expect(out.map((b) => b.provider)).toEqual(["akash1pt"]);
+  });
+
+  /**
+   * The whole point of the cell. `preferredCountryCodes` only reorders, so a hostile
+   * jurisdiction still WINS when it is cheaper — which is how poly's production workload sat
+   * in a Polymarket-restricted country while placement policy looked satisfied (bug.5270).
+   */
+  it("filters where the latency preference merely ranks", () => {
+    const preferenceOnly = screen([bid("akash1be", 10), bid("akash1pt", 900)], {
+      providers,
+      preferredCountryCodes: ["PT"],
+    });
+    expect(preferenceOnly.map((b) => b.provider)).toContain("akash1be");
+
+    const required = screen([bid("akash1be", 10), bid("akash1pt", 900)], {
+      providers,
+      requiredCountryCodes: ["PT"],
+    });
+    expect(required.map((b) => b.provider)).not.toContain("akash1be");
+  });
+
+  /**
+   * REQUIRED_FAILS_CLOSED. The preference path deliberately fails OPEN when the Console
+   * provider index is unavailable; a requirement must not, or an unreadable marketplace
+   * silently places a geo-constrained node anywhere.
+   */
+  it("refuses every bid when provider metadata is unavailable", () => {
+    const out = screenFull([bid("akash1pt", 100), bid("akash1be", 100)], {
+      providers: new Map(),
+      requiredCountryCodes: ["PT"],
+    });
+    expect(out.ranked).toEqual([]);
+    expect(out.rejections.required_country).toBe(2);
+  });
+
+  it("refuses a provider whose country is simply unknown", () => {
+    const out = screenFull([bid("akash1mystery", 100)], {
+      providers: new Map([
+        ["akash1mystery", info("akash1mystery", { countryCode: null })],
+      ]),
+      requiredCountryCodes: ["PT"],
+    });
+    expect(out.ranked).toEqual([]);
+    expect(out.rejections.required_country).toBe(1);
+  });
+
+  it("is inert when no requirement is declared, preserving today's behaviour", () => {
+    const out = screen([bid("akash1be", 10), bid("akash1pt", 900)], {
+      providers,
+      requiredCountryCodes: [],
+    });
+    expect(out).toHaveLength(2);
+  });
+
+  it("compares case-insensitively so a lowercase cell cannot silently refuse everything", () => {
+    const out = screen([bid("akash1pt", 100)], {
+      providers: new Map([
+        ["akash1pt", info("akash1pt", { countryCode: "pt" })],
+      ]),
+      requiredCountryCodes: ["Pt"],
+    });
+    expect(out.map((b) => b.provider)).toEqual(["akash1pt"]);
+  });
+});
+
+describe("screenBids rejection accounting (EVERY_REJECTION_IS_COUNTED)", () => {
+  /**
+   * Three independent filters can each empty the bid set and the caller previously got one
+   * static sentence after the whole bid window. An operator must be able to read WHICH filter
+   * refused everything — the `d69e5c29` blanked-allowlist incident was invisible for exactly
+   * this reason.
+   */
+  it("attributes the fleet allowlist separately from the node's country requirement", () => {
+    const out = screenFull([bid("akash1pt", 100), bid("akash1be", 100)], {
+      providers: new Map([
+        ["akash1pt", info("akash1pt", { countryCode: "PT" })],
+        ["akash1be", info("akash1be", { countryCode: "BE" })],
+      ]),
+      allowedProviders: new Set(["akash1be"]),
+      requiredCountryCodes: ["PT"],
+    });
+    expect(out.ranked).toEqual([]);
+    expect(out.rejections).toEqual({
+      not_allowlisted: 1,
+      required_country: 1,
+    });
+  });
+
+  it("counts an excluded provider as already_tried, not as a quality failure", () => {
+    const out = screenFull([bid("akash1tried", 100)], {
+      excludedProviders: new Set(["akash1tried"]),
+    });
+    expect(out.rejections).toEqual({ already_tried: 1 });
+  });
+
+  it("counts blacklist and quality refusals under their own reasons", () => {
+    const out = screenFull([bid("akash1struck", 100), bid("akash1weak", 100)], {
+      providers: new Map([
+        ["akash1struck", info("akash1struck")],
+        ["akash1weak", info("akash1weak", { isAudited: false })],
+      ]),
+      outcomes: new Map([
+        [
+          "akash1struck",
+          { successes: 0, failures: 1, lastFailureAtMs: NOW - HOUR },
+        ],
+      ]),
+    });
+    expect(out.rejections).toEqual({ blacklisted: 1, quality: 1 });
+  });
+
+  it("reports nothing refused when every bid survives", () => {
+    const out = screenFull([bid("akash1a", 100), bid("akash1b", 100)]);
+    expect(out.rejections).toEqual({});
+    expect(formatBidRejections(out.rejections)).toBe("none");
+  });
+
+  it("formats counts for an error message", () => {
+    expect(formatBidRejections({ required_country: 3, quality: 1 })).toBe(
+      "required_country=3, quality=1"
+    );
   });
 });

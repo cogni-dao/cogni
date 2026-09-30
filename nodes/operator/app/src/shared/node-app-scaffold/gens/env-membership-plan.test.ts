@@ -22,6 +22,7 @@ import {
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
   buildPlacementPlan,
+  buildRegionPlan,
   CATALOG_PATH,
   type EnvDeltaResult,
   type EnvPlanCurrent,
@@ -636,6 +637,34 @@ describe("planEnvAddShape (ADD_DERIVES_PLACEMENT, story.5039)", () => {
     ).toBe("production");
   });
 
+  it("threads the FLEET CONTROL ENV into an akash non-production lane's control env (isolated fleet, bug.5235)", () => {
+    // cogni-test-org exports FLEET_CONTROL_ENV=candidate-a — its own control plane reconciles the
+    // akash lane, so the derived control env is candidate-a, NOT production.
+    expect(
+      planEnvAddShape(
+        externallyBuiltCatalog(["production"]),
+        "candidate-a",
+        "candidate-a"
+      )
+    ).toEqual({
+      placement: "akash",
+      computeApi: "crossplane",
+      controlEnv: "candidate-a",
+    });
+  });
+
+  it("omitting the FLEET CONTROL ENV keeps the akash control env at production (cogni-dao, byte-identical)", () => {
+    // An empty/whitespace value is treated as unset — still the production default.
+    expect(
+      planEnvAddShape(externallyBuiltCatalog(["production"]), "candidate-a", "")
+        .controlEnv
+    ).toBe("production");
+    expect(
+      planEnvAddShape(externallyBuiltCatalog(["production"]), "candidate-a")
+        .controlEnv
+    ).toBe("production");
+  });
+
   it("throws compute_authority_unavailable (422) when no actuator writer resolves for the owner org", () => {
     // An org outside the CROSSPLANE_ACTUATOR_WRITERS map — the schema makes an akash env without
     // compute_api INVALID, so the verb must refuse loudly rather than author an unmergeable PR.
@@ -747,6 +776,68 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
         "lease_generation:\n  candidate-a: 3\n"
       );
     }
+  });
+
+  it("authors the akash lane's AppSet under the FLEET CONTROL ENV's dir on an isolated fleet (bug.5235)", () => {
+    const base = akashAddCurrent();
+    // Isolated fleet (FLEET_CONTROL_ENV=candidate-a): candidate-a IS the control env, so the
+    // kustomization the adapter fetches — and the one this plan folds into — is candidate-a's.
+    const current: EnvPlanCurrent = {
+      ...base,
+      appsetsKustomizationByEnv: {
+        "candidate-a": kustWith("candidate-a", ["operator"]),
+      },
+    };
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: true,
+      current,
+      fleetControlEnv: "candidate-a",
+    });
+    expect(res.kind).toBe("add");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    // The AppSet + its kustomization live under appsets/candidate-a/ — NOT the nonexistent
+    // appsets/production/ (the 422 GitRPC::BadObjectState this fix removes).
+    expect(paths(res.ops)).toContain(
+      appsetPath("candidate-a", "candidate-a", SLUG)
+    );
+    expect(paths(res.ops)).toContain(appsetsKustomizationPath("candidate-a"));
+    expect(paths(res.ops)).not.toContain(
+      appsetPath("production", "candidate-a", SLUG)
+    );
+    expect(paths(res.ops)).not.toContain(
+      appsetsKustomizationPath("production")
+    );
+
+    const kustOp = res.ops.find(
+      (o) => o.path === appsetsKustomizationPath("candidate-a")
+    );
+    expect(kustOp?.op).toBe("upsert");
+    if (kustOp?.op === "upsert") {
+      expect(kustOp.content).toContain(
+        `candidate-a-${SLUG}-applicationset.yaml`
+      );
+    }
+  });
+
+  it("keeps the akash lane under appsets/production/ when no FLEET CONTROL ENV is set (cogni-dao, byte-identical)", () => {
+    // The default-fleet path: omitting fleetControlEnv reproduces today's production-reconciled
+    // shape exactly — the AppSet dir stays appsets/production/.
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: true,
+      current: akashAddCurrent(),
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+    expect(paths(res.ops)).toContain(
+      appsetPath("production", "candidate-a", SLUG)
+    );
+    expect(paths(res.ops)).not.toContain(
+      appsetPath("candidate-a", "candidate-a", SLUG)
+    );
   });
 
   it("throws env_render_inputs_missing naming the CONTROL env when its kustomization is absent", () => {
@@ -1237,6 +1328,46 @@ describe("buildEnvDeltaPlan — akash REMOVE (REMOVE_COMPLETES_THE_ROW, story.50
     }
   });
 
+  it("deletes the akash lane's AppSet from the FLEET CONTROL ENV's dir on an isolated fleet (bug.5235)", () => {
+    const base = akashRemoveCurrent();
+    // Isolated fleet (FLEET_CONTROL_ENV=candidate-a): the AppSet was written under
+    // appsets/candidate-a/, so the remove must delete from there and regenerate that kustomization.
+    const CAND_KUST = `${KUST_HEADER}\n  - candidate-a-${SLUG}-applicationset.yaml\n  - candidate-a-operator-applicationset.yaml\n`;
+    const current: EnvPlanCurrent = {
+      ...base,
+      appsetsKustomizationByEnv: { "candidate-a": CAND_KUST },
+    };
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "candidate-a",
+      present: false,
+      current,
+      fleetControlEnv: "candidate-a",
+    });
+    expect(res.kind).toBe("remove");
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(deletes(res.ops)).toContain(
+      appsetPath("candidate-a", "candidate-a", SLUG)
+    );
+    expect(deletes(res.ops)).not.toContain(
+      appsetPath("production", "candidate-a", SLUG)
+    );
+
+    const kustOp = res.ops.find(
+      (o) => o.path === appsetsKustomizationPath("candidate-a")
+    );
+    expect(kustOp?.op).toBe("upsert");
+    if (kustOp?.op === "upsert") {
+      expect(kustOp.content).not.toContain(
+        `candidate-a-${SLUG}-applicationset.yaml`
+      );
+      expect(kustOp.content).toContain(
+        "candidate-a-operator-applicationset.yaml"
+      );
+    }
+  });
+
   it("drops ONLY the removed env's cells when other envs are placed too", () => {
     const base = akashRemoveCurrent();
     const current: EnvPlanCurrent = {
@@ -1382,5 +1513,211 @@ data:
       (o) => o.path === schedulerEndpointPatchPath("candidate-a")
     );
     expect(schedulerOp?.op).toBe("upsert");
+  });
+});
+
+/** An akash-placed, egress-declaring row — the region verb's precondition. */
+const akashPlaced = (env: string): EnvPlanCurrent => {
+  const base = externallyBuilt([env]);
+  return {
+    ...base,
+    catalog: `${base.catalog}deployment_provider:\n  ${env}: akash\nlease_generation:\n  ${env}: 1\ncompute_egress_cidrs:\n  - cidr: 80.200.246.35/32\n    comment: zencloud BE\n`,
+  };
+};
+
+/** Narrow an EnvPlanOp to its upsert content — the region plan only ever emits upserts. */
+const upsertContent = (op: EnvPlanOp): string => {
+  if (op.op !== "upsert") throw new Error(`expected an upsert, got ${op.op}`);
+  return op.content;
+};
+
+describe("buildRegionPlan (story.5050)", () => {
+  it("writes the requirement AND moves lease_generation in the SAME commit", () => {
+    const res = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["PT"],
+      leaseGeneration: 2,
+      current: akashPlaced("preview"),
+    });
+    if (res.kind !== "set_region")
+      throw new Error(`expected set_region, got ${res.kind}`);
+    // ONE file: the region requirement constrains which provider may win a bid, not which lane
+    // or address serves the env, so no overlay/appset/scheduler hunk may appear.
+    expect(res.ops).toHaveLength(1);
+    const next = parseYaml(upsertContent(res.ops[0]!)) as Record<
+      string,
+      unknown
+    >;
+    expect(next["required_placement_countries"]).toEqual({ preview: ["PT"] });
+    // REGION_BINDS_ON_A_FRESH_MINT — without this the verb would succeed and do nothing.
+    expect(next["lease_generation"]).toEqual({ preview: 2 });
+    expect(res.leaseGeneration).toBe(2);
+  });
+
+  it("sorts countries so the same requirement is one canonical commit", () => {
+    const res = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["NL", "PT"],
+      leaseGeneration: 2,
+      current: akashPlaced("preview"),
+    });
+    if (res.kind !== "set_region") throw new Error("expected set_region");
+    const next = parseYaml(upsertContent(res.ops[0]!)) as Record<
+      string,
+      unknown
+    >;
+    expect(next["required_placement_countries"]).toEqual({
+      preview: ["NL", "PT"],
+    });
+  });
+
+  /**
+   * THE REGRESSION THIS EXISTS FOR (observed live, PR #2496): `setCatalogPlacementCell` rewrites a
+   * block from its parsed map and DROPS the comments inside it, so a text comparison reads an
+   * identical request as a change. Because this verb bumps `lease_generation`, that is not a
+   * harmless extra PR — it mints a PAID LEASE on every repeat call and deletes the row's reviewed
+   * rationale. Idempotency must compare the PARSED cell value.
+   */
+  it("is a no-op when the held region matches, even with comments inside the block", () => {
+    const withComments = akashPlaced("preview");
+    const commented = {
+      ...withComments,
+      catalog: withComments.catalog.replace(
+        "required_placement_countries:\n  preview:",
+        "required_placement_countries:\n  # why we chose these\n  preview:"
+      ),
+    };
+    const seeded = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["PT"],
+      leaseGeneration: 2,
+      current: commented,
+    });
+    if (seeded.kind !== "set_region") throw new Error("expected set_region");
+    const withComment = {
+      ...commented,
+      catalog: upsertContent(seeded.ops[0]!).replace(
+        "required_placement_countries:",
+        "required_placement_countries:\n  # rationale a human wrote"
+      ),
+    };
+    expect(
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries: ["PT"],
+        leaseGeneration: 99,
+        current: withComment,
+      }).kind
+    ).toBe("no_changes");
+  });
+
+  it("is a no-op regardless of the order the countries are given in", () => {
+    const seeded = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["NL", "PT"],
+      leaseGeneration: 2,
+      current: akashPlaced("preview"),
+    });
+    if (seeded.kind !== "set_region") throw new Error("expected set_region");
+    expect(
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries: ["PT", "NL"],
+        leaseGeneration: 99,
+        current: {
+          ...akashPlaced("preview"),
+          catalog: upsertContent(seeded.ops[0]!),
+        },
+      }).kind
+    ).toBe("no_changes");
+  });
+
+  /** IDEMPOTENT — and load-bearing: a no-op must not move the generation and mint a paid lease. */
+  it("is a no-op when the region is already held, minting nothing", () => {
+    const held = akashPlaced("preview");
+    const first = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["PT"],
+      leaseGeneration: 2,
+      current: held,
+    });
+    if (first.kind !== "set_region") throw new Error("expected set_region");
+    const again = buildRegionPlan({
+      slug: SLUG,
+      env: "preview",
+      countries: ["PT"],
+      leaseGeneration: 9,
+      current: { ...held, catalog: upsertContent(first.ops[0]!) },
+    });
+    expect(again.kind).toBe("no_changes");
+  });
+
+  /** REGION_REQUIRES_AKASH — a k3s env screens no bids, so the cell would be inert desired state. */
+  it("refuses a k3s-placed env rather than writing a cell nothing reads", () => {
+    expect(() =>
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries: ["PT"],
+        leaseGeneration: 1,
+        current: externallyBuilt(["preview"]),
+      })
+    ).toThrow(/not placed on akash/);
+  });
+
+  /** EGRESS_COUPLING_OR_REFUSE — mirrors infra/catalog/_schema.json; see bug.5191. */
+  it("refuses when the row declares no compute_egress_cidrs", () => {
+    const noEgress = akashPlaced("preview");
+    expect(() =>
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries: ["PT"],
+        leaseGeneration: 2,
+        current: {
+          ...noEgress,
+          catalog: noEgress.catalog.replace(
+            /compute_egress_cidrs:[\s\S]*$/,
+            ""
+          ),
+        },
+      })
+    ).toThrow(/no compute_egress_cidrs/);
+  });
+
+  it("refuses an env the node is not deployed to", () => {
+    expect(() =>
+      buildRegionPlan({
+        slug: SLUG,
+        env: "production",
+        countries: ["PT"],
+        leaseGeneration: 1,
+        current: akashPlaced("preview"),
+      })
+    ).toThrow(/not deployed to that environment/);
+  });
+
+  it.each([
+    ["empty", [] as string[], /no countries given/],
+    ["lowercase", ["pt"], /not ISO 3166-1 alpha-2/],
+    ["three-letter", ["PRT"], /not ISO 3166-1 alpha-2/],
+    ["duplicated", ["PT", "PT"], /duplicate country codes/],
+  ])("refuses a %s country set", (_label, countries, re) => {
+    expect(() =>
+      buildRegionPlan({
+        slug: SLUG,
+        env: "preview",
+        countries,
+        leaseGeneration: 2,
+        current: akashPlaced("preview"),
+      })
+    ).toThrow(re);
   });
 });
