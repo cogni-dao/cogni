@@ -1176,17 +1176,26 @@ describe("XComputeWorkload placement requirement (story.5050)", () => {
     Record<string, unknown>;
 
   /**
-   * Akash refuses in-place placement change, so an accepted edit would be desired state
-   * nothing applies — the node keeps serving from its old jurisdiction while the XR claims
-   * otherwise. Immutability makes "bump leaseGeneration" the only way to re-place.
+   * Akash refuses in-place placement change, so an accepted edit without a fresh key would be
+   * desired state nothing applies — the node keeps serving from its old jurisdiction while the
+   * XR claims otherwise. The rule must live at spec scope so it can admit the env-manager's
+   * atomic placement + leaseGeneration bump while rejecting a placement-only edit.
    */
-  it("is immutable, so a re-placement must go through a leaseGeneration bump", () => {
-    const rules = (placement["x-kubernetes-validations"] ?? []) as {
+  it("allows re-placement only alongside a leaseGeneration bump", () => {
+    const rules = (specSchema["x-kubernetes-validations"] ?? []) as {
       rule: string;
       message: string;
     }[];
-    expect(rules.map((r) => r.rule)).toContain("self == oldSelf");
-    expect(JSON.stringify(rules)).toMatch(/leaseGeneration/);
+    const placementRule = rules.find((r) =>
+      /placement may change/.test(r.message)
+    );
+    expect(placementRule?.rule).toContain(
+      "self.placement == oldSelf.placement"
+    );
+    expect(placementRule?.rule).toContain("self.leaseGeneration >");
+    expect(placementRule?.rule).toContain("oldSelf.leaseGeneration");
+    expect(placementRule?.rule).toContain("oldSelf.leaseEpoch");
+    expect(placement["x-kubernetes-validations"]).toBeUndefined();
   });
 
   /**

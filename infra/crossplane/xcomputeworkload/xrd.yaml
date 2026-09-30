@@ -85,6 +85,17 @@ spec:
                   message: every service must reference a declared bundle artifact
                 - rule: "self.bundle.artifacts.all(a, self.workload.services.exists(s, s.artifact == a.name))"
                   message: every bundle artifact must be used by at least one service
+                # PLACEMENT_CHANGE_REQUIRES_FRESH_KEY. This must live at spec scope: a
+                # field-scoped rule cannot inspect sibling leaseGeneration and therefore
+                # made the env-manager's documented placement+bump transaction impossible.
+                # Fall back to the served legacy leaseEpoch when upgrading an older XR.
+                - rule: >-
+                    (!has(self.placement) && !has(oldSelf.placement)) ||
+                    (has(self.placement) && has(oldSelf.placement) && self.placement == oldSelf.placement) ||
+                    (has(self.leaseGeneration) && self.leaseGeneration >
+                      (has(oldSelf.leaseGeneration) ? oldSelf.leaseGeneration :
+                        (has(oldSelf.leaseEpoch) ? oldSelf.leaseEpoch : 0)))
+                  message: placement may change only with a leaseGeneration bump
               properties:
                 nodeId:
                   type: string
@@ -337,16 +348,12 @@ spec:
                     outbound probe proves reachability.
 
                     Absent = unconstrained, which is what every existing lease runs under.
-                    Immutable: Akash refuses in-place placement change, so a new requirement can
-                    only bind on a fresh mint behind a spec.leaseGeneration bump — accepting an
-                    edit here would otherwise read as applied desired state that nothing applies.
+                    Generation-guarded: Akash refuses in-place placement change, so a new
+                    requirement can only bind on a fresh mint behind a spec.leaseGeneration bump
+                    — accepting an edit without that bump would otherwise read as applied desired
+                    state that nothing applies.
                   type: object
                   required: [requiredCountries]
-                  x-kubernetes-validations:
-                    - {
-                        rule: "self == oldSelf",
-                        message: placement is immutable; bump leaseGeneration to re-place,
-                      }
                   properties:
                     requiredCountries:
                       type: array
