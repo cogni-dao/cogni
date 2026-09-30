@@ -56,14 +56,13 @@ spec:
   bootPolicy:
     onDeadline: Close
     onGiveUp: Replace
-  leaseGeneration: 15
+  leaseGeneration: 16
   placement:
     requiredCountries:
       - BG
       - FI
       - NL
       - PT
-      - RO
   dns:
     provider: cloudflare
     zoneId: 23220356c352c5831c6af57887b11a27
