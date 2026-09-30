@@ -67,6 +67,11 @@ render() {
 # run `pnpm gen:caddyfile`. CI (`scripts/ci/render-caddyfile.sh --check`) fails
 # if this file drifts from the catalog. See docs/guides/create-node.md.
 {
+  # Cloudflare terminates public TLS and connects to this origin in Full mode.
+  # Keep origin certificates local: public ACME challenges cannot reliably reach
+  # a proxied origin and leave the edge serving 525 after a Caddy recreate.
+  local_certs
+
   log {
     level INFO
     format json
