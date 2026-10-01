@@ -152,7 +152,12 @@ render_file() {
   [ -n "$np" ] && [ -n "$port" ] \
     || { echo "[ERROR] $node: catalog has no node_port/port" >&2; return 1; }
   tmp="$(mktemp)"
-  public_domain_root="${FORK_DOMAIN_ROOT:-cognidao.org}"
+  # WORKLOAD public domain (the browser-facing NEXTAUTH host) comes from DOMAIN
+  # (e.g. cogni-testing.org on the test-parent mirror). FORK_DOMAIN_ROOT is the
+  # SUBSTRATE root (cognidao.org) — the two DIVERGE on the test-parent, so do NOT
+  # flip the workload host with it (hub knowledge: test-fleet-parity-boundary).
+  # Precedence: DOMAIN → FORK_DOMAIN_ROOT (legacy fork fallback) → cognidao.org.
+  public_domain_root="${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}}"
   SLUG="$node" NODEPORT="$np" PORT="$port" PUBLIC_DOMAIN_ROOT="$public_domain_root" perl -0777 -pe '
     s/node-template/$ENV{SLUG}/g;
     s/\b30200\b/$ENV{NODEPORT}/g;
