@@ -55,19 +55,19 @@ Production proof:
 
 ## Current State
 
-| Item | Fact |
-| --- | --- |
-| Poly public | DOWN: `/version=eed16dc0`; `/readyz` times out/000 |
-| Accepted Poly release | main SHA `9033a162...`; XR already contains its valid bundle/artifact digest |
-| Rejected SHA | PR head `670939a3...` has a real candidate-tested image but promote rejects it with HTTP 409 `non_forward_promotion` because it is not on main |
-| Lease | production generation 20 hit `BootDeadlineClosed`; its settled idempotency key is spent and cannot be replayed |
-| Recovery PR | #2548 head `ace47fd958`; changes only `lease_generation.production: 20 -> 21` plus handoff docs; remote CI was still running when stopped |
-| Postgres durable fix | `/dev/shm=1GiB` live; container healthy; this fixed the shm maintenance cliff but did not explain every exit-2 |
-| Current temporary DB state | `service_poly CONNECTION LIMIT 1`; `service_poly_candidate_a=-1`; `max_parallel_workers_per_gather=2` (default restored) |
-| Why cap remains | uncapping immediately restarted the old `DELETE FROM poly_trader_position_snapshots ... EXISTS` query; it was terminated and the known bridge cap restored |
-| Request mutation | removed `external-create-pending` and set `cogni.io/reconcile-nudge` on Request `...-489bd369b815`; inspection showed it is the composition `dns-record` Request, not a fresh compute lease |
-| Pre-cutover signal | zero Postgres exit-2 and zero actuator `ledger_unavailable` in the 15-minute window checked around 22:17Z |
-| Active processes | none; the GitHub check watcher was stopped |
+| Item                       | Fact                                                                                                                                                                                        |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Poly public                | DOWN: `/version=eed16dc0`; `/readyz` times out/000                                                                                                                                          |
+| Accepted Poly release      | main SHA `9033a162...`; XR already contains its valid bundle/artifact digest                                                                                                                |
+| Rejected SHA               | PR head `670939a3...` has a real candidate-tested image but promote rejects it with HTTP 409 `non_forward_promotion` because it is not on main                                              |
+| Lease                      | production generation 20 hit `BootDeadlineClosed`; its settled idempotency key is spent and cannot be replayed                                                                              |
+| Recovery PR                | #2548 head `ace47fd958`; changes only `lease_generation.production: 20 -> 21` plus handoff docs; remote CI was still running when stopped                                                   |
+| Postgres durable fix       | `/dev/shm=1GiB` live; container healthy; this fixed the shm maintenance cliff but did not explain every exit-2                                                                              |
+| Current temporary DB state | `service_poly CONNECTION LIMIT 1`; `service_poly_candidate_a=-1`; `max_parallel_workers_per_gather=2` (default restored)                                                                    |
+| Why cap remains            | uncapping immediately restarted the old `DELETE FROM poly_trader_position_snapshots ... EXISTS` query; it was terminated and the known bridge cap restored                                  |
+| Request mutation           | removed `external-create-pending` and set `cogni.io/reconcile-nudge` on Request `...-489bd369b815`; inspection showed it is the composition `dns-record` Request, not a fresh compute lease |
+| Pre-cutover signal         | zero Postgres exit-2 and zero actuator `ledger_unavailable` in the 15-minute window checked around 22:17Z                                                                                   |
+| Active processes           | none; the GitHub check watcher was stopped                                                                                                                                                  |
 
 Live writes performed during this pickup:
 
