@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Permanent name-keyed DNS reconciler for XComputeWorkload records. The chart,
+# app image and Cloudflare zone are all pinned/scoped; only DNSEndpoints carrying
+# the steady-state label are visible to this controller.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: external-dns
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes-sigs.github.io/external-dns/
+    chart: external-dns
+    targetRevision: 1.22.0
+    helm:
+      releaseName: external-dns
+      values: |
+        image:
+          repository: registry.k8s.io/external-dns/external-dns
+          tag: v0.22.0@sha256:5fdcaf7deb5c158f93a1fc6fe169cdff4cfb9ae0172bee1a90ab0ef74fb9c9cf
+          pullPolicy: IfNotPresent
+        sources: [crd]
+        provider:
+          name: cloudflare
+        policy: sync
+        registry: txt
+        txtOwnerId: cogni-candidate-a-xcw
+        txtPrefix: xcw-%{record_type}-
+        domainFilters: [cognidao.org]
+        labelFilter: cogni.io/dns-role=record
+        managedRecordTypes: [CNAME]
+        triggerLoopOnEvent: true
+        interval: 1m
+        env:
+          - name: CF_API_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: external-dns-cloudflare
+                key: api-token
+          - name: CLOUDFLARE_ZONE_ID
+            valueFrom:
+              secretKeyRef:
+                name: external-dns-cloudflare
+                key: zone-id
+        extraArgs:
+          - --zone-id-filter=$(CLOUDFLARE_ZONE_ID)
+          - --cloudflare-dns-records-per-page=5000
+        resources:
+          requests: { cpu: 20m, memory: 64Mi }
+          limits: { cpu: 200m, memory: 192Mi }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: external-dns
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
