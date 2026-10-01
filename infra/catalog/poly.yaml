@@ -95,8 +95,20 @@ compute_egress_cidrs:
       authenticates identity instead of source address.
   - cidr: 95.217.58.106/32
     comment: Finland provider egress (story.5050)
+  - cidr: 157.180.59.24/32
+    comment: >-
+      RHITE Finland provider EGRESS, measured from inside a real lease on
+      provider.akash.rhite.co.uk (story.5050, bug.5326). This is the provider that bids 9.14
+      and wins under gen-19, and its egress is in a DIFFERENT netblock from every address
+      previously listed here — so without this entry the pod boots and is firewalled off its
+      own Postgres by the fail-closed substrate-port DROP, misses the boot SLO, and burns
+      three onGiveUp:Replace attempts on what reads as a market failure. The same lease
+      measured CLOB_STATUS=200 against clob.polymarket.com from country=FI.
   - cidr: 95.217.139.177/32
-    comment: RHITE Finland provider endpoint; workload egress must still be proven (story.5050)
+    comment: >-
+      RHITE Finland provider INGRESS endpoint (story.5050). Kept for reachability, but it is
+      NOT the egress — this entry used to carry "workload egress must still be proven" and the
+      measurement above disproved it. Ingress is not egress; measure from inside the lease.
   - cidr: 24.144.74.0/24
     comment: >-
       Netherlands provider egress range (story.5050). Widened from 24.144.74.27/32:
