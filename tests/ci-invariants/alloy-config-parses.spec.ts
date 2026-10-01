@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/ci-invariants/alloy-config-parses`
- * Purpose: Every committed Alloy config must PARSE against the exact alloy binary the runtime
- *   deploys. A River syntax error is not a cosmetic defect: alloy exits 1 and crash-loops, which
- *   takes the WHOLE metrics pipeline down, not just the block being edited.
+ * Purpose: Ensures every committed Alloy config parses against the exact deployed Alloy binary.
  * Scope: Static parse check via `alloy fmt` in a throwaway container. Does not deploy, does not
  *   connect to any database, and needs none of the host mounts a full `alloy run` demands.
  * Invariants:

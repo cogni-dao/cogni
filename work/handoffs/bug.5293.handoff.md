@@ -63,9 +63,9 @@ last_commit: 489d51d624
 - [ ] Implement item (2) as the option-(a) seam; prove one `(node, lane)` end-to-end before fan-out.
 - [ ] Build and **exercise** a restore drill before any graduation cutover.
 - [ ] Re-measure the 24h series before→after each change and report the delta, not the intent.
-- **Freshness, not value, is the honest health check.** A metrics pipeline cannot report its own death: `up == 1` read "healthy" for three deploys while alloy was crash-looping. Always ask whether the series is still *advancing* past the clock.
+- **Freshness, not value, is the honest health check.** A metrics pipeline cannot report its own death: `up == 1` read "healthy" for three deploys while alloy was crash-looping. Always ask whether the series is still _advancing_ past the clock.
 - **`gh run watch` / `gh pr checks --watch --fail-fast` exit 0 even when a check FAILED.** Always re-read state afterwards. This caught two red-looking-green runs.
-- **River comments are `//`, never `#`.** One `#` makes the whole Alloy config unparseable, alloy exits 1 and crash-loops, taking the *entire* metrics pipeline down — not just the edited block. #2530 is the gate.
+- **River comments are `//`, never `#`.** One `#` makes the whole Alloy config unparseable, alloy exits 1 and crash-loops, taking the _entire_ metrics pipeline down — not just the edited block. #2530 is the gate.
 - **The compose-lane dispatch refuses any non-lane path.** Check `candidateInfraPathLane` before composing a PR; mixing lanes or adding a test file makes it undispatchable.
 - Infra flights serialize on a concurrency group and currently take 15–20 min, mostly in the bug.5335 retry-thrash. Cancelling is safe **only** once the `Deploy Compose infra` step reports `success`.
 
