@@ -60,10 +60,10 @@ lease_generation:
   # the generation only as a side effect of CHANGING a cell, and the countries are already
   # correct, so this is the reviewed catalog PR the prod re-mint runbook prescribes
   # (CATALOG_IS_SSOT; hub `akash-prod-lease-recovery`). Tracked as bug.5336.
-  production: 19
+  production: 20
 required_placement_countries:
   candidate-a: [BE]
-  production: [FI, NL, PT]
+  production: [FI, NL, PT, UA]
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/poly/
@@ -95,6 +95,15 @@ compute_egress_cidrs:
       authenticates identity instead of source address.
   - cidr: 95.217.58.106/32
     comment: Finland provider egress (story.5050)
+  - cidr: 194.44.52.157/32
+    comment: >-
+      Ukraine provider pronto-ai EGRESS, measured from inside a real lease on
+      provider.pronto-ai.pp.ua (story.5050). This is the ONLY provider that has bid on poly's
+      own production auctions AND can serve a custom domain: 12.20 on gen-19, refused solely
+      on required_country. The same lease measured CLOB_STATUS=200 against
+      clob.polymarket.com from country=UA, so Ukraine is a permitted jurisdiction for poly's
+      outbound dependency. Ingress is not egress — this address is NOT one of the provider's
+      resolved endpoint IPs.
   - cidr: 157.180.59.24/32
     comment: >-
       RHITE Finland provider EGRESS, measured from inside a real lease on
