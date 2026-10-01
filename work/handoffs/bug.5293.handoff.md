@@ -62,6 +62,50 @@ A 64 MiB DSM segment cannot fit a 64 MiB `/dev/shm`. Durable hub entry:
 removes a Doltgres copy that had no Doltgres-specific evidence, and downgrades the
 root-cause language to match what is actually proven).
 
+## ⛔ FREEZE: no further production tuning (review directive, 2026-10-01)
+
+No more ANALYZE, GUC changes, indexes, or theory-driven live experiments. I made **six**
+manual production writes and **four** diagnosis reversals; that is flailing, and the next
+owner should not continue it. Everything below is either a revert or a deploy.
+
+## CORRECTION — a causal claim of mine that is NOT proven
+
+I wrote that "autovacuum never ran, therefore the table became 4.8 GB". **That is unproven
+and it conflicts with my own later evidence.** The 2,108,806 dead-tuple reading was taken
+BEFORE the container restart at 21:31:44Z; after the restart `n_dead_tup` read **0** on the
+same 4859 MB table, because statistics reset on restart. So I cannot currently distinguish
+"4.8 GB of bloat" from "4.8 GB of real heap + indexes". What IS proven:
+
+- VACUUM failed at DEFAULT settings with the 64 MiB shm error (reproduced)
+- `last_autovacuum` was NULL on every large table
+- autovacuum began running after `shm_size` landed (observed in `pg_stat_activity`)
+- `/dev/shm` was NOT the whole exit-2 cause — crashes continued after it was fixed
+
+To settle the bloat question use on-disk size over time, or `pgstattuple`, NOT the
+post-restart counters.
+
+## CONTROLLED CUTOVER — do this, in this order, nothing else
+
+Do **not** wait on the rolling 24h metric; by definition it cannot fall quickly.
+
+1. Keep the old poly workload stopped.
+2. **Revert the two bridge writes** (commands in the section above):
+   `ALTER ROLE service_poly CONNECTION LIMIT -1;` and
+   `ALTER SYSTEM RESET max_parallel_workers_per_gather;` + `SELECT pg_reload_conf();`
+   (also `service_poly_candidate_a` → `-1`)
+3. Clear/nudge **only poly's** wedged Request — not all 15.
+4. Deploy poly at the exact SHA the review names: **`670939a3`** (I promoted the merge
+   commit `9033a162`; reconcile which is correct before dispatching — the review's exact-SHA
+   candidate validation ran against `670939a3`).
+5. Prove: `/version` is that exact SHA, `/readyz` 200, actuator ledger healthy (no
+   `ledger_unavailable`), and query load back to normal in the sampler.
+6. Watch the **15-minute and 1-hour** crash rates. `≤9/24h` is tomorrow's final proof.
+7. If exit-2 persists: capture the FIRST dying backend's PID, signal and core evidence.
+   **No further global tuning without that evidence.**
+8. Only once the ledger is stable, clear the other nodes' wedged Requests **gradually**.
+9. Then the north star: automatic per-role/pool bounds + metering, and graduate poly to a
+   dedicated Postgres cell if it keeps dominating shared resources.
+
 ## STILL UNEXPLAINED — do not claim a cause without these
 
 `exit code 2` is PostgreSQL `quickdie()` → `_exit(2)` (the SIGQUIT path). The FIRST dying
