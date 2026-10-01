@@ -52,15 +52,14 @@ compute_api:
 lease_generation:
   candidate-a: 38
   preview: 2
-  # 18 -> 19 to re-mint after a DRY auction (story.5050, bug.5334). gen-18 created
-  # dseq 1790815181111, collected 8 bids, and every one was refused — then rolled back
-  # (akash_tx_allocation_rolled_back, 17:41:25). An idempotency key that has settled is
-  # spent for good: re-promoting at 18 only logs akash_tx_create_replayed, so the bump is
-  # the only way to get a fresh CREATE. There is no verb for this — /nodes/{id}/envs bumps
-  # the generation only as a side effect of CHANGING a cell, and the countries are already
-  # correct, so this is the reviewed catalog PR the prod re-mint runbook prescribes
-  # (CATALOG_IS_SSOT; hub `akash-prod-lease-recovery`). Tracked as bug.5336.
-  production: 19
+  # 19 -> 20 to re-mint after a second DRY auction (story.5050, bug.5293/5334).
+  # gen-18 dseq 1790815181111 collected 8 bids and refused all of them; gen-19 dseq
+  # 1790818782178 collected 6 bids, but every bidder was outside the required FI/NL/PT
+  # countries, then rolled back at 2026-10-01T01:41:25Z. Both settled idempotency keys are
+  # spent: replaying gen-19 returns the closed handle and can never apply a new Poly image.
+  # There is no activity-env re-mint verb, so this reviewed catalog bump is the recovery
+  # prescribed by hub `akash-prod-lease-recovery` (CATALOG_IS_SSOT).
+  production: 20
 required_placement_countries:
   candidate-a: [BE]
   production: [FI, NL, PT]
