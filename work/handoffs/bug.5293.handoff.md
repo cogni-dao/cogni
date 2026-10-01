@@ -6,153 +6,112 @@ status: active
 created: 2026-10-01
 updated: 2026-10-01
 branch: derekg1729/bug5293-handoff
-last_commit: 79ffc8724b
+last_commit: ace47fd958
 ---
 
-# Handoff: poly substrate health — deploy #99 and prove the crash SLO
+# Handoff: restore Poly production and prove its database substrate
 
 ## Mission
 
-Pickup: you own **poly production serving again, and the shared Postgres crash rate inside
-SLO**. poly has been down for hours (`/readyz` 000) because its fix cannot deploy, and the
-shared operator Postgres kills individual backends with `exited with exit code 2` — 113 in
-24h against a target of ≤9. A real, fleet-wide defect was found and fixed (container
-`/dev/shm` was the Docker default 64 MiB, which made `VACUUM` impossible at **any** setting);
-that is live and autovacuum now runs for the first time in this database's life. It was
-**not** the whole cause — crashes continued afterwards. **A production-tuning freeze is in
-effect**: everything left is a revert, a deploy, or evidence capture. Do not run more live
-experiments on theories.
+Pickup: own the incident end to end. Poly must serve the merged load-bounding fix again,
+and its required Postgres, Doltgres, Redis, and Temporal persistence paths must be proven
+healthy from the public service inward. A green PR, workflow, or Crossplane condition is
+not completion.
 
 ## Goal
 
-**End state:** poly serves the exact SHA of its merged fix with `/readyz` 200, the actuator
-allocation ledger stops returning `ledger_unavailable`, and Postgres `exit code 2` stops.
+**One-hour recovery target:** Poly serves merged main SHA
+`9033a16208bb234dd8fc04666bc3b9fc336b64f5`, `/readyz` returns 200, the old prune DELETE
+retry-storm is absent, the allocation ledger emits no `ledger_unavailable`, and Postgres
+adds zero exit-2 events for 15 minutes and then one hour.
 
-**E2E validation, in order:**
+**Full substrate closure:** emergency production settings are reverted; Doltgres has its
+expected live schema plus committed migration history; Redis and Temporal connectivity are
+proven; remaining wedged node Requests are released gradually only after the ledger is
+stable. Tomorrow's final Postgres gate is rolling exit-2 `<=9/24h`.
 
-1. `curl -s https://poly.cognidao.org/version` → `buildSha` equals the deployed poly fix SHA
-   (see Current State for the SHA discrepancy you must resolve first).
-2. `curl -o /dev/null -w '%{http_code}' https://poly.cognidao.org/readyz` → **200**.
-3. No `ledger_unavailable` in `{env="production",service="actuator"}`.
-4. The 2s sampler shows poly's prune `DELETE` no longer restarting every ~2s.
-5. **15-minute and 1-hour** crash counts at zero:
-   `bash scripts/loki-query.sh '{env="production",service="postgres"} |~ "exited with exit code"' 60 400`
-6. Final proof is **tomorrow**: rolling 24h ≤ 9. Do not wait on this metric to act — by
-   definition it cannot fall quickly.
+Production proof:
 
-Deploy proof is a **production promote**, not candidate-a: use
-`POST /api/v1/deploy/promote {nodeId, env:"production", sourceSha}` and judge on `/version` +
-`/readyz`, never on a green workflow or CR state (a latched `PHASE=Failed` survives re-mints).
+- `https://poly.cognidao.org/version` has `buildSha=9033a162...`.
+- `https://poly.cognidao.org/readyz` returns 200.
+- Loki has no new Postgres exit-2, actuator `ledger_unavailable`, or repeating Poly prune
+  DELETE during the observation windows.
+- Live substrate checks prove Doltgres schema/`dolt_log`, Redis, and Temporal; do not infer
+  health from containers or zero log lines.
 
 ## Start By Reading
 
-- `work/handoffs/archive/bug.5293/2026-10-01T22-11-09.md` — the long-form incident record
-  (full signature tables, every ruled-out hypothesis, the Crossplane chain).
-- `.context/bug5293-production-writes.md` — **EPHEMERAL, read first.** All 6 live production
-  writes with exact commands, timestamps, effects and **rollbacks**. Two must be reverted.
-- `.context/bug5293-baseline.md` — the measurement contract (baseline numbers to beat).
-- Hub entry **`postgres-shm-blocks-vacuum`** — the durable finding, cites
+- This handoff and the
+  [prior handoff](archive/bug.5293/2026-10-01T22-24-36.md).
+- `.context/bug5293-production-writes.md` — exact live-write ledger and rollbacks.
+- `.context/bug5293-baseline.md` — measurement contract and incident chronology.
+- [database-expert](../../../.agents/skills/database-expert/SKILL.md) and
+  [promote](../../../.agents/skills/promote/SKILL.md).
+- Hub entries `akash-prod-lease-recovery`, `control-plane-self-starvation`, and
   `prod-oom-misdiagnosis-taxonomy`.
-- `.claude/skills/database-expert/SKILL.md` — north star (shared → meter → bound → observe →
-  graduate) plus the detection predicates and the sampler recipe.
-- Hub entry **`akash-prod-lease-recovery`** — the `external-create-pending` unwedge procedure
-  (clear the annotation **and** set `cogni.io/reconcile-nudge`; clearing alone is a no-op).
-- `nodes/operator/app/src/app/api/v1/deploy/infra-reconcile/route.ts` — the infra lever;
-  needs `{nodeId:<operator>, env}`.
+- [Poly catalog row](../../../infra/catalog/poly.yaml) and
+  [PR #2548](https://github.com/cogni-dao/cogni/pull/2548).
+- [Poly #99](https://github.com/cogni-dao/poly/pull/99) — merged load-bound fix.
 
 ## Current State
 
-**Facts, measured 2026-10-01 ~22:00Z.**
+| Item | Fact |
+| --- | --- |
+| Poly public | DOWN: `/version=eed16dc0`; `/readyz` times out/000 |
+| Accepted Poly release | main SHA `9033a162...`; XR already contains its valid bundle/artifact digest |
+| Rejected SHA | PR head `670939a3...` has a real candidate-tested image but promote rejects it with HTTP 409 `non_forward_promotion` because it is not on main |
+| Lease | production generation 20 hit `BootDeadlineClosed`; its settled idempotency key is spent and cannot be replayed |
+| Recovery PR | #2548 head `ace47fd958`; changes only `lease_generation.production: 20 -> 21` plus handoff docs; remote CI was still running when stopped |
+| Postgres durable fix | `/dev/shm=1GiB` live; container healthy; this fixed the shm maintenance cliff but did not explain every exit-2 |
+| Current temporary DB state | `service_poly CONNECTION LIMIT 1`; `service_poly_candidate_a=-1`; `max_parallel_workers_per_gather=2` (default restored) |
+| Why cap remains | uncapping immediately restarted the old `DELETE FROM poly_trader_position_snapshots ... EXISTS` query; it was terminated and the known bridge cap restored |
+| Request mutation | removed `external-create-pending` and set `cogni.io/reconcile-nudge` on Request `...-489bd369b815`; inspection showed it is the composition `dns-record` Request, not a fresh compute lease |
+| Pre-cutover signal | zero Postgres exit-2 and zero actuator `ledger_unavailable` in the 15-minute window checked around 22:17Z |
+| Active processes | none; the GitHub check watcher was stopped |
 
-| thing            | state                                                                             |
-| ---------------- | --------------------------------------------------------------------------------- |
-| poly             | **DOWN** — `/readyz` 000, serving `eed16dc0`                                      |
-| Postgres         | 113 `exit code 2` / 24h; rate fell from every 1–3 min to ~1 per 10 min            |
-| `/dev/shm`       | **1 GiB**, verified `HostConfig.ShmSize=1073741824`                               |
-| autovacuum       | **running** (was NULL on every large table)                                       |
-| I/O pressure     | `io full avg10` 43.12 → 8.86; load 11.1 → 6.6                                     |
-| Doltgres / Redis | containers healthy; telemetry merged (#2544) but needs infra-reconcile            |
-| Backups          | real: 1.06 GB `cogni_poly.dump` + MANIFEST + timer active; restore drill unproven |
+Live writes performed during this pickup:
 
-**Shipped:** #2544 (redis+doltgres telemetry, merged) · #2545 (`shm_size`, merged) ·
-#2547 (narrows #2545: drops a Doltgres copy that had no Doltgres evidence; open) ·
-#2549 (database-expert detection predicates + sampler; open) · poly #99 **merged**.
-
-**⚠️ SHA discrepancy you must resolve before dispatching:** I promoted merge commit
-`9033a162`. The review names **`670939a3`** (poly #99's head, which passed exact-SHA
-candidate validation). Reconcile which is correct — a promote against a sha with no built
-image fails closed with `Image not found` (bug.5248 guard), which is how I learned that
-config-only merges have no app image.
-
-**Blocked on:** poly's XR is latched `PHASE=Failed`, `SERVING=false`, no RESOURCE,
-`SOURCE=eed16dc0`. Per the runbook a latched `Failed` survives a re-mint, so the deploy may
-need a `lease_generation` bump authored by the env verb (`POST /nodes/{id}/envs`) — note the
-verb is idempotent and will return `no_changes` unless a cell actually changes.
-
-**Access:** `~/dev/cogni-template/.local/provision-creds/production/{production-kubeconfig.yaml,production-vm-key}`
-— both work. I wrongly asserted for hours that I lacked these; they are documented in the
-`provision-env` skill's custody section.
+1. Restored both roles to `-1` and reset query parallelism to default 2.
+2. The old Poly DELETE immediately returned, so `service_poly` was deliberately restored to
+   limit 1 and that DELETE backend was terminated. Candidate-a remains `-1`; parallelism
+   remains default 2.
+3. No ANALYZE, new GUC, index, schema, or data mutation was performed.
 
 ## Design / Implementation Target
 
-1. **poly serves its fix SHA with `/readyz` 200.** Nothing else counts as done.
-2. **Revert the two bridge writes as part of the cutover, not before it:**
-   `ALTER ROLE service_poly CONNECTION LIMIT -1;` and
-   `ALTER SYSTEM RESET max_parallel_workers_per_gather;` + `SELECT pg_reload_conf();`
-   (also `service_poly_candidate_a` → `-1`). poly cannot serve while capped to 1 connection.
-3. **Clear only poly's wedged Request.** 15 are wedged across 6 nodes (poly, levelup, toks4,
-   toks5, beacon, node-template). Clear the rest **gradually, after** the ledger is stable —
-   doing all 15 at once re-storms the ledger.
-4. **The production-tuning freeze holds.** No ANALYZE, no GUC changes, no new indexes, no
-   theory-driven live writes. If `exit code 2` persists, capture the **first** dying
-   backend's PID, signal and core evidence before proposing anything global.
-5. **`exit code 2` must not be attributed without evidence.** Already ruled out by
-   measurement: container OOM (`oom_kill 0`, `RestartCount=0`), host OOM (clean journal),
-   disk (73%, 27 GB free), `/dev/shm` (now 1 GiB), query parallelism (crashes continued at
-   0), corruption (no PANIC/checksum/invalid page). It is the `quickdie()`/SIGQUIT path and
-   the first victim logs nothing.
-6. **Do not re-assert the bloat claim.** "autovacuum never ran → the table became 4.8 GB" is
-   **unproven**: the 2.1M dead-tuple reading predates the 21:31:44Z container restart, after
-   which `n_dead_tup` read 0 on the same 4859 MB table because statistics reset on restart.
-   Settle it with on-disk size over time or `pgstattuple`, never post-restart counters.
-7. **No regression in the boundaries that held:** `CATALOG_IS_SSOT` (placement only via the
-   env verb's reviewed commit), `PROMOTION_RUNS_AS_THE_OPERATOR` (no personal `gh` dispatch),
-   and the CI/CD freeze (`scripts/ci/*.sh` + `.github/workflows/*.yml` are frozen for the
-   operator control plane; zero lines were added to `deploy-infra.sh`).
-8. **Then the north star:** automatic per-role/pool bounds and metering so a noisy tenant is
-   bounded by provisioning rather than by hand, and graduate poly to a dedicated Postgres
-   cell if it keeps dominating shared resources. See the database-expert skill.
+1. Merge generation-21 only through the operator merge endpoint. Do not use personal
+   `gh merge` or hand-edit a deploy branch.
+2. Promote Poly main SHA `9033a162...` through `POST /api/v1/deploy/promote`; never retry
+   non-main `670939a3...`.
+3. Keep the one-connection bridge while CI/auction is idle. During gen-21 boot, terminate
+   stale old-build sessions, restore `service_poly CONNECTION LIMIT -1`, and verify the
+   effective role setting. The new app cannot serve under a one-connection cap.
+4. Trust public `/version` and `/readyz`, not the latched XR `phase=Failed` or a green
+   workflow. Generation 21 must create a new lease and observe `9033a162...`.
+5. Hold the production-tuning freeze: no ANALYZE, GUC experiments, new indexes, VM resize,
+   or theory-driven writes. If exit-2 persists after #99, capture the first dying backend's
+   PID/signal/core evidence before proposing a global change.
+6. Prove Doltgres migration step, expected tables, migration tracking, and `dolt_log`;
+   prove Redis and Temporal connectivity. Silence is blindness, not health.
+7. Release other wedged nodes one at a time only after the allocation ledger is stable.
+8. Preserve the north star: shared Postgres is metered and bounded, then measured outliers
+   graduate; emergency manual caps are not the lasting design.
 
 ## Next Actions / Risks
 
-- [ ] Resolve the `670939a3` vs `9033a162` SHA question, then promote poly to production.
-- [ ] Revert the two bridge writes **as part of** that cutover.
-- [ ] Clear/nudge **only** poly's wedged Request; prove the ledger is healthy before touching
-      the other five nodes.
-- [ ] Prove `/version` + `/readyz` + no `ledger_unavailable` + sampler shows no retry-storm.
-- [ ] Watch 15m/1h crash counts; the ≤9/24h gate is tomorrow's proof.
-- [ ] If exit-2 persists: PID/signal/core evidence first. No global tuning without it.
-- [ ] `infra-reconcile` to land #2544's redis/doltgres telemetry.
-- [ ] Add the `last_autovacuum IS NULL` alert (>100 MB tables) — one predicate would have
-      caught this months before a crash.
-- [ ] Fix `app_readonly` auth failures (~50/h) **declaratively via ESO**, never `ALTER ROLE`
-      — non-ESO-synced role drift, bug.5002 class, likely bug.5117 (broken poly datasource).
-- [ ] Build an operator-side unwedge verb so `external-create-pending` never needs kubectl.
+- [ ] Inspect PR #2548 remote checks; do not run local `check` or `check:fast` on the
+      resource-constrained device.
+- [ ] When green, request merge with `POST /api/v1/vcs/merge {nodeId:"operator",prNumber:2548}`
+      and wait for the merge queue to finish.
+- [ ] Confirm main contains `lease_generation.production: 21`.
+- [ ] Promote Poly source SHA `9033a16208bb234dd8fc04666bc3b9fc336b64f5` through the
+      operator API and arm a remote monitor.
+- [ ] Observe a fresh gen-21 resource/DSEQ; then remove the service-role cap as part of boot,
+      not minutes beforehand.
+- [ ] Prove `/version`, `/readyz`, ledger, prune-query absence, and 15m/1h crash windows.
+- [ ] Prove Doltgres/Redis/Temporal substrate before claiming the whole node healthy.
+- [ ] Update `bug.5293` outcome with facts; keep the rolling 24h gate open until tomorrow.
 
-**Gotchas that cost me hours**
-
-- **A healthy container proves nothing.** `Up 8 days (healthy)`, `RestartCount=0` coexisted
-  with ~110 backend deaths/day. Only _backends_ were dying.
-- **Zero log lines means unobserved, not healthy.** redis/doltgres were simply absent from the
-  host alloy allowlist.
-- **`infra-reconcile` reports the DEPLOYED `sourceSha`** (e.g. `cee9aedf`, which contains no
-  `shm_size`) yet still applied current compose. I predicted it would no-op; `docker inspect`
-  proved me wrong. Verify with the runtime, not the dispatch response.
-- **A full-database `ANALYZE` cannot finish on a crashing instance** — it died after 15 small
-  tables. Go one table at a time.
-- **The merge queue can land a PR before your correction does.** #2545 merged while I was
-  pushing a fix to it; check what actually merged (#2547 cleans it up).
-- **I made four assert-before-verify reversals** (blaming my own ANALYZE for a crash it did
-  not cause; calling backups broken after reading the wrong volume; retracting the shm
-  finding one command before the proof; predicting reconcile would no-op). Report
-  observation → evidence → inference separately, and run the check first.
+Risks: Akash may produce no acceptable FI/NL/PT bid; gen-21 may boot but fail egress or
+migrations; uncapping too early restarts the old DELETE storm; XR failure state can remain
+latched even while public function recovers; exit-2 has not been mechanically attributed.
