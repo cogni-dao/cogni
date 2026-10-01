@@ -20,7 +20,7 @@
  *     with a stable code so callers and the awareness surface observe their own failures.
  *   - AUDITED_PROVIDERS_ONLY (task.5051): the SDL anchors `signedBy.allOf` to the Overclock
  *     audit account and bids are screened on Console provider data (audited + online +
- *     uptime7d > 0.95 + activeLeases > 0, no 2σ price underbids) — pure logic in
+ *     uptime7d > 0.95, no 2σ price underbids; NOT activeLeases — bug.5334) — pure logic in
  *     ./akash-provider-screen. Metadata-read failure fails open (signedBy stays the hard gate).
  *   - BOOT_SLO_OR_CLOSE (task.5051): after lease, the workload must serve `/version` and its
  *     fixed `/readyz` health endpoint within `bootSloMs` (default 5min), or the deployment
@@ -230,6 +230,11 @@ interface ConsoleProvider {
   ipCountryCode?: string | null;
   /** The provider's own signed on-chain location declaration. Preferred over GeoIP. */
   country?: string | null;
+  /**
+   * The provider's own declaration that it will serve an SDL `accept:` hostname. OPTIONAL on
+   * Akash — absent means "did not say", which is NOT the same as `false`.
+   */
+  featEndpointCustomDomain?: boolean | null;
 }
 
 interface ConsoleLease {
@@ -278,6 +283,12 @@ interface ScreeningContext {
    * per-provision: it comes off the ProvisionSpec, which comes off the node's catalog row.
    */
   requiredCountryCodes: readonly string[];
+  /**
+   * Whether THIS workload serves a custom hostname, i.e. whether any global expose carries
+   * `hosts` (rendered as SDL `accept:`). Per-provision like the country requirement, and for
+   * the same reason: it is a property of the workload, not of the marketplace.
+   */
+  requiresCustomDomain: boolean;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -1060,6 +1071,7 @@ export class AkashComputeAdapter
       }
       const { ranked, rejections, roster } = screenBids({
         bids: screenable,
+        requiresCustomDomain: screening.requiresCustomDomain,
         providers: screening.providers,
         outcomes: screening.outcomes,
         preferredProviders: preferred,
@@ -1227,6 +1239,13 @@ export class AkashComputeAdapter
     return {
       ...screening,
       requiredCountryCodes: spec.placement?.requiredCountryCodes ?? [],
+      // One source of truth with the SDL: buildAkashSdl emits `accept:` from exactly these
+      // `hosts`, so the screen asks for the capability precisely when the manifest will use it.
+      requiresCustomDomain: spec.services.some((service) =>
+        (service.expose ?? []).some(
+          (expose) => expose.global && (expose.hosts?.length ?? 0) > 0
+        )
+      ),
     };
   }
 
@@ -1253,13 +1272,18 @@ export class AkashComputeAdapter
         isOnline: p.isOnline === true,
         isValidVersion: p.isValidVersion === true,
         uptime7d: Number(p.uptime7d ?? 0),
-        activeLeases: Number(p.leaseCount ?? 0),
         // Resolved at the SOURCE so every downstream consumer — the hard country filter,
         // the latency preference, and the bid roster — reads one consistent country.
         countryCode: effectiveCountryCode({
           declared: p.country,
           geoIp: p.ipCountryCode,
         }),
+        // Carried as a TRISTATE on purpose: `=== true`/`=== false` are the provider's
+        // declaration, `undefined` is "the registry read did not say". The screen refuses
+        // only on a positive `false`, so one failed marketplace read can never dry an auction.
+        ...(typeof p.featEndpointCustomDomain === "boolean"
+          ? { supportsCustomDomain: p.featEndpointCustomDomain }
+          : {}),
       });
       if (
         countrySourcesDisagree({ declared: p.country, geoIp: p.ipCountryCode })
@@ -1282,7 +1306,12 @@ export class AkashComputeAdapter
       .catch(() => new Map<string, ProviderOutcomeStats>());
     // Unconstrained by default so this seam is TOTAL: a caller that forgets `withPlacement`
     // gets today's behaviour, never an undefined requirement the screener would crash on.
-    return { providers, outcomes, requiredCountryCodes: [] };
+    return {
+      providers,
+      outcomes,
+      requiredCountryCodes: [],
+      requiresCustomDomain: false,
+    };
   }
 
   /** Best-effort outcome append (OUTCOME_STORE_IS_ADVISORY). */

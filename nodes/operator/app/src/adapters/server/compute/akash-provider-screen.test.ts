@@ -30,11 +30,68 @@ function info(
     isOnline: true,
     isValidVersion: true,
     uptime7d: 0.999,
-    activeLeases: 5,
     countryCode: "BE",
     ...over,
   };
 }
+
+describe("declared custom-domain capability", () => {
+  /**
+   * The exact near-miss from story.5050. On poly's own order the CHEAPEST bid inside its
+   * permitted country set came from a provider publishing featEndpointCustomDomain=false
+   * (CH, 6.00) while the capable one bid 7.00. Price is the final rank tiebreak, so without
+   * this gate the incapable provider wins, takes a paid lease, serves nothing at the public
+   * host, misses the boot SLO, and onGiveUp:Replace spends up to three leases to rediscover
+   * what the registry already declared (bug.5325).
+   */
+  it("refuses a provider that declares it cannot serve a custom domain", () => {
+    const providers = new Map([
+      [
+        "cheap-incapable",
+        info("cheap-incapable", { supportsCustomDomain: false }),
+      ],
+      ["capable", info("capable", { supportsCustomDomain: true })],
+    ]);
+    const screened = screenFull(
+      [bid("cheap-incapable", 6), bid("capable", 7)],
+      {
+        providers,
+        requiresCustomDomain: true,
+      }
+    );
+    expect(screened.ranked.map((b) => b.provider)).toEqual(["capable"]);
+    expect(screened.rejections).toMatchObject({ no_custom_domain: 1 });
+    expect(
+      screened.roster.find((v) => v.provider === "cheap-incapable")?.rejection
+    ).toBe("no_custom_domain");
+  });
+
+  /** A workload with no custom hostname must not be narrowed by a capability it never uses. */
+  it("ignores the capability when the workload needs no custom domain", () => {
+    const providers = new Map([
+      ["incapable", info("incapable", { supportsCustomDomain: false })],
+    ]);
+    const screened = screenFull([bid("incapable", 6)], {
+      providers,
+      requiresCustomDomain: false,
+    });
+    expect(screened.ranked.map((b) => b.provider)).toEqual(["incapable"]);
+  });
+
+  /**
+   * UNKNOWN_IS_NOT_NO. A failed /v1/providers read leaves the flag undefined; refusing on
+   * absence would turn one bad marketplace call into NO_ELIGIBLE_BIDS across the fleet.
+   */
+  it("does not refuse when the provider never declared either way", () => {
+    const providers = new Map([["silent", info("silent", {})]]);
+    const screened = screenFull([bid("silent", 6)], {
+      providers,
+      requiresCustomDomain: true,
+    });
+    expect(screened.ranked.map((b) => b.provider)).toEqual(["silent"]);
+    expect(screened.rejections.no_custom_domain).toBeUndefined();
+  });
+});
 
 function bid(provider: string, priceAmount: number): ScreenableBid {
   return { provider, priceAmount };
@@ -49,6 +106,7 @@ function screenFull(
     providers: new Map(),
     outcomes: new Map(),
     preferredProviders: [],
+    requiresCustomDomain: false,
     preferredCountryCodes: [],
     requiredCountryCodes: [],
     excludedProviders: new Set(),
@@ -74,9 +132,20 @@ describe("passesQualityFilter", () => {
     ["offline", { isOnline: false }],
     ["invalid version", { isValidVersion: false }],
     ["uptime7d at threshold", { uptime7d: 0.95 }],
-    ["zero active leases", { activeLeases: 0 }],
   ] as const)("rejects a provider that is %s", (_label, over) => {
     expect(passesQualityFilter(info("akash1bad", over))).toBe(false);
+  });
+
+  /**
+   * A_BID_IS_NOT_A_POPULARITY_CONTEST (bug.5334). Zero current tenants must NOT refuse: the
+   * old `activeLeases > 0` condition was unsatisfiable for any provider without an existing
+   * tenant, so a provider's FIRST lease with us could never be won. That is what refused
+   * `akash.rhite.co.uk` — audited, valid-version, online, uptime7d 0.967,
+   * featEndpointCustomDomain=true, inside the node's permitted countries — after it had
+   * already bid 9.14 on poly's own production auction (story.5050, gen-18).
+   */
+  it("accepts a healthy provider that has no tenants yet", () => {
+    expect(passesQualityFilter(info("akash1newcomer"))).toBe(true);
   });
 });
 
@@ -127,14 +196,25 @@ describe("screenBids quality filter", () => {
   it("drops providers failing the quality filter when metadata is available", () => {
     const providers = new Map([
       ["akash1good", info("akash1good")],
-      ["akash1froggy", info("akash1froggy", { activeLeases: 0 })],
+      ["akash1stale", info("akash1stale", { isValidVersion: false })],
       ["akash1down", info("akash1down", { isOnline: false })],
+      // A provider with no tenants yet is NOT a quality failure — see
+      // A_BID_IS_NOT_A_POPULARITY_CONTEST. It stays in the survivor set.
+      ["akash1newcomer", info("akash1newcomer")],
     ]);
     const out = screen(
-      [bid("akash1froggy", 10), bid("akash1good", 500), bid("akash1down", 20)],
+      [
+        bid("akash1stale", 10),
+        bid("akash1good", 500),
+        bid("akash1down", 20),
+        bid("akash1newcomer", 30),
+      ],
       { providers }
     );
-    expect(out.map((b) => b.provider)).toEqual(["akash1good"]);
+    expect(out.map((b) => b.provider)).toEqual([
+      "akash1newcomer",
+      "akash1good",
+    ]);
   });
 
   it("drops providers unknown to the metadata index when metadata is available", () => {

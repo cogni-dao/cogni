@@ -875,8 +875,12 @@ describe("AkashComputeAdapter bid screening", () => {
     const h = harness({
       providers: [
         providerEntry("akash1zen"),
-        // froggy-class: audited on paper, zero active leases (no proof of registry egress)
-        providerEntry("akash1froggy", { leaseCount: 0 }),
+        // froggy-class: audited on paper, but running an incompatible provider version —
+        // it would win on price, take the lease, and fail. NOTE: zero active leases is
+        // deliberately NOT the fixture here; see A_BID_IS_NOT_A_POPULARITY_CONTEST
+        // (bug.5334) — a provider with no current tenant must still be able to win its
+        // first lease, so leaseCount:0 no longer refuses anything.
+        providerEntry("akash1froggy", { isValidVersion: false }),
       ],
       bids: (dseq) => [
         bidEntry(dseq, "akash1zen", "900"),
