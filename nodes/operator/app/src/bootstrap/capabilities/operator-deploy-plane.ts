@@ -28,6 +28,10 @@ export function createOperatorDeployPlane(env: ServerEnv): DeployPlanePort {
     appId: env.GH_REVIEW_APP_ID,
     privateKey,
     fleetControlEnv: env.FLEET_CONTROL_ENV,
-    forkDomainRoot: env.FORK_DOMAIN_ROOT,
+    // WORKLOAD public domain: DOMAIN (e.g. cogni-testing.org on the test-parent)
+    // wins over the SUBSTRATE root FORK_DOMAIN_ROOT (cognidao.org); they diverge on
+    // the test-parent mirror. Byte-exact twin of render-node-overlays.sh's
+    // ${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}} precedence (test-fleet-parity-boundary).
+    forkDomainRoot: env.DOMAIN ?? env.FORK_DOMAIN_ROOT,
   });
 }

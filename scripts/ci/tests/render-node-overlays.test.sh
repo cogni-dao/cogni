@@ -142,6 +142,24 @@ grep -q 'externalName: .*\.vm\.cogni-testing\.org' <<<"$FORK_OUT" \
   && fail "$FN fork render rewrote VM service discovery with the public domain"
 pass "fork render rewrites public NEXTAUTH_URL and preserves VM discovery"
 
+# WORKLOAD domain comes from DOMAIN, not the SUBSTRATE root FORK_DOMAIN_ROOT (bug.5330).
+# On the test-parent mirror the two DIVERGE: FORK_DOMAIN_ROOT=cognidao.org (substrate),
+# DOMAIN=cogni-testing.org (workload). The NEXTAUTH host must follow DOMAIN while the
+# substrate externalName VM discovery stays on cognidao.org. Before the fix the renderer
+# read FORK_DOMAIN_ROOT for the workload host → it stayed cognidao.org and the test-parent
+# sync PR was permanently red against committed cogni-testing.org overlays.
+DOMAIN_OUT="$(DOMAIN=cogni-testing.org FORK_DOMAIN_ROOT=cognidao.org bash "$RENDER" "$FE" "$FN")"
+DOMAIN_NEXTAUTH="$(grep -A1 'path: /data/NEXTAUTH_URL' <<<"$DOMAIN_OUT")"
+grep -q 'cogni-testing\.org"' <<<"$DOMAIN_NEXTAUTH" \
+  || fail "$FN render did not take the WORKLOAD NEXTAUTH host from DOMAIN (cogni-testing.org)"
+grep -q 'cognidao\.org"' <<<"$DOMAIN_NEXTAUTH" \
+  && fail "$FN render left the NEXTAUTH host on cognidao.org despite DOMAIN=cogni-testing.org"
+grep -q 'externalName: .*\.vm\.cognidao\.org' <<<"$DOMAIN_OUT" \
+  || fail "$FN render changed or lost the SUBSTRATE VM discovery (must stay cognidao.org)"
+grep -q 'externalName: .*\.vm\.cogni-testing\.org' <<<"$DOMAIN_OUT" \
+  && fail "$FN render flipped SUBSTRATE VM discovery with the workload DOMAIN"
+pass "DOMAIN drives the workload NEXTAUTH host; FORK_DOMAIN_ROOT substrate stays cognidao.org"
+
 echo "[5/8] FALSIFYING: a hand-staled overlay turns --check red"
 STALE="infra/k8s/overlays/$FE/$FN/kustomization.yaml"
 stash "$STALE"
