@@ -72,6 +72,16 @@ spec:
             # collided. Set BY NAME in every overlay (story.5016 Gate 0b).
             - name: DEPLOY_ENVIRONMENT
               value: replace-in-overlay
+            # OPTIONAL PROVIDER PIN, NOT AN AUTHORIZATION GATE (story.5050).
+            # Empty here — and empty is now a VALID, MEANINGFUL default: "no pin, screen on
+            # policy alone". A comma-separated list narrows leasing to exactly those accounts.
+            # Until story.5050 an empty value refused EVERY bid, so this line was fail-closed
+            # human input; it is not any more. The gates that actually authorize a lease are
+            # the SDL `signedBy` audit anchor, the node's `required_placement_countries`
+            # catalog cell (fail-closed), the provider quality filter, price-outlier
+            # exclusion, and the derived strike blacklist — none of which live here.
+            # Still declared BY NAME in every overlay (story.5016 Gate 0b) so a positional
+            # env patch can never silently repoint it (d69e5c29).
             - name: AKASH_ALLOWED_PROVIDERS
               value: ""
             # NON-SECRET pinned wallet identity (story.5016 secret-boundary amendment 3).
