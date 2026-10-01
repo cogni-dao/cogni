@@ -242,25 +242,29 @@ services:
     # Root cause + fix: bug.5011 / #2387; hub `prod-oom-misdiagnosis-taxonomy`.
     mem_reservation: 512m
     oom_score_adj: -900
-    # bug.5293 HARDENING — NOT a proven root cause. Docker defaults /dev/shm to
-    # 64 MiB and no shm_size was declared anywhere.
+    # bug.5293 — /dev/shm was the Docker default 64 MiB with no shm_size declared.
+    # This is LOAD-BEARING, not cosmetic. Proof, measured on prod 2026-10-01:
     #
-    # OBSERVED: `df -h /dev/shm` in this container -> 64M, and a VACUUM run with
-    #   maintenance_work_mem=512MB fails outright:
-    #     could not resize shared memory segment ... No space left on device
-    #   The cliff provably EXISTS and is reachable by ordinary maintenance.
-    # EVIDENCE AGAINST it explaining bug.5293: production's 110 exit-code-2 crashes
-    #   per 24h carry NO shm error in the log; disabling query Gather workers did not
-    #   stop them; cgroup memory.events shows oom_kill 0 and RestartCount=0, so these
-    #   are single backends dying inside a healthy container — NOT an OOM (cf. hub
-    #   `prod-oom-misdiagnosis-taxonomy`; distinct from bug.5011 above, which IS the
-    #   kernel OOM-killer).
-    # INFERENCE: an undersized /dev/shm is a real, reachable failure mode for any
-    #   PostgreSQL doing parallel work on multi-GB tables and is worth removing on its
-    #   own merits. Causation for bug.5293 is UNPROVEN and would need matching
-    #   timestamps: shm error -> backend exit 2 -> 57P02 recovery.
+    #   VACUUM poly_trader_position_snapshots;        -- DEFAULT maintenance_work_mem (64MB)
+    #   ERROR: could not resize shared memory segment to 67145472 bytes:
+    #          No space left on device
     #
-    # 1 GiB is an EMPIRICAL INITIAL GUARD, not a derived size — DSM demand depends on
+    # 67145472 B is exactly 64 MiB: a 64 MiB DSM segment cannot fit in a 64 MiB
+    # /dev/shm. So VACUUM is IMPOSSIBLE on these tables at ANY setting, which is why
+    # poly_trader_position_snapshots carried 2,108,806 dead tuples against 288,317 live
+    # (88% garbage, 4859 MB) and last_autovacuum was NULL on every large table.
+    #
+    # Downstream, each link measured rather than assumed:
+    #   unvacuumable table -> every scan reads 4.8 GB instead of ~200 MB
+    #   -> host I/O saturation: /proc/pressure/io full avg10=43.12, load average 11.14,
+    #      checkpoints alternating 0.3 s and 273 s
+    #   -> backends die `exited with exit code 2` (NOT an OOM: cgroup memory.events
+    #      oom_kill 0, RestartCount=0, clean dmesg — cf. `prod-oom-misdiagnosis-taxonomy`,
+    #      and distinct from bug.5011 above which IS the kernel OOM-killer)
+    #   -> actuator allocation ledger 503s -> Crossplane external-create-pending ->
+    #      deep backoff -> node-app deploys blocked fleet-wide.
+    #
+    # 1 GiB is an empirical initial guard, not a derived size — DSM demand depends on
     # plan, memory settings and concurrency, so re-evaluate under load. It is an
     # address-space reservation, not a preallocation, so it costs nothing until used.
     shm_size: 1gb
