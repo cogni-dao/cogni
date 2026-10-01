@@ -602,20 +602,6 @@ services:
       - PROMETHEUS_USERNAME=${PROMETHEUS_USERNAME:-}
       - COGNI_DEFAULT_NODE_ID=${COGNI_DEFAULT_NODE_ID:-}
       - PROMETHEUS_PASSWORD=${PROMETHEUS_PASSWORD:-}
-      # Postgres metrics identity (bug.5293) for prometheus.exporter.postgres.
-      # Read-only, pg_monitor-granted role; alloy is on the `internal` network so it
-      # dials postgres:5432 directly. deploy-infra.sh already writes both into the
-      # runtime .env (lines ~1045-1048), so this adds no new secret.
-      #
-      # THIS PAIRING IS LOAD-BEARING: the DSN is assembled in the alloy CONFIG from
-      # sys.env(), so the config and this env block must change together. Measured
-      # 2026-09-30 — a revert pulled this file back to main while re-adding the
-      # exporter to the config alone, and sys.env() returned empty, yielding
-      # `postgresql://app_readonly:@postgres:5432/...` and a silent-looking
-      # `pg_up 0`. If you touch one, touch the other.
-      - APP_DB_READONLY_USER=${APP_DB_READONLY_USER:-app_readonly}
-      - APP_DB_READONLY_PASSWORD=${APP_DB_READONLY_PASSWORD:-}
-
   alloy-k8s-events:
     image: grafana/alloy:v1.9.2
     restart: unless-stopped

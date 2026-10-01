@@ -449,55 +449,6 @@ prometheus.scrape "node" {
 }
 
 // =============================================================================
-// PostgreSQL — the shared state substrate (bug.5293 / bug.5117 / bug.5188)
-// =============================================================================
-// Until this block existed there were NO Postgres metrics at all: app, worker,
-// openfga, cadvisor and node were scraped, and the one stateful service every
-// node and the operator depend on was unobserved. The cost was measured on
-// 2026-09-30 — ~78 postmaster crash-recoveries/24h, each 30-60s of operator
-// 502s, and the cause could not be named because nothing recorded the
-// database's own state. `control-plane-foundation-first`: observability
-// precedes machinery.
-//
-// PER-TENANT FOR FREE, AND WITHOUT AUTODISCOVERY. `pg_stat_database` is a
-// CLUSTER-WIDE view: this single connection to the `postgres` database already
-// returns ONE ROW PER DATABASE, so every node's DB — and every FUTURE node's,
-// with zero per-node work — arrives labelled by `datname` (TPS, rollback ratio,
-// cache-hit, temp spill, deadlocks, connections, size). That is the signal
-// `control-plane-self-starvation` needs to compute a graduation threshold and
-// prove which lane is noisy. An `autodiscovery` block is deliberately ABSENT:
-// it would have to query the instance to enumerate databases before it could
-// compute `.targets`, and on failure yields an EMPTY target list — so the
-// scrape would emit nothing at all, not even `up 0`, which is indistinguishable
-// from "never configured". A static DSN keeps a STATIC target, so a broken
-// exporter reports `up 0` / `pg_up 0` and is LOUD.
-//
-// CARDINALITY IS BOUNDED BY THE ALLOWLIST, not by collector flags. The
-// `infra_metrics` relabel below keeps ONLY the named pg_* families, so every
-// per-relation series (`pg_stat_user_tables_*`, `pg_statio_*`) is dropped
-// before remote_write regardless of which collectors ran. One gate, at the
-// point where the Grafana Cloud series bill is actually decided.
-//
-// CREDENTIAL: `app_readonly` — SELECT-only, read-only transactions, already
-// provisioned per env — granted `pg_monitor` by provision.sh (verified present
-// on candidate-a) so it can read the pg_stat_* views without superuser.
-// pg_monitor grants no table data. deploy-infra.sh already writes
-// APP_DB_READONLY_PASSWORD to the runtime env, so this needs no new secret.
-prometheus.exporter.postgres "default" {
-  data_source_names = [
-    "postgresql://" + sys.env("APP_DB_READONLY_USER") + ":" + sys.env("APP_DB_READONLY_PASSWORD") + "@postgres:5432/postgres?sslmode=disable",
-  ]
-}
-
-prometheus.scrape "postgres" {
-  targets         = prometheus.exporter.postgres.default.targets
-  forward_to      = [prometheus.relabel.infra_metrics.receiver]
-  scrape_interval = "30s"
-  scrape_timeout  = "10s"
-  job_name        = "postgres"
-}
-
-// =============================================================================
 // Metric Allowlist + Label Policy
 // =============================================================================
 // Only keep metrics we actually alert on or dashboard. Drop everything else
@@ -509,7 +460,7 @@ prometheus.relabel "infra_metrics" {
   // Keep only allowlisted metric names (+ up for deadman alerts)
   rule {
     source_labels = ["__name__"]
-    regex         = "(container_memory_working_set_bytes|container_memory_rss|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_memory_MemAvailable_bytes|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|node_k3s_kine_state_db_bytes|pg_up|pg_stat_database_numbackends|pg_stat_database_xact_commit|pg_stat_database_xact_rollback|pg_stat_database_blks_hit|pg_stat_database_blks_read|pg_stat_database_temp_files|pg_stat_database_temp_bytes|pg_stat_database_deadlocks|pg_stat_database_conflicts|pg_database_size_bytes|pg_settings_max_connections|pg_locks_count|pg_stat_activity_max_tx_duration|up)"
+    regex         = "(container_memory_working_set_bytes|container_memory_rss|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_memory_MemAvailable_bytes|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|node_k3s_kine_state_db_bytes|up)"
     action        = "keep"
   }
 
