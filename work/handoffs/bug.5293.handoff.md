@@ -4,175 +4,155 @@ type: handoff
 work_item_id: bug.5293
 status: active
 created: 2026-10-01
-owner: operator CTO-agent
+updated: 2026-10-01
+branch: derekg1729/bug5293-handoff
+last_commit: 79ffc8724b
 ---
 
-# Handoff: poly substrate health (bug.5293)
+# Handoff: poly substrate health — deploy #99 and prove the crash SLO
 
-## One-paragraph truth
+## Mission
 
-**poly is DOWN** (`/readyz` 000, serving `eed16dc0`; the fix #99 = `9033a162` is merged but
-NOT deployed). Postgres crashes with `exited with exit code 2` — **113 in 24h** against a
-target of ≤9. I found and fixed a real, fleet-wide root cause (`/dev/shm` was the Docker
-default 64 MiB, which made **VACUUM impossible at any setting**, so autovacuum had _never_
-run, so a 290k-row table became 4.8 GB, so every scan read 24× more than needed, saturating
-host I/O at 43% full stall). That fix is live and **autovacuum is now running for the first
-time in this database's life**. Crash rate fell from every 1–3 min to ~1 per 10 min. But
-`exit code 2` is **still unexplained** and poly is still down.
+Pickup: you own **poly production serving again, and the shared Postgres crash rate inside
+SLO**. poly has been down for hours (`/readyz` 000) because its fix cannot deploy, and the
+shared operator Postgres kills individual backends with `exited with exit code 2` — 113 in
+24h against a target of ≤9. A real, fleet-wide defect was found and fixed (container
+`/dev/shm` was the Docker default 64 MiB, which made `VACUUM` impossible at **any** setting);
+that is live and autovacuum now runs for the first time in this database's life. It was
+**not** the whole cause — crashes continued afterwards. **A production-tuning freeze is in
+effect**: everything left is a revert, a deploy, or evidence capture. Do not run more live
+experiments on theories.
 
-## Status matrix (measured 2026-10-01 ~21:55Z)
+## Goal
 
-| substrate    | baseline                         | now                                                     | state                       |
-| ------------ | -------------------------------- | ------------------------------------------------------- | --------------------------- |
-| Postgres     | 110 exit-2/24h                   | **113**/24h, last 21:45:58                              | 🔴 reduced, not fixed       |
-| `/dev/shm`   | 64 MiB                           | **1 GiB** (`HostConfig.ShmSize=1073741824`)             | 🟢 fixed                    |
-| autovacuum   | **never ran** (NULL everywhere)  | **running**                                             | 🟢 fixed                    |
-| I/O pressure | `io full avg10=43.12`, load 11.1 | **8.86**, load 6.6                                      | 🟢 5× better                |
-| Doltgres     | no telemetry                     | container healthy; #2544 merged, needs reconcile        | 🟡                          |
-| Redis        | no telemetry                     | container healthy; #2544 merged, needs reconcile        | 🟡                          |
-| Temporal     | 72 err/h, all `pq:`              | coupled to Postgres                                     | 🟡                          |
-| LiteLLM      | —                                | nominal                                                 | 🟢                          |
-| Backups      | unproven                         | **1.06 GB** `cogni_poly.dump` + MANIFEST + timer active | 🟢 (restore drill unproven) |
-| poly         | eed16dc0 / 000                   | eed16dc0 / 000                                          | 🔴 **DOWN**                 |
+**End state:** poly serves the exact SHA of its merged fix with `/readyz` 200, the actuator
+allocation ledger stops returning `ledger_unavailable`, and Postgres `exit code 2` stops.
 
-## ⚠️ TWO PRODUCTION WRITES THAT MUST BE REVERTED BEFORE POLY SERVES
+**E2E validation, in order:**
 
-```sql
-ALTER ROLE service_poly CONNECTION LIMIT -1;            -- currently capped to 1
-ALTER SYSTEM RESET max_parallel_workers_per_gather;     -- currently 0
-SELECT pg_reload_conf();
-```
+1. `curl -s https://poly.cognidao.org/version` → `buildSha` equals the deployed poly fix SHA
+   (see Current State for the SHA discrepancy you must resolve first).
+2. `curl -o /dev/null -w '%{http_code}' https://poly.cognidao.org/readyz` → **200**.
+3. No `ledger_unavailable` in `{env="production",service="actuator"}`.
+4. The 2s sampler shows poly's prune `DELETE` no longer restarting every ~2s.
+5. **15-minute and 1-hour** crash counts at zero:
+   `bash scripts/loki-query.sh '{env="production",service="postgres"} |~ "exited with exit code"' 60 400`
+6. Final proof is **tomorrow**: rolling 24h ≤ 9. Do not wait on this metric to act — by
+   definition it cannot fall quickly.
 
-Also `ALTER ROLE service_poly_candidate_a CONNECTION LIMIT -1;` (currently 2).
-Full ledger of all 6 live writes with commands/timestamps/effects/rollbacks:
-`.context/bug5293-production-writes.md` (EPHEMERAL — copy anything still relevant into a
-work item or the hub before it is purged).
+Deploy proof is a **production promote**, not candidate-a: use
+`POST /api/v1/deploy/promote {nodeId, env:"production", sourceSha}` and judge on `/version` +
+`/readyz`, never on a green workflow or CR state (a latched `PHASE=Failed` survives re-mints).
 
-## Root cause found, and the proof
+## Start By Reading
 
-```
-VACUUM <large table>;        -- DEFAULT maintenance_work_mem (64MB)
-ERROR: could not resize shared memory segment to 67145472 bytes: No space left on device
-                                             ^^^^^^^^ exactly 64 MiB
-```
+- `work/handoffs/archive/bug.5293/2026-10-01T22-11-09.md` — the long-form incident record
+  (full signature tables, every ruled-out hypothesis, the Crossplane chain).
+- `.context/bug5293-production-writes.md` — **EPHEMERAL, read first.** All 6 live production
+  writes with exact commands, timestamps, effects and **rollbacks**. Two must be reverted.
+- `.context/bug5293-baseline.md` — the measurement contract (baseline numbers to beat).
+- Hub entry **`postgres-shm-blocks-vacuum`** — the durable finding, cites
+  `prod-oom-misdiagnosis-taxonomy`.
+- `.claude/skills/database-expert/SKILL.md` — north star (shared → meter → bound → observe →
+  graduate) plus the detection predicates and the sampler recipe.
+- Hub entry **`akash-prod-lease-recovery`** — the `external-create-pending` unwedge procedure
+  (clear the annotation **and** set `cogni.io/reconcile-nudge`; clearing alone is a no-op).
+- `nodes/operator/app/src/app/api/v1/deploy/infra-reconcile/route.ts` — the infra lever;
+  needs `{nodeId:<operator>, env}`.
 
-A 64 MiB DSM segment cannot fit a 64 MiB `/dev/shm`. Durable hub entry:
-**`postgres-shm-blocks-vacuum`** (cites `prod-oom-misdiagnosis-taxonomy`). Shipped as
-`shm_size: 1gb` on `postgres` + `temporal-postgres` (#2545 merged; #2547 narrows it —
-removes a Doltgres copy that had no Doltgres-specific evidence, and downgrades the
-root-cause language to match what is actually proven).
+## Current State
 
-## ⛔ FREEZE: no further production tuning (review directive, 2026-10-01)
+**Facts, measured 2026-10-01 ~22:00Z.**
 
-No more ANALYZE, GUC changes, indexes, or theory-driven live experiments. I made **six**
-manual production writes and **four** diagnosis reversals; that is flailing, and the next
-owner should not continue it. Everything below is either a revert or a deploy.
+| thing            | state                                                                             |
+| ---------------- | --------------------------------------------------------------------------------- |
+| poly             | **DOWN** — `/readyz` 000, serving `eed16dc0`                                      |
+| Postgres         | 113 `exit code 2` / 24h; rate fell from every 1–3 min to ~1 per 10 min            |
+| `/dev/shm`       | **1 GiB**, verified `HostConfig.ShmSize=1073741824`                               |
+| autovacuum       | **running** (was NULL on every large table)                                       |
+| I/O pressure     | `io full avg10` 43.12 → 8.86; load 11.1 → 6.6                                     |
+| Doltgres / Redis | containers healthy; telemetry merged (#2544) but needs infra-reconcile            |
+| Backups          | real: 1.06 GB `cogni_poly.dump` + MANIFEST + timer active; restore drill unproven |
 
-## CORRECTION — a causal claim of mine that is NOT proven
+**Shipped:** #2544 (redis+doltgres telemetry, merged) · #2545 (`shm_size`, merged) ·
+#2547 (narrows #2545: drops a Doltgres copy that had no Doltgres evidence; open) ·
+#2549 (database-expert detection predicates + sampler; open) · poly #99 **merged**.
 
-I wrote that "autovacuum never ran, therefore the table became 4.8 GB". **That is unproven
-and it conflicts with my own later evidence.** The 2,108,806 dead-tuple reading was taken
-BEFORE the container restart at 21:31:44Z; after the restart `n_dead_tup` read **0** on the
-same 4859 MB table, because statistics reset on restart. So I cannot currently distinguish
-"4.8 GB of bloat" from "4.8 GB of real heap + indexes". What IS proven:
+**⚠️ SHA discrepancy you must resolve before dispatching:** I promoted merge commit
+`9033a162`. The review names **`670939a3`** (poly #99's head, which passed exact-SHA
+candidate validation). Reconcile which is correct — a promote against a sha with no built
+image fails closed with `Image not found` (bug.5248 guard), which is how I learned that
+config-only merges have no app image.
 
-- VACUUM failed at DEFAULT settings with the 64 MiB shm error (reproduced)
-- `last_autovacuum` was NULL on every large table
-- autovacuum began running after `shm_size` landed (observed in `pg_stat_activity`)
-- `/dev/shm` was NOT the whole exit-2 cause — crashes continued after it was fixed
+**Blocked on:** poly's XR is latched `PHASE=Failed`, `SERVING=false`, no RESOURCE,
+`SOURCE=eed16dc0`. Per the runbook a latched `Failed` survives a re-mint, so the deploy may
+need a `lease_generation` bump authored by the env verb (`POST /nodes/{id}/envs`) — note the
+verb is idempotent and will return `no_changes` unless a cell actually changes.
 
-To settle the bloat question use on-disk size over time, or `pgstattuple`, NOT the
-post-restart counters.
+**Access:** `~/dev/cogni-template/.local/provision-creds/production/{production-kubeconfig.yaml,production-vm-key}`
+— both work. I wrongly asserted for hours that I lacked these; they are documented in the
+`provision-env` skill's custody section.
 
-## CONTROLLED CUTOVER — do this, in this order, nothing else
+## Design / Implementation Target
 
-Do **not** wait on the rolling 24h metric; by definition it cannot fall quickly.
-
-1. Keep the old poly workload stopped.
-2. **Revert the two bridge writes** (commands in the section above):
+1. **poly serves its fix SHA with `/readyz` 200.** Nothing else counts as done.
+2. **Revert the two bridge writes as part of the cutover, not before it:**
    `ALTER ROLE service_poly CONNECTION LIMIT -1;` and
    `ALTER SYSTEM RESET max_parallel_workers_per_gather;` + `SELECT pg_reload_conf();`
-   (also `service_poly_candidate_a` → `-1`)
-3. Clear/nudge **only poly's** wedged Request — not all 15.
-4. Deploy poly at the exact SHA the review names: **`670939a3`** (I promoted the merge
-   commit `9033a162`; reconcile which is correct before dispatching — the review's exact-SHA
-   candidate validation ran against `670939a3`).
-5. Prove: `/version` is that exact SHA, `/readyz` 200, actuator ledger healthy (no
-   `ledger_unavailable`), and query load back to normal in the sampler.
-6. Watch the **15-minute and 1-hour** crash rates. `≤9/24h` is tomorrow's final proof.
-7. If exit-2 persists: capture the FIRST dying backend's PID, signal and core evidence.
-   **No further global tuning without that evidence.**
-8. Only once the ledger is stable, clear the other nodes' wedged Requests **gradually**.
-9. Then the north star: automatic per-role/pool bounds + metering, and graduate poly to a
-   dedicated Postgres cell if it keeps dominating shared resources.
+   (also `service_poly_candidate_a` → `-1`). poly cannot serve while capped to 1 connection.
+3. **Clear only poly's wedged Request.** 15 are wedged across 6 nodes (poly, levelup, toks4,
+   toks5, beacon, node-template). Clear the rest **gradually, after** the ledger is stable —
+   doing all 15 at once re-storms the ledger.
+4. **The production-tuning freeze holds.** No ANALYZE, no GUC changes, no new indexes, no
+   theory-driven live writes. If `exit code 2` persists, capture the **first** dying
+   backend's PID, signal and core evidence before proposing anything global.
+5. **`exit code 2` must not be attributed without evidence.** Already ruled out by
+   measurement: container OOM (`oom_kill 0`, `RestartCount=0`), host OOM (clean journal),
+   disk (73%, 27 GB free), `/dev/shm` (now 1 GiB), query parallelism (crashes continued at
+   0), corruption (no PANIC/checksum/invalid page). It is the `quickdie()`/SIGQUIT path and
+   the first victim logs nothing.
+6. **Do not re-assert the bloat claim.** "autovacuum never ran → the table became 4.8 GB" is
+   **unproven**: the 2.1M dead-tuple reading predates the 21:31:44Z container restart, after
+   which `n_dead_tup` read 0 on the same 4859 MB table because statistics reset on restart.
+   Settle it with on-disk size over time or `pgstattuple`, never post-restart counters.
+7. **No regression in the boundaries that held:** `CATALOG_IS_SSOT` (placement only via the
+   env verb's reviewed commit), `PROMOTION_RUNS_AS_THE_OPERATOR` (no personal `gh` dispatch),
+   and the CI/CD freeze (`scripts/ci/*.sh` + `.github/workflows/*.yml` are frozen for the
+   operator control plane; zero lines were added to `deploy-infra.sh`).
+8. **Then the north star:** automatic per-role/pool bounds and metering so a noisy tenant is
+   bounded by provisioning rather than by hand, and graduate poly to a dedicated Postgres
+   cell if it keeps dominating shared resources. See the database-expert skill.
 
-## STILL UNEXPLAINED — do not claim a cause without these
+## Next Actions / Risks
 
-`exit code 2` is PostgreSQL `quickdie()` → `_exit(2)` (the SIGQUIT path). The FIRST dying
-backend logs **nothing**. Ruled out BY MEASUREMENT:
+- [ ] Resolve the `670939a3` vs `9033a162` SHA question, then promote poly to production.
+- [ ] Revert the two bridge writes **as part of** that cutover.
+- [ ] Clear/nudge **only** poly's wedged Request; prove the ledger is healthy before touching
+      the other five nodes.
+- [ ] Prove `/version` + `/readyz` + no `ledger_unavailable` + sampler shows no retry-storm.
+- [ ] Watch 15m/1h crash counts; the ≤9/24h gate is tomorrow's proof.
+- [ ] If exit-2 persists: PID/signal/core evidence first. No global tuning without it.
+- [ ] `infra-reconcile` to land #2544's redis/doltgres telemetry.
+- [ ] Add the `last_autovacuum IS NULL` alert (>100 MB tables) — one predicate would have
+      caught this months before a crash.
+- [ ] Fix `app_readonly` auth failures (~50/h) **declaratively via ESO**, never `ALTER ROLE`
+      — non-ESO-synced role drift, bug.5002 class, likely bug.5117 (broken poly datasource).
+- [ ] Build an operator-side unwedge verb so `external-create-pending` never needs kubectl.
 
-- container OOM — cgroup `memory.events` `oom_kill 0`; `OOMKilled=false`; `RestartCount=0`
-- host OOM — clean `journalctl`/`dmesg` for the crash window
-- disk — 73% used, 27 GB free, `pg_wal` 289 MB
-- `/dev/shm` — now 1 GiB and VACUUM gets past it
-- query parallelism — crashes continued with `max_parallel_workers_per_gather=0`
-- corruption — no PANIC, no checksum failure, no invalid page in any log
+**Gotchas that cost me hours**
 
-Unexplained side-symptom: `password authentication failed for user "root"` every ~30s. NOT
-the healthcheck (that is `pg_isready -U postgres`). Source unidentified. Separately,
-`app_readonly` auth fails ~50/h — that is the non-ESO-synced role-drift class (bug.5002,
-likely bug.5117, the broken poly Grafana datasource).
-
-## The instrument that actually worked
-
-Aggregate counters never showed the load. A 2-second `pg_stat_activity` sampler did
-(`/root/pgwatch.sh` on the prod VM → `/tmp/pgsample.log`; recipe in the hub entry). It
-caught poly issuing a **new prune `DELETE` every ~2 seconds**, each cancelled by
-`statement_timeout` then retried with **no backoff**, stacking until VACUUM and autovacuum
-could never finish. **poly #99 bounds exactly this** — which is why #99, not any operator
-change, is the remaining fix.
-
-## Why #99 cannot deploy (the chain that blocked everything)
-
-```
-Postgres exit-2 → postmaster 57P02-quickdies all conns → actuator allocation ledger 503
- → Crossplane "cannot determine creation result" → leaves crossplane.io/external-create-pending
- → deep backoff → NEVER renders the next generation → node-app deploys blocked
-```
-
-**15 Requests across SIX nodes** (poly, levelup, toks4, toks5, beacon, node-template) were
-wedged this way. I cleared poly's 4 per hub `akash-prod-lease-recovery` (clear the annotation
-AND set `cogni.io/reconcile-nudge` — clearing alone is a no-op). **The other nodes' are
-still wedged.**
-
-Remaining poly blocker: its XR is latched `PHASE=Failed`, `SERVING=false`, no RESOURCE,
-`SOURCE=eed16dc0`. Per the runbook a latched `Failed` survives a re-mint, so the deploy may
-need a `lease_generation` bump via the env verb.
-
-## Next actions, in order
-
-1. **Deploy poly #99** (`9033a162`). It removes the retry-storm at source. May need a
-   generation bump to clear the latched `PHASE=Failed`.
-2. **Revert the two bridge writes** above as part of that deploy, not before.
-3. **infra-reconcile** to land #2544's redis/doltgres telemetry (`POST
-/api/v1/deploy/infra-reconcile {nodeId:<operator>, env:"production"}` — note it resolves
-   DEPLOYED infra, and it DID pick up current compose despite reporting an older `sourceSha`).
-4. **Unwedge the other 5 nodes** (same annotation + nudge). Needs an operator-side verb —
-   kubectl should not be the mechanism.
-5. **Alert on `last_autovacuum IS NULL`** for any table >100 MB. One predicate would have
-   caught this months before a crash did.
-6. Hunt the SIGQUIT source with the sampler running across a crash.
-
-## Access (I wrongly believed I lacked this for hours — I did not)
-
-`~/dev/cogni-template/.local/provision-creds/production/{production-kubeconfig.yaml,production-vm-key}`
-Both work. Documented in the `provision-env` skill's custody section. I asserted a constraint
-from a handoff instead of looking, and it cost hours.
-
-## Process warning for whoever picks this up
-
-I made **four** reversals today — blaming my own ANALYZE for a crash it did not cause,
-calling backups broken when I had read the wrong volume, retracting the shm finding one
-command before the proof arrived, and predicting infra-reconcile would apply stale compose
-when it did not. Every one came from asserting before the confirming check. **Report
-observation → evidence → inference as separate things, and run the check first.**
+- **A healthy container proves nothing.** `Up 8 days (healthy)`, `RestartCount=0` coexisted
+  with ~110 backend deaths/day. Only _backends_ were dying.
+- **Zero log lines means unobserved, not healthy.** redis/doltgres were simply absent from the
+  host alloy allowlist.
+- **`infra-reconcile` reports the DEPLOYED `sourceSha`** (e.g. `cee9aedf`, which contains no
+  `shm_size`) yet still applied current compose. I predicted it would no-op; `docker inspect`
+  proved me wrong. Verify with the runtime, not the dispatch response.
+- **A full-database `ANALYZE` cannot finish on a crashing instance** — it died after 15 small
+  tables. Go one table at a time.
+- **The merge queue can land a PR before your correction does.** #2545 merged while I was
+  pushing a fix to it; check what actually merged (#2547 cleans it up).
+- **I made four assert-before-verify reversals** (blaming my own ANALYZE for a crash it did
+  not cause; calling backups broken after reading the wrong volume; retracting the shm
+  finding one command before the proof; predicting reconcile would no-op). Report
+  observation → evidence → inference separately, and run the check first.
