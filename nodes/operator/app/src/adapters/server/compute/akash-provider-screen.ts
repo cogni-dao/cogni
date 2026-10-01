@@ -66,6 +66,16 @@ export interface AkashProviderInfo {
   readonly activeLeases: number;
   /** ISO 3166-1 alpha-2 country code of the provider's ingress IP, when known. */
   readonly countryCode: string | null;
+  /**
+   * Whether the provider declares `featEndpointCustomDomain` — i.e. whether it will serve an
+   * SDL `accept:` hostname at all. OPTIONAL on Akash, and three providers we have leased from
+   * publish `false`.
+   *
+   * `undefined` means the registry read did not resolve, NOT "no": an unknown provider is
+   * already refused by the quality filter, and treating absence as a refusal would turn one
+   * failed marketplace read into a dry auction.
+   */
+  readonly supportsCustomDomain?: boolean | undefined;
 }
 
 /**
@@ -153,6 +163,14 @@ export interface ScreenBidsInput {
    */
   readonly requiredCountryCodes: readonly string[];
   /**
+   * Whether THIS workload needs a provider that serves a custom hostname — true when any
+   * global expose carries `hosts` (which `buildAkashSdl` renders as `accept:`). Every Cogni
+   * node has a publicHost, so this is true in practice; it is a parameter rather than a
+   * constant because a hostless internal workload must not be narrowed by a capability it
+   * never uses.
+   */
+  readonly requiresCustomDomain: boolean;
+  /**
    * OPTIONAL operator-owned provider PIN. `undefined` OR EMPTY = NO PIN: every bid is judged
    * on policy alone (audit anchor, required country, quality, price, strikes). A NON-EMPTY
    * set is a hard narrowing — only those addresses may be leased — so an operator can still
@@ -235,6 +253,7 @@ export type BidRejectionReason =
   | "already_tried"
   | "not_allowlisted"
   | "required_country"
+  | "no_custom_domain"
   | "blacklisted"
   | "quality"
   | "price_outlier";
@@ -283,6 +302,7 @@ function rejectionFor(
     readonly excludedProviders: ReadonlySet<string>;
     readonly allowedProviders: ReadonlySet<string> | undefined;
     readonly requiredCountries: ReadonlySet<string>;
+    readonly requiresCustomDomain: boolean;
     readonly nowMs: number;
   }
 ): BidRejectionReason | undefined {
@@ -313,6 +333,19 @@ function rejectionFor(
   if (ctx.providers.size > 0 && (!info || !passesQualityFilter(info))) {
     return "quality";
   }
+  // DECLARED_INCAPACITY_IS_NOT_A_GAMBLE. `featEndpointCustomDomain` is OPTIONAL on Akash, and
+  // a provider that publishes `false` will take the lease, start the pod, and never serve the
+  // `accept:` hostname — so the workload 404s at its own public host, misses the boot SLO, and
+  // `onGiveUp: Replace` spends a fresh lease to learn what the registry already said. Price is
+  // the final rank tiebreak, so the cheapest bid wins; on poly's own order the cheapest bid in
+  // its permitted set was a provider declaring `false` (story.5050, bug.5325). Refusing on the
+  // declaration costs one skipped bid; not refusing costs up to three paid leases.
+  //
+  // Only a POSITIVE `false` refuses — see AkashProviderInfo.supportsCustomDomain on why
+  // `undefined` must not.
+  if (ctx.requiresCustomDomain && info?.supportsCustomDomain === false) {
+    return "no_custom_domain";
+  }
   return undefined;
 }
 
@@ -330,6 +363,7 @@ export function screenBids(input: ScreenBidsInput): ScreenedBids {
     preferredProviders,
     preferredCountryCodes,
     requiredCountryCodes,
+    requiresCustomDomain,
     allowedProviders,
     excludedProviders,
     nowMs,
@@ -355,6 +389,7 @@ export function screenBids(input: ScreenBidsInput): ScreenedBids {
       excludedProviders,
       allowedProviders,
       requiredCountries,
+      requiresCustomDomain,
       nowMs,
     });
     roster.push({
