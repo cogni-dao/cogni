@@ -429,6 +429,15 @@ wait_for_app() {
   # agents hunting a phantom outage for 90 minutes. It is not contradictory: Argo had COMPLETED a
   # sync at the PREVIOUS revision and never advanced to ours. Classify it so the reader knows who
   # fixes it.
+  # A revision is only comparable against the repo + ref the Application actually deploys FROM.
+  # On the test fleet, candidate-a's control plane is rooted on the cogni-test-org MIRROR, whose
+  # branches carry the SAME NAMES as this monorepo's. Comparing observed-vs-expected without naming
+  # the source repo made a faithful Argo look wedged and sent me hunting a phantom stuck sync hook.
+  # Print the source so the reader can tell "cluster didn't move" from "the repo it reads is behind".
+  local src_repo src_ref
+  src_repo=$(kubectl -n argocd get application "$app_name" -o jsonpath='{.spec.source.repoURL}' 2>/dev/null || true)
+  src_ref=$(kubectl -n argocd get application "$app_name" -o jsonpath='{.spec.source.targetRevision}' 2>/dev/null || true)
+
   local owner_line
   if [ "$REV" = "$EXPECTED_SHA" ]; then
     # Right revision, still not ready → genuinely lagging, or the workload is unhealthy.
@@ -436,9 +445,10 @@ wait_for_app() {
   elif [ -z "$REV" ]; then
     owner_line="REVISION_UNREADABLE — could not read status.sync.revision. Owner: unknown; a FAILED READ is not a negative, do not conclude 'absent' from this."
   else
-    owner_line="STALE_SYNC — Argo is synced to ${REV:0:8} but we pushed ${EXPECTED_SHA:0:8}: desired state advanced, the cluster did NOT. Waiting will not help. Owner: Argo/the sync itself — check for a sync hook stuck in Running below (a blocked hook pins the app at its last completed sync)."
+    owner_line="STALE_SOURCE_OR_SYNC — Argo reports ${REV:0:8}; we expected ${EXPECTED_SHA:0:8}. BEFORE assuming the cluster is wedged, check whether ${REV:0:8} is simply the HEAD of '${src_ref:-<unknown ref>}' on '${src_repo:-<unknown repo>}'. If it IS, Argo is FAITHFUL and the owner is that REPO being behind (a rotted mirror / an unmerged sync PR) — nothing to un-wedge, and deleting the Application will recreate it pointing at the same stale source. Only if ${REV:0:8} is NOT that ref's HEAD is this a sync problem."
   fi
   echo "  ❌ ${app_name} timed out: observed=${REV:0:8} expected=${EXPECTED_SHA:0:8} health=${HEALTH} phase=${SYNC_PHASE}"
+  echo "     ▸ source: repo=${src_repo:-<unknown>} ref=${src_ref:-<unknown>}"
   echo "     ▸ ${owner_line}"
   kubectl -n argocd get application "$app_name" -o jsonpath='{.status.sync.status} {.status.health.status} phase={.status.operationState.phase} msg={.status.operationState.message}{"\n"}' 2>/dev/null || true
   echo "  ▸ Argo sync result resources:"
