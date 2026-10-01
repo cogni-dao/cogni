@@ -130,7 +130,9 @@ grep -q 'node-template' <<<"$ES" \
 pass "$FN render is node-at-root + ESO-targeted (kustomization + external-secret producer)"
 
 echo "[4/8] isolated-fleet domain rewrites only the public NEXTAUTH_URL"
-FORK_OUT="$(FORK_DOMAIN_ROOT=cogni-testing.org bash "$RENDER" "$FE" "$FN")"
+# DOMAIN unset here so the legacy FORK_DOMAIN_ROOT fallback is the path under test
+# (ci.yaml exports an ambient DOMAIN that would otherwise take precedence — bug.5330).
+FORK_OUT="$(DOMAIN='' FORK_DOMAIN_ROOT=cogni-testing.org bash "$RENDER" "$FE" "$FN")"
 NEXTAUTH_BLOCK="$(grep -A1 'path: /data/NEXTAUTH_URL' <<<"$FORK_OUT")"
 grep -q 'cogni-testing\.org"' <<<"$NEXTAUTH_BLOCK" \
   || fail "$FN fork render did not rewrite NEXTAUTH_URL to cogni-testing.org"
