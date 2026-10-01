@@ -22,6 +22,7 @@
  *   - CLOSED_IS_REMOVED: a released lease still resolves to a handle, so `found` alone would
  *     never go false and a deleted XR could never finish deleting.
  *   - NARROWEST_ACTIVATION: exactly one managed type is activated, and it is namespaced.
+ *   - DNS_TYPE_FOLLOWS_TARGET: hostnames publish as CNAME; IPv4-only ingress publishes as A.
  * Side-effects: IO (reads repo manifests)
  * Links: story.5016 R2.3, task.5095, task.5096, infra/crossplane/AGENTS.md
  * @public
