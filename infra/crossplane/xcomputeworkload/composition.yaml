@@ -632,9 +632,30 @@ spec:
             */ -}}
             {{- $dnsObs := index $observedResources "dns-record" }}
             {{- $dnsResp := dict }}
+            {{- $dnsCreatePending := "" }}
+            {{- $dnsCreateAmbiguous := false }}
             {{- if $dnsObs }}
             {{- $dnsRaw := dig "status" "response" "body" "" $dnsObs.resource }}
             {{- if ne $dnsRaw "" }}{{ $dnsResp = fromJson $dnsRaw }}{{ end }}
+            {{- /*
+              SAFE CREATE-AMBIGUITY RECOVERY (bug.5341). provider-http writes
+              external-create-pending before CREATE and normally follows with
+              external-create-succeeded. If the controller is interrupted between those writes,
+              Crossplane correctly refuses to guess whether CREATE happened. DNS is the narrow
+              case where we do not need to guess: OBSERVE is name-addressed, and the desired
+              writer adopts an existing A/AAAA/CNAME before deciding whether CREATE is needed.
+              Once the provider itself reports that exact ambiguity, mirror its pending timestamp
+              into succeeded so the next reconcile performs the authoritative name lookup. Never
+              do this merely because pending exists — the provider must already have latched the
+              leak-prevention refusal. Lease Requests are deliberately outside this recovery.
+            */ -}}
+            {{- $dnsAnnotations := dig "metadata" "annotations" (dict) $dnsObs.resource }}
+            {{- $dnsCreatePending = get $dnsAnnotations "crossplane.io/external-create-pending" | default "" }}
+            {{- range (dig "status" "conditions" (list) $dnsObs.resource) }}
+            {{- if contains "cannot determine creation result" (dig "message" "" .) }}
+            {{- $dnsCreateAmbiguous = true }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- /* Cloudflare answers a LIST with an array and a CREATE/UPDATE with one object. */ -}}
             {{- $dnsResult := dig "result" (list) $dnsResp }}
@@ -790,6 +811,9 @@ spec:
             metadata:
               annotations:
                 gotemplating.fn.crossplane.io/composition-resource-name: dns-record
+                {{- if and $dnsCreateAmbiguous (ne $dnsCreatePending "") }}
+                crossplane.io/external-create-succeeded: {{ $dnsCreatePending | quote }}
+                {{- end }}
             spec:
               providerConfigRef:
                 kind: ClusterProviderConfig
