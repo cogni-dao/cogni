@@ -1186,6 +1186,45 @@ describe("AkashTxActuator.update / delete", () => {
     expect(api.updateCalls).toBe(updatesBefore);
   });
 
+  /**
+   * THE ACCEPTED COST, encoded so nobody discovers it in an incident. The refusal is terminal for
+   * this key and the composition has no CREATE path out of it, so a country set the incumbent
+   * violates blocks EVERY later revision of that workload — including a security patch — until a
+   * human bumps lease_generation. That is the deliberate trade (the alternative is serving from an
+   * excluded jurisdiction with no signal), but it must be a KNOWN property, not a surprise.
+   */
+  it("keeps refusing every subsequent revision until the generation is bumped", async () => {
+    const { actuator, api } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    api.providerCountryByAccount = { [api.lastProviderAccount]: "BE" };
+    const constrained = {
+      ...SPEC,
+      placement: { requiredCountryCodes: ["FI"] },
+    };
+    const updatesBefore = api.updateCalls;
+
+    // A NEW image (different SDL, so the no-op gate is not what stops it) still cannot ship.
+    const [service] = constrained.services;
+    if (!service) throw new Error("SPEC fixture must declare a service");
+    for (const image of ["sha-new1", "sha-new2"]) {
+      await expect(
+        actuator.update({
+          cogniKey: "k1",
+          externalName: "7001",
+          environment: "candidate-a",
+          identity: IDENTITY,
+          spec: { ...constrained, services: [{ ...service, image }] },
+        })
+      ).rejects.toMatchObject({ code: "placement_violated_by_incumbent" });
+    }
+    expect(api.updateCalls).toBe(updatesBefore);
+  });
+
   it("allows the update when the incumbent provider IS in the required set", async () => {
     const { actuator, api } = build();
     await actuator.create({

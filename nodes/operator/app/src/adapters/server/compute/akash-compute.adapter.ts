@@ -78,6 +78,9 @@ const MICRO = 1_000_000;
 /** Lease-log descriptor cache TTL — long enough to amortize polling, short enough that an
  * in-place SDL update's changed service set surfaces within minutes. */
 const DESCRIPTOR_CACHE_TTL_MS = 5 * 60_000;
+/** Provider-country cache TTL. A declared location is near-static; this only bounds staleness
+ * after a provider re-registers, which is rare and non-urgent. */
+const PROVIDER_COUNTRY_CACHE_TTL_MS = 30 * 60_000;
 
 /** Overclock Labs audit account — the `signedBy` anchor Console itself screens on. */
 export const AKASH_OVERCLOCK_AUDITOR =
@@ -375,6 +378,17 @@ export class AkashComputeAdapter
   /** Provider gateway URIs by owner account — stable identity, cached per process. */
   private readonly hostUriCache = new Map<string, string>();
   /**
+   * Screened country by provider account, short-TTL. A provider's declared location changes on
+   * the order of never, but the UPDATE path consults it on EVERY reconcile (~60s per workload),
+   * and the only read that answers it is the whole `/v1/providers` index — ~1850 entries and
+   * several MB. Without this the placement gate would cost one full registry download per
+   * workload per minute. Same reasoning as `descriptorCache` below.
+   */
+  private readonly providerCountryCache = new Map<
+    string,
+    { country: string | null; expiresAtMs: number }
+  >();
+  /**
    * Lease-log descriptors by dseq, short-TTL. Coordinates are stable for a lease's life
    * (an in-place SDL update can change `services`, hence the TTL rather than forever), and
    * the pump re-enumerates every poll — without this cache the wallet-writer would spend a
@@ -583,18 +597,30 @@ export class AkashComputeAdapter
    * where a provider is.
    */
   async providerCountry(providerAccount: string): Promise<string | null> {
+    const cached = this.providerCountryCache.get(providerAccount);
+    if (cached && cached.expiresAtMs > this.now().getTime())
+      return cached.country;
     const list = await this.request<ConsoleProvider[]>(
       "GET",
       "/v1/providers",
       undefined,
       this.writeTimeoutMs
     ).catch(() => undefined);
-    const hit = (list ?? []).find((p) => p.owner === providerAccount);
-    if (!hit) return null;
-    return effectiveCountryCode({
-      declared: hit.country,
-      geoIp: hit.ipCountryCode,
+    // A FAILED read is never cached: the caller treats `null` as "cannot evaluate" and waves the
+    // update through, so caching it would extend one hiccup into 30 minutes of an unenforced gate.
+    if (!list) return null;
+    const hit = list.find((p) => p.owner === providerAccount);
+    const country = hit
+      ? effectiveCountryCode({
+          declared: hit.country,
+          geoIp: hit.ipCountryCode,
+        })
+      : null;
+    this.providerCountryCache.set(providerAccount, {
+      country,
+      expiresAtMs: this.now().getTime() + PROVIDER_COUNTRY_CACHE_TTL_MS,
     });
+    return country;
   }
 
   async status(p: { leaseId: string }): Promise<ProvisionOutput> {

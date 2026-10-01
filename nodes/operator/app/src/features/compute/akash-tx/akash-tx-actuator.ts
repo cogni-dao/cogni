@@ -699,19 +699,30 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     );
 
     // PLACEMENT_BINDS_ON_EVERY_REVISION (story.5050). Akash refuses in-place placement change,
-    // so a workload's country requirement can only be honoured by a fresh CREATE — and
+    // so a country requirement can only be honoured by a fresh CREATE — and
     // `required_placement_countries` lives in the CR's `spec.placement`, NOT in the SDL. Change
     // the country set and the rendered SDL is BYTE-IDENTICAL, so this update rebinds the
-    // incumbent lease and the no-op gate below returns success. Net effect, measured on poly
-    // gen-20: the catalog said [FI, NL, PT], the verb succeeded, CI was green, the promote was
-    // green, and the workload kept serving from Belgium (pg_stat_activity.client_addr
-    // 80.200.246.35, AS5432 Proximus, Antwerp) for four days. A verb that succeeds and does
-    // nothing is BROKEN; this is the gate that makes it impossible to do so SILENTLY.
+    // incumbent lease and IDENTICAL_SDL_IS_A_NO_OP below returns success. Nothing in that path
+    // checks whether the lease being re-imaged still satisfies the requirement, so a node can
+    // declare a jurisdiction, see a green verb, green CI and a green promote, and keep running
+    // where it was. This gate makes that outcome impossible to reach SILENTLY.
+    //
+    // NOT motivated by a confirmed incident: story.5050's poly investigation initially read as
+    // one, and that reading was WRONG — poly's gen-20 did mint, in Finland (its XR reports
+    // `endpoints[0] = …ingress.akash.rhite.co.uk`). The Belgian address that suggested otherwise
+    // came from a SERVER-WIDE `pg_stat_activity` and belonged to a different node. What is real
+    // is the hole in the path; treat this as a guard, not a post-mortem fix.
+    //
+    // THE COST, deliberately accepted: the refusal is terminal for this key, and the composition
+    // has no CREATE path out of it. A country set the incumbent violates therefore blocks EVERY
+    // later revision of that workload — including security patches — until a human bumps
+    // `lease_generation`. That is the right trade only because the alternative is serving from an
+    // excluded jurisdiction indefinitely without a signal. The refusal names the remedy.
     //
     // Deliberately asymmetric with REQUIRED_FAILS_CLOSED in the bid screen: an unresolvable
-    // country REFUSES a bid (nothing is lost but one candidate) but must NOT refuse an update,
-    // because that would stop every image from shipping on a registry hiccup. Only a RESOLVED
-    // country that contradicts the requirement refuses, and it refuses loudly.
+    // country REFUSES a bid (one candidate lost) but must NOT refuse an update, because that
+    // would stop every image shipping fleet-wide on a registry hiccup. Only a RESOLVED country
+    // that contradicts the requirement refuses.
     const requiredCountries = (
       input.spec.placement?.requiredCountryCodes ?? []
     ).map((c) => c.toUpperCase());
