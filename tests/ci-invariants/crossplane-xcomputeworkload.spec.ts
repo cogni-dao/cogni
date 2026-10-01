@@ -23,6 +23,8 @@
  *     never go false and a deleted XR could never finish deleting.
  *   - NARROWEST_ACTIVATION: exactly one managed type is activated, and it is namespaced.
  *   - DNS_TYPE_FOLLOWS_TARGET: hostnames publish as CNAME; IPv4-only ingress publishes as A.
+ *   - DNS_CREATE_AMBIGUITY_RECOVERS_BY_NAME: only provider-confirmed ambiguous DNS creates are
+ *     released to the name-addressed OBSERVE path; paid lease creates remain fail-closed.
  * Side-effects: IO (reads repo manifests)
  * Links: story.5016 R2.3, task.5095, task.5096, infra/crossplane/AGENTS.md
  * @public
@@ -1092,6 +1094,33 @@ describe("XComputeWorkload public reachability (bug.5152)", () => {
     expect(templateCode).toContain("published: {{ $dnsPublished }}");
     expect(templateCode).not.toContain("published: {{ if $dns }}");
     expect(templateCode).toContain('index $observedResources "dns-record"');
+  });
+
+  it("recovers only provider-confirmed ambiguous DNS creates through name observation", () => {
+    expect(templateCode).toContain('$dnsCreatePending := ""');
+    expect(templateCode).toContain("$dnsCreateAmbiguous := false");
+    expect(templateCode).toContain(
+      'get $dnsAnnotations "crossplane.io/external-create-pending"'
+    );
+    expect(templateCode).toContain(
+      'contains "cannot determine creation result"'
+    );
+    expect(dnsBlock).toContain(
+      "crossplane.io/external-create-succeeded: {{ $dnsCreatePending | quote }}"
+    );
+    expect(dnsBlock).toContain(
+      'if and $dnsCreateAmbiguous (ne $dnsCreatePending "")'
+    );
+
+    // The paid lease Request must retain Crossplane's leak-prevention refusal. This recovery is
+    // safe only because the DNS OBSERVE is name-addressed and adoption precedes CREATE.
+    const leaseBlock = templateCode.slice(
+      templateCode.indexOf(
+        "composition-resource-name: {{ $leaseResourceName }}"
+      ),
+      templateCode.indexOf("composition-resource-name: dns-record")
+    );
+    expect(leaseBlock).not.toContain("external-create-succeeded");
   });
 });
 
