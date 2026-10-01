@@ -315,8 +315,8 @@ spec:
                 dns:
                   description: >-
                     DNS intent. Absent means "publish status.dns.target but write no record" —
-                    the XR still reports the CNAME it WOULD publish, so intent is observable
-                    even where the write path is not configured.
+                    the XR still reports the A or CNAME target it WOULD publish, so intent is
+                    observable even where the write path is not configured.
                   type: object
                   required: [provider, zoneId]
                   properties:
@@ -525,9 +525,10 @@ spec:
                     hostname: { type: string, maxLength: 253 }
                     target: { type: string, maxLength: 253 }
                     # OBSERVED, not intended (bug.5152). True only when the provider's zone
-                    # actually holds this hostname as the proxied CNAME to `target`. It used to
-                    # restate `spec.dns is set`, which made a node whose DNS write had been
-                    # failing since birth indistinguishable from a reachable one.
+                    # actually holds this hostname as the proxied A or CNAME record selected
+                    # from `target`. It used to restate `spec.dns is set`, which made a node
+                    # whose DNS write had been failing since birth indistinguishable from a
+                    # reachable one.
                     published: { type: boolean }
                 failure:
                   type: object

@@ -55,6 +55,7 @@ reconciliation semantics.
   - _Why this changed:_ node toks5 held a valid XR in `cogni-production` with a valid image digest, its migration never ran, so the actuator was NEVER CALLED — `akash-lease` reported "not yet ready" 1044 times and the node existed in no environment at all. Silent, unbounded, no alarm.
 - **REFUSAL_IS_OBSERVABLE:** the actuator's stable refusal `code` is surfaced on `status.failure.reason` (bug.5115: a wallet block that reached only provider logs was invisible for hours). Retryability comes from the HTTP status — 409 and 5xx are Progressing, other 4xx are Failed — never from a table of codes, which is why `reason` is a patterned string and not an enum. Surfacing is purely observational: it never stops the lease from being reconciled, unlike a `bootPolicy` spend decision.
 - **DNS_NEVER_WITHDRAWN_ON_TRANSITION:** the composed dns-record child MUST NOT be omitted (and so GC-deleted) merely because the current observe lacks an endpoint while the lease is still live (renderLease true). $dnsTarget is latched from status.dns.target exactly like $prevSha/$prevResource; a new target is adopted only once the new revision serves. Withdrawing a live public record on a transient/errored observe is the bug.5188 outage.
+- **DNS_TYPE_FOLLOWS_TARGET:** prefer a provider hostname and publish a proxied CNAME; when a provider exposes only IPv4 ingress, publish the first non-self IPv4 as a proxied A record. The same derived type must drive create, update, drift detection, and `status.dns.published`.
 
 ## Change Protocol
 
