@@ -20,7 +20,7 @@
  *     with a stable code so callers and the awareness surface observe their own failures.
  *   - AUDITED_PROVIDERS_ONLY (task.5051): the SDL anchors `signedBy.allOf` to the Overclock
  *     audit account and bids are screened on Console provider data (audited + online +
- *     uptime7d > 0.95 + activeLeases > 0, no 2σ price underbids) — pure logic in
+ *     uptime7d > 0.95, no 2σ price underbids; NOT activeLeases — bug.5334) — pure logic in
  *     ./akash-provider-screen. Metadata-read failure fails open (signedBy stays the hard gate).
  *   - BOOT_SLO_OR_CLOSE (task.5051): after lease, the workload must serve `/version` and its
  *     fixed `/readyz` health endpoint within `bootSloMs` (default 5min), or the deployment
@@ -1272,7 +1272,6 @@ export class AkashComputeAdapter
         isOnline: p.isOnline === true,
         isValidVersion: p.isValidVersion === true,
         uptime7d: Number(p.uptime7d ?? 0),
-        activeLeases: Number(p.leaseCount ?? 0),
         // Resolved at the SOURCE so every downstream consumer — the hard country filter,
         // the latency preference, and the bid roster — reads one consistent country.
         countryCode: effectiveCountryCode({

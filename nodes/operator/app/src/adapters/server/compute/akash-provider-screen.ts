@@ -11,9 +11,24 @@
  *   testable without IO.
  * Invariants:
  *   - AUDITED_ONLY: with provider metadata available, a bid survives only if its provider is
- *     audited + valid-version + online + uptime7d > 0.95 + activeLeases > 0 (active leases =
- *     proof of registry egress; marketplace uptime measures the status port, not workload
- *     success — froggy-servers failed 3/3 leases at "100%" uptime).
+ *     audited + valid-version + online + uptime7d > 0.95.
+ *   - A_BID_IS_NOT_A_POPULARITY_CONTEST (bug.5334): `activeLeases > 0` was part of the
+ *     conjunction above as "proof of registry egress". It is a popularity proxy, and no
+ *     provider without an existing tenant can satisfy it — so a provider's FIRST lease with
+ *     us was unwinnable. That cold-start trap, not jurisdiction and not the provider pool, is
+ *     what refused poly's gen-18: `akash.rhite.co.uk` bid 9.14 from a permitted country
+ *     reading audited=true, validVersion=true, online=true, uptime7d=0.967,
+ *     featEndpointCustomDomain=true, leaseCount=0. The original justification was real
+ *     (froggy-servers failed 3/3 leases at "100%" uptime, because marketplace uptime measures
+ *     the status port, not workload success) but the remedy was wrong: that evidence is OUR
+ *     OWN boot history, and it is already enforced by BLACKLIST_IS_DERIVED below. Screening on
+ *     someone else's tenancy count punished newcomers instead of failures.
+ *   - DECLARED_INCAPACITY_IS_NOT_A_GAMBLE (bug.5325): `featEndpointCustomDomain` is OPTIONAL on
+ *     Akash and several audited, online, quality-passing providers publish `false`. When the
+ *     workload serves a custom hostname, a provider declaring `false` is refused — it would
+ *     otherwise win on price (the final tiebreak), take a paid lease, and never answer the
+ *     public host. UNKNOWN_IS_NOT_NO: only a positive `false` refuses, so one failed
+ *     marketplace read cannot dry an auction fleet-wide.
  *   - FAIL_OPEN_ON_MISSING_METADATA: an empty provider map (Console read failed) skips the
  *     metadata filter — the SDL `signedBy` audit anchor remains the hard gate on-chain.
  *   - REQUIRED_FAILS_CLOSED: `requiredCountryCodes` is the one input that INVERTS the rule
@@ -62,8 +77,6 @@ export interface AkashProviderInfo {
   readonly isValidVersion: boolean;
   /** 7-day uptime ratio in [0,1]. */
   readonly uptime7d: number;
-  /** Count of currently active leases (proof of registry egress). */
-  readonly activeLeases: number;
   /** ISO 3166-1 alpha-2 country code of the provider's ingress IP, when known. */
   readonly countryCode: string | null;
   /**

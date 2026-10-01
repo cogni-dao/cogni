@@ -30,7 +30,6 @@ function info(
     isOnline: true,
     isValidVersion: true,
     uptime7d: 0.999,
-    activeLeases: 5,
     countryCode: "BE",
     ...over,
   };
@@ -145,10 +144,8 @@ describe("passesQualityFilter", () => {
    * featEndpointCustomDomain=true, inside the node's permitted countries — after it had
    * already bid 9.14 on poly's own production auction (story.5050, gen-18).
    */
-  it("accepts an otherwise healthy provider with zero active leases", () => {
-    expect(
-      passesQualityFilter(info("akash1newcomer", { activeLeases: 0 }))
-    ).toBe(true);
+  it("accepts a healthy provider that has no tenants yet", () => {
+    expect(passesQualityFilter(info("akash1newcomer"))).toBe(true);
   });
 });
 
@@ -201,9 +198,9 @@ describe("screenBids quality filter", () => {
       ["akash1good", info("akash1good")],
       ["akash1stale", info("akash1stale", { isValidVersion: false })],
       ["akash1down", info("akash1down", { isOnline: false })],
-      // Zero current tenants is NOT a quality failure — see
+      // A provider with no tenants yet is NOT a quality failure — see
       // A_BID_IS_NOT_A_POPULARITY_CONTEST. It stays in the survivor set.
-      ["akash1newcomer", info("akash1newcomer", { activeLeases: 0 })],
+      ["akash1newcomer", info("akash1newcomer")],
     ]);
     const out = screen(
       [
