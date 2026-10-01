@@ -51,7 +51,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
   - Identity broker: `/identity/attest` (authenticated; registered-node canonical return only)
   - Infra: `/health`, `/openapi.json`, `/meta/route-manifest` (via `(infra)/*`)
   - API: `/api/auth/*`, `/api/v1/chat/completions`
-  - Internal ops: `/api/internal/ops/governance/schedules/sync` [POST] (deploy-only trigger)
+  - Governance schedule reconciliation runs directly from the boot reconcile job; it has no HTTP trigger.
   - Agent discovery: `/.well-known/agent.json` [GET] — public discovery document for machine clients
   - Production infra reconcile: `/api/v1/deploy/infra-reconcile` [POST] — production-promoter-gated on the operator node; dispatches via the operator GitHub App and preserves the app pin
   - Attestation JWKS: `/.well-known/jwks.json` [GET] — public keys for verifying operator-signed identity attestations (task.5024)

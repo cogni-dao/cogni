@@ -31,6 +31,10 @@ tags: [authorization]
 
 6. **AUTHZ_FAIL_CLOSED_WITH_DISTINCTION**: `AuthorizationPort.check()` returns `deny` on infrastructure failure (timeout, network error, OpenFGA error). Use distinct error codes: `authz_denied` (OpenFGA returned DENY) vs `authz_unavailable` (infrastructure failure). Never return `allow` on failure. Metrics and durable audit events consume these codes in the P1 audit layer.
 
+7. **NODE_ACTION_ASSERTION_BOUND**: An operator-to-node support or repair call is authorized in OpenFGA before dispatch, then carried by a `node.action.v1` EdDSA assertion bound to `{nodeId, environment, actorId, action, target, bodyHash, exp, jti}`. The assertion expires within 60 seconds and its `jti` is consumed once by the owning node before side effects. The operator derives the node, environment, actor, and fixed target server-side; callers never supply a URL or receive the assertion.
+
+8. **AUTHORIZATION_IS_NOT_A_RUNTIME_SECRET**: OpenBao may hold the operator signing key, but a standing shared bearer is never an authorization authority. Generic operations bearer credentials must not gate support, repair, or recovery actions.
+
 ---
 
 ## Layered Authorization Model
@@ -47,17 +51,18 @@ Authorization operates across three distinct layers with different purposes:
 
 ## Implementation Coverage
 
-| Surface                                  | Status              | Enforcement                                                                                                                                                                           |
-| ---------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Shared authorization contract            | Active in task.5010 | `packages/authorization-core` exports `AuthorizationPort`, check params/decisions, helpers, OpenFGA adapter, fake                                                                     |
-| Tool execution                           | Active in task.5010 | `createToolRunner()` calls `AuthorizationPort.check()` after ToolPolicy and before arg validation/execution                                                                           |
-| Operator in-process graph/chat execution | Active in task.5010 | Operator DI injects `AuthorizationPort`; inproc provider passes `actorId`, `tenantId`, `graphId` to tool runner                                                                       |
-| API-originated internal graph runs       | Identity-ready      | Route requires `actorUserId`, `billingAccountId`, `virtualKeyId`; tool authz receives `user:{actorUserId}`                                                                            |
-| Direct `POST /api/v1/vcs/flight` route   | Active              | Route requires request identity from browser session or valid machine bearer token, checks `node.flight` on `node:{node_id}` when OpenFGA is configured, then artifact-gates dispatch |
-| `core__vcs_flight_candidate` graph tool  | Tool-authz-covered  | PR-manager graph invokes it through `toolRunner.exec()`, so OpenFGA can deny `tool.execute` for that tool                                                                             |
-| Connection broker token materialization  | Pending hardening   | Broker receives `{ actorId, tenantId }`; `connection.use` OpenFGA check is not wired in task.5010                                                                                     |
-| Graph invocation entry                   | Pending hardening   | `graph.invoke` check at `GraphExecutorPort.runGraph()` is not wired in task.5010                                                                                                      |
-| Authz audit metrics/events               | Pending hardening   | Current adapter returns decision details; durable `authz.check` event/metric emission is P1                                                                                           |
+| Surface                                  | Status                | Enforcement                                                                                                                                                                           |
+| ---------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared authorization contract            | Active in task.5010   | `packages/authorization-core` exports `AuthorizationPort`, check params/decisions, helpers, OpenFGA adapter, fake                                                                     |
+| Tool execution                           | Active in task.5010   | `createToolRunner()` calls `AuthorizationPort.check()` after ToolPolicy and before arg validation/execution                                                                           |
+| Operator in-process graph/chat execution | Active in task.5010   | Operator DI injects `AuthorizationPort`; inproc provider passes `actorId`, `tenantId`, `graphId` to tool runner                                                                       |
+| API-originated internal graph runs       | Identity-ready        | Route requires `actorUserId`, `billingAccountId`, `virtualKeyId`; tool authz receives `user:{actorUserId}`                                                                            |
+| Direct `POST /api/v1/vcs/flight` route   | Active                | Route requires request identity from browser session or valid machine bearer token, checks `node.flight` on `node:{node_id}` when OpenFGA is configured, then artifact-gates dispatch |
+| Node support/repair action assertions    | In progress task.5164 | Separate `node.support_read` and `node.repair` checks; frozen `node.action.v1` contract reuses the operator EdDSA/JWKS trust root. Node action adapters land per node.                |
+| `core__vcs_flight_candidate` graph tool  | Tool-authz-covered    | PR-manager graph invokes it through `toolRunner.exec()`, so OpenFGA can deny `tool.execute` for that tool                                                                             |
+| Connection broker token materialization  | Pending hardening     | Broker receives `{ actorId, tenantId }`; `connection.use` OpenFGA check is not wired in task.5010                                                                                     |
+| Graph invocation entry                   | Pending hardening     | `graph.invoke` check at `GraphExecutorPort.runGraph()` is not wired in task.5010                                                                                                      |
+| Authz audit metrics/events               | Pending hardening     | Current adapter returns decision details; durable `authz.check` event/metric emission is P1                                                                                           |
 
 ---
 
@@ -154,6 +159,12 @@ type node
     define admin: [user]
     define developer: [user, agent] or admin
     define can_flight: developer
+    define support_reader: [user, agent] or admin
+    define can_support_read: support_reader
+    define repairer: [user, agent] or admin
+    define can_repair: repairer
+    define funds_recovery: [user, agent] or admin
+    define can_recover_funds: funds_recovery
 
 type graph
   relations
@@ -191,13 +202,16 @@ The current `user.delegates` relation is global—not scoped to tenant or graph.
 
 ## Action→Relation Mapping
 
-| Action           | Resource Type     | OpenFGA Check                              | Error Code     |
-| ---------------- | ----------------- | ------------------------------------------ | -------------- |
-| `tool.execute`   | `tool:{id}`       | `check(actor, can_execute, tool:{id})`     | `authz_denied` |
-| `connection.use` | `connection:{id}` | `check(actor, can_use, connection:{id})`   | `authz_denied` |
-| `graph.invoke`   | `graph:{id}`      | `check(actor, can_invoke, graph:{id})`     | `authz_denied` |
-| `user.act_as`    | `user:{user_id}`  | `check(actor, delegates, user:{user_id})`  | `authz_denied` |
-| `node.flight`    | `node:{node_id}`  | `check(actor, can_flight, node:{node_id})` | `authz_denied` |
+| Action               | Resource Type     | OpenFGA Check                                     | Error Code     |
+| -------------------- | ----------------- | ------------------------------------------------- | -------------- |
+| `tool.execute`       | `tool:{id}`       | `check(actor, can_execute, tool:{id})`            | `authz_denied` |
+| `connection.use`     | `connection:{id}` | `check(actor, can_use, connection:{id})`          | `authz_denied` |
+| `graph.invoke`       | `graph:{id}`      | `check(actor, can_invoke, graph:{id})`            | `authz_denied` |
+| `user.act_as`        | `user:{user_id}`  | `check(actor, delegates, user:{user_id})`         | `authz_denied` |
+| `node.flight`        | `node:{node_id}`  | `check(actor, can_flight, node:{node_id})`        | `authz_denied` |
+| `node.support_read`  | `node:{node_id}`  | `check(actor, can_support_read, node:{node_id})`  | `authz_denied` |
+| `node.repair`        | `node:{node_id}`  | `check(actor, can_repair, node:{node_id})`        | `authz_denied` |
+| `node.recover_funds` | `node:{node_id}`  | `check(actor, can_recover_funds, node:{node_id})` | `authz_denied` |
 
 **Delegation relation:** `user.delegates` grants agents the right to act on behalf of user. Dual-check queries `user.act_as` when `subject` is present.
 

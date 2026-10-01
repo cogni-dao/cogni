@@ -4,14 +4,14 @@
 /** Live catalog and Ed25519 signing adapters for identity attestations. */
 
 import type { KeyObject } from "node:crypto";
-
+import type { NodeActionClaims } from "@cogni/node-contracts";
 import { SignJWT } from "jose";
-
 import type {
   DeployPlanePort,
   IdentityAttestationJwtClaims,
   IdentityAttestationRepositoryPort,
   IdentityAttestationSignerPort,
+  NodeActionSignerPort,
 } from "@/ports";
 import {
   ATTESTATION_ALG,
@@ -152,6 +152,18 @@ export class JoseIdentityAttestationSigner
   constructor(private readonly signingKey: KeyObject) {}
 
   async sign(claims: IdentityAttestationJwtClaims): Promise<string> {
+    const kid = await attestationKeyId(this.signingKey);
+    return new SignJWT({ ...claims })
+      .setProtectedHeader({ alg: ATTESTATION_ALG, typ: "JWT", kid })
+      .sign(this.signingKey);
+  }
+}
+
+/** Same environment Ed25519 custody, different frozen claim protocol and audience. */
+export class JoseNodeActionSigner implements NodeActionSignerPort {
+  constructor(private readonly signingKey: KeyObject) {}
+
+  async sign(claims: NodeActionClaims): Promise<string> {
     const kid = await attestationKeyId(this.signingKey);
     return new SignJWT({ ...claims })
       .setProtectedHeader({ alg: ATTESTATION_ALG, typ: "JWT", kid })

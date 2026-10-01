@@ -18,6 +18,9 @@ export type AuthzAction =
   | "user.act_as"
   | "node.flight"
   | "node.manage_secrets"
+  | "node.support_read"
+  | "node.repair"
+  | "node.recover_funds"
   | "node.promote_production"
   | "node.manage_envs";
 
@@ -28,6 +31,9 @@ export const AUTHZ_ACTIONS = [
   "user.act_as",
   "node.flight",
   "node.manage_secrets",
+  "node.support_read",
+  "node.repair",
+  "node.recover_funds",
   "node.promote_production",
   "node.manage_envs",
 ] as const satisfies readonly AuthzAction[];
@@ -132,6 +138,12 @@ export function relationForAuthzAction(action: AuthzAction): string {
       return "can_flight";
     case "node.manage_secrets":
       return "can_manage_secrets";
+    case "node.support_read":
+      return "can_support_read";
+    case "node.repair":
+      return "can_repair";
+    case "node.recover_funds":
+      return "can_recover_funds";
     case "node.promote_production":
       return "can_promote_production";
     case "node.manage_envs":

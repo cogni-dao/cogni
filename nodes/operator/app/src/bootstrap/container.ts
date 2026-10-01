@@ -202,6 +202,7 @@ import type {
   MetricsQueryPort,
   ModelCatalogPort,
   ModelProviderResolverPort,
+  NodeAddressPort,
   NodeDeploymentTopologyPort,
   NodeRegistryPort,
   OnChainVerifier,
@@ -359,6 +360,8 @@ export interface Container {
   connectionBroker: ConnectionBrokerPort | undefined;
   /** Authorization port — undefined until OpenFGA env is configured */
   authorization: AuthorizationPort | undefined;
+  /** Placement-aware operator → node address resolution. */
+  nodeAddress: NodeAddressPort;
   /** Model catalog — aggregates all providers for model listing */
   modelCatalog: ModelCatalogPort;
   /** Provider resolver — resolves providerKey to ModelProviderPort for runtime dispatch */
@@ -1125,6 +1128,7 @@ function createContainer(): Container {
       : undefined,
     connectionBroker,
     authorization,
+    nodeAddress,
     // Multi-provider model ports
     ...(() => {
       const platformProvider = new PlatformModelProvider(llmService);

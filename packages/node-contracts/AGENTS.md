@@ -39,6 +39,7 @@ Shared Zod route contracts and HTTP router definitions for all node apps. PURE_L
 All contract files re-exported via `src/index.ts`. Selective re-export for `ai.chat.v1.contract` to avoid `ChatMessage` name collision with `ai.completions.v1.contract`.
 
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint
+- `node.action.v1.contract` — frozen, short-lived operator→node action assertion bound to actor/node/env/action/target/body hash/jti
 
 **Internal scheduler-worker → node-app contracts (task.0280):**
 

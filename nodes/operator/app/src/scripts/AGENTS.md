@@ -25,12 +25,12 @@ Operational command surface for script-based tasks.
 }
 ```
 
-Note: This directory currently has no governance sync entrypoint file; sync is triggered via internal HTTP endpoint.
+Note: This directory has no governance sync entrypoint; the app reconciles schedules directly at boot.
 
 ## Public Surface
 
 - **Exports:** none (entry points only)
-- **CLI (if any):** `pnpm governance:schedules:sync` (curl to internal ops endpoint)
+- **CLI (if any):** none
 
 ## Responsibilities
 
@@ -39,13 +39,11 @@ Note: This directory currently has no governance sync entrypoint file; sync is t
 
 ## Usage
 
-```bash
-pnpm governance:schedules:sync
-```
+There is no governance schedule sync CLI. Boot reconciliation invokes the job directly.
 
 ## Standards
 
-- `governance:schedules:sync` triggers `/api/internal/ops/governance/schedules/sync`
+- Do not reintroduce a standing-bearer HTTP trigger for governance schedule sync.
 
 ## Dependencies
 

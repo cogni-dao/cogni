@@ -29,7 +29,7 @@ Job modules that wire business logic to the application container for ops-trigge
 ## Public Surface
 
 - **Exports:** `runGovernanceSchedulesSyncJob()`, `runCatalogNodeRegistryReconcileJob()`
-- **CLI (if any):** `pnpm governance:schedules:sync` (calls internal ops route)
+- **CLI (if any):** none; the app invokes the job directly at boot
 - **Files considered API:** `syncGovernanceSchedules.job.ts`, `reconcileCatalogNodeRegistry.job.ts`
 
 ## Ports (optional)
@@ -45,7 +45,7 @@ Job modules that wire business logic to the application container for ops-trigge
 ## Usage
 
 ```bash
-pnpm governance:schedules:sync  # POST /api/internal/ops/governance/schedules/sync
+pnpm dev  # boot reconciliation invokes the job directly
 ```
 
 ## Standards

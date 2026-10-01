@@ -45,6 +45,13 @@ describe("relationForAuthzAction", () => {
     expect(relationForAuthzAction("node.manage_secrets")).toBe(
       "can_manage_secrets"
     );
+    expect(relationForAuthzAction("node.support_read")).toBe(
+      "can_support_read"
+    );
+    expect(relationForAuthzAction("node.repair")).toBe("can_repair");
+    expect(relationForAuthzAction("node.recover_funds")).toBe(
+      "can_recover_funds"
+    );
   });
 
   it("formats resource references", () => {

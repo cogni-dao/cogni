@@ -91,7 +91,6 @@ jobs:
       LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
       SCHEDULER_API_TOKEN: ${{ secrets.SCHEDULER_API_TOKEN }}
       BILLING_INGEST_TOKEN: ${{ secrets.BILLING_INGEST_TOKEN }}
-      INTERNAL_OPS_TOKEN: ${{ secrets.INTERNAL_OPS_TOKEN }}
       DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
       GH_OAUTH_CLIENT_ID: ${{ secrets.GH_OAUTH_CLIENT_ID }}
       GH_OAUTH_CLIENT_SECRET: ${{ secrets.GH_OAUTH_CLIENT_SECRET }}
@@ -238,15 +237,3 @@ jobs:
           done
           echo "::error::db-backup.completed logs did not appear in Loki for both app and temporal clusters"
           exit 1
-
-      - name: Trigger work-items Notion sync
-        if: env.VM_HOST != '' && env.WORK_ITEMS_NOTION_TOKEN != ''
-        env:
-          DOMAIN: ${{ vars.DOMAIN }}
-          INTERNAL_OPS_TOKEN: ${{ secrets.INTERNAL_OPS_TOKEN }}
-        run: |
-          set -euo pipefail
-          curl -fsS -X POST "https://${DOMAIN}/api/internal/work/notion/sync" \
-            -H "Authorization: Bearer ${INTERNAL_OPS_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d '{"limit":500}' | jq .

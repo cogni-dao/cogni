@@ -61,7 +61,6 @@ export * from "./cognition.v1.contract";
 export * from "./error.chat.v1.contract";
 export * from "./governance.status.v1.contract";
 // ── Governance ──────────────────────────────────────────────────────────────
-export * from "./governance-schedules-sync.internal.v1.contract";
 export * from "./grants.validate.internal.v1.contract";
 // ── Graphs ──────────────────────────────────────────────────────────────────
 export * from "./graph-runs.create.internal.v1.contract";
@@ -80,6 +79,7 @@ export * from "./meta.livez.read.v1.contract";
 export * from "./meta.readyz.read.v1.contract";
 export * from "./meta.route-manifest.read.v1.contract";
 export * from "./meta.version.read.v1.contract";
+export * from "./node.action.v1.contract";
 // ── Nodes ──────────────────────────────────────────────────────────────────
 export * from "./nodes.operations-overview.v1.contract";
 // ── Payments ────────────────────────────────────────────────────────────────

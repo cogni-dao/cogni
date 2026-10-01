@@ -44,6 +44,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/dashboard/nodes` [GET] - authenticated principal's display-safe node operations overview (owner-scoped in v0)
   - `/api/v1/nodes/[id]` [GET, PATCH] - read + state-machine-aware update of a registered node row
   - `/api/v1/nodes/[id]/developers` [POST] - owner-gated approve/reject for registered agent developer flight authority
+  - `/api/v1/nodes/[id]/actions` [POST] - OpenFGA-gated allowlisted operator→node support, repair, and recovery actions
   - `/api/v1/nodes/[id]/reconcile-merge-queue` [POST] - env-manager-gated convergence of a node repo's live merge queue to the git-owned operator policy
   - `/api/v1/nodes/[id]/launch-pack` [GET] - owner-gated AI-assistant handoff for post-publish node launch
   - `/api/v1/nodes/[id]/publish` [POST] - mints the node repo, opens the submodule deployment PR, advances dao_formed → published
@@ -52,7 +53,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/nodes/[id]/reset-dao` [POST] - owner-only destructive reset of a node's DAO record (clears dao/token, status -> dao_pending) so it can be re-formed
   - `/api/v1/deploy/infra-reconcile` [POST] - production-promoter-gated, operator-node-only infra reconcile through the operator GitHub App; preserves the deployed app source pin
   - `/api/internal/billing/ingest` [POST] - LiteLLM generic_api callback receiver (bearer auth, Docker-internal only)
-  - `/api/internal/ops/governance/schedules/sync` [POST] - deploy-time governance sync trigger (bearer auth)
+  - Governance schedule reconciliation is deliberately not exposed as an HTTP route.
   - `/api/v1/chat/completions` [POST] - OpenAI-compatible chat completions (streaming + non-streaming, `cogni_status` extension); see [completions spec](../../../docs/spec/completions-api.md)
   - `/api/v1/ai/chat` [POST] - streaming chat with server-authoritative thread persistence
   - `/api/v1/activity` [GET]

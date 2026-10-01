@@ -27,7 +27,7 @@ tags: [poly, polymarket, wallets, multi-tenant, privy, runbook]
 | `withdrawUsdc`                                                                  | ⛔ stubbed (throw) — follow-up                                           |
 | Bootstrap factory `getPolyTraderWalletAdapter` + real CLOB-creds derivation     | ✅ shipped (`nodes/poly/app/src/bootstrap/poly-trader-wallet.ts`)        |
 | `POST /api/v1/poly/wallet/connect` route                                        | ✅ shipped (session-auth, `CUSTODIAL_CONSENT` enforced, 503 on unconfig) |
-| `POST /api/internal/ops/poly/wallet/rotate-clob-creds` route                    | ✅ shipped (internal ops auth, one-time rotation, no secret egress)      |
+| `POST /api/internal/node-actions/poly/wallet/rotate-clob-creds` route           | ✅ shipped (signed RBAC action, one-time rotation, no secret egress)     |
 | `GET /api/v1/poly/wallet/status` + `/profile` create-wallet control             | ✅ shipped                                                               |
 | Agent-actor auth path                                                           | ⛔ explicit 501 until agent-API-key auth lands                           |
 | CI secret plumbing (`candidate-flight-infra.yml` + `deploy-infra.sh`)           | ✅ wired for all 5 new secrets                                           |
@@ -192,17 +192,20 @@ Expect 1 info line per successful request. There should be no stub-creds warning
 ### 7. Rotate exposed CLOB credentials
 
 CLOB credentials are per active tenant wallet connection. This is intentionally
-not a product UI control: rotation is an internal ops action for incident
-response or controlled maintenance.
+not a product UI control: rotation is an OpenFGA-gated node repair action for
+incident response or controlled maintenance.
 
-After the fix is deployed, run the ops command once against the target host:
+After the fix is deployed, call the authenticated operator gateway:
 
 ```bash
-POLY_HOST=https://<poly-host> pnpm poly:wallet:rotate-clob-creds
+curl -fsS -X POST https://cognidao.org/api/v1/nodes/poly/actions \
+  -H 'content-type: application/json' \
+  --cookie '<authenticated operator session>' \
+  -d '{"action":"poly.wallet.rotate_clob_creds","input":{"rotate_all":true}}'
 ```
 
-The command posts to `/api/internal/ops/poly/wallet/rotate-clob-creds` with
-`INTERNAL_OPS_TOKEN` and `{"rotate_all":true}`. It rotates every non-revoked
+The operator checks `node.repair`, signs a 60-second action/body/node-bound
+assertion, and posts it to the owning node. The action rotates every non-revoked
 `poly_wallet_connections` row, invalidates the process-local trade-executor
 cache for each rotated billing account, and returns only counts plus
 connection ids/wallet addresses. It never returns API keys, passphrases,
