@@ -50,11 +50,19 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 37
+  candidate-a: 38
   preview: 2
-  production: 7
+  # 19 -> 20 to re-mint after a second DRY auction (story.5050, bug.5293/5334).
+  # gen-18 dseq 1790815181111 collected 8 bids and refused all of them; gen-19 dseq
+  # 1790818782178 collected 6 bids, but every bidder was outside the required FI/NL/PT
+  # countries, then rolled back at 2026-10-01T01:41:25Z. Both settled idempotency keys are
+  # spent: replaying gen-19 returns the closed handle and can never apply a new Poly image.
+  # There is no activity-env re-mint verb, so this reviewed catalog bump is the recovery
+  # prescribed by hub `akash-prod-lease-recovery` (CATALOG_IS_SSOT).
+  production: 20
 required_placement_countries:
-  production: [BG, FI, NL, PT]
+  candidate-a: [BE]
+  production: [FI, NL, PT]
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/poly/
@@ -71,7 +79,39 @@ compute_egress_cidrs:
     comment: Portugal provider egress (story.5050)
   - cidr: 77.76.13.0/24
     comment: Bulgaria provider rotating egress range (story.5050)
+  - cidr: 95.216.46.103/32
+    comment: >-
+      Finland provider egress, MEASURED from inside a real lease on
+      provider.m3a.eu-n-3.digitalfrontier.network (static.103.46.216.95.clients.your-server.de,
+      Helsinki, AS24940 Hetzner) — story.5050. The two /32s previously listed for Finland did
+      NOT contain it, which is bug.5326: the pod boots and cannot reach its own Postgres through
+      the fail-closed substrate-port DROP. The same lease measured CLOB_STATUS=200 against
+      clob.polymarket.com, so Finland is permitted for poly's outbound dependency.
+      DELIBERATELY A /32, NOT the Hetzner /16: this list is an IP allowlist in front of
+      Postgres/Doltgres/Redis/LiteLLM/Temporal, so a /16 on a public cloud would hand ~131k
+      rentable addresses a hole to production. A NAT rotation here costs an outage; a /16
+      costs the database. Rotation is the cheaper failure until the network layer
+      authenticates identity instead of source address.
   - cidr: 95.217.58.106/32
     comment: Finland provider egress (story.5050)
-  - cidr: 24.144.74.27/32
-    comment: Netherlands provider egress (story.5050)
+  - cidr: 157.180.59.24/32
+    comment: >-
+      RHITE Finland provider EGRESS, measured from inside a real lease on
+      provider.akash.rhite.co.uk (story.5050, bug.5326). This provider bid 9.14 during the
+      gen-18 dry auction; its egress is in a DIFFERENT netblock from every address
+      previously listed here — so without this entry the pod boots and is firewalled off its
+      own Postgres by the fail-closed substrate-port DROP, misses the boot SLO, and burns
+      three onGiveUp:Replace attempts on what reads as a market failure. The same lease
+      measured CLOB_STATUS=200 against clob.polymarket.com from country=FI.
+  - cidr: 95.217.139.177/32
+    comment: >-
+      RHITE Finland provider INGRESS endpoint (story.5050). Kept for reachability, but it is
+      NOT the egress — this entry used to carry "workload egress must still be proven" and the
+      measurement above disproved it. Ingress is not egress; measure from inside the lease.
+  - cidr: 24.144.74.0/24
+    comment: >-
+      Netherlands provider egress range (story.5050). Widened from 24.144.74.27/32:
+      provider.h100.ams.val.akash.pub now answers on .156/.158/.159/.160 and rotates inside
+      the /24, so the single-host entry trips bug.5326 the moment NL wins. AS394996, Amsterdam.
+  - cidr: 109.102.6.188/32
+    comment: Froggy Servers Romania provider endpoint; workload egress must still be proven (story.5050)
