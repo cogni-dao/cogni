@@ -463,6 +463,10 @@ class FakeConsole implements AkashTxConsolePort {
   recoverCalls = 0;
   statusCalls = 0;
   updateCalls = 0;
+  /** Country per provider account, as the registry would resolve it. Absent = unresolvable. */
+  providerCountryByAccount: Record<string, string> = {};
+  /** The account the last allocation landed on, so a test can target it by name. */
+  lastProviderAccount = "akash1provider";
   releaseCalls: string[] = [];
   nextLeaseId = "7001";
   /** Descriptors served by `leaseLogDescriptor`, keyed by leaseId (dseq). */
@@ -477,6 +481,10 @@ class FakeConsole implements AkashTxConsolePort {
   async allocationCursor(): Promise<string> {
     this.cursorCalls += 1;
     return this.options.cursor ?? "7000";
+  }
+
+  async providerCountry(providerAccount: string): Promise<string | null> {
+    return this.providerCountryByAccount[providerAccount] ?? null;
   }
 
   async allocateAndLease(input: {
@@ -1138,6 +1146,96 @@ describe("AkashTxActuator.update / delete", () => {
     expect(api.allocateCalls).toBe(spent.allocate);
     // And no second receipt: the identity re-bind lands on the SAME row the create opened.
     expect(ledger.rows.size).toBe(1);
+  });
+
+  /**
+   * PLACEMENT_BINDS_ON_EVERY_REVISION (story.5050). This is poly gen-20, exactly: the catalog
+   * said [FI, NL, PT], the verb succeeded, CI and the promote were green — and because
+   * required_placement_countries lives in the CR's spec.placement and NOT in the SDL, the
+   * rendered SDL was byte-identical, so the update rebound the incumbent lease and the
+   * no-op gate returned success. The workload kept serving from Belgium for four days
+   * (pg_stat_activity.client_addr 80.200.246.35, AS5432 Proximus, Antwerp). A silent wrong
+   * placement is the one outcome this gate must make impossible.
+   */
+  it("REFUSES to re-image a lease whose provider violates the required placement", async () => {
+    const { actuator, api } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    // The incumbent provider resolves to BE; the workload now requires FI/NL/PT.
+    api.providerCountryByAccount = { [api.lastProviderAccount]: "BE" };
+    const updatesBefore = api.updateCalls;
+
+    await expect(
+      actuator.update({
+        cogniKey: "k1",
+        externalName: "7001",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: {
+          ...SPEC,
+          placement: { requiredCountryCodes: ["FI", "NL", "PT"] },
+        },
+      })
+    ).rejects.toMatchObject({ code: "placement_violated_by_incumbent" });
+
+    // The provider must be left completely untouched — no re-image of a lease we are refusing.
+    expect(api.updateCalls).toBe(updatesBefore);
+  });
+
+  it("allows the update when the incumbent provider IS in the required set", async () => {
+    const { actuator, api } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    api.providerCountryByAccount = { [api.lastProviderAccount]: "FI" };
+
+    const resource = await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: {
+        ...SPEC,
+        placement: { requiredCountryCodes: ["FI", "NL", "PT"] },
+      },
+    });
+    expect(resource.externalName).toBe("7001");
+  });
+
+  /**
+   * Deliberately asymmetric with REQUIRED_FAILS_CLOSED in the bid screen. An unresolvable
+   * country refuses a BID (one candidate lost, nothing else). Refusing an UPDATE on the same
+   * evidence would stop every image from shipping fleet-wide on one registry hiccup, so an
+   * unknown country does NOT refuse here.
+   */
+  it("does not refuse when the provider's country cannot be resolved", async () => {
+    const { actuator, api } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    api.providerCountryByAccount = {}; // registry read resolves nothing
+
+    const resource = await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: {
+        ...SPEC,
+        placement: { requiredCountryCodes: ["FI"] },
+      },
+    });
+    expect(resource.externalName).toBe("7001");
   });
 
   it("no-ops a byte-identical re-PUT and leaves the receipt hash untouched (bug.5238)", async () => {

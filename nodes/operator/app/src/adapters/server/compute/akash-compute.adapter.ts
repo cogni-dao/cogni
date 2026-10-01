@@ -576,6 +576,27 @@ export class AkashComputeAdapter
     };
   }
 
+  /**
+   * Screened country for one provider account, or null when the registry did not resolve it.
+   * Reuses the SAME `effectiveCountryCode` resolution the bid screen uses (declared attribute
+   * first, GeoIP as fallback) so the update gate and the bid gate can never disagree about
+   * where a provider is.
+   */
+  async providerCountry(providerAccount: string): Promise<string | null> {
+    const list = await this.request<ConsoleProvider[]>(
+      "GET",
+      "/v1/providers",
+      undefined,
+      this.writeTimeoutMs
+    ).catch(() => undefined);
+    const hit = (list ?? []).find((p) => p.owner === providerAccount);
+    if (!hit) return null;
+    return effectiveCountryCode({
+      declared: hit.country,
+      geoIp: hit.ipCountryCode,
+    });
+  }
+
   async status(p: { leaseId: string }): Promise<ProvisionOutput> {
     const detail = await this.request<ConsoleDeploymentDetail>(
       "GET",

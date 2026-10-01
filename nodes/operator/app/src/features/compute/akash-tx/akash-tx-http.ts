@@ -70,6 +70,10 @@ const STATUS_BY_CODE: Readonly<Record<AkashTxErrorCode, number>> = {
   // The Composition treats 409 as retryable (`Progressing`), which is exactly right here.
   allocation_rolled_back: 409,
   provider_rejected: 422,
+  // 409: the desired placement and the live lease disagree. Retrying this UPDATE can never
+  // succeed — Akash will not move a lease in place — so the caller must CREATE at a bumped
+  // generation instead (story.5050).
+  placement_violated_by_incumbent: 409,
   // Terminal, NOT a conflict to retry: no number of retries changes who consumed the resource.
   identity_conflict: 422,
   provider_unavailable: 502,

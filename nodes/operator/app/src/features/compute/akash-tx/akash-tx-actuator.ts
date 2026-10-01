@@ -698,6 +698,52 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       "akash_tx_receipt_rebound"
     );
 
+    // PLACEMENT_BINDS_ON_EVERY_REVISION (story.5050). Akash refuses in-place placement change,
+    // so a workload's country requirement can only be honoured by a fresh CREATE — and
+    // `required_placement_countries` lives in the CR's `spec.placement`, NOT in the SDL. Change
+    // the country set and the rendered SDL is BYTE-IDENTICAL, so this update rebinds the
+    // incumbent lease and the no-op gate below returns success. Net effect, measured on poly
+    // gen-20: the catalog said [FI, NL, PT], the verb succeeded, CI was green, the promote was
+    // green, and the workload kept serving from Belgium (pg_stat_activity.client_addr
+    // 80.200.246.35, AS5432 Proximus, Antwerp) for four days. A verb that succeeds and does
+    // nothing is BROKEN; this is the gate that makes it impossible to do so SILENTLY.
+    //
+    // Deliberately asymmetric with REQUIRED_FAILS_CLOSED in the bid screen: an unresolvable
+    // country REFUSES a bid (nothing is lost but one candidate) but must NOT refuse an update,
+    // because that would stop every image from shipping on a registry hiccup. Only a RESOLVED
+    // country that contradicts the requirement refuses, and it refuses loudly.
+    const requiredCountries = (
+      input.spec.placement?.requiredCountryCodes ?? []
+    ).map((c) => c.toUpperCase());
+    if (requiredCountries.length > 0 && this.console.providerCountry) {
+      const incumbent = bound.record.providerAccount;
+      const country = incumbent
+        ? (
+            await this.console.providerCountry(incumbent).catch(() => null)
+          )?.toUpperCase()
+        : null;
+      if (country && !requiredCountries.includes(country)) {
+        this.log.error(
+          {
+            cogniKey: input.cogniKey,
+            externalName: input.externalName,
+            providerAccount: incumbent,
+            providerCountry: country,
+            requiredCountries,
+            code: "placement_violated_by_incumbent",
+          },
+          "akash_tx_update_refused_placement_violation"
+        );
+        throw new AkashTxError(
+          "placement_violated_by_incumbent",
+          `lease ${input.externalName} is on a provider in ${country}, which is not in the ` +
+            `workload's required placement [${requiredCountries.join(", ")}]; refusing to ` +
+            "re-image it. Akash cannot move a lease in place — this needs a fresh CREATE at a " +
+            "bumped lease_generation, not an update."
+        );
+      }
+    }
+
     // IDENTICAL_SDL_IS_A_NO_OP (bug.5238). A PUT is idempotent for the escrow/handle, but NOT
     // on the provider: Console re-triggers a redeploy on EVERY PUT, so re-PUTting the byte-
     // identical SDL restarts a rollout the workload may not have finished — a not-yet-serving
