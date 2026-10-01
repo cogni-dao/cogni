@@ -1063,6 +1063,7 @@ describe("XComputeWorkload public reachability (bug.5152)", () => {
     // permanently unreachable, so the first IPv4 is the bounded fallback.
     expect(templateCode).toContain('$dnsHostnameTarget := ""');
     expect(templateCode).toContain('$dnsIpv4Target := ""');
+    expect(templateCode).toContain("(ne $h $publicHost)");
     expect(templateCode).toContain("$dnsTarget := $dnsHostnameTarget");
     expect(templateCode).toContain(
       'if eq $dnsTarget "" }}{{ $dnsTarget = $dnsIpv4Target'
