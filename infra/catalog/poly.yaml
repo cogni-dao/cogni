@@ -52,14 +52,20 @@ compute_api:
 lease_generation:
   candidate-a: 38
   preview: 2
-  # 19 -> 20 to re-mint after a second DRY auction (story.5050, bug.5293/5334).
+  # 20 -> 21 after gen-20 booted the old eed16dc0 bundle, missed the boot
+  # deadline for the promoted 9033a162 bundle, and was closed by policy.
+  # The settled xcw:cogni-production:<node-id>:20 key is spent and cannot be
+  # replayed into a live lease; gen-21 is the reviewed re-mint for bug.5293.
+  #
+  # 19 -> 20 originally re-minted after a second DRY auction
+  # (story.5050, bug.5293/5334).
   # gen-18 dseq 1790815181111 collected 8 bids and refused all of them; gen-19 dseq
   # 1790818782178 collected 6 bids, but every bidder was outside the required FI/NL/PT
   # countries, then rolled back at 2026-10-01T01:41:25Z. Both settled idempotency keys are
   # spent: replaying gen-19 returns the closed handle and can never apply a new Poly image.
   # There is no activity-env re-mint verb, so this reviewed catalog bump is the recovery
   # prescribed by hub `akash-prod-lease-recovery` (CATALOG_IS_SSOT).
-  production: 20
+  production: 21
 required_placement_countries:
   candidate-a: [BE]
   production: [FI, NL, PT]
