@@ -62,6 +62,7 @@ export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
   "Done = before→after behavior proven on the live candidate, NOT a SHA deployed. Capture the BROKEN signal, flight, then read the FIXED behavior back from Loki at that SHA. 'Request reached the build' is deploy proof, not function. The /validate-candidate scorecard is the merge gate; reprove prod-facing changes in preview/prod.",
   "Persist what outlives the session in the durable substrate, never a doc that rots: plan + status → the work item; durable strategy/why → operator Dolt, linked to the item (specRefs / cite edge). Specs hold contracts + invariants only — never a rollout plan.",
   "Drive autonomously; interrupt a human only for the irreversible, outward-facing, or out-of-scope — never for approval you already hold, never to merge/promote something unvalidated. When you ask: one scorecard → the single decision → a clickable link.",
+  "Every human-facing reply IS a short, high-signal status — goal + live-proof + the one decision, nothing more. Brevity IS the contract: more words = more noise = less a human reads or trusts. A trust gate, not a style preference — no prose essays, no \"honest answer:\" paragraphs, no re-litigating, no chatty back-and-forth. \"tldr\" means you broke it: re-answer AS the status, half the length; never re-explain. Diverging is the signature of an untrustworthy agent whose work is discarded.",
 ];
 
 /**
