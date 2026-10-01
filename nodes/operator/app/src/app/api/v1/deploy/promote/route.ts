@@ -8,6 +8,8 @@
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: the env's gate — `node.promote_production` (→ `can_promote_production`) for production, `node.manage_envs` (→ `can_manage_envs`) for preview — is checked before any dispatch.
  *   - PROMOTION_RUNS_AS_THE_OPERATOR: dispatch uses the operator GitHub App, never a personal credential.
+ *   - ENV_SCOPED_PARENT: dispatch targets `NODE_SUBMODULE_PARENT_OWNER/REPO`; a test operator must
+ *     never fall back to the production monorepo hardcode.
  *   - APP_PROMOTE_IS_NO_INFRA: promotion reconciles the app digest only (`skip_infra=true`), orthogonal to substrate; Compose/secret/edge changes use a deliberate infra lever.
  *   - PREVIEW_IS_MANUAL_TOO (story.5039): `env=preview` is a SOURCE-ADDRESSED manual promote gated on `node.manage_envs` — the same authority that activates the env; activation + the lane's first write are one product action. Production is unchanged (`node.promote_production`). The auto node-merge hook remains a separate, ungated path.
  *   - ONE_PROMOTION_PRIMITIVE: a `sourceSha` promote is SOURCE-ADDRESSED via `promoteNode` — the
@@ -31,7 +33,6 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { getGithubRepo } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
 
@@ -114,9 +115,17 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
-    const { owner, repo } = getGithubRepo();
+    const envConfig = serverEnv();
+    const owner = envConfig.NODE_SUBMODULE_PARENT_OWNER;
+    const repo = envConfig.NODE_SUBMODULE_PARENT_REPO;
+    if (!owner || !repo) {
+      return NextResponse.json(
+        { error: "promote_target_not_configured" },
+        { status: 503 }
+      );
+    }
     try {
-      const deployPlane = createOperatorDeployPlane(serverEnv());
+      const deployPlane = createOperatorDeployPlane(envConfig);
       // ONE_PROMOTION_PRIMITIVE: a caller-supplied sha is SOURCE-ADDRESSED via `promoteNode` — the
       // SAME method the auto merge-hook uses, here with the requested env. It reads the catalog row
       // to discriminate remote-source (fork → node_source_sha) from in-repo (operator/poly →

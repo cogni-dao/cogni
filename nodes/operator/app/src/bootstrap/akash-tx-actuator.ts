@@ -337,8 +337,13 @@ const preferredProviders = (runtimeEnv.AKASH_PREFERRED_PROVIDERS ?? "")
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
-// An empty configured boundary intentionally rejects every provider; provider-enabled
-// environments must opt in their reachable accounts (same contract as the controller).
+// OPTIONAL PIN, NOT A GATE (story.5050). An empty or unset value means "no pin" — bids are
+// screened on policy alone: the SDL `signedBy` audit anchor, the node catalog's fail-closed
+// `required_placement_countries`, the quality filter, price-outlier exclusion, and the derived
+// strike blacklist. It used to mean "refuse every provider", which is why a blanked overlay
+// value (d69e5c29) could close every auction fleet-wide and why an 11-address enumeration,
+// 5 slots of which had gone dead, was the real single-vendor constraint. A NON-EMPTY value
+// still narrows leasing to exactly those accounts, so an operator can force a set on demand.
 const allowedProviders = (runtimeEnv.AKASH_ALLOWED_PROVIDERS ?? "")
   .split(",")
   .map((value) => value.trim())
@@ -529,14 +534,25 @@ const balanceTimer = setInterval(() => {
 }, BALANCE_CHECK_INTERVAL_MS);
 balanceTimer.unref();
 
+/**
+ * A paid allocation call can spend 30s creating, 90s screening bids, then 30s
+ * opening the lease.  The deployment handle is durably published between the
+ * first and second phases, so killing the process during bid screening leaves
+ * an active deployment with no provider to resume.  Drain longer than that
+ * complete transaction; the pod's terminationGracePeriodSeconds is pinned
+ * above this value by the runtime invariant test.
+ */
+const ACTUATOR_DRAIN_TIMEOUT_MS = 180_000;
+
 function shutdown(signal: string): void {
   log.info({ signal }, "akash_tx_actuator_stopping");
   clearInterval(sweepTimer);
   clearInterval(balanceTimer);
-  // In-flight requests are already idempotent by key, so a bounded drain is enough: a
-  // dropped response is recoverable from the durable receipt, a double-spend is not.
+  // Stop accepting new work and let the one wallet transaction already in flight finish.
+  // The durable receipt prevents a second writer; finishing this request prevents a rollout
+  // from stranding its handle between deployment creation and provider lease selection.
   server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 5_000).unref();
+  setTimeout(() => process.exit(0), ACTUATOR_DRAIN_TIMEOUT_MS).unref();
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));

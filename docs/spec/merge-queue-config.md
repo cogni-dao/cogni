@@ -30,7 +30,8 @@ Define the required-status-checks policy that actually works on GitHub today, ca
 
 - Defining the candidate-a `deploy_verified` gate — see [development-lifecycle.md](./development-lifecycle.md).
 - Per-node merge queues — discarded after analysis (see task.0391); revisit if N > 5 nodes or queue depth becomes a real bottleneck.
-- Replacing the merge queue with direct bot merges. Env-manager changes still edit shared per-environment files and require serialization on the current `main` tree.
+- Replacing the merge queue for ordinary code or human-authored PRs. Only the narrow, signed
+  `cogni.env-manager.v1` change type may direct-merge after its deterministic-tree proof passes.
 
 ## Core Invariants
 
@@ -110,15 +111,18 @@ queue-only layer through `POST /api/v1/nodes/{id}/reconcile-merge-queue`:
 **Runtime convergence uses the App, not a standing developer admin token.** The reconcile route is
 `node.manage_envs`-gated, resolves the target repository from the node catalog, reads the fixture from
 the deployment parent's `main`, and delegates the write to the operator GitHub App. The adapter
-rejects a fixture that changes `ALLGREEN`, adds a bypass actor, or carries anything other than the
-single queue rule; it reads the live ruleset back and fails unless every asserted field matches.
+rejects a fixture that changes `ALLGREEN`, adds a git-authored bypass actor, or carries anything
+other than the single queue rule. It then injects the executing review App as the sole
+installation-specific bypass actor, reads the live ruleset back, and fails unless every asserted
+field matches.
 Required checks remain independent and untouched. This makes config drift repairable by the same
 operator authority that owns generated deploy-state PRs without giving an agent GitHub administration.
 
-`min_entries_to_merge_wait_minutes: 0` removes only the idle batch timer. It does not bypass the
-queue: every PR still enters one serialized merge group, is rebased on current `main`, and must report
-the required checks on that rebased tree. Generated environment PRs need this serialization while
-they still commit shared per-environment AppSet and scheduler maps.
+`min_entries_to_merge_wait_minutes: 0` removes only the idle batch timer for ordinary PRs. They still
+enter a serialized merge group, rebase on current `main`, and report the required checks there.
+The review App's ruleset bypass is not general automation authority: `/vcs/merge` requests it only
+after the PR has classified as the App-signed env-manager change type and the principal has
+`node.manage_envs` on the trailer-named node. The ordinary path never sets the bypass flag.
 
 ## Signed env-manager fast path
 
@@ -156,6 +160,12 @@ GitHub `skipped` (a satisfied required conclusion), without scheduling four pass
 trusted classifier job owns the small schema + reproducible-generator proof. A PR that does not claim
 the reserved type runs full CI. A PR that claims it but fails any proof is red; it never silently
 falls back. Titles, labels, branch names, or copied PR bodies alone grant nothing.
+
+After those checks are green, `/vcs/merge` direct-squashes this one signed type with the review App's
+queue bypass. Classic required-status protection still applies, so the route cannot merge an
+unchecked tree. A normal PR—including one submitted by the same App—uses the merge queue. The
+env-manager writer already retries from current `main`; a stale/conflicting deterministic write is
+rejected and regenerated rather than silently overwriting another change.
 
 > Migration note: a repo that previously had the queue enabled via the classic UI checkbox should keep the ruleset as the single source of truth — the ruleset is authoritative and the legacy checkbox can be cleared once the ruleset is confirmed live (`gh api repos/{repo}/rulesets`).
 

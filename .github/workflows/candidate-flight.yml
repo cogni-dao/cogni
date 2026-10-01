@@ -36,6 +36,8 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
   SLOT: candidate-a
   OVERLAY_ENV: candidate-a
+  # Public workload zone for fork-aware generated scheduler routes.
+  FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
   # FLEET_CONTROL_ENV (subtask.5007): the env whose cluster reconciles + pays for akash
   # lanes. Default 'production' (cogni-dao fleet); an isolated fleet (cogni-test-org) sets
   # the repo var to 'candidate-a' so its own control plane owns akash lanes and no test
@@ -583,6 +585,71 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
+      - name: Reconcile isolated fleet control-plane root
+        if: steps.ssh-setup.outputs.has_vm == 'true'
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" == "cogni-dao/cogni" ]]; then
+            echo "Canonical fleet keeps its reviewed deploy/candidate-a-control-plane root."
+            exit 0
+          fi
+          # ISOLATED_FLEET_ROOT_IS_LOCAL: the apply-once root and its
+          # self-managing copy must follow the isolated parent's protected main.
+          # Otherwise the canonical root immediately overwrites this job's
+          # test-repo AppSet and Argo never sees the test deploy branch.
+          desired_repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          root_seed="ci-src/infra/k8s/argocd/control-plane/roots/candidate-a-control-plane-application.yaml"
+          rendered_root="$RUNNER_TEMP/candidate-a-control-plane-root.yaml"
+          sed -E \
+            -e "s#https://github\\.com/[Cc]ogni-[Dd][Aa][Oo]/cogni\\.git#${desired_repo}#g" \
+            -e 's#targetRevision: deploy/candidate-a-control-plane#targetRevision: main#g' \
+            "$root_seed" >"$rendered_root"
+
+          # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
+          . ci-src/scripts/ci/lib/ssh-retry.sh
+          read -r -a ssh_opts <<< "$SSH_OPTS"
+          ci_ssh_retry scp "${ssh_opts[@]}" "$rendered_root" "root@${VM_HOST}:/tmp/candidate-a-control-plane-root.yaml"
+          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" \
+            "kubectl apply -f /tmp/candidate-a-control-plane-root.yaml -n argocd && kubectl -n argocd annotate application cogni-candidate-a-control-plane argocd.argoproj.io/refresh=hard --overwrite && rm -f /tmp/candidate-a-control-plane-root.yaml"
+
+          for _ in $(seq 1 60); do
+            state="$(ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" \
+              "kubectl -n argocd get application cogni-candidate-a-control-plane -o jsonpath='{.spec.source.repoURL}{\"|\"}{.spec.source.targetRevision}{\"|\"}{.status.sync.revision}{\"|\"}{.status.sync.status}{\"|\"}{.status.health.status}{\"|\"}{.status.operationState.phase}'")"
+            # Argo's API drops directory.recurse:false as a default, so this
+            # self-managing Application can remain OutOfSync after a successful
+            # apply. Exact source + revision + health + operation success are
+            # the convergence proof; sync.status is diagnostic only.
+            if [[ "$state" == "${desired_repo}|main|${EXPECTED_REVISION}|"*'|Healthy|Succeeded' ]]; then
+              echo "Isolated control-plane root converged: $state"
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$state" != "${desired_repo}|main|${EXPECTED_REVISION}|"*'|Healthy|Succeeded' ]]; then
+            echo "::error::isolated control-plane root did not converge: $state"
+            exit 1
+          fi
+
+      - name: Reconcile fleet-control migration access
+        if: steps.ssh-setup.outputs.has_vm == 'true' && fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a'
+        env:
+          FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+        run: |
+          set -euo pipefail
+          # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
+          . ci-src/scripts/ci/lib/ssh-retry.sh
+          access_file="$RUNNER_TEMP/akash-tx-actuator-lane-access.yaml"
+          bash app-src/scripts/ci/render-akash-tx-actuator-lane-access.sh "$FLEET_CONTROL_ENV" >"$access_file"
+          read -r -a ssh_opts <<< "$SSH_OPTS"
+          ci_ssh_retry scp "${ssh_opts[@]}" "$access_file" "root@${VM_HOST}:/tmp/akash-tx-actuator-lane-access.yaml"
+          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "kubectl apply -f /tmp/akash-tx-actuator-lane-access.yaml && rm -f /tmp/akash-tx-actuator-lane-access.yaml"
+
       - name: Apply candidate-a-${{ matrix.node }}-applicationset.yaml
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
@@ -613,8 +680,17 @@ jobs:
             echo "::error::$APPSET_FILE missing at head_sha — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
             exit 1
           fi
+          # DEPLOY_REPO_OWNS_APPSET: committed AppSets default to the canonical
+          # fleet so the canonical tree stays byte-stable. At apply time render
+          # this one object for the repository whose deploy/<env>-<node> branch
+          # this workflow just wrote. Isolated test parents must never make Argo
+          # follow the canonical repo and silently ignore their deploy branch.
+          RENDERED_APPSET="$RUNNER_TEMP/appset-${NODE}.yaml"
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
+            CATALOG_DIR="${GITHUB_WORKSPACE}/app-src/infra/catalog" \
+            bash ci-src/scripts/ci/render-node-appset.sh candidate-a "$NODE" >"$RENDERED_APPSET"
           read -r -a ssh_opts <<< "$SSH_OPTS"
-          ci_ssh_retry scp "${ssh_opts[@]}" "$APPSET_FILE" "root@${VM_HOST}:/tmp/appset-${NODE}.yaml"
+          ci_ssh_retry scp "${ssh_opts[@]}" "$RENDERED_APPSET" "root@${VM_HOST}:/tmp/appset-${NODE}.yaml"
           # Anti-resurrection: the legacy shared `cogni-candidate-a` AppSet is
           # retired. Orphan-delete (never prune its live Applications) so it can
           # never reappear to re-clobber this lane, then apply the per-node object.
@@ -747,10 +823,19 @@ jobs:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
-          DOMAIN: ${{ vars.DOMAIN }}
+          # The isolated test parent uses DOMAIN for Akash workload identity
+          # (cogni-testing.org), while its k3s control plane remains at
+          # CANDIDATE_OPERATOR_DOMAIN allows an isolated test parent to keep its
+          # Akash workload zone separate while reusing the shared k3s operator.
+          # Forks without the override retain the conventional test.<root> host.
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
           FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          # An isolated Akash test parent must not receive the production-zone
+          # token just to inspect its already-live k3s operator record. The
+          # public readiness/buildSha gates below still fail closed on DNS/TLS.
+          CHECK_DNS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ZONE_ID != '' && 'true' || 'false' }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: app-src/infra/catalog
           ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS: 60
@@ -961,7 +1046,7 @@ jobs:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
-          DOMAIN: ${{ vars.DOMAIN }}
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
           # bug.5240 — secret-materialize's CI-derived bootstrap for the lease-log pump's
           # push credential (LOKI_LEASE_PUSH_* fallback; promote-and-deploy already exposes
           # these at job level). Create-if-absent: a later dedicated token wins.
@@ -1384,7 +1469,10 @@ jobs:
       - name: Checkout app source (PR catalog + base manifests)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          ref: ${{ needs.decide.outputs.head_sha }}
+          # PR flights reconcile the PR's catalog/manifests. Node-ref flights reconcile the
+          # target fleet's workflow source; an in-repo operator SHA can come from canonical and
+          # must not replace an isolated fork's catalog/domain state.
+          ref: ${{ inputs.pr_number != '' && needs.decide.outputs.head_sha || github.sha }}
           path: app-src
 
       - name: Reconcile scheduler-worker routing (propagate to per-env deploy branch)
@@ -1587,7 +1675,7 @@ jobs:
       - name: Wait for candidate readiness
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
         env:
-          DOMAIN: ${{ vars.DOMAIN }}
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
           PROMOTED_APPS: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-candidate-ready.sh
@@ -1604,7 +1692,7 @@ jobs:
       - name: Verify buildSha on endpoint (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
-          DOMAIN: ${{ vars.DOMAIN }}
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
           SOURCE_SHA_MAP: deploy-branch/.promote-state/source-sha-by-app.json
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.node_source_sha || needs.decide.outputs.head_sha }}
           NODES: ${{ matrix.node }}
@@ -1621,7 +1709,7 @@ jobs:
       - name: Run candidate smoke checks (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
-          DOMAIN: ${{ vars.DOMAIN }}
+          DOMAIN: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}
           PROMOTED_APPS: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/smoke-candidate.sh

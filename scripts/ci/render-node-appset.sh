@@ -94,6 +94,9 @@ deployable_nodes_for_env() {
 # render/apply time so Argo resolves the right repo (bug.5235) — the same
 # default-preserving env-var idiom as FLEET_CONTROL_ENV (subtask.5007) and the
 # ${FORK_REPO} substrate-app substitution (register-substrate-apps.sh).
+if [[ -z "${REPO_URL:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
+  REPO_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}.git"
+fi
 REPO_URL="${REPO_URL:-https://github.com/cogni-dao/cogni.git}"
 
 # Emit one ApplicationSet object for (env, node) by interpolating the shared

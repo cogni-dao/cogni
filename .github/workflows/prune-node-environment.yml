@@ -1,0 +1,113 @@
+name: Prune Node Environment
+
+# A merged, signed env-manager REMOVE deletes the generated AppSet from git. This workflow removes
+# the matching live per-node AppSet/Application from the cluster that owns the lane so Argo prunes
+# the workload and Crossplane runs its normal delete/finalizer path. It cannot promote, render, or
+# touch another node/environment.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Lane being removed"
+        required: true
+        type: choice
+        options: [candidate-a, preview, production]
+      control_environment:
+        description: "GitHub environment whose VM owns this lane's Argo control plane"
+        required: true
+        type: choice
+        options: [candidate-a, preview, production]
+      node:
+        description: "Exact node slug"
+        required: true
+        type: string
+      orphan_dseq:
+        description: "Optional known orphan Akash dseq to close and verify after prune"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prune-node-environment-${{ inputs.environment }}-${{ inputs.node }}
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.control_environment }}
+    steps:
+      - name: Validate exact target
+        env:
+          NODE: ${{ inputs.node }}
+          LANE: ${{ inputs.environment }}
+          ORPHAN_DSEQ: ${{ inputs.orphan_dseq }}
+        run: |
+          set -euo pipefail
+          case "$LANE" in candidate-a|preview|production) ;; *) exit 1 ;; esac
+          [[ "$NODE" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || {
+            echo "::error::invalid node slug"
+            exit 1
+          }
+          if [ -n "$ORPHAN_DSEQ" ] && ! [[ "$ORPHAN_DSEQ" =~ ^[0-9]+$ ]]; then
+            echo "::error::invalid orphan dseq"
+            exit 1
+          fi
+
+      - name: Setup SSH
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$VM_HOST" || { echo "::error::VM_HOST is required"; exit 1; }
+          test -n "$SSH_DEPLOY_KEY" || { echo "::error::SSH_DEPLOY_KEY is required"; exit 1; }
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Prune exactly one lane
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          NODE: ${{ inputs.node }}
+          LANE: ${{ inputs.environment }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+        run: |
+          set -euo pipefail
+          appset="cogni-${LANE}-${NODE}"
+          application="${LANE}-${NODE}"
+          ssh $SSH_OPTS root@"$VM_HOST" \
+            "kubectl delete applicationset \"$appset\" -n argocd --ignore-not-found --cascade=foreground --wait=true --timeout=180s && kubectl delete application \"$application\" -n argocd --ignore-not-found --cascade=foreground --wait=true --timeout=180s"
+
+      - name: Prove control objects are absent
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          NODE: ${{ inputs.node }}
+          LANE: ${{ inputs.environment }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTS root@"$VM_HOST" \
+            "! kubectl get applicationset \"cogni-${LANE}-${NODE}\" -n argocd >/dev/null 2>&1 && ! kubectl get application \"${LANE}-${NODE}\" -n argocd >/dev/null 2>&1"
+
+      - name: Checkout recovery tool
+        if: inputs.orphan_dseq != ''
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+
+      - name: Close and prove explicitly named orphan lease
+        if: inputs.orphan_dseq != ''
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          DSEQ: ${{ inputs.orphan_dseq }}
+          CONTROL_ENV: ${{ inputs.control_environment }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+        run: |
+          set -euo pipefail
+          namespace="cogni-${CONTROL_ENV}"
+          ssh $SSH_OPTS root@"$VM_HOST" \
+            "KUBECONFIG=/etc/rancher/k3s/k3s.yaml NAMESPACE='$namespace' bash -s -- --dseq '$DSEQ'" \
+            < scripts/ops/recover-orphaned-akash-lease.sh

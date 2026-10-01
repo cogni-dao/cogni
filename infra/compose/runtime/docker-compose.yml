@@ -602,7 +602,6 @@ services:
       - PROMETHEUS_USERNAME=${PROMETHEUS_USERNAME:-}
       - COGNI_DEFAULT_NODE_ID=${COGNI_DEFAULT_NODE_ID:-}
       - PROMETHEUS_PASSWORD=${PROMETHEUS_PASSWORD:-}
-
   alloy-k8s-events:
     image: grafana/alloy:v1.9.2
     restart: unless-stopped

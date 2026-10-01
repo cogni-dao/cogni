@@ -36,6 +36,10 @@ pass "committed Caddyfile.tmpl matches the catalog"
 
 echo "[2/7] every type:node has an edge block (catalog-driven, no node special-cased)"
 RENDERED="$(bash scripts/ci/render-caddyfile.sh)"
+local_certs_count="$(grep -c '^  local_certs$' <<<"$RENDERED")"
+[ "$local_certs_count" = "1" ] \
+  || fail "expected one global local_certs directive for the Cloudflare origin, found $local_certs_count"
+pass "Cloudflare origin uses local certificates (no proxied public-ACME dependency)"
 for node in "${NODE_TARGETS[@]}"; do
   slug="$(printf '%s' "$node" | tr '[:lower:]-' '[:upper:]_')"
   if is_primary_host "$node"; then

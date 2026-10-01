@@ -4045,6 +4045,39 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
   });
 });
 
+describe("GitHubRepoWriter.pruneNodeEnvironment", () => {
+  it("dispatches the one-node prune to the lane's control environment", async () => {
+    routeHandlers = {
+      [DISPATCH_ROUTE]: () => ({
+        workflow_run_id: 12348,
+        run_url:
+          "https://api.github.com/repos/cogni-test-org/cogni-monorepo/actions/runs/12348",
+        html_url:
+          "https://github.com/cogni-test-org/cogni-monorepo/actions/runs/12348",
+      }),
+    };
+
+    const result = await makeWriter().pruneNodeEnvironment({
+      parentOwner: "cogni-test-org",
+      parentRepo: "cogni-monorepo",
+      slug: "spawny-boi",
+      env: "preview",
+      controlEnv: "candidate-a",
+    });
+
+    expect(result.runId).toBe(12348);
+    expect(requests.at(-1)?.params).toMatchObject({
+      workflow_id: "prune-node-environment.yml",
+      ref: "main",
+      inputs: {
+        environment: "preview",
+        control_environment: "candidate-a",
+        node: "spawny-boi",
+      },
+    });
+  });
+});
+
 describe("rulesetGetToPutPayload", () => {
   it("copies the merge_queue ruleset verbatim, dropping the read-only envelope", () => {
     const put = rulesetGetToPutPayload({
@@ -4645,7 +4678,13 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
 describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
   const OWNER = "cogni-dao";
   const REPO = "cogni";
-  const expected = parseMergeQueueRulesetFixture(TEST_MERGE_QUEUE_POLICY_JSON);
+  const fixture = parseMergeQueueRulesetFixture(TEST_MERGE_QUEUE_POLICY_JSON);
+  const expected = {
+    ...fixture,
+    bypass_actors: [
+      { actor_id: 1, actor_type: "Integration", bypass_mode: "always" },
+    ],
+  };
 
   const policyFile = () => ({
     type: "file",
@@ -4702,7 +4741,7 @@ describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
     });
   });
 
-  it("is a zero-write no-op when live GitHub already matches main", async () => {
+  it("is a zero-write no-op when live GitHub already has the executing App bypass", async () => {
     routeHandlers = {
       "GET /repos/{owner}/{repo}/contents/{path}": policyFile,
       "GET /repos/{owner}/{repo}/rulesets": () => [
@@ -4736,7 +4775,7 @@ describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
     );
   });
 
-  it("rejects a policy with a bypass actor before reading or writing target rulesets", async () => {
+  it("rejects a git-authored bypass actor before injecting the executing App", async () => {
     const unsafe = {
       ...TEST_MERGE_QUEUE_POLICY,
       bypass_actors: [
@@ -4794,7 +4833,7 @@ describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
     ).rejects.toMatchObject({ code: "protection_unavailable", status: 502 });
   });
 
-  it("diffs the queue's exact safety and latency parameters", () => {
+  it("diffs the queue's exact safety, latency, and sole-App bypass", () => {
     expect(
       diffMergeQueueRuleset(
         {
@@ -4809,6 +4848,8 @@ describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
         },
         expected
       )
-    ).toContain("1 bypass actor(s) present, expected none");
+    ).toContain(
+      'bypass_actors are ["Integration:2994706:always"], expected ["Integration:1:always"]'
+    );
   });
 });

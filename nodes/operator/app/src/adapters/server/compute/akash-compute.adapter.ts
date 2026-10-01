@@ -20,7 +20,7 @@
  *     with a stable code so callers and the awareness surface observe their own failures.
  *   - AUDITED_PROVIDERS_ONLY (task.5051): the SDL anchors `signedBy.allOf` to the Overclock
  *     audit account and bids are screened on Console provider data (audited + online +
- *     uptime7d > 0.95 + activeLeases > 0, no 2σ price underbids) — pure logic in
+ *     uptime7d > 0.95, no 2σ price underbids; NOT activeLeases — bug.5334) — pure logic in
  *     ./akash-provider-screen. Metadata-read failure fails open (signedBy stays the hard gate).
  *   - BOOT_SLO_OR_CLOSE (task.5051): after lease, the workload must serve `/version` and its
  *     fixed `/readyz` health endpoint within `bootSloMs` (default 5min), or the deployment
@@ -55,7 +55,10 @@ import type {
 import { makeLogger } from "@/shared/observability";
 import {
   type AkashProviderInfo,
+  countrySourcesDisagree,
+  effectiveCountryCode,
   formatBidRejections,
+  formatBidRoster,
   type ProviderOutcomeStats,
   type ScreenableBid,
   type ScreenedBids,
@@ -142,8 +145,10 @@ export interface AkashComputeAdapterConfig {
    */
   preferredProviders?: readonly string[];
   /**
-   * Optional operator-owned hard provider boundary. When present, only these
-   * provider accounts may be leased; an empty list rejects every bid.
+   * Optional operator-owned provider PIN. A NON-EMPTY list narrows leasing to exactly those
+   * accounts. Absent OR EMPTY means NO pin — bids are judged on policy alone
+   * (PIN_IS_A_PREFERENCE_NOT_A_GATE in ./akash-provider-screen, story.5050). It used to be a
+   * fail-closed boundary where an empty list rejected every bid; it is not one now.
    */
   allowedProviders?: readonly string[];
   /**
@@ -166,7 +171,11 @@ export interface AkashComputeAdapterConfig {
    * compute_provider_outcomes insert failure never fails a live provision, but
    * it must land in logs loudly — silent drops gave provider screening amnesia.
    */
-  log?: { error(fields: Record<string, unknown>, message: string): void };
+  log?: {
+    error(fields: Record<string, unknown>, message: string): void;
+    /** Optional: a country-source disagreement is advisory, not a failure (story.5050). */
+    warn?(fields: Record<string, unknown>, message: string): void;
+  };
   /** SDL pricing knobs (max price per block per service). */
   pricing?: AkashSdlOptions;
   /** API base URL; defaults to the public Console API. */
@@ -219,6 +228,13 @@ interface ConsoleProvider {
   uptime7d?: number;
   leaseCount?: number;
   ipCountryCode?: string | null;
+  /** The provider's own signed on-chain location declaration. Preferred over GeoIP. */
+  country?: string | null;
+  /**
+   * The provider's own declaration that it will serve an SDL `accept:` hostname. OPTIONAL on
+   * Akash — absent means "did not say", which is NOT the same as `false`.
+   */
+  featEndpointCustomDomain?: boolean | null;
 }
 
 interface ConsoleLease {
@@ -267,6 +283,12 @@ interface ScreeningContext {
    * per-provision: it comes off the ProvisionSpec, which comes off the node's catalog row.
    */
   requiredCountryCodes: readonly string[];
+  /**
+   * Whether THIS workload serves a custom hostname, i.e. whether any global expose carries
+   * `hosts` (rendered as SDL `accept:`). Per-provision like the country requirement, and for
+   * the same reason: it is a property of the workload, not of the marketplace.
+   */
+  requiresCustomDomain: boolean;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -346,6 +368,7 @@ export class AkashComputeAdapter
   private readonly outcomeStore: ProviderOutcomeStore;
   private readonly log: {
     error(fields: Record<string, unknown>, message: string): void;
+    warn?(fields: Record<string, unknown>, message: string): void;
   };
   private readonly sdlOptions: AkashSdlOptions;
   private readonly now: () => Date;
@@ -1012,14 +1035,19 @@ export class AkashComputeAdapter
   ): Promise<ConsoleBidId> {
     const deadline = Date.now() + this.bidTimeoutMs;
     const preferred = this.config.preferredProviders ?? [];
-    const allowed = this.config.allowedProviders
-      ? new Set(this.config.allowedProviders)
-      : undefined;
+    // An EMPTY configured list collapses to `undefined` == no pin. Spelled out because `[]`
+    // is TRUTHY: the old `config.allowedProviders ? new Set(...)` turned an empty list into
+    // an empty Set, i.e. "no provider is permitted", which refused every bid in silence.
+    const allowed =
+      this.config.allowedProviders && this.config.allowedProviders.length > 0
+        ? new Set(this.config.allowedProviders)
+        : undefined;
     let sawAnyBid = false;
     // Carried out of the loop so NO_ELIGIBLE_BIDS can name WHICH filter refused everything.
     // Three independent filters can each empty the set; a static reason list sent operators
     // hunting the wrong one for a full bid window.
     let lastRejections: ScreenedBids["rejections"] = {};
+    let lastRoster: ScreenedBids["roster"] = [];
     for (;;) {
       const bids = await this.request<ConsoleBid[]>(
         "GET",
@@ -1041,8 +1069,9 @@ export class AkashComputeAdapter
           priceAmount: Number(b.bid?.price?.amount ?? Number.POSITIVE_INFINITY),
         });
       }
-      const { ranked, rejections } = screenBids({
+      const { ranked, rejections, roster } = screenBids({
         bids: screenable,
+        requiresCustomDomain: screening.requiresCustomDomain,
         providers: screening.providers,
         outcomes: screening.outcomes,
         preferredProviders: preferred,
@@ -1053,6 +1082,7 @@ export class AkashComputeAdapter
         nowMs: Date.now(),
       });
       lastRejections = rejections;
+      lastRoster = roster;
       const best = ranked[0];
       // A preferred provider that survived screening wins immediately; anyone else
       // waits out the window so late (often better) bids can compete.
@@ -1070,6 +1100,10 @@ export class AkashComputeAdapter
             "NO_ELIGIBLE_BIDS",
             `bids arrived for dseq ${dseq} but none passed provider screening ` +
               `[refused: ${formatBidRejections(lastRejections)}]` +
+              // The roster names the ADDRESSES so a dry auction is actionable without
+              // re-running it: counts alone cannot tell "nobody eligible bid" from
+              // "we refused the provider we were waiting for" (story.5050).
+              ` [bids: ${formatBidRoster(lastRoster)}]` +
               (screening.requiredCountryCodes.length > 0
                 ? ` (required placement countries: ${screening.requiredCountryCodes.join(", ")})`
                 : "")
@@ -1205,6 +1239,13 @@ export class AkashComputeAdapter
     return {
       ...screening,
       requiredCountryCodes: spec.placement?.requiredCountryCodes ?? [],
+      // One source of truth with the SDL: buildAkashSdl emits `accept:` from exactly these
+      // `hosts`, so the screen asks for the capability precisely when the manifest will use it.
+      requiresCustomDomain: spec.services.some((service) =>
+        (service.expose ?? []).some(
+          (expose) => expose.global && (expose.hosts?.length ?? 0) > 0
+        )
+      ),
     };
   }
 
@@ -1231,16 +1272,46 @@ export class AkashComputeAdapter
         isOnline: p.isOnline === true,
         isValidVersion: p.isValidVersion === true,
         uptime7d: Number(p.uptime7d ?? 0),
-        activeLeases: Number(p.leaseCount ?? 0),
-        countryCode: p.ipCountryCode ?? null,
+        // Resolved at the SOURCE so every downstream consumer — the hard country filter,
+        // the latency preference, and the bid roster — reads one consistent country.
+        countryCode: effectiveCountryCode({
+          declared: p.country,
+          geoIp: p.ipCountryCode,
+        }),
+        // Carried as a TRISTATE on purpose: `=== true`/`=== false` are the provider's
+        // declaration, `undefined` is "the registry read did not say". The screen refuses
+        // only on a positive `false`, so one failed marketplace read can never dry an auction.
+        ...(typeof p.featEndpointCustomDomain === "boolean"
+          ? { supportsCustomDomain: p.featEndpointCustomDomain }
+          : {}),
       });
+      if (
+        countrySourcesDisagree({ declared: p.country, geoIp: p.ipCountryCode })
+      ) {
+        // Not an error. This is the ONLY way we notice a stale GeoIP without re-running a
+        // manual audit, and a silently-wrong country refuses a provider for a country it is
+        // not in (story.5050).
+        this.log?.warn?.(
+          {
+            provider: p.owner,
+            declaredCountry: p.country,
+            geoIpCountry: p.ipCountryCode,
+          },
+          "akash_provider_country_source_disagreement"
+        );
+      }
     }
     const outcomes = await this.outcomeStore
       .stats(PROVIDER)
       .catch(() => new Map<string, ProviderOutcomeStats>());
     // Unconstrained by default so this seam is TOTAL: a caller that forgets `withPlacement`
     // gets today's behaviour, never an undefined requirement the screener would crash on.
-    return { providers, outcomes, requiredCountryCodes: [] };
+    return {
+      providers,
+      outcomes,
+      requiredCountryCodes: [],
+      requiresCustomDomain: false,
+    };
   }
 
   /** Best-effort outcome append (OUTCOME_STORE_IS_ADVISORY). */

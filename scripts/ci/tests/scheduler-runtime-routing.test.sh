@@ -150,7 +150,9 @@ yq ".name = \"za\" | .path_prefix = \"nodes/za/\" | .node_port = 30402 | .image_
 
 assert_endpoint() {
   local env="$1" want_zk="$2" want_za="$3" csv
-  csv="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" FORK_DOMAIN_ROOT=example.test \
+  # DOMAIN cleared so FORK_DOMAIN_ROOT=example.test is the fallback path under test
+  # (ci.yaml exports an ambient DOMAIN that would otherwise take precedence — bug.5330).
+  csv="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" DOMAIN='' FORK_DOMAIN_ROOT=example.test \
     bash scripts/ci/render-scheduler-worker-endpoints.sh --env "$env")" \
     || fail "placement render failed for env $env"
   case ",$csv," in

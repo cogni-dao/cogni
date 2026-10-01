@@ -31,6 +31,17 @@ env:
   # env. Default 'production' (cogni-dao); an isolated fleet (cogni-test-org) sets the repo
   # var to 'candidate-a' so its committed appsets tree matches. Read by control_env_for.
   FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+  # The repo that owns this fleet's deploy/* branches. Canonical keeps the same URL;
+  # the isolated test fleet renders its own repo instead of cogni-dao/cogni.
+  REPO_URL: https://github.com/${{ github.repository }}.git
+  # SUBSTRATE root zone (state-service / VM-discovery externalName hosts). Canonical keeps the
+  # cognidao.org default; an isolated fleet that relocates its substrate sets the repo variable.
+  FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+  # Public WORKLOAD zone (browser-facing NEXTAUTH host + catalog-derived scheduler endpoints).
+  # On the test-parent mirror this DIVERGES from the substrate root: DOMAIN=cogni-testing.org
+  # while FORK_DOMAIN_ROOT stays cognidao.org. Empty default so a plain fork that sets only
+  # FORK_DOMAIN_ROOT still falls back via the renderer's ${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}} (bug.5330).
+  DOMAIN: ${{ vars.DOMAIN }}
 
 jobs:
   env_manager_fast_path:

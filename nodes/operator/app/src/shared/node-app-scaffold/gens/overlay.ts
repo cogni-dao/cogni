@@ -11,11 +11,12 @@
  *   what `render-node-overlays.sh <env> <slug>` emits. Env-specific content (namespace, externalName,
  *   NEXTAUTH host) rides along from the source overlay unchanged.
  * Invariants:
- *   - SCAFFOLD_OUTPUT_PARITY — the ONLY transforms are `s/node-template/<slug>/g` then the
+ *   - SCAFFOLD_OUTPUT_PARITY — the structural transforms are `s/node-template/<slug>/g` then the
  *     word-bounded port literals (`s/\b30200\b/<nodePort>/g; s/\b3200\b/<port>/g`; 30200 before 3200
  *     so the `\b30200\b` match is not shadowed). The node-template template overlay already carries
  *     the node-at-root image layout (/app/app) and the ESO `<slug>-env-secrets` target directly —
- *     there is no path or secret rewrite. Byte-exact twin of `render-node-overlays.sh`.
+ *     there is no path or secret rewrite. A supplied fleet domain rewrites only NEXTAUTH_URL's
+ *     public host; VM service-discovery domains remain unchanged. Byte-exact twin otherwise.
  *   - NODE_AT_ROOT_MIGRATE_PATH — wizard-born nodes ship node-at-root images whose app tree is at
  *     `/app/app`. The template overlay carries `/app/app` migrate commands directly; this fails
  *     closed if the node-at-root Postgres migrate command is absent (a wrong path silently
@@ -36,22 +37,20 @@ const NODE_AT_ROOT_MIGRATE_CMD = `exec node ${STANDALONE_APP_DIR}/migrate.mjs ${
 /**
  * Clone the node-template overlay for one env into the new node's overlay. `templateOverlay` is the
  * source `infra/k8s/overlays/<env>/node-template/kustomization.yaml`; the env identity is carried by
- * that content (no substitution needed). The only transforms are the slug rename and the two
- * well-known port literals — the template already carries the node-at-root migrate paths and the ESO
- * `<slug>-env-secrets` target. Throws if the node-at-root Postgres migrate command is absent
- * (NODE_AT_ROOT_MIGRATE_PATH).
+ * that content. The transforms are the slug rename, the two well-known port literals, and an optional
+ * public NEXTAUTH_URL domain rewrite for an isolated fleet. Throws if the node-at-root Postgres
+ * migrate command is absent (NODE_AT_ROOT_MIGRATE_PATH).
  */
 export function renderOverlay(
   templateOverlay: string,
   slug: string,
   nodePort: number,
-  port: number
+  port: number,
+  publicDomainRoot?: string
 ): string {
-  const rendered = applyOverlayTransforms(
-    templateOverlay,
-    slug,
-    nodePort,
-    port
+  const rendered = rewriteNextAuthDomain(
+    applyOverlayTransforms(templateOverlay, slug, nodePort, port),
+    publicDomainRoot
   );
   if (!rendered.includes(NODE_AT_ROOT_MIGRATE_CMD)) {
     throw new Error(
@@ -60,6 +59,23 @@ export function renderOverlay(
     );
   }
   return rendered;
+}
+
+/** Rewrite only the browser-facing node origin; VM service discovery remains on its own zone. */
+function rewriteNextAuthDomain(
+  content: string,
+  publicDomainRoot?: string
+): string {
+  const domainRoot = publicDomainRoot?.trim();
+  if (!domainRoot || domainRoot === "cognidao.org") return content;
+  return content.replace(
+    /(path:\s*\/data\/NEXTAUTH_URL\s*\n\s*value:\s*"https:\/\/)([^"\n]+)(")/,
+    (_match, prefix: string, host: string, suffix: string) => {
+      const canonicalSuffix = ".cognidao.org";
+      if (!host.endsWith(canonicalSuffix)) return `${prefix}${host}${suffix}`;
+      return `${prefix}${host.slice(0, -canonicalSuffix.length)}.${domainRoot}${suffix}`;
+    }
+  );
 }
 
 /**

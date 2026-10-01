@@ -77,8 +77,9 @@ patches:
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
   # merge on `name`), never by positional JSON-pointer index. A positional
   # `/env/N/value` patch silently repoints when the base list shifts — that exact
-  # failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS fleet-wide, and an empty
-  # allowlist rejects every Akash provider bid.
+  # failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS fleet-wide. Since story.5050 a
+  # blanked value no longer closes every auction (empty == "no pin"), but a patch that
+  # silently repoints ANY of these values is still a fleet-wide incident.
   - target:
       kind: Deployment
       name: akash-tx-actuator
@@ -98,13 +99,24 @@ patches:
                       fieldRef: { fieldPath: metadata.namespace }
                   - name: DEPLOY_ENVIRONMENT
                     value: production
-                  # The providers this writer may lease from, fleet-wide. It is a HARD filter
-                  # (AkashComputeAdapter.selectBid), and it governs EVERY cogni-dao node in
-                  # EVERY environment — NS3 routes all real nodes to this production writer —
-                  # so candidate-a and preview placements are screened here too, not by their
-                  # own overlays. Set BY NAME via strategic merge, never a positional
-                  # `/env/N/value` patch: that exact failure (d69e5c29) blanked this list
-                  # fleet-wide and an empty allowlist rejects every bid, silently.
+                  # OPTIONAL PIN — NOT THE AUTHORIZATION BOUNDARY (story.5050). While
+                  # NON-EMPTY this is still a hard narrowing, and it still governs EVERY
+                  # cogni-dao node in EVERY environment (NS3 routes all real nodes to this
+                  # production writer), so candidate-a and preview placements are pinned here
+                  # too, not by their own overlays. What CHANGED: emptying this value no
+                  # longer refuses every bid — it means "no pin, screen on policy alone".
+                  # Set BY NAME via strategic merge, never a positional `/env/N/value` patch
+                  # (d69e5c29 blanked this list fleet-wide that way).
+                  #
+                  # THE LIST BELOW IS KEPT BUT IS KNOWN STALE. Measured against the live
+                  # registry 2026-09-30: 1848 providers registered, 30 online+audited+leasing,
+                  # 28 also custom-domain-capable, and only 6 of these 11 addresses qualify.
+                  # FIVE SLOTS ARE DEAD — overclock NL, Froggy RO and DSTM CH publish
+                  # `featEndpointCustomDomain=false`; ithub UA and RHITE FI are offline. That
+                  # rot, not the Akash market, is what held the poly node to one vendor across
+                  # ten dry auctions. Emptying this value is now the SAFE way to widen the
+                  # pool to all 28 qualifying providers; it is left populated here so that
+                  # unpinning production is a deliberate, separately-reviewed one-line change.
                   #
                   # zencloud (BE, Antwerp, AS5432 Proximus) hosts every production slot today.
                   #
@@ -113,14 +125,59 @@ patches:
                   # provider produced `refused: not_allowlisted=5, required_country=1` and closed
                   # the deployment — the filter worked perfectly and nothing could win, because
                   # the one eligible provider simply did not bid that round. The cell is a SET;
-                  # the allowlist has to be one too. Every provider below sits in a
-                  # Polymarket-PERMITTED jurisdiction and is Overclock-audited (verified on the
-                  # SDL anchor, not just Console's isAudited flag):
+                  # the allowlist has to be one too. The quality screen, price-outlier exclusion,
+                  # and derived strike blacklist are the safety boundary; this coarse allowlist
+                  # must not second-guess them by carrying only providers that happened to look
+                  # attractive during one capacity snapshot. The ten non-BE providers below sit
+                  # in Polymarket-PERMITTED jurisdictions and are Overclock-audited (verified on
+                  # the SDL anchor, not just Console's isAudited flag):
+                  # (state as re-measured 2026-09-30 — DEAD slots can no longer win a bid):
                   #   akash1hgulk6… digital frontier  PT Evora   AS5626
                   #   akash1aaul837… digital frontier BG Sofia
-                  #   akash19tp6w64… DSTM             CH Zurich
+                  #   akash19tp6w64… DSTM             CH Zurich       DEAD no custom-domain
                   #   akash1z9nr23c… digital frontier FI Helsinki
-                  #   akash1svfr9xa… overclock        NL Amsterdam
+                  #   akash1svfr9xa… overclock        NL Amsterdam    DEAD no custom-domain
+                  #   akash1s3hq36… Froggy Servers   RO Cluj-Napoca  DEAD no custom-domain
+                  #   akash1cvcfyad… proxyua          UA
+                  #   akash1rja3y2c… Pronto-AI        UA
+                  #   akash1v0f04wr… ithub            UA Kyiv         DEAD offline
+                  #   akash127x6cuk… RHITE            FI Helsinki     DEAD offline
+                  #   akash15pkdke… h100/val         NL Amsterdam (story.5050)
+                  # That last one is why this list moved again. Console advertises it as GB,
+                  # but the provider DECLARES `country=NL, city=AMS, datacenter=eu-west-ams-1,
+                  # hosting-provider=Overclock` on chain. Only the GeoIP of its ingress says
+                  # GB, at 51.5072,-0.1276 — central London, the default coordinate a
+                  # registrant gets when nothing better is known. The screener reads the
+                  # DECLARED field and falls back to GeoIP, logging
+                  # `akash_provider_country_source_disagreement` when they differ. No
+                  # per-owner correction table — that would rot exactly like this list does.
+                  #
+                  # WHY THIS LIST IS THE REAL CAP — MEASURED, not inferred (story.5050).
+                  # Posted poly's EXACT spec (cpu 2 / 2048Mi / 4096Mi, signedBy overclock,
+                  # accept poly.cognidao.org, both nginx and poly's own private image) to the
+                  # open market from a throwaway wallet. Ten bids in ten seconds, twice. Three
+                  # of them sit INSIDE poly's country set and OUTSIDE this list:
+                  #
+                  #   alphavps  BG   8.00
+                  #   oni       PT  28.00
+                  #   hetzner   FI  16.00
+                  #
+                  # Meanwhile poly's own gen-16 auction drew 8 bids and refused every one:
+                  # `quality=1, not_allowlisted=3, required_country=4`. Every refusal was
+                  # CORRECT — the screener is not broken. The pool was simply never allowed to
+                  # contain a provider that could win. Eleven consecutive dry auctions and
+                  # four days of country-set tuning were aimed at the minor filter; THIS is
+                  # the major one, and `not_allowlisted` is evaluated FIRST (first-match-wins
+                  # in `rejectionFor`), so those bids were never even country-evaluated.
+                  #
+                  # Five of the entries above are already dead: overclock NL, Froggy RO and
+                  # DSTM CH declare featEndpointCustomDomain=FALSE (every node has a
+                  # publicHost, so they can only win a lease and 404 — that was bug.5325, a
+                  # declared capability we never read), and ithub UA + RHITE FI are offline.
+                  # Every gate that actually matters fires independently of this list:
+                  # on-chain audit, the node-catalog country requirement, quality,
+                  # price-outlier and strike blacklisting. Keep it only as an optional pin;
+                  # policy must not be a hand-maintained enumeration.
                   # DSTM's larger CH box is deliberately ABSENT: it reports 0 active leases, and
                   # the screener's quality filter requires activeLeases>0 as proof of registry
                   # egress, so allowlisting it would only add a bid that is refused anyway.
@@ -135,7 +192,7 @@ patches:
                   # node MAY use is now the node's own catalog cell
                   # (`required_placement_countries.<env>`), which FILTERS bids fail-closed.
                   - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm,akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash19tp6w64zvdvdh26pv5lyf4f40llnqthgfy0t48,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x,akash1svfr9xarfkcxwdnx32nvl8cs9rfruu4nd56c4f
+                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm,akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash19tp6w64zvdvdh26pv5lyf4f40llnqthgfy0t48,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x,akash1svfr9xarfkcxwdnx32nvl8cs9rfruu4nd56c4f,akash1s3hq36mpas4nmkqasn7fgwhs9968cgl3u5esnw,akash1cvcfyadrm6gcghzspyhacw924c90lwnjkhcglm,akash1rja3y2ctj3tzmesvh0zfhzzx95rfjw405hwt8d,akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h,akash127x6cuk44ul3azferg8wy9fju686kcf6x2dhz7,akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr
                   - name: AKASH_ACTUATOR_ACCOUNT_ID
                     # PUBLIC, non-secret Akash account address of the operator sponsor wallet.
                     # Asserted at boot by assertActuatorWalletAccount() against Console

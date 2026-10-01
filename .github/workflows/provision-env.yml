@@ -65,6 +65,11 @@ concurrency:
   group: provision-env-${{ inputs.env }}
   cancel-in-progress: false
 
+env:
+  # The cluster that reconciles and pays for Akash lanes also owns their OpenBao prefixes.
+  # Production is the hub default; isolated fleets explicitly point this at candidate-a.
+  FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+
 jobs:
   provision:
     if: inputs.mode == 'full'

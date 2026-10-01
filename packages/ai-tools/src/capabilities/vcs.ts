@@ -150,6 +150,12 @@ export interface VcsCapability {
     repo: string;
     prNumber: number;
     method: "squash" | "merge" | "rebase";
+    /**
+     * Direct-merge even when the base branch has a merge queue. The caller may set this only
+     * after a narrower trust gate has proved the PR is eligible and the executing GitHub App is
+     * the queue ruleset's sole bypass actor.
+     */
+    bypassQueue?: boolean;
   }): Promise<MergeResult>;
 
   /** Create a new branch from a ref (branch name or SHA). */

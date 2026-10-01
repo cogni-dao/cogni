@@ -28,7 +28,7 @@
 export type SecretsLane = "candidate-a" | "preview" | "production";
 
 /**
- * Lanes each serving environment may custody, widest first.
+ * Lanes each serving environment may custody in the default production-controlled fleet.
  *
  * `production` is the multi-lane custodian because it is the PAYING cluster: the
  * Crossplane Composition interpolates every lane's secrets into the lease production's
@@ -51,8 +51,15 @@ export const SECRETS_LANE_TRUST: Readonly<
  */
 export function canWriteSecretsLane(
   servedEnv: string,
-  requestedEnv: string
+  requestedEnv: string,
+  fleetControlEnv: string = "production"
 ): boolean {
+  if (
+    servedEnv === fleetControlEnv &&
+    Object.hasOwn(SECRETS_LANE_TRUST, requestedEnv)
+  ) {
+    return true;
+  }
   const allowed = SECRETS_LANE_TRUST[servedEnv as SecretsLane];
-  return allowed !== undefined && allowed.includes(requestedEnv as SecretsLane);
+  return allowed?.includes(requestedEnv as SecretsLane) ?? false;
 }

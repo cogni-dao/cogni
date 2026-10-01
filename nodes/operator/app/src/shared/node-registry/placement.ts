@@ -9,7 +9,7 @@
  *   cluster; a node placed on decentralized compute has no `<slug>-node-app` Service and must be
  *   dialed at the public host it actually serves (bug.5106, story.5016).
  * Scope: Address math only. No I/O, no env read, no DB — callers supply the resolved placement,
- *   this environment's deploy env, and the operator's own apex domain.
+ *   this environment's deploy env, the fleet control env, and the operator's own apex domain.
  * Invariants:
  *   - K3S_IS_DEFAULT: an absent per-env declaration keeps the existing in-cluster lane, byte-for-byte
  *     the same default as `resolveNodeDeploymentProvider()` and `deployment_provider_for_target()`

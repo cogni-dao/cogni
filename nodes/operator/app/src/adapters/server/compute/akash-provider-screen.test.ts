@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 import {
   type AkashProviderInfo,
   BLACKLIST_TTL_MS,
+  countrySourcesDisagree,
+  effectiveCountryCode,
   formatBidRejections,
+  formatBidRoster,
   isProviderBlacklisted,
   type ProviderOutcomeStats,
   passesQualityFilter,
@@ -27,11 +30,68 @@ function info(
     isOnline: true,
     isValidVersion: true,
     uptime7d: 0.999,
-    activeLeases: 5,
     countryCode: "BE",
     ...over,
   };
 }
+
+describe("declared custom-domain capability", () => {
+  /**
+   * The exact near-miss from story.5050. On poly's own order the CHEAPEST bid inside its
+   * permitted country set came from a provider publishing featEndpointCustomDomain=false
+   * (CH, 6.00) while the capable one bid 7.00. Price is the final rank tiebreak, so without
+   * this gate the incapable provider wins, takes a paid lease, serves nothing at the public
+   * host, misses the boot SLO, and onGiveUp:Replace spends up to three leases to rediscover
+   * what the registry already declared (bug.5325).
+   */
+  it("refuses a provider that declares it cannot serve a custom domain", () => {
+    const providers = new Map([
+      [
+        "cheap-incapable",
+        info("cheap-incapable", { supportsCustomDomain: false }),
+      ],
+      ["capable", info("capable", { supportsCustomDomain: true })],
+    ]);
+    const screened = screenFull(
+      [bid("cheap-incapable", 6), bid("capable", 7)],
+      {
+        providers,
+        requiresCustomDomain: true,
+      }
+    );
+    expect(screened.ranked.map((b) => b.provider)).toEqual(["capable"]);
+    expect(screened.rejections).toMatchObject({ no_custom_domain: 1 });
+    expect(
+      screened.roster.find((v) => v.provider === "cheap-incapable")?.rejection
+    ).toBe("no_custom_domain");
+  });
+
+  /** A workload with no custom hostname must not be narrowed by a capability it never uses. */
+  it("ignores the capability when the workload needs no custom domain", () => {
+    const providers = new Map([
+      ["incapable", info("incapable", { supportsCustomDomain: false })],
+    ]);
+    const screened = screenFull([bid("incapable", 6)], {
+      providers,
+      requiresCustomDomain: false,
+    });
+    expect(screened.ranked.map((b) => b.provider)).toEqual(["incapable"]);
+  });
+
+  /**
+   * UNKNOWN_IS_NOT_NO. A failed /v1/providers read leaves the flag undefined; refusing on
+   * absence would turn one bad marketplace call into NO_ELIGIBLE_BIDS across the fleet.
+   */
+  it("does not refuse when the provider never declared either way", () => {
+    const providers = new Map([["silent", info("silent", {})]]);
+    const screened = screenFull([bid("silent", 6)], {
+      providers,
+      requiresCustomDomain: true,
+    });
+    expect(screened.ranked.map((b) => b.provider)).toEqual(["silent"]);
+    expect(screened.rejections.no_custom_domain).toBeUndefined();
+  });
+});
 
 function bid(provider: string, priceAmount: number): ScreenableBid {
   return { provider, priceAmount };
@@ -46,6 +106,7 @@ function screenFull(
     providers: new Map(),
     outcomes: new Map(),
     preferredProviders: [],
+    requiresCustomDomain: false,
     preferredCountryCodes: [],
     requiredCountryCodes: [],
     excludedProviders: new Set(),
@@ -71,9 +132,20 @@ describe("passesQualityFilter", () => {
     ["offline", { isOnline: false }],
     ["invalid version", { isValidVersion: false }],
     ["uptime7d at threshold", { uptime7d: 0.95 }],
-    ["zero active leases", { activeLeases: 0 }],
   ] as const)("rejects a provider that is %s", (_label, over) => {
     expect(passesQualityFilter(info("akash1bad", over))).toBe(false);
+  });
+
+  /**
+   * A_BID_IS_NOT_A_POPULARITY_CONTEST (bug.5334). Zero current tenants must NOT refuse: the
+   * old `activeLeases > 0` condition was unsatisfiable for any provider without an existing
+   * tenant, so a provider's FIRST lease with us could never be won. That is what refused
+   * `akash.rhite.co.uk` — audited, valid-version, online, uptime7d 0.967,
+   * featEndpointCustomDomain=true, inside the node's permitted countries — after it had
+   * already bid 9.14 on poly's own production auction (story.5050, gen-18).
+   */
+  it("accepts a healthy provider that has no tenants yet", () => {
+    expect(passesQualityFilter(info("akash1newcomer"))).toBe(true);
   });
 });
 
@@ -124,14 +196,25 @@ describe("screenBids quality filter", () => {
   it("drops providers failing the quality filter when metadata is available", () => {
     const providers = new Map([
       ["akash1good", info("akash1good")],
-      ["akash1froggy", info("akash1froggy", { activeLeases: 0 })],
+      ["akash1stale", info("akash1stale", { isValidVersion: false })],
       ["akash1down", info("akash1down", { isOnline: false })],
+      // A provider with no tenants yet is NOT a quality failure — see
+      // A_BID_IS_NOT_A_POPULARITY_CONTEST. It stays in the survivor set.
+      ["akash1newcomer", info("akash1newcomer")],
     ]);
     const out = screen(
-      [bid("akash1froggy", 10), bid("akash1good", 500), bid("akash1down", 20)],
+      [
+        bid("akash1stale", 10),
+        bid("akash1good", 500),
+        bid("akash1down", 20),
+        bid("akash1newcomer", 30),
+      ],
       { providers }
     );
-    expect(out.map((b) => b.provider)).toEqual(["akash1good"]);
+    expect(out.map((b) => b.provider)).toEqual([
+      "akash1newcomer",
+      "akash1good",
+    ]);
   });
 
   it("drops providers unknown to the metadata index when metadata is available", () => {
@@ -252,6 +335,91 @@ describe("screenBids ranking", () => {
       "akash1hist",
       "akash1near",
     ]);
+  });
+});
+
+describe("screenBids provider pin (PIN_IS_A_PREFERENCE_NOT_A_GATE)", () => {
+  // story.5050. The allowlist is retired as a GATE and kept only as a PIN. These pin the
+  // INVERSION — an empty pin used to refuse every bid, which is how a blanked overlay value
+  // (d69e5c29) closed auctions fleet-wide and how a rotting 11-address enumeration, 5 slots
+  // of which had gone dead, became the real single-vendor constraint.
+  it("an EMPTY pin is NO pin — every bid is still screened, none are refused for it", () => {
+    const out = screenFull(
+      [bid("akash1stranger", 100), bid("akash1other", 90)],
+      {
+        allowedProviders: new Set<string>(),
+      }
+    );
+    expect(out.ranked.map((b) => b.provider)).toEqual([
+      "akash1other",
+      "akash1stranger",
+    ]);
+    expect(out.rejections).toEqual({});
+  });
+
+  it("an OMITTED pin is NO pin (unchanged)", () => {
+    const out = screenFull([bid("akash1stranger", 100)]);
+    expect(out.ranked.map((b) => b.provider)).toEqual(["akash1stranger"]);
+    expect(out.rejections).toEqual({});
+  });
+
+  it("a NON-EMPTY pin still hard-narrows the pool", () => {
+    const out = screenFull(
+      [bid("akash1pinned", 900), bid("akash1stranger", 1)],
+      {
+        allowedProviders: new Set(["akash1pinned"]),
+      }
+    );
+    expect(out.ranked.map((b) => b.provider)).toEqual(["akash1pinned"]);
+    expect(out.rejections).toEqual({ not_allowlisted: 1 });
+  });
+
+  it("a NON-EMPTY pin that nobody matches still empties the set and names itself", () => {
+    const out = screenFull([bid("akash1stranger", 100)], {
+      allowedProviders: new Set(["akash1absent"]),
+    });
+    expect(out.ranked).toEqual([]);
+    expect(out.rejections).toEqual({ not_allowlisted: 1 });
+    expect(out.roster[0]).toMatchObject({ rejection: "not_allowlisted" });
+  });
+
+  it("removing the pin removes NO other gate — quality, country and strikes still refuse", () => {
+    const out = screenFull(
+      [bid("akash1pt", 100), bid("akash1weak", 100), bid("akash1struck", 100)],
+      {
+        allowedProviders: new Set<string>(),
+        providers: new Map([
+          ["akash1pt", info("akash1pt", { countryCode: "PT" })],
+          [
+            "akash1weak",
+            info("akash1weak", { countryCode: "PT", isAudited: false }),
+          ],
+          ["akash1struck", info("akash1struck", { countryCode: "PT" })],
+        ]),
+        outcomes: new Map([
+          [
+            "akash1struck",
+            { successes: 0, failures: 3, lastFailureAtMs: NOW - HOUR },
+          ],
+        ]),
+        requiredCountryCodes: ["PT"],
+      }
+    );
+    expect(out.ranked.map((b) => b.provider)).toEqual(["akash1pt"]);
+    expect(out.rejections).toEqual({ blacklisted: 1, quality: 1 });
+    expect(out.rejections.not_allowlisted).toBeUndefined();
+  });
+
+  it("an empty pin does not mask the node's fail-closed country requirement", () => {
+    const out = screenFull([bid("akash1be", 100)], {
+      allowedProviders: new Set<string>(),
+      providers: new Map([
+        ["akash1be", info("akash1be", { countryCode: "BE" })],
+      ]),
+      requiredCountryCodes: ["PT"],
+    });
+    expect(out.ranked).toEqual([]);
+    expect(out.rejections).toEqual({ required_country: 1 });
   });
 });
 
@@ -389,5 +557,126 @@ describe("screenBids rejection accounting (EVERY_REJECTION_IS_COUNTED)", () => {
     expect(formatBidRejections({ required_country: 3, quality: 1 })).toBe(
       "required_country=3, quality=1"
     );
+  });
+});
+
+describe("bid roster", () => {
+  // story.5050: eight poly auctions were re-rolled on aggregate counts alone. These pin the
+  // property that made that possible — a refused bid must stay attributable to an ADDRESS.
+  it("records every bid seen, survivors and refusals alike", () => {
+    const { roster } = screenFull([bid("akash-a", 5), bid("akash-b", 9)], {
+      allowedProviders: new Set(["akash-a"]),
+    });
+    expect(roster).toHaveLength(2);
+    expect(roster[0]).toMatchObject({ provider: "akash-a", priceAmount: 5 });
+    expect(roster[0]?.rejection).toBeUndefined();
+    expect(roster[1]).toMatchObject({
+      provider: "akash-b",
+      rejection: "not_allowlisted",
+    });
+  });
+
+  it("carries the country that the aggregate count cannot express", () => {
+    const { roster } = screenFull([bid("akash-a", 5)], {
+      providers: new Map([["akash-a", info("akash-a", { countryCode: "PT" })]]),
+      requiredCountryCodes: ["BG"],
+    });
+    expect(roster[0]).toMatchObject({
+      countryCode: "PT",
+      rejection: "required_country",
+    });
+  });
+
+  it("reports an unknown country as null rather than guessing", () => {
+    const { roster } = screenFull([bid("akash-a", 5)]);
+    expect(roster[0]?.countryCode).toBeNull();
+  });
+
+  it("amends the entry of a bid refused as a price outlier after the fact", () => {
+    // Outlier detection runs on the eligible cohort, so it cannot be decided in the
+    // first pass; a refused outlier must not be left looking like a survivor.
+    const { roster, rejections } = screenFull([
+      bid("akash-a", 1),
+      bid("akash-b", 100),
+      bid("akash-c", 101),
+      bid("akash-d", 102),
+    ]);
+    expect(rejections.price_outlier).toBe(1);
+    const outlier = roster.find((r) => r.provider === "akash-a");
+    expect(outlier?.rejection).toBe("price_outlier");
+    expect(
+      roster.filter((r) => r.rejection === undefined).map((r) => r.provider)
+    ).toEqual(["akash-b", "akash-c", "akash-d"]);
+  });
+
+  it("renders an actionable line, eliding the middle of each address", () => {
+    const line = formatBidRoster([
+      {
+        provider: "akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk",
+        priceAmount: 9.34,
+        countryCode: "PT",
+        rejection: "required_country",
+      },
+      { provider: "akash1short", priceAmount: 6, countryCode: null },
+    ]);
+    expect(line).toBe(
+      "akash1hgu…4ezk PT 9.34 required_country, akash1short ?? 6.00 ok"
+    );
+  });
+
+  it("renders an empty roster as none", () => {
+    expect(formatBidRoster([])).toBe("none");
+  });
+});
+
+describe("provider country resolution", () => {
+  // story.5050: akash15pkdke… DECLARES country=NL, city=AMS, datacenter=eu-west-ams-1 on
+  // chain, while its ingress GeoIPs to GB/London (51.5072,-0.1276 — a registrant default).
+  // Screening on GeoIP refused the only custom-domain-capable NL provider on the network.
+  it("prefers the provider's own declaration over GeoIP", () => {
+    expect(effectiveCountryCode({ declared: "NL", geoIp: "GB" })).toBe("NL");
+  });
+
+  it("falls back to GeoIP when nothing is declared", () => {
+    expect(effectiveCountryCode({ declared: null, geoIp: "pt" })).toBe("PT");
+    expect(effectiveCountryCode({ geoIp: "PT" })).toBe("PT");
+  });
+
+  it("keeps unknown unknown — resolution never invents a country", () => {
+    // REQUIRED_FAILS_CLOSED depends on this: null must stay null so the bid is refused.
+    expect(effectiveCountryCode({ declared: null, geoIp: null })).toBeNull();
+    expect(effectiveCountryCode({})).toBeNull();
+  });
+
+  it("rejects malformed values from EITHER source rather than trusting them", () => {
+    // A provider can declare anything; a free-text region must not become a country code.
+    expect(effectiveCountryCode({ declared: "eu-west", geoIp: "NL" })).toBe(
+      "NL"
+    );
+    expect(
+      effectiveCountryCode({ declared: "Netherlands", geoIp: "" })
+    ).toBeNull();
+  });
+
+  it("flags a disagreement so a stale GeoIP is visible without a manual audit", () => {
+    expect(countrySourcesDisagree({ declared: "NL", geoIp: "GB" })).toBe(true);
+    expect(countrySourcesDisagree({ declared: "NL", geoIp: "NL" })).toBe(false);
+  });
+
+  it("does not flag when only one source is usable", () => {
+    expect(countrySourcesDisagree({ declared: "NL", geoIp: null })).toBe(false);
+    expect(countrySourcesDisagree({ declared: "eu-west", geoIp: "GB" })).toBe(
+      false
+    );
+  });
+
+  it("admits the provider once its declared country is permitted", () => {
+    const { ranked } = screenFull([bid("akash15pkd", 5)], {
+      providers: new Map([
+        ["akash15pkd", info("akash15pkd", { countryCode: "NL" })],
+      ]),
+      requiredCountryCodes: ["BG", "FI", "NL", "PT", "RO"],
+    });
+    expect(ranked.map((b) => b.provider)).toEqual(["akash15pkd"]);
   });
 });

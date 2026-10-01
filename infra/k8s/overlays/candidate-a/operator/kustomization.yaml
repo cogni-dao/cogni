@@ -63,7 +63,9 @@ patches:
   # merge (env lists merge on `name`), never by positional JSON-pointer index.
   # A positional `/env/N/value` patch silently repoints when the base list
   # shifts — that exact failure (d69e5c29) blanked AKASH_ALLOWED_PROVIDERS
-  # fleet-wide, and an empty allowlist rejects every Akash provider bid.
+  # fleet-wide. Since story.5050 an empty AKASH_ALLOWED_PROVIDERS means "no
+  # provider pin — screen on policy alone", NOT "reject every bid"; a silently
+  # repointed env value is nonetheless still a fleet-wide incident.
   # DEPLOY_ENVIRONMENT must equal the `environment` the Composition sends — the Composition
   # pins that to `cogni-<env>` == the namespace, so these two values are one invariant expressed
   # in two places. It is NOT the ledger scope: bug.5187 keys `wallet_scope` on
@@ -148,6 +150,11 @@ patches:
       - op: add
         path: /data/FLEET_CONTROL_ENV
         value: "candidate-a"
+      # Public Akash workload zone for the disposable test fleet. This is deliberately separate
+      # from NEXTAUTH_URL/test.cognidao.org, which is the shared k3s operator control endpoint.
+      - op: add
+        path: /data/FORK_DOMAIN_ROOT
+        value: "cogni-testing.org"
       # PUBLIC, non-secret Akash account the actuator spends from (same value pinned on the
       # akash-tx-actuator container above). The OPERATOR APP needs it too: the env-membership
       # verb (`POST /api/v1/nodes/{id}/envs`) derives lease_generation by reading the allocation

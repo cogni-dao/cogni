@@ -72,6 +72,12 @@ initContainers:
   migrate: exec node /app/app/migrate.mjs /app/app/migrations
 `;
 
+const TEST_FLEET_TEMPLATE_OVERLAY = `${TEMPLATE_OVERLAY}publicOrigin:
+  - op: add
+    path: /data/NEXTAUTH_URL
+    value: "https://node-template-preview.cognidao.org"
+`;
+
 // node-template overlay's external-secret.yaml (the ESO producer). renderOverlayFile only
 // slug/port-renames it — node-template → blue everywhere, no migrate guard.
 const TEMPLATE_EXTERNAL_SECRET = `apiVersion: external-secrets.io/v1
@@ -93,6 +99,7 @@ const APPSET_TEMPLATE = `metadata:
 spec:
   generators:
     - git:
+        repoURL: __REPO_URL__
         files:
           - path: "infra/catalog/__NODE__.yaml"
 `;
@@ -154,6 +161,7 @@ function baseCurrent(envs: readonly string[]): EnvPlanCurrent {
     templateOverlayByEnv,
     templateExternalSecretByEnv,
     appsetTemplate: APPSET_TEMPLATE,
+    appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
     appsetsKustomizationByEnv,
     port: 3200,
     nodePort: 31100,
@@ -366,6 +374,7 @@ path_prefix: nodes/node-template/
       templateOverlayByEnv,
       templateExternalSecretByEnv,
       appsetTemplate: APPSET_TEMPLATE,
+      appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
       appsetsKustomizationByEnv,
       port: 3200,
       nodePort: 30200,
@@ -664,7 +673,6 @@ describe("planEnvAddShape (ADD_DERIVES_PLACEMENT, story.5039)", () => {
         .controlEnv
     ).toBe("production");
   });
-
   it("throws compute_authority_unavailable (422) when no actuator writer resolves for the owner org", () => {
     // An org outside the CROSSPLANE_ACTUATOR_WRITERS map — the schema makes an akash env without
     // compute_api INVALID, so the verb must refuse loudly rather than author an unmergeable PR.
@@ -691,6 +699,7 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
     templateOverlayByEnv: { "candidate-a": TEMPLATE_OVERLAY },
     templateExternalSecretByEnv: { "candidate-a": TEMPLATE_EXTERNAL_SECRET },
     appsetTemplate: APPSET_TEMPLATE,
+    appsetRepoUrl: "https://github.com/cogni-dao/cogni.git",
     appsetsKustomizationByEnv: {
       production: kustWith("production", ["blue", "operator"]),
     },
@@ -699,6 +708,69 @@ describe("buildEnvDeltaPlan — akash-derived ADD (story.5039)", () => {
     schedulerEndpointPatchByEnv: {
       "candidate-a": schedulerPatchFixture(`http://${SLUG}-node-app:3000`),
     },
+  });
+
+  it("writes a test-fleet preview lane under candidate-a's control directory", () => {
+    const current: EnvPlanCurrent = {
+      catalog: externallyBuiltCatalog(["candidate-a"], "cogni-test-org"),
+      templateOverlayByEnv: { preview: TEST_FLEET_TEMPLATE_OVERLAY },
+      templateExternalSecretByEnv: { preview: TEMPLATE_EXTERNAL_SECRET },
+      appsetTemplate: APPSET_TEMPLATE,
+      appsetRepoUrl: "https://github.com/cogni-test-org/cogni-monorepo.git",
+      publicDomainRoot: "cogni-testing.org",
+      appsetsKustomizationByEnv: {
+        "candidate-a": kustWith("candidate-a", ["blue", "operator"]),
+      },
+      port: 3200,
+      nodePort: 31100,
+      schedulerEndpointPatchByEnv: {
+        preview: schedulerPatchFixture(`http://${SLUG}-node-app:3000`),
+      },
+    };
+
+    const res = buildEnvDeltaPlan({
+      slug: SLUG,
+      env: "preview",
+      present: true,
+      current,
+      fleetControlEnv: "candidate-a",
+    });
+    if (res.kind === "no_changes") throw new Error("unexpected no_changes");
+
+    expect(paths(res.ops)).toContain(
+      appsetPath("candidate-a", "preview", SLUG)
+    );
+    const appsetOp = res.ops.find(
+      (op) => op.path === appsetPath("candidate-a", "preview", SLUG)
+    );
+    expect(appsetOp?.op).toBe("upsert");
+    if (appsetOp?.op === "upsert") {
+      expect(appsetOp.content).toContain(
+        "repoURL: https://github.com/cogni-test-org/cogni-monorepo.git"
+      );
+    }
+    const overlayOp = res.ops.find(
+      (op) => op.path === overlayPath("preview", SLUG)
+    );
+    expect(overlayOp?.op).toBe("upsert");
+    if (overlayOp?.op === "upsert") {
+      expect(overlayOp.content).toContain(
+        'value: "https://blue-preview.cogni-testing.org"'
+      );
+    }
+    const schedulerOp = res.ops.find(
+      (op) => op.path === schedulerEndpointPatchPath("preview")
+    );
+    expect(schedulerOp?.op).toBe("upsert");
+    if (schedulerOp?.op === "upsert") {
+      expect(schedulerOp.content).toContain(
+        `${SLUG}=https://${SLUG}-preview.cogni-testing.org`
+      );
+    }
+    expect(paths(res.ops)).toContain(appsetsKustomizationPath("candidate-a"));
+    expect(paths(res.ops)).not.toContain(
+      appsetPath("production", "preview", SLUG)
+    );
   });
 
   it("emits the FULL activation artifact set: catalog cells + control-env appset + scheduler route", () => {

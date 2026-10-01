@@ -155,9 +155,8 @@ export const schedulerEndpointPatchPath = (env: string): string =>
 
 /**
  * The canonical zone this repo's public hosts hang off, matching the bash renderer's own default
- * (`FORK_DOMAIN_ROOT:-cognidao.org` in scripts/ci/render-scheduler-worker-endpoints.sh). This
- * generator family stays pure (no env access, LAYER_NEUTRAL) — a fork that renamed its zone
- * regenerates this file locally with its own `FORK_DOMAIN_ROOT` export, exactly like the bash twin.
+ * (`FORK_DOMAIN_ROOT:-cognidao.org` in scripts/ci/render-scheduler-worker-endpoints.sh). The planner
+ * remains pure: adapters may supply a fleet-specific root, while omission preserves canonical output.
  */
 export const CANONICAL_DOMAIN_ROOT = "cognidao.org";
 
@@ -179,6 +178,10 @@ export interface EnvPlanCurrent {
   readonly templateExternalSecretByEnv?: Readonly<Record<string, string>>;
   /** The shared `node-applicationset.yaml.tmpl` (only needed on ADD). */
   readonly appsetTemplate?: string | undefined;
+  /** Repo that hosts this fleet's deploy branches (only needed on ADD). */
+  readonly appsetRepoUrl?: string | undefined;
+  /** Public workload zone for this fleet; omitted preserves the canonical cognidao.org default. */
+  readonly publicDomainRoot?: string | undefined;
   /**
    * Current appsets kustomizations, keyed by CONTROL env (bug.5204) — the adapter fetches the
    * kustomization of the env whose cluster reconciles the AppSet. On ADD that is
@@ -419,12 +422,13 @@ function planAdd(args: {
     templateExternalSecret === undefined ||
     appsetsKustomization === undefined ||
     current.appsetTemplate === undefined ||
+    current.appsetRepoUrl === undefined ||
     current.port === undefined ||
     current.nodePort === undefined
   ) {
     throw new EnvPlanError(
       "env_render_inputs_missing",
-      `cannot render add of '${env}' for '${slug}': missing template overlay, external-secret, appset template, control-env ('${shape.controlEnv}') kustomization, or ports.`,
+      `cannot render add of '${env}' for '${slug}': missing template overlay, external-secret, appset template/repo URL, control-env ('${shape.controlEnv}') kustomization, or ports.`,
       422
     );
   }
@@ -471,7 +475,8 @@ function planAdd(args: {
         templateOverlay,
         slug,
         current.nodePort,
-        current.port
+        current.port,
+        current.publicDomainRoot
       ),
     },
     // ESO producer of <slug>-env-secrets — without it the pod's envFrom secret never
@@ -492,7 +497,12 @@ function planAdd(args: {
     {
       op: "upsert",
       path: appsetPath(shape.controlEnv, env, slug),
-      content: renderNodeAppset(current.appsetTemplate, slug, env),
+      content: renderNodeAppset(
+        current.appsetTemplate,
+        slug,
+        env,
+        current.appsetRepoUrl
+      ),
     },
     {
       op: "upsert",
@@ -888,7 +898,7 @@ function buildSchedulerEndpointOp(
     slug,
     provider: placement,
     environment: env,
-    apexDomain: CANONICAL_DOMAIN_ROOT,
+    apexDomain: current.publicDomainRoot ?? CANONICAL_DOMAIN_ROOT,
   });
   const nextPatch = updateSchedulerEndpointHost(
     currentPatch,

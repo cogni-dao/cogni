@@ -13,7 +13,8 @@
  *   - COPIES_STAY_IN_SYNC: provision-env-vm.sh (cold start) and reconcile-env-substrate.sh
  *     (heal) each carry the policy and both say "KEEP IN SYNC". Until they are merged, the
  *     comment is enforced HERE — a comment cannot fail a build.
- *   - NO_UP_TRUST: no pre-prod environment may gain a `production` lane.
+ *   - EXPLICIT_FLEET_CONTROL: only the repo-declared control environment may gain the
+ *     multi-lane set. The default production-controlled fleet remains unchanged.
  *   - DENIES_FOLLOW_EVERY_LANE: `_system` and `_shared` are denied on every lane gained,
  *     data AND metadata — a per-node grant must never reach a shared path in ANY lane.
  * Side-effects: IO (reads repo scripts + source)
@@ -25,7 +26,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { SECRETS_LANE_TRUST } from "../../nodes/operator/app/src/shared/secrets/secrets-lane-trust.data";
+import {
+  canWriteSecretsLane,
+  SECRETS_LANE_TRUST,
+} from "../../nodes/operator/app/src/shared/secrets/secrets-lane-trust.data";
 
 const ROOT = path.resolve(__dirname, "../..");
 const SCRIPTS = [
@@ -33,19 +37,19 @@ const SCRIPTS = [
   "scripts/setup/reconcile-env-substrate.sh",
 ] as const;
 
-/** The `case` block each script uses to pick the lane set. */
-const LANE_CASE =
-  /case "\$\{DEPLOY_ENV\}" in\s*\n\s*production\)\s*SECRET_LANES="([^"]+)"\s*;;\s*\n\s*\*\)\s*SECRET_LANES="\$\{DEPLOY_ENV\}"\s*;;/;
+/** The fleet-control block each script uses to pick the lane set. */
+const FLEET_CONTROL_BLOCK =
+  /FLEET_CONTROL_ENV="\$\{FLEET_CONTROL_ENV:-production\}"\s*\n\s*if \[\[ "\$\{DEPLOY_ENV\}" == "\$\{FLEET_CONTROL_ENV\}" \]\]; then\s*\n\s*SECRET_LANES="([^"]+)"\s*\n\s*else\s*\n\s*SECRET_LANES="\$\{DEPLOY_ENV\}"\s*\n\s*fi/;
 
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
 
 describe("secrets lane trust (bug.5196)", () => {
-  it("states the same production lane set in BOTH shell copies", () => {
+  it("states the same fleet-control lane set in BOTH shell copies", () => {
     const sets = SCRIPTS.map((s) => {
-      const m = read(s).match(LANE_CASE);
+      const m = read(s).match(FLEET_CONTROL_BLOCK);
       expect(
         m,
-        `${s} must select node-secrets-writer lanes by DEPLOY_ENV`
+        `${s} must select node-secrets-writer lanes by FLEET_CONTROL_ENV`
       ).not.toBeNull();
       return (m as RegExpMatchArray)[1].trim().split(/\s+/).sort();
     });
@@ -54,20 +58,31 @@ describe("secrets lane trust (bug.5196)", () => {
 
   it("matches the TS table the route fast-fails on", () => {
     const fromTs = [...SECRETS_LANE_TRUST.production].sort();
-    const m = read(SCRIPTS[0]).match(LANE_CASE) as RegExpMatchArray;
+    const m = read(SCRIPTS[0]).match(FLEET_CONTROL_BLOCK) as RegExpMatchArray;
     expect(m[1].trim().split(/\s+/).sort()).toEqual(fromTs);
   });
 
-  it("grants no pre-prod environment a production lane", () => {
+  it("grants multi-lane custody only to the declared fleet control", () => {
     for (const [served, lanes] of Object.entries(SECRETS_LANE_TRUST)) {
       if (served === "production") continue;
       expect(lanes, `${served} must not custody production`).not.toContain(
         "production"
       );
     }
-    // The shell mirrors it: every non-production env falls to its own env, nothing wider.
+    expect(canWriteSecretsLane("candidate-a", "production")).toBe(false);
+    expect(
+      canWriteSecretsLane("candidate-a", "production", "candidate-a")
+    ).toBe(true);
+    expect(canWriteSecretsLane("preview", "production", "candidate-a")).toBe(
+      false
+    );
+
+    // The shell mirrors it: only DEPLOY_ENV == FLEET_CONTROL_ENV gets the wider set.
     for (const s of SCRIPTS) {
-      expect(read(s)).toContain('*)          SECRET_LANES="${DEPLOY_ENV}" ;;');
+      expect(read(s)).toContain(
+        'if [[ "${DEPLOY_ENV}" == "${FLEET_CONTROL_ENV}" ]]'
+      );
+      expect(read(s)).toContain('SECRET_LANES="${DEPLOY_ENV}"');
     }
   });
 

@@ -22,6 +22,7 @@
  *   - CLOSED_IS_REMOVED: a released lease still resolves to a handle, so `found` alone would
  *     never go false and a deleted XR could never finish deleting.
  *   - NARROWEST_ACTIVATION: exactly one managed type is activated, and it is namespaced.
+ *   - DNS_TYPE_FOLLOWS_TARGET: hostnames publish as CNAME; IPv4-only ingress publishes as A.
  * Side-effects: IO (reads repo manifests)
  * Links: story.5016 R2.3, task.5095, task.5096, infra/crossplane/AGENTS.md
  * @public
@@ -877,22 +878,28 @@ describe("XComputeWorkload refusal observability (bug.5115)", () => {
     );
   });
 
-  it("makes paid replacement opt-in and structurally unreachable (bug.5287 onGiveUp)", () => {
-    // TWO independent fences on the paid re-mint. (1) The composition only bumps the
-    // recovery key when bootPolicy.onGiveUp is Replace; Hold — the PERMANENT default —
-    // parks a closed lease as LeaseClosed with zero spend. (2) The XRD enum admits ONLY
-    // Hold until provider strikes are re-homed in the actuator, so an early Replace
-    // catalog cell is rejected by the CRD, not by prose ("if it's global, tier 4 happens
-    // by accident the moment someone adds a node").
+  it("keeps paid replacement OPT-IN and BOUNDED now that Replace is admitted (story.5050)", () => {
+    // The second fence has moved, not vanished. This test previously pinned `enum: [Hold]`
+    // because provider-strike recording did not yet live in the actuator — without it, a retry
+    // re-picked the provider that had just failed. task.5153 re-homed strikes (the actuator emits
+    // `akash_tx_provider_strike_recorded`), which is the stated precondition the XRD named, so
+    // Replace is admitted. What must NOT weaken:
+    //   - Hold stays the DEFAULT, so admitting Replace changes no existing row.
+    //   - The composition still gates the recovery-key bump on onGiveUp == Replace.
+    //   - The bump stays BOUNDED by $recoveryExhausted; Replace must never mean unbounded spend.
+    //   - Hold still parks a closed lease as LeaseClosed with zero spend.
     expect(template).toContain(
       'if and $closedForCurrentKey (not $recoveryExhausted) (eq $onGiveUp "Replace")'
     );
     const onGiveUp = (
       (specSchema.bootPolicy as YamlObject).properties as YamlObject
     ).onGiveUp as YamlObject;
-    expect(onGiveUp.enum).toEqual(["Hold"]);
+    expect(onGiveUp.enum).toEqual(["Hold", "Replace"]);
     expect(onGiveUp.default).toBe("Hold");
     expect(template).toContain('$failReason = "LeaseClosed"');
+    // The retry is only useful because it lands ELSEWHERE — the excluded set is what makes a
+    // bounded re-mint progress instead of re-picking the dead provider three times.
+    expect(templateCode).toContain("$desiredRecoveryPrefix");
   });
 
   it("never re-renders a lease Request under a settled key (Axiom 26 fence)", () => {
@@ -1041,15 +1048,41 @@ describe("XComputeWorkload public reachability (bug.5152)", () => {
     expect(templateCode).not.toMatch(/select\(\.type == "(MX|TXT|NS|SRV|CAA)"/);
   });
 
-  it("publishes a PROXIED CNAME, because the provider's certificate is not ours", () => {
-    // The Akash provider ingress serves `*.ingress.zencloud.eu`. A grey-cloud CNAME from the
-    // cogni name to it fails TLS on a subject-name mismatch before a byte of HTTP is exchanged,
-    // so an unproxied record resolves and STILL cannot be reached.
+  it("publishes a PROXIED address record, because the provider's certificate is not ours", () => {
+    // Whether the provider target is a hostname or IPv4 address, a grey-cloud record bypasses
+    // Cloudflare's TLS termination for the Cogni hostname.
     expect(dnsBlock).not.toContain("proxied: false");
     // CREATE body + UPDATE body.
     expect(dnsBlock.match(/proxied: true/g)?.length).toBe(2);
     // ...and drift back to grey-cloud is not "up to date".
     expect(dnsBlock).toContain("| .[0].proxied) == true");
+  });
+
+  it("uses a hostname CNAME when available and falls back to an IPv4 A record", () => {
+    // A provider hostname is more stable than its current ingress IP, so retain the existing
+    // preference. RHITE proved that rejecting every IPv4 target leaves a healthy paid lease
+    // permanently unreachable, so the first IPv4 is the bounded fallback.
+    expect(templateCode).toContain('$dnsHostnameTarget := ""');
+    expect(templateCode).toContain('$dnsIpv4Target := ""');
+    expect(templateCode).toContain("(ne $h $publicHost)");
+    expect(templateCode).toContain("$dnsTarget := $dnsHostnameTarget");
+    expect(templateCode).toContain(
+      'if eq $dnsTarget "" }}{{ $dnsTarget = $dnsIpv4Target'
+    );
+    expect(templateCode).toContain('$dnsRecordType := "CNAME"');
+    expect(templateCode).toContain('$dnsRecordType = "A"');
+  });
+
+  it("carries the target-derived record type through create, update, drift, and status", () => {
+    expect(templateCode).toContain(
+      '$cfPayload := dict "name" $publicHost "content" $effectiveDnsTarget "type" $dnsRecordType'
+    );
+    // CREATE and UPDATE consume the same payload type.
+    expect(dnsBlock.match(/type: \.payload\.body\.type/g)?.length).toBe(2);
+    expect(dnsBlock).toContain(
+      "({{ $cfAdoptable }} | .[0].type) == .payload.body.type"
+    );
+    expect(templateCode).toContain('(eq (dig "type" "" .) $dnsRecordType)');
   });
 
   it("reports published as an observation, never as an echo of the intent", () => {
@@ -1114,7 +1147,7 @@ describe("XComputeWorkload DNS survives a promotion transition (bug.5188)", () =
     // one — otherwise the CREATE/UPDATE body would publish "" the instant the observe errored.
     expect(dnsBlock.length).toBeGreaterThan(0);
     expect(templateCode).toContain(
-      '$cfPayload := dict "name" $publicHost "content" $effectiveDnsTarget'
+      '$cfPayload := dict "name" $publicHost "content" $effectiveDnsTarget "type" $dnsRecordType'
     );
   });
 });

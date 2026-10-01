@@ -166,7 +166,14 @@ jobs:
 
   reconcile-compute-egress:
     needs: decide
-    if: needs.decide.result == 'success'
+    # A lane VM exists for k3s targets. Akash-only lanes whose fleet control lives elsewhere
+    # have no lane VM; their allowlist is applied by the control-env twin below.
+    if: |
+      needs.decide.result == 'success' &&
+      (
+        needs.decide.outputs.has_k3s_node_targets == 'true' ||
+        needs.decide.outputs.environment == (vars.FLEET_CONTROL_ENV || 'production')
+      )
     runs-on: ubuntu-latest
     environment: ${{ needs.decide.outputs.environment }}
     steps:
@@ -195,9 +202,12 @@ jobs:
   # lane-VM job; for lanes custodied locally the two apply the same allowlist.
   reconcile-compute-egress-control:
     needs: decide
-    if: needs.decide.result == 'success' && needs.decide.outputs.environment != 'production'
+    if: |
+      needs.decide.result == 'success' &&
+      needs.decide.outputs.has_external_compute_node_targets == 'true' &&
+      needs.decide.outputs.environment != (vars.FLEET_CONTROL_ENV || 'production')
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
     steps:
       - name: Checkout reviewed application source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -235,7 +245,11 @@ jobs:
       group: reconcile-appset-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    environment: ${{ needs.decide.outputs.environment }}
+    # Argo lives in the CONTROL cluster. For an Akash lane there is no lane cluster, so
+    # reading the lane environment's VM credentials either produces an empty VM_HOST
+    # (isolated test fleets) or points at a cluster that can never observe the workload.
+    # This is the same lane-vs-control split used by promote-k8s below.
+    environment: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') || needs.decide.outputs.environment }}
     steps:
       # Checkout the head ref — the per-node AppSet YAML is catalog-derived CI
       # control plane (CATALOG_IS_SSOT), and a node ADDED in this promote carries
@@ -250,16 +264,32 @@ jobs:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
         run: |
+          set -euo pipefail
           if [ -z "$VM_HOST" ]; then
-            echo "⚠️ No VM_HOST — skipping AppSet reconcile"
-            echo "has_vm=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::VM_HOST is required for AppSet reconcile"
+            exit 1
           fi
           echo "has_vm=true" >> "$GITHUB_OUTPUT"
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Reconcile fleet-control migration access
+        if: steps.ssh-setup.outputs.has_vm == 'true' && fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash'
+        env:
+          FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+        run: |
+          set -euo pipefail
+          # shellcheck source=scripts/ci/lib/ssh-retry.sh
+          . scripts/ci/lib/ssh-retry.sh
+          access_file="$RUNNER_TEMP/akash-tx-actuator-lane-access.yaml"
+          bash scripts/ci/render-akash-tx-actuator-lane-access.sh "$FLEET_CONTROL_ENV" >"$access_file"
+          read -r -a ssh_opts <<< "$SSH_OPTS"
+          ci_ssh_retry scp "${ssh_opts[@]}" "$access_file" "root@${VM_HOST}:/tmp/akash-tx-actuator-lane-access.yaml"
+          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "kubectl apply -f /tmp/akash-tx-actuator-lane-access.yaml && rm -f /tmp/akash-tx-actuator-lane-access.yaml"
 
       - name: Apply ${{ needs.decide.outputs.environment }}-${{ matrix.node }}-applicationset.yaml
         if: steps.ssh-setup.outputs.has_vm == 'true'
@@ -274,14 +304,6 @@ jobs:
           # non-production lane is reconciled by the PRODUCTION cluster (task.5132).
           # shellcheck source=scripts/ci/lib/appset-paths.sh
           . scripts/ci/lib/appset-paths.sh
-          CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$NODE")"
-          if [ "$CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]; then
-            # The ${CONTROL_ENV} app-of-apps reconciles appsets/${CONTROL_ENV}/ from main
-            # with prune, so the object arrives declaratively. This job holds only THIS
-            # env's SSH credential and must not reach a higher-trust cluster.
-            echo "::notice::$NODE's $DEPLOY_ENVIRONMENT lane is reconciled by '$CONTROL_ENV' — its AppSet is owned by that cluster's app-of-apps. Skipping the imperative apply."
-            exit 0
-          fi
           APPSET_FILE="$(appset_rel_path "$DEPLOY_ENVIRONMENT" "$NODE")"
           if [ ! -f "$APPSET_FILE" ]; then
             echo "::error::$APPSET_FILE missing at head — run 'pnpm gen:node-appset' (CATALOG_IS_SSOT)"
@@ -308,7 +330,7 @@ jobs:
           # Anti-resurrection: orphan-delete the retired shared `cogni-<env>` AppSet
           # (keeps its live Applications), then apply the per-node object.
           # shellcheck disable=SC2086
-          retry ssh $SSH_OPTS root@"$VM_HOST" "kubectl delete applicationset cogni-${DEPLOY_ENVIRONMENT} -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml -n argocd && rm -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml"
+          retry ssh $SSH_OPTS root@"$VM_HOST" "kubectl delete applicationset cogni-${DEPLOY_ENVIRONMENT} -n argocd --cascade=orphan --ignore-not-found && kubectl apply -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml -n argocd && kubectl -n argocd annotate applicationset cogni-${DEPLOY_ENVIRONMENT}-${NODE} argocd.argoproj.io/application-set-refresh='true' --overwrite && rm -f /tmp/appset-${DEPLOY_ENVIRONMENT}-${NODE}.yaml"
 
   # Per-node public DNS for preview + production — mirrors candidate-flight.yml's
   # reconcile-dns. DNS is env-level + idempotent (no-op for existing nodes); a node
@@ -388,7 +410,11 @@ jobs:
       needs.reconcile-appset.result == 'success' &&
       (
         needs.decide.outputs.has_node_targets != 'true' ||
-        needs.reconcile-compute-egress.result == 'success' &&
+        (
+          needs.reconcile-compute-egress.result == 'success' ||
+          needs.reconcile-compute-egress.result == 'skipped' &&
+          needs.decide.outputs.has_k3s_node_targets != 'true'
+        ) &&
         (needs.reconcile-compute-egress-control.result == 'success' || needs.reconcile-compute-egress-control.result == 'skipped')
       ) &&
       (
@@ -403,7 +429,11 @@ jobs:
       group: flight-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    environment: ${{ needs.decide.outputs.environment }}
+    # Identity, secrets and deployment variables follow the control env for Akash. The lane
+    # remains `needs.decide.outputs.environment` everywhere desired state is named/written.
+    # Identity, secrets and deployment variables follow the control env for Akash. The lane
+    # remains `needs.decide.outputs.environment` everywhere desired state is named/written.
+    environment: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') || needs.decide.outputs.environment }}
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
@@ -567,9 +597,15 @@ jobs:
           git fetch origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
           if git rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
             git checkout -B "${PER_NODE_BRANCH}" "origin/${PER_NODE_BRANCH}"
-          else
+          elif git rev-parse --verify --quiet "refs/remotes/origin/${UMBRELLA_BRANCH}" >/dev/null; then
             echo "::warning::Per-node branch ${PER_NODE_BRANCH} missing — bootstrapping from ${UMBRELLA_BRANCH}"
             git checkout -B "${PER_NODE_BRANCH}" "origin/${UMBRELLA_BRANCH}"
+          else
+            # A fleet may have no legacy umbrella branch at all (the isolated test fleet is
+            # intentionally born per-node). The reviewed main tree is the correct first seed;
+            # the next step replaces deploy state from app-src before anything is pushed.
+            echo "::warning::Neither ${PER_NODE_BRANCH} nor ${UMBRELLA_BRANCH} exists — bootstrapping the new lane from main"
+            git checkout -B "${PER_NODE_BRANCH}" origin/main
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -764,21 +800,34 @@ jobs:
           git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
 
       - name: Setup SSH
+        id: ssh-setup
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
         run: |
           set -euo pipefail
+          NODE="${{ matrix.node }}"
+          LANE="${{ needs.decide.outputs.environment }}"
+          CATALOG_DIR="app-src/infra/catalog" . app-src/scripts/ci/lib/appset-paths.sh
+          CONTROL_ENV="$(CATALOG_DIR=app-src/infra/catalog control_env_for "$LANE" "$NODE")"
+          echo "control_env=$CONTROL_ENV" >> "$GITHUB_OUTPUT"
+          if [ "$CONTROL_ENV" != "$LANE" ]; then
+            echo "::notice::$NODE's $LANE lane is custodied by '$CONTROL_ENV' — the custodian replay owns substrate reconciliation."
+            echo "has_vm=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -z "$VM_HOST" ]; then
             echo "::error::VM_HOST is required for node substrate"
             exit 1
           fi
+          echo "has_vm=true" >> "$GITHUB_OUTPUT"
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Provision node state and run provider preflight
+        if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
@@ -982,7 +1031,7 @@ jobs:
       group: verify-deploy-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    environment: ${{ needs.decide.outputs.environment }}
+    environment: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') || needs.decide.outputs.environment }}
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
       VM_HOST: ${{ secrets.VM_HOST }}
@@ -1020,6 +1069,22 @@ jobs:
           CELL_DIR: ${{ runner.temp }}
           ENVIRONMENT: ${{ needs.decide.outputs.environment }}
         run: bash app-src/scripts/ci/resolve-cell-state.sh
+
+      - name: Resolve lane public domain
+        id: public-domain
+        if: steps.cell.outputs.promoted == 'true'
+        run: |
+          set -euo pipefail
+          source app-src/scripts/setup/lib/cogni-deployment-identity.sh
+          if [ "$DEPLOY_ENVIRONMENT" = "preview" ]; then
+            LANE_DOMAIN="$(cogni_operator_domain_for_env preview "${DOMAIN:?}")" || {
+              echo "::error::cannot derive public domain for lane '$DEPLOY_ENVIRONMENT'"
+              exit 1
+            }
+          else
+            LANE_DOMAIN="${DOMAIN:?}"
+          fi
+          echo "domain=$LANE_DOMAIN" >> "$GITHUB_OUTPUT"
 
       - name: Setup SSH
         if: steps.cell.outputs.promoted == 'true'
@@ -1059,28 +1124,11 @@ jobs:
           WORKLOAD_FILE="$(compute_workload_manifest_file "$NODE" "$ENVIRONMENT")"
           echo "path=${GITHUB_WORKSPACE}/deploy-branch/infra/k8s/overlays/${ENVIRONMENT}/${NODE}/${WORKLOAD_FILE}" >> "$GITHUB_OUTPUT"
 
-      # bug.5282: an Akash lane may be reconciled by a different environment's cluster
-      # (preview is normally custodied by production). This job only has the
-      # promoted environment's SSH credential, so polling that VM is guaranteed
-      # to report resource_absent even when the control cluster is reconciling it.
-      # The public buildSha probe below remains the authoritative gate.
-      - name: Resolve lane custody
-        id: custody
-        if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
-        env:
-          NODE: ${{ matrix.node }}
-          ENVIRONMENT: ${{ needs.decide.outputs.environment }}
-        run: |
-          set -euo pipefail
-          CATALOG_DIR="app-src/infra/catalog" . app-src/scripts/ci/lib/appset-paths.sh
-          CONTROL_ENV="$(CATALOG_DIR=app-src/infra/catalog control_env_for "$ENVIRONMENT" "$NODE")"
-          echo "control_env=$CONTROL_ENV" >> "$GITHUB_OUTPUT"
-          if [ "$CONTROL_ENV" != "$ENVIRONMENT" ]; then
-            echo "::notice::$NODE's $ENVIRONMENT lane is custodied by '$CONTROL_ENV' — skipping the $ENVIRONMENT-VM XCW wait and gating on the public /version probe."
-          fi
-
       - name: Wait for external ComputeWorkload readiness
-        if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s' && steps.custody.outputs.control_env == needs.decide.outputs.environment
+        # This Akash job is already bound to the control GitHub environment above, so VM_HOST
+        # is the cluster that actually owns the XR. Skipping foreign lanes here would turn the
+        # public probe into a false proof whenever another lane happened to serve the same SHA.
+        if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
         uses: ./.github/actions/wait-for-compute-workload
         with:
           app_source_root: ${{ github.workspace }}/app-src
@@ -1097,6 +1145,8 @@ jobs:
       - name: Verify buildSha (per-node)
         if: steps.cell.outputs.promoted == 'true'
         env:
+          # Public identity follows the lane, never the control environment selected for secrets.
+          DOMAIN: ${{ steps.public-domain.outputs.domain }}
           SOURCE_SHA_MAP: deploy-branch/.promote-state/source-sha-by-app.json
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.build_sha }}
           NODES: ${{ matrix.node }}

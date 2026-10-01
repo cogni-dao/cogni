@@ -125,9 +125,21 @@ function actuatorNamespaceForLane(
  * split, so a new non-production lane cannot arrive holding only half the policy.
  */
 export function bootPolicyForEnvironment(
-  environment: DeploymentEnvironment
+  environment: DeploymentEnvironment,
+  recovery: BootRecovery = "hold"
 ): XComputeWorkloadBootPolicy {
-  return { onDeadline: environment === "production" ? "Hold" : "Close" };
+  // ONE CELL OPENS BOTH GATES (story.5050). Recovery needs the lease CLOSED (`onDeadline`) before
+  // the Composition's `:recover:<n>` path is even reachable (`onGiveUp`). Deriving both from a
+  // single declaration is the point: half the policy is exactly the hazard the note above warns
+  // about — `Replace` with `onDeadline: Hold` is a workload that holds a dead lease forever while
+  // claiming it will self-heal, which is strictly worse than honest `Hold`.
+  if (recovery === "auto") {
+    return { onDeadline: "Close", onGiveUp: "Replace" };
+  }
+  return {
+    onDeadline: environment === "production" ? "Hold" : "Close",
+    onGiveUp: "Hold",
+  };
 }
 
 /**
@@ -153,7 +165,20 @@ export interface XComputeWorkloadDns {
 
 export interface XComputeWorkloadBootPolicy {
   readonly onDeadline: "Hold" | "Close";
+  readonly onGiveUp: "Hold" | "Replace";
 }
+
+/**
+ * Per-(node, environment) boot-recovery posture, declared in the catalog (story.5050).
+ *
+ * `hold` (the default, and today's behaviour everywhere) — a production lease that never serves
+ * is KEPT as evidence and a human bumps `lease_generation` to try again.
+ *
+ * `auto` — a lease that never serves is CLOSED at the boot deadline, which is what lets the
+ * Composition's bounded `:recover:<1..3>` re-mint fire, landing on a DIFFERENT provider because
+ * the ledger-derived excluded set skips the one that just failed.
+ */
+export type BootRecovery = "hold" | "auto";
 
 /**
  * Value-free runtime topology for the `cogni-node-app-v1` profile. The legacy controller
@@ -254,6 +279,11 @@ export interface BuildComputeWorkloadManifestInput {
    * and the XRD marks the field immutable to make that explicit rather than silently inert.
    */
   readonly requiredPlacementCountries?: readonly string[];
+  /**
+   * story.5050 — boot-recovery posture from the node's catalog row (`boot_recovery.<env>`).
+   * Absent = `hold`, which is byte-identical to every row's behaviour before this existed.
+   */
+  readonly bootRecovery?: BootRecovery;
   /**
    * DNS intent for the Crossplane authority only — the legacy controller resolves its own zone
    * from an in-cluster secret, so passing it there would be desired state nothing reads.
@@ -431,7 +461,10 @@ export function buildComputeWorkloadManifest(
         ? {
             ...spec,
             migration: { policy: MIGRATION_POLICY },
-            bootPolicy: bootPolicyForEnvironment(input.environment),
+            bootPolicy: bootPolicyForEnvironment(
+              input.environment,
+              input.bootRecovery ?? "hold"
+            ),
             // Emitted even at 0, like migration.policy (bug.5116): the committed desired
             // state states its own idempotence-key generation rather than inheriting a
             // default, so a catalog bump is a visible one-line git diff on the deploy branch.

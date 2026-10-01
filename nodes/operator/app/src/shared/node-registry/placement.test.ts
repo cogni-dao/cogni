@@ -21,6 +21,15 @@ import {
   toNodeDeploymentPlacement,
 } from "./placement";
 
+describe("controlEnvFor", () => {
+  it("routes external lanes through the configured fleet control env", () => {
+    expect(controlEnvFor("preview", "akash", "candidate-a")).toBe(
+      "candidate-a"
+    );
+    expect(controlEnvFor("preview", "k3s", "candidate-a")).toBe("preview");
+  });
+});
+
 describe("providerForEnv", () => {
   it("defaults an undeclared environment to k3s (K3S_IS_DEFAULT)", () => {
     expect(providerForEnv(undefined, "production")).toBe("k3s");
