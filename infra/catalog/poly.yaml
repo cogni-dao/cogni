@@ -72,11 +72,26 @@ compute_egress_cidrs:
     comment: Portugal provider egress (story.5050)
   - cidr: 77.76.13.0/24
     comment: Bulgaria provider rotating egress range (story.5050)
-  - cidr: 95.217.58.106/32
-    comment: Finland provider egress (story.5050)
-  - cidr: 95.217.139.177/32
-    comment: RHITE Finland provider endpoint; workload egress must still be proven (story.5050)
-  - cidr: 24.144.74.27/32
-    comment: Netherlands provider egress (story.5050)
+  - cidr: 95.216.0.0/16
+    comment: >-
+      Finland provider egress, AS24940 Hetzner (story.5050). MEASURED, not inferred: a real
+      lease taken on provider.m3a.eu-n-3.digitalfrontier.network reported its own egress as
+      95.216.46.103 (static.103.46.216.95.clients.your-server.de, Helsinki) — an address in
+      NEITHER of the /32s previously listed here. The NAT rotates inside Hetzner's Finnish
+      space, so a /32 per observation guarantees a repeat of bug.5326: the pod boots, cannot
+      reach its own Postgres through the fail-closed substrate-port DROP, misses its boot SLO,
+      and onGiveUp:Replace burns three providers on what reads as a market failure.
+      The same lease measured CLOB_STATUS=200 against clob.polymarket.com, so Finland is
+      a permitted jurisdiction for poly's outbound dependency.
+  - cidr: 95.217.0.0/16
+    comment: >-
+      Finland provider egress, second Hetzner block (story.5050). The previously listed
+      95.217.58.106/32 and 95.217.139.177/32 both fall here; widened for the same rotation
+      reason measured above.
+  - cidr: 24.144.74.0/24
+    comment: >-
+      Netherlands provider egress range (story.5050). Widened from 24.144.74.27/32:
+      provider.h100.ams.val.akash.pub now answers on .156/.158/.159/.160 and rotates inside
+      the /24, so the single-host entry trips bug.5326 the moment NL wins. AS394996, Amsterdam.
   - cidr: 109.102.6.188/32
     comment: Froggy Servers Romania provider endpoint; workload egress must still be proven (story.5050)
