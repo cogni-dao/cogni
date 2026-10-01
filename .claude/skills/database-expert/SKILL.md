@@ -1,27 +1,65 @@
 ---
 name: database-expert
-description: Cogni-template DB architecture reference — Postgres-vs-Doltgres split (operational vs AI-written data), per-node schema independence, drizzle configs, RLS (`app_user`/`app_service`), migrator images, Doltgres syntropy rules, and the gotchas. Use when adding/modifying DB tables, deciding which DB a new table belongs in, writing migrations, running `pnpm db:*`, debugging drizzle-kit errors, touching `@cogni/db-schema` or any `@cogni/<node>-{db,doltgres}-schema`, or dealing with `DATABASE_URL` / `DOLTGRES_URL` / `__drizzle_migrations` / per-node migrator Dockerfiles.
+description: Cogni database architecture and operations router — Postgres-vs-Doltgres placement, DB-per-node boundaries, shared-Postgres capacity/noisy-neighbor controls, metering and graduation, node-scoped access, schema ownership, migrations, backups, and runtime health. Use for schema changes, `DATABASE_URL`/`DOLTGRES_URL`, Drizzle, migration delivery, Postgres/Doltgres/Redis health, query pressure, connection limits, tenant isolation, database observability, or deciding when a node must leave shared Postgres.
 ---
 
 # database-expert
 
-Navigation aid for database schema, migrations, and DSN plumbing. Per-node schema independence (task.0324) is recent — most gotchas trace back to that layout not being internalized yet. **Always consult the specs first; this skill's job is to point, not to restate.**
+Navigation aid for database design, runtime health, access, and migration delivery. **Always consult the canonical specs and live control-plane state first; this skill points to truth and records durable decision rules, not incident status, fleet counts, thresholds, or deployment rosters.**
 
 ## Ground truth — open these, don't restate them here
 
-- [docs/spec/databases.md](../../../docs/spec/databases.md) — authoritative architecture, invariants (enumerated in §2), commands, migrator image shape. Treat this as canon.
+- [docs/spec/databases.md](../../../docs/spec/databases.md) — authoritative schema, role, migration, backup, and runtime contracts. Treat this as canon.
 - [docs/spec/database-rls.md](../../../docs/spec/database-rls.md) — two-user RLS (`app_user` + `app_service`), `SET LOCAL app.current_user_id`, dep-cruiser rule on `getServiceDb()` (only importable from `drizzle.service-client.ts`).
 - [docs/spec/database-url-alignment.md](../../../docs/spec/database-url-alignment.md) — explicit-DSN invariant, no component-piece fallback at runtime.
 - [docs/spec/multi-node-tenancy.md](../../../docs/spec/multi-node-tenancy.md) — DB-per-node boundary (the database IS the tenant, not a column).
+- [docs/spec/node-baas-architecture.md](../../../docs/spec/node-baas-architecture.md) — BaaS north star: nodes declare their substrate shape; the operator provisions, wires, observes, and evolves it.
+- [docs/spec/substrate-access-grant.md](../../../docs/spec/substrate-access-grant.md) — operator-mediated, node-scoped database/observability access; developers and agents receive no environment-wide credential.
+- [docs/design/substrate-grafana-observability.md](../../../docs/design/substrate-grafana-observability.md) — proxy-not-issuer observability plane and node-scoping model.
+- [docs/spec/cicd-platform-boundary.md](../../../docs/spec/cicd-platform-boundary.md) — new substrate behavior belongs in the typed operator control plane, not growing shell/YAML deploy brains or routine SSH.
 - [docs/guides/multi-node-dev.md](../../../docs/guides/multi-node-dev.md) — per-node dev commands + local setup.
 - `infra/compose/runtime/docker-compose.yml` + `infra/compose/runtime/db-backup/backup.sh` — runtime Postgres backup job for app Postgres + Temporal Postgres; candidate-flight-infra validates health, manifests, and Loki logs.
-- [work/items/task.0324…md](../../../work/items/task.0324.per-node-db-schema-independence.md) — why the current shape exists; task body has design history.
-- [work/items/task.0325…md](../../../work/items/task.0325.atlas-gitops-migrations.md) — Atlas spike intel, deferred.
 - The per-node db-schema package pattern lives in `node-template` and in each node's own repo — **not in this monorepo**. This repo contains `nodes/operator` and `nodes/scheduler-worker` only.
 - READMEs under `nodes/<node>/app/src/adapters/server/db/migrations/` — tripwires explaining the shared-era `0027_silent_nextwave.sql` duplicate.
 - [docs/spec/knowledge-data-plane.md](../../../docs/spec/knowledge-data-plane.md) — Doltgres knowledge plane architecture (separate from the awareness/Postgres side).
-- [work/items/task.0311…md](../../../work/items/task.0311.poly-knowledge-syntropy-seed.md) — why the Doltgres migrator pattern (per-node migrator image + trailing `dolt_commit`) exists; body has the Doltgres 0.56.0 compatibility test results.
 - The per-node doltgres-schema package pattern likewise lives in `node-template` / the node's own repo.
+- Migration delivery implementation: `packages/repo-spec/src/node-app-deployment.ts`, `nodes/operator/app/src/features/compute/akash-tx/akash-tx-migration-step.ts`, and `infra/crossplane/xcomputeworkload/composition.yaml`.
+- For current incidents and evolving policy, RECALL the operator knowledge entries `node-lane-substrate-ready`, `lane-db-two-derivations`, `control-plane-self-starvation`, and `prod-oom-misdiagnosis-taxonomy`; then inspect live work items and telemetry. Do not copy their current measurements into this skill.
+
+## Database hosting north star
+
+The Pareto default is **shared Postgres capacity with one logical database per node**. The database is the schema/security/migration boundary; a `node_id` column is not. But a database on a shared server is **not** a CPU, memory, I/O, connection, or failure-domain boundary.
+
+The target model is **shared by default, metered, bounded, observable, then graduated**:
+
+1. **Provision automatically.** The node declares its needs; the operator creates its DB, roles, DSNs/secrets, migrations, egress, dashboards, and policy. No per-node hand wiring.
+2. **Meter by database and role.** At minimum expose connections, transactions/rollbacks, block reads/cache hits, temp spill, deadlocks, database size, and query pressure. Prefer cluster-wide collection keyed by `datname`/`dbid`; do not add one exporter or dashboard configuration per node.
+3. **Bound every shared tenant.** Provision role/pool limits such as `CONNECTION LIMIT`, `statement_timeout`, `idle_in_transaction_session_timeout`, `lock_timeout`, bounded `work_mem`, and pooler caps. Heavy but degradable reads should use request-local limits (`SET LOCAL`), not cluster-wide hand tuning.
+4. **Protect environment failure domains.** Candidate/preview load must not impair production. Co-location is only acceptable while quotas and observed failure-domain behavior prove that separation.
+5. **Graduate measured outliers.** Move a sustained noisy node/lane to a dedicated Postgres cell when it dominates a constrained resource or harms neighbor SLOs. The policy/scorecard owns thresholds; this skill must not freeze a number. Row count and number of databases alone are not graduation signals.
+
+A larger shared VM is capacity, not tenant isolation: instance cgroups bound the whole server, not one database. Dedicated Postgres is the graduation path for demanding nodes, not the starting cost for every small node. This is the same broad product shape as managed Postgres platforms: pooled/shared tiers with metering and limits, isolated compute when the workload earns it.
+
+Database access follows the same boundary. Developers and agents use operator-mediated, audited, node-scoped read/query or privileged-action surfaces. The shared `app_readonly` role is a v0 cross-node leak, not the destination; never substitute an environment-wide DSN or routine production SSH for the scoped access plane.
+
+### Runtime health: prove the failure class before fixing it
+
+Treat Postgres, Doltgres, Redis, and Temporal's persistence as critical substrate even when their containers report healthy. A healthy postmaster can still be killing individual backends; silence can mean missing telemetry rather than health.
+
+1. Separate host/container OOM or restart, Postgres postmaster recovery, individual backend termination, statement timeout/cancellation, auth failure, lock pressure, and disk/I/O starvation by their actual signatures. Start with `prod-oom-misdiagnosis-taxonomy`.
+2. Attribute shared-Postgres pressure by `datname`/role and query shape: connections, reads, cache misses, spill, locks/deadlocks, transaction rate, size, and `pg_stat_statements` where available.
+3. Correlation is not causation. An expensive query is a proven query bug when its plan/shape is bad; it is only the crash cause after resource/exit evidence closes that link.
+4. Fix in order: pathological query/write shape and missing index → per-tenant role/pool bounds → workload isolation/graduation. Do not reach first for global engine tuning or a larger VM.
+5. Validate the user-visible/control-plane SLO after deployment. A green migration or workflow is not database health.
+
+#### Container shared memory is its own failure class
+
+On Linux, PostgreSQL normally backs parallel-query and parallel-maintenance dynamic shared memory with the container's `/dev/shm`. That capacity is independent of free host RAM, disk, and container health:
+
+- Prove the chain: correlate `could not resize shared memory segment ... No space left on device`, runtime `shm_size`, process exit, and recovery timestamps. The allocation error alone does not prove a crash.
+- Inspect the actual plan, memory settings, concurrent operations, and both query and maintenance parallelism. `max_parallel_workers_per_gather=0` does not disable parallel `VACUUM`/`CREATE INDEX`; do not size a fixed segment per worker.
+- Set `shm_size` declaratively only after a concurrent-workload test; assert it at runtime and monitor RAM. Raising the ceiling is not a memory or tenant bound.
+- Wire compatibility is not engine equivalence. Doltgres is not PostgreSQL; copy no PostgreSQL resource setting without Doltgres-specific evidence.
 
 ## Layout at a glance
 
@@ -128,58 +166,27 @@ import { someTable } from "@cogni/<node>-db-schema/<module>";
 
 **Do not** reach into a node app's `src/shared/db/` — that's the app's hex boundary. `@cogni/<node>-db-schema` exists as a workspace package precisely so cross-process consumers can import without that violation.
 
-### VERIFY BEFORE RELYING ON THIS: some prod node migration Jobs were `exit 0` no-ops
+### A declared migration is not an applied migration
 
-Check `infra/k8s/overlays/production/<node>/kustomization.yaml` for the short-circuit before assuming migrations ran. Node apps now run on Akash, so the k8s overlay may be vestigial for a given row — read it live (`GET /api/v1/nodes`, `infra/catalog/*.yaml`) — never hardcode a roster (Dolt `operator-node-catalog`). Un-no-opping is task.0324 Phase 3 — gated on `pg_dump` inspection of each prod DB first (current state unverified). **Do not flip these flags** without the snapshot-restore rehearsal.
+Do not infer live schema from an overlay, workflow, or green application rollout. Determine the node's current substrate from the catalog/repo-spec and rendered workload, then verify the migration step/receipt, tracking table, and expected live objects. Never hardcode a node roster or revive a vestigial Kubernetes path for an Akash-hosted node.
 
-## Runtime backups — candidate-a/preview/prod Compose infra
+## Runtime backups and recovery
 
-App Postgres and Temporal Postgres are backed up by the Compose `db-backup` profile service in `infra/compose/runtime/docker-compose.yml` (dev parity in `docker-compose.dev.yml`). It uses the official `postgres:15` image and the script at `infra/compose/runtime/db-backup/backup.sh`. On deployed VMs, `scripts/ci/deploy-infra.sh` installs `cogni-db-backup.timer`, which runs the service as a one-shot container instead of keeping a privileged DB client idle on the network.
+The contract lives in [databases.md](../../../docs/spec/databases.md) and the executable sources `infra/compose/runtime/db-backup/backup.sh`, `infra/compose/runtime/docker-compose.yml`, and the relevant flight workflow. Inspect those sources and live evidence; do not trust a copied cadence, retention value, or roster in this skill.
 
-What it does:
+Durable rules:
 
-- Backs up app Postgres (`postgres:5432`) and Temporal Postgres (`temporal-postgres:5432`).
-- Runs only when invoked: candidate-flight-infra forces one validation run, and the host systemd timer runs it every `DB_BACKUP_INTERVAL_SECONDS` (default 86400 = 24h).
-- Waits `DB_BACKUP_OBSERVABILITY_GRACE_SECONDS` (default 90) before exit so Alloy can scrape one-shot container logs.
-- Retains backups for `DB_BACKUP_RETENTION_DAYS` (default 14).
-- Writes timestamped directories under the persistent Docker volume `db_backups`.
-- Each backup dir contains `globals.sql`, one custom-format `pg_dump` file per database, and `MANIFEST.sha256`.
-- Emits JSON logs with `event="db_backup.completed"` and `cluster="app"` / `cluster="temporal"`.
+- A same-host volume protects against logical mistakes, not loss of the host. Disaster recovery requires a verified off-host copy.
+- A “completed” log line is not restore proof. Validate non-empty dumps, checksums/manifests, database coverage, and an actual restore drill.
+- Exercise the real network/auth path; localhost or socket trust can hide credential drift.
+- Production recovery and privileged SQL use the governed operator/runbook path. Routine SSH and ad-hoc direct writes are not the operating model.
+- Registry or seed recovery must derive canonical identities from repo-spec/catalog and stable natural identifiers; never freeze environment-specific UUIDs or a node roster in this skill.
 
-The candidate-a infra lever proves this path. `scripts/ci/deploy-infra.sh` installs/enables the timer, restarts Alloy when the log allowlist changes, forces a validation backup, verifies both latest manifests, and prints `db_backup.completed` logs. `.github/workflows/candidate-flight-infra.yml` then queries Loki for `{env="candidate-a",service="db-backup"} | json | event="db_backup.completed"` and requires hits for both clusters.
+### Migration delivery uses the node runtime artifact
 
-Known scope: this is same-VM persistent-volume backup — fine for logical DB damage + operator mistakes. It does NOT survive full VM loss on its own, so the off-host copy is a **periodic local pull**, not an S3 sink (keep it simple):
+Postgres and Doltgres migration inputs ship in the **same immutable runtime image** as the app. Kubernetes expresses them as rollout-gating `migrate` / `migrate-doltgres` init containers. The Akash path derives explicit migration steps from the declared runtime profile and secrets, then materializes them through Crossplane. The command path follows the image layout (`/app/nodes/<node>/app/...` versus `/app/app/...`); a mismatch must fail before the app serves.
 
-```bash
-# Pull the newest app backup dir off the VM to gitignored local storage (run periodically / before risky ops).
-# Decrypt the reprovision vm-key first (see the reseed section). VM = the env's cluster IP.
-ssh -i "$KF" root@$VM 'docker run --rm -v cogni-runtime_db_backups:/b alpine \
-  sh -c "tar czf - -C /b app/$(ls -1t /b/app | head -1)"' > .local/prod-art/prod-app-backup-$(date +%Y%m%d).tgz
-# Recovery after a fresh provision: pg_restore each *.dump into the new DB (globals.sql first), then reseed the
-# nodes registry (below). A same-VM backup + a recent local pull IS the recovery story — no object store needed.
-```
-
-**Restore drill = the recovery path**: fresh VM via `provision-env` → `pg_restore -U postgres -d <db> <db>.dump` per database (or the operator DB alone) → apply the reseed. That's it.
-
-> **⚠️ `db_backup.completed` is NOT proof of a real backup — verify the dump is non-empty (prod, 2026-08-05, now fixed).** Two compounding failures on the fresh reprovision: **(1) superuser password drift** — the `postgres` role's stored password diverged from the declared `POSTGRES_ROOT_PASSWORD`, so `backup.sh`'s TCP connect as `postgres` got `FATAL: password authentication failed`. (The app is unaffected — it uses the ESO-synced `app_operator` role; the **superuser** is not ESO-synced, so it drifts. Same DB-cred-SSoT class as bug.5002.) **(2) silent-success** — `backup.sh` swallowed that error and still emitted `event="db_backup.completed" cluster="app"` with a **0-byte `globals.sql`**, because `set -e` is neutered inside `run_once`'s `backup_cluster … || failed=1` (bash disables errexit on the left of `&&`/`||`). **Gotcha that hid it:** the container's `pg_hba` uses `trust` for `127.0.0.1`, so an in-container `psql -h 127.0.0.1` "succeeds" with any password — a false positive; test the **service hostname over the network** (`postgres:5432` on the compose net), not localhost. **Fixes shipped:** `backup.sh` now checks every `pg_dumpall`/`psql`/`pg_dump` explicitly and emits `db_backup.failed` + returns non-zero (never `completed`) on error; the prod superuser password was re-aligned via `ALTER ROLE postgres PASSWORD …` and a re-run produced real dumps. A trustworthy manual backup is `docker exec cogni-runtime-postgres-1 pg_dump -U postgres -Fc cogni_operator` (local **socket** → trust, no TCP password) piped to an off-host encrypted file. Follow-up: ESO-sync the superuser password so it can't drift on reprovision.
-
-## Reseeding the operator `nodes` registry after a fresh reprovision
-
-A fresh env reprovision brings up a brand-new operator Postgres. Migrations run, so the schema + RLS policies are correct, but the **`nodes` registry table is empty** (the node rows are app-written state, not migration state — the June-2026 prod backup's `nodes` table was empty too, so there's nothing to restore). Result: the owner's wallet has **no RLS ownership of any node**, so the operator UI/API can't see or manage beacon/poly/etc. even though those repos + catalog/deploy artifacts exist. This is `pm.prod-reprovision-nodes-registry-reseed.2026-08-05`.
-
-Reseed pattern (mirror `nodes/operator/app/src/adapters/server/db/migrations/0037_seed_first_class_nodes.sql`):
-
-- **Owner is resolved by `wallet_address`, NEVER a hardcoded `users.id`.** The same wallet gets a different `users.id` per DB (SIWE mints `randomUUID()` on first login, `auth.ts`), so hardcoding an id breaks across reprovisions. Resolve via `SELECT id FROM users WHERE lower(wallet_address)=lower('0x…')`. A pre-seeded `users` row is reused by SIWE on the owner's next login (wallet is unique) → the seeded `owner_user_id` == the future `session.id`, so ownership + any later OpenFGA `user:<id>` tuples line up.
-- **`nodes.id` MUST be the canonical `node_id`** from each repo's `.cogni/repo-spec.yaml` (== `infra/catalog/<slug>.yaml` `node_id`), so the DB row, the deploy overlays, and OpenFGA `node:<id>` all agree. Watch for stale forks that reuse another node's id (e.g. `standalone-node`/`cogni-poly` reusing operator's `4ff8eac1…`) → PK collision; exclude them.
-- Use **`INSERT … ON CONFLICT (slug) DO UPDATE SET owner_user_id = …`** (non-destructive, idempotent, re-run safe) over `0037`'s `DELETE+INSERT` (which cascades `node_access_requests`), unless you specifically need to canonicalize a mis-`id`'d row.
-- RLS: connect as a **BYPASSRLS superuser** (`psql -U postgres` over the container's local socket) to avoid toggling policies on a live table; only fall back to `0037`'s `DISABLE/ENABLE ROW LEVEL SECURITY` dance (inside one txn) if you're stuck on the RLS-enforced app role.
-- **RLS-aware reads gotcha:** a plain `SELECT … FROM nodes` as the app role returns **0 rows without `SET LOCAL app.current_user_id`** — that's tenant isolation, not an empty table. To read true counts use the superuser; to _prove_ ownership, `BEGIN; SET LOCAL app.current_user_id='<owner id>'; SELECT count(*) FROM nodes; COMMIT;` should return the owned count while any other id returns 0.
-
-**Durability without a migration:** if you direct-apply instead of shipping a `0040` migration, the reproducible record is the DB backup (see the ⚠️ above — take a real `pg_dump`, not the broken timer) plus this callout + the postmortem. A future reprovision then recovers by **restore**, not re-seed. The reproducible alternative is a `0040_seed_registry_nodes.sql` migration (same wallet-resolved pattern) so every future fresh DB self-heals ownership — prefer this when the node set is stable.
-
-### Migrations run inline as an initContainer (no separate migrator image)
-
-`task.0371` retired the separate `-migrate` image + Argo PreSync Job. Postgres + Doltgres migrations now run as the Deployment's `migrate` / `migrate-doltgres` **initContainers off the same runtime image** as the app, gated by rollout. The migrate runner path follows the node's image layout — `/app/nodes/<node>/app/migrate.mjs` (in-tree monorepo) vs `/app/app/migrate.mjs` (wizard-born node-at-root); the node's overlay declares it, and a layout mismatch is a `MODULE_NOT_FOUND` crash-loop before any DB connect. Canon + the layout contract: [databases.md §2](../../../docs/spec/databases.md). (The compose/`deploy-infra` Doltgres migrator on the VM is a separate path — see `POLY_MIGRATOR_IMAGE` below.)
+Canon: [databases.md §2](../../../docs/spec/databases.md). Current Akash implementation: `packages/repo-spec/src/node-app-deployment.ts` → `nodes/operator/app/src/features/compute/akash-tx/akash-tx-migration-step.ts` → `infra/crossplane/xcomputeworkload/composition.yaml`.
 
 ## Doltgres knowledge plane (per-node, parallel to the Postgres side)
 
@@ -193,7 +200,7 @@ nodes/<node>/drizzle.doltgres.config.ts        dialect: postgresql, schema glob 
 nodes/<node>/app/src/adapters/server/db/doltgres-migrations/   generated SQL, checked in
 ```
 
-No per-node doltgres package lives in this repo (task.0311 built the pattern). A node spins up its own when it adopts Doltgres — don't pre-scaffold.
+No per-node Doltgres package lives in this repo. A node creates one in its own repository when it adopts Doltgres — don't pre-scaffold.
 
 ### Adding a Doltgres table
 
@@ -202,16 +209,16 @@ Identical to the Postgres flow — with one caveat:
 1. Define the table in the node's doltgres-schema package.
 2. `pnpm db:generate:operator:doltgres` — generates SQL. (Per-node variants live in the node's own repo.)
 3. `pnpm db:migrate:operator:doltgres` (local dev) or deploy pipeline (candidate-a+) applies via drizzle-kit migrate.
-4. **One Dolt-specific step**: the migrator compose service chains a trailing `doltgres-commit-<node>` (postgres:15 + psql one-shot) that runs `SELECT dolt_commit('-Am', 'migration: drizzle-kit batch')`. This captures DDL into `dolt_log`; without it, drizzle-kit's changes exist in the working set but aren't committed to the Dolt history ([dolt#4843](https://github.com/dolthub/dolt/issues/4843)).
+4. **One Dolt-specific step**: the Doltgres migration runner performs a trailing `SELECT dolt_commit('-Am', ...)`. This captures DDL in `dolt_log`; without it, changes may remain only in the working set ([dolt#4843](https://github.com/dolthub/dolt/issues/4843)). Verify the current implementation in the node's `migrate-doltgres.mjs` and shared migration helpers rather than assuming a Compose sidecar exists.
 
-### Migrator image reuse
+### Migration artifact and runtime wiring
 
-A node's migrator image (`<node-repo>/app/Dockerfile AS migrator`) carries BOTH Postgres AND Doltgres migration inputs — same image, different entry command:
+A node's runtime image carries both Postgres and, when adopted, Doltgres migration inputs. The substrate runs the same digest with different commands:
 
-- `pnpm db:migrate:<node>:container` — Postgres (default CMD), defined in the node's own repo
-- `pnpm db:migrate:<node>:doltgres:container` — Doltgres (compose overrides command)
+- `migrate.mjs <postgres-migrations-dir>` — operational Postgres
+- `migrate-doltgres.mjs <doltgres-migrations-dir>` — knowledge Doltgres
 
-When another node adopts Doltgres, its `Dockerfile AS migrator` extends similarly.
+For Akash nodes, the `cogni-node-app-v1` runtime profile declares `DOLTGRES_URL`; that declaration enables the typed `migrate-doltgres` step. For Kubernetes, the overlay adds the corresponding init container. Do not reintroduce a separately tagged migrator image or workflow-only image variable.
 
 ### Doltgres is NOT a drop-in in every way — two caveats verified against 0.56.0
 
@@ -220,9 +227,17 @@ When another node adopts Doltgres, its `Dockerfile AS migrator` extends similarl
 
 Everything schema-time (drizzle-kit migrate, `CREATE SCHEMA`, `__drizzle_migrations__` tracking table, idempotent re-runs) works natively as of Doltgres 0.56.0 — validated end-to-end.
 
-### POLY_MIGRATOR_IMAGE env var (current gap)
+### Proving Doltgres migrations actually ran
 
-`docker-compose.yml`'s `doltgres-migrate-<node>` service reads `${<NODE>_MIGRATOR_IMAGE:-unused-by-infra-deploy}`. `deploy-infra.sh` gates the `run --rm` invocation on `-n "$POLY_MIGRATOR_IMAGE"`. Today neither `candidate-flight-infra.yml` nor `promote-and-deploy.yml` sets this env var, so Doltgres comes up + provisions but the schema isn't applied (warn-and-continue). Remediation: either self-resolve the image in deploy-infra.sh (mirror the `LITELLM_IMAGE` pattern at line ~547) or add as a workflow input. Tracked as task.0311 follow-up #1.
+The old claim that Poly required a workflow-provided `POLY_MIGRATOR_IMAGE` is obsolete. Absence of that variable does **not** prove missing schema wiring. Diagnose the current path end to end:
+
+1. Confirm the node declares the Doltgres secret/DSN in its runtime profile (`DOLTGRES_URL`).
+2. Confirm the built runtime digest contains `migrate-doltgres.mjs`, the migration directory, and the schema verifier it imports.
+3. Confirm the rendered workload contains a rollout-gating `migrate-doltgres` step using that same digest.
+4. Inspect the migration step status/logs and tracking table.
+5. Prove the expected live schema and a committed migration entry in `dolt_log`.
+
+Wiring present is not schema present; schema present is not a committed Dolt history. Require all relevant proofs before declaring the knowledge plane healthy.
 
 ### Doltgres-specific gotchas
 
@@ -272,6 +287,15 @@ Atlas + Drizzle official integration; `atlas migrate diff`, destructive-change l
 
 ## Anti-patterns to flag in review
 
+- Treating DB-per-node as compute/resource isolation; it is a logical schema/security/migration boundary on shared compute
+- Adding more nodes to shared Postgres without automatic per-database metering and per-role/pool bounds
+- Upsizing the shared VM or globally tuning Postgres before bounding and attributing the noisy tenant
+- Hardcoding a fleet-wide graduation threshold here instead of keeping policy with the live scorecard/SLO
+- Hand-configuring an exporter/dashboard for each node instead of collecting bounded cluster-wide metrics keyed by database
+- Letting candidate/preview load share an unbounded production failure domain
+- Giving a developer/agent an environment-wide DB credential, or using routine SSH/ad-hoc production SQL instead of the node-scoped governed access plane
+- Misclassifying PostgreSQL `/dev/shm` exhaustion as OOM, treating query parallelism as all parallelism, or copying PostgreSQL tuning to a wire-compatible non-PostgreSQL engine
+- Inferring a missing Doltgres migration from absent `POLY_MIGRATOR_IMAGE`; prove the runtime migration step, live schema, tracking row, and `dolt_log`
 - Node-specific table added to `@cogni/db-schema`
 - `@cogni/<node>-db-schema` imported from a different node
 - Relative TS import or hard-coded DSN inside a drizzle config
