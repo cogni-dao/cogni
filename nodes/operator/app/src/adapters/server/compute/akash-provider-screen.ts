@@ -212,14 +212,32 @@ export function isProviderBlacklisted(
   );
 }
 
-/** True when the provider passes the practitioner quality filter (Console's own criteria). */
+/**
+ * True when the provider passes the practitioner quality filter.
+ *
+ * A_BID_IS_NOT_A_POPULARITY_CONTEST (bug.5334). `activeLeases > 0` used to be required here as
+ * "proof of registry egress". It is really a popularity proxy, and it is unsatisfiable for any
+ * provider that does not already have a tenant — so it made a provider's FIRST lease with us
+ * impossible to win. That cold-start trap, not the Akash market, is what blocked poly's gen-18:
+ * `akash.rhite.co.uk` bid 9.14 on poly's own auction while reading
+ * `isAudited=true, isValidVersion=true, isOnline=true, uptime7d=0.967,
+ * featEndpointCustomDomain=true, leaseCount=0` — inside poly's permitted countries, capable of
+ * serving its hostname, and refused by this one condition. Thirteen consecutive dry auctions
+ * were attributed to jurisdiction and to the provider pool; this was in the conjunction the
+ * whole time.
+ *
+ * What remains are signals that stand on their own merits and are not self-referential:
+ * `isAudited` (on-chain attestation), `isValidVersion` (protocol compatibility — a genuinely
+ * incompatible provider wins then fails), `isOnline`, and a 7-day uptime floor. Boot failures
+ * are already answered by the derived strike blacklist, which is OUR OWN measured history
+ * rather than someone else's tenancy count.
+ */
 export function passesQualityFilter(info: AkashProviderInfo): boolean {
   return (
     info.isAudited &&
     info.isValidVersion &&
     info.isOnline &&
-    info.uptime7d > MIN_UPTIME_7D &&
-    info.activeLeases > 0
+    info.uptime7d > MIN_UPTIME_7D
   );
 }
 

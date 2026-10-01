@@ -133,9 +133,22 @@ describe("passesQualityFilter", () => {
     ["offline", { isOnline: false }],
     ["invalid version", { isValidVersion: false }],
     ["uptime7d at threshold", { uptime7d: 0.95 }],
-    ["zero active leases", { activeLeases: 0 }],
   ] as const)("rejects a provider that is %s", (_label, over) => {
     expect(passesQualityFilter(info("akash1bad", over))).toBe(false);
+  });
+
+  /**
+   * A_BID_IS_NOT_A_POPULARITY_CONTEST (bug.5334). Zero current tenants must NOT refuse: the
+   * old `activeLeases > 0` condition was unsatisfiable for any provider without an existing
+   * tenant, so a provider's FIRST lease with us could never be won. That is what refused
+   * `akash.rhite.co.uk` — audited, valid-version, online, uptime7d 0.967,
+   * featEndpointCustomDomain=true, inside the node's permitted countries — after it had
+   * already bid 9.14 on poly's own production auction (story.5050, gen-18).
+   */
+  it("accepts an otherwise healthy provider with zero active leases", () => {
+    expect(
+      passesQualityFilter(info("akash1newcomer", { activeLeases: 0 }))
+    ).toBe(true);
   });
 });
 
@@ -186,14 +199,25 @@ describe("screenBids quality filter", () => {
   it("drops providers failing the quality filter when metadata is available", () => {
     const providers = new Map([
       ["akash1good", info("akash1good")],
-      ["akash1froggy", info("akash1froggy", { activeLeases: 0 })],
+      ["akash1stale", info("akash1stale", { isValidVersion: false })],
       ["akash1down", info("akash1down", { isOnline: false })],
+      // Zero current tenants is NOT a quality failure — see
+      // A_BID_IS_NOT_A_POPULARITY_CONTEST. It stays in the survivor set.
+      ["akash1newcomer", info("akash1newcomer", { activeLeases: 0 })],
     ]);
     const out = screen(
-      [bid("akash1froggy", 10), bid("akash1good", 500), bid("akash1down", 20)],
+      [
+        bid("akash1stale", 10),
+        bid("akash1good", 500),
+        bid("akash1down", 20),
+        bid("akash1newcomer", 30),
+      ],
       { providers }
     );
-    expect(out.map((b) => b.provider)).toEqual(["akash1good"]);
+    expect(out.map((b) => b.provider)).toEqual([
+      "akash1newcomer",
+      "akash1good",
+    ]);
   });
 
   it("drops providers unknown to the metadata index when metadata is available", () => {
