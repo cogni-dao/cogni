@@ -52,10 +52,10 @@ compute_api:
 lease_generation:
   candidate-a: 38
   preview: 2
-  production: 16
+  production: 18
 required_placement_countries:
   candidate-a: [BE]
-  production: [BG, FI, NL, PT]
+  production: [FI, NL, PT]
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/poly/
@@ -72,11 +72,27 @@ compute_egress_cidrs:
     comment: Portugal provider egress (story.5050)
   - cidr: 77.76.13.0/24
     comment: Bulgaria provider rotating egress range (story.5050)
+  - cidr: 95.216.46.103/32
+    comment: >-
+      Finland provider egress, MEASURED from inside a real lease on
+      provider.m3a.eu-n-3.digitalfrontier.network (static.103.46.216.95.clients.your-server.de,
+      Helsinki, AS24940 Hetzner) — story.5050. The two /32s previously listed for Finland did
+      NOT contain it, which is bug.5326: the pod boots and cannot reach its own Postgres through
+      the fail-closed substrate-port DROP. The same lease measured CLOB_STATUS=200 against
+      clob.polymarket.com, so Finland is permitted for poly's outbound dependency.
+      DELIBERATELY A /32, NOT the Hetzner /16: this list is an IP allowlist in front of
+      Postgres/Doltgres/Redis/LiteLLM/Temporal, so a /16 on a public cloud would hand ~131k
+      rentable addresses a hole to production. A NAT rotation here costs an outage; a /16
+      costs the database. Rotation is the cheaper failure until the network layer
+      authenticates identity instead of source address.
   - cidr: 95.217.58.106/32
     comment: Finland provider egress (story.5050)
   - cidr: 95.217.139.177/32
     comment: RHITE Finland provider endpoint; workload egress must still be proven (story.5050)
-  - cidr: 24.144.74.27/32
-    comment: Netherlands provider egress (story.5050)
+  - cidr: 24.144.74.0/24
+    comment: >-
+      Netherlands provider egress range (story.5050). Widened from 24.144.74.27/32:
+      provider.h100.ams.val.akash.pub now answers on .156/.158/.159/.160 and rotates inside
+      the /24, so the single-host entry trips bug.5326 the moment NL wins. AS394996, Amsterdam.
   - cidr: 109.102.6.188/32
     comment: Froggy Servers Romania provider endpoint; workload egress must still be proven (story.5050)
