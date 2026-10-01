@@ -97,8 +97,8 @@ compute_egress_cidrs:
   - cidr: 157.180.59.24/32
     comment: >-
       RHITE Finland provider EGRESS, measured from inside a real lease on
-      provider.akash.rhite.co.uk (story.5050, bug.5326). This is the provider that bids 9.14
-      and wins under gen-19, and its egress is in a DIFFERENT netblock from every address
+      provider.akash.rhite.co.uk (story.5050, bug.5326). This provider bid 9.14 during the
+      gen-18 dry auction; its egress is in a DIFFERENT netblock from every address
       previously listed here — so without this entry the pod boots and is firewalled off its
       own Postgres by the fail-closed substrate-port DROP, misses the boot SLO, and burns
       three onGiveUp:Replace attempts on what reads as a market failure. The same lease
