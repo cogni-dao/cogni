@@ -72,22 +72,23 @@ compute_egress_cidrs:
     comment: Portugal provider egress (story.5050)
   - cidr: 77.76.13.0/24
     comment: Bulgaria provider rotating egress range (story.5050)
-  - cidr: 95.216.0.0/16
+  - cidr: 95.216.46.103/32
     comment: >-
-      Finland provider egress, AS24940 Hetzner (story.5050). MEASURED, not inferred: a real
-      lease taken on provider.m3a.eu-n-3.digitalfrontier.network reported its own egress as
-      95.216.46.103 (static.103.46.216.95.clients.your-server.de, Helsinki) — an address in
-      NEITHER of the /32s previously listed here. The NAT rotates inside Hetzner's Finnish
-      space, so a /32 per observation guarantees a repeat of bug.5326: the pod boots, cannot
-      reach its own Postgres through the fail-closed substrate-port DROP, misses its boot SLO,
-      and onGiveUp:Replace burns three providers on what reads as a market failure.
-      The same lease measured CLOB_STATUS=200 against clob.polymarket.com, so Finland is
-      a permitted jurisdiction for poly's outbound dependency.
-  - cidr: 95.217.0.0/16
-    comment: >-
-      Finland provider egress, second Hetzner block (story.5050). The previously listed
-      95.217.58.106/32 and 95.217.139.177/32 both fall here; widened for the same rotation
-      reason measured above.
+      Finland provider egress, MEASURED from inside a real lease on
+      provider.m3a.eu-n-3.digitalfrontier.network (static.103.46.216.95.clients.your-server.de,
+      Helsinki, AS24940 Hetzner) — story.5050. The two /32s previously listed for Finland did
+      NOT contain it, which is bug.5326: the pod boots and cannot reach its own Postgres through
+      the fail-closed substrate-port DROP. The same lease measured CLOB_STATUS=200 against
+      clob.polymarket.com, so Finland is permitted for poly's outbound dependency.
+      DELIBERATELY A /32, NOT the Hetzner /16: this list is an IP allowlist in front of
+      Postgres/Doltgres/Redis/LiteLLM/Temporal, so a /16 on a public cloud would hand ~131k
+      rentable addresses a hole to production. A NAT rotation here costs an outage; a /16
+      costs the database. Rotation is the cheaper failure until the network layer
+      authenticates identity instead of source address.
+  - cidr: 95.217.58.106/32
+    comment: Finland provider egress (story.5050)
+  - cidr: 95.217.139.177/32
+    comment: RHITE Finland provider endpoint; workload egress must still be proven (story.5050)
   - cidr: 24.144.74.0/24
     comment: >-
       Netherlands provider egress range (story.5050). Widened from 24.144.74.27/32:
