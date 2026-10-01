@@ -26,7 +26,7 @@ discovery.relabel "docker_logs" {
     // NOTE: River comments are `//`. A `#` comment is an ILLEGAL CHARACTER that makes
     // the whole file unparseable and exits alloy 1 — which is exactly how this file
     // took candidate-a's metrics pipeline dark for ~20 minutes.
-    regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy|alloy-k8s-events|pdc-agent)"
+    regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy|alloy-k8s-events|pdc-agent|redis|doltgres|doltgres-provision|doltgres-migrate-.*|doltgres-commit-.*)"
     action        = "keep"
   }
 
