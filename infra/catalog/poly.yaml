@@ -52,7 +52,14 @@ compute_api:
 lease_generation:
   candidate-a: 38
   preview: 2
-  production: 18
+  # 19 -> 20 to re-mint after a second DRY auction (story.5050, bug.5293/5334).
+  # gen-18 dseq 1790815181111 collected 8 bids and refused all of them; gen-19 dseq
+  # 1790818782178 collected 6 bids, but every bidder was outside the required FI/NL/PT
+  # countries, then rolled back at 2026-10-01T01:41:25Z. Both settled idempotency keys are
+  # spent: replaying gen-19 returns the closed handle and can never apply a new Poly image.
+  # There is no activity-env re-mint verb, so this reviewed catalog bump is the recovery
+  # prescribed by hub `akash-prod-lease-recovery` (CATALOG_IS_SSOT).
+  production: 20
 required_placement_countries:
   candidate-a: [BE]
   production: [FI, NL, PT]
@@ -87,8 +94,20 @@ compute_egress_cidrs:
       authenticates identity instead of source address.
   - cidr: 95.217.58.106/32
     comment: Finland provider egress (story.5050)
+  - cidr: 157.180.59.24/32
+    comment: >-
+      RHITE Finland provider EGRESS, measured from inside a real lease on
+      provider.akash.rhite.co.uk (story.5050, bug.5326). This provider bid 9.14 during the
+      gen-18 dry auction; its egress is in a DIFFERENT netblock from every address
+      previously listed here — so without this entry the pod boots and is firewalled off its
+      own Postgres by the fail-closed substrate-port DROP, misses the boot SLO, and burns
+      three onGiveUp:Replace attempts on what reads as a market failure. The same lease
+      measured CLOB_STATUS=200 against clob.polymarket.com from country=FI.
   - cidr: 95.217.139.177/32
-    comment: RHITE Finland provider endpoint; workload egress must still be proven (story.5050)
+    comment: >-
+      RHITE Finland provider INGRESS endpoint (story.5050). Kept for reachability, but it is
+      NOT the egress — this entry used to carry "workload egress must still be proven" and the
+      measurement above disproved it. Ingress is not egress; measure from inside the lease.
   - cidr: 24.144.74.0/24
     comment: >-
       Netherlands provider egress range (story.5050). Widened from 24.144.74.27/32:
