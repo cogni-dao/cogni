@@ -46,6 +46,14 @@ export interface NewDomain {
   description?: string;
 }
 
+/** Minimal row shape for cross-domain indexes that must not fetch entry bodies. */
+export interface KnowledgeIndexEntry {
+  id: string;
+  domain: string;
+  title: string;
+  entryType: string;
+}
+
 export class DomainNotRegisteredError extends Error {
   readonly domain: string;
   constructor(domain: string) {
@@ -151,6 +159,10 @@ export interface KnowledgeStorePort {
     domain: string,
     opts?: { tags?: string[]; limit?: number }
   ): Promise<Knowledge[]>;
+  /** List every row matching the requested entry types across all domains. */
+  listKnowledgeByEntryTypes(
+    entryTypes: readonly string[]
+  ): Promise<KnowledgeIndexEntry[]>;
   searchKnowledge(
     domain: string,
     query: string,
