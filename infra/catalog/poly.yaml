@@ -187,6 +187,25 @@ compute_egress_cidrs:
       authenticates identity instead of source address.
   - cidr: 95.217.58.106/32
     comment: Finland provider egress (story.5050)
+  - cidr: 157.180.108.139/32
+    comment: >-
+      RHITE Finland provider EGRESS after a NAT ROTATION, measured from inside the live
+      production lease 2026-10-02T06:1xZ via poly's own
+      GET /api/internal/ops/poly/egress-check:
+        {"blocked":false,"egress_ip":"157.180.108.139","egress_country":"FI",
+         "oracle_url":"https://polymarket.com/api/geoblock","oracle_http_status":200}
+      This is bug.5326 happening exactly as the 157.180.59.24 entry below predicted
+      ("A NAT rotation here costs an outage"). The lease won Finland, booted, and serves
+      /version, but /readyz returned 503 INTERNAL_ERROR after a ~15s timeout because this
+      /32 was absent from the fail-closed substrate-port allowlist, so the workload could
+      not reach its own Postgres. Polymarket reports blocked:false from this address, so
+      Finland remains the correct, trading-legal jurisdiction.
+      STILL A /32, NOT the Hetzner /16, for the reason the entry below gives: this list
+      fronts Postgres/Doltgres/Redis/LiteLLM/Temporal, and a /16 on a public cloud would
+      hand ~131k rentable addresses a hole into production. Rotation is the cheaper failure.
+      The DURABLE fix is to stop hand-tracking provider NATs: measure egress from inside the
+      lease at boot and allowlist it automatically (no TS writer exists for
+      compute_egress_cidrs yet, #2175). (bug.5293, bug.5326)
   - cidr: 157.180.59.24/32
     comment: >-
       RHITE Finland provider EGRESS, measured from inside a real lease on
