@@ -65,7 +65,30 @@ lease_generation:
   # spent: replaying gen-19 returns the closed handle and can never apply a new Poly image.
   # There is no activity-env re-mint verb, so this reviewed catalog bump is the recovery
   # prescribed by hub `akash-prod-lease-recovery` (CATALOG_IS_SSOT).
-  production: 21
+  # 21 -> 22. The country set is deliberately UNCHANGED ([FI, NL, PT], set by #2528).
+  # PLACEMENT IS NOT THE PROBLEM, and the evidence is positive, not inferred: RHITE Finland
+  # (akash127x6cuk4...dhz7 - isOnline, isAudited, featEndpointCustomDomain=true, and already
+  # in AKASH_ALLOWED_PROVIDERS) WON gen-20 and recorded `boot_ok` in
+  # compute_provider_outcomes at 2026-10-01T02:50:29Z. That working Finland lease was then
+  # destroyed by bootPolicy.onDeadline=Close because the promoted 9033a162 bundle could not
+  # hold /readyz through its 20:06-20:36Z window, while production Postgres was dying with
+  # `exit code 2` every 1-3 minutes. A DATABASE OUTAGE CLOSED A GOOD LEASE. The auction
+  # never misbehaved, and gens 18/19/21 went dry for a different reason again (bug.5334's
+  # activeLeases cold-start trap, since removed).
+  #
+  # Safe to spend this generation now: Postgres is at 1 exit-2 per 45 min (was ~4.6/h, peak
+  # 4 per 15 min) after bounding poly's statements, and candidate-a poly holds /readyz=200
+  # continuously against this SAME Postgres instance. The boot SLO needs one sustained
+  # /readyz, not a flawless hour.
+  #
+  # DO NOT widen required_placement_countries to rescue a dry auction. BG/RO were already
+  # tried and deliberately reverted (#2512/#2516/#2525/#2527 -> #2528). CH is inert: both
+  # Swiss providers publish featEndpointCustomDomain=false, so naming CH only lets an
+  # incapable provider win on price (screened since #2532). Only THREE registry providers
+  # can serve poly's publicHost inside the set, and the derived strike list goes PERMANENT
+  # at 3 boot failures - so every wasted generation risks permanently excluding the pool
+  # that story.5050 earned. Fix the substrate first, then re-mint. (bug.5293)
+  production: 22
 required_placement_countries:
   candidate-a: [BE]
   production: [FI, NL, PT]
