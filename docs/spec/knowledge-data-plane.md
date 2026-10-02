@@ -181,10 +181,10 @@ Everything that exists today (`packages/db-schema/src/*.ts`) plus the awareness 
 
 Curated expertise that compounds over time. The table set is open — domain specificity lives in row content (`domain`, `tags`), not in table structure. Nodes add companion tables only when a domain needs genuinely new columns (see SCHEMA_GENERIC_CONTENT_SPECIFIC).
 
-| Table        | Purpose                                                                                                                                                                                                                                                                                |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `knowledge`  | Domain-specific facts, claims, and curated assertions with provenance                                                                                                                                                                                                                  |
-| `work_items` | Per-node companion table — lifecycle artifacts (tasks, bugs, spikes, stories) owned by that node's `knowledge_<slug>` store. Structured columns + per-write `dolt_log` audit; not subject to `domain`/`tags` syntropy because rows are typed lifecycle entities, not free-form claims. |
+| Table        | Purpose                                                                                                                                                                                                                                   |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `knowledge`  | Domain-specific facts, claims, and curated assertions with provenance                                                                                                                                                                     |
+| `work_items` | Operator-only companion table — lifecycle artifacts (tasks, bugs, spikes, stories). Structured columns + per-row dolt_log audit; not subject to `domain`/`tags` syntropy because rows are typed lifecycle entities, not free-form claims. |
 
 ### Domain Extension Pattern
 

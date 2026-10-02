@@ -53,53 +53,23 @@ curl -s -X POST $BASE/api/v1/chat/completions \
 
 Every code change is tied to exactly one work item. **1 work item ≈ 1 PR.** Prefer adopting an existing item over creating one (anti-sprawl). Items stay lean — a one-line `outcome` describing successful E2E validation.
 
-> **`$BASE` is YOUR node's hub, not the operator apex.** Each node owns its own
-> `knowledge_<slug>` Doltgres database with its own Dolt commit graph, so a work item
-> created against `https://poly.cognidao.org` lives in poly's store and is invisible from
-> operator's. There is no central work-item hub to fall back to — write to the node you are
-> working on. Discover the write seam from the node itself: `GET $BASE/.well-known/agent.json`
-> exposes it under `actions`, and `GET $BASE/api/v1/cognition` restates it origin-relative.
-
-### Make, patch, close — the full round trip
-
 ```bash
-# 0. Discover open work first — adopt over create.
+# Discover open work
 curl -H "Authorization: Bearer $API_KEY" \
   "$BASE/api/v1/work/items?statuses=needs_implement,needs_design"
 
-# 1. MAKE — only when nothing fits. The server allocates the id; never send one.
-#    `type` is one of task|bug|story|spike|subtask.
-ID=$(curl -s -X POST $BASE/api/v1/work/items \
+# Create only when nothing fits (server allocates id ≥ 5000)
+curl -X POST $BASE/api/v1/work/items \
   -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
-  -d '{"type":"task","title":"<short>","summary":"<why>","outcome":"Success is when <...>"}' \
-  | jq -r .id)   # → 201, e.g. task.5061
+  -d '{"type":"task","title":"<short>","node":"operator","summary":"<why>"}'
 
-# 2. PATCH — the wrapper is `set`, NOT `patch`. Every write is audited in dolt_log.
+# PATCH as you progress — every write audited in dolt_log
 curl -X PATCH $BASE/api/v1/work/items/$ID \
   -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
   -d '{"set":{"branch":"feat/...","pr":"<url>","status":"needs_merge"}}'
-
-# 3. CLOSE — only after the PR is merged.
-curl -X PATCH $BASE/api/v1/work/items/$ID \
-  -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
-  -d '{"set":{"status":"done"}}'
 ```
 
-**Status vocabulary** (the complete enum — anything else is a `400`):
-`needs_triage`, `needs_research`, `needs_design`, `needs_implement`, `needs_closeout`,
-`needs_merge`, `done`, `blocked`, `cancelled`. **There is no `in_progress`** — a claim, not a
-status, signals active work (see the session routes below).
-
-**Settable via `set`:** `title`, `summary`, `outcome`, `status`, `priority`, `rank`, `estimate`,
-`labels`, `specRefs`, `branch`, `pr`, `reviewer`, `deployVerified`, `projectId`, `parentId`,
-`blockedBy`. Server-managed and therefore rejected: `id`, `revision`, `createdAt`, `updatedAt`.
-
 **Lifecycle close gate:** PATCH `status=done` only after PR merges to `main`. Pre-merge stays `needs_merge`; rejected review flips back to `needs_implement`.
-
-**Proof criteria for these routes:** create returns `201` with a server-allocated id, each PATCH
-returns `200` and the field reads back on a subsequent `GET`, an unknown `status` returns `400`,
-a body missing the `set` wrapper returns `400` (`set: Required`), and the item appears in
-`GET $BASE/api/v1/work/items` on **that node** while being absent from every other node's list.
 
 ## Work-item sessions — active execution coordination
 
