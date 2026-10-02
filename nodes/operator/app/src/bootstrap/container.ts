@@ -317,7 +317,7 @@ export interface Container {
   toolSource: ToolSourcePort;
   /** External-agent knowledge contribution service — undefined when DOLTGRES_URL is unset */
   knowledgeContributionService: ContributionService | undefined;
-  /** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
+  /** Direct knowledge store port for authenticated knowledge/domain routes. Undefined when DOLTGRES_URL is unset. */
   knowledgeStorePort: KnowledgeStorePort | undefined;
   /** EDO hypothesis-loop capability for the langgraph tool bindings AND the bearer-auth REST routes under /api/v1/edo. Always present (stubs throw when DOLTGRES_URL is unset). */
   edoCapability: EdoCapability;

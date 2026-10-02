@@ -77,6 +77,22 @@ describe("renderBundleMarkdown", () => {
     );
   });
 
+  it("renders the node-relative knowledge-domain control plane", () => {
+    const markdown = renderBundleMarkdown(baseInput);
+
+    expect(markdown).toContain("## Knowledge domain control plane");
+    expect(markdown).toContain(
+      "GET https://test.cognidao.org/api/v1/knowledge/domains"
+    );
+    expect(markdown).toContain(
+      "POST https://test.cognidao.org/api/v1/knowledge/domains"
+    );
+    expect(markdown).toContain(
+      "DELETE https://test.cognidao.org/api/v1/knowledge/domains/{id}"
+    );
+    expect(markdown).toContain("409 domain_in_use");
+  });
+
   it("renders the current-node orientation entry IN FULL above the tooling invariants", () => {
     const fullOrientation = [
       "**USE WHEN:** first read of every operator session.",

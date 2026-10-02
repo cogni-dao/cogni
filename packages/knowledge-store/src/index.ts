@@ -183,6 +183,7 @@ export {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  DomainInUseError,
   DomainNotRegisteredError,
   EdoEntryTypeRequiresAtomicToolError,
   HypothesisMissingEvaluateAtError,

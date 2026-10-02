@@ -25,8 +25,32 @@ export const OpenAPIV1 = generateOpenApi(
       description: "Public HTTP API for Cogni Template.",
     },
     servers: [{ url: "/api/v1", description: "V1 API" }],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          description: "Node-issued agent API key.",
+        },
+        sessionCookie: {
+          type: "apiKey",
+          in: "cookie",
+          name: "next-auth.session-token",
+          description:
+            "Authenticated NextAuth session cookie; secure deployments may prefix the cookie name.",
+        },
+      },
+    },
   },
   {
     setOperationId: true,
+    operationMapper: (operation, route) => {
+      const metadata = route.metadata as { auth?: string } | undefined;
+      if (metadata?.auth !== "bearer-or-session") return operation;
+      return {
+        ...operation,
+        security: [{ bearerAuth: [] }, { sessionCookie: [] }],
+      };
+    },
   }
 );

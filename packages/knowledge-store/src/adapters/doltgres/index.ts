@@ -37,6 +37,7 @@ import {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  DomainInUseError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
   type NewDomain,
@@ -323,6 +324,28 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       createdAt:
         created instanceof Date ? created.toISOString() : String(created ?? ""),
     };
+  }
+
+  async deleteDomain(id: string): Promise<boolean> {
+    const usageRows = await this.sql.unsafe(
+      `SELECT (SELECT COUNT(*) FROM knowledge WHERE domain = ${escapeValue(id)}) AS entry_count, (SELECT COUNT(*) FROM citations c WHERE c.citing_id IN (SELECT id FROM knowledge WHERE domain = ${escapeValue(id)}) OR c.cited_id IN (SELECT id FROM knowledge WHERE domain = ${escapeValue(id)})) AS reference_count`
+    );
+    const usage = usageRows[0] as Record<string, unknown> | undefined;
+    const entryCount = Number(usage?.entry_count ?? 0);
+    const referenceCount = Number(usage?.reference_count ?? 0);
+    if (entryCount > 0 || referenceCount > 0) {
+      throw new DomainInUseError(id, entryCount, referenceCount);
+    }
+
+    const deleted = await this.sql.unsafe(
+      `DELETE FROM domains WHERE id = ${escapeValue(id)} AND NOT EXISTS (SELECT 1 FROM knowledge WHERE domain = ${escapeValue(id)}) RETURNING id`
+    );
+    if (deleted.length === 0) return false;
+
+    await this.sql.unsafe(
+      `SELECT dolt_commit('-Am', ${escapeValue(`delete domain ${id}`)})`
+    );
+    return true;
   }
 
   // --- Write ---

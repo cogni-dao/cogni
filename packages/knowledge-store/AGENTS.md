@@ -43,7 +43,7 @@ Shared port + adapter for versioned domain knowledge backed by Doltgres. Generic
 
 **Root barrel** (`@cogni/knowledge-store`):
 
-- Types: `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
+- Types: `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`, `DomainInUseError`
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
 
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
@@ -65,7 +65,7 @@ Shared port + adapter for versioned domain knowledge backed by Doltgres. Generic
 
 ## Responsibilities
 
-- This directory **does**: define port interface, Zod domain schemas, Doltgres adapter (CRUD + commit/log/diff), connection factory with Doltgres-compatible settings.
+- This directory **does**: define port interface, Zod domain schemas, Doltgres adapter (knowledge CRUD, guarded empty-domain deletion, commit/log/diff), connection factory with Doltgres-compatible settings.
 - This directory **does not**: define schema (node packages own that), load env vars, own database provisioning, handle branching/remotes.
 
 ## Notes

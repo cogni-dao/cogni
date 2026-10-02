@@ -271,5 +271,12 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     "- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (refine in place > write new).",
     `- Cite an existing entry in your edit: \`POST ${origin}/api/v1/knowledge/contributions/{id}/commits\` with \`{op:"cite", citingId, citedId, citationType}\` — cross-plane cites (target on main) resolve and stay valid post-merge.`,
     "",
+    "## Knowledge domain control plane",
+    "",
+    `- Discover typed list/create/delete schemas: \`GET ${origin}/.well-known/agent.json\` → \`actions.{listKnowledgeDomains,createKnowledgeDomain,deleteKnowledgeDomain}\`.`,
+    `- List: \`GET ${origin}/api/v1/knowledge/domains\` with a node-issued Bearer key or authenticated session.`,
+    `- Register: \`POST ${origin}/api/v1/knowledge/domains\` with \`{id,name,description?}\`; the node auto-commits the write to Dolt.`,
+    `- Delete: \`DELETE ${origin}/api/v1/knowledge/domains/{id}\`; only empty domains are removed and committed. A \`409 domain_in_use\` reports remaining entry/reference counts.`,
+    "",
   ].join("\n");
 }
