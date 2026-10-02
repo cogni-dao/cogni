@@ -71,11 +71,7 @@ describe("loadCognitionSkillsIndex", () => {
 
     const result = await loadCognitionSkillsIndex(store);
 
-    expect(COGNITION_SKILL_ENTRY_TYPES).toEqual([
-      "skill",
-      "guide",
-      "playbook",
-    ]);
+    expect(COGNITION_SKILL_ENTRY_TYPES).toEqual(["skill", "guide", "playbook"]);
     expect(result).toEqual([
       {
         id: "old-guide",
