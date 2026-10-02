@@ -166,6 +166,25 @@ Bearer token. Same `SessionUser.id` shape as a SIWE-authed human.
 
 Adopt **exactly one** work item (1 work item ≈ 1 PR). Prefer adopting an existing `needs_implement`/`needs_design` item over creating a new one.
 
+Work items live in the node's **own** store (`knowledge_<slug>` Doltgres, own Dolt commit graph),
+so `$BASE` is the node you are working on — there is no central ledger to fall back to.
+
+```bash
+# find something to adopt first
+curl -s "$BASE/api/v1/work/items?statuses=needs_implement,needs_design" \
+  -H "Authorization: Bearer $API_KEY" | jq -r '.items[] | "\(.id)  \(.status)  \(.title)"'
+
+# create ONLY when nothing fits — the server allocates the id, never send one
+ID=$(curl -s -X POST $BASE/api/v1/work/items \
+  -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+  -d '{"type":"task","title":"<short>","summary":"<why>","outcome":"Success is when <...>"}' \
+  | jq -r .id)
+```
+
+`type` ∈ `task|bug|story|spike|subtask`. Write the definition of done as an ordered, measurable
+checklist in `outcome` **before** you act. Full field reference + the patch/close rows:
+[`docs/guides/agent-api-validation.md`](../guides/agent-api-validation.md) § Work items.
+
 ```bash
 # claim — once
 curl -s -X POST $BASE/api/v1/work/items/$ID/claims \
