@@ -237,8 +237,8 @@ Enable agents and scripts to manage node-local work items through typed port int
 | `packages/work-items/src/adapters/markdown/errors.ts`           | `StaleRevisionError`, `InvalidTransitionError`               |
 | `packages/work-items/src/adapters/markdown/index.ts`            | Adapter barrel                                               |
 | `packages/work-items/src/adapters/doltgres/adapter.ts`          | Shared node-local Doltgres implementation                    |
-| `packages/work-items/src/adapters/doltgres/ports.ts`            | HTTP slice port and inferred input types                      |
-| `packages/work-items/src/adapters/doltgres/index.ts`            | Curated Doltgres adapter barrel                               |
+| `packages/work-items/src/adapters/doltgres/ports.ts`            | HTTP slice port and inferred input types                     |
+| `packages/work-items/src/adapters/doltgres/index.ts`            | Curated Doltgres adapter barrel                              |
 | `packages/work-items/tests/contract/work-item-port.contract.ts` | Portable contract test suite                                 |
 
 ## Acceptance Checks
