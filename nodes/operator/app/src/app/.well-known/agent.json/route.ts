@@ -19,7 +19,12 @@
  * @public
  */
 
-import { flightOperation } from "@cogni/node-contracts";
+import {
+  flightOperation,
+  knowledgeDomainsCreateOperation,
+  knowledgeDomainsDeleteOperation,
+  knowledgeDomainsListOperation,
+} from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
@@ -88,6 +93,8 @@ export async function GET(request: Request) {
       workItemHeartbeat: `${origin}/api/v1/work/items/{id}/heartbeat`,
       workItemPr: `${origin}/api/v1/work/items/{id}/pr`,
       workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
+      knowledgeDomains: `${origin}/api/v1/knowledge/domains`,
+      knowledgeDomain: `${origin}/api/v1/knowledge/domains/{id}`,
       runs: `${origin}/api/v1/agent/runs`,
       runStream: `${origin}/api/v1/agent/runs/{runId}/stream`,
       // CI/CD plane (see docs/spec/node-ci-cd-contract.md § Env-promotion).
@@ -109,6 +116,30 @@ export async function GET(request: Request) {
       cognition: `${origin}/api/v1/cognition`,
     },
     actions: {
+      listKnowledgeDomains: {
+        method: "GET",
+        endpoint: `${origin}/api/v1/knowledge/domains`,
+        auth: { type: "bearer-or-session" },
+        inputSchema: z.toJSONSchema(knowledgeDomainsListOperation.input),
+        outputSchema: z.toJSONSchema(knowledgeDomainsListOperation.output),
+      },
+      createKnowledgeDomain: {
+        method: "POST",
+        endpoint: `${origin}/api/v1/knowledge/domains`,
+        auth: { type: "bearer-or-session" },
+        inputSchema: z.toJSONSchema(knowledgeDomainsCreateOperation.input),
+        outputSchema: z.toJSONSchema(knowledgeDomainsCreateOperation.output),
+      },
+      deleteKnowledgeDomain: {
+        method: "DELETE",
+        endpoint: `${origin}/api/v1/knowledge/domains/{id}`,
+        auth: { type: "bearer-or-session" },
+        inputSchema: z.toJSONSchema(knowledgeDomainsDeleteOperation.input),
+        outputSchema: z.toJSONSchema(knowledgeDomainsDeleteOperation.output),
+        conflictSchema: z.toJSONSchema(
+          knowledgeDomainsDeleteOperation.conflict
+        ),
+      },
       flightCandidate: {
         method: "POST",
         endpoint: `${origin}/api/v1/vcs/flight`,

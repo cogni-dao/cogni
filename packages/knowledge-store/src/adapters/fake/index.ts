@@ -42,6 +42,7 @@ import {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  DomainInUseError,
   DomainNotRegisteredError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
@@ -155,6 +156,30 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       at: new Date(),
     });
     return row;
+  }
+
+  async deleteDomain(id: string): Promise<boolean> {
+    if (!this.domainsMap.has(id)) return false;
+
+    const entryIds = new Set(
+      Array.from(this.rows.values())
+        .filter((row) => row.domain === id)
+        .map((row) => row.id)
+    );
+    const referenceCount = Array.from(this.edges.values()).filter(
+      (edge) => entryIds.has(edge.citingId) || entryIds.has(edge.citedId)
+    ).length;
+    if (entryIds.size > 0 || referenceCount > 0) {
+      throw new DomainInUseError(id, entryIds.size, referenceCount);
+    }
+
+    this.domainsMap.delete(id);
+    this.commitLog.push({
+      hash: this.nextHash(),
+      message: `delete domain ${id}`,
+      at: new Date(),
+    });
+    return true;
   }
 
   // --- Write — rows ---

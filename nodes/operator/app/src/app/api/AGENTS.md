@@ -79,6 +79,8 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
+  - `/api/v1/knowledge/domains` [GET, POST] - list/register node-local domains (Bearer or SIWE auth)
+  - `/api/v1/knowledge/domains/[id]` [DELETE] - remove an empty node-local domain; returns typed 409 usage conflicts
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 
 ## Responsibilities

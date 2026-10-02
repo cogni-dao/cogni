@@ -3,23 +3,25 @@
 
 /**
  * Module: `@app/api/v1/knowledge/domains/_handlers`
- * Purpose: HTTP handlers for the knowledge domain registry — list and register, mapping typed errors to HTTP statuses.
+ * Purpose: HTTP handlers for the knowledge domain registry — list, register, and guarded delete, mapping typed errors to HTTP statuses.
  * Scope: Operator-side wiring only. Does not contain business logic, validation, or storage I/O — those live in the port/adapter.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_LIST_COOKIE_ONLY
- *   (browse is a UI concern), DOMAIN_REGISTER_BEARER_OR_SESSION (federation:
- *   external bearer agents may register a domain on-demand so that downstream
- *   writes — knowledge contributions, EDO hypothesize/decide/record-outcome —
- *   can proceed against the DOMAIN_FK_ENFORCED_AT_WRITE adapter invariant
- *   without requiring a UI roundtrip).
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER,
+ *   DOMAIN_AUTHENTICATED_CONTROL_PLANE, DOMAIN_DELETE_EMPTY_ONLY.
  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
  * Links: docs/spec/knowledge-domain-registry.md, docs/spec/knowledge-syntropy.md
  * @internal
  */
 
-import { DomainAlreadyRegisteredError } from "@cogni/knowledge-store";
+import {
+  DomainAlreadyRegisteredError,
+  DomainInUseError,
+} from "@cogni/knowledge-store";
 import {
   DomainsCreateRequestSchema,
   DomainsCreateResponseSchema,
+  DomainsDeleteConflictResponseSchema,
+  DomainsDeleteRequestSchema,
+  DomainsDeleteResponseSchema,
 } from "@cogni/node-contracts";
 import type { SessionUser } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
@@ -31,22 +33,12 @@ function port() {
   return getContainer().knowledgeStorePort ?? null;
 }
 
-function isBearer(request: Request): boolean {
-  const authz = request.headers.get("authorization") ?? "";
-  return authz.toLowerCase().startsWith("bearer ");
-}
-
 export async function handleList(
-  request: Request,
+  _request: Request,
   sessionUser: SessionUser | null
 ): Promise<NextResponse> {
   if (!sessionUser)
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (isBearer(request))
-    return NextResponse.json(
-      { error: "knowledge domains require a session cookie (v0)" },
-      { status: 403 }
-    );
   const p = port();
   if (!p)
     return NextResponse.json(
@@ -62,11 +54,6 @@ export async function handleCreate(
 ): Promise<NextResponse> {
   if (!sessionUser)
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  // Bearer agents may register a domain on-demand to satisfy
-  // DOMAIN_FK_ENFORCED_AT_WRITE before downstream writes
-  // (knowledge contributions + EDO hypothesize/decide/record-outcome).
-  // Touch via underscore so the linter doesn't warn.
-  void isBearer(request);
   const p = port();
   if (!p)
     return NextResponse.json(
@@ -103,5 +90,56 @@ export async function handleCreate(
       return NextResponse.json({ error: e.message }, { status: 409 });
     }
     throw e;
+  }
+}
+
+export async function handleDelete(
+  id: string,
+  sessionUser: SessionUser | null
+): Promise<NextResponse> {
+  if (!sessionUser)
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  const parsed = DomainsDeleteRequestSchema.safeParse({ id });
+  if (!parsed.success)
+    return NextResponse.json(
+      { error: "invalid input", issues: parsed.error.issues },
+      { status: 400 }
+    );
+
+  const p = port();
+  if (!p)
+    return NextResponse.json(
+      { error: "knowledge store not configured" },
+      { status: 503 }
+    );
+
+  try {
+    const deleted = await p.deleteDomain(parsed.data.id);
+    if (!deleted) {
+      return NextResponse.json(
+        { error: `domain '${parsed.data.id}' not found` },
+        { status: 404 }
+      );
+    }
+    return NextResponse.json(
+      DomainsDeleteResponseSchema.parse({
+        id: parsed.data.id,
+        deleted: true,
+      })
+    );
+  } catch (error: unknown) {
+    if (error instanceof DomainInUseError) {
+      return NextResponse.json(
+        DomainsDeleteConflictResponseSchema.parse({
+          error: "domain_in_use",
+          domain: error.domain,
+          entryCount: error.entryCount,
+          referenceCount: error.referenceCount,
+        }),
+        { status: 409 }
+      );
+    }
+    throw error;
   }
 }

@@ -64,6 +64,27 @@ export class DomainAlreadyRegisteredError extends Error {
   }
 }
 
+/**
+ * Thrown when a domain cannot be removed without orphaning live knowledge.
+ * Counts are included so HTTP callers can distinguish entry ownership from
+ * citation cleanup without parsing a database error.
+ */
+export class DomainInUseError extends Error {
+  readonly domain: string;
+  readonly entryCount: number;
+  readonly referenceCount: number;
+
+  constructor(domain: string, entryCount: number, referenceCount: number) {
+    super(
+      `domain '${domain}' is in use by ${entryCount} knowledge entries and ${referenceCount} citation references`
+    );
+    this.name = "DomainInUseError";
+    this.domain = domain;
+    this.entryCount = entryCount;
+    this.referenceCount = referenceCount;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Hypothesis-loop typed errors (knowledge-syntropy.md § Enforcement Points)
 // ---------------------------------------------------------------------------
@@ -169,6 +190,11 @@ export interface KnowledgeStorePort {
    * `DomainAlreadyRegisteredError` on duplicate id.
    */
   registerDomain(input: NewDomain): Promise<Domain>;
+  /**
+   * Delete an empty domain and auto-commit. Returns false when the domain does
+   * not exist; throws `DomainInUseError` while entries or citations remain.
+   */
+  deleteDomain(id: string): Promise<boolean>;
 
   // --- Write — rows ---
   /** Upsert: inserts new entry or updates existing entry with same ID. */

@@ -4,9 +4,9 @@
 /**
  * Module: `@app/api/v1/knowledge/domains/route`
  * Purpose: HTTP endpoints for the knowledge domain registry — GET list with entry counts and POST register a new domain.
- * Scope: Cookie-session only. Does not contain business logic; delegates to _handlers.ts and the container's KnowledgeStorePort.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_HTTP_COOKIE_ONLY,
- *   DOMAIN_REGISTRY_VIA_UI, DOMAIN_REGISTER_AUTOCOMMITS.
+ * Scope: Authenticated Bearer agents and session users. Does not contain business logic; delegates to _handlers.ts and the container's KnowledgeStorePort.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER,
+ *   DOMAIN_AUTHENTICATED_CONTROL_PLANE, DOMAIN_REGISTER_AUTOCOMMITS.
  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
  * Links: docs/spec/knowledge-domain-registry.md
  * @public
@@ -24,7 +24,13 @@ export const GET = wrapRouteHandlerWithLogging(
     routeId: "knowledge.domains.list",
     auth: { mode: "required", getSessionUser },
   },
-  async (_ctx, request, sessionUser) => handleList(request, sessionUser)
+  async (ctx, request, sessionUser) => {
+    const response = await handleList(request, sessionUser);
+    if (response.ok) {
+      ctx.log.info({}, "knowledge.domains.list_success");
+    }
+    return response;
+  }
 );
 
 export const POST = wrapRouteHandlerWithLogging(
@@ -32,5 +38,11 @@ export const POST = wrapRouteHandlerWithLogging(
     routeId: "knowledge.domains.create",
     auth: { mode: "required", getSessionUser },
   },
-  async (_ctx, request, sessionUser) => handleCreate(request, sessionUser)
+  async (ctx, request, sessionUser) => {
+    const response = await handleCreate(request, sessionUser);
+    if (response.ok) {
+      ctx.log.info({}, "knowledge.domains.create_success");
+    }
+    return response;
+  }
 );
