@@ -44,6 +44,7 @@ import {
   DomainAlreadyRegisteredError,
   DomainNotRegisteredError,
   HypothesisMissingEvaluateAtError,
+  type KnowledgeIndexEntry,
   type KnowledgeStorePort,
   type NewDomain,
 } from "../../port/knowledge-store.port.js";
@@ -98,6 +99,25 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
     );
     return opts?.limit ? out.slice(0, opts.limit) : out;
+  }
+
+  async listKnowledgeByEntryTypes(
+    entryTypes: readonly string[]
+  ): Promise<KnowledgeIndexEntry[]> {
+    const wanted = new Set(entryTypes);
+    return Array.from(this.rows.values())
+      .filter((row) => wanted.has(row.entryType ?? ""))
+      .sort(
+        (a, b) =>
+          (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0) ||
+          a.id.localeCompare(b.id)
+      )
+      .map((row) => ({
+        id: row.id,
+        domain: row.domain,
+        title: row.title,
+        entryType: row.entryType ?? "finding",
+      }));
   }
 
   async searchKnowledge(
