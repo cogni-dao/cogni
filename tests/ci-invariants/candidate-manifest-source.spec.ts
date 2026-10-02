@@ -15,7 +15,8 @@
  *     replaces its explicitly configured k3s operator/control domain during
  *     substrate or public checks.
  *   DEPLOY_REPO_OWNS_APPSET: AppSet reconciliation renders repoURL for the
- *     repository that owns the deploy branch instead of the canonical default.
+ *     repository that owns the deploy branch instead of the canonical default;
+ *     writer, AppSet, verification checkout, and ancestry check share one resolver.
  *   ISOLATED_FLEET_ROOT_IS_LOCAL: a non-canonical candidate reconciles the
  *     apply-once control-plane root to its own protected main before AppSets.
  * Side-effects: IO (reads .github/workflows/candidate-flight.yml)
@@ -110,13 +111,78 @@ describe("candidate-a manifest source", () => {
 
     expect(apply).toBeTypeOf("string");
     expect(apply).toContain(
-      'REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"'
+      'REPO_URL="${{ steps.deploy-repo.outputs.url }}"'
     );
     expect(apply).toContain(
       'bash ci-src/scripts/ci/render-node-appset.sh candidate-a "$NODE" >"$RENDERED_APPSET"'
     );
     expect(apply).toContain(
       'ci_ssh_retry scp "${ssh_opts[@]}" "$RENDERED_APPSET"'
+    );
+  });
+
+  it("binds deploy writers and verifiers to the same resolved repository", () => {
+    const resolver =
+      "bash ci-src/scripts/ci/resolve-candidate-deploy-repository.sh";
+    const prepareResolve = namedStep(
+      "prepare-substrate-deploy-branch",
+      "Resolve watched deploy repository"
+    );
+    const appsetResolve = namedStep(
+      "reconcile-appset",
+      "Resolve watched deploy repository"
+    );
+    const flightResolve = namedStep(
+      "flight",
+      "Resolve watched deploy repository"
+    );
+    const verifyResolve = namedStep(
+      "verify-candidate",
+      "Resolve watched deploy repository"
+    );
+
+    for (const step of [
+      prepareResolve,
+      appsetResolve,
+      flightResolve,
+      verifyResolve,
+    ]) {
+      expect(step.run).toBe(resolver);
+      expect(step.env?.SYNC_MANIFEST_PATH).toBe(
+        "ci-src/.cogni/sync-manifest.yaml"
+      );
+    }
+
+    const prepare = namedStep(
+      "prepare-substrate-deploy-branch",
+      "Prepare deploy branch shape"
+    );
+    const flight = namedStep(
+      "flight",
+      "Prepare per-node deploy branch workspace"
+    );
+    for (const writer of [prepare, flight]) {
+      expect(writer.env?.DEPLOY_REPOSITORY).toBe(
+        "${{ steps.deploy-repo.outputs.repository }}"
+      );
+      expect(writer.run).toContain(
+        'github.com/${DEPLOY_REPOSITORY}.git" deploy-branch'
+      );
+    }
+
+    const checkout = namedStep(
+      "verify-candidate",
+      "Checkout per-node deploy branch (for source-sha map)"
+    );
+    const wait = namedStep(
+      "verify-candidate",
+      "Wait for ArgoCD sync (per-node)"
+    );
+    expect(checkout.with?.repository).toBe(
+      "${{ steps.deploy-repo.outputs.repository }}"
+    );
+    expect(wait.env?.GH_REPO).toBe(
+      "${{ steps.deploy-repo.outputs.repository }}"
     );
   });
 
