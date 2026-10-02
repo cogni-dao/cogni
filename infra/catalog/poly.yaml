@@ -50,7 +50,16 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 38
+  # 38 -> 39. Operator error, recorded so it is not repeated: while unwedging a
+  # Crossplane Request that was stuck on crossplane.io/external-create-pending with
+  # 503 ledger_unavailable, I cleared the annotation and applied the documented
+  # cogni.io/reconcile-nudge (hub akash-prod-lease-recovery step 4). That Request was a
+  # DELETE, not a create — the nudge let it complete and the actuator logged
+  # `akash_tx_released 1790779522819`, releasing candidate-a's HEALTHY live lease.
+  # poly-test went 200 -> 404 and receipt 1790779522819 closed at 2026-10-02T01:25:09Z.
+  # The hub's precondition is to verify the wedged receipt is settled with no live lease;
+  # I verified the LEDGER was clean and never checked that Request's verb. Check the verb.
+  candidate-a: 39
   preview: 2
   # 20 -> 21 after gen-20 booted the old eed16dc0 bundle, missed the boot
   # deadline for the promoted 9033a162 bundle, and was closed by policy.
@@ -111,7 +120,39 @@ lease_generation:
   # escrow refunds. Do NOT widen required_placement_countries to rescue a dry auction:
   # BG/RO were tried and deliberately reverted (#2512/#2516/#2525/#2527 -> #2528), and CH is
   # inert because both Swiss providers publish featEndpointCustomDomain=false. (bug.5293)
-  production: 23
+  # 23 -> 20. DELIBERATELY BACKWARD, and it is an ADOPT, not a re-mint. Read before changing.
+  #
+  # poly production already HAS a live, paid, serving Akash lease in FINLAND. Read from
+  # Console with the actuator's own credential 2026-10-02T02:0xZ:
+  #   GET /v1/deployments/1790822853178 -> state: active
+  #     lease provider akash127x6cuk44ul3azferg8wy9fju686kcf6x2dhz7  (RHITE Finland)
+  #     rate 9.141469 uact/block
+  #     svc app uris ["cfvnrn4gppe0j441ibuudbaosc.ingress.akash.rhite.co.uk",
+  #                   "poly.cognidao.org"]   available: 1
+  #   compute_cost_intervals -> state=active WITH provider and rate (a healthy receipt)
+  # while the XR reports phase=Failed, resource=<empty>, reason=BootDeadlineClosed. The XR
+  # DISOWNED a lease it never actually closed — render-safe, status-blind, exactly hub
+  # `receipt-is-not-liveness`. That lease is what serves the stale eed16dc0 on the public host.
+  #
+  # Gens 21, 22 and 23 each lost their auction (0 of 6-7 bids from FI/NL/PT) while we were
+  # paying RHITE for Finland the whole time. Escrow refunded each round, so the cost was hours,
+  # not money.
+  #
+  # The Akash create idempotency key is xcw:<ns>:<node>:<leaseGeneration> — GENERATION ONLY.
+  # Gen-20's key is NOT spent: its receipt is `active`, not settled. So rendering gen 20 makes
+  # the composition resolve to the EXISTING live handle and take the observe->UPDATE path,
+  # applying bundle 2679ce05 to the lease already serving poly.cognidao.org. That is the
+  # sweeper's own doctrine ("cursor, exactly one live allocation -> bind the handle to the
+  # receipt, never close it"). No auction, no new escrow, no provider strike, and it keeps the
+  # Finland placement story.5050 earned.
+  #
+  # The spent-key trap in akash-node-expert runs the OTHER way: bumping ONTO a settled gen
+  # replays a dead handle. Gens 21/22/23 are the settled ones and are never to be reused.
+  # boot_recovery is also the wrong lever here: it exists for a lease that NEVER served and
+  # closes + re-mints elsewhere; ours serves.
+  #
+  # DO NOT widen required_placement_countries to rescue this. (bug.5293)
+  production: 20
 required_placement_countries:
   candidate-a: [BE]
   production: [FI, NL, PT]

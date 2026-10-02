@@ -56,7 +56,7 @@ spec:
   bootPolicy:
     onDeadline: Close
     onGiveUp: Replace
-  leaseGeneration: 23
+  leaseGeneration: 20
   placement:
     requiredCountries:
       - FI
