@@ -50,7 +50,16 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 38
+  # 38 -> 39. Operator error, recorded so it is not repeated: while unwedging a
+  # Crossplane Request that was stuck on crossplane.io/external-create-pending with
+  # 503 ledger_unavailable, I cleared the annotation and applied the documented
+  # cogni.io/reconcile-nudge (hub akash-prod-lease-recovery step 4). That Request was a
+  # DELETE, not a create — the nudge let it complete and the actuator logged
+  # `akash_tx_released 1790779522819`, releasing candidate-a's HEALTHY live lease.
+  # poly-test went 200 -> 404 and receipt 1790779522819 closed at 2026-10-02T01:25:09Z.
+  # The hub's precondition is to verify the wedged receipt is settled with no live lease;
+  # I verified the LEDGER was clean and never checked that Request's verb. Check the verb.
+  candidate-a: 39
   preview: 2
   # 20 -> 21 after gen-20 booted the old eed16dc0 bundle, missed the boot
   # deadline for the promoted 9033a162 bundle, and was closed by policy.
