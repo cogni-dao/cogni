@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/knowledge-store/tests/domain-registry`
  * Purpose: Regression coverage for guarded domain deletion and Dolt commits.
- * Scope: In-memory adapter behavior plus Doltgres SQL generation with a fake client.
+ * Scope: In-memory adapter behavior plus Doltgres SQL generation with a fake client. Does not connect to a live database.
  * Invariants: DOMAIN_DELETE_EMPTY_ONLY, DOMAIN_DELETE_AUTOCOMMITS.
  * Side-effects: none
  * Links: packages/knowledge-store/src/port/knowledge-store.port.ts
