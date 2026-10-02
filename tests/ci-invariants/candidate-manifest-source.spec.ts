@@ -110,9 +110,7 @@ describe("candidate-a manifest source", () => {
     ).run;
 
     expect(apply).toBeTypeOf("string");
-    expect(apply).toContain(
-      'REPO_URL="${{ steps.deploy-repo.outputs.url }}"'
-    );
+    expect(apply).toContain('REPO_URL="${{ steps.deploy-repo.outputs.url }}"');
     expect(apply).toContain(
       'bash ci-src/scripts/ci/render-node-appset.sh candidate-a "$NODE" >"$RENDERED_APPSET"'
     );
