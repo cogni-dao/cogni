@@ -8,7 +8,7 @@ summary: API proof recipe for machine-agent discovery, auth, work-item coordinat
 read_when: Validating an HTTP/API surface locally or against candidate-a, especially inside /validate-candidate.
 owner: derekg1729
 created: 2026-04-08
-verified: 2026-04-08
+verified: 2026-10-02
 tags: [agent-api, validation, candidate-a, billing]
 ---
 
@@ -57,19 +57,83 @@ Every code change is tied to exactly one work item. **1 work item ≈ 1 PR.** Pr
 # Discover open work
 curl -H "Authorization: Bearer $API_KEY" \
   "$BASE/api/v1/work/items?statuses=needs_implement,needs_design"
-
-# Create only when nothing fits (server allocates id ≥ 5000)
-curl -X POST $BASE/api/v1/work/items \
-  -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
-  -d '{"type":"task","title":"<short>","node":"operator","summary":"<why>"}'
-
-# PATCH as you progress — every write audited in dolt_log
-curl -X PATCH $BASE/api/v1/work/items/$ID \
-  -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
-  -d '{"set":{"branch":"feat/...","pr":"<url>","status":"needs_merge"}}'
 ```
 
 **Lifecycle close gate:** PATCH `status=done` only after PR merges to `main`. Pre-merge stays `needs_merge`; rejected review flips back to `needs_implement`.
+
+### Node-local create → patch → close validation
+
+Run this disposable round trip against the node being validated. `BASE` must be
+that node's own origin; the procedure deliberately has no operator fallback and
+does not send a `node` field. The discovery checks prove the node advertises its
+write contract before the client mutates its local work-item store.
+
+This is a temporary executable validation client. [task.5171](https://cognidao.org/api/v1/work/items/task.5171)
+must migrate or delete it if durable hub guidance supersedes this procedure.
+The disposable probe is not a contribution work item: its brief `done` state
+exists only to prove terminal-state persistence before the row is deleted.
+
+```bash
+: "${BASE:?set BASE to the node origin under validation}"
+: "${API_KEY:?set API_KEY to a key issued by that node}"
+BASE=${BASE%/}
+
+# Discover the node-local action endpoints and their OpenAPI operations.
+AGENT_JSON=$(curl -fsS "$BASE/.well-known/agent.json")
+jq -e --arg base "$BASE" '
+  .actions.createWorkItem.method == "POST" and
+  .actions.createWorkItem.endpoint == ($base + "/api/v1/work/items") and
+  .actions.updateWorkItem.method == "PATCH" and
+  .actions.updateWorkItem.endpoint == ($base + "/api/v1/work/items/{id}")
+' <<<"$AGENT_JSON"
+
+OPENAPI=$(curl -fsS "$BASE/openapi.json")
+jq -e '
+  .paths["/work/items"].post != null and
+  .paths["/work/items/{id}"].patch != null
+' <<<"$OPENAPI"
+
+# Create one disposable row in this node's store and always clean it up.
+ID=$(curl -fsS -X POST "$BASE/api/v1/work/items" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "type":"task",
+    "title":"validation: node-local work-item round trip",
+    "summary":"Disposable API validation row; delete after the closed-state assertion."
+  }' | jq -er .id)
+
+cleanup() {
+  curl -fsS -X DELETE "$BASE/api/v1/work/items/$ID" \
+    -H "Authorization: Bearer $API_KEY" >/dev/null || true
+}
+trap cleanup EXIT
+
+# Patch and read back a node-local field.
+curl -fsS -X PATCH "$BASE/api/v1/work/items/$ID" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"set":{"summary":"Node-local PATCH readback passed."}}' \
+  | jq -e --arg id "$ID" '.id == $id and .summary == "Node-local PATCH readback passed."'
+
+# Close, then independently assert the durable closed state.
+curl -fsS -X PATCH "$BASE/api/v1/work/items/$ID" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"set":{"status":"done"}}' >/dev/null
+
+curl -fsS "$BASE/api/v1/work/items/$ID" \
+  -H "Authorization: Bearer $API_KEY" \
+  | jq -e --arg id "$ID" '.id == $id and .status == "done"'
+
+# Cleanup is part of the proof: delete the disposable row and require a 404.
+cleanup
+trap - EXIT
+HTTP_CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
+  "$BASE/api/v1/work/items/$ID" \
+  -H "Authorization: Bearer $API_KEY")
+test "$HTTP_CODE" = "404"
+```
 
 ## Work-item sessions — active execution coordination
 
@@ -228,6 +292,7 @@ planes — track under story.5023/bug.5127.
 ## Proof criteria
 
 - Agent completes **discover → register → auth → execute → list runs → stream events** with no browser session.
+- Node-local work-item validation completes **agent.json/OpenAPI discovery → create → patch → `done` readback → delete → `404` readback** against one explicit node `BASE`.
 - Graph execution produced a successful run (`status: "success"`).
 - Metering path recorded downstream (charge receipt / billing telemetry) for the run.
 - **Knowledge compounds:** the linked-atoms contribution diff shows all entries with their `domain`, and a self-referential cite (`citingId === citedId`) is rejected `400`.
