@@ -50,7 +50,16 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 38
+  # 38 -> 39. Operator error, recorded so it is not repeated: while unwedging a
+  # Crossplane Request that was stuck on crossplane.io/external-create-pending with
+  # 503 ledger_unavailable, I cleared the annotation and applied the documented
+  # cogni.io/reconcile-nudge (hub akash-prod-lease-recovery step 4). That Request was a
+  # DELETE, not a create — the nudge let it complete and the actuator logged
+  # `akash_tx_released 1790779522819`, releasing candidate-a's HEALTHY live lease.
+  # poly-test went 200 -> 404 and receipt 1790779522819 closed at 2026-10-02T01:25:09Z.
+  # The hub's precondition is to verify the wedged receipt is settled with no live lease;
+  # I verified the LEDGER was clean and never checked that Request's verb. Check the verb.
+  candidate-a: 39
   preview: 2
   # 20 -> 21 after gen-20 booted the old eed16dc0 bundle, missed the boot
   # deadline for the promoted 9033a162 bundle, and was closed by policy.
@@ -88,7 +97,30 @@ lease_generation:
   # can serve poly's publicHost inside the set, and the derived strike list goes PERMANENT
   # at 3 boot failures - so every wasted generation risks permanently excluding the pool
   # that story.5050 earned. Fix the substrate first, then re-mint. (bug.5293)
-  production: 22
+  # 22 -> 23. Countries UNCHANGED ([FI, NL, PT], #2528) — placement is NOT the fault.
+  # SIX dev-wallet market probes (all closed, zero lease taken) reproduced poly's SDL field
+  # for field — exact cpu/mem, 4096Mi storage as a LIST, `accept:` host, and
+  # signedBy.allOf=[Overclock] — and the in-set FI provider akash1z9nr23cg (isOnline,
+  # isAudited, featEndpointCustomDomain=true, already in AKASH_ALLOWED_PROVIDERS) bid 14.00
+  # every single time, state=open, inside 30s. 14.00 is UNDER the 17.86 bid poly's own
+  # gen-22 auction accepted. Yet all THREE digital-frontier providers (FI m3a, PT h4i,
+  # BG h6i) are absent from every poly roster. So resources, storage shape, accept:, the
+  # audit anchor, price and bid state are all eliminated by measurement; the gap is in the
+  # actuator's own request/collection path, not in jurisdiction and not in market supply.
+  # Tracking that separately — this bump is a fresh auction sample that also carries the
+  # poly-side fix to production.
+  #
+  # Promote target moves to poly main 2679ce05 (#102: retention prunes gated to a 30-min
+  # cadence instead of every 30s tick). Measured on prod: the prune is a ZERO-ROW no-op
+  # costing 72.7s before autovacuum and 29.1s after, so cadence — not statement duration —
+  # was the load. Postgres is now 0 exit-2 across a full hour and the 2,101,669 dead tuples
+  # on poly_trader_position_snapshots are reclaimed (first autovacuum in that table's life).
+  #
+  # A lost auction records NO provider boot failure, so re-minting costs no strike and the
+  # escrow refunds. Do NOT widen required_placement_countries to rescue a dry auction:
+  # BG/RO were tried and deliberately reverted (#2512/#2516/#2525/#2527 -> #2528), and CH is
+  # inert because both Swiss providers publish featEndpointCustomDomain=false. (bug.5293)
+  production: 23
 required_placement_countries:
   candidate-a: [BE]
   production: [FI, NL, PT]
