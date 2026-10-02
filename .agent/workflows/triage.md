@@ -16,7 +16,7 @@ you call _is_ the node assignment.
 
 ```bash
 # operator: https://cognidao.org · poly: https://poly.cognidao.org · …
-BASE=${BASE:-https://cognidao.org}
+: "${BASE:?set BASE to this repository's node origin; never default work-item writes to operator}"
 curl $BASE/.well-known/agent.json | jq '.actions'   # method + JSON Schema per write
 ```
 

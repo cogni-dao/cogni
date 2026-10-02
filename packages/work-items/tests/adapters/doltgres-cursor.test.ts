@@ -2,11 +2,14 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@tests/unit/adapters/work-items-cursor`
+ * Module: `@cogni/work-items/tests/adapters/doltgres-cursor`
  * Purpose: Unit tests for the opaque cursor codec used by Doltgres work_items pagination.
- * Scope: Pure encode/decode round-trip, error cases. No IO.
+ * Scope: Pure encode/decode round-trip plus error cases. Does not touch a database.
+ * Invariants:
+ *   - ROUND_TRIP_STABLE, decode(encode(c)) returns the original composite sort key.
+ *   - MALFORMED_IS_REJECTED, non-base64url or structurally invalid input raises InvalidCursorError.
  * Side-effects: none
- * Links: bug.5162, src/adapters/server/db/doltgres/work-items-cursor.ts
+ * Links: bug.5162, packages/work-items/src/adapters/doltgres/cursor.ts
  * @internal
  */
 
@@ -16,7 +19,7 @@ import {
   decodeCursor,
   encodeCursor,
   type WorkItemCursor,
-} from "@/adapters/server/db/doltgres/work-items-cursor";
+} from "../../src/adapters/doltgres/cursor.js";
 
 describe("work-items-cursor codec", () => {
   it("round-trips a fully populated cursor", () => {

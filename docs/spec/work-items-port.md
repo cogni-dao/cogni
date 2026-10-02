@@ -10,13 +10,13 @@ read_when: "Building a skill that reads/writes work items, implementing a new ad
 implements: proj.agentic-project-management
 owner: derekg1729
 created: 2026-03-10
-verified: 2026-03-10
+verified: 2026-10-02
 tags: [work-system, ports, adapters]
 ---
 
 # Work Items Port: Domain Types and Port Interfaces
 
-> Typed port interfaces for reading and writing work items. Adapters implement the port against a storage backend (markdown files today, DB or external tracker later). All access goes through the port — no direct file manipulation.
+> Typed port interfaces for reading and writing work items. Every node serves its own Doltgres-backed lifecycle ledger; the markdown adapter remains only for the legacy corpus and local compatibility. All access goes through the port — no direct storage manipulation.
 
 ### Key References
 
@@ -47,14 +47,16 @@ graph TD
     TR["VALID_TRANSITIONS + isValidTransition()"]
   end
 
-  subgraph "@cogni/work-items/markdown (adapter)"
+  subgraph "@cogni/work-items adapters"
     MA["MarkdownWorkItemAdapter"]
+    DA["DoltgresWorkItemAdapter"]
     FM["frontmatter.ts (parse/serialize)"]
     ER["StaleRevisionError, InvalidTransitionError"]
   end
 
   subgraph "Storage"
-    FS["work/items/*.md + work/projects/*.md"]
+    FS["legacy markdown corpus"]
+    DG["node-local knowledge_<slug>.work_items"]
   end
 
   S1 & S2 & S3 --> QP & CP
@@ -62,6 +64,8 @@ graph TD
   MA --> FM --> FS
   MA --> TR
   MA --> ER
+  DA -.implements node HTTP slice.-> QP & CP
+  DA --> DG
 ```
 
 ### Domain Types
@@ -128,6 +132,19 @@ Any adapter implementing `WorkItemQueryPort + WorkItemCommandPort` must satisfy:
 4. **ID allocation** — `create()` produces a unique `WorkItemId` in `<type>.<NNNN>` format.
 5. **Body preservation** — adapter writes never modify content outside the adapter's storage domain (e.g., markdown body below frontmatter).
 
+The node HTTP v1 surface deliberately exposes a smaller Doltgres port (`get`, `list`, `create`, `patch`, `delete`) and currently trusts the authenticated caller: it has no optimistic revision check or transition state machine. The Zod wire contracts, not the legacy markdown behavior, are authoritative for that HTTP slice.
+
+### Doltgres Adapter (node ledger)
+
+`@cogni/work-items/adapters/doltgres` is the shared adapter every node wires to its own `knowledge_<slug>` database:
+
+- **Store isolation**: the DSN selects the node; there is no node-routing field or central fallback.
+- **ID allocation**: fresh stores default to suffix `0001`; operator passes floor `5000` because its imported legacy corpus occupies lower IDs.
+- **Audit**: every create, patch, and delete ends with `dolt_commit('-Am', ...)` carrying the authenticated actor tag.
+- **Queries**: keyset pagination uses `(priority, rank, created_at, id)`; no `OFFSET` drift.
+- **Protocol**: runtime SQL uses `sql.unsafe()` because Doltgres does not support the postgres.js extended protocol reliably.
+- **Ownership**: packages own the adapter; each node owns thin Next.js route/facade/container wiring.
+
 ### Markdown Adapter (v0)
 
 The `MarkdownWorkItemAdapter` in `@cogni/work-items/markdown` implements both ports against `work/items/*.md` and `work/projects/*.md`:
@@ -183,14 +200,14 @@ stateDiagram-v2
 
 ## Goal
 
-Enable agents and scripts to manage work items through typed port interfaces instead of hand-editing YAML frontmatter. The port contract is adapter-independent — the same consumer code works against markdown files, a database, or an external tracker.
+Enable agents and scripts to manage node-local work items through typed port interfaces and machine-discoverable HTTP contracts instead of hand-editing YAML frontmatter.
 
 ## Non-Goals
 
-- Database or external tracker adapters (future — project P3)
+- External tracker adapters
 - UI for work item management (future — project P2)
 - Governance runner dispatch integration (future — project P2)
-- Audit trail beyond git history (not needed while markdown is source of truth)
+- Cross-node ID allocation or a central work-item ledger
 
 ## Invariants
 
@@ -219,6 +236,9 @@ Enable agents and scripts to manage work items through typed port interfaces ins
 | `packages/work-items/src/adapters/markdown/frontmatter.ts`      | Parse/serialize YAML frontmatter, compute SHA-256            |
 | `packages/work-items/src/adapters/markdown/errors.ts`           | `StaleRevisionError`, `InvalidTransitionError`               |
 | `packages/work-items/src/adapters/markdown/index.ts`            | Adapter barrel                                               |
+| `packages/work-items/src/adapters/doltgres/adapter.ts`          | Shared node-local Doltgres implementation                    |
+| `packages/work-items/src/adapters/doltgres/ports.ts`            | HTTP slice port and inferred input types                      |
+| `packages/work-items/src/adapters/doltgres/index.ts`            | Curated Doltgres adapter barrel                               |
 | `packages/work-items/tests/contract/work-item-port.contract.ts` | Portable contract test suite                                 |
 
 ## Acceptance Checks

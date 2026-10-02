@@ -2,33 +2,23 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@tests/unit/adapters/work-items-adapter-keyset`
- * Purpose: Unit tests for the Doltgres work-items keyset SQL — the actual
- *   bug-5162 fix. Drives the adapter with a fake `Sql` that captures issued
- *   query strings and serves canned rows, then asserts keyset progression
- *   walks the full dataset exactly once with id as a stable tiebreaker.
- * Scope: No real DB. No testcontainer (no Doltgres testcontainer infra in
- *   this repo as of bug-5162; if/when one lands, prefer a component-level
- *   test against a real Doltgres image).
+ * Module: `@cogni/work-items/tests/adapters/doltgres-adapter-keyset`
+ * Purpose: Unit tests for the Doltgres work-items keyset SQL, asserting pagination walks the dataset exactly once with id as a stable tiebreaker.
+ * Scope: Fake `Sql` capturing issued query strings. Does not use a real database or a testcontainer, since this repo has no Doltgres image.
  * Invariants:
- *   - KEYSET_TIEBREAK: rows that share (priority, rank, created_at) still
- *     progress because `id ASC` is part of the keyset. If the keyset
- *     condition drops the id tiebreaker the test fails (final-equality case).
- *   - KEYSET_OR_CHAIN: SQL contains the mixed-direction OR-chain that
- *     replaces an unsupported tuple compare under Doltgres.
- *   - HASMORE_TRUTH: hasMore flips false on the last page.
- *   - FULL_WALK_NO_DUPS: paginating limit=10 over 30 rows visits all rows
- *     exactly once.
+ *   - KEYSET_TIEBREAK, rows sharing (priority, rank, created_at) still progress because `id ASC` is part of the keyset.
+ *   - KEYSET_OR_CHAIN, the SQL carries the mixed-direction OR-chain replacing a tuple compare Doltgres cannot run.
+ *   - FULL_WALK_NO_DUPS, paginating limit=10 over 30 rows visits every row exactly once and hasMore falsifies last.
  * Side-effects: none
  * Links: bug.5162, PR #1180 review finding 3,
- *   nodes/operator/app/src/adapters/server/db/doltgres/work-items-adapter.ts
+ *   packages/work-items/src/adapters/doltgres/adapter.ts
  * @internal
  */
 
 import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
-import { DoltgresOperatorWorkItemAdapter } from "@/adapters/server/db/doltgres/work-items-adapter";
+import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
 
 type Row = Record<string, unknown>;
 
@@ -182,11 +172,11 @@ function makeFakeSql(rows: Row[]): { sql: Sql; queries: string[] } {
   return { sql: fake, queries };
 }
 
-describe("DoltgresOperatorWorkItemAdapter.list keyset SQL", () => {
+describe("DoltgresWorkItemAdapter.list keyset SQL", () => {
   it("walks 30 rows with limit=10 in 3 pages, no dups, no skips", async () => {
     const dataset = buildDataset();
     const { sql, queries } = makeFakeSql(dataset);
-    const adapter = new DoltgresOperatorWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql);
 
     const seen: string[] = [];
     let cursor: string | undefined;
@@ -228,7 +218,7 @@ describe("DoltgresOperatorWorkItemAdapter.list keyset SQL", () => {
       })
     );
     const { sql } = makeFakeSql(rows);
-    const adapter = new DoltgresOperatorWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql);
 
     const seen: string[] = [];
     let cursor: string | undefined;
@@ -251,7 +241,7 @@ describe("DoltgresOperatorWorkItemAdapter.list keyset SQL", () => {
   it("hasMore=false on the last page", async () => {
     const dataset = buildDataset().slice(0, 7);
     const { sql } = makeFakeSql(dataset);
-    const adapter = new DoltgresOperatorWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql);
     const r = await adapter.list({ limit: 10 });
     expect(r.items.length).toBe(7);
     expect(r.pageInfo.hasMore).toBe(false);
@@ -260,7 +250,7 @@ describe("DoltgresOperatorWorkItemAdapter.list keyset SQL", () => {
 
   it("issues the mixed-direction OR-chain in the SQL string", async () => {
     const { sql, queries } = makeFakeSql(buildDataset());
-    const adapter = new DoltgresOperatorWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql);
     const first = await adapter.list({ limit: 10 });
     const second = await adapter.list({
       limit: 10,

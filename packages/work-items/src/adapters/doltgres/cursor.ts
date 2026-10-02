@@ -2,10 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@adapters/server/db/doltgres/work-items-cursor`
+ * Module: `@cogni/work-items/adapters/doltgres/cursor`
  * Purpose: Opaque cursor encode/decode for keyset pagination of work_items.
- * Scope: Pure helpers — no IO. Cursor encodes the composite sort key
- *        (priority, rank, createdAt, id) using base64url(JSON).
+ * Scope: Pure helpers encoding the composite sort key (priority, rank, createdAt, id) as base64url(JSON). Does not perform IO or SQL.
  * Invariants:
  *   - OPAQUE_TO_CLIENTS: clients must treat cursor as a black box.
  *   - STABLE_TIEBREAK: id is the unique tiebreaker so progression is deterministic

@@ -43,7 +43,7 @@ Code carries _what_ via names + types. The **knowledge hub** carries the _why_ +
    # The hub of the node you are contributing to — each node owns its own
    # work-item + knowledge store, so this choice IS the node assignment.
    # operator: https://cognidao.org · poly: https://poly.cognidao.org · …
-   BASE=${BASE:-https://cognidao.org}
+   : "${BASE:?set BASE to this repository's node origin; never default writes to operator}"
    curl $BASE/.well-known/agent.json | jq '.endpoints, .actions'
    API_KEY=$(curl -s -X POST $BASE/api/v1/agent/register \
      -H "Content-Type: application/json" \

@@ -184,7 +184,7 @@ Curated expertise that compounds over time. The table set is open — domain spe
 | Table        | Purpose                                                                                                                                                                                                                                   |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `knowledge`  | Domain-specific facts, claims, and curated assertions with provenance                                                                                                                                                                     |
-| `work_items` | Operator-only companion table — lifecycle artifacts (tasks, bugs, spikes, stories). Structured columns + per-row dolt_log audit; not subject to `domain`/`tags` syntropy because rows are typed lifecycle entities, not free-form claims. |
+| `work_items` | Per-node companion table — lifecycle artifacts (tasks, bugs, spikes, stories) owned by that node's `knowledge_<slug>` store. Structured columns + per-write `dolt_log` audit; not subject to `domain`/`tags` syntropy because rows are typed lifecycle entities, not free-form claims. |
 
 ### Domain Extension Pattern
 
