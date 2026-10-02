@@ -50,7 +50,7 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
       "- `cognition-substrate-bootstrap` (why the session bundle exists) and the skills index in the session bundle. Then create this node's `<slug>-agent-orientation` and cite this entry.\n\n" +
       "## Work items belong to this node\n" +
       "- Resolve this node's base URL from `.cogni/repo-spec.yaml` and `/.well-known/agent.json`; never default writes to the operator apex.\n" +
-      "- Discover the typed write contracts at `actions.createWorkItem` and `actions.updateWorkItem`. Create with `POST /api/v1/work/items`; progress or close with `PATCH /api/v1/work/items/{id}` using `{\"set\":{...}}`.\n" +
+      '- Discover the typed write contracts at `actions.createWorkItem` and `actions.updateWorkItem`. Create with `POST /api/v1/work/items`; progress or close with `PATCH /api/v1/work/items/{id}` using `{"set":{...}}`.\n' +
       "- Adopt before creating. One work item + one node per session; close only after the linked PR merges and live behavior is proven.\n\n" +
       "Refine whenever repo layout, scripts, CI, deploy, auth, or validation behavior changes.",
     sourceType: "human",
