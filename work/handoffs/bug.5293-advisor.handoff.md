@@ -62,12 +62,12 @@ Verified live by the advisor at ~23:30Z 2026-10-01:
 
 Session topology (all on this machine):
 
-| session | lane | prod-write? |
-|---|---|---|
-| `da-nang-v2-3f` | incident OWNER — Postgres reliability + poly lease/promote | yes |
-| `san-jose-98` | make emergency caps declarative (provision.sh), drift gate, metrics, restore drill | no |
-| `zurich-v1-77` | story.5056 node→node billing wallets (unrelated) | no |
-| `lagos-31` | poly-side prune-DELETE root cause (poly PRs) | read-only |
+| session         | lane                                                                               | prod-write? |
+| --------------- | ---------------------------------------------------------------------------------- | ----------- |
+| `da-nang-v2-3f` | incident OWNER — Postgres reliability + poly lease/promote                         | yes         |
+| `san-jose-98`   | make emergency caps declarative (provision.sh), drift gate, metrics, restore drill | no          |
+| `zurich-v1-77`  | story.5056 node→node billing wallets (unrelated)                                   | no          |
+| `lagos-31`      | poly-side prune-DELETE root cause (poly PRs)                                       | read-only   |
 
 ## Design / Implementation Target
 
@@ -90,10 +90,10 @@ Session topology (all on this machine):
 
 ## Pointers
 
-| File / Resource | Why it matters |
-| --------------- | -------------- |
-| `work/handoffs/bug.5293.handoff.md` | Owner's live incident briefing (SSoT) |
-| `.context/bug5293-production-writes.md` | W1–W7 prod-write ledger + rollbacks |
-| `~/.claude/skills/tldr/SKILL.md` | The only accepted Derek comms format |
-| `.claude/skills/akash-node-expert/SKILL.md` | Auction/lease canon; probe-before-auction |
-| `https://poly.cognidao.org/{,version,readyz}` | Live truth — read all three |
+| File / Resource                               | Why it matters                            |
+| --------------------------------------------- | ----------------------------------------- |
+| `work/handoffs/bug.5293.handoff.md`           | Owner's live incident briefing (SSoT)     |
+| `.context/bug5293-production-writes.md`       | W1–W7 prod-write ledger + rollbacks       |
+| `~/.claude/skills/tldr/SKILL.md`              | The only accepted Derek comms format      |
+| `.claude/skills/akash-node-expert/SKILL.md`   | Auction/lease canon; probe-before-auction |
+| `https://poly.cognidao.org/{,version,readyz}` | Live truth — read all three               |
