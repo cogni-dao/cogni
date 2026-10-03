@@ -61,9 +61,13 @@ export {
   type UpdateScheduleInput,
 } from "@cogni/scheduler-core";
 
+// The work-items Doltgres port + adapter moved into @cogni/work-items so every
+// node can serve the same write surface against its OWN knowledge_<slug> store
+// (story.5060). Routes and facades still depend on this barrel, never on the
+// concrete adapter.
 export type {
   WorkItemsCreateInput,
   WorkItemsDoltgresPort,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
-} from "./work-items-doltgres.port";
+} from "@cogni/work-items/adapters/doltgres";

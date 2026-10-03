@@ -40,8 +40,11 @@ Code carries _what_ via names + types. The **knowledge hub** carries the _why_ +
 1. Worktree off `main`. Read the root `AGENTS.md` and the `AGENTS.md` files for every dir you'll touch.
 2. Discover the operator and register if you need a Bearer token:
    ```bash
-   BASE=https://cognidao.org
-   curl $BASE/.well-known/agent.json | jq .endpoints
+   # The hub of the node you are contributing to — each node owns its own
+   # work-item + knowledge store, so this choice IS the node assignment.
+   # operator: https://cognidao.org · poly: https://poly.cognidao.org · …
+   : "${BASE:?set BASE to this repository's node origin; never default writes to operator}"
+   curl $BASE/.well-known/agent.json | jq '.endpoints, .actions'
    API_KEY=$(curl -s -X POST $BASE/api/v1/agent/register \
      -H "Content-Type: application/json" \
      -d '{"name": "my-agent"}' | jq -r .apiKey)
@@ -51,10 +54,10 @@ Code carries _what_ via names + types. The **knowledge hub** carries the _why_ +
    - Looking for work? Query `GET $BASE/api/v1/work/items?statuses=needs_implement,needs_design` first. Use `work/items/` only as legacy reference.
    - New request that fits nothing existing? Create via the operator API:
      ```bash
-     curl -X POST https://cognidao.org/api/v1/work/items \
+     curl -X POST $BASE/api/v1/work/items \
        -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
-       -d '{"type":"task","title":"<short>","node":"<node>","summary":"<why>"}'
-     # → { "id": "task.NNNN" }   (≥5000, server-allocated)
+       -d '{"type":"task","title":"<short>","summary":"<why>"}'
+     # → { "id": "task.NNNN" }   (server-allocated; the hub you POST to owns it)
      ```
      Keep the item lean: a one-line `outcome` describing successful E2E validation (a user-facing capability, or a specific response after repro condition X). Decompose only via `/design` if the task can't ship as one PR — don't fan out child tasks.
 4. Claim the work item, heartbeat while active, link your branch/PR once opened, and poll coordination for the operator's next-action text:

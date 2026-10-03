@@ -19,7 +19,11 @@
  * @public
  */
 
-import { flightOperation } from "@cogni/node-contracts";
+import {
+  flightOperation,
+  workItemsCreateOperation,
+  workItemsPatchOperation,
+} from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
@@ -119,6 +123,26 @@ export async function GET(request: Request) {
         inputSchema: z.toJSONSchema(flightOperation.input),
         outputSchema: z.toJSONSchema(flightOperation.output),
       },
+      // WRITE_SEAM_IS_DISCOVERABLE: `endpoints.workItems` is only a URL — it cannot
+      // tell an agent that the route accepts POST, what body it takes, or that the
+      // server allocates the id. Agents that lacked these schemas fell back to
+      // harness-local slash commands, which hardcode the operator apex and so file
+      // every node's work onto operator. Schemas are projected from the zod
+      // contracts, so they cannot drift from the handlers.
+      createWorkItem: {
+        method: "POST",
+        endpoint: `${origin}/api/v1/work/items`,
+        auth: { type: "bearer" },
+        inputSchema: z.toJSONSchema(workItemsCreateOperation.input),
+        outputSchema: z.toJSONSchema(workItemsCreateOperation.output),
+      },
+      updateWorkItem: {
+        method: "PATCH",
+        endpoint: `${origin}/api/v1/work/items/{id}`,
+        auth: { type: "bearer" },
+        inputSchema: z.toJSONSchema(workItemsPatchOperation.input),
+        outputSchema: z.toJSONSchema(workItemsPatchOperation.output),
+      },
     },
     process: {
       contributionSpec: "docs/spec/development-lifecycle.md",
@@ -127,7 +151,9 @@ export async function GET(request: Request) {
       requiredLoop: [
         "discover",
         "register",
-        "adopt_work_item",
+        // Adopt over create (anti-sprawl), but creating is a first-class step of
+        // the loop — `actions.createWorkItem` carries the schema.
+        "adopt_or_create_work_item",
         "claim_or_heartbeat",
         "push_pr",
         "flight_candidate_a",

@@ -2,24 +2,19 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@adapters/server/db/doltgres/work-items-adapter`
- * Purpose: Operator-local Doltgres adapter for work_items — implements the v0 surface (Query + create + patch) for task.0424.
- * Scope: Reads/writes `work_items` in `knowledge_operator`. Auto-commits on every write per AUTO_COMMIT_ON_WRITE.
+ * Module: `@cogni/work-items/adapters/doltgres`
+ * Purpose: Doltgres adapter for `work_items` — the query plus create/patch/delete surface every node serves over HTTP.
+ * Scope: SQL against the node's OWN `knowledge_<slug>` database. Does not own HTTP routing, auth, env reads, or connection lifecycle.
  * Invariants:
- *   - SQL_UNSAFE_TARGETED: All CRUD via sql.unsafe() with escapeValue() — postgres.js extended-protocol path raises `unhandled message "&{}"` on Doltgres 0.56.2 for parameterized SELECT/INSERT/UPDATE. Same workaround as `@cogni/knowledge-store` adapter. Removable when upstream closes the gap.
- *   - AUTO_COMMIT_ON_WRITE: Each create/patch issues `dolt_commit('-Am', ...)` before returning.
- *   - AUTHOR_ATTRIBUTED: dolt_commit messages embed an `authorTag` derived from `getSessionUser`.
- *   - ID_RANGE_RESERVED: Allocator floor is 5000 per type.
- *   - PATCH_ALLOWLIST: Only fields enumerated in `WorkItemsPatchSet` are mutable.
- *   - OPERATOR_LOCAL_ADAPTER_V0: Lives here, NOT in packages/work-items/.
- *   - KEYSET_PAGINATION: list() uses (priority,rank,createdAt,id) keyset cursor —
- *     OFFSET would scan all skipped rows and breaks under concurrent writes
- *     (bug.5162). Sort order is priority ASC, rank ASC, created_at DESC, id ASC.
+ *   - SQL_UNSAFE_TARGETED, all CRUD via sql.unsafe() with escapeValue() because Doltgres 0.56.2 has no working extended query protocol.
+ *   - AUTO_COMMIT_ON_WRITE, every create/patch/delete issues an author-attributed `dolt_commit` before returning.
+ *   - ID_FLOOR_IS_PER_STORE, the allocator floor is a constructor option, so ids are unique per store and never across nodes.
  * Side-effects: IO (database reads/writes; dolt_commit calls).
- * Links: docs/spec/work-items-port.md, work/items/task.0424.doltgres-work-items-source-of-truth.md
+ * Links: docs/spec/work-items-port.md, docs/guides/agent-api-validation.md
  * @public
  */
 
+import type { Sql } from "postgres";
 import type {
   ActorKind,
   SubjectRef,
@@ -28,24 +23,31 @@ import type {
   WorkItemStatus,
   WorkItemType,
   WorkQuery,
-} from "@cogni/work-items";
-import { toWorkItemId } from "@cogni/work-items";
-import type { Sql } from "postgres";
-
+} from "../../index.js";
+import { toWorkItemId } from "../../index.js";
+import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
 import type {
   WorkItemsCreateInput,
   WorkItemsDoltgresPort,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
-} from "@/ports/server";
+} from "./ports.js";
 
-import {
-  decodeCursor,
-  encodeCursor,
-  type WorkItemCursor,
-} from "./work-items-cursor";
+/**
+ * Operator's floor: ids below 5000 belong to the pre-API markdown corpus that
+ * was imported into its store, so the allocator must never collide with them.
+ * A node booting an empty store has no legacy corpus and should start at 1.
+ */
+export const OPERATOR_ID_FLOOR = 5000;
 
-const ID_FLOOR = 5000;
+/** Options for {@link DoltgresWorkItemAdapter}. */
+export interface DoltgresWorkItemAdapterOptions {
+  /**
+   * Lowest id suffix the allocator may hand out. Defaults to 1 — correct for
+   * any node whose store starts empty. Operator passes {@link OPERATOR_ID_FLOOR}.
+   */
+  readonly idFloor?: number;
+}
 
 export class WorkItemAlreadyExistsError extends Error {
   constructor(public readonly id: string) {
@@ -149,6 +151,12 @@ function parseSuffix(id: string, type: WorkItemType): number | null {
   return /^\d+$/.test(tail) ? Number.parseInt(tail, 10) : null;
 }
 
+/**
+ * PATCH_ALLOWLIST: the only mutable columns. A field absent here is silently
+ * ignored by `patch()` rather than reaching SQL, so adding a settable field
+ * means adding it in three places — the zod patch contract, `WorkItemsPatchSet`,
+ * and this map.
+ */
 const PATCH_COLUMNS: Record<keyof WorkItemsPatchSet, string> = {
   title: "title",
   summary: "summary",
@@ -169,8 +177,15 @@ const PATCH_COLUMNS: Record<keyof WorkItemsPatchSet, string> = {
   blockedBy: "blocked_by",
 };
 
-export class DoltgresOperatorWorkItemAdapter implements WorkItemsDoltgresPort {
-  constructor(private readonly sql: Sql) {}
+export class DoltgresWorkItemAdapter implements WorkItemsDoltgresPort {
+  private readonly idFloor: number;
+
+  constructor(
+    private readonly sql: Sql,
+    options: DoltgresWorkItemAdapterOptions = {}
+  ) {
+    this.idFloor = options.idFloor ?? 1;
+  }
 
   async get(id: WorkItemId): Promise<WorkItem | null> {
     const rows = await this.sql.unsafe(
@@ -181,6 +196,12 @@ export class DoltgresOperatorWorkItemAdapter implements WorkItemsDoltgresPort {
       : null;
   }
 
+  /**
+   * KEYSET_PAGINATION: ordered by (priority, rank, created_at, id) and advanced
+   * by a cursor, never OFFSET — OFFSET rescans every skipped row and silently
+   * skips or repeats rows when a concurrent write shifts the window (bug.5162).
+   * Sort order is priority ASC, rank ASC, created_at DESC, id ASC.
+   */
   async list(query: WorkQuery = {}): Promise<{
     items: WorkItem[];
     nextCursor?: string;
@@ -297,7 +318,7 @@ export class DoltgresOperatorWorkItemAdapter implements WorkItemsDoltgresPort {
       const idRows = await this.sql.unsafe(
         `SELECT id FROM work_items WHERE type = ${escapeValue(input.type)}`
       );
-      let maxSuffix = ID_FLOOR - 1;
+      let maxSuffix = this.idFloor - 1;
       for (const r of idRows as ReadonlyArray<Record<string, unknown>>) {
         const suffix = parseSuffix(String(r.id), input.type);
         if (suffix !== null && suffix > maxSuffix) maxSuffix = suffix;
@@ -337,7 +358,7 @@ export class DoltgresOperatorWorkItemAdapter implements WorkItemsDoltgresPort {
     if (!row) throw new Error("INSERT returned no row");
 
     await this.sql.unsafe(
-      `SELECT dolt_commit('-Am', ${escapeValue(`task.0424: create ${allocatedId} by ${authorTag}`)})`
+      `SELECT dolt_commit('-Am', ${escapeValue(`work-items: create ${allocatedId} by ${authorTag}`)})`
     );
 
     return rowToWorkItem(row);
@@ -368,7 +389,7 @@ export class DoltgresOperatorWorkItemAdapter implements WorkItemsDoltgresPort {
     if (!row) return null;
 
     await this.sql.unsafe(
-      `SELECT dolt_commit('-Am', ${escapeValue(`task.0424: patch ${input.id as string} by ${authorTag}`)})`
+      `SELECT dolt_commit('-Am', ${escapeValue(`work-items: patch ${input.id as string} by ${authorTag}`)})`
     );
 
     return rowToWorkItem(row);
@@ -381,7 +402,7 @@ export class DoltgresOperatorWorkItemAdapter implements WorkItemsDoltgresPort {
     if (deleted.length === 0) return false;
 
     await this.sql.unsafe(
-      `SELECT dolt_commit('-Am', ${escapeValue(`task.5013: delete ${id as string} by ${authorTag}`)})`
+      `SELECT dolt_commit('-Am', ${escapeValue(`work-items: delete ${id as string} by ${authorTag}`)})`
     );
     return true;
   }

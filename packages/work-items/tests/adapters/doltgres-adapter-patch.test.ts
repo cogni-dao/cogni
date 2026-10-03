@@ -2,18 +2,16 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@tests/unit/adapters/work-items-adapter-patch`
- * Purpose: Drives DoltgresOperatorWorkItemAdapter.patch() with a fake `Sql`
- *   that captures issued SQL so we can assert deploy_verified / project_id /
- *   parent_id / blocked_by reach the UPDATE statement (bug.5005).
- * Scope: No real DB. Validates the PATCH_ALLOWLIST extension surgically.
+ * Module: `@cogni/work-items/tests/adapters/doltgres-adapter-patch`
+ * Purpose: Drives DoltgresWorkItemAdapter.patch() so deploy_verified, project_id, parent_id and blocked_by provably reach the UPDATE (bug.5005).
+ * Scope: Fake `Sql` capturing emitted UPDATE text. Does not use a real database and does not assert read-back behaviour.
  * Invariants:
  *   - PATCH_DEPLOY_VERIFIED: deployVerified:true emits `deploy_verified = TRUE`.
  *   - PATCH_NULLABLE_CLEAR: projectId:null emits `project_id = NULL`.
  *   - PATCH_PRESERVES_EXISTING: title still emits `title = '...'`.
  * Side-effects: none
  * Links: bug.5005,
- *   nodes/operator/app/src/adapters/server/db/doltgres/work-items-adapter.ts
+ *   packages/work-items/src/adapters/doltgres/adapter.ts
  * @internal
  */
 
@@ -21,7 +19,7 @@ import { toWorkItemId } from "@cogni/work-items";
 import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
-import { DoltgresOperatorWorkItemAdapter } from "@/adapters/server/db/doltgres/work-items-adapter";
+import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
 
 function makeFakeSql(): { sql: Sql; queries: string[] } {
   const queries: string[] = [];
@@ -64,10 +62,10 @@ function makeFakeSql(): { sql: Sql; queries: string[] } {
   return { sql: fn, queries };
 }
 
-describe("DoltgresOperatorWorkItemAdapter.patch — bug.5005 allowlist", () => {
+describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
   it("emits deploy_verified = TRUE for {deployVerified:true}", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresOperatorWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql);
     await adapter.patch(
       { id: toWorkItemId("bug.5005"), set: { deployVerified: true } },
       "test"
@@ -79,7 +77,7 @@ describe("DoltgresOperatorWorkItemAdapter.patch — bug.5005 allowlist", () => {
 
   it("emits project_id = NULL for {projectId:null}", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresOperatorWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql);
     await adapter.patch(
       { id: toWorkItemId("bug.5005"), set: { projectId: null } },
       "test"
@@ -91,7 +89,7 @@ describe("DoltgresOperatorWorkItemAdapter.patch — bug.5005 allowlist", () => {
 
   it("emits parent_id and blocked_by columns", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresOperatorWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql);
     await adapter.patch(
       {
         id: toWorkItemId("bug.5005"),
@@ -107,7 +105,7 @@ describe("DoltgresOperatorWorkItemAdapter.patch — bug.5005 allowlist", () => {
 
   it("still emits the existing whitelisted columns (title)", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresOperatorWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql);
     await adapter.patch(
       { id: toWorkItemId("bug.5005"), set: { title: "renamed" } },
       "test"

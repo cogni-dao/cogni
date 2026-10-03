@@ -17,6 +17,8 @@ import { initContract } from "@ts-rest/core";
 import { metaLivezOutputSchema } from "../meta.livez.read.v1.contract";
 import { metaReadyzOutputSchema } from "../meta.readyz.read.v1.contract";
 import { metaRoutesOutputSchema } from "../meta.route-manifest.read.v1.contract";
+import { workItemsCreateOperation } from "../work.items.create.v1.contract";
+import { workItemsPatchOperation } from "../work.items.patch.v1.contract";
 
 const c = initContract();
 
@@ -49,6 +51,26 @@ export const ApiContractV1 = c.router({
     responses: {
       200: metaReadyzOutputSchema,
       503: metaReadyzOutputSchema,
+    },
+  },
+  workItemsCreate: {
+    method: "POST",
+    path: "/work/items",
+    summary: workItemsCreateOperation.summary,
+    description: workItemsCreateOperation.description,
+    body: workItemsCreateOperation.input,
+    responses: {
+      201: workItemsCreateOperation.output,
+    },
+  },
+  workItemsPatch: {
+    method: "PATCH",
+    path: "/work/items/:id",
+    summary: workItemsPatchOperation.summary,
+    description: workItemsPatchOperation.description,
+    body: workItemsPatchOperation.input.omit({ id: true }),
+    responses: {
+      200: workItemsPatchOperation.output,
     },
   },
   // Future endpoints: metaOpenapi, etc.

@@ -76,7 +76,10 @@ COGNI_TEMPLATE_ROOT=<primary checkout> bash scripts/conductor-worktree-setup.sh
 
 ```bash
 KEY=$(grep COGNI_API_KEY_PROD <repo>/.env.cogni | head -1 | cut -d= -f2- | tr -d "\"' ")
-B=https://cognidao.org/api/v1/work/items
+# BASE is the hub of the node these items belong to (each node owns its own
+# work-item store): https://cognidao.org for operator, https://poly.cognidao.org for poly, …
+: "${BASE:?set BASE to the managed work items' node origin; never default writes to operator}"
+B=$BASE/api/v1/work/items
 sig(){
   wi=$(curl -s -A curl/8.4.0 -H "Authorization: Bearer $KEY" "$B/$1" | python3 -c \
     "import sys,json;d=json.load(sys.stdin);print('status=%s pr=%s branch=%s'%(d.get('status'),d.get('pr'),d.get('branch')))" 2>/dev/null)
