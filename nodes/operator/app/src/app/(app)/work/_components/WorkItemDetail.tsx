@@ -31,6 +31,9 @@ function assigneeLabel(a: SubjectRef): string {
 
 interface WorkItemDetailProps {
   readonly item: WorkItemDto | null;
+  readonly itemId?: string;
+  readonly isLoading?: boolean;
+  readonly error?: Error | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -55,12 +58,31 @@ function Field({
 
 export function WorkItemDetail({
   item,
+  itemId,
+  isLoading = false,
+  error = null,
   open,
   onOpenChange,
 }: WorkItemDetailProps): ReactElement {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
+        {isLoading && (
+          <p className="py-12 text-center text-muted-foreground text-sm">
+            Loading work item…
+          </p>
+        )}
+
+        {error && (
+          <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
+            <p className="font-medium text-sm">Work item not found.</p>
+            <p className="max-w-md text-muted-foreground text-xs leading-relaxed">
+              No work item with id <code className="font-mono">{itemId}</code>{" "}
+              exists, or it isn&apos;t visible to you.
+            </p>
+          </div>
+        )}
+
         {item && (
           <>
             <SheetHeader>
