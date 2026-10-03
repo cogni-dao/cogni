@@ -11,13 +11,13 @@ spec:
   nodeId: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/node-template@sha256:e5dbd0d6e0f3b869b34152af6a1c803a056dfc1b7da050a8da1fc9c53b35cf4a
+    ref: ghcr.io/cogni-dao/node-template@sha256:3ec22318887ba515b5e0882a33b4caa2cc7b221935355941643e3bb525a92c0a
     source:
       repository: cogni-dao/node-template
-      sha: 38508d33d9fa4e7771496b2a61d48bdfdb0d44e5
+      sha: cc8750be8a4dce4e00720b4716fb3a3557e1a09f
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/node-template@sha256:67fe43b6d876a3b99c335f8ce83ad488cfbe60624d97d846e31916ad93e55871
+        image: ghcr.io/cogni-dao/node-template@sha256:645f15e9ac11f39dd2cb1dd96c3f6db65df0cb76bbef223e18c2d68a14cff4d7
   workload:
     name: node-template
     publicHost: node-template.cognidao.org
@@ -45,6 +45,7 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
+    onGiveUp: Hold
   leaseGeneration: 2
   dns:
     provider: cloudflare
