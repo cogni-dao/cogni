@@ -61,39 +61,66 @@ curl -H "Authorization: Bearer $API_KEY" \
 
 **Lifecycle close gate:** PATCH `status=done` only after PR merges to `main`. Pre-merge stays `needs_merge`; rejected review flips back to `needs_implement`.
 
-### Node-local create → patch → close validation
+### Node-local fresh-agent work-item validation
 
 Run this disposable round trip against the node being validated. `BASE` must be
 that node's own origin; the procedure deliberately has no operator fallback and
-does not send a `node` field. The discovery checks prove the node advertises its
-write contract before the client mutates its local work-item store.
+does not send a `node` field. One freshly registered node agent owns the entire
+sequence: discover → register → create → claim → heartbeat → patch →
+done readback → release → delete → `404`. The discovery checks prove the
+node advertises every operation before the client mutates its local work-item
+store.
 
-This is a temporary executable validation client. [task.5171](https://cognidao.org/api/v1/work/items/task.5171)
-must migrate or delete it if durable hub guidance supersedes this procedure.
+This is a temporary executable validation client owned by
+[story.5060](https://cognidao.org/api/v1/work/items/story.5060). That story must
+migrate or delete it if durable hub guidance supersedes this procedure.
 The disposable probe is not a contribution work item: its brief `done` state
 exists only to prove terminal-state persistence before the row is deleted.
 
 ```bash
-: "${BASE:?set BASE to the node origin under validation}"
-: "${API_KEY:?set API_KEY to a key issued by that node}"
-BASE=${BASE%/}
+set -euo pipefail
 
-# Discover the node-local action endpoints and their OpenAPI operations.
+: "${BASE:?set BASE to the node origin under validation}"
+BASE=${BASE%/}
+RUN_ID="work-item-validation-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+COMMAND="/validate-candidate"
+
+# Discover the node-local registration and work-item actions.
 AGENT_JSON=$(curl -fsS "$BASE/.well-known/agent.json")
 jq -e --arg base "$BASE" '
+  .registrationUrl == ($base + "/api/v1/agent/register") and
   .actions.createWorkItem.method == "POST" and
   .actions.createWorkItem.endpoint == ($base + "/api/v1/work/items") and
+  .actions.claimWorkItem.method == "POST" and
+  .actions.claimWorkItem.endpoint == ($base + "/api/v1/work/items/{id}/claims") and
+  .actions.heartbeatWorkItem.method == "POST" and
+  .actions.heartbeatWorkItem.endpoint == ($base + "/api/v1/work/items/{id}/heartbeat") and
   .actions.updateWorkItem.method == "PATCH" and
-  .actions.updateWorkItem.endpoint == ($base + "/api/v1/work/items/{id}")
+  .actions.updateWorkItem.endpoint == ($base + "/api/v1/work/items/{id}") and
+  .actions.releaseWorkItem.method == "DELETE" and
+  .actions.releaseWorkItem.endpoint == ($base + "/api/v1/work/items/{id}/claims?runId={runId}") and
+  .actions.deleteWorkItem.method == "DELETE" and
+  .actions.deleteWorkItem.endpoint == ($base + "/api/v1/work/items/{id}")
 ' <<<"$AGENT_JSON"
 
 OPENAPI=$(curl -fsS "$BASE/openapi.json")
 jq -e '
   .paths["/work/items"].post != null and
-  .paths["/work/items/{id}"].patch != null
+  .paths["/work/items/{id}/claims"].post != null and
+  .paths["/work/items/{id}/claims"].delete != null and
+  .paths["/work/items/{id}/heartbeat"].post != null and
+  .paths["/work/items/{id}"].patch != null and
+  .paths["/work/items/{id}"].delete != null
 ' <<<"$OPENAPI"
 
+# Register one fresh agent on this node. Its key owns every mutation below.
+CREDS=$(curl -fsS -X POST "$BASE/api/v1/agent/register" \
+  -H "content-type: application/json" \
+  -d "$(jq -nc --arg name "$RUN_ID" '{name:$name}')")
+API_KEY=$(jq -er .apiKey <<<"$CREDS")
+
 # Create one disposable row in this node's store and always clean it up.
+ID=""
 ID=$(curl -fsS -X POST "$BASE/api/v1/work/items" \
   -H "Authorization: Bearer $API_KEY" \
   -H "content-type: application/json" \
@@ -104,30 +131,69 @@ ID=$(curl -fsS -X POST "$BASE/api/v1/work/items" \
   }' | jq -er .id)
 
 cleanup() {
-  curl -fsS -X DELETE "$BASE/api/v1/work/items/$ID" \
-    -H "Authorization: Bearer $API_KEY" >/dev/null || true
+  if [ -n "$ID" ]; then
+    curl -fsS -X DELETE \
+      "$BASE/api/v1/work/items/$ID/claims?runId=$RUN_ID" \
+      -H "Authorization: Bearer $API_KEY" >/dev/null 2>&1 || true
+    curl -fsS -X DELETE "$BASE/api/v1/work/items/$ID" \
+      -H "Authorization: Bearer $API_KEY" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
-# Patch and read back a node-local field.
+# Claim with the node contract's explicit execution identity and command.
+curl -fsS -X POST "$BASE/api/v1/work/items/$ID/claims" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "content-type: application/json" \
+  -d "$(jq -nc --arg runId "$RUN_ID" --arg command "$COMMAND" \
+    '{runId:$runId,command:$command}')" \
+  | jq -e --arg id "$ID" --arg runId "$RUN_ID" --arg command "$COMMAND" \
+    '.id == $id and .claimedByRun == $runId and .lastCommand == $command'
+
+# Refresh the same principal-bound claim.
+HEARTBEAT_COMMAND="$COMMAND:heartbeat"
+curl -fsS -X POST "$BASE/api/v1/work/items/$ID/heartbeat" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "content-type: application/json" \
+  -d "$(jq -nc --arg runId "$RUN_ID" --arg command "$HEARTBEAT_COMMAND" \
+    '{runId:$runId,command:$command}')" \
+  | jq -e --arg runId "$RUN_ID" --arg command "$HEARTBEAT_COMMAND" \
+    '.claimedByRun == $runId and .lastCommand == $command'
+
+# Patch the summary, then patch the terminal state.
 curl -fsS -X PATCH "$BASE/api/v1/work/items/$ID" \
   -H "Authorization: Bearer $API_KEY" \
   -H "content-type: application/json" \
   -d '{"set":{"summary":"Node-local PATCH readback passed."}}' \
   | jq -e --arg id "$ID" '.id == $id and .summary == "Node-local PATCH readback passed."'
 
-# Close, then independently assert the durable closed state.
 curl -fsS -X PATCH "$BASE/api/v1/work/items/$ID" \
   -H "Authorization: Bearer $API_KEY" \
   -H "content-type: application/json" \
   -d '{"set":{"status":"done"}}' >/dev/null
 
+# Independently read back the exact durable item state.
 curl -fsS "$BASE/api/v1/work/items/$ID" \
   -H "Authorization: Bearer $API_KEY" \
-  | jq -e --arg id "$ID" '.id == $id and .status == "done"'
+  | jq -e --arg id "$ID" --arg runId "$RUN_ID" --arg command "$HEARTBEAT_COMMAND" '
+      .id == $id and
+      .summary == "Node-local PATCH readback passed." and
+      .status == "done" and
+      .claimedByRun == $runId and
+      .lastCommand == $command
+    '
 
-# Cleanup is part of the proof: delete the disposable row and require a 404.
-cleanup
+# Release the claim through DELETE /claims?runId=, then delete the item.
+curl -fsS -X DELETE \
+  "$BASE/api/v1/work/items/$ID/claims?runId=$RUN_ID" \
+  -H "Authorization: Bearer $API_KEY" \
+  | jq -e --arg id "$ID" '.id == $id and .claimedByRun == null'
+
+curl -fsS -X DELETE "$BASE/api/v1/work/items/$ID" \
+  -H "Authorization: Bearer $API_KEY" \
+  | jq -e --arg id "$ID" '.id == $id and .deleted == true'
+
+# Deletion is part of the proof: the same agent must now read a 404.
 trap - EXIT
 HTTP_CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
   "$BASE/api/v1/work/items/$ID" \
@@ -135,29 +201,35 @@ HTTP_CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
 test "$HTTP_CODE" = "404"
 ```
 
-## Work-item sessions — active execution coordination
+## Operator-only work-item sessions — separate contract
 
-Use these routes when an agent is actively working a PR. They are operator-owned coordination surfaces, not shared node primitives.
+The operator currently retains its older PR-oriented coordination contract.
+These payloads use `ttlSeconds` / `lastCommand`, not the node-local
+`runId` / `command` lease above. Use this section only when `OPERATOR_BASE` is
+the operator origin; do not send these payloads to a community node.
 
 ```bash
+: "${OPERATOR_BASE:?set OPERATOR_BASE to the operator origin}"
+: "${OPERATOR_API_KEY:?set OPERATOR_API_KEY to an operator-issued key}"
+
 # Claim while you work
-curl -X POST $BASE/api/v1/work/items/$ID/claims \
-  -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+curl -X POST "$OPERATOR_BASE/api/v1/work/items/$ID/claims" \
+  -H "Authorization: Bearer $OPERATOR_API_KEY" -H "content-type: application/json" \
   -d '{"ttlSeconds":1800,"lastCommand":"/implement"}'
 
 # Keep the claim fresh
-curl -X POST $BASE/api/v1/work/items/$ID/heartbeat \
-  -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+curl -X POST "$OPERATOR_BASE/api/v1/work/items/$ID/heartbeat" \
+  -H "Authorization: Bearer $OPERATOR_API_KEY" -H "content-type: application/json" \
   -d '{"ttlSeconds":1800,"lastCommand":"/implement"}'
 
 # Link code artifact
-curl -X POST $BASE/api/v1/work/items/$ID/pr \
-  -H "Authorization: Bearer $API_KEY" -H "content-type: application/json" \
+curl -X POST "$OPERATOR_BASE/api/v1/work/items/$ID/pr" \
+  -H "Authorization: Bearer $OPERATOR_API_KEY" -H "content-type: application/json" \
   -d '{"branch":"feat/my-change","prNumber":1204}'
 
 # Read current coordination status
-curl -H "Authorization: Bearer $API_KEY" \
-  $BASE/api/v1/work/items/$ID/coordination
+curl -H "Authorization: Bearer $OPERATOR_API_KEY" \
+  "$OPERATOR_BASE/api/v1/work/items/$ID/coordination"
 ```
 
 Proof criteria for these routes: claim returns `201`, competing claim returns `200` with `conflict: true`, heartbeat returns `200`, PR link returns `200`, coordination echoes the session, and the durable work item reads back the linked `branch` / `pr`.
@@ -292,7 +364,7 @@ planes — track under story.5023/bug.5127.
 ## Proof criteria
 
 - Agent completes **discover → register → auth → execute → list runs → stream events** with no browser session.
-- Node-local work-item validation completes **agent.json/OpenAPI discovery → create → patch → `done` readback → delete → `404` readback** against one explicit node `BASE`.
+- Node-local work-item validation completes **agent.json/OpenAPI discovery → fresh registration → create → claim → heartbeat → summary patch → `done` patch → exact GET readback → release → delete → `404` readback** against one explicit node `BASE`.
 - Graph execution produced a successful run (`status: "success"`).
 - Metering path recorded downstream (charge receipt / billing telemetry) for the run.
 - **Knowledge compounds:** the linked-atoms contribution diff shows all entries with their `domain`, and a self-referential cite (`citingId === citedId`) is rejected `400`.
