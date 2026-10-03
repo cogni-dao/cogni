@@ -11,13 +11,13 @@ spec:
   nodeId: 557d8b59-8e3b-42f0-9aeb-a5c171296556
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/levelup@sha256:d71c12e9213348ba9d6ded914a7fd782c89119550ee01313c1a163db79d0655b
+    ref: ghcr.io/cogni-dao/levelup@sha256:b7cc9b1eddfab52502cf98bc02b479eb8155cd6ee9dca25c69b82f6df7b7c8a5
     source:
       repository: cogni-dao/levelup
-      sha: 75824ca8a0c10f6bf734ae83d52ca26411c4cdc2
+      sha: 9fddfa9235cb1bf6feca74690a3e24c4df6eed13
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/levelup@sha256:6615136c28396a52e33eefa13a19152294825f776ab0b24eebaf734ef241b049
+        image: ghcr.io/cogni-dao/levelup@sha256:ebc86cbf91e83bd6c9df8aa48ffac426020a80a6ece5e0460165a38a6256f94f
   workload:
     name: levelup
     publicHost: levelup.cognidao.org
@@ -45,6 +45,7 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
+    onGiveUp: Hold
   leaseGeneration: 2
   dns:
     provider: cloudflare
