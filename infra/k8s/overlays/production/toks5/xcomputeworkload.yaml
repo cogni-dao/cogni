@@ -11,13 +11,13 @@ spec:
   nodeId: f66b260b-4633-41e2-8711-b7c1b8449cc1
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/toks5@sha256:fa45daeb6159115a28960db89fa0ece3d9dfe998773cb41555006c308a416352
+    ref: ghcr.io/cogni-dao/toks5@sha256:c9b1da62185812a194279a33d5a9133f96067c3997d42d773bcdc16aa9def5db
     source:
       repository: cogni-dao/toks5
-      sha: 71747c65e3134fc9151e9007cd1d15a704e6057e
+      sha: 264a357d246476bbd1b418740dbdee61c208eafd
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/toks5@sha256:4edef4316664df38affb3976483cd68e2f72782ff102eab757654330f3e51590
+        image: ghcr.io/cogni-dao/toks5@sha256:7838e6aab174e53902affdadc4f0fba45649d87f3ae38c2b95a2b8f28d04d060
   workload:
     name: toks5
     publicHost: toks5.cognidao.org
@@ -45,6 +45,7 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
+    onGiveUp: Hold
   leaseGeneration: 5
   dns:
     provider: cloudflare
