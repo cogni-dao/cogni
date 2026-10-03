@@ -116,7 +116,6 @@ jobs:
       AUTH_SECRET: tNf5lFM9yMhdgwS5yeQB8Y2kmigblBqobkvI2XN2brg=
       SCHEDULER_API_TOKEN: test-scheduler-api-token-for-ci-min32chars
       BILLING_INGEST_TOKEN: test-billing-ingest-token-for-ci-min32ch
-      INTERNAL_OPS_TOKEN: test-internal-ops-token-for-ci-min32
       DISCORD_BOT_TOKEN: test-discord-bot-token-for-ci
       POSTHOG_API_KEY: phc_test_key_for_ci
       POSTHOG_HOST: http://localhost:18000
@@ -361,7 +360,6 @@ jobs:
       AUTH_SECRET: tNf5lFM9yMhdgwS5yeQB8Y2kmigblBqobkvI2XN2brg=
       SCHEDULER_API_TOKEN: test-scheduler-api-token-for-ci-min32chars
       BILLING_INGEST_TOKEN: test-billing-ingest-token-for-ci-min32ch
-      INTERNAL_OPS_TOKEN: test-internal-ops-token-for-ci-min32
       DISCORD_BOT_TOKEN: test-discord-bot-token-for-ci
       POSTHOG_API_KEY: phc_test_key_for_ci
       POSTHOG_HOST: http://localhost:18000
@@ -522,7 +520,6 @@ jobs:
       AUTH_SECRET: tNf5lFM9yMhdgwS5yeQB8Y2kmigblBqobkvI2XN2brg=
       SCHEDULER_API_TOKEN: test-scheduler-api-token-for-ci-min32chars
       BILLING_INGEST_TOKEN: test-billing-ingest-token-for-ci-min32ch
-      INTERNAL_OPS_TOKEN: test-internal-ops-token-for-ci-min32
       DISCORD_BOT_TOKEN: test-discord-bot-token-for-ci
       POSTHOG_API_KEY: phc_test_key_for_ci
       POSTHOG_HOST: http://localhost:18000

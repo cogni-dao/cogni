@@ -41,7 +41,7 @@
 declare -ga NODE_BASELINE_KEYS=(
   AUTH_SECRET LITELLM_MASTER_KEY
   SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN
-  INTERNAL_OPS_TOKEN METRICS_TOKEN GH_WEBHOOK_SECRET
+  METRICS_TOKEN GH_WEBHOOK_SECRET
   IDENTITY_ATTESTATION_PRIVATE_KEY
   CONNECTIONS_ENCRYPTION_KEY POLY_WALLET_AEAD_KEY_HEX
   POLY_WALLET_AEAD_KEY_ID
@@ -82,7 +82,6 @@ declare -ga NODE_TEMPLATE_KEYS=("${NODE_BASELINE_KEYS[@]}")
 # below overwrite the operator's single-App-plane value by ordering.
 declare -ga SCHEDULER_WORKER_KEYS=(
   DATABASE_SERVICE_URL SCHEDULER_API_TOKEN
-  INTERNAL_OPS_TOKEN
 )
 # ── Non-node PLATFORM SERVICES (mirror of scripts/lib/secrets-catalog-loader.ts) ─
 # Services that own their OWN OpenBao bucket `cogni/<env>/<service>/*` + their own

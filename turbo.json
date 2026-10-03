@@ -44,7 +44,6 @@
         "AUTH_SECRET",
         "SCHEDULER_API_TOKEN",
         "BILLING_INGEST_TOKEN",
-        "INTERNAL_OPS_TOKEN",
         "DISCORD_BOT_TOKEN",
         "POSTHOG_API_KEY",
         "POSTHOG_HOST",

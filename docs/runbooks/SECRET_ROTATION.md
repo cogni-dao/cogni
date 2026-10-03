@@ -101,7 +101,6 @@ All rotated 2026-03-24. These authenticate service-to-service calls within the d
 | ---------------------- | ------------------------------------------ | ------- |
 | `SCHEDULER_API_TOKEN`  | scheduler-worker → internal graph API      | ROTATED |
 | `BILLING_INGEST_TOKEN` | LiteLLM callback → billing ingest endpoint | ROTATED |
-| `INTERNAL_OPS_TOKEN`   | deploy trigger → governance schedule sync  | ROTATED |
 | `METRICS_TOKEN`        | Prometheus scrape → /api/metrics           | ROTATED |
 | `GH_WEBHOOK_SECRET`    | GitHub webhook HMAC verification           | ROTATED |
 
@@ -191,7 +190,7 @@ Deploy uses `${VAR:-}` fallback — empty = feature disabled.
 
 ```bash
 # One-liner to rotate all agent-owned secrets
-for SECRET in AUTH_SECRET SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN INTERNAL_OPS_TOKEN METRICS_TOKEN; do
+for SECRET in AUTH_SECRET SCHEDULER_API_TOKEN BILLING_INGEST_TOKEN METRICS_TOKEN; do
   openssl rand -base64 32 | gh secret set "$SECRET" --repo cogni-dao/cogni
 done
 echo "sk-cogni-$(openssl rand -hex 24)" | gh secret set LITELLM_MASTER_KEY --repo cogni-dao/cogni

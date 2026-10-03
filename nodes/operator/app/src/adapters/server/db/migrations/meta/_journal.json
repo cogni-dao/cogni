@@ -358,6 +358,20 @@
       "when": 1790637542881,
       "tag": "0050_oval_madripoor",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1790887231240,
+      "tag": "0051_pink_thunderbolt",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1790887755408,
+      "tag": "0052_bouncy_wasp",
+      "breakpoints": true
     }
   ]
 }
