@@ -150,3 +150,73 @@ describe("RECEIPT_WRITES_REQUIRE_CALL_ID_AND_COST", () => {
     expect(call.responseCostUsd).toBeGreaterThan(0);
   });
 });
+
+/**
+ * FREE_IS_FREE_ON_BOTH_LEGS (bug.5266).
+ *
+ * `is_free` is a charging-POLICY flag, not a claim the provider bills us nothing. `gpt-oss-120b` is
+ * the designated free tier yet OpenRouter genuinely charges for it, so the preflight waived the
+ * charge (`isModelFree` → 0n) while this writer billed the real cost — driving accounts NEGATIVE on
+ * the supposedly free tier.
+ *
+ * These pin the two halves that must stay true together: the charge is waived, and the provider cost
+ * is still recorded so COGS remains observable. `isFreeTier` is resolved by the PRODUCER because
+ * `fact.model` is a display name on the callback path — re-deriving it here would silently no-op.
+ */
+describe("FREE_IS_FREE_ON_BOTH_LEGS", () => {
+  it("free-tier model with real provider cost → charges 0 credits", async () => {
+    const accountService = makeMockAccountService();
+    const log = makeNoopLogger();
+
+    const fact = buildInprocUsageFact({
+      source: "litellm",
+      costUsd: 0.000_65,
+      model: "GPT-OSS 120B", // display name — deliberately NOT the catalog id
+      isFreeTier: true,
+    });
+
+    await commitUsageFact(fact, baseContext, accountService, log);
+
+    expect(accountService.recordChargeReceipt).toHaveBeenCalledTimes(1);
+    const arg = vi.mocked(accountService.recordChargeReceipt).mock
+      .calls[0]?.[0] as { chargedCredits: bigint; responseCostUsd: number };
+    expect(arg.chargedCredits).toBe(0n);
+    // Evidence is preserved — the waiver suppresses the CHARGE, never the COGS record.
+    expect(arg.responseCostUsd).toBeGreaterThan(0);
+  });
+
+  it("paid model with the same cost → still charges", async () => {
+    const accountService = makeMockAccountService();
+    const log = makeNoopLogger();
+
+    const fact = buildInprocUsageFact({
+      source: "litellm",
+      costUsd: 0.000_65,
+      model: "DeepSeek V4 Flash",
+      isFreeTier: false,
+    });
+
+    await commitUsageFact(fact, baseContext, accountService, log);
+
+    const arg = vi.mocked(accountService.recordChargeReceipt).mock
+      .calls[0]?.[0] as { chargedCredits: bigint };
+    expect(arg.chargedCredits).toBeGreaterThan(0n);
+  });
+
+  it("unresolved isFreeTier is treated as PAID (fail-to-charge, never fail-to-free)", async () => {
+    const accountService = makeMockAccountService();
+    const log = makeNoopLogger();
+
+    const fact = buildInprocUsageFact({
+      source: "litellm",
+      costUsd: 0.000_65,
+      model: "Some Model",
+    });
+
+    await commitUsageFact(fact, baseContext, accountService, log);
+
+    const arg = vi.mocked(accountService.recordChargeReceipt).mock
+      .calls[0]?.[0] as { chargedCredits: bigint };
+    expect(arg.chargedCredits).toBeGreaterThan(0n);
+  });
+});
