@@ -46,7 +46,10 @@ lease_generation:
   # story.5050 2->3: gen-2 was created then CLOSED with zero leases (escrow refunded) because
   # a one-country requirement had one eligible provider and it did not bid. Widening the set
   # needs a fresh mint to take effect — placement binds only on CREATE.
-  candidate-a: 3
+  # bug.5356 3->4: gen-3 closed after the candidate actuator's BE-only provider pin had
+  # an empty intersection with this row's BG/CH/FI/NL/PT requirement. The candidate
+  # overlay now pins audited PT/BG/FI providers already covered by this row's egress CIDRs.
+  candidate-a: 4
   preview: 1
   production: 2
 # task.5130 — ACTIVITY_ENV_IS_DEPLOYED (_schema.json): the singleton activity authority
