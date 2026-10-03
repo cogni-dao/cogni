@@ -11,15 +11,15 @@ spec:
   nodeId: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/toks4@sha256:de8b5f6d9a574181b08f90f3d237545828203410943653663084f369748abd68
+    ref: ghcr.io/cogni-dao/toks4@sha256:2464429a912aa86d77798445e963717c6230a28e4d6a84640fce7c4be4c35458
     source:
       repository: cogni-dao/toks4
-      sha: 31611782e356909366dc8a2a66aa8b3c9d3f4351
+      sha: 783b41d5b9b740d35c9d5376384c9809db1bb879
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/toks4@sha256:a6663d2a093e9f40035773b488b6f64f0974503478088d3742e748f10b1cfe6b
+        image: ghcr.io/cogni-dao/toks4@sha256:036daedd3931be1d60890d5880a96a9dc8934f436b191a0e297d64d6aa98b672
       - name: echo-sidecar
-        image: ghcr.io/cogni-dao/toks4-echo-sidecar@sha256:519c9be2f43d4003a602cbe95eb22b3aaa722745b586999b51f73fea1987e8c2
+        image: ghcr.io/cogni-dao/toks4-echo-sidecar@sha256:6d293c589b1d2f8d8893bec777ccd7588e572da191608bb20518210bba3fd85c
   workload:
     name: toks4
     publicHost: toks4.cognidao.org
@@ -57,6 +57,7 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
+    onGiveUp: Hold
   leaseGeneration: 2
   dns:
     provider: cloudflare
