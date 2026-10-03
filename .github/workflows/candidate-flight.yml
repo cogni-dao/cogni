@@ -417,9 +417,16 @@ jobs:
           KEY_B64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
         run: |
           set -euo pipefail
-          private_key=$(printf '%s' "$KEY_B64" | base64 -d | awk 'BEGIN {ORS="\n"} {print}' | head -c -2) &> /dev/null
-          echo "::add-mask::$private_key"
-          echo "key=$private_key" >> "$GITHUB_OUTPUT"
+          # Keep the output on one physical line. create-github-app-token expands
+          # escaped newlines, while raw PEM newlines break GITHUB_OUTPUT and can
+          # be emitted unmasked by the runner.
+          private_key_escaped="$(printf '%s' "$KEY_B64" | base64 -d | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+          [[ "$private_key_escaped" != *$'\n'* ]] || {
+            echo "::error::Decoded App key unexpectedly contains a literal newline"
+            exit 1
+          }
+          echo "::add-mask::$private_key_escaped"
+          echo "key=$private_key_escaped" >> "$GITHUB_OUTPUT"
 
       - name: Mint deploy-repository App token
         if: steps.deploy-repo.outputs.requires_app_token == 'true'
@@ -1192,9 +1199,16 @@ jobs:
           KEY_B64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
         run: |
           set -euo pipefail
-          private_key=$(printf '%s' "$KEY_B64" | base64 -d | awk 'BEGIN {ORS="\n"} {print}' | head -c -2) &> /dev/null
-          echo "::add-mask::$private_key"
-          echo "key=$private_key" >> "$GITHUB_OUTPUT"
+          # Keep the output on one physical line. create-github-app-token expands
+          # escaped newlines, while raw PEM newlines break GITHUB_OUTPUT and can
+          # be emitted unmasked by the runner.
+          private_key_escaped="$(printf '%s' "$KEY_B64" | base64 -d | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+          [[ "$private_key_escaped" != *$'\n'* ]] || {
+            echo "::error::Decoded App key unexpectedly contains a literal newline"
+            exit 1
+          }
+          echo "::add-mask::$private_key_escaped"
+          echo "key=$private_key_escaped" >> "$GITHUB_OUTPUT"
 
       - name: Mint deploy-repository App token
         if: steps.deploy-repo.outputs.requires_app_token == 'true'
@@ -1657,9 +1671,16 @@ jobs:
           KEY_B64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
         run: |
           set -euo pipefail
-          private_key=$(printf '%s' "$KEY_B64" | base64 -d | awk 'BEGIN {ORS="\n"} {print}' | head -c -2) &> /dev/null
-          echo "::add-mask::$private_key"
-          echo "key=$private_key" >> "$GITHUB_OUTPUT"
+          # Keep the output on one physical line. create-github-app-token expands
+          # escaped newlines, while raw PEM newlines break GITHUB_OUTPUT and can
+          # be emitted unmasked by the runner.
+          private_key_escaped="$(printf '%s' "$KEY_B64" | base64 -d | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+          [[ "$private_key_escaped" != *$'\n'* ]] || {
+            echo "::error::Decoded App key unexpectedly contains a literal newline"
+            exit 1
+          }
+          echo "::add-mask::$private_key_escaped"
+          echo "key=$private_key_escaped" >> "$GITHUB_OUTPUT"
 
       - name: Mint deploy-repository App token
         if: steps.deploy-repo.outputs.requires_app_token == 'true'
