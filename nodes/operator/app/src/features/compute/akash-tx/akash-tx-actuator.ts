@@ -93,6 +93,7 @@ import {
   type ComputeCostStorePort,
 } from "@/ports";
 
+import { RECOVERY_SUFFIX_PATTERN } from "../cogni-key";
 import { runMigrationStep } from "./akash-tx-migration-step";
 
 /** Structural pino subset. Fields first, stable marker second. */
@@ -253,9 +254,9 @@ function parseRecoveryKey(cogniKey: string): {
   baseKey: string;
   ordinal: number;
 } {
-  const match = /^(.+):recover:(\d+)$/.exec(cogniKey);
+  const match = RECOVERY_SUFFIX_PATTERN.exec(cogniKey);
   if (!match) return { baseKey: cogniKey, ordinal: 0 };
-  return { baseKey: match[1] as string, ordinal: Number(match[2]) };
+  return { baseKey: cogniKey.slice(0, match.index), ordinal: Number(match[1]) };
 }
 
 /** True when a receipt already binds a DIFFERENT consumer than the one now asking to spend. */

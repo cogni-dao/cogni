@@ -40,6 +40,28 @@
 
 import type { AkashTxAllocationRecord } from "@/ports";
 
+import { parseCogniKey } from "./cogni-key";
+
+/**
+ * The lease generation stated in a receipt's cogniKey — the base key's generation segment, never a
+ * bounded-recovery ordinal (cogni-key.ts GENERATION_IS_THE_GEN_COMPONENT). A generation over a
+ * million is not a real replacement counter; that, and any unparseable key, is invalid evidence.
+ */
+function receiptLeaseGeneration(receipt: AkashTxAllocationRecord): number {
+  let generation: number;
+  try {
+    generation = parseCogniKey(receipt.cogniKey).generation;
+  } catch {
+    generation = Number.NaN;
+  }
+  if (!Number.isSafeInteger(generation) || generation > 1_000_000) {
+    throw new Error(
+      `[lease-reactivation] receipt ${receipt.receiptId} has no valid lease generation suffix`
+    );
+  }
+  return generation;
+}
+
 /**
  * The generation a fresh activation of this (node, environment) must state in the catalog.
  *
@@ -79,13 +101,7 @@ export function replacementLeaseGeneration(input: {
 }): number {
   let required = input.catalogGeneration;
   for (const receipt of input.receipts) {
-    const match = /^xcw:.+:(0|[1-9]\d*)$/.exec(receipt.cogniKey);
-    const generation = match ? Number(match[1]) : Number.NaN;
-    if (!Number.isSafeInteger(generation) || generation > 1_000_000) {
-      throw new Error(
-        `[lease-reactivation] receipt ${receipt.receiptId} has no valid lease generation suffix`
-      );
-    }
+    const generation = receiptLeaseGeneration(receipt);
     // `preparing` is mid-transaction: not evidence, and NOT safe to leapfrog either — a key being
     // minted right now must not be re-presented, so it counts the same as a spent one.
     required = Math.max(required, generation + 1);
@@ -99,13 +115,7 @@ export function requiredLeaseGeneration(input: {
 }): number {
   let required = input.catalogGeneration;
   for (const receipt of input.receipts) {
-    const match = /^xcw:.+:(0|[1-9]\d*)$/.exec(receipt.cogniKey);
-    const generation = match ? Number(match[1]) : Number.NaN;
-    if (!Number.isSafeInteger(generation) || generation > 1_000_000) {
-      throw new Error(
-        `[lease-reactivation] receipt ${receipt.receiptId} has no valid lease generation suffix`
-      );
-    }
+    const generation = receiptLeaseGeneration(receipt);
     if (receipt.state === "released" || receipt.state === "failed") {
       // Terminal: this generation's key is spent — the next activation needs the one after it.
       required = Math.max(required, generation + 1);
