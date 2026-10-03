@@ -11,13 +11,13 @@ spec:
   nodeId: f97f68f2-8406-4a3b-b5a9-d579b779f19d
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/beacon@sha256:fc770a9a5abe48018ec7965f55b4f9f5b150bc7fe2715bb996bb0eee47d703e4
+    ref: ghcr.io/cogni-dao/beacon@sha256:a3648627e2afa248887ef4dd63b516f99349e5fece453e120b3eb5c6e55ebf70
     source:
       repository: cogni-dao/beacon
-      sha: ef20ee9db53e6132f3bdf32894efa59f344fc0af
+      sha: e6b144a87c8c6eff261a461ed9957ec588aba4d7
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/beacon@sha256:5adb56e61a99b33604739f922bf2868458edbe21592f5ae0379344535d607278
+        image: ghcr.io/cogni-dao/beacon@sha256:b8a9458a53f277bcab88b296a0ea28c9e02edb5c5154a31eea5c644a75a81ad8
   workload:
     name: beacon
     publicHost: beacon.cognidao.org
@@ -45,6 +45,7 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Hold
+    onGiveUp: Hold
   leaseGeneration: 2
   dns:
     provider: cloudflare
