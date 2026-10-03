@@ -11,15 +11,15 @@ spec:
   nodeId: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/toks4@sha256:de8b5f6d9a574181b08f90f3d237545828203410943653663084f369748abd68
+    ref: ghcr.io/cogni-dao/toks4@sha256:468dd1f47b5f8531d9113ad0e32be5084f745ac85bce4355a0ec47fe82dd21bb
     source:
       repository: cogni-dao/toks4
-      sha: 31611782e356909366dc8a2a66aa8b3c9d3f4351
+      sha: 59c854400c1efee129611960f1af22ebe9018fd4
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/toks4@sha256:a6663d2a093e9f40035773b488b6f64f0974503478088d3742e748f10b1cfe6b
+        image: ghcr.io/cogni-dao/toks4@sha256:2e2a9f546ae4073482cd6a32bb79747cfe6dc0bcff94d6bb9e38b7a606e36f44
       - name: echo-sidecar
-        image: ghcr.io/cogni-dao/toks4-echo-sidecar@sha256:519c9be2f43d4003a602cbe95eb22b3aaa722745b586999b51f73fea1987e8c2
+        image: ghcr.io/cogni-dao/toks4-echo-sidecar@sha256:173286f26fad5bcb03311b5c0ed4598fda3717bebf090709f6f374e423907473
   workload:
     name: toks4
     publicHost: toks4-test.cognidao.org
@@ -57,6 +57,7 @@ spec:
     policy: RequireBeforeServing
   bootPolicy:
     onDeadline: Close
+    onGiveUp: Replace
   leaseGeneration: 3
   placement:
     requiredCountries:
