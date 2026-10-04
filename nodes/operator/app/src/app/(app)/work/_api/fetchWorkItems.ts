@@ -60,3 +60,19 @@ export async function fetchWorkItems(): Promise<WorkItemsListOutput> {
     pageInfo: { endCursor: cursor, hasMore: true },
   };
 }
+
+export async function fetchWorkItem(id: string): Promise<WorkItemDto> {
+  const response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({
+      error: "Failed to fetch work item",
+    }));
+    throw new Error(error.error || `HTTP ${response.status}`);
+  }
+  return response.json() as Promise<WorkItemDto>;
+}
