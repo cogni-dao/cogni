@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isInfraOnlyPromoteNoop,
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
 } from "./node-deployment-targets";
@@ -165,6 +166,7 @@ describe("resolvePromoteDeploymentTargets", () => {
       sourceShas: {
         external: "0123456789abcdef0123456789abcdef01234567",
       },
+      infra: [],
       // No preview-forward mode stated ⇒ every target false (bug.5195).
       previewForward: {
         "scheduler-worker": false,
@@ -238,6 +240,51 @@ describe("resolvePromoteDeploymentTargets", () => {
         legacyK3sTargets: [],
       }).deployment
     ).toEqual([]);
+  });
+
+  it("classifies catalog infra artifacts outside the app deployment lane", () => {
+    const selection = resolvePromoteDeploymentTargets({
+      catalogRows: [
+        { name: "litellm", type: "infra" },
+        { name: "openfga", type: "infra" },
+      ],
+      environment: "preview",
+      requestedTargets: ["litellm", "openfga"],
+      legacyK3sTargets: [],
+    });
+
+    expect(selection.deployment).toEqual([]);
+    expect(selection.infra).toEqual(["litellm", "openfga"]);
+    expect(
+      isInfraOnlyPromoteNoop({
+        requestedTargets: ["litellm", "openfga"],
+        selection,
+      })
+    ).toBe(true);
+  });
+
+  it("does not classify an unavailable node as an infra-only no-op", () => {
+    const requestedTargets = ["external"];
+    const selection = resolvePromoteDeploymentTargets({
+      catalogRows,
+      environment: "production",
+      requestedTargets,
+      legacyK3sTargets: [],
+    });
+
+    expect(selection.deployment).toEqual([]);
+    expect(isInfraOnlyPromoteNoop({ requestedTargets, selection })).toBe(false);
+  });
+
+  it("still fails closed for an unknown requested target", () => {
+    expect(() =>
+      resolvePromoteDeploymentTargets({
+        catalogRows,
+        environment: "preview",
+        requestedTargets: ["not-in-catalog"],
+        legacyK3sTargets: [],
+      })
+    ).toThrow("Unknown promote target: not-in-catalog");
   });
 
   it("never changes a requested k3s target rejected by the legacy resolver", () => {
