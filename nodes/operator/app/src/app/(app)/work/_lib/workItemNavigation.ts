@@ -27,7 +27,7 @@ export function workItemHref(
   searchParams: SerializableSearchParams
 ): string {
   const query = searchParams.toString();
-  const path = `/work/${encodeURIComponent(id)}`;
+  const path = `/work/items/${encodeURIComponent(id)}`;
   return query ? `${path}?${query}` : path;
 }
 

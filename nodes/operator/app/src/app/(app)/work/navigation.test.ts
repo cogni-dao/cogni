@@ -25,7 +25,7 @@ const searchParams = new URLSearchParams(
 describe("work-item permalink navigation", () => {
   it("builds exact human routes while preserving useful list state", () => {
     expect(workItemHref("bug.5355", searchParams)).toBe(
-      "/work/bug.5355?status=needs_implement&sort=priority&q=permalink"
+      "/work/items/bug.5355?status=needs_implement&sort=priority&q=permalink"
     );
     expect(workListHref(searchParams)).toBe(
       "/work?status=needs_implement&sort=priority&q=permalink"
@@ -38,7 +38,7 @@ describe("work-item permalink navigation", () => {
     openWorkItemPermalink(router, "bug.5355", searchParams);
 
     expect(router.push).toHaveBeenCalledWith(
-      "/work/bug.5355?status=needs_implement&sort=priority&q=permalink",
+      "/work/items/bug.5355?status=needs_implement&sort=priority&q=permalink",
       { scroll: false }
     );
     expect(router.replace).not.toHaveBeenCalled();
@@ -54,5 +54,11 @@ describe("work-item permalink navigation", () => {
       { scroll: false }
     );
     expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("encodes a literal percent exactly once at the human URL boundary", () => {
+    expect(workItemHref("bug.%25", new URLSearchParams())).toBe(
+      "/work/items/bug.%2525"
+    );
   });
 });

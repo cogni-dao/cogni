@@ -11,7 +11,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchWorkItem } from "./fetchWorkItems";
+import { fetchWorkItem, WorkItemFetchError } from "./fetchWorkItems";
 
 describe("fetchWorkItem", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -32,18 +32,57 @@ describe("fetchWorkItem", () => {
     );
   });
 
-  it("surfaces unknown IDs as errors for the human not-found state", async () => {
+  it("encodes a literal percent exactly once at the machine API boundary", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ id: "bug.%25" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWorkItem("bug.%25");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/work/items/bug.%2525",
+      expect.any(Object)
+    );
+  });
+
+  it.each([
+    { status: 404, kind: "not_found" },
+    { status: 401, kind: "auth" },
+    { status: 403, kind: "auth" },
+    { status: 409, kind: "busy" },
+    { status: 429, kind: "busy" },
+    { status: 503, kind: "busy" },
+    { status: 500, kind: "server" },
+    { status: 502, kind: "server" },
+    { status: 400, kind: "unexpected" },
+  ] as const)("classifies HTTP $status as $kind", async ({ status, kind }) => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: false,
-        status: 404,
-        json: () => Promise.resolve({ error: "Work item not found: bug.9999" }),
+        status,
+        json: () => Promise.resolve({ error: `HTTP ${status}` }),
       })
     );
 
-    await expect(fetchWorkItem("bug.9999")).rejects.toThrow(
-      "Work item not found: bug.9999"
+    const error = await fetchWorkItem("bug.9999").catch(
+      (caught: unknown) => caught
     );
+
+    expect(error).toBeInstanceOf(WorkItemFetchError);
+    expect(error).toMatchObject({ kind, status });
+  });
+
+  it("classifies a rejected fetch as a network failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    const error = await fetchWorkItem("bug.5355").catch(
+      (caught: unknown) => caught
+    );
+
+    expect(error).toBeInstanceOf(WorkItemFetchError);
+    expect(error).toMatchObject({ kind: "network" });
   });
 });

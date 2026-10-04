@@ -2,19 +2,19 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@app/(app)/work/[id]/page`
- * Purpose: Human permalink for an exact work item, rendered in the route-backed dashboard detail sheet.
+ * Module: `@app/(app)/work/items/[id]/page`
+ * Purpose: Canonical human permalink for an exact work item, rendered in the route-backed dashboard detail sheet.
  * Scope: Auth check and route parameter projection only; client view owns data fetching.
- * Invariants: Protected route; URL is the selected-item source of truth.
+ * Invariants: Protected route; URL is the selected-item source of truth; params.id is already decoded by Next.
  * Side-effects: none
- * Links: bug.5355, [WorkDashboardView](../view.tsx)
+ * Links: bug.5355, [WorkDashboardView](../../view.tsx)
  * @public
  */
 
 import { redirect } from "next/navigation";
 
 import { getServerSessionUser } from "@/lib/auth/server";
-import { WorkDashboardView } from "../view";
+import { WorkDashboardView } from "../../view";
 
 export default async function WorkItemPage({
   params,
@@ -27,5 +27,5 @@ export default async function WorkItemPage({
   }
 
   const { id } = await params;
-  return <WorkDashboardView selectedItemId={decodeURIComponent(id)} />;
+  return <WorkDashboardView selectedItemId={id} />;
 }

@@ -141,7 +141,7 @@ export function WorkDashboardView({
       if (newQuery) params.set("q", newQuery);
       const qs = params.toString();
       const basePath = selectedItemId
-        ? `/work/${encodeURIComponent(selectedItemId)}`
+        ? `/work/items/${encodeURIComponent(selectedItemId)}`
         : "/work";
       router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
     },

@@ -54,9 +54,10 @@ curl -s -X POST $BASE/api/v1/chat/completions \
 Every code change is tied to exactly one work item. **1 work item ≈ 1 PR.** Prefer adopting an existing item over creating one (anti-sprawl). Items stay lean — a one-line `outcome` describing successful E2E validation.
 
 Human-facing status must link the authenticated permalink
-`$BASE/work/$ID`. The `/api/v1/work/items/$ID` URL is a machine endpoint,
-not a human permalink. Do not publish the disposable validation row below: it
-is intentionally deleted after the round trip.
+`$BASE/work/items/$ID`. The `/api/v1/work/items/$ID` URL is a machine endpoint,
+not a human permalink; `/work?q=$ID` is only a filtered list, not a permalink.
+Do not publish either as human proof. Do not publish the disposable validation
+row below: it is intentionally deleted after the round trip.
 
 ```bash
 # Discover open work
@@ -77,7 +78,7 @@ node advertises every operation before the client mutates its local work-item
 store.
 
 This is a temporary executable validation client owned by
-[story.5060](https://cognidao.org/work/story.5060). That story must
+[story.5060](https://cognidao.org/work/items/story.5060). That story must
 migrate or delete it if durable hub guidance supersedes this procedure.
 The disposable probe is not a contribution work item: its brief `done` state
 exists only to prove terminal-state persistence before the row is deleted.
