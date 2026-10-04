@@ -145,6 +145,12 @@ cache_is_stale() {
   [[ -z "$(find "$CACHE_FILE" -mmin "-$((REFRESH_TTL_SECONDS / 60))" 2>/dev/null)" ]]
 }
 
+# A repository snapshot is not a cache. Trusting one makes every fresh
+# worktree inject the contract from the git commit instead of current Dolt.
+cache_is_repo_tracked() {
+  git ls-files --error-unmatch -- "$CACHE_FILE" >/dev/null 2>&1
+}
+
 refresh_in_background() {
   cache_is_stale || return 0
   (
@@ -167,7 +173,7 @@ or resume the agent.
 EOF
 }
 
-if [[ -s "$CACHE_FILE" ]]; then
+if [[ -s "$CACHE_FILE" ]] && ! cache_is_repo_tracked; then
   bundle="$(cat "$CACHE_FILE")"
   if bundle_fits_budget "$bundle"; then
     printf '%s\n' "$bundle"
