@@ -52,6 +52,9 @@ describe("hostForEnv", () => {
     expect(hostForEnv("operator", true, "candidate-a", "cognidao.org")).toBe(
       "test.cognidao.org"
     );
+    expect(hostForEnv("operator", true, "preview", "cognidao.org")).toBe(
+      "preview.cognidao.org"
+    );
     expect(hostForEnv("operator", true, "production", "cognidao.org")).toBe(
       "cognidao.org"
     );
