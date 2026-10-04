@@ -19,6 +19,8 @@ export interface DeploymentTargetSelection {
 
 export interface PromoteDeploymentTargetSelection
   extends DeploymentTargetSelection {
+  /** Explicitly requested infra artifacts that never enter the app deployment lane. */
+  readonly infra: readonly string[];
   /**
    * Per-target preview-forward eligibility (bug.5195). Preview-forward reads a
    * node's digest from `deploy/preview-<node>`, so it is only ever valid for a
@@ -33,6 +35,17 @@ export interface PromoteDeploymentTargetSelection
    * digest from the reviewed catalog pin instead.
    */
   readonly previewForward: Readonly<Record<string, boolean>>;
+}
+
+export function isInfraOnlyPromoteNoop(input: {
+  readonly requestedTargets: readonly string[];
+  readonly selection: PromoteDeploymentTargetSelection;
+}): boolean {
+  return (
+    input.requestedTargets.length > 0 &&
+    input.selection.deployment.length === 0 &&
+    input.selection.infra.length === input.requestedTargets.length
+  );
 }
 
 /** Partition one flight once; downstream matrix cells reuse this exact decision. */
@@ -121,6 +134,9 @@ export function resolvePromoteDeploymentTargets(input: {
           typeof row.name === "string" ? [row.name] : []
         );
   const offCluster: string[] = [];
+  const infra = input.requestedTargets.filter(
+    (target) => byName.get(target)?.type === "infra"
+  );
   const sourceRepositories: Record<string, string> = {};
   const sourceShas: Record<string, string> = {};
   for (const target of offClusterCandidates) {
@@ -200,6 +216,7 @@ export function resolvePromoteDeploymentTargets(input: {
     sourceRepositories,
     sourceShas,
     previewForward,
+    infra,
   };
 }
 

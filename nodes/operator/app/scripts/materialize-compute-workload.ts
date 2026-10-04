@@ -43,6 +43,7 @@ import {
   resolveNodeDeploymentProvider,
 } from "@/features/compute/node-deployment-provider";
 import {
+  isInfraOnlyPromoteNoop,
   resolveDeploymentTargets,
   resolvePromoteDeploymentTargets,
 } from "@/features/compute/node-deployment-targets";
@@ -358,9 +359,9 @@ async function selectPromoteTargets(input: {
     ),
     previewForwardMode: input.previewForwardMode,
   });
-  // AN EMPTY PROMOTE IS A REFUSAL, NOT A SUCCESS (bug.5203). Every downstream job gates on
-  // `has_targets`, so a promote that resolves nothing SKIPS its way to a green conclusion
-  // indistinguishable from a successful deploy.
+  // AN EMPTY APP PROMOTE IS A REFUSAL, NOT A SILENT SUCCESS (bug.5203). Every downstream job
+  // gates on `has_targets`, so a promote that resolves nothing otherwise SKIPS its way to a
+  // green conclusion indistinguishable from a successful deploy.
   //
   // Observed twice on 2026-09-17: the node-merge webhook dispatches env=preview, #2238 retired
   // every preview node slot, so beacon's and toks5's merges each left only
@@ -372,12 +373,25 @@ async function selectPromoteTargets(input: {
   // selected environment" asserts it returns [] rather than throwing, and it is right. The
   // question "I was ASKED to deploy and deployed nothing" is only answerable where the request
   // is known. Fleet-wide promotes (no explicit CSV) legitimately match nothing and stay silent.
+  //
+  // Infra images are the typed exception (bug.5361): pr-build legitimately resolves them, but
+  // their runtime is Compose and never the app promotion lane. Report that as a loud, truthful
+  // no-op instead of rejecting a healthy main merge. Unknown targets still fail in the resolver;
+  // an out-of-environment node or rejected service still hits the refusal below.
   if (requestedTargets.length > 0 && selection.deployment.length === 0) {
-    throw new Error(
-      `[materialize-compute-workload] promote named ${requestedTargets.length} target(s) ` +
-        `(${requestedTargets.join(", ")}) but NONE deploy to '${input.environment}'. ` +
-        `Refusing to report a no-op promote as success — check those rows' catalog 'envs:'.`
-    );
+    if (isInfraOnlyPromoteNoop({ requestedTargets, selection })) {
+      const message =
+        `[materialize-compute-workload] promote resolved only catalog infra artifact(s) ` +
+        `(${selection.infra.join(", ")}); none deploy through the '${input.environment}' app lane. ` +
+        `Explicit no-op: no app digest was promoted.`;
+      process.stderr.write(`::warning::${message}\n`);
+    } else {
+      throw new Error(
+        `[materialize-compute-workload] promote named ${requestedTargets.length} target(s) ` +
+          `(${requestedTargets.join(", ")}) but NONE deploy to '${input.environment}'. ` +
+          `Refusing to report a no-op promote as success — check those rows' catalog 'envs:'.`
+      );
+    }
   }
 
   const outputs = {
