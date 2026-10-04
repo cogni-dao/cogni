@@ -16,6 +16,7 @@ import {
   openWorkItemPermalink,
   workItemHref,
   workListHref,
+  workListStateSearchParams,
 } from "./_lib/workItemNavigation";
 
 const searchParams = new URLSearchParams(
@@ -60,5 +61,21 @@ describe("work-item permalink navigation", () => {
     expect(workItemHref("bug.%25", new URLSearchParams())).toBe(
       "/work/items/bug.%2525"
     );
+  });
+
+  it("preserves unrelated query keys while clearing removed controlled filters", () => {
+    const current = new URLSearchParams(
+      "type=bug&status=needs_implement&project=operator&sort=-priority&q=old&context=keep"
+    );
+
+    const next = workListStateSearchParams(current);
+    next.set("sort", "priority");
+
+    expect(next.get("context")).toBe("keep");
+    expect(next.get("type")).toBeNull();
+    expect(next.get("status")).toBeNull();
+    expect(next.get("project")).toBeNull();
+    expect(next.get("q")).toBeNull();
+    expect(next.get("sort")).toBe("priority");
   });
 });

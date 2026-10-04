@@ -4,12 +4,12 @@
 "use client";
 
 import type { WorkItemDto } from "@cogni/node-contracts";
-import { SheetDescription } from "@cogni/node-ui-kit/shadcn/sheet";
 import type { ReactElement } from "react";
 import {
   Markdown,
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
 } from "@/components";

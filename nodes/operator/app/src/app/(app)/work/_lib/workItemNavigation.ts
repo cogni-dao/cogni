@@ -17,6 +17,22 @@ type WorkRouter = {
   replace(href: string, options: { scroll: boolean }): void;
 };
 
+const WORK_LIST_CONTROLLED_PARAMS = [
+  "type",
+  "status",
+  "project",
+  "sort",
+  "q",
+] as const;
+
+export function workListStateSearchParams(
+  searchParams: SerializableSearchParams
+): URLSearchParams {
+  const next = new URLSearchParams(searchParams.toString());
+  for (const key of WORK_LIST_CONTROLLED_PARAMS) next.delete(key);
+  return next;
+}
+
 export function workListHref(searchParams: SerializableSearchParams): string {
   const query = searchParams.toString();
   return query ? `/work?${query}` : "/work";

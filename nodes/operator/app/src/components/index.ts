@@ -46,6 +46,7 @@ export { Separator } from "@cogni/node-ui-kit/shadcn/separator";
 export {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,

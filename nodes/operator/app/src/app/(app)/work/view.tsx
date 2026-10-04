@@ -53,6 +53,7 @@ import { WorkItemDetail } from "./_components/WorkItemDetail";
 import {
   closeWorkItemPermalink,
   openWorkItemPermalink,
+  workListStateSearchParams,
 } from "./_lib/workItemNavigation";
 
 const ACTIVE_STATUSES = [
@@ -127,7 +128,7 @@ export function WorkDashboardView({
       newSorting: SortingState,
       newQuery: string
     ) => {
-      const params = new URLSearchParams();
+      const params = workListStateSearchParams(searchParams);
       for (const f of newFilters) {
         const key = f.id === "projectId" ? "project" : f.id;
         if (Array.isArray(f.value) && f.value.length > 0) {
@@ -145,7 +146,7 @@ export function WorkDashboardView({
         : "/work";
       router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
     },
-    [router, selectedItemId]
+    [router, searchParams, selectedItemId]
   );
 
   const openItem = useCallback(
