@@ -11,13 +11,13 @@ spec:
   nodeId: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/node-template@sha256:3ec22318887ba515b5e0882a33b4caa2cc7b221935355941643e3bb525a92c0a
+    ref: ghcr.io/cogni-dao/node-template@sha256:31ca97006f483675e61c107e879b6fd7a9aadab8208138c6312562beb14b46ee
     source:
       repository: cogni-dao/node-template
-      sha: cc8750be8a4dce4e00720b4716fb3a3557e1a09f
+      sha: 1211823f2e1290e7cd60ba3c6d213ba53de60915
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/node-template@sha256:645f15e9ac11f39dd2cb1dd96c3f6db65df0cb76bbef223e18c2d68a14cff4d7
+        image: ghcr.io/cogni-dao/node-template@sha256:996f4393d4c47bd8fedcdfe4154de30dd3e07715f58236f7c3edb2cd5d20a06e
   workload:
     name: node-template
     publicHost: node-template.cognidao.org
