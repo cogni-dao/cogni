@@ -34,9 +34,11 @@ git -C "$COGNI_TEMPLATE_ROOT" checkout main
 git -C "$COGNI_TEMPLATE_ROOT" pull --ff-only origin main
 ```
 
-Then create the workspace in Conductor and let setup run. The setup script fetches `origin/main`, ensures the primary checkout has a cognition bearer key, symlinks `.env.cogni` and `.local-auth` from the primary checkout, installs dependencies, emits package declarations, and runs `pnpm worktree:check`.
+Then create the workspace in Conductor and let setup run. The setup script fetches `origin/main`, ensures the primary checkout has a cognition bearer key, symlinks `.env.cogni` and `.local-auth` from the primary checkout, reconciles the stable user-level Codex cognition hook for local workspaces, installs dependencies, emits package declarations, and runs `pnpm worktree:check`. Cloud setup leaves the user-level Codex home untouched.
 
 Secrets and captured auth are symlinked, not copied, so rotations and refreshed storage states propagate to active worktrees. Session-start cognition reads `.env.cogni` directly and derives the node URL from `.cogni/repo-spec.yaml`, so no per-worktree environment export is needed after the one-time agent registration bootstrap saves `COGNI_NODE_API_KEY` there. Operator keys such as `COGNI_API_KEY_PROD` are for CI/CD authority and do not satisfy session cognition.
+
+Codex still requires one explicit trust action: open `/hooks` once and trust the stable user-level SessionStart hook. Because local setup keeps that same hook path current, later Conductor worktrees reuse the existing trust instead of requiring one approval per worktree.
 
 ### Manual Git Worktree
 

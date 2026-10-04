@@ -7,8 +7,9 @@
 # startup/resume/compact and on every process respawn — so it must NEVER put a
 # live call to the apex hub on the boot path. Acquisition (fetch) and
 # presentation (inject) are separate concerns:
-#   - presentation reads a durable local cache (.cogni/.cognition-cache.md) and
-#     is pure-offline, instant, and deterministic;
+#   - presentation reads a durable, gitignored local cache
+#     (.cogni/.cognition-cache.md) and is pure-offline, instant, and
+#     deterministic;
 #   - acquisition is a backgrounded, TTL-gated refresh whose failure is silent,
 #     because a stale-but-present bundle always beats a network stall or a scary
 #     wall. Once a session has ever oriented, a hub outage is invisible here.
@@ -132,6 +133,14 @@ cache_is_stale() {
   [ -z "$(find "$CACHE_FILE" -mmin "-$((REFRESH_TTL_SECONDS / 60))" 2>/dev/null)" ]
 }
 
+# A cognition snapshot committed to git is not a cache: every new workspace
+# would inherit whatever contract happened to be current at that commit, then
+# present it before the async refresh. Treat tracked snapshots as absent so a
+# fresh workspace fetches live cognition before its first agent reply.
+cache_is_repo_tracked() {
+  git ls-files --error-unmatch -- "$CACHE_FILE" >/dev/null 2>&1
+}
+
 # refresh_in_background — TTL-gated, fully detached, silent on failure. Its result
 # lands in the cache for the NEXT session; it never blocks or writes to stdout.
 refresh_in_background() {
@@ -144,7 +153,7 @@ refresh_in_background() {
 
 # PRESENTATION — local-first. If we have ever oriented, boot is offline-safe and
 # a hub outage is invisible; we just refresh in the background for next time.
-if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
+if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ] && ! cache_is_repo_tracked; then
   cached="$(cat "$CACHE_FILE")"
   if bundle_fits_budget "$cached"; then
     printf '%s\n' "$cached"
@@ -156,8 +165,9 @@ if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
   exit 0
 fi
 
-# FIRST BOOT (no cache): this is the only path allowed to touch the network in
-# the foreground, and the only one that can surface a notice. Bounded fetch.
+# FIRST BOOT (no usable untracked cache): this is the only path allowed to touch
+# the network in the foreground, and the only one that can surface a notice.
+# Bounded fetch.
 bundle="$(fetch_bundle)"
 if [ -n "$bundle" ]; then
   if ! bundle_fits_budget "$bundle"; then
