@@ -173,6 +173,7 @@ describe("proxy — page-level routing", () => {
     "/dashboard",
     "/knowledge",
     "/knowledge/entry-1",
+    "/work/items/bug.5355",
     "/nodes/payments",
     "/nodes/11111111-1111-4111-8111-111111111111",
   ])("redirects unauthenticated user on %s to sign-in with callback", async (path) => {
@@ -181,6 +182,15 @@ describe("proxy — page-level routing", () => {
     const res = await proxy(makeRequest(path));
 
     expectSignInRedirectTo(res, path);
+  });
+
+  it("passes an authenticated user through an exact work-item permalink", async () => {
+    mockGetToken.mockResolvedValue({ id: "user-1" });
+
+    const res = await proxy(makeRequest("/work/items/bug.5355"));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
   });
 
   it("preserves query params in app-route sign-in callbacks", async () => {

@@ -47,9 +47,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Input } from "@/components";
 
-import { fetchWorkItems } from "./_api/fetchWorkItems";
+import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
+import {
+  closeWorkItemPermalink,
+  openWorkItemPermalink,
+  workListStateSearchParams,
+} from "./_lib/workItemNavigation";
 
 const ACTIVE_STATUSES = [
   "needs_triage",
@@ -61,7 +66,11 @@ const ACTIVE_STATUSES = [
   "blocked",
 ];
 
-export function WorkDashboardView() {
+export function WorkDashboardView({
+  selectedItemId,
+}: {
+  readonly selectedItemId?: string;
+} = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -72,6 +81,14 @@ export function WorkDashboardView() {
   });
 
   const items = data?.items ?? [];
+
+  const selectedItemQuery = useQuery({
+    queryKey: ["work-item", selectedItemId],
+    queryFn: () => fetchWorkItem(selectedItemId as string),
+    enabled: selectedItemId !== undefined,
+    retry: false,
+    staleTime: 30_000,
+  });
 
   const initialFilters = useMemo((): ColumnFiltersState => {
     const filters: ColumnFiltersState = [];
@@ -111,7 +128,7 @@ export function WorkDashboardView() {
       newSorting: SortingState,
       newQuery: string
     ) => {
-      const params = new URLSearchParams();
+      const params = workListStateSearchParams(searchParams);
       for (const f of newFilters) {
         const key = f.id === "projectId" ? "project" : f.id;
         if (Array.isArray(f.value) && f.value.length > 0) {
@@ -124,12 +141,24 @@ export function WorkDashboardView() {
       }
       if (newQuery) params.set("q", newQuery);
       const qs = params.toString();
-      router.replace(qs ? `/work?${qs}` : "/work", { scroll: false });
+      const basePath = selectedItemId
+        ? `/work/items/${encodeURIComponent(selectedItemId)}`
+        : "/work";
+      router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
     },
-    [router]
+    [router, searchParams, selectedItemId]
   );
 
-  const [selectedItem, setSelectedItem] = useState<WorkItemDto | null>(null);
+  const openItem = useCallback(
+    (item: WorkItemDto) => {
+      openWorkItemPermalink(router, item.id, searchParams);
+    },
+    [router, searchParams]
+  );
+
+  const closeItem = useCallback(() => {
+    closeWorkItemPermalink(router, searchParams);
+  }, [router, searchParams]);
 
   const table = useReactTable({
     data: items,
@@ -192,7 +221,7 @@ export function WorkDashboardView() {
             const row = rows[focusedRowIndex];
             if (row) {
               e.preventDefault();
-              setSelectedItem(row.original);
+              openItem(row.original);
             }
           }
           break;
@@ -203,8 +232,8 @@ export function WorkDashboardView() {
             ?.focus();
           break;
         case "Escape":
-          if (selectedItem) {
-            setSelectedItem(null);
+          if (selectedItemId) {
+            closeItem();
           }
           break;
       }
@@ -212,7 +241,7 @@ export function WorkDashboardView() {
 
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [rows, focusedRowIndex, selectedItem]);
+  }, [rows, focusedRowIndex, selectedItemId, openItem, closeItem]);
 
   const hasActiveFilters = columnFilters.length > 0;
 
@@ -270,7 +299,7 @@ export function WorkDashboardView() {
           recordCount={items.length}
           isLoading={isLoading}
           loadingMode="skeleton"
-          onRowClick={(row) => setSelectedItem(row)}
+          onRowClick={openItem}
           tableLayout={{
             headerSticky: true,
             headerBackground: true,
@@ -290,10 +319,13 @@ export function WorkDashboardView() {
       )}
 
       <WorkItemDetail
-        item={selectedItem}
-        open={selectedItem !== null}
+        item={selectedItemQuery.data ?? null}
+        {...(selectedItemId !== undefined && { itemId: selectedItemId })}
+        isLoading={selectedItemQuery.isLoading}
+        error={selectedItemQuery.error}
+        open={selectedItemId !== undefined}
         onOpenChange={(open) => {
-          if (!open) setSelectedItem(null);
+          if (!open) closeItem();
         }}
       />
     </div>
