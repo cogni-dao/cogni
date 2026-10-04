@@ -49,7 +49,7 @@ lease_generation:
   # bug.5356 3->4: gen-3 closed after the candidate actuator's BE-only provider pin had
   # an empty intersection with this row's BG/CH/FI/NL/PT requirement. The candidate
   # overlay now pins audited PT/BG/FI providers already covered by this row's egress CIDRs.
-  candidate-a: 4
+  candidate-a: 5
   preview: 1
   production: 2
 # task.5130 — ACTIVITY_ENV_IS_DEPLOYED (_schema.json): the singleton activity authority
