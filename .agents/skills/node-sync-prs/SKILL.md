@@ -30,11 +30,11 @@ Re-running the skill is idempotent: enumerate targets fresh, then for each find 
 ## 2. Enumerate targets (every node, not just the obvious ones)
 
 1. **`Cogni-DAO/node-template`** — the canonical node-at-root template; **always first** (every new node forks it).
-2. **Forks / spawned nodes** — read `infra/catalog/*.yaml` `source_repo` rows in the operator repo (`rg -n '^source_repo:' infra/catalog`); normalize to `owner/repo`. Known live forks: `blue`, `habitat`, `oss`.
+2. **Forks / spawned nodes** — read `infra/catalog/*.yaml` `source_repo` rows in the operator repo (`rg -n '^source_repo:' infra/catalog`); normalize to `owner/repo`. Known older forks requiring current classification (never assume they are live): `blue`, `habitat`, `oss`.
 3. **Test org** — `gh repo list cogni-test-org --limit 100 --json nameWithOwner,isArchived,defaultBranchRef`; include `cogni-test-org/node-template` + `cogni-test-org/test-cog`; skip archived + throwaway wizard spawns.
 4. Any repo the user names directly.
 
-The `nodes` Postgres table is the real SSoT for spawned nodes (catalog/`.gitmodules` miss some) — if you can query it, prefer it; otherwise catalog + the known list.
+The `nodes` Postgres table is the real SSoT for spawned nodes (catalog/`.gitmodules` miss some) — if you can query it, prefer it. Cross-check the operator catalog for declared deployment and public `https://<node>.cognidao.org/version` for actually serving state. If registry access is unavailable, report that limitation and classify from catalog + serving evidence; do not silently promote an older-fork list into live scope or silently skip its repositories.
 
 ## 3. Confirm each target actually needs the change (drift check)
 
@@ -73,5 +73,5 @@ Reuse an existing open sync PR for the same repo/purpose — never open PR #2 fo
 
 - **node-template first**, then forks — forks inherit the template, so the canonical port is highest leverage.
 - **Targeted edits over whole-file copy** for drifted code; byte-for-byte only for genuinely identical files.
-- **No silent skips** — every enumerated repo is accounted for in the report: a PR link, or a one-line skip reason.
+- **No silent skips** — every enumerated repo and known older fork is accounted for in the report: a PR link, or a one-line skip reason backed by registry/catalog/serving evidence.
 - This is interim. The durable fix is operator-app auto-sync (dependabot-for-nodes); note that as the standing follow-up, don't re-solve it per port.
