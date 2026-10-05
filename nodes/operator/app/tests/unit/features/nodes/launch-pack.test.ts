@@ -139,20 +139,27 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain(".env.cogni");
     expect(pack.prompt).toContain("/contribute-to-cogni");
     expect(pack.prompt).toContain("recall the Cogni knowledge block above");
-    // Register-before-recall is the whole point: a fresh node has no token, and
-    // the knowledge block is auth-gated, so /contribute-to-cogni (mint token)
-    // MUST come before "recall the Cogni knowledge block". Lock the ordering so
-    // it cannot silently regress (the prior bug ordered recall first → 401 loop).
+    expect(pack.prompt).toContain("Local Conductor workspace:");
+    expect(pack.prompt).toContain(
+      "auto-registers this node's `COGNI_NODE_API_KEY` when absent"
+    );
+    expect(pack.prompt).toContain(
+      "saves it in the canonical primary checkout's `.env.cogni`"
+    );
+    expect(pack.prompt).toContain("symlinks that file into this workspace");
+    expect(pack.prompt).toContain("Non-Conductor or manual clone:");
+    // Manual clones must self-register before recalling the auth-gated block;
+    // local Conductor setup owns registration and must not receive that advice.
+    expect(pack.prompt.indexOf("Non-Conductor or manual clone:")).toBeLessThan(
+      pack.prompt.indexOf("/contribute-to-cogni")
+    );
     expect(pack.prompt.indexOf("/contribute-to-cogni")).toBeLessThan(
       pack.prompt.indexOf("recall the Cogni knowledge block above")
     );
-    expect(pack.prompt).toContain("stable user-level cognition hook");
+    expect(pack.prompt).toContain("stable user-level Codex cognition hook");
     expect(pack.prompt).toContain("Open `/hooks` once");
     expect(pack.prompt).toContain(
       "later local worktrees reuse the same trusted hook path"
-    );
-    expect(pack.prompt).toContain(
-      "Cloud setup does not modify a user-level Codex home"
     );
 
     // DELEGATION, not duplication: the prompt points at the reusable guides for
