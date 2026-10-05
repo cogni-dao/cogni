@@ -146,6 +146,14 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt.indexOf("/contribute-to-cogni")).toBeLessThan(
       pack.prompt.indexOf("recall the Cogni knowledge block above")
     );
+    expect(pack.prompt).toContain("stable user-level cognition hook");
+    expect(pack.prompt).toContain("Open `/hooks` once");
+    expect(pack.prompt).toContain(
+      "later local worktrees reuse the same trusted hook path"
+    );
+    expect(pack.prompt).toContain(
+      "Cloud setup does not modify a user-level Codex home"
+    );
 
     // DELEGATION, not duplication: the prompt points at the reusable guides for
     // the ordered e2e procedure and must NOT hardcode the operator vcs routes —

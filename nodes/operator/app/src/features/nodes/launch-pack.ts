@@ -100,6 +100,7 @@ export function buildNodeLaunchPack(
     "Your goal: a small style-kit customization, taken end-to-end to a live, validated candidate-a deploy, then reported to the human.",
     "",
     "A freshly-spawned node workspace ships with no `.env.cogni` and no Cogni credentials — expected, so do not hunt for a key file. Run /contribute-to-cogni against the operator endpoint root to register and mint your agent bearer token, save it as `.env.cogni` at the repo root, then recall the Cogni knowledge block above (it is auth-gated).",
+    "For Codex in a local Conductor workspace, let the committed setup run: it reconciles the stable user-level cognition hook. Open `/hooks` once to trust that SessionStart hook; later local worktrees reuse the same trusted hook path. Cloud setup does not modify a user-level Codex home.",
     "",
     "The exact end-to-end procedure lives in the reusable guides, NOT this prompt — follow them as the source of truth so this handoff can never drift from the live operator routes:",
     "- `cicd-e2e-required-sequence` — the required ordered steps and the operator API call for each (request access → branch-push → run-ci → flight → validate → merge → promote). The privileged steps (flight/merge/promote) are operator-bridged via your Bearer key, never personal `gh`.",
