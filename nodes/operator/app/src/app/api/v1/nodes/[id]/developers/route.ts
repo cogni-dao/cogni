@@ -64,6 +64,7 @@ type BranchPushOutcome =
   | "revoked"
   | "skipped:not_developer_role"
   | "skipped:github_identity_unbound"
+  | "skipped:node_repo_unresolved"
   | "error";
 
 type DeveloperDecision = z.infer<typeof DeveloperDecisionInput>["decision"];
@@ -309,30 +310,16 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         try {
           const env = serverEnv();
           const deployPlane = createOperatorDeployPlane(env);
-          // Target the node's OWN repo via the resolveNodeRepo path the merge/run-ci routes use, NOT
-          // `nodes.repoOwner/repoName` (which holds the submodule-PARENT monorepo). An in-repo node
-          // (the operator) resolves to the parent monorepo; a remote-source node to its own
-          // `source_repo`. A genuinely-absent row (`catalog_missing`) defensively keeps the parent.
-          let owner = env.NODE_SUBMODULE_PARENT_OWNER;
-          let repo = env.NODE_SUBMODULE_PARENT_REPO;
-          try {
-            const nodeRepo = await deployPlane.resolveNodeRepo({
-              parentOwner: owner ?? "",
-              parentRepo: repo ?? "",
-              slug: ownerNode.slug,
-            });
-            owner = nodeRepo.owner;
-            repo = nodeRepo.repo;
-          } catch (error) {
-            if ((error as { code?: string })?.code !== "catalog_missing")
-              throw error;
-            // catalog_missing (a genuinely absent row) ⇒ defensively keep the parent monorepo.
-          }
-          if (!owner || !repo) {
-            throw new Error(
-              "node repo not resolvable (no catalog row, no parent configured)"
-            );
-          }
+          // Branch-push MUST target the node's OWN resolved repo (in-repo node → parent monorepo;
+          // remote-source node → its `source_repo`). A genuinely-absent catalog row means we cannot
+          // identify the node's repo — SKIP the grant; NEVER fall back to the parent monorepo, where
+          // an org-wide developer already has push so the collaborator PUT silently no-ops (204) and
+          // logs "granted" while the agent is left READ-only on its own repo.
+          const { owner, repo } = await deployPlane.resolveNodeRepo({
+            parentOwner: env.NODE_SUBMODULE_PARENT_OWNER ?? "",
+            parentRepo: env.NODE_SUBMODULE_PARENT_REPO ?? "",
+            slug: ownerNode.slug,
+          });
           if (parsed.data.decision === "approve") {
             const r = await deployPlane.setNodeCollaborator({
               owner,
@@ -346,7 +333,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
             branchPush = "revoked";
           }
         } catch (error) {
-          branchPush = "error";
+          // No catalog row ⇒ node repo unknown; skip rather than mis-grant on the parent monorepo.
+          const resolveFailed =
+            (error as { code?: string })?.code === "catalog_missing";
+          branchPush = resolveFailed ? "skipped:node_repo_unresolved" : "error";
           // Stable failure-class signal: the GitHub HTTP status distinguishes 404 (App not installed
           // on the resolved repo) from 403 (App lacks admin) from other — the field that pinpointed
           // the wrong-repo bug. `err` is a controlled GitHub API message (no secrets/user content).
