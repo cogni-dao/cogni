@@ -12,6 +12,7 @@ namespace: argocd
 
 resources:
   - candidate-a-poly-applicationset.yaml
+  - candidate-a-red-applicationset.yaml
   - candidate-a-toks4-applicationset.yaml
   - preview-poly-applicationset.yaml
   - preview-toks4-applicationset.yaml
@@ -21,6 +22,7 @@ resources:
   - production-node-template-applicationset.yaml
   - production-operator-applicationset.yaml
   - production-poly-applicationset.yaml
+  - production-red-applicationset.yaml
   - production-scheduler-worker-applicationset.yaml
   - production-toks4-applicationset.yaml
   - production-toks5-applicationset.yaml
