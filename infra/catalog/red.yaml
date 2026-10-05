@@ -29,6 +29,11 @@ deployment_provider:
 compute_api:
   candidate-a: crossplane
   production: crossplane
+# Explicit initial replacement counter for each Akash lease. Generation 0 is the
+# first idempotence key; later retries must advance it from durable receipt evidence.
+lease_generation:
+  candidate-a: 0
+  production: 0
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
 # sub-production authority would have to be moved by every later promote, and generation 1
