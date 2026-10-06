@@ -11,15 +11,15 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:eeda78226de7e031c9f2d6379f9a01cbf9c5aba44fc3a3164a5b4888daa4620d
+    ref: ghcr.io/cogni-dao/poly@sha256:141ad5ca9bda7334bff602f39fb284b1763a8a844a5e78e50be9ddcb880e2186
     source:
       repository: cogni-dao/poly
-      sha: 9e4fb960a78c3f821f716bc8880382c0f4800486
+      sha: 6a9fb4ee8846a041ec042e0cf9721faf02713be7
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:6e6bbf1ea12342d3d16f4800efa5244a0cd699d674e0764fa7f9fc1c90f7669f
+        image: ghcr.io/cogni-dao/poly@sha256:aec55242d0027866decc9eb5d712b211ffb1ae675c0f1ef83d9c904b2284153d
       - name: paper-trader
-        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:28f4b4981856a82601374dffa1c3e1883c79b7b96743525e2badc934c224c22a
+        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:2499e491174453b4c965ed73fc5efc545969a2c28b3eaa238ce6f04773d095f6
   workload:
     name: poly
     publicHost: poly-test.cognidao.org
@@ -38,6 +38,8 @@ spec:
           - key: BILLING_INGEST_TOKEN
           - key: PAPER_ENFORCE_MODE
           - key: POLYGON_RPC_URL
+          - key: POLY_WALLET_RECOVERY_OPS_TOKEN
+          - key: INTERNAL_OPS_TOKEN
           - key: PRIVY_USER_WALLETS_APP_ID
           - key: PRIVY_USER_WALLETS_APP_SECRET
           - key: PRIVY_USER_WALLETS_SIGNING_KEY
