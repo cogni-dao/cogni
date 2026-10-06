@@ -86,7 +86,7 @@ Code carries _what_ via names + types. The **knowledge hub** carries the _why_ +
    The operator uses `coordination.nextAction` to push back when your work doesn't match scorecard requirements (e.g., demanding `/validate-candidate` before `/review-implementation` when `deployVerified` is false). Treat that text as authoritative — re-read it after each phase.
 
 5. Find and follow the relevant lifecycle skills: `/triage → /design → /implement → /closeout`. PATCH the work item with `branch` + `pr` + `status` as you progress so `dolt_log` reflects state.
-6. Run the smallest checks that cover your edited surface; normally `pnpm check:fast` must pass unless a human explicitly narrows verification. Push branch. `gh pr create` with a conventional commit title.
+6. Run the smallest checks that cover your edited surface; normally `pnpm check:fast` must pass unless a human explicitly narrows verification. **Push branch** — same-repo push needs branch-push: request the `developer` role (`POST $BASE/api/v1/nodes/$ID/access-requests {role:"developer", githubLogin:"<you>"}`), and **after the owner approves, accept your own GitHub invite** — `gh api /user/repository_invitations` then `PATCH /user/repository_invitations/{id}` (rbac.md §6 step 5). Nothing accepts it for you, so an un-accepted invite is the usual cause of a push `403` (not an RBAC bug); no invite ⇒ push to your fork and open a fork-PR instead. `gh pr create` with a conventional commit title.
 
 ## Phase 2 — Flight Request
 
