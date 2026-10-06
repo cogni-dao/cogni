@@ -175,7 +175,7 @@ describe("replayOperatorChange", () => {
         })
       ).resolves.toEqual({
         verified: false,
-        reason: "canonical-envelope-mismatch",
+        reason: "replay-error:canonical-envelope-mismatch",
       });
     }
   });
@@ -563,8 +563,18 @@ function readerFor(
         return null;
       }
     },
-    listPaths: async (_ref, prefix) =>
-      readdirSync(join(root, prefix)).map((name) => `${prefix}/${name}`),
+    listPaths: async (ref, prefix) => {
+      const selected = ref === headSha ? head : base;
+      const paths = new Set(
+        readdirSync(join(root, prefix)).map((name) => `${prefix}/${name}`)
+      );
+      for (const [path, content] of selected) {
+        if (!path.startsWith(`${prefix}/`)) continue;
+        if (content === null) paths.delete(path);
+        else paths.add(path);
+      }
+      return [...paths].sort();
+    },
   };
 }
 

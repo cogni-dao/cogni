@@ -623,6 +623,9 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
           status: 422,
         });
       }
+      if (route === COMPARE_ROUTE) {
+        return { status: "diverged" };
+      }
       throw new Error(`Unhandled request route: ${route}`);
     };
 

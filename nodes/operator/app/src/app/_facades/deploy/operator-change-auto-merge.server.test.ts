@@ -2,7 +2,10 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import type { VcsCapability } from "@cogni/ai-tools";
-import { WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
+import {
+  WorkflowExecutionAlreadyStartedError,
+  WorkflowIdReusePolicy,
+} from "@temporalio/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const temporal = vi.hoisted(() => ({ start: vi.fn() }));
@@ -136,7 +139,7 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       "OperatorChangeRecoveryWorkflow",
       expect.objectContaining({
         workflowId: `operator-change-recovery:cogni-test-org/cogni-monorepo:${headSha}`,
-        workflowIdReusePolicy: 3,
+        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
       })
     );
   });
