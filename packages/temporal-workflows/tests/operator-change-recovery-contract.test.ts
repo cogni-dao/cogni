@@ -71,6 +71,18 @@ describe("operator-change recovery contract", () => {
     ).toBe(false);
   });
 
+  it("binds a depth-zero recovery root to the exact losing head", () => {
+    expect(
+      OperatorChangeRecoveryWorkflowInputSchema.safeParse({
+        ...request,
+        intent: {
+          ...request.intent,
+          recoveryRootSha: "c".repeat(40),
+        },
+      }).success
+    ).toBe(false);
+  });
+
   it.each([
     {
       operation: "env.placement",

@@ -7,7 +7,7 @@
  * Scope: Fetch-stubbed unit tests only. Does not call a live operator, GitHub, or Temporal.
  * Invariants:
  *   - Only strict HTTP 200 results are semantic completion.
- *   - 408, 429, 5xx, network, and ambiguous success responses are retryable.
+ *   - 404 rollout races, 408, 429, 5xx, network, and ambiguous success responses are retryable.
  *   - Permanent 4xx responses are non-retryable and no GitHub credential is required.
  * Side-effects: temporarily stubs global fetch
  * Links: task.5188, services/scheduler-worker/src/adapters/operator-change-recovery-http.ts
@@ -96,7 +96,7 @@ describe("operator-change recovery HTTP adapter", () => {
     expect(JSON.parse(String(init?.body))).toEqual(request);
   });
 
-  it.each([408, 429, 500, 503])(
+  it.each([404, 408, 429, 500, 503])(
     "classifies HTTP %s as retryable",
     async (status) => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -111,7 +111,7 @@ describe("operator-change recovery HTTP adapter", () => {
     }
   );
 
-  it.each([400, 401, 403, 404, 409, 422])(
+  it.each([400, 401, 403, 409, 422])(
     "classifies permanent HTTP %s as non-retryable",
     async (status) => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(

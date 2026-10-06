@@ -7,6 +7,7 @@
  * Scope: Serializable intent/request/result schemas only. Does not contain GitHub, Temporal, or application logic.
  * Invariants:
  *   - One typed intent represents the original signed semantic verb, never stale derived file bytes.
+ *   - At depth zero the recovery root is the exact losing head; later depths preserve that root.
  *   - Recovery depth counts fresh-main regenerations only and is capped at three.
  *   - The scheduler-worker delegates with Bearer SCHEDULER_API_TOKEN and holds no GitHub credential.
  *   - Every object is strict so unknown or misspelled recovery fields fail closed.
@@ -80,7 +81,19 @@ export const OperatorChangeRecoveryRequestSchema = z
     losingHeadSha: GitShaSchema,
     intent: OperatorChangeIntentSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((request, context) => {
+    if (
+      request.intent.recoveryDepth === 0 &&
+      request.intent.recoveryRootSha !== request.losingHeadSha
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["intent", "recoveryRootSha"],
+        message: "depth-zero recovery root must equal the losing head",
+      });
+    }
+  });
 
 /**
  * Semantic outcomes are HTTP 200. Transport/availability failures use HTTP

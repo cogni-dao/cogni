@@ -9,7 +9,7 @@
  *   - Bearer SCHEDULER_API_TOKEN authenticates the internal hop and is never logged.
  *   - The stable business Idempotency-Key is supplied by the Activity unchanged.
  *   - Exact HTTP 200 with a valid strict result is semantic completion.
- *   - 408, 429, 5xx, network, and ambiguous 200 responses remain retryable.
+ *   - 404 rollout races, 408, 429, 5xx, network, and ambiguous 200 responses remain retryable.
  * Side-effects: HTTP I/O to the operator node only
  * Links: task.5188, packages/node-contracts/src/operator-change-recovery.internal.v1.contract.ts
  * @internal
@@ -33,7 +33,7 @@ export interface OperatorChangeRecoveryHttpAdapterDeps {
 }
 
 function isRetryableStatus(status: number): boolean {
-  return status === 408 || status === 429 || status >= 500;
+  return status === 404 || status === 408 || status === 429 || status >= 500;
 }
 
 async function readErrorText(response: Response): Promise<string> {
