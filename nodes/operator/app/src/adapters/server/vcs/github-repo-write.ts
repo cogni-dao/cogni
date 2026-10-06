@@ -103,11 +103,11 @@ import {
   parseNodeRepoPolicy,
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+import { parseOperatorChangeRegistry } from "@/shared/vcs/operator-change-policy";
 import {
   type OperatorChangeReplayReader,
   planOperatorChangeIntent,
 } from "@/shared/vcs/operator-change-replay";
-import { parseOperatorChangeRegistry } from "@/shared/vcs/operator-change-policy";
 
 export const OPERATOR_CHANGE_TYPE = "cogni.operator-change.v1";
 

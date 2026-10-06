@@ -12,6 +12,7 @@ vi.mock("@/bootstrap/container", () => ({
     taskQueue: "scheduler-node",
   }),
 }));
+
 import { dispatchOperatorChangeAutoMerge } from "./operator-change-auto-merge.server";
 
 const headSha = "a".repeat(40);
