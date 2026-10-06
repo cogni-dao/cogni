@@ -1327,11 +1327,11 @@ describe("XComputeWorkload placement requirement (story.5050)", () => {
    */
   it("rejects an empty country list rather than accepting a lease-refusing wildcard", () => {
     const countries = (
-      placement.properties as Record<string, Record<string, unknown>>
-    ).requiredCountries;
-    expect(countries.minItems).toBe(1);
+      placement["properties"] as Record<string, Record<string, unknown>>
+    )["requiredCountries"];
+    expect(countries["minItems"]).toBe(1);
     expect(countries["x-kubernetes-list-type"]).toBe("set");
-    expect((countries.items as Record<string, unknown>).pattern).toBe(
+    expect((countries["items"] as Record<string, unknown>)["pattern"]).toBe(
       "^[A-Z]{2}$"
     );
   });
