@@ -180,7 +180,7 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       sha: "fast-path",
     });
     expect(requestRoutes).toContain(MERGE_ROUTE);
-    expect(requestParams.at(-1)).toMatchObject({ sha: "verified-head-sha" });
+    expect(requestParams.at(-1)).toMatchObject({ sha: "a".repeat(40) });
     expect(graphqlQueries).toEqual([]);
     expect(mergeParams).toMatchObject({ sha: "a".repeat(40) });
   });
