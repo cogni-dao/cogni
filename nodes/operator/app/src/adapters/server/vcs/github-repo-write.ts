@@ -850,16 +850,33 @@ export function diffMergeQueueRuleset(
 /**
  * Canonical protection for every spawned node's default branch.
  *
- * NODE_REPO_BORN_PROTECTED: all changes arrive through a pull request and the
- * standard CI set must report before GitHub accepts the ref update. The required
- * checks all run on `merge_group`, so this composes with the separate merge-queue
- * ruleset without deadlocking the queue. Zero bypass actors means neither the
- * operator App nor a repo admin silently escapes node-owner governance.
+ * NODE_REPO_BORN_PROTECTED: ordinary changes arrive through a pull request and the
+ * standard CI set must report before GitHub accepts the ref update. A v2 policy
+ * grants exactly the operator App configured by this adapter an `always` bypass so
+ * its separately verified, CAS-bound deployment declaration can update main. The
+ * policy contains no installation-specific identity and callers cannot supply one.
  */
 export function nodeMainPolicyRulesetPayload(
-  policy: NodeRepoPolicy
+  policy: NodeRepoPolicy,
+  configuredOperatorAppId?: string
 ): RulesetWritePayload {
   const { ruleset } = policy;
+  let bypassActors: RulesetWritePayload["bypass_actors"] = [];
+  if (policy.schemaVersion === "cogni.node-repo-policy.v2") {
+    const actorId = Number(configuredOperatorAppId);
+    if (!Number.isSafeInteger(actorId) || actorId <= 0) {
+      throw new Error(
+        "cogni.node-repo-policy.v2 requires a positive configured operator App ID"
+      );
+    }
+    bypassActors = [
+      {
+        actor_id: actorId,
+        actor_type: "Integration",
+        bypass_mode: "always",
+      },
+    ];
+  }
   return {
     name: ruleset.name,
     target: "branch",
@@ -896,7 +913,7 @@ export function nodeMainPolicyRulesetPayload(
         },
       },
     ],
-    bypass_actors: [],
+    bypass_actors: bypassActors,
   };
 }
 
@@ -907,7 +924,7 @@ export function nodeMainPolicyRulesetPayload(
  *
  * Compares only what the policy actually asserts — enforcement, default-branch
  * targeting, the pull_request rule, the required-status-check contexts as a SET, and
- * that there are no bypass actors. GitHub's read envelope (id, source, timestamps,
+ * the exact bypass actor set. GitHub's read envelope (id, source, timestamps,
  * `_links`, `current_user_can_bypass`) and any additive rule GitHub itself injects are
  * deliberately ignored: this is a "the policy holds" check, not a byte-equality check
  * that would fail on every harmless GitHub-side addition.
@@ -987,10 +1004,17 @@ export function diffRulesetAgainstPolicy(
     }
   }
 
-  const bypass = active?.bypass_actors ?? [];
-  if (bypass.length > 0) {
+  const bypassKey = (actor: {
+    readonly actor_id?: number | null;
+    readonly actor_type?: string;
+    readonly bypass_mode?: string;
+  }): string =>
+    `${JSON.stringify(actor.actor_type)}:${JSON.stringify(actor.actor_id)}:${JSON.stringify(actor.bypass_mode)}`;
+  const gotBypass = (active?.bypass_actors ?? []).map(bypassKey).sort();
+  const wantBypass = expected.bypass_actors.map(bypassKey).sort();
+  if (JSON.stringify(gotBypass) !== JSON.stringify(wantBypass)) {
     problems.push(
-      `${bypass.length} bypass actor(s) present, expected none — protection would be escapable`
+      `bypass_actors are ${JSON.stringify(gotBypass)}, expected ${JSON.stringify(wantBypass)}`
     );
   }
 
@@ -3828,7 +3852,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
 
     const octokit = await this.getOctokit(owner, repo);
-    const payload = nodeMainPolicyRulesetPayload(policy);
+    const payload = nodeMainPolicyRulesetPayload(policy, this.config.appId);
     try {
       // Pre-check so a compliant repo is a zero-write no-op (and so the write path can
       // report WHY it wrote — the mismatches, or the ruleset's outright absence).
@@ -4957,7 +4981,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     const existing = (
       rulesets as ReadonlyArray<{ id: number; name: string }>
     ).find((ruleset) => ruleset.name === policy.ruleset.name);
-    const payload = nodeMainPolicyRulesetPayload(policy);
+    const payload = nodeMainPolicyRulesetPayload(policy, this.config.appId);
 
     const rulesetId = existing
       ? ((

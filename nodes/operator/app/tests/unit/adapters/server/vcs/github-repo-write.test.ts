@@ -81,7 +81,101 @@ const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
   },
 });
 const TEST_NODE_REPO_POLICY = parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON);
+const TEST_NODE_REPO_POLICY_V2_JSON = JSON.stringify({
+  schemaVersion: "cogni.node-repo-policy.v2",
+  ruleset: {
+    name: "main-pr-and-standard-ci",
+    target: "default_branch",
+    enforcement: "active",
+    pullRequest: {
+      allowedMergeMethods: ["squash"],
+      dismissStaleReviewsOnPush: false,
+      requireCodeOwnerReview: false,
+      requireLastPushApproval: false,
+      requiredApprovingReviewCount: 0,
+      requiredReviewThreadResolution: false,
+    },
+    requiredStatusChecks: {
+      doNotEnforceOnCreate: false,
+      strict: false,
+      contexts: ["unit", "component", "static", "manifest"],
+    },
+    operatorGeneratedChange: {
+      protocol: "cogni.operator-change.v1",
+      actor: "configured_operator_app",
+    },
+  },
+});
+const TEST_NODE_REPO_POLICY_V2 = parseNodeRepoPolicy(
+  TEST_NODE_REPO_POLICY_V2_JSON
+);
 const NODE_MAIN_POLICY_RULESET_NAME = TEST_NODE_REPO_POLICY.ruleset.name;
+
+describe("parseNodeRepoPolicy", () => {
+  it("keeps the v1 zero-bypass contract valid", () => {
+    expect(parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON)).toEqual(
+      TEST_NODE_REPO_POLICY
+    );
+  });
+
+  it("accepts only the semantic configured operator App lane in v2", () => {
+    expect(parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_V2_JSON)).toEqual(
+      TEST_NODE_REPO_POLICY_V2
+    );
+
+    for (const rulesetPatch of [
+      { bypassActors: [{ actorId: 1 }] },
+      {
+        operatorGeneratedChange: {
+          protocol: "cogni.operator-change.v1",
+          actor: "raw_app_id",
+        },
+      },
+      {
+        operatorGeneratedChange: {
+          protocol: "cogni.operator-change.v2",
+          actor: "configured_operator_app",
+        },
+      },
+    ]) {
+      const candidate = JSON.parse(TEST_NODE_REPO_POLICY_V2_JSON) as {
+        ruleset: Record<string, unknown>;
+      };
+      Object.assign(candidate.ruleset, rulesetPatch);
+      expect(() => parseNodeRepoPolicy(JSON.stringify(candidate))).toThrow();
+    }
+  });
+});
+
+describe("nodeMainPolicyRulesetPayload", () => {
+  it("keeps v1 at zero bypass actors", () => {
+    expect(
+      nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY, "999").bypass_actors
+    ).toEqual([]);
+  });
+
+  it("injects the configured operator App as the sole v2 always-bypass actor", () => {
+    expect(
+      nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, "3956976")
+        .bypass_actors
+    ).toEqual([
+      {
+        actor_id: 3956976,
+        actor_type: "Integration",
+        bypass_mode: "always",
+      },
+    ]);
+  });
+
+  it.each([undefined, "", "0", "-1", "not-an-app", "1.5"])(
+    "rejects invalid configured App ID %s for v2",
+    (appId) => {
+      expect(() =>
+        nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, appId)
+      ).toThrow("positive configured operator App ID");
+    }
+  );
+});
 
 describe("operatorChangeCommitMessage", () => {
   it("signs the reserved change type and canonical changed-path hash into trailers", () => {
@@ -1480,6 +1574,37 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
         },
       ],
     });
+  });
+
+  it("mints a v2 node with only the configured operator App bypass", async () => {
+    setHappyForkHandlers();
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () => ({
+      type: "file",
+      encoding: "base64",
+      content: Buffer.from(TEST_NODE_REPO_POLICY_V2_JSON).toString("base64"),
+    });
+    let postParams: Record<string, unknown> | undefined;
+    routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = (params) => {
+      postParams = params;
+      return recordRuleset(params, 88);
+    };
+
+    await makeWriter().forkFromTemplate({
+      templateOwner: "Cogni-DAO",
+      owner: "Cogni-DAO",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      chainId: 8453,
+    });
+
+    expect(postParams).toEqual({
+      owner: "Cogni-DAO",
+      repo: "atlas",
+      ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, "1"),
+    });
+    expect(postParams?.bypass_actors).toEqual([
+      { actor_id: 1, actor_type: "Integration", bypass_mode: "always" },
+    ]);
   });
 
   it("repairs a same-named policy ruleset with an exact PUT (idempotent, non-vacuous)", async () => {
@@ -4278,7 +4403,54 @@ describe("diffRulesetAgainstPolicy — protection readback", () => {
     };
     expect(
       diffRulesetAgainstPolicy(escapable as never, policy).join(" ")
-    ).toContain("bypass actor");
+    ).toContain("bypass_actors");
+  });
+
+  it("requires the exact configured Integration/always actor for v2", () => {
+    const v2Policy = nodeMainPolicyRulesetPayload(
+      TEST_NODE_REPO_POLICY_V2,
+      "3956976"
+    );
+    const faithfulV2 = {
+      ...faithfulReadback(),
+      bypass_actors: structuredClone(v2Policy.bypass_actors),
+    };
+    expect(diffRulesetAgainstPolicy(faithfulV2 as never, v2Policy)).toEqual(
+      []
+    );
+
+    for (const bypass_actors of [
+      [],
+      [
+        {
+          actor_id: 3956976,
+          actor_type: "Integration",
+          bypass_mode: "pull_request",
+        },
+      ],
+      [
+        {
+          actor_id: 2,
+          actor_type: "Integration",
+          bypass_mode: "always",
+        },
+      ],
+      [
+        ...v2Policy.bypass_actors,
+        {
+          actor_id: 2,
+          actor_type: "Integration",
+          bypass_mode: "always",
+        },
+      ],
+    ]) {
+      expect(
+        diffRulesetAgainstPolicy(
+          { ...faithfulV2, bypass_actors } as never,
+          v2Policy
+        ).join(" ")
+      ).toContain("bypass_actors");
+    }
   });
 
   it("catches a ruleset that no longer targets the default branch", () => {
@@ -4565,6 +4737,38 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
     expect(requests.map((request) => request.route)).toContain(
       "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"
     );
+  });
+
+  it("reconciles v2 with the configured operator App as the sole bypass", async () => {
+    storedRulesets.clear();
+    let postParams: Record<string, unknown> | undefined;
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_V2_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [],
+      "POST /repos/{owner}/{repo}/rulesets": (params) => {
+        postParams = params;
+        return recordRuleset(params, 88);
+      },
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        readStoredRuleset(params),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toMatchObject({ status: "applied", policySource: "node_repo" });
+
+    expect(postParams).toEqual({
+      owner: OWNER,
+      repo: REPO,
+      ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, "1"),
+    });
   });
 
   it("is a zero-write no-op when the active ruleset already satisfies the policy", async () => {
