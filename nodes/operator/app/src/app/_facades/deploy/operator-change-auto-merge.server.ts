@@ -14,7 +14,7 @@
  *   - BASE_AND_HEAD_ARE_ATOMIC: the verified one-parent head may advance only its exact base;
  *     a concurrent base update makes the non-force ref update fail closed.
  *   - ALL_REQUIRED_CHECKS_GREEN: GitHub's required-context set must be satisfied independently.
- * Side-effects: GitHub reads and, for a fully eligible tree, one direct merge.
+ * Side-effects: GitHub reads and, for a fully eligible tree, one non-force ref fast-forward.
  * Links: docs/spec/merge-queue-config.md
  * @internal
  */

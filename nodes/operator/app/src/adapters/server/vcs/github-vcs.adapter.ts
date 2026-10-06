@@ -71,6 +71,18 @@ interface StatusCheckEvidence {
   readonly appSlug?: string;
 }
 
+interface RequiredStatusChecksResult {
+  readonly checks: readonly RequiredStatusCheck[];
+  readonly complete: boolean;
+}
+
+function hasNextPage(response: {
+  readonly headers?: Readonly<Record<string, string | number | undefined>>;
+}): boolean {
+  const link = response.headers?.link;
+  return typeof link === "string" && /rel="next"/.test(link);
+}
+
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
@@ -149,6 +161,7 @@ export class GitHubVcsAdapter implements VcsCapability {
           owner: params.owner,
           repo: params.repo,
           ref: pr.head.sha,
+          per_page: 100,
         }),
         octokit.request(
           "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
@@ -172,6 +185,13 @@ export class GitHubVcsAdapter implements VcsCapability {
       conclusion: string | null;
       app: { id: number; slug: string } | null;
     }>;
+    const evidenceComplete =
+      !hasNextPage(checksResponse) &&
+      !hasNextPage(statusResponse) &&
+      (checksResponse.data.total_count ?? rawCheckRuns.length) <=
+        rawCheckRuns.length &&
+      (statusResponse.data.total_count ?? statusResponse.data.statuses.length) <=
+        statusResponse.data.statuses.length;
 
     const checks: CheckInfo[] = [
       // Modern check runs (all — for observability)
@@ -237,7 +257,7 @@ export class GitHubVcsAdapter implements VcsCapability {
     // skips, e.g. a fork-guarded build, is passing). An unprotected branch (no
     // required checks) is NOT green: merge-on-green is meaningless without a
     // required set, so it fails closed.
-    const requiredContexts = await this.getRequiredContexts(
+    const required = await this.getRequiredContexts(
       octokit,
       params.owner,
       params.repo,
@@ -250,20 +270,26 @@ export class GitHubVcsAdapter implements VcsCapability {
             evidence.appSlug === "github-actions"
           : evidence.source === "check-run" && evidence.appId === required.appId
       );
-    const pending = requiredContexts.some((required) => {
-      const evidence = evidenceFor(required);
-      return (
-        evidence.length === 0 ||
-        evidence.some(
-          (candidate) =>
-            candidate.status !== "completed" || candidate.conclusion === null
-        )
-      );
-    });
+    const pending =
+      !evidenceComplete ||
+      !required.complete ||
+      required.checks.some((requiredCheck) => {
+        const evidence = evidenceFor(requiredCheck);
+        return (
+          evidence.length === 0 ||
+          evidence.some(
+            (candidate) =>
+              candidate.status !== "completed" ||
+              candidate.conclusion === null
+          )
+        );
+      });
     const allGreen =
-      requiredContexts.length > 0 &&
-      requiredContexts.every((required) => {
-        const evidence = evidenceFor(required);
+      evidenceComplete &&
+      required.complete &&
+      required.checks.length > 0 &&
+      required.checks.every((requiredCheck) => {
+        const evidence = evidenceFor(requiredCheck);
         return (
           evidence.length > 0 &&
           evidence.every(
@@ -601,17 +627,17 @@ export class GitHubVcsAdapter implements VcsCapability {
   /**
    * The branch's REQUIRED status-check contexts across both GitHub enforcement
    * systems: classic branch protection and active rulesets. GitHub's effective
-   * policy is their union; spawned nodes use the rulesets path. Returns `[]` when
-   * neither system requires checks, which the merge gate treats as not-green /
-   * fail-closed. The active-rules endpoint includes repository + organization
-   * rules and needs only metadata:read.
+   * policy is their union; spawned nodes use the rulesets path. An empty check set
+   * or a paginated/truncated rules response is incomplete and the merge gate fails
+   * closed. The active-rules endpoint includes repository + organization rules and
+   * needs only metadata:read.
    */
   private async getRequiredContexts(
     octokit: Octokit,
     owner: string,
     repo: string,
     branch: string
-  ): Promise<RequiredStatusCheck[]> {
+  ): Promise<RequiredStatusChecksResult> {
     const checks = new Map<string, RequiredStatusCheck>();
     const add = (context: string, appId?: number) => {
       const key = `${context}\u0000${appId ?? "unbound"}`;
@@ -646,10 +672,11 @@ export class GitHubVcsAdapter implements VcsCapability {
       if ((error as { status?: number })?.status !== 404) throw error;
     }
 
-    const { data: activeRules } = await octokit.request(
+    const activeRulesResponse = await octokit.request(
       "GET /repos/{owner}/{repo}/rules/branches/{branch}",
       { owner, repo, branch, per_page: 100 }
     );
+    const activeRules = activeRulesResponse.data;
     for (const rule of activeRules as ReadonlyArray<{
       type?: string;
       parameters?: {
@@ -670,7 +697,10 @@ export class GitHubVcsAdapter implements VcsCapability {
         );
       }
     }
-    return [...checks.values()];
+    return {
+      checks: [...checks.values()],
+      complete: !hasNextPage(activeRulesResponse),
+    };
   }
 
   /**

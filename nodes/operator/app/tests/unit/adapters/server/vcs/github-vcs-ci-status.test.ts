@@ -29,6 +29,7 @@ type RequestHandler = (
 
 let onRequest: RequestHandler;
 const requestRoutes: string[] = [];
+const responseHeaders = new Map<string, Record<string, string>>();
 
 vi.mock("@octokit/auth-app", () => ({
   createAppAuth: () => async () => ({ token: "app-token" }),
@@ -38,7 +39,10 @@ vi.mock("@octokit/core", () => ({
   Octokit: class MockOctokit {
     async request(route: string, params: Record<string, unknown>) {
       requestRoutes.push(route);
-      return { data: await onRequest(route, params) };
+      return {
+        data: await onRequest(route, params),
+        headers: responseHeaders.get(route) ?? {},
+      };
     }
   },
 }));
@@ -85,6 +89,8 @@ function ciHandlers(input: {
   checkRuns: ReadonlyArray<Record<string, unknown>>;
   activeRules: ReadonlyArray<Record<string, unknown>>;
   statuses?: ReadonlyArray<Record<string, unknown>>;
+  checkRunsTotalCount?: number;
+  statusesTotalCount?: number;
   classicRequiredChecks?: Record<string, unknown>;
   reviews?: ReadonlyArray<Record<string, unknown>>;
   nextReviews?: ReadonlyArray<Record<string, unknown>>;
@@ -102,8 +108,19 @@ function ciHandlers(input: {
         draft: false,
       };
     }
-    if (route === CHECK_RUNS_ROUTE) return { check_runs: input.checkRuns };
-    if (route === STATUS_ROUTE) return { statuses: input.statuses ?? [] };
+    if (route === CHECK_RUNS_ROUTE) {
+      return {
+        check_runs: input.checkRuns,
+        total_count: input.checkRunsTotalCount ?? input.checkRuns.length,
+      };
+    }
+    if (route === STATUS_ROUTE) {
+      const statuses = input.statuses ?? [];
+      return {
+        statuses,
+        total_count: input.statusesTotalCount ?? statuses.length,
+      };
+    }
     if (route === REVIEWS_ROUTE) {
       return params.page === 2
         ? (input.nextReviews ?? [])
@@ -126,6 +143,7 @@ function ciHandlers(input: {
 
 beforeEach(() => {
   requestRoutes.length = 0;
+  responseHeaders.clear();
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => ({
@@ -412,5 +430,66 @@ describe("GitHubVcsAdapter.getCiStatus — merge-gate greenness (bug.5123)", () 
     expect(
       requestRoutes.filter((route) => route === REVIEWS_ROUTE)
     ).toHaveLength(2);
+  });
+
+  it.each([
+    ["check runs", CHECK_RUNS_ROUTE],
+    ["commit statuses", STATUS_ROUTE],
+    ["active branch rules", ACTIVE_BRANCH_RULES_ROUTE],
+  ])("fails closed when %s have another page", async (_label, route) => {
+    responseHeaders.set(route, {
+      link: '<https://api.github.test/resource?page=2>; rel="next"',
+    });
+    onRequest = ciHandlers({
+      checkRuns: GREEN_STANDARD_RUNS,
+      activeRules: [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: STANDARD_CONTEXTS.map((context) => ({
+              context,
+            })),
+          },
+        },
+      ],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(false);
+    expect(ci.pending).toBe(true);
+  });
+
+  it.each([
+    ["check runs", { checkRunsTotalCount: GREEN_STANDARD_RUNS.length + 1 }],
+    ["commit statuses", { statusesTotalCount: 1 }],
+  ])("fails closed when %s report truncated totals", async (_label, counts) => {
+    onRequest = ciHandlers({
+      checkRuns: GREEN_STANDARD_RUNS,
+      activeRules: [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: STANDARD_CONTEXTS.map((context) => ({
+              context,
+            })),
+          },
+        },
+      ],
+      ...counts,
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(false);
+    expect(ci.pending).toBe(true);
   });
 });
