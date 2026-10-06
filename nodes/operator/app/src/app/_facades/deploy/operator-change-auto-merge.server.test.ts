@@ -58,13 +58,11 @@ function vcs(eligible: boolean) {
         },
       ],
     }),
-      fastForwardOperatorChange: vi
-        .fn()
-        .mockResolvedValue({
-          outcome: "landed",
-          sha: headSha,
-          message: "Fast-forwarded",
-        }),
+    fastForwardOperatorChange: vi.fn().mockResolvedValue({
+      outcome: "landed",
+      sha: headSha,
+      message: "Fast-forwarded",
+    }),
   } as unknown as VcsCapability;
 }
 

@@ -933,10 +933,7 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
       throw new Error(`Unhandled request route: ${route}`);
     };
     const vcs = recoveryAdapter({ status: "satisfied", mainSha: freshMainSha });
-    if (
-      race === "required check regresses" ||
-      race === "review hold appears"
-    ) {
+    if (race === "required check regresses" || race === "review hold appears") {
       vi.mocked(vcs.getCiStatus)
         .mockResolvedValueOnce({
           headSha: losingHeadSha,
@@ -1005,8 +1002,11 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
       reason: "losing-pr-head-changed",
     });
     expect(
-      (vcs as unknown as { verifyOperatorChangeInternal: ReturnType<typeof vi.fn> })
-        .verifyOperatorChangeInternal
+      (
+        vcs as unknown as {
+          verifyOperatorChangeInternal: ReturnType<typeof vi.fn>;
+        }
+      ).verifyOperatorChangeInternal
     ).not.toHaveBeenCalled();
   });
 
@@ -1033,7 +1033,9 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
         baseSha: signedBaseSha,
       }),
     });
-    await expect(disabled.recoverOperatorChange(request)).resolves.toMatchObject({
+    await expect(
+      disabled.recoverOperatorChange(request)
+    ).resolves.toMatchObject({
       status: "terminal",
       reason: "losing-head-verification-failed:operation-disabled",
     });

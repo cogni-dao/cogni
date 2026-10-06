@@ -21,9 +21,8 @@ describe("stubVcsCapability", () => {
     const unconfigured = createVcsCapability({} as never);
     const configured = createVcsCapability({
       GH_REVIEW_APP_ID: "1",
-      GH_REVIEW_APP_PRIVATE_KEY_BASE64: Buffer.from("test-key").toString(
-        "base64"
-      ),
+      GH_REVIEW_APP_PRIVATE_KEY_BASE64:
+        Buffer.from("test-key").toString("base64"),
     } as never);
 
     expect(unconfigured).toBe(stubVcsCapability);

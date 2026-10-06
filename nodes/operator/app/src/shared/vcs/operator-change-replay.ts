@@ -320,7 +320,12 @@ export async function planOperatorChangeIntent(
 }
 
 async function planMembership(
-  input: OperatorChangePlanInput & { readonly intent: Extract<OperatorChangeIntent, { operation: "env.membership" }> }
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<
+      OperatorChangeIntent,
+      { operation: "env.membership" }
+    >;
+  }
 ): Promise<readonly EnvPlanOp[] | null> {
   const { environment: env, action, leaseGeneration } = input.intent;
   const present = action === "add";
@@ -342,7 +347,12 @@ async function planMembership(
 }
 
 async function planPlacement(
-  input: OperatorChangePlanInput & { readonly intent: Extract<OperatorChangeIntent, { operation: "env.placement" }> }
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<
+      OperatorChangeIntent,
+      { operation: "env.placement" }
+    >;
+  }
 ): Promise<readonly EnvPlanOp[] | null> {
   const { environment: env, provider } = input.intent;
   const plan = buildPlacementPlan({
@@ -371,8 +381,13 @@ async function planPlacement(
 }
 
 async function planRegion(
-  input: OperatorChangePlanInput & { readonly intent: Extract<OperatorChangeIntent, { operation: "env.region" }> }
-): Promise<{ readonly ops: readonly EnvPlanOp[] | null; readonly leaseGeneration: number }> {
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<OperatorChangeIntent, { operation: "env.region" }>;
+  }
+): Promise<{
+  readonly ops: readonly EnvPlanOp[] | null;
+  readonly leaseGeneration: number;
+}> {
   const { environment: env, countries, leaseGeneration } = input.intent;
   const plan = buildRegionPlan({
     slug: input.intent.node,
@@ -391,12 +406,18 @@ async function planRegion(
   });
   return {
     ops: plan.kind === "no_changes" ? null : plan.ops,
-    leaseGeneration: plan.kind === "no_changes" ? leaseGeneration : plan.leaseGeneration,
+    leaseGeneration:
+      plan.kind === "no_changes" ? leaseGeneration : plan.leaseGeneration,
   };
 }
 
 async function planNodeRegister(
-  input: OperatorChangePlanInput & { readonly intent: Extract<OperatorChangeIntent, { operation: "node.register" }> }
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<
+      OperatorChangeIntent,
+      { operation: "node.register" }
+    >;
+  }
 ): Promise<OperatorChangePlanResult> {
   const { node, nodeId, sourceRepo, sourceSha, ownerWallet } = input.intent;
   const repositoryOwner = input.repository.split("/", 1)[0];
@@ -452,7 +473,10 @@ async function planNodeRegister(
     );
   }
   const catalogPath = `infra/catalog/${node}.yaml`;
-  const existingCatalog = await input.reader.readFile(input.baseSha, catalogPath);
+  const existingCatalog = await input.reader.readFile(
+    input.baseSha,
+    catalogPath
+  );
   let nodePort = nextFreeNodePort(usedPorts);
   if (existingCatalog !== null) {
     const row = parseYaml(existingCatalog) as Record<string, unknown> | null;
@@ -514,7 +538,10 @@ async function planNodeRegister(
     for (const op of ops) {
       const current = await input.reader.readFile(input.baseSha, op.path);
       if (op.op === "delete" ? current !== null : current !== op.content) {
-        return { status: "conflict", reason: `node-register-footprint-conflict:${op.path}` };
+        return {
+          status: "conflict",
+          reason: `node-register-footprint-conflict:${op.path}`,
+        };
       }
     }
     return { status: "satisfied", intent: input.intent };
@@ -523,7 +550,12 @@ async function planNodeRegister(
 }
 
 async function planDeploymentDeclare(
-  input: OperatorChangePlanInput & { readonly intent: Extract<OperatorChangeIntent, { operation: "deployment.declare" }> }
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<
+      OperatorChangeIntent,
+      { operation: "deployment.declare" }
+    >;
+  }
 ): Promise<readonly EnvPlanOp[] | null> {
   if (
     input.deploymentCatalog === undefined ||
