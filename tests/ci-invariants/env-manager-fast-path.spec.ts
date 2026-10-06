@@ -72,9 +72,7 @@ describe("signed env-manager workflow fast path", () => {
   });
 
   it("eligible PR builds skip image detection so manifest is satisfied downstream", () => {
-    expectFailClosedFastPathCondition(
-      workflow("pr-build.yml").jobs.detect?.if
-    );
+    expectFailClosedFastPathCondition(workflow("pr-build.yml").jobs.detect?.if);
   });
 
   it("keeps schema and deterministic render proof in the CI classifier job", () => {
