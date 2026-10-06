@@ -127,7 +127,7 @@ export function renderCatalog(
     ? `lease_generation:\n${envs.map((env) => `  ${env}: 0\n`).join("")}`
     : "";
   const sourceShaLine = input.sourceSha
-    ? `source_sha: ${input.sourceSha}\n`
+    ? `source_sha: "${input.sourceSha}"\n`
     : "";
   const sourceLines = input.sourceRepo
     ? `source_repo: ${input.sourceRepo}
