@@ -15,9 +15,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createOperatorChangeRecoveryHttpClient,
-} from "../src/adapters/operator-change-recovery-http.js";
+import { createOperatorChangeRecoveryHttpClient } from "../src/adapters/operator-change-recovery-http.js";
 import { RunHttpClientError } from "../src/ports/index.js";
 
 const logger = {
@@ -96,35 +94,33 @@ describe("operator-change recovery HTTP adapter", () => {
     expect(JSON.parse(String(init?.body))).toEqual(request);
   });
 
-  it.each([404, 408, 429, 500, 503])(
-    "classifies HTTP %s as retryable",
-    async (status) => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response("temporary", { status })
-      );
-      const error = await client()
-        .recover(request, "stable-key")
-        .catch((caught: unknown) => caught);
-      expect(error).toBeInstanceOf(RunHttpClientError);
-      expect((error as RunHttpClientError).retryable).toBe(true);
-      expect((error as RunHttpClientError).status).toBe(status);
-    }
-  );
+  it.each([
+    404, 408, 429, 500, 503,
+  ])("classifies HTTP %s as retryable", async (status) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("temporary", { status })
+    );
+    const error = await client()
+      .recover(request, "stable-key")
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RunHttpClientError);
+    expect((error as RunHttpClientError).retryable).toBe(true);
+    expect((error as RunHttpClientError).status).toBe(status);
+  });
 
-  it.each([400, 401, 403, 409, 422])(
-    "classifies permanent HTTP %s as non-retryable",
-    async (status) => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response("permanent", { status })
-      );
-      const error = await client()
-        .recover(request, "stable-key")
-        .catch((caught: unknown) => caught);
-      expect(error).toBeInstanceOf(RunHttpClientError);
-      expect((error as RunHttpClientError).retryable).toBe(false);
-      expect((error as RunHttpClientError).status).toBe(status);
-    }
-  );
+  it.each([
+    400, 401, 403, 409, 422,
+  ])("classifies permanent HTTP %s as non-retryable", async (status) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("permanent", { status })
+    );
+    const error = await client()
+      .recover(request, "stable-key")
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RunHttpClientError);
+    expect((error as RunHttpClientError).retryable).toBe(false);
+    expect((error as RunHttpClientError).status).toBe(status);
+  });
 
   it("classifies a network failure as retryable", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("timeout"));

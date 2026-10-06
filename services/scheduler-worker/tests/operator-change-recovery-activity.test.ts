@@ -15,19 +15,16 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createOperatorChangeRecoveryActivities,
-} from "../src/activities/operator-change-recovery.js";
+import { createOperatorChangeRecoveryActivities } from "../src/activities/operator-change-recovery.js";
 import { RunHttpClientError } from "../src/ports/index.js";
 
 const { nonRetryable } = vi.hoisted(() => ({
-  nonRetryable: vi.fn(
-    (message: string, type: string, details?: unknown) =>
-      Object.assign(new Error(message), {
-        type,
-        details,
-        nonRetryable: true,
-      })
+  nonRetryable: vi.fn((message: string, type: string, details?: unknown) =>
+    Object.assign(new Error(message), {
+      type,
+      details,
+      nonRetryable: true,
+    })
   ),
 }));
 

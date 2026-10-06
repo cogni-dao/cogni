@@ -27,9 +27,7 @@ import {
 } from "@temporalio/worker";
 import { createGoalLoopActivities } from "./activities/goal-loop.js";
 import { createActivities } from "./activities/index.js";
-import {
-  createOperatorChangeRecoveryActivities,
-} from "./activities/operator-change-recovery.js";
+import { createOperatorChangeRecoveryActivities } from "./activities/operator-change-recovery.js";
 import { createReviewActivities } from "./activities/review.js";
 import { createSweepActivities } from "./activities/sweep.js";
 import { createContainer } from "./bootstrap/container.js";

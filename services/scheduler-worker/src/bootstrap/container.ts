@@ -39,9 +39,7 @@ import {
   GitHubSourceAdapter,
 } from "../adapters/ingestion/index.js";
 import { createSharedTokenNodePrincipalResolver } from "../adapters/node-principal.js";
-import {
-  createOperatorChangeRecoveryHttpClient,
-} from "../adapters/operator-change-recovery-http.js";
+import { createOperatorChangeRecoveryHttpClient } from "../adapters/operator-change-recovery-http.js";
 import { createReviewHttpClient } from "../adapters/review-http.js";
 import {
   createHttpExecutionGrantValidator,
