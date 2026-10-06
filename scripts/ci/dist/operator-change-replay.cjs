@@ -7337,6 +7337,268 @@ var import_node_child_process = require("child_process");
 var import_node_fs = require("fs");
 var import_node_path = require("path");
 
+// nodes/operator/app/src/shared/vcs/operator-change-policy.ts
+var import_node_crypto = require("crypto");
+var OPERATOR_CHANGE_TYPE = "cogni.operator-change.v1";
+var SHA = /^[0-9a-f]{40}$/;
+var PATH_SHA = /^[0-9a-f]{64}$/;
+var NODE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+var OPERATIONS = /* @__PURE__ */ new Set([
+  "env.membership",
+  "env.placement",
+  "env.region",
+  "node.register",
+  "deployment.declare"
+]);
+function reject(facts, reason, operation, node) {
+  return {
+    eligible: false,
+    reason,
+    headSha: facts.pr.headSha,
+    baseSha: facts.pr.baseSha,
+    ...operation ? { operation } : {},
+    ...node ? { node } : {}
+  };
+}
+function singleTrailer(message, key) {
+  const values = trailerValues(message, key);
+  return values.length === 1 ? values[0] ?? null : null;
+}
+function trailerValues(message, key) {
+  const prefix = `${key}: `;
+  return message.split("\n").filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
+}
+function trailerCount(message) {
+  return message.split("\n").filter((line) => line.startsWith("Cogni-")).length;
+}
+function canonicalPathHash(paths) {
+  return (0, import_node_crypto.createHash)("sha256").update(`${[...paths].sort().join("\n")}
+`).digest("hex");
+}
+function parseOperatorChangeRegistry(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const candidate = value;
+  if (candidate.version !== OPERATOR_CHANGE_TYPE) return null;
+  const repositories = candidate.repositories;
+  const childRepositoryApps = candidate.childRepositoryApps;
+  const operations = candidate.operations;
+  if (repositories === null || typeof repositories !== "object" || Array.isArray(repositories) || childRepositoryApps === null || typeof childRepositoryApps !== "object" || Array.isArray(childRepositoryApps) || operations === null || typeof operations !== "object" || Array.isArray(operations)) {
+    return null;
+  }
+  for (const identity of Object.values(repositories)) {
+    if (identity === null || typeof identity !== "object" || Array.isArray(identity) || typeof identity.botLogin !== "string" || !Number.isInteger(identity.botId)) {
+      return null;
+    }
+  }
+  for (const identity of Object.values(childRepositoryApps)) {
+    if (identity === null || typeof identity !== "object" || Array.isArray(identity) || typeof identity.botLogin !== "string" || !Number.isInteger(identity.botId)) {
+      return null;
+    }
+  }
+  for (const operation of OPERATIONS) {
+    const entry = operations[operation];
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry) || !Array.isArray(entry.enabledRepositories) || !entry.enabledRepositories.every(
+      (repo) => typeof repo === "string"
+    ) || typeof entry.verifier !== "string") {
+      return null;
+    }
+    const enabledChildOwners = entry.enabledChildOwners;
+    if (operation === "deployment.declare" && (!Array.isArray(enabledChildOwners) || !enabledChildOwners.every((owner) => typeof owner === "string")) || operation !== "deployment.declare" && enabledChildOwners !== void 0) {
+      return null;
+    }
+  }
+  return value;
+}
+function classifyOperatorChangeForMerge(facts) {
+  const repo = facts.repository.toLowerCase();
+  const message = facts.commit.message;
+  const changeTypes = trailerValues(message, "Cogni-Change-Type");
+  if (changeTypes.length === 0) {
+    return reject(facts, "reserved-envelope-not-claimed");
+  }
+  if (changeTypes.length !== 1 || changeTypes[0] !== OPERATOR_CHANGE_TYPE) {
+    return reject(facts, "invalid-change-type");
+  }
+  const operationValue = singleTrailer(message, "Cogni-Operation");
+  if (!operationValue || !OPERATIONS.has(operationValue)) {
+    return reject(facts, "duplicate-or-unlisted-operation");
+  }
+  const operation = operationValue;
+  const node = singleTrailer(message, "Cogni-Node");
+  const baseSha = singleTrailer(message, "Cogni-Base-SHA");
+  const signedPathHash = singleTrailer(message, "Cogni-Changed-Paths-SHA256");
+  if (!node || !NODE.test(node))
+    return reject(facts, "invalid-node", operation);
+  let identity = facts.registry.repositories[repo];
+  let childRepositoryBound = false;
+  if (!identity && operation === "deployment.declare") {
+    const parts = repo.split("/");
+    const owner = parts[0];
+    const repoName = parts[1];
+    if (parts.length === 2 && owner && repoName === node && facts.repositoryNode === node) {
+      identity = facts.registry.childRepositoryApps[owner];
+      childRepositoryBound = identity !== void 0;
+    }
+  }
+  if (!identity) return reject(facts, "untrusted-repository", operation, node);
+  if (!baseSha || !SHA.test(baseSha)) {
+    return reject(facts, "invalid-base-sha", operation, node);
+  }
+  if (!signedPathHash || !PATH_SHA.test(signedPathHash)) {
+    return reject(facts, "invalid-path-hash", operation, node);
+  }
+  if (facts.pr.state !== "open" || facts.pr.draft !== false || facts.pr.baseRef !== "main" || facts.pr.baseSha !== baseSha || facts.pr.headSha !== facts.expectedHeadSha || facts.commit.sha !== facts.expectedHeadSha || facts.pr.headRepoFullName?.toLowerCase() !== repo || facts.pr.commitCount !== 1 || facts.pr.userLogin !== identity.botLogin || facts.pr.userId !== identity.botId || facts.pr.userType !== "Bot") {
+    return reject(facts, "invalid-pr-identity", operation, node);
+  }
+  if (facts.commit.verified !== true || facts.commit.verificationReason !== "valid" || facts.commit.authorLogin !== identity.botLogin || facts.commit.authorId !== identity.botId || facts.commit.parents.length !== 1 || facts.commit.parents[0] !== baseSha) {
+    return reject(facts, "invalid-commit-signature", operation, node);
+  }
+  const subject = message.split("\n", 1)[0] ?? "";
+  let expectedTrailerCount;
+  switch (operation) {
+    case "env.membership": {
+      expectedTrailerCount = 8;
+      const env = singleTrailer(message, "Cogni-Environment");
+      const action = singleTrailer(message, "Cogni-Action");
+      const generation = singleTrailer(message, "Cogni-Lease-Generation");
+      if (!env?.match(/^(candidate-a|preview|production)$/) || !action?.match(/^(add|remove)$/) || !generation?.match(/^\d+$/) || facts.pr.headRef !== `cogni-operator/node-env-${node}-${env}` || subject !== `feat(node): ${action} ${node} ${action === "add" ? "to" : "from"} ${env}`) {
+        return reject(facts, "invalid-membership-envelope", operation, node);
+      }
+      break;
+    }
+    case "env.placement": {
+      expectedTrailerCount = 7;
+      const env = singleTrailer(message, "Cogni-Environment");
+      const provider = singleTrailer(message, "Cogni-Provider");
+      if (!env?.match(/^(candidate-a|preview|production)$/) || !provider?.match(/^(k3s|akash)$/) || facts.pr.headRef !== `cogni-operator/node-placement-${node}-${env}` || subject !== `feat(node): place ${node} ${env} on ${provider}`) {
+        return reject(facts, "invalid-placement-envelope", operation, node);
+      }
+      break;
+    }
+    case "env.region": {
+      expectedTrailerCount = 8;
+      const env = singleTrailer(message, "Cogni-Environment");
+      const countries = singleTrailer(message, "Cogni-Countries");
+      const generation = singleTrailer(message, "Cogni-Lease-Generation");
+      if (!env?.match(/^(candidate-a|preview|production)$/) || !countries?.match(/^[A-Z]{2}(,[A-Z]{2})*$/) || !generation?.match(/^\d+$/) || facts.pr.headRef !== `cogni-operator/node-region-${node}-${env}` || subject !== `feat(node): require ${node} ${env} placement in ${countries.replaceAll(",", ", ")}`) {
+        return reject(facts, "invalid-region-envelope", operation, node);
+      }
+      break;
+    }
+    case "node.register": {
+      expectedTrailerCount = 9;
+      const nodeId = singleTrailer(message, "Cogni-Node-Id");
+      const sourceRepo = singleTrailer(message, "Cogni-Source-Repo");
+      const sourceSha = singleTrailer(message, "Cogni-Source-SHA");
+      const ownerWallet = singleTrailer(message, "Cogni-Owner-Wallet");
+      const fleetOwner = repo.split("/", 1)[0];
+      if (!nodeId?.match(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      ) || !sourceSha?.match(SHA) || !ownerWallet?.match(/^0x[0-9a-fA-F]{40}$/) || sourceRepo?.toLowerCase() !== `https://github.com/${fleetOwner}/${node}.git` || facts.pr.headRef !== `cogni-operator/node-register-${node}` || subject !== `feat(node): register ${node}`) {
+        return reject(facts, "invalid-register-envelope", operation, node);
+      }
+      break;
+    }
+    case "deployment.declare":
+      expectedTrailerCount = 5;
+      if (facts.pr.headRef !== `cogni-operator/declare-deployment-${node}` || subject !== `feat(deploy): declare ${node} node deployment`) {
+        return reject(facts, "invalid-deployment-envelope", operation, node);
+      }
+      break;
+  }
+  if (trailerCount(message) !== expectedTrailerCount) {
+    return reject(facts, "unexpected-or-duplicate-trailer", operation, node);
+  }
+  if (facts.files.length === 0 || facts.files.length > 32 || facts.files.some(
+    (file) => file.previousFilename !== null || !["added", "modified", "removed"].includes(file.status)
+  )) {
+    return reject(facts, "invalid-file-metadata", operation, node);
+  }
+  const paths = facts.files.map((file) => file.filename);
+  if (new Set(paths).size !== paths.length) {
+    return reject(facts, "duplicate-file", operation, node);
+  }
+  if (canonicalPathHash(paths) !== signedPathHash) {
+    return reject(facts, "changed-path-hash-mismatch", operation, node);
+  }
+  const operationPolicy = facts.registry.operations[operation];
+  const enabled = operationPolicy.enabledRepositories.some(
+    (enabledRepo) => enabledRepo.toLowerCase() === repo
+  ) || operation === "deployment.declare" && childRepositoryBound && operationPolicy.enabledChildOwners?.some(
+    (owner) => owner.toLowerCase() === repo.split("/", 1)[0]
+  ) === true;
+  if (!enabled) return reject(facts, "operation-disabled", operation, node);
+  if (!facts.operationReplayVerified) {
+    return reject(facts, "operation-replay-failed", operation, node);
+  }
+  return {
+    eligible: true,
+    reason: "eligible",
+    headSha: facts.pr.headSha,
+    baseSha: facts.pr.baseSha,
+    operation,
+    node
+  };
+}
+
+// nodes/operator/app/src/shared/vcs/operator-change-replay.ts
+var import_node_crypto2 = require("crypto");
+
+// packages/repo-spec/dist/node-app-deployment.js
+var import_yaml = __toESM(require_dist(), 1);
+
+// packages/repo-spec/dist/node-app-deployment-v1.json
+var node_app_deployment_v1_default = {
+  spec: {
+    services: [
+      {
+        name: "app",
+        artifact: {
+          name: "app",
+          context: ".",
+          dockerfile: "Dockerfile",
+          target: "runner"
+        },
+        port: 3200,
+        visibility: "public",
+        runtime_profile: "cogni-node-app-v1",
+        bindings: {},
+        secret_refs: [],
+        bind_host: "0.0.0.0",
+        resources: {
+          cpu_units: 2,
+          memory_mi: 2048,
+          storage_mi: 4096
+        }
+      }
+    ]
+  },
+  yaml: "deployment:\n  services:\n    - name: app\n      artifact:\n        name: app\n        context: .\n        dockerfile: Dockerfile\n        target: runner\n      port: 3200\n      visibility: public\n      runtime_profile: cogni-node-app-v1\n      bindings: {}\n      bind_host: 0.0.0.0\n      resources:\n        cpu_units: 2\n        memory_mi: 2048\n        storage_mi: 4096\n"
+};
+
+// packages/repo-spec/dist/node-app-deployment.js
+var COGNI_NODE_APP_V1_SERVICE = node_app_deployment_v1_default.spec.services[0];
+var COGNI_NODE_APP_V1_DEPLOYMENT = node_app_deployment_v1_default.spec;
+var LEGACY_DEFAULT_NODE_DEPLOYMENT = {
+  services: [{ ...COGNI_NODE_APP_V1_SERVICE, secret_refs: [] }]
+};
+function renderNodeDeploymentYaml(deployment = COGNI_NODE_APP_V1_DEPLOYMENT) {
+  if (deployment === COGNI_NODE_APP_V1_DEPLOYMENT) {
+    return node_app_deployment_v1_default.yaml;
+  }
+  const services = deployment.services.map((service) => {
+    if (service.secret_refs.length > 0)
+      return service;
+    const { secret_refs: _omit, ...rest } = service;
+    return rest;
+  });
+  return (0, import_yaml.stringify)({ deployment: { ...deployment, services } }, {
+    lineWidth: 0
+  });
+}
+
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
@@ -11378,617 +11640,13 @@ var coerce = {
 };
 var NEVER = INVALID;
 
-// packages/repo-spec/src/parse.ts
-var import_yaml = __toESM(require_dist(), 1);
-
-// packages/repo-spec/src/schema.ts
-var creditsTopupSpecSchema = external_exports.object({
-  /** Payment provider identifier (e.g., "cogni-usdc-backend-v1") */
-  provider: external_exports.string().min(1, "Provider must be a non-empty string"),
-  /** EVM address receiving inbound payments (DAO wallet) */
-  receiving_address: external_exports.string().regex(
-    /^0x[a-fA-F0-9]{40}$/,
-    "Receiving address must be a valid EVM address (0x + 40 hex chars)"
-  ),
-  /** Optional: Informational list of chain names (not enforced by schema) */
-  allowed_chains: external_exports.array(external_exports.string()).optional(),
-  /** Optional: Informational list of token names (not enforced by schema) */
-  allowed_tokens: external_exports.array(external_exports.string()).optional(),
-  /**
-   * Purchase-side price markup multiplier (governance config; was env USER_PRICE_MARKUP_FACTOR).
-   * Drives the OpenRouter top-up amount and the 0xSplits allocation (DAO margin).
-   * Default is tuned for a 95% provider top-up / 5% DAO Split margin with a 5% provider fee:
-   * 1 / (0.95 top-up share × 0.95 fee complement). Distinct from spend-side LLM markup.
-   */
-  markup_factor: external_exports.number().min(1).default(1.10803324099723),
-  /**
-   * Fraction of purchased credits minted as a system-tenant (DAO) bonus (0–1).
-   * Default 0 = no system-account credit increase (the DAO earns USDC margin via the
-   * Split, not free minted AI credits). New nodes inherit 0; a node opts back in explicitly.
-   */
-  revenue_share: external_exports.number().min(0).max(1).default(0)
-});
-var evmAddressSchema = external_exports.string().regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address");
-var governanceScheduleSchema = external_exports.object({
-  /** Charter name (e.g., COMMUNITY, ENGINEERING, SUSTAINABILITY, GOVERN) */
-  charter: external_exports.string().min(1, "Charter must be non-empty"),
-  /** 5-field cron expression (minute hour day month weekday) */
-  cron: external_exports.string().regex(
-    /^(\S+\s+){4}\S+$/,
-    "Cron must be a 5-field expression (minute hour day month weekday)"
-  ),
-  /** IANA timezone (defaults to UTC) */
-  timezone: external_exports.string().default("UTC"),
-  /** Trigger word sent to the sandbox agent (single token, no spaces) */
-  entrypoint: external_exports.string().regex(/^\S+$/, "Entrypoint must be a single token (no spaces)")
-});
-var governanceSpecSchema = external_exports.object({
-  /** Chain ID as string or number (YAML flexibility); normalized to string. */
-  chain_id: external_exports.union([external_exports.string(), external_exports.number()]).transform((v) => String(v)).optional(),
-  /** DAO contract address (EVM 0x-prefixed, 40 hex chars) */
-  dao_contract: external_exports.string().regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address").optional(),
-  /** Aragon voting plugin contract address */
-  plugin_contract: external_exports.string().regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address").optional(),
-  /** CogniSignal contract address */
-  signal_contract: evmAddressSchema.optional(),
-  /** Aragon GovernanceERC20 token address used for contributor distributions */
-  token_contract: evmAddressSchema.optional(),
-  /** DAO-controlled holder/vault containing minted token inventory for emissions */
-  emissions_holder: evmAddressSchema.optional(),
-  /** Proposal launcher base URL (for deep links) */
-  base_url: external_exports.string().url().optional(),
-  /** Governance council schedules (cron-triggered charters) */
-  schedules: external_exports.array(governanceScheduleSchema).default([]).refine(
-    (arr) => new Set(arr.map((s) => s.charter.toLowerCase())).size === arr.length,
-    { message: "Duplicate charter names in governance.schedules" }
-  )
-});
-var nodeScheduleSchema = external_exports.object({
-  /** Stable schedule id — derives scheduleId + workflowId. Lowercase kebab token. */
-  id: external_exports.string().regex(
-    /^[a-z][a-z0-9-]{0,63}$/,
-    "id must be a lowercase kebab token (max 64 chars)"
-  ),
-  /** 5-field cron expression (minute hour day month weekday) */
-  cron: external_exports.string().regex(
-    /^(\S+\s+){4}\S+$/,
-    "Cron must be a 5-field expression (minute hour day month weekday)"
-  ),
-  /** IANA timezone (defaults to UTC) */
-  timezone: external_exports.string().default("UTC"),
-  /**
-   * Relative HTTP route on the node's OWN host (http-dispatch). The operator
-   * dispatches POST {nodeUrl}{route} under the node's tenant principal. Mutually
-   * exclusive with `graph`. Must be a leading-slash relative path (no host, no scheme).
-   */
-  route: external_exports.string().regex(
-    /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/,
-    "route must be a relative path beginning with '/' on the node's own host (no scheme/host)"
-  ).optional(),
-  /** Graph id to execute (graph run → GraphRunWorkflow). Mutually exclusive with `route`. */
-  graph: external_exports.string().min(1).optional(),
-  /**
-   * Opaque job payload forwarded verbatim to the node's route / graph input.
-   * The operator never interprets it; the node's handler owns its meaning.
-   */
-  payload: external_exports.record(external_exports.string(), external_exports.unknown()).default({})
-}).strict().superRefine((entry, ctx) => {
-  const hasRoute = entry.route !== void 0;
-  const hasGraph = entry.graph !== void 0;
-  if (hasRoute === hasGraph) {
-    ctx.addIssue({
-      code: "custom",
-      message: "Exactly one of `route` (http-dispatch) or `graph` (graph run) must be set per schedule"
-    });
-  }
-  if (hasRoute && entry.route && /^[a-z][a-z0-9+.-]*:\/\//i.test(entry.route)) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["route"],
-      message: "route must not be an absolute URL \u2014 relative path on the node's own host only"
-    });
-  }
-});
-var nodeSchedulesSchema = external_exports.array(nodeScheduleSchema).default([]).refine((arr) => new Set(arr.map((s) => s.id)).size === arr.length, {
-  message: "Duplicate schedule ids in schedules[]"
-});
-var serviceNameSchema = external_exports.string().regex(
-  /^[a-z][a-z0-9-]{0,62}$/,
-  "service and artifact names must be DNS-safe lowercase tokens (max 63 chars)"
-);
-var deploymentEnvNameSchema = external_exports.enum([
-  "candidate-a",
-  "preview",
-  "production"
-]);
-var serviceEnvKeySchema = external_exports.string().regex(
-  /^[A-Z][A-Z0-9_]{0,63}$/,
-  "service environment keys must be uppercase names"
-);
-var nodeServiceSecretRefSchema = external_exports.object({ key: serviceEnvKeySchema }).strict();
-var relativeBuildPathSchema = external_exports.string().min(1).max(256).refine(
-  (value) => !value.startsWith("/") && !value.includes("\\") && !value.split("/").includes(".."),
-  "build paths must be repo-relative and must not traverse parents"
-);
-var nodeServiceArtifactSchema = external_exports.object({
-  /** Stable logical artifact identity; becomes the bundle lookup key. */
-  name: serviceNameSchema,
-  /** Docker build context, relative to the source repository root. */
-  context: relativeBuildPathSchema.default("."),
-  /** Dockerfile path, relative to the source repository root. */
-  dockerfile: relativeBuildPathSchema.default("Dockerfile"),
-  /** Optional multi-stage Docker target. */
-  target: external_exports.string().min(1).max(128).optional()
-}).strict();
-var nodeServiceResourcesSchema = external_exports.object({
-  // Broad sanity bounds prevent malformed requests; environment/provider
-  // admission policy owns practical quotas and may be much smaller.
-  cpu_units: external_exports.number().min(0.1).max(64),
-  memory_mi: external_exports.number().int().min(128).max(262144),
-  storage_mi: external_exports.number().int().min(128).max(1048576)
-}).strict();
-var nodeServiceRuntimeProfileSchema = external_exports.literal("cogni-node-app-v1");
-var nodeServiceSpecSchema = external_exports.object({
-  name: serviceNameSchema,
-  artifact: nodeServiceArtifactSchema,
-  command: external_exports.array(external_exports.string().min(1).max(1024)).min(1).max(32).optional(),
-  args: external_exports.array(external_exports.string().max(1024)).max(32).optional(),
-  port: external_exports.number().int().min(1).max(65535),
-  visibility: external_exports.enum(["public", "private"]),
-  /**
-   * Optional per-service deployment-environment allow-list (story.5043). ABSENT = deploy to
-   * every environment (fully backward-compatible; every existing service omits it). When
-   * present it must be a NON-EMPTY list of valid environment names; the service is then
-   * materialized ONLY into the listed environments and DROPPED from the workload in the rest.
-   * This is how a private sidecar (e.g. a paper-trader) stays out of `production` so prod
-   * remains a 1-service lease while the sidecar still runs in `candidate-a`/`preview`. Only a
-   * PRIVATE service may carry it — the sole public service must reach every environment, so
-   * gating it out would break ONE_PUBLIC_SERVICE (rejected in the deployment refinement below).
-   */
-  envs: external_exports.array(deploymentEnvNameSchema).min(1).optional(),
-  /** Explicit non-provider compatibility selector; absent stays generic. */
-  runtime_profile: nodeServiceRuntimeProfileSchema.optional(),
-  /**
-   * Service topology owned in Git: environment variable → sibling service.
-   * Assembly resolves each target to http://<service>:<declared-port>; values
-   * cannot carry arbitrary URLs or secrets.
-   */
-  bindings: external_exports.record(serviceEnvKeySchema, serviceNameSchema).refine((bindings) => Object.keys(bindings).length <= 16, {
-    message: "A service may declare at most 16 sibling bindings"
-  }).default({}),
-  /** Value-free logical secret needs; scope is derived outside Git. */
-  secret_refs: external_exports.array(nodeServiceSecretRefSchema).max(32).refine(
-    (refs) => new Set(refs.map((ref) => ref.key)).size === refs.length,
-    "secret_refs keys must be unique"
-  ).default([]),
-  bind_host: external_exports.literal("0.0.0.0").default("0.0.0.0"),
-  /** Explicit for every declared service; environment policy owns recommended sizes. */
-  resources: nodeServiceResourcesSchema
-}).strict();
-var nodeDeploymentSchema = external_exports.object({
-  services: external_exports.array(nodeServiceSpecSchema).min(1).max(8)
-}).strict().superRefine((deployment, ctx) => {
-  const serviceNames = deployment.services.map((service) => service.name);
-  if (new Set(serviceNames).size !== serviceNames.length) {
-    ctx.addIssue({
-      code: "custom",
-      message: "Duplicate deployment service names"
-    });
-  }
-  const artifactsByName = /* @__PURE__ */ new Map();
-  deployment.services.forEach((service, index) => {
-    const prior = artifactsByName.get(service.artifact.name);
-    if (prior && (prior.context !== service.artifact.context || prior.dockerfile !== service.artifact.dockerfile || prior.target !== service.artifact.target)) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["services", index, "artifact"],
-        message: "Services reusing an artifact name must use identical build instructions"
-      });
-    } else {
-      artifactsByName.set(service.artifact.name, service.artifact);
-    }
-    const bindingKeys = new Set(Object.keys(service.bindings));
-    const conflictingSecret = service.secret_refs.find(
-      (ref) => bindingKeys.has(ref.key)
-    );
-    if (conflictingSecret) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["services", index, "secret_refs"],
-        message: `${conflictingSecret.key} cannot be both a sibling binding and a secret ref`
-      });
-    }
-  });
-  if (deployment.services.filter((service) => service.visibility === "public").length !== 1) {
-    ctx.addIssue({
-      code: "custom",
-      message: "deployment.services must contain exactly one public service"
-    });
-  }
-  deployment.services.forEach((service, index) => {
-    if (service.visibility === "private" && service.runtime_profile) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["services", index, "runtime_profile"],
-        message: "cogni-node-app-v1 runtime_profile requires the public service"
-      });
-    }
-    if (service.visibility === "public" && service.envs) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["services", index, "envs"],
-        message: "the public service must deploy to every environment and cannot declare `envs`"
-      });
-    }
-    Object.entries(service.bindings).forEach(([envName, target]) => {
-      if (target === service.name) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["services", index, "bindings", envName],
-          message: "A service binding cannot target itself"
-        });
-      } else if (!serviceNames.includes(target)) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["services", index, "bindings", envName],
-          message: `Service binding target is not declared: ${target}`
-        });
-      }
-    });
-  });
-});
-var activitySourceSpecSchema = external_exports.object({
-  /** Attribution pipeline profile ID (e.g., "cogni-v0.0") */
-  attribution_pipeline: external_exports.string().min(1),
-  /** External namespaces for cursor scoping (e.g., repo slugs) */
-  source_refs: external_exports.array(external_exports.string().min(1)).min(1),
-  /** Platform logins to exclude from attribution (e.g., automation bots) */
-  excluded_logins: external_exports.array(external_exports.string().min(1)).optional()
-});
-var poolConfigSpecSchema = external_exports.object({
-  /** Base issuance in credits (string → bigint). Governance-set budget per epoch. */
-  base_issuance_credits: external_exports.string().min(1, "base_issuance_credits must be a non-empty string")
-});
-var activityLedgerSpecSchema = external_exports.object({
-  /** Epoch length in days (1–90) */
-  epoch_length_days: external_exports.number().int().min(1).max(90),
-  /** EVM addresses allowed to mutate ledger data (allocations, pool components) */
-  approvers: external_exports.array(
-    external_exports.string().regex(
-      /^0x[a-fA-F0-9]{40}$/,
-      "Each approver must be a valid EVM address (0x + 40 hex chars)"
-    )
-  ).default([]),
-  /** Map of source name → source config */
-  activity_sources: external_exports.record(external_exports.string(), activitySourceSpecSchema),
-  /** Pool budget configuration (optional — defaults to 0 base issuance if missing) */
-  pool_config: poolConfigSpecSchema.optional()
-});
-var operatorWalletSpecSchema = external_exports.object({
-  /** Checksummed EVM address of the Privy-managed operator wallet */
-  address: external_exports.string().regex(
-    /^0x[a-fA-F0-9]{40}$/,
-    "Operator wallet address must be a valid EVM address (0x + 40 hex chars)"
-  )
-});
-var stewardWalletSpecSchema = external_exports.object({
-  /** Checksummed EVM address of the human-custodied steward wallet (USDC on Base). */
-  address: external_exports.string().regex(
-    /^0x[a-fA-F0-9]{40}$/,
-    "Steward wallet address must be a valid EVM address (0x + 40 hex chars)"
-  )
-});
-function isDoltHubRemoteUrl(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname === "doltremoteapi.dolthub.com" && url.username === "" && url.password === "" && url.search === "" && url.hash === "" && /^\/[^/]+\/[^/]+$/.test(url.pathname);
-  } catch {
-    return false;
-  }
-}
-var knowledgeRemoteSpecSchema = external_exports.object({
-  provider: external_exports.literal("dolthub"),
-  owner: external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/),
-  repo: external_exports.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
-  url: external_exports.string().refine(isDoltHubRemoteUrl, {
-    message: "DoltHub remote URL must be https://doltremoteapi.dolthub.com/<owner>/<repo> with no credentials"
-  }),
-  custody: external_exports.literal("cogni-owned")
-}).superRefine((remote, ctx) => {
-  if (remote.repo.startsWith("knowledge-")) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["repo"],
-      message: "knowledge.remote.repo must be the bare node slug \u2014 the legacy `knowledge-` prefix is retired"
-    });
-  }
-  let url;
-  try {
-    url = new URL(remote.url);
-  } catch {
-    return;
-  }
-  const expected = `/${remote.owner}/${remote.repo}`;
-  if (url.pathname !== expected) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["url"],
-      message: "DoltHub remote URL path must match knowledge.remote owner/repo"
-    });
-  }
-});
-var knowledgeSpecSchema = external_exports.object({
-  database: external_exports.string().regex(/^knowledge_[a-z][a-z0-9_]{0,63}$/),
-  remote: knowledgeRemoteSpecSchema
-});
-var comparisonOperators = ["gte", "gt", "lte", "lt", "eq"];
-var thresholdCriterionSchema = external_exports.object({
-  metric: external_exports.string().min(1)
-}).catchall(external_exports.number().min(0).max(1)).refine(
-  (obj) => {
-    const ops = Object.keys(obj).filter(
-      (k) => comparisonOperators.includes(k)
-    );
-    return ops.length === 1;
-  },
-  {
-    message: "Exactly one comparison operator (gte, gt, lte, lt, eq) required per threshold"
-  }
-);
-var successCriteriaSchema = external_exports.object({
-  /** If true, missing metrics result in neutral instead of fail. */
-  neutral_on_missing_metrics: external_exports.boolean().optional().default(false),
-  /** All criteria must pass. */
-  require: external_exports.array(thresholdCriterionSchema).optional(),
-  /** At least one criterion must pass. */
-  any_of: external_exports.array(thresholdCriterionSchema).optional()
-});
-var evaluationEntrySchema = external_exports.record(external_exports.string(), external_exports.string()).refine((obj) => Object.keys(obj).length === 1, {
-  message: "Each evaluation entry must have exactly one key (the metric name)"
-});
-var ruleSchema = external_exports.object({
-  id: external_exports.string().min(1),
-  schema_version: external_exports.string().optional(),
-  blocking: external_exports.boolean().optional().default(true),
-  workflow_id: external_exports.string().optional(),
-  evaluations: external_exports.array(evaluationEntrySchema).min(1),
-  success_criteria: successCriteriaSchema
-});
-var reviewLimitsGateSchema = external_exports.object({
-  type: external_exports.literal("review-limits"),
-  id: external_exports.string().optional(),
-  with: external_exports.object({
-    max_changed_files: external_exports.number().int().positive().optional(),
-    max_total_diff_kb: external_exports.number().positive().optional()
-  })
-});
-var aiRuleGateSchema = external_exports.object({
-  type: external_exports.literal("ai-rule"),
-  id: external_exports.string().optional(),
-  with: external_exports.object({
-    rule_file: external_exports.string().min(1)
-  })
-});
-var gateConfigSchema = external_exports.discriminatedUnion("type", [
-  reviewLimitsGateSchema,
-  aiRuleGateSchema
-]);
-var gatesArraySchema = external_exports.array(gateConfigSchema);
-var reviewConfigSchema = external_exports.object({
-  enabled: external_exports.boolean().optional().default(true),
-  model: external_exports.string().min(1).optional()
-});
-var scopeIdSchema = external_exports.string().uuid();
-var scopeKeySchema = external_exports.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
-var nodeRegistryEntrySchema = external_exports.object({
-  /** Node UUID — must match the node's own repo-spec node_id */
-  node_id: external_exports.string().uuid(),
-  /** Human-friendly display name (for logging, UI, dashboards) */
-  node_name: external_exports.string().min(1),
-  /** Path relative to repo root (e.g., "nodes/operator" for operator, "nodes/<slug>" for a child) */
-  path: external_exports.string().min(1),
-  /** Docker-internal endpoint for billing callback routing (optional — runtime config) */
-  endpoint: external_exports.string().optional()
-});
-var repoSpecSchema = external_exports.object({
-  /**
-   * Repo-spec schema version (e.g. "0.1.4"). Modeled explicitly rather than tolerated by
-   * `.passthrough()` — every spec carries it, so it is a declared field, not undeclared drift.
-   */
-  schema_version: external_exports.string().optional(),
-  /** Unique node identity — scopes all ledger tables. Generated once at init, never changes. */
-  node_id: external_exports.string().uuid("node_id must be a valid UUID"),
-  /**
-   * Human-facing node identity (display, not a key) — the SSOT a node self-describes from. `name` is
-   * the node slug (e.g. `operator`, `beacon`). The display layers, all projected to the node's public
-   * `/.well-known/agent.json` so the operator reads them rather than hardcoding (IDENTITY_IS_REPO_SPEC_PROJECTION):
-   *   - `hook`    — punchy ~5-word tagline shown on gallery cards / node-page headings.
-   *   - `mission` — the 1–3 sentence north-star the cognition substrate surfaces at session start.
-   *   - `brand`   — visual identity: `thumbnail` is a URL the NODE hosts (e.g. its OG image) so brand
-   *     stays sovereign + current with no operator asset-hosting; `color` tints the monogram fallback.
-   * All optional for back-compat (a node with only `name` falls back to title-cased slug + monogram).
-   */
-  intent: external_exports.object({
-    name: external_exports.string().min(1),
-    hook: external_exports.string().min(1).max(80).optional(),
-    mission: external_exports.string().min(1).optional(),
-    brand: external_exports.object({
-      // SSOT for the node's visual mark: a Lucide icon NAME (PascalCase, e.g. `Gamepad2`).
-      // ONE field, every surface reads it — app header, gallery card, og:image, favicon — so
-      // the icon is never hand-coded per-fork in AppHeader JSX again (that was the split-brain).
-      icon: external_exports.string().optional(),
-      // `color` tints the brand mark (icon + monogram fallback).
-      color: external_exports.string().optional(),
-      // Deprecated: a node-hosted image URL/path. Superseded by `icon` (which the node's
-      // /opengraph-image route renders to a PNG). Kept optional for back-compat during migration.
-      thumbnail: external_exports.string().optional()
-    }).optional()
-  }).passthrough().optional(),
-  /** Stable opaque scope UUID — DB FK, never changes. Optional for backward compat. */
-  scope_id: scopeIdSchema.optional(),
-  /** Human-friendly scope slug — for display, logs, schedule IDs. Optional for backward compat. */
-  scope_key: scopeKeySchema.optional(),
-  /** Activity ledger configuration (optional — needed only when LEDGER_INGEST is enabled) */
-  activity_ledger: activityLedgerSpecSchema.optional(),
-  /** Operator wallet configuration (optional — needed only when operator wallet is enabled) */
-  operator_wallet: operatorWalletSpecSchema.optional(),
-  /** Node-local knowledge plane declaration (optional for pre-knowledge nodes) */
-  knowledge: knowledgeSpecSchema.optional(),
-  /** Payment activation status — pending_activation until node:activate-payments completes */
-  payments: external_exports.object({
-    status: external_exports.enum(["pending_activation", "active"])
-  }).optional(),
-  /** Token distribution activation status — active only after DAO-controlled minted inventory is verified */
-  distributions: external_exports.object({
-    status: external_exports.enum(["pending_activation", "active"]),
-    claim_contract_pattern: external_exports.enum([
-      "uniswap.merkle-distributor.v1",
-      "1inch.cumulative-merkle-drop.v1"
-    ]).optional(),
-    /**
-     * The ONE cumulative Merkle distributor deployed for this node at
-     * distributions activation (R2). DAO-owned (ownership transferred to
-     * `governance.dao_contract` post-deploy). Epoch finalization (R3) resolves
-     * this address, calls `setMerkleRoot` per epoch, and mints only the delta —
-     * there is no per-epoch redeploy. Recorded once and treated as immutable.
-     */
-    distributor_address: evmAddressSchema.optional(),
-    /** Deploy transaction hash for the distributor (audit/provenance). */
-    distributor_deploy_tx: external_exports.string().regex(/^0x[0-9a-fA-F]{64}$/, "Invalid tx hash").optional()
-  }).optional(),
-  /** Payment configuration (optional — populated by node:activate-payments) */
-  payments_in: external_exports.object({
-    /** Inbound payment configuration for USDC credits top-up */
-    credits_topup: creditsTopupSpecSchema
-  }).optional(),
-  /**
-   * Outbound payment configuration (optional). Declares the human-custodied
-   * steward wallet that settles vendor invoices via manual crypto checkout.
-   * Besides the 0xSplits distribute, this is the operator wallet's only
-   * outbound destination (a single pinned address, funded by withdrawToSteward).
-   */
-  payments_out: external_exports.object({
-    /** Human-custodied wallet that settles vendor invoices (OpenRouter, Cherry). */
-    steward_wallet: stewardWalletSpecSchema
-  }).optional(),
-  /** Governance schedule configuration (optional — defaults to empty schedules) */
-  /**
-   * Unified governance section — DAO identity (contracts + chain) + council
-   * schedules. Required (every node declares its governance binding); inner
-   * fields optional so DAO identity can be incomplete pre-activation, and
-   * `schedules` defaults to [].
-   */
-  governance: governanceSpecSchema,
-  /**
-   * Node-facing recurring-work schedules (story.5008). The node declares
-   * recurring jobs; the operator reconciles them into Temporal Schedules under
-   * the node's tenant identity (see syncNodeSchedules). Optional — defaults to
-   * empty. Distinct from `governance.schedules` (operator charters): this is the
-   * node-author-facing contract (route XOR graph; no operator vocab leak).
-   */
-  schedules: nodeSchedulesSchema.optional().default([]),
-  /**
-   * Provider-neutral app-tier services. Omitted by existing nodes; the
-   * accessor supplies the legacy one-public-app default without requiring an
-   * author migration.
-   */
-  deployment: nodeDeploymentSchema.optional(),
-  /** PR review on/off + model selection (optional — defaults to enabled). */
-  review: reviewConfigSchema.optional(),
-  /** PR review gate configuration (optional — gates run in declared order). */
-  gates: gatesArraySchema.optional(),
-  /** Whether gate errors/timeouts result in failure instead of neutral. */
-  fail_on_error: external_exports.boolean().optional().default(false),
-  /** Node registry — operator-only. Declares child nodes in the monorepo. */
-  nodes: external_exports.array(nodeRegistryEntrySchema).optional()
-}).passthrough();
-
-// packages/repo-spec/src/parse.ts
-function parseRepoSpec(input) {
-  let parsed;
-  if (typeof input === "string") {
-    try {
-      parsed = (0, import_yaml.parse)(input);
-    } catch (error) {
-      throw new Error(
-        `[repo-spec] Failed to parse YAML: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  } else {
-    parsed = input;
-  }
-  const result = repoSpecSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new Error(
-      `[repo-spec] Invalid repo-spec structure: ${result.error.message}`
-    );
-  }
-  return result.data;
-}
-
-// nodes/operator/app/src/shared/vcs/operator-change-replay.ts
-var import_node_crypto = require("crypto");
-
-// packages/repo-spec/dist/node-app-deployment.js
-var import_yaml2 = __toESM(require_dist(), 1);
-
-// packages/repo-spec/dist/node-app-deployment-v1.json
-var node_app_deployment_v1_default = {
-  spec: {
-    services: [
-      {
-        name: "app",
-        artifact: {
-          name: "app",
-          context: ".",
-          dockerfile: "Dockerfile",
-          target: "runner"
-        },
-        port: 3200,
-        visibility: "public",
-        runtime_profile: "cogni-node-app-v1",
-        bindings: {},
-        secret_refs: [],
-        bind_host: "0.0.0.0",
-        resources: {
-          cpu_units: 2,
-          memory_mi: 2048,
-          storage_mi: 4096
-        }
-      }
-    ]
-  },
-  yaml: "deployment:\n  services:\n    - name: app\n      artifact:\n        name: app\n        context: .\n        dockerfile: Dockerfile\n        target: runner\n      port: 3200\n      visibility: public\n      runtime_profile: cogni-node-app-v1\n      bindings: {}\n      bind_host: 0.0.0.0\n      resources:\n        cpu_units: 2\n        memory_mi: 2048\n        storage_mi: 4096\n"
-};
-
-// packages/repo-spec/dist/node-app-deployment.js
-var COGNI_NODE_APP_V1_SERVICE = node_app_deployment_v1_default.spec.services[0];
-var COGNI_NODE_APP_V1_DEPLOYMENT = node_app_deployment_v1_default.spec;
-var LEGACY_DEFAULT_NODE_DEPLOYMENT = {
-  services: [{ ...COGNI_NODE_APP_V1_SERVICE, secret_refs: [] }]
-};
-function renderNodeDeploymentYaml(deployment = COGNI_NODE_APP_V1_DEPLOYMENT) {
-  if (deployment === COGNI_NODE_APP_V1_DEPLOYMENT) {
-    return node_app_deployment_v1_default.yaml;
-  }
-  const services = deployment.services.map((service) => {
-    if (service.secret_refs.length > 0)
-      return service;
-    const { secret_refs: _omit, ...rest } = service;
-    return rest;
-  });
-  return (0, import_yaml2.stringify)({ deployment: { ...deployment, services } }, {
-    lineWidth: 0
-  });
-}
-
 // packages/repo-spec/dist/deployment-activation.js
-var import_yaml3 = __toESM(require_dist(), 1);
+var import_yaml2 = __toESM(require_dist(), 1);
 var TOP_LEVEL_DEPLOYMENT_KEY = /(^|\n)deployment:/;
 function hasDeploymentActivationSpec(spec) {
   let parsed;
   try {
-    parsed = (0, import_yaml3.parse)(spec);
+    parsed = (0, import_yaml2.parse)(spec);
   } catch {
     return false;
   }
@@ -12008,7 +11666,7 @@ ${renderNodeDeploymentYaml()}`;
 }
 
 // nodes/operator/app/src/shared/vcs/operator-change-replay.ts
-var import_yaml6 = __toESM(require_dist());
+var import_yaml5 = __toESM(require_dist());
 
 // nodes/operator/app/src/shared/node-app-scaffold/gens/envs.ts
 var NODE_DEPLOY_ENVS = [
@@ -12316,7 +11974,7 @@ ${nodeIdLine}`;
 }
 
 // nodes/operator/app/src/shared/node-app-scaffold/gens/distribution-activation.ts
-var import_yaml4 = __toESM(require_dist());
+var import_yaml3 = __toESM(require_dist());
 var DISTRIBUTION_CLAIM_CONTRACT_PATTERN = "1inch.cumulative-merkle-drop.v1";
 var DISTRIBUTIONS_BLOCK = `distributions:
   status: active
@@ -13230,16 +12888,16 @@ function nextFreeNodePort(catalogNodePorts) {
 }
 
 // nodes/operator/app/src/shared/node-app-scaffold/gens/payments-activation.ts
-var import_yaml5 = __toESM(require_dist());
+var import_yaml4 = __toESM(require_dist());
 
 // nodes/operator/app/src/shared/vcs/operator-change-replay.ts
-var SHA = /^[0-9a-f]{40}$/;
-var NODE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+var SHA2 = /^[0-9a-f]{40}$/;
+var NODE2 = /^[a-z0-9][a-z0-9-]{0,62}$/;
 var WALLET = /^0x[0-9a-fA-F]{40}$/;
 var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 async function replayOperatorChange(input) {
   try {
-    if (!NODE.test(input.node) || !SHA.test(input.baseSha) || !SHA.test(input.headSha)) {
+    if (!NODE2.test(input.node) || !SHA2.test(input.baseSha) || !SHA2.test(input.headSha)) {
       return failed("invalid-identity");
     }
     const envelope = parseTrailers(input.message);
@@ -13250,7 +12908,7 @@ async function replayOperatorChange(input) {
     if (sortedPaths.length !== input.paths.length)
       return failed("duplicate-path");
     const signedPathHash = envelope.get("Cogni-Changed-Paths-SHA256");
-    const actualPathHash = (0, import_node_crypto.createHash)("sha256").update(`${sortedPaths.join("\n")}
+    const actualPathHash = (0, import_node_crypto2.createHash)("sha256").update(`${sortedPaths.join("\n")}
 `).digest("hex");
     if (signedPathHash !== actualPathHash) return failed("path-hash-mismatch");
     const subject = input.message.split("\n", 1)[0] ?? "";
@@ -13380,7 +13038,7 @@ async function replayNodeRegister(input, envelope, subject) {
   const sourceSha = requiredTrailer(envelope, "Cogni-Source-SHA");
   const ownerWallet = requiredTrailer(envelope, "Cogni-Owner-Wallet");
   const repositoryOwner = input.repository.split("/", 1)[0];
-  if (!UUID.test(nodeId) || !SHA.test(sourceSha) || !WALLET.test(ownerWallet) || sourceRepo.toLowerCase() !== `https://github.com/${repositoryOwner}/${input.node}.git`.toLowerCase() || subject !== `feat(node): register ${input.node}`) {
+  if (!UUID.test(nodeId) || !SHA2.test(sourceSha) || !WALLET.test(ownerWallet) || sourceRepo.toLowerCase() !== `https://github.com/${repositoryOwner}/${input.node}.git`.toLowerCase() || subject !== `feat(node): register ${input.node}`) {
     throw new Error("invalid-register-envelope");
   }
   const catalogPaths = await input.reader.listPaths(
@@ -13469,7 +13127,7 @@ async function replayDeploymentDeclare(input, envelope, subject) {
   if (input.deploymentCatalog === void 0 || input.deploymentCatalog === null) {
     throw new Error("deployment-parent-catalog-missing");
   }
-  const parsedCatalog = (0, import_yaml6.parse)(input.deploymentCatalog);
+  const parsedCatalog = (0, import_yaml5.parse)(input.deploymentCatalog);
   if (parsedCatalog === null || typeof parsedCatalog !== "object" || Array.isArray(parsedCatalog)) {
     throw new Error("deployment-parent-catalog-invalid");
   }
@@ -13628,211 +13286,552 @@ function failed(reason) {
   return { verified: false, reason };
 }
 
-// nodes/operator/app/src/shared/vcs/operator-change-policy.ts
-var import_node_crypto2 = require("crypto");
-var OPERATOR_CHANGE_TYPE = "cogni.operator-change.v1";
-var SHA2 = /^[0-9a-f]{40}$/;
-var PATH_SHA = /^[0-9a-f]{64}$/;
-var NODE2 = /^[a-z0-9][a-z0-9-]{0,62}$/;
-var OPERATIONS = /* @__PURE__ */ new Set([
-  "env.membership",
-  "env.placement",
-  "env.region",
-  "node.register",
-  "deployment.declare"
+// packages/repo-spec/src/parse.ts
+var import_yaml6 = __toESM(require_dist(), 1);
+
+// packages/repo-spec/src/schema.ts
+var creditsTopupSpecSchema = external_exports.object({
+  /** Payment provider identifier (e.g., "cogni-usdc-backend-v1") */
+  provider: external_exports.string().min(1, "Provider must be a non-empty string"),
+  /** EVM address receiving inbound payments (DAO wallet) */
+  receiving_address: external_exports.string().regex(
+    /^0x[a-fA-F0-9]{40}$/,
+    "Receiving address must be a valid EVM address (0x + 40 hex chars)"
+  ),
+  /** Optional: Informational list of chain names (not enforced by schema) */
+  allowed_chains: external_exports.array(external_exports.string()).optional(),
+  /** Optional: Informational list of token names (not enforced by schema) */
+  allowed_tokens: external_exports.array(external_exports.string()).optional(),
+  /**
+   * Purchase-side price markup multiplier (governance config; was env USER_PRICE_MARKUP_FACTOR).
+   * Drives the OpenRouter top-up amount and the 0xSplits allocation (DAO margin).
+   * Default is tuned for a 95% provider top-up / 5% DAO Split margin with a 5% provider fee:
+   * 1 / (0.95 top-up share × 0.95 fee complement). Distinct from spend-side LLM markup.
+   */
+  markup_factor: external_exports.number().min(1).default(1.10803324099723),
+  /**
+   * Fraction of purchased credits minted as a system-tenant (DAO) bonus (0–1).
+   * Default 0 = no system-account credit increase (the DAO earns USDC margin via the
+   * Split, not free minted AI credits). New nodes inherit 0; a node opts back in explicitly.
+   */
+  revenue_share: external_exports.number().min(0).max(1).default(0)
+});
+var evmAddressSchema = external_exports.string().regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address");
+var governanceScheduleSchema = external_exports.object({
+  /** Charter name (e.g., COMMUNITY, ENGINEERING, SUSTAINABILITY, GOVERN) */
+  charter: external_exports.string().min(1, "Charter must be non-empty"),
+  /** 5-field cron expression (minute hour day month weekday) */
+  cron: external_exports.string().regex(
+    /^(\S+\s+){4}\S+$/,
+    "Cron must be a 5-field expression (minute hour day month weekday)"
+  ),
+  /** IANA timezone (defaults to UTC) */
+  timezone: external_exports.string().default("UTC"),
+  /** Trigger word sent to the sandbox agent (single token, no spaces) */
+  entrypoint: external_exports.string().regex(/^\S+$/, "Entrypoint must be a single token (no spaces)")
+});
+var governanceSpecSchema = external_exports.object({
+  /** Chain ID as string or number (YAML flexibility); normalized to string. */
+  chain_id: external_exports.union([external_exports.string(), external_exports.number()]).transform((v) => String(v)).optional(),
+  /** DAO contract address (EVM 0x-prefixed, 40 hex chars) */
+  dao_contract: external_exports.string().regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address").optional(),
+  /** Aragon voting plugin contract address */
+  plugin_contract: external_exports.string().regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address").optional(),
+  /** CogniSignal contract address */
+  signal_contract: evmAddressSchema.optional(),
+  /** Aragon GovernanceERC20 token address used for contributor distributions */
+  token_contract: evmAddressSchema.optional(),
+  /** DAO-controlled holder/vault containing minted token inventory for emissions */
+  emissions_holder: evmAddressSchema.optional(),
+  /** Proposal launcher base URL (for deep links) */
+  base_url: external_exports.string().url().optional(),
+  /** Governance council schedules (cron-triggered charters) */
+  schedules: external_exports.array(governanceScheduleSchema).default([]).refine(
+    (arr) => new Set(arr.map((s) => s.charter.toLowerCase())).size === arr.length,
+    { message: "Duplicate charter names in governance.schedules" }
+  )
+});
+var nodeScheduleSchema = external_exports.object({
+  /** Stable schedule id — derives scheduleId + workflowId. Lowercase kebab token. */
+  id: external_exports.string().regex(
+    /^[a-z][a-z0-9-]{0,63}$/,
+    "id must be a lowercase kebab token (max 64 chars)"
+  ),
+  /** 5-field cron expression (minute hour day month weekday) */
+  cron: external_exports.string().regex(
+    /^(\S+\s+){4}\S+$/,
+    "Cron must be a 5-field expression (minute hour day month weekday)"
+  ),
+  /** IANA timezone (defaults to UTC) */
+  timezone: external_exports.string().default("UTC"),
+  /**
+   * Relative HTTP route on the node's OWN host (http-dispatch). The operator
+   * dispatches POST {nodeUrl}{route} under the node's tenant principal. Mutually
+   * exclusive with `graph`. Must be a leading-slash relative path (no host, no scheme).
+   */
+  route: external_exports.string().regex(
+    /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/,
+    "route must be a relative path beginning with '/' on the node's own host (no scheme/host)"
+  ).optional(),
+  /** Graph id to execute (graph run → GraphRunWorkflow). Mutually exclusive with `route`. */
+  graph: external_exports.string().min(1).optional(),
+  /**
+   * Opaque job payload forwarded verbatim to the node's route / graph input.
+   * The operator never interprets it; the node's handler owns its meaning.
+   */
+  payload: external_exports.record(external_exports.string(), external_exports.unknown()).default({})
+}).strict().superRefine((entry, ctx) => {
+  const hasRoute = entry.route !== void 0;
+  const hasGraph = entry.graph !== void 0;
+  if (hasRoute === hasGraph) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Exactly one of `route` (http-dispatch) or `graph` (graph run) must be set per schedule"
+    });
+  }
+  if (hasRoute && entry.route && /^[a-z][a-z0-9+.-]*:\/\//i.test(entry.route)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["route"],
+      message: "route must not be an absolute URL \u2014 relative path on the node's own host only"
+    });
+  }
+});
+var nodeSchedulesSchema = external_exports.array(nodeScheduleSchema).default([]).refine((arr) => new Set(arr.map((s) => s.id)).size === arr.length, {
+  message: "Duplicate schedule ids in schedules[]"
+});
+var serviceNameSchema = external_exports.string().regex(
+  /^[a-z][a-z0-9-]{0,62}$/,
+  "service and artifact names must be DNS-safe lowercase tokens (max 63 chars)"
+);
+var deploymentEnvNameSchema = external_exports.enum([
+  "candidate-a",
+  "preview",
+  "production"
 ]);
-function reject(facts, reason, operation, node) {
-  return {
-    eligible: false,
-    reason,
-    headSha: facts.pr.headSha,
-    baseSha: facts.pr.baseSha,
-    ...operation ? { operation } : {},
-    ...node ? { node } : {}
-  };
-}
-function singleTrailer(message, key) {
-  const prefix = `${key}: `;
-  const values = trailerValues(message, key);
-  return values.length === 1 ? values[0] ?? null : null;
-}
-function trailerValues(message, key) {
-  const prefix = `${key}: `;
-  return message.split("\n").filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
-}
-function trailerCount(message) {
-  return message.split("\n").filter((line) => line.startsWith("Cogni-")).length;
-}
-function canonicalPathHash(paths) {
-  return (0, import_node_crypto2.createHash)("sha256").update(`${[...paths].sort().join("\n")}
-`).digest("hex");
-}
-function parseOperatorChangeRegistry(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return null;
+var serviceEnvKeySchema = external_exports.string().regex(
+  /^[A-Z][A-Z0-9_]{0,63}$/,
+  "service environment keys must be uppercase names"
+);
+var nodeServiceSecretRefSchema = external_exports.object({ key: serviceEnvKeySchema }).strict();
+var relativeBuildPathSchema = external_exports.string().min(1).max(256).refine(
+  (value) => !value.startsWith("/") && !value.includes("\\") && !value.split("/").includes(".."),
+  "build paths must be repo-relative and must not traverse parents"
+);
+var nodeServiceArtifactSchema = external_exports.object({
+  /** Stable logical artifact identity; becomes the bundle lookup key. */
+  name: serviceNameSchema,
+  /** Docker build context, relative to the source repository root. */
+  context: relativeBuildPathSchema.default("."),
+  /** Dockerfile path, relative to the source repository root. */
+  dockerfile: relativeBuildPathSchema.default("Dockerfile"),
+  /** Optional multi-stage Docker target. */
+  target: external_exports.string().min(1).max(128).optional()
+}).strict();
+var nodeServiceResourcesSchema = external_exports.object({
+  // Broad sanity bounds prevent malformed requests; environment/provider
+  // admission policy owns practical quotas and may be much smaller.
+  cpu_units: external_exports.number().min(0.1).max(64),
+  memory_mi: external_exports.number().int().min(128).max(262144),
+  storage_mi: external_exports.number().int().min(128).max(1048576)
+}).strict();
+var nodeServiceRuntimeProfileSchema = external_exports.literal("cogni-node-app-v1");
+var nodeServiceSpecSchema = external_exports.object({
+  name: serviceNameSchema,
+  artifact: nodeServiceArtifactSchema,
+  command: external_exports.array(external_exports.string().min(1).max(1024)).min(1).max(32).optional(),
+  args: external_exports.array(external_exports.string().max(1024)).max(32).optional(),
+  port: external_exports.number().int().min(1).max(65535),
+  visibility: external_exports.enum(["public", "private"]),
+  /**
+   * Optional per-service deployment-environment allow-list (story.5043). ABSENT = deploy to
+   * every environment (fully backward-compatible; every existing service omits it). When
+   * present it must be a NON-EMPTY list of valid environment names; the service is then
+   * materialized ONLY into the listed environments and DROPPED from the workload in the rest.
+   * This is how a private sidecar (e.g. a paper-trader) stays out of `production` so prod
+   * remains a 1-service lease while the sidecar still runs in `candidate-a`/`preview`. Only a
+   * PRIVATE service may carry it — the sole public service must reach every environment, so
+   * gating it out would break ONE_PUBLIC_SERVICE (rejected in the deployment refinement below).
+   */
+  envs: external_exports.array(deploymentEnvNameSchema).min(1).optional(),
+  /** Explicit non-provider compatibility selector; absent stays generic. */
+  runtime_profile: nodeServiceRuntimeProfileSchema.optional(),
+  /**
+   * Service topology owned in Git: environment variable → sibling service.
+   * Assembly resolves each target to http://<service>:<declared-port>; values
+   * cannot carry arbitrary URLs or secrets.
+   */
+  bindings: external_exports.record(serviceEnvKeySchema, serviceNameSchema).refine((bindings) => Object.keys(bindings).length <= 16, {
+    message: "A service may declare at most 16 sibling bindings"
+  }).default({}),
+  /** Value-free logical secret needs; scope is derived outside Git. */
+  secret_refs: external_exports.array(nodeServiceSecretRefSchema).max(32).refine(
+    (refs) => new Set(refs.map((ref) => ref.key)).size === refs.length,
+    "secret_refs keys must be unique"
+  ).default([]),
+  bind_host: external_exports.literal("0.0.0.0").default("0.0.0.0"),
+  /** Explicit for every declared service; environment policy owns recommended sizes. */
+  resources: nodeServiceResourcesSchema
+}).strict();
+var nodeDeploymentSchema = external_exports.object({
+  services: external_exports.array(nodeServiceSpecSchema).min(1).max(8)
+}).strict().superRefine((deployment, ctx) => {
+  const serviceNames = deployment.services.map((service) => service.name);
+  if (new Set(serviceNames).size !== serviceNames.length) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Duplicate deployment service names"
+    });
   }
-  const candidate = value;
-  if (candidate.version !== OPERATOR_CHANGE_TYPE) return null;
-  const repositories = candidate.repositories;
-  const childRepositoryApps = candidate.childRepositoryApps;
-  const operations = candidate.operations;
-  if (repositories === null || typeof repositories !== "object" || Array.isArray(repositories) || childRepositoryApps === null || typeof childRepositoryApps !== "object" || Array.isArray(childRepositoryApps) || operations === null || typeof operations !== "object" || Array.isArray(operations)) {
-    return null;
-  }
-  for (const identity of Object.values(repositories)) {
-    if (identity === null || typeof identity !== "object" || Array.isArray(identity) || typeof identity.botLogin !== "string" || !Number.isInteger(identity.botId)) {
-      return null;
+  const artifactsByName = /* @__PURE__ */ new Map();
+  deployment.services.forEach((service, index) => {
+    const prior = artifactsByName.get(service.artifact.name);
+    if (prior && (prior.context !== service.artifact.context || prior.dockerfile !== service.artifact.dockerfile || prior.target !== service.artifact.target)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["services", index, "artifact"],
+        message: "Services reusing an artifact name must use identical build instructions"
+      });
+    } else {
+      artifactsByName.set(service.artifact.name, service.artifact);
     }
-  }
-  for (const identity of Object.values(childRepositoryApps)) {
-    if (identity === null || typeof identity !== "object" || Array.isArray(identity) || typeof identity.botLogin !== "string" || !Number.isInteger(identity.botId)) {
-      return null;
+    const bindingKeys = new Set(Object.keys(service.bindings));
+    const conflictingSecret = service.secret_refs.find(
+      (ref) => bindingKeys.has(ref.key)
+    );
+    if (conflictingSecret) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["services", index, "secret_refs"],
+        message: `${conflictingSecret.key} cannot be both a sibling binding and a secret ref`
+      });
     }
+  });
+  if (deployment.services.filter((service) => service.visibility === "public").length !== 1) {
+    ctx.addIssue({
+      code: "custom",
+      message: "deployment.services must contain exactly one public service"
+    });
   }
-  for (const operation of OPERATIONS) {
-    const entry = operations[operation];
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry) || !Array.isArray(entry.enabledRepositories) || !entry.enabledRepositories.every(
-      (repo) => typeof repo === "string"
-    ) || typeof entry.verifier !== "string") {
-      return null;
+  deployment.services.forEach((service, index) => {
+    if (service.visibility === "private" && service.runtime_profile) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["services", index, "runtime_profile"],
+        message: "cogni-node-app-v1 runtime_profile requires the public service"
+      });
     }
-    const enabledChildOwners = entry.enabledChildOwners;
-    if (operation === "deployment.declare" && (!Array.isArray(enabledChildOwners) || !enabledChildOwners.every((owner) => typeof owner === "string")) || operation !== "deployment.declare" && enabledChildOwners !== void 0) {
-      return null;
+    if (service.visibility === "public" && service.envs) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["services", index, "envs"],
+        message: "the public service must deploy to every environment and cannot declare `envs`"
+      });
     }
-  }
-  return value;
-}
-function classifyOperatorChangeForMerge(facts) {
-  const repo = facts.repository.toLowerCase();
-  const message = facts.commit.message;
-  const changeTypes = trailerValues(message, "Cogni-Change-Type");
-  if (changeTypes.length === 0) {
-    return reject(facts, "reserved-envelope-not-claimed");
-  }
-  if (changeTypes.length !== 1 || changeTypes[0] !== OPERATOR_CHANGE_TYPE) {
-    return reject(facts, "invalid-change-type");
-  }
-  const operationValue = singleTrailer(message, "Cogni-Operation");
-  if (!operationValue || !OPERATIONS.has(operationValue)) {
-    return reject(facts, "duplicate-or-unlisted-operation");
-  }
-  const operation = operationValue;
-  const node = singleTrailer(message, "Cogni-Node");
-  const baseSha = singleTrailer(message, "Cogni-Base-SHA");
-  const signedPathHash = singleTrailer(message, "Cogni-Changed-Paths-SHA256");
-  if (!node || !NODE2.test(node))
-    return reject(facts, "invalid-node", operation);
-  let identity = facts.registry.repositories[repo];
-  let childRepositoryBound = false;
-  if (!identity && operation === "deployment.declare") {
-    const parts = repo.split("/");
-    const owner = parts[0];
-    const repoName = parts[1];
-    if (parts.length === 2 && owner && repoName === node && facts.repositoryNode === node) {
-      identity = facts.registry.childRepositoryApps[owner];
-      childRepositoryBound = identity !== void 0;
-    }
-  }
-  if (!identity) return reject(facts, "untrusted-repository", operation, node);
-  if (!baseSha || !SHA2.test(baseSha)) {
-    return reject(facts, "invalid-base-sha", operation, node);
-  }
-  if (!signedPathHash || !PATH_SHA.test(signedPathHash)) {
-    return reject(facts, "invalid-path-hash", operation, node);
-  }
-  if (facts.pr.state !== "open" || facts.pr.draft !== false || facts.pr.baseRef !== "main" || facts.pr.baseSha !== baseSha || facts.pr.headSha !== facts.expectedHeadSha || facts.commit.sha !== facts.expectedHeadSha || facts.pr.headRepoFullName?.toLowerCase() !== repo || facts.pr.commitCount !== 1 || facts.pr.userLogin !== identity.botLogin || facts.pr.userId !== identity.botId || facts.pr.userType !== "Bot") {
-    return reject(facts, "invalid-pr-identity", operation, node);
-  }
-  if (facts.commit.verified !== true || facts.commit.verificationReason !== "valid" || facts.commit.authorLogin !== identity.botLogin || facts.commit.authorId !== identity.botId || facts.commit.parents.length !== 1 || facts.commit.parents[0] !== baseSha) {
-    return reject(facts, "invalid-commit-signature", operation, node);
-  }
-  const subject = message.split("\n", 1)[0] ?? "";
-  let expectedTrailerCount;
-  switch (operation) {
-    case "env.membership": {
-      expectedTrailerCount = 8;
-      const env = singleTrailer(message, "Cogni-Environment");
-      const action = singleTrailer(message, "Cogni-Action");
-      const generation = singleTrailer(message, "Cogni-Lease-Generation");
-      if (!env?.match(/^(candidate-a|preview|production)$/) || !action?.match(/^(add|remove)$/) || !generation?.match(/^\d+$/) || facts.pr.headRef !== `cogni-operator/node-env-${node}-${env}` || subject !== `feat(node): ${action} ${node} ${action === "add" ? "to" : "from"} ${env}`) {
-        return reject(facts, "invalid-membership-envelope", operation, node);
+    Object.entries(service.bindings).forEach(([envName, target]) => {
+      if (target === service.name) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["services", index, "bindings", envName],
+          message: "A service binding cannot target itself"
+        });
+      } else if (!serviceNames.includes(target)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["services", index, "bindings", envName],
+          message: `Service binding target is not declared: ${target}`
+        });
       }
-      break;
+    });
+  });
+});
+var activitySourceSpecSchema = external_exports.object({
+  /** Attribution pipeline profile ID (e.g., "cogni-v0.0") */
+  attribution_pipeline: external_exports.string().min(1),
+  /** External namespaces for cursor scoping (e.g., repo slugs) */
+  source_refs: external_exports.array(external_exports.string().min(1)).min(1),
+  /** Platform logins to exclude from attribution (e.g., automation bots) */
+  excluded_logins: external_exports.array(external_exports.string().min(1)).optional()
+});
+var poolConfigSpecSchema = external_exports.object({
+  /** Base issuance in credits (string → bigint). Governance-set budget per epoch. */
+  base_issuance_credits: external_exports.string().min(1, "base_issuance_credits must be a non-empty string")
+});
+var activityLedgerSpecSchema = external_exports.object({
+  /** Epoch length in days (1–90) */
+  epoch_length_days: external_exports.number().int().min(1).max(90),
+  /** EVM addresses allowed to mutate ledger data (allocations, pool components) */
+  approvers: external_exports.array(
+    external_exports.string().regex(
+      /^0x[a-fA-F0-9]{40}$/,
+      "Each approver must be a valid EVM address (0x + 40 hex chars)"
+    )
+  ).default([]),
+  /** Map of source name → source config */
+  activity_sources: external_exports.record(external_exports.string(), activitySourceSpecSchema),
+  /** Pool budget configuration (optional — defaults to 0 base issuance if missing) */
+  pool_config: poolConfigSpecSchema.optional()
+});
+var operatorWalletSpecSchema = external_exports.object({
+  /** Checksummed EVM address of the Privy-managed operator wallet */
+  address: external_exports.string().regex(
+    /^0x[a-fA-F0-9]{40}$/,
+    "Operator wallet address must be a valid EVM address (0x + 40 hex chars)"
+  )
+});
+var stewardWalletSpecSchema = external_exports.object({
+  /** Checksummed EVM address of the human-custodied steward wallet (USDC on Base). */
+  address: external_exports.string().regex(
+    /^0x[a-fA-F0-9]{40}$/,
+    "Steward wallet address must be a valid EVM address (0x + 40 hex chars)"
+  )
+});
+function isDoltHubRemoteUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "doltremoteapi.dolthub.com" && url.username === "" && url.password === "" && url.search === "" && url.hash === "" && /^\/[^/]+\/[^/]+$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+var knowledgeRemoteSpecSchema = external_exports.object({
+  provider: external_exports.literal("dolthub"),
+  owner: external_exports.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/),
+  repo: external_exports.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+  url: external_exports.string().refine(isDoltHubRemoteUrl, {
+    message: "DoltHub remote URL must be https://doltremoteapi.dolthub.com/<owner>/<repo> with no credentials"
+  }),
+  custody: external_exports.literal("cogni-owned")
+}).superRefine((remote, ctx) => {
+  if (remote.repo.startsWith("knowledge-")) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["repo"],
+      message: "knowledge.remote.repo must be the bare node slug \u2014 the legacy `knowledge-` prefix is retired"
+    });
+  }
+  let url;
+  try {
+    url = new URL(remote.url);
+  } catch {
+    return;
+  }
+  const expected = `/${remote.owner}/${remote.repo}`;
+  if (url.pathname !== expected) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["url"],
+      message: "DoltHub remote URL path must match knowledge.remote owner/repo"
+    });
+  }
+});
+var knowledgeSpecSchema = external_exports.object({
+  database: external_exports.string().regex(/^knowledge_[a-z][a-z0-9_]{0,63}$/),
+  remote: knowledgeRemoteSpecSchema
+});
+var comparisonOperators = ["gte", "gt", "lte", "lt", "eq"];
+var thresholdCriterionSchema = external_exports.object({
+  metric: external_exports.string().min(1)
+}).catchall(external_exports.number().min(0).max(1)).refine(
+  (obj) => {
+    const ops = Object.keys(obj).filter(
+      (k) => comparisonOperators.includes(k)
+    );
+    return ops.length === 1;
+  },
+  {
+    message: "Exactly one comparison operator (gte, gt, lte, lt, eq) required per threshold"
+  }
+);
+var successCriteriaSchema = external_exports.object({
+  /** If true, missing metrics result in neutral instead of fail. */
+  neutral_on_missing_metrics: external_exports.boolean().optional().default(false),
+  /** All criteria must pass. */
+  require: external_exports.array(thresholdCriterionSchema).optional(),
+  /** At least one criterion must pass. */
+  any_of: external_exports.array(thresholdCriterionSchema).optional()
+});
+var evaluationEntrySchema = external_exports.record(external_exports.string(), external_exports.string()).refine((obj) => Object.keys(obj).length === 1, {
+  message: "Each evaluation entry must have exactly one key (the metric name)"
+});
+var ruleSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  schema_version: external_exports.string().optional(),
+  blocking: external_exports.boolean().optional().default(true),
+  workflow_id: external_exports.string().optional(),
+  evaluations: external_exports.array(evaluationEntrySchema).min(1),
+  success_criteria: successCriteriaSchema
+});
+var reviewLimitsGateSchema = external_exports.object({
+  type: external_exports.literal("review-limits"),
+  id: external_exports.string().optional(),
+  with: external_exports.object({
+    max_changed_files: external_exports.number().int().positive().optional(),
+    max_total_diff_kb: external_exports.number().positive().optional()
+  })
+});
+var aiRuleGateSchema = external_exports.object({
+  type: external_exports.literal("ai-rule"),
+  id: external_exports.string().optional(),
+  with: external_exports.object({
+    rule_file: external_exports.string().min(1)
+  })
+});
+var gateConfigSchema = external_exports.discriminatedUnion("type", [
+  reviewLimitsGateSchema,
+  aiRuleGateSchema
+]);
+var gatesArraySchema = external_exports.array(gateConfigSchema);
+var reviewConfigSchema = external_exports.object({
+  enabled: external_exports.boolean().optional().default(true),
+  model: external_exports.string().min(1).optional()
+});
+var scopeIdSchema = external_exports.string().uuid();
+var scopeKeySchema = external_exports.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
+var nodeRegistryEntrySchema = external_exports.object({
+  /** Node UUID — must match the node's own repo-spec node_id */
+  node_id: external_exports.string().uuid(),
+  /** Human-friendly display name (for logging, UI, dashboards) */
+  node_name: external_exports.string().min(1),
+  /** Path relative to repo root (e.g., "nodes/operator" for operator, "nodes/<slug>" for a child) */
+  path: external_exports.string().min(1),
+  /** Docker-internal endpoint for billing callback routing (optional — runtime config) */
+  endpoint: external_exports.string().optional()
+});
+var repoSpecSchema = external_exports.object({
+  /**
+   * Repo-spec schema version (e.g. "0.1.4"). Modeled explicitly rather than tolerated by
+   * `.passthrough()` — every spec carries it, so it is a declared field, not undeclared drift.
+   */
+  schema_version: external_exports.string().optional(),
+  /** Unique node identity — scopes all ledger tables. Generated once at init, never changes. */
+  node_id: external_exports.string().uuid("node_id must be a valid UUID"),
+  /**
+   * Human-facing node identity (display, not a key) — the SSOT a node self-describes from. `name` is
+   * the node slug (e.g. `operator`, `beacon`). The display layers, all projected to the node's public
+   * `/.well-known/agent.json` so the operator reads them rather than hardcoding (IDENTITY_IS_REPO_SPEC_PROJECTION):
+   *   - `hook`    — punchy ~5-word tagline shown on gallery cards / node-page headings.
+   *   - `mission` — the 1–3 sentence north-star the cognition substrate surfaces at session start.
+   *   - `brand`   — visual identity: `thumbnail` is a URL the NODE hosts (e.g. its OG image) so brand
+   *     stays sovereign + current with no operator asset-hosting; `color` tints the monogram fallback.
+   * All optional for back-compat (a node with only `name` falls back to title-cased slug + monogram).
+   */
+  intent: external_exports.object({
+    name: external_exports.string().min(1),
+    hook: external_exports.string().min(1).max(80).optional(),
+    mission: external_exports.string().min(1).optional(),
+    brand: external_exports.object({
+      // SSOT for the node's visual mark: a Lucide icon NAME (PascalCase, e.g. `Gamepad2`).
+      // ONE field, every surface reads it — app header, gallery card, og:image, favicon — so
+      // the icon is never hand-coded per-fork in AppHeader JSX again (that was the split-brain).
+      icon: external_exports.string().optional(),
+      // `color` tints the brand mark (icon + monogram fallback).
+      color: external_exports.string().optional(),
+      // Deprecated: a node-hosted image URL/path. Superseded by `icon` (which the node's
+      // /opengraph-image route renders to a PNG). Kept optional for back-compat during migration.
+      thumbnail: external_exports.string().optional()
+    }).optional()
+  }).passthrough().optional(),
+  /** Stable opaque scope UUID — DB FK, never changes. Optional for backward compat. */
+  scope_id: scopeIdSchema.optional(),
+  /** Human-friendly scope slug — for display, logs, schedule IDs. Optional for backward compat. */
+  scope_key: scopeKeySchema.optional(),
+  /** Activity ledger configuration (optional — needed only when LEDGER_INGEST is enabled) */
+  activity_ledger: activityLedgerSpecSchema.optional(),
+  /** Operator wallet configuration (optional — needed only when operator wallet is enabled) */
+  operator_wallet: operatorWalletSpecSchema.optional(),
+  /** Node-local knowledge plane declaration (optional for pre-knowledge nodes) */
+  knowledge: knowledgeSpecSchema.optional(),
+  /** Payment activation status — pending_activation until node:activate-payments completes */
+  payments: external_exports.object({
+    status: external_exports.enum(["pending_activation", "active"])
+  }).optional(),
+  /** Token distribution activation status — active only after DAO-controlled minted inventory is verified */
+  distributions: external_exports.object({
+    status: external_exports.enum(["pending_activation", "active"]),
+    claim_contract_pattern: external_exports.enum([
+      "uniswap.merkle-distributor.v1",
+      "1inch.cumulative-merkle-drop.v1"
+    ]).optional(),
+    /**
+     * The ONE cumulative Merkle distributor deployed for this node at
+     * distributions activation (R2). DAO-owned (ownership transferred to
+     * `governance.dao_contract` post-deploy). Epoch finalization (R3) resolves
+     * this address, calls `setMerkleRoot` per epoch, and mints only the delta —
+     * there is no per-epoch redeploy. Recorded once and treated as immutable.
+     */
+    distributor_address: evmAddressSchema.optional(),
+    /** Deploy transaction hash for the distributor (audit/provenance). */
+    distributor_deploy_tx: external_exports.string().regex(/^0x[0-9a-fA-F]{64}$/, "Invalid tx hash").optional()
+  }).optional(),
+  /** Payment configuration (optional — populated by node:activate-payments) */
+  payments_in: external_exports.object({
+    /** Inbound payment configuration for USDC credits top-up */
+    credits_topup: creditsTopupSpecSchema
+  }).optional(),
+  /**
+   * Outbound payment configuration (optional). Declares the human-custodied
+   * steward wallet that settles vendor invoices via manual crypto checkout.
+   * Besides the 0xSplits distribute, this is the operator wallet's only
+   * outbound destination (a single pinned address, funded by withdrawToSteward).
+   */
+  payments_out: external_exports.object({
+    /** Human-custodied wallet that settles vendor invoices (OpenRouter, Cherry). */
+    steward_wallet: stewardWalletSpecSchema
+  }).optional(),
+  /** Governance schedule configuration (optional — defaults to empty schedules) */
+  /**
+   * Unified governance section — DAO identity (contracts + chain) + council
+   * schedules. Required (every node declares its governance binding); inner
+   * fields optional so DAO identity can be incomplete pre-activation, and
+   * `schedules` defaults to [].
+   */
+  governance: governanceSpecSchema,
+  /**
+   * Node-facing recurring-work schedules (story.5008). The node declares
+   * recurring jobs; the operator reconciles them into Temporal Schedules under
+   * the node's tenant identity (see syncNodeSchedules). Optional — defaults to
+   * empty. Distinct from `governance.schedules` (operator charters): this is the
+   * node-author-facing contract (route XOR graph; no operator vocab leak).
+   */
+  schedules: nodeSchedulesSchema.optional().default([]),
+  /**
+   * Provider-neutral app-tier services. Omitted by existing nodes; the
+   * accessor supplies the legacy one-public-app default without requiring an
+   * author migration.
+   */
+  deployment: nodeDeploymentSchema.optional(),
+  /** PR review on/off + model selection (optional — defaults to enabled). */
+  review: reviewConfigSchema.optional(),
+  /** PR review gate configuration (optional — gates run in declared order). */
+  gates: gatesArraySchema.optional(),
+  /** Whether gate errors/timeouts result in failure instead of neutral. */
+  fail_on_error: external_exports.boolean().optional().default(false),
+  /** Node registry — operator-only. Declares child nodes in the monorepo. */
+  nodes: external_exports.array(nodeRegistryEntrySchema).optional()
+}).passthrough();
+
+// packages/repo-spec/src/parse.ts
+function parseRepoSpec(input) {
+  let parsed;
+  if (typeof input === "string") {
+    try {
+      parsed = (0, import_yaml6.parse)(input);
+    } catch (error) {
+      throw new Error(
+        `[repo-spec] Failed to parse YAML: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
-    case "env.placement": {
-      expectedTrailerCount = 7;
-      const env = singleTrailer(message, "Cogni-Environment");
-      const provider = singleTrailer(message, "Cogni-Provider");
-      if (!env?.match(/^(candidate-a|preview|production)$/) || !provider?.match(/^(k3s|akash)$/) || facts.pr.headRef !== `cogni-operator/node-placement-${node}-${env}` || subject !== `feat(node): place ${node} ${env} on ${provider}`) {
-        return reject(facts, "invalid-placement-envelope", operation, node);
-      }
-      break;
-    }
-    case "env.region": {
-      expectedTrailerCount = 8;
-      const env = singleTrailer(message, "Cogni-Environment");
-      const countries = singleTrailer(message, "Cogni-Countries");
-      const generation = singleTrailer(message, "Cogni-Lease-Generation");
-      if (!env?.match(/^(candidate-a|preview|production)$/) || !countries?.match(/^[A-Z]{2}(,[A-Z]{2})*$/) || !generation?.match(/^\d+$/) || facts.pr.headRef !== `cogni-operator/node-region-${node}-${env}` || subject !== `feat(node): require ${node} ${env} placement in ${countries.replaceAll(",", ", ")}`) {
-        return reject(facts, "invalid-region-envelope", operation, node);
-      }
-      break;
-    }
-    case "node.register": {
-      expectedTrailerCount = 9;
-      const nodeId = singleTrailer(message, "Cogni-Node-Id");
-      const sourceRepo = singleTrailer(message, "Cogni-Source-Repo");
-      const sourceSha = singleTrailer(message, "Cogni-Source-SHA");
-      const ownerWallet = singleTrailer(message, "Cogni-Owner-Wallet");
-      const fleetOwner = repo.split("/", 1)[0];
-      if (!nodeId?.match(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-      ) || !sourceSha?.match(SHA2) || !ownerWallet?.match(/^0x[0-9a-fA-F]{40}$/) || sourceRepo?.toLowerCase() !== `https://github.com/${fleetOwner}/${node}.git` || facts.pr.headRef !== `cogni-operator/node-register-${node}` || subject !== `feat(node): register ${node}`) {
-        return reject(facts, "invalid-register-envelope", operation, node);
-      }
-      break;
-    }
-    case "deployment.declare":
-      expectedTrailerCount = 5;
-      if (facts.pr.headRef !== `cogni-operator/declare-deployment-${node}` || subject !== `feat(deploy): declare ${node} node deployment`) {
-        return reject(facts, "invalid-deployment-envelope", operation, node);
-      }
-      break;
+  } else {
+    parsed = input;
   }
-  if (trailerCount(message) !== expectedTrailerCount) {
-    return reject(facts, "unexpected-or-duplicate-trailer", operation, node);
+  const result = repoSpecSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(
+      `[repo-spec] Invalid repo-spec structure: ${result.error.message}`
+    );
   }
-  if (facts.files.length === 0 || facts.files.length > 32 || facts.files.some(
-    (file) => file.previousFilename !== null || !["added", "modified", "removed"].includes(file.status)
-  )) {
-    return reject(facts, "invalid-file-metadata", operation, node);
-  }
-  const paths = facts.files.map((file) => file.filename);
-  if (new Set(paths).size !== paths.length) {
-    return reject(facts, "duplicate-file", operation, node);
-  }
-  if (canonicalPathHash(paths) !== signedPathHash) {
-    return reject(facts, "changed-path-hash-mismatch", operation, node);
-  }
-  const operationPolicy = facts.registry.operations[operation];
-  const enabled = operationPolicy.enabledRepositories.some(
-    (enabledRepo) => enabledRepo.toLowerCase() === repo
-  ) || operation === "deployment.declare" && childRepositoryBound && operationPolicy.enabledChildOwners?.some(
-    (owner) => owner.toLowerCase() === repo.split("/", 1)[0]
-  ) === true;
-  if (!enabled) return reject(facts, "operation-disabled", operation, node);
-  if (!facts.operationReplayVerified) {
-    return reject(facts, "operation-replay-failed", operation, node);
-  }
-  return {
-    eligible: true,
-    reason: "eligible",
-    headSha: facts.pr.headSha,
-    baseSha: facts.pr.baseSha,
-    operation,
-    node
-  };
+  return result.data;
 }
 
 // scripts/ci/operator-change-replay.ts
@@ -13946,13 +13945,14 @@ async function classifyFromEnvironment() {
   const claimed = classification.reason !== "reserved-envelope-not-claimed";
   const invalid = claimed && classification.reason !== "operation-disabled" && classification.reason !== "eligible";
   process.stdout.write(
-    [
+    `${[
       `eligible=${String(classification.eligible)}`,
       `claimed=${String(claimed)}`,
       `invalid=${String(invalid)}`,
       `operation=${classification.operation ?? "none"}`,
       `reason=${classification.reason}`
-    ].join("\n") + "\n"
+    ].join("\n")}
+`
   );
 }
 async function main() {
