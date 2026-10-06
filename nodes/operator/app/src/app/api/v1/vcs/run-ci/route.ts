@@ -168,13 +168,17 @@ export const POST = wrapRouteHandlerWithLogging(
     //     cannot push, so the approved gate CI alone yields no flightable image.
     //     The operator dispatches the SAME pr-build.yml (workflow_dispatch, trusted
     //     base-repo context) for the approved head → `sha-<headSha>`, which
-    //     candidate-flight then resolves. No new workflow; RBAC was the gate above.
+    //     candidate-flight then resolves. The checkout repository MUST be the resolved
+    //     base repo, not the contributor fork: GitHub's fork network makes the exact
+    //     approved SHA fetchable from the base repo, while the artifact bundle must
+    //     carry the catalog `source_repo` identity (bug.5373). No new workflow; RBAC
+    //     was the gate above.
     if (result.headRepo && result.headSha) {
       try {
         await deployPlane.dispatchPrBuild({
           owner,
           repo,
-          headRepo: result.headRepo,
+          headRepo: `${owner}/${repo}`,
           headSha: result.headSha,
           prNumber,
         });
