@@ -153,7 +153,7 @@ export function removeCaddyBlock(
   if (
     match.index + expected.length !== boundary ||
     lines.slice(match.index, match.index + expected.length).join("\n") !==
-    expected.join("\n")
+      expected.join("\n")
   ) {
     throw new Error(`Caddyfile block for node '${slug}' is not canonical`);
   }

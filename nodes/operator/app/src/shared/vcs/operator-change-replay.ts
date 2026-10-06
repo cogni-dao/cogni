@@ -534,7 +534,7 @@ async function planNodeRegister(
       )?.[1];
       const expectedUrl =
         patchEnv !== undefined &&
-        NODE_FORMATION_ENVS.includes(patchEnv as NodeFormationEnv)
+        (NODE_FORMATION_ENVS as readonly string[]).includes(patchEnv)
           ? nodeAppBaseUrl({
               slug: node,
               provider: "akash",

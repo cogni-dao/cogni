@@ -207,7 +207,8 @@ describe("replayOperatorChange", () => {
           "infra/catalog/zz-replay-fixture.yaml"
         );
         const nodePort = catalog.match(/^node_port:\s*(\d+)\s*$/m)?.[1];
-        if (nodePort === undefined) throw new Error("fixture node_port missing");
+        if (nodePort === undefined)
+          throw new Error("fixture node_port missing");
         head.set(
           path,
           requiredMapValue(head, path).replace(
@@ -238,8 +239,7 @@ describe("replayOperatorChange", () => {
       },
       (head: Map<string, string | null>) => {
         const path = "infra/k8s/argocd/appsets/production/kustomization.yaml";
-        const line =
-          "  - production-zz-replay-fixture-applicationset.yaml\n";
+        const line = "  - production-zz-replay-fixture-applicationset.yaml\n";
         head.set(path, requiredMapValue(head, path).replace(line, line + line));
       },
       (head: Map<string, string | null>) => {
