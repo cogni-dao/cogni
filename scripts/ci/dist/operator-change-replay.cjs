@@ -25842,7 +25842,7 @@ ${crossplaneEnvs.map((env) => `  ${env}: crossplane
   const leaseGenerationBlock = offCluster ? `lease_generation:
 ${envs.map((env) => `  ${env}: 0
 `).join("")}` : "";
-  const sourceShaLine = input.sourceSha ? `source_sha: ${input.sourceSha}
+  const sourceShaLine = input.sourceSha ? `source_sha: "${input.sourceSha}"
 ` : "";
   const sourceLines = input.sourceRepo ? `source_repo: ${input.sourceRepo}
 image_repository: ${input.imageRepository ?? imageRepositoryFromSourceRepo(input.sourceRepo)}
