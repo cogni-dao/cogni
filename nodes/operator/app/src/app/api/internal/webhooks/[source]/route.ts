@@ -324,7 +324,6 @@ export async function POST(
     if (source === "github" && eventType === "check_run") {
       await dispatchOperatorChangeAutoMerge(
         verified.payload,
-        env,
         container.vcsCapability,
         log
       );

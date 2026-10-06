@@ -133,8 +133,9 @@ visibility is not an API preflight gate; parent workflow and deploy-time image-p
 separate substrate concerns.
 
 4. **Subscribe to events:** Issues, Issue comment, Pull request, Pull request review, Push, Check run.
-   The verified Check run delivery drives the internal expected-head merge evaluation for eligible
-   `cogni.operator-change.v1` PRs; every disabled, unlisted, or ordinary PR is ignored.
+   The verified Check run delivery only wakes the internal expected-head merge evaluation. The
+   operator independently re-fetches and reclassifies the PR against parent-main policy; the check
+   name and producer grant no authority. Every disabled, unlisted, or ordinary PR is ignored.
 
 5. Click **Create GitHub App**. Note the **App ID**.
 

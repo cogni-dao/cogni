@@ -122,6 +122,16 @@ export interface ApproveWorkflowRunsResult {
   readonly message: string;
 }
 
+/** Independent operator-side classification of one exact generated PR head. */
+export interface OperatorChangeVerificationResult {
+  readonly eligible: boolean;
+  readonly reason: string;
+  readonly headSha: string;
+  readonly baseSha: string;
+  readonly operation?: string;
+  readonly node?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Capability interface
 // ---------------------------------------------------------------------------
@@ -149,6 +159,17 @@ export interface VcsCapability {
     repo: string;
     prNumber: number;
   }): Promise<CiStatusResult>;
+
+  /**
+   * Re-fetch and verify an operator-generated PR against trusted main-owned
+   * policy. Webhook fields and CI check names are wake-up signals only.
+   */
+  verifyOperatorChange(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    expectedHeadSha: string;
+  }): Promise<OperatorChangeVerificationResult>;
 
   /**
    * Merge a pull request.

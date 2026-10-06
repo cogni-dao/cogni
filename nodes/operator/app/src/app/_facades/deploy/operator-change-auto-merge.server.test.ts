@@ -11,14 +11,18 @@ const payload = {
   repository: { full_name: "cogni-test-org/cogni-monorepo" },
   check_run: { head_sha: headSha, pull_requests: [{ number: 42 }] },
 };
-const env = {
-  NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
-  NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
-} as never;
 const log = { info: vi.fn() } as never;
 
-function vcs(ready: boolean) {
+function vcs(eligible: boolean) {
   return {
+    verifyOperatorChange: vi.fn().mockResolvedValue({
+      eligible,
+      reason: eligible ? "eligible" : "untrusted-repository",
+      headSha,
+      baseSha: "b".repeat(40),
+      operation: "env.membership",
+      node: "spawny-boi",
+    }),
     getCiStatus: vi.fn().mockResolvedValue({
       headSha,
       baseSha: "b".repeat(40),
@@ -26,30 +30,34 @@ function vcs(ready: boolean) {
       headCommitMessage: `generated\n\nCogni-Base-SHA: ${"b".repeat(40)}`,
       pending: false,
       allGreen: true,
-      checks: ready
-        ? [
-            {
-              name: "operator-change-automerge-ready",
-              status: "completed",
-              conclusion: "success",
-            },
-          ]
-        : [],
+      checks: [
+        {
+          name: "operator-change-automerge-ready",
+          status: "completed",
+          conclusion: "success",
+        },
+      ],
     }),
     mergePr: vi.fn().mockResolvedValue({ merged: true, message: "Merged" }),
   } as unknown as VcsCapability;
 }
 
 describe("dispatchOperatorChangeAutoMerge", () => {
-  it("no-ops without the trusted eligible-head check", async () => {
+  it("rejects a forged ready check when operator reclassification fails", async () => {
     const capability = vcs(false);
-    await dispatchOperatorChangeAutoMerge(payload, env, capability, log);
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
+    expect(capability.verifyOperatorChange).toHaveBeenCalledWith({
+      owner: "cogni-test-org",
+      repo: "cogni-monorepo",
+      prNumber: 42,
+      expectedHeadSha: headSha,
+    });
     expect(capability.mergePr).not.toHaveBeenCalled();
   });
 
-  it("binds the internal bypass merge to the current expected head", async () => {
+  it("binds a reverified internal bypass merge to the current expected head", async () => {
     const capability = vcs(true);
-    await dispatchOperatorChangeAutoMerge(payload, env, capability, log);
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
     expect(capability.mergePr).toHaveBeenCalledWith({
       owner: "cogni-test-org",
       repo: "cogni-monorepo",

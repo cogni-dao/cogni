@@ -120,9 +120,10 @@ operator authority that owns generated deploy-state PRs without giving an agent 
 
 `min_entries_to_merge_wait_minutes: 0` removes only the idle batch timer for ordinary PRs. They still
 enter a serialized merge group, rebase on current `main`, and report the required checks there.
-The review App's ruleset bypass is not caller authority: `/vcs/merge` never requests it. Only the
-HMAC-verified internal generated-change handler can request it after the trusted ready check and all
-required checks are green, bound atomically to the expected head SHA.
+The review App's ruleset bypass is not caller authority: `/vcs/merge` never requests it. A verified
+`check_run` delivery only wakes the internal generated-change handler; no check name, conclusion, or
+producer grants authority. The handler independently re-fetches and reclassifies the exact head,
+then may request bypass after all required checks are green, bound atomically to that head SHA.
 
 ## Signed operator-change fast path
 
@@ -163,10 +164,13 @@ or a valid operation that is still disabled, runs full CI. A malformed reserved 
 Titles, labels, branch names, or copied PR bodies alone grant nothing.
 
 No caller receives bypass authority. `/api/v1/vcs/merge` always uses the ordinary developer/RBAC +
-merge-queue path. Only the operator's HMAC-verified internal `check_suite.completed` handler may
-consider a generated direct merge. It re-reads the PR, commit, current base, classifier result, and
-required checks, then submits GitHub's `sha: <expected-head>` merge precondition. A stale head or
-base fails; an unlisted, disabled, edited, or human PR no-ops into the normal queue.
+merge-queue path. The HMAC-verified internal `check_run.completed` handler treats the event only as
+a retry signal. `VcsCapability.verifyOperatorChange` then re-reads the PR, commit, file list, current
+base, and the configured parent repository's main-owned registry; re-checks exact App identity,
+signature, one-commit history, envelope, path hash, exact repository enablement, and the built-in
+operation replay; and only then reads required checks and submits GitHub's
+`sha: <expected-head>` merge precondition. A stale head or base, unlisted repository, disabled or
+unimplemented replay, edit, or human PR no-ops into the normal queue.
 
 > Migration note: a repo that previously had the queue enabled via the classic UI checkbox should keep the ruleset as the single source of truth — the ruleset is authoritative and the legacy checkbox can be cleared once the ruleset is confirmed live (`gh api repos/{repo}/rulesets`).
 
@@ -175,8 +179,10 @@ The operation-specific fields are: membership (`Environment`, `Action`), placeme
 `Lease-Generation`), registration (`Node-Id`, `Source-Repo`, `Source-SHA`), and deployment
 declaration (the common fields only). `node.register` remains disabled while its writer emits the
 executable compiled roster; the other 13 current formation files are deterministic replay targets.
-`deployment.declare` also remains disabled until the same trusted contract is installed and proven
-in child-node repositories.
+`deployment.declare` also remains disabled until node-template ships the trusted child-main
+classifier/identity contract. Its operator-side replay is already repo-agnostic but binds the exact
+webhook repository to `infra/catalog/<node>.yaml` `source_repo` on the trusted parent before replaying
+the single stock `.cogni/repo-spec.yaml` splice. No organization wildcard is accepted.
 
 ## GitLab vFuture Mapping
 

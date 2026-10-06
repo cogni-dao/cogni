@@ -3,30 +3,29 @@
 
 /**
  * Module: `@app/_facades/deploy/operator-change-auto-merge.server`
- * Purpose: Internal-only merge executor for a trusted operator-change-ready check.
+ * Purpose: Internal-only merge executor woken by a GitHub check completion.
  * Scope: Consumes an already HMAC-verified GitHub check_run payload. It exposes no HTTP or caller
  *   authority and never accepts a repository, PR, or SHA from an agent request.
  * Invariants:
  *   - INTERNAL_EVENT_ONLY: invoked only after webhook verification.
- *   - TRUSTED_READY_CHECK: direct merge requires a successful check produced only when the
- *     origin/main classifier returned eligible.
+ *   - CHECK_RUN_IS_WAKE_ONLY: no check name, conclusion, or producing App grants authority.
+ *   - TRUSTED_RECLASSIFICATION: the operator re-fetches and verifies the current PR, commit,
+ *     files, trusted-main registry, exact App identity/signature, and operation replay.
  *   - EXPECTED_HEAD_IS_ATOMIC: webhook head, current PR head, and GitHub merge precondition agree.
- *   - ALL_REQUIRED_CHECKS_GREEN: the ready proof is necessary but not sufficient.
+ *   - ALL_REQUIRED_CHECKS_GREEN: GitHub's required-context set must be satisfied independently.
  * Side-effects: GitHub reads and, for a fully eligible tree, one direct merge.
  * Links: docs/spec/merge-queue-config.md
  * @internal
  */
 
 import type { VcsCapability } from "@cogni/ai-tools";
-import type { ServerEnv } from "@/shared/env";
 import type { Logger } from "@/shared/observability";
 
-const READY_CHECK = "operator-change-automerge-ready";
 const SHA = /^[0-9a-f]{40}$/;
+const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 export async function dispatchOperatorChangeAutoMerge(
   payload: Record<string, unknown>,
-  env: ServerEnv,
   vcs: VcsCapability,
   log: Logger
 ): Promise<void> {
@@ -39,10 +38,9 @@ export async function dispatchOperatorChangeAutoMerge(
   const fullName = repository?.full_name;
   const headSha = checkRun?.head_sha;
   const prNumber = pullRequests?.[0]?.number;
-  const expectedRepo = `${env.NODE_SUBMODULE_PARENT_OWNER}/${env.NODE_SUBMODULE_PARENT_REPO}`;
   if (
     typeof fullName !== "string" ||
-    fullName.toLowerCase() !== expectedRepo.toLowerCase() ||
+    !REPOSITORY.test(fullName) ||
     typeof headSha !== "string" ||
     !SHA.test(headSha) ||
     typeof prNumber !== "number" ||
@@ -51,25 +49,20 @@ export async function dispatchOperatorChangeAutoMerge(
     return;
   }
   const [owner, repo] = fullName.split("/") as [string, string];
+  const proof = await vcs.verifyOperatorChange({
+    owner,
+    repo,
+    prNumber,
+    expectedHeadSha: headSha,
+  });
+  if (!proof.eligible || proof.headSha !== headSha) return;
+
   const ci = await vcs.getCiStatus({ owner, repo, prNumber });
-  const signedBaseMatches = ci.headCommitMessage
-    ?.split("\n")
-    .filter((line) => line.startsWith("Cogni-Base-SHA: "));
-  const ready = ci.checks.some(
-    (check) =>
-      check.name === READY_CHECK &&
-      check.status === "completed" &&
-      check.conclusion === "success"
-  );
   if (
     ci.headSha !== headSha ||
-    !ci.baseSha ||
-    ci.headParentSha !== ci.baseSha ||
-    signedBaseMatches?.length !== 1 ||
-    signedBaseMatches[0] !== `Cogni-Base-SHA: ${ci.baseSha}` ||
+    ci.baseSha !== proof.baseSha ||
     ci.pending ||
-    !ci.allGreen ||
-    !ready
+    !ci.allGreen
   ) {
     return;
   }
@@ -89,6 +82,8 @@ export async function dispatchOperatorChangeAutoMerge(
       repo,
       prNumber,
       headSha,
+      operation: proof.operation,
+      node: proof.node,
       merged: result.merged,
       status: result.status,
     },
