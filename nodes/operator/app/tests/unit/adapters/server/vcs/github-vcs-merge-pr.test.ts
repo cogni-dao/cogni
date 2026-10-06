@@ -535,7 +535,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
     });
   });
 
-  it("refuses a child CAS when protected parent policy main moved after verification", async () => {
+  it("recovers a child CAS when protected parent policy main moved after verification", async () => {
     const verifiedPolicyHeadSha = "d".repeat(40);
     const movedPolicyHeadSha = "e".repeat(40);
     onRequest = (route, params) => {
@@ -575,7 +575,10 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
         expectedHeadSha: headSha,
         expectedPolicyHeadSha: verifiedPolicyHeadSha,
       })
-    ).resolves.toMatchObject({ outcome: "terminal", status: 409 });
+    ).resolves.toMatchObject({
+      outcome: "retryable_or_ambiguous",
+      status: 409,
+    });
     expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
   });
 
@@ -1144,21 +1147,26 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
       }
       throw new Error(`Unhandled request route: ${route}`);
     };
-    const disabled = recoveryAdapter({ status: "conflict", reason: "unused" });
-    Object.assign(disabled, {
-      verifyOperatorChangeInternal: vi.fn().mockResolvedValue({
-        eligible: false,
-        reason: "operation-disabled",
-        headSha: losingHeadSha,
-        baseSha: signedBaseSha,
-      }),
-    });
-    await expect(
-      disabled.recoverOperatorChange(request)
-    ).resolves.toMatchObject({
-      status: "terminal",
-      reason: "losing-head-verification-failed:operation-disabled",
-    });
+    for (const policyReason of [
+      "operation-disabled",
+      "replay-error:deployment-parent-catalog-invalid",
+    ]) {
+      const disabled = recoveryAdapter({ status: "conflict", reason: "unused" });
+      Object.assign(disabled, {
+        verifyOperatorChangeInternal: vi.fn().mockResolvedValue({
+          eligible: false,
+          reason: policyReason,
+          headSha: losingHeadSha,
+          baseSha: signedBaseSha,
+        }),
+      });
+      await expect(
+        disabled.recoverOperatorChange(request)
+      ).resolves.toMatchObject({
+        status: "terminal",
+        reason: `losing-head-verification-failed:${policyReason}`,
+      });
+    }
     for (const reason of [
       "node-register-footprint-conflict",
       "recovery-depth-exhausted",

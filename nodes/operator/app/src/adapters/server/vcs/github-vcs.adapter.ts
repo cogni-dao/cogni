@@ -882,9 +882,10 @@ export class GitHubVcsAdapter implements VcsCapability {
         );
         if (currentPolicyMain.object.sha !== params.expectedPolicyHeadSha) {
           return {
-            outcome: "terminal",
+            outcome: "retryable_or_ambiguous",
             status: 409,
-            message: "Trusted operator-change policy snapshot changed",
+            message:
+              "Trusted operator-change policy snapshot changed before compare-and-swap",
           };
         }
       }

@@ -211,8 +211,10 @@ the built-in operation replay. Only then does it read required checks and submit
 generated-change capability with `expectedBaseSha`, `expectedHeadSha`, and
 `expectedPolicyHeadSha`. That capability re-fetches the open same-repository `main` PR and its exact
 one-parent commit. For a child repository it also re-resolves parent `main` immediately before the
-write and refuses a changed policy/catalog snapshot; for the parent repository the already-required
-target-main equality supplies the same snapshot check. It then moves `heads/main` to that head
+write. A changed policy/catalog snapshot performs no child write and starts the stable recovery
+workflow, which re-verifies fresh policy before retrying; disabled or invalid fresh policy remains
+terminal. For the parent repository the already-required target-main equality supplies the same
+snapshot check. It then moves `heads/main` to that head
 through GitHub's non-force ref update (`force:false`). This is the atomic base+head compare-and-swap:
 if another PR advances target main, the now-divergent update is rejected with 409/422 and the stale
 PR remains unmerged. GitHub records this direct-push reachability as an

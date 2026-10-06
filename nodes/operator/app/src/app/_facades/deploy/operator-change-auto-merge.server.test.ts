@@ -148,6 +148,25 @@ describe("dispatchOperatorChangeAutoMerge", () => {
     );
   });
 
+  it("starts exactly one stable recovery workflow when protected policy moved", async () => {
+    const capability = vcs(true);
+    vi.mocked(capability.fastForwardOperatorChange).mockResolvedValueOnce({
+      outcome: "retryable_or_ambiguous",
+      status: 409,
+      message:
+        "Trusted operator-change policy snapshot changed before compare-and-swap",
+    });
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
+    expect(temporal.start).toHaveBeenCalledOnce();
+    expect(temporal.start).toHaveBeenCalledWith(
+      "OperatorChangeRecoveryWorkflow",
+      expect.objectContaining({
+        workflowId: `operator-change-recovery:cogni-test-org/cogni-monorepo:${headSha}`,
+        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
+      })
+    );
+  });
+
   it("dispatches a fully reverified stale head without exposing stale merge authority", async () => {
     const capability = vcs(false);
     vi.mocked(capability.verifyOperatorChange).mockResolvedValueOnce({
