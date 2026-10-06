@@ -247,6 +247,15 @@ export function createAkashTxDispatcher(
                 found: observation.found,
                 resourceState: observation.resource?.state ?? null,
                 endpointCount: observation.resource?.endpoints.length ?? 0,
+                // bug.5377: endpointCount alone cannot explain a persistent serving=false.
+                // The host-routed probe rejects an IP-literal endpoint outright, and a vhost
+                // that routes to a different lease comes back as a source mismatch - both
+                // collapse into the same bare `false`, which is why spawny-boi's candidate-a
+                // lease sat at serving=false for hours while its public host served the
+                // EXACT expected sha. These are provider ingress URIs, not secrets (the same
+                // values are published in bug.5367); bounded so a many-endpoint lease cannot
+                // flood the line.
+                endpoints: observation.resource?.endpoints.slice(0, 4) ?? [],
                 serving: observation.serving ?? null,
               },
               "akash_tx_host_routed_probe_result"
