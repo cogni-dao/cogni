@@ -69,7 +69,7 @@ run_classifier "$tmpdir/unsigned.out"
 mkdir -p "$tmpdir/policy/scripts/ci/verifiers" "$tmpdir/policy/scripts/ci/dist"
 jq '.operations["env.membership"].enabledRepositories = ["cogni-dao/cogni"]' \
   "$REGISTRY" > "$tmpdir/policy/scripts/ci/operator-change-v1.allowlist.json"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$tmpdir/policy/scripts/ci/verifiers/verify-env-membership.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$tmpdir/policy/scripts/ci/verifiers/verify-operator-change.sh"
 printf '// pinned replay fixture\n' > "$tmpdir/policy/scripts/ci/dist/operator-change-replay.mjs"
 write_fixtures
 run_classifier "$tmpdir/pinned-policy.out" "" "$tmpdir/policy"
@@ -111,7 +111,7 @@ cp "$REPO_ROOT/packages/repo-spec/src/node-app-deployment-v1.json" \
   "$tmpdir/policy/packages/repo-spec/src/node-app-deployment-v1.json"
 jq '.operations["deployment.declare"].enabledChildOwners = ["cogni-dao"]' \
   "$REGISTRY" > "$tmpdir/policy/scripts/ci/operator-change-v1.allowlist.json"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$tmpdir/policy/scripts/ci/verifiers/verify-deployment-declare.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$tmpdir/policy/scripts/ci/verifiers/verify-operator-change.sh"
 GITHUB_OUTPUT="$tmpdir/enabled-child.out" EVENT_NAME=pull_request REPOSITORY="$child_repo" PR_NUMBER_PR=45 \
   PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/child-pr.json" \
   FAST_PATH_COMMIT_JSON="$tmpdir/child-commit.json" FAST_PATH_FILES_JSON="$tmpdir/child-files.json" \

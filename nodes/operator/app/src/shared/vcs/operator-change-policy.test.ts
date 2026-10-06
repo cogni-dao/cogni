@@ -44,7 +44,7 @@ const registry: OperatorChangeRegistry = {
   operations: {
     "env.membership": {
       enabledRepositories: [repository],
-      verifier: "scripts/ci/verifiers/verify-env-membership.sh",
+      verifier: "scripts/ci/verifiers/verify-operator-change.sh",
     },
     "env.placement": { enabledRepositories: [], verifier: "disabled" },
     "env.region": { enabledRepositories: [], verifier: "disabled" },

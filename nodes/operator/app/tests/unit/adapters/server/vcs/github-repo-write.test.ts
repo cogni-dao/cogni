@@ -2216,18 +2216,30 @@ node_port: 30200
       }),
     };
 
-    await expect(
-      makeWriter().openNodeSubmodulePr({
-        owner: "Cogni-DAO",
-        repo: "cogni",
-        slug: "atlas",
-        nodeId: "11111111-1111-4111-8111-111111111111",
-        ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
-        chainId: 8453,
-        nodeRepoUrl: "https://github.com/Cogni-DAO/atlas.git",
-        nodeRepoHeadSha: "0123456789012345678901234567890123456789",
-      })
-    ).resolves.toEqual({
+    const birthInput = {
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
+      chainId: 8453,
+      nodeRepoUrl: "https://github.com/Cogni-DAO/atlas.git",
+      nodeRepoHeadSha: "0123456789012345678901234567890123456789",
+    } as const;
+    const contentRoute = routeHandlers[
+      "GET /repos/{owner}/{repo}/contents/{path}"
+    ];
+    if (!contentRoute) throw new Error("missing content route fixture");
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
+      params.path === "infra/catalog/atlas.yaml"
+        ? { type: "file", encoding: "base64", content: encode("collision\n") }
+        : contentRoute(params);
+    await expect(makeWriter().openNodeSubmodulePr(birthInput)).rejects.toThrow(
+      "node-owned path already exists"
+    );
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = contentRoute;
+
+    await expect(makeWriter().openNodeSubmodulePr(birthInput)).resolves.toEqual({
       prNumber: 88,
       prUrl: "https://github.com/Cogni-DAO/cogni/pull/88",
     });

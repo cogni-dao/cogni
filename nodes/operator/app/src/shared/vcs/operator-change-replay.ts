@@ -21,6 +21,7 @@ import {
   nextFreeNodePort,
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
+  type NodeFormationEnv,
   parseCatalogPlacement,
   planEnvAddShape,
   schedulerEndpointPatchPath,
@@ -262,7 +263,7 @@ async function replayNodeRegister(
     const port = content?.match(/^node_port:\s*(\d+)\s*$/m)?.[1];
     if (port) usedPorts.push(Number(port));
   }
-  const controlEnvForBirth = (env: (typeof NODE_FORMATION_ENVS)[number]) =>
+  const controlEnvForBirth = (env: NodeFormationEnv) =>
     controlEnvFor(env, "akash", input.fleetControlEnv);
   const templateOverlayByEnv: Record<string, string> = {};
   const templateExternalSecretByEnv: Record<string, string> = {};
