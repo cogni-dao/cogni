@@ -4963,7 +4963,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
   /**
    * Create or repair the exact PR + standard-CI ruleset on a spawned node.
    * Idempotent by stable name: POST once, then PUT the full canonical payload on
-   * every retry so drift (including an added bypass actor or dropped check) is
+   * every retry so drift (including a wrong/extra bypass actor or dropped check) is
    * removed. Errors deliberately propagate: a 403 means the operator App lacks
    * `administration:write`, and formation must fail rather than report a repo born
    * without an independent GitHub merge backstop.
@@ -5007,7 +5007,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     // READBACK_IS_THE_PROOF. A 2xx only proves GitHub ACCEPTED the request — not that
     // the ACTIVE ruleset carries the exact target, enforcement, PR rule, required
-    // contexts and zero bypass actors. GitHub can normalize, silently drop a rule it
+    // contexts and exact bypass actors. GitHub can normalize, silently drop a rule it
     // does not recognise, or leave a pre-existing ruleset partially updated, and every
     // one of those states reports 2xx while the node is NOT protected. A node whose
     // protection we merely requested is indistinguishable from one that is protected,
