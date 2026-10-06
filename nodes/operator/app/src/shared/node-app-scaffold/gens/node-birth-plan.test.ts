@@ -31,16 +31,16 @@ describe("nodeBirthPathPlan", () => {
   it("inventories every current shared projection", () => {
     const plan = nodeBirthPathPlan({
       slug: "spawny-boi",
-      controlEnvFor: () => "candidate-a",
+      controlEnvFor: () => "production",
     });
 
     expect(plan.current).toEqual(
       [
         "infra/catalog/spawny-boi.yaml",
         "infra/compose/edge/configs/Caddyfile.tmpl",
-        "infra/k8s/argocd/appsets/candidate-a/candidate-a-spawny-boi-applicationset.yaml",
-        "infra/k8s/argocd/appsets/candidate-a/kustomization.yaml",
-        "infra/k8s/argocd/appsets/candidate-a/production-spawny-boi-applicationset.yaml",
+        "infra/k8s/argocd/appsets/production/candidate-a-spawny-boi-applicationset.yaml",
+        "infra/k8s/argocd/appsets/production/kustomization.yaml",
+        "infra/k8s/argocd/appsets/production/production-spawny-boi-applicationset.yaml",
         "infra/k8s/base/scheduler-worker/configmap.yaml",
         "infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml",
         "infra/k8s/overlays/candidate-a/spawny-boi/external-secret.yaml",
