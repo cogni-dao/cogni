@@ -27190,10 +27190,11 @@ async function planNodeRegister(input) {
       const patchEnv = path.match(
         /^infra\/k8s\/overlays\/([^/]+)\/scheduler-worker\/node-endpoints\.patch\.yaml$/
       )?.[1];
-      const expectedUrl = patchEnv !== void 0 && NODE_FORMATION_ENVS.includes(patchEnv) ? nodeAppBaseUrl({
+      const formationPatchEnv = patchEnv !== void 0 && NODE_FORMATION_ENVS.includes(patchEnv) ? patchEnv : null;
+      const expectedUrl = formationPatchEnv !== null ? nodeAppBaseUrl({
         slug: node,
         provider: "akash",
-        environment: patchEnv,
+        environment: formationPatchEnv,
         apexDomain: CANONICAL_DOMAIN_ROOT
       }) : `http://${node}-node-app:3000`;
       replayScheduler[path] = removeSchedulerEndpoint(
