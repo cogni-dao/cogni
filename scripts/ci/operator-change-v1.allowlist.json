@@ -39,6 +39,7 @@
     },
     "deployment.declare": {
       "enabledRepositories": [],
+      "enabledChildOwners": [],
       "verifier": "scripts/ci/verifiers/verify-deployment-declare.sh"
     }
   }

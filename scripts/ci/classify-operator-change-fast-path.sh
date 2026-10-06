@@ -117,6 +117,7 @@ jq -e --arg operation "$operation" '.operations[$operation] != null' "$registry_
 
 bot_login="$(jq -r --arg repo "$repository_key" '.repositories[$repo].botLogin // empty' "$registry_json")"
 bot_id="$(jq -r --arg repo "$repository_key" '.repositories[$repo].botId // empty' "$registry_json")"
+child_repository_bound=false
 if [[ -z "$bot_login" || ! "$bot_id" =~ ^[0-9]+$ ]]; then
   # Child repository names do not exist before mint. Only deployment.declare
   # may derive its exact repo identity from protected base repo-spec; this
@@ -135,6 +136,7 @@ if [[ -z "$bot_login" || ! "$bot_id" =~ ^[0-9]+$ ]]; then
   [[ "$repo_spec_node" == "$node" && "$repo_name" == "$node" ]] || reject_claim untrusted-repository
   bot_login="$(jq -r --arg owner "$repo_owner" '.childRepositoryApps[$owner].botLogin // empty' "$registry_json")"
   bot_id="$(jq -r --arg owner "$repo_owner" '.childRepositoryApps[$owner].botId // empty' "$registry_json")"
+  child_repository_bound=true
 fi
 [[ -n "$bot_login" && "$bot_id" =~ ^[0-9]+$ ]] || reject_claim untrusted-repository
 
@@ -216,6 +218,9 @@ if command -v sha256sum >/dev/null 2>&1; then actual_paths_hash="$(sha256sum "$c
 [[ "$actual_paths_hash" == "$signed_paths_hash" ]] || reject_claim changed-path-hash-mismatch
 
 enabled="$(jq -r --arg operation "$operation" --arg repo "$repository_key" '.operations[$operation].enabledRepositories | index($repo) != null' "$registry_json")"
+if [[ "$enabled" != true && "$operation" == deployment.declare && "$child_repository_bound" == true ]]; then
+  enabled="$(jq -r --arg operation "$operation" --arg owner "$repo_owner" '.operations[$operation].enabledChildOwners | index($owner) != null' "$registry_json")"
+fi
 [[ "$enabled" == true ]] || ordinary_claim operation-disabled
 
 verifier="$(jq -r --arg operation "$operation" '.operations[$operation].verifier // empty' "$registry_json")"

@@ -48,7 +48,11 @@ const registry: OperatorChangeRegistry = {
     "env.placement": { enabledRepositories: [], verifier: "disabled" },
     "env.region": { enabledRepositories: [], verifier: "disabled" },
     "node.register": { enabledRepositories: [], verifier: "disabled" },
-    "deployment.declare": { enabledRepositories: [], verifier: "disabled" },
+    "deployment.declare": {
+      enabledRepositories: [],
+      enabledChildOwners: [],
+      verifier: "disabled",
+    },
   },
 };
 
@@ -161,8 +165,49 @@ describe("classifyOperatorChangeForMerge", () => {
       eligible: false,
       reason: "operation-disabled",
     });
+    const childEnabledRegistry: OperatorChangeRegistry = {
+      ...registry,
+      operations: {
+        ...registry.operations,
+        "deployment.declare": {
+          ...registry.operations["deployment.declare"],
+          enabledChildOwners: ["cogni-test-org"],
+        },
+      },
+    };
+    expect(
+      classifyOperatorChangeForMerge({
+        ...input,
+        registry: childEnabledRegistry,
+      })
+    ).toMatchObject({ eligible: true, reason: "eligible" });
+    expect(
+      classifyOperatorChangeForMerge({
+        ...input,
+        registry: childEnabledRegistry,
+        operationReplayVerified: false,
+      })
+    ).toMatchObject({ eligible: false, reason: "operation-replay-failed" });
     expect(
       classifyOperatorChangeForMerge({ ...input, repositoryNode: "not-blue" })
     ).toMatchObject({ eligible: false, reason: "untrusted-repository" });
+    expect(
+      classifyOperatorChangeForMerge({
+        ...input,
+        repository: "other-org/blue",
+        pr: { ...input.pr, headRepoFullName: "other-org/blue" },
+        registry: childEnabledRegistry,
+      })
+    ).toMatchObject({ eligible: false, reason: "untrusted-repository" });
+
+    const wrongOperation = facts({
+      repository: childRepository,
+      repositoryNode: "blue",
+      pr: { ...facts().pr, headRepoFullName: childRepository },
+    });
+    expect(classifyOperatorChangeForMerge(wrongOperation)).toMatchObject({
+      eligible: false,
+      reason: "untrusted-repository",
+    });
   });
 });

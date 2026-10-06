@@ -101,6 +101,22 @@ GITHUB_OUTPUT="$tmpdir/child.out" EVENT_NAME=pull_request REPOSITORY="$child_rep
 [[ "$(value "$tmpdir/child.out" invalid)" == false ]]
 [[ "$(value "$tmpdir/child.out" reason)" == operation-disabled ]]
 
+# Explicit owner enablement can reach the pinned replay, but only after the
+# exact child binding above. This fixture verifier stands in for the separately
+# tested byte-exact deployment verifier.
+mkdir -p "$tmpdir/policy/packages/repo-spec/src"
+cp "$REPO_ROOT/packages/repo-spec/src/node-app-deployment-v1.json" \
+  "$tmpdir/policy/packages/repo-spec/src/node-app-deployment-v1.json"
+jq '.operations["deployment.declare"].enabledChildOwners = ["cogni-dao"]' \
+  "$REGISTRY" > "$tmpdir/policy/scripts/ci/operator-change-v1.allowlist.json"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$tmpdir/policy/scripts/ci/verifiers/verify-deployment-declare.sh"
+GITHUB_OUTPUT="$tmpdir/enabled-child.out" EVENT_NAME=pull_request REPOSITORY="$child_repo" PR_NUMBER_PR=45 \
+  PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/child-pr.json" \
+  FAST_PATH_COMMIT_JSON="$tmpdir/child-commit.json" FAST_PATH_FILES_JSON="$tmpdir/child-files.json" \
+  FAST_PATH_POLICY_ROOT="$tmpdir/policy" bash "$CLASSIFIER" >/dev/null
+[[ "$(value "$tmpdir/enabled-child.out" eligible)" == true ]]
+[[ "$(value "$tmpdir/enabled-child.out" reason)" == eligible ]]
+
 GITHUB_OUTPUT="$tmpdir/wrong-child.out" EVENT_NAME=pull_request REPOSITORY=Cogni-DAO/not-cogni-template PR_NUMBER_PR=44 \
   PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/child-pr.json" \
   FAST_PATH_COMMIT_JSON="$tmpdir/child-commit.json" FAST_PATH_FILES_JSON="$tmpdir/child-files.json" \
@@ -113,6 +129,8 @@ jq -e '
   .version == "cogni.operator-change.v1"
   and ([.operations | keys[]] | sort) == (["deployment.declare","env.membership","env.placement","env.region","node.register"] | sort)
   and all(.operations[]; .enabledRepositories == [])
+  and .operations["deployment.declare"].enabledChildOwners == []
+  and all(.operations | to_entries[]; .key == "deployment.declare" or (.value | has("enabledChildOwners") | not))
 ' "$REGISTRY" >/dev/null
 
 echo "classify-operator-change-fast-path tests passed"

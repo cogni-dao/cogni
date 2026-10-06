@@ -32,6 +32,8 @@ export interface OperatorChangeRegistry {
       OperatorChangeOperation,
       {
         readonly enabledRepositories: readonly string[];
+        /** deployment.declare only; exact child repo still comes from base repo-spec. */
+        readonly enabledChildOwners?: readonly string[];
         readonly verifier: string;
       }
     >
@@ -188,6 +190,16 @@ export function parseOperatorChangeRegistry(
     ) {
       return null;
     }
+    const enabledChildOwners = (entry as Record<string, unknown>)
+      .enabledChildOwners;
+    if (
+      (operation === "deployment.declare" &&
+        (!Array.isArray(enabledChildOwners) ||
+          !enabledChildOwners.every((owner) => typeof owner === "string"))) ||
+      (operation !== "deployment.declare" && enabledChildOwners !== undefined)
+    ) {
+      return null;
+    }
   }
   return value as OperatorChangeRegistry;
 }
@@ -220,6 +232,7 @@ export function classifyOperatorChangeForMerge(
     return reject(facts, "invalid-node", operation);
 
   let identity = facts.registry.repositories[repo];
+  let childRepositoryBound = false;
   if (!identity && operation === "deployment.declare") {
     const parts = repo.split("/");
     const owner = parts[0];
@@ -231,6 +244,7 @@ export function classifyOperatorChangeForMerge(
       facts.repositoryNode === node
     ) {
       identity = facts.registry.childRepositoryApps[owner];
+      childRepositoryBound = identity !== undefined;
     }
   }
   if (!identity) return reject(facts, "untrusted-repository", operation, node);
@@ -369,9 +383,16 @@ export function classifyOperatorChangeForMerge(
     return reject(facts, "changed-path-hash-mismatch", operation, node);
   }
 
-  const enabled = facts.registry.operations[operation].enabledRepositories.some(
-    (enabledRepo) => enabledRepo.toLowerCase() === repo
-  );
+  const operationPolicy = facts.registry.operations[operation];
+  const enabled =
+    operationPolicy.enabledRepositories.some(
+      (enabledRepo) => enabledRepo.toLowerCase() === repo
+    ) ||
+    (operation === "deployment.declare" &&
+      childRepositoryBound &&
+      operationPolicy.enabledChildOwners?.some(
+        (owner) => owner.toLowerCase() === repo.split("/", 1)[0]
+      ) === true);
   if (!enabled) return reject(facts, "operation-disabled", operation, node);
   if (!facts.operationReplayVerified) {
     return reject(facts, "operation-replay-failed", operation, node);
