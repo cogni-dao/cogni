@@ -41,5 +41,5 @@ export function operatorChangeRecoveryIdempotencyKey(
 export function operatorChangeRecoveryWorkflowId(
   input: RecoveryIdentity
 ): string {
-  return `operator-change-recovery:${operatorChangeRecoveryIdempotencyKey(input)}`;
+  return `operator-change-recovery:${input.owner.toLowerCase()}/${input.repo.toLowerCase()}:${input.losingHeadSha}`;
 }
