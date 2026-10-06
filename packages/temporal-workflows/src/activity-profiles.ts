@@ -42,3 +42,18 @@ export const GRAPH_EXECUTION_ACTIVITY_OPTIONS = {
   startToCloseTimeout: "15 minutes",
   retry: { maximumAttempts: 1 },
 } as const satisfies ActivityOptions;
+
+/**
+ * Operator-change recovery: one HTTP-delegated Activity, retried at most three
+ * times. Each attempt re-reads fresh GitHub state behind the operator route;
+ * the workflow itself never polls or loops.
+ */
+export const OPERATOR_CHANGE_RECOVERY_ACTIVITY_OPTIONS = {
+  startToCloseTimeout: "2 minutes",
+  retry: {
+    initialInterval: "2 seconds",
+    maximumInterval: "30 seconds",
+    backoffCoefficient: 2,
+    maximumAttempts: 3,
+  },
+} as const satisfies ActivityOptions;
