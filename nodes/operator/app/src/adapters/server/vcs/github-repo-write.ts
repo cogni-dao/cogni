@@ -3525,12 +3525,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
     );
 
     // The catalog row is the existence gate: a node absent from the catalog can't have its env-set edited.
-    const catalog = await this.fetchFileText({
+    const catalog = await this.readFileAt(
+      octokit,
       owner,
       repo,
-      path: `infra/catalog/${slug}.yaml`,
-      ref: "main",
-    });
+      `infra/catalog/${slug}.yaml`,
+      baseCommitSha
+    );
     if (catalog === null) {
       throw deployPlaneError(
         "node_not_in_catalog",
@@ -3573,7 +3574,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
       env,
       present,
       catalog,
-      shape
+      shape,
+      baseCommitSha
     );
 
     let plan: ReturnType<typeof buildEnvDeltaPlan>;
@@ -3678,12 +3680,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
       repo
     );
 
-    const catalog = await this.fetchFileText({
+    const catalog = await this.readFileAt(
+      octokit,
       owner,
       repo,
-      path: `infra/catalog/${slug}.yaml`,
-      ref: "main",
-    });
+      `infra/catalog/${slug}.yaml`,
+      baseCommitSha
+    );
     if (catalog === null) {
       throw deployPlaneError(
         "node_not_in_catalog",
@@ -3709,11 +3712,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
       appsetsKustomizationByEnv: {},
       publicDomainRoot: this.config.forkDomainRoot,
       schedulerEndpointPatchByEnv: {
-        [env]: await this.readFileOnMain(
+        [env]: await this.readFileAtRequired(
           octokit,
           owner,
           repo,
-          schedulerEndpointPatchPath(env)
+          schedulerEndpointPatchPath(env),
+          baseCommitSha
         ),
       },
     };
@@ -3792,12 +3796,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
       repo
     );
 
-    const catalog = await this.fetchFileText({
+    const catalog = await this.readFileAt(
+      octokit,
       owner,
       repo,
-      path: `infra/catalog/${slug}.yaml`,
-      ref: "main",
-    });
+      `infra/catalog/${slug}.yaml`,
+      baseCommitSha
+    );
     if (catalog === null) {
       throw deployPlaneError(
         "node_not_in_catalog",
@@ -3972,7 +3977,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
     env: NodeFormationEnv,
     present: boolean,
     catalog: string,
-    shape?: EnvAddShape
+    shape: EnvAddShape | undefined,
+    baseCommitSha: string
   ): Promise<EnvPlanCurrent> {
     const appsetsKustomizationByEnv: Record<string, string> = {};
     const templateOverlayByEnv: Record<string, string> = {};
@@ -3983,37 +3989,42 @@ export class GitHubRepoWriter implements DeployPlanePort {
       // routing patch for an akash lane), and the CONTROL env's appsets kustomization (bug.5204 —
       // for an akash non-production lane that is appsets/production/, not the workload env's dir).
       const controlEnv = shape?.controlEnv ?? env;
-      templateOverlayByEnv[env] = await this.readFileOnMain(
+      templateOverlayByEnv[env] = await this.readFileAtRequired(
         octokit,
         owner,
         repo,
-        `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/kustomization.yaml`
+        `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/kustomization.yaml`,
+        baseCommitSha
       );
-      templateExternalSecretByEnv[env] = await this.readFileOnMain(
+      templateExternalSecretByEnv[env] = await this.readFileAtRequired(
         octokit,
         owner,
         repo,
-        `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/external-secret.yaml`
+        `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/external-secret.yaml`,
+        baseCommitSha
       );
-      appsetsKustomizationByEnv[controlEnv] = await this.readFileOnMain(
+      appsetsKustomizationByEnv[controlEnv] = await this.readFileAtRequired(
         octokit,
         owner,
         repo,
-        appsetsKustomizationPath(controlEnv)
+        appsetsKustomizationPath(controlEnv),
+        baseCommitSha
       );
-      const appsetTemplate = await this.readFileOnMain(
+      const appsetTemplate = await this.readFileAtRequired(
         octokit,
         owner,
         repo,
-        APPSET_TEMPLATE_PATH
+        APPSET_TEMPLATE_PATH,
+        baseCommitSha
       );
       const schedulerEndpointPatchByEnv: Record<string, string> = {};
       if (shape?.placement === "akash") {
-        schedulerEndpointPatchByEnv[env] = await this.readFileOnMain(
+        schedulerEndpointPatchByEnv[env] = await this.readFileAtRequired(
           octokit,
           owner,
           repo,
-          schedulerEndpointPatchPath(env)
+          schedulerEndpointPatchPath(env),
+          baseCommitSha
         );
       }
       const { port, nodePort } = parseCatalogPorts(catalog, slug);
@@ -4042,19 +4053,21 @@ export class GitHubRepoWriter implements DeployPlanePort {
       removeProvider,
       this.config.fleetControlEnv
     );
-    appsetsKustomizationByEnv[removeControlEnv] = await this.readFileOnMain(
+    appsetsKustomizationByEnv[removeControlEnv] = await this.readFileAtRequired(
       octokit,
       owner,
       repo,
-      appsetsKustomizationPath(removeControlEnv)
+      appsetsKustomizationPath(removeControlEnv),
+      baseCommitSha
     );
     const removeSchedulerPatchByEnv: Record<string, string> = {};
     if (removeProvider === "akash") {
-      removeSchedulerPatchByEnv[env] = await this.readFileOnMain(
+      removeSchedulerPatchByEnv[env] = await this.readFileAtRequired(
         octokit,
         owner,
         repo,
-        schedulerEndpointPatchPath(env)
+        schedulerEndpointPatchPath(env),
+        baseCommitSha
       );
     }
     return {
@@ -4330,12 +4343,18 @@ export class GitHubRepoWriter implements DeployPlanePort {
       "makes the node placeable without changing its current k3s behavior.\n\n" +
       "_Authored automatically by cogni-operator (node deployment-block verb, story.5016 T6)._";
 
-    const currentSpec = await this.fetchFileText({
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+    const currentSpec = await this.readFileAt(
+      octokit,
       owner,
       repo,
-      path: ".cogni/repo-spec.yaml",
-      ref: "main",
-    });
+      ".cogni/repo-spec.yaml",
+      baseCommitSha
+    );
     if (currentSpec === null) {
       throw deployPlaneError(
         "repo_spec_missing",
@@ -4352,11 +4371,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
       return { status: "no_changes" };
     }
 
-    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
-      octokit,
-      owner,
-      repo
-    );
     const blobSha = await this.createBlob(octokit, owner, repo, nextSpec);
 
     const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
@@ -5454,30 +5468,19 @@ export class GitHubRepoWriter implements DeployPlanePort {
     );
   }
 
-  /**
-   * Read a file's UTF-8 contents from main. The contents API caps inline content
-   * at 1MB (returns `encoding: "none"` + empty content above it) — pnpm-lock.yaml
-   * is already 0.96MB, one dependency from silent truncation — so fall back to the
-   * uncapped git/blobs endpoint via the blob SHA the metadata still returns.
-   */
-  private async readFileOnMain(
+  /** Read one required file at an exact immutable revision. */
+  private async readFileAtRequired(
     octokit: Octokit,
     owner: string,
     repo: string,
-    path: string
+    path: string,
+    ref: string
   ): Promise<string> {
-    const { data } = await octokit.request(
-      "GET /repos/{owner}/{repo}/contents/{path}",
-      { owner, repo, path, ref: "main" }
-    );
-    if (Array.isArray(data) || data.type !== "file") {
-      throw new Error(`readFileOnMain: expected a file at ${path} on main`);
+    const value = await this.readFileAt(octokit, owner, repo, path, ref);
+    if (value === null) {
+      throw new Error(`readFileAtRequired: expected a file at ${path}@${ref}`);
     }
-    if (data.encoding === "base64" && data.content) {
-      return Buffer.from(data.content, "base64").toString("utf-8");
-    }
-    // Truncated (>1MB) — read the blob by SHA (git/blobs has no inline cap).
-    return this.readBlob(octokit, owner, repo, data.sha);
+    return value;
   }
 
   /** Read one UTF-8 file at an exact immutable revision; null only when absent. */

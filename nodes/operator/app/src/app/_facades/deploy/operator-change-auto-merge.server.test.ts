@@ -19,6 +19,7 @@ vi.mock("@/bootstrap/container", () => ({
 import { dispatchOperatorChangeAutoMerge } from "./operator-change-auto-merge.server";
 
 const headSha = "a".repeat(40);
+const policyHeadSha = "b".repeat(40);
 const payload = {
   action: "completed",
   repository: { full_name: "cogni-test-org/cogni-monorepo" },
@@ -33,6 +34,7 @@ function vcs(eligible: boolean) {
       reason: eligible ? "eligible" : "untrusted-repository",
       headSha,
       baseSha: "b".repeat(40),
+      policyHeadSha,
       operation: "env.membership",
       node: "spawny-boi",
       intent: {
@@ -93,6 +95,7 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       prNumber: 42,
       expectedBaseSha: "b".repeat(40),
       expectedHeadSha: headSha,
+      expectedPolicyHeadSha: policyHeadSha,
     });
   });
 
@@ -111,6 +114,7 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       prNumber: 42,
       expectedBaseSha: "b".repeat(40),
       expectedHeadSha: headSha,
+      expectedPolicyHeadSha: policyHeadSha,
     });
   });
 
@@ -144,6 +148,25 @@ describe("dispatchOperatorChangeAutoMerge", () => {
     );
   });
 
+  it("starts exactly one stable recovery workflow when protected policy moved", async () => {
+    const capability = vcs(true);
+    vi.mocked(capability.fastForwardOperatorChange).mockResolvedValueOnce({
+      outcome: "retryable_or_ambiguous",
+      status: 409,
+      message:
+        "Trusted operator-change policy snapshot changed before compare-and-swap",
+    });
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
+    expect(temporal.start).toHaveBeenCalledOnce();
+    expect(temporal.start).toHaveBeenCalledWith(
+      "OperatorChangeRecoveryWorkflow",
+      expect.objectContaining({
+        workflowId: `operator-change-recovery:cogni-test-org/cogni-monorepo:${headSha}`,
+        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
+      })
+    );
+  });
+
   it("dispatches a fully reverified stale head without exposing stale merge authority", async () => {
     const capability = vcs(false);
     vi.mocked(capability.verifyOperatorChange).mockResolvedValueOnce({
@@ -151,6 +174,7 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       reason: "base-advanced",
       headSha,
       baseSha: "b".repeat(40),
+      policyHeadSha,
       operation: "env.membership",
       node: "spawny-boi",
       intent: {

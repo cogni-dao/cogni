@@ -492,6 +492,150 @@ function makeWriter(): GitHubRepoWriter {
   });
 }
 
+describe("generated operator-change immutable input snapshots", () => {
+  const baseCommitSha = "b".repeat(40);
+  const operations: readonly {
+    name: string;
+    invoke: (writer: GitHubRepoWriter) => Promise<unknown>;
+  }[] = [
+    {
+      name: "env.membership",
+      invoke: (writer) =>
+        writer.openNodeEnvPr({
+          owner: "o",
+          repo: "r",
+          slug: "blue",
+          env: "preview",
+          present: true,
+          leaseGeneration: 0,
+        }),
+    },
+    {
+      name: "env.placement",
+      invoke: (writer) =>
+        writer.openNodePlacementPr({
+          owner: "o",
+          repo: "r",
+          slug: "blue",
+          env: "preview",
+          placement: "k3s",
+        }),
+    },
+    {
+      name: "env.region",
+      invoke: (writer) =>
+        writer.openNodeRegionPr({
+          owner: "o",
+          repo: "r",
+          slug: "blue",
+          env: "preview",
+          countries: ["US"],
+          leaseGeneration: 0,
+        }),
+    },
+    {
+      name: "deployment.declare",
+      invoke: (writer) =>
+        writer.openNodeDeploymentBlockPr({
+          owner: "o",
+          repo: "blue",
+          slug: "blue",
+          isInRepoNode: false,
+        }),
+    },
+  ];
+
+  it.each(
+    operations
+  )("$name reads its first generator input from the resolved base, never moving main", async ({
+    invoke,
+  }) => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: baseCommitSha },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "base-tree" },
+      }),
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params.ref).toBe(baseCommitSha);
+        throw new Error("immutable-snapshot-observed");
+      },
+    };
+
+    await expect(invoke(makeWriter())).rejects.toThrow(
+      "immutable-snapshot-observed"
+    );
+    expect(
+      requests
+        .filter(
+          (request) =>
+            request.route === "GET /repos/{owner}/{repo}/contents/{path}"
+        )
+        .map((request) => request.params.ref)
+    ).toEqual([baseCommitSha]);
+  });
+
+  it("threads the same base through every membership shared-file read", async () => {
+    const writer = makeWriter();
+    const readFileAt = vi.fn().mockResolvedValue("fixture\n");
+    Object.assign(writer, { readFileAt });
+    const collectEnvPlanCurrent = (
+      writer as unknown as {
+        collectEnvPlanCurrent(
+          octokit: unknown,
+          owner: string,
+          repo: string,
+          slug: string,
+          env: "preview",
+          present: boolean,
+          catalog: string,
+          shape: unknown,
+          baseSha: string
+        ): Promise<unknown>;
+      }
+    ).collectEnvPlanCurrent.bind(writer);
+    const catalog = `name: blue
+port: 3200
+node_port: 31100
+deployment_provider:
+  preview: akash
+`;
+
+    await collectEnvPlanCurrent(
+      {},
+      "o",
+      "r",
+      "blue",
+      "preview",
+      true,
+      catalog,
+      {
+        placement: "akash",
+        computeApi: "crossplane",
+        controlEnv: "production",
+      },
+      baseCommitSha
+    );
+    await collectEnvPlanCurrent(
+      {},
+      "o",
+      "r",
+      "blue",
+      "preview",
+      false,
+      catalog,
+      undefined,
+      baseCommitSha
+    );
+
+    expect(readFileAt).toHaveBeenCalled();
+    expect(
+      readFileAt.mock.calls.every((call) => call[4] === baseCommitSha)
+    ).toBe(true);
+  });
+});
+
 const TEST_FORMATION_INPUT = {
   templateOwner: "Cogni-DAO",
   owner: "Cogni-DAO",
@@ -1514,12 +1658,18 @@ governance:
     const declaredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
 
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: "main-sha" },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "main-tree" },
+      }),
       "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
         expect(params).toMatchObject({
           owner: "cogni-test-org",
           repo: "test-cog",
           path: ".cogni/repo-spec.yaml",
-          ref: "main",
+          ref: "main-sha",
         });
         return {
           type: "file",
@@ -1540,6 +1690,8 @@ governance:
     ).resolves.toEqual({ status: "no_changes" });
 
     expect(requests.map((request) => request.route)).toEqual([
+      "GET /repos/{owner}/{repo}/git/ref/{ref}",
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
       "GET /repos/{owner}/{repo}/contents/{path}",
     ]);
   });
@@ -1555,6 +1707,7 @@ governance:
           owner: "cogni-test-org",
           repo: "test-cog",
           path: ".cogni/repo-spec.yaml",
+          ref: "main-sha",
         });
         return {
           type: "file",
@@ -1645,9 +1798,9 @@ governance:
     });
 
     expect(requests.map((request) => request.route)).toEqual([
-      "GET /repos/{owner}/{repo}/contents/{path}",
       "GET /repos/{owner}/{repo}/git/ref/{ref}",
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
+      "GET /repos/{owner}/{repo}/contents/{path}",
       "POST /repos/{owner}/{repo}/git/blobs",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
@@ -1662,12 +1815,15 @@ governance:
     const desiredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
 
     routeHandlers = {
-      "GET /repos/{owner}/{repo}/contents/{path}": () => ({
-        type: "file",
-        encoding: "base64",
-        content: encode(LEGACY_NODE_SPEC),
-        sha: "repo-spec-sha",
-      }),
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params.ref).toBe("current-main-sha");
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(LEGACY_NODE_SPEC),
+          sha: "repo-spec-sha",
+        };
+      },
       "GET /repos/{owner}/{repo}/pulls": (params) => {
         expect(params).toMatchObject({
           owner: "cogni-test-org",
@@ -1866,6 +2022,7 @@ governance:
           repo === OPERATOR_REPO &&
           path === `infra/catalog/${SLUG}.yaml`
         ) {
+          expect(params.ref).toBe("main-commit-sha");
           return {
             type: "file",
             encoding: "base64",
@@ -1878,6 +2035,7 @@ governance:
           repo === NODE_REPO &&
           path === ".cogni/repo-spec.yaml"
         ) {
+          expect(params.ref).toBe("main");
           if (nodeRepoSpec === null) {
             throw statusError(404, "Not Found");
           }
@@ -1893,6 +2051,7 @@ governance:
           repo === OPERATOR_REPO &&
           path === `infra/k8s/argocd/appsets/${ENV}/kustomization.yaml`
         ) {
+          expect(params.ref).toBe("main-commit-sha");
           return {
             type: "file",
             encoding: "base64",
@@ -1906,6 +2065,7 @@ governance:
           path ===
             `infra/k8s/overlays/${ENV}/scheduler-worker/node-endpoints.patch.yaml`
         ) {
+          expect(params.ref).toBe("main-commit-sha");
           return {
             type: "file",
             encoding: "base64",

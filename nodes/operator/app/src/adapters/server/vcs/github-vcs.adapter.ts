@@ -372,11 +372,21 @@ export class GitHubVcsAdapter implements VcsCapability {
     expectedHeadSha: string;
   }): Promise<OperatorChangeVerificationResult> {
     const strict = await this.verifyOperatorChangeInternal(params, false);
-    if (strict.eligible || strict.reason !== "invalid-pr-identity") {
+    if (
+      strict.eligible ||
+      !["invalid-pr-identity", "trusted-policy-head-moved"].includes(
+        strict.reason
+      )
+    ) {
       return strict;
     }
     const stale = await this.verifyOperatorChangeInternal(params, true);
-    if (!stale.eligible || stale.baseSha === strict.baseSha) return strict;
+    if (
+      !stale.eligible ||
+      (strict.reason === "invalid-pr-identity" &&
+        stale.baseSha === strict.baseSha)
+    )
+      return strict;
     return { ...stale, eligible: false, reason: "base-advanced" };
   }
 
@@ -413,27 +423,6 @@ export class GitHubVcsAdapter implements VcsCapability {
       return fail("trusted-policy-repository-unconfigured");
     }
 
-    const policyOctokit = await this.getOctokit(
-      this.config.operatorChangePolicyOwner,
-      this.config.operatorChangePolicyRepo
-    );
-    const registryText = await this.readFileText(
-      policyOctokit,
-      this.config.operatorChangePolicyOwner,
-      this.config.operatorChangePolicyRepo,
-      "scripts/ci/operator-change-v1.allowlist.json",
-      "main"
-    );
-    if (registryText === null) return fail("trusted-registry-unavailable");
-    let registryValue: unknown;
-    try {
-      registryValue = JSON.parse(registryText);
-    } catch {
-      return fail("invalid-trusted-registry");
-    }
-    const registry = parseOperatorChangeRegistry(registryValue);
-    if (registry === null) return fail("invalid-trusted-registry");
-
     const [commitResponse, filesResponse] = await Promise.all([
       targetOctokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
         owner: params.owner,
@@ -458,6 +447,36 @@ export class GitHubVcsAdapter implements VcsCapability {
     const replayBaseSha = allowStaleBase
       ? (commit.parents[0]?.sha ?? baseSha)
       : baseSha;
+    const policyOwner = this.config.operatorChangePolicyOwner;
+    const policyRepo = this.config.operatorChangePolicyRepo;
+    const policyOctokit = await this.getOctokit(policyOwner, policyRepo);
+    const { data: policyMainRef } = await policyOctokit.request(
+      "GET /repos/{owner}/{repo}/git/ref/{ref}",
+      { owner: policyOwner, repo: policyRepo, ref: "heads/main" }
+    );
+    const policyHeadSha = policyMainRef.object.sha;
+    const targetIsPolicyRepo =
+      `${params.owner}/${params.repo}`.toLowerCase() ===
+      `${policyOwner}/${policyRepo}`.toLowerCase();
+    if (!allowStaleBase && targetIsPolicyRepo && policyHeadSha !== baseSha) {
+      return fail("trusted-policy-head-moved");
+    }
+    const registryText = await this.readFileText(
+      policyOctokit,
+      policyOwner,
+      policyRepo,
+      "scripts/ci/operator-change-v1.allowlist.json",
+      policyHeadSha
+    );
+    if (registryText === null) return fail("trusted-registry-unavailable");
+    let registryValue: unknown;
+    try {
+      registryValue = JSON.parse(registryText);
+    } catch {
+      return fail("invalid-trusted-registry");
+    }
+    const registry = parseOperatorChangeRegistry(registryValue);
+    if (registry === null) return fail("invalid-trusted-registry");
     const baseRepoSpec = await this.readFileText(
       targetOctokit,
       params.owner,
@@ -535,6 +554,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       node: structural.node,
       files: facts.files.map((file) => file.filename),
       message: commit.commit.message,
+      policyHeadSha,
     });
     const classified = classify({
       ...facts,
@@ -551,7 +571,12 @@ export class GitHubVcsAdapter implements VcsCapability {
         headSha,
         message: commit.commit.message,
       });
-      return { ...classified, baseSha: replayBaseSha, intent };
+      return {
+        ...classified,
+        baseSha: replayBaseSha,
+        policyHeadSha,
+        intent,
+      };
     } catch {
       return { ...classified, eligible: false, reason: "intent-parse-failed" };
     }
@@ -568,6 +593,7 @@ export class GitHubVcsAdapter implements VcsCapability {
     node: string;
     files: readonly string[];
     message: string;
+    policyHeadSha: string;
   }): Promise<boolean> {
     const reader: OperatorChangeReplayReader = {
       readFile: async (ref, path) =>
@@ -623,7 +649,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       this.config.operatorChangePolicyOwner,
       this.config.operatorChangePolicyRepo,
       `infra/catalog/${input.node}.yaml`,
-      "main"
+      input.policyHeadSha
     );
     if (catalog === null) return false;
     return (
@@ -762,6 +788,7 @@ export class GitHubVcsAdapter implements VcsCapability {
     prNumber: number;
     expectedBaseSha: string;
     expectedHeadSha: string;
+    expectedPolicyHeadSha: string;
   }): Promise<OperatorChangeFastForwardResult> {
     const octokit = await this.getOctokit(params.owner, params.repo);
     let patchIssued = false;
@@ -814,6 +841,53 @@ export class GitHubVcsAdapter implements VcsCapability {
           status: 409,
           message: "Generated change PR base does not match main",
         };
+      }
+
+      if (
+        !this.config.operatorChangePolicyOwner ||
+        !this.config.operatorChangePolicyRepo
+      ) {
+        return {
+          outcome: "terminal",
+          status: 409,
+          message: "Trusted operator-change policy repository is unconfigured",
+        };
+      }
+      const targetIsPolicyRepo =
+        `${params.owner}/${params.repo}`.toLowerCase() ===
+        `${this.config.operatorChangePolicyOwner}/${this.config.operatorChangePolicyRepo}`.toLowerCase();
+      if (targetIsPolicyRepo) {
+        if (
+          params.expectedPolicyHeadSha !== params.expectedBaseSha ||
+          mainRef.object.sha !== params.expectedPolicyHeadSha
+        ) {
+          return {
+            outcome: "terminal",
+            status: 409,
+            message: "Trusted operator-change policy snapshot changed",
+          };
+        }
+      } else {
+        const policyOctokit = await this.getOctokit(
+          this.config.operatorChangePolicyOwner,
+          this.config.operatorChangePolicyRepo
+        );
+        const { data: currentPolicyMain } = await policyOctokit.request(
+          "GET /repos/{owner}/{repo}/git/ref/{ref}",
+          {
+            owner: this.config.operatorChangePolicyOwner,
+            repo: this.config.operatorChangePolicyRepo,
+            ref: "heads/main",
+          }
+        );
+        if (currentPolicyMain.object.sha !== params.expectedPolicyHeadSha) {
+          return {
+            outcome: "retryable_or_ambiguous",
+            status: 409,
+            message:
+              "Trusted operator-change policy snapshot changed before compare-and-swap",
+          };
+        }
       }
 
       patchIssued = true;
@@ -966,6 +1040,7 @@ export class GitHubVcsAdapter implements VcsCapability {
     if (
       !proof.eligible ||
       proof.baseSha !== request.signedBaseSha ||
+      proof.policyHeadSha === undefined ||
       proof.intent === undefined ||
       JSON.stringify(proof.intent) !== JSON.stringify(request.intent)
     ) {
@@ -994,6 +1069,7 @@ export class GitHubVcsAdapter implements VcsCapability {
         prNumber: request.prNumber,
         expectedBaseSha: request.signedBaseSha,
         expectedHeadSha: request.losingHeadSha,
+        expectedPolicyHeadSha: proof.policyHeadSha,
       });
       if (retried.outcome === "landed") {
         return { status: "landed", mainSha: retried.sha };
