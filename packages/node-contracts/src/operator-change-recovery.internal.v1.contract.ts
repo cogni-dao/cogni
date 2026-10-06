@@ -83,9 +83,7 @@ export const OperatorChangeIntentSchema = z.discriminatedUnion("operation", [
     operation: z.literal("node.register"),
     nodeId: z
       .string()
-      .regex(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-      ),
+      .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
     sourceRepo: z.string().url(),
     sourceSha: GitShaSchema,
     ownerWallet: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
