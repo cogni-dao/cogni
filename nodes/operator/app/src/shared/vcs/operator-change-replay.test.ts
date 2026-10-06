@@ -173,6 +173,29 @@ describe("replayOperatorChange", () => {
       verified: false,
       reason: "replay-error:deployment-already-declared",
     });
+
+    const unregistered = await deploymentFixture();
+    await expect(
+      replayOperatorChange({
+        ...unregistered.input,
+        deploymentCatalog: null,
+      })
+    ).resolves.toEqual({
+      verified: false,
+      reason: "replay-error:deployment-parent-catalog-missing",
+    });
+
+    const wrongSource = await deploymentFixture();
+    await expect(
+      replayOperatorChange({
+        ...wrongSource.input,
+        deploymentCatalog:
+          "name: cogni-template\nsource_repo: https://github.com/cogni-dao/not-cogni-template.git\n",
+      })
+    ).resolves.toEqual({
+      verified: false,
+      reason: "replay-error:deployment-parent-catalog-mismatch",
+    });
   });
 });
 
@@ -433,6 +456,11 @@ function fixture(
       baseSha,
       headSha,
       repository,
+      ...(operation === "deployment.declare"
+        ? {
+            deploymentCatalog: `name: ${node}\nsource_repo: https://github.com/${repository}.git\n`,
+          }
+        : {}),
       paths,
       message: message(subject, operation, node, paths, trailers),
       fleetControlEnv: "production",

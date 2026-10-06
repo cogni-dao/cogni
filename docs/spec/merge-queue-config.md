@@ -179,6 +179,11 @@ The CI shell is transport only: it re-fetches the PR, commit, and complete file 
 those normalized facts to that pinned bundle. The bundle executes the exact
 `classifyOperatorChangeForMerge` policy used by the deployed operator and invokes the shared replay
 core before it can emit `eligible=true`; shell drift cannot create a second eligibility policy.
+For `deployment.declare`, verifier code and the registry remain pinned to
+`job.workflow_repository@job.workflow_sha`, while the reusable workflow separately checks out that
+same repository's current protected `main` catalog. The shared replay requires the exact
+`infra/catalog/<node>.yaml` `source_repo` to equal the child PR repository. The control repository
+must therefore be publicly readable to child CI; private-parent attestation is not part of v1.
 
 Eligible PRs run only `resolve` and the trusted classifier. `static`, `unit`, and `component` are
 GitHub `skipped` (a satisfied required conclusion) without scheduling those runners; `detect` is

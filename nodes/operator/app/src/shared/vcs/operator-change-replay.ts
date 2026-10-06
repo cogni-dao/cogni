@@ -9,6 +9,7 @@
 
 import { createHash } from "node:crypto";
 import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
+import { parse as parseYaml } from "yaml";
 
 import {
   appsetsKustomizationPath,
@@ -46,6 +47,8 @@ export interface OperatorChangeReplayInput {
   readonly message: string;
   readonly paths: readonly string[];
   readonly repository: string;
+  /** Current protected parent-main catalog row; required only for deployment.declare. */
+  readonly deploymentCatalog?: string | null;
   readonly fleetControlEnv?: string | undefined;
   readonly forkDomainRoot?: string | undefined;
   readonly reader: OperatorChangeReplayReader;
@@ -347,6 +350,29 @@ async function replayDeploymentDeclare(
   requireTrailerCount(envelope, 5);
   if (subject !== `feat(deploy): declare ${input.node} node deployment`) {
     throw new Error("invalid-subject");
+  }
+  if (
+    input.deploymentCatalog === undefined ||
+    input.deploymentCatalog === null
+  ) {
+    throw new Error("deployment-parent-catalog-missing");
+  }
+  const parsedCatalog = parseYaml(input.deploymentCatalog) as unknown;
+  if (
+    parsedCatalog === null ||
+    typeof parsedCatalog !== "object" ||
+    Array.isArray(parsedCatalog)
+  ) {
+    throw new Error("deployment-parent-catalog-invalid");
+  }
+  const row = parsedCatalog as Record<string, unknown>;
+  const expectedSourceRepo = `https://github.com/${input.repository}.git`;
+  if (
+    row.name !== input.node ||
+    typeof row.source_repo !== "string" ||
+    row.source_repo.toLowerCase() !== expectedSourceRepo.toLowerCase()
+  ) {
+    throw new Error("deployment-parent-catalog-mismatch");
   }
   const path = ".cogni/repo-spec.yaml";
   const base = await requiredFile(input.reader, input.baseSha, path);

@@ -553,28 +553,6 @@ export class GitHubVcsAdapter implements VcsCapability {
       "main"
     );
     if (catalog === null) return false;
-    let parsedCatalog: unknown;
-    try {
-      parsedCatalog = parseYaml(catalog);
-    } catch {
-      return false;
-    }
-    if (
-      parsedCatalog === null ||
-      typeof parsedCatalog !== "object" ||
-      Array.isArray(parsedCatalog)
-    ) {
-      return false;
-    }
-    const row = parsedCatalog as Record<string, unknown>;
-    const expectedSourceRepo = `https://github.com/${input.owner}/${input.repo}.git`;
-    if (
-      row.name !== input.node ||
-      typeof row.source_repo !== "string" ||
-      row.source_repo.toLowerCase() !== expectedSourceRepo.toLowerCase()
-    ) {
-      return false;
-    }
     return (
       await replayOperatorChange({
         operation: input.operation,
@@ -584,6 +562,7 @@ export class GitHubVcsAdapter implements VcsCapability {
         message: input.message,
         paths: input.files,
         repository: `${input.owner}/${input.repo}`,
+        deploymentCatalog: catalog,
         fleetControlEnv: this.config.fleetControlEnv,
         forkDomainRoot: this.config.forkDomainRoot,
         reader,

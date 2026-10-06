@@ -13,6 +13,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { parseRepoSpec } from "../../packages/repo-spec/src";
 import {
@@ -84,6 +85,9 @@ async function replayFromEnvironment(): Promise<void> {
     baseSha,
     headSha,
     repository,
+    ...(operation === "deployment.declare"
+      ? { deploymentCatalog: parentCatalog(node) }
+      : {}),
     paths,
     message: gitText(["show", "-s", "--format=%B", headSha]),
     fleetControlEnv: process.env.FLEET_CONTROL_ENV,
@@ -168,6 +172,9 @@ async function classifyFromEnvironment(): Promise<void> {
       baseSha: classification.baseSha,
       headSha: classification.headSha,
       repository,
+      ...(classification.operation === "deployment.declare"
+        ? { deploymentCatalog: parentCatalog(classification.node) }
+        : {}),
       paths: facts.files.map((file) => file.filename),
       message: facts.commit.message,
       fleetControlEnv: process.env.FLEET_CONTROL_ENV,
@@ -213,6 +220,17 @@ void main().catch((error: unknown) => {
 
 function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8")) as T;
+}
+
+function parentCatalog(node: string): string | null {
+  const path = `infra/catalog/${node}.yaml`;
+  const root = process.env.OPERATOR_CHANGE_PARENT_CATALOG_ROOT;
+  if (!root) return fileAt("origin/main", path);
+  try {
+    return readFileSync(join(root, path), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 function requiredEnv(name: string): string {

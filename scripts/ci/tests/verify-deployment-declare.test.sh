@@ -12,6 +12,12 @@ REGISTRY="$REPO_ROOT/scripts/ci/operator-change-v1.allowlist.json"
 FIXTURE="$REPO_ROOT/packages/repo-spec/src/node-app-deployment-v1.json"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
+parent_control="$tmpdir/parent-control"
+mkdir -p "$parent_control/infra/catalog"
+printf '%s\n' \
+  'name: cogni-template' \
+  'source_repo: https://github.com/Cogni-DAO/cogni-template.git' \
+  > "$parent_control/infra/catalog/cogni-template.yaml"
 
 git -C "$tmpdir" init -q
 git -C "$tmpdir" config user.name test
@@ -48,27 +54,29 @@ head_sha="$(git -C "$tmpdir" rev-parse HEAD)"
     OPERATOR_CHANGE_BASE_SHA="$base_sha" OPERATOR_CHANGE_HEAD_SHA="$head_sha" \
     OPERATOR_CHANGE_PATHS_FILE="$tmpdir/paths.txt" \
     OPERATOR_CHANGE_REPLAY_BUNDLE="$REPLAY_BUNDLE" \
-    REPOSITORY=cogni-dao/cogni "$VERIFIER"
+    OPERATOR_CHANGE_PARENT_CATALOG_ROOT="$parent_control" \
+    REPOSITORY=Cogni-DAO/cogni-template "$VERIFIER"
 )
 
 # The CI transport feeds current GitHub facts into the same structural policy
 # and replay core used by the deployed operator. A complete enabled fixture is
 # eligible only through that shared bundle; the shell owns no trust decisions.
 jq -n --arg head "$head_sha" --arg base "$base_sha" --arg node "$node" \
-  '{state:"open",draft:false,base:{ref:"main",sha:$base},head:{sha:$head,ref:("cogni-operator/declare-deployment-" + $node),repo:{full_name:"Cogni-DAO/cogni"}},user:{login:"cogni-operator[bot]",id:265189974,type:"Bot"},commits:1}' > "$tmpdir/pr.json"
+  '{state:"open",draft:false,base:{ref:"main",sha:$base},head:{sha:$head,ref:("cogni-operator/declare-deployment-" + $node),repo:{full_name:"Cogni-DAO/cogni-template"}},user:{login:"cogni-operator[bot]",id:265189974,type:"Bot"},commits:1}' > "$tmpdir/pr.json"
 jq -n --arg head "$head_sha" --arg base "$base_sha" --rawfile message "$tmpdir/message.txt" \
   '{sha:$head,author:{login:"cogni-operator[bot]",id:265189974},parents:[{sha:$base}],commit:{message:$message,verification:{verified:true,reason:"valid"}}}' > "$tmpdir/commit.json"
 jq -n --arg path "$path" '[{filename:$path,previous_filename:null,status:"modified"}]' > "$tmpdir/files.json"
-jq '.operations["deployment.declare"].enabledRepositories = ["cogni-dao/cogni"]' \
+jq '.operations["deployment.declare"].enabledChildOwners = ["cogni-dao"]' \
   "$REGISTRY" > "$tmpdir/enabled-registry.json"
 (
   cd "$tmpdir"
   GITHUB_OUTPUT="$tmpdir/classifier.out" EVENT_NAME=pull_request \
-    REPOSITORY=Cogni-DAO/cogni PR_NUMBER_PR=42 PR_HEAD_SHA_PR="$head_sha" \
+    REPOSITORY=Cogni-DAO/cogni-template PR_NUMBER_PR=42 PR_HEAD_SHA_PR="$head_sha" \
     FAST_PATH_PR_JSON="$tmpdir/pr.json" FAST_PATH_COMMIT_JSON="$tmpdir/commit.json" \
     FAST_PATH_FILES_JSON="$tmpdir/files.json" \
     FAST_PATH_REGISTRY_JSON="$tmpdir/enabled-registry.json" \
-    FAST_PATH_POLICY_ROOT="$REPO_ROOT" bash "$CLASSIFIER"
+    FAST_PATH_POLICY_ROOT="$REPO_ROOT" \
+    OPERATOR_CHANGE_PARENT_CATALOG_ROOT="$parent_control" bash "$CLASSIFIER"
 )
 grep -qxF 'eligible=true' "$tmpdir/classifier.out"
 grep -qxF 'invalid=false' "$tmpdir/classifier.out"
@@ -85,7 +93,8 @@ if (
     OPERATOR_CHANGE_BASE_SHA="$base_sha" OPERATOR_CHANGE_HEAD_SHA="$forged_sha" \
     OPERATOR_CHANGE_PATHS_FILE="$tmpdir/paths.txt" \
     OPERATOR_CHANGE_REPLAY_BUNDLE="$REPLAY_BUNDLE" \
-    REPOSITORY=cogni-dao/cogni "$VERIFIER"
+    OPERATOR_CHANGE_PARENT_CATALOG_ROOT="$parent_control" \
+    REPOSITORY=Cogni-DAO/cogni-template "$VERIFIER"
 ); then
   echo "forged deployment declaration unexpectedly passed" >&2
   exit 1
