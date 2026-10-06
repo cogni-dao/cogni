@@ -88,6 +88,7 @@ import {
   DrizzleComputeCostStore,
   DrizzleProviderOutcomeStore,
   KubernetesMigrationJobAdapter,
+  orderEndpointsForServingProof,
   safeHostRoutedVersionProbe,
   safeReadyzProbe,
   safeVersionProbe,
@@ -313,7 +314,23 @@ const probe: AkashTxServingProbe = async ({
   expectedSourceSha,
   publicHost,
 }) => {
-  for (const endpoint of endpoints) {
+  // PROBE THE PROVIDER INGRESS BEFORE THE PUBLIC HOST (bug.5377). A lease's endpoint list can
+  // contain the workload's OWN public hostname as well as the provider ingress alias, and the
+  // order is the provider's choice, not ours. Connecting to the public hostname defeats the
+  // stated purpose of the host-routed proof below -- it is meant to exercise the provider's
+  // host-routing "without depending on the public DNS record" -- and it routes the proof
+  // through the edge instead of the lease. Measured on spawny-boi 2026-10-06: candidate-a
+  // listed ["spawny-boi.cogni-testing.org", "te6eed...ingress.zencloud.eu"] and sat at
+  // serving=false for hours, while preview listed its ingress alias FIRST and proved serving
+  // immediately -- same node, same code, same provider, opposite order. The public hostnames
+  // are dual-stack Cloudflare (A + AAAA) while both ingress aliases are IPv4-only on the
+  // provider's shared NAT, so the edge-first ordering also exposes the proof to an IPv6 path
+  // the cluster may have no egress for. The public host is still TRIED, just last: it must
+  // never be the only thing that can prove a lease, and dropping it would break a lease whose
+  // only endpoint is that name. Same rule the composition already applies when choosing a DNS
+  // target (bug.5125 -- never point a host to itself).
+  const ordered = orderEndpointsForServingProof(endpoints, publicHost);
+  for (const endpoint of ordered) {
     if (
       !(await safeVersionProbe(endpoint, expectedSourceSha)) ||
       !(await safeReadyzProbe(endpoint))

@@ -103,6 +103,7 @@ export { ProviderProxyLogsClient } from "./compute/provider-proxy-logs.adapter";
 // Bounded, SSRF-safe workload probes. Exported for the dedicated actuator process,
 // which must prove "serving at the expected SHA" without importing an adapter internal.
 export {
+  orderEndpointsForServingProof,
   safeHostRoutedVersionProbe,
   safeReadyzProbe,
   safeVersionProbe,

@@ -38,6 +38,46 @@ function isPrivateAddress(address: string): boolean {
  * Fetch `/version` with DNS resolution performed by the actual socket lookup callback.
  * Every answer must be globally routable; redirects and IP-literal endpoints are rejected.
  */
+/**
+ * Order a lease's endpoints so the PROVIDER INGRESS is proved before the workload's own public
+ * hostname (bug.5377). A lease endpoint list can contain both, and the order is the provider's
+ * choice. Connecting to the public hostname defeats the purpose of `safeHostRoutedVersionProbe`
+ * -- which exists to exercise the provider's host-routing WITHOUT depending on the public DNS
+ * record -- and routes the proof through the edge instead of the lease. The public host is still
+ * returned, just LAST: it must never be the only thing that can prove a lease, and dropping it
+ * would break a lease whose only endpoint is that name. This is the same rule the Crossplane
+ * composition already applies when picking a DNS target (bug.5125, never point a host to itself).
+ */
+export function orderEndpointsForServingProof(
+  endpoints: readonly string[],
+  publicHost?: string
+): string[] {
+  if (!publicHost) return [...endpoints];
+  const isPublic = (endpoint: string) =>
+    endpointHostname(endpoint) === normalizeHost(publicHost);
+  return [
+    ...endpoints.filter((endpoint) => !isPublic(endpoint)),
+    ...endpoints.filter(isPublic),
+  ];
+}
+
+function normalizeHost(host: string): string {
+  return host.toLowerCase().replace(/\.$/, "");
+}
+
+/** Endpoints arrive bare ("host", "host:port") or absolute ("http://host/..."). */
+function endpointHostname(endpoint: string): string {
+  const raw =
+    endpoint.startsWith("http://") || endpoint.startsWith("https://")
+      ? endpoint
+      : `http://${endpoint}`;
+  try {
+    return normalizeHost(new URL(raw).hostname);
+  } catch {
+    return "";
+  }
+}
+
 export type SafeVersionProbeResult =
   | "version_unavailable"
   | "source_mismatch"
