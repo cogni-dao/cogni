@@ -315,7 +315,13 @@ function setHappyForkHandlers(): void {
     "PATCH /repos/{owner}/{repo}": () => ({}),
     // Node main-policy upsert + merge-queue source lookup. Default: no rulesets,
     // so formation creates the required policy and skips the optional queue.
-    "GET /repos/{owner}/{repo}/rulesets": () => [],
+    "GET /repos/{owner}/{repo}/rulesets": (params) =>
+      params.repo === "atlas"
+        ? [...storedRulesets.entries()].map(([id, ruleset]) => ({
+            id,
+            name: String(ruleset.name),
+          }))
+        : [],
     "POST /repos/{owner}/{repo}/rulesets": (params) => recordRuleset(params),
     "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
       recordRuleset(params),
@@ -352,9 +358,7 @@ function setHappyForkHandlers(): void {
       ) {
         return Promise.reject(statusError(404, "Commit not found in template"));
       }
-      expect(["template-main", "identity-commit"]).toContain(
-        params.commit_sha
-      );
+      expect(["template-main", "identity-commit"]).toContain(params.commit_sha);
       return {
         tree: {
           sha:
@@ -532,11 +536,16 @@ function setFullyFormedExistingForkHandlers(
   routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = () => [
     { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
   ];
-  routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = () => ({
-    id: 41,
-    source_type: "Repository",
-    ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, "1"),
-  });
+  routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = (
+    params
+  ) =>
+    storedRulesets.has(41)
+      ? readStoredRuleset(params)
+      : {
+          id: 41,
+          source_type: "Repository",
+          ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, "1"),
+        };
 }
 
 const PAYMENT_PENDING_SPEC = `schema_version: "0.1.4"
@@ -1586,9 +1595,9 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     expect(routes).not.toContain("POST /repos/{owner}/{repo}/git/refs");
     expect(routes).toContain("PATCH /repos/{owner}/{repo}/git/refs/{ref}");
     expect(routes).toContain("POST /repos/{owner}/{repo}/rulesets");
-    expect(routes.indexOf("PATCH /repos/{owner}/{repo}/git/refs/{ref}")).toBeLessThan(
-      routes.indexOf("POST /repos/{owner}/{repo}/rulesets")
-    );
+    expect(
+      routes.indexOf("PATCH /repos/{owner}/{repo}/git/refs/{ref}")
+    ).toBeLessThan(routes.indexOf("POST /repos/{owner}/{repo}/rulesets"));
   });
 
   it("does not overwrite a new fork main that advances during identity creation", async () => {
@@ -1642,10 +1651,16 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
   it("creates the exact default-branch PR + standard-CI ruleset without bypass actors", async () => {
     setHappyForkHandlers();
-    let postParams: Record<string, unknown> | undefined;
+    let writeParams: Record<string, unknown> | undefined;
     routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = (params) => {
-      postParams = params;
+      writeParams = params;
       return recordRuleset(params, 88);
+    };
+    routeHandlers["PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = (
+      params
+    ) => {
+      writeParams = params;
+      return recordRuleset(params);
     };
 
     await makeWriter().forkFromTemplate({
@@ -1656,12 +1671,12 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       chainId: 8453,
     });
 
-    expect(postParams).toEqual({
+    expect(writeParams).toEqual({
       owner: "Cogni-DAO",
       repo: "atlas",
       ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY),
     });
-    expect(postParams).toMatchObject({
+    expect(writeParams).toMatchObject({
       enforcement: "active",
       bypass_actors: [],
       rules: [
@@ -1692,10 +1707,16 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
             ),
           }
         : contents(params);
-    let postParams: Record<string, unknown> | undefined;
+    let writeParams: Record<string, unknown> | undefined;
     routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = (params) => {
-      postParams = params;
+      writeParams = params;
       return recordRuleset(params, 88);
+    };
+    routeHandlers["PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = (
+      params
+    ) => {
+      writeParams = params;
+      return recordRuleset(params);
     };
 
     await makeWriter().forkFromTemplate({
@@ -1706,12 +1727,13 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       chainId: 8453,
     });
 
-    expect(postParams).toEqual({
+    expect(writeParams).toEqual({
       owner: "Cogni-DAO",
       repo: "atlas",
+      ruleset_id: 88,
       ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, "1"),
     });
-    expect(postParams?.bypass_actors).toEqual([
+    expect(writeParams?.bypass_actors).toEqual([
       { actor_id: 1, actor_type: "Integration", bypass_mode: "always" },
     ]);
   });
@@ -1733,9 +1755,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
         ? {
             type: "file",
             encoding: "base64",
-            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString(
-              "base64"
-            ),
+            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString("base64"),
           }
         : contents(params);
     routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = () => [
@@ -2069,9 +2089,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
         ? {
             type: "file",
             encoding: "base64",
-            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString(
-              "base64"
-            ),
+            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString("base64"),
           }
         : contents(params);
     routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = (
@@ -2158,6 +2176,11 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     expect(requests.map((request) => request.route)).toContain(
       "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
     );
+    const writes = requests.filter(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(writes.at(-1)?.params.bypass_actors).toEqual([]);
     expect(
       requests.some(
         (request) =>
@@ -2166,6 +2189,90 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       )
     ).toBe(false);
   });
+
+  it.each([
+    {
+      name: "wrong identity with v1 policy",
+      missingPolicy: false,
+      code: "existing_node_repo_incomplete",
+    },
+    {
+      name: "missing policy",
+      missingPolicy: true,
+      code: "template_repo_policy_missing",
+    },
+  ])(
+    "downgrades v2 when main moves after elevation to $name",
+    async ({ missingPolicy, code }) => {
+      setHappyForkHandlers();
+      setFullyFormedExistingForkHandlers();
+      routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+        Promise.reject(statusError(422, "Repository creation failed"));
+      routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+        full_name: "Cogni-DAO/atlas",
+        fork: true,
+        parent: { full_name: "Cogni-DAO/node-template" },
+        clone_url: "https://github.com/Cogni-DAO/atlas.git",
+      });
+      const contents =
+        routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+      routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) => {
+        if (params.repo === "atlas" && params.ref === "wrong-main") {
+          if (
+            missingPolicy &&
+            params.path === ".cogni/repo-policy.json"
+          ) {
+            return Promise.reject(statusError(404, "Not Found"));
+          }
+          if (params.path === ".cogni/repo-policy.json") {
+            return {
+              type: "file",
+              encoding: "base64",
+              content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString("base64"),
+            };
+          }
+          if (params.path === ".cogni/repo-spec.yaml") {
+            return {
+              type: "file",
+              encoding: "base64",
+              content: Buffer.from("intent:\n  name: wrong\n").toString(
+                "base64"
+              ),
+            };
+          }
+        }
+        return contents(params);
+      };
+      const mainShas = [
+        "advanced-human-main",
+        "advanced-human-main",
+        "advanced-human-main",
+        "wrong-main",
+        "wrong-main",
+      ];
+      let mainReads = 0;
+      routeHandlers["GET /repos/{owner}/{repo}/git/ref/{ref}"] = () => ({
+        object: { sha: mainShas[mainReads++] ?? "wrong-main" },
+      });
+
+      await expect(
+        makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+      ).rejects.toMatchObject({ code, status: 409 });
+
+      const rulesetWrites = requests.filter(
+        (request) =>
+          request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+      );
+      expect(rulesetWrites.at(-1)?.params.bypass_actors).toEqual([]);
+      expect(
+        requests.some(
+          (request) =>
+            request.route.startsWith("POST /repos/{owner}/{repo}/git/") ||
+            request.route.startsWith("PATCH /repos/{owner}/{repo}/git/")
+        )
+      ).toBe(false);
+    }
+  );
 
   it("restarts from the new policy snapshot when reused main advances", async () => {
     setHappyForkHandlers();
@@ -2186,9 +2293,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
         ? {
             type: "file",
             encoding: "base64",
-            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString(
-              "base64"
-            ),
+            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString("base64"),
           }
         : contents(params);
     let mainReads = 0;
@@ -2204,7 +2309,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
       headSha: "concurrent-main",
     });
-    expect(mainReads).toBe(5);
+    expect(mainReads).toBe(6);
     expect(
       requests.some(
         (request) =>
@@ -2217,8 +2322,9 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       (request) =>
         request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
     );
-    expect(rulesetWrites).toHaveLength(1);
-    expect(rulesetWrites[0]?.params.bypass_actors).toEqual([
+    expect(rulesetWrites).toHaveLength(2);
+    expect(rulesetWrites[0]?.params.bypass_actors).toEqual([]);
+    expect(rulesetWrites[1]?.params.bypass_actors).toEqual([
       { actor_id: 1, actor_type: "Integration", bypass_mode: "always" },
     ]);
   });
@@ -2264,9 +2370,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
         ? {
             type: "file",
             encoding: "base64",
-            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString(
-              "base64"
-            ),
+            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString("base64"),
           }
         : contents(params);
     routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = (
@@ -2275,6 +2379,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     const mainShas = [
       "advanced-human-main",
       "advanced-human-main",
+      "concurrent-main",
       "concurrent-main",
       "concurrent-main",
       "concurrent-main",
@@ -2295,11 +2400,61 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       (request) =>
         request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
     );
-    expect(rulesetWrites).toHaveLength(2);
+    expect(rulesetWrites).toHaveLength(3);
     expect(rulesetWrites[0]?.params.bypass_actors).toEqual([]);
-    expect(rulesetWrites[1]?.params.bypass_actors).toEqual([
+    expect(rulesetWrites[1]?.params.bypass_actors).toEqual([]);
+    expect(rulesetWrites[2]?.params.bypass_actors).toEqual([
       { actor_id: 1, actor_type: "Integration", bypass_mode: "always" },
     ]);
+  });
+
+  it("leaves zero bypass after an attempt-three post-elevation race", async () => {
+    setHappyForkHandlers();
+    setFullyFormedExistingForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+    const mainShas = [
+      "main-0",
+      "main-0",
+      "main-0",
+      "main-1",
+      "main-1",
+      "main-1",
+      "main-1",
+      "main-2",
+      "main-2",
+      "main-2",
+      "main-2",
+      "main-3",
+    ];
+    let mainReads = 0;
+    routeHandlers["GET /repos/{owner}/{repo}/git/ref/{ref}"] = () => ({
+      object: { sha: mainShas[mainReads++] ?? "main-3" },
+    });
+
+    await expect(
+      makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+    ).rejects.toMatchObject({ code: "node_formation_raced", status: 409 });
+
+    const rulesetWrites = requests.filter(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(rulesetWrites).toHaveLength(10);
+    expect(rulesetWrites.at(-1)?.params.bypass_actors).toEqual([]);
+    expect(
+      requests.some(
+        (request) =>
+          request.route.startsWith("POST /repos/{owner}/{repo}/git/") ||
+          request.route.startsWith("PATCH /repos/{owner}/{repo}/git/")
+      )
+    ).toBe(false);
   });
 
   it("fails before repo creation when the template policy is missing", async () => {
@@ -5139,6 +5294,9 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
   const REPO = "test-cog";
   const encode = (content: string) =>
     Buffer.from(content, "utf-8").toString("base64");
+  const stableMainRefHandler: RouteHandler = (params) => ({
+    object: { sha: params.repo === REPO ? "node-main" : "template-main" },
+  });
 
   /** Serve node policy + identity; `nodePolicy: null` exercises the legacy fallback. */
   function policyContentsHandler(
@@ -5147,11 +5305,10 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
     nodeName = REPO
   ): RouteHandler {
     return (params) => {
-      expect(params.ref).toBe("main");
-      if (
-        params.repo === REPO &&
-        params.path === ".cogni/repo-spec.yaml"
-      ) {
+      expect(params.ref).toBe(
+        params.repo === REPO ? "node-main" : "template-main"
+      );
+      if (params.repo === REPO && params.path === ".cogni/repo-spec.yaml") {
         return {
           type: "file",
           encoding: "base64",
@@ -5181,6 +5338,7 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
     storedRulesets.clear();
     let postParams: Record<string, unknown> | undefined;
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
       "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
         TEST_NODE_REPO_POLICY_JSON
       ),
@@ -5225,6 +5383,7 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
     storedRulesets.clear();
     let postParams: Record<string, unknown> | undefined;
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
       "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
         TEST_NODE_REPO_POLICY_V2_JSON
       ),
@@ -5255,6 +5414,7 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
 
   it("is a zero-write no-op when the active ruleset already satisfies the policy", async () => {
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
       "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
         TEST_NODE_REPO_POLICY_JSON
       ),
@@ -5284,6 +5444,117 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
     );
   });
 
+  it("keeps a stable compliant v2 ruleset as a zero-write no-op", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_V2_JSON
+      ),
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+      ],
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": () => ({
+        id: 41,
+        source_type: "Repository",
+        ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, "1"),
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).resolves.toMatchObject({ status: "compliant", mismatches: [] });
+
+    expect(
+      requests.some(
+        (request) =>
+          request.route === "POST /repos/{owner}/{repo}/rulesets" ||
+          request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+      )
+    ).toBe(false);
+  });
+
+  it.each([
+    { name: "mismatched identity", missingPolicy: false },
+    { name: "missing policy", missingPolicy: true },
+  ])(
+    "downgrades a compliant v2 bypass when main moves to $name",
+    async ({ missingPolicy }) => {
+      storedRulesets.clear();
+      let nodeMainReads = 0;
+      routeHandlers = {
+        "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => ({
+          object: {
+            sha:
+              params.repo === REPO
+                ? nodeMainReads++ === 0
+                  ? "node-main"
+                  : "invalid-main"
+                : "template-main",
+          },
+        }),
+        "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+          if (params.repo === "node-template") {
+            throw statusError(404, "Not Found");
+          }
+          if (
+            params.ref === "invalid-main" &&
+            params.path === ".cogni/repo-policy.json" &&
+            missingPolicy
+          ) {
+            throw statusError(404, "Not Found");
+          }
+          const content =
+            params.path === ".cogni/repo-policy.json"
+              ? TEST_NODE_REPO_POLICY_V2_JSON
+              : params.ref === "invalid-main"
+                ? "intent:\n  name: wrong\n"
+                : `intent:\n  name: ${REPO}\n`;
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(content),
+          };
+        },
+        "GET /repos/{owner}/{repo}/rulesets": () => [
+          { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+        ],
+        "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+          recordRuleset(params),
+        "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+          storedRulesets.has(41)
+            ? readStoredRuleset(params)
+            : {
+                id: 41,
+                source_type: "Repository",
+                ...nodeMainPolicyRulesetPayload(
+                  TEST_NODE_REPO_POLICY_V2,
+                  "1"
+                ),
+              },
+      };
+
+      await expect(
+        makeWriter().reconcileNodeMainProtection({
+          owner: OWNER,
+          repo: REPO,
+          slug: REPO,
+          isInRepoNode: false,
+        })
+      ).rejects.toMatchObject({ status: 409 });
+
+      const writes = requests.filter(
+        (request) =>
+          request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+      );
+      expect(writes.at(-1)?.params.bypass_actors).toEqual([]);
+    }
+  );
+
   it("repairs a drifted same-named ruleset with a PUT and reports the mismatches", async () => {
     storedRulesets.clear();
     const drifted = nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY);
@@ -5299,6 +5570,7 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
       ];
     }
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
       "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
         TEST_NODE_REPO_POLICY_JSON
       ),
@@ -5336,6 +5608,7 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
     storedRulesets.clear();
     let postParams: Record<string, unknown> | undefined;
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
       "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(null),
       "GET /repos/{owner}/{repo}/rulesets": () => [],
       "POST /repos/{owner}/{repo}/rulesets": (params) => {
@@ -5359,6 +5632,7 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
 
   it("never grants v2 protection from the template fallback", async () => {
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
       "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
         null,
         TEST_NODE_REPO_POLICY_V2_JSON
@@ -5380,6 +5654,7 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
 
   it("never grants v2 protection when repo-spec identity is not exact", async () => {
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
       "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
         TEST_NODE_REPO_POLICY_V2_JSON,
         TEST_NODE_REPO_POLICY_JSON,
@@ -5394,14 +5669,82 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
         slug: REPO,
         isInRepoNode: false,
       })
-    ).rejects.toMatchObject({ code: "node_repo_identity_invalid", status: 409 });
+    ).rejects.toMatchObject({
+      code: "node_repo_identity_invalid",
+      status: 409,
+    });
     expect(
       requests.some((request) => request.route.includes("/rulesets"))
     ).toBe(false);
   });
 
+  it("leaves zero bypass after three reconcile races", async () => {
+    storedRulesets.clear();
+    recordRuleset(
+      {
+        ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, "1"),
+        bypass_actors: [],
+      },
+      41
+    );
+    const mainShas = [
+      "main-0",
+      "main-0",
+      "main-0",
+      "main-1",
+      "main-1",
+      "main-1",
+      "main-1",
+      "main-2",
+      "main-2",
+      "main-2",
+      "main-2",
+      "main-3",
+    ];
+    let mainReads = 0;
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: mainShas[mainReads++] ?? "main-3" },
+      }),
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        const content =
+          params.path === ".cogni/repo-policy.json"
+            ? TEST_NODE_REPO_POLICY_V2_JSON
+            : `intent:\n  name: ${REPO}\n`;
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(content),
+        };
+      },
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+      ],
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        recordRuleset(params),
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        readStoredRuleset(params),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).rejects.toMatchObject({ code: "node_protection_raced", status: 409 });
+
+    const writes = requests.filter(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(writes.at(-1)?.params.bypass_actors).toEqual([]);
+  });
+
   it("surfaces App-lacks-admin as a typed protection_unavailable, never a generic 500", async () => {
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
       "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
         TEST_NODE_REPO_POLICY_JSON
       ),
@@ -5443,6 +5786,7 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
 
   it("fails closed with node_repo_policy_missing when neither the repo nor the template carries a policy", async () => {
     routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": stableMainRefHandler,
       "GET /repos/{owner}/{repo}/contents/{path}": () =>
         Promise.reject(statusError(404, "Not Found")),
     };

@@ -1014,10 +1014,7 @@ export function diffRulesetAgainstPolicy(
       "required_status_checks rule is absent — main can merge with no CI"
     );
   } else if (expectedChecks && activeChecks) {
-    const wantParameters = expectedChecks.parameters as Record<
-      string,
-      unknown
-    >;
+    const wantParameters = expectedChecks.parameters as Record<string, unknown>;
     const gotParameters = (activeChecks.parameters ?? {}) as Record<
       string,
       unknown
@@ -2705,6 +2702,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     // Three snapshots cover the normal State A -> State B transition plus one
     // concurrent-main retry. Continued churn fails closed with a retryable 409.
+    let lastReconciledPolicy: NodeRepoPolicy | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
       let base: { baseCommitSha: string; baseTreeSha: string };
       try {
@@ -2843,16 +2841,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
           }
         );
         try {
-          await octokit.request(
-            "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
-            {
-              owner,
-              repo: slug,
-              ref: "heads/main",
-              sha: commit.sha,
-              force: false,
-            }
-          );
+          await octokit.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", {
+            owner,
+            repo: slug,
+            ref: "heads/main",
+            sha: commit.sha,
+            force: false,
+          });
         } catch (error) {
           if ((error as { status?: number })?.status !== 422) throw error;
         }
@@ -2878,15 +2873,29 @@ export class GitHubRepoWriter implements DeployPlanePort {
           slug
         );
       }
-      if ((await readMainSha()) !== baseCommitSha) continue;
-      await this.ensureNodeMainPolicyRuleset(
+      const policyStable = await this.reconcileNodeMainPolicyRulesetAtSnapshot(
         octokit,
         owner,
         slug,
-        policyAtSnapshot
+        policyAtSnapshot,
+        baseCommitSha
       );
-      if ((await readMainSha()) !== baseCommitSha) continue;
+      lastReconciledPolicy = policyAtSnapshot;
+      if (!policyStable) continue;
       return { cloneUrl, headSha: baseCommitSha };
+    }
+
+    // Any v2 elevation attempted by an unstable snapshot was already downgraded
+    // immediately. Prove the final state is still zero-bypass before reporting the
+    // bounded retry failure; a caller must never inherit an ambiguous App bypass.
+    if (lastReconciledPolicy) {
+      await this.writeNodeMainPolicyRuleset(
+        octokit,
+        owner,
+        slug,
+        lastReconciledPolicy,
+        false
+      );
     }
 
     throw deployPlaneError(
@@ -3876,7 +3885,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * Nodes minted before the #1797/task.5028 backstop (or whose ruleset drifted) carry no
    * required-status-check protection, so the operator merge gate fail-closes every PR on them
    * (`not_green` on an empty required-context set). This verb re-applies the SAME canonical
-   * policy `forkFromTemplate` applies at birth, through the SAME `ensureNodeMainPolicyRuleset`
+   * policy `forkFromTemplate` applies at birth, through the SAME exact-snapshot staged
    * write+readback path — one protection SSOT, no second config.
    *
    * POLICY_IS_BOUND_TO_THE_INHERITED_TREE, reconcile flavor: the policy is read from the node
@@ -3916,128 +3925,195 @@ export class GitHubRepoWriter implements DeployPlanePort {
       );
     }
 
-    // Policy read: the node's own main first, canonical template as birth-parity fallback.
-    let policySource: "node_repo" | "template" = "node_repo";
-    let policyText = await this.fetchFileText({
-      owner,
-      repo,
-      path: NODE_REPO_POLICY_PATH,
-      ref: "main",
-    });
-    if (policyText === null) {
-      policySource = "template";
-      policyText = await this.fetchFileText({
-        owner,
-        repo: TEMPLATE_SLUG,
-        path: NODE_REPO_POLICY_PATH,
-        ref: "main",
-      });
-    }
-    if (policyText === null) {
-      throw deployPlaneError(
-        "node_repo_policy_missing",
-        `${owner}/${repo}@main and ${owner}/${TEMPLATE_SLUG}@main are both missing ${NODE_REPO_POLICY_PATH}`,
-        409
-      );
-    }
-    let policy: NodeRepoPolicy;
-    try {
-      policy = parseNodeRepoPolicy(policyText);
-    } catch (error) {
-      throw deployPlaneError(
-        "node_repo_policy_invalid",
-        `${policySource === "node_repo" ? `${owner}/${repo}` : `${owner}/${TEMPLATE_SLUG}`}@main has an invalid ${NODE_REPO_POLICY_PATH}: ${String(error)}`,
-        409
-      );
-    }
-    if (policy.schemaVersion === "cogni.node-repo-policy.v2") {
-      if (policySource !== "node_repo") {
-        throw deployPlaneError(
-          "node_repo_policy_invalid",
-          `${owner}/${repo}@main must carry its own v2 ${NODE_REPO_POLICY_PATH}; template fallback may not grant an operator bypass`,
-          409
-        );
-      }
-      const repoSpecText = await this.fetchFileText({
-        owner,
-        repo,
-        path: ".cogni/repo-spec.yaml",
-        ref: "main",
-      });
-      let nodeName: string;
-      try {
-        nodeName = repoSpecText ? parseRepoSpecNodeName(repoSpecText) : "";
-      } catch {
-        nodeName = "";
-      }
-      if (repo !== slug || nodeName !== slug) {
-        throw deployPlaneError(
-          "node_repo_identity_invalid",
-          `${owner}/${repo}@main must bind repo-spec intent.name, repository, and requested node to ${JSON.stringify(slug)} before v2 protection can grant a bypass`,
-          409
-        );
-      }
-    }
-
     const octokit = await this.getOctokit(owner, repo);
-    const payload = nodeMainPolicyRulesetPayload(policy, this.config.appId);
-    try {
-      // Pre-check so a compliant repo is a zero-write no-op (and so the write path can
-      // report WHY it wrote — the mismatches, or the ruleset's outright absence).
-      const { data: rulesets } = await octokit.request(
-        "GET /repos/{owner}/{repo}/rulesets",
-        { owner, repo }
+    const readMainSha = async (
+      targetOctokit: Octokit,
+      targetRepo: string
+    ): Promise<string> => {
+      const { data } = await targetOctokit.request(
+        "GET /repos/{owner}/{repo}/git/ref/{ref}",
+        { owner, repo: targetRepo, ref: "heads/main" }
       );
-      const existing = (
-        rulesets as ReadonlyArray<{ id: number; name: string }>
-      ).find((ruleset) => ruleset.name === policy.ruleset.name);
-      let mismatches: readonly string[];
-      if (existing) {
-        const { data: active } = await octokit.request(
-          "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
-          { owner, repo, ruleset_id: existing.id }
-        );
-        mismatches = diffRulesetAgainstPolicy(
-          active as RulesetResponse,
-          payload
-        );
-        if (mismatches.length === 0) {
-          this.log.info(
-            { owner, repo, slug, ruleset: policy.ruleset.name, policySource },
-            "node main protection already compliant; no write"
-          );
-          return {
-            status: "compliant",
-            policySource,
-            rulesetName: policy.ruleset.name,
-            requiredContexts: policy.ruleset.requiredStatusChecks.contexts,
-            mismatches: [],
-          };
-        }
-      } else {
-        mismatches = [`ruleset "${policy.ruleset.name}" absent`];
-      }
-
-      // Same create/repair + readback-proof path birth uses (PROTECTION_HAS_ONE_SSOT).
-      await this.ensureNodeMainPolicyRuleset(octokit, owner, repo, policy);
-      this.log.info(
-        {
+      return data.object.sha;
+    };
+    let lastPolicy: NodeRepoPolicy | undefined;
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const snapshotSha = await readMainSha(octokit, repo);
+        let policySource: "node_repo" | "template" = "node_repo";
+        let policyRef = snapshotSha;
+        let policyText = await this.readFileAtRef(
+          octokit,
           owner,
           repo,
-          slug,
-          ruleset: policy.ruleset.name,
+          NODE_REPO_POLICY_PATH,
+          snapshotSha
+        );
+        if (policyText === null) {
+          policySource = "template";
+          const templateOctokit = await this.getOctokit(owner, TEMPLATE_SLUG);
+          policyRef = await readMainSha(templateOctokit, TEMPLATE_SLUG);
+          policyText = await this.readFileAtRef(
+            templateOctokit,
+            owner,
+            TEMPLATE_SLUG,
+            NODE_REPO_POLICY_PATH,
+            policyRef
+          );
+        }
+        if (policyText === null) {
+          throw deployPlaneError(
+            "node_repo_policy_missing",
+            `${owner}/${repo}@${snapshotSha} and ${owner}/${TEMPLATE_SLUG}@${policyRef} are both missing ${NODE_REPO_POLICY_PATH}`,
+            409
+          );
+        }
+        let policy: NodeRepoPolicy;
+        try {
+          policy = parseNodeRepoPolicy(policyText);
+        } catch (error) {
+          throw deployPlaneError(
+            "node_repo_policy_invalid",
+            `${policySource === "node_repo" ? `${owner}/${repo}` : `${owner}/${TEMPLATE_SLUG}`}@${policyRef} has an invalid ${NODE_REPO_POLICY_PATH}: ${String(error)}`,
+            409
+          );
+        }
+        lastPolicy = policy;
+        if (policy.schemaVersion === "cogni.node-repo-policy.v2") {
+          if (policySource !== "node_repo") {
+            throw deployPlaneError(
+              "node_repo_policy_invalid",
+              `${owner}/${repo}@${snapshotSha} must carry its own v2 ${NODE_REPO_POLICY_PATH}; template fallback may not grant an operator bypass`,
+              409
+            );
+          }
+          const repoSpecText = await this.readFileAtRef(
+            octokit,
+            owner,
+            repo,
+            ".cogni/repo-spec.yaml",
+            snapshotSha
+          );
+          let nodeName: string;
+          try {
+            nodeName = repoSpecText ? parseRepoSpecNodeName(repoSpecText) : "";
+          } catch {
+            nodeName = "";
+          }
+          if (repo !== slug || nodeName !== slug) {
+            throw deployPlaneError(
+              "node_repo_identity_invalid",
+              `${owner}/${repo}@${snapshotSha} must bind repo-spec intent.name, repository, and requested node to ${JSON.stringify(slug)} before v2 protection can grant a bypass`,
+              409
+            );
+          }
+        }
+
+        const payload = nodeMainPolicyRulesetPayload(
+          policy,
+          this.config.appId
+        );
+        const { data: rulesets } = await octokit.request(
+          "GET /repos/{owner}/{repo}/rulesets",
+          { owner, repo }
+        );
+        const existing = (
+          rulesets as ReadonlyArray<{ id: number; name: string }>
+        ).find((ruleset) => ruleset.name === policy.ruleset.name);
+        let mismatches: readonly string[];
+        if (existing) {
+          const { data: active } = await octokit.request(
+            "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+            { owner, repo, ruleset_id: existing.id }
+          );
+          mismatches = diffRulesetAgainstPolicy(
+            active as RulesetResponse,
+            payload
+          );
+          if (mismatches.length === 0) {
+            try {
+              if ((await readMainSha(octokit, repo)) !== snapshotSha) {
+                if (policy.schemaVersion === "cogni.node-repo-policy.v2") {
+                  await this.writeNodeMainPolicyRuleset(
+                    octokit,
+                    owner,
+                    repo,
+                    policy,
+                    false
+                  );
+                }
+                continue;
+              }
+            } catch (error) {
+              if (policy.schemaVersion === "cogni.node-repo-policy.v2") {
+                await this.writeNodeMainPolicyRuleset(
+                  octokit,
+                  owner,
+                  repo,
+                  policy,
+                  false
+                );
+              }
+              throw error;
+            }
+            this.log.info(
+              { owner, repo, slug, ruleset: policy.ruleset.name, policySource },
+              "node main protection already compliant; no write"
+            );
+            return {
+              status: "compliant",
+              policySource,
+              rulesetName: policy.ruleset.name,
+              requiredContexts: policy.ruleset.requiredStatusChecks.contexts,
+              mismatches: [],
+            };
+          }
+        } else {
+          mismatches = [`ruleset "${policy.ruleset.name}" absent`];
+        }
+
+        const stable = await this.reconcileNodeMainPolicyRulesetAtSnapshot(
+          octokit,
+          owner,
+          repo,
+          policy,
+          snapshotSha
+        );
+        if (!stable) continue;
+        this.log.info(
+          {
+            owner,
+            repo,
+            slug,
+            ruleset: policy.ruleset.name,
+            policySource,
+            mismatches,
+          },
+          "node main protection reconciled onto existing repo"
+        );
+        return {
+          status: "applied",
           policySource,
+          rulesetName: policy.ruleset.name,
+          requiredContexts: policy.ruleset.requiredStatusChecks.contexts,
           mismatches,
-        },
-        "node main protection reconciled onto existing repo"
+        };
+      }
+
+      if (lastPolicy) {
+        await this.writeNodeMainPolicyRuleset(
+          octokit,
+          owner,
+          repo,
+          lastPolicy,
+          false
+        );
+      }
+      throw deployPlaneError(
+        "node_protection_raced",
+        `${owner}/${repo} main did not remain stable during three protection attempts; retry later`,
+        409
       );
-      return {
-        status: "applied",
-        policySource,
-        rulesetName: policy.ruleset.name,
-        requiredContexts: policy.ruleset.requiredStatusChecks.contexts,
-        mismatches,
-      };
     } catch (error) {
       const status = (error as { status?: number })?.status;
       if (status === 403) {
@@ -5096,11 +5172,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * `administration:write`, and formation must fail rather than report a repo born
    * without an independent GitHub merge backstop.
    */
-  private async ensureNodeMainPolicyRuleset(
+  private async writeNodeMainPolicyRuleset(
     octokit: Octokit,
     owner: string,
     repo: string,
-    policy: NodeRepoPolicy
+    policy: NodeRepoPolicy,
+    grantOperatorBypass: boolean
   ): Promise<void> {
     const { data: rulesets } = await octokit.request(
       "GET /repos/{owner}/{repo}/rulesets",
@@ -5109,7 +5186,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
     const existing = (
       rulesets as ReadonlyArray<{ id: number; name: string }>
     ).find((ruleset) => ruleset.name === policy.ruleset.name);
-    const payload = nodeMainPolicyRulesetPayload(policy, this.config.appId);
+    const canonicalPayload = nodeMainPolicyRulesetPayload(
+      policy,
+      this.config.appId
+    );
+    const payload = grantOperatorBypass
+      ? canonicalPayload
+      : { ...canonicalPayload, bypass_actors: [] };
 
     const rulesetId = existing
       ? ((
@@ -5154,6 +5237,61 @@ export class GitHubRepoWriter implements DeployPlanePort {
         `node ${owner}/${repo} protection readback mismatch: ${mismatches.join("; ")}`
       );
     }
+  }
+
+  /**
+   * Reconcile protection against one exact node-main snapshot.
+   *
+   * The semantic v2 App bypass is never written onto an unprotected or moving
+   * branch. Every attempt first installs and proves the same policy with ZERO
+   * bypass, proves main still equals the parsed snapshot, then elevates to the one
+   * configured App. Any movement or ambiguous failure after elevation immediately
+   * restores and proves zero bypass before the caller retries or throws.
+   */
+  private async reconcileNodeMainPolicyRulesetAtSnapshot(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    policy: NodeRepoPolicy,
+    snapshotSha: string
+  ): Promise<boolean> {
+    const readMainSha = async (): Promise<string> => {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/git/ref/{ref}",
+        { owner, repo, ref: "heads/main" }
+      );
+      return data.object.sha;
+    };
+    const downgrade = () =>
+      this.writeNodeMainPolicyRuleset(octokit, owner, repo, policy, false);
+
+    if ((await readMainSha()) !== snapshotSha) return false;
+    await downgrade();
+    if ((await readMainSha()) !== snapshotSha) return false;
+    if (policy.schemaVersion === "cogni.node-repo-policy.v1") return true;
+
+    try {
+      await this.writeNodeMainPolicyRuleset(
+        octokit,
+        owner,
+        repo,
+        policy,
+        true
+      );
+      if ((await readMainSha()) === snapshotSha) return true;
+    } catch (error) {
+      try {
+        await downgrade();
+      } catch (rollbackError) {
+        throw new Error(
+          `node ${owner}/${repo} v2 protection failed (${String(error)}) and zero-bypass rollback could not be proven: ${String(rollbackError)}`
+        );
+      }
+      throw error;
+    }
+
+    await downgrade();
+    return false;
   }
 
   /**
