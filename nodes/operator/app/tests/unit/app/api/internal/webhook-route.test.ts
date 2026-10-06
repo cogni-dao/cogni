@@ -21,6 +21,7 @@ const fakes = vi.hoisted(() => ({
   deliver: vi.fn(),
   review: vi.fn(),
   preview: vi.fn(),
+  autoMerge: vi.fn(),
   signal: vi.fn(),
 }));
 
@@ -54,6 +55,7 @@ vi.mock("@/bootstrap/container", () => ({
       ],
     ]),
     receiptDelivery: { deliverReceipts: fakes.deliver },
+    vcsCapability: {},
   }),
   resolveAttributionProfileResolver: () => ({
     resolveRepoRoute: fakes.catalogLookup,
@@ -64,6 +66,9 @@ vi.mock("@/app/_facades/review/dispatch.server", () => ({
 }));
 vi.mock("@/app/_facades/deploy/node-preview-promote.server", () => ({
   dispatchNodePreviewPromote: fakes.preview,
+}));
+vi.mock("@/app/_facades/deploy/operator-change-auto-merge.server", () => ({
+  dispatchOperatorChangeAutoMerge: fakes.autoMerge,
 }));
 vi.mock("@/features/governance/services/signal-dispatch", () => ({
   dispatchSignalExecution: fakes.signal,

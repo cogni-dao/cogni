@@ -32,6 +32,11 @@ export const stubVcsCapability: VcsCapability = {
       "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
     );
   },
+  verifyOperatorChange: async () => {
+    throw new Error(
+      "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
+    );
+  },
   mergePr: async () => {
     throw new Error(
       "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
@@ -73,5 +78,14 @@ export function createVcsCapability(env: ServerEnv): VcsCapability {
 
   const privateKey = Buffer.from(privateKeyBase64, "base64").toString("utf-8");
 
-  return new GitHubVcsAdapter({ appId, privateKey });
+  return new GitHubVcsAdapter({
+    appId,
+    privateKey,
+    ...(env.NODE_SUBMODULE_PARENT_OWNER
+      ? { operatorChangePolicyOwner: env.NODE_SUBMODULE_PARENT_OWNER }
+      : {}),
+    ...(env.NODE_SUBMODULE_PARENT_REPO
+      ? { operatorChangePolicyRepo: env.NODE_SUBMODULE_PARENT_REPO }
+      : {}),
+  });
 }

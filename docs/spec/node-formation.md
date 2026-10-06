@@ -345,6 +345,44 @@ Populated later by `pnpm node:activate-payments` (child node CLI):
 
 ### Node Publish (Operator-Authored Submodule PR)
 
+#### Unified generated-change envelope
+
+The parent registration PR may use the narrow fast path only when it is a
+single, data-only node declaration. The operator App writes one commit on
+`cogni-operator/node-register-<slug>` with this canonical envelope:
+
+```text
+feat(node): register <slug>
+
+Cogni-Change-Type: cogni.operator-change.v1
+Cogni-Operation: node.register
+Cogni-Node: <slug>
+Cogni-Node-Id: <uuid>
+Cogni-Source-Repo: https://github.com/<fleet-org>/<slug>.git
+Cogni-Source-SHA: <40-hex child main SHA>
+Cogni-Base-SHA: <40-hex parent main SHA>
+Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
+```
+
+`APP_SIGNATURE_IS_IDENTITY_NOT_SEMANTICS`: the App signature identifies the
+writer; it does not prove the generated tree is correct. CI therefore executes
+the classifier from `origin/main`, verifies the exact repository-scoped App,
+signature, branch, one-commit history, trailers, parent/base SHA, and path hash,
+then replays the trusted birth plan and requires a byte-identical result.
+
+`REGISTER_REPLAY_IS_COMPLETE_OR_DISABLED`: the current writer has 14 outputs. Thirteen declarative
+outputs can be replayed exactly (catalog, overlays, AppSets and their index, Caddy, and scheduler
+projections). The executable compiled roster cannot. Registration therefore stays disabled until
+that roster write is removed or a trusted exact verifier can reproduce the entire changed tree.
+
+`CLAIMED_INVALID_IS_RED`: a commit that claims `cogni.operator-change.v1` but fails
+any proof is rejected. A human edit, additional commit, unsigned/non-App
+commit, or ordinary unclaimed PR takes the standard CI and queue lane.
+
+The fast path ends at the parent declaration. The child repo still runs its
+standard merge gate, publishes `sha-<sourceSha>`, passes candidate exact-SHA
+validation, and promotes that identical digest to production.
+
 After Formation returns a verified repo-spec fragment, the **operator** mints the node's own repo and pins it into the monorepo as a git **submodule** — the **Publish** phase (task.5092). No GitHub Action and no human PAT: the operator holds GitHub App installation auth and drives the GitHub REST + Git Data API directly.
 
 **Why a submodule, not an inline clone:** a node is ~1100 files. Inlining them into the operator tree (the prior model) bloated the monorepo by a full app fork per node. Instead the node lives in **its own repo** (`Cogni-DAO/<slug>`), pinned at `nodes/<slug>` by a `160000` gitlink — the operator PR is a pointer + the catalog/overlay footprint, not 1100 lines. (`SUBMODULE_GITLINK_IS_OPERATOR_PIN` — see [node-ci-cd-contract.md](node-ci-cd-contract.md) § Submodule-pinned nodes.)

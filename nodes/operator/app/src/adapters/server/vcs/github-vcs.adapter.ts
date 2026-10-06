@@ -27,11 +27,19 @@ import type {
   CreateBranchResult,
   DispatchCandidateFlightResult,
   MergeResult,
+  OperatorChangeVerificationResult,
   PrSummary,
   VcsCapability,
 } from "@cogni/ai-tools";
+import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
+import { parse as parseYaml } from "yaml";
+import {
+  classifyOperatorChangeForMerge,
+  type OperatorChangeFacts,
+  parseOperatorChangeRegistry,
+} from "@/shared/vcs/operator-change-policy";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +48,9 @@ import { Octokit } from "@octokit/core";
 export interface GitHubVcsAdapterConfig {
   readonly appId: string;
   readonly privateKey: string;
+  /** Trusted repository whose main branch owns generated-change policy. */
+  readonly operatorChangePolicyOwner?: string;
+  readonly operatorChangePolicyRepo?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,8 +119,8 @@ export class GitHubVcsAdapter implements VcsCapability {
     );
 
     // Fetch check runs, combined status, and reviews in parallel
-    const [checksResponse, statusResponse, reviewsResponse] = await Promise.all(
-      [
+    const [checksResponse, statusResponse, reviewsResponse, commitResponse] =
+      await Promise.all([
         octokit.request("GET /repos/{owner}/{repo}/commits/{ref}/check-runs", {
           owner: params.owner,
           repo: params.repo,
@@ -130,8 +141,12 @@ export class GitHubVcsAdapter implements VcsCapability {
             per_page: 100,
           }
         ),
-      ]
-    );
+        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+          owner: params.owner,
+          repo: params.repo,
+          ref: pr.head.sha,
+        }),
+      ]);
 
     const rawCheckRuns = checksResponse.data.check_runs as Array<{
       name: string;
@@ -249,6 +264,12 @@ export class GitHubVcsAdapter implements VcsCapability {
       author: pr.user?.login ?? "unknown",
       baseBranch: pr.base.ref,
       headSha: pr.head.sha,
+      baseSha: pr.base.sha,
+      ...(commitResponse.data.parents?.length === 1 &&
+      commitResponse.data.parents[0]?.sha
+        ? { headParentSha: commitResponse.data.parents[0].sha }
+        : {}),
+      headCommitMessage: commitResponse.data.commit.message,
       mergeable: pr.mergeable,
       reviewDecision,
       labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name) ?? ""),
@@ -257,6 +278,259 @@ export class GitHubVcsAdapter implements VcsCapability {
       pending,
       checks,
     };
+  }
+
+  async verifyOperatorChange(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    expectedHeadSha: string;
+  }): Promise<OperatorChangeVerificationResult> {
+    const targetOctokit = await this.getOctokit(params.owner, params.repo);
+    const { data: pr } = await targetOctokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      {
+        owner: params.owner,
+        repo: params.repo,
+        pull_number: params.prNumber,
+      }
+    );
+    const baseSha = pr.base.sha;
+    const headSha = pr.head.sha;
+    const fail = (reason: string): OperatorChangeVerificationResult => ({
+      eligible: false,
+      reason,
+      headSha,
+      baseSha,
+    });
+    if (
+      !this.config.operatorChangePolicyOwner ||
+      !this.config.operatorChangePolicyRepo
+    ) {
+      return fail("trusted-policy-repository-unconfigured");
+    }
+
+    const policyOctokit = await this.getOctokit(
+      this.config.operatorChangePolicyOwner,
+      this.config.operatorChangePolicyRepo
+    );
+    const registryText = await this.readFileText(
+      policyOctokit,
+      this.config.operatorChangePolicyOwner,
+      this.config.operatorChangePolicyRepo,
+      "scripts/ci/operator-change-v1.allowlist.json",
+      "main"
+    );
+    if (registryText === null) return fail("trusted-registry-unavailable");
+    let registryValue: unknown;
+    try {
+      registryValue = JSON.parse(registryText);
+    } catch {
+      return fail("invalid-trusted-registry");
+    }
+    const registry = parseOperatorChangeRegistry(registryValue);
+    if (registry === null) return fail("invalid-trusted-registry");
+
+    const [commitResponse, filesResponse, baseRepoSpec] = await Promise.all([
+      targetOctokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+        owner: params.owner,
+        repo: params.repo,
+        ref: headSha,
+      }),
+      targetOctokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/files",
+        {
+          owner: params.owner,
+          repo: params.repo,
+          pull_number: params.prNumber,
+          per_page: 100,
+          page: 1,
+        }
+      ),
+      this.readFileText(
+        targetOctokit,
+        params.owner,
+        params.repo,
+        ".cogni/repo-spec.yaml",
+        baseSha
+      ),
+    ]);
+    if (filesResponse.headers.link?.includes('rel="next"')) {
+      return fail("changed-file-list-truncated");
+    }
+    const commit = commitResponse.data;
+    let repositoryNode: string | null = null;
+    if (baseRepoSpec !== null) {
+      try {
+        const parsedSpec = parseYaml(baseRepoSpec) as {
+          intent?: { name?: unknown };
+        } | null;
+        if (typeof parsedSpec?.intent?.name === "string") {
+          repositoryNode = parsedSpec.intent.name;
+        }
+      } catch {
+        repositoryNode = null;
+      }
+    }
+    const facts: OperatorChangeFacts = {
+      repository: `${params.owner}/${params.repo}`,
+      repositoryNode,
+      expectedHeadSha: params.expectedHeadSha,
+      pr: {
+        state: pr.state,
+        baseRef: pr.base.ref,
+        baseSha,
+        headRef: pr.head.ref,
+        headSha,
+        headRepoFullName: pr.head.repo?.full_name ?? null,
+        commitCount: pr.commits,
+        userLogin: pr.user?.login ?? null,
+        userId: pr.user?.id ?? null,
+        userType: pr.user?.type ?? null,
+      },
+      commit: {
+        sha: commit.sha,
+        message: commit.commit.message,
+        verified: commit.commit.verification?.verified === true,
+        verificationReason: commit.commit.verification?.reason ?? null,
+        authorLogin: commit.author?.login ?? null,
+        authorId: commit.author?.id ?? null,
+        parents: commit.parents.map((parent) => parent.sha),
+      },
+      files: filesResponse.data.map((file) => ({
+        filename: file.filename,
+        previousFilename: file.previous_filename ?? null,
+        status: file.status,
+      })),
+      registry,
+      operationReplayVerified: false,
+    };
+
+    const structural = classifyOperatorChangeForMerge(facts);
+    if (
+      structural.reason !== "operation-replay-failed" ||
+      !structural.operation ||
+      !structural.node
+    ) {
+      return structural;
+    }
+    const operationReplayVerified = await this.verifyOperatorChangeReplay({
+      targetOctokit,
+      policyOctokit,
+      owner: params.owner,
+      repo: params.repo,
+      baseSha,
+      headSha,
+      operation: structural.operation,
+      node: structural.node,
+      files: facts.files.map((file) => file.filename),
+    });
+    return classifyOperatorChangeForMerge({
+      ...facts,
+      operationReplayVerified,
+    });
+  }
+
+  private async verifyOperatorChangeReplay(input: {
+    targetOctokit: Octokit;
+    policyOctokit: Octokit;
+    owner: string;
+    repo: string;
+    baseSha: string;
+    headSha: string;
+    operation: string;
+    node: string;
+    files: readonly string[];
+  }): Promise<boolean> {
+    // The child-repository operation has a compact complete replay: one stock
+    // repo-spec splice plus an exact parent-catalog source_repo binding. Parent
+    // operations stay disabled until their shared generator plans are callable
+    // here; enabling their registry entry before then remains fail-closed.
+    if (
+      input.operation !== "deployment.declare" ||
+      input.files.length !== 1 ||
+      input.files[0] !== ".cogni/repo-spec.yaml" ||
+      !this.config.operatorChangePolicyOwner ||
+      !this.config.operatorChangePolicyRepo
+    ) {
+      return false;
+    }
+    const [baseSpec, headSpec, catalog] = await Promise.all([
+      this.readFileText(
+        input.targetOctokit,
+        input.owner,
+        input.repo,
+        ".cogni/repo-spec.yaml",
+        input.baseSha
+      ),
+      this.readFileText(
+        input.targetOctokit,
+        input.owner,
+        input.repo,
+        ".cogni/repo-spec.yaml",
+        input.headSha
+      ),
+      this.readFileText(
+        input.policyOctokit,
+        this.config.operatorChangePolicyOwner,
+        this.config.operatorChangePolicyRepo,
+        `infra/catalog/${input.node}.yaml`,
+        "main"
+      ),
+    ]);
+    if (baseSpec === null || headSpec === null || catalog === null)
+      return false;
+    let parsedCatalog: unknown;
+    try {
+      parsedCatalog = parseYaml(catalog);
+    } catch {
+      return false;
+    }
+    if (
+      parsedCatalog === null ||
+      typeof parsedCatalog !== "object" ||
+      Array.isArray(parsedCatalog)
+    ) {
+      return false;
+    }
+    const row = parsedCatalog as Record<string, unknown>;
+    const expectedSourceRepo = `https://github.com/${input.owner}/${input.repo}.git`;
+    if (
+      row.name !== input.node ||
+      typeof row.source_repo !== "string" ||
+      row.source_repo.toLowerCase() !== expectedSourceRepo.toLowerCase()
+    ) {
+      return false;
+    }
+    return renderDeploymentActivationSpec(baseSpec) === headSpec;
+  }
+
+  private async readFileText(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string
+  ): Promise<string | null> {
+    try {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        { owner, repo, path, ref }
+      );
+      if (
+        Array.isArray(data) ||
+        data.type !== "file" ||
+        typeof data.content !== "string"
+      ) {
+        return null;
+      }
+      return Buffer.from(data.content.replaceAll("\n", ""), "base64").toString(
+        "utf8"
+      );
+    } catch (error) {
+      if ((error as { status?: number })?.status === 404) return null;
+      throw error;
+    }
   }
 
   /**

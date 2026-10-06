@@ -44,10 +44,10 @@ import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import {
   diffMergeQueueRuleset,
   diffRulesetAgainstPolicy,
-  envManagerCommitMessage,
   GitHubRepoWriter,
   MERGE_QUEUE_RULESET_NAME,
   nodeMainPolicyRulesetPayload,
+  operatorChangeCommitMessage,
   parseMergeQueueRulesetFixture,
   rulesetGetToPutPayload,
 } from "@/adapters/server/vcs/github-repo-write";
@@ -83,14 +83,15 @@ const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
 const TEST_NODE_REPO_POLICY = parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON);
 const NODE_MAIN_POLICY_RULESET_NAME = TEST_NODE_REPO_POLICY.ruleset.name;
 
-describe("envManagerCommitMessage", () => {
+describe("operatorChangeCommitMessage", () => {
   it("signs the reserved change type and canonical changed-path hash into trailers", () => {
     expect(
-      envManagerCommitMessage({
+      operatorChangeCommitMessage({
         subject: "feat(node): add blue to preview",
+        operation: "env.membership",
         node: "blue",
-        env: "preview",
-        action: "add",
+        baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        trailers: { Environment: "preview", Action: "add" },
         paths: [
           "infra/k8s/overlays/preview/blue/kustomization.yaml",
           "infra/catalog/blue.yaml",
@@ -99,8 +100,10 @@ describe("envManagerCommitMessage", () => {
       })
     ).toBe(`feat(node): add blue to preview
 
-Cogni-Change-Type: cogni.env-manager.v1
+Cogni-Change-Type: cogni.operator-change.v1
+Cogni-Operation: env.membership
 Cogni-Node: blue
+Cogni-Base-SHA: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 Cogni-Environment: preview
 Cogni-Action: add
 Cogni-Changed-Paths-SHA256: 5ea8c8b4211282862f6994711022e66f653acad1ce626590338e1b2fdfdf2866`);
@@ -906,8 +909,11 @@ governance:
         return { sha: "deployment-tree" };
       },
       "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params.message).toContain(
+          "Cogni-Change-Type: cogni.operator-change.v1"
+        );
+        expect(params.message).toContain("Cogni-Operation: deployment.declare");
         expect(params).toMatchObject({
-          message: "feat(deploy): declare test-cog node deployment",
           tree: "deployment-tree",
           parents: ["main-sha"],
         });
@@ -2210,10 +2216,13 @@ node_port: 30200
         return { sha: "birth-tree" };
       },
       "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params.message).toContain(
+          "Cogni-Change-Type: cogni.operator-change.v1"
+        );
+        expect(params.message).toContain("Cogni-Operation: node.register");
         expect(params).toMatchObject({
           owner: "Cogni-DAO",
           repo: "cogni",
-          message: "feat(node): register atlas",
           tree: "birth-tree",
           parents: ["parent-main"],
         });

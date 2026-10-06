@@ -1,0 +1,46 @@
+{
+  "version": "cogni.operator-change.v1",
+  "repositories": {
+    "cogni-dao/cogni": {
+      "botLogin": "cogni-operator[bot]",
+      "botId": 265189974
+    },
+    "cogni-test-org/cogni-monorepo": {
+      "botLogin": "cogni-operator-test[bot]",
+      "botId": 290565426
+    }
+  },
+  "childRepositoryApps": {
+    "cogni-dao": {
+      "botLogin": "cogni-operator[bot]",
+      "botId": 265189974
+    },
+    "cogni-test-org": {
+      "botLogin": "cogni-operator-test[bot]",
+      "botId": 290565426
+    }
+  },
+  "operations": {
+    "env.membership": {
+      "enabledRepositories": [],
+      "verifier": "scripts/ci/verifiers/verify-env-membership.sh"
+    },
+    "env.placement": {
+      "enabledRepositories": [],
+      "verifier": "scripts/ci/verifiers/verify-env-placement.sh"
+    },
+    "env.region": {
+      "enabledRepositories": [],
+      "verifier": "scripts/ci/verifiers/verify-env-region.sh"
+    },
+    "node.register": {
+      "enabledRepositories": [],
+      "verifier": "scripts/ci/verifiers/verify-node-register.sh"
+    },
+    "deployment.declare": {
+      "enabledRepositories": [],
+      "enabledChildOwners": [],
+      "verifier": "scripts/ci/verifiers/verify-deployment-declare.sh"
+    }
+  }
+}

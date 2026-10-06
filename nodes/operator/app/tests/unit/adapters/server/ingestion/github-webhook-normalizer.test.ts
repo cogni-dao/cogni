@@ -457,6 +457,7 @@ describe("GitHubWebhookNormalizer", () => {
       expect(normalizer.supportedEvents).toContain("issues");
       expect(normalizer.supportedEvents).toContain("issue_comment");
       expect(normalizer.supportedEvents).toContain("push");
+      expect(normalizer.supportedEvents).toContain("check_run");
     });
   });
 });

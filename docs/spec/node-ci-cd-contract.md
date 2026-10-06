@@ -72,6 +72,19 @@ The simplification target is one artifact contract and one promotion primitive. 
     or `controlEnvFor` (`nodes/operator/app/src/features/compute/node-deployment-provider.ts`)
     — never by reading the env variable directly. See `## Lane vs control env` below.
 
+12. **ONE_GENERATED_CHANGE_PROTOCOL**: every operator-generated environment or deployment PR uses
+    `cogni.operator-change.v1`, one trusted classifier, and one versioned allowlist. Parent CI loads
+    it from `origin/main`; child CI calls the canonical reusable workflow at an exact reviewed SHA.
+    Each operation has a byte-exact replay verifier; an incomplete operation stays disabled. The child source repo keeps standard
+    CI, immutable image publication, candidate exact-SHA proof, and same-digest
+    production promotion. App signature proves authorship, not correctness.
+
+13. **CLAIMED_GENERATED_TYPES_FAIL_CLOSED**: a malformed reserved generated
+    claim is red; it does not silently become an ordinary PR. Unclaimed PRs and
+    human-edited/multi-commit PRs use ordinary CI and the merge queue. A direct
+    generated merge must bind GitHub's expected-head SHA after re-reading the
+    current base and head.
+
 ---
 
 ## Lane vs control env

@@ -132,7 +132,10 @@ image gate is the parent `candidate-flight.yml` digest resolution step, which ru
 visibility is not an API preflight gate; parent workflow and deploy-time image-pull credentials are
 separate substrate concerns.
 
-4. **Subscribe to events:** Issues, Issue comment, Pull request, Pull request review, Push
+4. **Subscribe to events:** Issues, Issue comment, Pull request, Pull request review, Push, Check run.
+   The verified Check run delivery only wakes the internal expected-head merge evaluation. The
+   operator independently re-fetches and reclassifies the PR against parent-main policy; the check
+   name and producer grant no authority. Every disabled, unlisted, or ordinary PR is ignored.
 
 5. Click **Create GitHub App**. Note the **App ID**.
 
