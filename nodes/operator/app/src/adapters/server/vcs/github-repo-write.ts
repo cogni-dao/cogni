@@ -2598,9 +2598,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
     // pass its first CI run (bug.5046/task.5032).
     await this.assertTemplateSourceCompatible(tplOctokit, templateOwner);
 
-    // Mint the repo as a named fork — idempotent: a prior partial run (fork created, pin PR failed)
-    // re-runs cleanly by reusing the existing matching fork instead of 422-ing on the duplicate name.
+    // Mint the repo as a named fork. A same-name template fork may be observed on
+    // retry, but it is NEVER rewritten: v2 intentionally lets the operator App
+    // bypass main protection for a verified generated-change CAS, so replaying the
+    // legacy force-update formation path would create an unsigned alternate writer.
     let cloneUrl: string;
+    let createdNewFork = true;
     try {
       const { data: created } = await tplOctokit.request(
         "POST /repos/{owner}/{repo}/forks",
@@ -2626,6 +2629,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         slug
       );
       cloneUrl = existingRepo.data.clone_url;
+      createdNewFork = false;
     }
 
     // Forking is async. Resolve main with a short retry before committing identity.
@@ -2646,8 +2650,97 @@ export class GitHubRepoWriter implements DeployPlanePort {
         `forkFromTemplate: ${owner}/${slug} main not ready after fork`
       );
     }
-    await this.ensureActionsEnabled(octokit, owner, slug);
     const { baseCommitSha, baseTreeSha } = base;
+
+    if (!createdNewFork) {
+      const expectedRepoSpec = renderRepoSpec({
+        slug,
+        repoOwner: owner,
+        nodeId: input.nodeId,
+        chainId: input.chainId,
+        daoContract: input.daoContract,
+        pluginContract: input.pluginContract,
+        signalContract: input.signalContract,
+        tokenContract: input.tokenContract,
+        knowledgeRemote: input.knowledgeRemote,
+        mission: input.mission,
+      });
+      const actualRepoSpec = await this.readFileAtRef(
+        octokit,
+        owner,
+        slug,
+        ".cogni/repo-spec.yaml",
+        baseCommitSha
+      );
+      if (actualRepoSpec !== expectedRepoSpec) {
+        throw deployPlaneError(
+          "existing_node_repo_incomplete",
+          `${owner}/${slug}@${baseCommitSha} already exists but its node identity does not exactly match the requested formation; refusing to rewrite main`,
+          409
+        );
+      }
+
+      const existingPolicyText = await this.readFileAtRef(
+        octokit,
+        owner,
+        slug,
+        NODE_REPO_POLICY_PATH,
+        baseCommitSha
+      );
+      if (!existingPolicyText) {
+        throw deployPlaneError(
+          "existing_node_repo_incomplete",
+          `${owner}/${slug}@${baseCommitSha} already exists without ${NODE_REPO_POLICY_PATH}; refusing to rewrite main`,
+          409
+        );
+      }
+      let existingPolicy: NodeRepoPolicy;
+      try {
+        existingPolicy = parseNodeRepoPolicy(existingPolicyText);
+      } catch (error) {
+        throw deployPlaneError(
+          "existing_node_repo_incomplete",
+          `${owner}/${slug}@${baseCommitSha} already exists with invalid ${NODE_REPO_POLICY_PATH}: ${String(error)}`,
+          409
+        );
+      }
+      const expectedRuleset = nodeMainPolicyRulesetPayload(
+        existingPolicy,
+        this.config.appId
+      );
+      const { data: rulesets } = await octokit.request(
+        "GET /repos/{owner}/{repo}/rulesets",
+        { owner, repo: slug }
+      );
+      const activeRuleset = (
+        rulesets as ReadonlyArray<{ id: number; name: string }>
+      ).find((ruleset) => ruleset.name === existingPolicy.ruleset.name);
+      if (!activeRuleset) {
+        throw deployPlaneError(
+          "existing_node_repo_incomplete",
+          `${owner}/${slug}@${baseCommitSha} already exists without active ruleset ${JSON.stringify(existingPolicy.ruleset.name)}; refusing to rewrite main`,
+          409
+        );
+      }
+      const { data: active } = await octokit.request(
+        "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
+        { owner, repo: slug, ruleset_id: activeRuleset.id }
+      );
+      const mismatches = diffRulesetAgainstPolicy(
+        active as RulesetResponse,
+        expectedRuleset
+      );
+      if (mismatches.length > 0) {
+        throw deployPlaneError(
+          "existing_node_repo_incomplete",
+          `${owner}/${slug}@${baseCommitSha} already exists with protection drift: ${mismatches.join("; ")}; refusing to rewrite main`,
+          409
+        );
+      }
+      return { cloneUrl, headSha: baseCommitSha };
+    }
+
+    await this.ensureActionsEnabled(octokit, owner, slug);
 
     // POLICY_IS_BOUND_TO_THE_INHERITED_TREE. Re-read the policy from the FORK at the
     // exact commit it is based on. The required contexts we are about to enforce must
@@ -2753,12 +2846,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
     await this.upsertRef(octokit, owner, slug, "main", commit.sha);
     await this.ensureCanonicalRepoSettings(octokit, owner, slug);
 
-    // PROTECTION_IS_THE_LAST_FALLIBLE_STEP. The zero-bypass PR ruleset makes any
-    // further direct `main` update impossible — including the `upsertRef` above on a
-    // retry. So every fallible initialization step that still needs an unprotected
-    // `main` MUST run before the protection write; otherwise a failure after
-    // protection (or a lost response) strands the node permanently half-formed: the
-    // retry cannot re-run identity, and the queue was never replicated.
+    // PROTECTION_IS_THE_LAST_FALLIBLE_STEP. Every fallible initialization step that
+    // needs the newly-created, still-unprotected `main` MUST run before protection.
+    // A retry that observes an existing fork has already returned through the
+    // GET-only proof above: it can never reach this mutation path. This separation is
+    // load-bearing under v2, where the operator App can bypass protection only so the
+    // signed generated-change verifier may perform its exact CAS.
     // Merge-queue replication is the only such step, and it is explicitly optional
     // (a missing monorepo queue ruleset is a clean skip), so a failure here leaves an
     // UNPROTECTED repo the retry can still fully re-form.
