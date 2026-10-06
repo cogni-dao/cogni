@@ -14,6 +14,12 @@
  * @public
  */
 
+import type {
+  OperatorChangeIntent,
+  OperatorChangeRecoveryRequest,
+  OperatorChangeRecoveryResult,
+} from "@cogni/node-contracts";
+
 // ---------------------------------------------------------------------------
 // Result types
 // ---------------------------------------------------------------------------
@@ -130,7 +136,14 @@ export interface OperatorChangeVerificationResult {
   readonly baseSha: string;
   readonly operation?: string;
   readonly node?: string;
+  readonly intent?: OperatorChangeIntent;
 }
+
+export type OperatorChangeFastForwardResult =
+  | { readonly outcome: "landed"; readonly sha: string; readonly message: string }
+  | { readonly outcome: "base_advanced"; readonly currentBaseSha: string; readonly message: string }
+  | { readonly outcome: "retryable_or_ambiguous"; readonly status?: number; readonly message: string }
+  | { readonly outcome: "terminal"; readonly status?: number; readonly message: string };
 
 // ---------------------------------------------------------------------------
 // Capability interface
@@ -183,7 +196,12 @@ export interface VcsCapability {
     prNumber: number;
     expectedBaseSha: string;
     expectedHeadSha: string;
-  }): Promise<MergeResult>;
+  }): Promise<OperatorChangeFastForwardResult>;
+
+  /** Recover one verified generated change from fresh main; never reuses stale derived bytes. */
+  recoverOperatorChange(
+    request: OperatorChangeRecoveryRequest
+  ): Promise<OperatorChangeRecoveryResult>;
 
   /**
    * Merge a pull request.

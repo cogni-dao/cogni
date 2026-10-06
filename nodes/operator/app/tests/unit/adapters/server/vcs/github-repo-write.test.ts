@@ -586,6 +586,91 @@ beforeEach(() => {
   installFetchMock();
 });
 
+describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
+  it("creates a fresh-main one-parent branch without ever PATCHing a ref", async () => {
+    const baseSha = "c".repeat(40);
+    const losingHeadSha = "a".repeat(40);
+    const headSha = "d".repeat(40);
+    const baseSpec = `schema_version: "0.1.4"\nnode_id: "11111111-1111-4111-8111-111111111111"\nscope_id: "22222222-2222-4222-8222-222222222222"\nscope_key: "default"\nintent:\n  name: blue\n  mission: "test"\ngovernance:\n  dao_contract: "0x1111111111111111111111111111111111111111"\n  chain_id: "8453"\n`;
+    const branch = `cogni-operator/declare-deployment-blue-recovery-d1-${losingHeadSha.slice(0, 12)}`;
+    const encode = (value: string) => Buffer.from(value).toString("base64");
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        if (params.ref === "heads/main") return { object: { sha: baseSha } };
+        if (params.ref === `heads/${branch}`) {
+          throw statusError(404, "missing");
+        }
+        throw new Error(`unexpected ref ${String(params.ref)}`);
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "base-tree" },
+      }),
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        if (params.repo === "control" && params.path === "infra/catalog/blue.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode("name: blue\nsource_repo: https://github.com/o/blue.git\n"),
+            sha: "catalog",
+          };
+        }
+        if (params.repo === "blue" && params.path === ".cogni/repo-spec.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: encode(baseSpec),
+            sha: "spec",
+          };
+        }
+        throw new Error(`unexpected content ${String(params.repo)}:${String(params.path)}`);
+      },
+      "POST /repos/{owner}/{repo}/git/blobs": () => ({ sha: "new-blob" }),
+      "POST /repos/{owner}/{repo}/git/trees": () => ({ sha: "new-tree" }),
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({ parents: [baseSha] });
+        expect(String(params.message)).toContain(
+          `Cogni-Recovery-Root-SHA: ${losingHeadSha}`
+        );
+        return { sha: headSha };
+      },
+      "POST /repos/{owner}/{repo}/git/refs": (params) => {
+        expect(params).toMatchObject({ ref: `refs/heads/${branch}`, sha: headSha });
+        return { ref: `refs/heads/${branch}` };
+      },
+      "POST /repos/{owner}/{repo}/pulls": () => ({
+        number: 69,
+        html_url: "https://github.com/o/blue/pull/69",
+      }),
+    };
+    const writer = new GitHubRepoWriter({
+      appId: "1",
+      privateKey: "key",
+      operatorChangePolicyOwner: "parent",
+      operatorChangePolicyRepo: "control",
+    });
+    await expect(
+      writer.createOperatorChangeRecoveryPr({
+        owner: "o",
+        repo: "blue",
+        intent: {
+          operation: "deployment.declare",
+          node: "blue",
+          recoveryRootSha: losingHeadSha,
+          recoveryDepth: 0,
+        },
+      })
+    ).resolves.toMatchObject({
+      status: "regenerated",
+      baseSha,
+      headSha,
+      prNumber: 69,
+    });
+    expect(
+      requests.some(({ route }) => route.startsWith("PATCH /repos/"))
+    ).toBe(false);
+  });
+});
+
 describe("GitHubRepoWriter.openPaymentsActivationPr", () => {
   it("reuses an existing activation PR when its branch already has the desired repo-spec", async () => {
     const nodeWalletAddress = "0xdCCa8D85603C2CC47dc6974a790dF846f8695056";

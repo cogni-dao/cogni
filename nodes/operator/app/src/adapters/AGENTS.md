@@ -29,7 +29,7 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 
 ## Public Surface
 
-- **Exports:** Port implementations for bootstrap injection (including identity-attestation live-catalog/Drizzle/Jose adapters and receipt-linked `DrizzleComputeCostStore`), database client (db, Database), MimirMetricsAdapter, ViemEvmOnchainClient, EvmRpcOnChainVerifierAdapter, EvmOnchainClient (type), GitHubWebhookNormalizer (ingestion), GitHubRepoWriter (operator App-backed deploy plane, including production infra reconcile), scheduling adapters (re-exported from @cogni/db-client)
+- **Exports:** Port implementations for bootstrap injection (including identity-attestation live-catalog/Drizzle/Jose adapters and receipt-linked `DrizzleComputeCostStore`), database client (db, Database), MimirMetricsAdapter, ViemEvmOnchainClient, EvmRpcOnChainVerifierAdapter, EvmOnchainClient (type), GitHubWebhookNormalizer (ingestion), GitHubRepoWriter (operator App-backed deploy plane, including create-only fresh-main operator-change recovery and production infra reconcile), scheduling adapters (re-exported from @cogni/db-client)
 - **CLI (if any):** cli/ adapter implementations
 - **Env/Config keys:** DATABASE_URL, LITELLM_BASE_URL, LITELLM_MASTER_KEY, FLEET_CONTROL_ENV and FORK_DOMAIN_ROOT (injected into GitHubRepoWriter), PROMETHEUS_QUERY_URL, PROMETHEUS_READ_USERNAME, PROMETHEUS_READ_PASSWORD, ANALYTICS_QUERY_TIMEOUT_MS, EVM_RPC_URL
 - **Files considered API:** Port implementation exports, database client, onchain client interfaces

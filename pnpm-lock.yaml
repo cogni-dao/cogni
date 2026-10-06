@@ -415,6 +415,9 @@ importers:
       '@cogni/scheduler-core':
         specifier: workspace:*
         version: link:../../../packages/scheduler-core
+      '@cogni/temporal-workflows':
+        specifier: workspace:*
+        version: link:../../../packages/temporal-workflows
       '@cogni/work-items':
         specifier: workspace:*
         version: link:../../../packages/work-items
@@ -722,6 +725,9 @@ importers:
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:../ai-core
+      '@cogni/node-contracts':
+        specifier: workspace:*
+        version: link:../node-contracts
       '@types/json-schema':
         specifier: ^7.0.15
         version: 7.0.15

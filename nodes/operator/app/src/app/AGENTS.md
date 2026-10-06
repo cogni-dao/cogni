@@ -54,6 +54,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
   - Internal ops: `/api/internal/ops/governance/schedules/sync` [POST] (deploy-only trigger)
   - Agent discovery: `/.well-known/agent.json` [GET] — public discovery document for machine clients
   - Production infra reconcile: `/api/v1/deploy/infra-reconcile` [POST] — production-promoter-gated on the operator node; dispatches via the operator GitHub App and preserves the app pin
+  - Operator-change recovery: `/api/internal/operator-change/recover` [POST] — scheduler-bearer-only; re-verifies the exact signed losing head and regenerates intent from fresh main through Temporal
   - Attestation JWKS: `/.well-known/jwks.json` [GET] — public keys for verifying operator-signed identity attestations (task.5024)
 - **Files considered API:** layout.tsx, page.tsx, loading.tsx, error.tsx, api/\*\*/route.ts, (infra)/\*\*/route.ts, .well-known/\*\*/route.ts
 - **Suspense / error boundaries:** each route group exposes a

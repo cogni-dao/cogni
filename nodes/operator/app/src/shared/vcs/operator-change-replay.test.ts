@@ -25,6 +25,7 @@ import { controlEnvFor } from "@/shared/node-registry/placement";
 import {
   type OperatorChangeReplayInput,
   type OperatorChangeReplayReader,
+  parseOperatorChangeIntent,
   replayOperatorChange,
 } from "./operator-change-replay";
 
@@ -50,6 +51,25 @@ const fixtureBuilders = [
 ] as const;
 
 describe("replayOperatorChange", () => {
+  it("parses only paired, bounded recovery identity trailers", async () => {
+    const recoveryRootSha = "c".repeat(40);
+    const fixture = await placementFixture();
+    const message = `${fixture.input.message}\nCogni-Recovery-Root-SHA: ${recoveryRootSha}\nCogni-Recovery-Depth: 1`;
+    expect(
+      parseOperatorChangeIntent({ ...fixture.input, message })
+    ).toMatchObject({
+      operation: "env.placement",
+      recoveryRootSha,
+      recoveryDepth: 1,
+    });
+    expect(() =>
+      parseOperatorChangeIntent({
+        ...fixture.input,
+        message: `${fixture.input.message}\nCogni-Recovery-Depth: 1`,
+      })
+    ).toThrow("partial-recovery-envelope");
+  });
+
   it("replays every operation through the same canonical core", async () => {
     const fixtures = await Promise.all(fixtureBuilders.map((build) => build()));
     for (const fixture of fixtures) {
@@ -161,7 +181,7 @@ describe("replayOperatorChange", () => {
     );
     await expect(replayOperatorChange(collision.input)).resolves.toMatchObject({
       verified: false,
-      reason: `replay-error:node-path-collision:infra/catalog/${collision.input.node}.yaml`,
+      reason: "replay-error:node-register-identity-conflict",
     });
 
     const declared = await deploymentFixture();

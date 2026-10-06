@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   classifyOperatorChangeForMerge,
+  classifyOperatorChangeForRecovery,
   type OperatorChangeFacts,
   type OperatorChangeRegistry,
 } from "./operator-change-policy";
@@ -96,6 +97,41 @@ function facts(
 describe("classifyOperatorChangeForMerge", () => {
   it("accepts only a fully replayed App-signed operation", () => {
     expect(classifyOperatorChangeForMerge(facts()).eligible).toBe(true);
+  });
+
+  it("keeps stale-base authority unavailable to the normal merge classifier", () => {
+    const stale = facts({
+      pr: { ...facts().pr, baseSha: "c".repeat(40) },
+    });
+    expect(classifyOperatorChangeForMerge(stale)).toMatchObject({
+      eligible: false,
+      reason: "invalid-pr-identity",
+    });
+    expect(classifyOperatorChangeForRecovery(stale)).toMatchObject({
+      eligible: true,
+      reason: "eligible",
+    });
+  });
+
+  it("accepts only a canonical signed recovery branch", () => {
+    const recoveryMessage = `${message}\nCogni-Recovery-Root-SHA: ${headSha}\nCogni-Recovery-Depth: 1`;
+    const recovery = facts({
+      pr: {
+        ...facts().pr,
+        headRef: `cogni-operator/node-env-spawny-boi-candidate-a-recovery-d1-${headSha.slice(0, 12)}`,
+      },
+      commit: { ...facts().commit, message: recoveryMessage },
+    });
+    expect(classifyOperatorChangeForMerge(recovery)).toMatchObject({
+      eligible: true,
+      reason: "eligible",
+    });
+    expect(
+      classifyOperatorChangeForMerge({
+        ...recovery,
+        pr: { ...recovery.pr, headRef: `${recovery.pr.headRef}-forged` },
+      })
+    ).toMatchObject({ eligible: false });
   });
 
   it("rejects a human PR even if a forged ready check woke the handler", () => {

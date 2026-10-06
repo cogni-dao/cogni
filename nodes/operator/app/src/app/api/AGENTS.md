@@ -79,6 +79,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
+  - `/api/internal/operator-change/recover` [POST] - scheduler-bearer-only durable recovery of one exact signed operator change
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 
 ## Responsibilities

@@ -217,6 +217,20 @@ export function parseOperatorChangeRegistry(
 export function classifyOperatorChangeForMerge(
   facts: OperatorChangeFacts
 ): OperatorChangeClassification {
+  return classifyOperatorChange(facts, false);
+}
+
+/** Recovery-only classifier for the exact unchanged losing head. */
+export function classifyOperatorChangeForRecovery(
+  facts: OperatorChangeFacts
+): OperatorChangeClassification {
+  return classifyOperatorChange(facts, true);
+}
+
+function classifyOperatorChange(
+  facts: OperatorChangeFacts,
+  allowStaleBase: boolean
+): OperatorChangeClassification {
   const repo = facts.repository.toLowerCase();
   const message = facts.commit.message;
   const changeTypes = trailerValues(message, "Cogni-Change-Type");
@@ -266,10 +280,12 @@ export function classifyOperatorChangeForMerge(
   }
 
   if (
-    facts.pr.state !== "open" ||
+    (allowStaleBase
+      ? !["open", "closed"].includes(facts.pr.state)
+      : facts.pr.state !== "open") ||
     facts.pr.draft !== false ||
     facts.pr.baseRef !== "main" ||
-    facts.pr.baseSha !== baseSha ||
+    (!allowStaleBase && facts.pr.baseSha !== baseSha) ||
     facts.pr.headSha !== facts.expectedHeadSha ||
     facts.commit.sha !== facts.expectedHeadSha ||
     facts.pr.headRepoFullName?.toLowerCase() !== repo ||
@@ -291,6 +307,20 @@ export function classifyOperatorChangeForMerge(
     return reject(facts, "invalid-commit-signature", operation, node);
   }
 
+  const recoveryRoot = singleTrailer(message, "Cogni-Recovery-Root-SHA");
+  const recoveryDepth = singleTrailer(message, "Cogni-Recovery-Depth");
+  const isRecovery = recoveryRoot !== null || recoveryDepth !== null;
+  if (
+    (recoveryRoot === null) !== (recoveryDepth === null) ||
+    (isRecovery &&
+      (!recoveryRoot?.match(SHA) ||
+        !recoveryDepth?.match(/^[1-3]$/)))
+  ) {
+    return reject(facts, "invalid-recovery-envelope", operation, node);
+  }
+  const recoverySuffix = isRecovery
+    ? `-recovery-d${recoveryDepth}-${recoveryRoot?.slice(0, 12)}`
+    : "";
   const subject = message.split("\n", 1)[0] ?? "";
   let expectedTrailerCount: number;
   switch (operation) {
@@ -303,7 +333,7 @@ export function classifyOperatorChangeForMerge(
         !env?.match(/^(candidate-a|preview|production)$/) ||
         !action?.match(/^(add|remove)$/) ||
         !generation?.match(/^\d+$/) ||
-        facts.pr.headRef !== `cogni-operator/node-env-${node}-${env}` ||
+        facts.pr.headRef !== `cogni-operator/node-env-${node}-${env}${recoverySuffix}` ||
         subject !==
           `feat(node): ${action} ${node} ${action === "add" ? "to" : "from"} ${env}`
       ) {
@@ -318,7 +348,7 @@ export function classifyOperatorChangeForMerge(
       if (
         !env?.match(/^(candidate-a|preview|production)$/) ||
         !provider?.match(/^(k3s|akash)$/) ||
-        facts.pr.headRef !== `cogni-operator/node-placement-${node}-${env}` ||
+        facts.pr.headRef !== `cogni-operator/node-placement-${node}-${env}${recoverySuffix}` ||
         subject !== `feat(node): place ${node} ${env} on ${provider}`
       ) {
         return reject(facts, "invalid-placement-envelope", operation, node);
@@ -334,7 +364,7 @@ export function classifyOperatorChangeForMerge(
         !env?.match(/^(candidate-a|preview|production)$/) ||
         !countries?.match(/^[A-Z]{2}(,[A-Z]{2})*$/) ||
         !generation?.match(/^\d+$/) ||
-        facts.pr.headRef !== `cogni-operator/node-region-${node}-${env}` ||
+        facts.pr.headRef !== `cogni-operator/node-region-${node}-${env}${recoverySuffix}` ||
         subject !==
           `feat(node): require ${node} ${env} placement in ${countries.replaceAll(",", ", ")}`
       ) {
@@ -356,8 +386,8 @@ export function classifyOperatorChangeForMerge(
         !sourceSha?.match(SHA) ||
         !ownerWallet?.match(/^0x[0-9a-fA-F]{40}$/) ||
         sourceRepo?.toLowerCase() !==
-          `https://github.com/${fleetOwner}/${node}.git` ||
-        facts.pr.headRef !== `cogni-operator/node-register-${node}` ||
+          `https://github.com/${fleetOwner}/${node}.git`.toLowerCase() ||
+        facts.pr.headRef !== `cogni-operator/node-register-${node}${recoverySuffix}` ||
         subject !== `feat(node): register ${node}`
       ) {
         return reject(facts, "invalid-register-envelope", operation, node);
@@ -367,14 +397,14 @@ export function classifyOperatorChangeForMerge(
     case "deployment.declare":
       expectedTrailerCount = 5;
       if (
-        facts.pr.headRef !== `cogni-operator/declare-deployment-${node}` ||
+        facts.pr.headRef !== `cogni-operator/declare-deployment-${node}${recoverySuffix}` ||
         subject !== `feat(deploy): declare ${node} node deployment`
       ) {
         return reject(facts, "invalid-deployment-envelope", operation, node);
       }
       break;
   }
-  if (trailerCount(message) !== expectedTrailerCount) {
+  if (trailerCount(message) !== expectedTrailerCount + (isRecovery ? 2 : 0)) {
     return reject(facts, "unexpected-or-duplicate-trailer", operation, node);
   }
 
