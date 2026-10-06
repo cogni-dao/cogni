@@ -58,9 +58,7 @@ function adapter(): GitHubVcsAdapter {
   return new GitHubVcsAdapter({ appId: "1", privateKey: "k" });
 }
 
-function greenMergeCi(
-  overrides: Partial<CiStatusResult> = {}
-): CiStatusResult {
+function greenMergeCi(overrides: Partial<CiStatusResult> = {}): CiStatusResult {
   return {
     prNumber: 7,
     prTitle: "feat: protected change",
