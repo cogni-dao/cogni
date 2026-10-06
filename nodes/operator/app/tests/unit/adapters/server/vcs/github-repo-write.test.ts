@@ -596,6 +596,8 @@ describe("generated operator-change immutable input snapshots", () => {
       }
     ).collectEnvPlanCurrent.bind(writer);
     const catalog = `name: blue
+port: 3200
+node_port: 31100
 deployment_provider:
   preview: akash
 `;
