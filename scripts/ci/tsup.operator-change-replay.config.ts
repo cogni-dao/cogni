@@ -4,9 +4,9 @@
 /**
  * Module: `@scripts/ci/tsup.operator-change-replay.config`
  * Purpose: Build the checked-in zero-install operator-change replay artifact.
- * Scope: Canonical replay CLI bundling only.
+ * Scope: Canonical replay CLI bundling only; does not define replay policy.
  * Invariants: Full CI must rebuild this artifact and prove byte equality with the committed bundle.
- * Side-effects: Reads the output directory override from the process environment.
+ * Side-effects: process.env (optional output directory override)
  * Links: docs/spec/merge-queue-config.md, task.5185
  * @internal
  */

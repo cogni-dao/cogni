@@ -4,9 +4,9 @@
 /**
  * Module: `@scripts/ci/operator-change-replay`
  * Purpose: Provide the zero-install Git transport for canonical operator-change replay.
- * Scope: Trusted CI checkout; reads exact base and head files with Git and performs no writes.
+ * Scope: Trusted CI checkout; reads exact base and head files with Git; does not access the network or write files.
  * Invariants: The bundle calls the deployed operator's semantic core and accepts only immutable workflow inputs.
- * Side-effects: Runs read-only Git subprocesses and exits nonzero on mismatch.
+ * Side-effects: IO (read-only Git subprocesses and stderr/exit), process.env (immutable workflow inputs)
  * Links: docs/spec/merge-queue-config.md, task.5185
  * @internal
  */
