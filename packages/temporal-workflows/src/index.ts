@@ -13,10 +13,12 @@
  * @public
  */
 
+export type { OperatorChangeRecoveryResult } from "@cogni/node-contracts";
 // Activity profiles (shared timeout/retry configs)
 export {
   EXTERNAL_API_ACTIVITY_OPTIONS,
   GRAPH_EXECUTION_ACTIVITY_OPTIONS,
+  OPERATOR_CHANGE_RECOVERY_ACTIVITY_OPTIONS,
   STANDARD_ACTIVITY_OPTIONS,
 } from "./activity-profiles.js";
 // Activity type interfaces
@@ -26,6 +28,7 @@ export type {
   GoalWire,
   LedgerActivities,
   LoopBudgetWire,
+  OperatorChangeRecoveryActivities,
   ReviewActivities,
   SchedulerActivities,
   SweepActivities,
@@ -69,6 +72,12 @@ export {
   NodeTaskInputSchema,
 } from "./workflows/node-task.schema.js";
 export type { NodeTaskResult } from "./workflows/node-task.workflow.js";
+export {
+  type OperatorChangeRecoveryWorkflowInput,
+  OperatorChangeRecoveryWorkflowInputSchema,
+  operatorChangeRecoveryIdempotencyKey,
+  operatorChangeRecoveryWorkflowId,
+} from "./workflows/operator-change-recovery.schema.js";
 export {
   type PrReviewWorkflowInput,
   PrReviewWorkflowInputSchema,

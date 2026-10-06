@@ -15,6 +15,23 @@
  * @public
  */
 
+import type {
+  InternalReviewPrContextOutput,
+  OperatorChangeRecoveryRequest,
+  OperatorChangeRecoveryResult,
+} from "@cogni/node-contracts";
+import type { OwningNode } from "@cogni/repo-spec";
+
+// ---------------------------------------------------------------------------
+// Operator change recovery (worker HTTP-delegates to the operator)
+// ---------------------------------------------------------------------------
+
+export interface OperatorChangeRecoveryActivities {
+  recoverOperatorChangeActivity(
+    input: OperatorChangeRecoveryRequest
+  ): Promise<OperatorChangeRecoveryResult>;
+}
+
 // ---------------------------------------------------------------------------
 // Scheduler Activities (graph-run CRUD + execution)
 // ---------------------------------------------------------------------------
@@ -96,9 +113,6 @@ export interface SchedulerActivities {
 // ---------------------------------------------------------------------------
 // Review Activities (GitHub I/O for PR review workflow)
 // ---------------------------------------------------------------------------
-
-import type { InternalReviewPrContextOutput } from "@cogni/node-contracts";
-import type { OwningNode } from "@cogni/repo-spec";
 
 export interface ReviewActivities {
   createCheckRunActivity(input: {

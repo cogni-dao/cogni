@@ -14,5 +14,6 @@
 export { GoalLoopWorkflow } from "./workflows/goal-loop.workflow.js";
 export { GraphRunWorkflow } from "./workflows/graph-run.workflow.js";
 export { NodeTaskWorkflow } from "./workflows/node-task.workflow.js";
+export { OperatorChangeRecoveryWorkflow } from "./workflows/operator-change-recovery.workflow.js";
 export { PrReviewWorkflow } from "./workflows/pr-review.workflow.js";
 export { ScheduledSweepWorkflow } from "./workflows/scheduled-sweep.workflow.js";

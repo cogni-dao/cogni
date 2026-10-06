@@ -22,7 +22,7 @@
 ```
 src/
 ├── index.ts                # Public type exports ONLY (safe to import anywhere)
-├── scheduler.ts            # Barrel: GraphRunWorkflow, PrReviewWorkflow (workflowsPath)
+├── scheduler.ts            # Barrel: scheduler-queue workflows (workflowsPath)
 ├── ledger.ts               # Barrel: CollectEpoch, Finalize, stages (workflowsPath)
 ├── activity-types.ts       # Explicit activity interfaces for proxyActivities<T>()
 ├── activity-profiles.ts    # Shared timeout/retry configs
@@ -32,6 +32,8 @@ src/
     ├── graph-run.workflow.ts
     ├── pr-review.workflow.ts
     ├── pr-review.schema.ts    # Zod source-of-truth for PrReviewWorkflowInput
+    ├── operator-change-recovery.schema.ts
+    ├── operator-change-recovery.workflow.ts
     ├── collect-epoch.workflow.ts
     ├── finalize-epoch.workflow.ts
     └── stages/
@@ -70,9 +72,9 @@ src/
 
 - **Types:** `GraphRunResult`, `GraphRunWorkflowInput`, `PrReviewWorkflowInput` (`z.infer<typeof PrReviewWorkflowInputSchema>` from `./pr-review.schema.ts`), `FinalizeEpochWorkflowInput`, `AttributionIngestRunV1`, `CollectSourcesInput`, `EnrichAndAllocateInput`
 - **Schemas:** `PrReviewWorkflowInputSchema` (Zod, `.strict()`) — single source of truth for `PrReviewWorkflow`'s input. Producers parse with this before `workflowClient.start(...)` per SINGLE_INPUT_CONTRACT (task.0419).
-- **Activity interfaces:** `SchedulerActivities`, `ReviewActivities`, `LedgerActivities`, `EnrichmentActivities`. Per task.0280, `validateGrantActivity` / `createGraphRunActivity` / `updateGraphRunActivity` inputs include `nodeId: string` so the worker can route each HTTP call to the owning node's internal API. Per task.0410, `fetchPrContextActivity` returns `{ changedFiles, owningNode }` and `postRoutingDiagnosticActivity` handles cross-domain refusal + miss-neutral outcomes.
+- **Activity interfaces:** `SchedulerActivities`, `ReviewActivities`, `OperatorChangeRecoveryActivities`, `LedgerActivities`, `EnrichmentActivities`. Per task.0280, `validateGrantActivity` / `createGraphRunActivity` / `updateGraphRunActivity` inputs include `nodeId: string` so the worker can route each HTTP call to the owning node's internal API. Per task.0410, `fetchPrContextActivity` returns `{ changedFiles, owningNode }` and `postRoutingDiagnosticActivity` handles cross-domain refusal + miss-neutral outcomes.
 - **Domain exports:** `evaluateCriteria`, `aggregateGateStatuses`, `formatCheckRunSummary`, `formatPrComment`, `formatCrossDomainRefusal`, `formatNoScopeNeutral`, `buildReviewUserMessage`, `findRequirement`, `formatThreshold`
-- **Config:** `STANDARD_ACTIVITY_OPTIONS`, `EXTERNAL_API_ACTIVITY_OPTIONS`, `GRAPH_EXECUTION_ACTIVITY_OPTIONS`. Metadata activities (grant + run CRUD) use `maximumAttempts: 6` (~2 min budget) to absorb parallel-rollout race windows.
+- **Config:** `STANDARD_ACTIVITY_OPTIONS`, `EXTERNAL_API_ACTIVITY_OPTIONS`, `GRAPH_EXECUTION_ACTIVITY_OPTIONS`, `OPERATOR_CHANGE_RECOVERY_ACTIVITY_OPTIONS`. Recovery transport retries are capped at three and the workflow contains no polling loop.
 
 ## Responsibilities
 
