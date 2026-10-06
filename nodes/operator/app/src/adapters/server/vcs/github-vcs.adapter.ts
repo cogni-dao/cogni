@@ -33,7 +33,6 @@ import type {
   VcsCapability,
 } from "@cogni/ai-tools";
 import type {
-  OperatorChangeIntent,
   OperatorChangeRecoveryRequest,
   OperatorChangeRecoveryResult,
 } from "@cogni/node-contracts";
@@ -845,6 +844,32 @@ export class GitHubVcsAdapter implements VcsCapability {
             };
           }
           if (current.object.sha !== params.expectedBaseSha) {
+            try {
+              const { data: ancestry } = await octokit.request(
+                "GET /repos/{owner}/{repo}/compare/{basehead}",
+                {
+                  owner: params.owner,
+                  repo: params.repo,
+                  basehead: `${params.expectedHeadSha}...${current.object.sha}`,
+                }
+              );
+              if (
+                ancestry.status === "ahead" ||
+                ancestry.status === "identical"
+              ) {
+                return {
+                  outcome: "landed",
+                  sha: params.expectedHeadSha,
+                  message: "Generated change landed and is an ancestor of current main",
+                };
+              }
+            } catch {
+              return {
+                outcome: "retryable_or_ambiguous",
+                ...(status === undefined ? {} : { status }),
+                message: "Generated change ancestry is ambiguous after PATCH",
+              };
+            }
             return {
               outcome: "base_advanced",
               currentBaseSha: current.object.sha,
@@ -966,36 +991,34 @@ export class GitHubVcsAdapter implements VcsCapability {
       }
     }
 
-    const writer = new GitHubRepoWriter({
-      appId: this.config.appId,
-      privateKey: this.config.privateKey,
-      ...(this.config.operatorChangePolicyOwner
-        ? { operatorChangePolicyOwner: this.config.operatorChangePolicyOwner }
-        : {}),
-      ...(this.config.operatorChangePolicyRepo
-        ? { operatorChangePolicyRepo: this.config.operatorChangePolicyRepo }
-        : {}),
-      ...(this.config.fleetControlEnv
-        ? { fleetControlEnv: this.config.fleetControlEnv }
-        : {}),
-      ...(this.config.forkDomainRoot
-        ? { forkDomainRoot: this.config.forkDomainRoot }
-        : {}),
-    });
+    const writer = this.createRecoveryWriter();
     const regenerated = await writer.createOperatorChangeRecoveryPr({
       owner: request.owner,
       repo: request.repo,
+      prNumber: request.prNumber,
       intent: request.intent,
+      losingHeadSha: request.losingHeadSha,
       ...(pr.state === "closed" ? { planOnly: true } : {}),
     });
     if (regenerated.status === "conflict") {
       return { status: "terminal", reason: regenerated.reason };
     }
     if (regenerated.status === "satisfied") {
-      const { data: freshPr } = await octokit.request(
-        "GET /repos/{owner}/{repo}/pulls/{pull_number}",
-        { owner: request.owner, repo: request.repo, pull_number: request.prNumber }
-      );
+      const [{ data: freshMain }, { data: freshPr }] = await Promise.all([
+        octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+          owner: request.owner,
+          repo: request.repo,
+          ref: "heads/main",
+        }),
+        octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+          owner: request.owner,
+          repo: request.repo,
+          pull_number: request.prNumber,
+        }),
+      ]);
+      if (freshMain.object.sha !== regenerated.mainSha) {
+        throw new Error("retryable_or_ambiguous:main-moved-after-satisfaction-plan");
+      }
       if (freshPr.state === "open" && freshPr.head.sha === request.losingHeadSha) {
         await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
           owner: request.owner,
@@ -1032,6 +1055,25 @@ export class GitHubVcsAdapter implements VcsCapability {
       prUrl: regenerated.prUrl,
       recoveryDepth: regenerated.intent.recoveryDepth,
     };
+  }
+
+  private createRecoveryWriter(): GitHubRepoWriter {
+    return new GitHubRepoWriter({
+      appId: this.config.appId,
+      privateKey: this.config.privateKey,
+      ...(this.config.operatorChangePolicyOwner
+        ? { operatorChangePolicyOwner: this.config.operatorChangePolicyOwner }
+        : {}),
+      ...(this.config.operatorChangePolicyRepo
+        ? { operatorChangePolicyRepo: this.config.operatorChangePolicyRepo }
+        : {}),
+      ...(this.config.fleetControlEnv
+        ? { fleetControlEnv: this.config.fleetControlEnv }
+        : {}),
+      ...(this.config.forkDomainRoot
+        ? { forkDomainRoot: this.config.forkDomainRoot }
+        : {}),
+    });
   }
 
   /**

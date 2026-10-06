@@ -114,11 +114,12 @@ describe("classifyOperatorChangeForMerge", () => {
   });
 
   it("accepts only a canonical signed recovery branch", () => {
-    const recoveryMessage = `${message}\nCogni-Recovery-Root-SHA: ${headSha}\nCogni-Recovery-Depth: 1`;
+    const recoveryRootSha = "c".repeat(40);
+    const recoveryMessage = `${message}\nCogni-Recovery-Root-SHA: ${recoveryRootSha}\nCogni-Recovery-Depth: 2\nCogni-Recovery-Losing-Head-SHA: ${headSha}`;
     const recovery = facts({
       pr: {
         ...facts().pr,
-        headRef: `cogni-operator/node-env-spawny-boi-candidate-a-recovery-d1-${headSha.slice(0, 12)}`,
+        headRef: `cogni-operator/node-env-spawny-boi-candidate-a-recovery-d2-${headSha.slice(0, 12)}`,
       },
       commit: { ...facts().commit, message: recoveryMessage },
     });

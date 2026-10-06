@@ -94,13 +94,21 @@ export function parseOperatorChangeIntent(input: Pick<
   }
   const recoveryRoot = envelope.get("Cogni-Recovery-Root-SHA");
   const recoveryDepthText = envelope.get("Cogni-Recovery-Depth");
-  if ((recoveryRoot === undefined) !== (recoveryDepthText === undefined)) {
+  const recoveryLosingHead = envelope.get("Cogni-Recovery-Losing-Head-SHA");
+  if (
+    new Set([
+      recoveryRoot === undefined,
+      recoveryDepthText === undefined,
+      recoveryLosingHead === undefined,
+    ]).size !== 1
+  ) {
     throw new Error("partial-recovery-envelope");
   }
   const recoveryDepth = recoveryDepthText === undefined ? 0 : Number(recoveryDepthText);
   const recoveryRootSha = recoveryRoot ?? input.headSha;
   if (
     !SHA.test(recoveryRootSha) ||
+    (recoveryLosingHead !== undefined && !SHA.test(recoveryLosingHead)) ||
     !Number.isSafeInteger(recoveryDepth) ||
     recoveryDepth < 0 ||
     recoveryDepth > 3 ||
@@ -108,7 +116,7 @@ export function parseOperatorChangeIntent(input: Pick<
   ) {
     throw new Error("invalid-recovery-envelope");
   }
-  const extra = recoveryRoot === undefined ? 0 : 2;
+  const extra = recoveryRoot === undefined ? 0 : 3;
   const subject = input.message.split("\n", 1)[0] ?? "";
   const common = { node: input.node, recoveryRootSha, recoveryDepth } as const;
   let candidate: unknown;

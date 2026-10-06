@@ -132,6 +132,7 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       "OperatorChangeRecoveryWorkflow",
       expect.objectContaining({
         workflowId: `operator-change-recovery:cogni-test-org/cogni-monorepo:${headSha}`,
+        workflowIdReusePolicy: 3,
       })
     );
   });

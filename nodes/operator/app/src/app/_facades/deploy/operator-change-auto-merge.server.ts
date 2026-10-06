@@ -24,7 +24,10 @@ import {
   OperatorChangeRecoveryWorkflowInputSchema,
   operatorChangeRecoveryWorkflowId,
 } from "@cogni/temporal-workflows";
-import { WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
+import {
+  WorkflowExecutionAlreadyStartedError,
+  WorkflowIdReusePolicy,
+} from "@temporalio/client";
 import { getTemporalWorkflowClient } from "@/bootstrap/container";
 import type { Logger } from "@/shared/observability";
 
@@ -109,6 +112,7 @@ export async function dispatchOperatorChangeAutoMerge(
       await client.start("OperatorChangeRecoveryWorkflow", {
         taskQueue,
         workflowId: operatorChangeRecoveryWorkflowId(request),
+        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
         args: [request],
       });
     } catch (error) {

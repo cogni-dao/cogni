@@ -54,7 +54,7 @@ describe("replayOperatorChange", () => {
   it("parses only paired, bounded recovery identity trailers", async () => {
     const recoveryRootSha = "c".repeat(40);
     const fixture = await placementFixture();
-    const message = `${fixture.input.message}\nCogni-Recovery-Root-SHA: ${recoveryRootSha}\nCogni-Recovery-Depth: 1`;
+    const message = `${fixture.input.message}\nCogni-Recovery-Root-SHA: ${recoveryRootSha}\nCogni-Recovery-Depth: 1\nCogni-Recovery-Losing-Head-SHA: ${recoveryRootSha}`;
     expect(
       parseOperatorChangeIntent({ ...fixture.input, message })
     ).toMatchObject({

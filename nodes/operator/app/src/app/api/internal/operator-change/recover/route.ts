@@ -54,7 +54,13 @@ export const POST = wrapRouteHandlerWithLogging(
       return NextResponse.json(result, { status: 200 });
     } catch (error) {
       const status = (error as { status?: number }).status;
-      if ([400, 401, 403, 409, 422].includes(status ?? 0)) {
+      if (
+        typeof status === "number" &&
+        status >= 400 &&
+        status < 500 &&
+        status !== 408 &&
+        status !== 429
+      ) {
         return NextResponse.json(
           { status: "terminal", reason: `github-permanent-${status}` },
           { status: 200 }

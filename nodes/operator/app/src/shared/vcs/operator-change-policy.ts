@@ -309,17 +309,29 @@ function classifyOperatorChange(
 
   const recoveryRoot = singleTrailer(message, "Cogni-Recovery-Root-SHA");
   const recoveryDepth = singleTrailer(message, "Cogni-Recovery-Depth");
-  const isRecovery = recoveryRoot !== null || recoveryDepth !== null;
+  const recoveryLosingHead = singleTrailer(
+    message,
+    "Cogni-Recovery-Losing-Head-SHA"
+  );
+  const isRecovery =
+    recoveryRoot !== null ||
+    recoveryDepth !== null ||
+    recoveryLosingHead !== null;
   if (
-    (recoveryRoot === null) !== (recoveryDepth === null) ||
+    new Set([
+      recoveryRoot === null,
+      recoveryDepth === null,
+      recoveryLosingHead === null,
+    ]).size !== 1 ||
     (isRecovery &&
       (!recoveryRoot?.match(SHA) ||
-        !recoveryDepth?.match(/^[1-3]$/)))
+        !recoveryDepth?.match(/^[1-3]$/) ||
+        !recoveryLosingHead?.match(SHA)))
   ) {
     return reject(facts, "invalid-recovery-envelope", operation, node);
   }
   const recoverySuffix = isRecovery
-    ? `-recovery-d${recoveryDepth}-${recoveryRoot?.slice(0, 12)}`
+    ? `-recovery-d${recoveryDepth}-${recoveryLosingHead?.slice(0, 12)}`
     : "";
   const subject = message.split("\n", 1)[0] ?? "";
   let expectedTrailerCount: number;
@@ -404,7 +416,7 @@ function classifyOperatorChange(
       }
       break;
   }
-  if (trailerCount(message) !== expectedTrailerCount + (isRecovery ? 2 : 0)) {
+  if (trailerCount(message) !== expectedTrailerCount + (isRecovery ? 3 : 0)) {
     return reject(facts, "unexpected-or-duplicate-trailer", operation, node);
   }
 
