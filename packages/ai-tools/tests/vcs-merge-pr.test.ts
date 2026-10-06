@@ -59,4 +59,38 @@ describe("createVcsMergePrImplementation", () => {
       message: "Merged",
     });
   });
+
+  it("preserves a fail-closed rejection from the authoritative capability", async () => {
+    const getCiStatus = vi.fn().mockResolvedValue({
+      headSha: "verified-head",
+      allGreen: false,
+    });
+    const mergePr = vi.fn().mockResolvedValue({
+      merged: false,
+      enqueued: false,
+      message: "PR is not eligible to merge",
+      status: 422,
+    });
+    const vcsCapability = {
+      getCiStatus,
+      mergePr,
+    } as unknown as VcsCapability;
+
+    const implementation = createVcsMergePrImplementation({ vcsCapability });
+    const result = await implementation.execute({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      prNumber: 42,
+      method: "squash",
+    });
+
+    expect(mergePr).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedHeadSha: "verified-head" })
+    );
+    expect(result).toEqual({
+      merged: false,
+      enqueued: false,
+      message: "PR is not eligible to merge",
+    });
+  });
 });
