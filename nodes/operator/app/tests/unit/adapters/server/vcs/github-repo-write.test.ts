@@ -545,36 +545,36 @@ describe("generated operator-change immutable input snapshots", () => {
     },
   ];
 
-  it.each(operations)(
-    "$name reads its first generator input from the resolved base, never moving main",
-    async ({ invoke }) => {
-      routeHandlers = {
-        "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
-          object: { sha: baseCommitSha },
-        }),
-        "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
-          tree: { sha: "base-tree" },
-        }),
-        "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
-          expect(params.ref).toBe(baseCommitSha);
-          throw new Error("immutable-snapshot-observed");
-        },
-      };
+  it.each(
+    operations
+  )("$name reads its first generator input from the resolved base, never moving main", async ({
+    invoke,
+  }) => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
+        object: { sha: baseCommitSha },
+      }),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        tree: { sha: "base-tree" },
+      }),
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        expect(params.ref).toBe(baseCommitSha);
+        throw new Error("immutable-snapshot-observed");
+      },
+    };
 
-      await expect(invoke(makeWriter())).rejects.toThrow(
-        "immutable-snapshot-observed"
-      );
-      expect(
-        requests
-          .filter(
-            (request) =>
-              request.route ===
-              "GET /repos/{owner}/{repo}/contents/{path}"
-          )
-          .map((request) => request.params.ref)
-      ).toEqual([baseCommitSha]);
-    }
-  );
+    await expect(invoke(makeWriter())).rejects.toThrow(
+      "immutable-snapshot-observed"
+    );
+    expect(
+      requests
+        .filter(
+          (request) =>
+            request.route === "GET /repos/{owner}/{repo}/contents/{path}"
+        )
+        .map((request) => request.params.ref)
+    ).toEqual([baseCommitSha]);
+  });
 
   it("threads the same base through every membership shared-file read", async () => {
     const writer = makeWriter();
@@ -628,9 +628,9 @@ deployment_provider:
     );
 
     expect(readFileAt).toHaveBeenCalled();
-    expect(readFileAt.mock.calls.every((call) => call[4] === baseCommitSha)).toBe(
-      true
-    );
+    expect(
+      readFileAt.mock.calls.every((call) => call[4] === baseCommitSha)
+    ).toBe(true);
   });
 });
 

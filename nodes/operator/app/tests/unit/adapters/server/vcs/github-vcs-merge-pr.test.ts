@@ -542,8 +542,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       if (route === MAIN_REF_ROUTE) {
         return {
           object: {
-            sha:
-              params.owner === "parent" ? movedPolicyHeadSha : baseSha,
+            sha: params.owner === "parent" ? movedPolicyHeadSha : baseSha,
           },
         };
       }
