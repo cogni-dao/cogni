@@ -173,7 +173,8 @@ The reusable workflow's zero-install verifier is the checked-in
 replay core used by the deployed operator, not the generated file. The first artifact was built by
 the repository's trusted GitHub CI from PR #2581 source head
 `383108d99aa67b5fbaa2ba937b6fc23204b86b95` (run `37443296838`, artifact `11402550585`,
-whose name used the PR event's synthetic merge SHA `888cd03465861fc4dbf6d0e4e652369e299f9f3b`).
+SHA-256 `e61cac303bdc2a6754f02327ea1338e9921faf56185c1a483fabead5f8ee09a5`; its name
+used the PR event's synthetic merge SHA `888cd03465861fc4dbf6d0e4e652369e299f9f3b`).
 The bootstrap run was superseded after artifact upload; it is provenance, not acceptance evidence.
 Full CI permanently rebuilds the checked-in artifact from source with the pinned workspace toolchain
 and requires byte-for-byte identity before accepting a change. The generated bundle therefore
