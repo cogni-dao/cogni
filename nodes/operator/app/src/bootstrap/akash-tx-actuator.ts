@@ -88,9 +88,9 @@ import {
   DrizzleComputeCostStore,
   DrizzleProviderOutcomeStore,
   KubernetesMigrationJobAdapter,
-  safeHostRoutedVersionProbe,
-  safeReadyzProbe,
-  safeVersionProbe,
+  safeHostRoutedVersionProbeResult,
+  safeReadyzProbeResult,
+  safeVersionProbeResult,
 } from "@/adapters/server";
 import {
   checkConsoleBalance,
@@ -313,22 +313,39 @@ const probe: AkashTxServingProbe = async ({
   expectedSourceSha,
   publicHost,
 }) => {
+  // NAME THE REASON, PER ENDPOINT, PER SUB-PROBE (bug.5377). `serving` is one boolean, so an
+  // unreachable endpoint and a vhost answering with the WRONG sha were the same signal. That
+  // ambiguity cost three build+flight cycles on spawny-boi (IP-literal, stale vhost, endpoint
+  // order -- all three wrong). Behaviour is unchanged: "matched" is exactly the old `true`.
   for (const endpoint of endpoints) {
-    if (
-      !(await safeVersionProbe(endpoint, expectedSourceSha)) ||
-      !(await safeReadyzProbe(endpoint))
-    ) {
-      continue;
-    }
-    // A hostnamed workload is only serving when the provider's HOST-ROUTED path answers
-    // with the same exact SHA — the bare-ingress proof above cannot see a stale
-    // deployment still owning the public hostname (bug.5237).
-    if (!publicHost) return true;
-    if (
-      await safeHostRoutedVersionProbe(endpoint, publicHost, expectedSourceSha)
-    ) {
-      return true;
-    }
+    const version = await safeVersionProbeResult(endpoint, expectedSourceSha);
+    const readyz =
+      version === "matched" ? await safeReadyzProbeResult(endpoint) : undefined;
+    const hostRouted =
+      version === "matched" && readyz === "matched" && publicHost
+        ? await safeHostRoutedVersionProbeResult(
+            endpoint,
+            publicHost,
+            expectedSourceSha
+          )
+        : undefined;
+    const served =
+      version === "matched" &&
+      readyz === "matched" &&
+      (!publicHost || hostRouted === "matched");
+    log.info(
+      {
+        endpoint,
+        publicHost: publicHost ?? null,
+        expectedSourceSha,
+        version,
+        readyz: readyz ?? null,
+        hostRouted: hostRouted ?? null,
+        served,
+      },
+      "akash_tx_serving_probe_attempt"
+    );
+    if (served) return true;
   }
   return false;
 };

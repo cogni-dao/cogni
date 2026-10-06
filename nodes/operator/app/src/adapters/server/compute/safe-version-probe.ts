@@ -210,6 +210,36 @@ export async function safeHostRoutedVersionProbe(
   );
 }
 
+/**
+ * Host-routed `/version` proof that RETURNS ITS REASON instead of collapsing to a boolean
+ * (bug.5377). `serving` was a single bool, so version_unavailable (endpoint unreachable,
+ * IP-literal, DNS/private-address rejection) and source_mismatch (the vhost answered, with the
+ * WRONG sha - a stale deployment still owning the hostname) were indistinguishable in the
+ * receipt. Three separate hypotheses each cost a build+flight cycle because of that.
+ */
+export function safeHostRoutedVersionProbeResult(
+  endpoint: string,
+  publicHost: string,
+  expectedSourceSha?: string,
+  timeoutMs = 5_000
+): Promise<SafeVersionProbeResult> {
+  return safeHttpProbe(
+    endpoint,
+    "/version",
+    expectedSourceSha,
+    timeoutMs,
+    publicHost
+  );
+}
+
+/** Readiness probe that returns its reason rather than a boolean (bug.5377). */
+export function safeReadyzProbeResult(
+  endpoint: string,
+  timeoutMs = 5_000
+): Promise<SafeVersionProbeResult> {
+  return safeHttpProbe(endpoint, "/readyz", undefined, timeoutMs);
+}
+
 /** Bounded SSRF-safe HTTP 2xx application-readiness probe. */
 export async function safeReadyzProbe(
   endpoint: string,
