@@ -75,10 +75,7 @@ async function replayFromEnvironment(): Promise<void> {
   const baseSha = requiredSha("OPERATOR_CHANGE_BASE_SHA");
   const headSha = requiredSha("OPERATOR_CHANGE_HEAD_SHA");
   const repository = requiredEnv("REPOSITORY");
-  const paths = readFileSync(
-    requiredEnv("OPERATOR_CHANGE_PATHS_FILE"),
-    "utf8"
-  )
+  const paths = readFileSync(requiredEnv("OPERATOR_CHANGE_PATHS_FILE"), "utf8")
     .split("\n")
     .filter(Boolean);
   const result = await replayOperatorChange({
@@ -208,7 +205,9 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(
+    `${error instanceof Error ? error.message : String(error)}\n`
+  );
   process.exitCode = 1;
 });
 
