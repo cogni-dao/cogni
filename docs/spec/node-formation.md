@@ -345,7 +345,7 @@ Populated later by `pnpm node:activate-payments` (child node CLI):
 
 ### Node Publish (Operator-Authored Submodule PR)
 
-#### Signed data-only birth fast path
+#### Unified generated-change envelope
 
 The parent registration PR may use the narrow fast path only when it is a
 single, data-only node declaration. The operator App writes one commit on
@@ -354,7 +354,8 @@ single, data-only node declaration. The operator App writes one commit on
 ```text
 feat(node): register <slug>
 
-Cogni-Change-Type: cogni.node-birth.v1
+Cogni-Change-Type: cogni.operator-change.v1
+Cogni-Operation: node.register
 Cogni-Node: <slug>
 Cogni-Node-Id: <uuid>
 Cogni-Source-Repo: https://github.com/<fleet-org>/<slug>.git
@@ -363,20 +364,18 @@ Cogni-Base-SHA: <40-hex parent main SHA>
 Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
 ```
 
-`BIRTH_SIGNATURE_IS_IDENTITY_NOT_SEMANTICS`: the App signature identifies the
+`APP_SIGNATURE_IS_IDENTITY_NOT_SEMANTICS`: the App signature identifies the
 writer; it does not prove the generated tree is correct. CI therefore executes
 the classifier from `origin/main`, verifies the exact repository-scoped App,
 signature, branch, one-commit history, trailers, parent/base SHA, and path hash,
 then replays the trusted birth plan and requires a byte-identical result.
 
-`BIRTH_FAST_PATH_IS_DATA_ONLY`: no executable source and no shared generated
-aggregate is eligible. A runtime roster, Caddyfile, scheduler map, AppSet
-kustomization, workflow, or any other multi-node file forces ordinary CI and
-the merge queue. Those projections derive after merge from the canonical node
-record. Until the data-only plan exists on `main`, the classifier returns
-ineligible; the existing broad birth footprint never inherits the shortcut.
+`REGISTER_REPLAY_IS_COMPLETE_OR_DISABLED`: the current writer has 14 outputs. Thirteen declarative
+outputs can be replayed exactly (catalog, overlays, AppSets and their index, Caddy, and scheduler
+projections). The executable compiled roster cannot. Registration therefore stays disabled until
+that roster write is removed or a trusted exact verifier can reproduce the entire changed tree.
 
-`CLAIMED_INVALID_IS_RED`: a commit that claims `cogni.node-birth.v1` but fails
+`CLAIMED_INVALID_IS_RED`: a commit that claims `cogni.operator-change.v1` but fails
 any proof is rejected. A human edit, additional commit, unsigned/non-App
 commit, or ordinary unclaimed PR takes the standard CI and queue lane.
 

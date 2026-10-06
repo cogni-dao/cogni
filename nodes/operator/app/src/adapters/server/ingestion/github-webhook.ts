@@ -71,6 +71,7 @@ export class GitHubWebhookNormalizer implements WebhookNormalizer {
     "issues",
     "issue_comment",
     "push",
+    "check_run",
   ] as const satisfies readonly string[];
 
   async verify(
@@ -106,6 +107,8 @@ export class GitHubWebhookNormalizer implements WebhookNormalizer {
         return this.normalizeIssueComment(payload);
       case "push":
         return this.normalizePush(payload);
+      case "check_run":
+        return [];
       default:
         // Events we don't have a specific normalizer for are dropped.
         // Add normalizers here as we expand ingestion coverage.

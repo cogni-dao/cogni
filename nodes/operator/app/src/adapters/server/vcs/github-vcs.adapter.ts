@@ -108,8 +108,8 @@ export class GitHubVcsAdapter implements VcsCapability {
     );
 
     // Fetch check runs, combined status, and reviews in parallel
-    const [checksResponse, statusResponse, reviewsResponse] = await Promise.all(
-      [
+    const [checksResponse, statusResponse, reviewsResponse, commitResponse] =
+      await Promise.all([
         octokit.request("GET /repos/{owner}/{repo}/commits/{ref}/check-runs", {
           owner: params.owner,
           repo: params.repo,
@@ -130,8 +130,12 @@ export class GitHubVcsAdapter implements VcsCapability {
             per_page: 100,
           }
         ),
-      ]
-    );
+        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+          owner: params.owner,
+          repo: params.repo,
+          ref: pr.head.sha,
+        }),
+      ]);
 
     const rawCheckRuns = checksResponse.data.check_runs as Array<{
       name: string;
@@ -249,6 +253,12 @@ export class GitHubVcsAdapter implements VcsCapability {
       author: pr.user?.login ?? "unknown",
       baseBranch: pr.base.ref,
       headSha: pr.head.sha,
+      baseSha: pr.base.sha,
+      ...(commitResponse.data.parents?.length === 1 &&
+      commitResponse.data.parents[0]?.sha
+        ? { headParentSha: commitResponse.data.parents[0].sha }
+        : {}),
+      headCommitMessage: commitResponse.data.commit.message,
       mergeable: pr.mergeable,
       reviewDecision,
       labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name) ?? ""),

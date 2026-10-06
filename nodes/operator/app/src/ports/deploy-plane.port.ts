@@ -206,24 +206,6 @@ export interface ResolvedNodeRepo {
   readonly repo: string;
 }
 
-/** Input to `classifyEnvManagerPr` — a PR addressed in the parent monorepo. */
-export interface ClassifyEnvManagerPrInput {
-  readonly owner: string;
-  readonly repo: string;
-  readonly prNumber: number;
-}
-
-/**
- * Whether a monorepo PR is an App-signed `cogni.env-manager.v1` env-membership PR (structurally
- * identical to `@/shared/vcs/env-manager-pr` `EnvManagerPrClassification` — declared here because
- * the ports layer may not import shared).
- */
-export interface EnvManagerPrClassificationResult {
-  readonly isEnvManagerPr: boolean;
-  /** The `Cogni-Node` trailer value — the node whose env membership the PR changes. */
-  readonly targetNodeRef?: string;
-}
-
 export interface DeployPlanePort {
   prepareNodeRefCandidateFlight(
     input: PrepareNodeRefCandidateFlightInput
@@ -249,22 +231,6 @@ export interface DeployPlanePort {
    * the merge route catches it to fall back to the monorepo (legacy lane); approve-checks surfaces it.
    */
   resolveNodeRepo(input: ResolveNodeRepoInput): Promise<ResolvedNodeRepo>;
-
-  /**
-   * Classify a monorepo PR as an App-signed env-membership PR (`cogni.env-manager.v1`) or not.
-   * Fetches the PR + its HEAD commit via the App and applies the pure classifier
-   * (`@/shared/vcs/env-manager-pr`): reserved branch family, single `Cogni-Change-Type` +
-   * `Cogni-Node` trailers, and an App signature (`verified && reason==="valid"`, one parent).
-   * The env-membership verb authors these signed PRs into the parent monorepo, so the merge
-   * route resolves the repo from `nodeId:operator` as usual and uses this ONLY to decide WHO may
-   * authorize: an env-manager PR is authorized by `node.manage_envs` on its `targetNodeRef`
-   * instead of `node.flight` on the operator. NEVER throws for a non-env PR — a look-alike that
-   * fails any gate returns `{ isEnvManagerPr: false }`, and the route additionally fail-closes on
-   * any thrown error (treats it as not-env-manager).
-   */
-  classifyEnvManagerPr(
-    input: ClassifyEnvManagerPrInput
-  ): Promise<EnvManagerPrClassificationResult>;
 
   /**
    * Read a text file from a repo via the operator App (contents:read). Returns null when the file is

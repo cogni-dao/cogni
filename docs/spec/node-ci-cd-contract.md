@@ -72,10 +72,9 @@ The simplification target is one artifact contract and one promotion primitive. 
     or `controlEnvFor` (`nodes/operator/app/src/features/compute/node-deployment-provider.ts`)
     — never by reading the env variable directly. See `## Lane vs control env` below.
 
-12. **BIRTH_FAST_PATH_STOPS_AT_DATA**: a signed parent node-birth PR may skip
-    generic parent CI only when `origin/main`'s trusted verifier proves one
-    byte-exact, node-scoped declarative birth plan. Executable source and shared
-    aggregates are never eligible. The child source repo always keeps standard
+12. **ONE_GENERATED_CHANGE_PROTOCOL**: every operator-generated environment or deployment PR uses
+    `cogni.operator-change.v1`, one origin/main classifier, and one versioned allowlist. Each
+    operation has a byte-exact replay verifier; an incomplete operation stays disabled. The child source repo keeps standard
     CI, immutable image publication, candidate exact-SHA proof, and same-digest
     production promotion. App signature proves authorship, not correctness.
 

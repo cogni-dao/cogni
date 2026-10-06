@@ -44,12 +44,14 @@ env:
   DOMAIN: ${{ vars.DOMAIN }}
 
 jobs:
-  env_manager_fast_path:
-    name: env-manager-fast-path
+  operator_change_fast_path:
+    name: operator-change-fast-path
     runs-on: ubuntu-latest
     outputs:
       eligible: ${{ steps.classify.outputs.eligible }}
       claimed: ${{ steps.classify.outputs.claimed }}
+      invalid: ${{ steps.classify.outputs.invalid }}
+      operation: ${{ steps.classify.outputs.operation }}
       reason: ${{ steps.classify.outputs.reason }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -57,19 +59,16 @@ jobs:
           fetch-depth: 0
 
       - id: classify
-        name: Verify signed env-manager change type
+        name: Verify signed operator-change envelope
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER_PR: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA_PR: ${{ github.event.pull_request.head.sha }}
-          MQ_HEAD_REF: ${{ github.event.merge_group.head_ref }}
-          MQ_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-          MQ_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
-          classifier='scripts/ci/classify-env-manager-fast-path.sh'
+          classifier='scripts/ci/classify-operator-change-fast-path.sh'
           if git cat-file -e "origin/main:$classifier" 2>/dev/null; then
             # TRUSTED_CLASSIFIER: never let the PR execute the code that decides
             # whether that same PR may skip heavy checks.
@@ -79,84 +78,32 @@ jobs:
             # full CI. Deletion/drift is not a bootstrap and fails above.
             echo 'eligible=false' >> "$GITHUB_OUTPUT"
             echo 'claimed=false' >> "$GITHUB_OUTPUT"
+            echo 'invalid=false' >> "$GITHUB_OUTPUT"
+            echo 'operation=none' >> "$GITHUB_OUTPUT"
             echo 'reason=classifier-bootstrap' >> "$GITHUB_OUTPUT"
           else
-            echo "::error::trusted env-manager classifier is missing from main"
+            echo "::error::trusted operator-change classifier is missing from main"
             exit 1
           fi
 
-      # Tiny, deterministic proof for the one reserved generator type. These
-      # are the checks that can actually invalidate an env-manager tree; app
-      # typechecks, unit tests, component containers, and image builds cannot.
-      - name: Validate changed catalog
-        if: steps.classify.outputs.eligible == 'true'
-        run: |
-          pipx install 'check-jsonschema==0.37.1'
-          check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml
-          bash scripts/ci/next-free-node-port.sh --check
-
-      - name: Verify generated deployment tree
-        if: steps.classify.outputs.eligible == 'true'
-        run: |
-          bash scripts/ci/render-scheduler-worker-endpoints.sh --check
-          bash scripts/ci/render-node-appset.sh --check
-          bash scripts/ci/render-node-overlays.sh --check
-
-  node_birth_fast_path:
-    name: node-birth-fast-path
+  operator_change_automerge_ready:
+    name: operator-change-automerge-ready
+    needs: [operator_change_fast_path]
+    if: needs.operator_change_fast_path.outputs.eligible == 'true'
     runs-on: ubuntu-latest
-    outputs:
-      eligible: ${{ steps.classify.outputs.eligible }}
-      claimed: ${{ steps.classify.outputs.claimed }}
-      reason: ${{ steps.classify.outputs.reason }}
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          fetch-depth: 0
-
-      - id: classify
-        name: Verify signed node-birth change type
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          REPOSITORY: ${{ github.repository }}
-          PR_NUMBER_PR: ${{ github.event.pull_request.number }}
-          PR_HEAD_SHA_PR: ${{ github.event.pull_request.head.sha }}
-          MQ_HEAD_REF: ${{ github.event.merge_group.head_ref }}
-        run: |
-          set -euo pipefail
-          classifier='scripts/ci/classify-node-birth-fast-path.sh'
-          if git cat-file -e "origin/main:$classifier" 2>/dev/null; then
-            # TRUSTED_CLASSIFIER: a birth PR never executes its own authority
-            # decision. The trusted plan on main is empty until isolation lands.
-            git show "origin/main:$classifier" | bash
-          elif [ "$(git diff --name-status origin/main...HEAD -- "$classifier")" = "$(printf 'A\t%s' "$classifier")" ]; then
-            echo 'eligible=false' >> "$GITHUB_OUTPUT"
-            echo 'claimed=false' >> "$GITHUB_OUTPUT"
-            echo 'reason=classifier-bootstrap' >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::trusted node-birth classifier is missing from main"
-            exit 1
-          fi
-
-      - name: Validate birth catalog
-        if: steps.classify.outputs.eligible == 'true'
-        run: |
-          pipx install 'check-jsonschema==0.37.1'
-          check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml
-          bash scripts/ci/next-free-node-port.sh --check
+      - run: echo "trusted operator-change classifier accepted this exact head"
 
   # Fast gate: install → typecheck → lint
   static:
-    needs: [env_manager_fast_path, node_birth_fast_path]
+    needs: [operator_change_fast_path]
     # A skipped required job is satisfied by GitHub and by the operator's
     # getCiStatus contract. Invalid/unavailable classifier results still run
     # this job so the enforcement step fails closed.
     if: |
       always() && (
-        needs.env_manager_fast_path.result != 'success' ||
-        needs.node_birth_fast_path.result != 'success' ||
-        (needs.env_manager_fast_path.outputs.eligible != 'true' && needs.node_birth_fast_path.outputs.eligible != 'true')
+        needs.operator_change_fast_path.result != 'success' ||
+        needs.operator_change_fast_path.outputs.eligible != 'true'
       )
     runs-on: ubuntu-latest
     env:
@@ -173,31 +120,16 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
-      - name: Enforce env-manager classifier result
+      - name: Enforce operator-change classifier result
         env:
-          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
-          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
-          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
-          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+          CLASSIFIER_RESULT: ${{ needs.operator_change_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.operator_change_fast_path.outputs.eligible }}
+          FAST_PATH_INVALID: ${{ needs.operator_change_fast_path.outputs.invalid }}
+          FAST_PATH_REASON: ${{ needs.operator_change_fast_path.outputs.reason }}
         run: |
-          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
-          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
-            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
-          fi
-          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
-
-      - name: Enforce node-birth classifier result
-        env:
-          CLASSIFIER_RESULT: ${{ needs.node_birth_fast_path.result }}
-          FAST_PATH_ELIGIBLE: ${{ needs.node_birth_fast_path.outputs.eligible }}
-          FAST_PATH_CLAIMED: ${{ needs.node_birth_fast_path.outputs.claimed }}
-          FAST_PATH_REASON: ${{ needs.node_birth_fast_path.outputs.reason }}
-        run: |
-          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::node-birth classifier failed"; exit 1; }
-          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
-            echo "::error::invalid signed node-birth claim: $FAST_PATH_REASON"; exit 1
-          fi
-          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed node-birth fast path accepted"
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::operator-change classifier failed"; exit 1; }
+          [ "$FAST_PATH_INVALID" != true ] || { echo "::error::invalid signed operator-change claim: $FAST_PATH_REASON"; exit 1; }
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed operator-change fast path accepted"
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -409,12 +341,11 @@ jobs:
   # exists to prevent. The hermetic UNIT proof stays here on PR CI (see the shell-tests job).
 
   unit:
-    needs: [env_manager_fast_path, node_birth_fast_path]
+    needs: [operator_change_fast_path]
     if: |
       always() && (
-        needs.env_manager_fast_path.result != 'success' ||
-        needs.node_birth_fast_path.result != 'success' ||
-        (needs.env_manager_fast_path.outputs.eligible != 'true' && needs.node_birth_fast_path.outputs.eligible != 'true')
+        needs.operator_change_fast_path.result != 'success' ||
+        needs.operator_change_fast_path.outputs.eligible != 'true'
       )
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140): unit does its own install + packages:build
@@ -441,31 +372,16 @@ jobs:
           # leaves origin/main unreachable and forces a runtime fetch.
           fetch-depth: 0
 
-      - name: Enforce env-manager classifier result
+      - name: Enforce operator-change classifier result
         env:
-          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
-          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
-          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
-          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+          CLASSIFIER_RESULT: ${{ needs.operator_change_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.operator_change_fast_path.outputs.eligible }}
+          FAST_PATH_INVALID: ${{ needs.operator_change_fast_path.outputs.invalid }}
+          FAST_PATH_REASON: ${{ needs.operator_change_fast_path.outputs.reason }}
         run: |
-          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
-          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
-            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
-          fi
-          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
-
-      - name: Enforce node-birth classifier result
-        env:
-          CLASSIFIER_RESULT: ${{ needs.node_birth_fast_path.result }}
-          FAST_PATH_ELIGIBLE: ${{ needs.node_birth_fast_path.outputs.eligible }}
-          FAST_PATH_CLAIMED: ${{ needs.node_birth_fast_path.outputs.claimed }}
-          FAST_PATH_REASON: ${{ needs.node_birth_fast_path.outputs.reason }}
-        run: |
-          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::node-birth classifier failed"; exit 1; }
-          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
-            echo "::error::invalid signed node-birth claim: $FAST_PATH_REASON"; exit 1
-          fi
-          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed node-birth fast path accepted"
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::operator-change classifier failed"; exit 1; }
+          [ "$FAST_PATH_INVALID" != true ] || { echo "::error::invalid signed operator-change claim: $FAST_PATH_REASON"; exit 1; }
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed operator-change fast path accepted"
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -590,12 +506,11 @@ jobs:
     # Skip on merge_group: not in required-status-checks (see infra/github/branch-protection.json),
     # so the queue doesn't gate on it. Re-running on the rebased candidate burns ~3 min for marginal
     # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
-    needs: [env_manager_fast_path, node_birth_fast_path]
+    needs: [operator_change_fast_path]
     if: |
       always() && github.event_name != 'merge_group' && (
-        needs.env_manager_fast_path.result != 'success' ||
-        needs.node_birth_fast_path.result != 'success' ||
-        (needs.env_manager_fast_path.outputs.eligible != 'true' && needs.node_birth_fast_path.outputs.eligible != 'true')
+        needs.operator_change_fast_path.result != 'success' ||
+        needs.operator_change_fast_path.outputs.eligible != 'true'
       )
     runs-on: ubuntu-latest
     # No `needs: static` (task.5140) — component does its own install + build and
@@ -615,31 +530,16 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
-      - name: Enforce env-manager classifier result
+      - name: Enforce operator-change classifier result
         env:
-          CLASSIFIER_RESULT: ${{ needs.env_manager_fast_path.result }}
-          FAST_PATH_ELIGIBLE: ${{ needs.env_manager_fast_path.outputs.eligible }}
-          FAST_PATH_CLAIMED: ${{ needs.env_manager_fast_path.outputs.claimed }}
-          FAST_PATH_REASON: ${{ needs.env_manager_fast_path.outputs.reason }}
+          CLASSIFIER_RESULT: ${{ needs.operator_change_fast_path.result }}
+          FAST_PATH_ELIGIBLE: ${{ needs.operator_change_fast_path.outputs.eligible }}
+          FAST_PATH_INVALID: ${{ needs.operator_change_fast_path.outputs.invalid }}
+          FAST_PATH_REASON: ${{ needs.operator_change_fast_path.outputs.reason }}
         run: |
-          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::env-manager classifier failed"; exit 1; }
-          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
-            echo "::error::invalid signed env-manager claim: $FAST_PATH_REASON"; exit 1
-          fi
-          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed env-manager fast path accepted"
-
-      - name: Enforce node-birth classifier result
-        env:
-          CLASSIFIER_RESULT: ${{ needs.node_birth_fast_path.result }}
-          FAST_PATH_ELIGIBLE: ${{ needs.node_birth_fast_path.outputs.eligible }}
-          FAST_PATH_CLAIMED: ${{ needs.node_birth_fast_path.outputs.claimed }}
-          FAST_PATH_REASON: ${{ needs.node_birth_fast_path.outputs.reason }}
-        run: |
-          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::node-birth classifier failed"; exit 1; }
-          if [ "$FAST_PATH_CLAIMED" = true ] && [ "$FAST_PATH_ELIGIBLE" != true ]; then
-            echo "::error::invalid signed node-birth claim: $FAST_PATH_REASON"; exit 1
-          fi
-          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed node-birth fast path accepted"
+          [ "$CLASSIFIER_RESULT" = success ] || { echo "::error::operator-change classifier failed"; exit 1; }
+          [ "$FAST_PATH_INVALID" != true ] || { echo "::error::invalid signed operator-change claim: $FAST_PATH_REASON"; exit 1; }
+          [ "$FAST_PATH_ELIGIBLE" != true ] || echo "Signed operator-change fast path accepted"
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 

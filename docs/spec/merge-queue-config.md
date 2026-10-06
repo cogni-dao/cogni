@@ -4,7 +4,7 @@ type: spec
 title: Merge Queue Required Checks — Policy & Empirical Constraints
 status: active
 trust: reviewed
-summary: Required-status-checks policy for the merge queue, including the signed env-manager fast path. GitHub's queue waits forever for required checks whose workflows lack a `merge_group:` trigger — verified empirically.
+summary: Required-status-checks policy for the merge queue, including the unified signed operator-change fast path. GitHub's queue waits forever for required checks whose workflows lack a `merge_group:` trigger — verified empirically.
 read_when: Adding/removing a required status check; changing operator-generated environment PRs; debugging a stuck merge queue; setting up `main`-branch protection on a Cogni-DAO node fork; planning the GitLab vFuture port.
 implements: []
 owner: cogni-dev
@@ -31,12 +31,12 @@ Define the required-status-checks policy that actually works on GitHub today, ca
 - Defining the candidate-a `deploy_verified` gate — see [development-lifecycle.md](./development-lifecycle.md).
 - Per-node merge queues — discarded after analysis (see task.0391); revisit if N > 5 nodes or queue depth becomes a real bottleneck.
 - Replacing the merge queue for ordinary code or human-authored PRs. Only the narrow, signed
-  `cogni.env-manager.v1` change type may direct-merge after its deterministic-tree proof passes.
+  `cogni.operator-change.v1` envelope may direct-merge internally after its operation proof passes.
 
 ## Core Invariants
 
 1. **REPORT_OR_DON'T_REQUIRE**: A required status check MUST be produced by a workflow that fires on both `pull_request:` AND `merge_group:` events. PR-only workflows cannot be required — the queue would wait forever for a status that never arrives. Empirically validated.
-2. **QUEUE_GATE_IS_TREE_CORRECTNESS**: Normal code PRs use the image-build aggregator (`manifest`) plus `static`, `unit`, and `component`. A verified `cogni.env-manager.v1` PR changes no runtime image, so the same required context names report success after the smaller generator-correctness proof defined below.
+2. **QUEUE_GATE_IS_TREE_CORRECTNESS**: Normal code PRs use the image-build aggregator (`manifest`) plus `static`, `unit`, and `component`. A verified and enabled `cogni.operator-change.v1` PR changes no runtime image, so the same required context names report success after the operation-specific generator proof defined below.
 3. **STUB_JOB_FOR_PR_INTENT**: When a check's "real validation" only makes sense on PR-time (e.g., title convention, security scan, candidate-a flight), the workflow MAY add a `merge_group:` trigger with a no-op passthrough step that emits a success status with the same context name. This makes the check visible on both events without doing duplicate work on the queue ref. **Canonical example: `candidate-flight`** — required-on-PR (every external-agent contribution must dispatch `/vcs/flight` and pass), but explicitly NOT required-on-merge-queue (the queue's rebased SHA is different from the PR head; re-flighting it would conflict with the slot lease and waste a candidate-a deploy). Implementation: `candidate-flight.yml` adds `merge_group:` trigger + a passthrough job that emits `candidate-flight` success on merge_group events. Spec'd; implementation tracked in task.0414.
 4. **CONFIG_AS_CODE**: The set of required checks is committed to `infra/github/branch-protection.json`. Drift between live and committed is detectable (`gh api ... | diff`).
 
@@ -120,24 +120,30 @@ operator authority that owns generated deploy-state PRs without giving an agent 
 
 `min_entries_to_merge_wait_minutes: 0` removes only the idle batch timer for ordinary PRs. They still
 enter a serialized merge group, rebase on current `main`, and report the required checks there.
-The review App's ruleset bypass is not general automation authority: `/vcs/merge` requests it only
-after the PR has classified as the App-signed env-manager change type and the principal has
-`node.manage_envs` on the trailer-named node. The ordinary path never sets the bypass flag.
+The review App's ruleset bypass is not caller authority: `/vcs/merge` never requests it. Only the
+HMAC-verified internal generated-change handler can request it after the trusted ready check and all
+required checks are green, bound atomically to the expected head SHA.
 
-## Signed env-manager fast path
+## Signed operator-change fast path
 
-The operator may skip unrelated application tests and image builds only for its reserved generated
-change type. The GitHub-signed commit carries these trailers:
+There is one generated-change protocol, not a new classifier and workflow condition for every
+operator verb. The GitHub App writes this envelope:
 
 ```text
-Cogni-Change-Type: cogni.env-manager.v1
+Cogni-Change-Type: cogni.operator-change.v1
+Cogni-Operation: env.membership|env.placement|env.region|node.register|deployment.declare
 Cogni-Node: <slug>
-Cogni-Environment: candidate-a|preview|production
-Cogni-Action: add|remove
+Cogni-Base-SHA: <40-hex main SHA and sole commit parent>
+<operation-specific trailers>
 Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
 ```
 
-`scripts/ci/classify-env-manager-fast-path.sh` fails closed unless all of these are true:
+`scripts/ci/operator-change-v1.allowlist.json` is the one versioned registry. It binds the exact
+production/test App identities, the five operation names, their trusted replay verifier, and the
+repositories where each operation is enabled. `enabledRepositories` is empty for every operation
+until its positive and negative matrix passes in test-org.
+
+`scripts/ci/classify-operator-change-fast-path.sh` fails closed unless all of these are true:
 
 - the workflow executes the classifier from `origin/main`, never the PR-controlled copy;
 - the PR and commit author match the exact repository-scoped GitHub App identity:
@@ -145,63 +151,32 @@ Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
   production-shaped `cogni-test-org/cogni-monorepo` E2E ground; no other repository inherits trust;
 - GitHub reports the head commit signature as verified and valid;
 - the same-repository branch, signed trailers, and PR head SHA agree;
-- the PR is specifically an env-membership add/remove on `cogni-operator/node-env-*`;
-- the base-to-head catalog diff is exactly that one declared membership mutation (including the
-  derived placement/compute/lease cells and activity authority), with every unrelated field equal;
-- the signed path hash equals the GitHub PR file list, and every file is inside the narrow
-  catalog/AppSet/overlay/scheduler boundary for that node and environment;
-- the merge-group diff contains exactly the same path set, preventing a batched or stale shared-file
-  candidate from taking the shortcut;
-- catalog schema, NodePort uniqueness, scheduler routing, per-node AppSets, and per-node overlays all
-  reproduce without drift on the checked-out tree.
+- the operation is listed and its branch, subject, required trailers, base, head, and sole parent agree;
+- the signed path hash equals GitHub's unique PR file list;
+- the operation is enabled for this exact repository; and
+- the operation's verifier, loaded from `origin/main`, replays the complete tree change exactly.
 
 Eligible PRs still produce the canonical `static`, `unit`, `component`, and `manifest` contexts as
 GitHub `skipped` (a satisfied required conclusion), without scheduling four passthrough runners. The
-trusted classifier job owns the small schema + reproducible-generator proof. A PR that does not claim
-the reserved type runs full CI. A PR that claims it but fails any proof is red; it never silently
-falls back. Titles, labels, branch names, or copied PR bodies alone grant nothing.
+trusted classifier job owns the operation replay proof. A PR that does not claim the reserved type,
+or a valid operation that is still disabled, runs full CI. A malformed reserved claim is red.
+Titles, labels, branch names, or copied PR bodies alone grant nothing.
 
-After those checks are green, `/vcs/merge` direct-squashes this one signed type with the review App's
-queue bypass. Classic required-status protection still applies, so the route cannot merge an
-unchecked tree. A normal PR—including one submitted by the same App—uses the merge queue. The
-env-manager writer already retries from current `main`; a stale/conflicting deterministic write is
-rejected and regenerated rather than silently overwriting another change.
+No caller receives bypass authority. `/api/v1/vcs/merge` always uses the ordinary developer/RBAC +
+merge-queue path. Only the operator's HMAC-verified internal `check_suite.completed` handler may
+consider a generated direct merge. It re-reads the PR, commit, current base, classifier result, and
+required checks, then submits GitHub's `sha: <expected-head>` merge precondition. A stale head or
+base fails; an unlisted, disabled, edited, or human PR no-ops into the normal queue.
 
 > Migration note: a repo that previously had the queue enabled via the classic UI checkbox should keep the ruleset as the single source of truth — the ruleset is authoritative and the legacy checkbox can be cleared once the ruleset is confirmed live (`gh api repos/{repo}/rulesets`).
 
-## Signed node-birth fast path
-
-The node-birth shortcut is a second reserved generated type,
-`cogni.node-birth.v1`. It follows the same trust shape as env-manager but has a
-different semantic verifier and never broadens env-manager's authority.
-
-- Only `Cogni-DAO/cogni` with `cogni-operator[bot]`, and the isolated
-  `cogni-test-org/cogni-monorepo` with `cogni-operator-test[bot]`, may claim it.
-- The PR must be same-repository, target `main`, use the reserved
-  `cogni-operator/node-register-<slug>` branch, contain exactly one valid
-  App-signed commit, and carry the canonical envelope from
-  [node-formation.md](./node-formation.md#signed-data-only-birth-fast-path).
-- The trusted classifier is loaded from `origin/main`. Its trusted path plan is
-  empty until the data-only birth contract lands on `main`, so the current
-  runtime/shared-file birth footprint is always ineligible.
-- The signed path hash and GitHub file list must equal the trusted plan. The
-  base SHA, commit parent, PR base, node identity, source repo, source SHA, and
-  generated bytes must all agree. Any runtime or shared aggregate path is
-  ordinary CI/queue, never eligible.
-- A claimed-but-invalid envelope is red. An unclaimed PR or any human edit uses
-  ordinary CI and the merge queue.
-
-When eligible, the trusted classifier owns only the formation-specific schema,
-placement, lease, source-pin, and replay proof. The canonical `static`, `unit`,
-`component`, and `manifest` jobs are satisfied as skipped. Direct merge is
-separate operator control-plane authority: it must re-read current base/head
-and submit GitHub's expected-head `sha` precondition. CI classification alone
-never grants a stale or changed head permission to merge.
-
-Production rules are unchanged until the test-org matrix proves: untouched
-birth under 60 seconds; spoof, extra path, stale base, changed head, human
-commit, and concurrent births fail closed; and the child's standard-CI digest
-is the exact digest served in candidate then production.
+The operation-specific fields are: membership (`Environment`, `Action`), placement
+(`Environment`, `Provider`), region (`Environment`, canonical `Countries`,
+`Lease-Generation`), registration (`Node-Id`, `Source-Repo`, `Source-SHA`), and deployment
+declaration (the common fields only). `node.register` remains disabled while its writer emits the
+executable compiled roster; the other 13 current formation files are deterministic replay targets.
+`deployment.declare` also remains disabled until the same trusted contract is installed and proven
+in child-node repositories.
 
 ## GitLab vFuture Mapping
 

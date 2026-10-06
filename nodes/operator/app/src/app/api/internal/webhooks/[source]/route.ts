@@ -19,6 +19,7 @@
 import { NextResponse } from "next/server";
 import { dispatchLaneOnboard } from "@/app/_facades/deploy/lane-onboard.server";
 import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
+import { dispatchOperatorChangeAutoMerge } from "@/app/_facades/deploy/operator-change-auto-merge.server";
 import { dispatchPrReview } from "@/app/_facades/review/dispatch.server";
 import {
   getContainer,
@@ -318,6 +319,15 @@ export async function POST(
       // pull_request closed/merged delivery for a queued merge (Poly #65); the canonical main
       // advance still identifies the exact on-main SHA.
       await dispatchNodePreviewPromote(verified.payload, env, log);
+    }
+
+    if (source === "github" && eventType === "check_run") {
+      await dispatchOperatorChangeAutoMerge(
+        verified.payload,
+        env,
+        container.vcsCapability,
+        log
+      );
     }
 
     if (source === "alchemy") {

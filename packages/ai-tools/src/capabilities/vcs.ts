@@ -45,6 +45,12 @@ export interface CiStatusResult {
   readonly author: string;
   readonly baseBranch: string;
   readonly headSha: string;
+  /** Current base SHA re-read with the PR (generated-change stale-base guard). */
+  readonly baseSha?: string;
+  /** Sole parent of the current head when it has exactly one parent. */
+  readonly headParentSha?: string;
+  /** Current head commit message; internal generated-change verification only. */
+  readonly headCommitMessage?: string;
   readonly mergeable: boolean | null;
   readonly reviewDecision: string | null;
   readonly labels: readonly string[];

@@ -41,7 +41,6 @@ const fakeVcs = vi.hoisted(() => ({
 }));
 
 const mockResolveNodeRepo = vi.hoisted(() => vi.fn());
-const mockClassifyEnvManagerPr = vi.hoisted(() => vi.fn());
 // Fresh adapter per test (no reset API); holder swapped in beforeEach.
 const authzHolder = vi.hoisted(
   () =>
@@ -81,7 +80,6 @@ const mockLog = vi.hoisted(() => ({
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
   createOperatorDeployPlane: () => ({
     resolveNodeRepo: mockResolveNodeRepo,
-    classifyEnvManagerPr: mockClassifyEnvManagerPr,
   }),
 }));
 
@@ -208,8 +206,6 @@ describe("POST /api/v1/vcs/merge", () => {
       owner: "Cogni-DAO",
       repo: NODE_SLUG,
     });
-    // Default: not a signed env-membership PR (ordinary merge).
-    mockClassifyEnvManagerPr.mockResolvedValue({ isEnvManagerPr: false });
     // FakeAuthorizationAdapter denies by default; each test grants what it needs.
   });
 
@@ -217,15 +213,6 @@ describe("POST /api/v1/vcs/merge", () => {
     authzHolder.current?.allow({
       actorId: `user:${TEST_SESSION_USER_1.id}`,
       action: "node.flight",
-      resource: `node:${nodeId}`,
-      context: { tenantId: nodeId, nodeId },
-    });
-  }
-
-  function grantManageEnvs(nodeId: string): void {
-    authzHolder.current?.allow({
-      actorId: `user:${TEST_SESSION_USER_1.id}`,
-      action: "node.manage_envs",
       resource: `node:${nodeId}`,
       context: { tenantId: nodeId, nodeId },
     });
@@ -264,7 +251,6 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: NODE_SLUG,
       prNumber: 42,
       method: "squash",
-      expectedHeadSha: "0123456789012345678901234567890123456789",
     });
   });
 
@@ -341,7 +327,6 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
-      expectedHeadSha: "0123456789012345678901234567890123456789",
     });
   });
 
@@ -358,7 +343,6 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
-      expectedHeadSha: "0123456789012345678901234567890123456789",
     });
   });
 
@@ -403,175 +387,15 @@ describe("POST /api/v1/vcs/merge", () => {
     expect(body.errorCode).toBe("merge_rejected");
   });
 
-  // -------------------------------------------------------------------------
-  // ENV_MANAGER_SELF_MERGE: an env_manager merges its OWN signed env-membership
-  // PR (in the operator monorepo) via node.manage_envs on the TARGET node —
-  // WITHOUT node.flight on the operator. task.5141.
-  // -------------------------------------------------------------------------
-
-  it("env_manager merges its OWN signed env PR via node.manage_envs (no node.flight on operator)", async () => {
-    // Principal holds can_manage_envs on the TARGET node, NOT can_flight on operator.
-    grantManageEnvs(NODE_ID);
-    // The env PR lives in the operator monorepo → nodeId:operator resolves there.
-    mockResolveNodeRepo.mockResolvedValue({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-    });
-    // A properly App-signed env-membership PR whose Cogni-Node trailer is the target node.
-    mockClassifyEnvManagerPr.mockResolvedValue({
-      isEnvManagerPr: true,
-      targetNodeRef: NODE_SLUG,
-    });
-
-    const res = await post({ prNumber: 42, nodeId: "operator" });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(mergeOperation.output.safeParse(body).success).toBe(true);
-    expect(body.merged).toBe(true);
-    // Repo resolution is UNCHANGED — still the operator monorepo.
-    expect(mockResolveNodeRepo).toHaveBeenCalledWith({
-      parentOwner: "cogni-test-org",
-      parentRepo: "cogni-monorepo",
-      slug: "operator",
-    });
-    expect(mockClassifyEnvManagerPr).toHaveBeenCalledWith({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-      prNumber: 42,
-    });
-    expect(fakeVcs.mergePr).toHaveBeenCalledWith({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-      prNumber: 42,
-      method: "squash",
-      expectedHeadSha: "0123456789012345678901234567890123456789",
-      bypassQueue: true,
-    });
-  });
-
-  it("signed env PR prefers manage_envs bypass when the principal also has operator flight", async () => {
-    grant(OPERATOR_NODE_ID);
-    grantManageEnvs(NODE_ID);
-    mockResolveNodeRepo.mockResolvedValue({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-    });
-    mockClassifyEnvManagerPr.mockResolvedValue({
-      isEnvManagerPr: true,
-      targetNodeRef: NODE_SLUG,
-    });
-
-    const res = await post({ prNumber: 42, nodeId: "operator" });
-    expect(res.status).toBe(200);
-    expect(fakeVcs.mergePr).toHaveBeenCalledWith({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-      prNumber: 42,
-      method: "squash",
-      expectedHeadSha: "0123456789012345678901234567890123456789",
-      bypassQueue: true,
-    });
-  });
-
-  it("signed env PR needs target manage_envs to bypass even with operator flight", async () => {
-    grant(OPERATOR_NODE_ID);
-    mockResolveNodeRepo.mockResolvedValue({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-    });
-    mockClassifyEnvManagerPr.mockResolvedValue({
-      isEnvManagerPr: true,
-      targetNodeRef: NODE_SLUG,
-    });
-
-    const res = await post({ prNumber: 42, nodeId: "operator" });
-    expect(res.status).toBe(200);
-    expect(fakeVcs.mergePr).toHaveBeenCalledWith({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-      prNumber: 42,
-      method: "squash",
-      expectedHeadSha: "0123456789012345678901234567890123456789",
-    });
-  });
-
-  it("env_manager CANNOT merge a NORMAL (non-env-manager) operator PR — still needs node.flight", async () => {
-    grantManageEnvs(NODE_ID);
-    mockResolveNodeRepo.mockResolvedValue({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-    });
-    // Ordinary PR → classifier says not an env-manager PR.
-    mockClassifyEnvManagerPr.mockResolvedValue({ isEnvManagerPr: false });
-
-    const res = await post({ prNumber: 42, nodeId: "operator" });
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.errorCode).toBe("authz_denied");
-    expect(fakeVcs.mergePr).not.toHaveBeenCalled();
-  });
-
-  it("right branch but UNSIGNED/human commit → NOT env-manager → falls back to node.flight (denied)", async () => {
-    grantManageEnvs(NODE_ID);
-    mockResolveNodeRepo.mockResolvedValue({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-    });
-    // The classifier fails the App-signature gate for an unsigned/human commit → not env-manager.
-    mockClassifyEnvManagerPr.mockResolvedValue({ isEnvManagerPr: false });
-
-    const res = await post({ prNumber: 42, nodeId: "operator" });
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.errorCode).toBe("authz_denied");
-    expect(fakeVcs.mergePr).not.toHaveBeenCalled();
-  });
-
-  it("env-manager classify FAILURE fails CLOSED to the node.flight denial (403)", async () => {
-    grantManageEnvs(NODE_ID);
-    mockResolveNodeRepo.mockResolvedValue({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-    });
-    mockClassifyEnvManagerPr.mockRejectedValue(new Error("GitHub 500"));
-
-    const res = await post({ prNumber: 42, nodeId: "operator" });
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.errorCode).toBe("authz_denied");
-    expect(fakeVcs.mergePr).not.toHaveBeenCalled();
-  });
-
-  it("env-manager PR but principal lacks manage_envs on the target → 403 (denied)", async () => {
-    // No grant at all.
-    mockResolveNodeRepo.mockResolvedValue({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
-    });
-    mockClassifyEnvManagerPr.mockResolvedValue({
-      isEnvManagerPr: true,
-      targetNodeRef: NODE_SLUG,
-    });
-
-    const res = await post({ prNumber: 42, nodeId: "operator" });
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.errorCode).toBe("authz_denied");
-    expect(fakeVcs.mergePr).not.toHaveBeenCalled();
-  });
-
-  it("developer/can_flight path is UNCHANGED — classify is never consulted", async () => {
+  it("developer/can_flight path is queue-aware and never asks for bypass", async () => {
     grant(NODE_ID);
     const res = await post({ prNumber: 42, nodeId: NODE_SLUG });
     expect(res.status).toBe(200);
-    // Flight holders never trigger the env-manager classification GitHub reads.
-    expect(mockClassifyEnvManagerPr).not.toHaveBeenCalled();
     expect(fakeVcs.mergePr).toHaveBeenCalledWith({
       owner: "Cogni-DAO",
       repo: NODE_SLUG,
       prNumber: 42,
       method: "squash",
-      expectedHeadSha: "0123456789012345678901234567890123456789",
     });
   });
 });

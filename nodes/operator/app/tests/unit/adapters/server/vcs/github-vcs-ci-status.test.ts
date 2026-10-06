@@ -52,6 +52,7 @@ function adapter(): GitHubVcsAdapter {
 const PR_GET_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}";
 const CHECK_RUNS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/check-runs";
 const STATUS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/status";
+const COMMIT_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}";
 const REVIEWS_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews";
 const CLASSIC_REQUIRED_CHECKS_ROUTE =
   "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks";
@@ -89,7 +90,7 @@ function ciHandlers(input: {
         number: 5,
         title: "test pr",
         user: { login: "dev" },
-        base: { ref: "main" },
+        base: { ref: "main", sha: "basesha" },
         head: { sha: "headsha", ref: "feat/x" },
         mergeable: true,
         labels: [],
@@ -99,6 +100,12 @@ function ciHandlers(input: {
     if (route === CHECK_RUNS_ROUTE) return { check_runs: input.checkRuns };
     if (route === STATUS_ROUTE) return { statuses: [] };
     if (route === REVIEWS_ROUTE) return [];
+    if (route === COMMIT_ROUTE) {
+      return {
+        parents: [{ sha: "basesha" }],
+        commit: { message: "test commit" },
+      };
+    }
     if (route === CLASSIC_REQUIRED_CHECKS_ROUTE) {
       throw statusError(404, "Branch not protected");
     }

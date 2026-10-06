@@ -57,6 +57,7 @@ const PR_GET_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}";
 const MERGE_ROUTE = "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge";
 const CHECK_RUNS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/check-runs";
 const STATUS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/status";
+const COMMIT_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}";
 const REVIEWS_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews";
 const CLASSIC_REQUIRED_CHECKS_ROUTE =
   "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks";
@@ -152,11 +153,13 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
   });
 
   it("direct-merges a caller-authorized bypass without querying or entering the queue", async () => {
-    onRequest = (route) => {
+    let mergeParams: Record<string, unknown> | undefined;
+    onRequest = (route, params) => {
       if (route === PR_GET_ROUTE) {
         return { base: { ref: "main" }, node_id: "PR_node_1" };
       }
       if (route === MERGE_ROUTE) {
+        mergeParams = params;
         return { merged: true, sha: "fast-path", message: "Merged" };
       }
       throw new Error(`Unhandled request route: ${route}`);
@@ -169,6 +172,7 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       method: "squash",
       expectedHeadSha: "verified-head-sha",
       bypassQueue: true,
+      expectedHeadSha: "a".repeat(40),
     });
 
     expect(result).toMatchObject({
@@ -179,6 +183,7 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
     expect(requestRoutes).toContain(MERGE_ROUTE);
     expect(requestParams.at(-1)).toMatchObject({ sha: "verified-head-sha" });
     expect(graphqlQueries).toEqual([]);
+    expect(mergeParams).toMatchObject({ sha: "a".repeat(40) });
   });
 
   it("surfaces a 405 as a structured failure (neither merged nor enqueued)", async () => {
@@ -245,7 +250,7 @@ describe("GitHubVcsAdapter.getCiStatus — ruleset-required checks", () => {
           number: 7,
           title: "feat: protected change",
           user: { login: "agent" },
-          base: { ref: "main" },
+          base: { ref: "main", sha: "base-sha" },
           head: { sha: "head-sha" },
           mergeable: true,
           labels: [],
@@ -264,6 +269,12 @@ describe("GitHubVcsAdapter.getCiStatus — ruleset-required checks", () => {
       }
       if (route === STATUS_ROUTE) return { statuses: [] };
       if (route === REVIEWS_ROUTE) return [];
+      if (route === COMMIT_ROUTE) {
+        return {
+          parents: [{ sha: "base-sha" }],
+          commit: { message: "test commit" },
+        };
+      }
       if (route === CLASSIC_REQUIRED_CHECKS_ROUTE) {
         throw Object.assign(new Error("Branch not protected"), { status: 404 });
       }

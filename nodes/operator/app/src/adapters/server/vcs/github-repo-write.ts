@@ -52,9 +52,7 @@ import { z } from "zod";
 import type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
-  ClassifyEnvManagerPrInput,
   DeployPlanePort,
-  EnvManagerPrClassificationResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
   ObservedWorkflowDispatchResult,
@@ -115,22 +113,39 @@ import {
   parseNodeRepoPolicy,
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
-import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
 
-const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
+export const OPERATOR_CHANGE_TYPE = "cogni.operator-change.v1";
 
-export function envManagerCommitMessage(input: {
+export function operatorChangeCommitMessage(input: {
   readonly subject: string;
+  readonly operation:
+    | "env.membership"
+    | "env.placement"
+    | "env.region"
+    | "node.register"
+    | "deployment.declare";
   readonly node: string;
-  readonly env: NodeFormationEnv;
-  readonly action: "add" | "remove";
+  readonly baseSha: string;
   readonly paths: readonly string[];
+  readonly trailers?: Readonly<Record<string, string | number>>;
 }): string {
   const canonicalPaths = [...new Set(input.paths)].sort();
   const pathsSha256 = createHash("sha256")
     .update(`${canonicalPaths.join("\n")}\n`)
     .digest("hex");
-  return `${input.subject}\n\nCogni-Change-Type: ${ENV_MANAGER_CHANGE_TYPE}\nCogni-Node: ${input.node}\nCogni-Environment: ${input.env}\nCogni-Action: ${input.action}\nCogni-Changed-Paths-SHA256: ${pathsSha256}`;
+  const operationTrailers = Object.entries(input.trailers ?? {})
+    .map(([key, value]) => `Cogni-${key}: ${value}`)
+    .join("\n");
+  return [
+    input.subject,
+    "",
+    `Cogni-Change-Type: ${OPERATOR_CHANGE_TYPE}`,
+    `Cogni-Operation: ${input.operation}`,
+    `Cogni-Node: ${input.node}`,
+    `Cogni-Base-SHA: ${input.baseSha}`,
+    ...(operationTrailers ? [operationTrailers] : []),
+    `Cogni-Changed-Paths-SHA256: ${pathsSha256}`,
+  ].join("\n");
 }
 
 export interface GitHubRepoWriterConfig {
@@ -1272,112 +1287,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
     // REMOTE-SOURCE node (fork): resolve its own source repo.
     return parseGithubRepoUrl(discriminator.data.source_repo);
-  }
-
-  async classifyEnvManagerPr(
-    input: ClassifyEnvManagerPrInput
-  ): Promise<EnvManagerPrClassificationResult> {
-    const octokit = await this.getOctokit(input.owner, input.repo);
-
-    // Resolve THIS deployment's operator App bot identity (login + user id) from the App itself —
-    // NEVER hardcoded. The shell twin (classify-env-manager-fast-path.sh) keys the trusted bot on
-    // the repository; in-app we key it on the executing App, which is the same trust boundary per
-    // deployment (prod operator → cogni-operator[bot]; test operator → cogni-operator-test[bot]).
-    const botIdentity = await this.resolveOperatorBotIdentity(octokit);
-
-    // Fetch the PR to read its HEAD branch ref + HEAD SHA + identity facts (state, base, opener,
-    // head repo, commit count).
-    const { data: pr } = await octokit.request(
-      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
-      {
-        owner: input.owner,
-        repo: input.repo,
-        pull_number: input.prNumber,
-      }
-    );
-
-    // Fetch the HEAD commit for its message trailers + App signature verification + parents + author.
-    const { data: commit } = await octokit.request(
-      "GET /repos/{owner}/{repo}/commits/{ref}",
-      {
-        owner: input.owner,
-        repo: input.repo,
-        ref: pr.head.sha,
-      }
-    );
-
-    return classifyEnvManagerCommit({
-      headRef: pr.head.ref,
-      commitMessage: commit.commit.message,
-      verified: commit.commit.verification?.verified === true,
-      verificationReason: commit.commit.verification?.reason ?? null,
-      parentCount: commit.parents?.length ?? 0,
-      prState: pr.state ?? null,
-      baseRef: pr.base?.ref ?? null,
-      prUserLogin: pr.user?.login ?? null,
-      prUserId: pr.user?.id ?? null,
-      prUserType: pr.user?.type ?? null,
-      headRepoFullName: pr.head.repo?.full_name ?? null,
-      commitCount: pr.commits ?? 0,
-      // `.author` is the linked GitHub account for the commit (a Bot for App-authored commits),
-      // distinct from `.commit.author` (the raw git author name/email) — parity with the shell twin.
-      commitAuthorLogin: commit.author?.login ?? null,
-      commitAuthorId: commit.author?.id ?? null,
-      expectedBotLogin: botIdentity.login,
-      expectedBotId: botIdentity.id,
-      expectedHeadRepoFullName: `${input.owner}/${input.repo}`,
-    });
-  }
-
-  private operatorBotIdentity?: { login: string; id: number };
-
-  /**
-   * Resolve the executing operator App's bot identity (`<slug>[bot]` login + numeric user id) —
-   * the SoD anchor `classifyEnvManagerCommit` compares the PR opener and HEAD-commit author
-   * against. Read from the App itself (`GET /app` for the slug, then `GET /users/<slug>[bot]` for
-   * the bot user id), NEVER hardcoded, so it self-selects per deployment exactly like the shell
-   * twin selects a bot per repository. Cached per adapter instance (the identity is stable).
-   */
-  private async resolveOperatorBotIdentity(
-    octokit: Octokit
-  ): Promise<{ login: string; id: number }> {
-    if (this.operatorBotIdentity) return this.operatorBotIdentity;
-    // `GET /app` is App-JWT scoped (not installation scoped), so authenticate as the App.
-    const { token } = await this.appAuth({ type: "app" });
-    const appResponse = await fetch("https://api.github.com/app", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-      },
-    });
-    if (!appResponse.ok) {
-      throw deployPlaneError(
-        "operator_bot_identity_unresolved",
-        `could not resolve operator App identity (GET /app HTTP ${appResponse.status})`,
-        502
-      );
-    }
-    const app = (await appResponse.json()) as { slug?: string };
-    if (!app.slug) {
-      throw deployPlaneError(
-        "operator_bot_identity_unresolved",
-        "operator App response is missing a slug",
-        502
-      );
-    }
-    const login = `${app.slug}[bot]`;
-    const { data: user } = await octokit.request("GET /users/{username}", {
-      username: login,
-    });
-    if (typeof user.id !== "number") {
-      throw deployPlaneError(
-        "operator_bot_identity_unresolved",
-        `operator bot user ${login} has no numeric id`,
-        502
-      );
-    }
-    this.operatorBotIdentity = { login, id: user.id };
-    return this.operatorBotIdentity;
   }
 
   /**
@@ -2915,11 +2824,24 @@ export class GitHubRepoWriter implements DeployPlanePort {
       nodePort
     );
 
+    const subject = `feat(node): register ${slug}`;
+    const message = operatorChangeCommitMessage({
+      subject,
+      operation: "node.register",
+      node: slug,
+      baseSha: baseCommitSha,
+      paths: footprintEntries.map((entry) => entry.path),
+      trailers: {
+        "Node-Id": input.nodeId,
+        "Source-Repo": input.nodeRepoUrl,
+        "Source-SHA": input.nodeRepoHeadSha,
+      },
+    });
     return this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
       baseCommitSha,
       baseTreeSha,
       entries: footprintEntries,
-      message: `feat(node): register ${slug}`,
+      message,
       branch: `cogni-operator/node-register-${slug}`,
     });
   }
@@ -3039,12 +2961,16 @@ export class GitHubRepoWriter implements DeployPlanePort {
     );
 
     const title = `feat(node): ${present ? "add" : "remove"} ${slug} ${present ? "to" : "from"} ${env}`;
-    const message = envManagerCommitMessage({
+    const message = operatorChangeCommitMessage({
       subject: title,
+      operation: "env.membership",
       node: slug,
-      env,
-      action: present ? "add" : "remove",
+      baseSha: baseCommitSha,
       paths: entries.map((entry) => entry.path),
+      trailers: {
+        Environment: env,
+        Action: present ? "add" : "remove",
+      },
     });
     const branch = `cogni-operator/node-env-${slug}-${env}`;
     const body = this.envPrBody(plan.kind, slug, env, plan.nextEnvs);
@@ -3167,9 +3093,16 @@ export class GitHubRepoWriter implements DeployPlanePort {
       plan.ops
     );
 
-    const message = `feat(node): place ${slug} ${env} on ${placement}`;
+    const title = `feat(node): place ${slug} ${env} on ${placement}`;
+    const message = operatorChangeCommitMessage({
+      subject: title,
+      operation: "env.placement",
+      node: slug,
+      baseSha: baseCommitSha,
+      paths: entries.map((entry) => entry.path),
+      trailers: { Environment: env, Provider: placement },
+    });
     const branch = `cogni-operator/node-placement-${slug}-${env}`;
-    const title = message;
     const body = this.placementPrBody(plan.kind, slug, env);
 
     const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
@@ -3256,7 +3189,19 @@ export class GitHubRepoWriter implements DeployPlanePort {
     );
 
     const rendered = [...countries].sort().join(", ");
-    const message = `feat(node): require ${slug} ${env} placement in ${rendered}`;
+    const title = `feat(node): require ${slug} ${env} placement in ${rendered}`;
+    const message = operatorChangeCommitMessage({
+      subject: title,
+      operation: "env.region",
+      node: slug,
+      baseSha: baseCommitSha,
+      paths: entries.map((entry) => entry.path),
+      trailers: {
+        Environment: env,
+        Countries: [...countries].sort().join(","),
+        "Lease-Generation": plan.leaseGeneration,
+      },
+    });
     const branch = `cogni-operator/node-region-${slug}-${env}`;
     const body = [
       `Requires \`${slug}\`'s **${env}** workload to be placed in **${rendered}** (ISO 3166-1 alpha-2).`,
@@ -3275,14 +3220,14 @@ export class GitHubRepoWriter implements DeployPlanePort {
       entries,
       message,
       branch,
-      pr: { title: message, body },
+      pr: { title, body },
     });
     await this.updatePrBody(
       octokit,
       owner,
       repo,
       result.prNumber,
-      message,
+      title,
       body
     );
     return {
@@ -3808,7 +3753,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
           sha: blobSha,
         },
       ],
-      message: `feat(deploy): declare ${slug} node deployment`,
+      message: operatorChangeCommitMessage({
+        subject: title,
+        operation: "deployment.declare",
+        node: slug,
+        baseSha: baseCommitSha,
+        paths: [".cogni/repo-spec.yaml"],
+      }),
       branch,
       pr: { title, body },
     });

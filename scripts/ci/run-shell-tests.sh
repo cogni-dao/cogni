@@ -62,8 +62,7 @@ PARALLEL=(
   require-node-ref-vm.test.sh
   resolve-substrate-gate.test.sh
   detect-affected.test.sh
-  classify-env-manager-fast-path.test.sh
-  classify-node-birth-fast-path.test.sh
+  classify-operator-change-fast-path.test.sh
   resolve-candidate-deploy-repository.test.sh
   reconcile-scheduler-worker-routing.test.sh
   render-node-appset.test.sh
