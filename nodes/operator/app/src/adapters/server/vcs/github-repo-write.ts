@@ -39,7 +39,6 @@ import { createHash } from "node:crypto";
 import {
   extractNodeId,
   hasDeclaredNodeDeployment,
-  hasDeploymentActivationSpec,
   parseRepoSpec,
   type RepoSpec,
   renderDeploymentActivationSpec,
@@ -3716,33 +3715,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
       return { status: "no_changes" };
     }
 
-    const existingPr = await this.findOpenPrForBranch(octokit, owner, repo, {
-      branch,
-      title,
-    });
-    if (existingPr) {
-      const pendingSpec = await this.fetchFileText({
-        owner,
-        repo,
-        path: ".cogni/repo-spec.yaml",
-        ref: branch,
-      });
-      if (
-        pendingSpec === nextSpec ||
-        (pendingSpec !== null && hasDeploymentActivationSpec(pendingSpec))
-      ) {
-        await this.updatePrBody(
-          octokit,
-          owner,
-          repo,
-          existingPr.prNumber,
-          title,
-          body
-        );
-        return { status: "pr_opened", ...existingPr };
-      }
-    }
-
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
       owner,
@@ -3934,10 +3906,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * The policy is read from the deployment parent at an explicit ref, validated to retain
    * ALLGREEN serialization with zero git-authored bypass actors, then the executing review App
    * is injected as the sole installation-specific bypass actor and the result is applied with
-   * readback. The merge route uses that privilege only for a classified signed env-manager PR.
+   * readback. Only the internal, fully replayed operator-change CAS may use that privilege; the
+   * public merge route remains on the ordinary merge-queue path.
    * This is the runtime authority bridge for config-as-code: agents hold node-scoped RBAC, while
    * the operator App alone holds `administration:write`. It deliberately updates only the named
-   * merge-queue ruleset; required checks remain owned by the independent protection policy.
+   * merge-queue ruleset; required-check policy is reconciled separately.
    */
   async reconcileMergeQueuePolicy(input: {
     policyOwner: string;

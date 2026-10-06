@@ -113,6 +113,26 @@ describe("classifyOperatorChangeForMerge", () => {
     });
   });
 
+  it("distinguishes an absent reserved envelope from a malformed claim", () => {
+    expect(
+      classifyOperatorChangeForMerge(
+        facts({ commit: { ...facts().commit, message: "human change" } })
+      )
+    ).toMatchObject({
+      eligible: false,
+      reason: "reserved-envelope-not-claimed",
+    });
+    expect(
+      classifyOperatorChangeForMerge({
+        ...facts(),
+        commit: {
+          ...facts().commit,
+          message: `${message}\nCogni-Change-Type: cogni.operator-change.v1`,
+        },
+      })
+    ).toMatchObject({ eligible: false, reason: "invalid-change-type" });
+  });
+
   it("rejects a signed PR after a human converts it to draft", () => {
     const input = facts({ pr: { ...facts().pr, draft: true } });
     expect(classifyOperatorChangeForMerge(input)).toMatchObject({

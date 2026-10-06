@@ -114,11 +114,16 @@ function reject(
 
 function singleTrailer(message: string, key: string): string | null {
   const prefix = `${key}: `;
-  const values = message
+  const values = trailerValues(message, key);
+  return values.length === 1 ? (values[0] ?? null) : null;
+}
+
+function trailerValues(message: string, key: string): string[] {
+  const prefix = `${key}: `;
+  return message
     .split("\n")
     .filter((line) => line.startsWith(prefix))
     .map((line) => line.slice(prefix.length));
-  return values.length === 1 ? (values[0] ?? null) : null;
 }
 
 function trailerCount(message: string): number {
@@ -215,8 +220,12 @@ export function classifyOperatorChangeForMerge(
 ): OperatorChangeClassification {
   const repo = facts.repository.toLowerCase();
   const message = facts.commit.message;
-  if (singleTrailer(message, "Cogni-Change-Type") !== OPERATOR_CHANGE_TYPE) {
+  const changeTypes = trailerValues(message, "Cogni-Change-Type");
+  if (changeTypes.length === 0) {
     return reject(facts, "reserved-envelope-not-claimed");
+  }
+  if (changeTypes.length !== 1 || changeTypes[0] !== OPERATOR_CHANGE_TYPE) {
+    return reject(facts, "invalid-change-type");
   }
   const operationValue = singleTrailer(message, "Cogni-Operation");
   if (

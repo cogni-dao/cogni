@@ -974,15 +974,15 @@ governance:
     ]);
   });
 
-  it("reuses an existing declaration PR when its branch already carries the block", async () => {
+  it("refreshes an existing declaration PR from current main instead of blessing its stale head", async () => {
     const branch = "cogni-operator/declare-deployment-test-cog";
     const desiredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
 
     routeHandlers = {
-      "GET /repos/{owner}/{repo}/contents/{path}": (params) => ({
+      "GET /repos/{owner}/{repo}/contents/{path}": () => ({
         type: "file",
         encoding: "base64",
-        content: encode(params.ref === branch ? desiredSpec : LEGACY_NODE_SPEC),
+        content: encode(LEGACY_NODE_SPEC),
         sha: "repo-spec-sha",
       }),
       "GET /repos/{owner}/{repo}/pulls": (params) => {
@@ -1000,6 +1000,55 @@ governance:
           },
         ];
       },
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        expect(params.ref).toBe("heads/main");
+        return { object: { sha: "current-main-sha" } };
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
+        expect(params.commit_sha).toBe("current-main-sha");
+        return { tree: { sha: "current-main-tree" } };
+      },
+      "POST /repos/{owner}/{repo}/git/blobs": (params) => {
+        const content = Buffer.from(String(params.content), "base64").toString(
+          "utf-8"
+        );
+        expect(content).toBe(desiredSpec);
+        return { sha: "fresh-repo-spec-blob" };
+      },
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        expect(params).toMatchObject({
+          base_tree: "current-main-tree",
+          tree: [
+            {
+              path: ".cogni/repo-spec.yaml",
+              mode: "100644",
+              type: "blob",
+              sha: "fresh-repo-spec-blob",
+            },
+          ],
+        });
+        return { sha: "fresh-deployment-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({
+          tree: "fresh-deployment-tree",
+          parents: ["current-main-sha"],
+        });
+        expect(params.message).toContain("Cogni-Base-SHA: current-main-sha");
+        return { sha: "fresh-deployment-commit" };
+      },
+      "POST /repos/{owner}/{repo}/git/refs": () =>
+        Promise.reject(statusError(422, "Reference already exists")),
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
+        expect(params).toMatchObject({
+          ref: `heads/${branch}`,
+          sha: "fresh-deployment-commit",
+          force: true,
+        });
+        return {};
+      },
+      "POST /repos/{owner}/{repo}/pulls": () =>
+        Promise.reject(statusError(422, "A pull request already exists")),
       "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
         expect(params).toMatchObject({
           pull_number: 44,
@@ -1022,7 +1071,7 @@ governance:
       prUrl: "https://github.com/cogni-test-org/test-cog/pull/44",
     });
 
-    expect(requests.map((request) => request.route)).not.toContain(
+    expect(requests.map((request) => request.route)).toContain(
       "POST /repos/{owner}/{repo}/git/commits"
     );
   });

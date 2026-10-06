@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-EXPECTED="$REPO_ROOT/scripts/ci/dist/operator-change-replay.mjs"
+EXPECTED="$REPO_ROOT/scripts/ci/dist/operator-change-replay.cjs"
 OUT_DIR="$(mktemp -d)"
 trap 'rm -rf "$OUT_DIR"' EXIT
 
@@ -17,7 +17,7 @@ cd "$REPO_ROOT"
 OPERATOR_CHANGE_BUNDLE_OUT_DIR="$OUT_DIR" \
   pnpm exec tsup --config scripts/ci/tsup.operator-change-replay.config.ts
 
-cmp "$EXPECTED" "$OUT_DIR/operator-change-replay.mjs" || {
+cmp "$EXPECTED" "$OUT_DIR/operator-change-replay.cjs" || {
   echo "operator-change-replay bundle is stale; regenerate it in trusted CI" >&2
   exit 1
 }

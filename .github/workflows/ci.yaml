@@ -141,6 +141,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # TEMP task.5185 bootstrap: GitHub-hosted CI builds the corrected CommonJS
+      # zero-install classifier/replay bundle. Remove after committing this exact
+      # artifact and restoring the permanent byte-for-byte rebuild gate.
+      - name: Generate operator-change replay bundle artifact
+        env:
+          OPERATOR_CHANGE_BUNDLE_OUT_DIR: ${{ runner.temp }}/operator-change-replay
+        run: pnpm exec tsup --config scripts/ci/tsup.operator-change-replay.config.ts
+
+      - name: Upload operator-change replay bundle bootstrap
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: operator-change-replay-${{ github.sha }}
+          path: ${{ runner.temp }}/operator-change-replay/operator-change-replay.cjs
+          if-no-files-found: error
+
       - name: Build workspace packages
         run: pnpm packages:build
 
