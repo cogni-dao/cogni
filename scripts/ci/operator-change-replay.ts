@@ -15,16 +15,16 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseRepoSpec } from "../../packages/repo-spec/src";
-import {
-  type OperatorChangeReplayReader,
-  replayOperatorChange,
-} from "../../nodes/operator/app/src/shared/vcs/operator-change-replay";
 import {
   classifyOperatorChangeForMerge,
   type OperatorChangeFacts,
   parseOperatorChangeRegistry,
 } from "../../nodes/operator/app/src/shared/vcs/operator-change-policy";
+import {
+  type OperatorChangeReplayReader,
+  replayOperatorChange,
+} from "../../nodes/operator/app/src/shared/vcs/operator-change-replay";
+import { parseRepoSpec } from "../../packages/repo-spec/src";
 
 const reader: OperatorChangeReplayReader = {
   readFile: async (ref, path) => fileAt(ref, path),
@@ -193,13 +193,13 @@ async function classifyFromEnvironment(): Promise<void> {
     classification.reason !== "operation-disabled" &&
     classification.reason !== "eligible";
   process.stdout.write(
-    [
+    `${[
       `eligible=${String(classification.eligible)}`,
       `claimed=${String(claimed)}`,
       `invalid=${String(invalid)}`,
       `operation=${classification.operation ?? "none"}`,
       `reason=${classification.reason}`,
-    ].join("\n") + "\n"
+    ].join("\n")}\n`
   );
 }
 

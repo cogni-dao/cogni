@@ -113,7 +113,6 @@ function reject(
 }
 
 function singleTrailer(message: string, key: string): string | null {
-  const prefix = `${key}: `;
   const values = trailerValues(message, key);
   return values.length === 1 ? (values[0] ?? null) : null;
 }
