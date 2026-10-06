@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/ai-tools/tests/vcs-merge-pr`
+ * Purpose: Prove the merge tool binds its write to the PR head read immediately beforehand.
+ * Scope: Mocked VcsCapability delegation only; no GitHub IO.
+ * Invariants: HEAD_SHA_PINNED — every merge request carries the freshly observed head SHA.
+ * Side-effects: none
+ * Links: src/tools/vcs-merge-pr.ts, src/capabilities/vcs.ts
+ * @internal
+ */
 
 import { describe, expect, it, vi } from "vitest";
 
