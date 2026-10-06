@@ -62,6 +62,7 @@ export async function dispatchOperatorChangeAutoMerge(
   if (
     ci.headSha !== headSha ||
     ci.baseSha !== proof.baseSha ||
+    ci.reviewDecision === "CHANGES_REQUESTED" ||
     ci.pending ||
     !ci.allGreen
   ) {

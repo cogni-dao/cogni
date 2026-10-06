@@ -47,6 +47,7 @@ export interface OperatorChangeFacts {
   readonly expectedHeadSha: string;
   readonly pr: {
     readonly state: string;
+    readonly draft: boolean;
     readonly baseRef: string;
     readonly baseSha: string;
     readonly headRef: string;
@@ -258,6 +259,7 @@ export function classifyOperatorChangeForMerge(
 
   if (
     facts.pr.state !== "open" ||
+    facts.pr.draft !== false ||
     facts.pr.baseRef !== "main" ||
     facts.pr.baseSha !== baseSha ||
     facts.pr.headSha !== facts.expectedHeadSha ||

@@ -142,7 +142,7 @@ fi
 
 jq -e \
   --arg login "$bot_login" --argjson bot_id "$bot_id" --arg repo "$REPOSITORY" --arg base_sha "$base_sha" \
-  '.state == "open" and .base.ref == "main" and .base.sha == $base_sha
+  '.state == "open" and .draft == false and .base.ref == "main" and .base.sha == $base_sha
    and .user.login == $login and .user.id == $bot_id and .user.type == "Bot"
    and ((.head.repo.full_name | ascii_downcase) == ($repo | ascii_downcase))
    and .commits == 1' "$pr_json" >/dev/null || reject_claim invalid-pr-identity

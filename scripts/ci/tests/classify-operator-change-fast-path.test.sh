@@ -30,7 +30,7 @@ Cogni-Changed-Paths-SHA256: $paths_hash"
 write_fixtures() {
   local author_login="${1:-cogni-operator[bot]}" verified="${2:-true}"
   jq -n --arg head "$head_sha" --arg base "$base_sha" --arg login "$author_login" \
-    '{state:"open",base:{ref:"main",sha:$base},head:{sha:$head,ref:"cogni-operator/node-env-blue-preview",repo:{full_name:"Cogni-DAO/cogni"}},user:{login:$login,id:265189974,type:"Bot"},commits:1}' > "$tmpdir/pr.json"
+    '{state:"open",draft:false,base:{ref:"main",sha:$base},head:{sha:$head,ref:"cogni-operator/node-env-blue-preview",repo:{full_name:"Cogni-DAO/cogni"}},user:{login:$login,id:265189974,type:"Bot"},commits:1}' > "$tmpdir/pr.json"
   jq -n --arg head "$head_sha" --arg base "$base_sha" --arg message "$message" --arg login "$author_login" --argjson verified "$verified" \
     '{sha:$head,author:{login:$login,id:265189974},parents:[{sha:$base}],commit:{message:$message,verification:{verified:$verified,reason:"valid"}}}' > "$tmpdir/commit.json"
   jq -n --arg path "$path" '[{filename:$path,previous_filename:null,status:"modified"}]' > "$tmpdir/files.json"
@@ -58,6 +58,14 @@ write_fixtures human true
 run_classifier "$tmpdir/human.out"
 [[ "$(value "$tmpdir/human.out" invalid)" == true ]]
 [[ "$(value "$tmpdir/human.out" reason)" == invalid-pr-identity ]]
+
+# A human draft hold changes PR metadata without changing the signed head.
+write_fixtures
+jq '.draft = true' "$tmpdir/pr.json" > "$tmpdir/draft-pr.json"
+mv "$tmpdir/draft-pr.json" "$tmpdir/pr.json"
+run_classifier "$tmpdir/draft.out"
+[[ "$(value "$tmpdir/draft.out" invalid)" == true ]]
+[[ "$(value "$tmpdir/draft.out" reason)" == invalid-pr-identity ]]
 
 # A bad App signature is red.
 write_fixtures 'cogni-operator[bot]' false
@@ -92,7 +100,7 @@ Cogni-Node: $child_node
 Cogni-Base-SHA: $child_base_sha
 Cogni-Changed-Paths-SHA256: $child_paths_hash"
 jq -n --arg head "$head_sha" --arg base "$child_base_sha" --arg repo "$child_repo" --arg node "$child_node" \
-  '{state:"open",base:{ref:"main",sha:$base},head:{sha:$head,ref:("cogni-operator/declare-deployment-" + $node),repo:{full_name:$repo}},user:{login:"cogni-operator[bot]",id:265189974,type:"Bot"},commits:1}' > "$tmpdir/child-pr.json"
+  '{state:"open",draft:false,base:{ref:"main",sha:$base},head:{sha:$head,ref:("cogni-operator/declare-deployment-" + $node),repo:{full_name:$repo}},user:{login:"cogni-operator[bot]",id:265189974,type:"Bot"},commits:1}' > "$tmpdir/child-pr.json"
 jq -n --arg head "$head_sha" --arg base "$child_base_sha" --arg message "$child_message" \
   '{sha:$head,author:{login:"cogni-operator[bot]",id:265189974},parents:[{sha:$base}],commit:{message:$message,verification:{verified:true,reason:"valid"}}}' > "$tmpdir/child-commit.json"
 jq -n --arg path "$child_path" '[{filename:$path,previous_filename:null,status:"modified"}]' > "$tmpdir/child-files.json"

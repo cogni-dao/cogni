@@ -198,6 +198,9 @@ indirect PR merge; test-org proof must still assert `mergedAt` before production
 A stale head or base, unlisted repository, disabled or unimplemented replay, edit, or human PR
 no-ops into the normal queue. Ordinary `mergePr` remains queue-backed, and queue-discovery failure
 returns a structured failure rather than falling through to a direct App merge.
+Human review holds remain authoritative metadata even when the signed commit is unchanged: a draft
+PR is rejected by CI classification, operator reclassification, and the final CAS precondition; a
+fresh `CHANGES_REQUESTED` review decision stops the facade before the ref update.
 
 > Migration note: a repo that previously had the queue enabled via the classic UI checkbox should keep the ruleset as the single source of truth — the ruleset is authoritative and the legacy checkbox can be cleared once the ruleset is confirmed live (`gh api repos/{repo}/rulesets`).
 

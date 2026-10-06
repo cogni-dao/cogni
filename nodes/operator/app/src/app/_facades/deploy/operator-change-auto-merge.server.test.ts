@@ -30,6 +30,8 @@ function vcs(eligible: boolean) {
       headCommitMessage: `generated\n\nCogni-Base-SHA: ${"b".repeat(40)}`,
       pending: false,
       allGreen: true,
+      reviewDecision: null,
+      draft: false,
       checks: [
         {
           name: "operator-change-automerge-ready",
@@ -76,6 +78,19 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       baseSha: "c".repeat(40),
       pending: false,
       allGreen: true,
+    } as never);
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
+    expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();
+  });
+
+  it("honors a human changes-requested hold before fast-forwarding", async () => {
+    const capability = vcs(true);
+    vi.mocked(capability.getCiStatus).mockResolvedValueOnce({
+      headSha,
+      baseSha: "b".repeat(40),
+      pending: false,
+      allGreen: true,
+      reviewDecision: "CHANGES_REQUESTED",
     } as never);
     await dispatchOperatorChangeAutoMerge(payload, capability, log);
     expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();

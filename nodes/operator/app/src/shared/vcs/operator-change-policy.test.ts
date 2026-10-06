@@ -66,6 +66,7 @@ function facts(
     expectedHeadSha: headSha,
     pr: {
       state: "open",
+      draft: false,
       baseRef: "main",
       baseSha,
       headRef: "cogni-operator/node-env-spawny-boi-candidate-a",
@@ -106,6 +107,14 @@ describe("classifyOperatorChangeForMerge", () => {
         userType: "User",
       },
     });
+    expect(classifyOperatorChangeForMerge(input)).toMatchObject({
+      eligible: false,
+      reason: "invalid-pr-identity",
+    });
+  });
+
+  it("rejects a signed PR after a human converts it to draft", () => {
+    const input = facts({ pr: { ...facts().pr, draft: true } });
     expect(classifyOperatorChangeForMerge(input)).toMatchObject({
       eligible: false,
       reason: "invalid-pr-identity",

@@ -383,6 +383,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       expectedHeadSha: params.expectedHeadSha,
       pr: {
         state: pr.state,
+        draft: pr.draft ?? true,
         baseRef: pr.base.ref,
         baseSha,
         headRef: pr.head.ref,
@@ -644,6 +645,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       ]);
       if (
         pr.state !== "open" ||
+        pr.draft !== false ||
         pr.base.ref !== "main" ||
         pr.base.sha !== params.expectedBaseSha ||
         pr.head.sha !== params.expectedHeadSha ||

@@ -241,6 +241,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
+          draft: false,
           base: { ref: "main", sha: baseSha },
           head: { sha: headSha, repo: { full_name: "o/r" } },
         };
@@ -279,6 +280,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
+          draft: false,
           base: { ref: "main", sha: "c".repeat(40) },
           head: { sha: headSha, repo: { full_name: "o/r" } },
         };
@@ -306,7 +308,36 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
+          draft: false,
           base: { ref: "release", sha: baseSha },
+          head: { sha: headSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      throw new Error(`Unexpected request route: ${route}`);
+    };
+
+    const result = await adapter().fastForwardOperatorChange({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      expectedBaseSha: baseSha,
+      expectedHeadSha: headSha,
+    });
+
+    expect(result).toMatchObject({ merged: false, status: 409 });
+    expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
+  });
+
+  it("rejects a draft hold before updating the ref", async () => {
+    onRequest = (route) => {
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: true,
+          base: { ref: "main", sha: baseSha },
           head: { sha: headSha, repo: { full_name: "o/r" } },
         };
       }
@@ -333,6 +364,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
+          draft: false,
           base: { ref: "main", sha: baseSha },
           head: { sha: headSha, repo: { full_name: "o/r" } },
         };
