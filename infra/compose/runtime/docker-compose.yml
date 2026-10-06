@@ -242,6 +242,19 @@ services:
     # Root cause + fix: bug.5011 / #2387; hub `prod-oom-misdiagnosis-taxonomy`.
     mem_reservation: 512m
     oom_score_adj: -900
+    # bug.5293 root cause: Docker defaults /dev/shm to 64 MiB. Postgres allocates a
+    # shared-memory segment per PARALLEL worker there, so any parallel plan over a
+    # large table fails `could not resize shared memory segment ... No space left on
+    # device` and the BACKEND DIES — the postmaster reports `exited with exit code 2`
+    # and then 57P02-quickdies every other connection. Measured on prod 2026-10-01:
+    # 110 such crashes in 24h, which 503'd the actuator's allocation ledger, wedged
+    # Crossplane with external-create-pending across SIX nodes, and blocked every
+    # node-app deploy. It reads as OOM and is NOT: the host had 16 GB free and no
+    # signal/OOM-kill ever appears (see hub `prod-oom-misdiagnosis-taxonomy`).
+    # 1 GiB is the smallest value that comfortably fits max_parallel_workers
+    # segments for our largest tables; it is an address-space reservation, not a
+    # preallocation, so it costs nothing until used.
+    shm_size: 1gb
     labels:
       # bug.5105: stateful stores are never autohealed. autoheal restarting a
       # database mid-recovery means recovery never finishes — that loop took the
@@ -441,6 +454,10 @@ services:
 
   doltgres:
     # Pin deliberately. `:latest` is unsafe for any stateful service: a silent
+    # bug.5293 — Doltgres speaks the Postgres wire protocol and inherits the same
+    # 64 MiB /dev/shm default. Sized to match the app Postgres so the knowledge
+    # plane cannot die the way the operational plane did.
+    shm_size: 1gb
     # tag roll on the next deploy can render the persistent volume unreadable
     # by the new binary (bug.5076 — the 0.56.2 → 0.56.3 roll changed the
     # auth-file serialization layout, breaking every infra flight on 2026-05-26).
@@ -602,6 +619,22 @@ services:
       - PROMETHEUS_USERNAME=${PROMETHEUS_USERNAME:-}
       - COGNI_DEFAULT_NODE_ID=${COGNI_DEFAULT_NODE_ID:-}
       - PROMETHEUS_PASSWORD=${PROMETHEUS_PASSWORD:-}
+      # Postgres metrics identity (bug.5293) for prometheus.exporter.postgres.
+      # pg_monitor-granted read role; alloy is on the `internal` network so it
+      # dials postgres:5432 directly. deploy-infra.sh already writes both into
+      # the runtime .env (lines ~1045-1048), so this adds no new secret. It is
+      # NOT least-privilege — see the credential note in
+      # configs/alloy-config.metrics.alloy and task.5162.
+      #
+      # THIS PAIRING IS LOAD-BEARING: the DSN is assembled in the alloy CONFIG
+      # from sys.env(), so the config and this env block must change together.
+      # Measured 2026-09-30 — a revert pulled this file back to main while
+      # re-adding the exporter to the config alone, and sys.env() returned empty,
+      # yielding `postgresql://app_readonly:@postgres:5432/...` and a
+      # silent-looking `pg_up 0`. If you touch one, touch the other.
+      - APP_DB_READONLY_USER=${APP_DB_READONLY_USER:-app_readonly}
+      - APP_DB_READONLY_PASSWORD=${APP_DB_READONLY_PASSWORD:-}
+
   alloy-k8s-events:
     image: grafana/alloy:v1.9.2
     restart: unless-stopped
@@ -657,6 +690,10 @@ services:
 
   temporal-postgres:
     # Dedicated Postgres for Temporal (not shared with app DB)
+    # bug.5293 — same 64 MiB /dev/shm trap as the app Postgres above. Temporal's
+    # history/visibility tables grow unbounded and its own maintenance scans go
+    # parallel, so an undersized segment kills a backend the same way.
+    shm_size: 1gb
     # Aligned to postgres:15 for consistency with app DB
     image: postgres:15
     restart: unless-stopped

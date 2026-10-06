@@ -4,19 +4,24 @@
 /**
  * Module: `@adapters/server/db/doltgres/client`
  * Purpose: Lazy operator-Doltgres `Sql` singleton + adapter wiring for the work_items API.
- * Scope: Builds a postgres.js client and a `DoltgresOperatorWorkItemAdapter`. Mirrors `drizzle.client.ts` shape.
+ * Scope: Builds a postgres.js client and a `DoltgresWorkItemAdapter`. Mirrors `drizzle.client.ts` shape.
  * Invariants: Single connection per process; lazy initialization; throws `DoltgresNotConfiguredError` when `DOLTGRES_URL` is unset.
+ *   OPERATOR_KEEPS_THE_5000_FLOOR: operator's store holds its imported pre-API
+ *   markdown corpus below 5000, so its allocator must clear it. Nodes booting an
+ *   empty store take the package default and start at 1.
  * Side-effects: IO (database connection on first access).
- * Links: docs/spec/work-items-port.md, work/items/task.0424.doltgres-work-items-source-of-truth.md
+ * Links: docs/spec/work-items-port.md, docs/guides/agent-api-validation.md
  * @internal
  */
 
 import { buildDoltgresClient } from "@cogni/knowledge-store/adapters/doltgres";
+import {
+  DoltgresWorkItemAdapter,
+  OPERATOR_ID_FLOOR,
+} from "@cogni/work-items/adapters/doltgres";
 import type { Sql } from "postgres";
 
 import { serverEnv } from "@/shared/env";
-
-import { DoltgresOperatorWorkItemAdapter } from "./work-items-adapter";
 
 export class DoltgresNotConfiguredError extends Error {
   constructor() {
@@ -28,7 +33,7 @@ export class DoltgresNotConfiguredError extends Error {
 }
 
 let _sql: Sql | null = null;
-let _adapter: DoltgresOperatorWorkItemAdapter | null = null;
+let _adapter: DoltgresWorkItemAdapter | null = null;
 
 function createSql(): Sql {
   const env = serverEnv();
@@ -46,8 +51,10 @@ export function getDoltgresSql(): Sql {
   return _sql;
 }
 
-export function getDoltgresWorkItemsAdapter(): DoltgresOperatorWorkItemAdapter {
+export function getDoltgresWorkItemsAdapter(): DoltgresWorkItemAdapter {
   if (!_adapter)
-    _adapter = new DoltgresOperatorWorkItemAdapter(getDoltgresSql());
+    _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
+      idFloor: OPERATOR_ID_FLOOR,
+    });
   return _adapter;
 }

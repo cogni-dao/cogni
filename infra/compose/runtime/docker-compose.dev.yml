@@ -269,6 +269,9 @@ services:
 
   postgres:
     image: postgres:15
+    # bug.5293 — dev parity with the deployed Postgres: 64 MiB /dev/shm kills a
+    # backend on any parallel plan over a large table (exit code 2).
+    shm_size: 1gb
     container_name: postgres
     restart: unless-stopped
     labels:
@@ -314,6 +317,10 @@ services:
 
   doltgres:
     # Pinned — see infra/compose/runtime/docker-compose.yml (bug.5076).
+    # bug.5293 — Doltgres speaks the Postgres wire protocol and inherits the same
+    # 64 MiB /dev/shm default. Sized to match the app Postgres so the knowledge
+    # plane cannot die the way the operational plane did.
+    shm_size: 1gb
     image: dolthub/doltgresql:0.57.3
     container_name: doltgres
     restart: unless-stopped
@@ -606,6 +613,10 @@ services:
 
   temporal-postgres:
     # Dedicated Postgres for Temporal (not shared with app DB)
+    # bug.5293 — same 64 MiB /dev/shm trap as the app Postgres above. Temporal's
+    # history/visibility tables grow unbounded and its own maintenance scans go
+    # parallel, so an undersized segment kills a backend the same way.
+    shm_size: 1gb
     # Aligned to postgres:15 for MVP consistency with app DB
     image: postgres:15
     container_name: temporal-postgres

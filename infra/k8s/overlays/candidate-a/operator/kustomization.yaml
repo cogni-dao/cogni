@@ -90,7 +90,13 @@ patches:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
                   - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+                    # bug.5356 — candidate's previous single-provider pin was zencloud
+                    # (BE), while toks4's required placement excludes BE. That made the
+                    # intersection empty and every fresh candidate auction unwinnable.
+                    # Keep candidate pinned to the audited, custom-domain-capable
+                    # providers whose permitted countries and egress CIDRs are already
+                    # declared on toks4; do not widen the geo-placement requirement.
+                    value: akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x
                   # HUMAN GATE (story.5016 secret-boundary amendment 3). The PUBLIC Akash
                   # account/wallet address the actuator is authorized to spend from — pinned
                   # here as plain config because it is not a secret and must be reviewable in

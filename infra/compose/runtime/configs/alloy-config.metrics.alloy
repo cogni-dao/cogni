@@ -26,7 +26,7 @@ discovery.relabel "docker_logs" {
     // NOTE: River comments are `//`. A `#` comment is an ILLEGAL CHARACTER that makes
     // the whole file unparseable and exits alloy 1 — which is exactly how this file
     // took candidate-a's metrics pipeline dark for ~20 minutes.
-    regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy|alloy-k8s-events|pdc-agent)"
+    regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy|alloy-k8s-events|pdc-agent|redis|doltgres|doltgres-provision|doltgres-migrate-.*|doltgres-commit-.*)"
     action        = "keep"
   }
 
@@ -449,6 +449,91 @@ prometheus.scrape "node" {
 }
 
 // =============================================================================
+// PostgreSQL — the shared state substrate (bug.5293 / bug.5117 / bug.5188)
+// =============================================================================
+// Postgres is the one stateful service every node and the operator depend on,
+// and it was the only scrape target missing: app, worker, openfga, cadvisor and
+// node were all observed. The cost of that gap was measured — ~110-114
+// postmaster crash-recoveries/24h, each taking operator routes to 502 for
+// 30-60s, and the cause could not be NAMED because nothing recorded the
+// database's own state. `control-plane-foundation-first`: observability
+// precedes machinery.
+//
+// THIS IS A RE-LAND. #2523 shipped this block, #2536 reverted it. Read the
+// revert before changing anything here, because its stated trigger does not
+// survive measurement: it fired on a SINGLE `exit code 2` at 00:58:52Z against
+// a baseline that was already crashing every 1-3 minutes. At that base rate any
+// change looks "adjacent" to a crash — the same base-rate artifact that had
+// already been retracted once this incident when auth failures (every ~20s)
+// were read as crash-adjacent. The exporter was never shown to cause anything.
+//
+// WHAT IT ACTUALLY COSTS POSTGRES, measured against `grafana/alloy:v1.9.2` with
+// a real Postgres rather than reasoned about: ONE connection, to the `postgres`
+// database, every 30s, running cluster-wide catalog views. The per-relation
+// collectors (`stat_user_tables`, `statio_user_tables`) are in this exporter's
+// DEFAULT set and were therefore live under #2523 — but they emit NOTHING and
+// scan nothing here, because with no `autodiscovery` block there is exactly one
+// connection and the `postgres` database has no user tables. So the feared
+// "allowlist hides the query cost" failure does not exist on this config. They
+// are still named OFF below, because a collector we do not keep should not be
+// something a future `autodiscovery` edit silently switches on.
+//
+// COLLECTORS ARE EXPLICIT AND VALIDATED. Every name below was confirmed against
+// the deployed binary; Alloy's own docs omit `roles`, and an INVALID name is the
+// failure mode that silently broke the first attempt. #2530 parses this file in
+// CI but cannot check collector names, so they are verified by the series they
+// produce — all 19 allowlisted families below were observed non-empty.
+//
+// PER-TENANT FOR FREE. `pg_stat_database` is a CLUSTER-WIDE view: this single
+// connection already returns ONE ROW PER DATABASE, so every node's DB — and
+// every FUTURE node's, with zero per-node work — arrives labelled by `datname`
+// (TPS, rollback ratio, cache-hit, temp spill, deadlocks, connections, size).
+// That is the signal `control-plane-self-starvation` needs to compute a
+// graduation threshold and prove which lane is noisy.
+//
+// `autodiscovery` IS DELIBERATELY ABSENT, for two reasons. It would have to
+// query the instance to enumerate databases before it could compute `.targets`,
+// and on failure yields an EMPTY target list — so the scrape emits nothing at
+// all, not even `up 0`, which is indistinguishable from "never configured".
+// That cost three deploys of blind debugging. It would also open one connection
+// per database and make the per-relation collectors real work. A static DSN
+// keeps a STATIC target, so a broken exporter reports `pg_up 0` and is LOUD.
+//
+// `pg_roles_connection_limit` is here on purpose: it reports `-1` for every
+// unbounded role, which is the fleet's state today, and is the continuous proof
+// that per-tenant `CONNECTION LIMIT` bounds landed (the "bound every shared
+// tenant" half of the database north star).
+//
+// CREDENTIAL — stated honestly: `app_readonly` is NOT a least-privilege metrics
+// identity. It is `BYPASSRLS` with `SELECT` on every table of every node
+// database (provision.sh), i.e. a cross-node read. It is used here only because
+// it already exists in every env and needs no new secret, so this adds no
+// credential surface beyond what Grafana's datasources already use. Measured:
+// `pg_monitor` ALONE is sufficient for all 19 families below — no table grants
+// and no BYPASSRLS were needed in validation — so the swap to a dedicated
+// `metrics_reader` is mechanical. Tracked as task.5162; do not describe the
+// current identity as least-privilege.
+prometheus.exporter.postgres "default" {
+  data_source_names = [
+    "postgresql://" + sys.env("APP_DB_READONLY_USER") + ":" + sys.env("APP_DB_READONLY_PASSWORD") + "@postgres:5432/postgres?sslmode=disable",
+  ]
+
+  // Explicit set REPLACES the exporter's defaults. Excludes `stat_user_tables`
+  // and `statio_user_tables` (per-relation, nothing kept), `replication_slot`
+  // (no slots) and `stat_statements` (extension not installed). `roles` is
+  // undocumented upstream of Alloy but accepted by v1.9.2 — verified, not assumed.
+  enabled_collectors = ["database", "locks", "stat_database", "stat_bgwriter", "wal", "replication", "roles"]
+}
+
+prometheus.scrape "postgres" {
+  targets         = prometheus.exporter.postgres.default.targets
+  forward_to      = [prometheus.relabel.infra_metrics.receiver]
+  scrape_interval = "30s"
+  scrape_timeout  = "10s"
+  job_name        = "postgres"
+}
+
+// =============================================================================
 // Metric Allowlist + Label Policy
 // =============================================================================
 // Only keep metrics we actually alert on or dashboard. Drop everything else
@@ -460,7 +545,7 @@ prometheus.relabel "infra_metrics" {
   // Keep only allowlisted metric names (+ up for deadman alerts)
   rule {
     source_labels = ["__name__"]
-    regex         = "(container_memory_working_set_bytes|container_memory_rss|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_memory_MemAvailable_bytes|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|node_k3s_kine_state_db_bytes|up)"
+    regex         = "(container_memory_working_set_bytes|container_memory_rss|container_spec_memory_limit_bytes|container_cpu_usage_seconds_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_errors_total|container_network_transmit_errors_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_fs_reads_bytes_total|container_fs_writes_bytes_total|node_filesystem_avail_bytes|node_memory_MemAvailable_bytes|node_cpu_seconds_total|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_nf_conntrack_entries|node_nf_conntrack_entries_limit|node_sockstat_TCP_alloc|node_sockstat_TCP_inuse|node_sockstat_TCP_tw|node_netstat_Tcp_CurrEstab|node_netstat_TcpExt_ListenDrops|node_netstat_TcpExt_ListenOverflows|node_netstat_TcpExt_SyncookiesFailed|node_netstat_TcpExt_TCPAbortOnMemory|node_k3s_kine_state_db_bytes|pg_up|pg_stat_database_numbackends|pg_stat_database_xact_commit|pg_stat_database_xact_rollback|pg_stat_database_blks_hit|pg_stat_database_blks_read|pg_stat_database_temp_files|pg_stat_database_temp_bytes|pg_stat_database_deadlocks|pg_stat_database_conflicts|pg_database_size_bytes|pg_settings_max_connections|pg_locks_count|pg_stat_activity_max_tx_duration|pg_roles_connection_limit|pg_stat_bgwriter_checkpoints_timed_total|pg_stat_bgwriter_checkpoints_req_total|pg_stat_bgwriter_buffers_backend_fsync_total|pg_wal_size_bytes|up)"
     action        = "keep"
   }
 

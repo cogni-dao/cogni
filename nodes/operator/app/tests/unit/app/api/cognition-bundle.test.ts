@@ -109,6 +109,38 @@ describe("renderBundleMarkdown", () => {
     expect(markdown).not.toContain("<watch-gate");
   });
 
+  // The work-item write seam is the one thing agents could NOT discover from a
+  // node: `endpoints.workItems` is a bare URL, so agents fell back to
+  // harness-local slash commands that hardcode the operator apex and filed every
+  // node's work onto operator. The section must therefore survive ONE_VOICE
+  // suppression (it is endpoint data, not a competing constitution) and must be
+  // origin-relative, which a hub-served orientation entry structurally cannot be.
+  it("always renders the node-relative work-item write seam, even with an orientation served", () => {
+    const withOrientation = renderBundleMarkdown({
+      ...baseInput,
+      orientation: {
+        id: "operator-agent-orientation",
+        content: "**USE WHEN:** first read of every operator session.",
+      },
+    });
+
+    for (const markdown of [renderBundleMarkdown(baseInput), withOrientation]) {
+      expect(markdown).toContain("## Work items — this node's own ledger");
+      // Origin-relative, so each node advertises its OWN hub.
+      expect(markdown).toContain(`POST ${baseInput.origin}/api/v1/work/items`);
+      expect(markdown).toContain(
+        `PATCH ${baseInput.origin}/api/v1/work/items/{id}`
+      );
+      // The two contract details agents most often get wrong.
+      expect(markdown).toContain('{"set":{...}}');
+      expect(markdown).toContain("There is no `in_progress`");
+    }
+
+    // Guard the actual regression: ONE_VOICE kills the fallback constitution,
+    // and must not take the write seam with it.
+    expect(withOrientation).not.toContain("## Tooling invariants");
+  });
+
   // The bundle is served to every harness (Claude Code, Codex, OpenAI, plain
   // shell) and auto-injected into a fresh session. So the "how to watch an async
   // gate" contract must be (a) portable — one blocking shell command, no

@@ -95,8 +95,8 @@ Load multiple if you're crossing domains (e.g., a research view that drives a ta
 The markdown work-item corpus was retired on 2026-04-25 (PR #1241). Items now live in Doltgres and are read via the operator API:
 
 - [proj.poly-copy-trading](../../../work/projects/proj.poly-copy-trading.md) — full roadmap, open bugs, constraints (still markdown)
-- Active poly items: `GET https://cognidao.org/api/v1/work/items?node=poly&statuses=needs_implement,needs_design,in_review`
-- Specific item: `GET https://cognidao.org/api/v1/work/items/{id}` (e.g. `task.5012`, `task.0322`, `bug.5012`, `spike.5024`)
+- Active poly items: `GET https://poly.cognidao.org/api/v1/work/items?statuses=needs_implement,needs_design,needs_merge`
+- Specific item: `GET https://poly.cognidao.org/api/v1/work/items/{id}` (e.g. `task.5012`, `task.0322`, `bug.5012`, `spike.5024`)
 
 Charter still references `../items/*.md` paths — those links are stale; use the API or follow links from the operator dashboard.
 

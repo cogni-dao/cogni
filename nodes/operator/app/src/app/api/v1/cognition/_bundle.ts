@@ -263,6 +263,23 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     "| --- | --- | --- |",
     domainRows,
     "",
+    // Deliberately OUTSIDE `fallbackConstitution`: this must render even when the
+    // hub serves an orientation. It does not restate the constitution (the
+    // ONE_VOICE concern of task.5155) — it is the node-relative endpoint contract,
+    // which a hub entry structurally cannot carry because `origin` is only known
+    // per-request. Without it agents fall back to harness-local slash commands
+    // that hardcode the operator apex and file every node's work onto operator.
+    "## Work items — this node's own ledger",
+    "",
+    `Your items live in THIS node's store (\`${origin}\`) — each node owns its own \`knowledge_<slug>\` database, so there is no central ledger to fall back to. ONE work item + ONE node per session.`,
+    "",
+    `- Find work: \`GET ${origin}/api/v1/work/items?statuses=needs_implement,needs_design\` — adopt over create.`,
+    `- File one: \`POST ${origin}/api/v1/work/items\` \`{type,title,summary,outcome}\` — \`type\` ∈ task|bug|story|spike|subtask; the server allocates the id, never send one.`,
+    `- Progress: \`PATCH ${origin}/api/v1/work/items/{id}\` \`{"set":{...}}\` — the wrapper is \`set\`, NOT \`patch\`.`,
+    "- `status` ∈ needs_triage|needs_research|needs_design|needs_implement|needs_closeout|needs_merge|done|blocked|cancelled. There is no `in_progress`.",
+    '- Close with `{"set":{"status":"done"}}` only after the PR merges.',
+    `- Machine schemas for the two writes: \`GET ${origin}/.well-known/agent.json\` → \`actions.createWorkItem\` / \`actions.updateWorkItem\`.`,
+    "",
     "## Recall + contribute",
     "",
     `- Browse a domain: \`GET ${origin}/api/v1/knowledge?domain=<domain>\``,

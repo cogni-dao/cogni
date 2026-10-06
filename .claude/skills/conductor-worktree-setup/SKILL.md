@@ -23,7 +23,10 @@ Use this with the bundled Conductor app skill when a human asks how to run Cogni
    git -C "$COGNI_TEMPLATE_ROOT" pull --ff-only origin main
    ```
 3. Create the Conductor workspace from that fresh base.
-4. Let Conductor run the committed setup script.
+4. Let Conductor run the committed setup script. Local setup reconciles the
+   stable user-level Codex cognition hook before installing dependencies.
+5. In Codex, open `/hooks` once and trust that user-level SessionStart hook.
+   Later local worktrees reuse the same trusted hook path.
 
 The setup script also fetches `origin/main` and fast-forwards the primary checkout only when it is already on clean `main`. It must not rewrite the Conductor feature branch after workspace creation.
 
@@ -31,4 +34,6 @@ The setup script also fetches `origin/main` and fast-forwards the primary checko
 
 - Ensure the primary checkout has `COGNI_NODE_API_KEY`, then symlink `.env.cogni` and `.local-auth` from the primary checkout; never copy them into worktrees. Operator keys such as `COGNI_API_KEY_PROD` are for CI/CD authority and do not satisfy session cognition, so Conductor workspaces must not require manual key exports after the one-time node-agent registration bootstrap.
 - Keep `pnpm install --offline --frozen-lockfile`, `pnpm packages:build`, and `pnpm worktree:check` in the setup path.
+- Local setup (`CONDUCTOR_IS_LOCAL=1`, including the local default) must reconcile the stable user-level Codex cognition hook. Cloud setup must not modify a user-level Codex home.
+- Codex still requires one explicit `/hooks` trust for that stable user-level hook; automatic reconciliation does not bypass trust.
 - If the setup contract changes, update the script, this skill, `docs/guides/new-worktree-setup.md`, and launch-pack wording together.

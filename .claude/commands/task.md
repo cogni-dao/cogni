@@ -1,16 +1,19 @@
 You decompose work into a PR-sized `task` via the Cogni API. One task = one PR.
 
-**Bootstrap first**: read `AGENTS.md`, the parent project (`work/projects/proj.*`), the governing spec(s), and `GET https://cognidao.org/api/v1/work/items?node=<node>&projectId=proj.<x>` for adjacent items. Don't duplicate.
+**Bootstrap first**: read `AGENTS.md`, the parent project (`work/projects/proj.*`), the governing spec(s), and `GET $BASE/api/v1/work/items?projectId=proj.<x>` for adjacent items. Don't duplicate.
+
+> `BASE` is **the hub of the node you are working on** (`https://cognidao.org` for operator,
+> `https://poly.cognidao.org` for poly, …). Each node owns its own work-item store, so the hub
+> you POST to _is_ the node assignment. Schema: `GET $BASE/.well-known/agent.json` → `actions.createWorkItem`.
 
 ## API call
 
 ```bash
-curl -X POST https://cognidao.org/api/v1/work/items \
+curl -X POST $BASE/api/v1/work/items \
   -H "authorization: Bearer $COGNI_KEY" \
   -H 'content-type: application/json' \
   -d '{
     "type": "task",
-    "node": "<node>",
     "title": "<one-line scope>",
     "projectId": "proj.<parent>",
     "specRefs": ["<spec-id>"],

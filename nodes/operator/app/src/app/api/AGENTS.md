@@ -69,8 +69,8 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/attribution/epochs/[id]/pool-components` [POST] - record pool component (SIWE + approver)
   - `/api/v1/users/me` [GET, PATCH] - current profile
   - `/api/v1/users/me/ownership` [GET] - current ownership summary derived from linked identities
-  - `/api/v1/work/items` [GET] - list work items with optional filters (SIWE auth)
-  - `/api/v1/work/items/[id]` [GET] - get single work item by ID (SIWE auth)
+  - `/api/v1/work/items` [GET, POST] - list/create node-local work items (Bearer or SIWE auth)
+  - `/api/v1/work/items/[id]` [GET, PATCH, DELETE] - read/update/delete a node-local work item (Bearer or SIWE auth)
   - `/api/v1/work/items/[id]/claims` [POST] - claim an operator work-item execution session (Bearer or SIWE auth)
   - `/api/v1/work/items/[id]/heartbeat` [POST] - refresh the authenticated user's active work-item session
   - `/api/v1/work/items/[id]/pr` [POST] - link branch/PR metadata to the active work-item session and durable work item

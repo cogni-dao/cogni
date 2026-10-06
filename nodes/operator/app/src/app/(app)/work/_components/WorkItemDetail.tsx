@@ -9,11 +9,13 @@ import {
   Markdown,
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
 } from "@/components";
 
 import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
+import { WorkItemFetchError } from "../_api/fetchWorkItems";
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
 type SubjectRef = WorkItemDto["assignees"][number];
@@ -31,6 +33,9 @@ function assigneeLabel(a: SubjectRef): string {
 
 interface WorkItemDetailProps {
   readonly item: WorkItemDto | null;
+  readonly itemId?: string;
+  readonly isLoading?: boolean;
+  readonly error?: Error | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -55,12 +60,70 @@ function Field({
 
 export function WorkItemDetail({
   item,
+  itemId,
+  isLoading = false,
+  error = null,
   open,
   onOpenChange,
 }: WorkItemDetailProps): ReactElement {
+  const isNotFound =
+    error instanceof WorkItemFetchError && error.kind === "not_found";
+  const isOperationalError = error !== null && !isNotFound;
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-lg">
+        {!item && isLoading && !error && (
+          <>
+            <SheetHeader className="sr-only">
+              <SheetTitle>Loading work item</SheetTitle>
+              <SheetDescription>
+                Loading details for {itemId ?? "the requested work item"}
+              </SheetDescription>
+            </SheetHeader>
+            <p className="py-12 text-center text-muted-foreground text-sm">
+              Loading work item…
+            </p>
+          </>
+        )}
+
+        {!item && isNotFound && (
+          <>
+            <SheetHeader className="sr-only">
+              <SheetTitle>Work item not found</SheetTitle>
+              <SheetDescription>
+                Work item {itemId ?? "with the requested ID"} does not exist or
+                is not visible to you
+              </SheetDescription>
+            </SheetHeader>
+            <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
+              <p className="font-medium text-sm">Work item not found.</p>
+              <p className="max-w-md text-muted-foreground text-xs leading-relaxed">
+                No work item with id <code className="font-mono">{itemId}</code>{" "}
+                exists, or it isn&apos;t visible to you.
+              </p>
+            </div>
+          </>
+        )}
+
+        {!item && isOperationalError && (
+          <>
+            <SheetHeader className="sr-only">
+              <SheetTitle>Unable to load work item</SheetTitle>
+              <SheetDescription>
+                The work-item request failed and can be retried
+              </SheetDescription>
+            </SheetHeader>
+            <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
+              <p className="font-medium text-sm">Unable to load work item.</p>
+              <p className="max-w-md text-muted-foreground text-xs leading-relaxed">
+                The work-item service is temporarily unavailable. Please try
+                again.
+              </p>
+            </div>
+          </>
+        )}
+
         {item && (
           <>
             <SheetHeader>
@@ -73,6 +136,9 @@ export function WorkItemDetail({
               <SheetTitle className="text-lg leading-snug">
                 {item.title}
               </SheetTitle>
+              <SheetDescription className="sr-only">
+                Details for {item.id}
+              </SheetDescription>
             </SheetHeader>
 
             <div className="mt-6 flex flex-col gap-5 px-1">

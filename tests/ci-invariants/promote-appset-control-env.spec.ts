@@ -94,5 +94,8 @@ describe("promote AppSet control-env wiring (task.5141)", () => {
     expect(verifyJob).toContain(
       'cogni_operator_domain_for_env preview "${DOMAIN:?}"'
     );
+    expect(verifyJob).toContain(
+      'if [ "$DEPLOY_ENVIRONMENT" = "preview" ] && [ "$DEPLOYMENT_PROVIDER" != "k3s" ]; then'
+    );
   });
 });

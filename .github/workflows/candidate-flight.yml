@@ -392,12 +392,63 @@ jobs:
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          path: ci-src
+
       - name: Checkout app source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 0
           path: app-src
+
+      - name: Resolve watched deploy repository
+        id: deploy-repo
+        env:
+          SYNC_MANIFEST_PATH: ci-src/.cogni/sync-manifest.yaml
+        run: bash ci-src/scripts/ci/resolve-candidate-deploy-repository.sh
+
+      - name: Decode deploy-repository App private key
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        id: deploy-app-pem
+        env:
+          KEY_B64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          # Keep the output on one physical line. create-github-app-token expands
+          # escaped newlines, while raw PEM newlines break GITHUB_OUTPUT and can
+          # be emitted unmasked by the runner.
+          private_key_escaped="$(printf '%s' "$KEY_B64" | base64 -d | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+          [[ "$private_key_escaped" != *$'\n'* ]] || {
+            echo "::error::Decoded App key unexpectedly contains a literal newline"
+            exit 1
+          }
+          echo "::add-mask::$private_key_escaped"
+          echo "key=$private_key_escaped" >> "$GITHUB_OUTPUT"
+
+      - name: Mint deploy-repository App token
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        id: deploy-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ steps.deploy-repo.outputs.app_id }}
+          private-key: ${{ steps.deploy-app-pem.outputs.key }}
+          owner: ${{ steps.deploy-repo.outputs.owner }}
+          repositories: ${{ steps.deploy-repo.outputs.repo }}
+
+      - name: Assert deploy-repository App boundary
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        env:
+          EXPECTED_APP_SLUG: ${{ steps.deploy-repo.outputs.app_slug }}
+          ACTUAL_APP_SLUG: ${{ steps.deploy-app.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          [[ "$ACTUAL_APP_SLUG" == "$EXPECTED_APP_SLUG" ]] || {
+            echo "::error::Refusing deploy-repository write: expected App '$EXPECTED_APP_SLUG', minted '$ACTUAL_APP_SLUG'"
+            exit 1
+          }
 
       # External compute must materialize its secrets and prove Akash prerequisites
       # before this job writes a ComputeWorkload to its watched branch. k3s targets
@@ -458,7 +509,8 @@ jobs:
 
       - name: Prepare deploy branch shape
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
+          DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
           NODE: ${{ matrix.node }}
           PER_NODE_BRANCH: deploy/candidate-a-${{ matrix.node }}
         run: |
@@ -477,7 +529,7 @@ jobs:
             fi
           done
 
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" deploy-branch
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" deploy-branch
           cd deploy-branch
           git fetch origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
           if git rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
@@ -567,6 +619,12 @@ jobs:
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
+
+      - name: Resolve watched deploy repository
+        id: deploy-repo
+        env:
+          SYNC_MANIFEST_PATH: ci-src/.cogni/sync-manifest.yaml
+        run: bash ci-src/scripts/ci/resolve-candidate-deploy-repository.sh
 
       - name: Setup SSH to candidate-a VM
         id: ssh-setup
@@ -686,7 +744,7 @@ jobs:
           # this workflow just wrote. Isolated test parents must never make Argo
           # follow the canonical repo and silently ignore their deploy branch.
           RENDERED_APPSET="$RUNNER_TEMP/appset-${NODE}.yaml"
-          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
+          REPO_URL="${{ steps.deploy-repo.outputs.url }}" \
             CATALOG_DIR="${GITHUB_WORKSPACE}/app-src/infra/catalog" \
             bash ci-src/scripts/ci/render-node-appset.sh candidate-a "$NODE" >"$RENDERED_APPSET"
           read -r -a ssh_opts <<< "$SSH_OPTS"
@@ -1128,6 +1186,52 @@ jobs:
           fetch-depth: 0
           path: app-src
 
+      - name: Resolve watched deploy repository
+        id: deploy-repo
+        env:
+          SYNC_MANIFEST_PATH: ci-src/.cogni/sync-manifest.yaml
+        run: bash ci-src/scripts/ci/resolve-candidate-deploy-repository.sh
+
+      - name: Decode deploy-repository App private key
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        id: deploy-app-pem
+        env:
+          KEY_B64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          # Keep the output on one physical line. create-github-app-token expands
+          # escaped newlines, while raw PEM newlines break GITHUB_OUTPUT and can
+          # be emitted unmasked by the runner.
+          private_key_escaped="$(printf '%s' "$KEY_B64" | base64 -d | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+          [[ "$private_key_escaped" != *$'\n'* ]] || {
+            echo "::error::Decoded App key unexpectedly contains a literal newline"
+            exit 1
+          }
+          echo "::add-mask::$private_key_escaped"
+          echo "key=$private_key_escaped" >> "$GITHUB_OUTPUT"
+
+      - name: Mint deploy-repository App token
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        id: deploy-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ steps.deploy-repo.outputs.app_id }}
+          private-key: ${{ steps.deploy-app-pem.outputs.key }}
+          owner: ${{ steps.deploy-repo.outputs.owner }}
+          repositories: ${{ steps.deploy-repo.outputs.repo }}
+
+      - name: Assert deploy-repository App boundary
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        env:
+          EXPECTED_APP_SLUG: ${{ steps.deploy-repo.outputs.app_slug }}
+          ACTUAL_APP_SLUG: ${{ steps.deploy-app.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          [[ "$ACTUAL_APP_SLUG" == "$EXPECTED_APP_SLUG" ]] || {
+            echo "::error::Refusing deploy-repository write: expected App '$EXPECTED_APP_SLUG', minted '$ACTUAL_APP_SLUG'"
+            exit 1
+          }
+
       # Per-cell substrate gate (Axiom 18): require THIS node's own assert-ok
       # marker. A sibling node's substrate failure leaves this node's marker
       # intact, so this cell proceeds. A flight target that needed no substrate
@@ -1155,11 +1259,12 @@ jobs:
 
       - name: Prepare per-node deploy branch workspace
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
+          DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
           PER_NODE_BRANCH: deploy/${{ matrix.env }}-${{ matrix.node }}
         run: |
           set -euo pipefail
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" deploy-branch
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" deploy-branch
           cd deploy-branch
           git fetch origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
           if git rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
@@ -1553,6 +1658,52 @@ jobs:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
 
+      - name: Resolve watched deploy repository
+        id: deploy-repo
+        env:
+          SYNC_MANIFEST_PATH: ci-src/.cogni/sync-manifest.yaml
+        run: bash ci-src/scripts/ci/resolve-candidate-deploy-repository.sh
+
+      - name: Decode deploy-repository App private key
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        id: deploy-app-pem
+        env:
+          KEY_B64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          # Keep the output on one physical line. create-github-app-token expands
+          # escaped newlines, while raw PEM newlines break GITHUB_OUTPUT and can
+          # be emitted unmasked by the runner.
+          private_key_escaped="$(printf '%s' "$KEY_B64" | base64 -d | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+          [[ "$private_key_escaped" != *$'\n'* ]] || {
+            echo "::error::Decoded App key unexpectedly contains a literal newline"
+            exit 1
+          }
+          echo "::add-mask::$private_key_escaped"
+          echo "key=$private_key_escaped" >> "$GITHUB_OUTPUT"
+
+      - name: Mint deploy-repository App token
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        id: deploy-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ steps.deploy-repo.outputs.app_id }}
+          private-key: ${{ steps.deploy-app-pem.outputs.key }}
+          owner: ${{ steps.deploy-repo.outputs.owner }}
+          repositories: ${{ steps.deploy-repo.outputs.repo }}
+
+      - name: Assert deploy-repository App boundary
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        env:
+          EXPECTED_APP_SLUG: ${{ steps.deploy-repo.outputs.app_slug }}
+          ACTUAL_APP_SLUG: ${{ steps.deploy-app.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          [[ "$ACTUAL_APP_SLUG" == "$EXPECTED_APP_SLUG" ]] || {
+            echo "::error::Refusing deploy-repository read: expected App '$EXPECTED_APP_SLUG', minted '$ACTUAL_APP_SLUG'"
+            exit 1
+          }
+
       # Per-cell substrate gate (Axiom 18): same per-node assert-ok marker the
       # flight cell used. A sibling node's substrate failure can't reach here.
       - name: Download this node's assert marker
@@ -1572,9 +1723,10 @@ jobs:
       - name: Checkout per-node deploy branch (for source-sha map)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
+          repository: ${{ steps.deploy-repo.outputs.repository }}
           ref: deploy/${{ matrix.env }}-${{ matrix.node }}
           path: deploy-branch
-          token: ${{ github.token }}
+          token: ${{ steps.deploy-app.outputs.token || github.token }}
 
       - name: Download per-cell deploy_branch_sha
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
@@ -1623,8 +1775,8 @@ jobs:
           DEPLOY_ENVIRONMENT: candidate-a
           EXPECTED_SHA: ${{ steps.expected.outputs.deploy_branch_sha }}
           PROMOTED_APPS: ${{ matrix.node }}
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
+          GH_REPO: ${{ steps.deploy-repo.outputs.repository }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-argocd.sh
 

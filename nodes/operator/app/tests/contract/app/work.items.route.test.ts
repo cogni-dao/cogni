@@ -46,7 +46,7 @@ vi.mock("@/bootstrap/container", () => {
         list: vi.fn(async (q: { cursor?: string }) => {
           if (q.cursor) {
             const { decodeCursor } = await import(
-              "@/adapters/server/db/doltgres/work-items-cursor"
+              "@cogni/work-items/adapters/doltgres"
             );
             decodeCursor(q.cursor); // throws InvalidCursorError on bad input
           }

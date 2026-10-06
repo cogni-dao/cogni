@@ -698,6 +698,63 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       "akash_tx_receipt_rebound"
     );
 
+    // PLACEMENT_BINDS_ON_EVERY_REVISION (story.5050). Akash refuses in-place placement change,
+    // so a country requirement can only be honoured by a fresh CREATE — and
+    // `required_placement_countries` lives in the CR's `spec.placement`, NOT in the SDL. Change
+    // the country set and the rendered SDL is BYTE-IDENTICAL, so this update rebinds the
+    // incumbent lease and IDENTICAL_SDL_IS_A_NO_OP below returns success. Nothing in that path
+    // checks whether the lease being re-imaged still satisfies the requirement, so a node can
+    // declare a jurisdiction, see a green verb, green CI and a green promote, and keep running
+    // where it was. This gate makes that outcome impossible to reach SILENTLY.
+    //
+    // NOT motivated by a confirmed incident: story.5050's poly investigation initially read as
+    // one, and that reading was WRONG — poly's gen-20 did mint, in Finland (its XR reports
+    // `endpoints[0] = …ingress.akash.rhite.co.uk`). The Belgian address that suggested otherwise
+    // came from a SERVER-WIDE `pg_stat_activity` and belonged to a different node. What is real
+    // is the hole in the path; treat this as a guard, not a post-mortem fix.
+    //
+    // THE COST, deliberately accepted: the refusal is terminal for this key, and the composition
+    // has no CREATE path out of it. A country set the incumbent violates therefore blocks EVERY
+    // later revision of that workload — including security patches — until a human bumps
+    // `lease_generation`. That is the right trade only because the alternative is serving from an
+    // excluded jurisdiction indefinitely without a signal. The refusal names the remedy.
+    //
+    // Deliberately asymmetric with REQUIRED_FAILS_CLOSED in the bid screen: an unresolvable
+    // country REFUSES a bid (one candidate lost) but must NOT refuse an update, because that
+    // would stop every image shipping fleet-wide on a registry hiccup. Only a RESOLVED country
+    // that contradicts the requirement refuses.
+    const requiredCountries = (
+      input.spec.placement?.requiredCountryCodes ?? []
+    ).map((c) => c.toUpperCase());
+    if (requiredCountries.length > 0 && this.console.providerCountry) {
+      const incumbent = bound.record.providerAccount;
+      const country = incumbent
+        ? (
+            await this.console.providerCountry(incumbent).catch(() => null)
+          )?.toUpperCase()
+        : null;
+      if (country && !requiredCountries.includes(country)) {
+        this.log.error(
+          {
+            cogniKey: input.cogniKey,
+            externalName: input.externalName,
+            providerAccount: incumbent,
+            providerCountry: country,
+            requiredCountries,
+            code: "placement_violated_by_incumbent",
+          },
+          "akash_tx_update_refused_placement_violation"
+        );
+        throw new AkashTxError(
+          "placement_violated_by_incumbent",
+          `lease ${input.externalName} is on a provider in ${country}, which is not in the ` +
+            `workload's required placement [${requiredCountries.join(", ")}]; refusing to ` +
+            "re-image it. Akash cannot move a lease in place — this needs a fresh CREATE at a " +
+            "bumped lease_generation, not an update."
+        );
+      }
+    }
+
     // IDENTICAL_SDL_IS_A_NO_OP (bug.5238). A PUT is idempotent for the escrow/handle, but NOT
     // on the provider: Console re-triggers a redeploy on EVERY PUT, so re-PUTting the byte-
     // identical SDL restarts a rollout the workload may not have finished — a not-yet-serving

@@ -2,12 +2,14 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@/ports/work-items-doltgres.port`
- * Purpose: Operator-local port for the Doltgres-backed `work_items` API surface (task.0423 v0).
- * Scope: Type-only port + input shapes derived from `@cogni/work-items` `WorkItemCommandPort`. Concrete adapter lives in `@/adapters/server/db/doltgres/work-items-adapter`.
- * Invariants: Routes/facades depend on this port, NEVER on the concrete adapter. Container wires either the real adapter or a `NotConfigured` impl when DOLTGRES_URL is unset.
+ * Module: `@cogni/work-items/adapters/doltgres/ports`
+ * Purpose: Port + input shapes for the Doltgres-backed `work_items` API surface every node serves.
+ * Scope: Types only, derived from `WorkItemCommandPort`. Does not contain implementation, IO, or container wiring.
+ * Invariants:
+ *   - DEPEND_ON_THE_PORT, routes and facades import these types, never the concrete adapter.
+ *   - NOT_CONFIGURED_IS_WIRED, the container substitutes a throwing impl when the node has no Doltgres URL.
  * Side-effects: none
- * Links: docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
+ * Links: docs/spec/work-items-port.md, docs/guides/agent-api-validation.md
  * @public
  */
 
@@ -16,7 +18,7 @@ import type {
   WorkItemCommandPort,
   WorkItemId,
   WorkQuery,
-} from "@cogni/work-items";
+} from "../../index.js";
 
 export type WorkItemsCreateInput = Parameters<WorkItemCommandPort["create"]>[0];
 

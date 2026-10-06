@@ -1076,7 +1076,10 @@ jobs:
         run: |
           set -euo pipefail
           source app-src/scripts/setup/lib/cogni-deployment-identity.sh
-          if [ "$DEPLOY_ENVIRONMENT" = "preview" ]; then
+          # k3s jobs already read the lane-scoped GitHub environment, whose DOMAIN is the
+          # final public host. Akash jobs read the fleet-control environment, so only that
+          # foreign-control case needs the preview prefix derived from its configured apex.
+          if [ "$DEPLOY_ENVIRONMENT" = "preview" ] && [ "$DEPLOYMENT_PROVIDER" != "k3s" ]; then
             LANE_DOMAIN="$(cogni_operator_domain_for_env preview "${DOMAIN:?}")" || {
               echo "::error::cannot derive public domain for lane '$DEPLOY_ENVIRONMENT'"
               exit 1

@@ -50,15 +50,108 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
-  candidate-a: 38
+  # 38 -> 39. Operator error, recorded so it is not repeated: while unwedging a
+  # Crossplane Request that was stuck on crossplane.io/external-create-pending with
+  # 503 ledger_unavailable, I cleared the annotation and applied the documented
+  # cogni.io/reconcile-nudge (hub akash-prod-lease-recovery step 4). That Request was a
+  # DELETE, not a create — the nudge let it complete and the actuator logged
+  # `akash_tx_released 1790779522819`, releasing candidate-a's HEALTHY live lease.
+  # poly-test went 200 -> 404 and receipt 1790779522819 closed at 2026-10-02T01:25:09Z.
+  # The hub's precondition is to verify the wedged receipt is settled with no live lease;
+  # I verified the LEDGER was clean and never checked that Request's verb. Check the verb.
+  candidate-a: 39
   preview: 2
-  # 19 -> 20 to re-mint after a second DRY auction (story.5050, bug.5293/5334).
+  # 20 -> 21 after gen-20 booted the old eed16dc0 bundle, missed the boot
+  # deadline for the promoted 9033a162 bundle, and was closed by policy.
+  # The settled xcw:cogni-production:<node-id>:20 key is spent and cannot be
+  # replayed into a live lease; gen-21 is the reviewed re-mint for bug.5293.
+  #
+  # 19 -> 20 originally re-minted after a second DRY auction
+  # (story.5050, bug.5293/5334).
   # gen-18 dseq 1790815181111 collected 8 bids and refused all of them; gen-19 dseq
   # 1790818782178 collected 6 bids, but every bidder was outside the required FI/NL/PT
   # countries, then rolled back at 2026-10-01T01:41:25Z. Both settled idempotency keys are
   # spent: replaying gen-19 returns the closed handle and can never apply a new Poly image.
   # There is no activity-env re-mint verb, so this reviewed catalog bump is the recovery
   # prescribed by hub `akash-prod-lease-recovery` (CATALOG_IS_SSOT).
+  # 21 -> 22. The country set is deliberately UNCHANGED ([FI, NL, PT], set by #2528).
+  # PLACEMENT IS NOT THE PROBLEM, and the evidence is positive, not inferred: RHITE Finland
+  # (akash127x6cuk4...dhz7 - isOnline, isAudited, featEndpointCustomDomain=true, and already
+  # in AKASH_ALLOWED_PROVIDERS) WON gen-20 and recorded `boot_ok` in
+  # compute_provider_outcomes at 2026-10-01T02:50:29Z. That working Finland lease was then
+  # destroyed by bootPolicy.onDeadline=Close because the promoted 9033a162 bundle could not
+  # hold /readyz through its 20:06-20:36Z window, while production Postgres was dying with
+  # `exit code 2` every 1-3 minutes. A DATABASE OUTAGE CLOSED A GOOD LEASE. The auction
+  # never misbehaved, and gens 18/19/21 went dry for a different reason again (bug.5334's
+  # activeLeases cold-start trap, since removed).
+  #
+  # Safe to spend this generation now: Postgres is at 1 exit-2 per 45 min (was ~4.6/h, peak
+  # 4 per 15 min) after bounding poly's statements, and candidate-a poly holds /readyz=200
+  # continuously against this SAME Postgres instance. The boot SLO needs one sustained
+  # /readyz, not a flawless hour.
+  #
+  # DO NOT widen required_placement_countries to rescue a dry auction. BG/RO were already
+  # tried and deliberately reverted (#2512/#2516/#2525/#2527 -> #2528). CH is inert: both
+  # Swiss providers publish featEndpointCustomDomain=false, so naming CH only lets an
+  # incapable provider win on price (screened since #2532). Only THREE registry providers
+  # can serve poly's publicHost inside the set, and the derived strike list goes PERMANENT
+  # at 3 boot failures - so every wasted generation risks permanently excluding the pool
+  # that story.5050 earned. Fix the substrate first, then re-mint. (bug.5293)
+  # 22 -> 23. Countries UNCHANGED ([FI, NL, PT], #2528) — placement is NOT the fault.
+  # SIX dev-wallet market probes (all closed, zero lease taken) reproduced poly's SDL field
+  # for field — exact cpu/mem, 4096Mi storage as a LIST, `accept:` host, and
+  # signedBy.allOf=[Overclock] — and the in-set FI provider akash1z9nr23cg (isOnline,
+  # isAudited, featEndpointCustomDomain=true, already in AKASH_ALLOWED_PROVIDERS) bid 14.00
+  # every single time, state=open, inside 30s. 14.00 is UNDER the 17.86 bid poly's own
+  # gen-22 auction accepted. Yet all THREE digital-frontier providers (FI m3a, PT h4i,
+  # BG h6i) are absent from every poly roster. So resources, storage shape, accept:, the
+  # audit anchor, price and bid state are all eliminated by measurement; the gap is in the
+  # actuator's own request/collection path, not in jurisdiction and not in market supply.
+  # Tracking that separately — this bump is a fresh auction sample that also carries the
+  # poly-side fix to production.
+  #
+  # Promote target moves to poly main 2679ce05 (#102: retention prunes gated to a 30-min
+  # cadence instead of every 30s tick). Measured on prod: the prune is a ZERO-ROW no-op
+  # costing 72.7s before autovacuum and 29.1s after, so cadence — not statement duration —
+  # was the load. Postgres is now 0 exit-2 across a full hour and the 2,101,669 dead tuples
+  # on poly_trader_position_snapshots are reclaimed (first autovacuum in that table's life).
+  #
+  # A lost auction records NO provider boot failure, so re-minting costs no strike and the
+  # escrow refunds. Do NOT widen required_placement_countries to rescue a dry auction:
+  # BG/RO were tried and deliberately reverted (#2512/#2516/#2525/#2527 -> #2528), and CH is
+  # inert because both Swiss providers publish featEndpointCustomDomain=false. (bug.5293)
+  # 23 -> 20. DELIBERATELY BACKWARD, and it is an ADOPT, not a re-mint. Read before changing.
+  #
+  # poly production already HAS a live, paid, serving Akash lease in FINLAND. Read from
+  # Console with the actuator's own credential 2026-10-02T02:0xZ:
+  #   GET /v1/deployments/1790822853178 -> state: active
+  #     lease provider akash127x6cuk44ul3azferg8wy9fju686kcf6x2dhz7  (RHITE Finland)
+  #     rate 9.141469 uact/block
+  #     svc app uris ["cfvnrn4gppe0j441ibuudbaosc.ingress.akash.rhite.co.uk",
+  #                   "poly.cognidao.org"]   available: 1
+  #   compute_cost_intervals -> state=active WITH provider and rate (a healthy receipt)
+  # while the XR reports phase=Failed, resource=<empty>, reason=BootDeadlineClosed. The XR
+  # DISOWNED a lease it never actually closed — render-safe, status-blind, exactly hub
+  # `receipt-is-not-liveness`. That lease is what serves the stale eed16dc0 on the public host.
+  #
+  # Gens 21, 22 and 23 each lost their auction (0 of 6-7 bids from FI/NL/PT) while we were
+  # paying RHITE for Finland the whole time. Escrow refunded each round, so the cost was hours,
+  # not money.
+  #
+  # The Akash create idempotency key is xcw:<ns>:<node>:<leaseGeneration> — GENERATION ONLY.
+  # Gen-20's key is NOT spent: its receipt is `active`, not settled. So rendering gen 20 makes
+  # the composition resolve to the EXISTING live handle and take the observe->UPDATE path,
+  # applying bundle 2679ce05 to the lease already serving poly.cognidao.org. That is the
+  # sweeper's own doctrine ("cursor, exactly one live allocation -> bind the handle to the
+  # receipt, never close it"). No auction, no new escrow, no provider strike, and it keeps the
+  # Finland placement story.5050 earned.
+  #
+  # The spent-key trap in akash-node-expert runs the OTHER way: bumping ONTO a settled gen
+  # replays a dead handle. Gens 21/22/23 are the settled ones and are never to be reused.
+  # boot_recovery is also the wrong lever here: it exists for a lease that NEVER served and
+  # closes + re-mints elsewhere; ours serves.
+  #
+  # DO NOT widen required_placement_countries to rescue this. (bug.5293)
   production: 20
 required_placement_countries:
   candidate-a: [BE]
@@ -94,6 +187,8 @@ compute_egress_cidrs:
       authenticates identity instead of source address.
   - cidr: 95.217.58.106/32
     comment: Finland provider egress (story.5050)
+  - cidr: 157.180.108.139/32
+    comment: "RHITE Finland EGRESS after a NAT ROTATION (bug.5326) — measured from inside the live production lease 2026-10-02T06:12Z via poly GET /api/internal/ops/poly/egress-check: egress_ip=157.180.108.139 egress_country=FI blocked=false oracle_http_status=200. The allowlist carried only 157.180.59.24/32, so the fail-closed substrate-port DROP cut the lease off its own Postgres: / and /version served 200 while /readyz returned 503 INTERNAL_ERROR after a ~15s connect timeout, and pg_stat_activity showed zero service_poly connections from any 157.180.* address. That is also why gen-20 missed its boot deadline, NOT the Postgres crash-loop. Deliberately a /32 not the Hetzner /16: this list fronts Postgres/Doltgres/Redis/LiteLLM/Temporal and a /16 on public cloud would hand ~131k rentable addresses a hole into production — rotation is the cheaper failure. Durable fix: measure egress from inside the lease at boot and allowlist it automatically; there is still no TS writer for compute_egress_cidrs (#2175). (bug.5293)"
   - cidr: 157.180.59.24/32
     comment: >-
       RHITE Finland provider EGRESS, measured from inside a real lease on

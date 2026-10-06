@@ -12,7 +12,7 @@
  *     DOLT_CREDS_KEYID; skips without them. NEVER targets cogni-dao (fail closed).
  *   - Drives the SAME modules the operator container wires: createDoltHubDatabaseEnsurer,
  *     DoltgresKnowledgeContributionAdapter + createContributionService + shapeGate +
- *     createDoltgresPusher/wrapPushSafe, DoltgresOperatorWorkItemAdapter.
+ *     createDoltgresPusher/wrapPushSafe, DoltgresWorkItemAdapter.
  * Side-effects: Docker containers; durable repo creation under the test owner.
  *
  * ── HOW TO RUN (prerequisites to replicate) ─────────────────────────────────
@@ -60,9 +60,9 @@ import {
   DoltgresKnowledgeStoreAdapter,
   wrapPushSafe,
 } from "@cogni/knowledge-store/adapters/doltgres";
+import { DoltgresWorkItemAdapter } from "@cogni/work-items/adapters/doltgres";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DoltgresOperatorWorkItemAdapter } from "@/adapters/server/db/doltgres/work-items-adapter";
 import { createDoltHubDatabaseEnsurer } from "@/features/nodes/dolthub-database";
 import { buildNodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
 
@@ -229,7 +229,7 @@ describe.skipIf(!hasRequiredEnv)(
       await store.registerDomain({ id: "proof", name: "Proof Domain" });
 
       // 3. Work item create + patch (auto-commits to main).
-      const wi = new DoltgresOperatorWorkItemAdapter(sql);
+      const wi = new DoltgresWorkItemAdapter(sql);
       const created = await wi.create(
         { type: "task", title: "E2E round-trip work item" } as never,
         "e2e-agent"

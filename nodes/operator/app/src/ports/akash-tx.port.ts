@@ -86,6 +86,14 @@ export type AkashTxErrorCode =
   | "outcome_unknown"
   /** Provider refused the request terminally (screening, rejected SDL, bad handle). */
   | "provider_rejected"
+  /**
+   * The live lease is on a provider whose country is NOT in the workload's required placement,
+   * so re-imaging it would keep serving from a jurisdiction the node has excluded. Akash cannot
+   * move a lease in place, so this is NOT retryable under the same key: it needs a fresh CREATE
+   * at a bumped `lease_generation`. Raised by the UPDATE path only — see
+   * PLACEMENT_BINDS_ON_EVERY_REVISION (story.5050).
+   */
+  | "placement_violated_by_incumbent"
   /** Provider unreachable / timed out on a non-mutating call. */
   | "provider_unavailable"
   /** The referenced external resource does not exist at the provider. */
@@ -326,6 +334,16 @@ export interface AkashTxConsolePort {
    */
   findAllocationSince(cursor: string): Promise<AkashAllocationProbe>;
   status(input: { leaseId: string }): Promise<ProvisionOutput>;
+  /**
+   * The screened country of a provider account, or `null` when the marketplace read did not
+   * resolve one. Exists so the UPDATE path can tell whether the lease it is about to re-image
+   * still satisfies the workload's placement requirement — see
+   * PLACEMENT_BINDS_ON_EVERY_REVISION in the actuator.
+   *
+   * OPTIONAL on the port: a deployment whose wiring predates this seam must keep updating, so
+   * an absent implementation disables the check rather than wedging every revision.
+   */
+  providerCountry?(providerAccount: string): Promise<string | null>;
   /**
    * sha256 hex of the exact SDL bytes `updateAllocated(spec)` would PUT for this spec — the same
    * `buildAkashSdl` render, pricing options and all. Pure and deterministic: identical spec →

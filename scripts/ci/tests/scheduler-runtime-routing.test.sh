@@ -50,7 +50,16 @@ done
 
 # bug.5094 — the value that actually reaches a cluster is the per-env overlay map,
 # and each node's address must follow its OWN catalog placement for THAT env.
-FORK_ROOT="${FORK_DOMAIN_ROOT:-cognidao.org}"
+# bug.5330 (4th site) — MUST mirror the generator's precedence exactly, or this test
+# computes expectations from a different root than the artifact it is validating.
+# render-scheduler-worker-endpoints.sh:51 uses "${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}}";
+# reading only FORK_DOMAIN_ROOT here was correct while the two never diverged, and became a
+# false failure the moment an isolated fleet set DOMAIN (the test parent: DOMAIN=cogni-testing.org
+# as the workload zone, FORK_DOMAIN_ROOT=cognidao.org as the substrate root). The committed
+# overlays then hold *-test.cogni-testing.org while this test demanded *-test.cognidao.org —
+# which is what kept cogni-test-org/cogni-monorepo#70 permanently red, rotting the mirror and
+# pinning candidate-a (bug.5331).
+FORK_ROOT="${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}}"
 # shellcheck source=scripts/setup/lib/fork-identity.sh
 source "$REPO_ROOT/scripts/setup/lib/fork-identity.sh"
 # shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
