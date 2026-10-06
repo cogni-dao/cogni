@@ -81,7 +81,11 @@ export function createVcsCapability(env: ServerEnv): VcsCapability {
   return new GitHubVcsAdapter({
     appId,
     privateKey,
-    operatorChangePolicyOwner: env.NODE_SUBMODULE_PARENT_OWNER,
-    operatorChangePolicyRepo: env.NODE_SUBMODULE_PARENT_REPO,
+    ...(env.NODE_SUBMODULE_PARENT_OWNER
+      ? { operatorChangePolicyOwner: env.NODE_SUBMODULE_PARENT_OWNER }
+      : {}),
+    ...(env.NODE_SUBMODULE_PARENT_REPO
+      ? { operatorChangePolicyRepo: env.NODE_SUBMODULE_PARENT_REPO }
+      : {}),
   });
 }

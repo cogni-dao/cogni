@@ -457,7 +457,8 @@ export class GitHubVcsAdapter implements VcsCapability {
         "main"
       ),
     ]);
-    if (baseSpec === null || headSpec === null || catalog === null) return false;
+    if (baseSpec === null || headSpec === null || catalog === null)
+      return false;
     let parsedCatalog: unknown;
     try {
       parsedCatalog = parseYaml(catalog);

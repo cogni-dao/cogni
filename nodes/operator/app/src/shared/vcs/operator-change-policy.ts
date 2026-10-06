@@ -184,20 +184,22 @@ export function classifyOperatorChangeForMerge(
   if (!identity) return reject(facts, "untrusted-repository");
 
   const message = facts.commit.message;
-  if (
-    singleTrailer(message, "Cogni-Change-Type") !== OPERATOR_CHANGE_TYPE
-  ) {
+  if (singleTrailer(message, "Cogni-Change-Type") !== OPERATOR_CHANGE_TYPE) {
     return reject(facts, "reserved-envelope-not-claimed");
   }
   const operationValue = singleTrailer(message, "Cogni-Operation");
-  if (!operationValue || !OPERATIONS.has(operationValue as OperatorChangeOperation)) {
+  if (
+    !operationValue ||
+    !OPERATIONS.has(operationValue as OperatorChangeOperation)
+  ) {
     return reject(facts, "duplicate-or-unlisted-operation");
   }
   const operation = operationValue as OperatorChangeOperation;
   const node = singleTrailer(message, "Cogni-Node");
   const baseSha = singleTrailer(message, "Cogni-Base-SHA");
   const signedPathHash = singleTrailer(message, "Cogni-Changed-Paths-SHA256");
-  if (!node || !NODE.test(node)) return reject(facts, "invalid-node", operation);
+  if (!node || !NODE.test(node))
+    return reject(facts, "invalid-node", operation);
   if (!baseSha || !SHA.test(baseSha)) {
     return reject(facts, "invalid-base-sha", operation, node);
   }
@@ -241,7 +243,8 @@ export function classifyOperatorChangeForMerge(
         !env?.match(/^(candidate-a|preview|production)$/) ||
         !action?.match(/^(add|remove)$/) ||
         facts.pr.headRef !== `cogni-operator/node-env-${node}-${env}` ||
-        subject !== `feat(node): ${action} ${node} ${action === "add" ? "to" : "from"} ${env}`
+        subject !==
+          `feat(node): ${action} ${node} ${action === "add" ? "to" : "from"} ${env}`
       ) {
         return reject(facts, "invalid-membership-envelope", operation, node);
       }
@@ -285,9 +288,12 @@ export function classifyOperatorChangeForMerge(
       const sourceSha = singleTrailer(message, "Cogni-Source-SHA");
       const fleetOwner = repo.split("/", 1)[0];
       if (
-        !nodeId?.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/) ||
+        !nodeId?.match(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+        ) ||
         !sourceSha?.match(SHA) ||
-        sourceRepo?.toLowerCase() !== `https://github.com/${fleetOwner}/${node}.git` ||
+        sourceRepo?.toLowerCase() !==
+          `https://github.com/${fleetOwner}/${node}.git` ||
         facts.pr.headRef !== `cogni-operator/node-register-${node}` ||
         subject !== `feat(node): register ${node}`
       ) {

@@ -73,8 +73,9 @@ The simplification target is one artifact contract and one promotion primitive. 
     — never by reading the env variable directly. See `## Lane vs control env` below.
 
 12. **ONE_GENERATED_CHANGE_PROTOCOL**: every operator-generated environment or deployment PR uses
-    `cogni.operator-change.v1`, one origin/main classifier, and one versioned allowlist. Each
-    operation has a byte-exact replay verifier; an incomplete operation stays disabled. The child source repo keeps standard
+    `cogni.operator-change.v1`, one trusted classifier, and one versioned allowlist. Parent CI loads
+    it from `origin/main`; child CI calls the canonical reusable workflow at an exact reviewed SHA.
+    Each operation has a byte-exact replay verifier; an incomplete operation stays disabled. The child source repo keeps standard
     CI, immutable image publication, candidate exact-SHA proof, and same-digest
     production promotion. App signature proves authorship, not correctness.
 

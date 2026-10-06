@@ -1,0 +1,27 @@
+{
+  "spec": {
+    "services": [
+      {
+        "name": "app",
+        "artifact": {
+          "name": "app",
+          "context": ".",
+          "dockerfile": "Dockerfile",
+          "target": "runner"
+        },
+        "port": 3200,
+        "visibility": "public",
+        "runtime_profile": "cogni-node-app-v1",
+        "bindings": {},
+        "secret_refs": [],
+        "bind_host": "0.0.0.0",
+        "resources": {
+          "cpu_units": 2,
+          "memory_mi": 2048,
+          "storage_mi": 4096
+        }
+      }
+    ]
+  },
+  "yaml": "deployment:\n  services:\n    - name: app\n      artifact:\n        name: app\n        context: .\n        dockerfile: Dockerfile\n        target: runner\n      port: 3200\n      visibility: public\n      runtime_profile: cogni-node-app-v1\n      bindings: {}\n      bind_host: 0.0.0.0\n      resources:\n        cpu_units: 2\n        memory_mi: 2048\n        storage_mi: 4096\n"
+}

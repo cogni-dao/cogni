@@ -36,10 +36,11 @@ write_fixtures() {
 }
 
 run_classifier() {
-  GITHUB_OUTPUT="$1" EVENT_NAME=pull_request REPOSITORY=Cogni-DAO/cogni PR_NUMBER_PR=42 \
+  local output="$1" registry="${2-$REGISTRY}" policy_root="${3:-}"
+  GITHUB_OUTPUT="$output" EVENT_NAME=pull_request REPOSITORY=Cogni-DAO/cogni PR_NUMBER_PR=42 \
     PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/pr.json" \
     FAST_PATH_COMMIT_JSON="$tmpdir/commit.json" FAST_PATH_FILES_JSON="$tmpdir/files.json" \
-    FAST_PATH_REGISTRY_JSON="$REGISTRY" bash "$CLASSIFIER" >/dev/null
+    FAST_PATH_REGISTRY_JSON="$registry" FAST_PATH_POLICY_ROOT="$policy_root" bash "$CLASSIFIER" >/dev/null
 }
 value() { awk -F= -v key="$2" '$1==key{v=$2} END{print v}' "$1"; }
 
@@ -62,6 +63,16 @@ write_fixtures 'cogni-operator[bot]' false
 run_classifier "$tmpdir/unsigned.out"
 [[ "$(value "$tmpdir/unsigned.out" invalid)" == true ]]
 [[ "$(value "$tmpdir/unsigned.out" reason)" == invalid-commit-signature ]]
+
+# A reusable workflow can load policy only from its pinned, workflow-owned checkout.
+mkdir -p "$tmpdir/policy/scripts/ci/verifiers"
+jq '.operations["env.membership"].enabledRepositories = ["cogni-dao/cogni"]' \
+  "$REGISTRY" > "$tmpdir/policy/scripts/ci/operator-change-v1.allowlist.json"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$tmpdir/policy/scripts/ci/verifiers/verify-env-membership.sh"
+write_fixtures
+run_classifier "$tmpdir/pinned-policy.out" "" "$tmpdir/policy"
+[[ "$(value "$tmpdir/pinned-policy.out" eligible)" == true ]]
+[[ "$(value "$tmpdir/pinned-policy.out" reason)" == eligible ]]
 
 # Every operation is explicitly registered and disabled pending test-org proof.
 jq -e '

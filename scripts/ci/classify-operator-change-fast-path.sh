@@ -4,7 +4,9 @@
 
 # Classify the single App-authored generated-change envelope.
 #
-# Both this file and its registry MUST be read from origin/main by the workflow.
+# Both this file and its registry MUST come from a trusted revision selected by
+# the workflow. In the monorepo that is origin/main. A pinned reusable workflow
+# supplies FAST_PATH_POLICY_ROOT from job.workflow_sha; it is never caller input.
 # A claimed but malformed envelope is invalid=true (required jobs fail). A
 # structurally valid operation that is not enabled stays on ordinary CI. No
 # operation is enabled until its verifier has passed the test-org E2E matrix.
@@ -17,6 +19,7 @@ PR_NUMBER_PR="${PR_NUMBER_PR:-}"
 PR_HEAD_SHA_PR="${PR_HEAD_SHA_PR:-}"
 OUTPUT_FILE="${GITHUB_OUTPUT:-}"
 readonly CHANGE_TYPE='cogni.operator-change.v1'
+POLICY_ROOT="${FAST_PATH_POLICY_ROOT:-}"
 
 if [[ -z "$OUTPUT_FILE" ]]; then
   echo "classify-operator-change-fast-path: GITHUB_OUTPUT is required" >&2
@@ -87,6 +90,10 @@ trailer_value() {
 
 if [[ -n "${FAST_PATH_REGISTRY_JSON:-}" ]]; then
   cp "$FAST_PATH_REGISTRY_JSON" "$registry_json"
+elif [[ -n "$POLICY_ROOT" ]]; then
+  registry_path="$POLICY_ROOT/scripts/ci/operator-change-v1.allowlist.json"
+  [[ -f "$registry_path" ]] || reject_claim trusted-registry-unavailable
+  cp "$registry_path" "$registry_json"
 else
   registry_path='scripts/ci/operator-change-v1.allowlist.json'
   git cat-file -e "origin/main:$registry_path" 2>/dev/null || reject_claim trusted-registry-unavailable
@@ -195,10 +202,26 @@ enabled="$(jq -r --arg operation "$operation" --arg repo "$repository_key" '.ope
 verifier="$(jq -r --arg operation "$operation" '.operations[$operation].verifier // empty' "$registry_json")"
 [[ "$verifier" == scripts/ci/verifiers/*.sh ]] || reject_claim invalid-verifier
 trusted_verifier="$tmpdir/verifier.sh"
-git show "origin/main:$verifier" > "$trusted_verifier" 2>/dev/null || reject_claim trusted-verifier-unavailable
+deployment_fixture_path='packages/repo-spec/src/node-app-deployment-v1.json'
+trusted_deployment_fixture="$tmpdir/node-app-deployment-v1.json"
+if [[ -n "$POLICY_ROOT" ]]; then
+  [[ -f "$POLICY_ROOT/$verifier" ]] || reject_claim trusted-verifier-unavailable
+  cp "$POLICY_ROOT/$verifier" "$trusted_verifier"
+  [[ "$operation" != deployment.declare ]] || {
+    [[ -f "$POLICY_ROOT/$deployment_fixture_path" ]] || reject_claim trusted-verifier-unavailable
+    cp "$POLICY_ROOT/$deployment_fixture_path" "$trusted_deployment_fixture"
+  }
+else
+  git show "origin/main:$verifier" > "$trusted_verifier" 2>/dev/null || reject_claim trusted-verifier-unavailable
+  if [[ "$operation" == deployment.declare ]]; then
+    git show "origin/main:$deployment_fixture_path" > "$trusted_deployment_fixture" 2>/dev/null ||
+      reject_claim trusted-verifier-unavailable
+  fi
+fi
 chmod +x "$trusted_verifier"
 OPERATOR_CHANGE_OPERATION="$operation" OPERATOR_CHANGE_NODE="$node" OPERATOR_CHANGE_BASE_SHA="$base_sha" \
 OPERATOR_CHANGE_HEAD_SHA="$head_sha" OPERATOR_CHANGE_PATHS_FILE="$changed_paths" \
+OPERATOR_CHANGE_DEPLOYMENT_FIXTURE="$trusted_deployment_fixture" \
   "$trusted_verifier" || reject_claim operation-verification-failed
 
 emit eligible true

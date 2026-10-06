@@ -27,6 +27,7 @@
 
 import { stringify } from "yaml";
 
+import nodeAppDeploymentV1 from "./node-app-deployment-v1.json";
 import type { NodeDeploymentSpec, NodeServiceSpec } from "./schema.js";
 
 /**
@@ -69,27 +70,12 @@ export const COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS = [
  * required keys in at build time (`resolveRuntimeProfileSecretRefs`). A node lists refs here
  * only when it needs a secret BEYOND the profile.
  */
-const COGNI_NODE_APP_V1_SERVICE: NodeServiceSpec = {
-  name: "app",
-  artifact: {
-    name: "app",
-    context: ".",
-    dockerfile: "Dockerfile",
-    target: "runner",
-  },
-  port: 3200,
-  visibility: "public",
-  runtime_profile: "cogni-node-app-v1",
-  bindings: {},
-  secret_refs: [],
-  bind_host: "0.0.0.0",
-  resources: { cpu_units: 2, memory_mi: 2048, storage_mi: 4096 },
-};
+const COGNI_NODE_APP_V1_SERVICE = nodeAppDeploymentV1.spec
+  .services[0] as NodeServiceSpec;
 
 /** Complete, provider-neutral `deployment:` declaration for a stock Cogni node. */
-export const COGNI_NODE_APP_V1_DEPLOYMENT: NodeDeploymentSpec = {
-  services: [COGNI_NODE_APP_V1_SERVICE],
-};
+export const COGNI_NODE_APP_V1_DEPLOYMENT =
+  nodeAppDeploymentV1.spec as NodeDeploymentSpec;
 
 /**
  * The fallback used when a node declares no `deployment:` block at all. k3s nodes resolve their
@@ -156,6 +142,9 @@ export function resolveRuntimeProfileSecretRefs(input: {
 export function renderNodeDeploymentYaml(
   deployment: NodeDeploymentSpec = COGNI_NODE_APP_V1_DEPLOYMENT
 ): string {
+  if (deployment === COGNI_NODE_APP_V1_DEPLOYMENT) {
+    return nodeAppDeploymentV1.yaml;
+  }
   const services = deployment.services.map((service) => {
     if (service.secret_refs.length > 0) return service;
     const { secret_refs: _omit, ...rest } = service;

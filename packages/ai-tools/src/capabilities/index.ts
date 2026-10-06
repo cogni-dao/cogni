@@ -97,6 +97,7 @@ export type {
   CreateBranchResult,
   DispatchCandidateFlightResult,
   MergeResult,
+  OperatorChangeVerificationResult,
   PrSummary,
   VcsCapability,
 } from "./vcs";

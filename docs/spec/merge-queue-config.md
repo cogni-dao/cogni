@@ -146,7 +146,10 @@ until its positive and negative matrix passes in test-org.
 
 `scripts/ci/classify-operator-change-fast-path.sh` fails closed unless all of these are true:
 
-- the workflow executes the classifier from `origin/main`, never the PR-controlled copy;
+- the workflow executes the classifier from trusted policy, never the PR-controlled copy: parent CI
+  reads `origin/main`, while child repos call `.github/workflows/operator-change-verify.yml` pinned to
+  an exact reviewed SHA; the reusable workflow derives its policy repository and revision only from
+  `job.workflow_repository` and `job.workflow_sha`, not caller inputs;
 - the PR and commit author match the exact repository-scoped GitHub App identity:
   `cogni-operator[bot]` for `Cogni-DAO/cogni`, or `cogni-operator-test[bot]` for the
   production-shaped `cogni-test-org/cogni-monorepo` E2E ground; no other repository inherits trust;
@@ -180,7 +183,9 @@ The operation-specific fields are: membership (`Environment`, `Action`), placeme
 declaration (the common fields only). `node.register` remains disabled while its writer emits the
 executable compiled roster; the other 13 current formation files are deterministic replay targets.
 `deployment.declare` also remains disabled until node-template ships the trusted child-main
-classifier/identity contract. Its operator-side replay is already repo-agnostic but binds the exact
+classifier/identity contract. Its reusable CI verifier replays the same stock declaration from
+`packages/repo-spec/src/node-app-deployment-v1.json`; its operator-side replay is already
+repo-agnostic but binds the exact
 webhook repository to `infra/catalog/<node>.yaml` `source_repo` on the trusted parent before replaying
 the single stock `.cogni/repo-spec.yaml` splice. No organization wildcard is accepted.
 

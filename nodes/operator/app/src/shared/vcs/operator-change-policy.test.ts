@@ -118,9 +118,7 @@ describe("classifyOperatorChangeForMerge", () => {
 
   it("rejects when operator-side operation replay does not match", () => {
     expect(
-      classifyOperatorChangeForMerge(
-        facts({ operationReplayVerified: false })
-      )
+      classifyOperatorChangeForMerge(facts({ operationReplayVerified: false }))
     ).toMatchObject({ eligible: false, reason: "operation-replay-failed" });
   });
 });

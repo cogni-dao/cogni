@@ -45,6 +45,7 @@ export type {
   MetricWindow,
   NodeDeployState,
   NodeHealthState,
+  OperatorChangeVerificationResult,
   ProvisionOutput,
   ProvisionServiceSpec,
   ProvisionSpec,
