@@ -82,6 +82,7 @@ const CHECK_RUNS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/check-runs";
 const STATUS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/status";
 const COMMIT_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}";
 const UPDATE_REF_ROUTE = "PATCH /repos/{owner}/{repo}/git/refs/{ref}";
+const MAIN_REF_ROUTE = "GET /repos/{owner}/{repo}/git/ref/{ref}";
 const REVIEWS_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews";
 const CLASSIC_REQUIRED_CHECKS_ROUTE =
   "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks";
@@ -471,6 +472,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
 
   it("non-force fast-forwards the verified one-parent head", async () => {
     onRequest = (route, params) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: baseSha } };
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -502,14 +504,14 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
     });
 
     expect(result).toMatchObject({
-      merged: true,
-      enqueued: false,
+      outcome: "landed",
       sha: headSha,
     });
   });
 
   it("rejects stale PR base/head facts before updating the ref", async () => {
     onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: "c".repeat(40) } };
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -532,12 +534,16 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       expectedHeadSha: headSha,
     });
 
-    expect(result).toMatchObject({ merged: false, status: 409 });
+    expect(result).toMatchObject({
+      outcome: "base_advanced",
+      currentBaseSha: "c".repeat(40),
+    });
     expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
   });
 
   it("rejects a non-main base before updating the ref", async () => {
     onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: baseSha } };
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -560,12 +566,13 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       expectedHeadSha: headSha,
     });
 
-    expect(result).toMatchObject({ merged: false, status: 409 });
+    expect(result).toMatchObject({ outcome: "terminal", status: 409 });
     expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
   });
 
   it("rejects a draft hold before updating the ref", async () => {
     onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: baseSha } };
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -588,12 +595,17 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       expectedHeadSha: headSha,
     });
 
-    expect(result).toMatchObject({ merged: false, status: 409 });
+    expect(result).toMatchObject({ outcome: "terminal", status: 409 });
     expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
   });
 
   it("fails the concurrent loser when GitHub rejects a non-fast-forward", async () => {
+    let mainReads = 0;
     onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) {
+        mainReads += 1;
+        return { object: { sha: mainReads === 1 ? baseSha : "c".repeat(40) } };
+      }
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -622,9 +634,49 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
     });
 
     expect(result).toMatchObject({
-      merged: false,
-      enqueued: false,
-      status: 422,
+      outcome: "base_advanced",
+      currentBaseSha: "c".repeat(40),
+    });
+  });
+
+  it("surfaces an ambiguous PATCH timeout for durable recovery", async () => {
+    let mainReads = 0;
+    onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) {
+        mainReads += 1;
+        if (mainReads === 1) return { object: { sha: baseSha } };
+        throw Object.assign(new Error("timeout"), { status: 504 });
+      }
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          base: { ref: "main", sha: baseSha },
+          head: { sha: headSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      if (route === UPDATE_REF_ROUTE) {
+        throw Object.assign(new Error("socket closed after write"), {
+          status: 504,
+        });
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+
+    await expect(
+      adapter().fastForwardOperatorChange({
+        owner: "o",
+        repo: "r",
+        prNumber: 7,
+        expectedBaseSha: baseSha,
+        expectedHeadSha: headSha,
+      })
+    ).resolves.toMatchObject({
+      outcome: "retryable_or_ambiguous",
+      status: 504,
     });
   });
 });

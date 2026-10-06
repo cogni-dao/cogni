@@ -20,6 +20,12 @@
  */
 
 import type { VcsCapability } from "@cogni/ai-tools";
+import {
+  OperatorChangeRecoveryWorkflowInputSchema,
+  operatorChangeRecoveryWorkflowId,
+} from "@cogni/temporal-workflows";
+import { WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
+import { getTemporalWorkflowClient } from "@/bootstrap/container";
 import type { Logger } from "@/shared/observability";
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -56,12 +62,16 @@ export async function dispatchOperatorChangeAutoMerge(
     prNumber,
     expectedHeadSha: headSha,
   });
-  if (!proof.eligible || proof.headSha !== headSha) return;
+  const staleButVerified = proof.reason === "base-advanced";
+  if (
+    (!proof.eligible && !staleButVerified) ||
+    proof.headSha !== headSha ||
+    !proof.intent
+  ) return;
 
   const ci = await vcs.getCiStatus({ owner, repo, prNumber });
   if (
     ci.headSha !== headSha ||
-    ci.baseSha !== proof.baseSha ||
     ci.reviewDecision === "CHANGES_REQUESTED" ||
     ci.pending ||
     !ci.allGreen
@@ -69,13 +79,42 @@ export async function dispatchOperatorChangeAutoMerge(
     return;
   }
 
-  const result = await vcs.fastForwardOperatorChange({
-    owner,
-    repo,
-    prNumber,
-    expectedBaseSha: proof.baseSha,
-    expectedHeadSha: headSha,
-  });
+  const result = staleButVerified
+    ? {
+        outcome: "base_advanced" as const,
+        currentBaseSha: ci.baseSha ?? "unknown",
+        message: "Verified generated change already has a stale base",
+      }
+    : await vcs.fastForwardOperatorChange({
+        owner,
+        repo,
+        prNumber,
+        expectedBaseSha: proof.baseSha,
+        expectedHeadSha: headSha,
+      });
+  if (
+    result.outcome === "base_advanced" ||
+    result.outcome === "retryable_or_ambiguous"
+  ) {
+    const request = OperatorChangeRecoveryWorkflowInputSchema.parse({
+      owner,
+      repo,
+      prNumber,
+      signedBaseSha: proof.baseSha,
+      losingHeadSha: headSha,
+      intent: proof.intent,
+    });
+    const { client, taskQueue } = await getTemporalWorkflowClient();
+    try {
+      await client.start("OperatorChangeRecoveryWorkflow", {
+        taskQueue,
+        workflowId: operatorChangeRecoveryWorkflowId(request),
+        args: [request],
+      });
+    } catch (error) {
+      if (!(error instanceof WorkflowExecutionAlreadyStartedError)) throw error;
+    }
+  }
   log.info(
     {
       event: "operator_change.auto_merge",
@@ -85,8 +124,8 @@ export async function dispatchOperatorChangeAutoMerge(
       headSha,
       operation: proof.operation,
       node: proof.node,
-      merged: result.merged,
-      status: result.status,
+      outcome: result.outcome,
+      status: "status" in result ? result.status : undefined,
     },
     "operator generated-change auto-merge evaluated"
   );
