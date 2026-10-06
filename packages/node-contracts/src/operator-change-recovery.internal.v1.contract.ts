@@ -30,6 +30,26 @@ const NodeSlugSchema = z
   .max(63)
   .regex(/^[a-z0-9][a-z0-9-]*$/);
 const EnvironmentSchema = z.enum(["candidate-a", "preview", "production"]);
+const LeaseGenerationSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .refine(Number.isSafeInteger, "lease generation must be a safe integer");
+const CanonicalCountriesSchema = z
+  .array(z.string().regex(/^[A-Z]{2}$/))
+  .min(1)
+  .superRefine((countries, context) => {
+    const canonical = [...new Set(countries)].sort();
+    if (
+      canonical.length !== countries.length ||
+      canonical.some((country, index) => country !== countries[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "countries must be unique and lexicographically sorted",
+      });
+    }
+  });
 
 const RecoveryIdentitySchema = z
   .object({
@@ -46,7 +66,7 @@ export const OperatorChangeIntentSchema = z.discriminatedUnion("operation", [
     operation: z.literal("env.membership"),
     environment: EnvironmentSchema,
     action: z.enum(["add", "remove"]),
-    leaseGeneration: z.number().int().nonnegative(),
+    leaseGeneration: LeaseGenerationSchema,
   }).strict(),
   RecoveryIdentitySchema.extend({
     operation: z.literal("env.placement"),
@@ -56,12 +76,16 @@ export const OperatorChangeIntentSchema = z.discriminatedUnion("operation", [
   RecoveryIdentitySchema.extend({
     operation: z.literal("env.region"),
     environment: EnvironmentSchema,
-    countries: z.array(z.string().regex(/^[A-Z]{2}$/)).min(1),
-    leaseGeneration: z.number().int().nonnegative(),
+    countries: CanonicalCountriesSchema,
+    leaseGeneration: LeaseGenerationSchema,
   }).strict(),
   RecoveryIdentitySchema.extend({
     operation: z.literal("node.register"),
-    nodeId: z.string().uuid(),
+    nodeId: z
+      .string()
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      ),
     sourceRepo: z.string().url(),
     sourceSha: GitShaSchema,
     ownerWallet: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
@@ -91,6 +115,17 @@ export const OperatorChangeRecoveryRequestSchema = z
         code: "custom",
         path: ["intent", "recoveryRootSha"],
         message: "depth-zero recovery root must equal the losing head",
+      });
+    }
+    if (
+      request.intent.operation === "node.register" &&
+      request.intent.sourceRepo.toLowerCase() !==
+        `https://github.com/${request.owner}/${request.intent.node}.git`.toLowerCase()
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["intent", "sourceRepo"],
+        message: "source repo must match the fleet owner and node",
       });
     }
   });

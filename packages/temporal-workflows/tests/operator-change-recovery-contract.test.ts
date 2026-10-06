@@ -98,7 +98,7 @@ describe("operator-change recovery contract", () => {
       recoveryRootSha: "b".repeat(40),
       recoveryDepth: 1,
       environment: "production",
-      countries: ["US", "CA"],
+      countries: ["CA", "US"],
       leaseGeneration: 8,
     },
     {
@@ -124,6 +124,75 @@ describe("operator-change recovery contract", () => {
         intent,
       }).success
     ).toBe(true);
+  });
+
+  it("rejects unsafe lease generations", () => {
+    expect(
+      OperatorChangeRecoveryWorkflowInputSchema.safeParse({
+        ...request,
+        intent: {
+          ...request.intent,
+          leaseGeneration: Number.MAX_SAFE_INTEGER + 1,
+        },
+      }).success
+    ).toBe(false);
+  });
+
+  it.each([
+    ["lowercase", ["ca", "US"]],
+    ["duplicate", ["CA", "CA"]],
+    ["unsorted", ["US", "CA"]],
+  ])("rejects %s region countries", (_case, countries) => {
+    expect(
+      OperatorChangeRecoveryWorkflowInputSchema.safeParse({
+        ...request,
+        intent: {
+          operation: "env.region",
+          node: "red",
+          recoveryRootSha: "b".repeat(40),
+          recoveryDepth: 1,
+          environment: "production",
+          countries,
+          leaseGeneration: 8,
+        },
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects a non-lowercase node UUID", () => {
+    expect(
+      OperatorChangeRecoveryWorkflowInputSchema.safeParse({
+        ...request,
+        intent: {
+          operation: "node.register",
+          node: "red",
+          recoveryRootSha: "b".repeat(40),
+          recoveryDepth: 0,
+          nodeId: "4FF8EAC1-4EBA-4ED0-931B-B1FE4F64713D",
+          sourceRepo: "https://github.com/cogni-test-org/red.git",
+          sourceSha: "c".repeat(40),
+          ownerWallet: `0x${"d".repeat(40)}`,
+        },
+      }).success
+    ).toBe(false);
+  });
+
+  it("binds node registration source repo to owner and node", () => {
+    expect(
+      OperatorChangeRecoveryWorkflowInputSchema.safeParse({
+        ...request,
+        intent: {
+          operation: "node.register",
+          node: "red",
+          recoveryRootSha: "b".repeat(40),
+          recoveryDepth: 0,
+          nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+          sourceRepo: "https://github.com/attacker/red.git",
+          sourceSha: "c".repeat(40),
+          ownerWallet: `0x${"d".repeat(40)}`,
+        },
+      }).success
+    ).toBe(false);
   });
 
   it("builds case-normalized stable workflow and idempotency identities", () => {
