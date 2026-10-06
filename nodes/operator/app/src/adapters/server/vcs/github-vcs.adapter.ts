@@ -190,7 +190,8 @@ export class GitHubVcsAdapter implements VcsCapability {
       !hasNextPage(statusResponse) &&
       (checksResponse.data.total_count ?? rawCheckRuns.length) <=
         rawCheckRuns.length &&
-      (statusResponse.data.total_count ?? statusResponse.data.statuses.length) <=
+      (statusResponse.data.total_count ??
+        statusResponse.data.statuses.length) <=
         statusResponse.data.statuses.length;
 
     const checks: CheckInfo[] = [
@@ -279,8 +280,7 @@ export class GitHubVcsAdapter implements VcsCapability {
           evidence.length === 0 ||
           evidence.some(
             (candidate) =>
-              candidate.status !== "completed" ||
-              candidate.conclusion === null
+              candidate.status !== "completed" || candidate.conclusion === null
           )
         );
       });

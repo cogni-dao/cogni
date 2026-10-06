@@ -67,8 +67,7 @@ const CLASSIC_REQUIRED_CHECKS_ROUTE =
 const ACTIVE_BRANCH_RULES_ROUTE =
   "GET /repos/{owner}/{repo}/rules/branches/{branch}";
 const CONTENTS_ROUTE = "GET /repos/{owner}/{repo}/contents/{path}";
-const PR_FILES_ROUTE =
-  "GET /repos/{owner}/{repo}/pulls/{pull_number}/files";
+const PR_FILES_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}/files";
 
 beforeEach(() => {
   requestRoutes.length = 0;
@@ -313,7 +312,9 @@ Cogni-Changed-Paths-SHA256: ${pathHash}`;
         };
       }
       if (route === PR_FILES_ROUTE) {
-        return [{ filename: path, previous_filename: null, status: "modified" }];
+        return [
+          { filename: path, previous_filename: null, status: "modified" },
+        ];
       }
       if (route === CONTENTS_ROUTE) {
         if (params.path === "scripts/ci/operator-change-v1.allowlist.json") {

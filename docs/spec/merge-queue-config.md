@@ -123,7 +123,9 @@ enter a serialized merge group, rebase on current `main`, and report the require
 The review App's ruleset bypass is not caller authority: `/vcs/merge` never requests it. A verified
 `check_run` delivery only wakes the internal generated-change handler; no check name, conclusion, or
 producer grants authority. The handler independently re-fetches and reclassifies the exact head,
-then may request bypass after all required checks are green, bound atomically to that head SHA.
+then, after all required checks are green, attempts a non-force ref fast-forward bound atomically to
+the base and head SHAs. The ruleset's configured App bypass permits that ref write; there is no
+caller-supplied bypass flag or request.
 
 ## Signed operator-change fast path
 
@@ -209,9 +211,10 @@ base+head compare-and-swap: if another PR advances main, the now-divergent updat
 indirect PR merge; test-org proof must still assert `mergedAt` before production eligibility.
 [Git ref update](https://docs.github.com/en/rest/git/refs) ·
 [Indirect PR merges](https://docs.github.com/en/pull-requests/reference/pull-request-merges).
-A stale head or base, unlisted repository, disabled or unimplemented replay, edit, or human PR
-no-ops into the normal queue. Ordinary `mergePr` remains queue-backed, and queue-discovery failure
-returns a structured failure rather than falling through to a direct App merge.
+An unclaimed, unlisted, or disabled operation runs ordinary CI and uses the normal queue. A malformed
+claimed envelope, stale base/head, edit, or failed replay is red and never auto-falls back. Ordinary
+`mergePr` remains queue-backed, and queue-discovery failure returns a structured failure rather than
+falling through to a direct App merge.
 Human review holds remain authoritative metadata even when the signed commit is unchanged: a draft
 PR is rejected by CI classification, operator reclassification, and the final CAS precondition; a
 fresh `CHANGES_REQUESTED` review decision stops the facade before the ref update. Review history
