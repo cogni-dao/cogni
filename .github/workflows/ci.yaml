@@ -144,21 +144,6 @@ jobs:
       - name: Build workspace packages
         run: pnpm packages:build
 
-      # TEMP task.5185 bootstrap: GitHub-hosted CI rebuilds the bundle after
-      # adding current parent-catalog binding to the shared replay. Remove after
-      # committing this exact artifact and restoring the byte gate.
-      - name: Generate operator-change replay bundle artifact
-        env:
-          OPERATOR_CHANGE_BUNDLE_OUT_DIR: ${{ runner.temp }}/operator-change-replay
-        run: pnpm exec tsup --config scripts/ci/tsup.operator-change-replay.config.ts
-
-      - name: Upload operator-change replay bundle bootstrap
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: operator-change-replay-${{ github.sha }}
-          path: ${{ runner.temp }}/operator-change-replay/operator-change-replay.cjs
-          if-no-files-found: error
-
       - name: Type check
         run: pnpm typecheck
 

@@ -7335,6 +7335,7 @@ var require_dist = __commonJS({
 // scripts/ci/operator-change-replay.ts
 var import_node_child_process = require("child_process");
 var import_node_fs = require("fs");
+var import_node_path = require("path");
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
@@ -12006,6 +12007,9 @@ function renderDeploymentActivationSpec(current) {
 ${renderNodeDeploymentYaml()}`;
 }
 
+// nodes/operator/app/src/shared/vcs/operator-change-replay.ts
+var import_yaml6 = __toESM(require_dist());
+
 // nodes/operator/app/src/shared/node-app-scaffold/gens/envs.ts
 var NODE_DEPLOY_ENVS = [
   "candidate-a",
@@ -13462,6 +13466,18 @@ async function replayDeploymentDeclare(input, envelope, subject) {
   if (subject !== `feat(deploy): declare ${input.node} node deployment`) {
     throw new Error("invalid-subject");
   }
+  if (input.deploymentCatalog === void 0 || input.deploymentCatalog === null) {
+    throw new Error("deployment-parent-catalog-missing");
+  }
+  const parsedCatalog = (0, import_yaml6.parse)(input.deploymentCatalog);
+  if (parsedCatalog === null || typeof parsedCatalog !== "object" || Array.isArray(parsedCatalog)) {
+    throw new Error("deployment-parent-catalog-invalid");
+  }
+  const row = parsedCatalog;
+  const expectedSourceRepo = `https://github.com/${input.repository}.git`;
+  if (row.name !== input.node || typeof row.source_repo !== "string" || row.source_repo.toLowerCase() !== expectedSourceRepo.toLowerCase()) {
+    throw new Error("deployment-parent-catalog-mismatch");
+  }
   const path = ".cogni/repo-spec.yaml";
   const base = await requiredFile(input.reader, input.baseSha, path);
   if (/^deployment:/m.test(base))
@@ -13830,16 +13846,14 @@ async function replayFromEnvironment() {
   const baseSha = requiredSha("OPERATOR_CHANGE_BASE_SHA");
   const headSha = requiredSha("OPERATOR_CHANGE_HEAD_SHA");
   const repository = requiredEnv("REPOSITORY");
-  const paths = (0, import_node_fs.readFileSync)(
-    requiredEnv("OPERATOR_CHANGE_PATHS_FILE"),
-    "utf8"
-  ).split("\n").filter(Boolean);
+  const paths = (0, import_node_fs.readFileSync)(requiredEnv("OPERATOR_CHANGE_PATHS_FILE"), "utf8").split("\n").filter(Boolean);
   const result = await replayOperatorChange({
     operation,
     node,
     baseSha,
     headSha,
     repository,
+    ...operation === "deployment.declare" ? { deploymentCatalog: parentCatalog(node) } : {},
     paths,
     message: gitText(["show", "-s", "--format=%B", headSha]),
     fleetControlEnv: process.env.FLEET_CONTROL_ENV,
@@ -13917,6 +13931,7 @@ async function classifyFromEnvironment() {
       baseSha: classification.baseSha,
       headSha: classification.headSha,
       repository,
+      ...classification.operation === "deployment.declare" ? { deploymentCatalog: parentCatalog(classification.node) } : {},
       paths: facts.files.map((file) => file.filename),
       message: facts.commit.message,
       fleetControlEnv: process.env.FLEET_CONTROL_ENV,
@@ -13948,12 +13963,24 @@ async function main() {
   await replayFromEnvironment();
 }
 void main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}
-`);
+  process.stderr.write(
+    `${error instanceof Error ? error.message : String(error)}
+`
+  );
   process.exitCode = 1;
 });
 function readJson(path) {
   return JSON.parse((0, import_node_fs.readFileSync)(path, "utf8"));
+}
+function parentCatalog(node) {
+  const path = `infra/catalog/${node}.yaml`;
+  const root = process.env.OPERATOR_CHANGE_PARENT_CATALOG_ROOT;
+  if (!root) return fileAt("origin/main", path);
+  try {
+    return (0, import_node_fs.readFileSync)((0, import_node_path.join)(root, path), "utf8");
+  } catch {
+    return null;
+  }
 }
 function requiredEnv(name) {
   const value = process.env[name];
