@@ -45,7 +45,11 @@ compute_api:
 # task.5122 renamed this cell from `lease_epoch`; the VALUE is unchanged, so the key this row
 # resolves to is still `…:1` byte-for-byte. "Epoch" is reserved for attribution/distribution.
 lease_generation:
-  preview: 1
+  # task.5180 — preview generation 1 hit BootDeadlineClosed after provider-http's
+  # external-create-pending guard wedged an UPDATE during a transient ledger outage.
+  # The old lease is now closed and its idempotency key is spent; generation 2 is
+  # the reviewed replacement that deploys the already-merged reliability build.
+  preview: 2
   production: 5
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
