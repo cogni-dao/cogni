@@ -178,8 +178,17 @@ a retry signal. `VcsCapability.verifyOperatorChange` then re-reads the PR, commi
 base, and the configured parent repository's main-owned registry; re-checks exact App identity,
 signature, one-commit history, envelope, path hash, exact repository enablement, and the built-in
 operation replay; and only then reads required checks and submits GitHub's
-`sha: <expected-head>` merge precondition. A stale head or base, unlisted repository, disabled or
-unimplemented replay, edit, or human PR no-ops into the normal queue.
+separate generated-change capability with both `expectedBaseSha` and `expectedHeadSha`. That
+capability re-fetches the open same-repository `main` PR and its exact one-parent commit, then moves
+`heads/main` to that head through GitHub's non-force ref update (`force:false`). This is the atomic
+base+head compare-and-swap: if another PR advances main, the now-divergent update is rejected with
+409/422 and the stale PR remains unmerged. GitHub records this direct-push reachability as an
+indirect PR merge; test-org proof must still assert `mergedAt` before production eligibility.
+[Git ref update](https://docs.github.com/en/rest/git/refs) ·
+[Indirect PR merges](https://docs.github.com/en/pull-requests/reference/pull-request-merges).
+A stale head or base, unlisted repository, disabled or unimplemented replay, edit, or human PR
+no-ops into the normal queue. Ordinary `mergePr` remains queue-backed, and queue-discovery failure
+returns a structured failure rather than falling through to a direct App merge.
 
 > Migration note: a repo that previously had the queue enabled via the classic UI checkbox should keep the ruleset as the single source of truth — the ruleset is authoritative and the legacy checkbox can be cleared once the ruleset is confirmed live (`gh api repos/{repo}/rulesets`).
 
@@ -189,11 +198,14 @@ The operation-specific fields are: membership (`Environment`, `Action`, `Lease-G
 deployment declaration (the common fields only). `node.register` omits executable runtime source;
 its declarative formation footprint is rebuilt byte-for-byte from the shared writer plan.
 `deployment.declare` also remains disabled until node-template ships the trusted child-main
-classifier/identity contract. Its reusable CI verifier replays the same stock declaration from
-`packages/repo-spec/src/node-app-deployment-v1.json`; its operator-side replay is already
-repo-agnostic but binds the exact
+classifier/identity contract. Its reusable CI verifier and operator service both call the same
+canonical replay core, which consumes the stock declaration from
+`packages/repo-spec/src/node-app-deployment-v1.json`. The operator additionally binds the exact
 webhook repository to `infra/catalog/<node>.yaml` `source_repo` on the trusted parent before replaying
-the single stock `.cogni/repo-spec.yaml` splice. No organization wildcard is accepted.
+the single stock `.cogni/repo-spec.yaml` splice. No organization wildcard is accepted. Child
+eligibility remains empty until task.5187 supplies the thin pinned caller and a fleet-specific
+node-repository policy whose sole bypass actor is the exact fleet App; the current child policy's
+`bypass_actors: []` correctly blocks the CAS write and cannot be weakened in this parent PR.
 
 ## GitLab vFuture Mapping
 

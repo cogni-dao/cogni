@@ -179,6 +179,7 @@ async function replayPlacement(
           input.baseSha,
           schedulerEndpointPatchPath(env)
         ),
+      },
     },
   });
   if (plan.kind === "no_changes") throw new Error("unexpected-no-changes");
