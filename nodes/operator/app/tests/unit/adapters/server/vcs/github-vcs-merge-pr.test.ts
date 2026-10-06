@@ -1151,7 +1151,10 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
       "operation-disabled",
       "replay-error:deployment-parent-catalog-invalid",
     ]) {
-      const disabled = recoveryAdapter({ status: "conflict", reason: "unused" });
+      const disabled = recoveryAdapter({
+        status: "conflict",
+        reason: "unused",
+      });
       Object.assign(disabled, {
         verifyOperatorChangeInternal: vi.fn().mockResolvedValue({
           eligible: false,
