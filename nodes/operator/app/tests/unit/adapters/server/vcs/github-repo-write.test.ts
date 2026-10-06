@@ -961,8 +961,6 @@ governance:
 
     expect(requests.map((request) => request.route)).toEqual([
       "GET /repos/{owner}/{repo}/contents/{path}",
-      "GET /repos/{owner}/{repo}/pulls",
-      "GET /repos/{owner}/{repo}/pulls",
       "GET /repos/{owner}/{repo}/git/ref/{ref}",
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
       "POST /repos/{owner}/{repo}/git/blobs",
@@ -974,15 +972,15 @@ governance:
     ]);
   });
 
-  it("reuses an existing declaration PR when its branch already carries the block", async () => {
+  it("refreshes an existing declaration PR from current main instead of blessing its stale head", async () => {
     const branch = "cogni-operator/declare-deployment-test-cog";
     const desiredSpec = renderDeploymentActivationSpec(LEGACY_NODE_SPEC);
 
     routeHandlers = {
-      "GET /repos/{owner}/{repo}/contents/{path}": (params) => ({
+      "GET /repos/{owner}/{repo}/contents/{path}": () => ({
         type: "file",
         encoding: "base64",
-        content: encode(params.ref === branch ? desiredSpec : LEGACY_NODE_SPEC),
+        content: encode(LEGACY_NODE_SPEC),
         sha: "repo-spec-sha",
       }),
       "GET /repos/{owner}/{repo}/pulls": (params) => {
@@ -1000,6 +998,55 @@ governance:
           },
         ];
       },
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => {
+        expect(params.ref).toBe("heads/main");
+        return { object: { sha: "current-main-sha" } };
+      },
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
+        expect(params.commit_sha).toBe("current-main-sha");
+        return { tree: { sha: "current-main-tree" } };
+      },
+      "POST /repos/{owner}/{repo}/git/blobs": (params) => {
+        const content = Buffer.from(String(params.content), "base64").toString(
+          "utf-8"
+        );
+        expect(content).toBe(desiredSpec);
+        return { sha: "fresh-repo-spec-blob" };
+      },
+      "POST /repos/{owner}/{repo}/git/trees": (params) => {
+        expect(params).toMatchObject({
+          base_tree: "current-main-tree",
+          tree: [
+            {
+              path: ".cogni/repo-spec.yaml",
+              mode: "100644",
+              type: "blob",
+              sha: "fresh-repo-spec-blob",
+            },
+          ],
+        });
+        return { sha: "fresh-deployment-tree" };
+      },
+      "POST /repos/{owner}/{repo}/git/commits": (params) => {
+        expect(params).toMatchObject({
+          tree: "fresh-deployment-tree",
+          parents: ["current-main-sha"],
+        });
+        expect(params.message).toContain("Cogni-Base-SHA: current-main-sha");
+        return { sha: "fresh-deployment-commit" };
+      },
+      "POST /repos/{owner}/{repo}/git/refs": () =>
+        Promise.reject(statusError(422, "Reference already exists")),
+      "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
+        expect(params).toMatchObject({
+          ref: `heads/${branch}`,
+          sha: "fresh-deployment-commit",
+          force: true,
+        });
+        return {};
+      },
+      "POST /repos/{owner}/{repo}/pulls": () =>
+        Promise.reject(statusError(422, "A pull request already exists")),
       "PATCH /repos/{owner}/{repo}/pulls/{pull_number}": (params) => {
         expect(params).toMatchObject({
           pull_number: 44,
@@ -1022,7 +1069,7 @@ governance:
       prUrl: "https://github.com/cogni-test-org/test-cog/pull/44",
     });
 
-    expect(requests.map((request) => request.route)).not.toContain(
+    expect(requests.map((request) => request.route)).toContain(
       "POST /repos/{owner}/{repo}/git/commits"
     );
   });
@@ -1925,6 +1972,13 @@ patches:
       },
       "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
         const path = String(params.path);
+        if (
+          path === "infra/catalog/atlas.yaml" ||
+          path.includes("/atlas/") ||
+          path.endsWith("-atlas-applicationset.yaml")
+        ) {
+          return Promise.reject(statusError(404, "not found"));
+        }
         if (path === ".gitmodules") {
           return Promise.reject(statusError(404, "not found"));
         }
@@ -2004,27 +2058,6 @@ resources:
 {$OPERATOR_DOMAIN:localhost} {
   reverse_proxy {$OPERATOR_UPSTREAM:host.docker.internal:30000}
 }
-`),
-          };
-        }
-        // The committed web-node roster (mandatory monorepo file). The publish MUST splice the
-        // new node in here so the PR is born drift-green (network-nodes-catalog-drift gate).
-        if (
-          path ===
-          "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts"
-        ) {
-          return {
-            type: "file",
-            encoding: "base64",
-            content: encode(`export interface NetworkNode {
-  name: string;
-  nodeId?: string;
-  primary?: boolean;
-}
-
-export const NETWORK_NODES: readonly NetworkNode[] = [
-  { name: "node-template", nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c" },
-];
 `),
           };
         }
@@ -2173,23 +2206,15 @@ node_port: 30200
           );
         }
 
-        // ROSTER DRIFT-GREEN PROOF (#1957): the publish PR MUST splice the new node into the
-        // committed web-node roster in the SAME tree as the catalog row it adds — else the
-        // network-nodes-catalog-drift gate fails `unit` and the auto-PR is un-mergeable. Assert
-        // the emitted roster blob carries `atlas` (new node) AND keeps the existing node-template.
+        // EXECUTABLE_OUTPUT_IS_INELIGIBLE (story.5065): birth is a declarative operation. The
+        // operator image's compiled roster must not enter its signed tree; wizard nodes resolve
+        // through the DB registry projection while the existing static fallback remains unchanged.
         const rosterEntry = tree.find(
           (item) =>
             item.path ===
             "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts"
         );
-        expect(rosterEntry).toBeDefined();
-        const roster = blobs.get(rosterEntry?.sha ?? "");
-        expect(roster).toContain(
-          `  { name: "atlas", nodeId: "11111111-1111-4111-8111-111111111111" },`
-        );
-        expect(roster).toContain(`{ name: "node-template",`);
-        // Drift-green by construction: the catalog gains atlas.yaml (type:node) and the roster
-        // gains `atlas` in the SAME commit → the slug sets stay equal.
+        expect(rosterEntry).toBeUndefined();
         const catalogEntry = tree.find(
           (item) => item.path === "infra/catalog/atlas.yaml"
         );
@@ -2220,6 +2245,9 @@ node_port: 30200
           "Cogni-Change-Type: cogni.operator-change.v1"
         );
         expect(params.message).toContain("Cogni-Operation: node.register");
+        expect(params.message).toContain(
+          "Cogni-Owner-Wallet: 0x070075F1389Ae1182aBac722B36CA12285d0c949"
+        );
         expect(params).toMatchObject({
           owner: "Cogni-DAO",
           repo: "cogni",
@@ -2235,21 +2263,34 @@ node_port: 30200
       }),
     };
 
-    await expect(
-      makeWriter().openNodeSubmodulePr({
-        owner: "Cogni-DAO",
-        repo: "cogni",
-        slug: "atlas",
-        nodeId: "11111111-1111-4111-8111-111111111111",
-        ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
-        chainId: 8453,
-        nodeRepoUrl: "https://github.com/Cogni-DAO/atlas.git",
-        nodeRepoHeadSha: "0123456789012345678901234567890123456789",
-      })
-    ).resolves.toEqual({
-      prNumber: 88,
-      prUrl: "https://github.com/Cogni-DAO/cogni/pull/88",
-    });
+    const birthInput = {
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      slug: "atlas",
+      nodeId: "11111111-1111-4111-8111-111111111111",
+      ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
+      chainId: 8453,
+      nodeRepoUrl: "https://github.com/Cogni-DAO/atlas.git",
+      nodeRepoHeadSha: "0123456789012345678901234567890123456789",
+    } as const;
+    const contentRoute =
+      routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    if (!contentRoute) throw new Error("missing content route fixture");
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
+      params.path === "infra/catalog/atlas.yaml"
+        ? { type: "file", encoding: "base64", content: encode("collision\n") }
+        : contentRoute(params);
+    await expect(makeWriter().openNodeSubmodulePr(birthInput)).rejects.toThrow(
+      "node-owned path already exists"
+    );
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = contentRoute;
+
+    await expect(makeWriter().openNodeSubmodulePr(birthInput)).resolves.toEqual(
+      {
+        prNumber: 88,
+        prUrl: "https://github.com/Cogni-DAO/cogni/pull/88",
+      }
+    );
   });
 });
 

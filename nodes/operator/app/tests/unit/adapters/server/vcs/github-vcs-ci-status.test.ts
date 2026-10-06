@@ -12,7 +12,8 @@
  *   never gate: a failing advisory check cannot block a PR whose GitHub-required
  *   set is satisfied, and a passing one cannot green an unprotected branch.
  * Scope: Mocked Octokit + `fetch`; no real GitHub I/O.
- * Invariants: EMPTY_REQUIRED_SET_IS_NOT_GREEN, ADVISORY_CHECKS_NEVER_GATE.
+ * Invariants: EMPTY_REQUIRED_SET_IS_NOT_GREEN, ADVISORY_CHECKS_NEVER_GATE,
+ *   REQUIRED_CHECK_PRODUCER_IS_BOUND, REVIEW_PAGINATION_FAILS_CLOSED.
  * Side-effects: none
  * Links: src/adapters/server/vcs/github-vcs.adapter.ts (getCiStatus),
  *   src/features/vcs/merge-gate.ts, bug.5123
@@ -28,6 +29,7 @@ type RequestHandler = (
 
 let onRequest: RequestHandler;
 const requestRoutes: string[] = [];
+const responseHeaders = new Map<string, Record<string, string>>();
 
 vi.mock("@octokit/auth-app", () => ({
   createAppAuth: () => async () => ({ token: "app-token" }),
@@ -37,7 +39,10 @@ vi.mock("@octokit/core", () => ({
   Octokit: class MockOctokit {
     async request(route: string, params: Record<string, unknown>) {
       requestRoutes.push(route);
-      return { data: await onRequest(route, params) };
+      return {
+        data: await onRequest(route, params),
+        headers: responseHeaders.get(route) ?? {},
+      };
     }
   },
 }));
@@ -83,8 +88,14 @@ function statusError(
 function ciHandlers(input: {
   checkRuns: ReadonlyArray<Record<string, unknown>>;
   activeRules: ReadonlyArray<Record<string, unknown>>;
+  statuses?: ReadonlyArray<Record<string, unknown>>;
+  checkRunsTotalCount?: number;
+  statusesTotalCount?: number;
+  classicRequiredChecks?: Record<string, unknown>;
+  reviews?: ReadonlyArray<Record<string, unknown>>;
+  nextReviews?: ReadonlyArray<Record<string, unknown>>;
 }): RequestHandler {
-  return (route) => {
+  return (route, params) => {
     if (route === PR_GET_ROUTE) {
       return {
         number: 5,
@@ -97,9 +108,24 @@ function ciHandlers(input: {
         draft: false,
       };
     }
-    if (route === CHECK_RUNS_ROUTE) return { check_runs: input.checkRuns };
-    if (route === STATUS_ROUTE) return { statuses: [] };
-    if (route === REVIEWS_ROUTE) return [];
+    if (route === CHECK_RUNS_ROUTE) {
+      return {
+        check_runs: input.checkRuns,
+        total_count: input.checkRunsTotalCount ?? input.checkRuns.length,
+      };
+    }
+    if (route === STATUS_ROUTE) {
+      const statuses = input.statuses ?? [];
+      return {
+        statuses,
+        total_count: input.statusesTotalCount ?? statuses.length,
+      };
+    }
+    if (route === REVIEWS_ROUTE) {
+      return params.page === 2
+        ? (input.nextReviews ?? [])
+        : (input.reviews ?? []);
+    }
     if (route === COMMIT_ROUTE) {
       return {
         parents: [{ sha: "basesha" }],
@@ -107,6 +133,7 @@ function ciHandlers(input: {
       };
     }
     if (route === CLASSIC_REQUIRED_CHECKS_ROUTE) {
+      if (input.classicRequiredChecks) return input.classicRequiredChecks;
       throw statusError(404, "Branch not protected");
     }
     if (route === ACTIVE_BRANCH_RULES_ROUTE) return input.activeRules;
@@ -116,6 +143,7 @@ function ciHandlers(input: {
 
 beforeEach(() => {
   requestRoutes.length = 0;
+  responseHeaders.clear();
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => ({
@@ -211,6 +239,248 @@ describe("GitHubVcsAdapter.getCiStatus — merge-gate greenness (bug.5123)", () 
           },
         },
       ],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(false);
+    expect(ci.pending).toBe(true);
+  });
+
+  it("rejects same-name checks from the wrong App when classic protection binds app_id", async () => {
+    onRequest = ciHandlers({
+      checkRuns: STANDARD_CONTEXTS.map((name) => ({
+        name,
+        status: "completed",
+        conclusion: "success",
+        app: { id: 999, slug: "github-actions" },
+      })),
+      classicRequiredChecks: {
+        contexts: [...STANDARD_CONTEXTS],
+        checks: STANDARD_CONTEXTS.map((context) => ({
+          context,
+          app_id: 15368,
+        })),
+      },
+      activeRules: [],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(false);
+    expect(ci.pending).toBe(true);
+  });
+
+  it("accepts a required check only from its ruleset-bound integration", async () => {
+    onRequest = ciHandlers({
+      checkRuns: STANDARD_CONTEXTS.map((name) => ({
+        name,
+        status: "completed",
+        conclusion: "success",
+        app: { id: 15368, slug: "github-actions" },
+      })),
+      activeRules: [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: STANDARD_CONTEXTS.map((context) => ({
+              context,
+              integration_id: 15368,
+            })),
+          },
+        },
+      ],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(true);
+    expect(ci.pending).toBe(false);
+  });
+
+  it("legacy statuses cannot satisfy a producer-bound required check", async () => {
+    onRequest = ciHandlers({
+      checkRuns: [],
+      statuses: STANDARD_CONTEXTS.map((context) => ({
+        context,
+        state: "success",
+      })),
+      classicRequiredChecks: {
+        contexts: [...STANDARD_CONTEXTS],
+        checks: STANDARD_CONTEXTS.map((context) => ({
+          context,
+          app_id: 15368,
+        })),
+      },
+      activeRules: [],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(false);
+    expect(ci.pending).toBe(true);
+  });
+
+  it("fails closed when the same required producer reports conflicting results", async () => {
+    onRequest = ciHandlers({
+      checkRuns: [
+        ...STANDARD_CONTEXTS.map((name) => ({
+          name,
+          status: "completed",
+          conclusion: "success",
+          app: { id: 15368, slug: "github-actions" },
+        })),
+        {
+          name: "unit",
+          status: "completed",
+          conclusion: "failure",
+          app: { id: 15368, slug: "github-actions" },
+        },
+      ],
+      classicRequiredChecks: {
+        contexts: [...STANDARD_CONTEXTS],
+        checks: STANDARD_CONTEXTS.map((context) => ({
+          context,
+          app_id: 15368,
+        })),
+      },
+      activeRules: [],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(false);
+    expect(ci.pending).toBe(false);
+  });
+
+  it("treats classic app_id -1 as an unbound any-producer gate", async () => {
+    onRequest = ciHandlers({
+      checkRuns: [],
+      statuses: STANDARD_CONTEXTS.map((context) => ({
+        context,
+        state: "success",
+      })),
+      classicRequiredChecks: {
+        contexts: [...STANDARD_CONTEXTS],
+        checks: STANDARD_CONTEXTS.map((context) => ({
+          context,
+          app_id: -1,
+        })),
+      },
+      activeRules: [],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(true);
+    expect(ci.pending).toBe(false);
+  });
+
+  it("fails closed when reviews exceed the first 100-result page", async () => {
+    onRequest = ciHandlers({
+      checkRuns: GREEN_STANDARD_RUNS,
+      activeRules: [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: STANDARD_CONTEXTS.map((context) => ({
+              context,
+            })),
+          },
+        },
+      ],
+      reviews: Array.from({ length: 100 }, (_, index) => ({
+        user: { login: `reviewer-${index}` },
+        state: "APPROVED",
+      })),
+      nextReviews: [{ user: { login: "hold" }, state: "COMMENTED" }],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.reviewDecision).toBe("CHANGES_REQUESTED");
+    expect(
+      requestRoutes.filter((route) => route === REVIEWS_ROUTE)
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    ["check runs", CHECK_RUNS_ROUTE],
+    ["commit statuses", STATUS_ROUTE],
+    ["active branch rules", ACTIVE_BRANCH_RULES_ROUTE],
+  ])("fails closed when %s have another page", async (_label, route) => {
+    responseHeaders.set(route, {
+      link: '<https://api.github.test/resource?page=2>; rel="next"',
+    });
+    onRequest = ciHandlers({
+      checkRuns: GREEN_STANDARD_RUNS,
+      activeRules: [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: STANDARD_CONTEXTS.map((context) => ({
+              context,
+            })),
+          },
+        },
+      ],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(false);
+    expect(ci.pending).toBe(true);
+  });
+
+  it.each([
+    ["check runs", { checkRunsTotalCount: GREEN_STANDARD_RUNS.length + 1 }],
+    ["commit statuses", { statusesTotalCount: 1 }],
+  ])("fails closed when %s report truncated totals", async (_label, counts) => {
+    onRequest = ciHandlers({
+      checkRuns: GREEN_STANDARD_RUNS,
+      activeRules: [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: STANDARD_CONTEXTS.map((context) => ({
+              context,
+            })),
+          },
+        },
+      ],
+      ...counts,
     });
 
     const ci = await adapter().getCiStatus({

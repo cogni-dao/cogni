@@ -39,7 +39,6 @@ import { createHash } from "node:crypto";
 import {
   extractNodeId,
   hasDeclaredNodeDeployment,
-  hasDeploymentActivationSpec,
   parseRepoSpec,
   type RepoSpec,
   renderDeploymentActivationSpec,
@@ -66,46 +65,36 @@ import type {
   ResolveNodeRepoInput,
 } from "@/ports";
 import {
-  appsetPath,
   appsetsKustomizationPath,
   buildEnvDeltaPlan,
+  buildNodeBirthPlan,
   buildPlacementPlan,
   buildRegionPlan,
-  CANONICAL_DOMAIN_ROOT,
   type EnvAddShape,
   type EnvPlanCurrent,
   EnvPlanError,
   type EnvPlanOp,
   hasDistributionActivationSpec,
   hasPaymentsActivationSpec,
-  insertAppsetKustomization,
-  insertCaddyBlock,
-  insertNetworkNode,
-  insertSchedulerEndpoint,
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
   nextFreeNodePort,
+  nodeBirthPathPlan,
   type PlacementProvider,
   parseCatalogPlacement,
   planEnvAddShape,
-  renderCatalog,
   renderDistributionActivationSpec,
-  renderNodeAppset,
   renderNodeExternalSecret,
   renderNodeExternalSecretKustomization,
-  renderOverlay,
-  renderOverlayFile,
   renderPaymentsActivationSpec,
   renderRepoSpec,
   schedulerEndpointPatchPath,
-  updateSchedulerEndpointHost,
 } from "@/shared/node-app-scaffold/gens";
 import type { NodeKnowledgeRemote } from "@/shared/node-app-scaffold/knowledge-remote";
 import {
   controlEnvFor,
   NODE_DEPLOYMENT_PROVIDERS,
-  nodeAppBaseUrl,
 } from "@/shared/node-registry/placement";
 import {
   NODE_REPO_POLICY_PATH,
@@ -2806,6 +2795,28 @@ export class GitHubRepoWriter implements DeployPlanePort {
       repo
     );
 
+    const controlEnvForBirth = (env: NodeFormationEnv): string =>
+      controlEnvFor(env, "akash", this.config.fleetControlEnv);
+    const birthPaths = nodeBirthPathPlan({
+      slug,
+      controlEnvFor: controlEnvForBirth,
+    }).replayableDeclarative;
+    for (const path of birthPaths.filter(
+      (candidate) =>
+        candidate === `infra/catalog/${slug}.yaml` ||
+        candidate.includes(`/${slug}/`) ||
+        candidate.endsWith(`-${slug}-applicationset.yaml`)
+    )) {
+      if (
+        (await this.readFileAt(octokit, owner, repo, path, baseCommitSha)) !==
+        null
+      ) {
+        throw new Error(
+          `openNodeSubmodulePr: node-owned path already exists at base: ${path}`
+        );
+      }
+    }
+
     // Control-plane footprint gens (catalog w/ source_sha pin, overlays, appsets, Caddyfile,
     // scheduler). No gitlink, no .gitmodules — the node is registered by its catalog row +
     // source_sha pin, not a submodule checkout (spec.node-submodule-retirement).
@@ -2821,7 +2832,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
       repo,
       input,
       CONTAINER_PORT,
-      nodePort
+      nodePort,
+      baseCommitSha
     );
 
     const subject = `feat(node): register ${slug}`;
@@ -2835,6 +2847,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         "Node-Id": input.nodeId,
         "Source-Repo": input.nodeRepoUrl,
         "Source-SHA": input.nodeRepoHeadSha,
+        "Owner-Wallet": input.ownerWallet,
       },
     });
     return this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
@@ -2970,6 +2983,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       trailers: {
         Environment: env,
         Action: present ? "add" : "remove",
+        "Lease-Generation": leaseGeneration ?? 0,
       },
     });
     const branch = `cogni-operator/node-env-${slug}-${env}`;
@@ -3701,33 +3715,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
       return { status: "no_changes" };
     }
 
-    const existingPr = await this.findOpenPrForBranch(octokit, owner, repo, {
-      branch,
-      title,
-    });
-    if (existingPr) {
-      const pendingSpec = await this.fetchFileText({
-        owner,
-        repo,
-        path: ".cogni/repo-spec.yaml",
-        ref: branch,
-      });
-      if (
-        pendingSpec === nextSpec ||
-        (pendingSpec !== null && hasDeploymentActivationSpec(pendingSpec))
-      ) {
-        await this.updatePrBody(
-          octokit,
-          owner,
-          repo,
-          existingPr.prNumber,
-          title,
-          body
-        );
-        return { status: "pr_opened", ...existingPr };
-      }
-    }
-
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
       owner,
@@ -3919,10 +3906,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * The policy is read from the deployment parent at an explicit ref, validated to retain
    * ALLGREEN serialization with zero git-authored bypass actors, then the executing review App
    * is injected as the sole installation-specific bypass actor and the result is applied with
-   * readback. The merge route uses that privilege only for a classified signed env-manager PR.
+   * readback. Only the internal, fully replayed operator-change CAS may use that privilege; the
+   * public merge route remains on the ordinary merge-queue path.
    * This is the runtime authority bridge for config-as-code: agents hold node-scoped RBAC, while
    * the operator App alone holds `administration:write`. It deliberately updates only the named
-   * merge-queue ruleset; required checks remain owned by the independent protection policy.
+   * merge-queue ruleset; required-check policy is reconciled separately.
    */
   async reconcileMergeQueuePolicy(input: {
     policyOwner: string;
@@ -4623,222 +4611,77 @@ export class GitHubRepoWriter implements DeployPlanePort {
     return nextFreeNodePort(ports);
   }
 
-  /** Footprint single-file gens: fetch current main blob, apply the gen, create the new blob. */
+  /** Fetch exact-base inputs, run the shared pure birth plan, then materialize its blobs. */
   private async buildFootprintEntries(
     octokit: Octokit,
     owner: string,
     repo: string,
-    input: OpenNodeAppPrInput | OpenNodeSubmodulePrInput,
+    input: OpenNodeSubmodulePrInput,
     port: number,
-    nodePort: number
+    nodePort: number,
+    baseCommitSha: string
   ): Promise<GitTreeEntry[]> {
     const { slug } = input;
-    const entries: GitTreeEntry[] = [];
-
-    const addBlob = async (path: string, content: string): Promise<void> => {
-      const sha = await this.createBlob(octokit, owner, repo, content);
-      entries.push({ path, mode: "100644", type: "blob", sha });
-    };
-
-    // catalog/<slug>.yaml — brand-new file (no current content to thread).
-    // Remote-source node: project node_id (drift-gated mirror of the minted repo-spec)
-    // and source_sha (the deploy pin replacing the gitlink) into the catalog so parent
-    // renderers + the deploy plane resolve identity + deploy SHA from metadata alone.
-    const catalogInput =
-      "nodeRepoUrl" in input
-        ? {
-            sourceRepo: input.nodeRepoUrl,
-            nodeId: input.nodeId,
-            sourceSha: input.nodeRepoHeadSha,
-            ownerWallet: input.ownerWallet,
-          }
-        : { ownerWallet: input.ownerWallet };
-    const catalogContent = renderCatalog(slug, port, nodePort, catalogInput);
-    await addBlob(`infra/catalog/${slug}.yaml`, catalogContent);
-    // The birth catalog's own placement decides each env's CONTROL env below (bug.5204) — a wizard
-    // birth is BORN_ON_AKASH in every birth env, so its AppSets all belong under appsets/production/.
-    const birthPlacement = parseCatalogPlacement(catalogContent);
-
-    // overlays per birth env (candidate-a only today). Each overlay dir clones BOTH the node-template
-    // kustomization.yaml AND its external-secret.yaml (the ESO producer of
-    // <slug>-env-secrets — without it the pod's envFrom secret never exists →
-    // CreateContainerConfigError). Byte-exact twin of render-node-overlays.sh.
-    for (const env of NODE_FORMATION_ENVS) {
-      const templateOverlay = await this.readFileOnMain(
+    const readRequired = async (path: string): Promise<string> => {
+      const value = await this.readFileAt(
         octokit,
         owner,
         repo,
+        path,
+        baseCommitSha
+      );
+      if (value === null) {
+        throw new Error(`buildFootprintEntries: ${path} missing at exact base`);
+      }
+      return value;
+    };
+    const templateOverlayByEnv: Record<string, string> = {};
+    const templateExternalSecretByEnv: Record<string, string> = {};
+    for (const env of NODE_FORMATION_ENVS) {
+      templateOverlayByEnv[env] = await readRequired(
         `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/kustomization.yaml`
       );
-      await addBlob(
-        `infra/k8s/overlays/${env}/${slug}/kustomization.yaml`,
-        renderOverlay(templateOverlay, slug, nodePort, port)
-      );
-      const templateExternalSecret = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
+      templateExternalSecretByEnv[env] = await readRequired(
         `infra/k8s/overlays/${env}/${TEMPLATE_SLUG}/external-secret.yaml`
       );
-      await addBlob(
-        `infra/k8s/overlays/${env}/${slug}/external-secret.yaml`,
-        renderOverlayFile(templateExternalSecret, slug, nodePort, port)
-      );
     }
-
-    // per-node AppSets for the birth envs — one ApplicationSet object per (env, slug) for structural LANE_ISOLATION
-    // (bug.0378). New files from the shared template (byte-exact to render-node-appset.sh) land under
-    // the PER-ENV infra/k8s/argocd/appsets/<env>/ dir (each reconciled+pruned by its own per-env
-    // cogni-<env>-appsets app-of-apps, story.5020), then folded into that env's appsets/<env>/
-    // kustomization.yaml so the unit-job drift gate stays green.
-    const appsetTemplate = await this.readFileOnMain(
-      octokit,
-      owner,
-      repo,
-      APPSET_TEMPLATE_PATH
-    );
-    // Grouped by CONTROL env: several birth envs may resolve to ONE control dir (akash ⇒
-    // production reconciles every lane), so each control kustomization is fetched once and every
-    // (env, slug) pair folds into the same evolving content — two blobs for one path would race.
-    const kustomizationByControlEnv = new Map<string, string>();
+    const controlEnvForBirth = (env: NodeFormationEnv): string =>
+      controlEnvFor(env, "akash", this.config.fleetControlEnv);
+    const appsetsKustomizationByControlEnv: Record<string, string> = {};
     for (const env of NODE_FORMATION_ENVS) {
-      const controlEnv = controlEnvFor(
-        env,
-        birthPlacement[env] ?? "k3s",
-        this.config.fleetControlEnv
-      );
-      await addBlob(
-        appsetPath(controlEnv, env, slug),
-        renderNodeAppset(
-          appsetTemplate,
-          slug,
-          env,
-          `https://github.com/${owner}/${repo}.git`
-        )
-      );
-      const argocdKustomization =
-        kustomizationByControlEnv.get(controlEnv) ??
-        (await this.readFileOnMain(
-          octokit,
-          owner,
-          repo,
-          appsetsKustomizationPath(controlEnv)
-        ));
-      kustomizationByControlEnv.set(
-        controlEnv,
-        insertAppsetKustomization(argocdKustomization, slug, env)
+      const controlEnv = controlEnvForBirth(env);
+      appsetsKustomizationByControlEnv[controlEnv] ??= await readRequired(
+        appsetsKustomizationPath(controlEnv)
       );
     }
-    for (const [controlEnv, content] of kustomizationByControlEnv) {
-      await addBlob(appsetsKustomizationPath(controlEnv), content);
+    const schedulerEndpointByPath: Record<string, string> = {};
+    const schedulerPaths = [
+      "infra/k8s/base/scheduler-worker/configmap.yaml",
+      ...NODE_DEPLOY_ENVS.map(schedulerEndpointPatchPath),
+    ];
+    for (const path of schedulerPaths) {
+      schedulerEndpointByPath[path] = await readRequired(path);
     }
-
-    // Caddyfile / ci.yaml / lockfile — single-file splices over main.
-    const caddyfile = await this.readFileOnMain(
-      octokit,
-      owner,
-      repo,
-      FOOTPRINT.caddyfile
-    );
-    await addBlob(
-      FOOTPRINT.caddyfile,
-      insertCaddyBlock(caddyfile, slug, nodePort)
-    );
-
-    // No ci.yaml scope-filter splice: a submodule node carries NO single-node-scope
-    // filter (SUBMODULE_GITLINK_IS_OPERATOR_PIN). Emitting a `nodes/<slug>/**` filter
-    // would make picomatch's globstar match the bare gitlink `nodes/<slug>`, so the pin
-    // misclassifies as node-domain and single-node-scope false-fails. With no filter the
-    // gitlink falls to operator's `**`. Mirrors render-scope-filters.sh's submodule skip.
-
-    // Scheduler-worker endpoint splice: the catalog now carries this submodule node's
-    // node_id projection (above), and the routing renderer enumerates every catalog
-    // type:node (is_built_by_this_repo lifted from the routing CSVs). So splice this node
-    // into every rendered routing map from the projected node_id — keeping it drift-clean
-    // with the catalog, born-green so chat/completions works on first flight
-    // (verify-scheduler-endpoints).
-    if ("nodeRepoUrl" in input) {
-      // bug.5094 — the routing map is rendered twice from one catalog: the
-      // env-invariant placement-DEFAULT in the shared base ConfigMap, and each
-      // deploy env's PROVIDER-RESOLVED map in its overlay patch. Splicing base alone
-      // leaves every formation PR drift-red against
-      // render-scheduler-worker-endpoints.sh --check AND the node unrouted wherever
-      // it deploys.
-      //
-      // PLACEMENT_DECIDES_THE_ADDRESS at BIRTH (story.5025). This used to be one
-      // byte-identical splice for every file, because a birth was always k3s. A node
-      // is now born on Akash in its birth environments (`renderCatalog`), so those
-      // envs' maps must carry the node's PUBLIC host — a fresh node has no
-      // `<slug>-node-app` Service for the worker to dial. Base keeps the k3s default:
-      // it is the placement-agnostic fallback, exactly as the shell renderer emits it.
-      const schedulerEndpointPaths = [
-        "infra/k8s/base/scheduler-worker/configmap.yaml",
-        ...NODE_DEPLOY_ENVS.map(
-          (env) =>
-            `infra/k8s/overlays/${env}/scheduler-worker/node-endpoints.patch.yaml`
-        ),
-      ];
-      const bornEnvs = new Set<string>(NODE_FORMATION_ENVS);
-      for (const schedulerEndpointPath of schedulerEndpointPaths) {
-        const currentConfigmap = await this.fetchFileText({
-          owner,
-          repo,
-          path: schedulerEndpointPath,
-          ref: "main",
-        });
-        if (!currentConfigmap) continue;
-        const spliced = insertSchedulerEndpoint(
-          currentConfigmap,
-          slug,
-          input.nodeId
-        );
-        const patchEnv = schedulerEndpointPath.match(
-          /^infra\/k8s\/overlays\/([^/]+)\/scheduler-worker\/node-endpoints\.patch\.yaml$/
-        )?.[1];
-        await addBlob(
-          schedulerEndpointPath,
-          patchEnv && bornEnvs.has(patchEnv)
-            ? updateSchedulerEndpointHost(
-                spliced,
-                slug,
-                input.nodeId,
-                nodeAppBaseUrl({
-                  slug,
-                  provider: "akash",
-                  environment: patchEnv as NodeFormationEnv,
-                  apexDomain: CANONICAL_DOMAIN_ROOT,
-                })
-              )
-            : spliced
-        );
-      }
-
-      // network-nodes roster splice: the operator runtime image can't fs-glob infra/catalog,
-      // so the web-node roster (network-nodes.data.ts) is a committed catalog projection kept
-      // honest by network-nodes-catalog-drift.test.ts (roster slug set == catalog type:node set).
-      // Splice this node in so the publish PR is born drift-green — else the roster is stale and
-      // the operator-authored auto-PR is un-mergeable (the roster was hand-maintained, blocking
-      // every new node). Mirrors the catalog splice: `readFileOnMain` FAIL-LOUD (not a
-      // fetchFileText null-guard) because the roster is a MANDATORY, always-present monorepo file —
-      // a fetch-miss must throw, never silently birth a drift-red PR (the exact bug this fixes).
-      const rosterPath =
-        "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts";
-      const currentRoster = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        rosterPath
-      );
-      await addBlob(
-        rosterPath,
-        insertNetworkNode(currentRoster, slug, input.nodeId)
-      );
-    }
-
-    // No pnpm-lock.yaml: a submodule node is not a workspace member of the operator monorepo — its
-    // packages resolve in its own repo + lockfile. (The single biggest chunk of inline-only tax.)
-
-    return entries;
+    const ops = buildNodeBirthPlan({
+      slug,
+      nodeId: input.nodeId,
+      sourceRepo: input.nodeRepoUrl,
+      sourceSha: input.nodeRepoHeadSha,
+      ownerWallet: input.ownerWallet,
+      port,
+      nodePort,
+      repositoryUrl: `https://github.com/${owner}/${repo}.git`,
+      controlEnvFor: controlEnvForBirth,
+      current: {
+        templateOverlayByEnv,
+        templateExternalSecretByEnv,
+        appsetTemplate: await readRequired(APPSET_TEMPLATE_PATH),
+        appsetsKustomizationByControlEnv,
+        caddyfile: await readRequired(FOOTPRINT.caddyfile),
+        schedulerEndpointByPath,
+      },
+    });
+    return this.planOpsToTreeEntries(octokit, owner, repo, ops);
   }
 
   /** Resolve a nested tree-entry SHA by walking a `/`-delimited repo path from a root tree. */
@@ -4906,6 +4749,30 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
     // Truncated (>1MB) — read the blob by SHA (git/blobs has no inline cap).
     return this.readBlob(octokit, owner, repo, data.sha);
+  }
+
+  /** Read one UTF-8 file at an exact immutable revision; null only when absent. */
+  private async readFileAt(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string
+  ): Promise<string | null> {
+    try {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/contents/{path}",
+        { owner, repo, path, ref }
+      );
+      if (Array.isArray(data) || data.type !== "file") return null;
+      if (data.encoding === "base64" && data.content) {
+        return Buffer.from(data.content, "base64").toString("utf-8");
+      }
+      return this.readBlob(octokit, owner, repo, data.sha);
+    } catch (error) {
+      if ((error as { status?: number })?.status === 404) return null;
+      throw error;
+    }
   }
 
   /** Create a blob from UTF-8 content; return its SHA. */

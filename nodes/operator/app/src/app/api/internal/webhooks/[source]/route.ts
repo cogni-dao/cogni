@@ -10,6 +10,7 @@
  * - WEBHOOK_RECEIPT_APPEND_EXEMPT: Receipt insertion bypasses WRITES_VIA_TEMPORAL (safe per RECEIPT_IDEMPOTENT + RECEIPT_APPEND_ONLY)
  * - UNIQUE_ROUTE_OR_NO_WRITE: GitHub attribution never falls back to the operator ledger.
  * - FRESH_NODE_FORCE_REFRESH: verified unresolved GitHub routes bypass the cache exactly once.
+ * - VERIFIED_CHECK_RUN_SURVIVES_INGESTION_FAILURE: a positively verified wake is still dispatched.
  * - ARCHITECTURE_ALIGNMENT: Route → feature service → port
  * Side-effects: IO (database writes via feature service)
  * Links: docs/spec/attribution-ledger.md
@@ -393,6 +394,21 @@ export async function POST(
       eventType === "pull_request"
     ) {
       dispatchPrReview(verifiedPayload, env, log);
+    }
+
+    // Attribution failure must not consume the sole final check wake. This may also retry an
+    // ambiguous dispatch failure from the happy path; fresh reclassification plus the exact
+    // non-force base/head CAS makes that retry idempotent and fail-closed.
+    if (
+      verifiedPayload !== null &&
+      source === "github" &&
+      eventType === "check_run"
+    ) {
+      await dispatchOperatorChangeAutoMerge(
+        verifiedPayload,
+        getContainer().vcsCapability,
+        log
+      );
     }
 
     if (verifiedPayload !== null && source === "alchemy") {

@@ -63,6 +63,7 @@ PARALLEL=(
   resolve-substrate-gate.test.sh
   detect-affected.test.sh
   classify-operator-change-fast-path.test.sh
+  check-operator-change-replay-bundle.test.sh
   verify-deployment-declare.test.sh
   resolve-candidate-deploy-repository.test.sh
   reconcile-scheduler-worker-routing.test.sh

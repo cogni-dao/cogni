@@ -47,6 +47,7 @@ export interface OperatorChangeFacts {
   readonly expectedHeadSha: string;
   readonly pr: {
     readonly state: string;
+    readonly draft: boolean;
     readonly baseRef: string;
     readonly baseSha: string;
     readonly headRef: string;
@@ -112,12 +113,16 @@ function reject(
 }
 
 function singleTrailer(message: string, key: string): string | null {
+  const values = trailerValues(message, key);
+  return values.length === 1 ? (values[0] ?? null) : null;
+}
+
+function trailerValues(message: string, key: string): string[] {
   const prefix = `${key}: `;
-  const values = message
+  return message
     .split("\n")
     .filter((line) => line.startsWith(prefix))
     .map((line) => line.slice(prefix.length));
-  return values.length === 1 ? (values[0] ?? null) : null;
 }
 
 function trailerCount(message: string): number {
@@ -214,8 +219,12 @@ export function classifyOperatorChangeForMerge(
 ): OperatorChangeClassification {
   const repo = facts.repository.toLowerCase();
   const message = facts.commit.message;
-  if (singleTrailer(message, "Cogni-Change-Type") !== OPERATOR_CHANGE_TYPE) {
+  const changeTypes = trailerValues(message, "Cogni-Change-Type");
+  if (changeTypes.length === 0) {
     return reject(facts, "reserved-envelope-not-claimed");
+  }
+  if (changeTypes.length !== 1 || changeTypes[0] !== OPERATOR_CHANGE_TYPE) {
+    return reject(facts, "invalid-change-type");
   }
   const operationValue = singleTrailer(message, "Cogni-Operation");
   if (
@@ -258,6 +267,7 @@ export function classifyOperatorChangeForMerge(
 
   if (
     facts.pr.state !== "open" ||
+    facts.pr.draft !== false ||
     facts.pr.baseRef !== "main" ||
     facts.pr.baseSha !== baseSha ||
     facts.pr.headSha !== facts.expectedHeadSha ||
@@ -285,12 +295,14 @@ export function classifyOperatorChangeForMerge(
   let expectedTrailerCount: number;
   switch (operation) {
     case "env.membership": {
-      expectedTrailerCount = 7;
+      expectedTrailerCount = 8;
       const env = singleTrailer(message, "Cogni-Environment");
       const action = singleTrailer(message, "Cogni-Action");
+      const generation = singleTrailer(message, "Cogni-Lease-Generation");
       if (
         !env?.match(/^(candidate-a|preview|production)$/) ||
         !action?.match(/^(add|remove)$/) ||
+        !generation?.match(/^\d+$/) ||
         facts.pr.headRef !== `cogni-operator/node-env-${node}-${env}` ||
         subject !==
           `feat(node): ${action} ${node} ${action === "add" ? "to" : "from"} ${env}`
@@ -331,16 +343,18 @@ export function classifyOperatorChangeForMerge(
       break;
     }
     case "node.register": {
-      expectedTrailerCount = 8;
+      expectedTrailerCount = 9;
       const nodeId = singleTrailer(message, "Cogni-Node-Id");
       const sourceRepo = singleTrailer(message, "Cogni-Source-Repo");
       const sourceSha = singleTrailer(message, "Cogni-Source-SHA");
+      const ownerWallet = singleTrailer(message, "Cogni-Owner-Wallet");
       const fleetOwner = repo.split("/", 1)[0];
       if (
         !nodeId?.match(
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
         ) ||
         !sourceSha?.match(SHA) ||
+        !ownerWallet?.match(/^0x[0-9a-fA-F]{40}$/) ||
         sourceRepo?.toLowerCase() !==
           `https://github.com/${fleetOwner}/${node}.git` ||
         facts.pr.headRef !== `cogni-operator/node-register-${node}` ||

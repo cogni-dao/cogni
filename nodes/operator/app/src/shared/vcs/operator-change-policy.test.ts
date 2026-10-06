@@ -23,6 +23,7 @@ const message = [
   `Cogni-Base-SHA: ${baseSha}`,
   "Cogni-Environment: candidate-a",
   "Cogni-Action: add",
+  "Cogni-Lease-Generation: 0",
   `Cogni-Changed-Paths-SHA256: ${pathHash}`,
 ].join("\n");
 
@@ -43,7 +44,7 @@ const registry: OperatorChangeRegistry = {
   operations: {
     "env.membership": {
       enabledRepositories: [repository],
-      verifier: "scripts/ci/verifiers/verify-env-membership.sh",
+      verifier: "scripts/ci/verifiers/verify-operator-change.sh",
     },
     "env.placement": { enabledRepositories: [], verifier: "disabled" },
     "env.region": { enabledRepositories: [], verifier: "disabled" },
@@ -65,6 +66,7 @@ function facts(
     expectedHeadSha: headSha,
     pr: {
       state: "open",
+      draft: false,
       baseRef: "main",
       baseSha,
       headRef: "cogni-operator/node-env-spawny-boi-candidate-a",
@@ -105,6 +107,34 @@ describe("classifyOperatorChangeForMerge", () => {
         userType: "User",
       },
     });
+    expect(classifyOperatorChangeForMerge(input)).toMatchObject({
+      eligible: false,
+      reason: "invalid-pr-identity",
+    });
+  });
+
+  it("distinguishes an absent reserved envelope from a malformed claim", () => {
+    expect(
+      classifyOperatorChangeForMerge(
+        facts({ commit: { ...facts().commit, message: "human change" } })
+      )
+    ).toMatchObject({
+      eligible: false,
+      reason: "reserved-envelope-not-claimed",
+    });
+    expect(
+      classifyOperatorChangeForMerge({
+        ...facts(),
+        commit: {
+          ...facts().commit,
+          message: `${message}\nCogni-Change-Type: cogni.operator-change.v1`,
+        },
+      })
+    ).toMatchObject({ eligible: false, reason: "invalid-change-type" });
+  });
+
+  it("rejects a signed PR after a human converts it to draft", () => {
+    const input = facts({ pr: { ...facts().pr, draft: true } });
     expect(classifyOperatorChangeForMerge(input)).toMatchObject({
       eligible: false,
       reason: "invalid-pr-identity",

@@ -23,24 +23,24 @@
   "operations": {
     "env.membership": {
       "enabledRepositories": [],
-      "verifier": "scripts/ci/verifiers/verify-env-membership.sh"
+      "verifier": "scripts/ci/verifiers/verify-operator-change.sh"
     },
     "env.placement": {
       "enabledRepositories": [],
-      "verifier": "scripts/ci/verifiers/verify-env-placement.sh"
+      "verifier": "scripts/ci/verifiers/verify-operator-change.sh"
     },
     "env.region": {
       "enabledRepositories": [],
-      "verifier": "scripts/ci/verifiers/verify-env-region.sh"
+      "verifier": "scripts/ci/verifiers/verify-operator-change.sh"
     },
     "node.register": {
       "enabledRepositories": [],
-      "verifier": "scripts/ci/verifiers/verify-node-register.sh"
+      "verifier": "scripts/ci/verifiers/verify-operator-change.sh"
     },
     "deployment.declare": {
       "enabledRepositories": [],
       "enabledChildOwners": [],
-      "verifier": "scripts/ci/verifiers/verify-deployment-declare.sh"
+      "verifier": "scripts/ci/verifiers/verify-operator-change.sh"
     }
   }
 }

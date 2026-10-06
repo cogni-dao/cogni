@@ -30,6 +30,8 @@ function vcs(eligible: boolean) {
       headCommitMessage: `generated\n\nCogni-Base-SHA: ${"b".repeat(40)}`,
       pending: false,
       allGreen: true,
+      reviewDecision: null,
+      draft: false,
       checks: [
         {
           name: "operator-change-automerge-ready",
@@ -38,7 +40,9 @@ function vcs(eligible: boolean) {
         },
       ],
     }),
-    mergePr: vi.fn().mockResolvedValue({ merged: true, message: "Merged" }),
+    fastForwardOperatorChange: vi
+      .fn()
+      .mockResolvedValue({ merged: true, message: "Fast-forwarded" }),
   } as unknown as VcsCapability;
 }
 
@@ -52,19 +56,43 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       prNumber: 42,
       expectedHeadSha: headSha,
     });
-    expect(capability.mergePr).not.toHaveBeenCalled();
+    expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();
   });
 
   it("binds a reverified internal bypass merge to the current expected head", async () => {
     const capability = vcs(true);
     await dispatchOperatorChangeAutoMerge(payload, capability, log);
-    expect(capability.mergePr).toHaveBeenCalledWith({
+    expect(capability.fastForwardOperatorChange).toHaveBeenCalledWith({
       owner: "cogni-test-org",
       repo: "cogni-monorepo",
       prNumber: 42,
-      method: "squash",
-      bypassQueue: true,
+      expectedBaseSha: "b".repeat(40),
       expectedHeadSha: headSha,
     });
+  });
+
+  it("rejects a stale base before the atomic fast-forward", async () => {
+    const capability = vcs(true);
+    vi.mocked(capability.getCiStatus).mockResolvedValueOnce({
+      headSha,
+      baseSha: "c".repeat(40),
+      pending: false,
+      allGreen: true,
+    } as never);
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
+    expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();
+  });
+
+  it("honors a human changes-requested hold before fast-forwarding", async () => {
+    const capability = vcs(true);
+    vi.mocked(capability.getCiStatus).mockResolvedValueOnce({
+      headSha,
+      baseSha: "b".repeat(40),
+      pending: false,
+      allGreen: true,
+      reviewDecision: "CHANGES_REQUESTED",
+    } as never);
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
+    expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();
   });
 });

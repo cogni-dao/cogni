@@ -23,10 +23,10 @@ tags: [web3, setup, dao]
 A Cogni DAO node has three lifecycle phases with distinct trust domains:
 
 1. **Formation** — governance identity (DAO + Signal). Starts from a DB-backed node registration row, then runs wallet-signed transactions in the shared operator repo's web UI. No secrets, no operator wallet, no payment rails.
-2. **Publish** — the operator mints the node repo and authors the submodule pin + catalog row + per-env overlays + per-node AppSets as a single GitHub App–authored PR, directly via the GitHub Git Data API. No GitHub Action, no human PAT. See [Node Publish](#node-publish-operator-authored-pr).
+2. **Publish** — the operator mints the node repo and authors its catalog `source_repo`/`source_sha` registration + declarative control-plane footprint as a single GitHub App–authored PR, directly via the GitHub Git Data API. No GitHub Action, no human PAT. See [Node Publish](#node-publish-operator-authored-pr).
 3. **Payment Activation** — operator wallet + revenue split. Runs in the child node's own trust domain via CLI. The child node owns its Privy credentials and operator wallet.
 
-Formation persists verified on-chain addresses to the node registry row. Publish writes those addresses into the minted node repo's `.cogni/repo-spec.yaml` with `payments.status: pending_activation`, then lands the submodule deployment pin as a reviewable PR; once merged + flighted, the node deploys per-node (see [ci-cd.md](ci-cd.md) Axiom 18). The child node then activates payments.
+Formation persists verified on-chain addresses to the node registry row. Publish writes those addresses into the minted node repo's `.cogni/repo-spec.yaml` with `payments.status: pending_activation`, then lands the parent catalog `source_sha` and generated footprint as a reviewable PR; once merged + flighted, the node deploys per-node (see [ci-cd.md](ci-cd.md) Axiom 18). The child node then activates payments.
 
 > Contract deployment is wallet-owned tooling. The operator registry must exist before transaction signing; server verification persists the formed addresses before Publish.
 > Payment activation belongs to the child node's trust domain. The shared operator repo never creates or controls child wallets.
@@ -41,10 +41,8 @@ Register (DB row) → Formation (wallet txs) → Publish (repo + operator PR) �
 
 This is distinct from a **standalone fork** — a solo operator who wants their own full instance on their own VM forks `Cogni-DAO/standalone-node` and follows [`fork-quickstart.md`](../runbooks/fork-quickstart.md). Two repos, two intents:
 
-| Repo                        | Role                                                                                                                                                                                                   |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Cogni-DAO/standalone-node` | Fork-whole quickstart — your own instance, your own substrate (`fork-quickstart.md`).                                                                                                                  |
-| `Cogni-DAO/node-template`   | Canonical node-at-root template repo — Publish creates a named fork, commits node identity on top, then submodule-pins it at `nodes/<slug>`. The operator repo does not carry a duplicate source tree. |
+- `Cogni-DAO/standalone-node` — fork-whole quickstart: your own instance and substrate ([fork-quickstart.md](../runbooks/fork-quickstart.md)).
+- `Cogni-DAO/node-template` — canonical node-at-root template: Publish forks it, commits identity, and records `source_repo` + `source_sha` in the parent catalog. The operator carries no duplicate source tree.
 
 `CATALOG_IS_SSOT` ([ci-cd.md](ci-cd.md) Axiom 16) is what makes Publish a single reviewable PR rather than a manual checklist: the catalog entry is the only declaration site, and overlays, per-node AppSets (Axiom 18), Caddy routing, scheduler endpoints, DNS (Axiom 21), and the build matrix all derive from it. The deploy-row contract lives in [create-node.md](../guides/create-node.md); secret values are excluded from the Publish PR and inherited via ESO.
 
@@ -343,7 +341,7 @@ Populated later by `pnpm node:activate-payments` (child node CLI):
 
 > Current schema: [.cogni/repo-spec.yaml](../../.cogni/repo-spec.yaml)
 
-### Node Publish (Operator-Authored Submodule PR)
+### Node Publish (Operator-Authored Registration PR)
 
 #### Unified generated-change envelope
 
@@ -360,6 +358,7 @@ Cogni-Node: <slug>
 Cogni-Node-Id: <uuid>
 Cogni-Source-Repo: https://github.com/<fleet-org>/<slug>.git
 Cogni-Source-SHA: <40-hex child main SHA>
+Cogni-Owner-Wallet: <normalized 0x address>
 Cogni-Base-SHA: <40-hex parent main SHA>
 Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
 ```
@@ -370,38 +369,40 @@ the classifier from `origin/main`, verifies the exact repository-scoped App,
 signature, branch, one-commit history, trailers, parent/base SHA, and path hash,
 then replays the trusted birth plan and requires a byte-identical result.
 
-`REGISTER_REPLAY_IS_COMPLETE_OR_DISABLED`: the current writer has 14 outputs. Thirteen declarative
-outputs can be replayed exactly (catalog, overlays, AppSets and their index, Caddy, and scheduler
-projections). The executable compiled roster cannot. Registration therefore stays disabled until
-that roster write is removed or a trusted exact verifier can reproduce the entire changed tree.
+`REGISTER_REPLAY_IS_COMPLETE_OR_DISABLED`: the writer and verifier share one complete deterministic
+13-path, data-only birth plan (catalog, overlays, AppSets and their index, Caddy, and scheduler
+projections). Registration remains disabled until its positive and negative test-org matrix passes,
+not because any output is outside replay.
 
 `CLAIMED_INVALID_IS_RED`: a commit that claims `cogni.operator-change.v1` but fails
-any proof is rejected. A human edit, additional commit, unsigned/non-App
-commit, or ordinary unclaimed PR takes the standard CI and queue lane.
+any proof is rejected. A human edit, additional commit, or unsigned/non-App commit on a claimed
+registration is red; only an ordinary unclaimed PR takes the standard CI and queue lane.
 
 The fast path ends at the parent declaration. The child repo still runs its
 standard merge gate, publishes `sha-<sourceSha>`, passes candidate exact-SHA
 validation, and promotes that identical digest to production.
 
-After Formation returns a verified repo-spec fragment, the **operator** mints the node's own repo and pins it into the monorepo as a git **submodule** — the **Publish** phase (task.5092). No GitHub Action and no human PAT: the operator holds GitHub App installation auth and drives the GitHub REST + Git Data API directly.
-
-**Why a submodule, not an inline clone:** a node is ~1100 files. Inlining them into the operator tree (the prior model) bloated the monorepo by a full app fork per node. Instead the node lives in **its own repo** (`Cogni-DAO/<slug>`), pinned at `nodes/<slug>` by a `160000` gitlink — the operator PR is a pointer + the catalog/overlay footprint, not 1100 lines. (`SUBMODULE_GITLINK_IS_OPERATOR_PIN` — see [node-ci-cd-contract.md](node-ci-cd-contract.md) § Submodule-pinned nodes.)
+After Formation returns a verified repo-spec fragment, the **operator** mints the node's own repo
+and registers its exact `source_repo` + `source_sha` in the parent catalog — the **Publish** phase
+(task.5092). No GitHub Action and no human PAT: the operator holds GitHub App installation auth and
+drives the GitHub REST + Git Data API directly. The operator never writes a gitlink or
+`.gitmodules`; node source stays in the sovereign child repo and deploy jobs fetch its exact SHA.
 
 **Mechanism** (`adapters/server/vcs/github-repo-write.ts` + `shared/node-app-scaffold/`):
 
 1. **Mint** — `POST /repos/Cogni-DAO/node-template/forks` creates `Cogni-DAO/<slug>` as a named fork of `node-template` (`default_branch_only: true`). This preserves a shared merge base so node developers can fetch and merge upstream template updates.
-2. **Identity + ESO leaves** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) and the `candidate-a`, `preview`, and `production` ExternalSecret leaves to the fork's `main`. The new HEAD SHA is the gitlink pin.
-3. **Pin** — the operator authors a PR on the monorepo: a `160000` gitlink at `nodes/<slug>` + a `.gitmodules` stanza, plus the footprint gens (catalog, overlays×3, per-node AppSets×3, Caddyfile route, `ci.yaml` scope filter, scheduler-worker endpoints) — **no `pnpm-lock.yaml`** (a submodule node is not a workspace member). One tree, one commit, one ref, one PR.
+2. **Identity + ESO leaves** — commit the regenerated `.cogni/repo-spec.yaml` (formed `node_id` / `scope_id` + DAO addresses) and the `candidate-a`, `preview`, and `production` ExternalSecret leaves to the fork's `main`. The new HEAD SHA becomes the catalog `source_sha`.
+3. **Register** — the operator authors one parent PR containing the deterministic 13-path declaration: catalog row, born-environment overlays and AppSets, shared AppSet index, Caddy route, and scheduler projections. The catalog carries the child `source_repo`, `source_sha`, and `node_id`; there is no gitlink, `.gitmodules`, child source, or lockfile in the parent tree.
 4. **Author** — the PR opens under the operator App installation (author = the App, auditable — not `github-actions[bot]`, not a human PAT).
 
 **Invariants:**
 
 - `NO_ACTION_INDIRECTION` — the operator authors the PR itself; it never dispatches a workflow to act on its own behalf.
-- `SUBMODULE_NOT_INLINE` — node content lives in its own repo + a gitlink, never inlined into the operator tree.
+- `NODE_SOURCE_STAYS_CHILD_OWNED` — node content lives only in its own repo; the parent records immutable source coordinates and declarative control-plane state.
 - `NO_SECRET_VALUES_IN_PR` — secret values and per-node `secrets-catalog.yaml` are absent from the template seed. The PR may carry ESO shape (`k8s/external-secrets/**`) so OpenBao values can materialize as `<slug>-env-secrets` ([secrets-management.md](secrets-management.md), [node-wizard-secret-setting.md](../design/node-wizard-secret-setting.md)).
 - `GENS_ARE_BYTE_EXACT` — every footprint gen shares one template with its `scripts/ci/render-*.sh` source of truth, enforced by the per-gen CI drift gate.
 
-> Verification: flight the operator + Publish one throwaway node → it mints `Cogni-DAO/<slug>` and opens the submodule PR; the gitlink PR passes `single-node-scope`, and the node flights (`<node>-test/version == build_sha`). Requires the env's operator App to hold org `administration: write` + an "all repositories" install (it must create AND commit to the new repo — see node-ci-cd-contract.md).
+> Verification: flight the operator + Publish one throwaway node → it mints `Cogni-DAO/<slug>` and opens the 13-path registration PR; that PR passes `single-node-scope`, the catalog resolves the exact child `source_sha`, and the node flights (`<node>-test/version == build_sha`). Requires the env's operator App to hold org `administration: write` + an "all repositories" install (it must create AND commit to the new repo — see node-ci-cd-contract.md).
 
 ### Payment Activation (Child Node)
 

@@ -23,20 +23,21 @@ Cogni-Operation: env.membership
 Cogni-Node: blue
 Cogni-Environment: preview
 Cogni-Action: add
+Cogni-Lease-Generation: 0
 Cogni-Base-SHA: $base_sha
 Cogni-Changed-Paths-SHA256: $paths_hash"
 
 write_fixtures() {
   local author_login="${1:-cogni-operator[bot]}" verified="${2:-true}"
   jq -n --arg head "$head_sha" --arg base "$base_sha" --arg login "$author_login" \
-    '{state:"open",base:{ref:"main",sha:$base},head:{sha:$head,ref:"cogni-operator/node-env-blue-preview",repo:{full_name:"Cogni-DAO/cogni"}},user:{login:$login,id:265189974,type:"Bot"},commits:1}' > "$tmpdir/pr.json"
+    '{state:"open",draft:false,base:{ref:"main",sha:$base},head:{sha:$head,ref:"cogni-operator/node-env-blue-preview",repo:{full_name:"Cogni-DAO/cogni"}},user:{login:$login,id:265189974,type:"Bot"},commits:1}' > "$tmpdir/pr.json"
   jq -n --arg head "$head_sha" --arg base "$base_sha" --arg message "$message" --arg login "$author_login" --argjson verified "$verified" \
     '{sha:$head,author:{login:$login,id:265189974},parents:[{sha:$base}],commit:{message:$message,verification:{verified:$verified,reason:"valid"}}}' > "$tmpdir/commit.json"
   jq -n --arg path "$path" '[{filename:$path,previous_filename:null,status:"modified"}]' > "$tmpdir/files.json"
 }
 
 run_classifier() {
-  local output="$1" registry="${2-$REGISTRY}" policy_root="${3:-}"
+  local output="$1" registry="${2-$REGISTRY}" policy_root="${3:-$REPO_ROOT}"
   GITHUB_OUTPUT="$output" EVENT_NAME=pull_request REPOSITORY=Cogni-DAO/cogni PR_NUMBER_PR=42 \
     PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/pr.json" \
     FAST_PATH_COMMIT_JSON="$tmpdir/commit.json" FAST_PATH_FILES_JSON="$tmpdir/files.json" \
@@ -58,21 +59,33 @@ run_classifier "$tmpdir/human.out"
 [[ "$(value "$tmpdir/human.out" invalid)" == true ]]
 [[ "$(value "$tmpdir/human.out" reason)" == invalid-pr-identity ]]
 
+# A human draft hold changes PR metadata without changing the signed head.
+write_fixtures
+jq '.draft = true' "$tmpdir/pr.json" > "$tmpdir/draft-pr.json"
+mv "$tmpdir/draft-pr.json" "$tmpdir/pr.json"
+run_classifier "$tmpdir/draft.out"
+[[ "$(value "$tmpdir/draft.out" invalid)" == true ]]
+[[ "$(value "$tmpdir/draft.out" reason)" == invalid-pr-identity ]]
+
 # A bad App signature is red.
 write_fixtures 'cogni-operator[bot]' false
 run_classifier "$tmpdir/unsigned.out"
 [[ "$(value "$tmpdir/unsigned.out" invalid)" == true ]]
 [[ "$(value "$tmpdir/unsigned.out" reason)" == invalid-commit-signature ]]
 
-# A reusable workflow can load policy only from its pinned, workflow-owned checkout.
-mkdir -p "$tmpdir/policy/scripts/ci/verifiers"
+# A reusable workflow loads both policy and executable classifier only from its
+# pinned, workflow-owned checkout. This structurally valid but non-replayable
+# fixture must be rejected by the real shared replay, not accepted by a shell stub.
+mkdir -p "$tmpdir/policy/scripts/ci/verifiers" "$tmpdir/policy/scripts/ci/dist"
 jq '.operations["env.membership"].enabledRepositories = ["cogni-dao/cogni"]' \
   "$REGISTRY" > "$tmpdir/policy/scripts/ci/operator-change-v1.allowlist.json"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$tmpdir/policy/scripts/ci/verifiers/verify-env-membership.sh"
+cp "$REPO_ROOT/scripts/ci/dist/operator-change-replay.cjs" \
+  "$tmpdir/policy/scripts/ci/dist/operator-change-replay.cjs"
 write_fixtures
 run_classifier "$tmpdir/pinned-policy.out" "" "$tmpdir/policy"
-[[ "$(value "$tmpdir/pinned-policy.out" eligible)" == true ]]
-[[ "$(value "$tmpdir/pinned-policy.out" reason)" == eligible ]]
+[[ "$(value "$tmpdir/pinned-policy.out" eligible)" == false ]]
+[[ "$(value "$tmpdir/pinned-policy.out" invalid)" == true ]]
+[[ "$(value "$tmpdir/pinned-policy.out" reason)" == operation-replay-failed ]]
 
 # An unknown child repo can authenticate only deployment.declare, and only
 # when protected base repo-spec binds intent.name to both repo and trailer.
@@ -90,37 +103,35 @@ Cogni-Node: $child_node
 Cogni-Base-SHA: $child_base_sha
 Cogni-Changed-Paths-SHA256: $child_paths_hash"
 jq -n --arg head "$head_sha" --arg base "$child_base_sha" --arg repo "$child_repo" --arg node "$child_node" \
-  '{state:"open",base:{ref:"main",sha:$base},head:{sha:$head,ref:("cogni-operator/declare-deployment-" + $node),repo:{full_name:$repo}},user:{login:"cogni-operator[bot]",id:265189974,type:"Bot"},commits:1}' > "$tmpdir/child-pr.json"
+  '{state:"open",draft:false,base:{ref:"main",sha:$base},head:{sha:$head,ref:("cogni-operator/declare-deployment-" + $node),repo:{full_name:$repo}},user:{login:"cogni-operator[bot]",id:265189974,type:"Bot"},commits:1}' > "$tmpdir/child-pr.json"
 jq -n --arg head "$head_sha" --arg base "$child_base_sha" --arg message "$child_message" \
   '{sha:$head,author:{login:"cogni-operator[bot]",id:265189974},parents:[{sha:$base}],commit:{message:$message,verification:{verified:true,reason:"valid"}}}' > "$tmpdir/child-commit.json"
 jq -n --arg path "$child_path" '[{filename:$path,previous_filename:null,status:"modified"}]' > "$tmpdir/child-files.json"
 GITHUB_OUTPUT="$tmpdir/child.out" EVENT_NAME=pull_request REPOSITORY="$child_repo" PR_NUMBER_PR=43 \
   PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/child-pr.json" \
   FAST_PATH_COMMIT_JSON="$tmpdir/child-commit.json" FAST_PATH_FILES_JSON="$tmpdir/child-files.json" \
-  FAST_PATH_REGISTRY_JSON="$REGISTRY" bash "$CLASSIFIER" >/dev/null
+  FAST_PATH_REGISTRY_JSON="$REGISTRY" FAST_PATH_POLICY_ROOT="$REPO_ROOT" \
+  bash "$CLASSIFIER" >/dev/null
 [[ "$(value "$tmpdir/child.out" invalid)" == false ]]
 [[ "$(value "$tmpdir/child.out" reason)" == operation-disabled ]]
 
-# Explicit owner enablement can reach the pinned replay, but only after the
-# exact child binding above. This fixture verifier stands in for the separately
-# tested byte-exact deployment verifier.
-mkdir -p "$tmpdir/policy/packages/repo-spec/src"
-cp "$REPO_ROOT/packages/repo-spec/src/node-app-deployment-v1.json" \
-  "$tmpdir/policy/packages/repo-spec/src/node-app-deployment-v1.json"
+# Explicit owner enablement reaches the real shared replay only after the exact
+# child binding above. The nonexistent fixture head fails closed.
 jq '.operations["deployment.declare"].enabledChildOwners = ["cogni-dao"]' \
   "$REGISTRY" > "$tmpdir/policy/scripts/ci/operator-change-v1.allowlist.json"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$tmpdir/policy/scripts/ci/verifiers/verify-deployment-declare.sh"
 GITHUB_OUTPUT="$tmpdir/enabled-child.out" EVENT_NAME=pull_request REPOSITORY="$child_repo" PR_NUMBER_PR=45 \
   PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/child-pr.json" \
   FAST_PATH_COMMIT_JSON="$tmpdir/child-commit.json" FAST_PATH_FILES_JSON="$tmpdir/child-files.json" \
   FAST_PATH_POLICY_ROOT="$tmpdir/policy" bash "$CLASSIFIER" >/dev/null
-[[ "$(value "$tmpdir/enabled-child.out" eligible)" == true ]]
-[[ "$(value "$tmpdir/enabled-child.out" reason)" == eligible ]]
+[[ "$(value "$tmpdir/enabled-child.out" eligible)" == false ]]
+[[ "$(value "$tmpdir/enabled-child.out" invalid)" == true ]]
+[[ "$(value "$tmpdir/enabled-child.out" reason)" == operation-replay-failed ]]
 
 GITHUB_OUTPUT="$tmpdir/wrong-child.out" EVENT_NAME=pull_request REPOSITORY=Cogni-DAO/not-cogni-template PR_NUMBER_PR=44 \
   PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/child-pr.json" \
   FAST_PATH_COMMIT_JSON="$tmpdir/child-commit.json" FAST_PATH_FILES_JSON="$tmpdir/child-files.json" \
-  FAST_PATH_REGISTRY_JSON="$REGISTRY" bash "$CLASSIFIER" >/dev/null
+  FAST_PATH_REGISTRY_JSON="$REGISTRY" FAST_PATH_POLICY_ROOT="$REPO_ROOT" \
+  bash "$CLASSIFIER" >/dev/null
 [[ "$(value "$tmpdir/wrong-child.out" invalid)" == true ]]
 [[ "$(value "$tmpdir/wrong-child.out" reason)" == untrusted-repository ]]
 

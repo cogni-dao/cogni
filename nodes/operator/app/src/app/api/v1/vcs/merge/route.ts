@@ -194,8 +194,9 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
-    // 6. Merge. Every caller uses the queue-aware path. Only the internal, HMAC-verified
-    //    generated-change reconciler may request a direct merge with an expected head SHA.
+    // 6. Merge. Every caller uses the queue-aware path with an exact head pin. The internal
+    //    generated-change reconciler never enters this route; after independent verification it
+    //    uses the separate non-force base+head ref fast-forward capability.
     let result: Awaited<ReturnType<typeof vcs.mergePr>>;
     try {
       result = await vcs.mergePr({

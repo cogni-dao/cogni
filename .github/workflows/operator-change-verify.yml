@@ -36,6 +36,9 @@ jobs:
   verify:
     name: operator-change-fast-path
     runs-on: ubuntu-latest
+    env:
+      FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+      FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
     outputs:
       eligible: ${{ steps.classify.outputs.eligible }}
       claimed: ${{ steps.classify.outputs.claimed }}
@@ -58,6 +61,15 @@ jobs:
           path: policy
           fetch-depth: 1
 
+      - name: Check out current protected parent catalog
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: main
+          path: parent-control
+          sparse-checkout: infra/catalog
+          persist-credentials: false
+
       - id: classify
         name: Re-fetch and classify exact pull request head
         env:
@@ -67,6 +79,7 @@ jobs:
           PR_NUMBER_PR: ${{ inputs.pr_number }}
           PR_HEAD_SHA_PR: ${{ inputs.head_sha }}
           FAST_PATH_POLICY_ROOT: ${{ github.workspace }}/policy
+          OPERATOR_CHANGE_PARENT_CATALOG_ROOT: ${{ github.workspace }}/parent-control
         working-directory: target
         run: bash "$FAST_PATH_POLICY_ROOT/scripts/ci/classify-operator-change-fast-path.sh"
 

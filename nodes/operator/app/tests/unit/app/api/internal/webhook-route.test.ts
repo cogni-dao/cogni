@@ -5,7 +5,8 @@
  * Module: `@tests/unit/app/api/internal/webhook-route`
  * Purpose: Pin the webhook verification boundary and fresh-node forced-refresh routing behavior.
  * Scope: Route shell with container, routing, persistence, delivery, and dispatch mocked; no IO.
- * Invariants: WEBHOOK_VERIFY_BEFORE_ROUTE, UNIQUE_ROUTE_OR_NO_WRITE, FRESH_NODE_FORCE_REFRESH.
+ * Invariants: WEBHOOK_VERIFY_BEFORE_ROUTE, UNIQUE_ROUTE_OR_NO_WRITE, FRESH_NODE_FORCE_REFRESH,
+ *   VERIFIED_CHECK_RUN_SURVIVES_INGESTION_FAILURE.
  * Side-effects: none
  * Links: src/app/api/internal/webhooks/[source]/route.ts, bug.5052
  * @public
@@ -197,6 +198,25 @@ describe("POST internal webhook verification boundary", () => {
       ok: false,
       error: "Ingestion failed",
     });
+  });
+
+  it("dispatches a verified check_run wake even when attribution routing fails", async () => {
+    fakes.verify.mockResolvedValue(true);
+    fakes.catalogLookup.mockRejectedValueOnce(new Error("catalog unavailable"));
+    const payload = {
+      action: "completed",
+      check_run: {
+        head_sha: "d".repeat(40),
+        pull_requests: [{ number: 17 }],
+      },
+      repository: { full_name: "cogni-test-org/cogni-monorepo" },
+    };
+
+    const response = await post(payload, "check_run");
+
+    expect(response.status).toBe(500);
+    expect(fakes.autoMerge).toHaveBeenCalledOnce();
+    expect(fakes.autoMerge).toHaveBeenCalledWith(payload, {}, logger);
   });
 
   it("force-refreshes a warm pre-spawn snapshot and routes the first verified fresh-node event once", async () => {

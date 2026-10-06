@@ -31,7 +31,6 @@ import type {
   PrSummary,
   VcsCapability,
 } from "@cogni/ai-tools";
-import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { parse as parseYaml } from "yaml";
@@ -40,6 +39,10 @@ import {
   type OperatorChangeFacts,
   parseOperatorChangeRegistry,
 } from "@/shared/vcs/operator-change-policy";
+import {
+  type OperatorChangeReplayReader,
+  replayOperatorChange,
+} from "@/shared/vcs/operator-change-replay";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -51,6 +54,33 @@ export interface GitHubVcsAdapterConfig {
   /** Trusted repository whose main branch owns generated-change policy. */
   readonly operatorChangePolicyOwner?: string;
   readonly operatorChangePolicyRepo?: string;
+  readonly fleetControlEnv?: string | undefined;
+  readonly forkDomainRoot?: string | undefined;
+}
+
+interface RequiredStatusCheck {
+  readonly context: string;
+  readonly appId?: number;
+}
+
+interface StatusCheckEvidence {
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly source: "check-run" | "legacy-status";
+  readonly appId?: number;
+  readonly appSlug?: string;
+}
+
+interface RequiredStatusChecksResult {
+  readonly checks: readonly RequiredStatusCheck[];
+  readonly complete: boolean;
+}
+
+function hasNextPage(response: {
+  readonly headers?: Readonly<Record<string, string | number | undefined>>;
+}): boolean {
+  const link = response.headers?.link;
+  return typeof link === "string" && /rel="next"/.test(link);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +161,7 @@ export class GitHubVcsAdapter implements VcsCapability {
           owner: params.owner,
           repo: params.repo,
           ref: pr.head.sha,
+          per_page: 100,
         }),
         octokit.request(
           "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
@@ -152,8 +183,16 @@ export class GitHubVcsAdapter implements VcsCapability {
       name: string;
       status: string;
       conclusion: string | null;
-      app: { slug: string } | null;
+      app: { id: number; slug: string } | null;
     }>;
+    const evidenceComplete =
+      !hasNextPage(checksResponse) &&
+      !hasNextPage(statusResponse) &&
+      (checksResponse.data.total_count ?? rawCheckRuns.length) <=
+        rawCheckRuns.length &&
+      (statusResponse.data.total_count ??
+        statusResponse.data.statuses.length) <=
+        statusResponse.data.statuses.length;
 
     const checks: CheckInfo[] = [
       // Modern check runs (all — for observability)
@@ -180,26 +219,25 @@ export class GitHubVcsAdapter implements VcsCapability {
       })),
     ];
 
-    // Index GitHub-native check producers by context name — github-actions check
-    // runs (by name) + legacy commit statuses (by context). Third-party app checks
-    // (SonarCloud, etc.) are informational and never gate a merge.
-    const byContext = new Map<
-      string,
-      { status: string; conclusion: string | null }
-    >();
+    // Keep every producer for a context. A same-name check from another App must
+    // never overwrite or impersonate the producer GitHub bound in branch policy.
+    const byContext = new Map<string, StatusCheckEvidence[]>();
     for (const cr of rawCheckRuns) {
-      if (cr.app?.slug === "github-actions") {
-        byContext.set(cr.name, {
-          status: cr.status,
-          conclusion: cr.conclusion,
-        });
-      }
+      const evidence = byContext.get(cr.name) ?? [];
+      evidence.push({
+        status: cr.status,
+        conclusion: cr.conclusion,
+        source: "check-run",
+        ...(cr.app ? { appId: cr.app.id, appSlug: cr.app.slug } : {}),
+      });
+      byContext.set(cr.name, evidence);
     }
     for (const s of statusResponse.data.statuses as Array<{
       context: string;
       state: string;
     }>) {
-      byContext.set(s.context, {
+      const evidence = byContext.get(s.context) ?? [];
+      evidence.push({
         status: "completed",
         conclusion:
           s.state === "success"
@@ -207,7 +245,9 @@ export class GitHubVcsAdapter implements VcsCapability {
             : s.state === "pending"
               ? null
               : "failure",
+        source: "legacy-status",
       });
+      byContext.set(s.context, evidence);
     }
 
     // REQUIRED_CHECKS_ARE_GITHUB_DEFINED: "green" is GitHub's OWN required-status-
@@ -218,41 +258,78 @@ export class GitHubVcsAdapter implements VcsCapability {
     // skips, e.g. a fork-guarded build, is passing). An unprotected branch (no
     // required checks) is NOT green: merge-on-green is meaningless without a
     // required set, so it fails closed.
-    const requiredContexts = await this.getRequiredContexts(
+    const required = await this.getRequiredContexts(
       octokit,
       params.owner,
       params.repo,
       pr.base.ref
     );
-    const pending = requiredContexts.some((ctx) => {
-      const c = byContext.get(ctx);
-      return !c || c.status !== "completed" || c.conclusion === null;
-    });
-    const allGreen =
-      requiredContexts.length > 0 &&
-      requiredContexts.every((ctx) => {
-        const c = byContext.get(ctx);
+    const evidenceFor = (required: RequiredStatusCheck) =>
+      (byContext.get(required.context) ?? []).filter((evidence) =>
+        required.appId === undefined
+          ? evidence.source === "legacy-status" ||
+            evidence.appSlug === "github-actions"
+          : evidence.source === "check-run" && evidence.appId === required.appId
+      );
+    const pending =
+      !evidenceComplete ||
+      !required.complete ||
+      required.checks.some((requiredCheck) => {
+        const evidence = evidenceFor(requiredCheck);
         return (
-          c != null &&
-          c.status === "completed" &&
-          (c.conclusion === "success" || c.conclusion === "skipped")
+          evidence.length === 0 ||
+          evidence.some(
+            (candidate) =>
+              candidate.status !== "completed" || candidate.conclusion === null
+          )
+        );
+      });
+    const allGreen =
+      evidenceComplete &&
+      required.complete &&
+      required.checks.length > 0 &&
+      required.checks.every((requiredCheck) => {
+        const evidence = evidenceFor(requiredCheck);
+        return (
+          evidence.length > 0 &&
+          evidence.every(
+            (candidate) =>
+              candidate.status === "completed" &&
+              (candidate.conclusion === "success" ||
+                candidate.conclusion === "skipped")
+          )
         );
       });
 
     // Compute review decision from individual reviews.
     // Take the latest review per reviewer; if any APPROVED and none CHANGES_REQUESTED → approved.
-    const latestByReviewer = new Map<string, string>();
-    for (const review of reviewsResponse.data as Array<{
+    const reviews = reviewsResponse.data as Array<{
       user: { login: string } | null;
       state: string;
-    }>) {
+    }>;
+    let reviewsOverflow = reviews.length > 100;
+    if (reviews.length === 100) {
+      const { data: nextReviews } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+        {
+          owner: params.owner,
+          repo: params.repo,
+          pull_number: params.prNumber,
+          per_page: 100,
+          page: 2,
+        }
+      );
+      reviewsOverflow = nextReviews.length > 0;
+    }
+    const latestByReviewer = new Map<string, string>();
+    for (const review of reviews) {
       if (review.user && review.state !== "COMMENTED") {
         latestByReviewer.set(review.user.login, review.state);
       }
     }
     const reviewStates = [...latestByReviewer.values()];
     let reviewDecision: string | null = null;
-    if (reviewStates.includes("CHANGES_REQUESTED")) {
+    if (reviewsOverflow || reviewStates.includes("CHANGES_REQUESTED")) {
       reviewDecision = "CHANGES_REQUESTED";
     } else if (reviewStates.includes("APPROVED")) {
       reviewDecision = "APPROVED";
@@ -378,6 +455,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       expectedHeadSha: params.expectedHeadSha,
       pr: {
         state: pr.state,
+        draft: pr.draft ?? true,
         baseRef: pr.base.ref,
         baseSha,
         headRef: pr.head.ref,
@@ -424,6 +502,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       operation: structural.operation,
       node: structural.node,
       files: facts.files.map((file) => file.filename),
+      message: commit.commit.message,
     });
     return classifyOperatorChangeForMerge({
       ...facts,
@@ -441,13 +520,50 @@ export class GitHubVcsAdapter implements VcsCapability {
     operation: string;
     node: string;
     files: readonly string[];
+    message: string;
   }): Promise<boolean> {
-    // The child-repository operation has a compact complete replay: one stock
-    // repo-spec splice plus an exact parent-catalog source_repo binding. Parent
-    // operations stay disabled until their shared generator plans are callable
-    // here; enabling their registry entry before then remains fail-closed.
+    const reader: OperatorChangeReplayReader = {
+      readFile: async (ref, path) =>
+        this.readFileText(
+          input.targetOctokit,
+          input.owner,
+          input.repo,
+          path,
+          ref
+        ),
+      listPaths: async (ref, prefix) => {
+        const { data } = await input.targetOctokit.request(
+          "GET /repos/{owner}/{repo}/contents/{path}",
+          {
+            owner: input.owner,
+            repo: input.repo,
+            path: prefix,
+            ref,
+          }
+        );
+        if (!Array.isArray(data)) return [];
+        return data
+          .filter((entry) => entry.type === "file")
+          .map((entry) => `${prefix}/${entry.name}`);
+      },
+    };
+    if (input.operation !== "deployment.declare") {
+      return (
+        await replayOperatorChange({
+          operation: input.operation,
+          node: input.node,
+          baseSha: input.baseSha,
+          headSha: input.headSha,
+          message: input.message,
+          paths: input.files,
+          repository: `${input.owner}/${input.repo}`,
+          fleetControlEnv: this.config.fleetControlEnv,
+          forkDomainRoot: this.config.forkDomainRoot,
+          reader,
+        })
+      ).verified;
+    }
     if (
-      input.operation !== "deployment.declare" ||
       input.files.length !== 1 ||
       input.files[0] !== ".cogni/repo-spec.yaml" ||
       !this.config.operatorChangePolicyOwner ||
@@ -455,54 +571,29 @@ export class GitHubVcsAdapter implements VcsCapability {
     ) {
       return false;
     }
-    const [baseSpec, headSpec, catalog] = await Promise.all([
-      this.readFileText(
-        input.targetOctokit,
-        input.owner,
-        input.repo,
-        ".cogni/repo-spec.yaml",
-        input.baseSha
-      ),
-      this.readFileText(
-        input.targetOctokit,
-        input.owner,
-        input.repo,
-        ".cogni/repo-spec.yaml",
-        input.headSha
-      ),
-      this.readFileText(
-        input.policyOctokit,
-        this.config.operatorChangePolicyOwner,
-        this.config.operatorChangePolicyRepo,
-        `infra/catalog/${input.node}.yaml`,
-        "main"
-      ),
-    ]);
-    if (baseSpec === null || headSpec === null || catalog === null)
-      return false;
-    let parsedCatalog: unknown;
-    try {
-      parsedCatalog = parseYaml(catalog);
-    } catch {
-      return false;
-    }
-    if (
-      parsedCatalog === null ||
-      typeof parsedCatalog !== "object" ||
-      Array.isArray(parsedCatalog)
-    ) {
-      return false;
-    }
-    const row = parsedCatalog as Record<string, unknown>;
-    const expectedSourceRepo = `https://github.com/${input.owner}/${input.repo}.git`;
-    if (
-      row.name !== input.node ||
-      typeof row.source_repo !== "string" ||
-      row.source_repo.toLowerCase() !== expectedSourceRepo.toLowerCase()
-    ) {
-      return false;
-    }
-    return renderDeploymentActivationSpec(baseSpec) === headSpec;
+    const catalog = await this.readFileText(
+      input.policyOctokit,
+      this.config.operatorChangePolicyOwner,
+      this.config.operatorChangePolicyRepo,
+      `infra/catalog/${input.node}.yaml`,
+      "main"
+    );
+    if (catalog === null) return false;
+    return (
+      await replayOperatorChange({
+        operation: input.operation,
+        node: input.node,
+        baseSha: input.baseSha,
+        headSha: input.headSha,
+        message: input.message,
+        paths: input.files,
+        repository: `${input.owner}/${input.repo}`,
+        deploymentCatalog: catalog,
+        fleetControlEnv: this.config.fleetControlEnv,
+        forkDomainRoot: this.config.forkDomainRoot,
+        reader,
+      })
+    ).verified;
   }
 
   private async readFileText(
@@ -536,44 +627,148 @@ export class GitHubVcsAdapter implements VcsCapability {
   /**
    * The branch's REQUIRED status-check contexts across both GitHub enforcement
    * systems: classic branch protection and active rulesets. GitHub's effective
-   * policy is their union; spawned nodes use the rulesets path. Returns `[]` when
-   * neither system requires checks, which the merge gate treats as not-green /
-   * fail-closed. The active-rules endpoint includes repository + organization
-   * rules and needs only metadata:read.
+   * policy is their union; spawned nodes use the rulesets path. An empty check set
+   * or a paginated/truncated rules response is incomplete and the merge gate fails
+   * closed. The active-rules endpoint includes repository + organization rules and
+   * needs only metadata:read.
    */
   private async getRequiredContexts(
     octokit: Octokit,
     owner: string,
     repo: string,
     branch: string
-  ): Promise<string[]> {
-    const contexts = new Set<string>();
+  ): Promise<RequiredStatusChecksResult> {
+    const checks = new Map<string, RequiredStatusCheck>();
+    const add = (context: string, appId?: number) => {
+      const key = `${context}\u0000${appId ?? "unbound"}`;
+      checks.set(key, {
+        context,
+        ...(appId === undefined ? {} : { appId }),
+      });
+    };
     try {
       const { data } = await octokit.request(
         "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks",
         { owner, repo, branch }
       );
-      for (const context of data.contexts ?? []) contexts.add(context);
+      const classicChecks = (data.checks ?? []) as ReadonlyArray<{
+        context?: string;
+        app_id?: number | null;
+      }>;
+      const producerBoundContexts = new Set<string>();
+      for (const check of classicChecks) {
+        if (!check.context) continue;
+        if (typeof check.app_id === "number" && check.app_id !== -1) {
+          producerBoundContexts.add(check.context);
+          add(check.context, check.app_id);
+        } else {
+          add(check.context);
+        }
+      }
+      for (const context of data.contexts ?? []) {
+        if (!producerBoundContexts.has(context)) add(context);
+      }
     } catch (error) {
       if ((error as { status?: number })?.status !== 404) throw error;
     }
 
-    const { data: activeRules } = await octokit.request(
+    const activeRulesResponse = await octokit.request(
       "GET /repos/{owner}/{repo}/rules/branches/{branch}",
       { owner, repo, branch, per_page: 100 }
     );
+    const activeRules = activeRulesResponse.data;
     for (const rule of activeRules as ReadonlyArray<{
       type?: string;
       parameters?: {
-        required_status_checks?: ReadonlyArray<{ context?: string }>;
+        required_status_checks?: ReadonlyArray<{
+          context?: string;
+          integration_id?: number | null;
+        }>;
       };
     }>) {
       if (rule.type !== "required_status_checks") continue;
       for (const check of rule.parameters?.required_status_checks ?? []) {
-        if (check.context) contexts.add(check.context);
+        if (!check.context) continue;
+        add(
+          check.context,
+          typeof check.integration_id === "number"
+            ? check.integration_id
+            : undefined
+        );
       }
     }
-    return [...contexts];
+    return {
+      checks: [...checks.values()],
+      complete: !hasNextPage(activeRulesResponse),
+    };
+  }
+
+  /**
+   * Atomically land one verified generated change without entering the merge queue.
+   * The head must still be the PR's exact one-parent child of the observed base. GitHub's
+   * non-force ref update supplies the final compare-and-swap: if another PR advances the
+   * base after these reads, this update is no longer a fast-forward and fails closed.
+   */
+  async fastForwardOperatorChange(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    expectedBaseSha: string;
+    expectedHeadSha: string;
+  }): Promise<MergeResult> {
+    const octokit = await this.getOctokit(params.owner, params.repo);
+    try {
+      const [{ data: pr }, { data: commit }] = await Promise.all([
+        octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+          owner: params.owner,
+          repo: params.repo,
+          pull_number: params.prNumber,
+        }),
+        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+          owner: params.owner,
+          repo: params.repo,
+          ref: params.expectedHeadSha,
+        }),
+      ]);
+      if (
+        pr.state !== "open" ||
+        pr.draft !== false ||
+        pr.base.ref !== "main" ||
+        pr.base.sha !== params.expectedBaseSha ||
+        pr.head.sha !== params.expectedHeadSha ||
+        pr.head.repo?.full_name?.toLowerCase() !==
+          `${params.owner}/${params.repo}`.toLowerCase() ||
+        commit.sha !== params.expectedHeadSha ||
+        commit.parents.length !== 1 ||
+        commit.parents[0]?.sha !== params.expectedBaseSha
+      ) {
+        return {
+          merged: false,
+          enqueued: false,
+          status: 409,
+          message: "Generated change base/head precondition failed",
+        };
+      }
+
+      const { data: updated } = await octokit.request(
+        "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
+        {
+          owner: params.owner,
+          repo: params.repo,
+          ref: `heads/${pr.base.ref}`,
+          sha: params.expectedHeadSha,
+          force: false,
+        }
+      );
+      return {
+        merged: true,
+        enqueued: false,
+        sha: updated.object.sha,
+        message: "Verified generated change fast-forwarded atomically",
+      };
+    } catch (error) {
+      return this.toMergeFailure(error);
+    }
   }
 
   /**
@@ -588,11 +783,9 @@ export class GitHubVcsAdapter implements VcsCapability {
    *
    * MERGED_XOR_ENQUEUED: the merge gate (caller) has already asserted the PR is
    * green; this method only chooses the execution path by queue requirement. A caller that has
-   * already proved a narrower signed change type may request `bypassQueue`; in that case the App
-   * uses the ordinary merge endpoint and GitHub independently enforces that the App is an allowed
-   * ruleset bypass actor. Every direct merge also sends `expectedHeadSha`; GitHub rejects the
-   * request if the PR head moved after the caller's CI read. Required classic-protection checks
-   * still apply.
+   * Every direct merge also sends `expectedHeadSha`; GitHub rejects the request if the PR head
+   * moved after the caller's CI read. Required classic-protection checks still apply. The signed
+   * generated-change fast lane is deliberately separate in `fastForwardOperatorChange`.
    */
   async mergePr(params: {
     owner: string;
@@ -600,7 +793,6 @@ export class GitHubVcsAdapter implements VcsCapability {
     prNumber: number;
     method: "squash" | "merge" | "rebase";
     expectedHeadSha: string;
-    bypassQueue?: boolean;
   }): Promise<MergeResult> {
     const octokit = await this.getOctokit(params.owner, params.repo);
 
@@ -619,14 +811,17 @@ export class GitHubVcsAdapter implements VcsCapability {
       return this.toMergeFailure(error);
     }
 
-    const queueEnabled = params.bypassQueue
-      ? false
-      : await this.isMergeQueueEnabled(
-          octokit,
-          params.owner,
-          params.repo,
-          baseRef
-        );
+    let queueEnabled: boolean;
+    try {
+      queueEnabled = await this.isMergeQueueEnabled(
+        octokit,
+        params.owner,
+        params.repo,
+        baseRef
+      );
+    } catch (error) {
+      return this.toMergeFailure(error);
+    }
 
     if (queueEnabled) {
       try {
@@ -687,8 +882,8 @@ export class GitHubVcsAdapter implements VcsCapability {
   /**
    * True when `branch` has an active merge queue (a `merge_queue` ruleset or the
    * legacy "Require merge queue" toggle). GraphQL `repository.mergeQueue(branch)`
-   * returns a non-null node when one exists. Fail-open to `false` (direct merge)
-   * if the query errors — never block a merge on a flaky discovery call.
+   * returns a non-null node when one exists. Discovery failure propagates to a
+   * structured merge failure; it can never degrade into a direct App write.
    */
   private async isMergeQueueEnabled(
     octokit: Octokit,
@@ -696,21 +891,17 @@ export class GitHubVcsAdapter implements VcsCapability {
     repo: string,
     branch: string
   ): Promise<boolean> {
-    try {
-      const result = await octokit.graphql<{
-        repository: { mergeQueue: { id: string } | null } | null;
-      }>(
-        `query ($owner: String!, $repo: String!, $branch: String!) {
+    const result = await octokit.graphql<{
+      repository: { mergeQueue: { id: string } | null } | null;
+    }>(
+      `query ($owner: String!, $repo: String!, $branch: String!) {
           repository(owner: $owner, name: $repo) {
             mergeQueue(branch: $branch) { id }
           }
         }`,
-        { owner, repo, branch }
-      );
-      return Boolean(result.repository?.mergeQueue?.id);
-    } catch {
-      return false;
-    }
+      { owner, repo, branch }
+    );
+    return Boolean(result.repository?.mergeQueue?.id);
   }
 
   /** Enable auto-merge on a PR (routes through the merge queue when required). */
