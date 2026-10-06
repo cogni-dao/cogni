@@ -143,6 +143,10 @@ Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
 production/test App identities, the five operation names, their trusted replay verifier, and the
 repositories where each operation is enabled. `enabledRepositories` is empty for every operation
 until its positive and negative matrix passes in test-org.
+`childRepositoryApps` authenticates the App signer for not-yet-minted repository names only; it
+never enables an operation. Only `deployment.declare` may use it, after the protected base
+`.cogni/repo-spec.yaml` binds `intent.name` exactly to both the target repository name and signed
+node trailer. The operator still requires the parent's exact catalog `source_repo` binding.
 
 `scripts/ci/classify-operator-change-fast-path.sh` fails closed unless all of these are true:
 

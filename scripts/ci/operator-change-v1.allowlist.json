@@ -10,6 +10,16 @@
       "botId": 290565426
     }
   },
+  "childRepositoryApps": {
+    "cogni-dao": {
+      "botLogin": "cogni-operator[bot]",
+      "botId": 265189974
+    },
+    "cogni-test-org": {
+      "botLogin": "cogni-operator-test[bot]",
+      "botId": 290565426
+    }
+  },
   "operations": {
     "env.membership": {
       "enabledRepositories": [],

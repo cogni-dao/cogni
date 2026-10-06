@@ -23,6 +23,10 @@ export interface OperatorChangeRegistry {
   readonly repositories: Readonly<
     Record<string, { readonly botLogin: string; readonly botId: number }>
   >;
+  /** Signer identity only; never operation eligibility. */
+  readonly childRepositoryApps: Readonly<
+    Record<string, { readonly botLogin: string; readonly botId: number }>
+  >;
   readonly operations: Readonly<
     Record<
       OperatorChangeOperation,
@@ -36,6 +40,8 @@ export interface OperatorChangeRegistry {
 
 export interface OperatorChangeFacts {
   readonly repository: string;
+  /** `intent.name` independently read from the current base repo-spec. */
+  readonly repositoryNode: string | null;
   readonly expectedHeadSha: string;
   readonly pr: {
     readonly state: string;
@@ -131,11 +137,15 @@ export function parseOperatorChangeRegistry(
   const candidate = value as Record<string, unknown>;
   if (candidate.version !== OPERATOR_CHANGE_TYPE) return null;
   const repositories = candidate.repositories;
+  const childRepositoryApps = candidate.childRepositoryApps;
   const operations = candidate.operations;
   if (
     repositories === null ||
     typeof repositories !== "object" ||
     Array.isArray(repositories) ||
+    childRepositoryApps === null ||
+    typeof childRepositoryApps !== "object" ||
+    Array.isArray(childRepositoryApps) ||
     operations === null ||
     typeof operations !== "object" ||
     Array.isArray(operations)
@@ -143,6 +153,17 @@ export function parseOperatorChangeRegistry(
     return null;
   }
   for (const identity of Object.values(repositories)) {
+    if (
+      identity === null ||
+      typeof identity !== "object" ||
+      Array.isArray(identity) ||
+      typeof (identity as Record<string, unknown>).botLogin !== "string" ||
+      !Number.isInteger((identity as Record<string, unknown>).botId)
+    ) {
+      return null;
+    }
+  }
+  for (const identity of Object.values(childRepositoryApps)) {
     if (
       identity === null ||
       typeof identity !== "object" ||
@@ -180,9 +201,6 @@ export function classifyOperatorChangeForMerge(
   facts: OperatorChangeFacts
 ): OperatorChangeClassification {
   const repo = facts.repository.toLowerCase();
-  const identity = facts.registry.repositories[repo];
-  if (!identity) return reject(facts, "untrusted-repository");
-
   const message = facts.commit.message;
   if (singleTrailer(message, "Cogni-Change-Type") !== OPERATOR_CHANGE_TYPE) {
     return reject(facts, "reserved-envelope-not-claimed");
@@ -200,6 +218,23 @@ export function classifyOperatorChangeForMerge(
   const signedPathHash = singleTrailer(message, "Cogni-Changed-Paths-SHA256");
   if (!node || !NODE.test(node))
     return reject(facts, "invalid-node", operation);
+
+  let identity = facts.registry.repositories[repo];
+  if (!identity && operation === "deployment.declare") {
+    const parts = repo.split("/");
+    const owner = parts[0];
+    const repoName = parts[1];
+    if (
+      parts.length === 2 &&
+      owner &&
+      repoName === node &&
+      facts.repositoryNode === node
+    ) {
+      identity = facts.registry.childRepositoryApps[owner];
+    }
+  }
+  if (!identity) return reject(facts, "untrusted-repository", operation, node);
+
   if (!baseSha || !SHA.test(baseSha)) {
     return reject(facts, "invalid-base-sha", operation, node);
   }

@@ -34,6 +34,12 @@ const registry: OperatorChangeRegistry = {
       botId: 290565426,
     },
   },
+  childRepositoryApps: {
+    "cogni-test-org": {
+      botLogin: "cogni-operator-test[bot]",
+      botId: 290565426,
+    },
+  },
   operations: {
     "env.membership": {
       enabledRepositories: [repository],
@@ -51,6 +57,7 @@ function facts(
 ): OperatorChangeFacts {
   return {
     repository,
+    repositoryNode: "cogni-monorepo",
     expectedHeadSha: headSha,
     pr: {
       state: "open",
@@ -120,5 +127,42 @@ describe("classifyOperatorChangeForMerge", () => {
     expect(
       classifyOperatorChangeForMerge(facts({ operationReplayVerified: false }))
     ).toMatchObject({ eligible: false, reason: "operation-replay-failed" });
+  });
+
+  it("accepts only repo-spec-bound child identity for deployment classification", () => {
+    const childRepository = "cogni-test-org/blue";
+    const childPath = ".cogni/repo-spec.yaml";
+    const childPathHash = createHash("sha256")
+      .update(`${childPath}\n`)
+      .digest("hex");
+    const childMessage = [
+      "feat(deploy): declare blue node deployment",
+      "",
+      "Cogni-Change-Type: cogni.operator-change.v1",
+      "Cogni-Operation: deployment.declare",
+      "Cogni-Node: blue",
+      `Cogni-Base-SHA: ${baseSha}`,
+      `Cogni-Changed-Paths-SHA256: ${childPathHash}`,
+    ].join("\n");
+    const input = facts({
+      repository: childRepository,
+      repositoryNode: "blue",
+      pr: {
+        ...facts().pr,
+        headRef: "cogni-operator/declare-deployment-blue",
+        headRepoFullName: childRepository,
+      },
+      commit: { ...facts().commit, message: childMessage },
+      files: [
+        { filename: childPath, previousFilename: null, status: "modified" },
+      ],
+    });
+    expect(classifyOperatorChangeForMerge(input)).toMatchObject({
+      eligible: false,
+      reason: "operation-disabled",
+    });
+    expect(
+      classifyOperatorChangeForMerge({ ...input, repositoryNode: "not-blue" })
+    ).toMatchObject({ eligible: false, reason: "untrusted-repository" });
   });
 });

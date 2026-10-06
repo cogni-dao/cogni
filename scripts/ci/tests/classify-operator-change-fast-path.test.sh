@@ -74,6 +74,40 @@ run_classifier "$tmpdir/pinned-policy.out" "" "$tmpdir/policy"
 [[ "$(value "$tmpdir/pinned-policy.out" eligible)" == true ]]
 [[ "$(value "$tmpdir/pinned-policy.out" reason)" == eligible ]]
 
+# An unknown child repo can authenticate only deployment.declare, and only
+# when protected base repo-spec binds intent.name to both repo and trailer.
+child_base_sha="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+child_node=cogni-template
+child_repo=Cogni-DAO/cogni-template
+child_path=.cogni/repo-spec.yaml
+printf '%s\n' "$child_path" > "$tmpdir/child-paths.txt"
+child_paths_hash="$(shasum -a 256 "$tmpdir/child-paths.txt" | awk '{print $1}')"
+child_message="feat(deploy): declare $child_node node deployment
+
+Cogni-Change-Type: cogni.operator-change.v1
+Cogni-Operation: deployment.declare
+Cogni-Node: $child_node
+Cogni-Base-SHA: $child_base_sha
+Cogni-Changed-Paths-SHA256: $child_paths_hash"
+jq -n --arg head "$head_sha" --arg base "$child_base_sha" --arg repo "$child_repo" --arg node "$child_node" \
+  '{state:"open",base:{ref:"main",sha:$base},head:{sha:$head,ref:("cogni-operator/declare-deployment-" + $node),repo:{full_name:$repo}},user:{login:"cogni-operator[bot]",id:265189974,type:"Bot"},commits:1}' > "$tmpdir/child-pr.json"
+jq -n --arg head "$head_sha" --arg base "$child_base_sha" --arg message "$child_message" \
+  '{sha:$head,author:{login:"cogni-operator[bot]",id:265189974},parents:[{sha:$base}],commit:{message:$message,verification:{verified:true,reason:"valid"}}}' > "$tmpdir/child-commit.json"
+jq -n --arg path "$child_path" '[{filename:$path,previous_filename:null,status:"modified"}]' > "$tmpdir/child-files.json"
+GITHUB_OUTPUT="$tmpdir/child.out" EVENT_NAME=pull_request REPOSITORY="$child_repo" PR_NUMBER_PR=43 \
+  PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/child-pr.json" \
+  FAST_PATH_COMMIT_JSON="$tmpdir/child-commit.json" FAST_PATH_FILES_JSON="$tmpdir/child-files.json" \
+  FAST_PATH_REGISTRY_JSON="$REGISTRY" bash "$CLASSIFIER" >/dev/null
+[[ "$(value "$tmpdir/child.out" invalid)" == false ]]
+[[ "$(value "$tmpdir/child.out" reason)" == operation-disabled ]]
+
+GITHUB_OUTPUT="$tmpdir/wrong-child.out" EVENT_NAME=pull_request REPOSITORY=Cogni-DAO/not-cogni-template PR_NUMBER_PR=44 \
+  PR_HEAD_SHA_PR="$head_sha" FAST_PATH_PR_JSON="$tmpdir/child-pr.json" \
+  FAST_PATH_COMMIT_JSON="$tmpdir/child-commit.json" FAST_PATH_FILES_JSON="$tmpdir/child-files.json" \
+  FAST_PATH_REGISTRY_JSON="$REGISTRY" bash "$CLASSIFIER" >/dev/null
+[[ "$(value "$tmpdir/wrong-child.out" invalid)" == true ]]
+[[ "$(value "$tmpdir/wrong-child.out" reason)" == untrusted-repository ]]
+
 # Every operation is explicitly registered and disabled pending test-org proof.
 jq -e '
   .version == "cogni.operator-change.v1"

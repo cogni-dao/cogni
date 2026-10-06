@@ -102,10 +102,6 @@ fi
 jq -e --arg version "$CHANGE_TYPE" '.version == $version' "$registry_json" >/dev/null || reject_claim invalid-trusted-registry
 
 repository_key="$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
-bot_login="$(jq -r --arg repo "$repository_key" '.repositories[$repo].botLogin // empty' "$registry_json")"
-bot_id="$(jq -r --arg repo "$repository_key" '.repositories[$repo].botId // empty' "$registry_json")"
-[[ -n "$bot_login" && "$bot_id" =~ ^[0-9]+$ ]] || reject_claim untrusted-repository
-
 node="$(trailer_value Cogni-Node)" || reject_claim duplicate-or-missing-node
 operation="$(trailer_value Cogni-Operation)" || reject_claim duplicate-or-missing-operation
 base_sha="$(trailer_value Cogni-Base-SHA)" || reject_claim duplicate-or-missing-base-sha
@@ -118,6 +114,29 @@ emit operation "$operation"
 [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] || reject_claim invalid-base-sha
 [[ "$signed_paths_hash" =~ ^[0-9a-f]{64}$ ]] || reject_claim invalid-path-hash
 jq -e --arg operation "$operation" '.operations[$operation] != null' "$registry_json" >/dev/null || reject_claim unlisted-operation
+
+bot_login="$(jq -r --arg repo "$repository_key" '.repositories[$repo].botLogin // empty' "$registry_json")"
+bot_id="$(jq -r --arg repo "$repository_key" '.repositories[$repo].botId // empty' "$registry_json")"
+if [[ -z "$bot_login" || ! "$bot_id" =~ ^[0-9]+$ ]]; then
+  # Child repository names do not exist before mint. Only deployment.declare
+  # may derive its exact repo identity from protected base repo-spec; this
+  # namespace mapping authenticates the App signer and grants no eligibility.
+  [[ "$operation" == deployment.declare ]] || reject_claim untrusted-repository
+  repo_owner="${repository_key%%/*}"
+  repo_name="${repository_key#*/}"
+  [[ -n "$repo_owner" && "$repo_name" != "$repository_key" && "$repo_name" != */* ]] || reject_claim untrusted-repository
+  base_repo_spec="$tmpdir/base-repo-spec.yaml"
+  git show "$base_sha:.cogni/repo-spec.yaml" > "$base_repo_spec" 2>/dev/null || reject_claim untrusted-repository
+  repo_spec_node="$(awk '
+    $0 == "intent:" { in_intent = 1; next }
+    in_intent && /^[^ ]/ { in_intent = 0 }
+    in_intent && /^  name: [a-z0-9][a-z0-9-]*$/ { sub(/^  name: /, ""); print }
+  ' "$base_repo_spec")"
+  [[ "$repo_spec_node" == "$node" && "$repo_name" == "$node" ]] || reject_claim untrusted-repository
+  bot_login="$(jq -r --arg owner "$repo_owner" '.childRepositoryApps[$owner].botLogin // empty' "$registry_json")"
+  bot_id="$(jq -r --arg owner "$repo_owner" '.childRepositoryApps[$owner].botId // empty' "$registry_json")"
+fi
+[[ -n "$bot_login" && "$bot_id" =~ ^[0-9]+$ ]] || reject_claim untrusted-repository
 
 jq -e \
   --arg login "$bot_login" --argjson bot_id "$bot_id" --arg repo "$REPOSITORY" --arg base_sha "$base_sha" \

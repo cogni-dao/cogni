@@ -331,7 +331,7 @@ export class GitHubVcsAdapter implements VcsCapability {
     const registry = parseOperatorChangeRegistry(registryValue);
     if (registry === null) return fail("invalid-trusted-registry");
 
-    const [commitResponse, filesResponse] = await Promise.all([
+    const [commitResponse, filesResponse, baseRepoSpec] = await Promise.all([
       targetOctokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
         owner: params.owner,
         repo: params.repo,
@@ -347,13 +347,34 @@ export class GitHubVcsAdapter implements VcsCapability {
           page: 1,
         }
       ),
+      this.readFileText(
+        targetOctokit,
+        params.owner,
+        params.repo,
+        ".cogni/repo-spec.yaml",
+        baseSha
+      ),
     ]);
     if (filesResponse.headers.link?.includes('rel="next"')) {
       return fail("changed-file-list-truncated");
     }
     const commit = commitResponse.data;
+    let repositoryNode: string | null = null;
+    if (baseRepoSpec !== null) {
+      try {
+        const parsedSpec = parseYaml(baseRepoSpec) as {
+          intent?: { name?: unknown };
+        } | null;
+        if (typeof parsedSpec?.intent?.name === "string") {
+          repositoryNode = parsedSpec.intent.name;
+        }
+      } catch {
+        repositoryNode = null;
+      }
+    }
     const facts: OperatorChangeFacts = {
       repository: `${params.owner}/${params.repo}`,
+      repositoryNode,
       expectedHeadSha: params.expectedHeadSha,
       pr: {
         state: pr.state,
