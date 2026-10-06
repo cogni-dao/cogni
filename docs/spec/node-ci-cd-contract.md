@@ -72,6 +72,19 @@ The simplification target is one artifact contract and one promotion primitive. 
     or `controlEnvFor` (`nodes/operator/app/src/features/compute/node-deployment-provider.ts`)
     — never by reading the env variable directly. See `## Lane vs control env` below.
 
+12. **BIRTH_FAST_PATH_STOPS_AT_DATA**: a signed parent node-birth PR may skip
+    generic parent CI only when `origin/main`'s trusted verifier proves one
+    byte-exact, node-scoped declarative birth plan. Executable source and shared
+    aggregates are never eligible. The child source repo always keeps standard
+    CI, immutable image publication, candidate exact-SHA proof, and same-digest
+    production promotion. App signature proves authorship, not correctness.
+
+13. **CLAIMED_GENERATED_TYPES_FAIL_CLOSED**: a malformed reserved generated
+    claim is red; it does not silently become an ordinary PR. Unclaimed PRs and
+    human-edited/multi-commit PRs use ordinary CI and the merge queue. A direct
+    generated merge must bind GitHub's expected-head SHA after re-reading the
+    current base and head.
+
 ---
 
 ## Lane vs control env
