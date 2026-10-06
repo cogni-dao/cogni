@@ -174,14 +174,11 @@ describe("nodeMainPolicyRulesetPayload", () => {
     "-1",
     "not-an-app",
     "1.5",
-  ])(
-    "rejects invalid configured App ID %s for v2",
-    (appId) => {
-      expect(() =>
-        nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, appId)
-      ).toThrow("positive configured operator App ID");
-    }
-  );
+  ])("rejects invalid configured App ID %s for v2", (appId) => {
+    expect(() =>
+      nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, appId)
+    ).toThrow("positive configured operator App ID");
+  });
 });
 
 describe("operatorChangeCommitMessage", () => {
