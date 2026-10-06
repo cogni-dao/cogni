@@ -79,6 +79,11 @@ export {
   renderNodeExternalSecretKustomization,
 } from "./external-secret";
 export { insertNetworkNode } from "./network-nodes";
+export {
+  type NodeBirthPathPlan,
+  type NodeBirthPathPlanInput,
+  nodeBirthPathPlan,
+} from "./node-birth-plan";
 export { nextFreeNodePort } from "./node-port";
 export { renderOverlay, renderOverlayFile } from "./overlay";
 export {

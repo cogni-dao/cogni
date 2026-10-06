@@ -1267,7 +1267,7 @@ function getLivenessAccessor(): ReturnType<typeof createLivenessAccessor> {
 
 /**
  * Resolve the public node registry: the SELF-DESCRIBED gallery. The candidate roster (operator's bundled
- * catalog nodes + the DB wizard projection, `status='active'`) is ENRICHED from a CACHED per-slug probe
+ * fallback nodes + the DB wizard projection, `status='active'`) is ENRICHED from a CACHED per-slug probe
  * that reads each node's liveness (`/readyz`) AND self-described identity (`/.well-known/agent.json`). So
  * the gallery shows the full roster, each card's title/tagline/thumbnail/color coming from the node's OWN
  * repo-spec projection (zero operator-side identity literals) plus an honest live/down health badge.

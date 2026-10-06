@@ -80,7 +80,6 @@ import {
   hasPaymentsActivationSpec,
   insertAppsetKustomization,
   insertCaddyBlock,
-  insertNetworkNode,
   insertSchedulerEndpoint,
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
@@ -4813,26 +4812,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
         );
       }
 
-      // network-nodes roster splice: the operator runtime image can't fs-glob infra/catalog,
-      // so the web-node roster (network-nodes.data.ts) is a committed catalog projection kept
-      // honest by network-nodes-catalog-drift.test.ts (roster slug set == catalog type:node set).
-      // Splice this node in so the publish PR is born drift-green — else the roster is stale and
-      // the operator-authored auto-PR is un-mergeable (the roster was hand-maintained, blocking
-      // every new node). Mirrors the catalog splice: `readFileOnMain` FAIL-LOUD (not a
-      // fetchFileText null-guard) because the roster is a MANDATORY, always-present monorepo file —
-      // a fetch-miss must throw, never silently birth a drift-red PR (the exact bug this fixes).
-      const rosterPath =
-        "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts";
-      const currentRoster = await this.readFileOnMain(
-        octokit,
-        owner,
-        repo,
-        rosterPath
-      );
-      await addBlob(
-        rosterPath,
-        insertNetworkNode(currentRoster, slug, input.nodeId)
-      );
+      // No network-nodes.data.ts splice. It is compiled runtime source, so including it in a
+      // signed node.register.v1 commit would let a data-plane operation bypass the application
+      // build. Wizard nodes are already projected from the DB by DbNodeRegistryAdapter; the
+      // committed static roster remains an unchanged fallback for its existing entries.
     }
 
     // No pnpm-lock.yaml: a submodule node is not a workspace member of the operator monorepo — its

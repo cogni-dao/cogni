@@ -2007,27 +2007,6 @@ resources:
 `),
           };
         }
-        // The committed web-node roster (mandatory monorepo file). The publish MUST splice the
-        // new node in here so the PR is born drift-green (network-nodes-catalog-drift gate).
-        if (
-          path ===
-          "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts"
-        ) {
-          return {
-            type: "file",
-            encoding: "base64",
-            content: encode(`export interface NetworkNode {
-  name: string;
-  nodeId?: string;
-  primary?: boolean;
-}
-
-export const NETWORK_NODES: readonly NetworkNode[] = [
-  { name: "node-template", nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c" },
-];
-`),
-          };
-        }
         throw statusError(404, `not found: ${path}`);
       },
       "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": (params) => {
@@ -2173,23 +2152,15 @@ node_port: 30200
           );
         }
 
-        // ROSTER DRIFT-GREEN PROOF (#1957): the publish PR MUST splice the new node into the
-        // committed web-node roster in the SAME tree as the catalog row it adds — else the
-        // network-nodes-catalog-drift gate fails `unit` and the auto-PR is un-mergeable. Assert
-        // the emitted roster blob carries `atlas` (new node) AND keeps the existing node-template.
+        // EXECUTABLE_OUTPUT_IS_INELIGIBLE (story.5065): birth is a declarative operation. The
+        // operator image's compiled roster must not enter its signed tree; wizard nodes resolve
+        // through the DB registry projection while the existing static fallback remains unchanged.
         const rosterEntry = tree.find(
           (item) =>
             item.path ===
             "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts"
         );
-        expect(rosterEntry).toBeDefined();
-        const roster = blobs.get(rosterEntry?.sha ?? "");
-        expect(roster).toContain(
-          `  { name: "atlas", nodeId: "11111111-1111-4111-8111-111111111111" },`
-        );
-        expect(roster).toContain(`{ name: "node-template",`);
-        // Drift-green by construction: the catalog gains atlas.yaml (type:node) and the roster
-        // gains `atlas` in the SAME commit → the slug sets stay equal.
+        expect(rosterEntry).toBeUndefined();
         const catalogEntry = tree.find(
           (item) => item.path === "infra/catalog/atlas.yaml"
         );

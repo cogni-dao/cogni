@@ -3,9 +3,8 @@
 
 /**
  * Module: `@adapters/server/node-registry/static-node-registry.adapter`
- * Purpose: NodeRegistryPort adapter for the operator's committed network roster — the full set of
- *   deployed web nodes (the catalog `type: node` entries). Composed with the DB-projection adapter for
- *   wizard-created dynamic nodes.
+ * Purpose: NodeRegistryPort adapter for the operator's committed fallback roster of established web
+ *   nodes. Composed with the DB-projection adapter that owns wizard-created dynamic membership.
  * Scope: Maps roster full-app nodes → a NodeSummary SKELETON (slug, repo, href, primary), resolving hrefs
  *   from a base domain. It supplies NO display identity: `title` defaults to `titleCaseSlug(slug)` and
  *   `tagline` to "" — both are OVERWRITTEN downstream by the LiveNodeRegistryAdapter from each node's own
@@ -47,7 +46,7 @@ function toSummary(node: NetworkNode, domain: string | undefined): NodeSummary {
   };
 }
 
-/** Serves the committed network roster of full-app web nodes (catalog `type: node`). */
+/** Serves the committed fallback roster of established full-app web nodes. */
 export class StaticNodeRegistryAdapter implements NodeRegistryPort {
   constructor(
     private readonly nodes: readonly NetworkNode[] = NETWORK_NODES,
