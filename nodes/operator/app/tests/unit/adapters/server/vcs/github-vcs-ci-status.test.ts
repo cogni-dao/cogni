@@ -105,7 +105,9 @@ function ciHandlers(input: {
     if (route === CHECK_RUNS_ROUTE) return { check_runs: input.checkRuns };
     if (route === STATUS_ROUTE) return { statuses: input.statuses ?? [] };
     if (route === REVIEWS_ROUTE) {
-      return params.page === 2 ? input.nextReviews ?? [] : input.reviews ?? [];
+      return params.page === 2
+        ? (input.nextReviews ?? [])
+        : (input.reviews ?? []);
     }
     if (route === COMMIT_ROUTE) {
       return {
@@ -317,6 +319,69 @@ describe("GitHubVcsAdapter.getCiStatus — merge-gate greenness (bug.5123)", () 
     expect(ci.pending).toBe(true);
   });
 
+  it("fails closed when the same required producer reports conflicting results", async () => {
+    onRequest = ciHandlers({
+      checkRuns: [
+        ...STANDARD_CONTEXTS.map((name) => ({
+          name,
+          status: "completed",
+          conclusion: "success",
+          app: { id: 15368, slug: "github-actions" },
+        })),
+        {
+          name: "unit",
+          status: "completed",
+          conclusion: "failure",
+          app: { id: 15368, slug: "github-actions" },
+        },
+      ],
+      classicRequiredChecks: {
+        contexts: [...STANDARD_CONTEXTS],
+        checks: STANDARD_CONTEXTS.map((context) => ({
+          context,
+          app_id: 15368,
+        })),
+      },
+      activeRules: [],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(false);
+    expect(ci.pending).toBe(false);
+  });
+
+  it("treats classic app_id -1 as an unbound any-producer gate", async () => {
+    onRequest = ciHandlers({
+      checkRuns: [],
+      statuses: STANDARD_CONTEXTS.map((context) => ({
+        context,
+        state: "success",
+      })),
+      classicRequiredChecks: {
+        contexts: [...STANDARD_CONTEXTS],
+        checks: STANDARD_CONTEXTS.map((context) => ({
+          context,
+          app_id: -1,
+        })),
+      },
+      activeRules: [],
+    });
+
+    const ci = await adapter().getCiStatus({
+      owner: "o",
+      repo: "r",
+      prNumber: 5,
+    });
+
+    expect(ci.allGreen).toBe(true);
+    expect(ci.pending).toBe(false);
+  });
+
   it("fails closed when reviews exceed the first 100-result page", async () => {
     onRequest = ciHandlers({
       checkRuns: GREEN_STANDARD_RUNS,
@@ -344,8 +409,8 @@ describe("GitHubVcsAdapter.getCiStatus — merge-gate greenness (bug.5123)", () 
     });
 
     expect(ci.reviewDecision).toBe("CHANGES_REQUESTED");
-    expect(requestRoutes.filter((route) => route === REVIEWS_ROUTE)).toHaveLength(
-      2
-    );
+    expect(
+      requestRoutes.filter((route) => route === REVIEWS_ROUTE)
+    ).toHaveLength(2);
   });
 });

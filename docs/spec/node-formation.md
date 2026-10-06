@@ -343,7 +343,7 @@ Populated later by `pnpm node:activate-payments` (child node CLI):
 
 > Current schema: [.cogni/repo-spec.yaml](../../.cogni/repo-spec.yaml)
 
-### Node Publish (Operator-Authored Submodule PR)
+### Node Publish (Operator-Authored Registration PR)
 
 #### Unified generated-change envelope
 
@@ -360,6 +360,7 @@ Cogni-Node: <slug>
 Cogni-Node-Id: <uuid>
 Cogni-Source-Repo: https://github.com/<fleet-org>/<slug>.git
 Cogni-Source-SHA: <40-hex child main SHA>
+Cogni-Owner-Wallet: <normalized 0x address>
 Cogni-Base-SHA: <40-hex parent main SHA>
 Cogni-Changed-Paths-SHA256: <sha256 of sorted unique paths, one path per line>
 ```
@@ -370,10 +371,10 @@ the classifier from `origin/main`, verifies the exact repository-scoped App,
 signature, branch, one-commit history, trailers, parent/base SHA, and path hash,
 then replays the trusted birth plan and requires a byte-identical result.
 
-`REGISTER_REPLAY_IS_COMPLETE_OR_DISABLED`: the current writer has 14 outputs. Thirteen declarative
-outputs can be replayed exactly (catalog, overlays, AppSets and their index, Caddy, and scheduler
-projections). The executable compiled roster cannot. Registration therefore stays disabled until
-that roster write is removed or a trusted exact verifier can reproduce the entire changed tree.
+`REGISTER_REPLAY_IS_COMPLETE_OR_DISABLED`: the writer and verifier share one complete deterministic
+13-path, data-only birth plan (catalog, overlays, AppSets and their index, Caddy, and scheduler
+projections). Registration remains disabled until its positive and negative test-org matrix passes,
+not because any output is outside replay.
 
 `CLAIMED_INVALID_IS_RED`: a commit that claims `cogni.operator-change.v1` but fails
 any proof is rejected. A human edit, additional commit, unsigned/non-App

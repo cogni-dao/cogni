@@ -248,14 +248,13 @@ export class GitHubVcsAdapter implements VcsCapability {
         required.appId === undefined
           ? evidence.source === "legacy-status" ||
             evidence.appSlug === "github-actions"
-          : evidence.source === "check-run" &&
-            evidence.appId === required.appId
+          : evidence.source === "check-run" && evidence.appId === required.appId
       );
     const pending = requiredContexts.some((required) => {
       const evidence = evidenceFor(required);
       return (
         evidence.length === 0 ||
-        evidence.every(
+        evidence.some(
           (candidate) =>
             candidate.status !== "completed" || candidate.conclusion === null
         )
@@ -263,14 +262,18 @@ export class GitHubVcsAdapter implements VcsCapability {
     });
     const allGreen =
       requiredContexts.length > 0 &&
-      requiredContexts.every((required) =>
-        evidenceFor(required).some(
-          (candidate) =>
-            candidate.status === "completed" &&
-            (candidate.conclusion === "success" ||
-              candidate.conclusion === "skipped")
-        )
-      );
+      requiredContexts.every((required) => {
+        const evidence = evidenceFor(required);
+        return (
+          evidence.length > 0 &&
+          evidence.every(
+            (candidate) =>
+              candidate.status === "completed" &&
+              (candidate.conclusion === "success" ||
+                candidate.conclusion === "skipped")
+          )
+        );
+      });
 
     // Compute review decision from individual reviews.
     // Take the latest review per reviewer; if any APPROVED and none CHANGES_REQUESTED → approved.
@@ -650,7 +653,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       const producerBoundContexts = new Set<string>();
       for (const check of classicChecks) {
         if (!check.context) continue;
-        if (typeof check.app_id === "number") {
+        if (typeof check.app_id === "number" && check.app_id !== -1) {
           producerBoundContexts.add(check.context);
           add(check.context, check.app_id);
         } else {

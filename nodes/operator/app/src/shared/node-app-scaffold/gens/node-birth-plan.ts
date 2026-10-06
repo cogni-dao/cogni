@@ -18,7 +18,7 @@
  */
 
 import { nodeAppBaseUrl } from "../../node-registry/placement";
-import { renderNodeAppset, insertAppsetKustomization } from "./appset";
+import { insertAppsetKustomization, renderNodeAppset } from "./appset";
 import { insertCaddyBlock } from "./caddyfile";
 import { renderCatalog } from "./catalog";
 import {
