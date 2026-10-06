@@ -170,7 +170,6 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       repo: "r",
       prNumber: 7,
       method: "squash",
-      expectedHeadSha: "verified-head-sha",
       bypassQueue: true,
       expectedHeadSha: "a".repeat(40),
     });
