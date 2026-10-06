@@ -141,6 +141,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build workspace packages
+        run: pnpm packages:build
+
       # TEMP task.5185 bootstrap: GitHub-hosted CI builds the corrected CommonJS
       # zero-install classifier/replay bundle. Remove after committing this exact
       # artifact and restoring the permanent byte-for-byte rebuild gate.
@@ -155,9 +158,6 @@ jobs:
           name: operator-change-replay-${{ github.sha }}
           path: ${{ runner.temp }}/operator-change-replay/operator-change-replay.cjs
           if-no-files-found: error
-
-      - name: Build workspace packages
-        run: pnpm packages:build
 
       - name: Type check
         run: pnpm typecheck
