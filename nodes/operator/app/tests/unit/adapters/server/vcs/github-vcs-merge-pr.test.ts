@@ -13,6 +13,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { CiStatusResult } from "@cogni/ai-tools";
 import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,6 +31,7 @@ let onGraphql: GraphqlHandler;
 const requestRoutes: string[] = [];
 const requestParams: Record<string, unknown>[] = [];
 const graphqlQueries: string[] = [];
+const graphqlVars: Record<string, unknown>[] = [];
 
 vi.mock("@octokit/auth-app", () => ({
   createAppAuth: () => async () => ({ token: "app-token" }),
@@ -44,6 +46,7 @@ vi.mock("@octokit/core", () => ({
     }
     async graphql(query: string, vars: Record<string, unknown>) {
       graphqlQueries.push(query);
+      graphqlVars.push(vars);
       return onGraphql(query, vars);
     }
   },
@@ -53,6 +56,26 @@ import { GitHubVcsAdapter } from "@/adapters/server/vcs/github-vcs.adapter";
 
 function adapter(): GitHubVcsAdapter {
   return new GitHubVcsAdapter({ appId: "1", privateKey: "k" });
+}
+
+function greenMergeCi(
+  overrides: Partial<CiStatusResult> = {}
+): CiStatusResult {
+  return {
+    prNumber: 7,
+    prTitle: "feat: protected change",
+    author: "agent",
+    baseBranch: "main",
+    headSha: "verified-head-sha",
+    mergeable: true,
+    reviewDecision: null,
+    labels: [],
+    draft: false,
+    allGreen: true,
+    pending: false,
+    checks: [],
+    ...overrides,
+  };
 }
 
 const PR_GET_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}";
@@ -73,6 +96,7 @@ beforeEach(() => {
   requestRoutes.length = 0;
   requestParams.length = 0;
   graphqlQueries.length = 0;
+  graphqlVars.length = 0;
   // Installation lookup goes through global fetch.
   vi.stubGlobal(
     "fetch",
@@ -104,7 +128,9 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       throw new Error(`Unhandled request route: ${route}`);
     };
 
-    const result = await adapter().mergePr({
+    const vcs = adapter();
+    vi.spyOn(vcs, "getCiStatus").mockResolvedValue(greenMergeCi());
+    const result = await vcs.mergePr({
       owner: "o",
       repo: "r",
       prNumber: 7,
@@ -141,7 +167,9 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       );
     };
 
-    const result = await adapter().mergePr({
+    const vcs = adapter();
+    vi.spyOn(vcs, "getCiStatus").mockResolvedValue(greenMergeCi());
+    const result = await vcs.mergePr({
       owner: "o",
       repo: "r",
       prNumber: 7,
@@ -155,6 +183,11 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
     expect(requestRoutes).not.toContain(MERGE_ROUTE);
     // queue-detect + enable-auto-merge both ran.
     expect(graphqlQueries.length).toBe(2);
+    expect(graphqlVars.at(-1)).toMatchObject({
+      pullRequestId: "PR_node_1",
+      mergeMethod: "SQUASH",
+      expectedHeadOid: "verified-head-sha",
+    });
   });
 
   it("never direct-merges when merge-queue discovery fails", async () => {
@@ -168,7 +201,9 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       throw new Error(`Unexpected REST request: ${route}`);
     };
 
-    const result = await adapter().mergePr({
+    const vcs = adapter();
+    vi.spyOn(vcs, "getCiStatus").mockResolvedValue(greenMergeCi());
+    const result = await vcs.mergePr({
       owner: "o",
       repo: "r",
       prNumber: 7,
@@ -193,7 +228,9 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       throw new Error(`Unhandled request route: ${route}`);
     };
 
-    const result = await adapter().mergePr({
+    const vcs = adapter();
+    vi.spyOn(vcs, "getCiStatus").mockResolvedValue(greenMergeCi());
+    const result = await vcs.mergePr({
       owner: "o",
       repo: "r",
       prNumber: 7,
@@ -220,7 +257,9 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       throw new Error(`Unhandled request route: ${route}`);
     };
 
-    const result = await adapter().mergePr({
+    const vcs = adapter();
+    vi.spyOn(vcs, "getCiStatus").mockResolvedValue(greenMergeCi());
+    const result = await vcs.mergePr({
       owner: "o",
       repo: "r",
       prNumber: 7,
@@ -233,6 +272,65 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       enqueued: false,
       status: 409,
     });
+  });
+
+  it.each([
+    {
+      name: "red required checks",
+      ci: { allGreen: false },
+      expectedStatus: 422,
+    },
+    {
+      name: "pending required checks",
+      ci: { pending: true },
+      expectedStatus: 422,
+    },
+    { name: "draft", ci: { draft: true }, expectedStatus: 422 },
+    {
+      name: "wrong base",
+      ci: { baseBranch: "release" },
+      expectedStatus: 422,
+    },
+    {
+      name: "merge conflict",
+      ci: { mergeable: false },
+      expectedStatus: 422,
+    },
+    {
+      name: "review hold or overflow",
+      ci: { reviewDecision: "CHANGES_REQUESTED" },
+      expectedStatus: 422,
+    },
+    {
+      name: "stale head",
+      ci: { headSha: "new-head-sha" },
+      expectedStatus: 409,
+    },
+  ])("fails closed before every REST or GraphQL write for $name", async ({
+    ci,
+    expectedStatus,
+  }) => {
+    const vcs = adapter();
+    const getCiStatus = vi
+      .spyOn(vcs, "getCiStatus")
+      .mockResolvedValue(greenMergeCi(ci));
+
+    const result = await vcs.mergePr({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      method: "squash",
+      expectedHeadSha: "verified-head-sha",
+    });
+
+    expect(result).toMatchObject({
+      merged: false,
+      enqueued: false,
+      status: expectedStatus,
+    });
+    expect(getCiStatus).toHaveBeenCalledOnce();
+    expect(requestRoutes).not.toContain(MERGE_ROUTE);
+    expect(graphqlQueries).toHaveLength(0);
   });
 });
 

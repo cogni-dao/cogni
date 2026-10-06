@@ -809,6 +809,8 @@ This slots into the node contribution model. The **standard** path is branch-pus
 
 **The merge gate reads GitHub's required set, never an operator-invented list.** `GitHubVcsAdapter.getCiStatus` fetches `…/branches/{base}/protection/required_status_checks` and computes `allGreen` as "every required context is satisfied (`success` or `skipped`)." An unprotected branch (no required checks) is **not green** — `/vcs/merge` fails closed. So "merge on green" means precisely "all of GitHub's required checks are green," and the operator never re-defines greenness.
 
+That gate is enforced again at the `GitHubVcsAdapter.mergePr` capability boundary because a policy-v2 operator App can bypass the child ruleset. Immediately before either merge write, the adapter fresh-reads the PR and requires `main`, non-draft, complete green required checks, `mergeable === true`, no changes-requested/overflow hold, and the caller's exact expected head. Failure happens before queue discovery or any REST/GraphQL write. Direct merge carries the expected `sha`; queue enablement carries GraphQL `expectedHeadOid`. The AI tool may preflight, but it cannot weaken or replace this authoritative check.
+
 > Existing node repos minted before this became automatic need a one-time operator backfill: read their inherited template policy and apply the same named PR/check ruleset exactly. The optional merge-queue ruleset remains a separate copy of the deployment monorepo's queue mechanism (`bash infra/github/setup-main-branch.sh <owner>/<repo>` once enabled).
 
 External-node-formation impact: a spawned node is in lock-step with the monorepo's exact merge-on-green gate the moment it is formed — no spelunking through Settings, no ad-hoc divergence.

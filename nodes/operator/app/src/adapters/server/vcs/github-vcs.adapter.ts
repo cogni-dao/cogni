@@ -781,11 +781,11 @@ export class GitHubVcsAdapter implements VcsCapability {
    * queue state is detected deterministically up front (GraphQL `mergeQueue`) so
    * we never have to disambiguate a `405`.
    *
-   * MERGED_XOR_ENQUEUED: the merge gate (caller) has already asserted the PR is
-   * green; this method only chooses the execution path by queue requirement. A caller that has
-   * Every direct merge also sends `expectedHeadSha`; GitHub rejects the request if the PR head
-   * moved after the caller's CI read. Required classic-protection checks still apply. The signed
-   * generated-change fast lane is deliberately separate in `fastForwardOperatorChange`.
+   * MERGED_XOR_ENQUEUED: this capability independently re-reads and gates the PR
+   * before choosing the execution path by queue requirement. Every direct merge
+   * also sends `expectedHeadSha`; queue enablement sends `expectedHeadOid`. The
+   * signed generated-change fast lane is deliberately separate in
+   * `fastForwardOperatorChange`.
    */
   async mergePr(params: {
     owner: string;
@@ -794,6 +794,45 @@ export class GitHubVcsAdapter implements VcsCapability {
     method: "squash" | "merge" | "rebase";
     expectedHeadSha: string;
   }): Promise<MergeResult> {
+    // CAPABILITY_BOUNDARY_MERGE_GATE: the App may be the configured v2 ruleset
+    // bypass actor, so GitHub protection cannot be the only guard. Re-read every
+    // merge fact here, at the write capability boundary, before queue discovery
+    // or either merge write. Callers may preflight for UX, but cannot authorize.
+    let ci: CiStatusResult;
+    try {
+      ci = await this.getCiStatus({
+        owner: params.owner,
+        repo: params.repo,
+        prNumber: params.prNumber,
+      });
+    } catch (error) {
+      return this.toMergeFailure(error);
+    }
+    if (ci.headSha !== params.expectedHeadSha) {
+      return {
+        merged: false,
+        enqueued: false,
+        status: 409,
+        message: "PR head changed after the caller observed CI; retry",
+      };
+    }
+    if (
+      ci.baseBranch !== "main" ||
+      ci.draft ||
+      !ci.allGreen ||
+      ci.pending ||
+      ci.mergeable !== true ||
+      ci.reviewDecision === "CHANGES_REQUESTED"
+    ) {
+      return {
+        merged: false,
+        enqueued: false,
+        status: 422,
+        message:
+          "PR is not eligible to merge: require main base, non-draft, complete green checks, mergeable state, and no review hold",
+      };
+    }
+
     const octokit = await this.getOctokit(params.owner, params.repo);
 
     // Resolve the PR's base branch + GraphQL node id once (node id is required by
@@ -825,7 +864,12 @@ export class GitHubVcsAdapter implements VcsCapability {
 
     if (queueEnabled) {
       try {
-        await this.enableAutoMerge(octokit, prNodeId, params.method);
+        await this.enableAutoMerge(
+          octokit,
+          prNodeId,
+          params.method,
+          params.expectedHeadSha
+        );
         return {
           merged: false,
           enqueued: true,
@@ -908,16 +952,17 @@ export class GitHubVcsAdapter implements VcsCapability {
   private async enableAutoMerge(
     octokit: Octokit,
     pullRequestId: string,
-    method: "squash" | "merge" | "rebase"
+    method: "squash" | "merge" | "rebase",
+    expectedHeadOid: string
   ): Promise<void> {
     const mergeMethod = method.toUpperCase(); // GraphQL PullRequestMergeMethod
     await octokit.graphql(
-      `mutation ($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
-        enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }) {
+      `mutation ($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!, $expectedHeadOid: GitObjectID!) {
+        enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod, expectedHeadOid: $expectedHeadOid }) {
           pullRequest { id state }
         }
       }`,
-      { pullRequestId, mergeMethod }
+      { pullRequestId, mergeMethod, expectedHeadOid }
     );
   }
 

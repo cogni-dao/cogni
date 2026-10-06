@@ -1611,11 +1611,14 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       routeHandlers["GET /repos/{owner}/{repo}/git/commits/{commit_sha}"];
     routeHandlers["GET /repos/{owner}/{repo}/git/commits/{commit_sha}"] = (
       params
-    ) =>
-      params.repo === "node-template" &&
-      params.commit_sha === "advanced-human-main"
-        ? Promise.reject(statusError(404, "Commit not found in template"))
-        : commitHandler(params);
+    ) => {
+      if (params.commit_sha === "advanced-human-main") {
+        return params.repo === "node-template"
+          ? Promise.reject(statusError(404, "Commit not found in template"))
+          : { tree: { sha: "advanced-human-tree" } };
+      }
+      return commitHandler(params);
+    };
     routeHandlers["PATCH /repos/{owner}/{repo}/git/refs/{ref}"] = (params) => {
       refUpdate = params;
       mainSha = "advanced-human-main";
