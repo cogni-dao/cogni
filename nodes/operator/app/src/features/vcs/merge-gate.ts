@@ -9,8 +9,9 @@
  * Scope: Two total functions over `CiStatusResult` / a GitHub status. Unit-testable
  *   without a container or GitHub.
  * Invariants:
- *   - BRANCH_PROTECTION_IS_AUTHORITY: this gate is fast-fail UX. GitHub branch
- *     protection independently rejects a non-green merge (405) — the real backstop.
+ *   - CAPABILITY_GATE_IS_AUTHORITY: this pure gate is fast-fail UX. The VCS
+ *     capability independently re-reads the PR and enforces the same gate at the
+ *     App-write boundary, including when the App can bypass branch protection.
  *   - REQUIRED_CHECKS_ARE_GITHUB_DEFINED: `ci.allGreen` reflects GitHub's OWN
  *     required-status-check set for the PR's base branch (read from branch
  *     protection by GitHubVcsAdapter), not an operator-invented list. Green ⇔
@@ -75,6 +76,7 @@ export function evaluateMergeGate(
 
 /**
  * Classify a failed `mergePr()` by the surfaced GitHub HTTP status.
+ * 422 → authoritative capability gate rejection;
  * 405 → GitHub refused (not mergeable / branch protection / already merged/closed);
  * 409 → PR head modified mid-merge (retry); anything else → opaque merge failure.
  */
@@ -82,6 +84,13 @@ export function classifyMergeFailure(
   status: number | undefined,
   message: string
 ): MergeGateRejection {
+  if (status === 422) {
+    return {
+      status: 422,
+      errorCode: "merge_gate_rejected",
+      error: message || "PR is not eligible to merge",
+    };
+  }
   if (status === 405) {
     return {
       status: 409,

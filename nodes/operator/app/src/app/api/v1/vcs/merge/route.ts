@@ -25,8 +25,9 @@
  *     typo'd / unknown slug hard-404s (`catalog_missing`), never a silent retarget.
  *   - NO_REPO_FROM_AGENT: owner/repo are operator-resolved via `resolveNodeRepo` (the node's catalog
  *     row), never the body (anti-spoof).
- *   - BRANCH_PROTECTION_IS_AUTHORITY: GitHub independently rejects a non-green merge (405); the
- *     `evaluateMergeGate` pre-check is fast-fail UX + clear errors, not the sole gate.
+ *   - CAPABILITY_GATE_IS_AUTHORITY: `evaluateMergeGate` is fast-fail UX. The VCS capability
+ *     independently re-reads and gates the PR at the App-write boundary, including when the App
+ *     can bypass branch protection.
  *   - CALLERS_NEVER_BYPASS_QUEUE: this public route always uses the ordinary queue-aware merge
  *     path. Generated-change bypass belongs only to the verified internal webhook path.
  *   - NO_SEPARATION_OF_DUTIES (V0): autonomous self-merge on green is intended ("no human required

@@ -78,6 +78,14 @@ describe("evaluateMergeGate", () => {
 });
 
 describe("classifyMergeFailure", () => {
+  it("preserves an authoritative capability gate rejection", () => {
+    expect(classifyMergeFailure(422, "PR is not eligible to merge")).toEqual({
+      status: 422,
+      errorCode: "merge_gate_rejected",
+      error: "PR is not eligible to merge",
+    });
+  });
+
   it("maps GitHub 405 to merge_rejected (409)", () => {
     expect(classifyMergeFailure(405, "Pull Request is not mergeable")).toEqual(
       expect.objectContaining({ status: 409, errorCode: "merge_rejected" })
