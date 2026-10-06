@@ -167,7 +167,14 @@ describe("nodeMainPolicyRulesetPayload", () => {
     ]);
   });
 
-  it.each([undefined, "", "0", "-1", "not-an-app", "1.5"])(
+  it.each([
+    undefined,
+    "",
+    "0",
+    "-1",
+    "not-an-app",
+    "1.5",
+  ])(
     "rejects invalid configured App ID %s for v2",
     (appId) => {
       expect(() =>
@@ -4415,9 +4422,7 @@ describe("diffRulesetAgainstPolicy — protection readback", () => {
       ...faithfulReadback(),
       bypass_actors: structuredClone(v2Policy.bypass_actors),
     };
-    expect(diffRulesetAgainstPolicy(faithfulV2 as never, v2Policy)).toEqual(
-      []
-    );
+    expect(diffRulesetAgainstPolicy(faithfulV2 as never, v2Policy)).toEqual([]);
 
     for (const bypass_actors of [
       [],
