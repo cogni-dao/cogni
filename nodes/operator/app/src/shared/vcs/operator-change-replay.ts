@@ -21,6 +21,7 @@ import {
   buildNodeBirthPlan,
   buildPlacementPlan,
   buildRegionPlan,
+  CANONICAL_DOMAIN_ROOT,
   type EnvPlanCurrent,
   type EnvPlanOp,
   NODE_DEPLOY_ENVS,
@@ -29,9 +30,15 @@ import {
   nextFreeNodePort,
   parseCatalogPlacement,
   planEnvAddShape,
+  removeCaddyBlock,
+  removeFromAppsetsKustomization,
+  removeSchedulerEndpoint,
   schedulerEndpointPatchPath,
 } from "@/shared/node-app-scaffold/gens";
-import { controlEnvFor } from "@/shared/node-registry/placement";
+import {
+  controlEnvFor,
+  nodeAppBaseUrl,
+} from "@/shared/node-registry/placement";
 
 const SHA = /^[0-9a-f]{40}$/;
 const NODE = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -494,6 +501,55 @@ async function planNodeRegister(
     }
     nodePort = row.node_port as number;
   }
+  const appsetTemplate = await requiredFile(
+    input.reader,
+    input.baseSha,
+    "scripts/ci/node-applicationset.yaml.tmpl"
+  );
+  const caddyfile = await requiredFile(
+    input.reader,
+    input.baseSha,
+    "infra/compose/edge/configs/Caddyfile.tmpl"
+  );
+  const replayAppsets = { ...appsetsKustomizationByControlEnv };
+  const replayScheduler = { ...schedulerEndpointByPath };
+  let replayCaddyfile = caddyfile;
+  if (existingCatalog !== null) {
+    for (const env of NODE_FORMATION_ENVS) {
+      const controlEnv = controlEnvForBirth(env);
+      const current = replayAppsets[controlEnv];
+      if (current === undefined) {
+        throw new Error(`node-register-appset-missing:${controlEnv}`);
+      }
+      const absent = removeFromAppsetsKustomization(current, node, env);
+      if (absent === current) {
+        throw new Error(`node-register-appset-entry-missing:${env}:${node}`);
+      }
+      replayAppsets[controlEnv] = absent;
+    }
+    replayCaddyfile = removeCaddyBlock(caddyfile, node, nodePort);
+    for (const [path, current] of Object.entries(replayScheduler)) {
+      const patchEnv = path.match(
+        /^infra\/k8s\/overlays\/([^/]+)\/scheduler-worker\/node-endpoints\.patch\.yaml$/
+      )?.[1];
+      const expectedUrl =
+        patchEnv !== undefined &&
+        NODE_FORMATION_ENVS.includes(patchEnv as NodeFormationEnv)
+          ? nodeAppBaseUrl({
+              slug: node,
+              provider: "akash",
+              environment: patchEnv as NodeFormationEnv,
+              apexDomain: CANONICAL_DOMAIN_ROOT,
+            })
+          : `http://${node}-node-app:3000`;
+      replayScheduler[path] = removeSchedulerEndpoint(
+        current,
+        node,
+        nodeId,
+        expectedUrl
+      );
+    }
+  }
   const ops = buildNodeBirthPlan({
     slug: node,
     nodeId,
@@ -507,18 +563,10 @@ async function planNodeRegister(
     current: {
       templateOverlayByEnv,
       templateExternalSecretByEnv,
-      appsetTemplate: await requiredFile(
-        input.reader,
-        input.baseSha,
-        "scripts/ci/node-applicationset.yaml.tmpl"
-      ),
-      appsetsKustomizationByControlEnv,
-      caddyfile: await requiredFile(
-        input.reader,
-        input.baseSha,
-        "infra/compose/edge/configs/Caddyfile.tmpl"
-      ),
-      schedulerEndpointByPath,
+      appsetTemplate,
+      appsetsKustomizationByControlEnv: replayAppsets,
+      caddyfile: replayCaddyfile,
+      schedulerEndpointByPath: replayScheduler,
     },
   });
   for (const op of ops) {

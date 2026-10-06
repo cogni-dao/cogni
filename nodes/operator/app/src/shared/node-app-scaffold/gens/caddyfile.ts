@@ -118,3 +118,45 @@ export function insertCaddyBlock(
     ...lines.slice(insertLine),
   ].join("\n");
 }
+
+/**
+ * Strict inverse of {@link insertCaddyBlock}. Recovery uses this to derive the
+ * node-absent trusted-main bytes before replaying the canonical birth plan.
+ * Missing, duplicate, or byte-edited contributions fail closed.
+ */
+export function removeCaddyBlock(
+  currentCaddyfile: string,
+  slug: string,
+  nodePort: number
+): string {
+  const lines = currentCaddyfile.split("\n");
+  const blocks = findBlocks(lines);
+  const matches = blocks.filter(
+    (block) => !block.isPrimary && block.node === slug
+  );
+  if (matches.length !== 1) {
+    throw new Error(
+      `Caddyfile must contain exactly one block for node '${slug}'`
+    );
+  }
+  const match = matches[0];
+  if (
+    match === undefined ||
+    match.index === 0 ||
+    lines[match.index - 1] !== ""
+  ) {
+    throw new Error(`Caddyfile block for node '${slug}' is malformed`);
+  }
+  const expected = nonPrimaryBlock(slug, nodePort).split("\n");
+  const successor = blocks.find((block) => block.index > match.index);
+  const boundary = successor ? successor.index - 1 : lines.length - 1;
+  if (
+    match.index + expected.length !== boundary ||
+    lines.slice(match.index, match.index + expected.length).join("\n") !==
+    expected.join("\n")
+  ) {
+    throw new Error(`Caddyfile block for node '${slug}' is not canonical`);
+  }
+  lines.splice(match.index - 1, expected.length + 1);
+  return lines.join("\n");
+}

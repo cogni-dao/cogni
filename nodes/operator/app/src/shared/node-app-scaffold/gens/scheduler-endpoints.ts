@@ -117,6 +117,66 @@ export function insertSchedulerEndpoint(
 }
 
 /**
+ * Strict inverse of {@link insertSchedulerEndpoint}. The expected URL is
+ * explicit because generated Akash overlay projections replace the initial
+ * in-cluster host. Missing, duplicate, or edited pairs fail closed.
+ */
+export function removeSchedulerEndpoint(
+  currentConfigmap: string,
+  slug: string,
+  nodeId: string,
+  expectedUrl: string = urlForSlug(slug)
+): string {
+  const match = LINE_RE.exec(currentConfigmap);
+  if (!match) {
+    throw new Error(`configmap is missing a quoted ${ENDPOINTS_KEY} line`);
+  }
+  const [line, indent, csv] = match;
+  if (line === undefined || indent === undefined || csv === undefined) {
+    throw new Error(
+      `configmap ${ENDPOINTS_KEY} line did not capture its parts`
+    );
+  }
+  const cells = csv.length === 0 ? [] : csv.split(",");
+  if (cells.length % 2 !== 0) {
+    throw new Error(`${ENDPOINTS_KEY} CSV has an unpaired cell count`);
+  }
+  const targetIndexes: number[] = [];
+  for (let index = 0; index < cells.length; index += 2) {
+    const slugCell = cells[index];
+    const aliasCell = cells[index + 1];
+    if (slugCell === undefined || aliasCell === undefined) {
+      throw new Error(`${ENDPOINTS_KEY} CSV has an unpaired cell count`);
+    }
+    if (slugCell.slice(0, slugCell.indexOf("=")) === slug) {
+      targetIndexes.push(index);
+    }
+  }
+  if (targetIndexes.length !== 1) {
+    throw new Error(
+      `${ENDPOINTS_KEY} must contain exactly one pair for node '${slug}'`
+    );
+  }
+  const target = targetIndexes[0];
+  if (
+    target === undefined ||
+    cells[target] !== `${slug}=${expectedUrl}` ||
+    cells[target + 1] !== `${nodeId}=${expectedUrl}` ||
+    cells.some(
+      (cell, index) =>
+        index !== target + 1 && cell.slice(0, cell.indexOf("=")) === nodeId
+    )
+  ) {
+    throw new Error(
+      `${ENDPOINTS_KEY} pair for node '${slug}' is not canonical`
+    );
+  }
+  cells.splice(target, 2);
+  const lineOut = `${indent}${ENDPOINTS_KEY}: "${cells.join(",")}"`;
+  return currentConfigmap.replace(line, lineOut);
+}
+
+/**
  * Rewrite an EXISTING node's routed URL in the scheduler-worker configmap's `COGNI_NODE_ENDPOINTS`
  * CSV — both its `<slug>=` cell and its `<node_id>=` alias cell — to `newUrl`, preserving position.
  * The placement lever (story.5016 T5) flips WHERE a node's app is dialed, not WHETHER it is routed:
