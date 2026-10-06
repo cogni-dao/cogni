@@ -4009,10 +4009,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
           }
         }
 
-        const payload = nodeMainPolicyRulesetPayload(
-          policy,
-          this.config.appId
-        );
+        const payload = nodeMainPolicyRulesetPayload(policy, this.config.appId);
         const { data: rulesets } = await octokit.request(
           "GET /repos/{owner}/{repo}/rulesets",
           { owner, repo }
@@ -5271,13 +5268,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     if (policy.schemaVersion === "cogni.node-repo-policy.v1") return true;
 
     try {
-      await this.writeNodeMainPolicyRuleset(
-        octokit,
-        owner,
-        repo,
-        policy,
-        true
-      );
+      await this.writeNodeMainPolicyRuleset(octokit, owner, repo, policy, true);
       if ((await readMainSha()) === snapshotSha) return true;
     } catch (error) {
       try {

@@ -2201,78 +2201,72 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       missingPolicy: true,
       code: "template_repo_policy_missing",
     },
-  ])(
-    "downgrades v2 when main moves after elevation to $name",
-    async ({ missingPolicy, code }) => {
-      setHappyForkHandlers();
-      setFullyFormedExistingForkHandlers();
-      routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
-        Promise.reject(statusError(422, "Repository creation failed"));
-      routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
-        full_name: "Cogni-DAO/atlas",
-        fork: true,
-        parent: { full_name: "Cogni-DAO/node-template" },
-        clone_url: "https://github.com/Cogni-DAO/atlas.git",
-      });
-      const contents =
-        routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
-      routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) => {
-        if (params.repo === "atlas" && params.ref === "wrong-main") {
-          if (
-            missingPolicy &&
-            params.path === ".cogni/repo-policy.json"
-          ) {
-            return Promise.reject(statusError(404, "Not Found"));
-          }
-          if (params.path === ".cogni/repo-policy.json") {
-            return {
-              type: "file",
-              encoding: "base64",
-              content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString("base64"),
-            };
-          }
-          if (params.path === ".cogni/repo-spec.yaml") {
-            return {
-              type: "file",
-              encoding: "base64",
-              content: Buffer.from("intent:\n  name: wrong\n").toString(
-                "base64"
-              ),
-            };
-          }
+  ])("downgrades v2 when main moves after elevation to $name", async ({
+    missingPolicy,
+    code,
+  }) => {
+    setHappyForkHandlers();
+    setFullyFormedExistingForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+    const contents = routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) => {
+      if (params.repo === "atlas" && params.ref === "wrong-main") {
+        if (missingPolicy && params.path === ".cogni/repo-policy.json") {
+          return Promise.reject(statusError(404, "Not Found"));
         }
-        return contents(params);
-      };
-      const mainShas = [
-        "advanced-human-main",
-        "advanced-human-main",
-        "advanced-human-main",
-        "wrong-main",
-        "wrong-main",
-      ];
-      let mainReads = 0;
-      routeHandlers["GET /repos/{owner}/{repo}/git/ref/{ref}"] = () => ({
-        object: { sha: mainShas[mainReads++] ?? "wrong-main" },
-      });
+        if (params.path === ".cogni/repo-policy.json") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString("base64"),
+          };
+        }
+        if (params.path === ".cogni/repo-spec.yaml") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from("intent:\n  name: wrong\n").toString("base64"),
+          };
+        }
+      }
+      return contents(params);
+    };
+    const mainShas = [
+      "advanced-human-main",
+      "advanced-human-main",
+      "advanced-human-main",
+      "wrong-main",
+      "wrong-main",
+    ];
+    let mainReads = 0;
+    routeHandlers["GET /repos/{owner}/{repo}/git/ref/{ref}"] = () => ({
+      object: { sha: mainShas[mainReads++] ?? "wrong-main" },
+    });
 
-      await expect(
-        makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
-      ).rejects.toMatchObject({ code, status: 409 });
+    await expect(
+      makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+    ).rejects.toMatchObject({ code, status: 409 });
 
-      const rulesetWrites = requests.filter(
+    const rulesetWrites = requests.filter(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(rulesetWrites.at(-1)?.params.bypass_actors).toEqual([]);
+    expect(
+      requests.some(
         (request) =>
-          request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
-      );
-      expect(rulesetWrites.at(-1)?.params.bypass_actors).toEqual([]);
-      expect(
-        requests.some(
-          (request) =>
-            request.route.startsWith("POST /repos/{owner}/{repo}/git/") ||
-            request.route.startsWith("PATCH /repos/{owner}/{repo}/git/")
-        )
-      ).toBe(false);
-    }
-  );
+          request.route.startsWith("POST /repos/{owner}/{repo}/git/") ||
+          request.route.startsWith("PATCH /repos/{owner}/{repo}/git/")
+      )
+    ).toBe(false);
+  });
 
   it("restarts from the new policy snapshot when reused main advances", async () => {
     setHappyForkHandlers();
@@ -5481,79 +5475,75 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
   it.each([
     { name: "mismatched identity", missingPolicy: false },
     { name: "missing policy", missingPolicy: true },
-  ])(
-    "downgrades a compliant v2 bypass when main moves to $name",
-    async ({ missingPolicy }) => {
-      storedRulesets.clear();
-      let nodeMainReads = 0;
-      routeHandlers = {
-        "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => ({
-          object: {
-            sha:
-              params.repo === REPO
-                ? nodeMainReads++ === 0
-                  ? "node-main"
-                  : "invalid-main"
-                : "template-main",
-          },
-        }),
-        "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
-          if (params.repo === "node-template") {
-            throw statusError(404, "Not Found");
-          }
-          if (
-            params.ref === "invalid-main" &&
-            params.path === ".cogni/repo-policy.json" &&
-            missingPolicy
-          ) {
-            throw statusError(404, "Not Found");
-          }
-          const content =
-            params.path === ".cogni/repo-policy.json"
-              ? TEST_NODE_REPO_POLICY_V2_JSON
-              : params.ref === "invalid-main"
-                ? "intent:\n  name: wrong\n"
-                : `intent:\n  name: ${REPO}\n`;
-          return {
-            type: "file",
-            encoding: "base64",
-            content: encode(content),
-          };
+  ])("downgrades a compliant v2 bypass when main moves to $name", async ({
+    missingPolicy,
+  }) => {
+    storedRulesets.clear();
+    let nodeMainReads = 0;
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => ({
+        object: {
+          sha:
+            params.repo === REPO
+              ? nodeMainReads++ === 0
+                ? "node-main"
+                : "invalid-main"
+              : "template-main",
         },
-        "GET /repos/{owner}/{repo}/rulesets": () => [
-          { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
-        ],
-        "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
-          recordRuleset(params),
-        "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
-          storedRulesets.has(41)
-            ? readStoredRuleset(params)
-            : {
-                id: 41,
-                source_type: "Repository",
-                ...nodeMainPolicyRulesetPayload(
-                  TEST_NODE_REPO_POLICY_V2,
-                  "1"
-                ),
-              },
-      };
+      }),
+      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
+        if (params.repo === "node-template") {
+          throw statusError(404, "Not Found");
+        }
+        if (
+          params.ref === "invalid-main" &&
+          params.path === ".cogni/repo-policy.json" &&
+          missingPolicy
+        ) {
+          throw statusError(404, "Not Found");
+        }
+        const content =
+          params.path === ".cogni/repo-policy.json"
+            ? TEST_NODE_REPO_POLICY_V2_JSON
+            : params.ref === "invalid-main"
+              ? "intent:\n  name: wrong\n"
+              : `intent:\n  name: ${REPO}\n`;
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(content),
+        };
+      },
+      "GET /repos/{owner}/{repo}/rulesets": () => [
+        { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+      ],
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        recordRuleset(params),
+      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
+        storedRulesets.has(41)
+          ? readStoredRuleset(params)
+          : {
+              id: 41,
+              source_type: "Repository",
+              ...nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, "1"),
+            },
+    };
 
-      await expect(
-        makeWriter().reconcileNodeMainProtection({
-          owner: OWNER,
-          repo: REPO,
-          slug: REPO,
-          isInRepoNode: false,
-        })
-      ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).rejects.toMatchObject({ status: 409 });
 
-      const writes = requests.filter(
-        (request) =>
-          request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
-      );
-      expect(writes.at(-1)?.params.bypass_actors).toEqual([]);
-    }
-  );
+    const writes = requests.filter(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(writes.at(-1)?.params.bypass_actors).toEqual([]);
+  });
 
   it("repairs a drifted same-named ruleset with a PUT and reports the mismatches", async () => {
     storedRulesets.clear();
