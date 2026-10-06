@@ -795,6 +795,8 @@ describe("GitHubRepoWriter.openDistributionActivationPr", () => {
 
     expect(requests.map((request) => request.route)).toEqual([
       "GET /repos/{owner}/{repo}/contents/{path}",
+      "GET /repos/{owner}/{repo}/pulls",
+      "GET /repos/{owner}/{repo}/pulls",
       "GET /repos/{owner}/{repo}/git/ref/{ref}",
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
       "POST /repos/{owner}/{repo}/git/blobs",
@@ -959,8 +961,6 @@ governance:
 
     expect(requests.map((request) => request.route)).toEqual([
       "GET /repos/{owner}/{repo}/contents/{path}",
-      "GET /repos/{owner}/{repo}/pulls",
-      "GET /repos/{owner}/{repo}/pulls",
       "GET /repos/{owner}/{repo}/git/ref/{ref}",
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
       "POST /repos/{owner}/{repo}/git/blobs",
