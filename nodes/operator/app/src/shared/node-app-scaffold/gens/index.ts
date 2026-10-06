@@ -80,6 +80,11 @@ export {
 } from "./external-secret";
 export { insertNetworkNode } from "./network-nodes";
 export { nextFreeNodePort } from "./node-port";
+export {
+  type NodeBirthPathPlan,
+  type NodeBirthPathPlanInput,
+  nodeBirthPathPlan,
+} from "./node-birth-plan";
 export { renderOverlay, renderOverlayFile } from "./overlay";
 export {
   ACTIVATION_MARKUP_FACTOR,
