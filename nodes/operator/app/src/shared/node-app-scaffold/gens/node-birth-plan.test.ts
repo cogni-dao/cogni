@@ -6,26 +6,33 @@ import { describe, expect, it } from "vitest";
 import { nodeBirthPathPlan } from "./node-birth-plan";
 
 describe("nodeBirthPathPlan", () => {
-  it("names the seven-path target but keeps eligibility empty", () => {
+  it("names all thirteen exactly replayable declarative paths but keeps eligibility empty", () => {
     const plan = nodeBirthPathPlan({
       slug: "atlas",
       controlEnvFor: () => "production",
     });
 
-    expect(plan.isolatedTarget).toEqual(
-      [
-        "infra/catalog/atlas.yaml",
-        "infra/k8s/argocd/appsets/production/candidate-a-atlas-applicationset.yaml",
-        "infra/k8s/argocd/appsets/production/production-atlas-applicationset.yaml",
-        "infra/k8s/overlays/candidate-a/atlas/external-secret.yaml",
-        "infra/k8s/overlays/candidate-a/atlas/kustomization.yaml",
-        "infra/k8s/overlays/production/atlas/external-secret.yaml",
-        "infra/k8s/overlays/production/atlas/kustomization.yaml",
-      ].sort()
+    expect(plan.replayableDeclarative).toEqual(
+      plan.current.filter(
+        (path) =>
+          path !==
+          "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts"
+      )
     );
-    expect(plan.isolatedTarget).toHaveLength(7);
+    expect(plan.replayableDeclarative).toHaveLength(13);
+    expect(plan.replayableDeclarative).toContain(
+      "infra/k8s/argocd/appsets/production/kustomization.yaml"
+    );
+    expect(plan.replayableDeclarative).toContain(
+      "infra/compose/edge/configs/Caddyfile.tmpl"
+    );
+    expect(plan.replayableDeclarative).toContain(
+      "infra/k8s/base/scheduler-worker/configmap.yaml"
+    );
     expect(plan.eligible).toEqual([]);
-    expect(plan.blockers).toHaveLength(4);
+    expect(plan.blockers).toEqual([
+      "compiled network-nodes.data.ts runtime source is excluded from node birth",
+    ]);
   });
 
   it("inventories every current shared projection", () => {

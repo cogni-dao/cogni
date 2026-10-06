@@ -6,12 +6,12 @@
  * Purpose: Define the complete path contract for one operator-authored node-birth commit.
  * Scope: Pure path planning only; content renderers remain in their focused modules.
  * Invariants:
- *   - CURRENT_IS_NOT_ELIGIBLE: today's writer still mutates shared projections, so no path is
- *     exposed as fast-path eligible.
- *   - ISOLATED_TARGET_IS_NODE_SCOPED: the target contains only the node's catalog row, overlay
- *     leaves, and per-lane ApplicationSets. Naming the target does not claim its consumers exist.
- *   - ONE_TARGET_SEAM: future writer and classifier work must converge on this exact target rather
- *     than growing separate path allowlists.
+ *   - EXECUTABLE_OUTPUT_IS_INELIGIBLE: the origin/main writer's compiled runtime-source mutation is
+ *     excluded from the replayable target.
+ *   - DECLARATIVE_SHARED_CONFIG_IS_REPLAYABLE: a shared file is safe when a trusted-main renderer
+ *     can reproduce its exact bytes; shared does not imply executable or unsafe.
+ *   - ONE_TARGET_SEAM: writer and classifier work must converge on this exact declarative footprint
+ *     rather than growing separate path allowlists.
  * Side-effects: none.
  * Links: story.5065, task.5184, docs/spec/node-formation.md
  * @public
@@ -36,25 +36,22 @@ export interface NodeBirthPathPlanInput {
 }
 
 export interface NodeBirthPathPlan {
-  /** What the writer emits today. Contains shared mutable projections, so it is never fast-path safe. */
+  /** What the writer emitted before executable roster isolation: 13 declarative paths + source. */
   readonly current: readonly string[];
-  /** The intended isolated footprint once every listed consumer has been replaced. */
-  readonly isolatedTarget: readonly string[];
-  /** Fail-closed classifier contract. Empty until the projection blockers are implemented and proven. */
+  /** Declarative footprint whose exact bytes can be replayed from trusted main. */
+  readonly replayableDeclarative: readonly string[];
+  /** Fail-closed classifier contract. Empty until writer and verifier changes land together. */
   readonly eligible: readonly string[];
   readonly blockers: readonly string[];
 }
 
 /**
- * Inventory today's birth footprint and the immutable seven-path target:
+ * Inventory the pre-isolation 14-path footprint and its 13-path declarative replay target. The
+ * catalog, node leaves, per-lane ApplicationSets, shared AppSet index, Caddy route table, and
+ * scheduler route tables are all deterministic configuration. The compiled TypeScript roster is
+ * executable source and is the sole excluded path.
  *
- * - one canonical catalog row;
- * - two node-owned overlay leaves per birth environment;
- * - one node-owned ApplicationSet per birth environment.
- *
- * Shared projections are absent from `isolatedTarget`, but their consumers have not all been replaced.
- * `eligible` therefore stays empty. This is deliberate: a classifier must not infer fast-path safety
- * merely because the desired footprint has been named.
+ * `eligible` stays empty until the writer omission and trusted-main replay verifier land together.
  */
 export function nodeBirthPathPlan(
   input: NodeBirthPathPlanInput
@@ -67,7 +64,7 @@ export function nodeBirthPathPlan(
   const appsets = NODE_FORMATION_ENVS.map((env) =>
     appsetPath(input.controlEnvFor(env), env, input.slug)
   );
-  const isolatedTarget = [catalog, ...overlays, ...appsets].sort();
+  const nodeOwned = [catalog, ...overlays, ...appsets];
   const controlEnvs = new Set(
     NODE_FORMATION_ENVS.map((env) => input.controlEnvFor(env))
   );
@@ -78,23 +75,23 @@ export function nodeBirthPathPlan(
     "infra/k8s/base/scheduler-worker/configmap.yaml",
     ...NODE_DEPLOY_ENVS.map(schedulerEndpointPatchPath),
   ];
-  const current = [
-    ...isolatedTarget,
+  const replayableDeclarative = [
+    ...nodeOwned,
     ...sharedAppsetIndexes,
     "infra/compose/edge/configs/Caddyfile.tmpl",
     ...schedulerProjections,
+  ].sort();
+  const current = [
+    ...replayableDeclarative,
     "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts",
   ].sort();
 
   return {
     current,
-    isolatedTarget,
+    replayableDeclarative,
     eligible: [],
     blockers: [
-      "appset directories still depend on a shared kustomization index",
-      "edge drift checks still require the committed Caddy projection",
-      "scheduler deployment still copies committed aggregate routing maps",
-      "public discovery still compiles network-nodes.data.ts into the operator image",
+      "compiled network-nodes.data.ts runtime source is excluded from node birth",
     ],
   };
 }
