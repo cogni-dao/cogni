@@ -285,12 +285,14 @@ export function classifyOperatorChangeForMerge(
   let expectedTrailerCount: number;
   switch (operation) {
     case "env.membership": {
-      expectedTrailerCount = 7;
+      expectedTrailerCount = 8;
       const env = singleTrailer(message, "Cogni-Environment");
       const action = singleTrailer(message, "Cogni-Action");
+      const generation = singleTrailer(message, "Cogni-Lease-Generation");
       if (
         !env?.match(/^(candidate-a|preview|production)$/) ||
         !action?.match(/^(add|remove)$/) ||
+        !generation?.match(/^\d+$/) ||
         facts.pr.headRef !== `cogni-operator/node-env-${node}-${env}` ||
         subject !==
           `feat(node): ${action} ${node} ${action === "add" ? "to" : "from"} ${env}`
@@ -331,16 +333,18 @@ export function classifyOperatorChangeForMerge(
       break;
     }
     case "node.register": {
-      expectedTrailerCount = 8;
+      expectedTrailerCount = 9;
       const nodeId = singleTrailer(message, "Cogni-Node-Id");
       const sourceRepo = singleTrailer(message, "Cogni-Source-Repo");
       const sourceSha = singleTrailer(message, "Cogni-Source-SHA");
+      const ownerWallet = singleTrailer(message, "Cogni-Owner-Wallet");
       const fleetOwner = repo.split("/", 1)[0];
       if (
         !nodeId?.match(
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
         ) ||
         !sourceSha?.match(SHA) ||
+        !ownerWallet?.match(/^0x[0-9a-fA-F]{40}$/) ||
         sourceRepo?.toLowerCase() !==
           `https://github.com/${fleetOwner}/${node}.git` ||
         facts.pr.headRef !== `cogni-operator/node-register-${node}` ||

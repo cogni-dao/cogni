@@ -37,6 +37,11 @@ export const stubVcsCapability: VcsCapability = {
       "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
     );
   },
+  fastForwardOperatorChange: async () => {
+    throw new Error(
+      "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
+    );
+  },
   mergePr: async () => {
     throw new Error(
       "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
@@ -86,6 +91,12 @@ export function createVcsCapability(env: ServerEnv): VcsCapability {
       : {}),
     ...(env.NODE_SUBMODULE_PARENT_REPO
       ? { operatorChangePolicyRepo: env.NODE_SUBMODULE_PARENT_REPO }
+      : {}),
+    ...(env.FLEET_CONTROL_ENV
+      ? { fleetControlEnv: env.FLEET_CONTROL_ENV }
+      : {}),
+    ...(env.FORK_DOMAIN_ROOT
+      ? { forkDomainRoot: env.FORK_DOMAIN_ROOT }
       : {}),
   });
 }

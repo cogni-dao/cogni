@@ -11,7 +11,8 @@
  *   - CHECK_RUN_IS_WAKE_ONLY: no check name, conclusion, or producing App grants authority.
  *   - TRUSTED_RECLASSIFICATION: the operator re-fetches and verifies the current PR, commit,
  *     files, trusted-main registry, exact App identity/signature, and operation replay.
- *   - EXPECTED_HEAD_IS_ATOMIC: webhook head, current PR head, and GitHub merge precondition agree.
+ *   - BASE_AND_HEAD_ARE_ATOMIC: the verified one-parent head may advance only its exact base;
+ *     a concurrent base update makes the non-force ref update fail closed.
  *   - ALL_REQUIRED_CHECKS_GREEN: GitHub's required-context set must be satisfied independently.
  * Side-effects: GitHub reads and, for a fully eligible tree, one direct merge.
  * Links: docs/spec/merge-queue-config.md
@@ -67,12 +68,11 @@ export async function dispatchOperatorChangeAutoMerge(
     return;
   }
 
-  const result = await vcs.mergePr({
+  const result = await vcs.fastForwardOperatorChange({
     owner,
     repo,
     prNumber,
-    method: "squash",
-    bypassQueue: true,
+    expectedBaseSha: proof.baseSha,
     expectedHeadSha: headSha,
   });
   log.info(

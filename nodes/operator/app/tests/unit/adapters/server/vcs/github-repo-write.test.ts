@@ -1925,6 +1925,13 @@ patches:
       },
       "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
         const path = String(params.path);
+        if (
+          path === "infra/catalog/atlas.yaml" ||
+          path.includes("/atlas/") ||
+          path.endsWith("-atlas-applicationset.yaml")
+        ) {
+          return Promise.reject(statusError(404, "not found"));
+        }
         if (path === ".gitmodules") {
           return Promise.reject(statusError(404, "not found"));
         }
@@ -2191,6 +2198,9 @@ node_port: 30200
           "Cogni-Change-Type: cogni.operator-change.v1"
         );
         expect(params.message).toContain("Cogni-Operation: node.register");
+        expect(params.message).toContain(
+          "Cogni-Owner-Wallet: 0x070075F1389Ae1182aBac722B36CA12285d0c949"
+        );
         expect(params).toMatchObject({
           owner: "Cogni-DAO",
           repo: "cogni",

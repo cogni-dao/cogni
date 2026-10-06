@@ -183,11 +183,11 @@ unimplemented replay, edit, or human PR no-ops into the normal queue.
 
 > Migration note: a repo that previously had the queue enabled via the classic UI checkbox should keep the ruleset as the single source of truth — the ruleset is authoritative and the legacy checkbox can be cleared once the ruleset is confirmed live (`gh api repos/{repo}/rulesets`).
 
-The operation-specific fields are: membership (`Environment`, `Action`), placement
+The operation-specific fields are: membership (`Environment`, `Action`, `Lease-Generation`), placement
 (`Environment`, `Provider`), region (`Environment`, canonical `Countries`,
-`Lease-Generation`), registration (`Node-Id`, `Source-Repo`, `Source-SHA`), and deployment
-declaration (the common fields only). `node.register` remains disabled while its writer emits the
-executable compiled roster; the other 13 current formation files are deterministic replay targets.
+`Lease-Generation`), registration (`Node-Id`, `Source-Repo`, `Source-SHA`, `Owner-Wallet`), and
+deployment declaration (the common fields only). `node.register` omits executable runtime source;
+its declarative formation footprint is rebuilt byte-for-byte from the shared writer plan.
 `deployment.declare` also remains disabled until node-template ships the trusted child-main
 classifier/identity contract. Its reusable CI verifier replays the same stock declaration from
 `packages/repo-spec/src/node-app-deployment-v1.json`; its operator-side replay is already

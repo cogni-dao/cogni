@@ -23,6 +23,7 @@ const message = [
   `Cogni-Base-SHA: ${baseSha}`,
   "Cogni-Environment: candidate-a",
   "Cogni-Action: add",
+  "Cogni-Lease-Generation: 0",
   `Cogni-Changed-Paths-SHA256: ${pathHash}`,
 ].join("\n");
 

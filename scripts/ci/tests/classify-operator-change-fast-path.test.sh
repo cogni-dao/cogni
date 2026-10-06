@@ -23,6 +23,7 @@ Cogni-Operation: env.membership
 Cogni-Node: blue
 Cogni-Environment: preview
 Cogni-Action: add
+Cogni-Lease-Generation: 0
 Cogni-Base-SHA: $base_sha
 Cogni-Changed-Paths-SHA256: $paths_hash"
 
@@ -65,10 +66,11 @@ run_classifier "$tmpdir/unsigned.out"
 [[ "$(value "$tmpdir/unsigned.out" reason)" == invalid-commit-signature ]]
 
 # A reusable workflow can load policy only from its pinned, workflow-owned checkout.
-mkdir -p "$tmpdir/policy/scripts/ci/verifiers"
+mkdir -p "$tmpdir/policy/scripts/ci/verifiers" "$tmpdir/policy/scripts/ci/dist"
 jq '.operations["env.membership"].enabledRepositories = ["cogni-dao/cogni"]' \
   "$REGISTRY" > "$tmpdir/policy/scripts/ci/operator-change-v1.allowlist.json"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$tmpdir/policy/scripts/ci/verifiers/verify-env-membership.sh"
+printf '// pinned replay fixture\n' > "$tmpdir/policy/scripts/ci/dist/operator-change-replay.mjs"
 write_fixtures
 run_classifier "$tmpdir/pinned-policy.out" "" "$tmpdir/policy"
 [[ "$(value "$tmpdir/pinned-policy.out" eligible)" == true ]]

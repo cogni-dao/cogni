@@ -31,7 +31,6 @@ import type {
   PrSummary,
   VcsCapability,
 } from "@cogni/ai-tools";
-import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { parse as parseYaml } from "yaml";
@@ -40,6 +39,10 @@ import {
   type OperatorChangeFacts,
   parseOperatorChangeRegistry,
 } from "@/shared/vcs/operator-change-policy";
+import {
+  type OperatorChangeReplayReader,
+  replayOperatorChange,
+} from "@/shared/vcs/operator-change-replay";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -51,6 +54,8 @@ export interface GitHubVcsAdapterConfig {
   /** Trusted repository whose main branch owns generated-change policy. */
   readonly operatorChangePolicyOwner?: string;
   readonly operatorChangePolicyRepo?: string;
+  readonly fleetControlEnv?: string | undefined;
+  readonly forkDomainRoot?: string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +429,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       operation: structural.operation,
       node: structural.node,
       files: facts.files.map((file) => file.filename),
+      message: commit.commit.message,
     });
     return classifyOperatorChangeForMerge({
       ...facts,
@@ -441,13 +447,50 @@ export class GitHubVcsAdapter implements VcsCapability {
     operation: string;
     node: string;
     files: readonly string[];
+    message: string;
   }): Promise<boolean> {
-    // The child-repository operation has a compact complete replay: one stock
-    // repo-spec splice plus an exact parent-catalog source_repo binding. Parent
-    // operations stay disabled until their shared generator plans are callable
-    // here; enabling their registry entry before then remains fail-closed.
+    const reader: OperatorChangeReplayReader = {
+      readFile: async (ref, path) =>
+        this.readFileText(
+          input.targetOctokit,
+          input.owner,
+          input.repo,
+          path,
+          ref
+        ),
+      listPaths: async (ref, prefix) => {
+        const { data } = await input.targetOctokit.request(
+          "GET /repos/{owner}/{repo}/contents/{path}",
+          {
+            owner: input.owner,
+            repo: input.repo,
+            path: prefix,
+            ref,
+          }
+        );
+        if (!Array.isArray(data)) return [];
+        return data
+          .filter((entry) => entry.type === "file")
+          .map((entry) => `${prefix}/${entry.name}`);
+      },
+    };
+    if (input.operation !== "deployment.declare") {
+      return (
+        await replayOperatorChange({
+          operation: input.operation,
+          node: input.node,
+          baseSha: input.baseSha,
+          headSha: input.headSha,
+          message: input.message,
+          paths: input.files,
+          repository: `${input.owner}/${input.repo}`,
+          fleetControlEnv: this.config.fleetControlEnv,
+          forkDomainRoot: this.config.forkDomainRoot,
+          reader,
+        })
+      ).verified;
+    }
     if (
-      input.operation !== "deployment.declare" ||
       input.files.length !== 1 ||
       input.files[0] !== ".cogni/repo-spec.yaml" ||
       !this.config.operatorChangePolicyOwner ||
@@ -455,31 +498,14 @@ export class GitHubVcsAdapter implements VcsCapability {
     ) {
       return false;
     }
-    const [baseSpec, headSpec, catalog] = await Promise.all([
-      this.readFileText(
-        input.targetOctokit,
-        input.owner,
-        input.repo,
-        ".cogni/repo-spec.yaml",
-        input.baseSha
-      ),
-      this.readFileText(
-        input.targetOctokit,
-        input.owner,
-        input.repo,
-        ".cogni/repo-spec.yaml",
-        input.headSha
-      ),
-      this.readFileText(
+    const catalog = await this.readFileText(
         input.policyOctokit,
         this.config.operatorChangePolicyOwner,
         this.config.operatorChangePolicyRepo,
         `infra/catalog/${input.node}.yaml`,
         "main"
-      ),
-    ]);
-    if (baseSpec === null || headSpec === null || catalog === null)
-      return false;
+      );
+    if (catalog === null) return false;
     let parsedCatalog: unknown;
     try {
       parsedCatalog = parseYaml(catalog);
@@ -502,7 +528,20 @@ export class GitHubVcsAdapter implements VcsCapability {
     ) {
       return false;
     }
-    return renderDeploymentActivationSpec(baseSpec) === headSpec;
+    return (
+      await replayOperatorChange({
+        operation: input.operation,
+        node: input.node,
+        baseSha: input.baseSha,
+        headSha: input.headSha,
+        message: input.message,
+        paths: input.files,
+        repository: `${input.owner}/${input.repo}`,
+        fleetControlEnv: this.config.fleetControlEnv,
+        forkDomainRoot: this.config.forkDomainRoot,
+        reader,
+      })
+    ).verified;
   }
 
   private async readFileText(
@@ -577,6 +616,73 @@ export class GitHubVcsAdapter implements VcsCapability {
   }
 
   /**
+   * Atomically land one verified generated change without entering the merge queue.
+   * The head must still be the PR's exact one-parent child of the observed base. GitHub's
+   * non-force ref update supplies the final compare-and-swap: if another PR advances the
+   * base after these reads, this update is no longer a fast-forward and fails closed.
+   */
+  async fastForwardOperatorChange(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    expectedBaseSha: string;
+    expectedHeadSha: string;
+  }): Promise<MergeResult> {
+    const octokit = await this.getOctokit(params.owner, params.repo);
+    try {
+      const [{ data: pr }, { data: commit }] = await Promise.all([
+        octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+          owner: params.owner,
+          repo: params.repo,
+          pull_number: params.prNumber,
+        }),
+        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+          owner: params.owner,
+          repo: params.repo,
+          ref: params.expectedHeadSha,
+        }),
+      ]);
+      if (
+        pr.state !== "open" ||
+        pr.base.ref !== "main" ||
+        pr.base.sha !== params.expectedBaseSha ||
+        pr.head.sha !== params.expectedHeadSha ||
+        pr.head.repo?.full_name?.toLowerCase() !==
+          `${params.owner}/${params.repo}`.toLowerCase() ||
+        commit.sha !== params.expectedHeadSha ||
+        commit.parents.length !== 1 ||
+        commit.parents[0]?.sha !== params.expectedBaseSha
+      ) {
+        return {
+          merged: false,
+          enqueued: false,
+          status: 409,
+          message: "Generated change base/head precondition failed",
+        };
+      }
+
+      const { data: updated } = await octokit.request(
+        "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
+        {
+          owner: params.owner,
+          repo: params.repo,
+          ref: `heads/${pr.base.ref}`,
+          sha: params.expectedHeadSha,
+          force: false,
+        }
+      );
+      return {
+        merged: true,
+        enqueued: false,
+        sha: updated.object.sha,
+        message: "Verified generated change fast-forwarded atomically",
+      };
+    } catch (error) {
+      return this.toMergeFailure(error);
+    }
+  }
+
+  /**
    * Merge a PR — queue-tolerant by default. When the base branch requires a merge queue,
    * GitHub `405`s a direct `PUT .../merge`, so we instead enable auto-merge
    * (`enablePullRequestAutoMerge`), which GitHub routes through the queue: the
@@ -588,11 +694,9 @@ export class GitHubVcsAdapter implements VcsCapability {
    *
    * MERGED_XOR_ENQUEUED: the merge gate (caller) has already asserted the PR is
    * green; this method only chooses the execution path by queue requirement. A caller that has
-   * already proved a narrower signed change type may request `bypassQueue`; in that case the App
-   * uses the ordinary merge endpoint and GitHub independently enforces that the App is an allowed
-   * ruleset bypass actor. Every direct merge also sends `expectedHeadSha`; GitHub rejects the
-   * request if the PR head moved after the caller's CI read. Required classic-protection checks
-   * still apply.
+   * Every direct merge also sends `expectedHeadSha`; GitHub rejects the request if the PR head
+   * moved after the caller's CI read. Required classic-protection checks still apply. The signed
+   * generated-change fast lane is deliberately separate in `fastForwardOperatorChange`.
    */
   async mergePr(params: {
     owner: string;
@@ -600,7 +704,6 @@ export class GitHubVcsAdapter implements VcsCapability {
     prNumber: number;
     method: "squash" | "merge" | "rebase";
     expectedHeadSha: string;
-    bypassQueue?: boolean;
   }): Promise<MergeResult> {
     const octokit = await this.getOctokit(params.owner, params.repo);
 
@@ -619,14 +722,17 @@ export class GitHubVcsAdapter implements VcsCapability {
       return this.toMergeFailure(error);
     }
 
-    const queueEnabled = params.bypassQueue
-      ? false
-      : await this.isMergeQueueEnabled(
-          octokit,
-          params.owner,
-          params.repo,
-          baseRef
-        );
+    let queueEnabled: boolean;
+    try {
+      queueEnabled = await this.isMergeQueueEnabled(
+        octokit,
+        params.owner,
+        params.repo,
+        baseRef
+      );
+    } catch (error) {
+      return this.toMergeFailure(error);
+    }
 
     if (queueEnabled) {
       try {
@@ -687,8 +793,8 @@ export class GitHubVcsAdapter implements VcsCapability {
   /**
    * True when `branch` has an active merge queue (a `merge_queue` ruleset or the
    * legacy "Require merge queue" toggle). GraphQL `repository.mergeQueue(branch)`
-   * returns a non-null node when one exists. Fail-open to `false` (direct merge)
-   * if the query errors — never block a merge on a flaky discovery call.
+   * returns a non-null node when one exists. Discovery failure propagates to a
+   * structured merge failure; it can never degrade into a direct App write.
    */
   private async isMergeQueueEnabled(
     octokit: Octokit,
@@ -696,21 +802,17 @@ export class GitHubVcsAdapter implements VcsCapability {
     repo: string,
     branch: string
   ): Promise<boolean> {
-    try {
-      const result = await octokit.graphql<{
-        repository: { mergeQueue: { id: string } | null } | null;
-      }>(
-        `query ($owner: String!, $repo: String!, $branch: String!) {
+    const result = await octokit.graphql<{
+      repository: { mergeQueue: { id: string } | null } | null;
+    }>(
+      `query ($owner: String!, $repo: String!, $branch: String!) {
           repository(owner: $owner, name: $repo) {
             mergeQueue(branch: $branch) { id }
           }
         }`,
-        { owner, repo, branch }
-      );
-      return Boolean(result.repository?.mergeQueue?.id);
-    } catch {
-      return false;
-    }
+      { owner, repo, branch }
+    );
+    return Boolean(result.repository?.mergeQueue?.id);
   }
 
   /** Enable auto-merge on a PR (routes through the merge queue when required). */

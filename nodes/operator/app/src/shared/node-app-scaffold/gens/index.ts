@@ -80,6 +80,8 @@ export {
 } from "./external-secret";
 export { insertNetworkNode } from "./network-nodes";
 export {
+  buildNodeBirthPlan,
+  type BuildNodeBirthPlanInput,
   type NodeBirthPathPlan,
   type NodeBirthPathPlanInput,
   nodeBirthPathPlan,

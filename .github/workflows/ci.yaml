@@ -396,6 +396,21 @@ jobs:
       - name: Build workspace packages
         run: pnpm packages:build
 
+      # TEMP task.5185 bootstrap: generate the first zero-install replay bundle
+      # on GitHub-hosted CI. Removed once the artifact is committed and replaced
+      # by the permanent byte-for-byte rebuild gate.
+      - name: Generate operator-change replay bundle artifact
+        env:
+          OPERATOR_CHANGE_BUNDLE_OUT_DIR: .context/operator-change-replay
+        run: pnpm exec tsup --config tsup.operator-change-replay.config.ts
+
+      - name: Upload operator-change replay bundle bootstrap
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: operator-change-replay-${{ github.sha }}
+          path: .context/operator-change-replay/operator-change-replay.mjs
+          if-no-files-found: error
+
       - name: Repository policy check
         run: pnpm check:root-layout
 

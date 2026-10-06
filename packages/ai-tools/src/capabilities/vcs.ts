@@ -172,6 +172,20 @@ export interface VcsCapability {
   }): Promise<OperatorChangeVerificationResult>;
 
   /**
+   * Atomically land one independently verified generated change by advancing
+   * its base ref to the exact one-parent head. Both SHAs are mandatory: a
+   * competing base update makes GitHub's non-force ref update fail closed.
+   * Ordinary human/agent PRs must continue through {@link mergePr}.
+   */
+  fastForwardOperatorChange(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    expectedBaseSha: string;
+    expectedHeadSha: string;
+  }): Promise<MergeResult>;
+
+  /**
    * Merge a pull request.
    *
    * `expectedHeadSha` binds every synchronous merge attempt to the revision
@@ -186,12 +200,6 @@ export interface VcsCapability {
     prNumber: number;
     method: "squash" | "merge" | "rebase";
     expectedHeadSha: string;
-    /**
-     * Direct-merge even when the base branch has a merge queue. The caller may set this only
-     * after a narrower trust gate has proved the PR is eligible and the executing GitHub App is
-     * the queue ruleset's sole bypass actor.
-     */
-    bypassQueue?: boolean;
   }): Promise<MergeResult>;
 
   /** Create a new branch from a ref (branch name or SHA). */

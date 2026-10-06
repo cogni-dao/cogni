@@ -20,15 +20,26 @@
 import {
   appsetPath,
   appsetsKustomizationPath,
+  CANONICAL_DOMAIN_ROOT,
+  type EnvPlanOp,
   externalSecretPath,
   overlayPath,
   schedulerEndpointPatchPath,
 } from "./env-membership-plan";
+import { renderNodeAppset, insertAppsetKustomization } from "./appset";
+import { insertCaddyBlock } from "./caddyfile";
+import { renderCatalog } from "./catalog";
 import {
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
 } from "./envs";
+import { renderOverlay, renderOverlayFile } from "./overlay";
+import {
+  insertSchedulerEndpoint,
+  updateSchedulerEndpointHost,
+} from "./scheduler-endpoints";
+import { nodeAppBaseUrl } from "../../node-registry/placement";
 
 export interface NodeBirthPathPlanInput {
   readonly slug: string;
@@ -43,6 +54,142 @@ export interface NodeBirthPathPlan {
   /** Fail-closed classifier contract. Empty until writer and verifier changes land together. */
   readonly eligible: readonly string[];
   readonly blockers: readonly string[];
+}
+
+export interface BuildNodeBirthPlanInput {
+  readonly slug: string;
+  readonly nodeId: string;
+  readonly sourceRepo: string;
+  readonly sourceSha: string;
+  readonly ownerWallet: string;
+  readonly port: number;
+  readonly nodePort: number;
+  readonly repositoryUrl: string;
+  readonly controlEnvFor: (env: NodeFormationEnv) => string;
+  readonly current: {
+    readonly templateOverlayByEnv: Readonly<Record<string, string>>;
+    readonly templateExternalSecretByEnv: Readonly<Record<string, string>>;
+    readonly appsetTemplate: string;
+    readonly appsetsKustomizationByControlEnv: Readonly<Record<string, string>>;
+    readonly caddyfile: string;
+    readonly schedulerEndpointByPath: Readonly<Record<string, string>>;
+  };
+}
+
+/**
+ * Build the complete deterministic declarative node-registration tree. This is
+ * the single content plan shared by the GitHub writer and the zero-install
+ * verifier bundle; neither side may reconstruct these bytes independently.
+ */
+export function buildNodeBirthPlan(
+  input: BuildNodeBirthPlanInput
+): readonly EnvPlanOp[] {
+  const catalog = renderCatalog(input.slug, input.port, input.nodePort, {
+    sourceRepo: input.sourceRepo,
+    nodeId: input.nodeId,
+    sourceSha: input.sourceSha,
+    ownerWallet: input.ownerWallet,
+  });
+  const ops: EnvPlanOp[] = [
+    { op: "upsert", path: `infra/catalog/${input.slug}.yaml`, content: catalog },
+  ];
+
+  for (const env of NODE_FORMATION_ENVS) {
+    const overlay = input.current.templateOverlayByEnv[env];
+    const externalSecret = input.current.templateExternalSecretByEnv[env];
+    if (overlay === undefined || externalSecret === undefined) {
+      throw new Error(`node birth input missing template files for ${env}`);
+    }
+    ops.push(
+      {
+        op: "upsert",
+        path: overlayPath(env, input.slug),
+        content: renderOverlay(overlay, input.slug, input.nodePort, input.port),
+      },
+      {
+        op: "upsert",
+        path: externalSecretPath(env, input.slug),
+        content: renderOverlayFile(
+          externalSecret,
+          input.slug,
+          input.nodePort,
+          input.port
+        ),
+      }
+    );
+  }
+
+  const kustomizations = new Map<string, string>();
+  for (const env of NODE_FORMATION_ENVS) {
+    const controlEnv = input.controlEnvFor(env);
+    ops.push({
+      op: "upsert",
+      path: appsetPath(controlEnv, env, input.slug),
+      content: renderNodeAppset(
+        input.current.appsetTemplate,
+        input.slug,
+        env,
+        input.repositoryUrl
+      ),
+    });
+    const current =
+      kustomizations.get(controlEnv) ??
+      input.current.appsetsKustomizationByControlEnv[controlEnv];
+    if (current === undefined) {
+      throw new Error(`node birth input missing appset index for ${controlEnv}`);
+    }
+    kustomizations.set(
+      controlEnv,
+      insertAppsetKustomization(current, input.slug, env)
+    );
+  }
+  for (const [controlEnv, content] of kustomizations) {
+    ops.push({
+      op: "upsert",
+      path: appsetsKustomizationPath(controlEnv),
+      content,
+    });
+  }
+
+  ops.push({
+    op: "upsert",
+    path: "infra/compose/edge/configs/Caddyfile.tmpl",
+    content: insertCaddyBlock(
+      input.current.caddyfile,
+      input.slug,
+      input.nodePort
+    ),
+  });
+
+  const bornEnvs = new Set<string>(NODE_FORMATION_ENVS);
+  for (const [path, current] of Object.entries(
+    input.current.schedulerEndpointByPath
+  )) {
+    const spliced = insertSchedulerEndpoint(current, input.slug, input.nodeId);
+    const patchEnv = path.match(
+      /^infra\/k8s\/overlays\/([^/]+)\/scheduler-worker\/node-endpoints\.patch\.yaml$/
+    )?.[1];
+    ops.push({
+      op: "upsert",
+      path,
+      content:
+        patchEnv && bornEnvs.has(patchEnv)
+          ? updateSchedulerEndpointHost(
+              spliced,
+              input.slug,
+              input.nodeId,
+              nodeAppBaseUrl({
+                slug: input.slug,
+                provider: "akash",
+                environment: patchEnv as NodeFormationEnv,
+                apexDomain: CANONICAL_DOMAIN_ROOT,
+              })
+            )
+          : spliced,
+    });
+  }
+
+  return ops;
 }
 
 /**

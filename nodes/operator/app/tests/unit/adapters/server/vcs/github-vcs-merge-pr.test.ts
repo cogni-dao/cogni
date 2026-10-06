@@ -58,6 +58,7 @@ const MERGE_ROUTE = "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge";
 const CHECK_RUNS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/check-runs";
 const STATUS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/status";
 const COMMIT_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}";
+const UPDATE_REF_ROUTE = "PATCH /repos/{owner}/{repo}/git/refs/{ref}";
 const REVIEWS_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews";
 const CLASSIC_REQUIRED_CHECKS_ROUTE =
   "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks";
@@ -152,17 +153,15 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
     expect(graphqlQueries.length).toBe(2);
   });
 
-  it("direct-merges a caller-authorized bypass without querying or entering the queue", async () => {
-    let mergeParams: Record<string, unknown> | undefined;
-    onRequest = (route, params) => {
+  it("never direct-merges when merge-queue discovery fails", async () => {
+    onGraphql = () => {
+      throw new Error("GraphQL unavailable");
+    };
+    onRequest = (route) => {
       if (route === PR_GET_ROUTE) {
         return { base: { ref: "main" }, node_id: "PR_node_1" };
       }
-      if (route === MERGE_ROUTE) {
-        mergeParams = params;
-        return { merged: true, sha: "fast-path", message: "Merged" };
-      }
-      throw new Error(`Unhandled request route: ${route}`);
+      throw new Error(`Unexpected REST request: ${route}`);
     };
 
     const result = await adapter().mergePr({
@@ -170,19 +169,12 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       repo: "r",
       prNumber: 7,
       method: "squash",
-      bypassQueue: true,
-      expectedHeadSha: "a".repeat(40),
+      expectedHeadSha: "verified-head-sha",
     });
 
-    expect(result).toMatchObject({
-      merged: true,
-      enqueued: false,
-      sha: "fast-path",
-    });
-    expect(requestRoutes).toContain(MERGE_ROUTE);
-    expect(requestParams.at(-1)).toMatchObject({ sha: "verified-head-sha" });
-    expect(graphqlQueries).toEqual([]);
-    expect(mergeParams).toMatchObject({ sha: "a".repeat(40) });
+    expect(result).toMatchObject({ merged: false, enqueued: false });
+    expect(requestRoutes).not.toContain(MERGE_ROUTE);
+    expect(graphqlQueries).toHaveLength(1);
   });
 
   it("surfaces a 405 as a structured failure (neither merged nor enqueued)", async () => {
@@ -230,13 +222,144 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       prNumber: 7,
       method: "squash",
       expectedHeadSha: "verified-head-sha",
-      bypassQueue: true,
     });
 
     expect(result).toMatchObject({
       merged: false,
       enqueued: false,
       status: 409,
+    });
+  });
+});
+
+describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
+  const baseSha = "b".repeat(40);
+  const headSha = "a".repeat(40);
+
+  it("non-force fast-forwards the verified one-parent head", async () => {
+    onRequest = (route, params) => {
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          base: { ref: "main", sha: baseSha },
+          head: { sha: headSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      if (route === UPDATE_REF_ROUTE) {
+        expect(params).toMatchObject({
+          ref: "heads/main",
+          sha: headSha,
+          force: false,
+        });
+        return { object: { sha: headSha } };
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+
+    const result = await adapter().fastForwardOperatorChange({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      expectedBaseSha: baseSha,
+      expectedHeadSha: headSha,
+    });
+
+    expect(result).toMatchObject({
+      merged: true,
+      enqueued: false,
+      sha: headSha,
+    });
+  });
+
+  it("rejects stale PR base/head facts before updating the ref", async () => {
+    onRequest = (route) => {
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          base: { ref: "main", sha: "c".repeat(40) },
+          head: { sha: headSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      throw new Error(`Unexpected request route: ${route}`);
+    };
+
+    const result = await adapter().fastForwardOperatorChange({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      expectedBaseSha: baseSha,
+      expectedHeadSha: headSha,
+    });
+
+    expect(result).toMatchObject({ merged: false, status: 409 });
+    expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
+  });
+
+  it("rejects a non-main base before updating the ref", async () => {
+    onRequest = (route) => {
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          base: { ref: "release", sha: baseSha },
+          head: { sha: headSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      throw new Error(`Unexpected request route: ${route}`);
+    };
+
+    const result = await adapter().fastForwardOperatorChange({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      expectedBaseSha: baseSha,
+      expectedHeadSha: headSha,
+    });
+
+    expect(result).toMatchObject({ merged: false, status: 409 });
+    expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
+  });
+
+  it("fails the concurrent loser when GitHub rejects a non-fast-forward", async () => {
+    onRequest = (route) => {
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          base: { ref: "main", sha: baseSha },
+          head: { sha: headSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      if (route === UPDATE_REF_ROUTE) {
+        throw Object.assign(new Error("Update is not a fast forward"), {
+          status: 422,
+        });
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+
+    const result = await adapter().fastForwardOperatorChange({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      expectedBaseSha: baseSha,
+      expectedHeadSha: headSha,
+    });
+
+    expect(result).toMatchObject({
+      merged: false,
+      enqueued: false,
+      status: 422,
     });
   });
 });

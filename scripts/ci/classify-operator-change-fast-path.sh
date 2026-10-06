@@ -157,10 +157,11 @@ head_ref="$(jq -r '.head.ref // empty' "$pr_json")"
 subject="$(sed -n '1p' "$message_file")"
 case "$operation" in
   env.membership)
-    expected_trailer_count=7
+    expected_trailer_count=8
     env_name="$(trailer_value Cogni-Environment)" || reject_claim duplicate-or-missing-environment
     action="$(trailer_value Cogni-Action)" || reject_claim duplicate-or-missing-action
-    [[ "$env_name" =~ ^(candidate-a|preview|production)$ && "$action" =~ ^(add|remove)$ ]] || reject_claim invalid-membership-envelope
+    generation="$(trailer_value Cogni-Lease-Generation)" || reject_claim duplicate-or-missing-lease-generation
+    [[ "$env_name" =~ ^(candidate-a|preview|production)$ && "$action" =~ ^(add|remove)$ && "$generation" =~ ^[0-9]+$ ]] || reject_claim invalid-membership-envelope
     [[ "$head_ref" == "cogni-operator/node-env-$node-$env_name" ]] || reject_claim invalid-branch
     if [[ "$action" == add ]]; then
       [[ "$subject" == "feat(node): add $node to $env_name" ]] || reject_claim invalid-subject
@@ -187,11 +188,12 @@ case "$operation" in
     [[ "$subject" == "feat(node): require $node $env_name placement in $rendered_countries" ]] || reject_claim invalid-subject
     ;;
   node.register)
-    expected_trailer_count=8
+    expected_trailer_count=9
     node_id="$(trailer_value Cogni-Node-Id)" || reject_claim duplicate-or-missing-node-id
     source_repo="$(trailer_value Cogni-Source-Repo)" || reject_claim duplicate-or-missing-source-repo
     source_sha="$(trailer_value Cogni-Source-SHA)" || reject_claim duplicate-or-missing-source-sha
-    [[ "$node_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && "$source_sha" =~ ^[0-9a-f]{40}$ ]] || reject_claim invalid-register-envelope
+    owner_wallet="$(trailer_value Cogni-Owner-Wallet)" || reject_claim duplicate-or-missing-owner-wallet
+    [[ "$node_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && "$source_sha" =~ ^[0-9a-f]{40}$ && "$owner_wallet" =~ ^0x[0-9a-fA-F]{40}$ ]] || reject_claim invalid-register-envelope
     fleet_owner="${repository_key%%/*}"
     [[ "${source_repo,,}" == "https://github.com/$fleet_owner/$node.git" ]] || reject_claim invalid-source-repo
     [[ "$head_ref" == "cogni-operator/node-register-$node" && "$subject" == "feat(node): register $node" ]] || reject_claim invalid-register-identity
@@ -226,26 +228,22 @@ fi
 verifier="$(jq -r --arg operation "$operation" '.operations[$operation].verifier // empty' "$registry_json")"
 [[ "$verifier" == scripts/ci/verifiers/*.sh ]] || reject_claim invalid-verifier
 trusted_verifier="$tmpdir/verifier.sh"
-deployment_fixture_path='packages/repo-spec/src/node-app-deployment-v1.json'
-trusted_deployment_fixture="$tmpdir/node-app-deployment-v1.json"
+replay_bundle_path='scripts/ci/dist/operator-change-replay.mjs'
+trusted_replay_bundle="$tmpdir/operator-change-replay.mjs"
 if [[ -n "$POLICY_ROOT" ]]; then
   [[ -f "$POLICY_ROOT/$verifier" ]] || reject_claim trusted-verifier-unavailable
   cp "$POLICY_ROOT/$verifier" "$trusted_verifier"
-  [[ "$operation" != deployment.declare ]] || {
-    [[ -f "$POLICY_ROOT/$deployment_fixture_path" ]] || reject_claim trusted-verifier-unavailable
-    cp "$POLICY_ROOT/$deployment_fixture_path" "$trusted_deployment_fixture"
-  }
+  [[ -f "$POLICY_ROOT/$replay_bundle_path" ]] || reject_claim trusted-verifier-unavailable
+  cp "$POLICY_ROOT/$replay_bundle_path" "$trusted_replay_bundle"
 else
   git show "origin/main:$verifier" > "$trusted_verifier" 2>/dev/null || reject_claim trusted-verifier-unavailable
-  if [[ "$operation" == deployment.declare ]]; then
-    git show "origin/main:$deployment_fixture_path" > "$trusted_deployment_fixture" 2>/dev/null ||
-      reject_claim trusted-verifier-unavailable
-  fi
+  git show "origin/main:$replay_bundle_path" > "$trusted_replay_bundle" 2>/dev/null ||
+    reject_claim trusted-verifier-unavailable
 fi
 chmod +x "$trusted_verifier"
 OPERATOR_CHANGE_OPERATION="$operation" OPERATOR_CHANGE_NODE="$node" OPERATOR_CHANGE_BASE_SHA="$base_sha" \
 OPERATOR_CHANGE_HEAD_SHA="$head_sha" OPERATOR_CHANGE_PATHS_FILE="$changed_paths" \
-OPERATOR_CHANGE_DEPLOYMENT_FIXTURE="$trusted_deployment_fixture" \
+OPERATOR_CHANGE_REPLAY_BUNDLE="$trusted_replay_bundle" REPOSITORY="$REPOSITORY" \
   "$trusted_verifier" || reject_claim operation-verification-failed
 
 emit eligible true

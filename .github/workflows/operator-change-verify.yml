@@ -36,6 +36,9 @@ jobs:
   verify:
     name: operator-change-fast-path
     runs-on: ubuntu-latest
+    env:
+      FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+      FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
     outputs:
       eligible: ${{ steps.classify.outputs.eligible }}
       claimed: ${{ steps.classify.outputs.claimed }}
