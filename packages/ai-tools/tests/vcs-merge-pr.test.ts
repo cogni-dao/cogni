@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/ai-tools/tests/vcs-merge-pr`
  * Purpose: Prove the merge tool binds its write to the PR head read immediately beforehand.
- * Scope: Mocked VcsCapability delegation only; no GitHub IO.
+ * Scope: Mocked VcsCapability delegation only. Does not call GitHub.
  * Invariants: HEAD_SHA_PINNED — every merge request carries the freshly observed head SHA.
  * Side-effects: none
  * Links: src/tools/vcs-merge-pr.ts, src/capabilities/vcs.ts
