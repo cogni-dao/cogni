@@ -175,6 +175,12 @@ describe("nodeMainPolicyRulesetPayload", () => {
     "-1",
     "not-an-app",
     "1.5",
+    " 1",
+    "+1",
+    "01",
+    "1e3",
+    "0x1",
+    "9007199254740992",
   ])("rejects invalid configured App ID %s for v2", (appId) => {
     expect(() =>
       nodeMainPolicyRulesetPayload(TEST_NODE_REPO_POLICY_V2, appId)
@@ -283,26 +289,25 @@ function readStoredRuleset(
 
 function setHappyForkHandlers(): void {
   storedRulesets.clear();
+  let currentMainSha = "template-main";
+  let mintedRepoSpec: string | undefined;
   routeHandlers = {
     "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
       expect(String(params.owner).toLowerCase()).toBe("cogni-dao");
-      expect(params).toMatchObject({ path: ".cogni/repo-policy.json" });
-      // The policy is read TWICE by design: once as a pre-flight at floating template
-      // main (fail before minting an unprotectable repo), then again from the FORK at
-      // its exact base commit — the revision whose workflows must satisfy it.
-      if (params.repo === "node-template") {
-        expect(params.ref).toBe("main");
-      } else {
-        // The fork read must be pinned to the resolved base COMMIT (the sha the
-        // identity commit parents on), never the floating "main" the pre-flight used.
-        expect(params.repo).toBe("atlas");
-        expect(params.ref).toBe("template-main");
-        expect(params.ref).not.toBe("main");
-      }
+      const content =
+        params.path === ".cogni/repo-policy.json"
+          ? TEST_NODE_REPO_POLICY_JSON
+          : params.path === ".cogni/repo-spec.yaml" &&
+              params.ref === "identity-commit"
+            ? mintedRepoSpec
+            : params.path === ".cogni/repo-spec.yaml"
+              ? "inherited template identity"
+              : undefined;
+      if (!content) throw new Error(`Unexpected content read: ${params.path}`);
       return {
         type: "file",
         encoding: "base64",
-        content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString("base64"),
+        content: Buffer.from(content).toString("base64"),
       };
     },
     // Canonical merge settings (squash-only, auto-merge, delete-on-merge) — applied
@@ -336,15 +341,28 @@ function setHappyForkHandlers(): void {
         repo: "atlas",
         ref: "heads/main",
       });
-      return { object: { sha: "template-main" } };
+      return { object: { sha: currentMainSha } };
     },
     "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) => {
-      expect(params).toMatchObject({
-        owner: "Cogni-DAO",
-        repo: "atlas",
-        commit_sha: "template-main",
-      });
-      return { tree: { sha: "template-tree" } };
+      expect(params.owner).toBe("Cogni-DAO");
+      expect(["atlas", "node-template"]).toContain(params.repo);
+      if (
+        params.repo === "node-template" &&
+        params.commit_sha === "identity-commit"
+      ) {
+        return Promise.reject(statusError(404, "Commit not found in template"));
+      }
+      expect(["template-main", "identity-commit"]).toContain(
+        params.commit_sha
+      );
+      return {
+        tree: {
+          sha:
+            params.commit_sha === "identity-commit"
+              ? "identity-tree"
+              : "template-tree",
+        },
+      };
     },
     "PUT /repos/{owner}/{repo}/actions/permissions": (params) => {
       expect(params).toMatchObject({
@@ -388,6 +406,7 @@ function setHappyForkHandlers(): void {
         "utf-8"
       );
       if (content.includes('node_id: "11111111-1111-4111-8111-111111111111"')) {
+        mintedRepoSpec = content;
         return { sha: "repo-spec-blob" };
       }
       if (
@@ -448,16 +467,15 @@ function setHappyForkHandlers(): void {
       });
       return { sha: "identity-commit" };
     },
-    "POST /repos/{owner}/{repo}/git/refs": () =>
-      Promise.reject(statusError(422, "Reference already exists")),
     "PATCH /repos/{owner}/{repo}/git/refs/{ref}": (params) => {
       expect(params).toMatchObject({
         owner: "Cogni-DAO",
         repo: "atlas",
         ref: "heads/main",
         sha: "identity-commit",
-        force: true,
+        force: false,
       });
+      currentMainSha = String(params.sha);
       return {};
     },
   };
@@ -490,9 +508,12 @@ function setFullyFormedExistingForkHandlers(
   routeHandlers["GET /repos/{owner}/{repo}/git/ref/{ref}"] = () => ({
     object: { sha: headSha },
   });
-  routeHandlers["GET /repos/{owner}/{repo}/git/commits/{commit_sha}"] = () => ({
-    tree: { sha: "advanced-human-tree" },
-  });
+  routeHandlers["GET /repos/{owner}/{repo}/git/commits/{commit_sha}"] = (
+    params
+  ) =>
+    params.repo === "node-template"
+      ? Promise.reject(statusError(404, "Commit not found in template"))
+      : { tree: { sha: "advanced-human-tree" } };
   routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) => {
     const content =
       params.repo === "node-template" ||
@@ -1561,33 +1582,62 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
       headSha: "identity-commit",
     });
-    expect(requests.map((request) => request.route)).toEqual([
-      "GET /repos/{owner}/{repo}/contents/{path}",
-      "POST /repos/{owner}/{repo}/forks",
-      "GET /repos/{owner}/{repo}/git/ref/{ref}",
-      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
-      "PUT /repos/{owner}/{repo}/actions/permissions",
-      "PUT /repos/{owner}/{repo}/actions/permissions/workflow",
-      "GET /repos/{owner}/{repo}/actions/workflows",
-      // Policy re-read from the FORK at its base commit — the revision whose
-      // workflows must satisfy the contexts we are about to require.
-      "GET /repos/{owner}/{repo}/contents/{path}",
-      // One repo-spec blob + one external-secret pair per BIRTH env (story.5025), so this
-      // sequence tracks the birth set instead of pinning a count that silently goes stale.
-      ...Array.from(
-        { length: 1 + 2 * NODE_FORMATION_ENVS.length },
-        () => "POST /repos/{owner}/{repo}/git/blobs"
-      ),
-      "POST /repos/{owner}/{repo}/git/trees",
-      "POST /repos/{owner}/{repo}/git/commits",
-      "POST /repos/{owner}/{repo}/git/refs",
-      "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
-      "PATCH /repos/{owner}/{repo}",
-      "GET /repos/{owner}/{repo}/rulesets",
-      "POST /repos/{owner}/{repo}/rulesets",
-      // The write is not the last word — the ruleset is read back and compared.
-      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
-    ]);
+    const routes = requests.map((request) => request.route);
+    expect(routes).not.toContain("POST /repos/{owner}/{repo}/git/refs");
+    expect(routes).toContain("PATCH /repos/{owner}/{repo}/git/refs/{ref}");
+    expect(routes).toContain("POST /repos/{owner}/{repo}/rulesets");
+    expect(routes.indexOf("PATCH /repos/{owner}/{repo}/git/refs/{ref}")).toBeLessThan(
+      routes.indexOf("POST /repos/{owner}/{repo}/rulesets")
+    );
+  });
+
+  it("does not overwrite a new fork main that advances during identity creation", async () => {
+    setHappyForkHandlers();
+    let refUpdate: Record<string, unknown> | undefined;
+    let mainSha = "template-main";
+    routeHandlers["GET /repos/{owner}/{repo}/git/ref/{ref}"] = () => ({
+      object: { sha: mainSha },
+    });
+    const commitHandler =
+      routeHandlers["GET /repos/{owner}/{repo}/git/commits/{commit_sha}"];
+    routeHandlers["GET /repos/{owner}/{repo}/git/commits/{commit_sha}"] = (
+      params
+    ) =>
+      params.repo === "node-template" &&
+      params.commit_sha === "advanced-human-main"
+        ? Promise.reject(statusError(404, "Commit not found in template"))
+        : commitHandler(params);
+    routeHandlers["PATCH /repos/{owner}/{repo}/git/refs/{ref}"] = (params) => {
+      refUpdate = params;
+      mainSha = "advanced-human-main";
+      return Promise.reject(statusError(422, "Update is not a fast forward"));
+    };
+
+    await expect(
+      makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+    ).rejects.toMatchObject({
+      code: "existing_node_repo_incomplete",
+      status: 409,
+    });
+    expect(refUpdate).toMatchObject({
+      ref: "heads/main",
+      sha: "identity-commit",
+      force: false,
+    });
+    expect(
+      requests.filter(
+        (request) =>
+          request.route === "PATCH /repos/{owner}/{repo}/git/refs/{ref}"
+      )
+    ).toHaveLength(1);
+    expect(
+      requests.some(
+        (request) =>
+          request.route === "POST /repos/{owner}/{repo}/git/refs" ||
+          request.route === "POST /repos/{owner}/{repo}/rulesets" ||
+          request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+      )
+    ).toBe(false);
   });
 
   it("creates the exact default-branch PR + standard-CI ruleset without bypass actors", async () => {
@@ -1631,11 +1681,17 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
   it("mints a v2 node with only the configured operator App bypass", async () => {
     setHappyForkHandlers();
-    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () => ({
-      type: "file",
-      encoding: "base64",
-      content: Buffer.from(TEST_NODE_REPO_POLICY_V2_JSON).toString("base64"),
-    });
+    const contents = routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
+      params.path === ".cogni/repo-policy.json"
+        ? {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(TEST_NODE_REPO_POLICY_V2_JSON).toString(
+              "base64"
+            ),
+          }
+        : contents(params);
     let postParams: Record<string, unknown> | undefined;
     routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = (params) => {
       postParams = params;
@@ -1662,6 +1718,26 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
   it("repairs a same-named policy ruleset with an exact PUT (idempotent, non-vacuous)", async () => {
     setHappyForkHandlers();
+    setFullyFormedExistingForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+    const contents = routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
+      params.repo === "atlas" && params.path === ".cogni/repo-policy.json"
+        ? {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString(
+              "base64"
+            ),
+          }
+        : contents(params);
     routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = () => [
       { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
     ];
@@ -1672,6 +1748,9 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       putParams = params;
       return recordRuleset(params);
     };
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = (
+      params
+    ) => readStoredRuleset(params);
 
     await makeWriter().forkFromTemplate({
       templateOwner: "Cogni-DAO",
@@ -1884,7 +1963,63 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     );
   });
 
-  it("returns an advanced fully-formed fork without rewriting its human main", async () => {
+  it("resumes an untouched inherited fork through non-force identity CAS", async () => {
+    setHappyForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+
+    await expect(
+      makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+    ).resolves.toEqual({
+      cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
+      headSha: "identity-commit",
+    });
+    expect(
+      requests.filter(
+        (request) =>
+          request.route === "PATCH /repos/{owner}/{repo}/git/refs/{ref}"
+      )
+    ).toHaveLength(1);
+    expect(
+      requests.find(
+        (request) =>
+          request.route === "PATCH /repos/{owner}/{repo}/git/refs/{ref}"
+      )?.params.force
+    ).toBe(false);
+  });
+
+  it("rejects protection installed before inherited identity", async () => {
+    setHappyForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets"] = () => [
+      { id: 41, name: NODE_MAIN_POLICY_RULESET_NAME },
+    ];
+
+    await expect(
+      makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+    ).rejects.toMatchObject({
+      code: "existing_node_repo_incomplete",
+      status: 409,
+    });
+    expect(
+      requests.some((request) => request.route.includes("/git/blobs"))
+    ).toBe(false);
+  });
+
+  it("heals an exact-identity partial fork without rewriting its human main", async () => {
     setHappyForkHandlers();
     setFullyFormedExistingForkHandlers();
     routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
@@ -1902,25 +2037,63 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
       headSha: "advanced-human-main",
     });
-    expect(requests.map((request) => request.route)).toEqual([
-      "GET /repos/{owner}/{repo}/contents/{path}",
-      "POST /repos/{owner}/{repo}/forks",
-      "GET /repos/{owner}/{repo}",
-      "GET /repos/{owner}/{repo}/git/ref/{ref}",
-      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}",
-      "GET /repos/{owner}/{repo}/contents/{path}",
-      "GET /repos/{owner}/{repo}/contents/{path}",
-      "GET /repos/{owner}/{repo}/rulesets",
-      "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}",
-    ]);
+    expect(requests.map((request) => request.route)).toContain(
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(requests.map((request) => request.route)).toContain(
+      "PATCH /repos/{owner}/{repo}"
+    );
     expect(
       requests.filter(
         (request) =>
-          request.route.includes("/git/refs") &&
-          (request.route.startsWith("POST") ||
-            request.route.startsWith("PATCH"))
+          request.route.startsWith("POST /repos/{owner}/{repo}/git/") ||
+          request.route.startsWith("PATCH /repos/{owner}/{repo}/git/")
       )
     ).toEqual([]);
+  });
+
+  it("keeps a reused v1 fork at zero bypass actors", async () => {
+    setHappyForkHandlers();
+    setFullyFormedExistingForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+    const contents = routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
+      params.repo === "atlas" && params.path === ".cogni/repo-policy.json"
+        ? {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString(
+              "base64"
+            ),
+          }
+        : contents(params);
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = (
+      params
+    ) => readStoredRuleset(params);
+
+    await expect(
+      makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+    ).resolves.toMatchObject({ headSha: "advanced-human-main" });
+
+    const write = requests.find(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(write?.params.bypass_actors).toEqual([]);
+    expect(
+      requests.some(
+        (request) =>
+          request.route.startsWith("POST /repos/{owner}/{repo}/git/") ||
+          request.route.startsWith("PATCH /repos/{owner}/{repo}/git/")
+      )
+    ).toBe(false);
   });
 
   it("fails closed instead of rewriting a reused fork with mismatched identity", async () => {
@@ -1954,12 +2127,16 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       requests.some(
         (request) =>
           request.route.startsWith("POST /repos/{owner}/{repo}/git/") ||
-          request.route.startsWith("PATCH /repos/{owner}/{repo}/git/")
+          request.route.startsWith("PATCH /repos/{owner}/{repo}/git/") ||
+          request.route === "PATCH /repos/{owner}/{repo}" ||
+          request.route.startsWith("PUT /repos/{owner}/{repo}/actions/") ||
+          request.route === "POST /repos/{owner}/{repo}/rulesets" ||
+          request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
       )
     ).toBe(false);
   });
 
-  it("fails closed instead of repairing protection on a reused v2 fork", async () => {
+  it("fails closed when v2 protection readback drops the configured App", async () => {
     setHappyForkHandlers();
     setFullyFormedExistingForkHandlers();
     routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
@@ -1977,19 +2154,152 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
     await expect(
       makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
-    ).rejects.toMatchObject({
-      code: "existing_node_repo_incomplete",
-      status: 409,
-    });
+    ).rejects.toThrow("protection readback mismatch");
+    expect(requests.map((request) => request.route)).toContain(
+      "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
     expect(
       requests.some(
         (request) =>
-          request.route === "POST /repos/{owner}/{repo}/rulesets" ||
-          request.route ===
-            "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}" ||
+          request.route.startsWith("POST /repos/{owner}/{repo}/git/") ||
           request.route.startsWith("PATCH /repos/{owner}/{repo}/git/")
       )
     ).toBe(false);
+  });
+
+  it("restarts from the new policy snapshot when reused main advances", async () => {
+    setHappyForkHandlers();
+    setFullyFormedExistingForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+    const contents = routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
+      params.repo === "atlas" &&
+      params.path === ".cogni/repo-policy.json" &&
+      params.ref === "advanced-human-main"
+        ? {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString(
+              "base64"
+            ),
+          }
+        : contents(params);
+    let mainReads = 0;
+    routeHandlers["GET /repos/{owner}/{repo}/git/ref/{ref}"] = () => ({
+      object: {
+        sha: mainReads++ === 0 ? "advanced-human-main" : "concurrent-main",
+      },
+    });
+
+    await expect(
+      makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+    ).resolves.toEqual({
+      cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
+      headSha: "concurrent-main",
+    });
+    expect(mainReads).toBe(5);
+    expect(
+      requests.some(
+        (request) =>
+          request.route.startsWith("POST /repos/{owner}/{repo}/git/") ||
+          request.route.startsWith("PATCH /repos/{owner}/{repo}/git/") ||
+          request.route === "POST /repos/{owner}/{repo}/rulesets"
+      )
+    ).toBe(false);
+    const rulesetWrites = requests.filter(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(rulesetWrites).toHaveLength(1);
+    expect(rulesetWrites[0]?.params.bypass_actors).toEqual([
+      { actor_id: 1, actor_type: "Integration", bypass_mode: "always" },
+    ]);
+  });
+
+  it("fails with retryable 409 after three unstable main snapshots", async () => {
+    setHappyForkHandlers();
+    setFullyFormedExistingForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+    let mainReads = 0;
+    routeHandlers["GET /repos/{owner}/{repo}/git/ref/{ref}"] = () => ({
+      object: { sha: `moving-main-${mainReads++}` },
+    });
+
+    await expect(
+      makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+    ).rejects.toMatchObject({ code: "node_formation_raced", status: 409 });
+    expect(mainReads).toBe(6);
+  });
+
+  it("reconciles again when main advances after the ruleset write", async () => {
+    setHappyForkHandlers();
+    setFullyFormedExistingForkHandlers();
+    routeHandlers["POST /repos/{owner}/{repo}/forks"] = () =>
+      Promise.reject(statusError(422, "Repository creation failed"));
+    routeHandlers["GET /repos/{owner}/{repo}"] = () => ({
+      full_name: "Cogni-DAO/atlas",
+      fork: true,
+      parent: { full_name: "Cogni-DAO/node-template" },
+      clone_url: "https://github.com/Cogni-DAO/atlas.git",
+    });
+    const contents = routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
+      params.repo === "atlas" &&
+      params.path === ".cogni/repo-policy.json" &&
+      params.ref === "advanced-human-main"
+        ? {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(TEST_NODE_REPO_POLICY_JSON).toString(
+              "base64"
+            ),
+          }
+        : contents(params);
+    routeHandlers["GET /repos/{owner}/{repo}/rulesets/{ruleset_id}"] = (
+      params
+    ) => readStoredRuleset(params);
+    const mainShas = [
+      "advanced-human-main",
+      "advanced-human-main",
+      "concurrent-main",
+      "concurrent-main",
+      "concurrent-main",
+      "concurrent-main",
+    ];
+    let mainReads = 0;
+    routeHandlers["GET /repos/{owner}/{repo}/git/ref/{ref}"] = () => ({
+      object: { sha: mainShas[mainReads++] },
+    });
+
+    await expect(
+      makeWriter().forkFromTemplate(TEST_FORMATION_INPUT)
+    ).resolves.toEqual({
+      cloneUrl: "https://github.com/Cogni-DAO/atlas.git",
+      headSha: "concurrent-main",
+    });
+    const rulesetWrites = requests.filter(
+      (request) =>
+        request.route === "PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}"
+    );
+    expect(rulesetWrites).toHaveLength(2);
+    expect(rulesetWrites[0]?.params.bypass_actors).toEqual([]);
+    expect(rulesetWrites[1]?.params.bypass_actors).toEqual([
+      { actor_id: 1, actor_type: "Integration", bypass_mode: "always" },
+    ]);
   });
 
   it("fails before repo creation when the template policy is missing", async () => {
@@ -4571,6 +4881,53 @@ describe("diffRulesetAgainstPolicy — protection readback", () => {
       diffRulesetAgainstPolicy(misTargeted as never, policy).join(" ")
     ).toContain("~DEFAULT_BRANCH");
   });
+
+  it("catches exact name, target, include, and exclude drift", () => {
+    const variants = [
+      { ...faithfulReadback(), name: "lookalike-policy" },
+      { ...faithfulReadback(), target: "tag" },
+      {
+        ...faithfulReadback(),
+        conditions: {
+          ref_name: {
+            include: ["~DEFAULT_BRANCH", "refs/heads/release"],
+            exclude: [],
+          },
+        },
+      },
+      {
+        ...faithfulReadback(),
+        conditions: {
+          ref_name: {
+            include: ["~DEFAULT_BRANCH"],
+            exclude: ["refs/heads/emergency"],
+          },
+        },
+      },
+    ];
+
+    for (const variant of variants) {
+      expect(diffRulesetAgainstPolicy(variant as never, policy)).not.toEqual(
+        []
+      );
+    }
+  });
+
+  it("catches strict and do-not-enforce-on-create drift", () => {
+    for (const key of [
+      "strict_required_status_checks_policy",
+      "do_not_enforce_on_create",
+    ] as const) {
+      const drifted = faithfulReadback();
+      const checks = drifted.rules.find(
+        (rule: { type: string }) => rule.type === "required_status_checks"
+      ) as { parameters: Record<string, unknown> };
+      checks.parameters[key] = !checks.parameters[key];
+      expect(
+        diffRulesetAgainstPolicy(drifted as never, policy).join(" ")
+      ).toContain(`required_status_checks.${key}`);
+    }
+  });
 });
 
 describe("forkFromTemplate — protection is the last fallible step", () => {
@@ -4687,6 +5044,7 @@ describe("forkFromTemplate — policy is bound to the inherited tree", () => {
   // the same revision as the workflows that have to satisfy it.
   it("enforces the policy at the fork's base commit, not a template main that moved", async () => {
     setHappyForkHandlers();
+    const contents = routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
     const movedOnTemplateMain = JSON.stringify({
       ...TEST_NODE_REPO_POLICY,
       ruleset: {
@@ -4704,15 +5062,18 @@ describe("forkFromTemplate — policy is bound to the inherited tree", () => {
         },
       },
     });
-    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) => ({
-      type: "file",
-      encoding: "base64",
-      content: Buffer.from(
-        params.repo === "node-template"
-          ? movedOnTemplateMain // template main advanced after the pre-flight read
-          : TEST_NODE_REPO_POLICY_JSON // what the fork actually inherited
-      ).toString("base64"),
-    });
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
+      params.path === ".cogni/repo-policy.json"
+        ? {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(
+              params.repo === "node-template"
+                ? movedOnTemplateMain // template main advanced after pre-flight
+                : TEST_NODE_REPO_POLICY_JSON // what the fork inherited
+            ).toString("base64"),
+          }
+        : contents(params);
 
     let written: Record<string, unknown> | undefined;
     routeHandlers["POST /repos/{owner}/{repo}/rulesets"] = (params) => {
@@ -4779,13 +5140,25 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
   const encode = (content: string) =>
     Buffer.from(content, "utf-8").toString("base64");
 
-  /** Serve the node repo's own policy file; `nodePolicy: null` = 404 on the node repo. */
-  function policyContentsHandler(nodePolicy: string | null): RouteHandler {
+  /** Serve node policy + identity; `nodePolicy: null` exercises the legacy fallback. */
+  function policyContentsHandler(
+    nodePolicy: string | null,
+    templatePolicy = TEST_NODE_REPO_POLICY_JSON,
+    nodeName = REPO
+  ): RouteHandler {
     return (params) => {
-      expect(params).toMatchObject({
-        path: ".cogni/repo-policy.json",
-        ref: "main",
-      });
+      expect(params.ref).toBe("main");
+      if (
+        params.repo === REPO &&
+        params.path === ".cogni/repo-spec.yaml"
+      ) {
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(`intent:\n  name: ${nodeName}\n`),
+        };
+      }
+      expect(params.path).toBe(".cogni/repo-policy.json");
       if (params.repo === REPO) {
         if (nodePolicy === null) throw statusError(404, "Not Found");
         return {
@@ -4799,7 +5172,7 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
       return {
         type: "file",
         encoding: "base64",
-        content: encode(TEST_NODE_REPO_POLICY_JSON),
+        content: encode(templatePolicy),
       };
     };
   }
@@ -4961,11 +5334,14 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
   it("falls back to canonical node-template@main when the node repo lacks the policy file", async () => {
     // poly/toks4 reality: forks minted before task.5028 shipped `.cogni/repo-policy.json`.
     storedRulesets.clear();
+    let postParams: Record<string, unknown> | undefined;
     routeHandlers = {
       "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(null),
       "GET /repos/{owner}/{repo}/rulesets": () => [],
-      "POST /repos/{owner}/{repo}/rulesets": (params) =>
-        recordRuleset(params, 88),
+      "POST /repos/{owner}/{repo}/rulesets": (params) => {
+        postParams = params;
+        return recordRuleset(params, 88);
+      },
       "GET /repos/{owner}/{repo}/rulesets/{ruleset_id}": (params) =>
         readStoredRuleset(params),
     };
@@ -4978,6 +5354,50 @@ describe("GitHubRepoWriter.reconcileNodeMainProtection (bug.5123)", () => {
         isInRepoNode: false,
       })
     ).resolves.toMatchObject({ status: "applied", policySource: "template" });
+    expect(postParams?.bypass_actors).toEqual([]);
+  });
+
+  it("never grants v2 protection from the template fallback", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        null,
+        TEST_NODE_REPO_POLICY_V2_JSON
+      ),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).rejects.toMatchObject({ code: "node_repo_policy_invalid", status: 409 });
+    expect(
+      requests.some((request) => request.route.includes("/rulesets"))
+    ).toBe(false);
+  });
+
+  it("never grants v2 protection when repo-spec identity is not exact", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": policyContentsHandler(
+        TEST_NODE_REPO_POLICY_V2_JSON,
+        TEST_NODE_REPO_POLICY_JSON,
+        "another-node"
+      ),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeMainProtection({
+        owner: OWNER,
+        repo: REPO,
+        slug: REPO,
+        isInRepoNode: false,
+      })
+    ).rejects.toMatchObject({ code: "node_repo_identity_invalid", status: 409 });
+    expect(
+      requests.some((request) => request.route.includes("/rulesets"))
+    ).toBe(false);
   });
 
   it("surfaces App-lacks-admin as a typed protection_unavailable, never a generic 500", async () => {
