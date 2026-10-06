@@ -487,12 +487,18 @@ async function planNodeRegister(
   let nodePort = nextFreeNodePort(usedPorts);
   if (existingCatalog !== null) {
     const row = parseYaml(existingCatalog) as Record<string, unknown> | null;
+    const sourceShas = [
+      ...existingCatalog.matchAll(
+        /^source_sha:[^\S\r\n]*([0-9a-f]{40})[^\S\r\n]*$/gm
+      ),
+    ].map((match) => match[1]);
     if (
       row?.name !== node ||
       row.node_id !== nodeId ||
       typeof row.source_repo !== "string" ||
       row.source_repo.toLowerCase() !== sourceRepo.toLowerCase() ||
-      row.source_sha !== sourceSha ||
+      sourceShas.length !== 1 ||
+      sourceShas[0] !== sourceSha ||
       row.owner_wallet !== ownerWallet ||
       row.port !== 3200 ||
       !Number.isSafeInteger(row.node_port)
