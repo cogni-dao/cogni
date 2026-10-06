@@ -82,6 +82,8 @@ const CHECK_RUNS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/check-runs";
 const STATUS_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}/status";
 const COMMIT_ROUTE = "GET /repos/{owner}/{repo}/commits/{ref}";
 const UPDATE_REF_ROUTE = "PATCH /repos/{owner}/{repo}/git/refs/{ref}";
+const MAIN_REF_ROUTE = "GET /repos/{owner}/{repo}/git/ref/{ref}";
+const COMPARE_ROUTE = "GET /repos/{owner}/{repo}/compare/{basehead}";
 const REVIEWS_ROUTE = "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews";
 const CLASSIC_REQUIRED_CHECKS_ROUTE =
   "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks";
@@ -471,6 +473,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
 
   it("non-force fast-forwards the verified one-parent head", async () => {
     onRequest = (route, params) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: baseSha } };
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -502,14 +505,14 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
     });
 
     expect(result).toMatchObject({
-      merged: true,
-      enqueued: false,
+      outcome: "landed",
       sha: headSha,
     });
   });
 
   it("rejects stale PR base/head facts before updating the ref", async () => {
     onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: "c".repeat(40) } };
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -532,12 +535,16 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       expectedHeadSha: headSha,
     });
 
-    expect(result).toMatchObject({ merged: false, status: 409 });
+    expect(result).toMatchObject({
+      outcome: "base_advanced",
+      currentBaseSha: "c".repeat(40),
+    });
     expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
   });
 
   it("rejects a non-main base before updating the ref", async () => {
     onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: baseSha } };
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -560,12 +567,13 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       expectedHeadSha: headSha,
     });
 
-    expect(result).toMatchObject({ merged: false, status: 409 });
+    expect(result).toMatchObject({ outcome: "terminal", status: 409 });
     expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
   });
 
   it("rejects a draft hold before updating the ref", async () => {
     onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: baseSha } };
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -588,12 +596,17 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       expectedHeadSha: headSha,
     });
 
-    expect(result).toMatchObject({ merged: false, status: 409 });
+    expect(result).toMatchObject({ outcome: "terminal", status: 409 });
     expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
   });
 
   it("fails the concurrent loser when GitHub rejects a non-fast-forward", async () => {
+    let mainReads = 0;
     onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) {
+        mainReads += 1;
+        return { object: { sha: mainReads === 1 ? baseSha : "c".repeat(40) } };
+      }
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -610,6 +623,9 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
           status: 422,
         });
       }
+      if (route === COMPARE_ROUTE) {
+        return { status: "diverged" };
+      }
       throw new Error(`Unhandled request route: ${route}`);
     };
 
@@ -622,10 +638,503 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
     });
 
     expect(result).toMatchObject({
-      merged: false,
-      enqueued: false,
-      status: 422,
+      outcome: "base_advanced",
+      currentBaseSha: "c".repeat(40),
     });
+  });
+
+  it("surfaces an ambiguous PATCH timeout for durable recovery", async () => {
+    let mainReads = 0;
+    onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) {
+        mainReads += 1;
+        if (mainReads === 1) return { object: { sha: baseSha } };
+        throw Object.assign(new Error("timeout"), { status: 504 });
+      }
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          base: { ref: "main", sha: baseSha },
+          head: { sha: headSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      if (route === UPDATE_REF_ROUTE) {
+        throw Object.assign(new Error("socket closed after write"), {
+          status: 504,
+        });
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+
+    await expect(
+      adapter().fastForwardOperatorChange({
+        owner: "o",
+        repo: "r",
+        prNumber: 7,
+        expectedBaseSha: baseSha,
+        expectedHeadSha: headSha,
+      })
+    ).resolves.toMatchObject({
+      outcome: "retryable_or_ambiguous",
+      status: 504,
+    });
+  });
+
+  it("recognizes an ambiguous accepted PATCH without issuing a second write", async () => {
+    let mainReads = 0;
+    let patchWrites = 0;
+    onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) {
+        mainReads += 1;
+        return { object: { sha: mainReads === 1 ? baseSha : headSha } };
+      }
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          base: { ref: "main", sha: baseSha },
+          head: { sha: headSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      if (route === UPDATE_REF_ROUTE) {
+        patchWrites += 1;
+        throw Object.assign(new Error("response dropped after write"), {
+          status: 504,
+        });
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    await expect(
+      adapter().fastForwardOperatorChange({
+        owner: "o",
+        repo: "r",
+        prNumber: 7,
+        expectedBaseSha: baseSha,
+        expectedHeadSha: headSha,
+      })
+    ).resolves.toMatchObject({ outcome: "landed", sha: headSha });
+    expect(patchWrites).toBe(1);
+  });
+
+  it("classifies a transient failure before PATCH as retryable with zero writes", async () => {
+    onRequest = (route) => {
+      if (route === PR_GET_ROUTE) {
+        throw Object.assign(new Error("GitHub unavailable"), { status: 503 });
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      if (route === MAIN_REF_ROUTE) return { object: { sha: baseSha } };
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    await expect(
+      adapter().fastForwardOperatorChange({
+        owner: "o",
+        repo: "r",
+        prNumber: 7,
+        expectedBaseSha: baseSha,
+        expectedHeadSha: headSha,
+      })
+    ).resolves.toMatchObject({
+      outcome: "retryable_or_ambiguous",
+      status: 503,
+    });
+    expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
+  });
+
+  it.each([
+    ["ahead", "landed"],
+    ["diverged", "base_advanced"],
+  ])("uses exact ancestry after ambiguous PATCH and later main advance: %s", async (ancestryStatus, expectedOutcome) => {
+    let mainReads = 0;
+    let patchWrites = 0;
+    onRequest = (route, params) => {
+      if (route === MAIN_REF_ROUTE) {
+        mainReads += 1;
+        return {
+          object: {
+            sha: mainReads === 1 ? baseSha : "d".repeat(40),
+          },
+        };
+      }
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          base: { ref: "main", sha: baseSha },
+          head: { sha: headSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      if (route === UPDATE_REF_ROUTE) {
+        patchWrites += 1;
+        throw Object.assign(new Error("response dropped after write"), {
+          status: 504,
+        });
+      }
+      if (route === COMPARE_ROUTE) {
+        expect(params.basehead).toBe(`${headSha}...${"d".repeat(40)}`);
+        return { status: ancestryStatus };
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    await expect(
+      adapter().fastForwardOperatorChange({
+        owner: "o",
+        repo: "r",
+        prNumber: 7,
+        expectedBaseSha: baseSha,
+        expectedHeadSha: headSha,
+      })
+    ).resolves.toMatchObject({ outcome: expectedOutcome });
+    expect(patchWrites).toBe(1);
+  });
+});
+
+describe("GitHubVcsAdapter.recoverOperatorChange", () => {
+  const signedBaseSha = "b".repeat(40);
+  const losingHeadSha = "a".repeat(40);
+  const freshMainSha = "c".repeat(40);
+  const intent = {
+    operation: "env.membership" as const,
+    node: "spawny-boi",
+    environment: "candidate-a" as const,
+    action: "add" as const,
+    leaseGeneration: 0,
+    recoveryRootSha: losingHeadSha,
+    recoveryDepth: 0,
+  };
+  const request = {
+    owner: "o",
+    repo: "r",
+    prNumber: 7,
+    signedBaseSha,
+    losingHeadSha,
+    intent,
+  };
+
+  function recoveryAdapter(writerResult: unknown): GitHubVcsAdapter {
+    const vcs = adapter();
+    Object.assign(vcs, {
+      verifyOperatorChangeInternal: vi.fn().mockResolvedValue({
+        eligible: true,
+        reason: "eligible",
+        headSha: losingHeadSha,
+        baseSha: signedBaseSha,
+        operation: intent.operation,
+        node: intent.node,
+        intent,
+      }),
+      getCiStatus: vi.fn().mockResolvedValue({
+        headSha: losingHeadSha,
+        baseSha: freshMainSha,
+        pending: false,
+        allGreen: true,
+        reviewDecision: null,
+      }),
+      createRecoveryWriter: () => ({
+        createOperatorChangeRecoveryPr: vi.fn().mockResolvedValue(writerResult),
+      }),
+    });
+    return vcs;
+  }
+
+  it("closes an already-satisfied exact PR only while main remains at the planned SHA", async () => {
+    let closeWrites = 0;
+    onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: freshMainSha } };
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          merged_at: null,
+          base: { ref: "main", sha: freshMainSha },
+          head: { sha: losingHeadSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === "PATCH /repos/{owner}/{repo}/pulls/{pull_number}") {
+        closeWrites += 1;
+        return { state: "closed" };
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    const vcs = recoveryAdapter({ status: "satisfied", mainSha: freshMainSha });
+    await expect(vcs.recoverOperatorChange(request)).resolves.toEqual({
+      status: "satisfied",
+      reason: "intent_already_satisfied",
+      mainSha: freshMainSha,
+    });
+    expect(closeWrites).toBe(1);
+  });
+
+  it("retries with zero close when main moves after the satisfaction plan", async () => {
+    let mainReads = 0;
+    let closeWrites = 0;
+    onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) {
+        mainReads += 1;
+        return {
+          object: {
+            sha: mainReads === 1 ? freshMainSha : "d".repeat(40),
+          },
+        };
+      }
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          merged_at: null,
+          base: { ref: "main", sha: freshMainSha },
+          head: { sha: losingHeadSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === "PATCH /repos/{owner}/{repo}/pulls/{pull_number}") {
+        closeWrites += 1;
+        return {};
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    const vcs = recoveryAdapter({ status: "satisfied", mainSha: freshMainSha });
+    await expect(vcs.recoverOperatorChange(request)).rejects.toThrow(
+      "main-moved-after-satisfaction-plan"
+    );
+    expect(closeWrites).toBe(0);
+  });
+
+  it.each([
+    "required check regresses",
+    "review hold appears",
+    "parent catalog moves",
+    "PR head is edited",
+    "PR becomes draft or closed",
+  ])("returns terminal with zero close when %s before satisfaction close", async (race) => {
+    let closeWrites = 0;
+    onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: freshMainSha } };
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          merged_at: null,
+          base: { ref: "main", sha: freshMainSha },
+          head: { sha: losingHeadSha, repo: { full_name: "o/r" } },
+        };
+      }
+      if (route === "PATCH /repos/{owner}/{repo}/pulls/{pull_number}") {
+        closeWrites += 1;
+        return {};
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    const vcs = recoveryAdapter({ status: "satisfied", mainSha: freshMainSha });
+    if (race === "required check regresses" || race === "review hold appears") {
+      vi.mocked(vcs.getCiStatus)
+        .mockResolvedValueOnce({
+          headSha: losingHeadSha,
+          baseSha: freshMainSha,
+          pending: false,
+          allGreen: true,
+          reviewDecision: null,
+        } as never)
+        .mockResolvedValueOnce({
+          headSha: losingHeadSha,
+          baseSha: freshMainSha,
+          pending: false,
+          allGreen: race !== "required check regresses",
+          reviewDecision:
+            race === "review hold appears" ? "CHANGES_REQUESTED" : null,
+        } as never);
+    } else {
+      const verifier = (
+        vcs as unknown as {
+          verifyOperatorChangeInternal: ReturnType<typeof vi.fn>;
+        }
+      ).verifyOperatorChangeInternal;
+      verifier.mockResolvedValueOnce({
+        eligible: true,
+        reason: "eligible",
+        headSha: losingHeadSha,
+        baseSha: signedBaseSha,
+        operation: intent.operation,
+        node: intent.node,
+        intent,
+      });
+      verifier.mockResolvedValueOnce({
+        eligible: false,
+        reason:
+          race === "parent catalog moves"
+            ? "operation-replay-failed"
+            : "invalid-pr-identity",
+        headSha: losingHeadSha,
+        baseSha: signedBaseSha,
+      });
+    }
+    await expect(vcs.recoverOperatorChange(request)).resolves.toEqual({
+      status: "terminal",
+      reason: "losing-pr-no-longer-authorized-before-close",
+    });
+    expect(closeWrites).toBe(0);
+  });
+
+  it("stops before policy or writer work when a human edits the losing head", async () => {
+    onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: freshMainSha } };
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          merged_at: null,
+          base: { ref: "main", sha: freshMainSha },
+          head: { sha: "e".repeat(40), repo: { full_name: "o/r" } },
+        };
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    const vcs = recoveryAdapter({ status: "satisfied", mainSha: freshMainSha });
+    await expect(vcs.recoverOperatorChange(request)).resolves.toMatchObject({
+      status: "terminal",
+      reason: "losing-pr-head-changed",
+    });
+    expect(
+      (
+        vcs as unknown as {
+          verifyOperatorChangeInternal: ReturnType<typeof vi.fn>;
+        }
+      ).verifyOperatorChangeInternal
+    ).not.toHaveBeenCalled();
+  });
+
+  it("keeps disabled policy, conflicts, depth exhaustion, and closed-unsatisfied terminal", async () => {
+    onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: freshMainSha } };
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          merged_at: null,
+          base: { ref: "main", sha: freshMainSha },
+          head: { sha: losingHeadSha, repo: { full_name: "o/r" } },
+        };
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    const disabled = recoveryAdapter({ status: "conflict", reason: "unused" });
+    Object.assign(disabled, {
+      verifyOperatorChangeInternal: vi.fn().mockResolvedValue({
+        eligible: false,
+        reason: "operation-disabled",
+        headSha: losingHeadSha,
+        baseSha: signedBaseSha,
+      }),
+    });
+    await expect(
+      disabled.recoverOperatorChange(request)
+    ).resolves.toMatchObject({
+      status: "terminal",
+      reason: "losing-head-verification-failed:operation-disabled",
+    });
+    for (const reason of [
+      "node-register-footprint-conflict",
+      "recovery-depth-exhausted",
+      "closed-pr-intent-not-satisfied",
+    ]) {
+      const vcs = recoveryAdapter({ status: "conflict", reason });
+      await expect(vcs.recoverOperatorChange(request)).resolves.toEqual({
+        status: "terminal",
+        reason,
+      });
+    }
+  });
+
+  it("derives closed-unsatisfied through the real recovery writer", async () => {
+    const node = "blue";
+    const repository = "o/blue";
+    const deploymentIntent = {
+      operation: "deployment.declare" as const,
+      node,
+      recoveryRootSha: losingHeadSha,
+      recoveryDepth: 0,
+    };
+    const baseSpec = `schema_version: "0.1.4"\nnode_id: "11111111-1111-4111-8111-111111111111"\nscope_id: "22222222-2222-4222-8222-222222222222"\nscope_key: "default"\nintent:\n  name: blue\n  mission: "test"\ngovernance:\n  dao_contract: "0x1111111111111111111111111111111111111111"\n  chain_id: "8453"\n`;
+    const encode = (value: string) => Buffer.from(value).toString("base64");
+    onRequest = (route, params) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: freshMainSha } };
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "closed",
+          draft: false,
+          merged_at: null,
+          base: { ref: "main", sha: freshMainSha },
+          head: { sha: losingHeadSha, repo: { full_name: repository } },
+        };
+      }
+      if (route === "GET /repos/{owner}/{repo}/git/commits/{commit_sha}") {
+        return { tree: { sha: "base-tree" } };
+      }
+      if (route === CONTENTS_ROUTE) {
+        const value =
+          params.repo === "control"
+            ? "name: blue\nsource_repo: https://github.com/o/blue.git\n"
+            : baseSpec;
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(value),
+          sha: "content",
+        };
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    const vcs = new GitHubVcsAdapter({
+      appId: "1",
+      privateKey: "k",
+      operatorChangePolicyOwner: "parent",
+      operatorChangePolicyRepo: "control",
+    });
+    Object.assign(vcs, {
+      verifyOperatorChangeInternal: vi.fn().mockResolvedValue({
+        eligible: true,
+        reason: "eligible",
+        headSha: losingHeadSha,
+        baseSha: signedBaseSha,
+        operation: deploymentIntent.operation,
+        node,
+        intent: deploymentIntent,
+      }),
+      getCiStatus: vi.fn().mockResolvedValue({
+        headSha: losingHeadSha,
+        baseSha: freshMainSha,
+        pending: false,
+        allGreen: true,
+        reviewDecision: null,
+      }),
+    });
+
+    await expect(
+      vcs.recoverOperatorChange({
+        owner: "o",
+        repo: node,
+        prNumber: 7,
+        signedBaseSha,
+        losingHeadSha,
+        intent: deploymentIntent,
+      })
+    ).resolves.toEqual({
+      status: "terminal",
+      reason: "closed-pr-intent-not-satisfied",
+    });
+    expect(requestRoutes.some((route) => /^(PATCH|POST) /.test(route))).toBe(
+      false
+    );
   });
 });
 

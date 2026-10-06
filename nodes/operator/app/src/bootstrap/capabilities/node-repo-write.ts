@@ -34,5 +34,11 @@ export function createNodeRepoWriter(env: ServerEnv): GitHubRepoWriter {
     // ${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}} precedence (test-fleet-parity-boundary).
     forkDomainRoot: env.DOMAIN ?? env.FORK_DOMAIN_ROOT,
     dnsReverseReconcile: env.DNS_REVERSE_RECONCILE,
+    ...(env.NODE_SUBMODULE_PARENT_OWNER
+      ? { operatorChangePolicyOwner: env.NODE_SUBMODULE_PARENT_OWNER }
+      : {}),
+    ...(env.NODE_SUBMODULE_PARENT_REPO
+      ? { operatorChangePolicyRepo: env.NODE_SUBMODULE_PARENT_REPO }
+      : {}),
   });
 }

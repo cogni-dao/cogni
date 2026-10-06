@@ -14,6 +14,9 @@ import {
   buildPlacementPlan,
   buildRegionPlan,
   type EnvPlanOp,
+  insertAppsetKustomization,
+  insertCaddyBlock,
+  insertSchedulerEndpoint,
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
@@ -25,6 +28,8 @@ import { controlEnvFor } from "@/shared/node-registry/placement";
 import {
   type OperatorChangeReplayInput,
   type OperatorChangeReplayReader,
+  parseOperatorChangeIntent,
+  planOperatorChangeIntent,
   replayOperatorChange,
 } from "./operator-change-replay";
 
@@ -50,6 +55,25 @@ const fixtureBuilders = [
 ] as const;
 
 describe("replayOperatorChange", () => {
+  it("parses only paired, bounded recovery identity trailers", async () => {
+    const recoveryRootSha = "c".repeat(40);
+    const fixture = await placementFixture();
+    const message = `${fixture.input.message}\nCogni-Recovery-Root-SHA: ${recoveryRootSha}\nCogni-Recovery-Depth: 1\nCogni-Recovery-Losing-Head-SHA: ${recoveryRootSha}`;
+    expect(
+      parseOperatorChangeIntent({ ...fixture.input, message })
+    ).toMatchObject({
+      operation: "env.placement",
+      recoveryRootSha,
+      recoveryDepth: 1,
+    });
+    expect(() =>
+      parseOperatorChangeIntent({
+        ...fixture.input,
+        message: `${fixture.input.message}\nCogni-Recovery-Depth: 1`,
+      })
+    ).toThrow("partial-recovery-envelope");
+  });
+
   it("replays every operation through the same canonical core", async () => {
     const fixtures = await Promise.all(fixtureBuilders.map((build) => build()));
     for (const fixture of fixtures) {
@@ -57,6 +81,64 @@ describe("replayOperatorChange", () => {
         verified: true,
         reason: "verified",
       });
+    }
+  });
+
+  it("plans changed, satisfied, and conflict outcomes for all five operations", async () => {
+    for (const build of [
+      membershipFixture,
+      placementFixture,
+      regionFixture,
+      nodeRegisterFixture,
+      deploymentFixture,
+    ]) {
+      const fixture = await build();
+      const intent = parseOperatorChangeIntent(fixture.input);
+      const common = {
+        intent,
+        baseSha,
+        repository: fixture.input.repository,
+        ...(fixture.input.fleetControlEnv === undefined
+          ? {}
+          : { fleetControlEnv: fixture.input.fleetControlEnv }),
+        ...(fixture.input.forkDomainRoot === undefined
+          ? {}
+          : { forkDomainRoot: fixture.input.forkDomainRoot }),
+      };
+      await expect(
+        planOperatorChangeIntent({
+          ...common,
+          ...(fixture.input.deploymentCatalog === undefined
+            ? {}
+            : { deploymentCatalog: fixture.input.deploymentCatalog }),
+          reader: fixture.input.reader,
+        })
+      ).resolves.toMatchObject({ status: "changes" });
+      await expect(
+        planOperatorChangeIntent({
+          ...common,
+          ...(fixture.input.deploymentCatalog === undefined
+            ? {}
+            : { deploymentCatalog: fixture.input.deploymentCatalog }),
+          reader: readerFor(fixture.head, fixture.head),
+        })
+      ).resolves.toMatchObject({ status: "satisfied" });
+      const conflictReader: OperatorChangeReplayReader = {
+        readFile: async (_ref, path) =>
+          path === `infra/catalog/${fixture.input.node}.yaml`
+            ? "occupied\n"
+            : null,
+        listPaths: async () => [],
+      };
+      await expect(
+        planOperatorChangeIntent({
+          ...common,
+          ...(fixture.input.operation === "deployment.declare"
+            ? { deploymentCatalog: null }
+            : {}),
+          reader: conflictReader,
+        })
+      ).resolves.toMatchObject({ status: "conflict" });
     }
   });
 
@@ -96,9 +178,121 @@ describe("replayOperatorChange", () => {
         })
       ).resolves.toEqual({
         verified: false,
-        reason: "canonical-envelope-mismatch",
+        reason: "replay-error:canonical-envelope-mismatch",
       });
     }
+  });
+
+  it("requires the complete existing node registration footprint", async () => {
+    const fixture = await nodeRegisterFixture();
+    const intent = parseOperatorChangeIntent(fixture.input);
+    const plan = (head: ReadonlyMap<string, string | null>) =>
+      planOperatorChangeIntent({
+        intent,
+        baseSha,
+        repository: fixture.input.repository,
+        fleetControlEnv: fixture.input.fleetControlEnv,
+        forkDomainRoot: fixture.input.forkDomainRoot,
+        reader: readerFor(head, head),
+      });
+    await expect(plan(fixture.head)).resolves.toEqual({
+      status: "satisfied",
+      intent,
+    });
+
+    const corruptions = [
+      (head: Map<string, string | null>) => {
+        const path = "infra/compose/edge/configs/Caddyfile.tmpl";
+        const catalog = requiredMapValue(
+          head,
+          "infra/catalog/zz-replay-fixture.yaml"
+        );
+        const nodePort = catalog.match(/^node_port:\s*(\d+)\s*$/m)?.[1];
+        if (nodePort === undefined)
+          throw new Error("fixture node_port missing");
+        head.set(
+          path,
+          requiredMapValue(head, path).replace(
+            `NodePort ${nodePort}`,
+            `NodePort ${Number(nodePort) + 1}`
+          )
+        );
+      },
+      (head: Map<string, string | null>) => {
+        const path = "infra/k8s/base/scheduler-worker/configmap.yaml";
+        head.set(
+          path,
+          requiredMapValue(head, path).replace(
+            "zz-replay-fixture=http://zz-replay-fixture-node-app:3000",
+            "zz-replay-fixture=https://wrong.example.org"
+          )
+        );
+      },
+      (head: Map<string, string | null>) => {
+        const path = "infra/k8s/argocd/appsets/production/kustomization.yaml";
+        head.set(
+          path,
+          requiredMapValue(head, path).replace(
+            "  - production-zz-replay-fixture-applicationset.yaml\n",
+            ""
+          )
+        );
+      },
+      (head: Map<string, string | null>) => {
+        const path = "infra/k8s/argocd/appsets/production/kustomization.yaml";
+        const line = "  - production-zz-replay-fixture-applicationset.yaml\n";
+        head.set(path, requiredMapValue(head, path).replace(line, line + line));
+      },
+      (head: Map<string, string | null>) => {
+        const path =
+          "infra/k8s/overlays/production/zz-replay-fixture/kustomization.yaml";
+        head.set(path, `${requiredMapValue(head, path)}# edited\n`);
+      },
+    ];
+    for (const corrupt of corruptions) {
+      const head = new Map(fixture.head);
+      corrupt(head);
+      await expect(plan(head)).resolves.toMatchObject({ status: "conflict" });
+    }
+  });
+
+  it("preserves unrelated later shared entries while proving node registration", async () => {
+    const fixture = await nodeRegisterFixture();
+    const head = new Map(fixture.head);
+    const later = "zzzz-later";
+    const laterId = "22222222-2222-4222-8222-222222222222";
+    const caddyPath = "infra/compose/edge/configs/Caddyfile.tmpl";
+    head.set(
+      caddyPath,
+      insertCaddyBlock(requiredMapValue(head, caddyPath), later, 39999)
+    );
+    for (const path of [
+      "infra/k8s/base/scheduler-worker/configmap.yaml",
+      ...NODE_DEPLOY_ENVS.map(schedulerEndpointPatchPath),
+    ]) {
+      head.set(
+        path,
+        insertSchedulerEndpoint(requiredMapValue(head, path), later, laterId)
+      );
+    }
+    for (const env of NODE_FORMATION_ENVS) {
+      const path = appsetsKustomizationPath("production");
+      head.set(
+        path,
+        insertAppsetKustomization(requiredMapValue(head, path), later, env)
+      );
+    }
+    const intent = parseOperatorChangeIntent(fixture.input);
+    await expect(
+      planOperatorChangeIntent({
+        intent,
+        baseSha,
+        repository: fixture.input.repository,
+        fleetControlEnv: fixture.input.fleetControlEnv,
+        forkDomainRoot: fixture.input.forkDomainRoot,
+        reader: readerFor(head, head),
+      })
+    ).resolves.toMatchObject({ status: "satisfied" });
   });
 
   it("rejects operation-specific semantic attacks", async () => {
@@ -161,7 +355,7 @@ describe("replayOperatorChange", () => {
     );
     await expect(replayOperatorChange(collision.input)).resolves.toMatchObject({
       verified: false,
-      reason: `replay-error:node-path-collision:infra/catalog/${collision.input.node}.yaml`,
+      reason: "replay-error:node-register-identity-conflict",
     });
 
     const declared = await deploymentFixture();
@@ -484,8 +678,18 @@ function readerFor(
         return null;
       }
     },
-    listPaths: async (_ref, prefix) =>
-      readdirSync(join(root, prefix)).map((name) => `${prefix}/${name}`),
+    listPaths: async (ref, prefix) => {
+      const selected = ref === headSha ? head : base;
+      const paths = new Set(
+        readdirSync(join(root, prefix)).map((name) => `${prefix}/${name}`)
+      );
+      for (const [path, content] of selected) {
+        if (!path.startsWith(`${prefix}/`)) continue;
+        if (content === null) paths.delete(path);
+        else paths.add(path);
+      }
+      return [...paths].sort();
+    },
   };
 }
 
@@ -512,6 +716,17 @@ function pathHash(paths: readonly string[]): string {
   return createHash("sha256")
     .update(`${[...paths].sort().join("\n")}\n`)
     .digest("hex");
+}
+
+function requiredMapValue(
+  values: ReadonlyMap<string, string | null>,
+  path: string
+): string {
+  const value = values.get(path);
+  if (value === undefined || value === null) {
+    throw new Error(`missing fixture value: ${path}`);
+  }
+  return value;
 }
 
 function disk(path: string): string {

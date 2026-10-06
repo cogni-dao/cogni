@@ -36,6 +36,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { OperatorChangeIntent } from "@cogni/node-contracts";
 import {
   extractNodeId,
   hasDeclaredNodeDeployment,
@@ -102,6 +103,11 @@ import {
   parseNodeRepoPolicy,
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+import { parseOperatorChangeRegistry } from "@/shared/vcs/operator-change-policy";
+import {
+  type OperatorChangeReplayReader,
+  planOperatorChangeIntent,
+} from "@/shared/vcs/operator-change-replay";
 
 export const OPERATOR_CHANGE_TYPE = "cogni.operator-change.v1";
 
@@ -155,6 +161,85 @@ export interface GitHubRepoWriterConfig {
   readonly fleetControlEnv?: string | undefined;
   /** Public workload zone for generated node routes; canonical defaults to cognidao.org. */
   readonly forkDomainRoot?: string | undefined;
+  readonly operatorChangePolicyOwner?: string | undefined;
+  readonly operatorChangePolicyRepo?: string | undefined;
+}
+
+export type OperatorChangeRecoveryWriteResult =
+  | { readonly status: "satisfied"; readonly mainSha: string }
+  | { readonly status: "conflict"; readonly reason: string }
+  | {
+      readonly status: "regenerated";
+      readonly baseSha: string;
+      readonly headSha: string;
+      readonly branch: string;
+      readonly prNumber: number;
+      readonly prUrl: string;
+      readonly intent: OperatorChangeIntent;
+    };
+
+function recoveryCanonicalBranch(intent: OperatorChangeIntent): string {
+  switch (intent.operation) {
+    case "env.membership":
+      return `cogni-operator/node-env-${intent.node}-${intent.environment}`;
+    case "env.placement":
+      return `cogni-operator/node-placement-${intent.node}-${intent.environment}`;
+    case "env.region":
+      return `cogni-operator/node-region-${intent.node}-${intent.environment}`;
+    case "node.register":
+      return `cogni-operator/node-register-${intent.node}`;
+    case "deployment.declare":
+      return `cogni-operator/declare-deployment-${intent.node}`;
+  }
+}
+
+function recoveryCommitMetadata(intent: OperatorChangeIntent): {
+  readonly title: string;
+  readonly trailers: Readonly<Record<string, string | number>>;
+} {
+  switch (intent.operation) {
+    case "env.membership":
+      return {
+        title: `feat(node): ${intent.action} ${intent.node} ${intent.action === "add" ? "to" : "from"} ${intent.environment}`,
+        trailers: {
+          Environment: intent.environment,
+          Action: intent.action,
+          "Lease-Generation": intent.leaseGeneration,
+        },
+      };
+    case "env.placement":
+      return {
+        title: `feat(node): place ${intent.node} ${intent.environment} on ${intent.provider}`,
+        trailers: {
+          Environment: intent.environment,
+          Provider: intent.provider,
+        },
+      };
+    case "env.region":
+      return {
+        title: `feat(node): require ${intent.node} ${intent.environment} placement in ${intent.countries.join(", ")}`,
+        trailers: {
+          Environment: intent.environment,
+          Countries: intent.countries.join(","),
+          "Lease-Generation": intent.leaseGeneration,
+        },
+      };
+    case "node.register":
+      return {
+        title: `feat(node): register ${intent.node}`,
+        trailers: {
+          "Node-Id": intent.nodeId,
+          "Source-Repo": intent.sourceRepo,
+          "Source-SHA": intent.sourceSha,
+          "Owner-Wallet": intent.ownerWallet,
+        },
+      };
+    case "deployment.declare":
+      return {
+        title: `feat(deploy): declare ${intent.node} node deployment`,
+        trailers: {},
+      };
+  }
 }
 
 export interface OpenNodeAppPrInput {
@@ -1123,6 +1208,425 @@ export class GitHubRepoWriter implements DeployPlanePort {
       appId: config.appId,
       privateKey: config.privateKey,
     });
+  }
+
+  /**
+   * Regenerate one signed operator verb from fresh main. Recovery branches are
+   * create-only: an existing ref is returned for full adapter verification and
+   * is never updated, forcefully or otherwise.
+   */
+  async createOperatorChangeRecoveryPr(input: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly prNumber: number;
+    readonly intent: OperatorChangeIntent;
+    readonly losingHeadSha: string;
+    readonly planOnly?: boolean;
+    readonly reverifyAuthority: () => Promise<boolean>;
+  }): Promise<OperatorChangeRecoveryWriteResult> {
+    const nextDepth = input.intent.recoveryDepth + 1;
+    if (nextDepth > 3) {
+      return { status: "conflict", reason: "recovery-depth-exhausted" };
+    }
+    if (
+      !this.config.operatorChangePolicyOwner ||
+      !this.config.operatorChangePolicyRepo
+    ) {
+      return {
+        status: "conflict",
+        reason: "trusted-policy-repository-unconfigured",
+      };
+    }
+    const policyOwner = this.config.operatorChangePolicyOwner;
+    const policyRepo = this.config.operatorChangePolicyRepo;
+    const octokit = await this.getOctokit(input.owner, input.repo);
+    const policyOctokit = await this.getOctokit(policyOwner, policyRepo);
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      input.owner,
+      input.repo
+    );
+    const reader: OperatorChangeReplayReader = {
+      readFile: (ref, path) =>
+        this.readFileAt(octokit, input.owner, input.repo, path, ref),
+      listPaths: async (ref, prefix) => {
+        try {
+          const { data } = await octokit.request(
+            "GET /repos/{owner}/{repo}/contents/{path}",
+            { owner: input.owner, repo: input.repo, path: prefix, ref }
+          );
+          return Array.isArray(data)
+            ? data
+                .filter((entry) => entry.type === "file")
+                .map((entry) => `${prefix}/${entry.name}`)
+            : [];
+        } catch (error) {
+          if ((error as { status?: number }).status === 404) return [];
+          throw error;
+        }
+      },
+    };
+    let deploymentCatalog: string | null | undefined;
+    if (input.intent.operation === "deployment.declare") {
+      deploymentCatalog = await this.readFileAt(
+        policyOctokit,
+        policyOwner,
+        policyRepo,
+        `infra/catalog/${input.intent.node}.yaml`,
+        "main"
+      );
+    }
+    const nextIntent: OperatorChangeIntent = {
+      ...input.intent,
+      recoveryDepth: nextDepth,
+    };
+    const plan = await planOperatorChangeIntent({
+      intent: nextIntent,
+      baseSha: baseCommitSha,
+      repository: `${input.owner}/${input.repo}`,
+      ...(deploymentCatalog === undefined ? {} : { deploymentCatalog }),
+      ...(this.config.fleetControlEnv === undefined
+        ? {}
+        : { fleetControlEnv: this.config.fleetControlEnv }),
+      ...(this.config.forkDomainRoot === undefined
+        ? {}
+        : { forkDomainRoot: this.config.forkDomainRoot }),
+      reader,
+    });
+    if (plan.status === "satisfied") {
+      return { status: "satisfied", mainSha: baseCommitSha };
+    }
+    if (plan.status === "conflict") return plan;
+    if (input.planOnly) {
+      return { status: "conflict", reason: "closed-pr-intent-not-satisfied" };
+    }
+
+    const depth = plan.intent.recoveryDepth;
+    const losingHeadPrefix = input.losingHeadSha.slice(0, 12);
+    const canonicalBranch = recoveryCanonicalBranch(plan.intent);
+    const branch = `${canonicalBranch}-recovery-d${depth}-${losingHeadPrefix}`;
+    const metadata = recoveryCommitMetadata(plan.intent);
+    const message = operatorChangeCommitMessage({
+      subject: metadata.title,
+      operation: plan.intent.operation,
+      node: plan.intent.node,
+      baseSha: baseCommitSha,
+      paths: plan.ops.map((op) => op.path),
+      trailers: {
+        ...metadata.trailers,
+        "Recovery-Root-SHA": plan.intent.recoveryRootSha,
+        "Recovery-Depth": plan.intent.recoveryDepth,
+        "Recovery-Losing-Head-SHA": input.losingHeadSha,
+      },
+    });
+    const [{ data: losingPr }, { data: reviews }, registryText] =
+      await Promise.all([
+        octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+          owner: input.owner,
+          repo: input.repo,
+          pull_number: input.prNumber,
+        }),
+        octokit.request(
+          "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+          {
+            owner: input.owner,
+            repo: input.repo,
+            pull_number: input.prNumber,
+            per_page: 100,
+            page: 1,
+          }
+        ),
+        this.readFileAt(
+          policyOctokit,
+          policyOwner,
+          policyRepo,
+          "scripts/ci/operator-change-v1.allowlist.json",
+          "main"
+        ),
+      ]);
+    if (
+      losingPr.state !== "open" ||
+      losingPr.draft === true ||
+      losingPr.base.ref !== "main" ||
+      losingPr.head.sha !== input.losingHeadSha ||
+      losingPr.head.repo?.full_name?.toLowerCase() !==
+        `${input.owner}/${input.repo}`.toLowerCase()
+    ) {
+      return { status: "conflict", reason: "losing-pr-no-longer-authorized" };
+    }
+    const latestReviewByUser = new Map<string, string>();
+    for (const review of reviews) {
+      if (review.user?.login && review.state !== "COMMENTED") {
+        latestReviewByUser.set(review.user.login, review.state);
+      }
+    }
+    let reviewsTruncated = false;
+    if (reviews.length === 100) {
+      const { data: nextReviews } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+        {
+          owner: input.owner,
+          repo: input.repo,
+          pull_number: input.prNumber,
+          per_page: 100,
+          page: 2,
+        }
+      );
+      reviewsTruncated = nextReviews.length > 0;
+    }
+    if (
+      reviewsTruncated ||
+      [...latestReviewByUser.values()].includes("CHANGES_REQUESTED")
+    ) {
+      return { status: "conflict", reason: "losing-pr-review-hold" };
+    }
+    if (registryText === null) {
+      return { status: "conflict", reason: "trusted-registry-unavailable" };
+    }
+    let registryValue: unknown;
+    try {
+      registryValue = JSON.parse(registryText);
+    } catch {
+      return { status: "conflict", reason: "invalid-trusted-registry" };
+    }
+    const registry = parseOperatorChangeRegistry(registryValue);
+    if (registry === null) {
+      return { status: "conflict", reason: "invalid-trusted-registry" };
+    }
+    const repository = `${input.owner}/${input.repo}`.toLowerCase();
+    const operationPolicy = registry.operations[input.intent.operation];
+    const directIdentity = registry.repositories[repository];
+    const childIdentity =
+      input.intent.operation === "deployment.declare" &&
+      input.repo === input.intent.node
+        ? registry.childRepositoryApps[input.owner.toLowerCase()]
+        : undefined;
+    const directEnabled = operationPolicy.enabledRepositories.some(
+      (enabledRepo) => enabledRepo.toLowerCase() === repository
+    );
+    const childEnabled =
+      input.intent.operation === "deployment.declare" &&
+      childIdentity !== undefined &&
+      operationPolicy.enabledChildOwners?.some(
+        (owner) => owner.toLowerCase() === input.owner.toLowerCase()
+      ) === true;
+    const trustedIdentity = directEnabled
+      ? directIdentity
+      : childEnabled
+        ? childIdentity
+        : undefined;
+    if (trustedIdentity === undefined) {
+      return { status: "conflict", reason: "operation-disabled" };
+    }
+    const authorityStillCurrent = async (): Promise<boolean> => {
+      const [{ data: currentPr }, { data: currentReviews }, currentRegistry] =
+        await Promise.all([
+          octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+            owner: input.owner,
+            repo: input.repo,
+            pull_number: input.prNumber,
+          }),
+          octokit.request(
+            "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+            {
+              owner: input.owner,
+              repo: input.repo,
+              pull_number: input.prNumber,
+              per_page: 100,
+              page: 1,
+            }
+          ),
+          this.readFileAt(
+            policyOctokit,
+            policyOwner,
+            policyRepo,
+            "scripts/ci/operator-change-v1.allowlist.json",
+            "main"
+          ),
+        ]);
+      if (
+        currentPr.state !== "open" ||
+        currentPr.draft === true ||
+        currentPr.base.ref !== "main" ||
+        currentPr.head.sha !== input.losingHeadSha ||
+        currentPr.head.repo?.full_name?.toLowerCase() !== repository ||
+        currentRegistry !== registryText ||
+        currentReviews.length >= 100
+      ) {
+        return false;
+      }
+      const currentLatestReviewByUser = new Map<string, string>();
+      for (const review of currentReviews) {
+        if (review.user?.login && review.state !== "COMMENTED") {
+          currentLatestReviewByUser.set(review.user.login, review.state);
+        }
+      }
+      return ![...currentLatestReviewByUser.values()].includes(
+        "CHANGES_REQUESTED"
+      );
+    };
+    const verifyExistingBranch = (headSha: string) =>
+      this.verifyExactRecoveryBranch(octokit, {
+        owner: input.owner,
+        repo: input.repo,
+        baseSha: baseCommitSha,
+        headSha,
+        message,
+        ops: plan.ops,
+        botLogin: trustedIdentity.botLogin,
+        botId: trustedIdentity.botId,
+      });
+    const openOrReusePr = async (headSha: string) => {
+      const existingPr = await this.findExactOpenPrForBranch(
+        octokit,
+        input.owner,
+        input.repo,
+        branch,
+        headSha
+      );
+      if (
+        !(await authorityStillCurrent()) ||
+        !(await input.reverifyAuthority())
+      ) {
+        throw Object.assign(
+          new Error("recovery authority changed before PR creation"),
+          { status: 409 }
+        );
+      }
+      if (existingPr !== null) return existingPr;
+      try {
+        const { data } = await octokit.request(
+          "POST /repos/{owner}/{repo}/pulls",
+          {
+            owner: input.owner,
+            repo: input.repo,
+            title: metadata.title,
+            body: "Regenerated by the operator from the original signed intent after main advanced.",
+            head: branch,
+            base: "main",
+          }
+        );
+        return { prNumber: data.number, prUrl: data.html_url };
+      } catch (error) {
+        if ((error as { status?: number }).status !== 422) throw error;
+        const raced = await this.findExactOpenPrForBranch(
+          octokit,
+          input.owner,
+          input.repo,
+          branch,
+          headSha
+        );
+        if (raced === null) throw error;
+        if (
+          !(await authorityStillCurrent()) ||
+          !(await input.reverifyAuthority())
+        ) {
+          throw Object.assign(
+            new Error("recovery authority changed before PR reuse"),
+            { status: 409 }
+          );
+        }
+        return raced;
+      }
+    };
+    const existing = await this.readBranchRef(
+      octokit,
+      input.owner,
+      input.repo,
+      branch
+    );
+    if (existing !== null) {
+      if (!(await verifyExistingBranch(existing))) {
+        return { status: "conflict", reason: "divergent-recovery-branch" };
+      }
+      const pr = await openOrReusePr(existing);
+      return {
+        status: "regenerated",
+        baseSha: baseCommitSha,
+        headSha: existing,
+        branch,
+        ...pr,
+        intent: plan.intent,
+      };
+    }
+
+    if (
+      !(await authorityStillCurrent()) ||
+      !(await input.reverifyAuthority())
+    ) {
+      return { status: "conflict", reason: "recovery-authority-changed" };
+    }
+    const entries = await this.planOpsToTreeEntries(
+      octokit,
+      input.owner,
+      input.repo,
+      plan.ops
+    );
+    const { data: finalTree } = await octokit.request(
+      "POST /repos/{owner}/{repo}/git/trees",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        base_tree: baseTreeSha,
+        tree: entries,
+      }
+    );
+    const { data: commit } = await octokit.request(
+      "POST /repos/{owner}/{repo}/git/commits",
+      {
+        owner: input.owner,
+        repo: input.repo,
+        message,
+        tree: finalTree.sha,
+        parents: [baseCommitSha],
+      }
+    );
+    let headSha = commit.sha;
+    try {
+      if (
+        !(await authorityStillCurrent()) ||
+        !(await input.reverifyAuthority())
+      ) {
+        return { status: "conflict", reason: "recovery-authority-changed" };
+      }
+      await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
+        owner: input.owner,
+        repo: input.repo,
+        ref: `refs/heads/${branch}`,
+        sha: headSha,
+      });
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (
+        status !== 422 &&
+        status !== 408 &&
+        status !== 429 &&
+        status !== undefined &&
+        status < 500
+      ) {
+        throw error;
+      }
+      const raced = await this.readBranchRef(
+        octokit,
+        input.owner,
+        input.repo,
+        branch
+      );
+      if (raced === null) throw error;
+      headSha = raced;
+    }
+    if (!(await verifyExistingBranch(headSha))) {
+      return { status: "conflict", reason: "divergent-recovery-branch" };
+    }
+    const pr = await openOrReusePr(headSha);
+    return {
+      status: "regenerated",
+      baseSha: baseCommitSha,
+      headSha,
+      branch,
+      ...pr,
+      intent: plan.intent,
+    };
   }
 
   async prepareNodeRefCandidateFlight(
@@ -5045,6 +5549,136 @@ export class GitHubRepoWriter implements DeployPlanePort {
         force: true,
       });
     }
+  }
+
+  private async readBranchRef(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<string | null> {
+    try {
+      const { data } = await octokit.request(
+        "GET /repos/{owner}/{repo}/git/ref/{ref}",
+        { owner, repo, ref: `heads/${branch}` }
+      );
+      return data.object.sha;
+    } catch (error) {
+      if ((error as { status?: number }).status === 404) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * Prove that an existing create-only recovery branch is exactly the App-signed
+   * fresh-main plan before reusing it or opening its missing PR. This is the
+   * crash-after-ref recovery seam; a merely familiar branch name is never enough.
+   */
+  private async verifyExactRecoveryBranch(
+    octokit: Octokit,
+    input: {
+      readonly owner: string;
+      readonly repo: string;
+      readonly baseSha: string;
+      readonly headSha: string;
+      readonly message: string;
+      readonly ops: readonly EnvPlanOp[];
+      readonly botLogin: string;
+      readonly botId: number;
+    }
+  ): Promise<boolean> {
+    try {
+      const [{ data: commit }, { data: comparison }] = await Promise.all([
+        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+          owner: input.owner,
+          repo: input.repo,
+          ref: input.headSha,
+        }),
+        octokit.request("GET /repos/{owner}/{repo}/compare/{basehead}", {
+          owner: input.owner,
+          repo: input.repo,
+          basehead: `${input.baseSha}...${input.headSha}`,
+        }),
+      ]);
+      if (
+        commit.sha !== input.headSha ||
+        commit.commit.message !== input.message ||
+        commit.commit.verification?.verified !== true ||
+        commit.commit.verification?.reason !== "valid" ||
+        commit.author?.login !== input.botLogin ||
+        commit.author?.id !== input.botId ||
+        commit.parents.length !== 1 ||
+        commit.parents[0]?.sha !== input.baseSha ||
+        comparison.status !== "ahead" ||
+        comparison.ahead_by !== 1 ||
+        comparison.commits.length !== 1 ||
+        comparison.commits[0]?.sha !== input.headSha
+      ) {
+        return false;
+      }
+      const expectedOps = new Map(input.ops.map((op) => [op.path, op]));
+      const files = comparison.files ?? [];
+      if (
+        files.length !== expectedOps.size ||
+        files.some((file) => {
+          const op = expectedOps.get(file.filename);
+          return (
+            op === undefined ||
+            file.previous_filename !== undefined ||
+            (op.op === "delete"
+              ? file.status !== "removed"
+              : !["added", "modified"].includes(file.status))
+          );
+        })
+      ) {
+        return false;
+      }
+      const contents = await Promise.all(
+        input.ops.map(async (op) => ({
+          op,
+          content: await this.readFileAt(
+            octokit,
+            input.owner,
+            input.repo,
+            op.path,
+            input.headSha
+          ),
+        }))
+      );
+      return contents.every(({ op, content }) =>
+        op.op === "delete" ? content === null : content === op.content
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async findExactOpenPrForBranch(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+    branch: string,
+    headSha: string
+  ): Promise<OpenNodeAppPrResult | null> {
+    const { data } = await octokit.request("GET /repos/{owner}/{repo}/pulls", {
+      owner,
+      repo,
+      state: "open",
+      head: `${owner}:${branch}`,
+      base: "main",
+      per_page: 2,
+    });
+    const exact = data.filter(
+      (candidate) =>
+        candidate.head.ref === branch &&
+        candidate.head.sha === headSha &&
+        candidate.head.repo?.full_name?.toLowerCase() ===
+          `${owner}/${repo}`.toLowerCase() &&
+        candidate.base.ref === "main"
+    );
+    const [match] = exact;
+    if (exact.length !== 1 || match === undefined) return null;
+    return { prNumber: match.number, prUrl: match.html_url };
   }
 
   private async findOpenPrForBranch(

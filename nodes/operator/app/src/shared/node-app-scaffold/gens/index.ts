@@ -17,7 +17,7 @@ export {
   removeFromAppsetsKustomization,
   renderNodeAppset,
 } from "./appset";
-export { insertCaddyBlock } from "./caddyfile";
+export { insertCaddyBlock, removeCaddyBlock } from "./caddyfile";
 export {
   githubOwnerFromSourceRepo,
   type RenderCatalogInput,
@@ -98,5 +98,6 @@ export {
 export { type RenderRepoSpecInput, renderRepoSpec } from "./repo-spec";
 export {
   insertSchedulerEndpoint,
+  removeSchedulerEndpoint,
   updateSchedulerEndpointHost,
 } from "./scheduler-endpoints";

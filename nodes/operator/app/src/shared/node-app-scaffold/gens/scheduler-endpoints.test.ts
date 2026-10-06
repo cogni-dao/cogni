@@ -21,6 +21,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   insertSchedulerEndpoint,
+  removeSchedulerEndpoint,
   updateSchedulerEndpointHost,
 } from "./scheduler-endpoints";
 
@@ -119,6 +120,30 @@ data:
     expect(
       insertSchedulerEndpoint(eofPatch, "ztest", NODE_ID).endsWith("\n")
     ).toBe(true);
+  });
+
+  it("strictly removes one exact generated endpoint pair", () => {
+    expect(removeSchedulerEndpoint(GOLDEN, "ztest", NODE_ID)).toBe(BEFORE);
+    expect(() =>
+      removeSchedulerEndpoint(
+        GOLDEN.replace(
+          "ztest=http://ztest-node-app:3000",
+          "ztest=https://wrong.example.org"
+        ),
+        "ztest",
+        NODE_ID
+      )
+    ).toThrow(/not canonical/);
+    expect(() =>
+      removeSchedulerEndpoint(
+        GOLDEN.replace(
+          `,ztest=http://ztest-node-app:3000,${NODE_ID}=http://ztest-node-app:3000`,
+          `,ztest=http://ztest-node-app:3000,${NODE_ID}=http://ztest-node-app:3000,ztest=http://ztest-node-app:3000,${NODE_ID}=http://ztest-node-app:3000`
+        ),
+        "ztest",
+        NODE_ID
+      )
+    ).toThrow(/exactly one/);
   });
 });
 

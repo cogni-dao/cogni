@@ -8,6 +8,10 @@
  */
 
 import { createHash } from "node:crypto";
+import {
+  type OperatorChangeIntent,
+  OperatorChangeIntentSchema,
+} from "@cogni/node-contracts";
 import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import { parse as parseYaml } from "yaml";
 
@@ -17,6 +21,7 @@ import {
   buildNodeBirthPlan,
   buildPlacementPlan,
   buildRegionPlan,
+  CANONICAL_DOMAIN_ROOT,
   type EnvPlanCurrent,
   type EnvPlanOp,
   NODE_DEPLOY_ENVS,
@@ -25,14 +30,18 @@ import {
   nextFreeNodePort,
   parseCatalogPlacement,
   planEnvAddShape,
+  removeCaddyBlock,
+  removeFromAppsetsKustomization,
+  removeSchedulerEndpoint,
   schedulerEndpointPatchPath,
 } from "@/shared/node-app-scaffold/gens";
-import { controlEnvFor } from "@/shared/node-registry/placement";
+import {
+  controlEnvFor,
+  nodeAppBaseUrl,
+} from "@/shared/node-registry/placement";
 
 const SHA = /^[0-9a-f]{40}$/;
 const NODE = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const WALLET = /^0x[0-9a-fA-F]{40}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export interface OperatorChangeReplayReader {
   readFile(ref: string, path: string): Promise<string | null>;
@@ -59,26 +68,174 @@ export interface OperatorChangeReplayResult {
   readonly reason: string;
 }
 
+export interface OperatorChangePlanInput {
+  readonly intent: OperatorChangeIntent;
+  readonly baseSha: string;
+  readonly repository: string;
+  readonly deploymentCatalog?: string | null;
+  readonly fleetControlEnv?: string | undefined;
+  readonly forkDomainRoot?: string | undefined;
+  readonly reader: OperatorChangeReplayReader;
+}
+
+export type OperatorChangePlanResult =
+  | {
+      readonly status: "changes";
+      readonly ops: readonly EnvPlanOp[];
+      readonly intent: OperatorChangeIntent;
+    }
+  | { readonly status: "satisfied"; readonly intent: OperatorChangeIntent }
+  | { readonly status: "conflict"; readonly reason: string };
+
+export function parseOperatorChangeIntent(
+  input: Pick<
+    OperatorChangeReplayInput,
+    "operation" | "node" | "baseSha" | "headSha" | "message"
+  >
+): OperatorChangeIntent {
+  if (
+    !NODE.test(input.node) ||
+    !SHA.test(input.baseSha) ||
+    !SHA.test(input.headSha)
+  ) {
+    throw new Error("invalid-identity");
+  }
+  const envelope = parseTrailers(input.message);
+  if (
+    envelope.get("Cogni-Change-Type") !== "cogni.operator-change.v1" ||
+    envelope.get("Cogni-Operation") !== input.operation ||
+    envelope.get("Cogni-Node") !== input.node ||
+    envelope.get("Cogni-Base-SHA") !== input.baseSha
+  ) {
+    throw new Error("canonical-envelope-mismatch");
+  }
+  const recoveryRoot = envelope.get("Cogni-Recovery-Root-SHA");
+  const recoveryDepthText = envelope.get("Cogni-Recovery-Depth");
+  const recoveryLosingHead = envelope.get("Cogni-Recovery-Losing-Head-SHA");
+  if (
+    new Set([
+      recoveryRoot === undefined,
+      recoveryDepthText === undefined,
+      recoveryLosingHead === undefined,
+    ]).size !== 1
+  ) {
+    throw new Error("partial-recovery-envelope");
+  }
+  const recoveryDepth =
+    recoveryDepthText === undefined ? 0 : Number(recoveryDepthText);
+  const recoveryRootSha = recoveryRoot ?? input.headSha;
+  if (
+    !SHA.test(recoveryRootSha) ||
+    (recoveryLosingHead !== undefined && !SHA.test(recoveryLosingHead)) ||
+    !Number.isSafeInteger(recoveryDepth) ||
+    recoveryDepth < 0 ||
+    recoveryDepth > 3 ||
+    (recoveryRoot !== undefined && recoveryDepth === 0)
+  ) {
+    throw new Error("invalid-recovery-envelope");
+  }
+  const extra = recoveryRoot === undefined ? 0 : 3;
+  const subject = input.message.split("\n", 1)[0] ?? "";
+  const common = { node: input.node, recoveryRootSha, recoveryDepth } as const;
+  let candidate: unknown;
+  switch (input.operation) {
+    case "env.membership": {
+      requireTrailerCount(envelope, 8 + extra);
+      const environment = requiredEnvironment(envelope);
+      const action = requiredTrailer(envelope, "Cogni-Action");
+      if (!/^(add|remove)$/.test(action)) throw new Error("invalid-action");
+      if (
+        subject !==
+        `feat(node): ${action} ${input.node} ${action === "add" ? "to" : "from"} ${environment}`
+      ) {
+        throw new Error("invalid-subject");
+      }
+      candidate = {
+        ...common,
+        operation: "env.membership",
+        environment,
+        action,
+        leaseGeneration: requiredGeneration(envelope),
+      };
+      break;
+    }
+    case "env.placement": {
+      requireTrailerCount(envelope, 7 + extra);
+      const environment = requiredEnvironment(envelope);
+      const provider = requiredTrailer(envelope, "Cogni-Provider");
+      if (
+        !/^(k3s|akash)$/.test(provider) ||
+        subject !==
+          `feat(node): place ${input.node} ${environment} on ${provider}`
+      ) {
+        throw new Error("invalid-placement-envelope");
+      }
+      candidate = {
+        ...common,
+        operation: "env.placement",
+        environment,
+        provider,
+      };
+      break;
+    }
+    case "env.region": {
+      requireTrailerCount(envelope, 8 + extra);
+      const environment = requiredEnvironment(envelope);
+      const countries = requiredTrailer(envelope, "Cogni-Countries").split(",");
+      if (
+        countries.length === 0 ||
+        countries.some((country) => !/^[A-Z]{2}$/.test(country)) ||
+        uniqueSorted(countries).join(",") !== countries.join(",")
+      ) {
+        throw new Error("invalid-countries");
+      }
+      if (
+        subject !==
+        `feat(node): require ${input.node} ${environment} placement in ${countries.join(", ")}`
+      ) {
+        throw new Error("invalid-subject");
+      }
+      candidate = {
+        ...common,
+        operation: "env.region",
+        environment,
+        countries,
+        leaseGeneration: requiredGeneration(envelope),
+      };
+      break;
+    }
+    case "node.register": {
+      requireTrailerCount(envelope, 9 + extra);
+      if (subject !== `feat(node): register ${input.node}`)
+        throw new Error("invalid-subject");
+      candidate = {
+        ...common,
+        operation: "node.register",
+        nodeId: requiredTrailer(envelope, "Cogni-Node-Id"),
+        sourceRepo: requiredTrailer(envelope, "Cogni-Source-Repo"),
+        sourceSha: requiredTrailer(envelope, "Cogni-Source-SHA"),
+        ownerWallet: requiredTrailer(envelope, "Cogni-Owner-Wallet"),
+      };
+      break;
+    }
+    case "deployment.declare":
+      requireTrailerCount(envelope, 5 + extra);
+      if (subject !== `feat(deploy): declare ${input.node} node deployment`)
+        throw new Error("invalid-subject");
+      candidate = { ...common, operation: "deployment.declare" };
+      break;
+    default:
+      throw new Error("operation-not-bundled");
+  }
+  return OperatorChangeIntentSchema.parse(candidate);
+}
+
 export async function replayOperatorChange(
   input: OperatorChangeReplayInput
 ): Promise<OperatorChangeReplayResult> {
   try {
-    if (
-      !NODE.test(input.node) ||
-      !SHA.test(input.baseSha) ||
-      !SHA.test(input.headSha)
-    ) {
-      return failed("invalid-identity");
-    }
+    const intent = parseOperatorChangeIntent(input);
     const envelope = parseTrailers(input.message);
-    if (
-      envelope.get("Cogni-Change-Type") !== "cogni.operator-change.v1" ||
-      envelope.get("Cogni-Operation") !== input.operation ||
-      envelope.get("Cogni-Node") !== input.node ||
-      envelope.get("Cogni-Base-SHA") !== input.baseSha
-    ) {
-      return failed("canonical-envelope-mismatch");
-    }
     const sortedPaths = uniqueSorted(input.paths);
     if (sortedPaths.length !== input.paths.length)
       return failed("duplicate-path");
@@ -88,28 +245,34 @@ export async function replayOperatorChange(
       .digest("hex");
     if (signedPathHash !== actualPathHash) return failed("path-hash-mismatch");
 
-    const subject = input.message.split("\n", 1)[0] ?? "";
-    let ops: readonly EnvPlanOp[];
-    switch (input.operation) {
-      case "env.membership":
-        ops = await replayMembership(input, envelope, subject);
-        break;
-      case "env.placement":
-        ops = await replayPlacement(input, envelope, subject);
-        break;
-      case "env.region":
-        ops = await replayRegion(input, envelope, subject);
-        break;
-      case "node.register":
-        ops = await replayNodeRegister(input, envelope, subject);
-        break;
-      case "deployment.declare":
-        ops = await replayDeploymentDeclare(input, envelope, subject);
-        break;
-      default:
-        return failed("operation-not-bundled");
+    const plan = await planOperatorChangeIntent({
+      intent,
+      baseSha: input.baseSha,
+      repository: input.repository,
+      ...(input.deploymentCatalog === undefined
+        ? {}
+        : { deploymentCatalog: input.deploymentCatalog }),
+      ...(input.fleetControlEnv === undefined
+        ? {}
+        : { fleetControlEnv: input.fleetControlEnv }),
+      ...(input.forkDomainRoot === undefined
+        ? {}
+        : { forkDomainRoot: input.forkDomainRoot }),
+      reader: input.reader,
+    });
+    if (plan.status !== "changes") {
+      if (plan.status === "conflict")
+        return failed(`replay-error:${plan.reason}`);
+      return failed(
+        input.operation === "deployment.declare"
+          ? "replay-error:deployment-already-declared"
+          : "replay-error:unexpected-no-changes"
+      );
     }
-    return await verifyOps(input, ops);
+    if (JSON.stringify(plan.intent) !== JSON.stringify(intent)) {
+      return failed("intent-replay-mismatch");
+    }
+    return await verifyOps(input, plan.ops);
   } catch (error) {
     return failed(
       error instanceof Error ? `replay-error:${error.message}` : "replay-error"
@@ -117,62 +280,97 @@ export async function replayOperatorChange(
   }
 }
 
-async function replayMembership(
-  input: OperatorChangeReplayInput,
-  envelope: ReadonlyMap<string, string>,
-  subject: string
-): Promise<readonly EnvPlanOp[]> {
-  requireTrailerCount(envelope, 8);
-  const env = requiredEnvironment(envelope);
-  const action = requiredTrailer(envelope, "Cogni-Action");
-  const leaseGeneration = requiredGeneration(envelope);
-  if (!/^(add|remove)$/.test(action)) throw new Error("invalid-action");
-  if (
-    subject !==
-    `feat(node): ${action} ${input.node} ${action === "add" ? "to" : "from"} ${env}`
-  ) {
-    throw new Error("invalid-subject");
+export async function planOperatorChangeIntent(
+  input: OperatorChangePlanInput
+): Promise<OperatorChangePlanResult> {
+  try {
+    let ops: readonly EnvPlanOp[] | null;
+    let effectiveIntent = input.intent;
+    switch (input.intent.operation) {
+      case "env.membership":
+        ops = await planMembership({ ...input, intent: input.intent });
+        break;
+      case "env.placement":
+        ops = await planPlacement({ ...input, intent: input.intent });
+        break;
+      case "env.region": {
+        const region = await planRegion({ ...input, intent: input.intent });
+        ops = region.ops;
+        effectiveIntent = {
+          ...input.intent,
+          leaseGeneration: region.leaseGeneration,
+        };
+        break;
+      }
+      case "node.register": {
+        const registration = await planNodeRegister({
+          ...input,
+          intent: input.intent,
+        });
+        if (registration.status !== "changes") return registration;
+        ops = registration.ops;
+        break;
+      }
+      case "deployment.declare":
+        ops = await planDeploymentDeclare({ ...input, intent: input.intent });
+        break;
+    }
+    return ops === null
+      ? { status: "satisfied", intent: effectiveIntent }
+      : { status: "changes", ops, intent: effectiveIntent };
+  } catch (error) {
+    return {
+      status: "conflict",
+      reason: error instanceof Error ? error.message : "planner-error",
+    };
   }
+}
+
+async function planMembership(
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<
+      OperatorChangeIntent,
+      { operation: "env.membership" }
+    >;
+  }
+): Promise<readonly EnvPlanOp[] | null> {
+  const { environment: env, action, leaseGeneration } = input.intent;
   const present = action === "add";
   const catalog = await requiredFile(
     input.reader,
     input.baseSha,
-    `infra/catalog/${input.node}.yaml`
+    `infra/catalog/${input.intent.node}.yaml`
   );
   const current = await membershipCurrent(input, catalog, env, present);
   const plan = buildEnvDeltaPlan({
-    slug: input.node,
+    slug: input.intent.node,
     env,
     present,
     current,
     leaseGeneration,
     fleetControlEnv: input.fleetControlEnv,
   });
-  if (plan.kind === "no_changes") throw new Error("unexpected-no-changes");
-  return plan.ops;
+  return plan.kind === "no_changes" ? null : plan.ops;
 }
 
-async function replayPlacement(
-  input: OperatorChangeReplayInput,
-  envelope: ReadonlyMap<string, string>,
-  subject: string
-): Promise<readonly EnvPlanOp[]> {
-  requireTrailerCount(envelope, 7);
-  const env = requiredEnvironment(envelope);
-  const provider = requiredTrailer(envelope, "Cogni-Provider");
-  if (!/^(k3s|akash)$/.test(provider)) throw new Error("invalid-provider");
-  if (subject !== `feat(node): place ${input.node} ${env} on ${provider}`) {
-    throw new Error("invalid-subject");
+async function planPlacement(
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<
+      OperatorChangeIntent,
+      { operation: "env.placement" }
+    >;
   }
+): Promise<readonly EnvPlanOp[] | null> {
+  const { environment: env, provider } = input.intent;
   const plan = buildPlacementPlan({
-    slug: input.node,
+    slug: input.intent.node,
     env,
     placement: provider as "k3s" | "akash",
     current: {
       catalog: await requiredFile(
         input.reader,
         input.baseSha,
-        `infra/catalog/${input.node}.yaml`
+        `infra/catalog/${input.intent.node}.yaml`
       ),
       templateOverlayByEnv: {},
       appsetsKustomizationByEnv: {},
@@ -186,35 +384,20 @@ async function replayPlacement(
       },
     },
   });
-  if (plan.kind === "no_changes") throw new Error("unexpected-no-changes");
-  return plan.ops;
+  return plan.kind === "no_changes" ? null : plan.ops;
 }
 
-async function replayRegion(
-  input: OperatorChangeReplayInput,
-  envelope: ReadonlyMap<string, string>,
-  subject: string
-): Promise<readonly EnvPlanOp[]> {
-  requireTrailerCount(envelope, 8);
-  const env = requiredEnvironment(envelope);
-  const countries = requiredTrailer(envelope, "Cogni-Countries").split(",");
-  const canonicalCountries = uniqueSorted(countries);
-  if (
-    countries.length === 0 ||
-    countries.some((country) => !/^[A-Z]{2}$/.test(country)) ||
-    canonicalCountries.join(",") !== countries.join(",")
-  ) {
-    throw new Error("invalid-countries");
+async function planRegion(
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<OperatorChangeIntent, { operation: "env.region" }>;
   }
-  const leaseGeneration = requiredGeneration(envelope);
-  if (
-    subject !==
-    `feat(node): require ${input.node} ${env} placement in ${countries.join(", ")}`
-  ) {
-    throw new Error("invalid-subject");
-  }
+): Promise<{
+  readonly ops: readonly EnvPlanOp[] | null;
+  readonly leaseGeneration: number;
+}> {
+  const { environment: env, countries, leaseGeneration } = input.intent;
   const plan = buildRegionPlan({
-    slug: input.node,
+    slug: input.intent.node,
     env,
     countries,
     leaseGeneration,
@@ -222,40 +405,36 @@ async function replayRegion(
       catalog: await requiredFile(
         input.reader,
         input.baseSha,
-        `infra/catalog/${input.node}.yaml`
+        `infra/catalog/${input.intent.node}.yaml`
       ),
       templateOverlayByEnv: {},
       appsetsKustomizationByEnv: {},
     },
   });
-  if (plan.kind === "no_changes" || plan.leaseGeneration !== leaseGeneration) {
-    throw new Error("region-replay-mismatch");
-  }
-  return plan.ops;
+  return {
+    ops: plan.kind === "no_changes" ? null : plan.ops,
+    leaseGeneration:
+      plan.kind === "no_changes" ? leaseGeneration : plan.leaseGeneration,
+  };
 }
 
-async function replayNodeRegister(
-  input: OperatorChangeReplayInput,
-  envelope: ReadonlyMap<string, string>,
-  subject: string
-): Promise<readonly EnvPlanOp[]> {
-  requireTrailerCount(envelope, 9);
-  const nodeId = requiredTrailer(envelope, "Cogni-Node-Id");
-  const sourceRepo = requiredTrailer(envelope, "Cogni-Source-Repo");
-  const sourceSha = requiredTrailer(envelope, "Cogni-Source-SHA");
-  const ownerWallet = requiredTrailer(envelope, "Cogni-Owner-Wallet");
+async function planNodeRegister(
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<
+      OperatorChangeIntent,
+      { operation: "node.register" }
+    >;
+  }
+): Promise<OperatorChangePlanResult> {
+  const { node, nodeId, sourceRepo, sourceSha, ownerWallet } = input.intent;
   const repositoryOwner = input.repository.split("/", 1)[0];
   if (
-    !UUID.test(nodeId) ||
-    !SHA.test(sourceSha) ||
-    !WALLET.test(ownerWallet) ||
+    !repositoryOwner ||
     sourceRepo.toLowerCase() !==
-      `https://github.com/${repositoryOwner}/${input.node}.git`.toLowerCase() ||
-    subject !== `feat(node): register ${input.node}`
+      `https://github.com/${repositoryOwner}/${node}.git`.toLowerCase()
   ) {
-    throw new Error("invalid-register-envelope");
+    return { status: "conflict", reason: "node-register-source-repo-mismatch" };
   }
-
   const catalogPaths = await input.reader.listPaths(
     input.baseSha,
     "infra/catalog"
@@ -300,57 +479,136 @@ async function replayNodeRegister(
       path
     );
   }
+  const catalogPath = `infra/catalog/${node}.yaml`;
+  const existingCatalog = await input.reader.readFile(
+    input.baseSha,
+    catalogPath
+  );
+  let nodePort = nextFreeNodePort(usedPorts);
+  if (existingCatalog !== null) {
+    const row = parseYaml(existingCatalog) as Record<string, unknown> | null;
+    if (
+      row?.name !== node ||
+      row.node_id !== nodeId ||
+      typeof row.source_repo !== "string" ||
+      row.source_repo.toLowerCase() !== sourceRepo.toLowerCase() ||
+      row.source_sha !== sourceSha ||
+      row.owner_wallet !== ownerWallet ||
+      row.port !== 3200 ||
+      !Number.isSafeInteger(row.node_port)
+    ) {
+      return { status: "conflict", reason: "node-register-identity-conflict" };
+    }
+    nodePort = row.node_port as number;
+  }
+  const appsetTemplate = await requiredFile(
+    input.reader,
+    input.baseSha,
+    "scripts/ci/node-applicationset.yaml.tmpl"
+  );
+  const caddyfile = await requiredFile(
+    input.reader,
+    input.baseSha,
+    "infra/compose/edge/configs/Caddyfile.tmpl"
+  );
+  const replayAppsets = { ...appsetsKustomizationByControlEnv };
+  const replayScheduler = { ...schedulerEndpointByPath };
+  let replayCaddyfile = caddyfile;
+  if (existingCatalog !== null) {
+    for (const env of NODE_FORMATION_ENVS) {
+      const controlEnv = controlEnvForBirth(env);
+      const current = replayAppsets[controlEnv];
+      if (current === undefined) {
+        throw new Error(`node-register-appset-missing:${controlEnv}`);
+      }
+      const absent = removeFromAppsetsKustomization(current, node, env);
+      if (absent === current) {
+        throw new Error(`node-register-appset-entry-missing:${env}:${node}`);
+      }
+      replayAppsets[controlEnv] = absent;
+    }
+    replayCaddyfile = removeCaddyBlock(caddyfile, node, nodePort);
+    for (const [path, current] of Object.entries(replayScheduler)) {
+      const patchEnv = path.match(
+        /^infra\/k8s\/overlays\/([^/]+)\/scheduler-worker\/node-endpoints\.patch\.yaml$/
+      )?.[1];
+      const formationPatchEnv =
+        patchEnv !== undefined &&
+        (NODE_FORMATION_ENVS as readonly string[]).includes(patchEnv)
+          ? (patchEnv as (typeof NODE_FORMATION_ENVS)[number])
+          : null;
+      const expectedUrl =
+        formationPatchEnv !== null
+          ? nodeAppBaseUrl({
+              slug: node,
+              provider: "akash",
+              environment: formationPatchEnv,
+              apexDomain: CANONICAL_DOMAIN_ROOT,
+            })
+          : `http://${node}-node-app:3000`;
+      replayScheduler[path] = removeSchedulerEndpoint(
+        current,
+        node,
+        nodeId,
+        expectedUrl
+      );
+    }
+  }
   const ops = buildNodeBirthPlan({
-    slug: input.node,
+    slug: node,
     nodeId,
     sourceRepo,
     sourceSha,
     ownerWallet,
     port: 3200,
-    nodePort: nextFreeNodePort(usedPorts),
+    nodePort,
     repositoryUrl: `https://github.com/${input.repository}.git`,
     controlEnvFor: controlEnvForBirth,
     current: {
       templateOverlayByEnv,
       templateExternalSecretByEnv,
-      appsetTemplate: await requiredFile(
-        input.reader,
-        input.baseSha,
-        "scripts/ci/node-applicationset.yaml.tmpl"
-      ),
-      appsetsKustomizationByControlEnv,
-      caddyfile: await requiredFile(
-        input.reader,
-        input.baseSha,
-        "infra/compose/edge/configs/Caddyfile.tmpl"
-      ),
-      schedulerEndpointByPath,
+      appsetTemplate,
+      appsetsKustomizationByControlEnv: replayAppsets,
+      caddyfile: replayCaddyfile,
+      schedulerEndpointByPath: replayScheduler,
     },
   });
   for (const op of ops) {
     const nodeOwned =
-      op.path === `infra/catalog/${input.node}.yaml` ||
-      op.path.includes(`/${input.node}/`) ||
-      op.path.endsWith(`-${input.node}-applicationset.yaml`);
+      op.path === catalogPath ||
+      op.path.includes(`/${node}/`) ||
+      op.path.endsWith(`-${node}-applicationset.yaml`);
     if (
       nodeOwned &&
+      existingCatalog === null &&
       (await input.reader.readFile(input.baseSha, op.path)) !== null
     ) {
-      throw new Error(`node-path-collision:${op.path}`);
+      return { status: "conflict", reason: `node-path-collision:${op.path}` };
     }
   }
-  return ops;
+  if (existingCatalog !== null) {
+    for (const op of ops) {
+      const current = await input.reader.readFile(input.baseSha, op.path);
+      if (op.op === "delete" ? current !== null : current !== op.content) {
+        return {
+          status: "conflict",
+          reason: `node-register-footprint-conflict:${op.path}`,
+        };
+      }
+    }
+    return { status: "satisfied", intent: input.intent };
+  }
+  return { status: "changes", ops, intent: input.intent };
 }
 
-async function replayDeploymentDeclare(
-  input: OperatorChangeReplayInput,
-  envelope: ReadonlyMap<string, string>,
-  subject: string
-): Promise<readonly EnvPlanOp[]> {
-  requireTrailerCount(envelope, 5);
-  if (subject !== `feat(deploy): declare ${input.node} node deployment`) {
-    throw new Error("invalid-subject");
+async function planDeploymentDeclare(
+  input: OperatorChangePlanInput & {
+    readonly intent: Extract<
+      OperatorChangeIntent,
+      { operation: "deployment.declare" }
+    >;
   }
+): Promise<readonly EnvPlanOp[] | null> {
   if (
     input.deploymentCatalog === undefined ||
     input.deploymentCatalog === null
@@ -368,7 +626,7 @@ async function replayDeploymentDeclare(
   const row = parsedCatalog as Record<string, unknown>;
   const expectedSourceRepo = `https://github.com/${input.repository}.git`;
   if (
-    row.name !== input.node ||
+    row.name !== input.intent.node ||
     typeof row.source_repo !== "string" ||
     row.source_repo.toLowerCase() !== expectedSourceRepo.toLowerCase()
   ) {
@@ -376,8 +634,7 @@ async function replayDeploymentDeclare(
   }
   const path = ".cogni/repo-spec.yaml";
   const base = await requiredFile(input.reader, input.baseSha, path);
-  if (/^deployment:/m.test(base))
-    throw new Error("deployment-already-declared");
+  if (/^deployment:/m.test(base)) return null;
   return [
     {
       op: "upsert",
@@ -388,7 +645,7 @@ async function replayDeploymentDeclare(
 }
 
 async function membershipCurrent(
-  input: OperatorChangeReplayInput,
+  input: OperatorChangePlanInput,
   catalog: string,
   env: "candidate-a" | "preview" | "production",
   present: boolean

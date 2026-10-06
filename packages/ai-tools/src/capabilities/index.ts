@@ -97,6 +97,7 @@ export type {
   CreateBranchResult,
   DispatchCandidateFlightResult,
   MergeResult,
+  OperatorChangeFastForwardResult,
   OperatorChangeVerificationResult,
   PrSummary,
   VcsCapability,

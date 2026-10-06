@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { insertCaddyBlock } from "./caddyfile";
+import { insertCaddyBlock, removeCaddyBlock } from "./caddyfile";
 
 // Minimal seed: a global block + the primary (operator) site block. Non-primary blocks are built by
 // insertCaddyBlock so the fixtures stay byte-exact to the real emitter.
@@ -68,5 +68,16 @@ describe("insertCaddyBlock", () => {
     expect(() => insertCaddyBlock(withZebra, "zebra", 32000)).toThrow(
       /already contains/
     );
+  });
+
+  it("strictly removes one exact generated block", () => {
+    const withZebra = insertCaddyBlock(SEED, "zebra", 32000);
+    expect(removeCaddyBlock(withZebra, "zebra", 32000)).toBe(SEED);
+    expect(() => removeCaddyBlock(withZebra, "zebra", 32001)).toThrow(
+      /not canonical/
+    );
+    expect(() =>
+      removeCaddyBlock(`${withZebra}\n${withZebra}`, "zebra", 32000)
+    ).toThrow(/exactly one/);
   });
 });

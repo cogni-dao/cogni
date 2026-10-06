@@ -27,22 +27,30 @@ import type {
   CreateBranchResult,
   DispatchCandidateFlightResult,
   MergeResult,
+  OperatorChangeFastForwardResult,
   OperatorChangeVerificationResult,
   PrSummary,
   VcsCapability,
 } from "@cogni/ai-tools";
+import type {
+  OperatorChangeRecoveryRequest,
+  OperatorChangeRecoveryResult,
+} from "@cogni/node-contracts";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import { parse as parseYaml } from "yaml";
 import {
   classifyOperatorChangeForMerge,
+  classifyOperatorChangeForRecovery,
   type OperatorChangeFacts,
   parseOperatorChangeRegistry,
 } from "@/shared/vcs/operator-change-policy";
 import {
   type OperatorChangeReplayReader,
+  parseOperatorChangeIntent,
   replayOperatorChange,
 } from "@/shared/vcs/operator-change-replay";
+import { GitHubRepoWriter } from "./github-repo-write";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -363,6 +371,24 @@ export class GitHubVcsAdapter implements VcsCapability {
     prNumber: number;
     expectedHeadSha: string;
   }): Promise<OperatorChangeVerificationResult> {
+    const strict = await this.verifyOperatorChangeInternal(params, false);
+    if (strict.eligible || strict.reason !== "invalid-pr-identity") {
+      return strict;
+    }
+    const stale = await this.verifyOperatorChangeInternal(params, true);
+    if (!stale.eligible || stale.baseSha === strict.baseSha) return strict;
+    return { ...stale, eligible: false, reason: "base-advanced" };
+  }
+
+  private async verifyOperatorChangeInternal(
+    params: {
+      owner: string;
+      repo: string;
+      prNumber: number;
+      expectedHeadSha: string;
+    },
+    allowStaleBase: boolean
+  ): Promise<OperatorChangeVerificationResult> {
     const targetOctokit = await this.getOctokit(params.owner, params.repo);
     const { data: pr } = await targetOctokit.request(
       "GET /repos/{owner}/{repo}/pulls/{pull_number}",
@@ -408,7 +434,7 @@ export class GitHubVcsAdapter implements VcsCapability {
     const registry = parseOperatorChangeRegistry(registryValue);
     if (registry === null) return fail("invalid-trusted-registry");
 
-    const [commitResponse, filesResponse, baseRepoSpec] = await Promise.all([
+    const [commitResponse, filesResponse] = await Promise.all([
       targetOctokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
         owner: params.owner,
         repo: params.repo,
@@ -424,18 +450,21 @@ export class GitHubVcsAdapter implements VcsCapability {
           page: 1,
         }
       ),
-      this.readFileText(
-        targetOctokit,
-        params.owner,
-        params.repo,
-        ".cogni/repo-spec.yaml",
-        baseSha
-      ),
     ]);
     if (filesResponse.headers.link?.includes('rel="next"')) {
       return fail("changed-file-list-truncated");
     }
     const commit = commitResponse.data;
+    const replayBaseSha = allowStaleBase
+      ? (commit.parents[0]?.sha ?? baseSha)
+      : baseSha;
+    const baseRepoSpec = await this.readFileText(
+      targetOctokit,
+      params.owner,
+      params.repo,
+      ".cogni/repo-spec.yaml",
+      replayBaseSha
+    );
     let repositoryNode: string | null = null;
     if (baseRepoSpec !== null) {
       try {
@@ -484,7 +513,10 @@ export class GitHubVcsAdapter implements VcsCapability {
       operationReplayVerified: false,
     };
 
-    const structural = classifyOperatorChangeForMerge(facts);
+    const classify = allowStaleBase
+      ? classifyOperatorChangeForRecovery
+      : classifyOperatorChangeForMerge;
+    const structural = classify(facts);
     if (
       structural.reason !== "operation-replay-failed" ||
       !structural.operation ||
@@ -497,17 +529,32 @@ export class GitHubVcsAdapter implements VcsCapability {
       policyOctokit,
       owner: params.owner,
       repo: params.repo,
-      baseSha,
+      baseSha: replayBaseSha,
       headSha,
       operation: structural.operation,
       node: structural.node,
       files: facts.files.map((file) => file.filename),
       message: commit.commit.message,
     });
-    return classifyOperatorChangeForMerge({
+    const classified = classify({
       ...facts,
       operationReplayVerified,
     });
+    if (!classified.eligible || !classified.operation || !classified.node) {
+      return classified;
+    }
+    try {
+      const intent = parseOperatorChangeIntent({
+        operation: classified.operation,
+        node: classified.node,
+        baseSha: replayBaseSha,
+        headSha,
+        message: commit.commit.message,
+      });
+      return { ...classified, baseSha: replayBaseSha, intent };
+    } catch {
+      return { ...classified, eligible: false, reason: "intent-parse-failed" };
+    }
   }
 
   private async verifyOperatorChangeReplay(input: {
@@ -715,26 +762,32 @@ export class GitHubVcsAdapter implements VcsCapability {
     prNumber: number;
     expectedBaseSha: string;
     expectedHeadSha: string;
-  }): Promise<MergeResult> {
+  }): Promise<OperatorChangeFastForwardResult> {
     const octokit = await this.getOctokit(params.owner, params.repo);
+    let patchIssued = false;
     try {
-      const [{ data: pr }, { data: commit }] = await Promise.all([
-        octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
-          owner: params.owner,
-          repo: params.repo,
-          pull_number: params.prNumber,
-        }),
-        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
-          owner: params.owner,
-          repo: params.repo,
-          ref: params.expectedHeadSha,
-        }),
-      ]);
+      const [{ data: pr }, { data: commit }, { data: mainRef }] =
+        await Promise.all([
+          octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+            owner: params.owner,
+            repo: params.repo,
+            pull_number: params.prNumber,
+          }),
+          octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+            owner: params.owner,
+            repo: params.repo,
+            ref: params.expectedHeadSha,
+          }),
+          octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+            owner: params.owner,
+            repo: params.repo,
+            ref: "heads/main",
+          }),
+        ]);
       if (
         pr.state !== "open" ||
         pr.draft !== false ||
         pr.base.ref !== "main" ||
-        pr.base.sha !== params.expectedBaseSha ||
         pr.head.sha !== params.expectedHeadSha ||
         pr.head.repo?.full_name?.toLowerCase() !==
           `${params.owner}/${params.repo}`.toLowerCase() ||
@@ -743,13 +796,27 @@ export class GitHubVcsAdapter implements VcsCapability {
         commit.parents[0]?.sha !== params.expectedBaseSha
       ) {
         return {
-          merged: false,
-          enqueued: false,
+          outcome: "terminal",
           status: 409,
           message: "Generated change base/head precondition failed",
         };
       }
+      if (mainRef.object.sha !== params.expectedBaseSha) {
+        return {
+          outcome: "base_advanced",
+          currentBaseSha: mainRef.object.sha,
+          message: "Generated change base advanced before compare-and-swap",
+        };
+      }
+      if (pr.base.sha !== params.expectedBaseSha) {
+        return {
+          outcome: "terminal",
+          status: 409,
+          message: "Generated change PR base does not match main",
+        };
+      }
 
+      patchIssued = true;
       const { data: updated } = await octokit.request(
         "PATCH /repos/{owner}/{repo}/git/refs/{ref}",
         {
@@ -761,14 +828,320 @@ export class GitHubVcsAdapter implements VcsCapability {
         }
       );
       return {
-        merged: true,
-        enqueued: false,
+        outcome: "landed",
         sha: updated.object.sha,
         message: "Verified generated change fast-forwarded atomically",
       };
     } catch (error) {
-      return this.toMergeFailure(error);
+      const status = (error as { status?: number }).status;
+      if (patchIssued) {
+        try {
+          const { data: current } = await octokit.request(
+            "GET /repos/{owner}/{repo}/git/ref/{ref}",
+            { owner: params.owner, repo: params.repo, ref: "heads/main" }
+          );
+          if (current.object.sha === params.expectedHeadSha) {
+            return {
+              outcome: "landed",
+              sha: params.expectedHeadSha,
+              message:
+                "Generated change landed despite an ambiguous PATCH response",
+            };
+          }
+          if (current.object.sha !== params.expectedBaseSha) {
+            try {
+              const { data: ancestry } = await octokit.request(
+                "GET /repos/{owner}/{repo}/compare/{basehead}",
+                {
+                  owner: params.owner,
+                  repo: params.repo,
+                  basehead: `${params.expectedHeadSha}...${current.object.sha}`,
+                }
+              );
+              if (
+                ancestry.status === "ahead" ||
+                ancestry.status === "identical"
+              ) {
+                return {
+                  outcome: "landed",
+                  sha: params.expectedHeadSha,
+                  message:
+                    "Generated change landed and is an ancestor of current main",
+                };
+              }
+            } catch {
+              return {
+                outcome: "retryable_or_ambiguous",
+                ...(status === undefined ? {} : { status }),
+                message: "Generated change ancestry is ambiguous after PATCH",
+              };
+            }
+            return {
+              outcome: "base_advanced",
+              currentBaseSha: current.object.sha,
+              message: "Generated change lost the compare-and-swap",
+            };
+          }
+        } catch {
+          return {
+            outcome: "retryable_or_ambiguous",
+            ...(status === undefined ? {} : { status }),
+            message: "Generated change PATCH outcome is ambiguous",
+          };
+        }
+      }
+      if (
+        status === 408 ||
+        status === 429 ||
+        status === undefined ||
+        (typeof status === "number" && status >= 500)
+      ) {
+        return {
+          outcome: "retryable_or_ambiguous",
+          ...(status === undefined ? {} : { status }),
+          message:
+            error instanceof Error ? error.message : "GitHub request failed",
+        };
+      }
+      return {
+        outcome: "terminal",
+        ...(status === undefined ? {} : { status }),
+        message:
+          error instanceof Error ? error.message : "GitHub request failed",
+      };
     }
+  }
+
+  async recoverOperatorChange(
+    request: OperatorChangeRecoveryRequest
+  ): Promise<OperatorChangeRecoveryResult> {
+    const octokit = await this.getOctokit(request.owner, request.repo);
+    const [{ data: mainRef }, { data: pr }] = await Promise.all([
+      octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+        owner: request.owner,
+        repo: request.repo,
+        ref: "heads/main",
+      }),
+      octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+        owner: request.owner,
+        repo: request.repo,
+        pull_number: request.prNumber,
+      }),
+    ]);
+    const mainSha = mainRef.object.sha;
+    if (mainSha === request.losingHeadSha) {
+      return {
+        status: "satisfied",
+        reason: "main_equals_losing_head",
+        mainSha,
+      };
+    }
+    if (
+      pr.head.sha !== request.losingHeadSha ||
+      pr.head.repo?.full_name?.toLowerCase() !==
+        `${request.owner}/${request.repo}`.toLowerCase()
+    ) {
+      return { status: "terminal", reason: "losing-pr-head-changed" };
+    }
+    if (pr.state === "closed" && pr.merged_at !== null) {
+      return { status: "satisfied", reason: "exact_pr_merged", mainSha };
+    }
+    if (
+      !["open", "closed"].includes(pr.state) ||
+      pr.draft === true ||
+      pr.base.ref !== "main"
+    ) {
+      return { status: "terminal", reason: "losing-pr-is-not-recoverable" };
+    }
+
+    const proof = await this.verifyOperatorChangeInternal(
+      {
+        owner: request.owner,
+        repo: request.repo,
+        prNumber: request.prNumber,
+        expectedHeadSha: request.losingHeadSha,
+      },
+      true
+    );
+    if (
+      !proof.eligible ||
+      proof.baseSha !== request.signedBaseSha ||
+      proof.intent === undefined ||
+      JSON.stringify(proof.intent) !== JSON.stringify(request.intent)
+    ) {
+      return {
+        status: "terminal",
+        reason: `losing-head-verification-failed:${proof.reason}`,
+      };
+    }
+    const ci = await this.getCiStatus({
+      owner: request.owner,
+      repo: request.repo,
+      prNumber: request.prNumber,
+    });
+    if (
+      ci.headSha !== request.losingHeadSha ||
+      ci.reviewDecision === "CHANGES_REQUESTED" ||
+      ci.pending ||
+      !ci.allGreen
+    ) {
+      return { status: "terminal", reason: "losing-head-checks-not-green" };
+    }
+    if (mainSha === request.signedBaseSha) {
+      const retried = await this.fastForwardOperatorChange({
+        owner: request.owner,
+        repo: request.repo,
+        prNumber: request.prNumber,
+        expectedBaseSha: request.signedBaseSha,
+        expectedHeadSha: request.losingHeadSha,
+      });
+      if (retried.outcome === "landed") {
+        return { status: "landed", mainSha: retried.sha };
+      }
+      if (retried.outcome === "terminal") {
+        return { status: "terminal", reason: retried.message };
+      }
+      if (retried.outcome === "retryable_or_ambiguous") {
+        throw new Error(`retryable_or_ambiguous:${retried.message}`);
+      }
+    }
+
+    const reverifyLosingAuthority = async (): Promise<boolean> => {
+      const [currentProof, currentCi] = await Promise.all([
+        this.verifyOperatorChangeInternal(
+          {
+            owner: request.owner,
+            repo: request.repo,
+            prNumber: request.prNumber,
+            expectedHeadSha: request.losingHeadSha,
+          },
+          true
+        ),
+        this.getCiStatus({
+          owner: request.owner,
+          repo: request.repo,
+          prNumber: request.prNumber,
+        }),
+      ]);
+      return (
+        currentProof.eligible &&
+        currentProof.baseSha === request.signedBaseSha &&
+        currentProof.intent !== undefined &&
+        JSON.stringify(currentProof.intent) ===
+          JSON.stringify(request.intent) &&
+        currentCi.headSha === request.losingHeadSha &&
+        currentCi.reviewDecision !== "CHANGES_REQUESTED" &&
+        !currentCi.pending &&
+        currentCi.allGreen
+      );
+    };
+    const writer = this.createRecoveryWriter();
+    const regenerated = await writer.createOperatorChangeRecoveryPr({
+      owner: request.owner,
+      repo: request.repo,
+      prNumber: request.prNumber,
+      intent: request.intent,
+      losingHeadSha: request.losingHeadSha,
+      reverifyAuthority: reverifyLosingAuthority,
+      ...(pr.state === "closed" ? { planOnly: true } : {}),
+    });
+    if (regenerated.status === "conflict") {
+      return { status: "terminal", reason: regenerated.reason };
+    }
+    if (regenerated.status === "satisfied") {
+      if (!(await reverifyLosingAuthority())) {
+        return {
+          status: "terminal",
+          reason: "losing-pr-no-longer-authorized-before-close",
+        };
+      }
+      const [{ data: freshMain }, { data: freshPr }] = await Promise.all([
+        octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+          owner: request.owner,
+          repo: request.repo,
+          ref: "heads/main",
+        }),
+        octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+          owner: request.owner,
+          repo: request.repo,
+          pull_number: request.prNumber,
+        }),
+      ]);
+      if (freshMain.object.sha !== regenerated.mainSha) {
+        throw new Error(
+          "retryable_or_ambiguous:main-moved-after-satisfaction-plan"
+        );
+      }
+      if (
+        freshPr.state !== "open" ||
+        freshPr.draft === true ||
+        freshPr.base.ref !== "main" ||
+        freshPr.head.sha !== request.losingHeadSha ||
+        freshPr.head.repo?.full_name?.toLowerCase() !==
+          `${request.owner}/${request.repo}`.toLowerCase()
+      ) {
+        return {
+          status: "terminal",
+          reason: "losing-pr-no-longer-authorized-before-close",
+        };
+      }
+      await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
+        owner: request.owner,
+        repo: request.repo,
+        pull_number: request.prNumber,
+        state: "closed",
+      });
+      return {
+        status: "satisfied",
+        reason: "intent_already_satisfied",
+        mainSha: regenerated.mainSha,
+      };
+    }
+    const regeneratedProof = await this.verifyOperatorChange({
+      owner: request.owner,
+      repo: request.repo,
+      prNumber: regenerated.prNumber,
+      expectedHeadSha: regenerated.headSha,
+    });
+    if (
+      !regeneratedProof.eligible ||
+      regeneratedProof.baseSha !== regenerated.baseSha ||
+      regeneratedProof.intent === undefined ||
+      JSON.stringify(regeneratedProof.intent) !==
+        JSON.stringify(regenerated.intent)
+    ) {
+      return {
+        status: "terminal",
+        reason: `regenerated-head-verification-failed:${regeneratedProof.reason}`,
+      };
+    }
+    return {
+      status: "regenerated",
+      baseSha: regenerated.baseSha,
+      headSha: regenerated.headSha,
+      prNumber: regenerated.prNumber,
+      prUrl: regenerated.prUrl,
+      recoveryDepth: regenerated.intent.recoveryDepth,
+    };
+  }
+
+  private createRecoveryWriter(): GitHubRepoWriter {
+    return new GitHubRepoWriter({
+      appId: this.config.appId,
+      privateKey: this.config.privateKey,
+      ...(this.config.operatorChangePolicyOwner
+        ? { operatorChangePolicyOwner: this.config.operatorChangePolicyOwner }
+        : {}),
+      ...(this.config.operatorChangePolicyRepo
+        ? { operatorChangePolicyRepo: this.config.operatorChangePolicyRepo }
+        : {}),
+      ...(this.config.fleetControlEnv
+        ? { fleetControlEnv: this.config.fleetControlEnv }
+        : {}),
+      ...(this.config.forkDomainRoot
+        ? { forkDomainRoot: this.config.forkDomainRoot }
+        : {}),
+    });
   }
 
   /**
