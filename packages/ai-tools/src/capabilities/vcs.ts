@@ -135,10 +135,26 @@ export interface OperatorChangeVerificationResult {
 }
 
 export type OperatorChangeFastForwardResult =
-  | { readonly outcome: "landed"; readonly sha: string; readonly message: string }
-  | { readonly outcome: "base_advanced"; readonly currentBaseSha: string; readonly message: string }
-  | { readonly outcome: "retryable_or_ambiguous"; readonly status?: number; readonly message: string }
-  | { readonly outcome: "terminal"; readonly status?: number; readonly message: string };
+  | {
+      readonly outcome: "landed";
+      readonly sha: string;
+      readonly message: string;
+    }
+  | {
+      readonly outcome: "base_advanced";
+      readonly currentBaseSha: string;
+      readonly message: string;
+    }
+  | {
+      readonly outcome: "retryable_or_ambiguous";
+      readonly status?: number;
+      readonly message: string;
+    }
+  | {
+      readonly outcome: "terminal";
+      readonly status?: number;
+      readonly message: string;
+    };
 
 // ---------------------------------------------------------------------------
 // Capability interface

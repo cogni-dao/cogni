@@ -70,7 +70,8 @@ export async function dispatchOperatorChangeAutoMerge(
     (!proof.eligible && !staleButVerified) ||
     proof.headSha !== headSha ||
     !proof.intent
-  ) return;
+  )
+    return;
 
   const ci = await vcs.getCiStatus({ owner, repo, prNumber });
   if (

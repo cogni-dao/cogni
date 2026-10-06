@@ -14,14 +14,25 @@
  */
 
 import type { VcsCapability } from "@cogni/ai-tools";
+import type {
+  OperatorChangeRecoveryRequest,
+  OperatorChangeRecoveryResult,
+} from "@cogni/node-contracts";
 
 import { GitHubVcsAdapter } from "@/adapters/server";
 import type { ServerEnv } from "@/shared/env";
 
+/** Operator-only extension kept out of the public AI tool capability surface. */
+export interface OperatorVcsCapability extends VcsCapability {
+  recoverOperatorChange(
+    request: OperatorChangeRecoveryRequest
+  ): Promise<OperatorChangeRecoveryResult>;
+}
+
 /**
  * Stub VcsCapability that throws when not configured.
  */
-export const stubVcsCapability: VcsCapability = {
+export const stubVcsCapability: OperatorVcsCapability = {
   listPrs: async () => {
     throw new Error(
       "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
@@ -40,6 +51,11 @@ export const stubVcsCapability: VcsCapability = {
   fastForwardOperatorChange: async () => {
     throw new Error(
       "VcsCapability not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
+    );
+  },
+  recoverOperatorChange: async () => {
+    throw new Error(
+      "Operator change recovery not configured. Set GH_REVIEW_APP_ID and GH_REVIEW_APP_PRIVATE_KEY_BASE64."
     );
   },
   mergePr: async () => {
@@ -73,7 +89,7 @@ export const stubVcsCapability: VcsCapability = {
  * @param env - Server environment
  * @returns VcsCapability backed by GitHubVcsAdapter or stub
  */
-export function createVcsCapability(env: ServerEnv): VcsCapability {
+export function createVcsCapability(env: ServerEnv): OperatorVcsCapability {
   const appId = env.GH_REVIEW_APP_ID;
   const privateKeyBase64 = env.GH_REVIEW_APP_PRIVATE_KEY_BASE64;
 

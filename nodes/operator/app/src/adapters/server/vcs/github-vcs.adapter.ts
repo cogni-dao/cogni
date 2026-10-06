@@ -380,12 +380,15 @@ export class GitHubVcsAdapter implements VcsCapability {
     return { ...stale, eligible: false, reason: "base-advanced" };
   }
 
-  private async verifyOperatorChangeInternal(params: {
-    owner: string;
-    repo: string;
-    prNumber: number;
-    expectedHeadSha: string;
-  }, allowStaleBase: boolean): Promise<OperatorChangeVerificationResult> {
+  private async verifyOperatorChangeInternal(
+    params: {
+      owner: string;
+      repo: string;
+      prNumber: number;
+      expectedHeadSha: string;
+    },
+    allowStaleBase: boolean
+  ): Promise<OperatorChangeVerificationResult> {
     const targetOctokit = await this.getOctokit(params.owner, params.repo);
     const { data: pr } = await targetOctokit.request(
       "GET /repos/{owner}/{repo}/pulls/{pull_number}",
@@ -763,23 +766,24 @@ export class GitHubVcsAdapter implements VcsCapability {
     const octokit = await this.getOctokit(params.owner, params.repo);
     let patchIssued = false;
     try {
-      const [{ data: pr }, { data: commit }, { data: mainRef }] = await Promise.all([
-        octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
-          owner: params.owner,
-          repo: params.repo,
-          pull_number: params.prNumber,
-        }),
-        octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
-          owner: params.owner,
-          repo: params.repo,
-          ref: params.expectedHeadSha,
-        }),
-        octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
-          owner: params.owner,
-          repo: params.repo,
-          ref: "heads/main",
-        }),
-      ]);
+      const [{ data: pr }, { data: commit }, { data: mainRef }] =
+        await Promise.all([
+          octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+            owner: params.owner,
+            repo: params.repo,
+            pull_number: params.prNumber,
+          }),
+          octokit.request("GET /repos/{owner}/{repo}/commits/{ref}", {
+            owner: params.owner,
+            repo: params.repo,
+            ref: params.expectedHeadSha,
+          }),
+          octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+            owner: params.owner,
+            repo: params.repo,
+            ref: "heads/main",
+          }),
+        ]);
       if (
         pr.state !== "open" ||
         pr.draft !== false ||
@@ -840,7 +844,8 @@ export class GitHubVcsAdapter implements VcsCapability {
             return {
               outcome: "landed",
               sha: params.expectedHeadSha,
-              message: "Generated change landed despite an ambiguous PATCH response",
+              message:
+                "Generated change landed despite an ambiguous PATCH response",
             };
           }
           if (current.object.sha !== params.expectedBaseSha) {
@@ -860,7 +865,8 @@ export class GitHubVcsAdapter implements VcsCapability {
                 return {
                   outcome: "landed",
                   sha: params.expectedHeadSha,
-                  message: "Generated change landed and is an ancestor of current main",
+                  message:
+                    "Generated change landed and is an ancestor of current main",
                 };
               }
             } catch {
@@ -893,13 +899,15 @@ export class GitHubVcsAdapter implements VcsCapability {
         return {
           outcome: "retryable_or_ambiguous",
           ...(status === undefined ? {} : { status }),
-          message: error instanceof Error ? error.message : "GitHub request failed",
+          message:
+            error instanceof Error ? error.message : "GitHub request failed",
         };
       }
       return {
         outcome: "terminal",
         ...(status === undefined ? {} : { status }),
-        message: error instanceof Error ? error.message : "GitHub request failed",
+        message:
+          error instanceof Error ? error.message : "GitHub request failed",
       };
     }
   }
@@ -922,7 +930,11 @@ export class GitHubVcsAdapter implements VcsCapability {
     ]);
     const mainSha = mainRef.object.sha;
     if (mainSha === request.losingHeadSha) {
-      return { status: "satisfied", reason: "main_equals_losing_head", mainSha };
+      return {
+        status: "satisfied",
+        reason: "main_equals_losing_head",
+        mainSha,
+      };
     }
     if (
       pr.head.sha !== request.losingHeadSha ||
@@ -957,7 +969,10 @@ export class GitHubVcsAdapter implements VcsCapability {
       proof.intent === undefined ||
       JSON.stringify(proof.intent) !== JSON.stringify(request.intent)
     ) {
-      return { status: "terminal", reason: `losing-head-verification-failed:${proof.reason}` };
+      return {
+        status: "terminal",
+        reason: `losing-head-verification-failed:${proof.reason}`,
+      };
     }
     const ci = await this.getCiStatus({
       owner: request.owner,
@@ -1012,7 +1027,8 @@ export class GitHubVcsAdapter implements VcsCapability {
         currentProof.eligible &&
         currentProof.baseSha === request.signedBaseSha &&
         currentProof.intent !== undefined &&
-        JSON.stringify(currentProof.intent) === JSON.stringify(request.intent) &&
+        JSON.stringify(currentProof.intent) ===
+          JSON.stringify(request.intent) &&
         currentCi.headSha === request.losingHeadSha &&
         currentCi.reviewDecision !== "CHANGES_REQUESTED" &&
         !currentCi.pending &&
@@ -1052,7 +1068,9 @@ export class GitHubVcsAdapter implements VcsCapability {
         }),
       ]);
       if (freshMain.object.sha !== regenerated.mainSha) {
-        throw new Error("retryable_or_ambiguous:main-moved-after-satisfaction-plan");
+        throw new Error(
+          "retryable_or_ambiguous:main-moved-after-satisfaction-plan"
+        );
       }
       if (
         freshPr.state !== "open" ||
@@ -1089,9 +1107,13 @@ export class GitHubVcsAdapter implements VcsCapability {
       !regeneratedProof.eligible ||
       regeneratedProof.baseSha !== regenerated.baseSha ||
       regeneratedProof.intent === undefined ||
-      JSON.stringify(regeneratedProof.intent) !== JSON.stringify(regenerated.intent)
+      JSON.stringify(regeneratedProof.intent) !==
+        JSON.stringify(regenerated.intent)
     ) {
-      return { status: "terminal", reason: `regenerated-head-verification-failed:${regeneratedProof.reason}` };
+      return {
+        status: "terminal",
+        reason: `regenerated-head-verification-failed:${regeneratedProof.reason}`,
+      };
     }
     return {
       status: "regenerated",

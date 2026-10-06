@@ -14,10 +14,7 @@
 import { OperatorChangeRecoveryRequestSchema } from "@cogni/node-contracts";
 import { verifySchedulerBearer } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
-import {
-  type OperatorChangeRecoveryCapability,
-  recoverOperatorChange,
-} from "@/app/_facades/deploy/operator-change-recovery.server";
+import { recoverOperatorChange } from "@/app/_facades/deploy/operator-change-recovery.server";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { serverEnv } from "@/shared/env";
@@ -52,7 +49,7 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const result = await recoverOperatorChange(
         parsed.data,
-        getContainer().vcsCapability as unknown as OperatorChangeRecoveryCapability
+        getContainer().vcsCapability
       );
       return NextResponse.json(result, { status: 200 });
     } catch (error) {

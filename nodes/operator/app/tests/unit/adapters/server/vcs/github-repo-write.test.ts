@@ -639,20 +639,30 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
       label: "creates a fresh-main branch",
       ambiguousRefResponse: false,
       authorityDropsBeforeRef: false,
+      planOnly: false,
     },
     {
       label: "recovers after an ambiguous create-ref response",
       ambiguousRefResponse: true,
       authorityDropsBeforeRef: false,
+      planOnly: false,
     },
     {
       label: "leaves no ref when checks or catalog move before create-ref",
       ambiguousRefResponse: false,
       authorityDropsBeforeRef: true,
+      planOnly: false,
+    },
+    {
+      label: "returns closed-unsatisfied from the real planner before writes",
+      ambiguousRefResponse: false,
+      authorityDropsBeforeRef: false,
+      planOnly: true,
     },
   ])("$label without ever PATCHing a ref", async ({
     ambiguousRefResponse,
     authorityDropsBeforeRef,
+    planOnly,
   }) => {
     const baseSha = "c".repeat(40);
     const losingHeadSha = "a".repeat(40);
@@ -691,11 +701,16 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
             sha: "registry",
           };
         }
-        if (params.repo === "control" && params.path === "infra/catalog/blue.yaml") {
+        if (
+          params.repo === "control" &&
+          params.path === "infra/catalog/blue.yaml"
+        ) {
           return {
             type: "file",
             encoding: "base64",
-            content: encode("name: blue\nsource_repo: https://github.com/o/blue.git\n"),
+            content: encode(
+              "name: blue\nsource_repo: https://github.com/o/blue.git\n"
+            ),
             sha: "catalog",
           };
         }
@@ -707,7 +722,9 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
             sha: "spec",
           };
         }
-        throw new Error(`unexpected content ${String(params.repo)}:${String(params.path)}`);
+        throw new Error(
+          `unexpected content ${String(params.repo)}:${String(params.path)}`
+        );
       },
       "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
         state: "open",
@@ -733,7 +750,9 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
         files: [{ filename: ".cogni/repo-spec.yaml", status: "modified" }],
       }),
       "POST /repos/{owner}/{repo}/git/blobs": (params) => {
-        writtenSpec = Buffer.from(String(params.content), "base64").toString("utf8");
+        writtenSpec = Buffer.from(String(params.content), "base64").toString(
+          "utf8"
+        );
         expect(writtenSpec).toBe(desiredSpec);
         return { sha: "new-blob" };
       },
@@ -750,7 +769,10 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
         return { sha: headSha };
       },
       "POST /repos/{owner}/{repo}/git/refs": (params) => {
-        expect(params).toMatchObject({ ref: `refs/heads/${branch}`, sha: headSha });
+        expect(params).toMatchObject({
+          ref: `refs/heads/${branch}`,
+          sha: headSha,
+        });
         if (ambiguousRefResponse) {
           throw statusError(503, "response lost");
         }
@@ -779,12 +801,18 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
         recoveryDepth: 0,
       },
       losingHeadSha,
+      ...(planOnly ? { planOnly: true } : {}),
       reverifyAuthority: vi.fn(async () => {
         authorityReads += 1;
         return !(authorityDropsBeforeRef && authorityReads === 2);
       }),
     });
-    if (authorityDropsBeforeRef) {
+    if (planOnly) {
+      await expect(result).resolves.toEqual({
+        status: "conflict",
+        reason: "closed-pr-intent-not-satisfied",
+      });
+    } else if (authorityDropsBeforeRef) {
       await expect(result).resolves.toEqual({
         status: "conflict",
         reason: "recovery-authority-changed",
@@ -804,24 +832,38 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
       requests.filter(
         ({ route }) => route === "POST /repos/{owner}/{repo}/git/refs"
       )
-    ).toHaveLength(authorityDropsBeforeRef ? 0 : 1);
+    ).toHaveLength(authorityDropsBeforeRef || planOnly ? 0 : 1);
   });
 
   it.each([
-    { label: "reuses its exact PR", existingPr: true, divergent: false },
+    {
+      label: "reuses its exact PR",
+      existingPr: true,
+      divergent: false,
+      authorityCurrent: true,
+    },
     {
       label: "opens its missing PR after a branch-only retry",
       existingPr: false,
       divergent: false,
+      authorityCurrent: true,
     },
     {
       label: "rejects a divergent existing branch",
       existingPr: false,
       divergent: true,
+      authorityCurrent: true,
+    },
+    {
+      label: "rejects exact PR reuse after losing authority changes",
+      existingPr: true,
+      divergent: false,
+      authorityCurrent: false,
     },
   ])("$label without updating the deterministic ref", async ({
     existingPr,
     divergent,
+    authorityCurrent,
   }) => {
     const baseSha = "c".repeat(40);
     const losingHeadSha = "a".repeat(40);
@@ -845,7 +887,9 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
     const encode = (value: string) => Buffer.from(value).toString("base64");
     routeHandlers = {
       "GET /repos/{owner}/{repo}/git/ref/{ref}": (params) => ({
-        object: { sha: params.ref === "heads/main" ? baseSha : existingHeadSha },
+        object: {
+          sha: params.ref === "heads/main" ? baseSha : existingHeadSha,
+        },
       }),
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
         tree: { sha: "base-tree" },
@@ -926,13 +970,15 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
         recoveryDepth: 1,
       },
       losingHeadSha,
-      reverifyAuthority: vi.fn().mockResolvedValue(true),
+      reverifyAuthority: vi.fn().mockResolvedValue(authorityCurrent),
     });
     if (divergent) {
       await expect(result).resolves.toEqual({
         status: "conflict",
         reason: "divergent-recovery-branch",
       });
+    } else if (!authorityCurrent) {
+      await expect(result).rejects.toMatchObject({ status: 409 });
     } else {
       await expect(result).resolves.toMatchObject({
         status: "regenerated",
@@ -940,12 +986,14 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
         prNumber: 69,
       });
     }
-    expect(requests.some(({ route }) => route.startsWith("PATCH "))).toBe(false);
+    expect(requests.some(({ route }) => route.startsWith("PATCH "))).toBe(
+      false
+    );
     expect(
       requests.filter(
         ({ route }) => route === "POST /repos/{owner}/{repo}/pulls"
       )
-    ).toHaveLength(!divergent && !existingPr ? 1 : 0);
+    ).toHaveLength(!divergent && authorityCurrent && !existingPr ? 1 : 0);
   });
 
   it.each([
@@ -988,9 +1036,8 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
     const registry = JSON.parse(recoveryRegistry) as {
       operations: { "deployment.declare": { enabledChildOwners: string[] } };
     };
-    registry.operations["deployment.declare"].enabledChildOwners = fixture.enabled
-      ? ["o"]
-      : [];
+    registry.operations["deployment.declare"].enabledChildOwners =
+      fixture.enabled ? ["o"] : [];
     const encode = (value: string) => Buffer.from(value).toString("base64");
     routeHandlers = {
       "GET /repos/{owner}/{repo}/git/ref/{ref}": () => ({
@@ -1041,7 +1088,9 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
         reverifyAuthority: vi.fn().mockResolvedValue(true),
       })
     ).resolves.toEqual({ status: "conflict", reason: fixture.reason });
-    expect(requests.some(({ route }) => /^(PATCH|POST) /.test(route))).toBe(false);
+    expect(requests.some(({ route }) => /^(PATCH|POST) /.test(route))).toBe(
+      false
+    );
   });
 });
 

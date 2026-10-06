@@ -49,22 +49,24 @@ const validRequest = {
   },
 };
 
-async function post(input: {
-  readonly authorization?: string;
-  readonly body?: unknown;
-} = {}): Promise<Response> {
+async function post(
+  input: { readonly authorization?: string; readonly body?: unknown } = {}
+): Promise<Response> {
   const { POST } = await import("./route");
   return POST(
-    new Request("https://operator.example/api/internal/operator-change/recover", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(input.authorization
-          ? { authorization: input.authorization }
-          : {}),
-      },
-      body: JSON.stringify(input.body ?? validRequest),
-    }) as NextRequest
+    new Request(
+      "https://operator.example/api/internal/operator-change/recover",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(input.authorization
+            ? { authorization: input.authorization }
+            : {}),
+        },
+        body: JSON.stringify(input.body ?? validRequest),
+      }
+    ) as NextRequest
   );
 }
 
@@ -96,31 +98,31 @@ describe("POST /api/internal/operator-change/recover", () => {
     });
   });
 
-  it.each([400, 401, 403, 404, 405, 409, 410, 422])(
-    "maps permanent GitHub %s to terminal HTTP 200",
-    async (status) => {
-      recoverOperatorChange.mockRejectedValueOnce(
-        Object.assign(new Error("permanent"), { status })
-      );
-      const response = await post({ authorization: `Bearer ${schedulerToken}` });
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({
-        status: "terminal",
-        reason: `github-permanent-${status}`,
-      });
-    }
-  );
+  it.each([
+    400, 401, 403, 404, 405, 409, 410, 422,
+  ])("maps permanent GitHub %s to terminal HTTP 200", async (status) => {
+    recoverOperatorChange.mockRejectedValueOnce(
+      Object.assign(new Error("permanent"), { status })
+    );
+    const response = await post({ authorization: `Bearer ${schedulerToken}` });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "terminal",
+      reason: `github-permanent-${status}`,
+    });
+  });
 
-  it.each([408, 429, 500, 503, undefined])(
-    "keeps retryable or ambiguous GitHub %s as HTTP 503",
-    async (status) => {
-      recoverOperatorChange.mockRejectedValueOnce(
-        Object.assign(new Error("retry"),
-          status === undefined ? {} : { status }
-        )
-      );
-      const response = await post({ authorization: `Bearer ${schedulerToken}` });
-      expect(response.status).toBe(503);
-    }
-  );
+  it.each([
+    408,
+    429,
+    500,
+    503,
+    undefined,
+  ])("keeps retryable or ambiguous GitHub %s as HTTP 503", async (status) => {
+    recoverOperatorChange.mockRejectedValueOnce(
+      Object.assign(new Error("retry"), status === undefined ? {} : { status })
+    );
+    const response = await post({ authorization: `Bearer ${schedulerToken}` });
+    expect(response.status).toBe(503);
+  });
 });

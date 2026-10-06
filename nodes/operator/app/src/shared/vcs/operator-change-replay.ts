@@ -72,15 +72,25 @@ export interface OperatorChangePlanInput {
 }
 
 export type OperatorChangePlanResult =
-  | { readonly status: "changes"; readonly ops: readonly EnvPlanOp[]; readonly intent: OperatorChangeIntent }
+  | {
+      readonly status: "changes";
+      readonly ops: readonly EnvPlanOp[];
+      readonly intent: OperatorChangeIntent;
+    }
   | { readonly status: "satisfied"; readonly intent: OperatorChangeIntent }
   | { readonly status: "conflict"; readonly reason: string };
 
-export function parseOperatorChangeIntent(input: Pick<
-  OperatorChangeReplayInput,
-  "operation" | "node" | "baseSha" | "headSha" | "message"
->): OperatorChangeIntent {
-  if (!NODE.test(input.node) || !SHA.test(input.baseSha) || !SHA.test(input.headSha)) {
+export function parseOperatorChangeIntent(
+  input: Pick<
+    OperatorChangeReplayInput,
+    "operation" | "node" | "baseSha" | "headSha" | "message"
+  >
+): OperatorChangeIntent {
+  if (
+    !NODE.test(input.node) ||
+    !SHA.test(input.baseSha) ||
+    !SHA.test(input.headSha)
+  ) {
     throw new Error("invalid-identity");
   }
   const envelope = parseTrailers(input.message);
@@ -104,7 +114,8 @@ export function parseOperatorChangeIntent(input: Pick<
   ) {
     throw new Error("partial-recovery-envelope");
   }
-  const recoveryDepth = recoveryDepthText === undefined ? 0 : Number(recoveryDepthText);
+  const recoveryDepth =
+    recoveryDepthText === undefined ? 0 : Number(recoveryDepthText);
   const recoveryRootSha = recoveryRoot ?? input.headSha;
   if (
     !SHA.test(recoveryRootSha) ||
@@ -126,38 +137,70 @@ export function parseOperatorChangeIntent(input: Pick<
       const environment = requiredEnvironment(envelope);
       const action = requiredTrailer(envelope, "Cogni-Action");
       if (!/^(add|remove)$/.test(action)) throw new Error("invalid-action");
-      if (subject !== `feat(node): ${action} ${input.node} ${action === "add" ? "to" : "from"} ${environment}`) {
+      if (
+        subject !==
+        `feat(node): ${action} ${input.node} ${action === "add" ? "to" : "from"} ${environment}`
+      ) {
         throw new Error("invalid-subject");
       }
-      candidate = { ...common, operation: "env.membership", environment, action, leaseGeneration: requiredGeneration(envelope) };
+      candidate = {
+        ...common,
+        operation: "env.membership",
+        environment,
+        action,
+        leaseGeneration: requiredGeneration(envelope),
+      };
       break;
     }
     case "env.placement": {
       requireTrailerCount(envelope, 7 + extra);
       const environment = requiredEnvironment(envelope);
       const provider = requiredTrailer(envelope, "Cogni-Provider");
-      if (!/^(k3s|akash)$/.test(provider) || subject !== `feat(node): place ${input.node} ${environment} on ${provider}`) {
+      if (
+        !/^(k3s|akash)$/.test(provider) ||
+        subject !==
+          `feat(node): place ${input.node} ${environment} on ${provider}`
+      ) {
         throw new Error("invalid-placement-envelope");
       }
-      candidate = { ...common, operation: "env.placement", environment, provider };
+      candidate = {
+        ...common,
+        operation: "env.placement",
+        environment,
+        provider,
+      };
       break;
     }
     case "env.region": {
       requireTrailerCount(envelope, 8 + extra);
       const environment = requiredEnvironment(envelope);
       const countries = requiredTrailer(envelope, "Cogni-Countries").split(",");
-      if (countries.length === 0 || countries.some((country) => !/^[A-Z]{2}$/.test(country)) || uniqueSorted(countries).join(",") !== countries.join(",")) {
+      if (
+        countries.length === 0 ||
+        countries.some((country) => !/^[A-Z]{2}$/.test(country)) ||
+        uniqueSorted(countries).join(",") !== countries.join(",")
+      ) {
         throw new Error("invalid-countries");
       }
-      if (subject !== `feat(node): require ${input.node} ${environment} placement in ${countries.join(", ")}`) {
+      if (
+        subject !==
+        `feat(node): require ${input.node} ${environment} placement in ${countries.join(", ")}`
+      ) {
         throw new Error("invalid-subject");
       }
-      candidate = { ...common, operation: "env.region", environment, countries, leaseGeneration: requiredGeneration(envelope) };
+      candidate = {
+        ...common,
+        operation: "env.region",
+        environment,
+        countries,
+        leaseGeneration: requiredGeneration(envelope),
+      };
       break;
     }
     case "node.register": {
       requireTrailerCount(envelope, 9 + extra);
-      if (subject !== `feat(node): register ${input.node}`) throw new Error("invalid-subject");
+      if (subject !== `feat(node): register ${input.node}`)
+        throw new Error("invalid-subject");
       candidate = {
         ...common,
         operation: "node.register",
@@ -170,7 +213,8 @@ export function parseOperatorChangeIntent(input: Pick<
     }
     case "deployment.declare":
       requireTrailerCount(envelope, 5 + extra);
-      if (subject !== `feat(deploy): declare ${input.node} node deployment`) throw new Error("invalid-subject");
+      if (subject !== `feat(deploy): declare ${input.node} node deployment`)
+        throw new Error("invalid-subject");
       candidate = { ...common, operation: "deployment.declare" };
       break;
     default:
@@ -210,7 +254,8 @@ export async function replayOperatorChange(
       reader: input.reader,
     });
     if (plan.status !== "changes") {
-      if (plan.status === "conflict") return failed(`replay-error:${plan.reason}`);
+      if (plan.status === "conflict")
+        return failed(`replay-error:${plan.reason}`);
       return failed(
         input.operation === "deployment.declare"
           ? "replay-error:deployment-already-declared"
@@ -244,11 +289,17 @@ export async function planOperatorChangeIntent(
       case "env.region": {
         const region = await planRegion({ ...input, intent: input.intent });
         ops = region.ops;
-        effectiveIntent = { ...input.intent, leaseGeneration: region.leaseGeneration };
+        effectiveIntent = {
+          ...input.intent,
+          leaseGeneration: region.leaseGeneration,
+        };
         break;
       }
       case "node.register": {
-        const registration = await planNodeRegister({ ...input, intent: input.intent });
+        const registration = await planNodeRegister({
+          ...input,
+          intent: input.intent,
+        });
         if (registration.status !== "changes") return registration;
         ops = registration.ops;
         break;
@@ -261,7 +312,10 @@ export async function planOperatorChangeIntent(
       ? { status: "satisfied", intent: effectiveIntent }
       : { status: "changes", ops, intent: effectiveIntent };
   } catch (error) {
-    return { status: "conflict", reason: error instanceof Error ? error.message : "planner-error" };
+    return {
+      status: "conflict",
+      reason: error instanceof Error ? error.message : "planner-error",
+    };
   }
 }
 

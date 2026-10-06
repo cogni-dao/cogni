@@ -20,7 +20,6 @@ import type {
   KnowledgeCapability,
   MetricsCapability,
   RepoCapability,
-  VcsCapability,
   WebSearchCapability,
 } from "@cogni/ai-tools";
 import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
@@ -170,7 +169,10 @@ import { createLivenessAccessor } from "@/bootstrap/capabilities/node-registry";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
-import { createVcsCapability } from "@/bootstrap/capabilities/vcs";
+import {
+  createVcsCapability,
+  type OperatorVcsCapability,
+} from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registry-reconcile";
@@ -310,7 +312,7 @@ export interface Container {
   /** Repo capability for AI tools - requires COGNI_REPO_PATH */
   repoCapability: RepoCapability;
   /** VCS capability for GitHub operations - requires GH_REVIEW_APP_ID */
-  vcsCapability: VcsCapability;
+  vcsCapability: OperatorVcsCapability;
   /** Read-only deploy capability (SEE flow) — undefined when no base domain is configured */
   deployCapability: DeployCapability | undefined;
   /** Tool source with real implementations for AI tool execution */

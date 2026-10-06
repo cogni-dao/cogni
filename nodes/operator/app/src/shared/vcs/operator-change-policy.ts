@@ -345,7 +345,8 @@ function classifyOperatorChange(
         !env?.match(/^(candidate-a|preview|production)$/) ||
         !action?.match(/^(add|remove)$/) ||
         !generation?.match(/^\d+$/) ||
-        facts.pr.headRef !== `cogni-operator/node-env-${node}-${env}${recoverySuffix}` ||
+        facts.pr.headRef !==
+          `cogni-operator/node-env-${node}-${env}${recoverySuffix}` ||
         subject !==
           `feat(node): ${action} ${node} ${action === "add" ? "to" : "from"} ${env}`
       ) {
@@ -360,7 +361,8 @@ function classifyOperatorChange(
       if (
         !env?.match(/^(candidate-a|preview|production)$/) ||
         !provider?.match(/^(k3s|akash)$/) ||
-        facts.pr.headRef !== `cogni-operator/node-placement-${node}-${env}${recoverySuffix}` ||
+        facts.pr.headRef !==
+          `cogni-operator/node-placement-${node}-${env}${recoverySuffix}` ||
         subject !== `feat(node): place ${node} ${env} on ${provider}`
       ) {
         return reject(facts, "invalid-placement-envelope", operation, node);
@@ -376,7 +378,8 @@ function classifyOperatorChange(
         !env?.match(/^(candidate-a|preview|production)$/) ||
         !countries?.match(/^[A-Z]{2}(,[A-Z]{2})*$/) ||
         !generation?.match(/^\d+$/) ||
-        facts.pr.headRef !== `cogni-operator/node-region-${node}-${env}${recoverySuffix}` ||
+        facts.pr.headRef !==
+          `cogni-operator/node-region-${node}-${env}${recoverySuffix}` ||
         subject !==
           `feat(node): require ${node} ${env} placement in ${countries.replaceAll(",", ", ")}`
       ) {
@@ -399,7 +402,8 @@ function classifyOperatorChange(
         !ownerWallet?.match(/^0x[0-9a-fA-F]{40}$/) ||
         sourceRepo?.toLowerCase() !==
           `https://github.com/${fleetOwner}/${node}.git`.toLowerCase() ||
-        facts.pr.headRef !== `cogni-operator/node-register-${node}${recoverySuffix}` ||
+        facts.pr.headRef !==
+          `cogni-operator/node-register-${node}${recoverySuffix}` ||
         subject !== `feat(node): register ${node}`
       ) {
         return reject(facts, "invalid-register-envelope", operation, node);
@@ -409,7 +413,8 @@ function classifyOperatorChange(
     case "deployment.declare":
       expectedTrailerCount = 5;
       if (
-        facts.pr.headRef !== `cogni-operator/declare-deployment-${node}${recoverySuffix}` ||
+        facts.pr.headRef !==
+          `cogni-operator/declare-deployment-${node}${recoverySuffix}` ||
         subject !== `feat(deploy): declare ${node} node deployment`
       ) {
         return reject(facts, "invalid-deployment-envelope", operation, node);

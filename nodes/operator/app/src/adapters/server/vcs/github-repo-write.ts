@@ -210,7 +210,10 @@ function recoveryCommitMetadata(intent: OperatorChangeIntent): {
     case "env.placement":
       return {
         title: `feat(node): place ${intent.node} ${intent.environment} on ${intent.provider}`,
-        trailers: { Environment: intent.environment, Provider: intent.provider },
+        trailers: {
+          Environment: intent.environment,
+          Provider: intent.provider,
+        },
       };
     case "env.region":
       return {
@@ -1229,15 +1232,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
       !this.config.operatorChangePolicyOwner ||
       !this.config.operatorChangePolicyRepo
     ) {
-      return { status: "conflict", reason: "trusted-policy-repository-unconfigured" };
+      return {
+        status: "conflict",
+        reason: "trusted-policy-repository-unconfigured",
+      };
     }
     const policyOwner = this.config.operatorChangePolicyOwner;
     const policyRepo = this.config.operatorChangePolicyRepo;
     const octokit = await this.getOctokit(input.owner, input.repo);
-    const policyOctokit = await this.getOctokit(
-      policyOwner,
-      policyRepo
-    );
+    const policyOctokit = await this.getOctokit(policyOwner, policyRepo);
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
       input.owner,
@@ -1435,8 +1438,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
           ),
           this.readFileAt(
             policyOctokit,
-            this.config.operatorChangePolicyOwner,
-            this.config.operatorChangePolicyRepo,
+            policyOwner,
+            policyRepo,
             "scripts/ci/operator-change-v1.allowlist.json",
             "main"
           ),
@@ -1481,7 +1484,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
         branch,
         headSha
       );
-      if (existingPr !== null) return existingPr;
       if (
         !(await authorityStillCurrent()) ||
         !(await input.reverifyAuthority())
@@ -1491,6 +1493,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
           { status: 409 }
         );
       }
+      if (existingPr !== null) return existingPr;
       try {
         const { data } = await octokit.request(
           "POST /repos/{owner}/{repo}/pulls",
@@ -1514,6 +1517,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
           headSha
         );
         if (raced === null) throw error;
+        if (
+          !(await authorityStillCurrent()) ||
+          !(await input.reverifyAuthority())
+        ) {
+          throw Object.assign(
+            new Error("recovery authority changed before PR reuse"),
+            { status: 409 }
+          );
+        }
         return raced;
       }
     };
