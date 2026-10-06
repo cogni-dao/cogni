@@ -25712,6 +25712,30 @@ function insertCaddyBlock(currentCaddyfile, slug, nodePort) {
     ...lines.slice(insertLine)
   ].join("\n");
 }
+function removeCaddyBlock(currentCaddyfile, slug, nodePort) {
+  const lines = currentCaddyfile.split("\n");
+  const blocks = findBlocks(lines);
+  const matches = blocks.filter(
+    (block) => !block.isPrimary && block.node === slug
+  );
+  if (matches.length !== 1) {
+    throw new Error(
+      `Caddyfile must contain exactly one block for node '${slug}'`
+    );
+  }
+  const match = matches[0];
+  if (match === void 0 || match.index === 0 || lines[match.index - 1] !== "") {
+    throw new Error(`Caddyfile block for node '${slug}' is malformed`);
+  }
+  const expected = nonPrimaryBlock(slug, nodePort).split("\n");
+  const successor = blocks.find((block) => block.index > match.index);
+  const boundary = successor ? successor.index - 1 : lines.length - 1;
+  if (match.index + expected.length !== boundary || lines.slice(match.index, match.index + expected.length).join("\n") !== expected.join("\n")) {
+    throw new Error(`Caddyfile block for node '${slug}' is not canonical`);
+  }
+  lines.splice(match.index - 1, expected.length + 1);
+  return lines.join("\n");
+}
 
 // nodes/operator/app/src/shared/node-registry/crossplane-control-plane.ts
 var CROSSPLANE_CONTROL_PLANE_ENVS = [
@@ -26222,6 +26246,49 @@ function insertSchedulerEndpoint(currentConfigmap, slug, nodeId) {
   }
   const csvOut = pairs.map((p) => p.text).join(",");
   const lineOut = `${indent}${ENDPOINTS_KEY}: "${csvOut}"`;
+  return currentConfigmap.replace(line, lineOut);
+}
+function removeSchedulerEndpoint(currentConfigmap, slug, nodeId, expectedUrl = urlForSlug(slug)) {
+  const match = LINE_RE.exec(currentConfigmap);
+  if (!match) {
+    throw new Error(`configmap is missing a quoted ${ENDPOINTS_KEY} line`);
+  }
+  const [line, indent, csv] = match;
+  if (line === void 0 || indent === void 0 || csv === void 0) {
+    throw new Error(
+      `configmap ${ENDPOINTS_KEY} line did not capture its parts`
+    );
+  }
+  const cells = csv.length === 0 ? [] : csv.split(",");
+  if (cells.length % 2 !== 0) {
+    throw new Error(`${ENDPOINTS_KEY} CSV has an unpaired cell count`);
+  }
+  const targetIndexes = [];
+  for (let index = 0; index < cells.length; index += 2) {
+    const slugCell = cells[index];
+    const aliasCell = cells[index + 1];
+    if (slugCell === void 0 || aliasCell === void 0) {
+      throw new Error(`${ENDPOINTS_KEY} CSV has an unpaired cell count`);
+    }
+    if (slugCell.slice(0, slugCell.indexOf("=")) === slug) {
+      targetIndexes.push(index);
+    }
+  }
+  if (targetIndexes.length !== 1) {
+    throw new Error(
+      `${ENDPOINTS_KEY} must contain exactly one pair for node '${slug}'`
+    );
+  }
+  const target = targetIndexes[0];
+  if (target === void 0 || cells[target] !== `${slug}=${expectedUrl}` || cells[target + 1] !== `${nodeId}=${expectedUrl}` || cells.some(
+    (cell, index) => index !== target + 1 && cell.slice(0, cell.indexOf("=")) === nodeId
+  )) {
+    throw new Error(
+      `${ENDPOINTS_KEY} pair for node '${slug}' is not canonical`
+    );
+  }
+  cells.splice(target, 2);
+  const lineOut = `${indent}${ENDPOINTS_KEY}: "${cells.join(",")}"`;
   return currentConfigmap.replace(line, lineOut);
 }
 function updateSchedulerEndpointHost(currentConfigmap, slug, nodeId, newUrl) {
@@ -27092,6 +27159,51 @@ async function planNodeRegister(input) {
     }
     nodePort = row.node_port;
   }
+  const appsetTemplate = await requiredFile(
+    input.reader,
+    input.baseSha,
+    "scripts/ci/node-applicationset.yaml.tmpl"
+  );
+  const caddyfile = await requiredFile(
+    input.reader,
+    input.baseSha,
+    "infra/compose/edge/configs/Caddyfile.tmpl"
+  );
+  const replayAppsets = { ...appsetsKustomizationByControlEnv };
+  const replayScheduler = { ...schedulerEndpointByPath };
+  let replayCaddyfile = caddyfile;
+  if (existingCatalog !== null) {
+    for (const env of NODE_FORMATION_ENVS) {
+      const controlEnv = controlEnvForBirth(env);
+      const current = replayAppsets[controlEnv];
+      if (current === void 0) {
+        throw new Error(`node-register-appset-missing:${controlEnv}`);
+      }
+      const absent = removeFromAppsetsKustomization(current, node, env);
+      if (absent === current) {
+        throw new Error(`node-register-appset-entry-missing:${env}:${node}`);
+      }
+      replayAppsets[controlEnv] = absent;
+    }
+    replayCaddyfile = removeCaddyBlock(caddyfile, node, nodePort);
+    for (const [path, current] of Object.entries(replayScheduler)) {
+      const patchEnv = path.match(
+        /^infra\/k8s\/overlays\/([^/]+)\/scheduler-worker\/node-endpoints\.patch\.yaml$/
+      )?.[1];
+      const expectedUrl = patchEnv !== void 0 && NODE_FORMATION_ENVS.includes(patchEnv) ? nodeAppBaseUrl({
+        slug: node,
+        provider: "akash",
+        environment: patchEnv,
+        apexDomain: CANONICAL_DOMAIN_ROOT
+      }) : `http://${node}-node-app:3000`;
+      replayScheduler[path] = removeSchedulerEndpoint(
+        current,
+        node,
+        nodeId,
+        expectedUrl
+      );
+    }
+  }
   const ops = buildNodeBirthPlan({
     slug: node,
     nodeId,
@@ -27105,18 +27217,10 @@ async function planNodeRegister(input) {
     current: {
       templateOverlayByEnv,
       templateExternalSecretByEnv,
-      appsetTemplate: await requiredFile(
-        input.reader,
-        input.baseSha,
-        "scripts/ci/node-applicationset.yaml.tmpl"
-      ),
-      appsetsKustomizationByControlEnv,
-      caddyfile: await requiredFile(
-        input.reader,
-        input.baseSha,
-        "infra/compose/edge/configs/Caddyfile.tmpl"
-      ),
-      schedulerEndpointByPath
+      appsetTemplate,
+      appsetsKustomizationByControlEnv: replayAppsets,
+      caddyfile: replayCaddyfile,
+      schedulerEndpointByPath: replayScheduler
     }
   });
   for (const op of ops) {
