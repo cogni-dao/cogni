@@ -36,8 +36,18 @@ function workflow(name: string) {
   };
 }
 
-const FAIL_CLOSED_SKIP =
-  "needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true'";
+const ENV_MANAGER_CLASSIFIER_FAILED =
+  "needs.env_manager_fast_path.result != 'success'";
+const NODE_BIRTH_CLASSIFIER_FAILED =
+  "needs.node_birth_fast_path.result != 'success'";
+const NO_FAST_PATH_ELIGIBLE =
+  "needs.env_manager_fast_path.outputs.eligible != 'true' && needs.node_birth_fast_path.outputs.eligible != 'true'";
+
+function expectFailClosedFastPathCondition(condition: string | undefined) {
+  expect(condition).toContain(ENV_MANAGER_CLASSIFIER_FAILED);
+  expect(condition).toContain(NODE_BIRTH_CLASSIFIER_FAILED);
+  expect(condition).toContain(NO_FAST_PATH_ELIGIBLE);
+}
 
 describe("signed env-manager workflow fast path", () => {
   it.each([
@@ -57,13 +67,13 @@ describe("signed env-manager workflow fast path", () => {
   it("eligible CI skips all three application-heavy required jobs", () => {
     const jobs = workflow("ci.yaml").jobs;
     for (const name of ["static", "unit", "component"]) {
-      expect(jobs[name]?.if).toContain(FAIL_CLOSED_SKIP);
+      expectFailClosedFastPathCondition(jobs[name]?.if);
     }
   });
 
   it("eligible PR builds skip image detection so manifest is satisfied downstream", () => {
-    expect(workflow("pr-build.yml").jobs.detect?.if).toContain(
-      FAIL_CLOSED_SKIP
+    expectFailClosedFastPathCondition(
+      workflow("pr-build.yml").jobs.detect?.if
     );
   });
 
