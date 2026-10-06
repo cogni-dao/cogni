@@ -26,6 +26,7 @@ import {
   type OperatorChangeReplayInput,
   type OperatorChangeReplayReader,
   parseOperatorChangeIntent,
+  planOperatorChangeIntent,
   replayOperatorChange,
 } from "./operator-change-replay";
 
@@ -77,6 +78,64 @@ describe("replayOperatorChange", () => {
         verified: true,
         reason: "verified",
       });
+    }
+  });
+
+  it("plans changed, satisfied, and conflict outcomes for all five operations", async () => {
+    for (const build of [
+      membershipFixture,
+      placementFixture,
+      regionFixture,
+      nodeRegisterFixture,
+      deploymentFixture,
+    ]) {
+      const fixture = await build();
+      const intent = parseOperatorChangeIntent(fixture.input);
+      const common = {
+        intent,
+        baseSha,
+        repository: fixture.input.repository,
+        ...(fixture.input.fleetControlEnv === undefined
+          ? {}
+          : { fleetControlEnv: fixture.input.fleetControlEnv }),
+        ...(fixture.input.forkDomainRoot === undefined
+          ? {}
+          : { forkDomainRoot: fixture.input.forkDomainRoot }),
+      };
+      await expect(
+        planOperatorChangeIntent({
+          ...common,
+          ...(fixture.input.deploymentCatalog === undefined
+            ? {}
+            : { deploymentCatalog: fixture.input.deploymentCatalog }),
+          reader: fixture.input.reader,
+        })
+      ).resolves.toMatchObject({ status: "changes" });
+      await expect(
+        planOperatorChangeIntent({
+          ...common,
+          ...(fixture.input.deploymentCatalog === undefined
+            ? {}
+            : { deploymentCatalog: fixture.input.deploymentCatalog }),
+          reader: readerFor(fixture.head, fixture.head),
+        })
+      ).resolves.toMatchObject({ status: "satisfied" });
+      const conflictReader: OperatorChangeReplayReader = {
+        readFile: async (_ref, path) =>
+          path === `infra/catalog/${fixture.input.node}.yaml`
+            ? "occupied\n"
+            : null,
+        listPaths: async () => [],
+      };
+      await expect(
+        planOperatorChangeIntent({
+          ...common,
+          ...(fixture.input.operation === "deployment.declare"
+            ? { deploymentCatalog: null }
+            : {}),
+          reader: conflictReader,
+        })
+      ).resolves.toMatchObject({ status: "conflict" });
     }
   });
 

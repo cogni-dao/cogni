@@ -991,6 +991,34 @@ export class GitHubVcsAdapter implements VcsCapability {
       }
     }
 
+    const reverifyLosingAuthority = async (): Promise<boolean> => {
+      const [currentProof, currentCi] = await Promise.all([
+        this.verifyOperatorChangeInternal(
+          {
+            owner: request.owner,
+            repo: request.repo,
+            prNumber: request.prNumber,
+            expectedHeadSha: request.losingHeadSha,
+          },
+          true
+        ),
+        this.getCiStatus({
+          owner: request.owner,
+          repo: request.repo,
+          prNumber: request.prNumber,
+        }),
+      ]);
+      return (
+        currentProof.eligible &&
+        currentProof.baseSha === request.signedBaseSha &&
+        currentProof.intent !== undefined &&
+        JSON.stringify(currentProof.intent) === JSON.stringify(request.intent) &&
+        currentCi.headSha === request.losingHeadSha &&
+        currentCi.reviewDecision !== "CHANGES_REQUESTED" &&
+        !currentCi.pending &&
+        currentCi.allGreen
+      );
+    };
     const writer = this.createRecoveryWriter();
     const regenerated = await writer.createOperatorChangeRecoveryPr({
       owner: request.owner,
@@ -998,12 +1026,19 @@ export class GitHubVcsAdapter implements VcsCapability {
       prNumber: request.prNumber,
       intent: request.intent,
       losingHeadSha: request.losingHeadSha,
+      reverifyAuthority: reverifyLosingAuthority,
       ...(pr.state === "closed" ? { planOnly: true } : {}),
     });
     if (regenerated.status === "conflict") {
       return { status: "terminal", reason: regenerated.reason };
     }
     if (regenerated.status === "satisfied") {
+      if (!(await reverifyLosingAuthority())) {
+        return {
+          status: "terminal",
+          reason: "losing-pr-no-longer-authorized-before-close",
+        };
+      }
       const [{ data: freshMain }, { data: freshPr }] = await Promise.all([
         octokit.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
           owner: request.owner,
@@ -1019,14 +1054,25 @@ export class GitHubVcsAdapter implements VcsCapability {
       if (freshMain.object.sha !== regenerated.mainSha) {
         throw new Error("retryable_or_ambiguous:main-moved-after-satisfaction-plan");
       }
-      if (freshPr.state === "open" && freshPr.head.sha === request.losingHeadSha) {
-        await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
-          owner: request.owner,
-          repo: request.repo,
-          pull_number: request.prNumber,
-          state: "closed",
-        });
+      if (
+        freshPr.state !== "open" ||
+        freshPr.draft === true ||
+        freshPr.base.ref !== "main" ||
+        freshPr.head.sha !== request.losingHeadSha ||
+        freshPr.head.repo?.full_name?.toLowerCase() !==
+          `${request.owner}/${request.repo}`.toLowerCase()
+      ) {
+        return {
+          status: "terminal",
+          reason: "losing-pr-no-longer-authorized-before-close",
+        };
       }
+      await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
+        owner: request.owner,
+        repo: request.repo,
+        pull_number: request.prNumber,
+        state: "closed",
+      });
       return {
         status: "satisfied",
         reason: "intent_already_satisfied",

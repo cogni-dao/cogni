@@ -1219,6 +1219,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     readonly intent: OperatorChangeIntent;
     readonly losingHeadSha: string;
     readonly planOnly?: boolean;
+    readonly reverifyAuthority: () => Promise<boolean>;
   }): Promise<OperatorChangeRecoveryWriteResult> {
     const nextDepth = input.intent.recoveryDepth + 1;
     if (nextDepth > 3) {
@@ -1230,10 +1231,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
     ) {
       return { status: "conflict", reason: "trusted-policy-repository-unconfigured" };
     }
+    const policyOwner = this.config.operatorChangePolicyOwner;
+    const policyRepo = this.config.operatorChangePolicyRepo;
     const octokit = await this.getOctokit(input.owner, input.repo);
     const policyOctokit = await this.getOctokit(
-      this.config.operatorChangePolicyOwner,
-      this.config.operatorChangePolicyRepo
+      policyOwner,
+      policyRepo
     );
     const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
       octokit,
@@ -1264,8 +1267,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
     if (input.intent.operation === "deployment.declare") {
       deploymentCatalog = await this.readFileAt(
         policyOctokit,
-        this.config.operatorChangePolicyOwner,
-        this.config.operatorChangePolicyRepo,
+        policyOwner,
+        policyRepo,
         `infra/catalog/${input.intent.node}.yaml`,
         "main"
       );
@@ -1278,9 +1281,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
       intent: nextIntent,
       baseSha: baseCommitSha,
       repository: `${input.owner}/${input.repo}`,
-      deploymentCatalog,
-      fleetControlEnv: this.config.fleetControlEnv,
-      forkDomainRoot: this.config.forkDomainRoot,
+      ...(deploymentCatalog === undefined ? {} : { deploymentCatalog }),
+      ...(this.config.fleetControlEnv === undefined
+        ? {}
+        : { fleetControlEnv: this.config.fleetControlEnv }),
+      ...(this.config.forkDomainRoot === undefined
+        ? {}
+        : { forkDomainRoot: this.config.forkDomainRoot }),
       reader,
     });
     if (plan.status === "satisfied") {
@@ -1328,8 +1335,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
         ),
         this.readFileAt(
           policyOctokit,
-          this.config.operatorChangePolicyOwner,
-          this.config.operatorChangePolicyRepo,
+          policyOwner,
+          policyRepo,
           "scripts/ci/operator-change-v1.allowlist.json",
           "main"
         ),
@@ -1475,7 +1482,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
         headSha
       );
       if (existingPr !== null) return existingPr;
-      if (!(await authorityStillCurrent())) {
+      if (
+        !(await authorityStillCurrent()) ||
+        !(await input.reverifyAuthority())
+      ) {
         throw Object.assign(
           new Error("recovery authority changed before PR creation"),
           { status: 409 }
@@ -1528,7 +1538,10 @@ export class GitHubRepoWriter implements DeployPlanePort {
       };
     }
 
-    if (!(await authorityStillCurrent())) {
+    if (
+      !(await authorityStillCurrent()) ||
+      !(await input.reverifyAuthority())
+    ) {
       return { status: "conflict", reason: "recovery-authority-changed" };
     }
     const entries = await this.planOpsToTreeEntries(
@@ -1558,6 +1571,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
     );
     let headSha = commit.sha;
     try {
+      if (
+        !(await authorityStillCurrent()) ||
+        !(await input.reverifyAuthority())
+      ) {
+        return { status: "conflict", reason: "recovery-authority-changed" };
+      }
       await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
         owner: input.owner,
         repo: input.repo,

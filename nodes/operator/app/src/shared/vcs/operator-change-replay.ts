@@ -198,9 +198,15 @@ export async function replayOperatorChange(
       intent,
       baseSha: input.baseSha,
       repository: input.repository,
-      deploymentCatalog: input.deploymentCatalog,
-      fleetControlEnv: input.fleetControlEnv,
-      forkDomainRoot: input.forkDomainRoot,
+      ...(input.deploymentCatalog === undefined
+        ? {}
+        : { deploymentCatalog: input.deploymentCatalog }),
+      ...(input.fleetControlEnv === undefined
+        ? {}
+        : { fleetControlEnv: input.fleetControlEnv }),
+      ...(input.forkDomainRoot === undefined
+        ? {}
+        : { forkDomainRoot: input.forkDomainRoot }),
       reader: input.reader,
     });
     if (plan.status !== "changes") {

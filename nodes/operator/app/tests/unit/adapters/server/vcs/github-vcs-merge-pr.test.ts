@@ -910,6 +910,87 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
     expect(closeWrites).toBe(0);
   });
 
+  it.each([
+    "required check regresses",
+    "review hold appears",
+    "parent catalog moves",
+    "PR head is edited",
+    "PR becomes draft or closed",
+  ])(
+    "returns terminal with zero close when %s before satisfaction close",
+    async (race) => {
+      let closeWrites = 0;
+      onRequest = (route) => {
+        if (route === MAIN_REF_ROUTE) return { object: { sha: freshMainSha } };
+        if (route === PR_GET_ROUTE) {
+          return {
+            state: "open",
+            draft: false,
+            merged_at: null,
+            base: { ref: "main", sha: freshMainSha },
+            head: { sha: losingHeadSha, repo: { full_name: "o/r" } },
+          };
+        }
+        if (route === "PATCH /repos/{owner}/{repo}/pulls/{pull_number}") {
+          closeWrites += 1;
+          return {};
+        }
+        throw new Error(`Unhandled request route: ${route}`);
+      };
+      const vcs = recoveryAdapter({ status: "satisfied", mainSha: freshMainSha });
+      if (
+        race === "required check regresses" ||
+        race === "review hold appears"
+      ) {
+        vi.mocked(vcs.getCiStatus)
+          .mockResolvedValueOnce({
+            headSha: losingHeadSha,
+            baseSha: freshMainSha,
+            pending: false,
+            allGreen: true,
+            reviewDecision: null,
+          } as never)
+          .mockResolvedValueOnce({
+            headSha: losingHeadSha,
+            baseSha: freshMainSha,
+            pending: false,
+            allGreen: race !== "required check regresses",
+            reviewDecision:
+              race === "review hold appears" ? "CHANGES_REQUESTED" : null,
+          } as never);
+      } else {
+        const verifier = (
+          vcs as unknown as {
+            verifyOperatorChangeInternal: ReturnType<typeof vi.fn>;
+          }
+        ).verifyOperatorChangeInternal;
+        verifier.mockResolvedValueOnce({
+          eligible: true,
+          reason: "eligible",
+          headSha: losingHeadSha,
+          baseSha: signedBaseSha,
+          operation: intent.operation,
+          node: intent.node,
+          intent,
+        });
+        verifier.mockResolvedValueOnce({
+          eligible: false,
+          reason:
+            race === "parent catalog moves"
+              ? "operation-replay-failed"
+              : "invalid-pr-identity",
+          headSha: losingHeadSha,
+          baseSha: signedBaseSha,
+        });
+      }
+      await expect(vcs.recoverOperatorChange(request)).resolves.toEqual({
+        status: "terminal",
+        reason: "losing-pr-no-longer-authorized-before-close",
+      });
+      expect(closeWrites).toBe(0);
+    }
+  );
+
   it("stops before policy or writer work when a human edits the losing head", async () => {
     onRequest = (route) => {
       if (route === MAIN_REF_ROUTE) return { object: { sha: freshMainSha } };

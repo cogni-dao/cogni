@@ -10,6 +10,7 @@
  * @internal
  */
 
+import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const recoverOperatorChange = vi.fn();
@@ -63,7 +64,7 @@ async function post(input: {
           : {}),
       },
       body: JSON.stringify(input.body ?? validRequest),
-    })
+    }) as NextRequest
   );
 }
 

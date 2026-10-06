@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import type { VcsCapability } from "@cogni/ai-tools";
+import { WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const temporal = vi.hoisted(() => ({ start: vi.fn() }));
@@ -172,5 +173,24 @@ describe("dispatchOperatorChangeAutoMerge", () => {
     await expect(
       dispatchOperatorChangeAutoMerge(payload, capability, log)
     ).rejects.toThrow("temporal unavailable");
+  });
+
+  it("treats a duplicate stable workflow start as an idempotent no-op", async () => {
+    const capability = vcs(true);
+    vi.mocked(capability.fastForwardOperatorChange).mockResolvedValueOnce({
+      outcome: "base_advanced",
+      currentBaseSha: "c".repeat(40),
+      message: "lost CAS",
+    });
+    const alreadyStarted = new Error("already started");
+    Object.setPrototypeOf(
+      alreadyStarted,
+      WorkflowExecutionAlreadyStartedError.prototype
+    );
+    temporal.start.mockRejectedValueOnce(alreadyStarted);
+    await expect(
+      dispatchOperatorChangeAutoMerge(payload, capability, log)
+    ).resolves.toBeUndefined();
+    expect(temporal.start).toHaveBeenCalledOnce();
   });
 });

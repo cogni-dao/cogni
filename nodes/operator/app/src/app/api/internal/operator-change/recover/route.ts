@@ -52,7 +52,7 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const result = await recoverOperatorChange(
         parsed.data,
-        getContainer().vcsCapability as OperatorChangeRecoveryCapability
+        getContainer().vcsCapability as unknown as OperatorChangeRecoveryCapability
       );
       return NextResponse.json(result, { status: 200 });
     } catch (error) {

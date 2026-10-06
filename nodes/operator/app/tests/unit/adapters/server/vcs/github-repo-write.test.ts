@@ -625,6 +625,7 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
           recoveryDepth: 3,
         },
         losingHeadSha: "d".repeat(40),
+        reverifyAuthority: vi.fn().mockResolvedValue(true),
       })
     ).resolves.toEqual({
       status: "conflict",
@@ -634,12 +635,25 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
   });
 
   it.each([
-    { label: "creates a fresh-main branch", ambiguousRefResponse: false },
+    {
+      label: "creates a fresh-main branch",
+      ambiguousRefResponse: false,
+      authorityDropsBeforeRef: false,
+    },
     {
       label: "recovers after an ambiguous create-ref response",
       ambiguousRefResponse: true,
+      authorityDropsBeforeRef: false,
     },
-  ])("$label without ever PATCHing a ref", async ({ ambiguousRefResponse }) => {
+    {
+      label: "leaves no ref when checks or catalog move before create-ref",
+      ambiguousRefResponse: false,
+      authorityDropsBeforeRef: true,
+    },
+  ])("$label without ever PATCHing a ref", async ({
+    ambiguousRefResponse,
+    authorityDropsBeforeRef,
+  }) => {
     const baseSha = "c".repeat(40);
     const losingHeadSha = "a".repeat(40);
     const headSha = "d".repeat(40);
@@ -753,28 +767,44 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
       operatorChangePolicyOwner: "parent",
       operatorChangePolicyRepo: "control",
     });
-    await expect(
-      writer.createOperatorChangeRecoveryPr({
-        owner: "o",
-        repo: "blue",
-        prNumber: 68,
-        intent: {
-          operation: "deployment.declare",
-          node: "blue",
-          recoveryRootSha: losingHeadSha,
-          recoveryDepth: 0,
-        },
-        losingHeadSha,
-      })
-    ).resolves.toMatchObject({
-      status: "regenerated",
-      baseSha,
-      headSha,
-      prNumber: 69,
+    let authorityReads = 0;
+    const result = writer.createOperatorChangeRecoveryPr({
+      owner: "o",
+      repo: "blue",
+      prNumber: 68,
+      intent: {
+        operation: "deployment.declare",
+        node: "blue",
+        recoveryRootSha: losingHeadSha,
+        recoveryDepth: 0,
+      },
+      losingHeadSha,
+      reverifyAuthority: vi.fn(async () => {
+        authorityReads += 1;
+        return !(authorityDropsBeforeRef && authorityReads === 2);
+      }),
     });
+    if (authorityDropsBeforeRef) {
+      await expect(result).resolves.toEqual({
+        status: "conflict",
+        reason: "recovery-authority-changed",
+      });
+    } else {
+      await expect(result).resolves.toMatchObject({
+        status: "regenerated",
+        baseSha,
+        headSha,
+        prNumber: 69,
+      });
+    }
     expect(
       requests.some(({ route }) => route.startsWith("PATCH /repos/"))
     ).toBe(false);
+    expect(
+      requests.filter(
+        ({ route }) => route === "POST /repos/{owner}/{repo}/git/refs"
+      )
+    ).toHaveLength(authorityDropsBeforeRef ? 0 : 1);
   });
 
   it.each([
@@ -896,6 +926,7 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
         recoveryDepth: 1,
       },
       losingHeadSha,
+      reverifyAuthority: vi.fn().mockResolvedValue(true),
     });
     if (divergent) {
       await expect(result).resolves.toEqual({
@@ -1007,6 +1038,7 @@ describe("GitHubRepoWriter.createOperatorChangeRecoveryPr", () => {
           recoveryDepth: 0,
         },
         losingHeadSha,
+        reverifyAuthority: vi.fn().mockResolvedValue(true),
       })
     ).resolves.toEqual({ status: "conflict", reason: fixture.reason });
     expect(requests.some(({ route }) => /^(PATCH|POST) /.test(route))).toBe(false);
