@@ -11,7 +11,8 @@
  *   - MAY_ENQUEUE: when the base branch requires a merge queue the PR is enqueued
  *     (`enqueued: true`, no `sha`) rather than merged immediately; poll the PR to confirm.
  *   - HEAD_SHA_PINNED: re-read CI immediately before merge and bind the merge request to that head.
- *   - Agent must verify CI green + approval before calling (enforced by prompt, not code)
+ *   - CAPABILITY_GATE_IS_AUTHORITY: VcsCapability independently re-reads and
+ *     enforces merge eligibility immediately before either write path.
  * Side-effects: IO (merges PR via VcsCapability)
  * Links: task.0242
  * @public
@@ -67,8 +68,7 @@ export const vcsMergePrContract: ToolContract<
 > = {
   name: VCS_MERGE_PR_NAME,
   description:
-    "Merge a pull request. IMPORTANT: Always check CI status and review approval " +
-    "with core__vcs_get_ci_status before merging. " +
+    "Merge a pull request. The VCS capability independently rechecks CI, PR state, and the exact head before writing. " +
     "The normal code target is main; preview and production are promoted later by the deploy plane. " +
     "Use 'squash' for accepted feature PRs. " +
     "If the base branch requires a merge queue, the PR is ADDED TO THE QUEUE (enqueued=true) rather " +

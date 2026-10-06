@@ -390,6 +390,20 @@ describe("POST /api/v1/vcs/merge", () => {
     expect(body.errorCode).toBe("merge_rejected");
   });
 
+  it("preserves an authoritative capability gate rejection (422)", async () => {
+    grant(NODE_ID);
+    fakeVcs.mergePr.mockResolvedValue({
+      merged: false,
+      status: 422,
+      message: "PR is not eligible to merge",
+    });
+    const res = await post({ prNumber: 42, nodeId: NODE_SLUG });
+    expect(res.status).toBe(422);
+    const body = await res.json();
+    expect(body.errorCode).toBe("merge_gate_rejected");
+    expect(body.error).toBe("PR is not eligible to merge");
+  });
+
   it("developer/can_flight path is queue-aware and never asks for bypass", async () => {
     grant(NODE_ID);
     const res = await post({ prNumber: 42, nodeId: NODE_SLUG });

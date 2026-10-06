@@ -5,7 +5,7 @@
  * Module: `@shared/node-repo-policy`
  * Purpose: Parse the versioned repository-protection policy owned by node-template.
  * Scope: Pure JSON validation only; GitHub reads and ruleset writes remain in the VCS adapter.
- * Invariants: TEMPLATE_POLICY_IS_SSOT, NO_BYPASS_ACTORS, REQUIRED_CHECKS_NONEMPTY.
+ * Invariants: TEMPLATE_POLICY_IS_SSOT, BYPASS_ID_RUNTIME_ONLY, REQUIRED_CHECKS_NONEMPTY.
  * Side-effects: none
  * Links: task.5028, Cogni-DAO/node-template:.cogni/repo-policy.json
  * @internal
@@ -39,21 +39,43 @@ const RequiredStatusChecksPolicySchema = z
   })
   .strict();
 
-export const NodeRepoPolicySchema = z
+const NodeRepoRulesetBaseSchema = z
   .object({
-    schemaVersion: z.literal("cogni.node-repo-policy.v1"),
-    ruleset: z
-      .object({
-        name: z.string().min(1),
-        target: z.literal("default_branch"),
-        enforcement: z.literal("active"),
-        pullRequest: PullRequestPolicySchema,
-        requiredStatusChecks: RequiredStatusChecksPolicySchema,
-        bypassActors: z.array(z.never()).max(0),
-      })
-      .strict(),
+    name: z.string().min(1),
+    target: z.literal("default_branch"),
+    enforcement: z.literal("active"),
+    pullRequest: PullRequestPolicySchema,
+    requiredStatusChecks: RequiredStatusChecksPolicySchema,
   })
   .strict();
+
+const NodeRepoPolicyV1Schema = z
+  .object({
+    schemaVersion: z.literal("cogni.node-repo-policy.v1"),
+    ruleset: NodeRepoRulesetBaseSchema.extend({
+      bypassActors: z.array(z.never()).max(0),
+    }).strict(),
+  })
+  .strict();
+
+const NodeRepoPolicyV2Schema = z
+  .object({
+    schemaVersion: z.literal("cogni.node-repo-policy.v2"),
+    ruleset: NodeRepoRulesetBaseSchema.extend({
+      operatorGeneratedChange: z
+        .object({
+          protocol: z.literal("cogni.operator-change.v1"),
+          actor: z.literal("configured_operator_app"),
+        })
+        .strict(),
+    }).strict(),
+  })
+  .strict();
+
+export const NodeRepoPolicySchema = z.discriminatedUnion("schemaVersion", [
+  NodeRepoPolicyV1Schema,
+  NodeRepoPolicyV2Schema,
+]);
 
 export type NodeRepoPolicy = z.infer<typeof NodeRepoPolicySchema>;
 
