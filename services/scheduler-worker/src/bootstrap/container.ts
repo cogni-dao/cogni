@@ -39,6 +39,9 @@ import {
   GitHubSourceAdapter,
 } from "../adapters/ingestion/index.js";
 import { createSharedTokenNodePrincipalResolver } from "../adapters/node-principal.js";
+import {
+  createOperatorChangeRecoveryHttpClient,
+} from "../adapters/operator-change-recovery-http.js";
 import { createReviewHttpClient } from "../adapters/review-http.js";
 import {
   createHttpExecutionGrantValidator,
@@ -53,6 +56,7 @@ import type {
   ExecutionGrantHttpValidator,
   GraphRunHttpWriter,
   NodePrincipalResolver,
+  OperatorChangeRecoveryHttpClient,
   ReviewHttpClient,
 } from "../ports/index.js";
 import type { Env } from "./env.js";
@@ -68,6 +72,8 @@ export interface ServiceContainer {
   nodePrincipalResolver: NodePrincipalResolver;
   /** HTTP client for the operator's review GitHub plane (bug.5000). */
   reviewClient: ReviewHttpClient;
+  /** Credential-free HTTP delegation to the operator-owned recovery plane. */
+  operatorChangeRecoveryClient: OperatorChangeRecoveryHttpClient;
   config: {
     nodeEndpoints: Map<string, string>;
     schedulerApiToken: string;
@@ -212,6 +218,13 @@ export function createContainer(config: Env, logger: Logger): ServiceContainer {
       nodeEndpoints,
       schedulerApiToken: config.SCHEDULER_API_TOKEN,
       logger: logger.child?.({ component: "review-http" }) ?? logger,
+    }),
+    operatorChangeRecoveryClient: createOperatorChangeRecoveryHttpClient({
+      nodeEndpoints,
+      schedulerApiToken: config.SCHEDULER_API_TOKEN,
+      logger:
+        logger.child?.({ component: "operator-change-recovery-http" }) ??
+        logger,
     }),
     config: {
       nodeEndpoints,

@@ -27,6 +27,9 @@ import {
 } from "@temporalio/worker";
 import { createGoalLoopActivities } from "./activities/goal-loop.js";
 import { createActivities } from "./activities/index.js";
+import {
+  createOperatorChangeRecoveryActivities,
+} from "./activities/operator-change-recovery.js";
 import { createReviewActivities } from "./activities/review.js";
 import { createSweepActivities } from "./activities/sweep.js";
 import { createContainer } from "./bootstrap/container.js";
@@ -226,6 +229,13 @@ export async function startSchedulerWorker(
       container.logger,
   });
 
+  // Durable generated-change recovery owns no GitHub credential here. The one
+  // Activity delegates to the operator plane with the existing scheduler token.
+  const operatorChangeRecoveryActivities =
+    createOperatorChangeRecoveryActivities({
+      recoveryClient: container.operatorChangeRecoveryClient,
+    });
+
   // Sweep activities poll the operator's work-items API, so they only apply
   // when the formation includes an operator node. Catalog/formation-driven:
   // if COGNI_NODE_ENDPOINTS has no "operator" entry (e.g. a candidate slot
@@ -265,6 +275,7 @@ export async function startSchedulerWorker(
   const allActivities = {
     ...graphActivities,
     ...reviewActivities,
+    ...operatorChangeRecoveryActivities,
     ...sweepActivities,
     ...goalLoopActivities,
   };

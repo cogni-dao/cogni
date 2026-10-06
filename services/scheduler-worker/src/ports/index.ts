@@ -38,6 +38,8 @@ import type {
   InternalReviewPrContextInput,
   InternalReviewPrContextOutput,
   InternalReviewUpdateCheckRunInput,
+  OperatorChangeRecoveryRequest,
+  OperatorChangeRecoveryResult,
 } from "@cogni/node-contracts";
 import type { ExecutionGrant, GraphRunKind } from "@cogni/scheduler-core";
 
@@ -90,6 +92,18 @@ export interface ReviewHttpClient {
   fetchPrContext: (
     input: InternalReviewPrContextInput
   ) => Promise<InternalReviewPrContextOutput>;
+}
+
+/**
+ * Credential-free scheduler seam for durable operator-change recovery. The
+ * concrete adapter calls the operator's internal API; GitHub credentials stay
+ * exclusively in the operator application.
+ */
+export interface OperatorChangeRecoveryHttpClient {
+  recover: (
+    input: OperatorChangeRecoveryRequest,
+    idempotencyKey: string
+  ) => Promise<OperatorChangeRecoveryResult>;
 }
 
 /**

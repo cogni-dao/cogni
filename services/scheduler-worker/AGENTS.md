@@ -30,6 +30,7 @@ src/
 ├── activities/      # Temporal activities — HTTP-delegate run/grant persistence to owning node
 ├── adapters/        # Concrete implementations
 │   ├── run-http.ts  # HttpGraphRunWriter + HttpExecutionGrantValidator (task.0280)
+│   ├── operator-change-recovery-http.ts # recovery delegation; no GitHub credential
 │   └── ingestion/   # GitHub poll adapter + webhook normalizer + token provider
 ├── observability/   # Logger factory (sole pino importer), redaction, metrics
 ├── main.ts          # Entry: env() → probeNodeReachability() → startSchedulerWorker() + optional ledger
@@ -48,7 +49,7 @@ src/
   - **story.5007 — finalize DELETED from the worker.** Epoch finalization no longer runs here at all: the operator app finalizes IN-PROCESS in its own route (`runFinalizeEpoch` from `@cogni/attribution-pipeline-plugins`). `FinalizeEpochWorkflow`, the `finalizeEpoch` activity, and every distribution/wallet/config-gateway dep (`walletResolver`, `distributionConfigClient`, the `distribution-config-http` adapter) are **removed** — one finalize path, no dead Temporal shadow. `ledger-tasks-<nodeId>` now carries **CollectEpoch only** (operator STAYS on CollectEpochWorkflow behind `OPERATOR_STAYS_ON_COLLECT_EPOCH`). Retiring `ledger-tasks` itself is the joint endpoint of the operator-collect cutover (task.5015), NOT this change.
   - ⚠️ **Changing a queue/worker is an INTEGRATION change. Unit-green does NOT prove pickup.** Prove it on a running Temporal — the stack test (`pnpm test:stack:dev`) or by finalizing a real epoch on candidate-a and reading Loki for the pickup — BEFORE you call it done.
   - ⚠️ **DEPLOY_COUPLING (no drain → app+worker are atomic):** a queue move touches the operator **app** (dispatch + schedule migration) AND this **scheduler-worker** (poller). With no legacy drain, they MUST ship from the SAME SHA together — `promote-and-deploy.yml` does (default targets = NODE_TARGETS **+ scheduler-worker**). A lone `candidate-flight` (app-only, per-node) ships the app half only → the migrated schedule fires on a queue no worker polls → **silent CollectEpoch starvation** (finalize is no longer at risk — story.5007 moved it in-process). Validate the worker half on promote, or co-deploy the scheduler-worker.
-- **activities/ import ports only** — never adapters/, bootstrap/, or @cogni/db-client
+- **activities/ import ports only** — never adapters/, bootstrap/, or @cogni/db-client. Operator-change recovery is one thin HTTP-delegating Activity with a stable business idempotency key and maximum three Temporal attempts.
 - **bootstrap/container.ts is the only place** that instantiates concrete adapters
 - **observability/logger.ts is the only file** that imports pino directly
 - **ports/ is interfaces + error classes only** — no runtime I/O, no framework deps
@@ -96,7 +97,7 @@ src/
 
 ## Dependencies
 
-- **Internal:** `@cogni/temporal-workflows` (workflow defs, activity types, domain logic), `@cogni/scheduler-core` (ports), `@cogni/ingestion-core` (ports), `@cogni/attribution-ledger` (domain logic + epoch window), `@cogni/attribution-pipeline-contracts` (enricher validation, profile resolution, allocator dispatch), `@cogni/attribution-pipeline-plugins` (built-in registries), `@cogni/db-client` (adapters, bootstrap only), `@cogni/repo-spec` (identity from `.cogni/repo-spec.yaml`), `@cogni/ids`
+- **Internal:** `@cogni/temporal-workflows` (workflow defs, activity types, domain logic), `@cogni/node-contracts` (strict operator-change recovery wire contract), `@cogni/scheduler-core` (ports), `@cogni/ingestion-core` (ports), `@cogni/attribution-ledger` (domain logic + epoch window), `@cogni/attribution-pipeline-contracts` (enricher validation, profile resolution, allocator dispatch), `@cogni/attribution-pipeline-plugins` (built-in registries), `@cogni/db-client` (adapters, bootstrap only), `@cogni/repo-spec` (identity from `.cogni/repo-spec.yaml`), `@cogni/ids`
 - **External:** `@temporalio/worker`, `@temporalio/activity`, `@octokit/webhooks-methods`, `pino`, `viem`, `zod`
 
 ## Change Protocol
