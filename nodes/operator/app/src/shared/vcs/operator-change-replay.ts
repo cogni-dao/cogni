@@ -532,13 +532,17 @@ async function planNodeRegister(
       const patchEnv = path.match(
         /^infra\/k8s\/overlays\/([^/]+)\/scheduler-worker\/node-endpoints\.patch\.yaml$/
       )?.[1];
-      const expectedUrl =
+      const formationPatchEnv =
         patchEnv !== undefined &&
         (NODE_FORMATION_ENVS as readonly string[]).includes(patchEnv)
+          ? (patchEnv as (typeof NODE_FORMATION_ENVS)[number])
+          : null;
+      const expectedUrl =
+        formationPatchEnv !== null
           ? nodeAppBaseUrl({
               slug: node,
               provider: "akash",
-              environment: patchEnv as NodeFormationEnv,
+              environment: formationPatchEnv,
               apexDomain: CANONICAL_DOMAIN_ROOT,
             })
           : `http://${node}-node-app:3000`;
