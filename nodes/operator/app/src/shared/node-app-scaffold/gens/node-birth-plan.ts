@@ -91,7 +91,11 @@ export function buildNodeBirthPlan(
     ownerWallet: input.ownerWallet,
   });
   const ops: EnvPlanOp[] = [
-    { op: "upsert", path: `infra/catalog/${input.slug}.yaml`, content: catalog },
+    {
+      op: "upsert",
+      path: `infra/catalog/${input.slug}.yaml`,
+      content: catalog,
+    },
   ];
 
   for (const env of NODE_FORMATION_ENVS) {
@@ -136,7 +140,9 @@ export function buildNodeBirthPlan(
       kustomizations.get(controlEnv) ??
       input.current.appsetsKustomizationByControlEnv[controlEnv];
     if (current === undefined) {
-      throw new Error(`node birth input missing appset index for ${controlEnv}`);
+      throw new Error(
+        `node birth input missing appset index for ${controlEnv}`
+      );
     }
     kustomizations.set(
       controlEnv,

@@ -95,8 +95,6 @@ export function createVcsCapability(env: ServerEnv): VcsCapability {
     ...(env.FLEET_CONTROL_ENV
       ? { fleetControlEnv: env.FLEET_CONTROL_ENV }
       : {}),
-    ...(env.FORK_DOMAIN_ROOT
-      ? { forkDomainRoot: env.FORK_DOMAIN_ROOT }
-      : {}),
+    ...(env.FORK_DOMAIN_ROOT ? { forkDomainRoot: env.FORK_DOMAIN_ROOT } : {}),
   });
 }

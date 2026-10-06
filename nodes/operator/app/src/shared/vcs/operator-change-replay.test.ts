@@ -106,7 +106,8 @@ describe("replayOperatorChange", () => {
     const deletedPath = removal.input.paths.find(
       (path) => removal.head.get(path) === null
     );
-    if (!deletedPath) throw new Error("membership remove fixture has no delete");
+    if (!deletedPath)
+      throw new Error("membership remove fixture has no delete");
     removal.head.set(deletedPath, "forged\n");
     await expect(replayOperatorChange(removal.input)).resolves.toEqual({
       verified: false,
@@ -189,10 +190,14 @@ async function membershipFixture(): Promise<ReplayFixture> {
     current: {
       catalog,
       templateOverlayByEnv: {
-        [env]: disk(`infra/k8s/overlays/${env}/node-template/kustomization.yaml`),
+        [env]: disk(
+          `infra/k8s/overlays/${env}/node-template/kustomization.yaml`
+        ),
       },
       templateExternalSecretByEnv: {
-        [env]: disk(`infra/k8s/overlays/${env}/node-template/external-secret.yaml`),
+        [env]: disk(
+          `infra/k8s/overlays/${env}/node-template/external-secret.yaml`
+        ),
       },
       appsetTemplate: disk("scripts/ci/node-applicationset.yaml.tmpl"),
       appsetRepoUrl: `https://github.com/${repository}.git`,
@@ -379,18 +384,12 @@ async function nodeRegisterFixture(): Promise<ReplayFixture> {
       ),
     },
   });
-  return fixture(
-    "node.register",
-    node,
-    `feat(node): register ${node}`,
-    plan,
-    {
-      "Node-Id": "11111111-1111-4111-8111-111111111111",
-      "Source-Repo": `https://github.com/cogni-dao/${node}.git`,
-      "Source-SHA": "1".repeat(40),
-      "Owner-Wallet": `0x${"2".repeat(40)}`,
-    }
-  );
+  return fixture("node.register", node, `feat(node): register ${node}`, plan, {
+    "Node-Id": "11111111-1111-4111-8111-111111111111",
+    "Source-Repo": `https://github.com/cogni-dao/${node}.git`,
+    "Source-SHA": "1".repeat(40),
+    "Owner-Wallet": `0x${"2".repeat(40)}`,
+  });
 }
 
 async function deploymentFixture(): Promise<ReplayFixture> {

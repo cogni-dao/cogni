@@ -499,12 +499,12 @@ export class GitHubVcsAdapter implements VcsCapability {
       return false;
     }
     const catalog = await this.readFileText(
-        input.policyOctokit,
-        this.config.operatorChangePolicyOwner,
-        this.config.operatorChangePolicyRepo,
-        `infra/catalog/${input.node}.yaml`,
-        "main"
-      );
+      input.policyOctokit,
+      this.config.operatorChangePolicyOwner,
+      this.config.operatorChangePolicyRepo,
+      `infra/catalog/${input.node}.yaml`,
+      "main"
+    );
     if (catalog === null) return false;
     let parsedCatalog: unknown;
     try {

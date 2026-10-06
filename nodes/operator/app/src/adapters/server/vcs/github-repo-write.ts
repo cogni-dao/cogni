@@ -67,8 +67,8 @@ import type {
 } from "@/ports";
 import {
   appsetsKustomizationPath,
-  buildNodeBirthPlan,
   buildEnvDeltaPlan,
+  buildNodeBirthPlan,
   buildPlacementPlan,
   buildRegionPlan,
   type EnvAddShape,
@@ -79,9 +79,9 @@ import {
   hasPaymentsActivationSpec,
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
-  nodeBirthPathPlan,
   type NodeFormationEnv,
   nextFreeNodePort,
+  nodeBirthPathPlan,
   type PlacementProvider,
   parseCatalogPlacement,
   planEnvAddShape,
@@ -2809,13 +2809,8 @@ export class GitHubRepoWriter implements DeployPlanePort {
         candidate.endsWith(`-${slug}-applicationset.yaml`)
     )) {
       if (
-        (await this.readFileAt(
-          octokit,
-          owner,
-          repo,
-          path,
-          baseCommitSha
-        )) !== null
+        (await this.readFileAt(octokit, owner, repo, path, baseCommitSha)) !==
+        null
       ) {
         throw new Error(
           `openNodeSubmodulePr: node-owned path already exists at base: ${path}`

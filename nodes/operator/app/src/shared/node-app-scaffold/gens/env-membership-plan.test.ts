@@ -1603,6 +1603,12 @@ const upsertContent = (op: EnvPlanOp): string => {
   return op.content;
 };
 
+const firstOp = (ops: readonly EnvPlanOp[]): EnvPlanOp => {
+  const op = ops[0];
+  if (!op) throw new Error("expected at least one operation");
+  return op;
+};
+
 describe("buildRegionPlan (story.5050)", () => {
   it("writes the requirement AND moves lease_generation in the SAME commit", () => {
     const res = buildRegionPlan({
@@ -1617,13 +1623,13 @@ describe("buildRegionPlan (story.5050)", () => {
     // ONE file: the region requirement constrains which provider may win a bid, not which lane
     // or address serves the env, so no overlay/appset/scheduler hunk may appear.
     expect(res.ops).toHaveLength(1);
-    const next = parseYaml(upsertContent(res.ops[0]!)) as Record<
+    const next = parseYaml(upsertContent(firstOp(res.ops))) as Record<
       string,
       unknown
     >;
-    expect(next["required_placement_countries"]).toEqual({ preview: ["PT"] });
+    expect(next.required_placement_countries).toEqual({ preview: ["PT"] });
     // REGION_BINDS_ON_A_FRESH_MINT — without this the verb would succeed and do nothing.
-    expect(next["lease_generation"]).toEqual({ preview: 2 });
+    expect(next.lease_generation).toEqual({ preview: 2 });
     expect(res.leaseGeneration).toBe(2);
   });
 
@@ -1636,11 +1642,11 @@ describe("buildRegionPlan (story.5050)", () => {
       current: akashPlaced("preview"),
     });
     if (res.kind !== "set_region") throw new Error("expected set_region");
-    const next = parseYaml(upsertContent(res.ops[0]!)) as Record<
+    const next = parseYaml(upsertContent(firstOp(res.ops))) as Record<
       string,
       unknown
     >;
-    expect(next["required_placement_countries"]).toEqual({
+    expect(next.required_placement_countries).toEqual({
       preview: ["NL", "PT"],
     });
   });
@@ -1671,7 +1677,7 @@ describe("buildRegionPlan (story.5050)", () => {
     if (seeded.kind !== "set_region") throw new Error("expected set_region");
     const withComment = {
       ...commented,
-      catalog: upsertContent(seeded.ops[0]!).replace(
+      catalog: upsertContent(firstOp(seeded.ops)).replace(
         "required_placement_countries:",
         "required_placement_countries:\n  # rationale a human wrote"
       ),
@@ -1704,7 +1710,7 @@ describe("buildRegionPlan (story.5050)", () => {
         leaseGeneration: 99,
         current: {
           ...akashPlaced("preview"),
-          catalog: upsertContent(seeded.ops[0]!),
+          catalog: upsertContent(firstOp(seeded.ops)),
         },
       }).kind
     ).toBe("no_changes");
@@ -1726,7 +1732,7 @@ describe("buildRegionPlan (story.5050)", () => {
       env: "preview",
       countries: ["PT"],
       leaseGeneration: 9,
-      current: { ...held, catalog: upsertContent(first.ops[0]!) },
+      current: { ...held, catalog: upsertContent(firstOp(first.ops)) },
     });
     expect(again.kind).toBe("no_changes");
   });

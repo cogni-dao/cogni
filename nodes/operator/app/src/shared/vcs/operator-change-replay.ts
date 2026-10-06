@@ -31,8 +31,7 @@ import { controlEnvFor } from "@/shared/node-registry/placement";
 const SHA = /^[0-9a-f]{40}$/;
 const NODE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const WALLET = /^0x[0-9a-fA-F]{40}$/;
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export interface OperatorChangeReplayReader {
   readFile(ref: string, path: string): Promise<string | null>;
@@ -78,7 +77,8 @@ export async function replayOperatorChange(
       return failed("canonical-envelope-mismatch");
     }
     const sortedPaths = uniqueSorted(input.paths);
-    if (sortedPaths.length !== input.paths.length) return failed("duplicate-path");
+    if (sortedPaths.length !== input.paths.length)
+      return failed("duplicate-path");
     const signedPathHash = envelope.get("Cogni-Changed-Paths-SHA256");
     const actualPathHash = createHash("sha256")
       .update(`${sortedPaths.join("\n")}\n`)
@@ -350,7 +350,8 @@ async function replayDeploymentDeclare(
   }
   const path = ".cogni/repo-spec.yaml";
   const base = await requiredFile(input.reader, input.baseSha, path);
-  if (/^deployment:/m.test(base)) throw new Error("deployment-already-declared");
+  if (/^deployment:/m.test(base))
+    throw new Error("deployment-already-declared");
   return [
     {
       op: "upsert",
@@ -454,7 +455,8 @@ async function verifyOps(
       input.reader.readFile(input.headSha, op.path),
     ]);
     if (op.op === "delete") {
-      if (base === null || head !== null) return failed(`delete-mismatch:${op.path}`);
+      if (base === null || head !== null)
+        return failed(`delete-mismatch:${op.path}`);
     } else if (head !== op.content) {
       return failed(`content-mismatch:${op.path}`);
     }

@@ -2226,9 +2226,8 @@ node_port: 30200
       nodeRepoUrl: "https://github.com/Cogni-DAO/atlas.git",
       nodeRepoHeadSha: "0123456789012345678901234567890123456789",
     } as const;
-    const contentRoute = routeHandlers[
-      "GET /repos/{owner}/{repo}/contents/{path}"
-    ];
+    const contentRoute =
+      routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
     if (!contentRoute) throw new Error("missing content route fixture");
     routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) =>
       params.path === "infra/catalog/atlas.yaml"
@@ -2239,10 +2238,12 @@ node_port: 30200
     );
     routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = contentRoute;
 
-    await expect(makeWriter().openNodeSubmodulePr(birthInput)).resolves.toEqual({
-      prNumber: 88,
-      prUrl: "https://github.com/Cogni-DAO/cogni/pull/88",
-    });
+    await expect(makeWriter().openNodeSubmodulePr(birthInput)).resolves.toEqual(
+      {
+        prNumber: 88,
+        prUrl: "https://github.com/Cogni-DAO/cogni/pull/88",
+      }
+    );
   });
 });
 

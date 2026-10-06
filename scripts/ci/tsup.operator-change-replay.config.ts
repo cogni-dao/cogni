@@ -3,12 +3,12 @@
 
 import { defineConfig } from "tsup";
 
+// biome-ignore lint/style/noDefaultExport: required by tsup
 export default defineConfig({
   entry: {
     "operator-change-replay": "scripts/ci/operator-change-replay.ts",
   },
-  outDir:
-    process.env.OPERATOR_CHANGE_BUNDLE_OUT_DIR ?? "scripts/ci/dist",
+  outDir: process.env.OPERATOR_CHANGE_BUNDLE_OUT_DIR ?? "scripts/ci/dist",
   format: ["esm"],
   platform: "node",
   target: "node22",
