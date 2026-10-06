@@ -11,16 +11,21 @@
  * @internal
  */
 
-import type { VcsCapability } from "@cogni/ai-tools";
 import {
   type OperatorChangeRecoveryRequest,
   type OperatorChangeRecoveryResult,
   OperatorChangeRecoveryResultSchema,
 } from "@cogni/node-contracts";
 
+export interface OperatorChangeRecoveryCapability {
+  recoverOperatorChange(
+    request: OperatorChangeRecoveryRequest
+  ): Promise<OperatorChangeRecoveryResult>;
+}
+
 export async function recoverOperatorChange(
   input: OperatorChangeRecoveryRequest,
-  vcs: VcsCapability
+  vcs: OperatorChangeRecoveryCapability
 ): Promise<OperatorChangeRecoveryResult> {
   return OperatorChangeRecoveryResultSchema.parse(
     await vcs.recoverOperatorChange(input)

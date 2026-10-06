@@ -725,9 +725,6 @@ importers:
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:../ai-core
-      '@cogni/node-contracts':
-        specifier: workspace:*
-        version: link:../node-contracts
       '@types/json-schema':
         specifier: ^7.0.15
         version: 7.0.15

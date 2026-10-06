@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import type { VcsCapability } from "@cogni/ai-tools";
 import type { OperatorChangeRecoveryRequest } from "@cogni/node-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { recoverOperatorChange } from "./operator-change-recovery.server";
+import {
+  type OperatorChangeRecoveryCapability,
+  recoverOperatorChange,
+} from "./operator-change-recovery.server";
 
 const request: OperatorChangeRecoveryRequest = {
   owner: "cogni-test-org",
@@ -34,7 +36,7 @@ describe("recoverOperatorChange", () => {
         prUrl: "https://github.com/cogni-test-org/cogni-monorepo/pull/69",
         recoveryDepth: 1,
       }),
-    } as unknown as VcsCapability;
+    } as OperatorChangeRecoveryCapability;
     await expect(recoverOperatorChange(request, vcs)).resolves.toMatchObject({
       status: "regenerated",
       recoveryDepth: 1,
@@ -48,7 +50,7 @@ describe("recoverOperatorChange", () => {
         status: "regenerated",
         recoveryDepth: 99,
       }),
-    } as unknown as VcsCapability;
+    } as OperatorChangeRecoveryCapability;
     await expect(recoverOperatorChange(request, vcs)).rejects.toThrow();
   });
 });

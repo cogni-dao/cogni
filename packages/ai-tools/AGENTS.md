@@ -59,7 +59,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
   - `vcsMergePrBoundTool`, `VCS_MERGE_PR_NAME`, `createVcsMergePrImplementation` - VCS merge PR tool
   - `vcsCreateBranchBoundTool`, `VCS_CREATE_BRANCH_NAME`, `createVcsCreateBranchImplementation` - VCS create branch tool
   - `vcsFlightCandidateBoundTool`, `VCS_FLIGHT_CANDIDATE_NAME`, `createVcsFlightCandidateImplementation` - VCS dispatch candidate-flight tool (NO_AUTO_FLIGHT)
-  - `VcsCapability`, `CiStatusResult`, `MergeResult`, `OperatorChangeFastForwardResult`, `PrSummary`, `CreateBranchResult`, `CheckInfo`, `DispatchCandidateFlightResult` - VCS capability types; operator-change recovery imports only strict wire types from `@cogni/node-contracts`
+  - `VcsCapability`, `CiStatusResult`, `MergeResult`, `OperatorChangeFastForwardResult`, `PrSummary`, `CreateBranchResult`, `CheckInfo`, `DispatchCandidateFlightResult` - public VCS capability types; operator-only recovery stays outside this agent-tool surface
   - `workItemQueryBoundTool`, `WORK_ITEM_QUERY_NAME`, `createWorkItemQueryImplementation` - Work item query tool
   - `workItemTransitionBoundTool`, `WORK_ITEM_TRANSITION_NAME`, `createWorkItemTransitionImplementation` - Work item transition tool
   - `WorkItemCapability`, `WorkItemInfo`, `WorkItemQueryParams`, `WorkItemTransitionResult` - Work item capability types
@@ -100,7 +100,7 @@ pnpm --filter @cogni/ai-tools build
 
 ## Dependencies
 
-- **Internal:** `@cogni/ai-core` (ToolSpec type), `@cogni/node-contracts` (operator-change recovery wire types only)
+- **Internal:** `@cogni/ai-core` (ToolSpec type)
 - **External:** `zod`, `zod-to-json-schema`
 
 ## Change Protocol
