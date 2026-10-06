@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Zero-install Git transport for the canonical operator-change replay core. */
+/**
+ * Module: `@scripts/ci/operator-change-replay`
+ * Purpose: Provide the zero-install Git transport for canonical operator-change replay.
+ * Scope: Trusted CI checkout; reads exact base and head files with Git and performs no writes.
+ * Invariants: The bundle calls the deployed operator's semantic core and accepts only immutable workflow inputs.
+ * Side-effects: Runs read-only Git subprocesses and exits nonzero on mismatch.
+ * Links: docs/spec/merge-queue-config.md, task.5185
+ * @internal
+ */
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";

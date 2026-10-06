@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
@@ -14,10 +14,10 @@ import {
   buildPlacementPlan,
   buildRegionPlan,
   type EnvPlanOp,
-  nextFreeNodePort,
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
   type NodeFormationEnv,
+  nextFreeNodePort,
   planEnvAddShape,
   schedulerEndpointPatchPath,
 } from "@/shared/node-app-scaffold/gens";

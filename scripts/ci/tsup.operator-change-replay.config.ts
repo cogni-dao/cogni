@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@scripts/ci/tsup.operator-change-replay.config`
+ * Purpose: Build the checked-in zero-install operator-change replay artifact.
+ * Scope: Canonical replay CLI bundling only.
+ * Invariants: Full CI must rebuild this artifact and prove byte equality with the committed bundle.
+ * Side-effects: Reads the output directory override from the process environment.
+ * Links: docs/spec/merge-queue-config.md, task.5185
+ * @internal
+ */
 
 import { defineConfig } from "tsup";
 

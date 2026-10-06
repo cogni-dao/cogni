@@ -58,6 +58,19 @@ export interface GitHubVcsAdapterConfig {
   readonly forkDomainRoot?: string | undefined;
 }
 
+interface RequiredStatusCheck {
+  readonly context: string;
+  readonly appId?: number;
+}
+
+interface StatusCheckEvidence {
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly source: "check-run" | "legacy-status";
+  readonly appId?: number;
+  readonly appSlug?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
@@ -157,7 +170,7 @@ export class GitHubVcsAdapter implements VcsCapability {
       name: string;
       status: string;
       conclusion: string | null;
-      app: { slug: string } | null;
+      app: { id: number; slug: string } | null;
     }>;
 
     const checks: CheckInfo[] = [
@@ -185,26 +198,25 @@ export class GitHubVcsAdapter implements VcsCapability {
       })),
     ];
 
-    // Index GitHub-native check producers by context name — github-actions check
-    // runs (by name) + legacy commit statuses (by context). Third-party app checks
-    // (SonarCloud, etc.) are informational and never gate a merge.
-    const byContext = new Map<
-      string,
-      { status: string; conclusion: string | null }
-    >();
+    // Keep every producer for a context. A same-name check from another App must
+    // never overwrite or impersonate the producer GitHub bound in branch policy.
+    const byContext = new Map<string, StatusCheckEvidence[]>();
     for (const cr of rawCheckRuns) {
-      if (cr.app?.slug === "github-actions") {
-        byContext.set(cr.name, {
-          status: cr.status,
-          conclusion: cr.conclusion,
-        });
-      }
+      const evidence = byContext.get(cr.name) ?? [];
+      evidence.push({
+        status: cr.status,
+        conclusion: cr.conclusion,
+        source: "check-run",
+        ...(cr.app ? { appId: cr.app.id, appSlug: cr.app.slug } : {}),
+      });
+      byContext.set(cr.name, evidence);
     }
     for (const s of statusResponse.data.statuses as Array<{
       context: string;
       state: string;
     }>) {
-      byContext.set(s.context, {
+      const evidence = byContext.get(s.context) ?? [];
+      evidence.push({
         status: "completed",
         conclusion:
           s.state === "success"
@@ -212,7 +224,9 @@ export class GitHubVcsAdapter implements VcsCapability {
             : s.state === "pending"
               ? null
               : "failure",
+        source: "legacy-status",
       });
+      byContext.set(s.context, evidence);
     }
 
     // REQUIRED_CHECKS_ARE_GITHUB_DEFINED: "green" is GitHub's OWN required-status-
@@ -229,35 +243,64 @@ export class GitHubVcsAdapter implements VcsCapability {
       params.repo,
       pr.base.ref
     );
-    const pending = requiredContexts.some((ctx) => {
-      const c = byContext.get(ctx);
-      return !c || c.status !== "completed" || c.conclusion === null;
+    const evidenceFor = (required: RequiredStatusCheck) =>
+      (byContext.get(required.context) ?? []).filter((evidence) =>
+        required.appId === undefined
+          ? evidence.source === "legacy-status" ||
+            evidence.appSlug === "github-actions"
+          : evidence.source === "check-run" &&
+            evidence.appId === required.appId
+      );
+    const pending = requiredContexts.some((required) => {
+      const evidence = evidenceFor(required);
+      return (
+        evidence.length === 0 ||
+        evidence.every(
+          (candidate) =>
+            candidate.status !== "completed" || candidate.conclusion === null
+        )
+      );
     });
     const allGreen =
       requiredContexts.length > 0 &&
-      requiredContexts.every((ctx) => {
-        const c = byContext.get(ctx);
-        return (
-          c != null &&
-          c.status === "completed" &&
-          (c.conclusion === "success" || c.conclusion === "skipped")
-        );
-      });
+      requiredContexts.every((required) =>
+        evidenceFor(required).some(
+          (candidate) =>
+            candidate.status === "completed" &&
+            (candidate.conclusion === "success" ||
+              candidate.conclusion === "skipped")
+        )
+      );
 
     // Compute review decision from individual reviews.
     // Take the latest review per reviewer; if any APPROVED and none CHANGES_REQUESTED → approved.
-    const latestByReviewer = new Map<string, string>();
-    for (const review of reviewsResponse.data as Array<{
+    const reviews = reviewsResponse.data as Array<{
       user: { login: string } | null;
       state: string;
-    }>) {
+    }>;
+    let reviewsOverflow = reviews.length > 100;
+    if (reviews.length === 100) {
+      const { data: nextReviews } = await octokit.request(
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+        {
+          owner: params.owner,
+          repo: params.repo,
+          pull_number: params.prNumber,
+          per_page: 100,
+          page: 2,
+        }
+      );
+      reviewsOverflow = nextReviews.length > 0;
+    }
+    const latestByReviewer = new Map<string, string>();
+    for (const review of reviews) {
       if (review.user && review.state !== "COMMENTED") {
         latestByReviewer.set(review.user.login, review.state);
       }
     }
     const reviewStates = [...latestByReviewer.values()];
     let reviewDecision: string | null = null;
-    if (reviewStates.includes("CHANGES_REQUESTED")) {
+    if (reviewsOverflow || reviewStates.includes("CHANGES_REQUESTED")) {
       reviewDecision = "CHANGES_REQUESTED";
     } else if (reviewStates.includes("APPROVED")) {
       reviewDecision = "APPROVED";
@@ -586,14 +629,37 @@ export class GitHubVcsAdapter implements VcsCapability {
     owner: string,
     repo: string,
     branch: string
-  ): Promise<string[]> {
-    const contexts = new Set<string>();
+  ): Promise<RequiredStatusCheck[]> {
+    const checks = new Map<string, RequiredStatusCheck>();
+    const add = (context: string, appId?: number) => {
+      const key = `${context}\u0000${appId ?? "unbound"}`;
+      checks.set(key, {
+        context,
+        ...(appId === undefined ? {} : { appId }),
+      });
+    };
     try {
       const { data } = await octokit.request(
         "GET /repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks",
         { owner, repo, branch }
       );
-      for (const context of data.contexts ?? []) contexts.add(context);
+      const classicChecks = (data.checks ?? []) as ReadonlyArray<{
+        context?: string;
+        app_id?: number | null;
+      }>;
+      const producerBoundContexts = new Set<string>();
+      for (const check of classicChecks) {
+        if (!check.context) continue;
+        if (typeof check.app_id === "number") {
+          producerBoundContexts.add(check.context);
+          add(check.context, check.app_id);
+        } else {
+          add(check.context);
+        }
+      }
+      for (const context of data.contexts ?? []) {
+        if (!producerBoundContexts.has(context)) add(context);
+      }
     } catch (error) {
       if ((error as { status?: number })?.status !== 404) throw error;
     }
@@ -605,15 +671,24 @@ export class GitHubVcsAdapter implements VcsCapability {
     for (const rule of activeRules as ReadonlyArray<{
       type?: string;
       parameters?: {
-        required_status_checks?: ReadonlyArray<{ context?: string }>;
+        required_status_checks?: ReadonlyArray<{
+          context?: string;
+          integration_id?: number | null;
+        }>;
       };
     }>) {
       if (rule.type !== "required_status_checks") continue;
       for (const check of rule.parameters?.required_status_checks ?? []) {
-        if (check.context) contexts.add(check.context);
+        if (!check.context) continue;
+        add(
+          check.context,
+          typeof check.integration_id === "number"
+            ? check.integration_id
+            : undefined
+        );
       }
     }
-    return [...contexts];
+    return [...checks.values()];
   }
 
   /**

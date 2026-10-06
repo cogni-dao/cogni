@@ -200,7 +200,12 @@ no-ops into the normal queue. Ordinary `mergePr` remains queue-backed, and queue
 returns a structured failure rather than falling through to a direct App merge.
 Human review holds remain authoritative metadata even when the signed commit is unchanged: a draft
 PR is rejected by CI classification, operator reclassification, and the final CAS precondition; a
-fresh `CHANGES_REQUESTED` review decision stops the facade before the ref update.
+fresh `CHANGES_REQUESTED` review decision stops the facade before the ref update. Review history
+that exceeds the first 100-result API page also stops the facade rather than risking a missed hold.
+Required-check policy preserves GitHub's producer binding: classic `checks[].app_id` and ruleset
+`integration_id` must match the reporting check-run App ID. A same-name check from another App
+cannot satisfy the gate, and legacy commit statuses satisfy only a policy entry with no producer
+binding.
 
 > Migration note: a repo that previously had the queue enabled via the classic UI checkbox should keep the ruleset as the single source of truth — the ruleset is authoritative and the legacy checkbox can be cleared once the ruleset is confirmed live (`gh api repos/{repo}/rulesets`).
 

@@ -17,6 +17,10 @@
  * @public
  */
 
+import { nodeAppBaseUrl } from "../../node-registry/placement";
+import { renderNodeAppset, insertAppsetKustomization } from "./appset";
+import { insertCaddyBlock } from "./caddyfile";
+import { renderCatalog } from "./catalog";
 import {
   appsetPath,
   appsetsKustomizationPath,
@@ -26,9 +30,6 @@ import {
   overlayPath,
   schedulerEndpointPatchPath,
 } from "./env-membership-plan";
-import { renderNodeAppset, insertAppsetKustomization } from "./appset";
-import { insertCaddyBlock } from "./caddyfile";
-import { renderCatalog } from "./catalog";
 import {
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
@@ -39,7 +40,6 @@ import {
   insertSchedulerEndpoint,
   updateSchedulerEndpointHost,
 } from "./scheduler-endpoints";
-import { nodeAppBaseUrl } from "../../node-registry/placement";
 
 export interface NodeBirthPathPlanInput {
   readonly slug: string;
