@@ -128,6 +128,8 @@ export interface OperatorChangeVerificationResult {
   readonly reason: string;
   readonly headSha: string;
   readonly baseSha: string;
+  /** Immutable trusted-policy main snapshot used for registry/catalog reads. */
+  readonly policyHeadSha?: string;
   readonly operation?: string;
   readonly node?: string;
   /** Parsed only by the operator's canonical node-contract schema before use. */
@@ -207,6 +209,7 @@ export interface VcsCapability {
     prNumber: number;
     expectedBaseSha: string;
     expectedHeadSha: string;
+    expectedPolicyHeadSha: string;
   }): Promise<OperatorChangeFastForwardResult>;
 
   /**

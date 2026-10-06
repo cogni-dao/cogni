@@ -151,6 +151,9 @@ never enables an operation. Only `deployment.declare` may use it, after the prot
 node trailer. Its separate `enabledChildOwners` scope is also deployment-only and empty by default;
 it avoids a per-child policy redeploy while granting no authority until explicitly enabled. The
 operator still requires the parent's exact catalog `source_repo` binding for the resolved repo.
+Every operator writer resolves target `main` once and reads all generator inputs by that immutable
+commit SHA before signing `Cogni-Base-SHA`; a floating `main` read may not contribute bytes to the
+signed head.
 
 `scripts/ci/classify-operator-change-fast-path.sh` fails closed unless all of these are true:
 
@@ -200,15 +203,19 @@ Titles, labels, branch names, or copied PR bodies alone grant nothing.
 
 No caller receives bypass authority. `/api/v1/vcs/merge` always uses the ordinary developer/RBAC +
 merge-queue path. The HMAC-verified internal `check_run.completed` handler treats the event only as
-a retry signal. `VcsCapability.verifyOperatorChange` then re-reads the PR, commit, file list, current
-base, and the configured parent repository's main-owned registry; re-checks exact App identity,
-signature, one-commit history, envelope, path hash, exact repository enablement, and the built-in
-operation replay; and only then reads required checks and submits GitHub's
-separate generated-change capability with both `expectedBaseSha` and `expectedHeadSha`. That
-capability re-fetches the open same-repository `main` PR and its exact one-parent commit, then moves
-`heads/main` to that head through GitHub's non-force ref update (`force:false`). This is the atomic
-base+head compare-and-swap: if another PR advances main, the now-divergent update is rejected with
-409/422 and the stale PR remains unmerged. GitHub records this direct-push reachability as an
+a retry signal. `VcsCapability.verifyOperatorChange` then re-reads the PR, commit, file list, and
+current base. It resolves the configured parent repository's protected `main` once, reads both the
+registry and any deployment catalog binding at that immutable `policyHeadSha`, and re-checks exact
+App identity, signature, one-commit history, envelope, path hash, exact repository enablement, and
+the built-in operation replay. Only then does it read required checks and submit GitHub's separate
+generated-change capability with `expectedBaseSha`, `expectedHeadSha`, and
+`expectedPolicyHeadSha`. That capability re-fetches the open same-repository `main` PR and its exact
+one-parent commit. For a child repository it also re-resolves parent `main` immediately before the
+write and refuses a changed policy/catalog snapshot; for the parent repository the already-required
+target-main equality supplies the same snapshot check. It then moves `heads/main` to that head
+through GitHub's non-force ref update (`force:false`). This is the atomic base+head compare-and-swap:
+if another PR advances target main, the now-divergent update is rejected with 409/422 and the stale
+PR remains unmerged. GitHub records this direct-push reachability as an
 indirect PR merge; test-org proof must still assert `mergedAt` before production eligibility.
 [Git ref update](https://docs.github.com/en/rest/git/refs) ·
 [Indirect PR merges](https://docs.github.com/en/pull-requests/reference/pull-request-merges).

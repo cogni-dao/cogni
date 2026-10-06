@@ -69,6 +69,7 @@ export async function dispatchOperatorChangeAutoMerge(
   if (
     (!proof.eligible && !staleButVerified) ||
     proof.headSha !== headSha ||
+    proof.policyHeadSha === undefined ||
     !proof.intent
   )
     return;
@@ -95,6 +96,7 @@ export async function dispatchOperatorChangeAutoMerge(
         prNumber,
         expectedBaseSha: proof.baseSha,
         expectedHeadSha: headSha,
+        expectedPolicyHeadSha: proof.policyHeadSha,
       });
   if (
     result.outcome === "base_advanced" ||

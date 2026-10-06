@@ -19,6 +19,7 @@ vi.mock("@/bootstrap/container", () => ({
 import { dispatchOperatorChangeAutoMerge } from "./operator-change-auto-merge.server";
 
 const headSha = "a".repeat(40);
+const policyHeadSha = "b".repeat(40);
 const payload = {
   action: "completed",
   repository: { full_name: "cogni-test-org/cogni-monorepo" },
@@ -33,6 +34,7 @@ function vcs(eligible: boolean) {
       reason: eligible ? "eligible" : "untrusted-repository",
       headSha,
       baseSha: "b".repeat(40),
+      policyHeadSha,
       operation: "env.membership",
       node: "spawny-boi",
       intent: {
@@ -93,6 +95,7 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       prNumber: 42,
       expectedBaseSha: "b".repeat(40),
       expectedHeadSha: headSha,
+      expectedPolicyHeadSha: policyHeadSha,
     });
   });
 
@@ -111,6 +114,7 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       prNumber: 42,
       expectedBaseSha: "b".repeat(40),
       expectedHeadSha: headSha,
+      expectedPolicyHeadSha: policyHeadSha,
     });
   });
 
@@ -151,6 +155,7 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       reason: "base-advanced",
       headSha,
       baseSha: "b".repeat(40),
+      policyHeadSha,
       operation: "env.membership",
       node: "spawny-boi",
       intent: {

@@ -55,7 +55,12 @@ vi.mock("@octokit/core", () => ({
 import { GitHubVcsAdapter } from "@/adapters/server/vcs/github-vcs.adapter";
 
 function adapter(): GitHubVcsAdapter {
-  return new GitHubVcsAdapter({ appId: "1", privateKey: "k" });
+  return new GitHubVcsAdapter({
+    appId: "1",
+    privateKey: "k",
+    operatorChangePolicyOwner: "o",
+    operatorChangePolicyRepo: "r",
+  });
 }
 
 function greenMergeCi(overrides: Partial<CiStatusResult> = {}): CiStatusResult {
@@ -382,8 +387,19 @@ Cogni-Changed-Paths-SHA256: ${pathHash}`;
     let currentCatalog =
       "name: blue\nsource_repo: https://github.com/o/blue.git\n";
     let catalogReads = 0;
+    let policyHeadReads = 0;
+    let currentPolicyHeadSha = "d".repeat(40);
     const encode = (value: string) => Buffer.from(value).toString("base64");
     onRequest = (route, params) => {
+      if (route === MAIN_REF_ROUTE) {
+        policyHeadReads += 1;
+        expect(params).toMatchObject({
+          owner: "parent",
+          repo: "control",
+          ref: "heads/main",
+        });
+        return { object: { sha: currentPolicyHeadSha } };
+      }
       if (route === PR_GET_ROUTE) {
         return {
           state: "open",
@@ -416,6 +432,7 @@ Cogni-Changed-Paths-SHA256: ${pathHash}`;
       }
       if (route === CONTENTS_ROUTE) {
         if (params.path === "scripts/ci/operator-change-v1.allowlist.json") {
+          expect(params.ref).toBe(currentPolicyHeadSha);
           return {
             type: "file",
             content: encode(JSON.stringify(registry)),
@@ -423,6 +440,7 @@ Cogni-Changed-Paths-SHA256: ${pathHash}`;
         }
         if (params.path === "infra/catalog/blue.yaml") {
           catalogReads += 1;
+          expect(params.ref).toBe(currentPolicyHeadSha);
           return { type: "file", content: encode(currentCatalog) };
         }
         if (params.path === path) {
@@ -448,8 +466,13 @@ Cogni-Changed-Paths-SHA256: ${pathHash}`;
         prNumber: 42,
         expectedHeadSha: headSha,
       })
-    ).resolves.toMatchObject({ eligible: true, reason: "eligible" });
+    ).resolves.toMatchObject({
+      eligible: true,
+      reason: "eligible",
+      policyHeadSha: currentPolicyHeadSha,
+    });
 
+    currentPolicyHeadSha = "e".repeat(40);
     currentCatalog =
       "name: blue\nsource_repo: https://github.com/o/not-blue.git\n";
     await expect(
@@ -464,6 +487,7 @@ Cogni-Changed-Paths-SHA256: ${pathHash}`;
       reason: "operation-replay-failed",
     });
     expect(catalogReads).toBe(2);
+    expect(policyHeadReads).toBe(2);
   });
 });
 
@@ -502,12 +526,58 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       prNumber: 7,
       expectedBaseSha: baseSha,
       expectedHeadSha: headSha,
+      expectedPolicyHeadSha: baseSha,
     });
 
     expect(result).toMatchObject({
       outcome: "landed",
       sha: headSha,
     });
+  });
+
+  it("refuses a child CAS when protected parent policy main moved after verification", async () => {
+    const verifiedPolicyHeadSha = "d".repeat(40);
+    const movedPolicyHeadSha = "e".repeat(40);
+    onRequest = (route, params) => {
+      if (route === MAIN_REF_ROUTE) {
+        return {
+          object: {
+            sha:
+              params.owner === "parent" ? movedPolicyHeadSha : baseSha,
+          },
+        };
+      }
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          base: { ref: "main", sha: baseSha },
+          head: { sha: headSha, repo: { full_name: "o/child" } },
+        };
+      }
+      if (route === COMMIT_ROUTE) {
+        return { sha: headSha, parents: [{ sha: baseSha }] };
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    const vcs = new GitHubVcsAdapter({
+      appId: "1",
+      privateKey: "k",
+      operatorChangePolicyOwner: "parent",
+      operatorChangePolicyRepo: "control",
+    });
+
+    await expect(
+      vcs.fastForwardOperatorChange({
+        owner: "o",
+        repo: "child",
+        prNumber: 7,
+        expectedBaseSha: baseSha,
+        expectedHeadSha: headSha,
+        expectedPolicyHeadSha: verifiedPolicyHeadSha,
+      })
+    ).resolves.toMatchObject({ outcome: "terminal", status: 409 });
+    expect(requestRoutes).not.toContain(UPDATE_REF_ROUTE);
   });
 
   it("rejects stale PR base/head facts before updating the ref", async () => {
@@ -533,6 +603,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       prNumber: 7,
       expectedBaseSha: baseSha,
       expectedHeadSha: headSha,
+      expectedPolicyHeadSha: baseSha,
     });
 
     expect(result).toMatchObject({
@@ -565,6 +636,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       prNumber: 7,
       expectedBaseSha: baseSha,
       expectedHeadSha: headSha,
+      expectedPolicyHeadSha: baseSha,
     });
 
     expect(result).toMatchObject({ outcome: "terminal", status: 409 });
@@ -594,6 +666,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       prNumber: 7,
       expectedBaseSha: baseSha,
       expectedHeadSha: headSha,
+      expectedPolicyHeadSha: baseSha,
     });
 
     expect(result).toMatchObject({ outcome: "terminal", status: 409 });
@@ -635,6 +708,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
       prNumber: 7,
       expectedBaseSha: baseSha,
       expectedHeadSha: headSha,
+      expectedPolicyHeadSha: baseSha,
     });
 
     expect(result).toMatchObject({
@@ -677,6 +751,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
         prNumber: 7,
         expectedBaseSha: baseSha,
         expectedHeadSha: headSha,
+        expectedPolicyHeadSha: baseSha,
       })
     ).resolves.toMatchObject({
       outcome: "retryable_or_ambiguous",
@@ -718,6 +793,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
         prNumber: 7,
         expectedBaseSha: baseSha,
         expectedHeadSha: headSha,
+        expectedPolicyHeadSha: baseSha,
       })
     ).resolves.toMatchObject({ outcome: "landed", sha: headSha });
     expect(patchWrites).toBe(1);
@@ -741,6 +817,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
         prNumber: 7,
         expectedBaseSha: baseSha,
         expectedHeadSha: headSha,
+        expectedPolicyHeadSha: baseSha,
       })
     ).resolves.toMatchObject({
       outcome: "retryable_or_ambiguous",
@@ -794,6 +871,7 @@ describe("GitHubVcsAdapter.fastForwardOperatorChange — base+head CAS", () => {
         prNumber: 7,
         expectedBaseSha: baseSha,
         expectedHeadSha: headSha,
+        expectedPolicyHeadSha: baseSha,
       })
     ).resolves.toMatchObject({ outcome: expectedOutcome });
     expect(patchWrites).toBe(1);
@@ -804,6 +882,7 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
   const signedBaseSha = "b".repeat(40);
   const losingHeadSha = "a".repeat(40);
   const freshMainSha = "c".repeat(40);
+  const policyHeadSha = "d".repeat(40);
   const intent = {
     operation: "env.membership" as const,
     node: "spawny-boi",
@@ -830,6 +909,7 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
         reason: "eligible",
         headSha: losingHeadSha,
         baseSha: signedBaseSha,
+        policyHeadSha,
         operation: intent.operation,
         node: intent.node,
         intent,
@@ -847,6 +927,42 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
     });
     return vcs;
   }
+
+  it("binds a same-base recovery CAS to the freshly verified policy head", async () => {
+    onRequest = (route) => {
+      if (route === MAIN_REF_ROUTE) return { object: { sha: signedBaseSha } };
+      if (route === PR_GET_ROUTE) {
+        return {
+          state: "open",
+          draft: false,
+          merged_at: null,
+          base: { ref: "main", sha: signedBaseSha },
+          head: { sha: losingHeadSha, repo: { full_name: "o/r" } },
+        };
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+    const vcs = recoveryAdapter({ status: "conflict", reason: "unused" });
+    const fastForwardOperatorChange = vi.fn().mockResolvedValue({
+      outcome: "landed",
+      sha: losingHeadSha,
+      message: "landed",
+    });
+    Object.assign(vcs, { fastForwardOperatorChange });
+
+    await expect(vcs.recoverOperatorChange(request)).resolves.toEqual({
+      status: "landed",
+      mainSha: losingHeadSha,
+    });
+    expect(fastForwardOperatorChange).toHaveBeenCalledWith({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      expectedBaseSha: signedBaseSha,
+      expectedHeadSha: losingHeadSha,
+      expectedPolicyHeadSha: policyHeadSha,
+    });
+  });
 
   it("closes an already-satisfied exact PR only while main remains at the planned SHA", async () => {
     let closeWrites = 0;
@@ -964,6 +1080,7 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
         reason: "eligible",
         headSha: losingHeadSha,
         baseSha: signedBaseSha,
+        policyHeadSha,
         operation: intent.operation,
         node: intent.node,
         intent,
@@ -976,6 +1093,7 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
             : "invalid-pr-identity",
         headSha: losingHeadSha,
         baseSha: signedBaseSha,
+        policyHeadSha,
       });
     }
     await expect(vcs.recoverOperatorChange(request)).resolves.toEqual({
@@ -1106,6 +1224,7 @@ describe("GitHubVcsAdapter.recoverOperatorChange", () => {
         reason: "eligible",
         headSha: losingHeadSha,
         baseSha: signedBaseSha,
+        policyHeadSha,
         operation: deploymentIntent.operation,
         node,
         intent: deploymentIntent,
