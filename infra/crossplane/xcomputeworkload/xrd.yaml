@@ -565,6 +565,23 @@ spec:
                 # therefore the CREATE action instead of trying to UPDATE a settled lease.
                 leaseRequestGeneration:
                   { type: integer, minimum: 0, maximum: 1000000 }
+                # THE GENERATION PROVEN SERVING (bug.5322). Written ONLY after the composite
+                # observes `active && serving` for the current generation — the same pair
+                # status.serving and the Ready phase are written from — so it names a lease that
+                # has actually answered on the canonical public host with the exact source sha,
+                # not one that was merely minted. It is what makes CLOSE-AFTER-CUTOVER possible:
+                # while it names a generation other than spec.leaseGeneration, the Composition
+                # keeps rendering the child that holds that generation's key ALONGSIDE the
+                # candidate, so Crossplane's GC — and therefore the actuator's irreversible
+                # /v1/akash/delete — cannot reach a live lease until its replacement serves.
+                # Without it, bumping the generation advanced the child name, the old child
+                # stopped being rendered, and the node went DOWN before the replacement served
+                # anything (toks4, 2026-09-30: /readyz 503, stale sha, no lease).
+                # Existing XRs omit it, which the Composition reads as -1 and renders exactly as
+                # it did before this field existed; the field is adopted the first time that
+                # workload is observed serving, so the fleet converges with zero churn.
+                activeLeaseGeneration:
+                  { type: integer, minimum: 0, maximum: 1000000 }
                 bootDeadlineAt: { type: string, format: date-time }
                 # BOOT EPOCH (bug.5244, bug.5287). The (bundle sha, leaseGeneration,
                 # optional recovery ordinal) attempt this XR's boot deadline is anchored to,
