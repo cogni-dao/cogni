@@ -1218,12 +1218,12 @@ describe("catalog lease generation naming", () => {
   });
 
   /**
-   * THE VALUE IS THE MONEY (bug.5192). toks5 production's generation-0 receipt is terminally
-   * settled, so its row MUST resolve to key suffix `:1`. The rename may not move a VALUE: a
+   * THE VALUE IS THE MONEY (bug.5192). toks5 production and preview each have terminally
+   * settled receipts, so their rows MUST stay on explicit replacement generations. A
    * changed suffix answers "no existing resource" and mints a SECOND PAID LEASE, and a suffix
    * that reverted to 0 re-deads the node against a key the actuator already spent.
    */
-  it("keeps toks5 production on its explicit replacement generation when that fleet row exists", () => {
+  it("keeps toks5 environments on their explicit replacement generations when that fleet row exists", () => {
     const toks5Path = path.join(CATALOG_DIR, "toks5.yaml");
     if (!existsSync(toks5Path)) return;
 
@@ -1243,6 +1243,9 @@ describe("catalog lease generation naming", () => {
     // closed lease, so a retry under :4 would replay the dead handle (task.5157 case c). toks5's
     // SDL is identical to healthy toks4, so gen-4's 404 reads as transient; 5 is a fresh key
     // that re-enters createAndLease to retry the manifest delivery.
+    // task.5180: preview gen-1 reached BootDeadlineClosed after a provider-http UPDATE wedge;
+    // its closed lease makes :1 spent, so :2 is the reviewed replacement.
+    expect(toks5.lease_generation?.preview).toBe(2);
     expect(toks5.lease_generation?.production).toBe(5);
   });
 });
