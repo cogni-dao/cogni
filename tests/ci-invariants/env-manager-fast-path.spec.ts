@@ -37,8 +37,7 @@ function workflow(name: string) {
   };
 }
 
-const CLASSIFIER_FAILED =
-  "needs.operator_change_fast_path.result != 'success'";
+const CLASSIFIER_FAILED = "needs.operator_change_fast_path.result != 'success'";
 const NOT_ELIGIBLE =
   "needs.operator_change_fast_path.outputs.eligible != 'true'";
 

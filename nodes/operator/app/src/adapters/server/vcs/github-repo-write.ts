@@ -3222,14 +3222,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       branch,
       pr: { title, body },
     });
-    await this.updatePrBody(
-      octokit,
-      owner,
-      repo,
-      result.prNumber,
-      title,
-      body
-    );
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
     return {
       status: "pr_opened",
       action: "set_region",
