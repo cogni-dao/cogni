@@ -99,6 +99,23 @@ function logReadinessFailure(
  * `deep` (from `?deep=1`) restores hard-fail semantics for provisioning /
  * stack-test smoke checks that must assert the substrate is actually up.
  */
+/**
+ * A NON-FATAL DEPENDENCY MUST NOT SPEND THE READINESS BUDGET (bug.5378). The checks below were
+ * already declared non-fatal on the default probe path, but they were still awaited to their own
+ * connection timeouts -- so an unreachable Temporal plus an unreachable scheduler-worker cost
+ * timeout + timeout and /readyz answered 200 after ~6s (measured on spawny-boi candidate-a:
+ * 6.227s / 5.866s, versus 1.03-1.19s for a node whose substrate is up). A late 200 is not a
+ * harmless 200: the Akash serving probe budgets 5s, so it recorded version_unavailable and
+ * `serving` stayed FALSE FOREVER on a node that was healthy and serving the exact expected sha
+ * -- which keeps the XR out of Ready, blocks CI verify-candidate, and (since bug.5322) prevents
+ * status.activeLeaseGeneration from ever being adopted. If a non-fatal check can push the
+ * response past a consumer's timeout it is fatal in practice, which is the very fleet-drain
+ * failure mode (incident 2026-06-26) that the non-fatal design exists to prevent.
+ */
+const NON_FATAL_SUBSTRATE_BUDGET_MS = 1_000;
+
+const BUDGET_EXCEEDED = Symbol("readiness_budget_exceeded");
+
 async function assertSubstrate(
   check: () => Promise<void>,
   opts: {
@@ -108,25 +125,71 @@ async function assertSubstrate(
     dependency: string;
   }
 ): Promise<void> {
-  try {
-    await check();
-  } catch (error) {
-    if (opts.deep) throw error; // explicit deep probe: hard-fail (503)
-    if (error instanceof InfraConnectivityError) {
+  // `?deep=1` keeps its contract exactly: unbounded wait, hard-fail. Provisioning and
+  // stack-test smoke checks rely on it to assert the substrate is genuinely up.
+  if (!opts.deep) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Settle the check into a value rather than racing a rejection: if the budget wins, the
+    // check's eventual failure is already handled here and cannot surface as an unhandled
+    // rejection that crashes the process.
+    const settled = check().then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error })
+    );
+    const outcome = await Promise.race([
+      settled,
+      new Promise<typeof BUDGET_EXCEEDED>((resolve) => {
+        timer = setTimeout(
+          () => resolve(BUDGET_EXCEEDED),
+          NON_FATAL_SUBSTRATE_BUDGET_MS
+        );
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+    if (outcome === BUDGET_EXCEEDED) {
       opts.ctx.log.error(
         {
           event: opts.event,
           severity: "critical",
-          reason: error.code,
+          reason: "readiness_budget_exceeded",
           dependency: opts.dependency,
-          message: error.message,
+          budgetMs: NON_FATAL_SUBSTRATE_BUDGET_MS,
         },
-        `readiness: ${opts.dependency} unreachable — MISSION-CRITICAL async substrate down (AI/chat is dispatched through Temporal). Returning ready: probe stays non-fatal so the fleet is not drained; the critical alert + request-time 503 cover it.`
+        `readiness: ${opts.dependency} did not answer within the ${NON_FATAL_SUBSTRATE_BUDGET_MS}ms non-fatal budget — MISSION-CRITICAL async substrate likely down (AI/chat is dispatched through Temporal). Returning ready WITHOUT waiting it out: a late 200 breaks the serving probe (bug.5378); the critical alert + request-time 503 cover it.`
       );
       return;
     }
-    throw error; // unexpected error type → fall through to default 503 handling
+    if (outcome.ok) return;
+    return handleSubstrateFailure(outcome.error, opts);
   }
+  try {
+    await check();
+  } catch (error) {
+    if (opts.deep) throw error; // explicit deep probe: hard-fail (503)
+    return handleSubstrateFailure(error, opts);
+  }
+}
+
+/** Shared non-fatal failure handling for a substrate check (bug.5378 split it out). */
+function handleSubstrateFailure(
+  error: unknown,
+  opts: { ctx: RequestContext; event: string; dependency: string }
+): void {
+  if (error instanceof InfraConnectivityError) {
+    opts.ctx.log.error(
+      {
+        event: opts.event,
+        severity: "critical",
+        reason: error.code,
+        dependency: opts.dependency,
+        message: error.message,
+      },
+      `readiness: ${opts.dependency} unreachable — MISSION-CRITICAL async substrate down (AI/chat is dispatched through Temporal). Returning ready: probe stays non-fatal so the fleet is not drained; the critical alert + request-time 503 cover it.`
+    );
+    return;
+  }
+  throw error; // unexpected error type → fall through to default 503 handling
 }
 
 export const GET = wrapRouteHandlerWithLogging(
@@ -193,21 +256,26 @@ export const GET = wrapRouteHandlerWithLogging(
       // mission-critical: failures are logged at ERROR with a critical-severity
       // event so monitoring alarms. `?deep=1` hard-fails (503) for provisioning
       // / stack-test smoke checks that must confirm the substrate is up.
-      await assertSubstrate(
-        () => assertTemporalConnectivity(container.scheduleControl, env),
-        {
+      // CONCURRENTLY, not one after the other (bug.5378): serialized, two unreachable
+      // dependencies cost two budgets. Promise.all keeps each check's own logging and,
+      // under `?deep=1`, still surfaces the first rejection as the 503 it must be.
+      await Promise.all([
+        assertSubstrate(
+          () => assertTemporalConnectivity(container.scheduleControl, env),
+          {
+            ctx,
+            deep,
+            event: "substrate.temporal.unreachable",
+            dependency: "temporal",
+          }
+        ),
+        assertSubstrate(() => assertSchedulerWorkerConnectivity(env), {
           ctx,
           deep,
-          event: "substrate.temporal.unreachable",
-          dependency: "temporal",
-        }
-      );
-      await assertSubstrate(() => assertSchedulerWorkerConnectivity(env), {
-        ctx,
-        deep,
-        event: "substrate.scheduler_worker.unreachable",
-        dependency: "scheduler-worker",
-      });
+          event: "substrate.scheduler_worker.unreachable",
+          dependency: "scheduler-worker",
+        }),
+      ]);
 
       // Verify system tenant billing account exists (per SYSTEM_TENANT_STARTUP_CHECK)
       await verifySystemTenant(container.serviceAccountService);
