@@ -144,6 +144,11 @@ jobs:
       - name: Build workspace packages
         run: pnpm packages:build
 
+      # TEMP task.5188 remote-only focused diagnosis. Remove after the exact
+      # node.register inverse conflict reason is captured from GitHub CI.
+      - name: Diagnose node registration recovery replay
+        run: pnpm exec vitest run --config nodes/operator/app/vitest.config.mts nodes/operator/app/src/shared/vcs/operator-change-replay.test.ts
+
       - name: Type check
         run: pnpm typecheck
 

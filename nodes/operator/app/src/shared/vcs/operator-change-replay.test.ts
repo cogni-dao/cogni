@@ -195,8 +195,9 @@ describe("replayOperatorChange", () => {
         forkDomainRoot: fixture.input.forkDomainRoot,
         reader: readerFor(head, head),
       });
-    await expect(plan(fixture.head)).resolves.toMatchObject({
+    await expect(plan(fixture.head)).resolves.toEqual({
       status: "satisfied",
+      intent,
     });
 
     const corruptions = [
