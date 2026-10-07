@@ -190,7 +190,7 @@ Do not merge or promote money-rail behavior on ambiguous validation language. Sa
 
 ## Knowledge Updates
 
-When future payment work reveals durable new facts, use [`contribute-knowledge-to-cogni`](../contribute-knowledge-to-cogni/SKILL.md) before writing to the hub. Recall first, refine existing entries when possible, and keep one open contribution branch. As-built contracts belong in `docs/spec/*` shipped with code; atomic findings and operating rules can go to the knowledge hub.
+When future payment work reveals durable new facts, use [`contribute-knowledge-to-cogni`](../contribute-knowledge-to-cogni/SKILL.md) before writing to the hub. Recall first, refine existing entries when possible, and keep one inbox per work item — unrelated knowledge opens its own. As-built contracts belong in `docs/spec/*` shipped with code; atomic findings and operating rules can go to the knowledge hub.
 
 Good candidates for knowledge contribution:
 
