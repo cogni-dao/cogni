@@ -14,11 +14,10 @@ production_branch: deploy/production-red
 # story.5025 — per-env node-set (deploy ⊆ provisioned). A wizard birth renders the transient
 # candidate-a proof slot and canonical production; PREVIEW_IS_ABSENT_AT_BIRTH. Closing the
 # candidate after the proof is the ordinary env verb ({env:candidate-a, present:false}).
-envs: [candidate-a, production]
+envs: [production]
 # story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
 # fallback that exists for rows minted before decentralized compute did.
 deployment_provider:
-  candidate-a: akash
   production: akash
 # task.5097 — WHICH authority reconciles the workload. Crossplane
 # (infra/crossplane/xcomputeworkload) owns every generic concern; the only Cogni-specific
@@ -27,12 +26,10 @@ deployment_provider:
 # control plane) and pay for its lease (a pinned actuator wallet); an environment missing
 # either is omitted and stays on the pre-existing legacy default (task.5104, task.5097).
 compute_api:
-  candidate-a: crossplane
   production: crossplane
 # Explicit initial replacement counter for each Akash lease. Generation 0 is the
 # first idempotence key; later retries must advance it from durable receipt evidence.
 lease_generation:
-  candidate-a: 0
   production: 0
 # story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
