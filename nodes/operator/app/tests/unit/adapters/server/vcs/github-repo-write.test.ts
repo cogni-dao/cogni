@@ -80,7 +80,6 @@ const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
     bypassActors: [],
   },
 });
-
 const TEST_NODE_REPO_POLICY = parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON);
 const NODE_MAIN_POLICY_RULESET_NAME = TEST_NODE_REPO_POLICY.ruleset.name;
 
