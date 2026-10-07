@@ -90,13 +90,21 @@ patches:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
                   - name: AKASH_ALLOWED_PROVIDERS
-                    # bug.5356 — candidate's previous single-provider pin was zencloud
-                    # (BE), while toks4's required placement excludes BE. That made the
-                    # intersection empty and every fresh candidate auction unwinnable.
-                    # Keep candidate pinned to the audited, custom-domain-capable
-                    # providers whose permitted countries and egress CIDRs are already
-                    # declared on toks4; do not widen the geo-placement requirement.
-                    value: akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x
+                    # bug.5380 — EMPTY ON PURPOSE: screen on policy alone. The previous
+                    # three-provider pin existed solely for toks4's geo (bug.5356), and
+                    # toks4 was RETIRED in #2583, so the pin now only narrows the lane for
+                    # nodes it was never about. Measured 2026-10-07: spawny-boi's gen-2
+                    # auction drew SEVEN bids and refused all seven as not_allowlisted —
+                    # including akash16yr3…jxxm (ZenCloud), the provider HOSTING that
+                    # node's live lease. The lane could not re-mint on the provider it was
+                    # already running on. Per story.5050 and the note above, empty means
+                    # "no provider pin — screen on policy alone" (signedBy audit anchor,
+                    # audited + uptime7d>0.95 + activeLeases>0, 2σ price-outlier cut,
+                    # derived strike blacklist), NOT "reject every bid". Geography stays
+                    # enforced where it belongs: per-node, fail-closed, via the catalog's
+                    # required_placement_countries — poly is the only node that declares
+                    # it, and that requirement is unaffected by this change.
+                    value: ""
                   # HUMAN GATE (story.5016 secret-boundary amendment 3). The PUBLIC Akash
                   # account/wallet address the actuator is authorized to spend from — pinned
                   # here as plain config because it is not a secret and must be reviewable in
