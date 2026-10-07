@@ -1006,9 +1006,24 @@ jobs:
           # candidate-specific prerequisite assertion is the next, read-only step.
           RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT: "true"
           # Sibling degradation remains non-fatal for ordinary production replay,
-          # but this job exists to gate candidate-a specifically.
-          RUN_NODE_SUBSTRATE_REQUIRED_LANE: candidate-a
-        run: bash ci-src/scripts/ci/run-node-substrate.sh "$DEPLOY_ENVIRONMENT" "${{ matrix.node }}"
+          # but a foreign custodian run exists to gate candidate-a specifically.
+          # In an isolated fleet candidate-a is the target, not a sibling, so its
+          # ordinary target failure semantics already fail closed.
+          RUN_NODE_SUBSTRATE_REQUIRED_LANE: ${{ (vars.FLEET_CONTROL_ENV || 'production') != 'candidate-a' && 'candidate-a' || '' }}
+        run: |
+          set -euo pipefail
+          catalog="app-src/infra/catalog/${{ matrix.node }}.yaml"
+          # The matrix provider describes the TARGET candidate lane. The control
+          # replay must describe the CONTROL lane instead (default k3s), or a
+          # candidate-akash/production-k3s node falsely runs production's Akash
+          # provider assertion semantics.
+          control_provider="$(yq -N ".deployment_provider.\"${DEPLOY_ENVIRONMENT}\" // \"k3s\"" "$catalog")"
+          case "$control_provider" in
+            k3s|akash) ;;
+            *) echo "::error::unsupported control provider '$control_provider' for ${DEPLOY_ENVIRONMENT}/${{ matrix.node }}"; exit 1 ;;
+          esac
+          DEPLOYMENT_PROVIDER="$control_provider" \
+            bash ci-src/scripts/ci/run-node-substrate.sh "$DEPLOY_ENVIRONMENT" "${{ matrix.node }}"
 
       - name: Assert candidate-a prerequisites in the custodian
         env:

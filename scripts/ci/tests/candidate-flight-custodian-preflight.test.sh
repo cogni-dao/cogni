@@ -13,8 +13,10 @@ WF="$ROOT/.github/workflows/candidate-flight.yml"
 job="$(sed -n '/^  external-node-preflight:/,/^  prepare-substrate-deploy-branch:/p' "$WF")"
 printf '%s\n' "$job" | grep -Fq 'environment: ${{ vars.FLEET_CONTROL_ENV || '\''production'\'' }}'
 printf '%s\n' "$job" | grep -Fq 'RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT: "true"'
-printf '%s\n' "$job" | grep -Fq 'RUN_NODE_SUBSTRATE_REQUIRED_LANE: candidate-a'
-printf '%s\n' "$job" | grep -Fq 'run: bash ci-src/scripts/ci/run-node-substrate.sh "$DEPLOY_ENVIRONMENT"'
+printf '%s\n' "$job" | grep -Fq "RUN_NODE_SUBSTRATE_REQUIRED_LANE: \${{ (vars.FLEET_CONTROL_ENV || 'production') != 'candidate-a' && 'candidate-a' || '' }}"
+printf '%s\n' "$job" | grep -Fq 'control_provider="$(yq -N ".deployment_provider.\"${DEPLOY_ENVIRONMENT}\" // \"k3s\"" "$catalog")"'
+printf '%s\n' "$job" | grep -Fq 'DEPLOYMENT_PROVIDER="$control_provider"'
+printf '%s\n' "$job" | grep -Fq 'bash ci-src/scripts/ci/run-node-substrate.sh "$DEPLOY_ENVIRONMENT"'
 printf '%s\n' "$job" | grep -Fq "(vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a' && vars.DOMAIN"
 printf '%s\n' "$job" | grep -Fq 'DEPLOY_ENVIRONMENT: candidate-a'
 printf '%s\n' "$job" | grep -Fq 'run: bash ci-src/scripts/ci/assert-target-substrate.sh'

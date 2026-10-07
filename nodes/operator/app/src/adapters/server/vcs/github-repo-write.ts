@@ -53,12 +53,9 @@ import type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
   ClassifyEnvManagerPrInput,
-  ClassifyNodeRegisterPrInput,
   DeployPlanePort,
   EnvManagerPrClassificationResult,
-  NodeBirthDispatchResult,
   NodeInfraReconcileResult,
-  NodeRegisterPrClassificationResult,
   NodePromoteResult,
   ObservedWorkflowDispatchResult,
   PreparedNodeRefCandidateFlight,
@@ -119,7 +116,6 @@ import {
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
-import { classifyNodeRegisterCommit } from "@/shared/vcs/node-register-pr";
 
 const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
 
@@ -1333,50 +1329,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
     });
   }
 
-  async classifyNodeRegisterPr(
-    input: ClassifyNodeRegisterPrInput
-  ): Promise<NodeRegisterPrClassificationResult> {
-    const octokit = await this.getOctokit(input.owner, input.repo);
-    const botIdentity = await this.resolveOperatorBotIdentity(octokit);
-    const { data: pr } = await octokit.request(
-      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
-      {
-        owner: input.owner,
-        repo: input.repo,
-        pull_number: input.prNumber,
-      }
-    );
-    const { data: commit } = await octokit.request(
-      "GET /repos/{owner}/{repo}/commits/{ref}",
-      {
-        owner: input.owner,
-        repo: input.repo,
-        ref: pr.head.sha,
-      }
-    );
-
-    return classifyNodeRegisterCommit({
-      headRef: pr.head.ref,
-      commitMessage: commit.commit.message,
-      verified: commit.commit.verification?.verified === true,
-      verificationReason: commit.commit.verification?.reason ?? null,
-      parentCount: commit.parents?.length ?? 0,
-      prState: pr.state ?? null,
-      merged: pr.merged === true,
-      baseRef: pr.base?.ref ?? null,
-      prUserLogin: pr.user?.login ?? null,
-      prUserId: pr.user?.id ?? null,
-      prUserType: pr.user?.type ?? null,
-      headRepoFullName: pr.head.repo?.full_name ?? null,
-      commitCount: pr.commits ?? 0,
-      commitAuthorLogin: commit.author?.login ?? null,
-      commitAuthorId: commit.author?.id ?? null,
-      expectedBotLogin: botIdentity.login,
-      expectedBotId: botIdentity.id,
-      expectedHeadRepoFullName: `${input.owner}/${input.repo}`,
-    });
-  }
-
   private operatorBotIdentity?: { login: string; id: number };
 
   /**
@@ -2290,102 +2242,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
       workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/candidate-flight.yml`,
       message: `Candidate flight dispatched for ${input.slug}@${input.sourceSha.slice(0, 8)}.`,
     };
-  }
-
-  async dispatchNodeBirthCandidateFlight(input: {
-    owner: string;
-    repo: string;
-    slug: string;
-    sourceSha: string;
-    mergeSha: string;
-  }): Promise<NodeBirthDispatchResult> {
-    if (
-      !SOURCE_SHA_PATTERN.test(input.sourceSha) ||
-      !SOURCE_SHA_PATTERN.test(input.mergeSha)
-    ) {
-      throw deployPlaneError(
-        "invalid_source_sha",
-        "node birth dispatch requires full source and merge SHAs",
-        422
-      );
-    }
-
-    const octokit = await this.getOctokit(input.owner, input.repo);
-    const checkName = `node-birth-dispatch/${input.slug}`;
-    const workflowUrl = `https://github.com/${input.owner}/${input.repo}/actions/workflows/candidate-flight.yml`;
-    const { data: checks } = await octokit.request(
-      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs",
-      {
-        owner: input.owner,
-        repo: input.repo,
-        ref: input.mergeSha,
-        check_name: checkName,
-      }
-    );
-    const prior = checks.check_runs.find(
-      (check) =>
-        check.name === checkName &&
-        (check.status !== "completed" || check.conclusion === "success")
-    );
-    if (prior) return { status: "already_dispatched", workflowUrl };
-
-    // The immutable merge-SHA check run is a durable dispatch receipt. Sequential
-    // GitHub redeliveries stop above; if two deliveries race before either receipt
-    // is visible, candidate-flight's node+source concurrency key collapses them.
-    const { data: receipt } = await octokit.request(
-      "POST /repos/{owner}/{repo}/check-runs",
-      {
-        owner: input.owner,
-        repo: input.repo,
-        name: checkName,
-        head_sha: input.mergeSha,
-        status: "in_progress",
-        output: {
-          title: "Node birth candidate dispatch",
-          summary: `Dispatching candidate substrate gate and flight for ${input.slug}@${input.sourceSha.slice(0, 8)}.`,
-        },
-      }
-    );
-
-    try {
-      await this.dispatchNodeRefCandidateFlight({
-        owner: input.owner,
-        repo: input.repo,
-        slug: input.slug,
-        sourceSha: input.sourceSha,
-      });
-      await octokit.request(
-        "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}",
-        {
-          owner: input.owner,
-          repo: input.repo,
-          check_run_id: receipt.id,
-          status: "completed",
-          conclusion: "success",
-          details_url: workflowUrl,
-          output: {
-            title: "Node birth candidate dispatched",
-            summary: `Candidate substrate gate and flight dispatched for ${input.slug}@${input.sourceSha.slice(0, 8)}.`,
-          },
-        }
-      );
-      return { status: "dispatched", workflowUrl };
-    } catch (error) {
-      await octokit
-        .request("PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}", {
-          owner: input.owner,
-          repo: input.repo,
-          check_run_id: receipt.id,
-          status: "completed",
-          conclusion: "failure",
-          output: {
-            title: "Node birth candidate dispatch failed",
-            summary: `Candidate dispatch failed for ${input.slug}; GitHub webhook redelivery may retry safely.`,
-          },
-        })
-        .catch(() => undefined);
-      throw error;
-    }
   }
 
   async dispatchPrBuild(input: {

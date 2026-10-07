@@ -27,10 +27,11 @@ ORDER="$TMPROOT/order.log"
 CATALOG_FIXTURE="$TMPROOT/catalog"
 mkdir -p "$CATALOG_FIXTURE"
 export COGNI_CATALOG_ROOT="$CATALOG_FIXTURE"
-for n in node-template operator toks4 k3snode isolated; do
+for n in node-template operator toks4 k3snode isolated mixed; do
   printf 'name: %s\nenvs: [candidate-a, preview, production]\n' "$n" > "$CATALOG_FIXTURE/$n.yaml"
 done
 printf 'name: isolated\nenvs: [candidate-a]\ndeployment_provider:\n  candidate-a: akash\n' > "$CATALOG_FIXTURE/isolated.yaml"
+printf 'name: mixed\nenvs: [candidate-a, production]\ndeployment_provider:\n  candidate-a: akash\n' > "$CATALOG_FIXTURE/mixed.yaml"
 # toks4 is akash in PRODUCTION ONLY — control env == env in every lane it holds, which is
 # every existing fleet row. Case 5 must stay byte-identical to its pre-bug.5206 expectation.
 printf 'name: toks4\nenvs: [production]\ndeployment_provider:\n  production: akash\n' > "$CATALOG_FIXTURE/toks4.yaml"
@@ -359,6 +360,36 @@ RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
 got="$(paste -sd'|' - < "$ORDER")"
 want="materialize candidate-a isolated|reconcile candidate-a isolated"
 [ "$got" = "$want" ] || { echo "isolated fleet must reconcile candidate locally:
+  got:  $got
+  want: $want" >&2; exit 1; }
+
+# ── Case 15: a required foreign lane absent from the custodian set fails before
+#    ANY side effect. This catches stale/typo'd custody assumptions at the gate. ─
+: > "$ORDER"
+if DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+   RUN_NODE_SUBSTRATE_REQUIRED_LANE=candidate-a \
+   RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT=true \
+   RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+   RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+   RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+     bash "$RUNNER" production toks4 >/dev/null 2>&1; then
+  echo "an absent required lane must fail before side effects" >&2; exit 1
+fi
+[ ! -s "$ORDER" ] || { echo "absent required lane performed side effects:" >&2; cat "$ORDER" >&2; exit 1; }
+
+# ── Case 16: provider belongs to the EXECUTION lane, not the candidate matrix
+#    cell. mixed is candidate-akash/production-k3s; the control replay still
+#    provisions candidate substrate, but never runs production Akash semantics. ─
+: > "$ORDER"
+DEPLOYMENT_PROVIDER=k3s COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+RUN_NODE_SUBSTRATE_REQUIRED_LANE=candidate-a \
+RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+  bash "$RUNNER" production mixed >/dev/null
+got="$(paste -sd'|' - < "$ORDER")"
+want="materialize production mixed|materialize candidate-a mixed|reconcile production mixed|reconcile candidate-a mixed"
+[ "$got" = "$want" ] || { echo "production-k3s control replay inherited candidate Akash semantics:
   got:  $got
   want: $want" >&2; exit 1; }
 

@@ -124,6 +124,23 @@ while IFS= read -r lane; do
 done < <(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
 echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} custodies lanes of ${TARGET_NODE}: [${custodied_lanes[*]}]"
 
+# A lane-specific gate must fail BEFORE materialize/reconcile side effects if the
+# catalog no longer assigns that lane to this custodian. Otherwise a typo or
+# placement drift would green-light the target after reconciling unrelated lanes.
+if [ -n "${RUN_NODE_SUBSTRATE_REQUIRED_LANE:-}" ]; then
+  required_lane_present=false
+  for lane in "${custodied_lanes[@]}"; do
+    if [ "$lane" = "$RUN_NODE_SUBSTRATE_REQUIRED_LANE" ]; then
+      required_lane_present=true
+      break
+    fi
+  done
+  if ! $required_lane_present; then
+    echo "::error::run-node-substrate: required lane ${RUN_NODE_SUBSTRATE_REQUIRED_LANE}/${TARGET_NODE} is not custodied by ${DEPLOY_ENVIRONMENT}; refusing side effects" >&2
+    exit 1
+  fi
+fi
+
 # ── SIBLING_NEVER_FAILS_THE_TARGET (bug.5278/bug.5269) ──────────────────────────
 # Production custodies candidate-a/preview substrate for akash nodes (bug.5206/
 # task.5132), so sibling lanes MUST keep being reconciled from this run — but a

@@ -18,7 +18,6 @@
 
 import { NextResponse } from "next/server";
 import { dispatchLaneOnboard } from "@/app/_facades/deploy/lane-onboard.server";
-import { dispatchNodeBirthOnboard } from "@/app/_facades/deploy/node-birth-onboard.server";
 import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
 import { dispatchPrReview } from "@/app/_facades/review/dispatch.server";
 import {
@@ -312,10 +311,6 @@ export async function POST(
       // desired state. Matches only that verb's branch on the parent monorepo; every other
       // merge no-ops (task.5132).
       dispatchLaneOnboard(verified.payload, env, log);
-      // A node-register merge is the reviewed birth authority. Await its exact,
-      // App-signed candidate dispatch so a transient App/GitHub failure returns
-      // non-2xx and remains eligible for webhook redelivery.
-      await dispatchNodeBirthOnboard(verified.payload, env, log);
     }
 
     if (source === "github" && eventType === "push") {
