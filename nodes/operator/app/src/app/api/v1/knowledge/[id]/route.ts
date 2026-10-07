@@ -62,6 +62,7 @@ export const GET = wrapRouteHandlerWithLogging<{
         entityId: entry.entityId ?? null,
         title: entry.title,
         content: entry.content,
+        useWhen: entry.useWhen ?? null,
         entryType: entry.entryType ?? "finding",
         confidencePct: entry.confidencePct ?? null,
         sourceType: entry.sourceType,
