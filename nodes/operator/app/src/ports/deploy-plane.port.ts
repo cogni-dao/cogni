@@ -224,6 +224,27 @@ export interface EnvManagerPrClassificationResult {
   readonly targetNodeRef?: string;
 }
 
+export interface ClassifyNodeRegisterPrInput {
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+}
+
+export interface NodeRegisterPrClassificationResult {
+  readonly isNodeRegisterPr: boolean;
+  readonly slug?: string;
+}
+
+export type NodeBirthDispatchResult =
+  | {
+      readonly status: "dispatched";
+      readonly workflowUrl: string;
+    }
+  | {
+      readonly status: "already_dispatched";
+      readonly workflowUrl: string;
+    };
+
 export interface DeployPlanePort {
   prepareNodeRefCandidateFlight(
     input: PrepareNodeRefCandidateFlightInput
@@ -265,6 +286,24 @@ export interface DeployPlanePort {
   classifyEnvManagerPr(
     input: ClassifyEnvManagerPrInput
   ): Promise<EnvManagerPrClassificationResult>;
+
+  /** Verify a CLOSED+merged node-register PR was authored and signed by this exact App. */
+  classifyNodeRegisterPr(
+    input: ClassifyNodeRegisterPrInput
+  ): Promise<NodeRegisterPrClassificationResult>;
+
+  /**
+   * Dispatch the candidate flight once for a merged node birth. A check-run on
+   * the immutable merge SHA is the durable dispatch receipt used to suppress
+   * GitHub webhook redelivery; candidate-flight concurrency closes the race.
+   */
+  dispatchNodeBirthCandidateFlight(input: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly slug: string;
+    readonly sourceSha: string;
+    readonly mergeSha: string;
+  }): Promise<NodeBirthDispatchResult>;
 
   /**
    * Read a text file from a repo via the operator App (contents:read). Returns null when the file is

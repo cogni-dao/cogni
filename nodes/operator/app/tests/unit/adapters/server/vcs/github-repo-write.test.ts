@@ -80,6 +80,87 @@ const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
     bypassActors: [],
   },
 });
+
+describe("GitHubRepoWriter.dispatchNodeBirthCandidateFlight", () => {
+  const input = {
+    owner: "Cogni-DAO",
+    repo: "cogni",
+    slug: "red",
+    sourceSha: "6".repeat(40),
+    mergeSha: "7".repeat(40),
+  };
+
+  it("writes a durable receipt and dispatches candidate flight once", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        check_runs: [],
+      }),
+      "POST /repos/{owner}/{repo}/check-runs": () => ({ id: 77 }),
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches": () =>
+        ({}),
+      "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}": () => ({}),
+    };
+
+    await expect(
+      makeWriter().dispatchNodeBirthCandidateFlight(input)
+    ).resolves.toMatchObject({ status: "dispatched" });
+    expect(
+      requests.filter((request) => request.route.includes("/dispatches"))
+    ).toHaveLength(1);
+    expect(
+      requests.find((request) => request.route.includes("/dispatches"))?.params
+    ).toMatchObject({
+      workflow_id: "candidate-flight.yml",
+      ref: "main",
+      inputs: { node_slug: "red", source_sha: input.sourceSha },
+    });
+  });
+
+  it("suppresses a duplicate webhook when the merge SHA receipt exists", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        check_runs: [
+          {
+            id: 77,
+            name: "node-birth-dispatch/red",
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      }),
+    };
+
+    await expect(
+      makeWriter().dispatchNodeBirthCandidateFlight(input)
+    ).resolves.toMatchObject({ status: "already_dispatched" });
+    expect(requests.some((request) => request.route.includes("/dispatches"))).toBe(
+      false
+    );
+  });
+
+  it("marks a failed dispatch retryable and rethrows", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": () => ({
+        check_runs: [],
+      }),
+      "POST /repos/{owner}/{repo}/check-runs": () => ({ id: 77 }),
+      "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches": () =>
+        Promise.reject(new Error("dispatch unavailable")),
+      "PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}": (params) => {
+        expect(params).toMatchObject({
+          check_run_id: 77,
+          status: "completed",
+          conclusion: "failure",
+        });
+        return {};
+      },
+    };
+
+    await expect(
+      makeWriter().dispatchNodeBirthCandidateFlight(input)
+    ).rejects.toThrow("dispatch unavailable");
+  });
+});
 const TEST_NODE_REPO_POLICY = parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON);
 const NODE_MAIN_POLICY_RULESET_NAME = TEST_NODE_REPO_POLICY.ruleset.name;
 

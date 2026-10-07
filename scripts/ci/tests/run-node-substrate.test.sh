@@ -27,9 +27,10 @@ ORDER="$TMPROOT/order.log"
 CATALOG_FIXTURE="$TMPROOT/catalog"
 mkdir -p "$CATALOG_FIXTURE"
 export COGNI_CATALOG_ROOT="$CATALOG_FIXTURE"
-for n in node-template operator toks4 k3snode; do
+for n in node-template operator toks4 k3snode isolated; do
   printf 'name: %s\nenvs: [candidate-a, preview, production]\n' "$n" > "$CATALOG_FIXTURE/$n.yaml"
 done
+printf 'name: isolated\nenvs: [candidate-a]\ndeployment_provider:\n  candidate-a: akash\n' > "$CATALOG_FIXTURE/isolated.yaml"
 # toks4 is akash in PRODUCTION ONLY — control env == env in every lane it holds, which is
 # every existing fleet row. Case 5 must stay byte-identical to its pre-bug.5206 expectation.
 printf 'name: toks4\nenvs: [production]\ndeployment_provider:\n  production: akash\n' > "$CATALOG_FIXTURE/toks4.yaml"
@@ -300,5 +301,65 @@ fi
 if grep -q '^assert' "$ORDER"; then
   echo "the provider assert must NOT run after a fatal target reconcile" >&2; exit 1
 fi
+
+# ── Case 12: a foreign-custodied candidate gate can require candidate-a while
+#    preserving ordinary production replay semantics. It also skips the production
+#    provider assert: the caller separately asserts candidate-a prerequisites and
+#    must never imply that a production app was deployed. ───────────────────────
+cat > "$TMPROOT/rec.sh" <<EOF
+#!/usr/bin/env bash
+echo "reconcile \$1 \$2" >> "$ORDER"
+if [ "\$1" = "candidate-a" ]; then exit 3; fi
+exit 0
+EOF
+chmod +x "$TMPROOT/rec.sh"
+: > "$ORDER"
+if DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+   RUN_NODE_SUBSTRATE_REQUIRED_LANE=candidate-a \
+   RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT=true \
+   RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+   RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+   RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+     bash "$RUNNER" production polyfix >/dev/null 2>&1; then
+  echo "a REQUIRED custodied candidate-a failure must fail its preflight gate" >&2; exit 1
+fi
+if grep -q '^assert' "$ORDER"; then
+  echo "substrate-only control replay must skip the control-env provider assert" >&2; exit 1
+fi
+
+# ── Case 13: the required candidate succeeds in exact control-run order while
+#    the production provider assert remains skipped. This is the canonical birth
+#    gate: substrate only, no production app assertion/promotion. ───────────────
+mk_stub "$TMPROOT/rec.sh" reconcile 0
+: > "$ORDER"
+DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+RUN_NODE_SUBSTRATE_REQUIRED_LANE=candidate-a \
+RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT=true \
+RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+  bash "$RUNNER" production polyfix >/dev/null
+got="$(paste -sd'|' - < "$ORDER")"
+want="materialize production polyfix|materialize candidate-a polyfix|materialize preview polyfix|reconcile production polyfix|reconcile candidate-a polyfix|reconcile preview polyfix"
+[ "$got" = "$want" ] || { echo "required candidate gate order mismatch:
+  got:  $got
+  want: $want" >&2; exit 1; }
+
+# ── Case 14: isolated fleets remain self-contained. FLEET_CONTROL_ENV=candidate-a
+#    uses candidate credentials/domain at the workflow layer, and the runner keeps
+#    ordinary candidate target behavior with no production-custodian reach. ─────
+: > "$ORDER"
+FLEET_CONTROL_ENV=candidate-a DEPLOYMENT_PROVIDER=akash \
+COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT=true \
+RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+  bash "$RUNNER" candidate-a isolated >/dev/null
+got="$(paste -sd'|' - < "$ORDER")"
+want="materialize candidate-a isolated|reconcile candidate-a isolated"
+[ "$got" = "$want" ] || { echo "isolated fleet must reconcile candidate locally:
+  got:  $got
+  want: $want" >&2; exit 1; }
 
 echo "PASS: run-node-substrate.test.sh"
