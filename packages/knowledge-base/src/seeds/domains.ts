@@ -35,10 +35,16 @@ export interface NewDomain {
 // `skills` is intentionally absent: it is an entry_type (skill/guide/playbook),
 // not a domain.
 //
-// NOTE (task.5194): this constant currently has NO consumer. It is exported
-// from the package index and imported by nothing, so these rows are not yet
-// applied on a fresh node — which is why `mission` is empty fleet-wide. The
-// seed path has to be built; editing this list alone does not seed anything.
+// NOTE (task.5194): these rows ARE applied — but only on the local-dev path.
+// `scripts/db/seed-doltgres.mts` imports this constant and calls
+// `registerDomain` for each row idempotently, and that script runs via
+// `pnpm db:seed:doltgres` inside `pnpm db:setup`, which is invoked only from
+// `scripts/bootstrap/setup.sh`. No GitHub workflow runs it, and it is pinned to
+// `DOLTGRES_URL_OPERATOR`. A freshly spawned node therefore never seeds these
+// shelves, which is why `mission` is empty fleet-wide. Registration is also
+// available to any node agent directly: `POST /api/v1/knowledge/domains`
+// returns 201 for a node bearer. task.5194 makes the first-agent bootstrap say
+// which shelves to register; it does not need a new migrator.
 export const BASE_DOMAIN_SEEDS: NewDomain[] = [
   {
     id: "meta",
