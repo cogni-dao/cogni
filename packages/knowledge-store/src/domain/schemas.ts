@@ -138,6 +138,11 @@ export const KnowledgeSchema = z.object({
   entityId: z.string().nullable().optional(),
   title: z.string().min(1),
   content: z.string().min(1),
+  // useWhen: the one-line retrieval trigger. `title` already carries the CLAIM
+  // in 91 of 101 live entries, so this is the non-redundant half — the reader's
+  // situation, not the content. Projected into browse + the cognition index so
+  // an agent can route without reading full content (task.5193).
+  useWhen: z.string().max(320).nullable().optional(),
   entryType: z.string().min(1).optional(),
   confidencePct: z.number().int().min(0).max(100).nullable().optional(),
   sourceType: SourceTypeSchema,

@@ -94,6 +94,11 @@ export const knowledge = pgTable(
     entityId: text("entity_id"),
     title: text("title").notNull(),
     content: text("content").notNull(),
+    // useWhen: the one-line retrieval trigger ("use when X"). A COLUMN, not a
+    // content convention, so browse/list and the cognition index can project a
+    // routing table without reading 350KB of content. Nullable: pre-existing
+    // rows are backfilled from their leading bold Use-when line (task.5193).
+    useWhen: text("use_when"),
     entryType: text("entry_type").notNull().default("finding"),
     status: text("status").notNull().default("draft"),
     confidencePct: integer("confidence_pct").notNull().default(40),

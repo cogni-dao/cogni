@@ -173,6 +173,7 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       entityId: entry.entityId ?? null,
       title: stripDangerousControlChars(entry.title),
       content: stripDangerousControlChars(entry.content),
+      useWhen: entry.useWhen ? stripDangerousControlChars(entry.useWhen) : null,
       entryType: entry.entryType ?? "finding",
       confidencePct: initializeConfidence(entry).confidencePct,
       sourceType: entry.sourceType,
@@ -217,6 +218,12 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       }),
       ...(update.content !== undefined && {
         content: stripDangerousControlChars(update.content),
+      }),
+      ...(update.useWhen !== undefined && {
+        useWhen:
+          typeof update.useWhen === "string"
+            ? stripDangerousControlChars(update.useWhen)
+            : update.useWhen,
       }),
       ...(update.entryType !== undefined && { entryType: update.entryType }),
       ...(update.confidencePct !== undefined && {
