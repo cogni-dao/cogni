@@ -14,8 +14,13 @@
  *   - BASE_AND_HEAD_ARE_ATOMIC: the verified one-parent head may advance only its exact base;
  *     a concurrent base update makes the non-force ref update fail closed.
  *   - ALL_REQUIRED_CHECKS_GREEN: GitHub's required-context set must be satisfied independently.
- * Side-effects: GitHub reads and, for a fully eligible tree, one non-force ref fast-forward.
- * Links: docs/spec/merge-queue-config.md
+ *   - REGISTER_DURABLE_BEFORE_CAS: node.register starts the stable Temporal workflow before any
+ *     ref write; the Activity owns the CAS and post-land candidate dispatch as one retryable unit.
+ *   - FAILED_EXECUTIONS_RESTART: redelivery may restart a failed/timed-out/canceled/terminated
+ *     execution, while a running or successfully completed execution remains a duplicate no-op.
+ * Side-effects: GitHub reads, a durable workflow start for node.register/recovery, and for other
+ *   eligible trees one non-force ref fast-forward.
+ * Links: docs/spec/merge-queue-config.md, task.5195
  * @internal
  */
 
@@ -33,6 +38,24 @@ import type { Logger } from "@/shared/observability";
 
 const SHA = /^[0-9a-f]{40}$/;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+type RecoveryRequest = ReturnType<
+  typeof OperatorChangeRecoveryWorkflowInputSchema.parse
+>;
+
+async function startRecoveryWorkflow(request: RecoveryRequest): Promise<void> {
+  const { client, taskQueue } = await getTemporalWorkflowClient();
+  try {
+    await client.start("OperatorChangeRecoveryWorkflow", {
+      taskQueue,
+      workflowId: operatorChangeRecoveryWorkflowId(request),
+      workflowIdReusePolicy: WorkflowIdReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+      args: [request],
+    });
+  } catch (error) {
+    if (!(error instanceof WorkflowExecutionAlreadyStartedError)) throw error;
+  }
+}
 
 export async function dispatchOperatorChangeAutoMerge(
   payload: Record<string, unknown>,
@@ -84,6 +107,36 @@ export async function dispatchOperatorChangeAutoMerge(
     return;
   }
 
+  const request = OperatorChangeRecoveryWorkflowInputSchema.parse({
+    owner,
+    repo,
+    prNumber,
+    signedBaseSha: proof.baseSha,
+    losingHeadSha: headSha,
+    intent: proof.intent,
+  });
+
+  // The node birth CAS and its candidate dispatch must be one durable retryable operation. Starting
+  // Temporal first leaves main untouched if the handoff fails; Activity retry can safely repeat the
+  // exact node+source dispatch after it observes that this head already landed.
+  if (request.intent.operation === "node.register") {
+    await startRecoveryWorkflow(request);
+    log.info(
+      {
+        event: "operator_change.auto_merge",
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        operation: request.intent.operation,
+        node: request.intent.node,
+        outcome: "durable_execution_started",
+      },
+      "operator generated-change auto-merge evaluated"
+    );
+    return;
+  }
+
   const result = staleButVerified
     ? {
         outcome: "base_advanced" as const,
@@ -102,25 +155,7 @@ export async function dispatchOperatorChangeAutoMerge(
     result.outcome === "base_advanced" ||
     result.outcome === "retryable_or_ambiguous"
   ) {
-    const request = OperatorChangeRecoveryWorkflowInputSchema.parse({
-      owner,
-      repo,
-      prNumber,
-      signedBaseSha: proof.baseSha,
-      losingHeadSha: headSha,
-      intent: proof.intent,
-    });
-    const { client, taskQueue } = await getTemporalWorkflowClient();
-    try {
-      await client.start("OperatorChangeRecoveryWorkflow", {
-        taskQueue,
-        workflowId: operatorChangeRecoveryWorkflowId(request),
-        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
-        args: [request],
-      });
-    } catch (error) {
-      if (!(error instanceof WorkflowExecutionAlreadyStartedError)) throw error;
-    }
+    await startRecoveryWorkflow(request);
   }
   log.info(
     {
