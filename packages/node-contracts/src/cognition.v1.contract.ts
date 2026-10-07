@@ -24,8 +24,15 @@ import { z } from "zod";
 
 export const CognitionSkillPointerSchema = z.object({
   id: z.string(),
-  /** The entry's "use when X" framed title — discovery metadata, not body. */
+  /** The entry's claim, in one line. Discovery metadata, not body. */
   title: z.string(),
+  /**
+   * The entry's retrieval trigger — the reader's situation, from the
+   * `use_when` column. Null on entries written before the column existed, or
+   * on types that legitimately have none (hypothesis/decision/html). Renderers
+   * fall back to `title` so an un-backfilled node still shows something.
+   */
+  useWhen: z.string().nullable().optional(),
   entryType: z.string(),
   domain: z.string(),
 });

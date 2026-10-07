@@ -47,6 +47,49 @@ const baseInput = {
   orientation: null,
 } as const;
 
+const SKILL_WITH_TRIGGER = {
+  id: "shelf-one-axis",
+  title: "A shelf sorts on one axis or regrows a catch-all",
+  useWhen: "designing or reviewing a knowledge domain set",
+  entryType: "rule",
+  domain: "method",
+};
+
+describe("skills index — the 'use when' column shows the trigger", () => {
+  it("renders use_when, not the title, when the entry has one", () => {
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      skillsIndex: [SKILL_WITH_TRIGGER],
+    });
+    // The header has always claimed "use when"; it must now be true.
+    expect(md).toContain("| entry | type | use when |");
+    expect(md).toContain("designing or reviewing a knowledge domain set");
+    // The claim belongs in the entry body, not this column.
+    expect(md).not.toContain(
+      "A shelf sorts on one axis or regrows a catch-all"
+    );
+  });
+
+  it("falls back to the title when use_when is null", () => {
+    // A node that has not backfilled must still show a usable line rather
+    // than an empty cell.
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      skillsIndex: [{ ...SKILL_WITH_TRIGGER, useWhen: null }],
+    });
+    expect(md).toContain("A shelf sorts on one axis or regrows a catch-all");
+  });
+
+  it("falls back to the title when use_when is absent entirely", () => {
+    const { useWhen: _omitted, ...withoutField } = SKILL_WITH_TRIGGER;
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      skillsIndex: [withoutField],
+    });
+    expect(md).toContain("A shelf sorts on one axis or regrows a catch-all");
+  });
+});
+
 describe("renderBundleMarkdown", () => {
   it("renders name, mission, counts, and load time while demoting build SHA", () => {
     const markdown = renderBundleMarkdown(baseInput);

@@ -118,6 +118,7 @@ export const GET = wrapRouteHandlerWithLogging(
           skillsIndex.push({
             id: r.id,
             title: r.title,
+            useWhen: r.useWhen ?? null,
             entryType: r.entryType ?? "guide",
             domain: r.domain,
           });
