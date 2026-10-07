@@ -38,6 +38,7 @@ import {
   type Domain,
   DomainAlreadyRegisteredError,
   HypothesisMissingEvaluateAtError,
+  type KnowledgeIndexEntry,
   type KnowledgeStorePort,
   type NewDomain,
 } from "../../port/knowledge-store.port.js";
@@ -223,6 +224,27 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       `SELECT * FROM knowledge WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ${limit}`
     );
     return rows.map((r) => rowToKnowledge(r as Record<string, unknown>));
+  }
+
+  async listKnowledgeByEntryTypes(
+    entryTypes: readonly string[]
+  ): Promise<KnowledgeIndexEntry[]> {
+    const uniqueTypes = [...new Set(entryTypes)];
+    if (uniqueTypes.length === 0) return [];
+
+    const entryTypeList = uniqueTypes.map(escapeValue).join(", ");
+    const rows = await this.sql.unsafe(
+      `SELECT id, domain, title, entry_type FROM knowledge WHERE entry_type IN (${entryTypeList}) ORDER BY created_at DESC, id ASC`
+    );
+    return rows.map((row) => {
+      const record = row as Record<string, unknown>;
+      return {
+        id: record.id as string,
+        domain: record.domain as string,
+        title: record.title as string,
+        entryType: record.entry_type as string,
+      };
+    });
   }
 
   async searchKnowledge(

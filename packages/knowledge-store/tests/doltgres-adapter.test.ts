@@ -51,6 +51,32 @@ class FakeSql {
 
   async unsafe(query: string): Promise<Rows> {
     this.queries.push(query);
+    if (
+      query.startsWith(
+        "SELECT id, domain, title, entry_type FROM knowledge WHERE entry_type IN"
+      )
+    ) {
+      return rows([
+        {
+          id: "catalog-skill",
+          domain: "nodes",
+          title: "Catalog skill",
+          entry_type: "skill",
+        },
+        {
+          id: "deploy-guide",
+          domain: "infrastructure",
+          title: "Deploy guide",
+          entry_type: "guide",
+        },
+        {
+          id: "incident-playbook",
+          domain: "infrastructure",
+          title: "Incident playbook",
+          entry_type: "playbook",
+        },
+      ]);
+    }
     if (query.includes("FROM work_items")) {
       return rows(
         Array.from(this.workItemIds).some((id) => query.includes(`'${id}'`))
@@ -87,6 +113,28 @@ class FakeSql {
     return rows([]);
   }
 }
+
+describe("DoltgresKnowledgeStoreAdapter — cross-domain entry-type index", () => {
+  it("queries every actionable type without a domain or row limit", async () => {
+    const fake = new FakeSql();
+
+    const result = await adapterFor(fake).listKnowledgeByEntryTypes([
+      "skill",
+      "guide",
+      "playbook",
+    ]);
+
+    expect(result.map((row) => row.entryType)).toEqual([
+      "skill",
+      "guide",
+      "playbook",
+    ]);
+    const query = fake.queries[0];
+    expect(query).toContain("entry_type IN ('skill', 'guide', 'playbook')");
+    expect(query).not.toContain("domain =");
+    expect(query).not.toContain("LIMIT");
+  });
+});
 
 function adapterFor(fake: FakeSql): DoltgresKnowledgeStoreAdapter {
   return new DoltgresKnowledgeStoreAdapter({ sql: fake as unknown as Sql });

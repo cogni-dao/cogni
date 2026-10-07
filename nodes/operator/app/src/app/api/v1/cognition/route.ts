@@ -37,12 +37,12 @@ import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
   assertBundleWithinBudget,
-  isCognitionEntry,
   type OrientationEntry,
   renderBundleMarkdown,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
 } from "./_bundle";
+import { loadCognitionSkillsIndex } from "./_skills-index";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -82,7 +82,7 @@ export const GET = wrapRouteHandlerWithLogging(
     const buildSha = serverEnv().APP_BUILD_SHA ?? "unknown";
     const generatedAt = new Date().toISOString();
 
-    const skillsIndex: CognitionSkillPointer[] = [];
+    let skillsIndex: CognitionSkillPointer[] = [];
     const domainPointers: CognitionDomainPointer[] = [];
     // The current node's orientation entry id, by `<slug>-agent-orientation`
     // convention — captured during the scan, its excerpt fetched below. A
@@ -95,6 +95,9 @@ export const GET = wrapRouteHandlerWithLogging(
     // are the only piece that must survive an unconfigured/empty hub.
     const port = container.knowledgeStorePort;
     if (port) {
+      // Dedicated cross-domain query: the actionable index must never depend
+      // on the bounded per-domain browse scan (bug.5350).
+      skillsIndex = await loadCognitionSkillsIndex(port);
       const domains = await port.listDomainsFull();
       for (const d of domains) {
         // Suppress empty domains (e.g. a placeholder `nodes` with 0 entries):
@@ -114,13 +117,6 @@ export const GET = wrapRouteHandlerWithLogging(
           } else if (!orientationId && r.id.endsWith("-agent-orientation")) {
             orientationId = r.id;
           }
-          if (!isCognitionEntry(r.entryType)) continue;
-          skillsIndex.push({
-            id: r.id,
-            title: r.title,
-            entryType: r.entryType ?? "guide",
-            domain: r.domain,
-          });
         }
       }
     }

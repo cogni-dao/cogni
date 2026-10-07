@@ -186,6 +186,7 @@ export {
   DomainNotRegisteredError,
   EdoEntryTypeRequiresAtomicToolError,
   HypothesisMissingEvaluateAtError,
+  type KnowledgeIndexEntry,
   type KnowledgeStorePort,
   type NewDomain,
 } from "./port/knowledge-store.port.js";
