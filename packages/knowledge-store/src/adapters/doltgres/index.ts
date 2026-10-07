@@ -61,6 +61,7 @@ function rowToKnowledge(row: Record<string, unknown>): Knowledge {
     entityId: (row.entity_id as string) ?? null,
     title: row.title as string,
     content: row.content as string,
+    useWhen: (row.use_when as string) ?? null,
     entryType: row.entry_type as string,
     confidencePct:
       row.confidence_pct != null ? Number(row.confidence_pct) : null,
@@ -92,6 +93,12 @@ function knowledgeInsertColumns(entry: NewKnowledge): SqlColumnValue[] {
     { column: "entity_id", value: entry.entityId ?? undefined },
     { column: "title", value: stripDangerousControlChars(entry.title) },
     { column: "content", value: stripDangerousControlChars(entry.content) },
+    {
+      column: "use_when",
+      value: entry.useWhen
+        ? stripDangerousControlChars(entry.useWhen)
+        : undefined,
+    },
     { column: "entry_type", value: entry.entryType ?? undefined },
     { column: "confidence_pct", value: confidence },
     { column: "source_type", value: entry.sourceType },
@@ -118,7 +125,8 @@ function knowledgeUpdateColumns(
     // PRESERVE_MARKDOWN_WHITESPACE: strip dangerous control chars from the
     // free-text fields on write (bug.5062), same as the insert path.
     const value =
-      (key === "title" || key === "content") && typeof raw === "string"
+      (key === "title" || key === "content" || key === "useWhen") &&
+      typeof raw === "string"
         ? stripDangerousControlChars(raw)
         : raw;
     columns.push({ column, value });
@@ -128,6 +136,7 @@ function knowledgeUpdateColumns(
   push("entity_id", "entityId");
   push("title", "title");
   push("content", "content");
+  push("use_when", "useWhen");
   push("entry_type", "entryType");
   push("confidence_pct", "confidencePct");
   push("source_type", "sourceType");

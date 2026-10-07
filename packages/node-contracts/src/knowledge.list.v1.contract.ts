@@ -31,6 +31,7 @@ export const KnowledgeRowSchema = z.object({
   entityId: z.string().nullable(),
   title: z.string(),
   content: z.string(),
+  useWhen: z.string().nullable(),
   entryType: z.string(),
   confidencePct: z.number().int().nullable(),
   sourceType: z.string(),

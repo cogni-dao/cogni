@@ -30,6 +30,7 @@ export const KnowledgeEntryInputSchema = z.object({
   entityId: z.string().max(128).optional(),
   title: z.string().min(1).max(256),
   content: z.string().min(1).max(65536),
+  useWhen: z.string().min(1).max(320).optional(),
   entryType: z.string().min(1).max(64).optional(),
   tags: z.array(z.string().max(64)).max(32).optional(),
 });

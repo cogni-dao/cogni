@@ -43,6 +43,13 @@
       "when": 1779700000000,
       "tag": "0005_edo_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791406372340,
+      "tag": "0006_damp_cassandra_nova",
+      "breakpoints": true
     }
   ]
 }
