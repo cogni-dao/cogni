@@ -360,7 +360,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
       gates: [shapeGate],
     });
     const edit: KnowledgeContributionEdit = {
@@ -392,7 +391,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: defaultCanMergeKnowledge,
-      rateLimit: { maxOpenPerPrincipal: 5 },
       gates: [shapeGate],
     });
 
@@ -412,7 +410,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: defaultCanMergeKnowledge,
-      rateLimit: { maxOpenPerPrincipal: 5 },
       gates: [shapeGate],
     });
 
@@ -431,7 +428,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
       gates: [shapeGate],
     });
     const edit: KnowledgeContributionEdit = {
@@ -461,7 +457,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
       gates: [shapeGate],
     });
     const edit: KnowledgeContributionEdit = {
@@ -483,7 +478,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
       gates: [shapeGate],
     });
     const edit: KnowledgeContributionEdit = {
@@ -505,7 +499,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
     });
     const edit: KnowledgeContributionEdit = {
       op: "update",
@@ -532,7 +525,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
     });
     const edit: KnowledgeContributionEdit = {
       op: "delete",
@@ -556,7 +548,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
     });
 
     await expect(
@@ -584,7 +575,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
     });
 
     await service.close({
@@ -603,7 +593,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
     });
 
     await expect(
@@ -622,7 +611,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => true,
-      rateLimit: { maxOpenPerPrincipal: 5 },
       pushMainOnMerge: async () => {
         pushCalls++;
       },
@@ -644,7 +632,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
     });
 
     const record = await service.createEdoHypothesisContribution({
@@ -679,7 +666,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
     });
 
     const decision = await service.createEdoDecisionContribution({
@@ -729,7 +715,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
     });
 
     const h = await service.createEdoHypothesisContribution({
@@ -792,17 +777,16 @@ describe("createContributionService", () => {
     expect(port.mainEntryIds.size).toBe(0);
   });
 
-  it("EDO open-quota gates NEW contributions but does not block compounding", async () => {
-    // Quota only applies when there is NO existing open contribution to
-    // append onto. Once compounding kicks in, the chain shares one slot.
+  it("EDO hypotheses compound onto one open contribution per principal", async () => {
+    // The first hypothesize opens a contribution; later ones for the same
+    // principal append to it rather than forking a second branch.
     const port = new FakeContributionPort();
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 1 },
     });
 
-    // First hypothesize opens a contribution (no quota hit — count was 0).
+    // First hypothesize opens a contribution.
     const first = await service.createEdoHypothesisContribution({
       principal: agent,
       body: {
@@ -818,7 +802,7 @@ describe("createContributionService", () => {
     });
     expect(first.commitCount).toBe(1);
 
-    // Second hypothesize for the SAME principal compounds — quota irrelevant.
+    // Second hypothesize for the SAME principal compounds.
     const second = await service.createEdoHypothesisContribution({
       principal: agent,
       body: {
@@ -842,7 +826,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
-      rateLimit: { maxOpenPerPrincipal: 5 },
     });
     const first = await service.createEdoHypothesisContribution({
       principal: agent,
@@ -887,7 +870,6 @@ describe("createContributionService", () => {
     const service = createContributionService({
       port,
       canMergeKnowledge: () => true,
-      rateLimit: { maxOpenPerPrincipal: 5 },
       pushMainOnMerge: async () => {
         try {
           throw new Error("dolthub unreachable");

@@ -266,7 +266,6 @@ describe.skipIf(!hasRequiredEnv)(
       const svc = createContributionService({
         port: new DoltgresKnowledgeContributionAdapter({ sql }),
         canMergeKnowledge: defaultCanMergeKnowledge,
-        rateLimit: { maxOpenPerPrincipal: 10 },
         gates: [shapeGate],
         pushMainOnMerge,
       });
