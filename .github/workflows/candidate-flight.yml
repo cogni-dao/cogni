@@ -929,7 +929,7 @@ jobs:
       matrix:
         node: ${{ fromJson(needs.decide.outputs.external_compute_node_targets_json) }}
     concurrency:
-      group: external-node-preflight-candidate-a-${{ matrix.node }}
+      group: node-substrate-${{ vars.FLEET_CONTROL_ENV || 'production' }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     # The lane and the credential-bearing execution environment are different for a

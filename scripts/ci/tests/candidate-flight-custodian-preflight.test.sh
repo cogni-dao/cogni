@@ -12,6 +12,7 @@ WF="$ROOT/.github/workflows/candidate-flight.yml"
 
 job="$(sed -n '/^  external-node-preflight:/,/^  prepare-substrate-deploy-branch:/p' "$WF")"
 grep -Fq 'environment: ${{ vars.FLEET_CONTROL_ENV || '\''production'\'' }}' <<<"$job"
+grep -Fq "group: node-substrate-\${{ vars.FLEET_CONTROL_ENV || 'production' }}-\${{ matrix.node }}" <<<"$job"
 grep -Fq 'RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT: "true"' <<<"$job"
 grep -Fq "RUN_NODE_SUBSTRATE_REQUIRED_LANE: \${{ (vars.FLEET_CONTROL_ENV || 'production') != 'candidate-a' && 'candidate-a' || '' }}" <<<"$job"
 grep -Fq 'control_provider="$(yq -N ".deployment_provider.\"${DEPLOY_ENVIRONMENT}\" // \"k3s\"" "$catalog")"' <<<"$job"
