@@ -302,6 +302,7 @@ async function insertKnowledgeRow(input: {
   domain: string;
   title: string;
   content: string;
+  useWhen?: string | null;
   entryType: "hypothesis" | "decision" | "outcome";
   confidencePct: number;
   evaluateAt?: Date | null;
@@ -315,6 +316,7 @@ async function insertKnowledgeRow(input: {
     domain,
     title,
     content,
+    useWhen,
     entryType,
     confidencePct,
     evaluateAt,
@@ -329,7 +331,7 @@ async function insertKnowledgeRow(input: {
   // PRESERVE_MARKDOWN_WHITESPACE: strip dangerous control chars from free text
   // at every knowledge write, including the contribution/EDO merge (bug.5062).
   await conn.unsafe(
-    `INSERT INTO knowledge (id, domain, entity_id, title, content, entry_type, confidence_pct, source_type, source_ref, source_node, tags, evaluate_at, resolution_strategy) VALUES (${escapeValue(id)}, ${escapeValue(domain)}, NULL, ${escapeValue(stripDangerousControlChars(title))}, ${escapeValue(stripDangerousControlChars(content))}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue(provenance.sourceType)}, ${escapeValue(provenance.sourceRef)}, ${escapeValue(provenance.sourceNode)}, ${tags && tags.length > 0 ? escapeValue(tags) : "NULL"}, ${escapeValue(evaluateAt ?? null)}, ${escapeValue(resolutionStrategy ?? null)})`
+    `INSERT INTO knowledge (id, domain, entity_id, title, content, use_when, entry_type, confidence_pct, source_type, source_ref, source_node, tags, evaluate_at, resolution_strategy) VALUES (${escapeValue(id)}, ${escapeValue(domain)}, NULL, ${escapeValue(stripDangerousControlChars(title))}, ${escapeValue(stripDangerousControlChars(content))}, ${useWhen ? escapeValue(stripDangerousControlChars(useWhen)) : "NULL"}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue(provenance.sourceType)}, ${escapeValue(provenance.sourceRef)}, ${escapeValue(provenance.sourceNode)}, ${tags && tags.length > 0 ? escapeValue(tags) : "NULL"}, ${escapeValue(evaluateAt ?? null)}, ${escapeValue(resolutionStrategy ?? null)})`
   );
 }
 
@@ -624,7 +626,7 @@ async function applyEdit(input: {
     await assertKnowledgeRowExists(conn, edit.targetRowId);
     const entryType = edit.entry.entryType ?? "finding";
     const result = await conn.unsafe(
-      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(stripDangerousControlChars(edit.entry.title))}, content = ${escapeValue(stripDangerousControlChars(edit.entry.content))}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
+      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(stripDangerousControlChars(edit.entry.title))}, content = ${escapeValue(stripDangerousControlChars(edit.entry.content))}, use_when = ${edit.entry.useWhen ? escapeValue(stripDangerousControlChars(edit.entry.useWhen)) : "NULL"}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
     );
     if (result.count === 0) {
       throw new ContributionNotFoundError(
@@ -644,7 +646,7 @@ async function applyEdit(input: {
     edit.entry.id ?? `${contributionId}-${randomBytes(3).toString("hex")}`;
   const entryType = edit.entry.entryType ?? "finding";
   await conn.unsafe(
-    `INSERT INTO knowledge (id, domain, entity_id, title, content, entry_type, confidence_pct, source_type, source_ref, source_node, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(stripDangerousControlChars(edit.entry.title))}, ${escapeValue(stripDangerousControlChars(edit.entry.content))}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"})`
+    `INSERT INTO knowledge (id, domain, entity_id, title, content, use_when, entry_type, confidence_pct, source_type, source_ref, source_node, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(stripDangerousControlChars(edit.entry.title))}, ${escapeValue(stripDangerousControlChars(edit.entry.content))}, ${edit.entry.useWhen ? escapeValue(stripDangerousControlChars(edit.entry.useWhen)) : "NULL"}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"})`
   );
 }
 
@@ -1269,6 +1271,7 @@ export class DoltgresKnowledgeContributionAdapter
             id: row.from_id,
             title: row.from_title ?? null,
             content: row.from_content ?? null,
+            useWhen: row.from_use_when ?? null,
             entryType: row.from_entry_type ?? null,
             domain: row.from_domain ?? null,
           }
@@ -1278,6 +1281,7 @@ export class DoltgresKnowledgeContributionAdapter
             id: row.to_id,
             title: row.to_title ?? null,
             content: row.to_content ?? null,
+            useWhen: row.to_use_when ?? null,
             entryType: row.to_entry_type ?? null,
             domain: row.to_domain ?? null,
           }
@@ -1294,6 +1298,7 @@ export class DoltgresKnowledgeContributionAdapter
         after &&
         before.title === after.title &&
         before.content === after.content &&
+        before.useWhen === after.useWhen &&
         before.entryType === after.entryType &&
         before.domain === after.domain
       ) {
