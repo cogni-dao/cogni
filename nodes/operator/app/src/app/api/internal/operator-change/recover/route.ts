@@ -15,6 +15,7 @@ import { OperatorChangeRecoveryRequestSchema } from "@cogni/node-contracts";
 import { verifySchedulerBearer } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { recoverOperatorChange } from "@/app/_facades/deploy/operator-change-recovery.server";
+import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { serverEnv } from "@/shared/env";
@@ -25,10 +26,11 @@ export const runtime = "nodejs";
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "operator-change.recover.internal", auth: { mode: "none" } },
   async (ctx, request) => {
+    const env = serverEnv();
     if (
       !verifySchedulerBearer(
         request.headers.get("authorization"),
-        serverEnv().SCHEDULER_API_TOKEN
+        env.SCHEDULER_API_TOKEN
       )
     ) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -49,12 +51,23 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const result = await recoverOperatorChange(
         parsed.data,
-        getContainer().vcsCapability
+        getContainer().vcsCapability,
+        createOperatorDeployPlane(env)
       );
       return NextResponse.json(result, { status: 200 });
     } catch (error) {
       const status = (error as { status?: number }).status;
+      const code = (error as { code?: string }).code;
+      // An exact node.register head and signed source necessarily contain these objects. Immediately
+      // after the ref CAS, GitHub reads may still report them absent; keep only these coded
+      // availability races retryable. Identity, shape, and permission failures remain terminal.
+      const registerAvailabilityRace =
+        parsed.data.intent.operation === "node.register" &&
+        ((status === 404 && code === "catalog_missing") ||
+          (status === 422 &&
+            (code === "source_missing" || code === "repo_spec_missing")));
       if (
+        !registerAvailabilityRace &&
         typeof status === "number" &&
         status >= 400 &&
         status < 500 &&

@@ -27,7 +27,31 @@ const payload = {
 };
 const log = { info: vi.fn() } as never;
 
-function vcs(eligible: boolean) {
+const membershipIntent = {
+  operation: "env.membership" as const,
+  node: "spawny-boi",
+  environment: "candidate-a" as const,
+  action: "add" as const,
+  leaseGeneration: 0,
+  recoveryRootSha: headSha,
+  recoveryDepth: 0,
+};
+
+const registerIntent = {
+  operation: "node.register" as const,
+  node: "spawny-boi",
+  nodeId: "11111111-1111-4111-8111-111111111111",
+  sourceRepo: "https://github.com/cogni-test-org/spawny-boi.git",
+  sourceSha: "d".repeat(40),
+  ownerWallet: `0x${"1".repeat(40)}`,
+  recoveryRootSha: headSha,
+  recoveryDepth: 0,
+};
+
+function vcs(
+  eligible: boolean,
+  intent: typeof membershipIntent | typeof registerIntent = membershipIntent
+) {
   return {
     verifyOperatorChange: vi.fn().mockResolvedValue({
       eligible,
@@ -35,17 +59,9 @@ function vcs(eligible: boolean) {
       headSha,
       baseSha: "b".repeat(40),
       policyHeadSha,
-      operation: "env.membership",
-      node: "spawny-boi",
-      intent: {
-        operation: "env.membership",
-        node: "spawny-boi",
-        environment: "candidate-a",
-        action: "add",
-        leaseGeneration: 0,
-        recoveryRootSha: headSha,
-        recoveryDepth: 0,
-      },
+      operation: intent.operation,
+      node: intent.node,
+      intent,
     }),
     getCiStatus: vi.fn().mockResolvedValue({
       headSha,
@@ -84,6 +100,7 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       expectedHeadSha: headSha,
     });
     expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();
+    expect(temporal.start).not.toHaveBeenCalled();
   });
 
   it("binds a reverified internal bypass merge to the current expected head", async () => {
@@ -97,6 +114,67 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       expectedHeadSha: headSha,
       expectedPolicyHeadSha: policyHeadSha,
     });
+    expect(temporal.start).not.toHaveBeenCalled();
+  });
+
+  it("durably hands off node.register before any main write", async () => {
+    const capability = vcs(true, registerIntent);
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
+    expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();
+    expect(temporal.start).toHaveBeenCalledWith(
+      "OperatorChangeRecoveryWorkflow",
+      expect.objectContaining({
+        workflowId: `operator-change-recovery:cogni-test-org/cogni-monorepo:${headSha}`,
+        workflowIdReusePolicy:
+          WorkflowIdReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+        args: [
+          expect.objectContaining({
+            losingHeadSha: headSha,
+            intent: registerIntent,
+          }),
+        ],
+      })
+    );
+  });
+
+  it("leaves node.register main untouched when durable handoff fails", async () => {
+    const capability = vcs(true, registerIntent);
+    temporal.start.mockRejectedValueOnce(new Error("temporal unavailable"));
+    await expect(
+      dispatchOperatorChangeAutoMerge(payload, capability, log)
+    ).rejects.toThrow("temporal unavailable");
+    expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();
+  });
+
+  it("treats a running or successfully completed handoff as a duplicate no-op", async () => {
+    const capability = vcs(true, registerIntent);
+    const alreadyStarted = new Error("already started");
+    Object.setPrototypeOf(
+      alreadyStarted,
+      WorkflowExecutionAlreadyStartedError.prototype
+    );
+    temporal.start.mockRejectedValueOnce(alreadyStarted);
+    await expect(
+      dispatchOperatorChangeAutoMerge(payload, capability, log)
+    ).resolves.toBeUndefined();
+    expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();
+  });
+
+  it("allows redelivery to restart a failed terminal execution", async () => {
+    const capability = vcs(true, registerIntent);
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
+    await dispatchOperatorChangeAutoMerge(payload, capability, log);
+    expect(temporal.start).toHaveBeenCalledTimes(2);
+    expect(temporal.start).toHaveBeenNthCalledWith(
+      2,
+      "OperatorChangeRecoveryWorkflow",
+      expect.objectContaining({
+        workflowId: `operator-change-recovery:cogni-test-org/cogni-monorepo:${headSha}`,
+        workflowIdReusePolicy:
+          WorkflowIdReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+      })
+    );
+    expect(capability.fastForwardOperatorChange).not.toHaveBeenCalled();
   });
 
   it("lets the capability classify a base race instead of dropping the wake", async () => {
@@ -143,7 +221,8 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       "OperatorChangeRecoveryWorkflow",
       expect.objectContaining({
         workflowId: `operator-change-recovery:cogni-test-org/cogni-monorepo:${headSha}`,
-        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
+        workflowIdReusePolicy:
+          WorkflowIdReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
       })
     );
   });
@@ -162,7 +241,8 @@ describe("dispatchOperatorChangeAutoMerge", () => {
       "OperatorChangeRecoveryWorkflow",
       expect.objectContaining({
         workflowId: `operator-change-recovery:cogni-test-org/cogni-monorepo:${headSha}`,
-        workflowIdReusePolicy: WorkflowIdReusePolicy.REJECT_DUPLICATE,
+        workflowIdReusePolicy:
+          WorkflowIdReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
       })
     );
   });

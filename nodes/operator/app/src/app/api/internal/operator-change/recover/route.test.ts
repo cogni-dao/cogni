@@ -14,6 +14,7 @@ import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const recoverOperatorChange = vi.fn();
+const createOperatorDeployPlane = vi.fn(() => ({ kind: "test-deploy" }));
 const schedulerToken = "scheduler-token-at-least-32-characters";
 
 vi.mock("@/app/_facades/deploy/operator-change-recovery.server", () => ({
@@ -21,6 +22,9 @@ vi.mock("@/app/_facades/deploy/operator-change-recovery.server", () => ({
 }));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({ vcsCapability: { kind: "test-vcs" } }),
+}));
+vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
+  createOperatorDeployPlane,
 }));
 vi.mock("@/shared/env", () => ({
   serverEnv: () => ({ SCHEDULER_API_TOKEN: schedulerToken }),
@@ -44,6 +48,20 @@ const validRequest = {
   intent: {
     operation: "deployment.declare",
     node: "blue",
+    recoveryRootSha: "a".repeat(40),
+    recoveryDepth: 0,
+  },
+};
+
+const registerRequest = {
+  ...validRequest,
+  intent: {
+    operation: "node.register",
+    node: "blue",
+    nodeId: "11111111-1111-4111-8111-111111111111",
+    sourceRepo: "https://github.com/cogni-test-org/blue.git",
+    sourceSha: "c".repeat(40),
+    ownerWallet: `0x${"1".repeat(40)}`,
     recoveryRootSha: "a".repeat(40),
     recoveryDepth: 0,
   },
@@ -96,6 +114,11 @@ describe("POST /api/internal/operator-change/recover", () => {
       status: "landed",
       mainSha: "a".repeat(40),
     });
+    expect(recoverOperatorChange).toHaveBeenCalledWith(
+      validRequest,
+      { kind: "test-vcs" },
+      { kind: "test-deploy" }
+    );
   });
 
   it.each([
@@ -109,6 +132,64 @@ describe("POST /api/internal/operator-change/recover", () => {
     await expect(response.json()).resolves.toEqual({
       status: "terminal",
       reason: `github-permanent-${status}`,
+    });
+  });
+
+  it.each([
+    [404, "catalog_missing"],
+    [422, "source_missing"],
+    [422, "repo_spec_missing"],
+  ])("keeps post-CAS node.register availability %s/%s retryable", async (status, code) => {
+    recoverOperatorChange.mockRejectedValueOnce(
+      Object.assign(new Error("signed object not visible yet"), {
+        status,
+        code,
+      })
+    );
+    const response = await post({
+      authorization: `Bearer ${schedulerToken}`,
+      body: registerRequest,
+    });
+    expect(response.status).toBe(503);
+  });
+
+  it.each([
+    [404, "source_missing"],
+    [422, "node_id_mismatch"],
+    [422, "invalid_repo_spec"],
+  ])("keeps unrelated node.register %s/%s terminal", async (status, code) => {
+    recoverOperatorChange.mockRejectedValueOnce(
+      Object.assign(new Error("permanent register failure"), {
+        status,
+        code,
+      })
+    );
+    const response = await post({
+      authorization: `Bearer ${schedulerToken}`,
+      body: registerRequest,
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "terminal",
+      reason: `github-permanent-${status}`,
+    });
+  });
+
+  it("keeps the same coded status terminal for non-register operations", async () => {
+    recoverOperatorChange.mockRejectedValueOnce(
+      Object.assign(new Error("catalog missing"), {
+        status: 404,
+        code: "catalog_missing",
+      })
+    );
+    const response = await post({
+      authorization: `Bearer ${schedulerToken}`,
+      body: validRequest,
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "terminal",
+      reason: "github-permanent-404",
     });
   });
 
