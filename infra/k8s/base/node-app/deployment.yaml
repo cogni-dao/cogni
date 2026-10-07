@@ -23,6 +23,21 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
+      # ZERO_DOWNTIME_HOTSWAP: keep the OLD pod serving until the NEW pod passes
+      # readyz, THEN cut over. maxSurge:1 + maxUnavailable:0 is the Kubernetes
+      # default and the intended behavior for a single-replica Deployment behind
+      # the edge — the new pod schedules alongside the old, becomes Ready, and the
+      # old is removed only after. No zero-endpoint window, no edge 502.
+      #
+      # This REVERTS #1969 (cbb73b7ad), which set maxSurge:0/maxUnavailable:1
+      # (kill-old-before-new) → a guaranteed edge 502 on EVERY deploy across
+      # candidate-a + preview + PRODUCTION. #1969's stated reason — a surge pod
+      # goes Pending (Insufficient memory) on the 6GB box → rollout stalls on the
+      # stale image — is a symptom of inflated pod *requests*, not real pressure
+      # (honest-alloc #1945 puts the real fleet at ~2732Mi on 6GB). If a surge
+      # pod ever can't schedule, the fix is to RIGHT-SIZE requests / add VM
+      # headroom — NEVER to go back to kill-old-first, which trades a stall for a
+      # fleet-wide every-deploy outage.
       maxUnavailable: 0
       maxSurge: 1
   selector:

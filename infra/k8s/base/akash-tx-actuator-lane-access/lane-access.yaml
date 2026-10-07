@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5132 — the custodying cluster's actuator may run ONE lane's migration Job IN THAT LANE'S
+# NAMESPACE, and nothing else there.
+#
+# WHY THIS EXISTS. An akash node's non-production lane is reconciled by the PRODUCTION cluster
+# (bug.5206 custody: whoever renders the lease must read that lane's secrets). Its database is
+# that lane's own — `cogni_<node>_<lane>` on the same Postgres (bug.5207) — and the DSN naming it
+# lives ONLY in `cogni-<lane>/<node>-compute-env-secrets`. So the migration Job must be created
+# THERE: a Job in the actuator's own namespace resolves that same Secret NAME to production's
+# Secret and migrates production's database, then leaves a receipt the lane reads as its own
+# proof. That is exactly how poly's candidate-a lane served an empty database.
+#
+# WHY A ROLE PER LANE AND NOT A ClusterRole. `roleRef` is namespace-local, so each custodied lane
+# namespace carries its own Role + RoleBinding. The grant stays enumerable — you can read this
+# file and know every namespace the actuator can write a Job into — and a namespace NOT listed
+# here is structurally out of reach. A ClusterRole would trade that for one less object.
+#
+# VERBS ARE DERIVED FROM THE ADAPTER, not copied: KubernetesMigrationJobAdapter calls
+# readNamespacedJob (get), createNamespacedJob (create), listNamespacedJob (list),
+# deleteNamespacedJob (delete) and listNamespacedPod (list). Identical to the actuator's
+# own-namespace Role in ../akash-tx-actuator/rbac.yaml — same code, same reach, one namespace over.
+#
+# THE SUBJECT NAME CARRIES THE OVERLAY'S `namePrefix: operator-`. The actuator's ServiceAccount is
+# declared bare in ../akash-tx-actuator/service-account.yaml and lands as
+# `operator-akash-tx-actuator` because infra/k8s/overlays/production/operator/kustomization.yaml
+# prefixes everything it builds. This file is applied OUTSIDE that overlay (it targets other
+# namespaces, which the overlay's `namespace:` transformer would rewrite), so it must name the
+# subject as the cluster actually holds it. Verified live:
+#   kubectl auth can-i create jobs -n cogni-candidate-a \
+#     --as=system:serviceaccount:cogni-production:operator-akash-tx-actuator
+#
+# LANES ARE CATALOG-DERIVED, this list is not (yet). Production custodies every akash row's
+# non-production lanes; today that is candidate-a and preview, the only two non-production envs
+# that exist. A new lane needs a stanza here — the follow-up CI invariant that enumerates
+# lane-scoped receipts is what will catch a missing one.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: akash-tx-actuator-lane-migration
+  namespace: cogni-candidate-a
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: akash-tx-actuator-lane-migration
+  namespace: cogni-candidate-a
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: akash-tx-actuator-lane-migration
+subjects:
+  - kind: ServiceAccount
+    name: operator-akash-tx-actuator
+    namespace: cogni-production
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: akash-tx-actuator-lane-migration
+  namespace: cogni-preview
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: akash-tx-actuator-lane-migration
+  namespace: cogni-preview
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: akash-tx-actuator-lane-migration
+subjects:
+  - kind: ServiceAccount
+    name: operator-akash-tx-actuator
+    namespace: cogni-production
