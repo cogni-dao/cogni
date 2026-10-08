@@ -201,13 +201,6 @@ export class ContributionStateError extends Error {
   }
 }
 
-export class ContributionQuotaError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ContributionQuotaError";
-  }
-}
-
 export class ContributionForbiddenError extends Error {
   constructor(message: string = "forbidden") {
     super(message);

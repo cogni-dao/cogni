@@ -38,7 +38,6 @@ import {
   ContributionConflictError,
   ContributionForbiddenError,
   ContributionNotFoundError,
-  ContributionQuotaError,
   ContributionStateError,
   DomainNotRegisteredError,
   EdoEntryTypeRequiresAtomicToolError,
@@ -82,8 +81,6 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 409 });
   if (e instanceof ContributionConflictError)
     return NextResponse.json({ error: e.message }, { status: 409 });
-  if (e instanceof ContributionQuotaError)
-    return NextResponse.json({ error: e.message }, { status: 429 });
   if (e instanceof KnowledgeGateError)
     return NextResponse.json(
       { error: "knowledge gate rejected write", issues: e.errors },

@@ -1,0 +1,1 @@
+ALTER TABLE "knowledge" ADD COLUMN "use_when" text;

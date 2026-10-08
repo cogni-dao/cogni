@@ -1136,7 +1136,25 @@ spec:
                 Carried forward verbatim on every tick that does not prove serving: this must
                 never silently regress to -1 and un-protect a live lease. Omitted entirely while
                 still -1 so a fleet that has never served renders byte-identically. */}}
-              {{- if and $active $serving }}
+              {{- /* EDGE-OBSERVED, NOT LEASE-OBSERVED (bug.5322, measured 2026-10-08). Advancing
+                this latch is what stops retaining the outgoing child, which closes its lease --
+                so it must require proof that THE PUBLIC HOST serves the candidate, not merely
+                that the candidate COULD. $serving comes from the host-routed probe, which
+                connects to the candidate's OWN lease endpoint presenting Host: <publicHost>; it
+                passes the moment the provider routes that vhost on that lease, while Cloudflare
+                still points at the incumbent. Advancing on it closed gen-1 while the edge was
+                still using it: spawny-boi candidate-a went nginx 404 for ~7 minutes (441 bad
+                responses, no self-heal, manual re-flight to recover), and the bug.5188
+                last-known-good latch then pinned DNS to a CLOSED lease.
+                $dnsPublished is the honest signal: it is read back from the LIVE Cloudflare zone
+                (bug.5152 -- an observation, never an intent echo), so it cannot be true until the
+                record actually carries $effectiveDnsTarget. Sequence it buys: tick N candidate
+                serves -> DNS child writes the new target, $dnsPublished still false -> DO NOT
+                advance, incumbent retained; tick N+1 the record reads back -> advance -> tick N+2
+                the outgoing child stops rendering and closes. The close now strictly follows the
+                observed cutover. A stalled Cloudflare write therefore leaks a retained lease
+                (bounded, visible, costed) instead of dropping traffic -- the correct trade. */}}
+              {{- if and $active $serving $dnsPublished }}
               activeLeaseGeneration: {{ $leaseGeneration }}
               {{- else if ge $activeLeaseGeneration 0 }}
               activeLeaseGeneration: {{ $activeLeaseGeneration }}

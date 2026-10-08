@@ -159,7 +159,6 @@ export {
   ContributionConflictError,
   ContributionForbiddenError,
   ContributionNotFoundError,
-  ContributionQuotaError,
   ContributionStateError,
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,

@@ -4,8 +4,8 @@
 /**
  * Module: `@app/readyz`
  * Purpose: HTTP readiness endpoint. The default (k8s probe) path answers only "can this pod serve HTTP?" — local serving readiness: env, runtime secrets, system tenant.
- * Scope: Validates env + runtime secrets + system tenant (fatal). Checks EVM RPC, Temporal, and scheduler-worker connectivity but treats transient failures as NON-FATAL on the default probe (logged, still 200). `?deep=1` restores hard substrate assertion for provisioning / stack-test smoke checks.
- * Invariants: Always returns valid readyz schema; force-dynamic runtime. Every managed non-test node requires and exercises EVM RPC even before payment activation. The default path does not drain the fleet for a transient upstream failure (incident 2026-06-26: scheduler-worker hiccup → fleet-wide 502); `?deep=1` forces a live RPC read and makes EVM RPC, Temporal, and scheduler-worker failures fatal (503).
+ * Scope: Validates env + runtime secrets + system tenant (fatal). Checks EVM RPC, Temporal, scheduler-worker, and the Doltgres knowledge plane but treats transient failures as NON-FATAL on the default probe (logged, still 200). `?deep=1` restores hard substrate assertion for provisioning / deploy-gate smoke checks.
+ * Invariants: Always returns valid readyz schema; force-dynamic runtime. Every managed non-test node requires and exercises EVM RPC even before payment activation. The default path does not drain the fleet for a transient upstream failure (incident 2026-06-26: scheduler-worker hiccup → fleet-wide 502); `?deep=1` forces a live RPC read and makes EVM RPC, Temporal, scheduler-worker, and knowledge-store failures fatal (503). Every substrate probe here MUST be bounded by its own timeout — an unbounded await on wedged substrate makes readiness unanswerable rather than unhealthy (bug.5386).
  * Side-effects: IO (HTTP response, structured logging, network calls to RPC and Temporal)
  * Notes: Used by Docker HEALTHCHECK, deployment validation, K8s readiness probes.
  *        HTTP status is primary truth: 200 = ready, 503 = not ready.
@@ -23,6 +23,7 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { EnvValidationError, serverEnv } from "@/shared/env";
 import {
   assertEvmRpcConfig,
+  assertKnowledgeStoreConnectivity,
   assertRuntimeSecrets,
   assertSchedulerWorkerConnectivity,
   assertTemporalConnectivity,
@@ -84,11 +85,17 @@ function logReadinessFailure(
 }
 
 /**
- * Async-substrate connectivity check that is NON-FATAL to the k8s readiness
- * probe by default. Temporal and scheduler-worker are async dispatch substrate,
- * not synchronous serving dependencies — failing /readyz on their blip drains
+ * Substrate connectivity check that is NON-FATAL to the k8s readiness probe by
+ * default. Temporal and scheduler-worker are async dispatch substrate, not
+ * synchronous serving dependencies — failing /readyz on their blip drains
  * every node-app from its Service endpoints and causes a fleet-wide 502
- * (incident 2026-06-26). Same rationale already applied to EVM RPC.
+ * (incident 2026-06-26). Same rationale already applied to EVM RPC and the
+ * Doltgres knowledge plane.
+ *
+ * Every `check` passed here MUST impose its own timeout. This wrapper can only
+ * classify a check that RETURNS or THROWS; an unbounded await makes readiness
+ * unanswerable, which is the masking defect of bug.5386/bug.5185 rather than a
+ * fix for it.
  *
  * They ARE mission-critical: all AI/chat work is dispatched through Temporal, so
  * a sustained outage means AI is down. We therefore log failures at ERROR with a
@@ -121,7 +128,7 @@ async function assertSubstrate(
           dependency: opts.dependency,
           message: error.message,
         },
-        `readiness: ${opts.dependency} unreachable — MISSION-CRITICAL async substrate down (AI/chat is dispatched through Temporal). Returning ready: probe stays non-fatal so the fleet is not drained; the critical alert + request-time 503 cover it.`
+        `readiness: ${opts.dependency} unreachable — MISSION-CRITICAL substrate down. Returning ready: probe stays non-fatal so the fleet is not drained; this critical alert, the request-time 503, and the hard-failing \`?deep=1\` deploy gate cover it.`
       );
       return;
     }
@@ -208,6 +215,23 @@ export const GET = wrapRouteHandlerWithLogging(
         event: "substrate.scheduler_worker.unreachable",
         dependency: "scheduler-worker",
       });
+
+      // Doltgres knowledge plane. BOUNDED by construction — a wedged
+      // knowledge-store pool never returns and never errors, so before this
+      // probe existed /readyz had no way to see a dead knowledge plane and
+      // answered 200 while every knowledge endpoint timed out (bug.5386).
+      // Non-fatal on the default k8s probe for the same fleet-drain reason as
+      // Temporal; the critical-severity event is what reaches monitoring, and
+      // `?deep=1` (the deploy gate) hard-fails.
+      await assertSubstrate(
+        () => assertKnowledgeStoreConnectivity(container.knowledgeStorePort),
+        {
+          ctx,
+          deep,
+          event: "substrate.knowledge_store.unreachable",
+          dependency: "knowledge-store",
+        }
+      );
 
       // Verify system tenant billing account exists (per SYSTEM_TENANT_STARTUP_CHECK)
       await verifySystemTenant(container.serviceAccountService);

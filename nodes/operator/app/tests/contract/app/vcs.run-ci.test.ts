@@ -230,11 +230,13 @@ describe("POST /api/v1/vcs/run-ci", () => {
       prNumber: 7,
     });
     // run-ci's build half: the operator dispatches the trusted pr-build of the
-    // approved head so a flightable sha-<headSha> image exists.
+    // approved head so a flightable sha-<headSha> image exists. The exact fork
+    // SHA is fetched through the base repo's fork network so bundle provenance
+    // remains the catalog source repo (bug.5373), never the contributor fork.
     expect(mockDispatchPrBuild).toHaveBeenCalledWith({
       owner: "Cogni-DAO",
       repo: NODE_SLUG,
-      headRepo: "flock-leader/cogni",
+      headRepo: `Cogni-DAO/${NODE_SLUG}`,
       headSha: "0123456789012345678901234567890123456789",
       prNumber: 7,
     });
@@ -258,7 +260,7 @@ describe("POST /api/v1/vcs/run-ci", () => {
     expect(mockDispatchPrBuild).toHaveBeenCalledWith({
       owner: "cogni-test-org",
       repo: "cogni-monorepo",
-      headRepo: "flock-leader/cogni",
+      headRepo: "cogni-test-org/cogni-monorepo",
       headSha: "0123456789012345678901234567890123456789",
       prNumber: 7,
     });

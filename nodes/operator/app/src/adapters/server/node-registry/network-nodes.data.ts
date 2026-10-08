@@ -63,7 +63,6 @@ export const NETWORK_NODES: readonly NetworkNode[] = [
   { name: "node-template", nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c" },
   { name: "beacon", nodeId: "f97f68f2-8406-4a3b-b5a9-d579b779f19d" },
   { name: "poly", nodeId: "4b06359a-a859-4399-888e-a8c7a6696f7e" },
-  { name: "toks4", nodeId: "72aa130b-f0ad-495a-a061-9ee1f9c9525d" },
   { name: "levelup", nodeId: "557d8b59-8e3b-42f0-9aeb-a5c171296556" },
   { name: "toks5", nodeId: "f66b260b-4633-41e2-8711-b7c1b8449cc1" },
   { name: "red", nodeId: "921b1d1d-4ded-4a6d-b3f1-f7d6affa406a" },

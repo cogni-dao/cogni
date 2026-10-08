@@ -47,6 +47,107 @@ const baseInput = {
   orientation: null,
 } as const;
 
+const SKILL_WITH_TRIGGER = {
+  id: "shelf-one-axis",
+  title: "A shelf sorts on one axis or regrows a catch-all",
+  useWhen: "designing or reviewing a knowledge domain set",
+  entryType: "rule",
+  domain: "method",
+};
+
+describe("bundle budget — realistic shapes must have headroom in CI", () => {
+  // The existing guard test proves assertBundleWithinBudget THROWS over the
+  // limit. That converts silent truncation into a loud failure, but the failure
+  // lands at runtime: /api/v1/cognition 500s and every agent session boots with
+  // NO cognition. These tests move the detection into CI by rendering realistic
+  // worst-case shapes instead of a synthetic "x".repeat().
+  //
+  // Measured on prod 2026-10-07 (buildSha f112873ef5cd, operator hub):
+  //   bundle 15,100 bytes of 16,384 — 1,284 headroom
+  //   20 indexed rows, use_when median 134 chars, max 314
+  const MEASURED_ROWS = 20;
+  const MEASURED_MAX_TRIGGER = 314;
+
+  function indexOf(rows: number, triggerLen: number) {
+    return Array.from({ length: rows }, (_, i) => ({
+      id: `build-compute-entry-${i}`,
+      title: `Claim sentence number ${i} stating what the entry concludes`,
+      useWhen: "x".repeat(triggerLen),
+      entryType: "guide",
+      domain: "build-compute",
+    }));
+  }
+
+  it("stays within budget at today's measured shape", () => {
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      skillsIndex: indexOf(MEASURED_ROWS, MEASURED_MAX_TRIGGER),
+    });
+    expect(() => assertBundleWithinBudget(md)).not.toThrow();
+  });
+
+  it("fails loudly if the index grows past what the ceiling allows", () => {
+    // Not aspirational: this is the growth path. Every new skill/guide/playbook
+    // entry adds a row, and the hub is designed to accumulate. When this test
+    // starts failing, the bundle must become a router (task.5197) rather than
+    // have the budget raised.
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      skillsIndex: indexOf(80, MEASURED_MAX_TRIGGER),
+    });
+    expect(() => assertBundleWithinBudget(md)).toThrow(/maximum is/);
+  });
+
+  it("reports how much headroom today's shape actually leaves", () => {
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      skillsIndex: indexOf(MEASURED_ROWS, MEASURED_MAX_TRIGGER),
+    });
+    const bytes = new TextEncoder().encode(
+      `${md.replace(/\n+$/, "")}\n`
+    ).byteLength;
+    const headroom = SESSION_COGNITION_MAX_BYTES - bytes;
+    // A guard with no margin is a guard that fires in production. Keep enough
+    // room for one orientation edit.
+    expect(headroom).toBeGreaterThan(512);
+  });
+});
+
+describe("skills index — the 'use when' column shows the trigger", () => {
+  it("renders use_when, not the title, when the entry has one", () => {
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      skillsIndex: [SKILL_WITH_TRIGGER],
+    });
+    // The header has always claimed "use when"; it must now be true.
+    expect(md).toContain("| entry | type | use when |");
+    expect(md).toContain("designing or reviewing a knowledge domain set");
+    // The claim belongs in the entry body, not this column.
+    expect(md).not.toContain(
+      "A shelf sorts on one axis or regrows a catch-all"
+    );
+  });
+
+  it("falls back to the title when use_when is null", () => {
+    // A node that has not backfilled must still show a usable line rather
+    // than an empty cell.
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      skillsIndex: [{ ...SKILL_WITH_TRIGGER, useWhen: null }],
+    });
+    expect(md).toContain("A shelf sorts on one axis or regrows a catch-all");
+  });
+
+  it("falls back to the title when use_when is absent entirely", () => {
+    const { useWhen: _omitted, ...withoutField } = SKILL_WITH_TRIGGER;
+    const md = renderBundleMarkdown({
+      ...baseInput,
+      skillsIndex: [withoutField],
+    });
+    expect(md).toContain("A shelf sorts on one axis or regrows a catch-all");
+  });
+});
+
 describe("renderBundleMarkdown", () => {
   it("renders name, mission, counts, and load time while demoting build SHA", () => {
     const markdown = renderBundleMarkdown(baseInput);

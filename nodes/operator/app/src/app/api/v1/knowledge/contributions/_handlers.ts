@@ -19,7 +19,6 @@ import {
   ContributionConflictError,
   ContributionForbiddenError,
   ContributionNotFoundError,
-  ContributionQuotaError,
   ContributionStateError,
   DomainNotRegisteredError,
   KnowledgeGateError,
@@ -66,8 +65,6 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 409 });
   if (e instanceof ContributionConflictError)
     return NextResponse.json({ error: e.message }, { status: 409 });
-  if (e instanceof ContributionQuotaError)
-    return NextResponse.json({ error: e.message }, { status: 429 });
   if (e instanceof DomainNotRegisteredError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   // A cite/EDO edit whose target resolves on neither the branch nor main, or

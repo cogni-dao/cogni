@@ -285,6 +285,7 @@ describe("akash-tx dispatcher", () => {
           found: true,
           resourceState: "active",
           endpointCount: 1,
+          endpoints: ["provider.example:80"],
           serving: null,
         },
       },

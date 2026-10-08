@@ -71,6 +71,7 @@ export async function loadKnowledgeList(
         entityId: r.entityId ?? null,
         title: r.title,
         content: r.content,
+        useWhen: r.useWhen ?? null,
         entryType: r.entryType ?? "finding",
         confidencePct: r.confidencePct ?? null,
         sourceType: r.sourceType,

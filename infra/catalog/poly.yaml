@@ -60,7 +60,18 @@ lease_generation:
   # The hub's precondition is to verify the wedged receipt is settled with no live lease;
   # I verified the LEDGER was clean and never checked that Request's verb. Check the verb.
   candidate-a: 39
-  preview: 2
+  # 2 -> 3. Gen-2's lease (dseq 1790283509086, zencloud) was closed by the protocol with
+  # escrow state insufficient_funds (settled overdrawn -1667 uact) on 2026-09-30; Console
+  # per-dseq read 2026-10-06 shows deployment=closed, no live lease, so the hub
+  # precondition (verify settled, check the verb) holds. The spent key
+  # xcw:cogni-preview:4b06359a-...:2 replays the closed handle
+  # ({state:closed, replayed:true}), so every preview promote since 2026-09-30 timed out on
+  # bundle_not_observed (11 consecutive failures on 2026-10-06 alone) while
+  # poly-preview.cognidao.org 404s. NOT a wallet problem: the Console account held
+  # 84.48 ACT free at the time of this bump — the per-deployment escrow ran dry while the
+  # account was unfunded, and the account has since been topped up. Gen-3 is the reviewed
+  # re-mint; production (gen-20, Finland) was serving the expected sha throughout.
+  preview: 3
   # 20 -> 21 after gen-20 booted the old eed16dc0 bundle, missed the boot
   # deadline for the promoted 9033a162 bundle, and was closed by policy.
   # The settled xcw:cogni-production:<node-id>:20 key is spent and cannot be

@@ -195,7 +195,12 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     skillsIndex.length > 0
       ? skillsIndex
           .map(
-            (s) => `| \`${s.id}\` | ${s.entryType} | ${escapeCell(s.title)} |`
+            // The column header has always said "use when"; before the
+            // `use_when` column existed it rendered the title, which is the
+            // claim, not the trigger. Prefer the real field and fall back to
+            // the title so a node that has not backfilled still shows a line.
+            (s) =>
+              `| \`${s.id}\` | ${s.entryType} | ${escapeCell(s.useWhen ?? s.title)} |`
           )
           .join("\n")
       : "| _(none merged yet)_ | | |";

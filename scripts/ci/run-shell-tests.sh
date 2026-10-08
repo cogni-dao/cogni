@@ -51,6 +51,7 @@ PARALLEL=(
   secret-materialize.test.sh
   reconcile-node-substrate.test.sh
   run-node-substrate.test.sh
+  candidate-flight-custodian-preflight.test.sh
   assert-target-substrate.test.sh
   resolve-remote-source-sha.test.sh
   compute-workload-manifest-file.test.sh

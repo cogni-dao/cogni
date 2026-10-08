@@ -6,7 +6,9 @@
  * Purpose: Doltgres-backed implementation of KnowledgeContributionPort using Dolt branches.
  * Scope: Adapter only. Each contribution is one contrib/<agent>-<id> branch that can receive many logical commits. Does not contain HTTP or business-logic policy.
  * Invariants:
- *   - All branch ops run inside sql.reserve() so dolt_checkout pins to one connection.
+ *   - All branch ops run inside a session-pinned connection acquired via
+ *     `reserveDoltgresConnection` (never bare `sql.reserve()` — bug.5386) so
+ *     dolt_checkout pins to one connection and a cold pool fails instead of hanging.
  *   - Appends for the same contribution are serialized in-process and guarded
  *     against stale metadata before recording the next sequence number.
  *   - try/finally restores dolt_checkout('main') and releases the connection on error.
@@ -55,6 +57,7 @@ import {
   CitationTypeMismatchError,
   HypothesisMissingEvaluateAtError,
 } from "../../port/knowledge-store.port.js";
+import { reserveDoltgresConnection } from "./build-client.js";
 import { assertDomainRegistered, escapeRef, escapeValue } from "./util.js";
 
 function principalSlug(p: Principal): string {
@@ -220,7 +223,9 @@ async function withReserved<T>(
   sql: Sql,
   fn: (conn: ReservedSql) => Promise<T>
 ): Promise<T> {
-  const conn = await sql.reserve();
+  // Never `sql.reserve()` directly — a cold reserve on a `fetch_types: false`
+  // client never settles and permanently burns a pool slot (bug.5386).
+  const conn = await reserveDoltgresConnection(sql);
   try {
     return await fn(conn);
   } finally {
@@ -252,6 +257,21 @@ async function assertKnowledgeRowExists(
       `knowledge row not found: ${targetRowId}`
     );
   }
+}
+
+/**
+ * Contribution branches can outlive an additive knowledge-table migration.
+ * Query the checked-out branch's schema before referencing an optional column;
+ * current-main SQL must not make a historical branch permanently unwritable.
+ */
+async function knowledgeColumnExists(
+  conn: ReservedSql,
+  columnName: string
+): Promise<boolean> {
+  const rows = await conn.unsafe(
+    `SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'knowledge' AND column_name = ${escapeValue(columnName)} LIMIT 1`
+  );
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +322,7 @@ async function insertKnowledgeRow(input: {
   domain: string;
   title: string;
   content: string;
+  useWhen?: string | null;
   entryType: "hypothesis" | "decision" | "outcome";
   confidencePct: number;
   evaluateAt?: Date | null;
@@ -315,6 +336,7 @@ async function insertKnowledgeRow(input: {
     domain,
     title,
     content,
+    useWhen,
     entryType,
     confidencePct,
     evaluateAt,
@@ -326,10 +348,15 @@ async function insertKnowledgeRow(input: {
     throw new HypothesisMissingEvaluateAtError(id);
   }
   await assertDomainRegistered(conn, domain);
+  const hasUseWhen = await knowledgeColumnExists(conn, "use_when");
+  const useWhenColumn = hasUseWhen ? ", use_when" : "";
+  const useWhenValue = hasUseWhen
+    ? `, ${useWhen ? escapeValue(stripDangerousControlChars(useWhen)) : "NULL"}`
+    : "";
   // PRESERVE_MARKDOWN_WHITESPACE: strip dangerous control chars from free text
   // at every knowledge write, including the contribution/EDO merge (bug.5062).
   await conn.unsafe(
-    `INSERT INTO knowledge (id, domain, entity_id, title, content, entry_type, confidence_pct, source_type, source_ref, source_node, tags, evaluate_at, resolution_strategy) VALUES (${escapeValue(id)}, ${escapeValue(domain)}, NULL, ${escapeValue(stripDangerousControlChars(title))}, ${escapeValue(stripDangerousControlChars(content))}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue(provenance.sourceType)}, ${escapeValue(provenance.sourceRef)}, ${escapeValue(provenance.sourceNode)}, ${tags && tags.length > 0 ? escapeValue(tags) : "NULL"}, ${escapeValue(evaluateAt ?? null)}, ${escapeValue(resolutionStrategy ?? null)})`
+    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}, entry_type, confidence_pct, source_type, source_ref, source_node, tags, evaluate_at, resolution_strategy) VALUES (${escapeValue(id)}, ${escapeValue(domain)}, NULL, ${escapeValue(stripDangerousControlChars(title))}, ${escapeValue(stripDangerousControlChars(content))}${useWhenValue}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue(provenance.sourceType)}, ${escapeValue(provenance.sourceRef)}, ${escapeValue(provenance.sourceNode)}, ${tags && tags.length > 0 ? escapeValue(tags) : "NULL"}, ${escapeValue(evaluateAt ?? null)}, ${escapeValue(resolutionStrategy ?? null)})`
   );
 }
 
@@ -614,6 +641,7 @@ async function applyEdit(input: {
   }
 
   await assertDomainRegistered(conn, edit.entry.domain);
+  const hasUseWhen = await knowledgeColumnExists(conn, "use_when");
   const confidencePct = initializeConfidence(
     {
       sourceType: "external",
@@ -623,8 +651,11 @@ async function applyEdit(input: {
   if (edit.op === "update") {
     await assertKnowledgeRowExists(conn, edit.targetRowId);
     const entryType = edit.entry.entryType ?? "finding";
+    const useWhenAssignment = hasUseWhen
+      ? `, use_when = ${edit.entry.useWhen ? escapeValue(stripDangerousControlChars(edit.entry.useWhen)) : "NULL"}`
+      : "";
     const result = await conn.unsafe(
-      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(stripDangerousControlChars(edit.entry.title))}, content = ${escapeValue(stripDangerousControlChars(edit.entry.content))}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
+      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(stripDangerousControlChars(edit.entry.title))}, content = ${escapeValue(stripDangerousControlChars(edit.entry.content))}${useWhenAssignment}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
     );
     if (result.count === 0) {
       throw new ContributionNotFoundError(
@@ -643,8 +674,12 @@ async function applyEdit(input: {
   const entryId =
     edit.entry.id ?? `${contributionId}-${randomBytes(3).toString("hex")}`;
   const entryType = edit.entry.entryType ?? "finding";
+  const useWhenColumn = hasUseWhen ? ", use_when" : "";
+  const useWhenValue = hasUseWhen
+    ? `, ${edit.entry.useWhen ? escapeValue(stripDangerousControlChars(edit.entry.useWhen)) : "NULL"}`
+    : "";
   await conn.unsafe(
-    `INSERT INTO knowledge (id, domain, entity_id, title, content, entry_type, confidence_pct, source_type, source_ref, source_node, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(stripDangerousControlChars(edit.entry.title))}, ${escapeValue(stripDangerousControlChars(edit.entry.content))}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"})`
+    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}, entry_type, confidence_pct, source_type, source_ref, source_node, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(stripDangerousControlChars(edit.entry.title))}, ${escapeValue(stripDangerousControlChars(edit.entry.content))}${useWhenValue}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"})`
   );
 }
 
@@ -1269,6 +1304,7 @@ export class DoltgresKnowledgeContributionAdapter
             id: row.from_id,
             title: row.from_title ?? null,
             content: row.from_content ?? null,
+            useWhen: row.from_use_when ?? null,
             entryType: row.from_entry_type ?? null,
             domain: row.from_domain ?? null,
           }
@@ -1278,6 +1314,7 @@ export class DoltgresKnowledgeContributionAdapter
             id: row.to_id,
             title: row.to_title ?? null,
             content: row.to_content ?? null,
+            useWhen: row.to_use_when ?? null,
             entryType: row.to_entry_type ?? null,
             domain: row.to_domain ?? null,
           }
@@ -1294,6 +1331,7 @@ export class DoltgresKnowledgeContributionAdapter
         after &&
         before.title === after.title &&
         before.content === after.content &&
+        before.useWhen === after.useWhen &&
         before.entryType === after.entryType &&
         before.domain === after.domain
       ) {
