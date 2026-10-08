@@ -14,7 +14,7 @@
  *   the committed shape.
  * Side-effects: none — pure string transform, no IO, no env.
  * Links: infra/catalog/node-template.yaml, infra/catalog/_schema.json, scripts/setup/scaffold-node.sh,
- *   task.5092, story.5025, task.5097, task.5104
+ *   task.5092, story.5025, task.5097, task.5104, bug.5369
  * @public
  */
 
@@ -120,6 +120,12 @@ export function renderCatalog(
     offCluster && crossplaneEnvs.length > 0
       ? `compute_api:\n${crossplaneEnvs.map((env) => `  ${env}: crossplane\n`).join("")}`
       : "";
+  // Every Akash birth starts at replacement ordinal zero. Keeping this beside placement in the
+  // canonical catalog row closes bug.5369: an omitted cell made the first terminal lease impossible
+  // to replace without a human repair commit.
+  const leaseGenerationBlock = offCluster
+    ? `lease_generation:\n${envs.map((env) => `  ${env}: 0\n`).join("")}`
+    : "";
   const sourceShaLine = input.sourceSha
     ? `source_sha: ${input.sourceSha}\n`
     : "";
@@ -151,7 +157,9 @@ ${placementBlock}# task.5097 — WHICH authority reconciles the workload. Crossp
 # bespoke controller in any environment that can BOTH reconcile the composite (an installed
 # control plane) and pay for its lease (a pinned actuator wallet); an environment missing
 # either is omitted and stays on the pre-existing legacy default (task.5104, task.5097).
-${computeApiBlock}# story.5025 — birth authority is PRODUCTION, the only environment that receives Git
+${computeApiBlock}# Explicit initial replacement counter for every Akash lease. Generation 0 is the
+# first idempotence key; later retries advance it only from durable terminal receipt evidence.
+${leaseGenerationBlock}# story.5025 — birth authority is PRODUCTION, the only environment that receives Git
 # webhooks (ACTIVITY_FOLLOWS_INGEST, bug.5079). Born here it is immutable for life: a
 # sub-production authority would have to be moved by every later promote, and generation 1
 # has no fenced cross-environment cutover. candidate-a stays passive — it never ingests, so

@@ -54,11 +54,7 @@ function block(slug: string, upper: string, port: number): string {
 
   log {
     format json
-    output file /data/logs/caddy/access-${slug}.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 `;

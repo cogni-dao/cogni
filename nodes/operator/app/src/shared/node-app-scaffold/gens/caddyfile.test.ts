@@ -41,6 +41,10 @@ describe("insertCaddyBlock", () => {
     expect(out).toContain(
       "# ── operator (primary domain) → k3s NodePort 30100"
     );
+    // Keep the operator splice byte-aligned with render-caddyfile.sh. File loggers were removed;
+    // reintroducing one makes the signed birth PR drift-red and requires a human repair (bug.5369).
+    expect(out).toContain("    output stdout\n");
+    expect(out).not.toContain("output file /data/logs/caddy");
   });
 
   it("splices non-primary nodes into slug-sorted order", () => {

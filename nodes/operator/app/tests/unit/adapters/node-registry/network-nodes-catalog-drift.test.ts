@@ -2,26 +2,26 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: TOTAL drift guard for `@adapters/server/node-registry/network-nodes.data`.
- * Purpose: Keep the committed web-node roster honest against its identity SSoT. The operator runtime
- *   image ships only its own `.cogni` (NOT `infra/catalog/`), so the roster is a committed PROJECTION
- *   that CANNOT be fs-globbed at runtime — publish maintains it via an `insertNetworkNode` splice
- *   (`gens/network-nodes.ts`). This test re-reads the SSoT at TEST time (repo fs-read is fine) and
- *   asserts the roster matches it on EVERY projected field, not just slugs:
- *     - `name`  ← the catalog's `type: node` slug set (add/remove a node ⇒ this fails until synced).
+ * Module: Static-roster drift guard for `@adapters/server/node-registry/network-nodes.data`.
+ * Purpose: Keep every committed fallback node honest against its identity SSoT without requiring new
+ *   wizard nodes to rewrite compiled operator source. The runtime composes this preserved static subset
+ *   with the DB projection that owns dynamic wizard nodes. This test re-reads the SSoT at TEST time and
+ *   asserts every static entry matches its catalog projection on every field:
+ *     - `name`  ← an existing catalog `type: node` row (a stale removed node fails).
  *     - `primary` ← the catalog's `is_primary_host` (task.5078 — operator serves the bare apex domain;
  *        every other node uses `${name}-${DOMAIN}`). A hand-flipped/stale `primary` now fails here.
  *     - `nodeId` ← the identity SSoT per `REPO_SPEC_IS_IDENTITY_SSOT` (infra/catalog/_schema.json): a
  *        SUBMODULE node (`source_repo` set) carries a drift-gated `node_id` PROJECTION in its catalog
  *        row; an IN-REPO node (e.g. operator) carries it in `nodes/<slug>/.cogni/repo-spec.yaml` and
  *        must NOT duplicate it in the catalog. This test reads from the correct source per node.
- *   Before this guard only the slug SET was checked, so `primary`/`nodeId` could silently drift.
+ *   New catalog nodes need not appear here: forcing catalog equality made node.register.v1 author
+ *   executable TypeScript. Static entries remain strict; dynamic membership comes from the DB.
  * Scope: Reads `infra/catalog/*.yaml` + in-repo `nodes/<slug>/.cogni/repo-spec.yaml` from disk; pure-data
  *   assertion otherwise. No network.
  * Side-effects: fs reads under the repo's infra/catalog + nodes/<slug>/.cogni.
  * Links: src/adapters/server/node-registry/network-nodes.data.ts, infra/catalog/*.yaml,
  *   infra/catalog/_schema.json (REPO_SPEC_IS_IDENTITY_SSOT), docs/spec/ci-cd.md (task.5078),
- *   src/shared/node-app-scaffold/gens/network-nodes.ts (the publish splice this guards)
+ *   src/adapters/server/node-registry/db-node-registry.adapter.ts (dynamic membership)
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -117,14 +117,18 @@ function normalizeRosterEntry(entry: {
 const byName = (a: { name: string }, b: { name: string }) =>
   a.name.localeCompare(b.name);
 
-describe("adapters/node-registry/network-nodes.data ↔ identity SSoT drift (TOTAL)", () => {
-  it("roster EXACTLY equals the catalog projection on name + nodeId + primary", () => {
-    const expected = expectedRoster().sort(byName);
+describe("adapters/node-registry/network-nodes.data ↔ identity SSoT drift", () => {
+  it("static roster is a field-exact subset of the catalog projection", () => {
+    const expectedByName = new Map(
+      expectedRoster().map((node) => [node.name, node])
+    );
     const roster = NETWORK_NODES.map(normalizeRosterEntry).sort(byName);
 
-    // Full-object equality (not just slugs): a node added/removed from the catalog, a hand-flipped
-    // `primary`, or a nodeId that drifts from its repo-spec/catalog SSoT all fail here until synced.
-    expect(roster).toEqual(expected);
+    // New wizard nodes are DB-projected and may be absent here. Every preserved fallback entry must
+    // still exist in the SSoT and match its nodeId/primary values exactly.
+    for (const node of roster) {
+      expect(expectedByName.get(node.name)).toEqual(node);
+    }
   });
 
   it("exactly one node is primary (serves the bare apex domain — task.5078)", () => {

@@ -11,7 +11,7 @@
  * Invariants: CATALOG_IS_SSOT — the emitted block mirrors `emit_site_block`'s heredoc exactly;
  *   non-primary nodes stay in `sort`-order; primary (operator) block is never moved.
  * Side-effects: none — pure string transform, no IO, no env.
- * Links: scripts/ci/render-caddyfile.sh, docs/guides/create-node.md, task.5092
+ * Links: scripts/ci/render-caddyfile.sh, docs/guides/create-node.md, task.5092, bug.5369
  * @public
  */
 
@@ -25,7 +25,6 @@ function nonPrimaryBlock(slug: string, nodePort: number): string {
   const upper = slugVar(slug);
   const host = `{$${upper}_DOMAIN:${slug}.localhost}`;
   const upstream = `{$${upper}_UPSTREAM:host.docker.internal:${nodePort}}`;
-  const logfile = `access-${slug}.log`;
   return [
     `# ── ${slug} node → k3s NodePort ${nodePort} ──────────────────────────────────`,
     `${host} {`,
@@ -45,11 +44,7 @@ function nonPrimaryBlock(slug: string, nodePort: number): string {
     ``,
     `  log {`,
     `    format json`,
-    `    output file /data/logs/caddy/${logfile} {`,
-    `      roll_size 10MB`,
-    `      roll_keep 7`,
-    `      roll_keep_for 168h`,
-    `    }`,
+    `    output stdout`,
     `  }`,
     `}`,
   ].join("\n");

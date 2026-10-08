@@ -26,6 +26,7 @@ describe("renderCatalog", () => {
     // the schema rejects, so this arm stays on the pre-existing default.
     expect(out).not.toContain("deployment_provider:");
     expect(out).not.toContain("compute_api:");
+    expect(out).not.toContain("lease_generation:");
   });
 
   it("renders submodule source metadata for child image resolution", () => {
@@ -83,6 +84,10 @@ describe("renderCatalog", () => {
       "candidate-a": "crossplane",
       production: "crossplane",
     });
+    expect(row.lease_generation).toEqual({
+      "candidate-a": 0,
+      production: 0,
+    });
     // Both facts hold for production: installed control plane AND pinned dedicated wallet.
     expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("production");
     expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).toContain("production");
@@ -107,12 +112,19 @@ describe("renderCatalog", () => {
         ownerWallet,
         sourceRepo: "https://github.com/cogni-test-org/ay.git",
       })
-    ) as Record<string, Record<string, string>>;
-    const birthEnvs = [...(row.envs as unknown as string[])].sort();
+    ) as {
+      envs: string[];
+      deployment_provider?: Record<string, string>;
+      compute_api?: Record<string, string>;
+      lease_generation?: Record<string, number>;
+    };
+    const birthEnvs = [...row.envs].sort();
 
     expect(Object.keys(row.deployment_provider ?? {}).sort()).toEqual(
       birthEnvs
     );
+    expect(Object.keys(row.lease_generation ?? {}).sort()).toEqual(birthEnvs);
+    expect(Object.values(row.lease_generation ?? {})).toEqual([0, 0]);
 
     const authorityEnvs = Object.keys(row.compute_api ?? {}).sort();
     expect(authorityEnvs.length).toBeGreaterThan(0);
