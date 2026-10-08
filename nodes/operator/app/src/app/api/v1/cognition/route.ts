@@ -36,7 +36,6 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
-  assertBundleWithinBudget,
   isCognitionEntry,
   type OrientationEntry,
   renderBundleMarkdown,
@@ -150,7 +149,6 @@ export const GET = wrapRouteHandlerWithLogging(
       domainPointers,
       orientation,
     });
-    assertBundleWithinBudget(markdown);
 
     ctx.log.info(
       {

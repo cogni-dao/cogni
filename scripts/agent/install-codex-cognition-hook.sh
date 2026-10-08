@@ -25,7 +25,6 @@ cat >"$HOOK_PATH" <<'HOOK'
 # only stable Cogni node metadata and never executes repo-local hook code.
 set -u
 
-SESSION_COGNITION_MAX_BYTES=16384
 CACHE_FILE=".cogni/.cognition-cache.md"
 REFRESH_TTL_SECONDS=900
 FETCH_TIMEOUT=6
@@ -49,14 +48,6 @@ if [[ -n "${CODEX_THREAD_ID:-}" ]]; then
   mkdir "$COGNI_HOOK_LOCK" 2>/dev/null || exit 0
   trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
 fi
-
-bundle_bytes() {
-  printf '%s\n' "$1" | LC_ALL=C wc -c | tr -d '[:space:]'
-}
-
-bundle_fits_budget() {
-  [[ "$(bundle_bytes "$1")" -le "$SESSION_COGNITION_MAX_BYTES" ]]
-}
 
 read_env_file_value() {
   local var_name="$1"
@@ -156,31 +147,16 @@ refresh_in_background() {
   (
     local fresh
     fresh="$(fetch_bundle)"
-    [[ -n "$fresh" ]] && bundle_fits_budget "$fresh" && write_cache_atomic "$fresh"
+    [[ -n "$fresh" ]] && write_cache_atomic "$fresh"
   ) >/dev/null 2>&1 &
 }
 
-oversized_bundle_notice() {
-  local actual_bytes="$1"
-  local source_name="$2"
-  cat <<EOF
-COGNI COGNITION — bundle rejected before injection
-
-The $source_name bundle is $actual_bytes bytes, above the strict
-$SESSION_COGNITION_MAX_BYTES-byte SessionStart ceiling. Nothing was truncated
-or partially injected. Reduce the node orientation/index at $url, then restart
-or resume the agent.
-EOF
-}
-
+# Codex user hook: raw stdout is the developer-context channel, and the managed
+# config block disables Codex's spill (additionalContextLimit = 0), so the full
+# bundle surfaces at any size. No producer-side byte ceiling (story.5070).
 if [[ -s "$CACHE_FILE" ]] && ! cache_is_repo_tracked; then
   bundle="$(cat "$CACHE_FILE")"
-  if bundle_fits_budget "$bundle"; then
-    printf '%s\n' "$bundle"
-    refresh_in_background
-    exit 0
-  fi
-  oversized_bundle_notice "$(bundle_bytes "$bundle")" "cached"
+  printf '%s\n' "$bundle"
   refresh_in_background
   exit 0
 fi
@@ -188,10 +164,6 @@ fi
 bundle="$(fetch_bundle)"
 
 if [[ -n "$bundle" ]]; then
-  if ! bundle_fits_budget "$bundle"; then
-    oversized_bundle_notice "$(bundle_bytes "$bundle")" "fetched"
-    exit 0
-  fi
   write_cache_atomic "$bundle"
   printf '%s\n' "$bundle"
 else
