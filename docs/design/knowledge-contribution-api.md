@@ -560,4 +560,5 @@ curl -X POST "$URL/api/v1/knowledge/contributions/$CID/merge" \
   lease before appending to the same contribution branch.
 - **Diff mode mismatch** — three-dot diff is review-correct, but current Doltgres table-function restrictions may force two-revision calls. Keep this inside the adapter.
 - **Three-way merge on `dolt_merge`** — branch was created from `main` HEAD at create; if `main` advances before merge (concurrent internal writes), merge is three-way. Conflicts on `knowledge.id` return 409 (`ContributionConflictError`); v0 does not implement rebase.
+- **Additive optional columns do not strand open branches** — append code inspects the checked-out contribution branch schema before referencing an optional knowledge column. A branch cut before `knowledge.use_when` remains writable; a current-schema branch persists the field. This is compatibility for additive optional columns, not a rebase mechanism.
 - **Doltgres 0.56 RBAC non-functional** — every connection is superuser; app-layer auth is the _only_ gate. Already accepted per spec's `RUNTIME_URL_IS_SUPERUSER`. Reinforces why merge remains session-only — there is no DB-level enforcement
