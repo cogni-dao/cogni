@@ -49,8 +49,33 @@ sig="$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign "$pem" -
 jwt="${header}.${payload}.${sig}"
 
 api="https://api.github.com"
-slug="$(curl -fsS -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" "$api/app" 2>/dev/null | sed -n 's/.*"slug":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-[[ -n "$slug" ]] || { err "FATAL: App JWT rejected (check GH_REVIEW_APP_ID matches the private key)"; exit 1; }
+
+# gh_get <path> — read a GitHub App endpoint, FAILING OUT LOUD (bug.5404).
+#
+# The previous form was `x="$(curl -fsS … 2>/dev/null | sed … )"`, and under this
+# script's own `set -euo pipefail` that is a silent-exit trap: curl fails,
+# `2>/dev/null` throws away the one line that says why, `pipefail` makes the
+# command substitution non-zero, and `set -e` aborts AT THE ASSIGNMENT — so the
+# `|| { err "FATAL …"; exit 1; }` on the next line never runs. A rejected App
+# JWT therefore produced a non-zero exit with ZERO output anywhere, and
+# deploy-infra's fail-closed webhook guard reported only that it had closed,
+# never why. That hard-blocked the whole candidate-a infra lane undiagnosably.
+#
+# `-f` suppresses the response body on an HTTP error, so on failure the captured
+# text is curl's own one-line diagnostic ("The requested URL returned error:
+# 401") and never a response payload.
+gh_get() {
+  local path="$1" out
+  if ! out="$(curl -fsS -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" "${api}${path}" 2>&1)"; then
+    err "FATAL: GET ${path} failed: ${out}"
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
+app_json="$(gh_get /app)" || { err "FATAL: App JWT rejected (check GH_REVIEW_APP_ID matches the private key)"; exit 1; }
+slug="$(printf '%s' "$app_json" | sed -n 's/.*"slug":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+[[ -n "$slug" ]] || { err "FATAL: GET /app returned no slug (App id ${APP_ID}); response had ${#app_json} bytes"; exit 1; }
 err "syncing webhook secret to App '${slug}' (id ${APP_ID})"
 
 # Cross-env clobber guard (bug.5012 follow-on, incident 2026-08-14): an env
@@ -60,7 +85,8 @@ err "syncing webhook secret to App '${slug}' (id ${APP_ID})"
 # does not deliver to THIS env. Skip (exit 0), loudly: the creds misconfig is
 # its own bug; this sync must never be the blast radius.
 if [[ -n "${EXPECTED_WEBHOOK_HOST:-}" ]]; then
-  hook_url="$(curl -fsS -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" "$api/app/hook/config" 2>/dev/null | sed -n 's/.*"url":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  hook_json="$(gh_get /app/hook/config)" || { err "FATAL: cannot read the App's hook config, so the cross-env guard cannot be evaluated"; exit 1; }
+  hook_url="$(printf '%s' "$hook_json" | sed -n 's/.*"url":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
   hook_host="${hook_url#*://}"; hook_host="${hook_host%%/*}"
   if [[ "$hook_host" != "$EXPECTED_WEBHOOK_HOST" ]]; then
     err "REFUSING cross-env sync — App '${slug}' delivers to '${hook_host}', this env is '${EXPECTED_WEBHOOK_HOST}' (env holds another env's App creds — fix the creds, not the App)"
