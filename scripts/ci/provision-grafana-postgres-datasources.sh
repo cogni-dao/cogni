@@ -119,6 +119,13 @@ if [[ "$datasource_host" != "postgres:5432" && "${GRAFANA_POSTGRES_ALLOW_NON_INT
   exit 1
 fi
 
+if ! [[ "$DEPLOY_ENVIRONMENT" =~ ^[a-z0-9-]+$ ]]; then
+  echo "Refusing to converge: DEPLOY_ENVIRONMENT '${DEPLOY_ENVIRONMENT}' is not a plain lowercase slug" >&2
+  exit 1
+fi
+
+declare -A intended_uids=()
+
 IFS=',' read -ra grafana_dbs <<< "$dbs"
 for db_name in "${grafana_dbs[@]}"; do
   db_name="$(echo "$db_name" | xargs)"
@@ -127,9 +134,9 @@ for db_name in "${grafana_dbs[@]}"; do
   node="${db_name#cogni_}"
   uid="cogni-${DEPLOY_ENVIRONMENT}-${node}-postgres"
   name="Postgres - ${DEPLOY_ENVIRONMENT} ${node}"
+  intended_uids["$uid"]=1
   payload_file="${tmpdir}/${uid}.json"
   response_file="${tmpdir}/${uid}.response.json"
-  query_file="${tmpdir}/${uid}.query.json"
 
   jq -n \
     --arg name "$name" \
@@ -193,4 +200,51 @@ for db_name in "${grafana_dbs[@]}"; do
   log "provisioned ${uid}"
 done
 
+# CONVERGE, DON'T ACCUMULATE (bug.5117). The loop above only ever created or
+# updated, so a datasource outlived the node it described — keeping whatever
+# readonly-password epoch it was born with and retrying on Grafana's health
+# schedule forever. Measured 2026-10-08: 55 live datasources against a
+# catalog-derived set of 21, and ~420 `FATAL: password authentication failed for
+# user "app_readonly"` per hour on the production Postgres, every one of them
+# from a datasource outside the roster. Declaring state is not enough; the
+# declared set has to be the WHOLE set.
+#
+# Scope is deliberately narrow: only `cogni-<this env>-<node>-postgres` uids, and
+# only Postgres datasources. Loki/Prometheus datasources and every other
+# environment are untouchable here — an over-broad delete is far worse than the
+# bug it fixes.
+if (( ${#intended_uids[@]} == 0 )); then
+  echo "Refusing to prune: the catalog-derived datasource set is empty" >&2
+  echo "node_database_csv() returned '${dbs}'; a prune against an empty roster would delete every datasource in ${DEPLOY_ENVIRONMENT}." >&2
+  exit 1
+fi
+
+existing_file="${tmpdir}/existing-datasources.json"
+curl -fsS -H "Authorization: Bearer ${GRAFANA_SERVICE_ACCOUNT_TOKEN}" \
+  "${grafana_base}/api/datasources" > "$existing_file"
+
+pruned=0
+# `</dev/null` on the curl is load-bearing: curl inherits the loop's stdin and
+# will swallow the remaining uids otherwise (same trap as run-node-substrate.sh).
+while IFS= read -r existing_uid; do
+  [[ -n "$existing_uid" ]] || continue
+  [[ -z "${intended_uids[$existing_uid]+x}" ]] || continue
+
+  if [[ "${GRAFANA_DATASOURCE_PRUNE:-1}" != "1" ]]; then
+    log "would prune ${existing_uid} (GRAFANA_DATASOURCE_PRUNE=0)"
+    continue
+  fi
+
+  log "pruning ${existing_uid} (no longer in the catalog-derived set for ${DEPLOY_ENVIRONMENT})"
+  curl -fsS -X DELETE "${grafana_base}/api/datasources/uid/${existing_uid}" \
+    -H "Authorization: Bearer ${GRAFANA_SERVICE_ACCOUNT_TOKEN}" </dev/null >/dev/null
+  pruned=$((pruned + 1))
+done < <(jq -r --arg env "$DEPLOY_ENVIRONMENT" '
+  .[]
+  | select(.type == "grafana-postgresql-datasource")
+  | .uid
+  | select(test("^cogni-" + $env + "-[a-z0-9_]+-postgres$"))
+' "$existing_file")
+
+log "converged ${DEPLOY_ENVIRONMENT}: ${#intended_uids[@]} datasource(s) declared, ${pruned} pruned"
 log "all datasources provisioned; runtime connectivity is verified separately by verify-grafana-postgres-datasources.sh"
