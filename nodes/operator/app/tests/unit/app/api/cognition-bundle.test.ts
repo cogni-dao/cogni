@@ -74,7 +74,9 @@ describe("bundle growth — large indexes render whole, no serve-side ceiling (s
       ...baseInput,
       skillsIndex: indexOf(80, 314),
     });
-    const bytes = new TextEncoder().encode(`${md.replace(/\n+$/, "")}\n`).byteLength;
+    const bytes = new TextEncoder().encode(
+      `${md.replace(/\n+$/, "")}\n`
+    ).byteLength;
     // Past the old ceiling — which would have thrown here.
     expect(bytes).toBeGreaterThan(16 * 1024);
     // The last row is present ⇒ nothing was dropped.
@@ -276,7 +278,6 @@ describe("renderBundleMarkdown", () => {
     expect(markdown).toContain("## Tooling invariants");
     expect(markdown).toContain("<watch-gate");
   });
-
 });
 
 describe("resolveOrientation", () => {
