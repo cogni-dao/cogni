@@ -288,9 +288,14 @@ export const workItems = pgTable(
     blockedBy: text("blocked_by"),
     deployVerified: boolean("deploy_verified").notNull().default(false),
 
-    // Governance runner locking (vestigial in v0)
+    // Principal-bound coordination lease. The shared Doltgres adapter's
+    // claim/heartbeat/release surface binds a claim to the principal that took
+    // it, so `claim_owner_principal_id` and `claim_expires_at` are load-bearing
+    // rather than vestigial — `list()` selects `claim_expires_at` directly.
     claimedByRun: text("claimed_by_run"),
+    claimOwnerPrincipalId: text("claim_owner_principal_id"),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
     lastCommand: text("last_command"),
 
     // Structured arrays (jsonb for v0)
@@ -303,6 +308,7 @@ export const workItems = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    createdByPrincipalId: text("created_by_principal_id"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
