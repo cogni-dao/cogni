@@ -51,6 +51,12 @@ class FakeReservedSql {
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    // Admission control takes a session advisory lock before any branch work
+    // (bug.5391); a fake that cannot answer it would fail every write as busy.
+    if (query.includes("pg_try_advisory_lock"))
+      return [{ pg_try_advisory_lock: true }];
+    if (query.includes("pg_advisory_unlock"))
+      return [{ pg_advisory_unlock: true }];
     if (query.includes("dolt_hashof")) {
       return [{ dolt_hashof: "head123" }];
     }
@@ -180,6 +186,12 @@ class FakeMergeReservedSql {
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    // Admission control takes a session advisory lock before any branch work
+    // (bug.5391); a fake that cannot answer it would fail every write as busy.
+    if (query.includes("pg_try_advisory_lock"))
+      return [{ pg_try_advisory_lock: true }];
+    if (query.includes("pg_advisory_unlock"))
+      return [{ pg_advisory_unlock: true }];
     if (query.includes("dolt_merge('--abort')")) {
       return [{ dolt_merge: ["", "0", "0", "aborted"] }];
     }
@@ -904,6 +916,12 @@ class CrossPlaneFakeReservedSql {
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    // Admission control takes a session advisory lock before any branch work
+    // (bug.5391); a fake that cannot answer it would fail every write as busy.
+    if (query.includes("pg_try_advisory_lock"))
+      return [{ pg_try_advisory_lock: true }];
+    if (query.includes("pg_advisory_unlock"))
+      return [{ pg_advisory_unlock: true }];
     if (query.includes("dolt_hashof")) return [{ dolt_hashof: "head123" }];
     if (query.includes("dolt_commit")) return [{ dolt_commit: ["{next456}"] }];
     if (query.includes("SELECT 1 FROM knowledge WHERE id"))

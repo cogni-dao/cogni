@@ -46,6 +46,23 @@ export interface NewDomain {
   description?: string;
 }
 
+/**
+ * The knowledge write plane is saturated or recovering; the caller may retry.
+ *
+ * Distinct from a state or validation error: nothing was decided about the
+ * request, so replaying it is safe. Routes map this to 503, never 409 — a 409
+ * would tell an agent its write was rejected on the merits (bug.5391).
+ */
+export class KnowledgeBusyError extends Error {
+  readonly code = "KNOWLEDGE_BUSY" as const;
+  readonly retryable = true as const;
+
+  constructor(message = "Knowledge write plane is busy; retry shortly") {
+    super(message);
+    this.name = "KnowledgeBusyError";
+  }
+}
+
 export class DomainNotRegisteredError extends Error {
   readonly domain: string;
   constructor(domain: string) {

@@ -575,10 +575,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
 export type { DoltgresAdapterConfig as Config };
 export {
   buildDoltgresClient,
-  DOLTGRES_RESERVE_TIMEOUT_MS,
   type DoltgresClientConfig,
-  DoltgresReserveTimeoutError,
-  reserveDoltgresConnection,
 } from "./build-client.js";
 export {
   DoltgresKnowledgeContributionAdapter,
@@ -595,3 +592,9 @@ export {
   DoltgresEdoResolverAdapter,
   type DoltgresEdoResolverConfig,
 } from "./edo-resolver.js";
+export {
+  type BranchSessionLogger,
+  type BranchSessionOptions,
+  DoltBranchSessionRunner,
+  KNOWLEDGE_BRANCH_LOCK_KEY,
+} from "./session-admission.js";
