@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-# Hermetic regressions for bug.5284 and bug.5359: Codex must receive the
-# complete bounded SessionStart bundle, tracked snapshots must never be
-# presented as live cognition, and the stable user hook must stay reconciled.
+# Hermetic regressions for bug.5284, bug.5359, and story.5070: both runtimes must
+# receive the COMPLETE SessionStart bundle at any size — Codex via raw stdout
+# (spill disabled), Claude Code via structured hookSpecificOutput.additionalContext
+# (raw stdout there is preview-capped to ~2KB) — with no byte ceiling to reject or
+# truncate against. Tracked snapshots must never be presented as live cognition,
+# and the stable user hook must stay reconciled.
 
 set -euo pipefail
 
@@ -18,6 +21,17 @@ trap 'rm -rf "$FIXTURE_ROOT"' EXIT
 fail() {
   echo "session-cognition-hook.test: $*" >&2
   exit 1
+}
+
+# surfaced <hook-stdout> — the text the agent actually receives, regardless of
+# which channel the loader used: Claude Code structured JSON additionalContext,
+# or Codex raw stdout. Lets a content assertion stay channel-agnostic.
+surfaced() {
+  if printf '%s' "$1" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>&1; then
+    printf '%s' "$1" | jq -j '.hookSpecificOutput.additionalContext'
+  else
+    printf '%s' "$1"
+  fi
 }
 
 grep -Fq 'additionalContextLimit = 0' "$REPO_ROOT/.codex/config.toml" ||
@@ -48,7 +62,10 @@ tracked_output="$({
   PATH="$FAKE_BIN:$PATH" CODEX_THREAD_ID="" COGNI_NODE_API_KEY="test-key" \
     CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" bash "$LOADER"
 })"
-[[ "$tracked_output" == "live cognition" ]] ||
+# CODEX_THREAD_ID="" ⇒ Claude Code path ⇒ structured JSON channel.
+printf '%s' "$tracked_output" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>&1 ||
+  fail "Claude Code path did not surface via the additionalContext channel"
+[[ "$(surfaced "$tracked_output")" == "live cognition" ]] ||
   fail "project loader presented a git-tracked cognition snapshot"
 [[ "$(cat "$TRACKED_CACHE")" == "live cognition" ]] ||
   fail "project loader did not replace the tracked snapshot with live cognition"
@@ -59,8 +76,18 @@ small_output="$({
   cd "$FIXTURE_ROOT/small"
   CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" bash "$LOADER"
 })"
-[[ "$small_output" == "complete cognition" ]] ||
-  fail "bounded cached bundle was not presented verbatim"
+[[ "$(surfaced "$small_output")" == "complete cognition" ]] ||
+  fail "cached bundle was not surfaced verbatim (Claude Code path)"
+
+# Codex path: raw stdout verbatim (Codex disables its spill via additionalContextLimit=0).
+mkdir -p "$FIXTURE_ROOT/codex-tmp"
+codex_output="$({
+  cd "$FIXTURE_ROOT/small"
+  CODEX_THREAD_ID="codex-raw" TMPDIR="$FIXTURE_ROOT/codex-tmp" \
+    CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" bash "$LOADER"
+})"
+[[ "$codex_output" == "complete cognition" ]] ||
+  fail "Codex path did not present raw stdout verbatim"
 
 mkdir "$FIXTURE_ROOT/cogni-cognition-lock-test.lock"
 locked_output="$({
@@ -71,16 +98,20 @@ locked_output="$({
 [[ -z "$locked_output" ]] ||
   fail "second concurrent presenter did not honor the per-thread lock"
 
+# story.5070 regression: a large bundle must surface WHOLE through the Claude Code
+# structured channel — never truncated or rejected by a byte ceiling. This is the
+# assertion the original bug.5284 ceiling got backwards.
 mkdir -p "$FIXTURE_ROOT/large/.cogni"
 head -c 17000 /dev/zero | tr '\0' x >"$FIXTURE_ROOT/large/.cogni/.cognition-cache.md"
 large_output="$({
   cd "$FIXTURE_ROOT/large"
   CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" bash "$LOADER"
 })"
-[[ "$large_output" == *"bundle rejected before injection"* ]] ||
-  fail "oversized cache did not fail closed"
-[[ "$(printf '%s\n' "$large_output" | LC_ALL=C wc -c | tr -d '[:space:]')" -lt 1024 ]] ||
-  fail "oversized cache leaked into hook stdout"
+printf '%s' "$large_output" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>&1 ||
+  fail "large bundle was not surfaced via the Claude Code additionalContext channel"
+large_surfaced="$(surfaced "$large_output")"
+[[ "${#large_surfaced}" -eq 17000 ]] ||
+  fail "large bundle truncated or rejected (surfaced ${#large_surfaced} of 17000 bytes)"
 
 LEGACY_HOME="$FIXTURE_ROOT/legacy-codex"
 LEGACY_HOOK="$LEGACY_HOME/hooks/cogni-session-cognition.sh"
