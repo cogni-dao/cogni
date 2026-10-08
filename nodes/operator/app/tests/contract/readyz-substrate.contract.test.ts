@@ -4,8 +4,8 @@
 /**
  * Module: `@tests/contract/readyz-substrate.contract`
  * Purpose: Prove the shallow/deep readiness contract for async substrate dependencies.
- * Scope: Exercises the /readyz route with isolated Temporal and scheduler-worker probes. Does not perform network or database IO.
- * Invariants: Default readiness stays healthy while emitting critical dependency events; `?deep=1` returns 503 for either missing dependency.
+ * Scope: Exercises the /readyz route with isolated Temporal, scheduler-worker, and knowledge-store probes. Does not perform network or database IO.
+ * Invariants: Default readiness stays healthy while emitting critical dependency events; `?deep=1` returns 503 for any missing dependency, knowledge plane included (bug.5386).
  * Side-effects: none
  * Links: src/app/(infra)/readyz/route.ts, Cogni-DAO/cogni#1860
  * @internal
@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   assertEvmRpcConfig: vi.fn(),
+  assertKnowledgeStoreConnectivity: vi.fn(),
   assertRuntimeSecrets: vi.fn(),
   assertSchedulerWorkerConnectivity: vi.fn(),
   assertTemporalConnectivity: vi.fn(),
@@ -31,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
     evmOnchainClient: {},
+    knowledgeStorePort: { domainExists: async () => false },
     paymentRailsActive: false,
     scheduleControl: {},
     serviceAccountService: {},
@@ -86,6 +88,8 @@ vi.mock("@/shared/env/invariants", async (importOriginal) => {
     ...actual,
     assertEvmRpcConfig: (...args: unknown[]) =>
       mocks.assertEvmRpcConfig(...args),
+    assertKnowledgeStoreConnectivity: (...args: unknown[]) =>
+      mocks.assertKnowledgeStoreConnectivity(...args),
     assertRuntimeSecrets: (...args: unknown[]) =>
       mocks.assertRuntimeSecrets(...args),
     assertSchedulerWorkerConnectivity: (...args: unknown[]) =>
@@ -121,6 +125,7 @@ describe("GET /readyz async substrate contract", () => {
     });
     mocks.assertTemporalConnectivity.mockResolvedValue(undefined);
     mocks.assertSchedulerWorkerConnectivity.mockResolvedValue(undefined);
+    mocks.assertKnowledgeStoreConnectivity.mockResolvedValue(undefined);
     mocks.checkEvmRpcConnectivity.mockResolvedValue({ ok: true });
     mocks.verifySystemTenant.mockResolvedValue(undefined);
   });
@@ -233,7 +238,7 @@ describe("GET /readyz async substrate contract", () => {
         reason: "INFRA_UNREACHABLE",
         dependency: "temporal",
       }),
-      expect.stringContaining("MISSION-CRITICAL async substrate down")
+      expect.stringContaining("MISSION-CRITICAL substrate down")
     );
     expect(mocks.error).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -242,7 +247,7 @@ describe("GET /readyz async substrate contract", () => {
         reason: "INFRA_UNREACHABLE",
         dependency: "scheduler-worker",
       }),
-      expect.stringContaining("MISSION-CRITICAL async substrate down")
+      expect.stringContaining("MISSION-CRITICAL substrate down")
     );
   });
 
@@ -278,5 +283,54 @@ describe("GET /readyz async substrate contract", () => {
     });
     expect(mocks.assertTemporalConnectivity).toHaveBeenCalledOnce();
     expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
+  });
+  it("keeps shallow readiness healthy but critically observes a wedged knowledge plane (bug.5386)", async () => {
+    mocks.assertKnowledgeStoreConnectivity.mockRejectedValue(
+      new InfraConnectivityError(
+        "Knowledge store connectivity check failed: knowledge store did not answer within 3000ms (pool exhausted or wedged)"
+      )
+    );
+
+    const response = await GET(request());
+
+    // Non-fatal by design: a knowledge-plane blip must not drain the fleet.
+    // What must NOT happen is silence — before this probe, candidate-a logged
+    // only "request received" and /readyz answered 200 with nothing to alert on.
+    expect(response.status).toBe(200);
+    expect(mocks.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "substrate.knowledge_store.unreachable",
+        severity: "critical",
+        reason: "INFRA_UNREACHABLE",
+        dependency: "knowledge-store",
+      }),
+      expect.stringContaining("MISSION-CRITICAL substrate down")
+    );
+  });
+
+  it("returns 503 from the deep probe when the knowledge plane is wedged (bug.5386)", async () => {
+    // This is the gate. candidate-flight's verify-candidate certified a node
+    // whose entire Doltgres plane was unresponsive; deep readiness must refuse.
+    mocks.assertKnowledgeStoreConnectivity.mockRejectedValue(
+      new InfraConnectivityError("knowledge store is wedged")
+    );
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      message: "knowledge store is wedged",
+    });
+    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
+  });
+
+  it("probes the container's knowledge store port", async () => {
+    await GET(request());
+
+    expect(mocks.assertKnowledgeStoreConnectivity).toHaveBeenCalledWith(
+      expect.objectContaining({ domainExists: expect.any(Function) })
+    );
   });
 });
