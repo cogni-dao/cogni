@@ -242,18 +242,31 @@ services:
     # Root cause + fix: bug.5011 / #2387; hub `prod-oom-misdiagnosis-taxonomy`.
     mem_reservation: 512m
     oom_score_adj: -900
-    # bug.5293 root cause: Docker defaults /dev/shm to 64 MiB. Postgres allocates a
-    # shared-memory segment per PARALLEL worker there, so any parallel plan over a
-    # large table fails `could not resize shared memory segment ... No space left on
-    # device` and the BACKEND DIES — the postmaster reports `exited with exit code 2`
-    # and then 57P02-quickdies every other connection. Measured on prod 2026-10-01:
-    # 110 such crashes in 24h, which 503'd the actuator's allocation ledger, wedged
-    # Crossplane with external-create-pending across SIX nodes, and blocked every
-    # node-app deploy. It reads as OOM and is NOT: the host had 16 GB free and no
-    # signal/OOM-kill ever appears (see hub `prod-oom-misdiagnosis-taxonomy`).
-    # 1 GiB is the smallest value that comfortably fits max_parallel_workers
-    # segments for our largest tables; it is an address-space reservation, not a
-    # preallocation, so it costs nothing until used.
+    # bug.5293 — /dev/shm was the Docker default 64 MiB with no shm_size declared.
+    # This is LOAD-BEARING, not cosmetic. Proof, measured on prod 2026-10-01:
+    #
+    #   VACUUM poly_trader_position_snapshots;        -- DEFAULT maintenance_work_mem (64MB)
+    #   ERROR: could not resize shared memory segment to 67145472 bytes:
+    #          No space left on device
+    #
+    # 67145472 B is exactly 64 MiB: a 64 MiB DSM segment cannot fit in a 64 MiB
+    # /dev/shm. So VACUUM is IMPOSSIBLE on these tables at ANY setting, which is why
+    # poly_trader_position_snapshots carried 2,108,806 dead tuples against 288,317 live
+    # (88% garbage, 4859 MB) and last_autovacuum was NULL on every large table.
+    #
+    # Downstream, each link measured rather than assumed:
+    #   unvacuumable table -> every scan reads 4.8 GB instead of ~200 MB
+    #   -> host I/O saturation: /proc/pressure/io full avg10=43.12, load average 11.14,
+    #      checkpoints alternating 0.3 s and 273 s
+    #   -> backends die `exited with exit code 2` (NOT an OOM: cgroup memory.events
+    #      oom_kill 0, RestartCount=0, clean dmesg — cf. `prod-oom-misdiagnosis-taxonomy`,
+    #      and distinct from bug.5011 above which IS the kernel OOM-killer)
+    #   -> actuator allocation ledger 503s -> Crossplane external-create-pending ->
+    #      deep backoff -> node-app deploys blocked fleet-wide.
+    #
+    # 1 GiB is an empirical initial guard, not a derived size — DSM demand depends on
+    # plan, memory settings and concurrency, so re-evaluate under load. It is an
+    # address-space reservation, not a preallocation, so it costs nothing until used.
     shm_size: 1gb
     labels:
       # bug.5105: stateful stores are never autohealed. autoheal restarting a
@@ -454,10 +467,6 @@ services:
 
   doltgres:
     # Pin deliberately. `:latest` is unsafe for any stateful service: a silent
-    # bug.5293 — Doltgres speaks the Postgres wire protocol and inherits the same
-    # 64 MiB /dev/shm default. Sized to match the app Postgres so the knowledge
-    # plane cannot die the way the operational plane did.
-    shm_size: 1gb
     # tag roll on the next deploy can render the persistent volume unreadable
     # by the new binary (bug.5076 — the 0.56.2 → 0.56.3 roll changed the
     # auth-file serialization layout, breaking every infra flight on 2026-05-26).

@@ -317,10 +317,6 @@ services:
 
   doltgres:
     # Pinned — see infra/compose/runtime/docker-compose.yml (bug.5076).
-    # bug.5293 — Doltgres speaks the Postgres wire protocol and inherits the same
-    # 64 MiB /dev/shm default. Sized to match the app Postgres so the knowledge
-    # plane cannot die the way the operational plane did.
-    shm_size: 1gb
     image: dolthub/doltgresql:0.57.3
     container_name: doltgres
     restart: unless-stopped
