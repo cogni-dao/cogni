@@ -17,6 +17,7 @@ import {
   buildNodeLaunchPack,
   candidateUrlForSlug,
   NODE_LAUNCH_PACK_KNOWLEDGE_ID,
+  NODE_STARTER_SHELF_IDS,
   nodeRepoUrlForSlug,
   ownerFromGithubPrUrl,
 } from "@/features/nodes/launch-pack";
@@ -201,6 +202,26 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).not.toContain("node-app-secrets");
     expect(pack.prompt).not.toContain("OpenBao");
     expect(pack.prompt).toContain("operator API");
+
+    // Knowledge shelves: a spawned node's registry boots EMPTY (no seeder runs
+    // on a spawned node), so the launch pack is the only thing that tells the
+    // first agent to register them. Append-only registry ⇒ the exact id list and
+    // the "no DELETE" warning are both load-bearing (task.5196).
+    expect(pack.prompt).toContain(
+      "Register this node's knowledge shelves BEFORE your first knowledge write"
+    );
+    expect(pack.prompt).toContain("/api/v1/knowledge/domains");
+    expect(pack.prompt).toContain(
+      "meta, mission, strategy, method, use-service, build-agents, build-product"
+    );
+    for (const id of NODE_STARTER_SHELF_IDS) {
+      expect(pack.prompt).toContain(id);
+    }
+    expect(pack.prompt).toContain("APPEND-ONLY");
+    expect(pack.prompt).toContain("cogni-domain-taxonomy");
+    // Shelves are hub-relative: a node must not inherit the operator's internals.
+    expect(pack.prompt).toContain("not the operator's");
+    expect(pack.prompt).toContain("`knowledge_<slug>` database");
 
     expect(pack.prompt).toContain(".claude/skills/node-styling/SKILL.md");
     expect(pack.prompt).not.toContain("node-formation-styling-guide");
