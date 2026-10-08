@@ -45,6 +45,8 @@ const reviewer: Principal = {
 class FakeReservedSql {
   readonly queries: string[] = [];
 
+  constructor(private readonly hasUseWhen = true) {}
+
   async unsafe(
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
@@ -57,6 +59,12 @@ class FakeReservedSql {
     }
     if (query.includes("FROM domains")) {
       return [{ "?column?": 1 }];
+    }
+    if (
+      query.includes("information_schema.columns") &&
+      query.includes("'use_when'")
+    ) {
+      return this.hasUseWhen ? [{ "?column?": 1 }] : [];
     }
     if (query.includes("dolt_merge")) {
       return [{ dolt_merge: ["merge123"] }];
@@ -105,11 +113,14 @@ class FakeReservedSql {
 
 class FakeSql {
   readonly queries: string[] = [];
-  readonly conn = new FakeReservedSql();
+  readonly conn: FakeReservedSql;
 
   constructor(
-    private readonly contributionRecord: Record<string, unknown> = record
-  ) {}
+    private readonly contributionRecord: Record<string, unknown> = record,
+    hasUseWhen = true
+  ) {
+    this.conn = new FakeReservedSql(hasUseWhen);
+  }
 
   async unsafe(query: string): Promise<Record<string, unknown>[]> {
     this.queries.push(query);
@@ -571,6 +582,63 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     );
     expect(update).toBeDefined();
     expect(update).toContain("designing a knowledge domain set");
+  });
+
+  it("updates a historical branch that predates the optional use_when column", async () => {
+    const fake = new FakeSql(record, false);
+
+    await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "refresh a long-lived visual",
+      edits: [
+        {
+          op: "update",
+          targetRowId: "node-birth-fastlane",
+          entry: {
+            id: "node-birth-fastlane",
+            domain: "substrate",
+            title: "Generated PR fast lane status",
+            content: "Current visual.",
+          },
+        },
+      ],
+    });
+
+    const update = fake.conn.queries.find((q) =>
+      q.startsWith("UPDATE knowledge SET")
+    );
+    expect(update).toBeDefined();
+    expect(update).not.toContain("use_when");
+    expect(update).toContain("Current visual.");
+  });
+
+  it("inserts into a historical branch that predates the optional use_when column", async () => {
+    const fake = new FakeSql(record, false);
+
+    await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "append a historical-branch atom",
+      edits: [
+        {
+          op: "insert",
+          entry: {
+            id: "historical-branch-atom",
+            domain: "substrate",
+            title: "Historical branch atom",
+            content: "Current content.",
+          },
+        },
+      ],
+    });
+
+    const insert = fake.conn.queries.find((q) =>
+      q.startsWith("INSERT INTO knowledge (")
+    );
+    expect(insert).toBeDefined();
+    expect(insert).not.toContain("use_when");
+    expect(insert).toContain("Current content.");
   });
 
   it("writes NULL use_when when the edit omits it", async () => {
