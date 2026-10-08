@@ -11,13 +11,13 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:eb957403c73e0a954d3fc4b6a5500bd2b9dfaf8cdc0b24cfaf8237108c2c680b
+    ref: ghcr.io/cogni-dao/poly@sha256:274962dbefb99ee149bd9f0ffa93ff420f59560d5d8b3773477c62629217d6d8
     source:
       repository: cogni-dao/poly
-      sha: 477f6e536a3cbf8fb5eac6cf04a2f2fc400ece7f
+      sha: 2cda43fdfe2185713d6db0952235b451c3b0a37c
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:a4a3ab8909ecf399d02030e27238662b111fea7d5e02af4bda22d6e62d7bf62f
+        image: ghcr.io/cogni-dao/poly@sha256:fd0eaf4b7b7fa0dce7f08a07bde654c9b9f7e916660f981a5de59f3370b2257d
   workload:
     name: poly
     publicHost: poly.cognidao.org
@@ -36,8 +36,6 @@ spec:
           - key: BILLING_INGEST_TOKEN
           - key: PAPER_ENFORCE_MODE
           - key: POLYGON_RPC_URL
-          - key: POLY_WALLET_RECOVERY_OPS_TOKEN
-          - key: INTERNAL_OPS_TOKEN
           - key: PRIVY_USER_WALLETS_APP_ID
           - key: PRIVY_USER_WALLETS_APP_SECRET
           - key: PRIVY_USER_WALLETS_SIGNING_KEY
