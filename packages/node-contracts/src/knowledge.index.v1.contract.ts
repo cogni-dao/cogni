@@ -4,7 +4,7 @@
 /**
  * Module: `@contracts/knowledge.index.v1.contract`
  * Purpose: HTTP contract for GET /api/v1/knowledge/index — the routing projection. Returns id + retrieval trigger + type per entry, WITHOUT content, so an agent can pick a shelf entry without downloading bodies.
- * Scope: Read-only query + response shapes. No behaviour, no IO.
+ * Scope: Read-only query + response shapes. Does not perform IO and does not define behaviour.
  * Invariants: INDEX_CARRIES_NO_CONTENT — the response must never include `content`; that is the whole point of the endpoint.
  * Side-effects: none
  * Links: knowledge entry `cogni-domain-taxonomy`, packages/node-contracts/src/knowledge.list.v1.contract.ts
