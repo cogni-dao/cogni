@@ -836,7 +836,7 @@ function createContainer(): Container {
 
   let doltgresWorkItems: WorkItemsDoltgresPort;
   try {
-    doltgresWorkItems = getDoltgresWorkItemsAdapter();
+    doltgresWorkItems = getDoltgresWorkItemsAdapter(log);
   } catch (e) {
     if (!(e instanceof DoltgresNotConfiguredError)) throw e;
     const notConfigured = () => {
