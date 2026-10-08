@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/ci-invariants/candidate-lane-credential-boundary`
  * Purpose: Pins which environment's VM credentials a candidate lever may hold.
- * Scope: Static assertions over the candidate-flight workflows; executes no Actions and no SSH.
+ * Scope: Static assertions over the candidate-flight workflows; does not execute GitHub Actions, SSH, or deploy.
  * Invariants:
  *   LANE_CREDENTIALS_MATCH_LANE: a step that names a literal lane in
  *     DEPLOY_ENVIRONMENT and also reads `secrets.VM_HOST` / `secrets.SSH_DEPLOY_KEY`
