@@ -187,7 +187,10 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
     };
     expect(
       assessComputeWorkloadReadiness({ expected: xExpected, live: failed })
-    ).toEqual({ ready: false, reason: "phase_not_ready:ProviderRejected" });
+    ).toEqual({
+      ready: false,
+      reason: "phase_not_ready:ProviderRejected:serving=true",
+    });
   });
 
   it("treats the 'None' cleared-failure sentinel as no failure on the composite too (bug.5287)", () => {
@@ -199,7 +202,36 @@ describe("assessComputeWorkloadReadiness — XComputeWorkload (story.5016)", () 
     };
     expect(
       assessComputeWorkloadReadiness({ expected: xExpected, live: progressing })
-    ).toEqual({ ready: false, reason: "phase_not_ready" });
+    ).toEqual({ ready: false, reason: "phase_not_ready:serving=true" });
+  });
+
+  it("names serving=true beside a not-Ready phase so a latched phase is legible (bug.5390)", () => {
+    // The shape that failed poly promote run 37720716454: the bundle already
+    // matched and the composite was serving, while `phase` stayed latched from a
+    // prior generation. The gate still fails closed — but the reason must say
+    // which of the two problems it is.
+    const latched = xLive();
+    (latched.status as Record<string, unknown>).phase = "Failed";
+    (latched.status as Record<string, unknown>).serving = true;
+    (latched.status as Record<string, unknown>).failure = { reason: "None" };
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: xExpected,
+        live: latched,
+      })
+    ).toEqual({ ready: false, reason: "phase_not_ready:serving=true" });
+  });
+
+  it("names serving=absent when the composite never reported the field", () => {
+    const noServing = xLive();
+    (noServing.status as Record<string, unknown>).phase = "Progressing";
+    delete (noServing.status as Record<string, unknown>).serving;
+    expect(
+      assessComputeWorkloadReadiness({
+        expected: xExpected,
+        live: noServing,
+      })
+    ).toEqual({ ready: false, reason: "phase_not_ready:serving=absent" });
   });
 
   it("tolerates XRD-defaulted nested subfields the materializer omits (bug.5263)", () => {

@@ -105,6 +105,12 @@ function timeoutHint(reason: string): string {
   if (reason.startsWith("bundle_not_observed")) {
     return "the workload EXISTS but has not observed the desired bundle - the actuator has not applied this revision";
   }
+  // A latched phase and a dead lease are opposite problems wearing the same word.
+  if (reason.startsWith("phase_not_ready")) {
+    return reason.includes("serving=true")
+      ? "the composite IS serving and the desired bundle already matched, so this phase is most likely LATCHED from a prior generation - verify /version.buildSha against the desired sha before treating this as an outage"
+      : "the composite is NOT serving - this is a real lease/boot problem, not a latched phase";
+  }
   const hints: Readonly<Record<string, string>> = {
     resource_absent:
       "the workload DOES NOT EXIST in this namespace - Git declares it but Argo has not applied it, so waiting can never succeed; inspect the per-node Application sync state",
