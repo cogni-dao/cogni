@@ -85,7 +85,7 @@ read -r -a ssh_opts <<< "$ssh_opts_raw"
 # login transient; stable 403 authz drift still fails after one fresh-JWT check.
 cogni_openbao_kubernetes_login_retry "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
   "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_arg" "$egress_cidrs_csv" \
-  "$egress_allowlist" "$compute_api" <<'REMOTE'
+  "$egress_allowlist" "$compute_api" "$vm_host" <<'REMOTE'
 set -euo pipefail
 env_name="$1"
 node="$2"
@@ -94,6 +94,11 @@ required_keys_csv="$3"
 egress_cidrs_csv="$4"
 egress_allowlist="$5"
 authority="$6"
+# bug.5394 — the cluster this assertion actually reached. DEPLOY_ENVIRONMENT names the
+# lane being asserted; this names the VM whose kubeconfig answered. They are two
+# different things, and when they disagree every namespaced lookup below returns
+# "absent" for resources that are perfectly healthy in the lane's own cluster.
+vm_host="${7:-unknown}"
 namespace="cogni-${env_name}"
 actuator="operator-akash-tx-actuator"
 xcw_crd="xcomputeworkloads.compute.cogni.io"
@@ -106,6 +111,20 @@ fail() { echo "::error::assert-target-substrate: $*" >&2; exit 1; }
 mark_ok() { echo "[OK] $*"; }
 
 echo "[INFO] compute authority for ${node} in ${env_name}: compute_api=${authority}"
+echo "[INFO] asserting lane ${env_name} (namespace ${namespace}) against the cluster reachable from ${vm_host}"
+
+# ── LANE_AND_CLUSTER_MUST_AGREE (bug.5394) ──────────────────────────────────────
+# Every assertion below is namespaced to the lane. If this VM's cluster does not host
+# the lane at all, those lookups come back empty and the first one to notice blames the
+# resource instead of the address — #2602 pointed this job's SSH at the production VM
+# while still asserting candidate-a, and the resulting "actuator is not available
+# (availableReplicas='0')" sent four sessions after a phantom actuator outage while the
+# real one was healthy. Check the address before trusting any answer about the lane.
+if ! kubectl get namespace "$namespace" >/dev/null 2>&1; then
+  present="$(kubectl get namespace -o name 2>/dev/null | sed 's#^namespace/##' | grep '^cogni-' | paste -sd, - || true)"
+  fail "lane ${env_name} is not hosted by the cluster reachable from ${vm_host}: namespace ${namespace} does not exist there (cogni-* namespaces present: ${present:-none}). This is an ADDRESSING failure, not a substrate failure — the lane's own resources are untouched and unasserted. Point this job at the environment that owns ${namespace} (its own VM_HOST / SSH_DEPLOY_KEY) and re-run; do NOT read the per-resource assertions below as evidence about ${env_name}."
+fi
+mark_ok "lane ${env_name}: namespace ${namespace} exists on the cluster reached from ${vm_host}"
 
 if [ "$authority" = "crossplane" ]; then
   # Crossplane owns the workload here. Assert the control plane (XRD + Composition +

@@ -391,6 +391,17 @@ YAML
 cat > "$EXTERNAL_BIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
+  # bug.5394 — the lane/cluster addressing guard runs before every namespaced lookup.
+  # FAKE_LANE_NOT_HOSTED=1 makes this cluster deny hosting the lane, i.e. the #2602
+  # shape: right lane name, wrong cluster.
+  *"get namespace cogni-"*)
+    [ "${FAKE_LANE_NOT_HOSTED:-}" = "1" ] && exit 1
+    exit 0
+    ;;
+  *"get namespace -o name"*)
+    echo "namespace/cogni-production"
+    exit 0
+    ;;
   # The legacy controller is RETIRED (task.5138) — a crossplane row touching it is drift.
   *compute-workload-controller*)
     echo "fake external kubectl: legacy controller must never be touched: $*" >&2
@@ -545,6 +556,17 @@ YAML
 cat > "$XCW_BIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
+  # bug.5394 — the lane/cluster addressing guard runs before every namespaced lookup.
+  # FAKE_LANE_NOT_HOSTED=1 makes this cluster deny hosting the lane, i.e. the #2602
+  # shape: right lane name, wrong cluster.
+  *"get namespace cogni-"*)
+    [ "${FAKE_LANE_NOT_HOSTED:-}" = "1" ] && exit 1
+    exit 0
+    ;;
+  *"get namespace -o name"*)
+    echo "namespace/cogni-production"
+    exit 0
+    ;;
   *compute-workload-controller*)
     echo "fake xcw kubectl: legacy controller must never be touched on a crossplane row: $*" >&2
     exit 1
@@ -637,6 +659,34 @@ grep -q "catalog compute egress CIDRs are installed" "$TMPROOT/xcw-success.out"
 grep -q "External compute preconditions ready for toks5" "$TMPROOT/xcw-success.out"
 if grep -q "compute workload controller" "$TMPROOT/xcw-success.out"; then
   echo "expected the crossplane branch to assert no legacy controller" >&2
+  exit 1
+fi
+
+# ── bug.5394 — LANE_AND_CLUSTER_MUST_AGREE ──────────────────────────────────────
+# #2602 pointed this job's SSH at the production VM while still passing
+# DEPLOY_ENVIRONMENT=candidate-a. The cluster-scoped Crossplane assertions all pass on
+# production, so the first NAMESPACED lookup was the one that noticed — and it blamed
+# the actuator ("availableReplicas='0'") for a deployment that was healthy in
+# candidate-a's own cluster. Eight consecutive poly/red preflights failed on that
+# message and four root-cause theories were burned on a phantom outage. The guard must
+# diagnose the ADDRESS and must not let any per-resource verdict be reported at all.
+if env "${XCW_ENV[@]}" FAKE_LANE_NOT_HOSTED=1 \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/xcw-wrong-cluster.out" 2>&1; then
+  echo "expected a lane the cluster does not host to fail" >&2
+  exit 1
+fi
+grep -q "lane candidate-a is not hosted by the cluster reachable from 192.0.2.10" "$TMPROOT/xcw-wrong-cluster.out"
+grep -q "namespace cogni-candidate-a does not exist there" "$TMPROOT/xcw-wrong-cluster.out"
+grep -q "cogni-\* namespaces present: cogni-production" "$TMPROOT/xcw-wrong-cluster.out"
+grep -q "ADDRESSING failure, not a substrate failure" "$TMPROOT/xcw-wrong-cluster.out"
+# The whole point: no per-resource verdict may be emitted about a lane this cluster
+# does not host. A single "availableReplicas" in this output is the bug.5394 regression.
+if grep -q "availableReplicas" "$TMPROOT/xcw-wrong-cluster.out"; then
+  echo "expected no actuator verdict when the cluster does not host the lane" >&2
+  exit 1
+fi
+if grep -q "is available" "$TMPROOT/xcw-wrong-cluster.out"; then
+  echo "expected no availability verdict when the cluster does not host the lane" >&2
   exit 1
 fi
 
