@@ -59,7 +59,7 @@ const CURL_SHIM = [
   "fi",
   'body="{\\"slug\\":\\"shim-app\\",\\"url\\":\\"https://shim.example/hook\\"}"',
   '[[ -n "$out" ]] && printf \'%s\' "$body" > "$out"',
-  'printf \'%s\' "${SHIM_HTTP_STATUS:-200}"',
+  "printf '%s' \"${SHIM_HTTP_STATUS:-200}\"",
   "",
 ].join("\n");
 
