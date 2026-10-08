@@ -4,7 +4,7 @@
 /**
  * Module: `@shared/env/invariants`
  * Purpose: Fail-fast validation of runtime secrets, infrastructure connectivity, and cross-field env invariants.
- * Scope: Runtime secret checks, infrastructure health probes (Temporal, EVM RPC), cross-field validations. Does NOT validate during Next.js build/SSG.
+ * Scope: Runtime secret checks, infrastructure health probes (Temporal, EVM RPC, knowledge store), cross-field validations. Does NOT validate during Next.js build/SSG.
  * Invariants: Throws RuntimeSecretError on missing secrets; throws InfraConnectivityError on unreachable infra; memoizes production only.
  * Side-effects: IO (network calls for connectivity checks)
  * Notes: Call assert* functions from adapter methods and runtime endpoints only, never from build-reachable code.
@@ -360,5 +360,84 @@ export async function assertSchedulerWorkerConnectivity(
       `Scheduler-worker connectivity check failed: ${message}. ` +
         `Verify scheduler-worker is running and SCHEDULER_WORKER_HEALTH_URL (${env.SCHEDULER_WORKER_HEALTH_URL}) is correct.`
     );
+  }
+}
+
+/**
+ * KnowledgeStorePort subset needed for the readiness probe. Kept minimal so
+ * this module does not import @cogni/knowledge-store (and so the probe can be
+ * exercised with a plain stub).
+ */
+interface KnowledgeStoreForHealthCheck {
+  /** Single-row primary-key lookup against the `domains` table. */
+  domainExists(id: string): Promise<boolean>;
+}
+
+/**
+ * Budget for the knowledge-store readiness probe. Deliberately short: the
+ * failure mode this exists to catch is an UNBOUNDED hang, not slowness, so the
+ * probe must give up fast enough that /readyz still answers inside a k8s probe
+ * window.
+ */
+export const KNOWLEDGE_STORE_PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * Tests Doltgres knowledge-plane reachability with a bounded single-row read.
+ *
+ * WHY THIS IS NOT JUST `await port.domainExists(...)` (bug.5386): when the
+ * knowledge-store connection pool is exhausted, postgres.js parks the query on
+ * an unbounded internal backlog. It never resolves, never rejects, and nothing
+ * is logged beyond "request received". A probe that simply awaits the call
+ * therefore hangs with it — which is precisely how candidate-a served /readyz
+ * 200 and a green `verify-candidate` while every knowledge endpoint timed out.
+ * The `Promise.race` is the load-bearing part: readiness must be able to
+ * CONCLUDE "unhealthy", and the only way to conclude anything about a call that
+ * cannot return is to stop waiting for it.
+ *
+ * Same masking class as bug.5185 (poly prod knowledge 503 hidden by /readyz).
+ *
+ * @param knowledgeStore - knowledge store port, or undefined when DOLTGRES_URL
+ *   is unset (no knowledge plane on this node → nothing to assert).
+ * @throws InfraConnectivityError if the knowledge plane is unreachable or does
+ *   not answer inside the budget.
+ */
+export async function assertKnowledgeStoreConnectivity(
+  knowledgeStore: KnowledgeStoreForHealthCheck | undefined,
+  opts: { timeoutMs?: number } = {}
+): Promise<void> {
+  // No DOLTGRES_URL => no knowledge plane is claimed, so there is nothing to
+  // assert. This must stay a silent no-op, not a failure: nodes legitimately
+  // boot without a knowledge store.
+  if (!knowledgeStore) return;
+
+  const timeoutMs = opts.timeoutMs ?? KNOWLEDGE_STORE_PROBE_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    await Promise.race([
+      knowledgeStore.domainExists("__readyz_health_check__"),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `knowledge store did not answer within ${timeoutMs}ms (pool exhausted or wedged)`
+              )
+            ),
+          timeoutMs
+        );
+      }),
+    ]);
+    // Success: Doltgres answered. `false` is the expected result and is fine —
+    // we are probing reachability, not content.
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown knowledge store error";
+    throw new InfraConnectivityError(
+      `Knowledge store connectivity check failed: ${message}. ` +
+        "Verify DOLTGRES_URL is correct, Doltgres is running, and the knowledge-store connection pool is not wedged."
+    );
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

@@ -575,7 +575,10 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
 export type { DoltgresAdapterConfig as Config };
 export {
   buildDoltgresClient,
+  DOLTGRES_RESERVE_TIMEOUT_MS,
   type DoltgresClientConfig,
+  DoltgresReserveTimeoutError,
+  reserveDoltgresConnection,
 } from "./build-client.js";
 export {
   DoltgresKnowledgeContributionAdapter,

@@ -6,7 +6,9 @@
  * Purpose: Doltgres-backed implementation of KnowledgeContributionPort using Dolt branches.
  * Scope: Adapter only. Each contribution is one contrib/<agent>-<id> branch that can receive many logical commits. Does not contain HTTP or business-logic policy.
  * Invariants:
- *   - All branch ops run inside sql.reserve() so dolt_checkout pins to one connection.
+ *   - All branch ops run inside a session-pinned connection acquired via
+ *     `reserveDoltgresConnection` (never bare `sql.reserve()` — bug.5386) so
+ *     dolt_checkout pins to one connection and a cold pool fails instead of hanging.
  *   - Appends for the same contribution are serialized in-process and guarded
  *     against stale metadata before recording the next sequence number.
  *   - try/finally restores dolt_checkout('main') and releases the connection on error.
@@ -55,6 +57,7 @@ import {
   CitationTypeMismatchError,
   HypothesisMissingEvaluateAtError,
 } from "../../port/knowledge-store.port.js";
+import { reserveDoltgresConnection } from "./build-client.js";
 import { assertDomainRegistered, escapeRef, escapeValue } from "./util.js";
 
 function principalSlug(p: Principal): string {
@@ -220,7 +223,9 @@ async function withReserved<T>(
   sql: Sql,
   fn: (conn: ReservedSql) => Promise<T>
 ): Promise<T> {
-  const conn = await sql.reserve();
+  // Never `sql.reserve()` directly — a cold reserve on a `fetch_types: false`
+  // client never settles and permanently burns a pool slot (bug.5386).
+  const conn = await reserveDoltgresConnection(sql);
   try {
     return await fn(conn);
   } finally {
