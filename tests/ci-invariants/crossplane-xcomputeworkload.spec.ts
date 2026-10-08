@@ -1596,7 +1596,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       // bug.5322 — observed edge state; gates the close.
 
       // bug.5322 — `published` is OBSERVED edge state and gates the close.
-      dns?: { target?: string; published?: boolean };
+      dns?: { target?: string; published?: boolean; observedContent?: string };
     };
     observed: Record<string, ObservedChild>;
   };
@@ -1707,6 +1707,11 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     }
     // Observed Cloudflare state. Defaults TRUE so every pre-existing case keeps its meaning;
     // only the new regression cases set it false.
+    // bug.5322 (measured twice): `published` means "the record matches current INTENT", which
+    // during a cutover is still the INCUMBENT target while the latch holds -- so it is true
+    // immediately and cannot gate the close. The close needs "the record carries the CANDIDATE
+    // target". Fixtures express that as dns.observedContent; default = the latched target, so
+    // every pre-existing case is unchanged.
     const dnsPublished = xr.status.dns?.published ?? true;
     const prevDnsTarget = xr.status.dns?.target ?? "";
     let effectiveDnsTarget = dnsTarget;
@@ -1719,6 +1724,9 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     ) {
       effectiveDnsTarget = prevDnsTarget;
     }
+
+    const observedContent = xr.status.dns?.observedContent ?? effectiveDnsTarget;
+    const dnsCutoverObserved = dnsTarget !== "" && observedContent === dnsTarget;
 
     return {
       /** Every composed LEASE child this render returns, sorted. */
@@ -1736,7 +1744,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
         // and proves the edge DOES. Advancing on `serving` alone closed the incumbent while
         // Cloudflare still pointed at it -> nginx 404 for ~7 minutes on spawny-boi candidate-a.
         activeLeaseGeneration:
-          active && serving && dnsPublished
+          active && serving && dnsCutoverObserved
             ? xr.leaseGeneration
             : activeLeaseGeneration >= 0
               ? activeLeaseGeneration
@@ -1986,7 +1994,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     expect(out.retainedCogniKey).toBeUndefined();
   });
 
-  it("does NOT advance the latch while the edge has not published the candidate (bug.5322)", () => {
+  it("does NOT advance while the live record still carries the INCUMBENT (bug.5322)", () => {
     // The 2026-10-08 outage: the candidate was serving on its OWN lease endpoint, so `serving`
     // was true, but Cloudflare still pointed at the incumbent. Advancing here closed gen-1 and
     // the public host returned nginx 404 for ~7 minutes. `published` is read back from the live
@@ -1996,7 +2004,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       status: {
         activeLeaseGeneration: 1,
         leaseRequestGeneration: 3,
-        dns: { target: INCUMBENT_TARGET, published: false },
+        dns: { target: INCUMBENT_TARGET, observedContent: INCUMBENT_TARGET },
       },
       observed: {
         "akash-lease-g1": {
@@ -2013,13 +2021,13 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     expect(r.leaseChildren).toEqual(["akash-lease-g1", "akash-lease-g3"]);
   });
 
-  it("advances only once the edge HAS published the candidate (bug.5322)", () => {
+  it("advances only once the live record carries the CANDIDATE (bug.5322)", () => {
     const r = render({
       leaseGeneration: 3,
       status: {
         activeLeaseGeneration: 1,
         leaseRequestGeneration: 3,
-        dns: { target: CANDIDATE_TARGET, published: true },
+        dns: { target: CANDIDATE_TARGET, observedContent: CANDIDATE_TARGET },
       },
       observed: {
         "akash-lease-g1": {
@@ -2037,7 +2045,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
 
   it("pins the template's advance gate to the observed edge signal (bug.5322)", () => {
     expect(templateCode).toContain(
-      "{{- if and $active $serving $dnsPublished }}"
+      "{{- if and $active $serving $dnsCutoverObserved }}"
     );
   });
 
