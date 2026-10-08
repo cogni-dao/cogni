@@ -468,10 +468,7 @@
       "compositePrimaryKeys": {
         "pk_kcc_contribution_seq": {
           "name": "pk_kcc_contribution_seq",
-          "columns": [
-            "contribution_id",
-            "seq"
-          ]
+          "columns": ["contribution_id", "seq"]
         }
       },
       "uniqueConstraints": {},
