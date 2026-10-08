@@ -786,7 +786,6 @@ function createContainer(): Container {
     knowledgeContributionService = createContributionService({
       port: contributionPort,
       canMergeKnowledge: defaultCanMergeKnowledge,
-      rateLimit: { maxOpenPerPrincipal: 10 },
       // v0 write-pipeline: shape gate only on the contribution path.
       // Provenance is stamped by the adapter (`source_type='external'`,
       // `source_ref='contribution:<id>:<seq>'`), so the provenance gate is

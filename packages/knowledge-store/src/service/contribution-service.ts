@@ -28,7 +28,6 @@ import {
 import {
   ContributionForbiddenError,
   ContributionNotFoundError,
-  ContributionQuotaError,
   ContributionStateError,
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
@@ -69,7 +68,6 @@ export interface ListQuery {
 export interface ContributionServiceDeps {
   port: KnowledgeContributionPort;
   canMergeKnowledge: (p: Principal) => boolean;
-  rateLimit: { maxOpenPerPrincipal: number };
   /**
    * Write-pipeline gates run against every insert/update edit before it is
    * forwarded to the port. Throws `KnowledgeGateError` on failure; the HTTP
@@ -194,24 +192,10 @@ export function createContributionService(
     return prior.find((r) => r.idempotencyKey === idempotencyKey) ?? null;
   }
 
-  async function enforceOpenQuota(principal: Principal): Promise<void> {
-    const open = await deps.port.list({
-      state: "open",
-      principalId: principal.id,
-      limit: 100,
-    });
-    if (open.length >= deps.rateLimit.maxOpenPerPrincipal) {
-      throw new ContributionQuotaError(
-        `max open contributions per principal = ${deps.rateLimit.maxOpenPerPrincipal}`
-      );
-    }
-  }
-
   return {
     async create({ principal, body }) {
       const replayed = await idempotencyReplay(principal, body.idempotencyKey);
       if (replayed) return replayed;
-      await enforceOpenQuota(principal);
       const gated = await gateEdits(body.edits);
       return deps.port.create({
         principal,
@@ -238,7 +222,6 @@ export function createContributionService(
           ...body,
         });
       }
-      await enforceOpenQuota(principal);
       return deps.port.createEdoHypothesis({ principal, ...body });
     },
 
@@ -253,7 +236,6 @@ export function createContributionService(
           ...body,
         });
       }
-      await enforceOpenQuota(principal);
       return deps.port.createEdoDecision({ principal, ...body });
     },
 
@@ -268,7 +250,6 @@ export function createContributionService(
           ...body,
         });
       }
-      await enforceOpenQuota(principal);
       return deps.port.createEdoOutcome({ principal, ...body });
     },
 
