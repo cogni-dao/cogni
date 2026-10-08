@@ -836,7 +836,7 @@ function createContainer(): Container {
 
   let doltgresWorkItems: WorkItemsDoltgresPort;
   try {
-    doltgresWorkItems = getDoltgresWorkItemsAdapter();
+    doltgresWorkItems = getDoltgresWorkItemsAdapter(log);
   } catch (e) {
     if (!(e instanceof DoltgresNotConfiguredError)) throw e;
     const notConfigured = () => {
@@ -848,6 +848,12 @@ function createContainer(): Container {
       create: notConfigured,
       patch: notConfigured,
       delete: notConfigured,
+      // The shared port carries the creator-bound lease lifecycle. Operator's
+      // own 409-line adapter had no counterpart, so this stub predates them;
+      // they must still fail closed with the same error rather than be absent.
+      claim: notConfigured,
+      heartbeat: notConfigured,
+      release: notConfigured,
     };
   }
 

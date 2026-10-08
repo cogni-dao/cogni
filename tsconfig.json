@@ -24,7 +24,6 @@
     { "path": "./packages/scheduler-core" },
     { "path": "./packages/temporal-workflows" },
     { "path": "./packages/repo-spec" },
-    { "path": "./packages/work-items" },
     { "path": "./packages/dns-ops" },
     { "path": "./packages/node-core" },
     { "path": "./packages/node-contracts" },
