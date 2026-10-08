@@ -1,0 +1,54 @@
+apiVersion: compute.cogni.io/v1alpha1
+kind: XComputeWorkload
+metadata:
+  name: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
+  namespace: cogni-production
+  labels:
+    cogni.io/node-id: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
+    cogni.io/environment: production
+    cogni.io/node: red
+spec:
+  nodeId: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
+  environment: production
+  bundle:
+    ref: ghcr.io/cogni-dao/red@sha256:351fdbeaa9f8e9950dda3ba40a92402b8ff25af01d51ca21d9689fff91719af3
+    source:
+      repository: cogni-dao/red
+      sha: 991b753ab6fdbe48424a7fb2e1ef2cd1ea7c2252
+    artifacts:
+      - name: app
+        image: ghcr.io/cogni-dao/red@sha256:deda40f485b9bc7b13489d34bef23b0cdf1a1c2a74deada4e00a11afee80fc2f
+  workload:
+    name: red
+    publicHost: red.cognidao.org
+    services:
+      - name: app
+        artifact: app
+        runtimeProfile: cogni-node-app-v1
+        secretRefs:
+          - key: AUTH_SECRET
+          - key: DATABASE_URL
+          - key: DATABASE_SERVICE_URL
+          - key: DOLTGRES_URL
+          - key: EVM_RPC_URL
+          - key: LITELLM_VIRTUAL_KEY
+          - key: SCHEDULER_API_TOKEN
+          - key: BILLING_INGEST_TOKEN
+        port: 3200
+        visibility: public
+        bindings: {}
+        bindHost: 0.0.0.0
+        cpuUnits: 2
+        memoryMi: 2048
+        storageMi: 4096
+  migration:
+    policy: RequireBeforeServing
+  bootPolicy:
+    onDeadline: Hold
+    onGiveUp: Hold
+  leaseGeneration: 0
+  dns:
+    provider: cloudflare
+    zoneId: 23220356c352c5831c6af57887b11a27
+  runtime:
+    substrateHost: cogni.vm.cognidao.org

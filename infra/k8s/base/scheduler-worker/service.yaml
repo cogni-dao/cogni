@@ -7,7 +7,16 @@ metadata:
   labels:
     app.kubernetes.io/name: scheduler-worker
     app.kubernetes.io/part-of: cogni
+# NodePort (not ClusterIP): the shared scheduler-worker runs as a k3s pod while
+# the metrics scraper (Alloy) runs in the Compose infra plane. Compose→k3s crosses
+# the pod-network boundary, so — exactly like node-app — the health/metrics port is
+# published as a NodePort the compose Alloy dials at host.docker.internal:30900
+# (see infra/compose/runtime/configs/alloy-config.metrics.alloy worker_metrics).
+# 30900 is outside the catalog node_port band (auto-allocation grows upward from the
+# current max, never backfills — scripts/ci/next-free-node-port.sh) so it will not
+# clash with a per-node NodePort on any VM. One shared worker ⇒ one fixed NodePort.
 spec:
+  type: NodePort
   selector:
     app.kubernetes.io/name: scheduler-worker
   ports:
@@ -15,3 +24,4 @@ spec:
       targetPort: health
       protocol: TCP
       name: health
+      nodePort: 30900
