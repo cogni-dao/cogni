@@ -17,7 +17,9 @@ matcher = "startup|resume|clear|compact"
 type = "command"
 command = 'bash "$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh"'
 statusMessage = "Loading Cogni cognition substrate"
-# The loader enforces SESSION_COGNITION_MAX_BYTES before writing stdout, so it
-# is safe to bypass Codex's default ~2,500-token head/tail spill. A spill can
-# cut load-bearing instructions out of the middle of the orientation.
+# Disable Codex's default ~2,500-token head/tail spill so the FULL cognition
+# bundle surfaces as developer context — a spill cuts load-bearing instructions
+# out of the middle of the agent-contract. The loader emits raw stdout under
+# Codex and structured hookSpecificOutput.additionalContext under Claude Code;
+# both are uncapped, so the whole bundle auto-surfaces at any size (no ceiling).
 additionalContextLimit = 0

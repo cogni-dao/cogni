@@ -13,11 +13,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  assertBundleWithinBudget,
   renderBundleMarkdown,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
-  SESSION_COGNITION_MAX_BYTES,
   SESSION_WATCH_GATE,
 } from "@/app/api/v1/cognition/_bundle";
 
@@ -55,19 +53,12 @@ const SKILL_WITH_TRIGGER = {
   domain: "method",
 };
 
-describe("bundle budget — realistic shapes must have headroom in CI", () => {
-  // The existing guard test proves assertBundleWithinBudget THROWS over the
-  // limit. That converts silent truncation into a loud failure, but the failure
-  // lands at runtime: /api/v1/cognition 500s and every agent session boots with
-  // NO cognition. These tests move the detection into CI by rendering realistic
-  // worst-case shapes instead of a synthetic "x".repeat().
-  //
-  // Measured on prod 2026-10-07 (buildSha f112873ef5cd, operator hub):
-  //   bundle 15,100 bytes of 16,384 — 1,284 headroom
-  //   20 indexed rows, use_when median 134 chars, max 314
-  const MEASURED_ROWS = 20;
-  const MEASURED_MAX_TRIGGER = 314;
-
+describe("bundle growth — large indexes render whole, no serve-side ceiling (story.5070)", () => {
+  // The hub is designed to accumulate: every new skill/guide/playbook adds a row.
+  // Delivery is now uncapped on both runtimes (Codex raw stdout with spill off;
+  // Claude Code structured additionalContext), so the producer no longer enforces
+  // a byte ceiling. The former 16 KB cap (bug.5284) would have rejected this shape
+  // at the source and 500'd /api/v1/cognition; growth must now render whole.
   function indexOf(rows: number, triggerLen: number) {
     return Array.from({ length: rows }, (_, i) => ({
       id: `build-compute-entry-${i}`,
@@ -78,38 +69,18 @@ describe("bundle budget — realistic shapes must have headroom in CI", () => {
     }));
   }
 
-  it("stays within budget at today's measured shape", () => {
+  it("renders a bundle well past the former 16 KB cap, whole and untruncated", () => {
     const md = renderBundleMarkdown({
       ...baseInput,
-      skillsIndex: indexOf(MEASURED_ROWS, MEASURED_MAX_TRIGGER),
-    });
-    expect(() => assertBundleWithinBudget(md)).not.toThrow();
-  });
-
-  it("fails loudly if the index grows past what the ceiling allows", () => {
-    // Not aspirational: this is the growth path. Every new skill/guide/playbook
-    // entry adds a row, and the hub is designed to accumulate. When this test
-    // starts failing, the bundle must become a router (task.5197) rather than
-    // have the budget raised.
-    const md = renderBundleMarkdown({
-      ...baseInput,
-      skillsIndex: indexOf(80, MEASURED_MAX_TRIGGER),
-    });
-    expect(() => assertBundleWithinBudget(md)).toThrow(/maximum is/);
-  });
-
-  it("reports how much headroom today's shape actually leaves", () => {
-    const md = renderBundleMarkdown({
-      ...baseInput,
-      skillsIndex: indexOf(MEASURED_ROWS, MEASURED_MAX_TRIGGER),
+      skillsIndex: indexOf(80, 314),
     });
     const bytes = new TextEncoder().encode(
       `${md.replace(/\n+$/, "")}\n`
     ).byteLength;
-    const headroom = SESSION_COGNITION_MAX_BYTES - bytes;
-    // A guard with no margin is a guard that fires in production. Keep enough
-    // room for one orientation edit.
-    expect(headroom).toBeGreaterThan(512);
+    // Past the old ceiling — which would have thrown here.
+    expect(bytes).toBeGreaterThan(16 * 1024);
+    // The last row is present ⇒ nothing was dropped.
+    expect(md).toContain("build-compute-entry-79");
   });
 });
 
@@ -306,17 +277,6 @@ describe("renderBundleMarkdown", () => {
     // watch-gate DO render — a session on an empty hub still gets the rules.
     expect(markdown).toContain("## Tooling invariants");
     expect(markdown).toContain("<watch-gate");
-  });
-
-  it("fails closed before a SessionStart bundle can exceed its strict byte budget", () => {
-    // The presenter appends one final newline to the body.
-    const atBudget = "x".repeat(SESSION_COGNITION_MAX_BYTES - 1);
-    const overBudget = `${atBudget}x`;
-
-    expect(() => assertBundleWithinBudget(atBudget)).not.toThrow();
-    expect(() => assertBundleWithinBudget(overBudget)).toThrow(
-      `maximum is ${SESSION_COGNITION_MAX_BYTES}`
-    );
   });
 });
 
