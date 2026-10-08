@@ -21,6 +21,7 @@ import {
 } from "@cogni/work-items/adapters/doltgres";
 import type { Sql } from "postgres";
 
+import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { makeLogger } from "@/shared/observability";
 
@@ -61,13 +62,34 @@ export function getDoltgresSql(): Sql {
 // adapter — bug.5358 was diagnosed on poly through
 // `component="doltgres-work-items"`. Binding the same value here is what makes
 // operator's work-item behaviour visible to the same dashboards and queries.
-const workItemsLogger = makeLogger({ component: "doltgres-work-items" });
+//
+// `nodeId` is equally load-bearing and is easy to omit: `makeLogger` reads it as
+// the reserved emitter identity that Alloy turns into the `node` Loki stream
+// label, so a logger built without it emits lines that cannot be attributed to
+// any node in the per-node log view. Candidate-a proved this — the first version
+// of this wiring passed only `component`, and its `adapter.work_items.*` lines
+// were the only ones in the fleet missing `nodeId`. Lazy + guarded, matching
+// `proxy.ts`: repo-spec is unavailable in some test environments and
+// observability must never break the data path.
+let workItemsLogger: ReturnType<typeof makeLogger> | undefined;
+function getWorkItemsLogger(): ReturnType<typeof makeLogger> {
+  if (!workItemsLogger) {
+    let nodeId = "unknown";
+    try {
+      nodeId = getNodeId();
+    } catch {
+      // repo-spec unavailable (e.g. test env) — fall back to "unknown".
+    }
+    workItemsLogger = makeLogger({ nodeId, component: "doltgres-work-items" });
+  }
+  return workItemsLogger;
+}
 
 export function getDoltgresWorkItemsAdapter(): DoltgresWorkItemAdapter {
   if (!_adapter)
     _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
       idFloor: OPERATOR_ID_FLOOR,
-      logger: workItemsLogger,
+      logger: getWorkItemsLogger(),
       // RECONNECT_AFTER_DESTROYED_CONNECTION: a query that hits the deadline
       // destroys its reserved connection. Without a way to rebuild the client
       // the adapter stays latched on a dead pool — the 2026-10-03 poly incident
