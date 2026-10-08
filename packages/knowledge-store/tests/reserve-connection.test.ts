@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/knowledge-store/tests/reserve-connection`
  * Purpose: Pin the PRIME_BEFORE_RESERVE invariant that keeps the Doltgres knowledge plane from wedging (bug.5386).
- * Scope: Exercises the REAL postgres.js client against a minimal in-process Postgres wire server. No Doltgres, no Docker, no network egress.
+ * Scope: Harness-level proof against a fake PG wire server. Does not connect to Doltgres and does not assert application behaviour.
  * Invariants:
  *   - A bare `sql.reserve()` as the first operation on a `fetch_types: false`
  *     client NEVER settles. This is the defect; the first test documents it so
