@@ -28,7 +28,7 @@
  * blast radius" — and a rejected credential is the same class of fault.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -78,24 +78,25 @@ function run(extraEnv: Record<string, string>): {
     stdio: ["ignore", "pipe", "ignore"],
   });
 
-  try {
-    const out = execFileSync("bash", [SCRIPT], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
-        GH_REVIEW_APP_ID: "123456",
-        GH_REVIEW_APP_PRIVATE_KEY_BASE64: key.toString("base64"),
-        GH_WEBHOOK_SECRET: "dummy-not-a-real-secret",
-        ...extraEnv,
-      },
-    });
-    return { status: 0, out };
-  } catch (error) {
-    const e = error as { status?: number; stdout?: string; stderr?: string };
-    return { status: e.status ?? 1, out: `${e.stdout ?? ""}${e.stderr ?? ""}` };
-  }
+  // spawnSync, not execFileSync: this script reports through `err()` on STDERR,
+  // and execFileSync only hands back stderr when the command FAILS. A skip-path
+  // assertion (exit 0 + a loud line) would then read an empty string and fail
+  // for the wrong reason.
+  const proc = spawnSync("bash", [SCRIPT], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      GH_REVIEW_APP_ID: "123456",
+      GH_REVIEW_APP_PRIVATE_KEY_BASE64: key.toString("base64"),
+      GH_WEBHOOK_SECRET: "dummy-not-a-real-secret",
+      ...extraEnv,
+    },
+  });
+  return {
+    status: proc.status ?? 1,
+    out: `${proc.stdout ?? ""}${proc.stderr ?? ""}`,
+  };
 }
 
 describe("sync-app-webhook-secret (bug.5404)", () => {
