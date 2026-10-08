@@ -758,9 +758,21 @@ spec:
             {{- $dnsRecords := list }}
             {{- if kindIs "slice" $dnsResult }}{{ $dnsRecords = $dnsResult }}{{ else if kindIs "map" $dnsResult }}{{ $dnsRecords = list $dnsResult }}{{ end }}
             {{- $dnsPublished := false }}
+            {{- /* CUTOVER_IS_OBSERVED_AT_THE_CANDIDATE (bug.5322, measured twice on 2026-10-08).
+              $dnsPublished answers "does the live record match what we currently INTEND", and
+              during a cutover the intent ($effectiveDnsTarget) is still the INCUMBENT's target
+              while the latch holds -- so it is true immediately and cannot gate the close. Gating
+              on it closed the incumbent anyway and the public host 404'd for ~7 minutes, twice.
+              $dnsCutoverObserved is the signal the close actually needs: the live record carries
+              the CANDIDATE's own target ($dnsTarget, derived from the candidate child's observed
+              endpoints), so it cannot be true until the edge genuinely moved. Empty $dnsTarget --
+              a candidate with no endpoints yet -- can never satisfy it. */}}
+            {{- $dnsCutoverObserved := false }}
             {{- range $dnsRecords }}
-            {{- if and (eq (dig "type" "" .) $dnsRecordType) (eq (dig "content" "" . | lower | trimSuffix ".") $effectiveDnsTarget) (dig "proxied" false .) }}
-            {{- $dnsPublished = true }}
+            {{- if and (eq (dig "type" "" .) $dnsRecordType) (dig "proxied" false .) }}
+            {{- $recordContent := dig "content" "" . | lower | trimSuffix "." }}
+            {{- if eq $recordContent $effectiveDnsTarget }}{{ $dnsPublished = true }}{{ end }}
+            {{- if and (ne $dnsTarget "") (eq $recordContent $dnsTarget) }}{{ $dnsCutoverObserved = true }}{{ end }}
             {{- end }}
             {{- end }}
 
@@ -1154,7 +1166,7 @@ spec:
                 the outgoing child stops rendering and closes. The close now strictly follows the
                 observed cutover. A stalled Cloudflare write therefore leaks a retained lease
                 (bounded, visible, costed) instead of dropping traffic -- the correct trade. */}}
-              {{- if and $active $serving $dnsPublished }}
+              {{- if and $active $serving $dnsCutoverObserved }}
               activeLeaseGeneration: {{ $leaseGeneration }}
               {{- else if ge $activeLeaseGeneration 0 }}
               activeLeaseGeneration: {{ $activeLeaseGeneration }}
