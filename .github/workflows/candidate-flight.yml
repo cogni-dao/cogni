@@ -929,15 +929,10 @@ jobs:
       matrix:
         node: ${{ fromJson(needs.decide.outputs.external_compute_node_targets_json) }}
     concurrency:
-      group: node-substrate-${{ vars.FLEET_CONTROL_ENV || 'production' }}-${{ matrix.node }}
+      group: external-node-preflight-candidate-a-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    # The lane and the credential-bearing execution environment are different for a
-    # foreign-custodied Akash node. Production owns canonical candidate-a substrate;
-    # an isolated test fleet declares candidate-a as its own custodian. This job uses
-    # only the catalog-selected control environment's credentials and still asserts
-    # the candidate-a target below. It never renders or promotes a production app.
-    environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+    environment: candidate-a
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
@@ -977,12 +972,12 @@ jobs:
           git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
           git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
 
-      - name: Setup SSH to the fleet-control VM
+      - name: Setup SSH to candidate-a VM
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
           NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-          DEPLOY_ENVIRONMENT: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+          DEPLOY_ENVIRONMENT: candidate-a
         run: |
           set -euo pipefail
           bash ci-src/scripts/ci/require-node-ref-vm.sh
@@ -991,53 +986,18 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Reconcile custodian substrate without an app promotion
+      - name: Provision node state and assert Akash prerequisites
         env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
-          DEPLOY_ENVIRONMENT: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-          DOMAIN: ${{ vars.DOMAIN }}
-          APP_SOURCE_DIR: app-src
-          COGNI_CATALOG_ROOT: app-src/infra/catalog
-          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
-          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-          STATUS_URL: ${{ needs.decide.outputs.status_url }}
-          # A control-env replay must not assert (or imply) a production app. The
-          # candidate-specific prerequisite assertion is the next, read-only step.
-          RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT: "true"
-          # Sibling degradation remains non-fatal for ordinary production replay,
-          # but a foreign custodian run exists to gate candidate-a specifically.
-          # In an isolated fleet candidate-a is the target, not a sibling, so its
-          # ordinary target failure semantics already fail closed.
-          RUN_NODE_SUBSTRATE_REQUIRED_LANE: ${{ (vars.FLEET_CONTROL_ENV || 'production') != 'candidate-a' && 'candidate-a' || '' }}
-        run: |
-          set -euo pipefail
-          catalog="app-src/infra/catalog/${{ matrix.node }}.yaml"
-          # The matrix provider describes the TARGET candidate lane. The control
-          # replay must describe the CONTROL lane instead (default k3s), or a
-          # candidate-akash/production-k3s node falsely runs production's Akash
-          # provider assertion semantics.
-          control_provider="$(yq -N ".deployment_provider.\"${DEPLOY_ENVIRONMENT}\" // \"k3s\"" "$catalog")"
-          case "$control_provider" in
-            k3s|akash) ;;
-            *) echo "::error::unsupported control provider '$control_provider' for ${DEPLOY_ENVIRONMENT}/${{ matrix.node }}"; exit 1 ;;
-          esac
-          DEPLOYMENT_PROVIDER="$control_provider" \
-            bash ci-src/scripts/ci/run-node-substrate.sh "$DEPLOY_ENVIRONMENT" "${{ matrix.node }}"
-
-      - name: Assert candidate-a prerequisites in the custodian
-        env:
-          TARGET: ${{ matrix.node }}
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
-          # Canonical production holds candidate-a at test.<root>. An isolated
-          # fleet is its own custodian and its candidate environment supplies the
-          # workload zone directly (currently cogni-testing.org).
-          DOMAIN: ${{ (vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a' && vars.DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}
+          DOMAIN: ${{ vars.DOMAIN }}
           APP_SOURCE_DIR: app-src
-          COGNI_CATALOG_ROOT: app-src/infra/catalog
-        run: bash ci-src/scripts/ci/assert-target-substrate.sh
+          COGNI_CATALOG_ROOT: infra/catalog
+          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
+          STATUS_URL: ${{ needs.decide.outputs.status_url }}
+        run: bash ci-src/scripts/ci/run-node-substrate.sh candidate-a "${{ matrix.node }}"
 
       # The deploy-branch preparation cell gates on this marker before mutating
       # the watched branch, independently of sibling matrix results.
