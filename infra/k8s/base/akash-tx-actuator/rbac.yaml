@@ -10,7 +10,8 @@
 #
 # Derived from the adapter, not copied wholesale from compute-workload-controller's Role:
 # KubernetesMigrationJobAdapter calls readNamespacedJob (get), createNamespacedJob (create),
-# listNamespacedJob (list), deleteNamespacedJob (delete) and listNamespacedPod (list).
+# listNamespacedJob (list), deleteNamespacedJob (delete), listNamespacedPod (list) and
+# readNamespacedPodLog (get pods/log).
 # Everything else the controller holds — computeworkloads(+status/finalizers), leases, events,
 # the allocation ConfigMap — is deliberately ABSENT: Crossplane owns every CR here, this
 # process holds no Lease (its wallet slot is a Postgres unique index), and its receipts are
@@ -31,6 +32,20 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [list]
+  # PR #2629 gave the SAME adapter a `readReceipt` that reads the migrator's own stdout
+  # (readNamespacedPodLog) so the operator can report a node's APPLIED migrations without
+  # holding a credential that can read the node's database. It did not come here, and
+  # Kubernetes RBAC implies NEITHER a subresource from its parent (`pods` does not cover
+  # `pods/log`) NOR `get` from `list` — so every receipt read was 403, the adapter's
+  # best-effort catch turned that into `null`, and the actuator logged
+  # `akash_tx_migration_receipt_absent` once per `akash_tx_migration_succeeded` for every
+  # workload in every environment while `node_migration_reports` stayed empty everywhere.
+  #
+  # This stays inside VALUE_FREE: a migration Job's stdout carries journal tags and ledger
+  # hashes, never a DSN. The grant is read-only, and `pods` itself is still LIST-only.
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
