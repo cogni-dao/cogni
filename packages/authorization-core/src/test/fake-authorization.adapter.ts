@@ -47,13 +47,18 @@ function checksFor(params: AuthzCheckParams): readonly AuthzSubcheck[] {
 
   if (!params.subjectId) return [permission];
 
+  const accountScopedDelegation = params.action === "billing_account.read";
   return [
     permission,
     {
       name: "delegation",
       user: params.actorId,
-      relation: relationForAuthzAction("user.act_as"),
-      object: authzUserResource(params.subjectId),
+      relation: relationForAuthzAction(
+        accountScopedDelegation ? "billing_account.act_as" : "user.act_as"
+      ),
+      object: accountScopedDelegation
+        ? params.resource
+        : authzUserResource(params.subjectId),
       decision: "deny",
       code: "authz_denied",
     },
@@ -119,5 +124,9 @@ export class FakeAuthorizationAdapter implements AuthorizationPort {
 }
 
 function relationKey(tuple: AuthzRelationTuple): string {
-  return JSON.stringify(tuple);
+  return JSON.stringify({
+    user: tuple.user,
+    relation: tuple.relation,
+    object: tuple.object,
+  });
 }
