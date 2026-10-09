@@ -544,18 +544,25 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
 
     if (!params.subjectId) return [permission];
 
-    const accountScopedDelegation = params.action === "billing_account.read";
+    const subjectDelegation = {
+      name: "delegation" as const,
+      user: params.actorId,
+      relation: relationForAuthzAction("user.act_as"),
+      object: authzUserResource(params.subjectId),
+    };
+
+    if (params.action !== "billing_account.read") {
+      return [permission, subjectDelegation];
+    }
+
     return [
       permission,
+      subjectDelegation,
       {
         name: "delegation",
         user: params.actorId,
-        relation: relationForAuthzAction(
-          accountScopedDelegation ? "billing_account.act_as" : "user.act_as"
-        ),
-        object: accountScopedDelegation
-          ? params.resource
-          : authzUserResource(params.subjectId),
+        relation: relationForAuthzAction("billing_account.act_as"),
+        object: params.resource,
         ...(conditionContext !== undefined
           ? { context: conditionContext }
           : {}),
