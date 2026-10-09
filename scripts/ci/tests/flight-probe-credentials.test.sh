@@ -59,7 +59,7 @@ if [[ "$cmd" == *"sh -c"* && "$cmd" == *"exec bao"* ]]; then
   IFS= read -r token
   [ "$token" = writer-token ] || exit 3
 fi
-path="$(printf '%s' "$cmd" | sed -n "s/.*'\\(cogni\\/[^']*\\)'.*/\\1/p")"
+path="$(printf '%s' "$cmd" | grep -oE 'cogni/[A-Za-z0-9_./-]+' | tail -n 1)"
 if [[ "$cmd" == *"bao kv get -format=json"* ]]; then
   dir="${FAKE_BAO_ROOT}/${path}"
   if [ ! -d "$dir" ]; then echo "No value found at ${path}" >&2; exit 2; fi
