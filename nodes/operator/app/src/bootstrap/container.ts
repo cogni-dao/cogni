@@ -146,6 +146,7 @@ import {
   createNodeAddressResolver,
 } from "@/adapters/server/node-registry/node-address.adapter";
 import { StaticNodeRegistryAdapter } from "@/adapters/server/node-registry/static-node-registry.adapter";
+import { DrizzleNodeMigrationReportStore } from "@/adapters/server/observability/drizzle-node-migration-report.adapter";
 import { ServiceDrizzlePaymentAttemptRepository } from "@/adapters/server/payments/drizzle-payment-attempt.adapter";
 import { SplitTreasurySettlementAdapter } from "@/adapters/server/treasury/split-treasury-settlement.adapter";
 import {
@@ -203,6 +204,7 @@ import type {
   ModelCatalogPort,
   ModelProviderResolverPort,
   NodeDeploymentTopologyPort,
+  NodeMigrationReportStorePort,
   NodeRegistryPort,
   OnChainVerifier,
   OperatorWalletPort,
@@ -313,6 +315,12 @@ export interface Container {
   vcsCapability: VcsCapability;
   /** Read-only deploy capability (SEE flow) — undefined when no base domain is configured */
   deployCapability: DeployCapability | undefined;
+  /**
+   * APPLIED migration state as operator-held deployment metadata (`node_migration_reports`).
+   * Read-only on this runtime: the app SERVES receipts, the actuator's migration step WRITES them.
+   * Metadata, never node data access — there is no DSN here for any `cogni_<node>`.
+   */
+  nodeMigrationReportStore: NodeMigrationReportStorePort | undefined;
   /** Tool source with real implementations for AI tool execution */
   toolSource: ToolSourcePort;
   /** External-agent knowledge contribution service — undefined when DOLTGRES_URL is unset */
@@ -740,6 +748,13 @@ function createContainer(): Container {
   // DeployCapability (read-only SEE flow) — probe-backed v0; undefined when no base domain.
   const deployCapability = createDeployCapability(env);
 
+  // Applied-migration readout (the schema readout): a plain read of the OPERATOR's own Postgres.
+  // The rows get there because the node's own migrator reported them, so this seam is metadata,
+  // never node data access (docs/spec/multi-node-tenancy.md NO_CROSS_NODE_QUERIES).
+  const nodeMigrationReportStore = new DrizzleNodeMigrationReportStore(
+    async () => serviceDb
+  );
+
   // KnowledgeCapability + EdoCapability for AI tools (require DOLTGRES_URL)
   let knowledgeCapability: KnowledgeCapability;
   let edoCapability: EdoCapability;
@@ -1117,6 +1132,7 @@ function createContainer(): Container {
     repoCapability,
     vcsCapability,
     deployCapability,
+    nodeMigrationReportStore,
     toolSource,
     knowledgeContributionService,
     knowledgeStorePort,

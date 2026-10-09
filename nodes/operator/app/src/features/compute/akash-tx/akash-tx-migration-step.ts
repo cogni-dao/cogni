@@ -29,6 +29,9 @@
  *     is paying for it. Until task.5132 only the secret NAME was stated; the namespace defaulted
  *     to this process's own, which for a foreign-custodied lane resolved that name to the PAYING
  *     env's Secret — and left the receipt where the lane then read it as its own proof.
+ *   - RECEIPT_IS_METADATA_NOT_DATA_ACCESS: on `succeeded` this step collects the receipt the node's
+ *     OWN migrator printed and stores it as operator deployment metadata, keyed by the workload
+ *     being reconciled. The operator never connects to `cogni_<node>` to learn what was applied.
  *   - OUTCOME_IS_OBSERVABLE: every phase emits a structured log marker before it is returned
  *     (bug.5115: a refusal that only reached CR status was invisible for hours). A `failed`
  *     phase additionally reaches the composite as a named status reason.
@@ -44,7 +47,12 @@ import type {
   AkashTxMigrationPort,
   AkashTxMigrationStep,
   ComputeWorkloadMigrationPhase,
+  NodeMigrationReportStorePort,
 } from "@/ports";
+import {
+  diffDeclaredVsApplied,
+  parseMigrationReceipt,
+} from "@/shared/migrations/migration-receipt";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
 
@@ -120,7 +128,79 @@ export interface AkashTxMigrationStepInput {
 export interface AkashTxMigrationStepDeps {
   /** Absent means the actuator cannot run migrations; the step reports `unavailable`. */
   readonly migration?: AkashTxMigrationPort;
+  /**
+   * Where a collected receipt is stored as operator-held deployment METADATA. Absent means the
+   * receipt is simply not collected — the schema readout then honestly says "never reported"
+   * rather than implying an empty schema.
+   */
+  readonly reports?: NodeMigrationReportStorePort;
   readonly log: AkashTxLogger;
+}
+
+/**
+ * Collect the receipt the node's own migrator printed and store it against the workload THIS CALL
+ * is reconciling. There is no caller-supplied node on this path: the key is the workload the
+ * actuator was asked to observe, which is the same derivation that makes
+ * ENVIRONMENT_IS_THE_WORKLOAD'S true for the Job itself. Nothing here reaches a node database —
+ * the migrator read its own ledger with its own DSN and printed the answer.
+ *
+ * Non-throwing and non-blocking, like everything else in this module: a receipt that cannot be
+ * collected or stored must never turn a succeeded migration into a phase the composite acts on.
+ */
+async function recordReceipt(
+  deps: AkashTxMigrationStepDeps,
+  input: {
+    readonly workload: string;
+    readonly environment: string;
+    readonly bundleDigest: string;
+    readonly namespace: string;
+    readonly containerName: string;
+    readonly fields: Record<string, unknown>;
+  }
+): Promise<void> {
+  const { reports, migration } = deps;
+  if (!reports || !migration?.readReceipt) return;
+  try {
+    const stdout = await migration.readReceipt({
+      nodeSlug: input.workload,
+      bundleDigest: input.bundleDigest,
+      namespace: input.namespace,
+      containerName: input.containerName,
+    });
+    const receipt = stdout ? parseMigrationReceipt(stdout) : null;
+    if (!receipt) {
+      deps.log.info(input.fields, "akash_tx_migration_receipt_absent");
+      return;
+    }
+    const outcome = await reports.record({
+      nodeSlug: input.workload,
+      environment: input.environment,
+      declared: receipt.declared,
+      applied: receipt.applied,
+      bundleDigest: input.bundleDigest,
+      reporter: "migration-job",
+    });
+    const drift = diffDeclaredVsApplied(receipt);
+    // Counts and enums only: a migration tag is row content and never reaches a log line.
+    deps.log.info(
+      {
+        ...input.fields,
+        outcome,
+        declaredCount: receipt.declared.length,
+        appliedCount: receipt.applied.length,
+        missingCount: drift.missing.length,
+      },
+      "akash_tx_migration_receipt_recorded"
+    );
+  } catch (error) {
+    deps.log.error(
+      {
+        ...input.fields,
+        causeMessage: error instanceof Error ? error.message : "unknown cause",
+      },
+      "akash_tx_migration_receipt_failed"
+    );
+  }
 }
 
 /**
@@ -171,6 +251,20 @@ export async function runMigrationStep(
 
   if (outcome === "succeeded") {
     deps.log.info(fields, "akash_tx_migration_succeeded");
+    // Declared-vs-applied becomes comparable here, and only here: the migrator just told us what
+    // it applied. Awaited so the receipt is durable before the phase is reported, but it cannot
+    // change the phase (NEVER_REFUSES) — recordReceipt swallows everything.
+    await recordReceipt(deps, {
+      workload: input.workload,
+      environment: input.environment,
+      bundleDigest,
+      namespace: workloadNamespace(input.environment),
+      // The FIRST phase is the node's Postgres migrate; Doltgres has its own runtime drift check
+      // (verifyDoltgresSchema), so Postgres is the plane with no proof today.
+      containerName:
+        cogniNodeAppMigrationPhases({ doltgres })[0]?.name ?? "migrate",
+      fields,
+    });
     return "succeeded";
   }
   if (outcome === "running") {

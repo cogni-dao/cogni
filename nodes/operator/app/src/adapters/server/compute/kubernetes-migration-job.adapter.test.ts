@@ -69,10 +69,13 @@ function batch(job?: V1Job, jobs: V1Job[] = []) {
   };
 }
 
-function pods(items: V1Pod[] = []) {
+function pods(items: V1Pod[] = [], logBody = "") {
   return {
     listNamespacedPod: vi.fn(async (..._args: unknown[]) => ({
       body: { items },
+    })),
+    readNamespacedPodLog: vi.fn(async (..._args: unknown[]) => ({
+      body: logBody,
     })),
   };
 }
@@ -553,5 +556,56 @@ describe("KubernetesMigrationJobAdapter lane scoping", () => {
 
     const [namespace] = api.createNamespacedJob.mock.calls[0] ?? [];
     expect(namespace).toBe(NAMESPACE);
+  });
+});
+
+describe("readReceipt", () => {
+  const RECEIPT =
+    'COGNI_MIGRATION_RECEIPT_V1 {"node":"toks","declared":[],"applied":[]}';
+
+  /** A pod that completed — the one whose stdout describes the end state. */
+  const succeededPod = (name: string): V1Pod =>
+    ({ metadata: { name }, status: { phase: "Succeeded" } }) as V1Pod;
+
+  it("reads the named phase container of this digest's pod, in the workload namespace", async () => {
+    const podApi = pods([succeededPod("migrate-toks-abc-xyz")], RECEIPT);
+    const adapter = adapterOf(batch(), podApi);
+    await expect(
+      adapter.readReceipt({
+        nodeSlug: "toks",
+        bundleDigest: DIGEST,
+        namespace: "cogni-candidate-a",
+        containerName: "migrate",
+      })
+    ).resolves.toBe(RECEIPT);
+    const [podName, namespace, container] =
+      podApi.readNamespacedPodLog.mock.calls[0] ?? [];
+    expect(podName).toBe("migrate-toks-abc-xyz");
+    expect(namespace).toBe("cogni-candidate-a");
+    expect(container).toBe("migrate");
+  });
+
+  it("returns null rather than throwing when the pods cannot be read", async () => {
+    const podApi = pods([]);
+    podApi.listNamespacedPod.mockRejectedValue(new Error("api down"));
+    const adapter = adapterOf(batch(), podApi);
+    await expect(
+      adapter.readReceipt({
+        nodeSlug: "toks",
+        bundleDigest: DIGEST,
+        containerName: "migrate",
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("returns null for a malformed digest instead of throwing", async () => {
+    const adapter = adapterOf(batch(), pods([], RECEIPT));
+    await expect(
+      adapter.readReceipt({
+        nodeSlug: "toks",
+        bundleDigest: "not-a-digest",
+        containerName: "migrate",
+      })
+    ).resolves.toBeNull();
   });
 });

@@ -52,4 +52,20 @@ export interface ComputeWorkloadMigrationPort {
   ensure(
     input: ComputeWorkloadMigrationInput
   ): Promise<"succeeded" | "running" | "failed">;
+  /**
+   * The migrator's own stdout for a SUCCEEDED digest, so the caller can collect the receipt the
+   * migrator printed — "what did this deploy actually apply?" — WITHOUT anyone holding a credential
+   * that can read the node's database (docs/spec/multi-node-tenancy.md NO_CROSS_NODE_QUERIES).
+   *
+   * Optional, and never throws: an implementation that cannot produce logs returns null, because a
+   * missing receipt is deployment metadata that did not arrive, never a migration that failed.
+   * `containerName` keeps RECONCILER_OWNS_POLICY true — the adapter does not decide which phase
+   * speaks for the node's Postgres schema.
+   */
+  readReceipt?(input: {
+    readonly nodeSlug: string;
+    readonly bundleDigest: string;
+    readonly namespace?: string | undefined;
+    readonly containerName: string;
+  }): Promise<string | null>;
 }
