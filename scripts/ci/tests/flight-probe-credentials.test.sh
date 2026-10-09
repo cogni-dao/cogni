@@ -199,6 +199,17 @@ grep -q 'invalid node slug' "$TMPROOT/invalid-node.out"
 grep -q 'invalid VM_HOST' "$TMPROOT/invalid-host.out"
 test ! -e "$INJECTION_MARKER"
 
+set +e
+env VM_HOST=fake FLEET_CONTROL_ENV=production SECRETS_CONTROL_ENV=production \
+  COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" FLIGHT_PROBE_SSH_BIN="$FAKEBIN/ssh" \
+  FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" SSH_OPTS='-i fake' \
+  bash scripts/ci/flight-probe-credentials.sh materialize candidate-a node-template- \
+  >"$TMPROOT/noncanonical-node.out" 2>&1
+noncanonical_node_rc=$?
+set -e
+test "$noncanonical_node_rc" -ne 0
+grep -q 'invalid node slug' "$TMPROOT/noncanonical-node.out"
+
 for invalid_host in '-oProxyCommand=touch injected' 'fake host' '.fake' 'fake.' 'fake..host'; do
   set +e
   env VM_HOST="$invalid_host" FLEET_CONTROL_ENV=production SECRETS_CONTROL_ENV=production \

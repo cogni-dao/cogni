@@ -50,7 +50,7 @@ USAGE
 [[ "$SECRETS_CONTROL_ENV" == "$CONTROL_ENV" ]] \
   || fail "control-vault-only: SECRETS_CONTROL_ENV '$SECRETS_CONTROL_ENV' must equal FLEET_CONTROL_ENV '$CONTROL_ENV'"
 [[ -n "$TARGET_NODE" ]] || { usage; exit 2; }
-[[ "$TARGET_NODE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "invalid node slug '$TARGET_NODE'"
+[[ "$TARGET_NODE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || fail "invalid node slug"
 [[ -n "${VM_HOST:-}" ]] || fail "VM_HOST is required"
 
 # VM_HOST is later embedded in the ssh destination. Accept only an RFC-1123
