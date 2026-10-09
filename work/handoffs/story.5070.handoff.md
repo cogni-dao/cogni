@@ -96,7 +96,7 @@ real work. Do not mistake delivery or one-shot formatting for the goal.
 - [ ] Land the committed skeleton floor (req 2); then hook write-only (req 3).
 - [ ] Only then: node-template parity + opencode.json + the orientation→map-only hub migration (human-merge-gated).
 - Risk: **delivery ≠ adherence** — the trap this whole story fell into; grade with the eval, never assert.
-- Risk: hub work-item `PATCH` 500s — can't update story.5070 outcome via API; state lives in the eval + `.context/story5070-resume.md`. File a bug when the write-path recovers.
+- Risk: story.5070's hub `PATCH` 500s — this is **bug.5418** (it predates the `created_by_principal_id` column; a NULL-creator row passes `mayMutate` authz then fails `validateTransitionMatrix`'s proof → 500 + orphaned branch). NOT a build regression. Fixed in `@cogni/work-items` 0.1.8 (node-template #160, being driven to all 6 nodes). Items created today `PATCH` fine. Persist story.5070's outcome once operator promotes 0.1.8 — do NOT file a churn item as a workaround. The knowledge `/contributions/{id}/commits` 404 was **bug.5085** (bearer must be the inbox's author principal; orphaned after this session's key rotation) + a cite-referencing-a-same-commit-row quirk — open a fresh inbox under the current key, insert and cite in separate commits. Until then, state lives in this handoff + `.context/story5070-resume.md`.
 - Risk: closing Claude adherence may be a model limit, not a substrate one (Codex passes the same bundle). If so, the deliverable is a documented finding + the eval, not a forced pass.
 
 ## Pointers
