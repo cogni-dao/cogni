@@ -58,12 +58,16 @@
  *     identical SDL thrashes a not-yet-serving node; the gate skips only that case and any real
  *     spec change still applies + records the new hash.
  *   - REFUSAL_IS_OBSERVABLE: every refusal emits a structured log line before it throws
- *     (bug.5115: a wallet block that only reached CR status was invisible for hours).
+ *     (bug.5115: a wallet block that only reached CR status was invisible for hours). The same
+ *     rule now covers what observe ANSWERS, not only what it refuses: every observe states the
+ *     migration verdict its response carries (`akash_tx_observe_migration_verdict`), because
+ *     that one enum is what the composite reads to decide `MigrationFailed`, and nothing else
+ *     in this process logs the RESPONSE (bug.5416).
  * Side-effects: IO (Akash Console transactions via the injected client; durable allocation and
  *   receipt-linked cost writes; one bounded serving probe per observe when asked)
  * Links: @ports/akash-tx.port, adapters/server/compute/akash-compute.adapter (SDL + provider
  *   screening stay there), adapters/server/compute/akash-tx-allocation-ledger.adapter,
- *   ./akash-tx-wallet, ./akash-tx-http, task.5095
+ *   ./akash-tx-wallet, ./akash-tx-http, task.5095, bug.5416
  * @internal
  */
 
@@ -348,6 +352,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     // "found: false" must keep reporting it, because that is the signal Crossplane uses to
     // create the lease, and a database has no business vetoing that (task.5135).
     const migration = await this.releaseMigration(input);
+    // THE VERDICT THE COMPOSITE WILL READ, stated once per observe (bug.5416). Everything
+    // upstream of this line logs how the step WENT; only this line logs what the RESPONSE
+    // carries, which is the single value `composition.yaml` turns into `MigrationFailed`.
+    this.logMigrationVerdict(input, migration);
     const withMigration = (
       observation: AkashTxObservation
     ): AkashTxObservation =>
@@ -930,6 +938,61 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           : {}),
       }
     );
+  }
+
+  /**
+   * State the migration verdict THIS OBSERVE RESPONSE CARRIES — the exact value the composite
+   * reads as `dig "migration" "phase" "" $resp` and turns into `status.failure.reason:
+   * MigrationFailed` (bug.5416).
+   *
+   * Every other migration marker in this feature reports how the STEP went: the Job's outcome,
+   * the receipt, the drift. None of them is the gate's input. A `succeeded` Job that failed the
+   * drift gate logs `akash_tx_migration_succeeded` AND `akash_tx_migration_drift_missing`, and a
+   * reader still has to re-derive which phase the wire ended up with. This line removes the
+   * derivation: one marker, one `phase`, per response.
+   *
+   * Unconditional, NOT change-only. A verdict that is logged only when it CHANGES is invisible
+   * to every bounded window query — which is precisely the failure bug.5416 reports (four
+   * 30-minute Loki searches, zero results, while the gate was demonstrably firing). A gate is a
+   * steady state, so it has to be readable as one. The cost is one line per observe against the
+   * ~20 this feature already emits per digest per 10 minutes.
+   *
+   * PRIVACY, inherited from bug.5415: this line carries an ENUM and the caller's own identifiers.
+   * No tags, no counts sourced from a database row, no DSN, no receipt content. Named migration
+   * tags appear in exactly one place — `akash_tx_migration_drift_missing`, image content only.
+   */
+  private logMigrationVerdict(
+    input: {
+      cogniKey: string;
+      migration?: AkashTxMigrationStep;
+      workload?: string;
+      environment?: string;
+    },
+    phase: AkashTxMigrationPhase | undefined
+  ): void {
+    const fields = {
+      cogniKey: input.cogniKey,
+      ...(input.workload ? { workload: input.workload } : {}),
+      ...(input.environment ? { environment: input.environment } : {}),
+      ...(input.migration
+        ? { bundleDigest: input.migration.bundleDigest }
+        : {}),
+      // `requested: false` is a DIFFERENT fact from any phase, and worth one line: it is how a
+      // gate that was never consulted at all — a composite that stopped attaching the step —
+      // stays distinguishable from a gate that passed. `phase` is absent on exactly that path,
+      // because that is what the response carries.
+      requested: input.migration !== undefined,
+      ...(phase ? { phase } : {}),
+    };
+    if (phase === "failed") {
+      this.log.error(fields, "akash_tx_observe_migration_verdict");
+      return;
+    }
+    if (phase === "unavailable") {
+      this.log.warn(fields, "akash_tx_observe_migration_verdict");
+      return;
+    }
+    this.log.info(fields, "akash_tx_observe_migration_verdict");
   }
 
   /**
