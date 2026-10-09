@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/attribution-ledger/actor-contribution-allocation`
  * Purpose: Deterministic v1 actor-allocation envelope and EIP-712 signing data.
- * Scope: Pure functions only. Existing AttributionStatement v2 bytes are untouched.
+ * Scope: Pure functions only. Does not alter existing AttributionStatement v2 bytes.
  * Invariants:
  * - AI_EARNER_PRESERVED: earnedByActorId and beneficiaryActorId are separate signed facts.
  * - BENEFICIARY_CUTOFF_FROZEN: policy id/version and receipt cutoff are signed.

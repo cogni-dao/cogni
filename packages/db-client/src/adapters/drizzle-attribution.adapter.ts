@@ -2128,6 +2128,52 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           "P0 beneficiary claim requires an active agent earner and human beneficiary"
         );
       }
+      const [latestPolicyRows, latestAllocationRows] = await Promise.all([
+        tx
+          .select({ effectiveFrom: actorBeneficiaryPolicies.effectiveFrom })
+          .from(actorBeneficiaryPolicies)
+          .where(
+            eq(
+              actorBeneficiaryPolicies.earnedByActorId,
+              params.earnedByActorId
+            )
+          )
+          .orderBy(desc(actorBeneficiaryPolicies.effectiveFrom))
+          .limit(1),
+        tx
+          .select({
+            contributionCutoff:
+              actorContributionAllocations.contributionCutoff,
+          })
+          .from(actorContributionAllocations)
+          .where(
+            eq(
+              actorContributionAllocations.earnedByActorId,
+              params.earnedByActorId
+            )
+          )
+          .orderBy(desc(actorContributionAllocations.contributionCutoff))
+          .limit(1),
+      ]);
+      const latestPolicy = latestPolicyRows[0];
+      if (
+        latestPolicy &&
+        params.effectiveFrom.getTime() <= latestPolicy.effectiveFrom.getTime()
+      ) {
+        throw new Error(
+          "Beneficiary policy effectiveFrom must be strictly after the latest policy"
+        );
+      }
+      const latestAllocation = latestAllocationRows[0];
+      if (
+        latestAllocation &&
+        params.effectiveFrom.getTime() <=
+          latestAllocation.contributionCutoff.getTime()
+      ) {
+        throw new Error(
+          "Beneficiary policy cannot backdate across a frozen actor allocation"
+        );
+      }
       const [row] = await tx
         .insert(actorBeneficiaryPolicies)
         .values({
@@ -2262,70 +2308,89 @@ export class DrizzleAttributionAdapter implements AttributionStore {
   async insertSignedActorContributionAllocation(
     params: InsertSignedActorContributionAllocationParams
   ): Promise<ActorContributionAllocationRecord> {
-    const prepared = await this.prepareActorContributionAllocation({
+    const initial = await this.prepareActorContributionAllocation({
       nodeId: params.allocation.nodeId,
       epochId: BigInt(params.allocation.epochId),
       receiptId: params.allocation.receiptId,
     });
-    if (prepared.allocationRef !== params.allocation.allocationRef) {
-      throw new Error("Actor allocation facts diverged before persistence");
-    }
-    const [policy] = await this.db
-      .select({
-        authorizedByActorId: actorBeneficiaryPolicies.authorizedByActorId,
-      })
-      .from(actorBeneficiaryPolicies)
-      .where(eq(actorBeneficiaryPolicies.id, prepared.beneficiaryPolicyId))
-      .limit(1);
-    if (policy?.authorizedByActorId !== params.signerActorId) {
-      throw new Error(
-        "Allocation signer is not the beneficiary policy authorizer"
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${initial.earnedByActorId}`}))`
       );
-    }
-    if (
-      !(await this.actorOwnsSigningWallet({
-        actorId: params.signerActorId,
-        wallet: params.signerWallet,
-      }))
-    ) {
-      throw new Error("Allocation signer wallet is not owned by signer actor");
-    }
+      const prepared = await this.prepareActorContributionAllocation({
+        nodeId: params.allocation.nodeId,
+        epochId: BigInt(params.allocation.epochId),
+        receiptId: params.allocation.receiptId,
+      });
+      if (prepared.allocationRef !== params.allocation.allocationRef) {
+        throw new Error("Actor allocation facts diverged before persistence");
+      }
+      const [policy] = await tx
+        .select({
+          authorizedByActorId: actorBeneficiaryPolicies.authorizedByActorId,
+        })
+        .from(actorBeneficiaryPolicies)
+        .where(eq(actorBeneficiaryPolicies.id, prepared.beneficiaryPolicyId))
+        .limit(1);
+      if (policy?.authorizedByActorId !== params.signerActorId) {
+        throw new Error(
+          "Allocation signer is not the beneficiary policy authorizer"
+        );
+      }
+      if (
+        !(await this.actorOwnsSigningWallet({
+          actorId: params.signerActorId,
+          wallet: params.signerWallet,
+        }))
+      ) {
+        throw new Error(
+          "Allocation signer wallet is not owned by signer actor"
+        );
+      }
 
-    const [inserted] = await this.db
-      .insert(actorContributionAllocations)
-      .values({
-        id: prepared.allocationRef,
-        nodeId: prepared.nodeId,
-        scopeId: prepared.scopeId,
-        epochId: BigInt(prepared.epochId),
-        receiptId: prepared.receiptId,
-        contractVersion: prepared.contractVersion,
-        earnedByActorId: prepared.earnedByActorId,
-        beneficiaryActorId: prepared.beneficiaryActorId,
-        beneficiaryPolicyId: prepared.beneficiaryPolicyId,
-        beneficiaryPolicyVersion: prepared.beneficiaryPolicyVersion,
-        contributionCutoff: new Date(prepared.contributionCutoff),
-        sourceEvidence: { ...prepared.sourceEvidence },
-        sourceEvidenceHash: prepared.sourceEvidenceHash,
-        signerActorId: params.signerActorId,
-        signerWallet: params.signerWallet.toLowerCase(),
-        signature: params.signature,
-        signedAt: params.signedAt,
-      })
-      .onConflictDoNothing({ target: actorContributionAllocations.id })
-      .returning();
-    if (inserted) return toActorContributionAllocation(inserted);
-    const existing = await this.getActorContributionAllocation(
-      prepared.allocationRef
-    );
-    if (
-      !existing ||
-      existing.signature !== params.signature ||
-      existing.signerWallet !== params.signerWallet.toLowerCase()
-    ) {
-      throw new Error("Actor allocation idempotency conflict");
-    }
-    return existing;
+      const [inserted] = await tx
+        .insert(actorContributionAllocations)
+        .values({
+          id: prepared.allocationRef,
+          nodeId: prepared.nodeId,
+          scopeId: prepared.scopeId,
+          epochId: BigInt(prepared.epochId),
+          receiptId: prepared.receiptId,
+          contractVersion: prepared.contractVersion,
+          earnedByActorId: prepared.earnedByActorId,
+          beneficiaryActorId: prepared.beneficiaryActorId,
+          beneficiaryPolicyId: prepared.beneficiaryPolicyId,
+          beneficiaryPolicyVersion: prepared.beneficiaryPolicyVersion,
+          contributionCutoff: new Date(prepared.contributionCutoff),
+          sourceEvidence: { ...prepared.sourceEvidence },
+          sourceEvidenceHash: prepared.sourceEvidenceHash,
+          signerActorId: params.signerActorId,
+          signerWallet: params.signerWallet.toLowerCase(),
+          signature: params.signature,
+          signedAt: params.signedAt,
+        })
+        .onConflictDoNothing({ target: actorContributionAllocations.id })
+        .returning();
+      if (inserted) return toActorContributionAllocation(inserted);
+      const [existing] = await tx
+        .select()
+        .from(actorContributionAllocations)
+        .where(
+          and(
+            eq(actorContributionAllocations.id, prepared.allocationRef),
+            eq(actorContributionAllocations.scopeId, this.scopeId)
+          )
+        )
+        .limit(1);
+      if (
+        !existing ||
+        existing.signature !== params.signature ||
+        existing.signerWallet !== params.signerWallet.toLowerCase()
+      ) {
+        throw new Error("Actor allocation idempotency conflict");
+      }
+      return toActorContributionAllocation(existing);
+    });
   }
 
   async getActorContributionAllocation(
