@@ -53,6 +53,18 @@ USAGE
 [[ "$TARGET_NODE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "invalid node slug '$TARGET_NODE'"
 [[ -n "${VM_HOST:-}" ]] || fail "VM_HOST is required"
 
+# VM_HOST is later embedded in the ssh destination. Accept only an RFC-1123
+# hostname/IPv4-shaped value: no whitespace, option prefix, shell metacharacter,
+# empty label, or label longer than 63 bytes can reach transport argv.
+[[ ${#VM_HOST} -le 253 ]] || fail "VM_HOST exceeds 253 bytes"
+[[ "$VM_HOST" != .* && "$VM_HOST" != *. && "$VM_HOST" != *..* ]] || fail "invalid VM_HOST"
+IFS='.' read -r -a vm_host_labels <<< "$VM_HOST"
+[[ ${#vm_host_labels[@]} -gt 0 ]] || fail "invalid VM_HOST"
+for vm_host_label in "${vm_host_labels[@]}"; do
+  [[ "$vm_host_label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] \
+    || fail "invalid VM_HOST"
+done
+
 catalog_file="$CATALOG_ROOT/$TARGET_NODE.yaml"
 [[ -f "$catalog_file" ]] || fail "unknown node '$TARGET_NODE' (missing $catalog_file)"
 NODE_ID="$(yq -N '.node_id // ""' "$catalog_file")"

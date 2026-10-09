@@ -163,4 +163,40 @@ set -e
 test "$rc" -ne 0
 grep -q 'control-vault-only' "$TMPROOT/wrong-control.out"
 
+# Inputs interpolated into transport/path commands are canonical before the
+# first ssh call. Quote/metacharacter payloads cannot become remote commands.
+INJECTION_MARKER="$TMPROOT/injected"
+set +e
+env VM_HOST=fake FLEET_CONTROL_ENV=production SECRETS_CONTROL_ENV=production \
+  COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" FLIGHT_PROBE_SSH_BIN="$FAKEBIN/ssh" \
+  FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" SSH_OPTS='-i fake' \
+  bash scripts/ci/flight-probe-credentials.sh materialize candidate-a \
+  "node-template'; touch $INJECTION_MARKER; #" >"$TMPROOT/invalid-node.out" 2>&1
+invalid_node_rc=$?
+env VM_HOST="fake; touch $INJECTION_MARKER" FLEET_CONTROL_ENV=production SECRETS_CONTROL_ENV=production \
+  COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" FLIGHT_PROBE_SSH_BIN="$FAKEBIN/ssh" \
+  FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" SSH_OPTS='-i fake' \
+  bash scripts/ci/flight-probe-credentials.sh materialize candidate-a node-template \
+  >"$TMPROOT/invalid-host.out" 2>&1
+invalid_host_rc=$?
+set -e
+test "$invalid_node_rc" -ne 0
+test "$invalid_host_rc" -ne 0
+grep -q 'invalid node slug' "$TMPROOT/invalid-node.out"
+grep -q 'invalid VM_HOST' "$TMPROOT/invalid-host.out"
+test ! -e "$INJECTION_MARKER"
+
+for invalid_host in '-oProxyCommand=touch injected' 'fake host' '.fake' 'fake.' 'fake..host'; do
+  set +e
+  env VM_HOST="$invalid_host" FLEET_CONTROL_ENV=production SECRETS_CONTROL_ENV=production \
+    COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" FLIGHT_PROBE_SSH_BIN="$FAKEBIN/ssh" \
+    FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" SSH_OPTS='-i fake' \
+    bash scripts/ci/flight-probe-credentials.sh materialize candidate-a node-template \
+    >"$TMPROOT/invalid-host-shape.out" 2>&1
+  invalid_host_shape_rc=$?
+  set -e
+  test "$invalid_host_shape_rc" -ne 0
+  grep -q 'invalid VM_HOST' "$TMPROOT/invalid-host-shape.out"
+done
+
 echo "PASS: flight-probe-credentials.test.sh"
