@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/node-contracts/flight-probe.internal.v1`
  * Purpose: Frozen wire contract for the bounded operator-to-node run-carries probe.
- * Scope: Schemas only. Credential verification and workflow execution stay in the node app.
+ * Scope: Schemas only. Does not verify credentials or execute workflows; those stay in the node app.
  * Invariants:
  *   - FIXED_OPERATION: the caller cannot choose graph, prompt, model, billing account, or actor.
  *   - SERVICE_NOT_CONTRIBUTOR: principalId is the stable `service:{nodeId}/flight-prober` subject.
