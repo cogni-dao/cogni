@@ -17,7 +17,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockRedeem = vi.fn().mockResolvedValue({
   actorId: "11111111-1111-4111-8111-111111111111",
-  principalId: "agent:node-1/11111111-1111-4111-8111-111111111111",
+  principalId:
+    "agent:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/11111111-1111-4111-8111-111111111111",
   credentialId: "22222222-2222-4222-8222-222222222222",
   apiKey: "cogni_ag_sk_v2_22222222-2222-4222-8222-222222222222.secret",
   billingAccountId: "billing-1",
@@ -74,7 +75,7 @@ describe("POST /api/v1/agent/register", () => {
         const json = await response.json();
         expect(json.actorId).toBe("11111111-1111-4111-8111-111111111111");
         expect(json.principalId).toBe(
-          "agent:node-1/11111111-1111-4111-8111-111111111111"
+          "agent:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/11111111-1111-4111-8111-111111111111"
         );
         expect(json.apiKey).toContain("cogni_ag_sk_v2_");
         expect(json.billingAccountId).toBe("billing-1");

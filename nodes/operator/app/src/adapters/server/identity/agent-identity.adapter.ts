@@ -12,10 +12,10 @@
  */
 
 import {
+  createHash,
   hkdfSync,
   randomBytes,
   randomUUID,
-  scryptSync,
   timingSafeEqual,
 } from "node:crypto";
 import {
@@ -49,7 +49,15 @@ const MAX_OUTSTANDING_GRANTS_PER_ISSUER = 5;
 type ParsedCredential = { readonly id: string; readonly secret: string };
 
 function hashOpaque(label: string, value: string): string {
-  return scryptSync(value, `cogni-agent-v2:${label}`, 32).toString("hex");
+  // These are 256-bit machine-generated bearer secrets, not human passwords.
+  // A fast, domain-separated digest avoids making unauthenticated grant
+  // redemption a CPU-exhaustion primitive while keeping only hash material.
+  return createHash("sha256")
+    .update("cogni-agent-v2\0", "utf8")
+    .update(label, "utf8")
+    .update("\0", "utf8")
+    .update(value, "utf8")
+    .digest("hex");
 }
 
 function deriveSecret(label: string, material: string): string {

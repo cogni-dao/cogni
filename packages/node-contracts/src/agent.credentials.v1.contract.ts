@@ -14,26 +14,69 @@
 
 import { z } from "zod";
 
-export const humanRequestPrincipalSchema = z.object({
-  kind: z.literal("human"),
-  principalId: z.string().startsWith("user:"),
-  userId: z.string().min(1),
-  walletAddress: z.string().nullable(),
-  displayName: z.string().nullable(),
-  avatarColor: z.string().nullable(),
-});
+function nodeQualifiedPrincipalSchema(kind: "agent" | "user") {
+  return z.string().superRefine((value, ctx) => {
+    const match = new RegExp(`^${kind}:([^:/]+)/([^:/]+)$`).exec(value);
+    if (
+      !match ||
+      !z.string().uuid().safeParse(match[1]).success ||
+      !z.string().uuid().safeParse(match[2]).success
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: `${kind} principal must be ${kind}:{node_uuid}/{local_uuid}`,
+      });
+    }
+  });
+}
 
-export const agentRequestPrincipalSchema = z.object({
-  kind: z.literal("agent"),
-  principalId: z.string().startsWith("agent:"),
-  actorId: z.string().uuid(),
-  credentialId: z.string().uuid(),
-  billingAccountId: z.string().min(1),
-  displayName: z.string().nullable(),
-  legacyUserId: z.string().nullable(),
-});
+function principalLocalId(principalId: string): string {
+  return principalId.slice(principalId.lastIndexOf("/") + 1).toLowerCase();
+}
 
-export const requestPrincipalSchema = z.discriminatedUnion("kind", [
+export const userPrincipalIdSchema = nodeQualifiedPrincipalSchema("user");
+export const agentPrincipalIdSchema = nodeQualifiedPrincipalSchema("agent");
+
+export const humanRequestPrincipalSchema = z
+  .object({
+    kind: z.literal("human"),
+    principalId: userPrincipalIdSchema,
+    userId: z.string().uuid(),
+    walletAddress: z.string().nullable(),
+    displayName: z.string().nullable(),
+    avatarColor: z.string().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    if (principalLocalId(value.principalId) !== value.userId.toLowerCase()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "user principal suffix must equal userId",
+        path: ["principalId"],
+      });
+    }
+  });
+
+export const agentRequestPrincipalSchema = z
+  .object({
+    kind: z.literal("agent"),
+    principalId: agentPrincipalIdSchema,
+    actorId: z.string().uuid(),
+    credentialId: z.string().uuid(),
+    billingAccountId: z.string().min(1),
+    displayName: z.string().nullable(),
+    legacyUserId: z.string().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    if (principalLocalId(value.principalId) !== value.actorId.toLowerCase()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "agent principal suffix must equal actorId",
+        path: ["principalId"],
+      });
+    }
+  });
+
+export const requestPrincipalSchema = z.union([
   humanRequestPrincipalSchema,
   agentRequestPrincipalSchema,
 ]);
@@ -43,22 +86,32 @@ export type AgentRequestPrincipal = z.infer<typeof agentRequestPrincipalSchema>;
 export type RequestPrincipal = z.infer<typeof requestPrincipalSchema>;
 
 export const executionIdentitySchema = z.object({
-  actorPrincipal: z.string().startsWith("agent:"),
-  subjectPrincipal: z.string().startsWith("user:").nullable(),
+  actorPrincipal: agentPrincipalIdSchema,
+  subjectPrincipal: userPrincipalIdSchema.nullable(),
   billingAccountId: z.string().min(1),
   grantId: z.string().min(1).nullable(),
 });
 export type ExecutionIdentity = z.infer<typeof executionIdentitySchema>;
 
-const credentialOutputSchema = z.object({
-  actorId: z.string().uuid(),
-  principalId: z.string().startsWith("agent:"),
-  credentialId: z.string().uuid(),
-  apiKey: z.string().min(32),
-  billingAccountId: z.string().min(1),
-  authenticateUntil: z.string().datetime(),
-  renewUntil: z.string().datetime(),
-});
+export const agentCredentialOutputSchema = z
+  .object({
+    actorId: z.string().uuid(),
+    principalId: agentPrincipalIdSchema,
+    credentialId: z.string().uuid(),
+    apiKey: z.string().min(32),
+    billingAccountId: z.string().min(1),
+    authenticateUntil: z.string().datetime(),
+    renewUntil: z.string().datetime(),
+  })
+  .superRefine((value, ctx) => {
+    if (principalLocalId(value.principalId) !== value.actorId.toLowerCase()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "agent principal suffix must equal actorId",
+        path: ["principalId"],
+      });
+    }
+  });
 
 export const createAgentSpawnGrantOperation = {
   id: "agent.spawn-grants.create.v1",
@@ -75,14 +128,24 @@ export const createAgentSpawnGrantOperation = {
 
 export const agentCredentialStatusOperation = {
   id: "agent.credentials.status.v1",
-  output: z.object({
-    actorId: z.string().uuid(),
-    principalId: z.string().startsWith("agent:"),
-    credentialId: z.string().uuid(),
-    status: z.enum(["active", "renew_only"]),
-    authenticateUntil: z.string().datetime(),
-    renewUntil: z.string().datetime(),
-  }),
+  output: z
+    .object({
+      actorId: z.string().uuid(),
+      principalId: agentPrincipalIdSchema,
+      credentialId: z.string().uuid(),
+      status: z.enum(["active", "renew_only"]),
+      authenticateUntil: z.string().datetime(),
+      renewUntil: z.string().datetime(),
+    })
+    .superRefine((value, ctx) => {
+      if (principalLocalId(value.principalId) !== value.actorId.toLowerCase()) {
+        ctx.addIssue({
+          code: "custom",
+          message: "agent principal suffix must equal actorId",
+          path: ["principalId"],
+        });
+      }
+    }),
 } as const;
 
 export const rotateAgentCredentialOperation = {
@@ -122,7 +185,7 @@ export const createAgentRecoveryGrantOperation = {
 export const recoverAgentCredentialOperation = {
   id: "agent.credentials.recover.v1",
   input: z.object({ recoveryToken: z.string().min(32).max(512) }),
-  output: credentialOutputSchema,
+  output: agentCredentialOutputSchema,
 } as const;
 
 export const upgradeLegacyAgentCredentialOperation = {
@@ -130,5 +193,5 @@ export const upgradeLegacyAgentCredentialOperation = {
   input: z.object({
     idempotencyKey: z.string().min(8).max(128),
   }),
-  output: credentialOutputSchema,
+  output: agentCredentialOutputSchema,
 } as const;
