@@ -101,7 +101,8 @@ function asOpenFgaReturnsIt(authored: string): string {
   for (const typeDef of model.type_definitions) {
     // A type declaring no relations comes back with an empty map, not an absent key.
     typeDef.relations ??= {};
-    const metadata = (typeDef.metadata ??= {}) as Json;
+    typeDef.metadata ??= {};
+    const metadata = typeDef.metadata as Json;
     metadata.module ??= "";
     metadata.relations ??= {};
     for (const relation of Object.values(metadata.relations as Json)) {
