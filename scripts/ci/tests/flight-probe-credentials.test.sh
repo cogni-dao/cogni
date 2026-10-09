@@ -14,7 +14,16 @@ trap 'rm -rf "$TMPROOT"' EXIT
 FAKEBIN="$TMPROOT/bin"
 BAO_ROOT="$TMPROOT/openbao"
 SSH_ARGV_LOG="$TMPROOT/ssh-argv.log"
+JQ_ARGV_LOG="$TMPROOT/jq-argv.log"
+REAL_JQ="$(command -v jq)"
 mkdir -p "$FAKEBIN" "$BAO_ROOT"
+
+cat > "$FAKEBIN/jq" <<'EOF'
+#!/usr/bin/env bash
+[ -z "${FAKE_JQ_ARGV_LOG:-}" ] || printf '%s\n' "$@" >> "$FAKE_JQ_ARGV_LOG"
+exec "$REAL_JQ" "$@"
+EOF
+chmod +x "$FAKEBIN/jq"
 
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
@@ -48,9 +57,9 @@ if [[ "$cmd" == *"bao kv get -format=json"* ]]; then
   data='{}'
   for f in "$dir"/*; do
     [ -f "$f" ] || continue
-    data="$(jq -c --arg key "$(basename "$f")" --rawfile value "$f" '.[$key]=$value' <<<"$data")"
+    data="$("$REAL_JQ" -c --arg key "$(basename "$f")" --rawfile value "$f" '.[$key]=$value' <<<"$data")"
   done
-  jq -cn --argjson data "$data" --argjson version "$version" \
+  "$REAL_JQ" -cn --argjson data "$data" --argjson version "$version" \
     '{data:{data:$data,metadata:{version:$version}}}'
   exit 0
 fi
@@ -65,7 +74,7 @@ if [[ "$cmd" == *"bao kv patch"* || "$cmd" == *"bao kv put"* ]]; then
   mkdir -p "$dir"
   while IFS=$'\t' read -r key value; do
     [ -n "$key" ] && printf '%s' "$value" > "$dir/$key"
-  done < <(jq -r 'to_entries[] | [.key,.value] | @tsv')
+  done < <("$REAL_JQ" -r 'to_entries[] | [.key,.value] | @tsv')
   printf '%s' "$((current + 1))" > "$dir/.version"
   echo success
   exit 0
@@ -77,6 +86,7 @@ chmod +x "$FAKEBIN/kubectl"
 run_lifecycle() {
   local op="$1" out="$2"
   env \
+    PATH="$FAKEBIN:$PATH" \
     VM_HOST=fake \
     FLEET_CONTROL_ENV=production \
     SECRETS_CONTROL_ENV=production \
@@ -85,6 +95,8 @@ run_lifecycle() {
     FAKE_REMOTE_PATH="$FAKEBIN" \
     FAKE_BAO_ROOT="$BAO_ROOT" \
     FAKE_SSH_ARGV_LOG="$SSH_ARGV_LOG" \
+    FAKE_JQ_ARGV_LOG="$JQ_ARGV_LOG" \
+    REAL_JQ="$REAL_JQ" \
     SSH_OPTS='-i fake' \
     bash scripts/ci/flight-probe-credentials.sh "$op" candidate-a node-template >"$out" 2>&1
 }
@@ -135,6 +147,7 @@ test "$(jq -r '.active' "$RING_FILE")" = "$REVOKED_ACTIVE"
 for secret in "$OLD" "$NEW" "$REVOKED_ACTIVE"; do
   ! grep -R -qF "$secret" "$TMPROOT"/*.out
   ! grep -qF "$secret" "$SSH_ARGV_LOG"
+  ! grep -qF "$secret" "$JQ_ARGV_LOG"
 done
 ! grep -qF writer-token "$SSH_ARGV_LOG"
 

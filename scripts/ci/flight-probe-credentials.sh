@@ -122,7 +122,7 @@ read_path() {
 write_field_cas() {
   local path="$1" key="$2" value="$3" exists="$4" version="$5"
   local payload out rc
-  payload="$(jq -cn --arg key "$key" --arg value "$value" '{($key):$value}')"
+  payload="$(printf '%s' "$value" | jq -Rsc --arg key "$key" '{($key):.}')"
   set +e
   if [[ "$exists" == true ]]; then
     out="$(printf '%s' "$payload" | bao_exec payload "kv patch -cas=${version} '${path}' -" 2>&1)"
@@ -199,7 +199,9 @@ store_map_entry() {
     MAP="$(jq -r --arg key "$MAP_FIELD" '.[$key] // "{}"' <<<"$PATH_DATA")"
     valid_map "$MAP" || fail "invalid exact credential map at $OPERATOR_PATH/$MAP_FIELD"
     if [[ "$action" == set ]]; then
-      desired="$(jq -ce --arg key "$MAP_KEY" --arg active "$active" '.[$key]=$active' <<<"$MAP")"
+      desired="$({ printf '%s\0' "$MAP"; printf '%s' "$active"; } \
+        | jq -Rsc --arg key "$MAP_KEY" \
+          'split("\u0000") as $parts | ($parts[0] | fromjson) | .[$key]=$parts[1]')"
     else
       desired="$(jq -ce --arg key "$MAP_KEY" 'del(.[$key])' <<<"$MAP")"
     fi
@@ -214,7 +216,7 @@ store_map_entry() {
 mint_ring() {
   local secret
   secret="$(openssl rand -base64 32)"
-  jq -cn --arg active "$secret" '{active:$active,previous:null}'
+  printf '%s' "$secret" | jq -Rsc '{active:.,previous:null}'
 }
 
 case "$OPERATION" in
@@ -235,7 +237,8 @@ case "$OPERATION" in
     fi
     [[ "$MAP_ACTIVE" == "$ACTIVE" ]] || fail "operator map does not point at current active key; refusing to prepare"
     old="$ACTIVE"; next="$(openssl rand -base64 32)"
-    store_ring "$(jq -cn --arg active "$next" --arg previous "$old" '{active:$active,previous:$previous}')"
+    store_ring "$({ printf '%s\0' "$next"; printf '%s' "$old"; } \
+      | jq -Rsc 'split("\u0000") | {active:.[0],previous:.[1]}')"
     log "prepared rotation for ${MAP_KEY}; sync/redeploy target and verify both keys before activate"
     ;;
   activate)
@@ -252,7 +255,7 @@ case "$OPERATION" in
     [[ -n "$PREVIOUS" ]] || { log "rotation already finished for ${MAP_KEY}"; exit 0; }
     load_map
     [[ "$MAP_ACTIVE" == "$ACTIVE" ]] || fail "operator map has not activated the new key"
-    store_ring "$(jq -cn --arg active "$ACTIVE" '{active:$active,previous:null}')"
+    store_ring "$(printf '%s' "$ACTIVE" | jq -Rsc '{active:.,previous:null}')"
     log "removed predecessor desired state for ${MAP_KEY}; rotation remains pending until target sync/redeploy proves old-key 401"
     ;;
   revoke)
