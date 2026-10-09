@@ -2,12 +2,14 @@
 id: knowledge-branch-workflow
 type: design
 title: "Knowledge Branch Workflow"
-status: draft
+status: accepted
 spec_refs:
   - knowledge-data-plane-spec
   - knowledge-syntropy
 work_items:
   - task.5054
+  - task.5204
+  - bug.5391
 created: 2026-05-19
 ---
 
@@ -32,7 +34,7 @@ trunk knowledge on main
   + row/file edits on that branch
   + diff review
   + session-gated merge
-  + confidence/citation promotion after merge
+  + policy-owned confidence and cited lineage
 ```
 
 ## Human Model
@@ -102,7 +104,7 @@ POST /knowledge/contributions/:id/commits
   -> serialize append for that contribution
   -> reject if branch head no longer matches recorded head
   -> checkout existing branch
-  -> apply inserts/updates/deprecations
+  -> apply a typed batch: insert/update/patch/delete/cite
   -> dolt_commit(message)
   -> record next seq + attribution pointer
 
@@ -150,13 +152,14 @@ iteration must preserve that:
   server-generated IDs are discoverable through the branch diff, not guessed.
 - Every insert/update keeps provenance; branch updates may change the latest
   source pointer, while Dolt history preserves prior values.
-- Deprecation is explicit. A contribution deprecates or supersedes knowledge; it
-  does not delete it.
+- Superseded durable knowledge stays linked through `supersedes`. The delete op
+  is limited to dead probes/duplicates, refuses inbound citations, and remains
+  visible in Dolt history.
 - The app records who authored each contribution commit because Dolt commits do
   not carry Cogni auth/session context.
-- Merge promotes branch knowledge into trusted `main`; confidence/citation
-  promotion can happen during or after merge, but the merge itself stays a Dolt
-  merge.
+- Merge promotes branch knowledge into trusted `main`; confidence remains
+  policy-owned and citation recomputation happens during the edit path. Merge
+  itself stays a Dolt merge.
 
 ## What Cogni Adds
 
@@ -165,8 +168,8 @@ The minimal Cogni layer is:
 - Contribution lifecycle state: `open`, `merged`, `closed`.
 - Principal attribution: owner, commit author, resolver.
 - HTTP policy: owner can append/close; session user can merge.
-- Syntropy validation: domain registered, provenance present, update targets
-  valid on the branch, deprecate-not-delete.
+- Syntropy validation: domain registered, provenance present, mutation targets
+  valid on the branch, strict patch shape, and citation endpoints valid.
 - JSON projections for clients: contribution record, commit timeline, review
   diff.
 
@@ -175,37 +178,38 @@ The exact data model and routes are specified in
 
 ## Invariants
 
-| Rule                                | Constraint                                                                    |
-| ----------------------------------- | ----------------------------------------------------------------------------- |
-| DOLT_IS_SOURCE_OF_TRUTH             | Doltgres `main` is the trusted knowledge state.                               |
-| INTERNAL_WRITES_TO_MAIN             | Trusted internal tools may write directly to `main`.                          |
-| EXTERNAL_WRITES_TO_BRANCH           | External contributors write to `contrib/*` branches only.                     |
-| CONTRIBUTION_BRANCH_IS_MULTI_COMMIT | An open contribution branch can receive many commits before merge.            |
-| COMMIT_IS_LOGICAL_BATCH             | Each contribution commit has one message and one coherent edit batch.         |
-| APPEND_ADVANCES_RECORDED_HEAD       | An append starts from the contribution's recorded branch head or conflicts.   |
-| COMMIT_SEQUENCE_IS_UNIQUE           | A contribution cannot record two commits with the same sequence number.       |
-| INSERT_ID_IS_STABLE                 | Inserts may carry client-supplied IDs for later branch-local updates.         |
-| TARGET_ROW_REQUIRED_FOR_UPDATE      | Updating/deprecating existing knowledge requires a valid branch-local target. |
-| REVIEW_DIFF_IS_DOLT_DIFF            | Review uses Dolt diff primitives, not hand-rolled staging comparison.         |
-| MERGE_REQUIRES_SESSION              | Bearer agents cannot merge to `main`; session users can.                      |
-| OWNER_CAN_CLOSE                     | A branch owner can close their own open contribution.                         |
-| OWNER_CAN_APPEND                    | A branch owner can append commits while the contribution is open.             |
-| DEPRECATE_NOT_DELETE                | Knowledge rows are deprecated/superseded, not deleted.                        |
-| PROVENANCE_REQUIRED                 | Every inserted or updated row keeps source/provenance.                        |
-| DOMAIN_REGISTERED                   | Every edited row must reference a registered domain.                          |
-| ATTRIBUTION_INDEX_ONLY              | Cogni metadata points to Dolt commits; it does not replace Dolt history.      |
+| Rule                                   | Constraint                                                                  |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| DOLT_IS_SOURCE_OF_TRUTH                | Doltgres `main` is the trusted knowledge state.                             |
+| INTERNAL_WRITES_TO_MAIN                | Trusted internal tools may write directly to `main`.                        |
+| EXTERNAL_WRITES_TO_BRANCH              | External contributors write to `contrib/*` branches only.                   |
+| CONTRIBUTION_BRANCH_IS_MULTI_COMMIT    | An open contribution branch can receive many commits before merge.          |
+| COMMIT_IS_LOGICAL_BATCH                | Each contribution commit has one message and one coherent edit batch.       |
+| APPEND_ADVANCES_RECORDED_HEAD          | An append starts from the contribution's recorded branch head or conflicts. |
+| COMMIT_SEQUENCE_IS_UNIQUE              | A contribution cannot record two commits with the same sequence number.     |
+| INSERT_ID_IS_STABLE                    | Inserts may carry client-supplied IDs for later branch-local updates.       |
+| TARGET_ROW_REQUIRED_FOR_MUTATION       | Update, patch, and delete require a valid branch-local target.              |
+| REVIEW_DIFF_IS_DOLT_DIFF               | Review uses Dolt diff primitives, not hand-rolled staging comparison.       |
+| MERGE_REQUIRES_SESSION                 | Bearer agents cannot merge to `main`; session users can.                    |
+| OWNER_CAN_CLOSE                        | A branch owner can close their own open contribution.                       |
+| OWNER_CAN_APPEND                       | A branch owner can append commits while the contribution is open.           |
+| DEPRECATE_NOT_DELETE_DURABLE_KNOWLEDGE | Superseded claims stay linked; delete is only for dead, uncited rows.       |
+| PROVENANCE_REQUIRED                    | Every inserted or updated row keeps source/provenance.                      |
+| DOMAIN_REGISTERED                      | Every edited row must reference a registered domain.                        |
+| ATTRIBUTION_INDEX_ONLY                 | Cogni metadata points to Dolt commits; it does not replace Dolt history.    |
 
-## Pareto MVP
+## Implemented v0
 
-Build only this next:
+The shipped workflow includes:
 
-1. Add a contribution-commit timeline that points to Dolt commit hashes.
-2. Add `POST /knowledge/contributions/:id/commits`.
-3. Add `GET /knowledge/contributions/:id/commits`.
-4. Track branch base/head and commit count on the contribution record.
-5. Require append sequencing to advance the recorded branch head.
-6. Make `GET /diff` project Dolt's branch diff for review.
-7. Keep merge/close policies unchanged.
+1. A contribution-commit timeline that points to Dolt commit hashes.
+2. `POST` and `GET /knowledge/contributions/:id/commits`.
+3. Recorded branch base/head and commit count.
+4. Append sequencing against the recorded branch head.
+5. A cumulative Dolt row diff through `GET /diff`.
+6. Owner append/close plus session-only merge.
+7. The five typed edit ops, including body-preserving `patch`.
+8. FIFO branch-session admission, a dedicated branch client, and a cross-replica advisory lock.
 
 Do not build:
 
@@ -228,7 +232,7 @@ Do not build:
 
 ## Acceptance
 
-The next implementation is done when:
+The v0 workflow acceptance is:
 
 1. An agent opens one contribution branch.
 2. The same agent appends at least three commits to that branch.
@@ -242,9 +246,9 @@ The next implementation is done when:
 
 ## Implementation Status
 
-PR #1343 now starts the workflow implementation: typed edit batches,
-multi-commit contribution metadata, append/list commit endpoints, and
-branch-local update/deprecate validation. The remaining gap is end-to-end
-Doltgres stack coverage for create -> append three commits -> diff -> merge,
-plus contributor-facing tooling that uses the append endpoint as the default
-iteration path.
+The workflow is live on every knowledge-capable node through the shared
+knowledge-store package. task.5204 added the strict `patch` op plus the
+content-free `/knowledge/index?q=` reader path; bug.5391 added bounded
+branch-session admission so write bursts do not consume read capacity. The live
+contributor contract is the `knowledge-contribution-flow` hub entry, reviewed
+and merged by a human like every other contribution.
