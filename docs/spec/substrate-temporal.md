@@ -255,6 +255,11 @@ Reusable mechanics ship as `@cogni-dao/agent-workflow-runtime`, sourced from nod
 - Worker bootstrap, health, metrics, and graceful shutdown helpers;
 - stable queue/deployment naming helpers.
 
+This is a thin Cogni contract, not a framework facade. A node's own package manifests pin and
+import `@temporalio/workflow`, `@temporalio/worker`, and `@langchain/langgraph` directly. Nodes keep
+the official SDK programming models, types, replay rules, and upgrade paths; the Cogni package
+only supplies the repeated platform integration needed to run those SDKs on the managed substrate.
+
 It contains no node graph catalog, workflow policy, secrets, process-specific adapters, or
 operator governance/ledger code. It follows the knowledge/work-items package path: immutable
 attested GitHub Release tarball, anonymous install, exact version pin, and no `workspace:*`

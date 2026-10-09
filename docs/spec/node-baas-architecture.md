@@ -436,6 +436,10 @@ The highest-value moves, based on the current package layout, are:
 
 Packages that should **not** move in the MVP: `@cogni/db-client`, `@cogni/db-schema`, `@cogni/knowledge-base`, `@cogni/knowledge-store`, `@cogni/langgraph-graphs`, `@cogni/graph-execution-core`, `@cogni/graph-execution-host`, `@cogni/node-contracts`, `@cogni/node-core`, `@cogni/node-shared`, `@cogni/node-ui-kit`. They are shared substrate today. The MVP also does not move graph execution into the Worker: it calls the app's private graph-run API so billing, run persistence, and telemetry keep one execution path.
 
+The new runtime package is intentionally additive. Node code continues to import and program
+against pinned `@langchain/langgraph` and `@temporalio/*` SDKs directly; Cogni owns the deployment
+and operational contract, not a proprietary graph or Workflow abstraction.
+
 ## MVP
 
 The MVP should not reorganize every package. It should make newly minted node repos feel coherent while preserving current deployment progress.

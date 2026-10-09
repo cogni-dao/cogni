@@ -404,6 +404,10 @@ is the source of truth; immutable, attested GitHub Release tarballs are anonymou
 node repos pin exact versions. It must not ship `workspace:*` runtime dependencies. Poly proves
 consumer adoption before existing-node propagation.
 
+It also must not hide the official SDKs. Node-owned graphs and Workflows directly import pinned
+`@langchain/langgraph` and `@temporalio/*` packages; the Cogni runtime adds the managed namespace,
+schedule, worker-lifecycle, health, and observability contract around them.
+
 ### LangGraph vs Temporal Boundary
 
 The boundary between LangGraph and Temporal is **durability and runtime semantics**, not DAG shape or AI-vs-non-AI. Both systems can express DAGs; the question is whether a step needs crash recovery, idempotency, and cross-process coordination (Temporal) or in-process intelligence and dataflow (LangGraph).
