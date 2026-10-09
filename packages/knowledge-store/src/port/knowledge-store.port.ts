@@ -164,9 +164,19 @@ export class EdoEntryTypeRequiresAtomicToolError extends Error {
 export interface KnowledgeStorePort {
   // --- Read ---
   getKnowledge(id: string): Promise<Knowledge | null>;
+  /**
+   * Rows on one shelf, newest first.
+   *
+   * `q` is a case-insensitive substring match against `useWhen` ONLY — the
+   * retrieval trigger, the field that names the reader's situation. It is the
+   * filter `/knowledge/index` needs to answer "which triggers match mine?"
+   * without downloading bodies (task.5204). Rows whose `useWhen` is null never
+   * match. Full-text over title/content stays `searchKnowledge`; these are two
+   * questions, not one endpoint with modes.
+   */
   listKnowledge(
     domain: string,
-    opts?: { tags?: string[]; limit?: number }
+    opts?: { tags?: string[]; limit?: number; q?: string }
   ): Promise<Knowledge[]>;
   searchKnowledge(
     domain: string,
