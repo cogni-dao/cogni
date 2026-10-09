@@ -11,13 +11,19 @@
  * @public
  */
 
-import { CredentialsMethod, OpenFgaClient } from "@openfga/sdk";
+import {
+  ConsistencyPreference,
+  CredentialsMethod,
+  OpenFgaClient,
+} from "@openfga/sdk";
 
 import {
+  AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
   type AuthorizationPort,
   type AuthzCheckParams,
   type AuthzDecision,
   type AuthzListDecision,
+  type AuthzMutationOptions,
   type AuthzRelationTuple,
   type AuthzSubcheck,
   type AuthzWriteDecision,
@@ -29,6 +35,11 @@ export interface OpenFgaCheckRequest {
   readonly user: string;
   readonly relation: string;
   readonly object: string;
+  readonly context?: Readonly<Record<string, unknown>>;
+}
+
+export interface OpenFgaCheckOptions {
+  readonly consistency?: ConsistencyPreference;
 }
 
 export interface OpenFgaCheckResponse {
@@ -36,7 +47,10 @@ export interface OpenFgaCheckResponse {
 }
 
 export interface OpenFgaCheckClient {
-  check(request: OpenFgaCheckRequest): Promise<OpenFgaCheckResponse>;
+  check(
+    request: OpenFgaCheckRequest,
+    options?: OpenFgaCheckOptions
+  ): Promise<OpenFgaCheckResponse>;
 }
 
 export interface OpenFgaWriteClient extends OpenFgaCheckClient {
@@ -49,7 +63,7 @@ export interface OpenFgaWriteClient extends OpenFgaCheckClient {
     }
   ): Promise<unknown>;
   deleteTuples(
-    tuples: AuthzRelationTuple[],
+    tuples: Array<Pick<AuthzRelationTuple, "user" | "relation" | "object">>,
     options?: {
       readonly conflict?: {
         readonly onMissingDeletes?: "error" | "ignore";
@@ -120,6 +134,8 @@ export interface OpenFgaAuthorizationAdapterConfig {
   readonly writeMaxRetries?: number;
   /** Fixed backoff between write retries, ms (default 100 — matches OpenFGA SDK). */
   readonly writeRetryBackoffMs?: number;
+  /** Trusted server clock used for conditional grant evaluation. */
+  readonly now?: () => Date;
   readonly client?: OpenFgaCheckClient;
   readonly storeClient?: OpenFgaStoreClient;
 }
@@ -129,6 +145,7 @@ interface PlannedSubcheck {
   readonly user: string;
   readonly relation: string;
   readonly object: string;
+  readonly context?: Readonly<Record<string, unknown>>;
 }
 
 const DEFAULT_TIMEOUT_MS = 1_500;
@@ -192,9 +209,12 @@ class StoreNameResolvingOpenFgaClient
     private readonly storeName: string
   ) {}
 
-  async check(request: OpenFgaCheckRequest): Promise<OpenFgaCheckResponse> {
+  async check(
+    request: OpenFgaCheckRequest,
+    options?: OpenFgaCheckOptions
+  ): Promise<OpenFgaCheckResponse> {
     const client = await this.resolveClient();
-    return client.check(request);
+    return client.check(request, options);
   }
 
   async writeTuples(
@@ -213,7 +233,7 @@ class StoreNameResolvingOpenFgaClient
   }
 
   async deleteTuples(
-    tuples: AuthzRelationTuple[],
+    tuples: Array<Pick<AuthzRelationTuple, "user" | "relation" | "object">>,
     options?: {
       readonly conflict?: {
         readonly onMissingDeletes?: "error" | "ignore";
@@ -418,6 +438,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
   private readonly writeTimeoutMs: number;
   private readonly writeMaxRetries: number;
   private readonly writeRetryBackoffMs: number;
+  private readonly now: () => Date;
 
   constructor(config: OpenFgaAuthorizationAdapterConfig) {
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -425,6 +446,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     this.writeMaxRetries = config.writeMaxRetries ?? DEFAULT_WRITE_MAX_RETRIES;
     this.writeRetryBackoffMs =
       config.writeRetryBackoffMs ?? DEFAULT_WRITE_RETRY_BACKOFF_MS;
+    this.now = config.now ?? (() => new Date());
     if (config.client !== undefined) {
       this.client = config.client;
     } else if (config.storeId !== undefined) {
@@ -466,7 +488,10 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     return deniedDecision("authz_denied", results, "OpenFGA denied");
   }
 
-  async writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision> {
+  async writeRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision> {
     const client = this.client;
     if (!isOpenFgaWriteClient(client)) {
       return {
@@ -490,6 +515,9 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
         this.writeRetryBackoffMs,
         isRetryableWriteError
       );
+      if (options?.confirm === "higher_consistency") {
+        return this.confirmRelation(tuple, true);
+      }
       return { decision: "success", code: "authz_write_success" };
     } catch (error) {
       // Surface the underlying cause (timeout vs connection-refused vs OpenFGA 4xx).
@@ -503,7 +531,10 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     }
   }
 
-  async deleteRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision> {
+  async deleteRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision> {
     const client = this.client;
     if (!isOpenFgaWriteClient(client)) {
       return {
@@ -517,7 +548,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
       await withRetry(
         () =>
           withTimeout(
-            client.deleteTuples([tuple], {
+            client.deleteTuples([tupleKeyWithoutCondition(tuple)], {
               conflict: { onMissingDeletes: "ignore" },
             }),
             this.writeTimeoutMs,
@@ -527,6 +558,9 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
         this.writeRetryBackoffMs,
         isRetryableWriteError
       );
+      if (options?.confirm === "higher_consistency") {
+        return this.confirmRelation(tuple, false);
+      }
       return { decision: "success", code: "authz_write_success" };
     } catch (error) {
       return {
@@ -583,22 +617,32 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
   }
 
   private planChecks(params: AuthzCheckParams): readonly PlannedSubcheck[] {
+    const conditionContext = this.conditionContextForAction(params.action);
     const permission = {
       name: "permission" as const,
       user: params.subjectId ?? params.actorId,
       relation: relationForAuthzAction(params.action),
       object: params.resource,
+      ...(conditionContext !== undefined ? { context: conditionContext } : {}),
     };
 
     if (!params.subjectId) return [permission];
 
+    const accountScopedDelegation = params.action === "billing_account.read";
     return [
       permission,
       {
         name: "delegation",
         user: params.actorId,
-        relation: relationForAuthzAction("user.act_as"),
-        object: authzUserResource(params.subjectId),
+        relation: relationForAuthzAction(
+          accountScopedDelegation ? "billing_account.act_as" : "user.act_as"
+        ),
+        object: accountScopedDelegation
+          ? params.resource
+          : authzUserResource(params.subjectId),
+        ...(conditionContext !== undefined
+          ? { context: conditionContext }
+          : {}),
       },
     ];
   }
@@ -610,6 +654,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
           user: check.user,
           relation: check.relation,
           object: check.object,
+          ...(check.context !== undefined ? { context: check.context } : {}),
         }),
         this.timeoutMs,
         "check"
@@ -624,6 +669,70 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
       return unavailableCheck(check);
     }
   }
+
+  private conditionContextForAction(
+    action: AuthzCheckParams["action"]
+  ): Readonly<Record<string, unknown>> | undefined {
+    if (
+      action !== "billing_account.read" &&
+      action !== "billing_account.act_as"
+    ) {
+      return undefined;
+    }
+    return { current_time: this.now().toISOString() };
+  }
+
+  private async confirmRelation(
+    tuple: AuthzRelationTuple,
+    expectedAllowed: boolean
+  ): Promise<AuthzWriteDecision> {
+    try {
+      const conditionContext =
+        tuple.condition?.name === AUTHZ_GRANT_NOT_EXPIRED_CONDITION
+          ? { current_time: this.now().toISOString() }
+          : undefined;
+      const response = await withTimeout(
+        this.client.check(
+          {
+            user: tuple.user,
+            relation: tuple.relation,
+            object: tuple.object,
+            ...(conditionContext !== undefined
+              ? { context: conditionContext }
+              : {}),
+          },
+          { consistency: ConsistencyPreference.HigherConsistency }
+        ),
+        this.timeoutMs,
+        "confirmation"
+      );
+
+      if (response.allowed === expectedAllowed) {
+        return { decision: "success", code: "authz_write_success" };
+      }
+      return {
+        decision: "failure",
+        code: "authz_write_unavailable",
+        reason: `OpenFGA confirmation mismatch: expected allowed=${expectedAllowed}`,
+      };
+    } catch (error) {
+      return {
+        decision: "failure",
+        code: "authz_write_unavailable",
+        reason: `OpenFGA confirmation unavailable: ${errorMessage(error)}`,
+      };
+    }
+  }
+}
+
+function tupleKeyWithoutCondition(
+  tuple: AuthzRelationTuple
+): Pick<AuthzRelationTuple, "user" | "relation" | "object"> {
+  return {
+    user: tuple.user,
+    relation: tuple.relation,
+    object: tuple.object,
+  };
 }
 
 function isOpenFgaWriteClient(

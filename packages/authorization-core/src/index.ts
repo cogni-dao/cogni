@@ -16,6 +16,9 @@ export type AuthzAction =
   | "connection.use"
   | "graph.invoke"
   | "user.act_as"
+  | "billing_account.read"
+  | "billing_account.grant"
+  | "billing_account.act_as"
   | "node.flight"
   | "node.manage_secrets"
   | "node.promote_production"
@@ -26,6 +29,9 @@ export const AUTHZ_ACTIONS = [
   "connection.use",
   "graph.invoke",
   "user.act_as",
+  "billing_account.read",
+  "billing_account.grant",
+  "billing_account.act_as",
   "node.flight",
   "node.manage_secrets",
   "node.promote_production",
@@ -77,8 +83,14 @@ export type AuthzDecision =
 
 export interface AuthorizationPort {
   check(params: AuthzCheckParams): Promise<AuthzDecision>;
-  writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
-  deleteRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
+  writeRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  deleteRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
   /**
    * Lists the stored relation tuples a subject holds (the directly-assigned
    * ROLE grants, e.g. `developer`/`production_promoter`, not computed
@@ -89,10 +101,24 @@ export interface AuthorizationPort {
   listRelations(user: string): Promise<AuthzListDecision>;
 }
 
+export interface AuthzRelationCondition {
+  readonly name: string;
+  readonly context?: Readonly<Record<string, unknown>>;
+}
+
 export interface AuthzRelationTuple {
   readonly user: string;
   readonly relation: string;
   readonly object: string;
+  readonly condition?: AuthzRelationCondition;
+}
+
+export interface AuthzMutationOptions {
+  /**
+   * Confirm the post-mutation relation state through OpenFGA's
+   * HIGHER_CONSISTENCY read path before reporting success.
+   */
+  readonly confirm?: "higher_consistency";
 }
 
 export type AuthzWriteDecision =
@@ -134,8 +160,23 @@ export function authzUserResource(userId: string): string {
   return userId.startsWith("user:") ? userId : `user:${userId}`;
 }
 
+export function authzBillingAccountResource(billingAccountId: string): string {
+  return billingAccountId.startsWith("billing_account:")
+    ? billingAccountId
+    : `billing_account:${billingAccountId}`;
+}
+
 export function authzNodeResource(nodeId: string): string {
   return `node:${nodeId}`;
+}
+
+export const AUTHZ_GRANT_NOT_EXPIRED_CONDITION = "grant_not_expired";
+
+export function authzGrantExpiresAt(expiresAt: string): AuthzRelationCondition {
+  return {
+    name: AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
+    context: { expires_at: expiresAt },
+  };
 }
 
 export function relationForAuthzAction(action: AuthzAction): string {
@@ -148,6 +189,12 @@ export function relationForAuthzAction(action: AuthzAction): string {
       return "can_invoke";
     case "user.act_as":
       return "delegates";
+    case "billing_account.read":
+      return "can_read";
+    case "billing_account.grant":
+      return "can_grant";
+    case "billing_account.act_as":
+      return "can_act_as";
     case "node.flight":
       return "can_flight";
     case "node.manage_secrets":
@@ -163,6 +210,8 @@ export {
   OpenFgaAuthorizationAdapter,
   type OpenFgaAuthorizationAdapterConfig,
   type OpenFgaCheckClient,
+  type OpenFgaCheckOptions,
+  type OpenFgaCheckRequest,
   type OpenFgaReadClient,
   type OpenFgaReadRequest,
   type OpenFgaReadResponse,
