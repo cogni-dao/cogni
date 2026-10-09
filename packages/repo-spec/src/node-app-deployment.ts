@@ -60,6 +60,9 @@ export const COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS = [
   "LITELLM_VIRTUAL_KEY",
   "SCHEDULER_API_TOKEN",
   "BILLING_INGEST_TOKEN",
+  // Stable node-local service credential. The value is a bounded two-key JSON ring so
+  // rotation can overlap old/new without a fleet bearer or an authentication gap.
+  "FLIGHT_PROBE_API_KEY",
 ] as const;
 
 /**

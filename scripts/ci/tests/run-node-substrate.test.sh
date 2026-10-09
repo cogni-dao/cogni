@@ -63,6 +63,16 @@ EOF
   chmod +x "$1"
 }
 
+# Most existing cases predate the orthogonal control-vault credential phase and
+# assert the materialize/reconcile ordering only. Keep that phase inert there;
+# Case 7b below proves its exact control-lane calls separately.
+cat > "$TMPROOT/flight-noop.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$TMPROOT/flight-noop.sh"
+export RUN_NODE_SUBSTRATE_FLIGHT_PROBE_BIN="$TMPROOT/flight-noop.sh"
+
 # ── Case 1: happy path — materialize then reconcile, same args, in order ──────
 mk_stub "$TMPROOT/mat.sh" materialize 0
 mk_stub "$TMPROOT/rec.sh" reconcile 0
@@ -184,6 +194,22 @@ want="materialize production polyfix|materialize candidate-a polyfix|materialize
 [ "$got" = "$want" ] || { echo "the reconciling cluster must hold every lane it reconciles:
   got:  $got
   want: $want" >&2; exit 1; }
+
+# ── Case 7b: only the fleet-control run materializes operator-owned flight
+# credentials, once for its own lane and once for each foreign-custodied lane.
+mk_stub "$TMPROOT/flight.sh" flight-probe 0
+: > "$ORDER"
+DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+RUN_NODE_SUBSTRATE_FLIGHT_PROBE_BIN="$TMPROOT/flight.sh" \
+RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+  bash "$RUNNER" production polyfix >/dev/null
+got="$(grep '^flight-probe' "$ORDER" | paste -sd'|' -)"
+want_flight="flight-probe materialize production|flight-probe materialize candidate-a|flight-probe materialize preview"
+[ "$got" = "$want_flight" ] || { echo "fleet-control credential lanes mismatch:
+  got:  $got
+  want: $want_flight" >&2; exit 1; }
 
 # The real materializer/reconciler invoke cogni_ssh_transport_retry, whose stdin buffering used
 # to drain the heredoc that also carried the lane loop. A child that consumes stdin must not make

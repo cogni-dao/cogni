@@ -145,4 +145,22 @@ describe("secrets-catalog-loader · REAL repo catalog (guards the migration)", (
     );
     expect(nt).not.toBe(cn);
   });
+
+  it("declares flight-prober as control-materialized node-local ring", () => {
+    const { secrets, routing } = loadSecretsCatalog({ repoRoot });
+    const secret = secrets.find((s) => s.name === "FLIGHT_PROBE_API_KEY");
+    expect(secret).toMatchObject({
+      source: "agent",
+      materializeOnly: true,
+    });
+    expect(routing.FLIGHT_PROBE_API_KEY).toMatchObject({
+      appliesTo: "all-nodes",
+      consumedBy: ["pod"],
+    });
+    const ring = JSON.parse(secret?.generate?.() ?? "null") as unknown;
+    expect(ring).toEqual({
+      active: expect.stringMatching(/^.{32,}$/),
+      previous: null,
+    });
+  });
 });
