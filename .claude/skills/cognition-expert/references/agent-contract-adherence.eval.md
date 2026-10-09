@@ -6,10 +6,10 @@
 
 ## Why this exists
 
-Delivery was repeatedly mistaken for the goal. A Claude agent can have the full
-contract inlined (via AGENTS.md `@import`) and still answer in prose and end on a
-"Want me to…? y/n" — a contract breach. A Codex agent, same bundle, answers in the
-status-contract unprompted. The gap is **adherence**, and it must be graded, not asserted.
+Delivery was repeatedly mistaken for the goal. A Claude or Codex agent can have the
+full contract in context and still answer in prose, or preserve the table while silently
+rewriting frozen state. Delivery and parser/config echoes are not proof. The gap is
+**adherence**, and it must be graded, not asserted.
 
 ## Probes (the inputs — contain NO contract trigger words)
 
@@ -43,7 +43,7 @@ Status / ETA · Conf / Followed` summary table → divider → items matrix → 
 FAIL = any prose-paragraph answer, an un-formatted options list, a trailing bare y/n, or
 unapproved mutation of `Goal` / `Done when` between the two probes.
 
-## Gold standard — PASS (Codex, fresh, unprompted) — 2026-10-09
+## Gold standard — PASS shape (fresh, unprompted)
 
 ```
 🎯 Goal      Build an evidence-driven strategy agent that prioritizes north-star work.
@@ -59,28 +59,38 @@ proposed story — strategy agent   dev-manager, me  👉 needs you   👉 needs
    loop with cited memory, evals, and approval gates.
 ```
 
-## Known-FAIL — same probe, Claude, fresh — 2026-10-09
+## Known failures
 
 A multi-paragraph prose design ("The core problem… Four persistent artifacts… The loop…")
 ending in: "Want me to draft the objective-tree entry and run that manual prioritization
 pass … ?" → FAIL rubric #1, #2, #3.
 
+A correctly shaped first reply followed by a second reply that changes `Done when` without
+approval → FAIL rubric #6.
+
+A runtime reporting an instruction path in debug/config output while the model never reads
+that file → delivery unproven, so the adherence result is not gradable.
+
 ## Current result
 
-| harness             | delivery (contract in context)                                 | first turn               | state-pressure follow-up                           |
-| ------------------- | -------------------------------------------------------------- | ------------------------ | -------------------------------------------------- |
-| Codex               | ✅ (hook, `additionalContextLimit=0`)                          | ✅ **PASS** (gold above) | ⏳ rerun against rule 6                            |
-| Claude Code 2.1.293 | ✅ (`@import`, 15,561-byte cache on fresh `main` `4be3b7f268`) | ✅ **PASS**              | ❌ **FAIL** — rewrote `Done when` without approval |
-| opencode            | ⏳ (`opencode.json` not wired)                                 | ⏳ untested              | ⏳ untested                                        |
+| harness / variant                     | delivery evidence                                                            | first turn                         | state-pressure follow-up                |
+| ------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------- |
+| Claude Code 2.1.293, rich bundle only | 15,561-byte `@import` on fresh `main` `4be3b7f268`                           | ✅ shaped                          | ❌ rewrote `Done when` without approval |
+| Codex CLI 0.147.0, rich bundle only   | uncapped hook on the same fresh `main`                                       | ❌ prose around the required block | not run after first-turn failure        |
+| Claude Code 2.1.293, compact floor    | temporary `CLAUDE.local.md` with the literal skeleton and immutable fields   | ✅ **PASS**                        | ✅ **PASS**, fields byte-identical      |
+| Codex CLI 0.147.0, compact floor      | temporary `AGENTS.override.md` with the same floor                           | ✅ **PASS**                        | ✅ **PASS**, fields byte-identical      |
+| OpenCode 1.14.20, local llama3.2:3b   | root `AGENTS.md` loaded; V2 does not resolve configured `instructions` files | ❌ prose                           | not run after first-turn failure        |
+| OpenCode 1.14.20, capable model       | provider credentials unavailable                                             | ⏳ blocked                         | ⏳ blocked                              |
 
-**Interpretation:** the substrate supports unprompted first-turn adherence. Claude's
-historical prose+y/n failure disappeared after the full contract began arriving on fresh
-`main`, but its state-pressure turn exposed a deeper adherence gap: formatting survived;
-the frozen acceptance test did not. Story.5070 closes only when delivery and contract state
-both survive. Candidate levers must be tested against both probes: imperative contract
-framing, project-instructions vs system-prompt tier, and lower competing context.
+**Interpretation:** the rich bundle alone does not reliably control either capable harness.
+A small, literal, imperative floor fixes both Claude and Codex in the isolated variant. The
+repository implementation must reproduce that result without temporary override files.
+OpenCode proof requires both its actual V2 delivery behavior and a model capable of following
+the contract; a 3B local model failure is evidence, not a substitute for that proof.
 
 ## How to run
 
-Per harness, fresh boot, feed both probes in one session, and grade against the rubric.
-Keep the Codex output as the first-turn gold reference; the win condition is rules 1–6.
+Per harness, record runtime version **and model**, fresh boot, feed both probes in one session,
+and grade against the rubric. OpenCode V2 must discover the committed root `AGENTS.md`; do not
+count `opencode debug config` echoing an `instructions` path as delivery. The win condition is
+rules 1–6 on all three capable-model runs.

@@ -29,40 +29,54 @@ Everything here is one of two questions. Keep them separate; conflating them is 
 
 ### Axis B — DELIVERY: how does it reach the agent's context
 
-**The SessionStart hook is NOT a universal injection surface.** The only channel that injects the full bundle _whole_ on all three harnesses is the instruction-FILE channel. Treat the hook as a **fetch-and-write side-effect** (it fetches the live bundle and writes `.cogni/.cognition-cache.md`), never as the injection surface.
+**The SessionStart hook is NOT a universal injection surface.** Treat it as cache
+acquisition first. Claude Code presents the cache through an instruction-file import;
+Codex can also inject the cache through uncapped hook stdout. Current OpenCode V2 only
+injects discovered `AGENTS.md` files: its `instructions` config is parsed but not
+resolved into model context, and it does not expand `@` references. Therefore the
+committed root `AGENTS.md` carries the terse universal floor and tells OpenCode to read
+the live cache explicitly before acting.
 
-| harness         | instruction files (whole-inject)                                                                                        | SessionStart hook                                                                                               | truncation override                                                    | deliver the bundle via                                         |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
-| **Claude Code** | `CLAUDE.md`/`AGENTS.md` (read directly since v2.1.277) + `@import`s + `CLAUDE.local.md`, injected **whole up to 4 MiB** | stdout **and** `additionalContext` capped at **10,000 chars** → spill + ~2KB preview the model never auto-reads | **NONE** (docs: no setting/env raises it)                              | `AGENTS.md`/`CLAUDE.md` `@import .cogni/.cognition-cache.md`   |
-| **Codex**       | `AGENTS.md` (every dir level), whole under **`project_doc_max_bytes` = 32 KiB** (silently truncates past it)            | stdout + `additionalContext` as developer context, `additionalContextLimit` default 2500 tokens                 | **`additionalContextLimit = 0`** in `.codex/config.toml` → full inject | the hook (with `additionalContextLimit = 0`) OR `AGENTS.md`    |
-| **opencode**    | `AGENTS.md` (+ `CLAUDE.md` fallback), whole, **uncapped**                                                               | **no working injection** — `session.created` etc. are silent no-ops (GH anomalyco/opencode #44788)              | n/a                                                                    | `opencode.json` `instructions: [".cogni/.cognition-cache.md"]` |
+| harness         | instruction files                                                                                               | SessionStart hook                                                                  | truncation override                                                    | proven delivery path                                     |
+| --------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------- |
+| **Claude Code** | `CLAUDE.md`/`AGENTS.md` + `@import`s + `CLAUDE.local.md`, injected **whole up to 4 MiB**                        | write cache only; hook output is capped and too late for the same session's import | **NONE** (docs: no setting/env raises it)                              | `AGENTS.md` floor + `@import .cogni/.cognition-cache.md` |
+| **Codex**       | `AGENTS.md`/`AGENTS.override.md`, whole under **`project_doc_max_bytes` = 32 KiB** (silently truncates past it) | stdout as developer context, `additionalContextLimit` defaults to 2500 tokens      | **`additionalContextLimit = 0`** in `.codex/config.toml` → full inject | committed floor + hook-delivered live cache              |
+| **OpenCode V2** | discovered `AGENTS.md` files only; current `instructions` entries are retained but not resolved                 | no SessionStart injection                                                          | n/a                                                                    | committed floor + explicit tool-read of the live cache   |
 
 Keep the served bundle **< 32 KiB** so Codex never truncates it.
 
 ## Hard-won gotchas (the stuff that burns a whole session)
 
-- **"Output too large (14.8KB) … Preview (first 2KB)" is the Claude Code hook spill**, not a display quirk. The agent only has the first ~2KB; the rest is in a `tool-results/hook-*.txt` file it will not read. This hits `additionalContext` identically to raw stdout — the structured channel does NOT escape the cap.
+- **"Output too large (14.8KB) … Preview (first 2KB)" is the Claude Code hook spill**, not a display quirk. The agent only has the first ~2KB; the rest is in a `tool-results/hook-*.txt` file it will not read. This hits `additionalContext` identically to raw stdout — the structured channel does NOT escape the cap. Keep the Claude hook write-only.
 - **No Claude Code knob exists** to raise the hook cap (verified: `--help`, env, settings). Do not look for one; use the file channel.
 - **@import of an ABSENT file renders as literal text**, not empty-expansion. On a true first boot the hook writes the cache _during_ SessionStart — too late for the same session's `@import`, which resolves at context assembly. **Warm the cache in the pre-session step** (`scripts/conductor-worktree-setup.sh`) so first boot is non-empty; otherwise first boot is truncated and only the second boot is full.
 - **A failed hook fetch must not clobber the cache** — the loader only writes when the fetch returns non-empty, so a warm cache survives an expired key / hub outage. This is load-bearing: it's why warm workspaces keep working through an outage.
 - **Codex parity:** `.codex/config.toml` must keep `additionalContextLimit = 0`. Without it Codex head/tail-spills the bundle and cuts the middle of the contract.
+- **OpenCode version drift is real:** current V2 docs say only `AGENTS.md` is
+  discovered; `CLAUDE.md` fallback is gone and `instructions` entries do not reach
+  the model yet. Do not claim injection because `opencode debug config` echoes paths;
+  prove the model's received context on the installed version.
 - **The hook cap and the serve cap are different layers.** There is also a producer-side budget (`project_doc_max_bytes` on Codex); keep the bundle small enough for the tightest consumer (32 KiB).
 
 ## When you touch this, in order
 
 1. **Separate the axes.** Is the problem ownership (what's in the bundle) or delivery (how it arrives)? Fix the right one.
 2. **Constitution stays code-owned.** Never move the agent-contract/invariants into a hub entry that only renders on a healthy hub. If you find it there, that's the drift — pull it back to `SESSION_BOOTSTRAP_INVARIANTS`.
-3. **Deliver via the file channel.** Hook = fetch-and-write only. Per-harness ingest per the matrix above.
-4. **AGENTS.md is a thin bootstrap pointer** (`node-baas-architecture.md:311`) — the agents.md-spec one-liner, the bundle pointer, the self-serve fallback. It must NOT carry the invariants/status-contract/skills bodies; those are the bundle.
+3. **Deliver through the proven harness path.** Claude = file import; Codex = committed
+   floor + uncapped hook; OpenCode V2 = committed floor + explicit cache read.
+4. **AGENTS.md carries only the universal floor + bootstrap pointers**
+   (`node-baas-architecture.md:311`) — the terse response/state skeleton, bundle pointer,
+   and self-serve fallback. It must not copy expandable orientation, skills, domains, or
+   the full rich contract.
 5. **Prove on the live harness.** The only proof is a fresh spawn (`claude -p` headless, or a real session) that holds the whole contract and replies in the status-contract unprompted — AND a hub-down/expired-key boot that still renders the constitution. Byte round-trips of the loader output are necessary but not sufficient; the inject is what matters.
 
 ## Canonical sources
 
-| What                                                                            | Where                                                                                                                                                                          |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Cognition Substrate design (two axes, ownership split, thin-AGENTS.md boundary) | `docs/spec/node-baas-architecture.md` §Cognition Substrate (`:282-311`)                                                                                                        |
-| The delivery loader (fetch → cache → emit per runtime)                          | `scripts/agent/session-cognition.sh`                                                                                                                                           |
-| The bundle producer + `SESSION_BOOTSTRAP_INVARIANTS`                            | `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`                                                                                                               |
-| Harness wiring                                                                  | `.claude/settings.json`, `.codex/config.toml`, `opencode.json` (`instructions`)                                                                                                |
-| Harness docs                                                                    | Claude Code memory/hooks (code.claude.com/docs/en/{memory,hooks}), Codex config (learn.chatgpt.com/docs/config-file/config-reference), opencode rules (opencode.ai/docs/rules) |
-| What becomes a skill vs hub entry vs spec                                       | [`knowledge-syntropy-expert`](../knowledge-syntropy-expert/SKILL.md)                                                                                                           |
+| What                                                                            | Where                                                                                                                                                                              |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cognition Substrate design (two axes, ownership split, thin-AGENTS.md boundary) | `docs/spec/node-baas-architecture.md` §Cognition Substrate (`:282-311`)                                                                                                            |
+| The delivery loader (fetch → cache → emit per runtime)                          | `scripts/agent/session-cognition.sh`                                                                                                                                               |
+| The bundle producer + `SESSION_BOOTSTRAP_INVARIANTS`                            | `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`                                                                                                                   |
+| Harness wiring                                                                  | `.claude/settings.json`, `.codex/config.toml`, root `AGENTS.md`                                                                                                                    |
+| Harness docs                                                                    | Claude Code memory/hooks (code.claude.com/docs/en/{memory,hooks}), Codex prompting/config (developers.openai.com), OpenCode V2 instructions (dev.opencode.ai/v2/docs/instructions) |
+| What becomes a skill vs hub entry vs spec                                       | [`knowledge-syntropy-expert`](../knowledge-syntropy-expert/SKILL.md)                                                                                                               |

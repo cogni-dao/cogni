@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-# Hermetic regressions for bug.5284, bug.5359, and story.5070: both runtimes must
-# receive the COMPLETE SessionStart bundle at any size — Codex via raw stdout
-# (spill disabled), Claude Code via structured hookSpecificOutput.additionalContext
-# (raw stdout there is preview-capped to ~2KB) — with no byte ceiling to reject or
-# truncate against. Tracked snapshots must never be presented as live cognition,
-# and the stable user hook must stay reconciled.
+# Hermetic regressions for bug.5284, bug.5359, and story.5070: Codex receives the
+# COMPLETE bundle through hook stdout with spill disabled; Claude Code's hook is
+# write-only because AGENTS.md owns presentation through the file channel. Tracked
+# snapshots must never be presented as live cognition, and the stable user hook
+# must stay reconciled.
 
 set -euo pipefail
 
@@ -23,19 +22,14 @@ fail() {
   exit 1
 }
 
-# surfaced <hook-stdout> — the text the agent actually receives, regardless of
-# which channel the loader used: Claude Code structured JSON additionalContext,
-# or Codex raw stdout. Lets a content assertion stay channel-agnostic.
-surfaced() {
-  if printf '%s' "$1" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>&1; then
-    printf '%s' "$1" | jq -j '.hookSpecificOutput.additionalContext'
-  else
-    printf '%s' "$1"
-  fi
-}
-
 grep -Fq 'additionalContextLimit = 0' "$REPO_ROOT/.codex/config.toml" ||
   fail "project hook still uses Codex's truncating default"
+grep -Fq 'Every human-facing reply, including answers and follow-ups, is exactly this skeleton' \
+  "$REPO_ROOT/AGENTS.md" || fail "root AGENTS.md omitted the universal response floor"
+grep -Fq 'reproduce `Goal` and `Done when` byte-for-byte' "$REPO_ROOT/AGENTS.md" ||
+  fail "root AGENTS.md omitted immutable session state"
+grep -Fq 'read `.cogni/.cognition-cache.md` before any task' "$REPO_ROOT/AGENTS.md" ||
+  fail "root AGENTS.md omitted the OpenCode V2 cache-read fallback"
 
 grep -Fq "if [[ \"\${CONDUCTOR_IS_LOCAL:-1}\" == \"1\" ]]; then" "$CONDUCTOR_SETUP" ||
   fail "Conductor setup does not guard user-hook installation to local workspaces"
@@ -62,11 +56,9 @@ tracked_output="$({
   PATH="$FAKE_BIN:$PATH" CODEX_THREAD_ID="" COGNI_NODE_API_KEY="test-key" \
     CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" bash "$LOADER"
 })"
-# CODEX_THREAD_ID="" ⇒ Claude Code path ⇒ structured JSON channel.
-printf '%s' "$tracked_output" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>&1 ||
-  fail "Claude Code path did not surface via the additionalContext channel"
-[[ "$(surfaced "$tracked_output")" == "live cognition" ]] ||
-  fail "project loader presented a git-tracked cognition snapshot"
+# CODEX_THREAD_ID="" ⇒ Claude Code path ⇒ refresh cache without hook output.
+[[ -z "$tracked_output" ]] ||
+  fail "Claude Code hook emitted duplicate cognition instead of staying write-only"
 [[ "$(cat "$TRACKED_CACHE")" == "live cognition" ]] ||
   fail "project loader did not replace the tracked snapshot with live cognition"
 
@@ -74,10 +66,10 @@ mkdir -p "$FIXTURE_ROOT/small/.cogni" "$FIXTURE_ROOT/no-user-hooks"
 printf '%s\n' 'complete cognition' >"$FIXTURE_ROOT/small/.cogni/.cognition-cache.md"
 small_output="$({
   cd "$FIXTURE_ROOT/small"
-  CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" bash "$LOADER"
+  CODEX_THREAD_ID="" CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" bash "$LOADER"
 })"
-[[ "$(surfaced "$small_output")" == "complete cognition" ]] ||
-  fail "cached bundle was not surfaced verbatim (Claude Code path)"
+[[ -z "$small_output" ]] ||
+  fail "Claude Code cached path emitted duplicate cognition"
 
 # Codex path: raw stdout verbatim (Codex disables its spill via additionalContextLimit=0).
 mkdir -p "$FIXTURE_ROOT/codex-tmp"
@@ -98,20 +90,18 @@ locked_output="$({
 [[ -z "$locked_output" ]] ||
   fail "second concurrent presenter did not honor the per-thread lock"
 
-# story.5070 regression: a large bundle must surface WHOLE through the Claude Code
-# structured channel — never truncated or rejected by a byte ceiling. This is the
-# assertion the original bug.5284 ceiling got backwards.
+# story.5070 regression: a large cached bundle remains intact while Claude Code's
+# hook stays write-only. AGENTS.md owns presentation through its file import.
 mkdir -p "$FIXTURE_ROOT/large/.cogni"
 head -c 17000 /dev/zero | tr '\0' x >"$FIXTURE_ROOT/large/.cogni/.cognition-cache.md"
 large_output="$({
   cd "$FIXTURE_ROOT/large"
-  CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" bash "$LOADER"
+  CODEX_THREAD_ID="" CODEX_HOME="$FIXTURE_ROOT/no-user-hooks" bash "$LOADER"
 })"
-printf '%s' "$large_output" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null 2>&1 ||
-  fail "large bundle was not surfaced via the Claude Code additionalContext channel"
-large_surfaced="$(surfaced "$large_output")"
-[[ "${#large_surfaced}" -eq 17000 ]] ||
-  fail "large bundle truncated or rejected (surfaced ${#large_surfaced} of 17000 bytes)"
+[[ -z "$large_output" ]] ||
+  fail "large Claude Code bundle leaked through duplicate hook output"
+[[ "$(wc -c <"$FIXTURE_ROOT/large/.cogni/.cognition-cache.md" | tr -d ' ')" -eq 17000 ]] ||
+  fail "large cached bundle was mutated"
 
 LEGACY_HOME="$FIXTURE_ROOT/legacy-codex"
 LEGACY_HOOK="$LEGACY_HOME/hooks/cogni-session-cognition.sh"
@@ -153,11 +143,13 @@ bash -n "$LEGACY_HOOK"
 printf '%s\n' 'stale committed cognition' >"$TRACKED_CACHE"
 installed_output="$({
   cd "$TRACKED_ROOT"
-  PATH="$FAKE_BIN:$PATH" CODEX_THREAD_ID="" COGNI_NODE_API_KEY="test-key" \
+  mkdir -p "$FIXTURE_ROOT/installed-codex-tmp"
+  PATH="$FAKE_BIN:$PATH" CODEX_THREAD_ID="installed-codex" \
+    TMPDIR="$FIXTURE_ROOT/installed-codex-tmp" COGNI_NODE_API_KEY="test-key" \
     CODEX_HOME="$LEGACY_HOME" bash "$LEGACY_HOOK"
 })"
 [[ "$installed_output" == "live cognition" ]] ||
-  fail "installed user hook presented a git-tracked cognition snapshot"
+  fail "installed Codex hook did not present refreshed cognition"
 [[ "$(cat "$TRACKED_CACHE")" == "live cognition" ]] ||
   fail "installed user hook did not replace the tracked snapshot with live cognition"
 

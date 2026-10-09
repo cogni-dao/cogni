@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Session-start cognition loader — shared by the Claude Code (.claude/settings.json)
-# and Codex (.codex/config.toml) SessionStart hooks. Presents THIS node's own
-# cognition bundle on stdout; both runtimes inject it into context.
+# and Codex (.codex/config.toml) SessionStart hooks. Refreshes THIS node's own
+# cognition cache; only Codex also consumes hook stdout as its injection channel.
 #
 # Design: LOCAL-FIRST PRESENT + ASYNC REFRESH. The hook fires on every
 # startup/resume/compact and on every process respawn — so it must NEVER put a
@@ -47,31 +47,18 @@ if [ -n "${CODEX_THREAD_ID:-}" ]; then
   trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
 fi
 
-# emit_agent_context <text> — auto-surface <text> into the agent's context, whole,
-# at any size. The bundle is a live projection of the Dolt knowledge hub, so it
-# must arrive COMPLETE and never be shrunk, static-ified, or left for the agent to
-# go read. The two runtimes cap stdout differently, so we match each one's own
-# first-class, uncapped injection channel:
+# emit_agent_context <text> — surface <text> only where the hook is the selected
+# injection channel. The bundle is a live projection of the Dolt knowledge hub.
+# Harnesses ingest it differently:
 #   - Codex reads raw stdout as developer context and the .codex/config.toml
 #     `additionalContextLimit = 0` disables its head/tail spill, so the full
 #     payload lands untruncated.
-#   - Claude Code applies an "Output too large" preview to RAW stdout, silently
-#     dropping all but the first ~2KB (and spilling the rest to a file the agent
-#     never reads). Its uncapped SessionStart channel is structured JSON:
-#     `hookSpecificOutput.additionalContext`. So under Claude Code we emit that.
-# Result: the whole bundle auto-surfaces in both runtimes, 2KB or 50KB, with no
-# size ceiling to reject or truncate against.
+#   - Claude Code expands AGENTS.md @imports before/at SessionStart, so hook output
+#     is too late for that session and duplicates a preview of the same bundle.
+#     Its hook is therefore write-only; the committed AGENTS.md floor covers a
+#     cold first boot and the warmed cache supplies the rich contract thereafter.
 emit_agent_context() {
   if [ -n "${CODEX_THREAD_ID:-}" ]; then
-    printf '%s\n' "$1"
-    return 0
-  fi
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$1" \
-      | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
-  else
-    # jq absent (fetch_bundle already needs it, so this is cache-only degradation):
-    # fall back to raw stdout rather than crash the boot path.
     printf '%s\n' "$1"
   fi
 }
