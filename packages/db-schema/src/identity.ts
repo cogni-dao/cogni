@@ -4,8 +4,7 @@
 /**
  * Module: `@cogni/db-schema/identity`
  * Purpose: User identity binding tables — links external accounts (wallet, Discord, GitHub, Google) to users.
- * Scope: Defines the canonical actor identity registry, explicit beneficiary policy,
- * and the legacy user-binding compatibility projection. Does not contain queries or business logic.
+ * Scope: Defines the canonical actor identity registry, explicit beneficiary policy, and legacy user-binding compatibility projection. Does not contain queries or business logic.
  * Invariants:
  * - BINDINGS_ARE_EVIDENCED: Proof lives in identity_events.payload, not on the binding row.
  * - NO_AUTO_MERGE: UNIQUE(provider, external_id) — same external ID for same provider can't bind to two users.
