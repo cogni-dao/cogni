@@ -328,6 +328,13 @@ export class KubernetesMigrationJobAdapter
    * The migrator's stdout for this digest, bounded. Best-effort and NEVER throwing: the receipt is
    * deployment metadata about a migration that already succeeded, so failing to read it must not
    * change any verdict. Prefers a pod that actually reached Succeeded.
+   *
+   * `pods/log` IS A SEPARATE GRANT from `pods` (and `get` a separate verb from `list`). This
+   * method shipped with no RBAC change, so every call 403'd and the swallowing catch below
+   * reported that as "the node printed no receipt" — in every environment, 1:1 with every
+   * success, for the whole life of the feature. The grant now exists in all three places the
+   * actuator's reach is written down; the WARN is the other half of the fix, so the next
+   * unreadable log says WHY instead of being indistinguishable from an absent receipt.
    */
   async readReceipt(input: {
     readonly nodeSlug: string;
@@ -374,11 +381,33 @@ export class KubernetesMigrationJobAdapter
           );
           const body = log.body;
           if (typeof body === "string" && body.length > 0) return body;
-        } catch {
-          // This pod cannot speak; try the next one.
+        } catch (error) {
+          // This pod cannot speak; try the next one — but say so. A 403 here and a pod that
+          // genuinely printed nothing are the same `null` to the caller, and that ambiguity is
+          // exactly what made the missing `pods/log` grant invisible.
+          this.log?.warn(
+            {
+              job: name,
+              node: input.nodeSlug,
+              pod: podName,
+              container: input.containerName,
+              namespace,
+              statusCode: statusCode(error),
+            },
+            "compute_workload_migration_receipt_log_unreadable"
+          );
         }
       }
-    } catch {
+    } catch (error) {
+      this.log?.warn(
+        {
+          job: name,
+          node: input.nodeSlug,
+          namespace,
+          statusCode: statusCode(error),
+        },
+        "compute_workload_migration_receipt_pods_unlistable"
+      );
       return null;
     }
     return null;

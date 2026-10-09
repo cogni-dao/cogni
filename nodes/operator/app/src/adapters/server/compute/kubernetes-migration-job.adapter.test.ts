@@ -588,7 +588,8 @@ describe("readReceipt", () => {
   it("returns null rather than throwing when the pods cannot be read", async () => {
     const podApi = pods([]);
     podApi.listNamespacedPod.mockRejectedValue(new Error("api down"));
-    const adapter = adapterOf(batch(), podApi);
+    const log = warnLog();
+    const adapter = adapterOf(batch(), podApi, log);
     await expect(
       adapter.readReceipt({
         nodeSlug: "toks",
@@ -596,6 +597,45 @@ describe("readReceipt", () => {
         containerName: "migrate",
       })
     ).resolves.toBeNull();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ node: "toks" }),
+      "compute_workload_migration_receipt_pods_unlistable"
+    );
+  });
+
+  it("names the status code when the pod log itself is forbidden", async () => {
+    // THE REGRESSION. `pods/log` is a separate RBAC resource from `pods` and `get` a separate
+    // verb from `list`, so the grant that lets the line above LIST pods does not let this read
+    // them. A 403 here is swallowed on purpose — a missing receipt must never fail a migration
+    // that succeeded — which made it indistinguishable from "the migrator printed nothing" and
+    // hid the missing grant behind `akash_tx_migration_receipt_absent` in every environment at
+    // once. It must still SAY the status code.
+    const podApi = pods([succeededPod("migrate-toks-abc-xyz")], RECEIPT);
+    podApi.readNamespacedPodLog.mockRejectedValue(
+      Object.assign(new Error('pods "migrate-toks-abc-xyz" is forbidden'), {
+        statusCode: 403,
+      })
+    );
+    const log = warnLog();
+    const adapter = adapterOf(batch(), podApi, log);
+    await expect(
+      adapter.readReceipt({
+        nodeSlug: "toks",
+        bundleDigest: DIGEST,
+        namespace: "cogni-candidate-a",
+        containerName: "migrate",
+      })
+    ).resolves.toBeNull();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: "toks",
+        pod: "migrate-toks-abc-xyz",
+        container: "migrate",
+        namespace: "cogni-candidate-a",
+        statusCode: 403,
+      }),
+      "compute_workload_migration_receipt_log_unreadable"
+    );
   });
 
   it("returns null for a malformed digest instead of throwing", async () => {
