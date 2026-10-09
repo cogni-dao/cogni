@@ -140,10 +140,26 @@ export function authzUserResource(userId: string): string {
   return userId.startsWith("user:") ? userId : `user:${userId}`;
 }
 
-export function authzBillingAccountResource(billingAccountId: string): string {
-  return billingAccountId.startsWith("billing_account:")
-    ? billingAccountId
-    : `billing_account:${billingAccountId}`;
+/**
+ * Qualify node-local identities before they enter the env-shared OpenFGA store.
+ * The node segment is a namespace boundary only; it does not imply ownership.
+ */
+export function authzNodeUserPrincipal(nodeId: string, userId: string): string {
+  return nodeScopedReference("user", nodeId, userId);
+}
+
+export function authzNodeAgentPrincipal(
+  nodeId: string,
+  actorId: string
+): string {
+  return nodeScopedReference("agent", nodeId, actorId);
+}
+
+export function authzBillingAccountResource(
+  nodeId: string,
+  billingAccountId: string
+): string {
+  return nodeScopedReference("billing_account", nodeId, billingAccountId);
 }
 
 export function authzNodeResource(nodeId: string): string {
@@ -157,6 +173,23 @@ export function authzGrantExpiresAt(expiresAt: string): AuthzRelationCondition {
     name: AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
     context: { expires_at: expiresAt },
   };
+}
+
+function nodeScopedReference(
+  type: "user" | "agent" | "billing_account",
+  nodeId: string,
+  localId: string
+): string {
+  // OpenFGA permits exactly one ':' in an object/user reference. Keep the
+  // node-local components inside the opaque ID with '/' as their delimiter.
+  const prefix = `${type}:${nodeId}/`;
+  if (localId.startsWith(prefix)) return localId;
+
+  const typePrefix = `${type}:`;
+  const unqualifiedId = localId.startsWith(typePrefix)
+    ? localId.slice(typePrefix.length)
+    : localId;
+  return `${prefix}${unqualifiedId}`;
 }
 
 export function relationForAuthzAction(action: AuthzAction): string {
