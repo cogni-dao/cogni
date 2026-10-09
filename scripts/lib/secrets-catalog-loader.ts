@@ -437,8 +437,8 @@ function generatorFor(g: z.infer<typeof GenerateSchema>): () => string {
       return () => rand64(g.bytes);
     case "hex":
       return () => randHex(g.bytes);
-      case "flight-probe-key-ring":
-        return () => JSON.stringify({ active: rand64(g.bytes), previous: null });
+    case "flight-probe-key-ring":
+      return () => JSON.stringify({ active: rand64(g.bytes), previous: null });
     case "sk-cogni":
       return () => `sk-cogni-${randHex(g.randHexBytes)}`;
     case "static":
