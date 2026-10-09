@@ -1,6 +1,6 @@
 ---
 name: cognition-expert
-description: "Session-bootstrap + cognition-delivery expert for Cogni nodes — how an agent actually receives (or fails to receive) its operating contract at session start, across Claude Code, Codex, and opencode. Points at the canon (docs/spec/node-baas-architecture.md §Cognition Substrate, scripts/agent/session-cognition.sh, nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts) and holds the durable mental model + hard-won gotchas that aren't obvious when you read it: the two-axis design (code-owned constitution vs hub-served knowledge index), why the SessionStart hook is NOT a universal injection surface, and why the full bundle must ride the instruction-FILE channel. Use when touching the cognition bundle, the session-start loader, AGENTS.md/CLAUDE.md bootstrap, the .cogni/.cognition-cache.md cache, @imports, .codex/config.toml, opencode.json instructions, SESSION_BOOTSTRAP_INVARIANTS, the served orientation entry, or when debugging why a fresh agent booted without its agent-contract / replied in prose instead of the status-contract / got a truncated bundle. Triggers: 'cognition bundle', 'session-cognition.sh', 'SessionStart hook', 'agent-contract not loading', 'status-contract', 'bundle truncated', 'Output too large / Preview first 2KB', 'additionalContext', 'additionalContextLimit', 'CLAUDE.md @import', 'CLAUDE.local.md', '.cognition-cache.md', 'AGENTS.md bootstrap', 'thin pointer', 'ONE_VOICE', 'orientation IS the constitution', 'SESSION_BOOTSTRAP_INVARIANTS', 'opencode AGENTS.md', 'Codex project_doc_max_bytes', 'why did a fresh agent not follow the contract', 'cross-harness bootstrap', 'hub-empty boot', 'cognition didn't load'."
+description: "Session-bootstrap + cognition-delivery expert for Cogni nodes — how an agent actually receives (or fails to receive) its operating contract at session start, across Claude Code, Codex, and opencode. Points at the canon (docs/spec/node-baas-architecture.md §Cognition Substrate, scripts/agent/session-cognition.sh, nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts) and holds the durable mental model + hard-won gotchas that aren't obvious when you read it: the two-axis design (code-owned constitution vs hub-served knowledge index), why the SessionStart hook is NOT a universal injection surface, and why each harness needs a native full-context path. Use when touching the cognition bundle, the session-start loader, AGENTS.md/CLAUDE.md bootstrap, the .cogni/.cognition-cache.md cache, @imports, .codex/config.toml, opencode.json instructions, SESSION_BOOTSTRAP_INVARIANTS, the served orientation entry, or when debugging why a fresh agent booted without its agent-contract / replied in prose instead of the status-contract / got a truncated bundle. Triggers: 'cognition bundle', 'session-cognition.sh', 'SessionStart hook', 'agent-contract not loading', 'status-contract', 'bundle truncated', 'Output too large / Preview first 2KB', 'additionalContext', 'additionalContextLimit', 'CLAUDE.md @import', 'CLAUDE.local.md', '.cognition-cache.md', 'AGENTS.md bootstrap', 'thin pointer', 'ONE_VOICE', 'orientation IS the constitution', 'SESSION_BOOTSTRAP_INVARIANTS', 'opencode AGENTS.md', 'Codex project_doc_max_bytes', 'why did a fresh agent not follow the contract', 'cross-harness bootstrap', 'hub-empty boot', 'cognition didn't load'."
 ---
 
 # cognition-expert
@@ -42,7 +42,7 @@ Codex can also inject the cache through uncapped hook stdout. OpenCode does not 
 | **Codex**       | `AGENTS.md`/`AGENTS.override.md`, whole under **`project_doc_max_bytes` = 32 KiB** (silently truncates past it) | stdout as developer context, `additionalContextLimit` defaults to 2500 tokens | **`additionalContextLimit = 0`** in `.codex/config.toml` → full inject | committed floor + hook-delivered live cache            |
 | **OpenCode**    | root `AGENTS.md` + `opencode.json` `instructions` files, combined automatically                               | no SessionStart injection                                                     | n/a                                                                    | committed floor + instruction-loaded warm cache         |
 
-Keep the served bundle **< 32 KiB** so Codex never truncates it.
+Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its cold-boot floor.
 
 ## Hard-won gotchas (the stuff that burns a whole session)
 
@@ -71,7 +71,9 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
   current official rules document that `opencode.json` `instructions` files are combined with
   `AGENTS.md`. Keep the repo-owned adapter and still prove received context on the installed
   version; a parsed config is necessary evidence, not the live-model acceptance proof.
-- **The hook cap and the serve cap are different layers.** There is also a producer-side budget (`project_doc_max_bytes` on Codex); keep the bundle small enough for the tightest consumer (32 KiB).
+- **Hook output and project instructions are different layers.** Codex's
+  `project_doc_max_bytes` limits discovered `AGENTS.md`, not the hook-delivered live bundle;
+  `additionalContextLimit = 0` disables spilling for that hook path.
 - **Session delivery and fleet distribution are different proofs.** A fix in the operator repo
   proves neither existing-node adoption nor developer-zero-config. Rich Dolt cognition is
   write-once/live-fetched; shared runtime behavior belongs in a versioned `@cogni/*` cohort;

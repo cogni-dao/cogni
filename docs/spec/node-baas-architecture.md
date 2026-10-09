@@ -297,7 +297,7 @@ The bundle's stance is **constitution + map**: the code-owned invariants say how
 
 **Delivery is the instruction-FILE channel, not the hook. The SessionStart hook is a fetch-and-write side-effect, never the injection surface** — because a hook is not a universal inject path across harnesses:
 
-| harness     | whole-inject channel (≤32 KiB)                                   | SessionStart hook                                                                     | override                                   |
+| harness     | model-visible channel                                              | SessionStart hook                                                                     | override                                   |
 | ----------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------ |
 | Claude Code | output style + `CLAUDE.md`/`AGENTS.md` + `@import`s + Stop check | hook stdout is capped; write cache at start and validate the final response at Stop   | **none** (no setting/env raises it)        |
 | Codex       | `AGENTS.md`, whole under `project_doc_max_bytes` (32 KiB)        | `additionalContext` default 2500 tokens, spills                                       | `additionalContextLimit = 0` → full inject |

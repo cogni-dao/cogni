@@ -147,11 +147,10 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
 4. **Must NOT regress:** delivery on `main` (fresh-boot FULL), Codex adherence, the gitignored cache
    (never commit it), "replaces git-synced AGENTS.md sprawl" (git stays a pointer, hub stays source).
 5. **Boundaries:** do NOT code-own the full rich contract (reintroduces the ONE_VOICE two-constitution
-   duplication task.5155 killed + kills refine-in-place); the rich contract stays hub-refined. README /
-   `opencode.json` are peripheral — deferred until adherence is proven. \*\*No node-template/fleet
-   propagation until fresh operator Claude and Codex agents pass the committed-floor eval. OpenCode
-   also needs a capable authenticated provider; V2 only discovers `AGENTS.md`, does not resolve
-   configured `instructions` files, and does not expand the `@` cache reference.
+   duplication task.5155 killed + kills refine-in-place); the rich contract stays hub-refined.
+   OpenCode does not expand the `@` cache reference, so committed `opencode.json` loads the cache as
+   an instruction file automatically. No node-template/fleet propagation until fresh operator
+   harness evidence is accepted; a capable authenticated OpenCode model remains required.
 
 ## Next Actions / Risks
 
