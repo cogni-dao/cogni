@@ -58,7 +58,7 @@ curl -sS -X POST \
 
 The node wizard now performs this repo-creation call automatically during node
 publish for every spawned node. It uses the environment's `DOLTHUB_API_TOKEN`
-and explicit `DOLTHUB_OWNER`, derives `repoName = knowledge-<node>`, and writes
+and explicit `DOLTHUB_OWNER`, derives `repoName = <node-slug>`, and writes
 the resulting environment-owned mirror into the node's repo-spec:
 
 ```yaml
@@ -67,8 +67,8 @@ knowledge:
   remote:
     provider: dolthub
     owner: "cogni-dao"
-    repo: "knowledge-<node>"
-    url: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-<node>"
+    repo: "<node>"
+    url: "https://doltremoteapi.dolthub.com/cogni-dao/<node>"
     custody: cogni-owned
 ```
 

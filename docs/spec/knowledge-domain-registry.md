@@ -5,7 +5,7 @@ title: "Knowledge Domain Registry — FK Enforcement, HTTP API, and Phasing"
 status: draft
 spec_state: draft
 trust: draft
-summary: "Makes ENTRY_HAS_DOMAIN a real gate. Every write to `knowledge` (HTTP contributions and `core__knowledge_write`) verifies `domain` exists in `domains` before INSERT; unregistered domains return 400. Base set seeded by the schema migrator (reference data, not content); cookie-session HTTP + UI extends beyond the base. Phased: Phase 1 single-node (operator manages knowledge_operator), Phase 2 registry-node hosts UIs for headless nodes."
+summary: "Makes ENTRY_HAS_DOMAIN a real gate. Every write to `knowledge` (HTTP contributions and `core__knowledge_write`) verifies `domain` exists in `domains` before INSERT; unregistered domains return 400. A node agent registers the approved base set through the API before first write; each node's Dolt `domains` table is the taxonomy source of truth. Phased: Phase 1 single-node (operator manages knowledge_operator), Phase 2 registry-node hosts UIs for headless nodes."
 read_when: Implementing or reviewing the domain registry, debugging a `DomainNotRegisteredError`, designing a future registry node, or extracting `/knowledge` UI into a shared package.
 implements:
 owner: derekg1729
@@ -20,19 +20,19 @@ tags: [knowledge, dolt, domain, registry, fk, syntropy]
 
 ### Key References
 
-|                    |                                                                             |                                                                                                       |
-| ------------------ | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| **Schema**         | [knowledge-syntropy](./knowledge-syntropy.md) § Seed Schema                 | `domains` table columns                                                                               |
-| **Infrastructure** | [knowledge-data-plane](./knowledge-data-plane.md)                           | Doltgres server, per-node DBs, `KnowledgeStorePort`                                                   |
-| **Cookie-Session** | [knowledge-syntropy](./knowledge-syntropy.md) § Invariants                  | `DOMAIN_HTTP_COOKIE_ONLY` (domains write/list); knowledge reads → `KNOWLEDGE_READ_REQUIRES_PRINCIPAL` |
-| **UI Reference**   | PR #1308 (`task.5037`)                                                      | `/knowledge` Browse ⇄ Inbox toggle, DataGrid, Sheet                                                   |
-| **Future Hosting** | [knowledge-syntropy](./knowledge-syntropy.md) § Critical Path § Rd-PORTABLE | UI extraction into `@cogni/...-knowledge-ui` package                                                  |
+|                    |                                                                             |                                                                            |
+| ------------------ | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **Schema**         | [knowledge-syntropy](./knowledge-syntropy.md) § Seed Schema                 | `domains` table columns                                                    |
+| **Infrastructure** | [knowledge-data-plane](./knowledge-data-plane.md)                           | Doltgres server, per-node DBs, `KnowledgeStorePort`                        |
+| **Authentication** | [knowledge-syntropy](./knowledge-syntropy.md) § Invariants                  | domain list is session-only; registration accepts a session or node bearer |
+| **UI Reference**   | PR #1308 (`task.5037`)                                                      | `/knowledge` Browse ⇄ Inbox toggle, DataGrid, Sheet                        |
+| **Future Hosting** | [knowledge-syntropy](./knowledge-syntropy.md) § Critical Path § Rd-PORTABLE | UI extraction into `@cogni/...-knowledge-ui` package                       |
 
 ---
 
 ## Goal
 
-Close the gap where `ENTRY_HAS_DOMAIN` was declared as an invariant but not enforced. Make `domain` a foreign key in spirit — every write to `knowledge` verifies the domain is registered, or fails with `DomainNotRegisteredError`. Seed the base set in the schema migration (reference data) and provide a UI to extend beyond it.
+Close the gap where `ENTRY_HAS_DOMAIN` was declared as an invariant but not enforced. Make `domain` a foreign key in spirit — every write to `knowledge` verifies the domain is registered, or fails with `DomainNotRegisteredError`. Register the approved base set through the node's API before first write and provide a UI to inspect or extend it.
 
 ---
 
@@ -87,8 +87,8 @@ The `DomainNotRegisteredError` class lives in `packages/knowledge-store/src/port
 ### HTTP API
 
 ```
-GET  /api/v1/knowledge/domains       cookie-only  →  200 { domains: Domain[] }
-POST /api/v1/knowledge/domains       cookie-only  →  201 | 409 | 400
+GET  /api/v1/knowledge/domains       session cookie          →  200 { domains: Domain[] }
+POST /api/v1/knowledge/domains       session or node bearer  →  201 | 409 | 400
 ```
 
 ### `GET /api/v1/knowledge/domains`
@@ -121,18 +121,18 @@ Response shape (Zod contract `packages/node-contracts/src/knowledge.domains.v1.c
 
 Body: `{ id, name, description? }`.
 
-| Outcome                           | Status | Behavior                                                                |
-| --------------------------------- | ------ | ----------------------------------------------------------------------- |
-| Valid + new id                    | 201    | INSERT + `dolt_commit('-Am', 'register domain <id>')`. Returns the row. |
-| Duplicate id                      | 409    | `{ error: "domain '<id>' already registered" }`. No commit.             |
-| Invalid input (Zod)               | 400    | Standard contract-validation 400.                                       |
-| Not signed in (no session cookie) | 401    | Standard auth 401.                                                      |
+| Outcome                    | Status | Behavior                                                                |
+| -------------------------- | ------ | ----------------------------------------------------------------------- |
+| Valid + new id             | 201    | INSERT + `dolt_commit('-Am', 'register domain <id>')`. Returns the row. |
+| Duplicate id               | 409    | `{ error: "domain '<id>' already registered" }`. No commit.             |
+| Invalid input (Zod)        | 400    | Standard contract-validation 400.                                       |
+| No authenticated principal | 401    | Standard auth 401.                                                      |
 
 DELETE / PUT endpoints are **out of scope** in v0 (per `DEPRECATE_NOT_DELETE` spirit). Domain registration is sticky.
 
 ### Auth
 
-Domain register/list over HTTP is cookie-session only (`DOMAIN_HTTP_COOKIE_ONLY`) — bearer agents cannot register domains. Note this is narrower than knowledge reads, which now accept any authenticated principal (`KNOWLEDGE_READ_REQUIRES_PRINCIPAL`); the `GET /api/v1/knowledge` browse response already returns the domain list, so bearer recall does not depend on the domains endpoint. Bearer agents may also read via the contracted port methods.
+Domain listing is cookie-session only because it backs the human management UI. Domain registration accepts either a session or a node bearer: agents must be able to establish the approved shelves before the domain FK gate permits their first contribution. Bearer recall gets the domain projection from cognition and knowledge reads; it does not depend on the list endpoint.
 
 ---
 
@@ -180,36 +180,27 @@ No edit, no delete, no row-detail Sheet in v0. The grid is read + register only.
 
 ### Seeding
 
-`domains` is **reference data**, not content. `NODES_BOOT_EMPTY` (from [knowledge-data-plane](./knowledge-data-plane.md)) scopes to **content tables** — `knowledge`, `citations`, `sources` — not the `domains` registry.
+`domains` is **reference data**, not content. Even so, a new production node currently boots with an empty registry: the schema migrator applies DDL only, and no deploy workflow runs the dev seed script.
 
-**Seeding — v0 is MANUAL (deliberately).** Domains are registered one-time, by hand, via the session-authed `/knowledge` **Domains → "+ Add domain"** UI (or `POST /api/v1/knowledge/domains`); base knowledge (orientation etc.) is added via the contribution API. There is **no** automated provision-time domain seeding today, and it does **not** belong in the schema migrator (`migrate-doltgres.mjs` is DDL only — mixing reference-data seeding into a load-bearing initContainer that gates every pod start is the wrong layer). Automated fleet seeding is deferred until an actual fresh-fleet reprovision needs it; when it lands it will be a **dedicated seed step** (Job/init), not the schema migrator. `scripts/db/seed-doltgres.mts` is the convenience runner for dev + one-off manual seeding.
+**Seeding — v0 is API-driven.** Before its first knowledge write, a node agent registers the approved rows once with `POST /api/v1/knowledge/domains` using its node bearer. A session user can do the same through `/knowledge` **Domains → "+ Add domain"**. Base knowledge (orientation etc.) is then added through the contribution API. There is **no** automated provision-time domain seeding today, and it does **not** belong in the schema migrator (`migrate-doltgres.mjs` is DDL only — mixing reference-data seeding into a load-bearing initContainer that gates every pod start is the wrong layer). If automated fleet seeding lands, it must be a dedicated seed step. `scripts/db/seed-doltgres.mts` remains a local-dev and one-off convenience runner.
 
 **Universal baseline (shipped by EVERY node).** SSOT is `BASE_DOMAIN_SEEDS` in `@cogni/knowledge-base` (`packages/knowledge-base/src/seeds/domains.ts`); the table below mirrors it for reference — if they disagree, the code wins:
 
-| id         | Purpose                                                                        | feeds cognition bundle     |
-| ---------- | ------------------------------------------------------------------------------ | -------------------------- |
-| `meta`     | How to operate this node + the hub itself (orientation, conventions, skills)   | Orientation + Skills index |
-| `mission`  | The node's charter — why it exists, values, non-goals                          | `mission` field            |
-| `strategy` | How the node pursues its mission — decision approaches + EDO hypothesis chains | Domains + the EDO engine   |
+| id              | Purpose                                                                               |
+| --------------- | ------------------------------------------------------------------------------------- |
+| `meta`          | How to use this node and its hub: orientation, conventions, and contribution contract |
+| `mission`       | Why the node exists, its values, and its non-goals                                    |
+| `strategy`      | How the node pursues its mission: research, bets, and validated EDO decisions         |
+| `method`        | Reusable reasoning and proof rules that hold independent of this stack                |
+| `use-service`   | How outside consumers use the service this node offers                                |
+| `build-agents`  | The node's agents, graphs, tools, prompts, cognition, knowledge, and work-item planes |
+| `build-product` | How the node's product is built: UI, data model, and user-facing surfaces             |
 
-Only three domains are universal, because they map 1:1 to what the cognition bootstrap
-(`nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`) assembles for every session. **`skills`
-is deliberately NOT a domain** — the bundle builds its skills index cross-domain from `entry_type ∈ {skill, guide,
-playbook}`. A node registers a new domain only once it has content for it; the bundle suppresses empty domains
-(`route.ts` skips `entryCount === 0`), so registering-without-seeding is dead weight.
+These seven domains are the universal starter taxonomy. **`skills` is deliberately NOT a domain** — it is an entry type, and cognition builds its skills index cross-domain from `entry_type ∈ {skill, guide, playbook}`. Empty registered domains remain visible registry commitments even when cognition suppresses them, so register only the approved set.
 
 **Niche (subject-matter) domains are PER-NODE — registered on that node only, NEVER in the shared base.**
 
-| node       | niche domains                           |
-| ---------- | --------------------------------------- |
-| `operator` | `infrastructure`, `governance`, `nodes` |
-| `poly`     | `prediction-market`                     |
-| `resy`     | `reservations`                          |
-
-The earlier prototype put `prediction-market`/`reservations` in the shared `@cogni/knowledge-base` base seeds —
-cross-node contamination. Fixed: shared base = `meta`/`mission`/`strategy` only; each node registers its own niche
-domains manually (v0). Idempotency is inherent — `POST /api/v1/knowledge/domains` (and `seed-doltgres.mts`) are
-SELECT-then-INSERT, so re-runs are safe no-ops.
+Niche shelves are approved against a node's live knowledge set, then registered directly in that node's Dolt registry. They never belong in `.cogni/repo-spec.yaml`, whose `knowledge` block identifies only the database and DoltHub remote, and they never enter the shared base. A useful default bar is five coherent entries that cannot be routed cleanly to an existing shelf. Registration is sticky: a duplicate `POST` returns 409 rather than acting as a no-op.
 
 The UI's `+ Add domain` flow exists for **extension** — operators registering domains beyond the base set (e.g., `art-marketplace`, `dao-tooling`) as a node's specialization grows. UI registration is the path for net-new domains; it does not duplicate the base set.
 
@@ -254,7 +245,7 @@ Server-side FK gate (the locking move):
 
 - Backend (node-agnostic): port methods, adapter helper, contract, error class — all in `packages/`.
 - HTTP + UI (operator-bound): three new endpoints + 3-mode toggle in the existing `/knowledge` page.
-- Migrator unchanged. Seeds are UI-driven.
+- Migrator unchanged. Registration is API-driven by a node agent or session user.
 
 **Not in Phase 1:** UI extraction, multi-node hosting, registry-node app shell.
 
@@ -301,16 +292,16 @@ Phase 1 must therefore avoid hard-coding `knowledge_operator` anywhere in `packa
 
 ## Invariants
 
-| Rule                             | Constraint                                                                                                                                                                                                                                                                            |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DOMAIN_FK_ENFORCED_AT_WRITE`    | Every write to `knowledge` verifies `domain` exists in `domains` before INSERT. Unregistered → `DomainNotRegisteredError` → HTTP 400.                                                                                                                                                 |
-| `DOMAIN_REGISTRY_EXTENDS_VIA_UI` | Base domains are seeded by the schema migrator (reference data). The UI's `POST /api/v1/knowledge/domains` is for **extension** — adding new domains beyond the seeded set. `NODES_BOOT_EMPTY` scopes to content tables (`knowledge`, `citations`, `sources`), not `domains`.         |
-| `DOMAIN_CHECK_AT_ADAPTER_LAYER`  | The check lives in the Doltgres adapters (not in `createKnowledgeCapability`), so it shares the caller's client and works on per-PR contribution branches.                                                                                                                            |
-| `DOMAIN_REGISTRATION_IS_STICKY`  | No DELETE / PUT endpoints in v0. Domain rows are append-only. (Inherits `DEPRECATE_NOT_DELETE` spirit.)                                                                                                                                                                               |
-| `DOMAIN_HTTP_COOKIE_ONLY`        | GET + POST `/api/v1/knowledge/domains` are cookie-session only (bearer/x402 rejected) — domain creation is a trusted-human act in v0. Narrower than `KNOWLEDGE_READ_REQUIRES_PRINCIPAL`; bearer recall gets the domain list from the `GET /api/v1/knowledge` browse response instead. |
-| `DOMAIN_LIST_SINGLE_QUERY`       | `listDomainsFull()` returns rows + `entry_count` in one SQL query (`LEFT JOIN knowledge … GROUP BY`). No N+1.                                                                                                                                                                         |
-| `DOMAIN_HELPER_SQL_SAFE`         | The shared helper escapes its `domain` argument via `escapeValue()` (Doltgres requires `sql.unsafe`).                                                                                                                                                                                 |
-| `DOMAIN_REGISTER_AUTOCOMMITS`    | `registerDomain()` issues `dolt_commit('-Am', 'register domain <id>')` after INSERT. (Inherits `AUTO_COMMIT_ON_WRITE`.)                                                                                                                                                               |
+| Rule                              | Constraint                                                                                                                                                                                                    |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DOMAIN_FK_ENFORCED_AT_WRITE`     | Every write to `knowledge` verifies `domain` exists in `domains` before INSERT. Unregistered → `DomainNotRegisteredError` → HTTP 400.                                                                         |
+| `DOMAIN_REGISTRY_EXTENDS_VIA_API` | A node bearer or session user registers approved domains through `POST /api/v1/knowledge/domains`; the schema migrator never seeds rows. The local Dolt `domains` table is the only taxonomy source of truth. |
+| `DOMAIN_CHECK_AT_ADAPTER_LAYER`   | The check lives in the Doltgres adapters (not in `createKnowledgeCapability`), so it shares the caller's client and works on per-PR contribution branches.                                                    |
+| `DOMAIN_REGISTRATION_IS_STICKY`   | No DELETE / PUT endpoints in v0. Domain rows are append-only. (Inherits `DEPRECATE_NOT_DELETE` spirit.)                                                                                                       |
+| `DOMAIN_HTTP_AUTH_SPLIT`          | GET `/api/v1/knowledge/domains` is session-only; POST accepts either a session or a node bearer so an agent can satisfy the FK gate before its first write.                                                   |
+| `DOMAIN_LIST_SINGLE_QUERY`        | `listDomainsFull()` returns rows + `entry_count` in one SQL query (`LEFT JOIN knowledge … GROUP BY`). No N+1.                                                                                                 |
+| `DOMAIN_HELPER_SQL_SAFE`          | The shared helper escapes its `domain` argument via `escapeValue()` (Doltgres requires `sql.unsafe`).                                                                                                         |
+| `DOMAIN_REGISTER_AUTOCOMMITS`     | `registerDomain()` issues `dolt_commit('-Am', 'register domain <id>')` after INSERT. (Inherits `AUTO_COMMIT_ON_WRITE`.)                                                                                       |
 
 ---
 
@@ -320,7 +311,7 @@ Phase 1 must therefore avoid hard-coding `knowledge_operator` anywhere in `packa
 - DELETE / PUT domain endpoints
 - Per-domain RBAC (`domain_grants` table is vFuture)
 - `entry_types` registry (P1 EDO work; architecturally similar but ships serially)
-- Bearer / x402 access to `/api/v1/knowledge/domains`
+- x402 access to `/api/v1/knowledge/domains`; bearer access remains POST-only
 - UI extraction into a shared package (`Rd-PORTABLE`; filed when a 2nd node needs `/knowledge`)
 
 ---
