@@ -33,14 +33,16 @@ import type {
 /**
  * No producer-side byte ceiling (story.5070).
  *
- * Both SessionStart delivery channels are uncapped — Codex raw stdout with its
- * spill disabled (`additionalContextLimit = 0`), and Claude Code structured
- * `hookSpecificOutput.additionalContext` — so the bundle is injected WHOLE at
- * any size. The former 16 KB cap (bug.5284) was premised on Codex's spill being
- * disabled "only while the producer enforces a strict bound"; once delivery
- * stopped truncating, that bound capped the SSoT itself and blocked realistic
- * growth. The bundle is human-curated in Dolt, not user-generated, so no
- * arbitrary serve-side limit is enforced here.
+ * The loader writes `.cogni/.cognition-cache.md`, then each harness uses its
+ * native full-context path: Claude Code `@import` (up to 4 MiB), Codex hook
+ * stdout with `additionalContextLimit = 0`, and OpenCode `opencode.json`
+ * instructions. Claude Code's SessionStart stdout/`additionalContext` is NOT a
+ * safe delivery surface — it caps large output with no override — so no
+ * universal hook-injection path or serve-side ceiling is assumed. The former
+ * 16 KB cap (bug.5284) capped
+ * the SSoT itself and blocked realistic growth; the bundle is human-curated in
+ * Dolt, not user-generated. See docs/spec/node-baas-architecture.md §Cognition
+ * Substrate and the `cognition-expert` skill.
  */
 
 /**
