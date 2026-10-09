@@ -21,7 +21,7 @@ const mockRedeem = vi.fn().mockResolvedValue({
     "agent:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/11111111-1111-4111-8111-111111111111",
   credentialId: "22222222-2222-4222-8222-222222222222",
   apiKey: "cogni_ag_sk_v2_22222222-2222-4222-8222-222222222222.secret",
-  billingAccountId: "billing-1",
+  billingAccountId: "44444444-4444-4444-8444-444444444444",
   authenticateUntil: "2026-01-31T00:00:00.000Z",
   renewUntil: "2026-02-07T00:00:00.000Z",
 });
@@ -78,7 +78,9 @@ describe("POST /api/v1/agent/register", () => {
           "agent:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/11111111-1111-4111-8111-111111111111"
         );
         expect(json.apiKey).toContain("cogni_ag_sk_v2_");
-        expect(json.billingAccountId).toBe("billing-1");
+        expect(json.billingAccountId).toBe(
+          "44444444-4444-4444-8444-444444444444"
+        );
         expect(mockRedeem).toHaveBeenCalledWith(
           "cogni_ag_sg_v1_abcdefghijklmnopqrstuvwxyz0123456789"
         );
