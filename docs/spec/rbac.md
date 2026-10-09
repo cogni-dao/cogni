@@ -2,7 +2,8 @@
 id: rbac-spec
 type: spec
 title: Authorization (RBAC/ReBAC) Design
-status: active
+status: draft
+spec_state: proposed
 trust: draft
 summary: OpenFGA-only authorization for node-local human, AI, and service principals, including exact-account direct and server-bound on-behalf-of delegation.
 read_when: Implementing authorization checks, tool permissions, or on-behalf-of delegation
@@ -16,6 +17,25 @@ tags: [authorization]
 
 > [!CRITICAL]
 > Every protected action requires `AuthorizationPort.check(actor, subject?, action, resource, context)`. When `subject` is present (agent acting on behalf of user), BOTH the subject's permission AND the actor's delegation must be verified. OpenFGA is the sole source of truth.
+
+## Goal
+
+Define one deny-by-default authorization contract for human, AI, and service
+principals, including exact-resource direct access and server-bound OBO execution.
+
+## Non-Goals
+
+- Authentication and credential lifecycle; see [Identity Model](./identity-model.md).
+- Inferring permission from spawn provenance, stewardship, tenancy, attribution,
+  beneficiary, or wallet ownership.
+- Replacing resource predicates and RLS defense with OpenFGA.
+
+## Design
+
+The contract separates capability availability from relationship authorization,
+keeps OpenFGA as the sole permission authority, and binds every decision to typed
+principals plus an exact resource. The sections below distinguish current
+coverage from the proposed first-class AI and account-data delta.
 
 ## Core Invariants
 

@@ -2,8 +2,8 @@
 id: decentralized-user-identity
 type: spec
 title: Human and AI Identity + Account Bindings
-status: active
-spec_state: active
+status: draft
+spec_state: proposed
 trust: reviewed
 summary: Node-local human user_id and AI actor_id remain separate from evidenced wallet/provider bindings, replaceable credentials, permissions, attribution, beneficiary, and settlement.
 read_when: Working on identity, auth, account linking, RBAC actor types, user context injection, or ledger attribution
