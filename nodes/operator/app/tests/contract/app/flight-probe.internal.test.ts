@@ -35,16 +35,18 @@ const fakes = vi.hoisted(() => {
 });
 
 const serverEnvMock = vi.hoisted(() =>
-  vi.fn((): {
-    FLIGHT_PROBE_API_KEY: string | undefined;
-    APP_BUILD_SHA: string | undefined;
-  } => ({
-    FLIGHT_PROBE_API_KEY: JSON.stringify({
-      active: "p".repeat(32),
-      previous: null,
-    }),
-    APP_BUILD_SHA: "a".repeat(40),
-  }))
+  vi.fn(
+    (): {
+      FLIGHT_PROBE_API_KEY: string | undefined;
+      APP_BUILD_SHA: string | undefined;
+    } => ({
+      FLIGHT_PROBE_API_KEY: JSON.stringify({
+        active: "p".repeat(32),
+        previous: null,
+      }),
+      APP_BUILD_SHA: "a".repeat(40),
+    })
+  )
 );
 
 vi.mock("@/shared/env", () => ({ serverEnv: () => serverEnvMock() }));
