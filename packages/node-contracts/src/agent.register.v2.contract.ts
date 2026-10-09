@@ -12,19 +12,12 @@
  */
 
 import { z } from "zod";
+import { agentCredentialOutputSchema } from "./agent.credentials.v1.contract";
 
 export const registerAgentV2Operation = {
   id: "agent.register.v2",
   input: z.object({
     spawnToken: z.string().min(32).max(512),
   }),
-  output: z.object({
-    actorId: z.string().uuid(),
-    principalId: z.string().startsWith("agent:"),
-    credentialId: z.string().uuid(),
-    apiKey: z.string().min(1),
-    billingAccountId: z.string().min(1),
-    authenticateUntil: z.string().datetime(),
-    renewUntil: z.string().datetime(),
-  }),
+  output: agentCredentialOutputSchema,
 } as const;
