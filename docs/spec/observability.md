@@ -280,13 +280,17 @@ mode is always identified explicitly.
 
 Instrumentation follows the normal node observability contract:
 
-| Surface | Signal | Cardinality rule |
-| --- | --- | --- |
-| health operation | one terminal `substrate.temporal.health_checked` event with result, reason code, duration, mode, and counts | node identity is inherited; no inputs/results/secrets |
-| inspection freshness | `temporal_substrate_last_success_timestamp_seconds` gauge | default `node_id` only |
-| server-side pollers | `temporal_substrate_pollers` gauge labeled `task_type=workflow|activity` | fixed enum only |
-| schedule reconciliation | `temporal_schedule_drift` gauge | aggregate count; schedule ID is a log field, never a label |
-| inspector behavior | `temporal_substrate_checks_total` and `temporal_substrate_check_duration_seconds` | result/reason enums only |
+- Health operation: one terminal `substrate.temporal.health_checked` event with result, reason
+  code, duration, mode, and counts. Node identity is inherited; inputs, results, and secrets are
+  excluded.
+- Inspection freshness: `temporal_substrate_last_success_timestamp_seconds`, with only the default
+  `node_id` label.
+- Server-side pollers: `temporal_substrate_pollers`, labeled only with the fixed
+  `task_type=workflow|activity` enum.
+- Schedule reconciliation: `temporal_schedule_drift`, aggregated across schedules. Schedule ID is a
+  log field, never a metric label.
+- Inspector behavior: `temporal_substrate_checks_total` and
+  `temporal_substrate_check_duration_seconds`, labeled only with result and reason enums.
 
 The operator calls the diagnostic at a fixed interval. Alerts are direct and actionable: required
 poller absent/stale, Worker/app/current Build ID mismatch, persistent schedule drift, or stale last
