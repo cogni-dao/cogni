@@ -29,15 +29,9 @@
  */
 export const MIGRATION_RECEIPT_MARKER = "COGNI_MIGRATION_RECEIPT_V1";
 
-/** One row of drizzle's applied-migration ledger, joined to its journal tag. */
-export interface AppliedMigration {
-  /** Journal tag, e.g. `0050_oval_madripoor`. Resolved by the migrator from `meta/_journal.json`. */
-  readonly tag: string;
-  /** drizzle's own hash of the migration SQL, as recorded in `drizzle.__drizzle_migrations`. */
-  readonly hash: string;
-  /** drizzle's `created_at` for the row (the journal's `when`, epoch ms). */
-  readonly appliedAtMs: number;
-}
+import type { AppliedMigration } from "@/types/migration-receipt";
+
+export type { AppliedMigration };
 
 /** What one successful migrate run reports about the database it just migrated. */
 export interface MigrationReceipt {

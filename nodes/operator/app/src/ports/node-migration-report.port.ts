@@ -18,7 +18,7 @@
  * @public
  */
 
-import type { AppliedMigration } from "@/shared/migrations/migration-receipt";
+import type { AppliedMigration } from "@/types/migration-receipt";
 
 /** One stored receipt, as the read path sees it. */
 export interface NodeMigrationReportRecord {
