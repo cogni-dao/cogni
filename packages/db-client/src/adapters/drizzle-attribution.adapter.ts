@@ -2191,7 +2191,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         tx
           .select({ id: actors.id, kind: actors.kind, userId: actors.userId })
           .from(actors)
-          .where(and(eq(actors.id, params.actorId), eq(actors.status, "active")))
+            .where(
+              and(eq(actors.id, params.actorId), eq(actors.status, "active"))
+            )
           .limit(1),
         tx
           .select({ id: actors.id })
@@ -2413,7 +2415,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       .orderBy(desc(actorBindings.createdAt))
       .limit(1);
     if (!binding) {
-      throw new Error("Receipt source has no actor owner at contribution cutoff");
+        throw new Error(
+          "Receipt source has no actor owner at contribution cutoff"
+        );
     }
     const [policy] = await this.db
       .select()
@@ -2488,12 +2492,16 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       throw new Error("Actor allocation facts diverged before persistence");
     }
     const [policy] = await this.db
-      .select({ authorizedByActorId: actorBeneficiaryPolicies.authorizedByActorId })
+        .select({
+          authorizedByActorId: actorBeneficiaryPolicies.authorizedByActorId,
+        })
       .from(actorBeneficiaryPolicies)
       .where(eq(actorBeneficiaryPolicies.id, prepared.beneficiaryPolicyId))
       .limit(1);
     if (policy?.authorizedByActorId !== params.signerActorId) {
-      throw new Error("Allocation signer is not the beneficiary policy authorizer");
+        throw new Error(
+          "Allocation signer is not the beneficiary policy authorizer"
+        );
     }
     if (
       !(await this.actorOwnsSigningWallet({
