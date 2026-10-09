@@ -250,6 +250,12 @@ export type {
   ServingResult,
 } from "./node-flight.port";
 export type {
+  NodeMigrationReportRecord,
+  NodeMigrationReportStorePort,
+  RecordNodeMigrationReportInput,
+  RecordNodeMigrationReportOutcome,
+} from "./node-migration-report.port";
+export type {
   NodeKind,
   NodeRegistryPort,
   NodeSummary,

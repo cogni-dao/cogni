@@ -91,6 +91,7 @@ import {
   type AkashTxWorkloadIdentity,
   type ComputeCostEvidencePort,
   type ComputeCostStorePort,
+  type NodeMigrationReportStorePort,
 } from "@/ports";
 
 import { runMigrationStep } from "./akash-tx-migration-step";
@@ -127,6 +128,12 @@ export interface AkashTxActuatorDeps {
    * this seam can no longer stop a lease from being created (task.5135).
    */
   readonly migration?: AkashTxMigrationPort;
+  /**
+   * Where a successful migration's RECEIPT is stored as operator-held deployment metadata
+   * (`node_migration_reports`). Omitted → receipts are not collected and the node's schema
+   * readout honestly says "never reported". Never a credential on a node database.
+   */
+  readonly migrationReports?: NodeMigrationReportStorePort;
   /** Paired, receipt-linked cost seams. Production wiring supplies both or startup fails. */
   readonly costEvidence: ComputeCostEvidencePort;
   readonly costStore: ComputeCostStorePort;
@@ -302,6 +309,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly log: AkashTxLogger;
   private readonly probe?: AkashTxServingProbe;
   private readonly migration?: AkashTxMigrationPort;
+  private readonly migrationReports?: NodeMigrationReportStorePort;
   private readonly costEvidence: ComputeCostEvidencePort;
   private readonly costStore: ComputeCostStorePort;
   private readonly providerConsumerAccountId: string;
@@ -318,6 +326,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     this.log = deps.log ?? NOOP_LOGGER;
     if (deps.probe) this.probe = deps.probe;
     if (deps.migration) this.migration = deps.migration;
+    if (deps.migrationReports) this.migrationReports = deps.migrationReports;
     this.costEvidence = deps.costEvidence;
     this.costStore = deps.costStore;
     this.providerConsumerAccountId = deps.providerConsumerAccountId;
@@ -909,6 +918,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       {
         log: this.log,
         ...(this.migration ? { migration: this.migration } : {}),
+        ...(this.migrationReports ? { reports: this.migrationReports } : {}),
       },
       {
         step: input.migration,
