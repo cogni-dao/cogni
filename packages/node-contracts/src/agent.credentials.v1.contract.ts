@@ -4,7 +4,7 @@
 /**
  * Module: `@contracts/agent.credentials.v1`
  * Purpose: Shared principal and lifecycle wire contracts for durable node-local agent credentials.
- * Scope: Zod schemas only. No persistence, authorization, secret generation, or framework code.
+ * Scope: Zod schemas only. Does not persist identities, authorize requests, generate secrets, or depend on frameworks.
  * Invariants: CREDENTIAL_NE_PRINCIPAL; NODE_LOCAL_BEARER; HUMAN_AND_AGENT_ARE_DISTINCT;
  *   SHARED_STORE_PRINCIPALS_ARE_NODE_QUALIFIED.
  * Side-effects: none
