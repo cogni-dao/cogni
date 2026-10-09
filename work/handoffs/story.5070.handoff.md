@@ -13,13 +13,18 @@ last_commit: 33ba85e0e9
 
 ## Mission
 
+Goal = Fresh agents follow the agent-contract unprompted
+
+Done when = Fresh Claude, Codex, and opencode boots pass the sustained adherence eval.
+
 Pickup: you own closing the **adherence** gap in the cognition bootstrap. The end-to-end goal
 is simple and behavioral — **a human spawns a fresh agent, and it responds in the agent-contract
 (the status-contract block) with ZERO human prompting to do so.** Codex agents already do this
-spectacularly, unprompted, on the current substrate. Claude Code agents, given the *identical*
-bundle, still answer in prose and end on a "Want me to…? (y/n)" — a contract breach. Delivery
-(getting the contract into context) is **solved and verified**; adherence (the agent actually
-obeying it unprompted) is **not**, and that is the real work. Do not mistake delivery for the goal.
+spectacularly, unprompted, on the current substrate. Claude Code historically answered in prose
+and ended on a "Want me to…? (y/n)" despite receiving the _identical_ bundle. It now passes the
+first-turn format bar but mutates frozen contract state on the follow-up. Delivery (getting the
+contract into context) is **solved and verified**; sustained adherence is **not**, and that is the
+real work. Do not mistake delivery or one-shot formatting for the goal.
 
 ## Goal
 
@@ -28,8 +33,11 @@ obeying it unprompted) is **not**, and that is the real work. Do not mistake del
   **sustains** it the next turn — on Claude Code, Codex, and opencode.
 - **E2E validation = the adherence eval passes.** Grade a fresh `claude -p` boot against
   `.claude/skills/cognition-expert/references/agent-contract-adherence.eval.md` (the Codex output is
-  the gold standard; a Claude prose+y/n reply is the known-FAIL). PASS = the whole reply is the
-  status-contract block, unprompted, no trailing bare y/n. Today: Codex ✅, **Claude ❌**, opencode ⏳.
+  the gold standard; a Claude prose+y/n reply is the historical known-FAIL). PASS = the whole reply
+  is the status-contract block, unprompted, no trailing bare y/n. Current operator result: Codex ✅,
+  Claude ✅ for the two-turn format rubric, opencode ⏳. Claude's second turn changed the
+  proposed `Done when` without an approved pivot, so the stronger full-contract eval still needs that
+  regression case before operator propagation resumes.
 - This is a **client-side** change (loader + AGENTS.md + repo-committed floor), **not** a candidate-a
   deploy. There is no `/version` SHA proof to chase; the proof is a fresh-boot eval run. (The one
   server-side piece — the cognition endpoint — already shipped: operator prod serves the full bundle.)
@@ -54,17 +62,19 @@ obeying it unprompted) is **not**, and that is the real work. Do not mistake del
   two-tier design). CI has intermittent main-drift on `unit`; rebase on `main` to clear, then merge.
 - **The cache is NOT sprawl:** `.cogni/.cognition-cache.md` is gitignored (`.gitignore:127`), never
   committed, absent from a fresh clone. Git holds only the one-line `@import` pointer; the hub is source.
-- **Open / blocked:** Claude adherence FAILS the eval. Propagation to node-template/fleet is **HALTED**
-  by CEO until operator adherence is proven. Hub write-path is degraded (work-item `PATCH` → 500,
+- **Open / blocked:** On 2026-10-09 a fresh Claude Code 2.1.293 boot at operator `main`
+  `4be3b7f268` passed the two-turn format rubric without trigger words. Its follow-up changed
+  the proposed `Done when`, revealing a gap between the frozen format eval and the full contract.
+  Propagation to node-template/fleet remains **HALTED** until the stronger operator adherence proof
+  passes. Hub write-path is degraded (work-item `PATCH` → 500,
   knowledge `/contributions/{id}/commits` → 404); `vcs/merge` works. Operator key is `flock-leader-operator`
   (userId `f97e06f4-…`, RBAC developer+secrets_manager+production_promoter+env_manager granted).
 
 ## Design / Implementation Target
 
-1. **Close Claude adherence** — the core open problem. Make a fresh Claude agent pass the eval. Candidate
-   levers to test AGAINST the eval (don't guess — measure): more imperative contract framing in the
-   Claude channel; whether the system-prompt tier vs project-instructions changes obedience; cutting
-   competing low-signal injected context. It may expose a model-behavior limit — if so, document it.
+1. **Close Claude adherence** — the frozen format eval now passes on a fresh operator `main` boot.
+   Strengthen it with contract-state cases (frozen Goal/Done when, ownership gates, persistence) and
+   test framing changes against those cases rather than claiming success from formatting alone.
 2. **Committed skeleton floor** — a terse `SESSION_BOOTSTRAP_INVARIANTS` spine must render on a cold boot
    with NO network (hub-down / hosted / CI / claude.ai / raw clone), where the Conductor warm-setup
    doesn't run. The code-served invariants travel the authed endpoint, so they do NOT cover a cold boot;
@@ -91,12 +101,12 @@ obeying it unprompted) is **not**, and that is the real work. Do not mistake del
 
 ## Pointers
 
-| File / Resource | Why it matters |
-| --------------- | -------------- |
-| `.claude/skills/cognition-expert/references/agent-contract-adherence.eval.md` | The frozen acceptance test (gold=Codex, fail=Claude). |
-| `.claude/skills/cognition-expert/SKILL.md` | Mental model + cross-harness delivery matrix + gotchas. |
-| `docs/spec/node-baas-architecture.md` §Cognition Substrate | The two-tier design of record. |
-| `scripts/agent/session-cognition.sh` · `scripts/conductor-worktree-setup.sh` | Loader + the warm-at-setup step. |
-| `nodes/operator/app/src/app/api/v1/cognition/_bundle.ts` | `SESSION_BOOTSTRAP_INVARIANTS`, render logic. |
-| PRs #2626 (merged) · #2650 (merged) · #2633 (open) | Delivery, unconditional invariants, design. |
-| `.context/story5070-resume.md` | Full drive log + findings. |
+| File / Resource                                                               | Why it matters                                          |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `.claude/skills/cognition-expert/references/agent-contract-adherence.eval.md` | The frozen acceptance test (gold=Codex, fail=Claude).   |
+| `.claude/skills/cognition-expert/SKILL.md`                                    | Mental model + cross-harness delivery matrix + gotchas. |
+| `docs/spec/node-baas-architecture.md` §Cognition Substrate                    | The two-tier design of record.                          |
+| `scripts/agent/session-cognition.sh` · `scripts/conductor-worktree-setup.sh`  | Loader + the warm-at-setup step.                        |
+| `nodes/operator/app/src/app/api/v1/cognition/_bundle.ts`                      | `SESSION_BOOTSTRAP_INVARIANTS`, render logic.           |
+| PRs #2626 (merged) · #2650 (merged) · #2633 (open)                            | Delivery, unconditional invariants, design.             |
+| `.context/story5070-resume.md`                                                | Full drive log + findings.                              |
