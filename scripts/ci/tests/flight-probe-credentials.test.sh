@@ -115,12 +115,14 @@ run_lifecycle() {
 }
 
 NODE_ID="$(yq -N '.node_id' infra/catalog/node-template.yaml)"
-RING_FILE="$BAO_ROOT/cogni/candidate-a/node-template/FLIGHT_PROBE_API_KEY"
+RING_FILE="$BAO_ROOT/cogni/candidate-a/flight-prober/$NODE_ID"
+TARGET_RING_FILE="$BAO_ROOT/cogni/candidate-a/node-template/FLIGHT_PROBE_API_KEY"
 MAP_FILE="$BAO_ROOT/cogni/production/operator/FLIGHT_PROBE_CREDENTIALS_JSON"
 
 run_lifecycle materialize "$TMPROOT/materialize.out"
-test -f "$RING_FILE" && test -f "$MAP_FILE"
+test -f "$RING_FILE" && test -f "$TARGET_RING_FILE" && test -f "$MAP_FILE"
 jq -e '(keys | sort) == ["active","previous"] and (.active|length)>=32 and .previous==null' "$RING_FILE" >/dev/null
+test "$(cat "$TARGET_RING_FILE")" = "$(cat "$RING_FILE")"
 OLD="$(jq -r '.active' "$RING_FILE")"
 test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key]' "$MAP_FILE")" = "$OLD"
 ! grep -qF "$OLD" "$TMPROOT/materialize.out"
@@ -134,6 +136,7 @@ run_lifecycle prepare "$TMPROOT/prepare.out"
 NEW="$(jq -r '.active' "$RING_FILE")"
 test "$NEW" != "$OLD"
 test "$(jq -r '.previous' "$RING_FILE")" = "$OLD"
+test "$(cat "$TARGET_RING_FILE")" = "$(cat "$RING_FILE")"
 test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key]' "$MAP_FILE")" = "$OLD"
 run_lifecycle prepare "$TMPROOT/prepare-retry.out"
 test "$(jq -r '.active' "$RING_FILE")" = "$NEW"
@@ -146,12 +149,14 @@ test "$(jq -r '.previous' "$RING_FILE")" = "$OLD"
 run_lifecycle finish "$TMPROOT/finish.out"
 test "$(jq -r '.active' "$RING_FILE")" = "$NEW"
 test "$(jq -r '.previous' "$RING_FILE")" = null
+test "$(cat "$TARGET_RING_FILE")" = "$(cat "$RING_FILE")"
 grep -q 'remains pending.*old-key 401' "$TMPROOT/finish.out"
 
 # revoke re-keys the target before removing operator authority; retry is stable.
 run_lifecycle revoke "$TMPROOT/revoke.out"
 REVOKED_ACTIVE="$(jq -r '.active' "$RING_FILE")"
 test "$REVOKED_ACTIVE" != "$NEW"
+test "$(cat "$TARGET_RING_FILE")" = "$(cat "$RING_FILE")"
 test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key] // empty' "$MAP_FILE")" = ""
 grep -q 'prepared revocation.*pending.*401' "$TMPROOT/revoke.out"
 run_lifecycle revoke "$TMPROOT/revoke-retry.out"

@@ -182,6 +182,10 @@ export {
 } from "./review/github-review.adapter";
 // Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
 export {
+  OpenBaoFlightProbeProjectionAdapter,
+  type OpenBaoFlightProbeProjectionDeps,
+} from "./secrets/openbao-flight-probe-projection.adapter";
+export {
   OpenBaoSecretsAdapter,
   type OpenBaoSecretsAdapterDeps,
 } from "./secrets/openbao-secrets.adapter";

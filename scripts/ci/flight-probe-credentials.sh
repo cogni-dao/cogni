@@ -26,6 +26,7 @@ LANE="${2:-}"
 TARGET_NODE="${3:-}"
 CONTROL_ENV="${FLEET_CONTROL_ENV:-production}"
 SECRETS_CONTROL_ENV="${SECRETS_CONTROL_ENV:-$CONTROL_ENV}"
+LOCAL_TARGET_VIEW="${FLIGHT_PROBE_LOCAL_TARGET_VIEW:-true}"
 CATALOG_ROOT="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-$REPO_ROOT}/infra/catalog}"
 SSH_BIN="${FLIGHT_PROBE_SSH_BIN:-ssh}"
 SSH_OPTS_RAW="${SSH_OPTS:--i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6}"
@@ -49,6 +50,7 @@ USAGE
 [[ "$CONTROL_ENV" =~ ^(candidate-a|preview|production)$ ]] || fail "unsupported FLEET_CONTROL_ENV '$CONTROL_ENV'"
 [[ "$SECRETS_CONTROL_ENV" == "$CONTROL_ENV" ]] \
   || fail "control-vault-only: SECRETS_CONTROL_ENV '$SECRETS_CONTROL_ENV' must equal FLEET_CONTROL_ENV '$CONTROL_ENV'"
+[[ "$LOCAL_TARGET_VIEW" =~ ^(true|false)$ ]] || fail "FLIGHT_PROBE_LOCAL_TARGET_VIEW must be true or false"
 [[ -n "$TARGET_NODE" ]] || { usage; exit 2; }
 [[ "$TARGET_NODE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || fail "invalid node slug"
 [[ -n "${VM_HOST:-}" ]] || fail "VM_HOST is required"
@@ -140,8 +142,8 @@ valid_ring() {
   jq -e '
     type == "object" and
     (keys | sort) == ["active", "previous"] and
-    (.active | type == "string" and length >= 32) and
-    (.previous == null or (.previous | type == "string" and length >= 32)) and
+    (.active | type == "string" and length >= 32 and length <= 256) and
+    (.previous == null or (.previous | type == "string" and length >= 32 and length <= 256)) and
     (.previous == null or .previous != .active)
   ' >/dev/null 2>&1 <<<"$1"
 }
@@ -151,22 +153,24 @@ valid_map() {
     type == "object" and
     all(to_entries[];
       (.key | test("^(candidate-a|preview|production)/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
-      (.value | type == "string" and length >= 32)
+      (.value | type == "string" and length >= 32 and length <= 256)
     )
   ' >/dev/null 2>&1 <<<"$1"
 }
 
+AUTHORITY_PATH="cogni/${LANE}/flight-prober"
 TARGET_PATH="cogni/${LANE}/${TARGET_NODE}"
 OPERATOR_PATH="cogni/${CONTROL_ENV}/operator"
 MAP_KEY="${LANE}/${NODE_ID}"
-RING_KEY=FLIGHT_PROBE_API_KEY
+RING_KEY="${NODE_ID}"
+TARGET_RING_KEY=FLIGHT_PROBE_API_KEY
 MAP_FIELD=FLIGHT_PROBE_CREDENTIALS_JSON
 
 load_ring() {
-  read_path "$TARGET_PATH"
+  read_path "$AUTHORITY_PATH"
   RING="$(jq -r --arg key "$RING_KEY" '.[$key] // empty' <<<"$PATH_DATA")"
   [[ -z "$RING" ]] && return 1
-  valid_ring "$RING" || fail "invalid bounded ring at $TARGET_PATH/$RING_KEY"
+  valid_ring "$RING" || fail "invalid bounded ring at $AUTHORITY_PATH/$RING_KEY"
   ACTIVE="$(jq -r '.active' <<<"$RING")"
   PREVIOUS="$(jq -r '.previous // empty' <<<"$RING")"
   return 0
@@ -176,13 +180,28 @@ store_ring() {
   local desired="$1" attempt
   valid_ring "$desired" || fail "refusing to store invalid ring"
   for attempt in 1 2 3 4 5; do
-    read_path "$TARGET_PATH"
-    if write_field_cas "$TARGET_PATH" "$RING_KEY" "$desired" "$PATH_EXISTS" "$PATH_VERSION"; then
+    read_path "$AUTHORITY_PATH"
+    if write_field_cas "$AUTHORITY_PATH" "$RING_KEY" "$desired" "$PATH_EXISTS" "$PATH_VERSION"; then
       RING="$desired"; ACTIVE="$(jq -r '.active' <<<"$desired")"; PREVIOUS="$(jq -r '.previous // empty' <<<"$desired")"
       return 0
     fi
   done
   fail "concurrent writes prevented ring update after 5 CAS attempts"
+}
+
+sync_local_target_view() {
+  local desired="$1" attempt current
+  [[ "$LOCAL_TARGET_VIEW" == true ]] || return 0
+  valid_ring "$desired" || fail "refusing to project invalid target ring"
+  for attempt in 1 2 3 4 5; do
+    read_path "$TARGET_PATH"
+    current="$(jq -r --arg key "$TARGET_RING_KEY" '.[$key] // empty' <<<"$PATH_DATA")"
+    [[ "$current" == "$desired" ]] && return 0
+    if write_field_cas "$TARGET_PATH" "$TARGET_RING_KEY" "$desired" "$PATH_EXISTS" "$PATH_VERSION"; then
+      return 0
+    fi
+  done
+  fail "concurrent writes prevented target-view projection after 5 CAS attempts"
 }
 
 load_map() {
@@ -225,6 +244,7 @@ case "$OPERATION" in
       store_ring "$(mint_ring)"
       log "created control-authoritative ring for ${LANE}/${TARGET_NODE}"
     fi
+    sync_local_target_view "$RING"
     store_map_entry set "$ACTIVE"
     log "materialized exact map entry ${MAP_KEY} in control env ${CONTROL_ENV}"
     ;;
@@ -232,6 +252,7 @@ case "$OPERATION" in
     load_ring || fail "cannot rotate absent ring; run materialize first"
     load_map
     if [[ -n "$PREVIOUS" ]]; then
+      sync_local_target_view "$RING"
       log "rotation already prepared for ${MAP_KEY}; no third key minted"
       exit 0
     fi
@@ -239,6 +260,7 @@ case "$OPERATION" in
     old="$ACTIVE"; next="$(openssl rand -base64 32)"
     store_ring "$({ printf '%s\0' "$next"; printf '%s' "$old"; } \
       | jq -Rsc 'split("\u0000") | {active:.[0],previous:.[1]}')"
+    sync_local_target_view "$RING"
     log "prepared rotation for ${MAP_KEY}; sync/redeploy target and verify both keys before activate"
     ;;
   activate)
@@ -247,15 +269,17 @@ case "$OPERATION" in
     load_map
     [[ "$MAP_ACTIVE" == "$PREVIOUS" || "$MAP_ACTIVE" == "$ACTIVE" ]] \
       || fail "operator map points at neither bounded ring key"
+    sync_local_target_view "$RING"
     store_map_entry set "$ACTIVE"
     log "activated new key for ${MAP_KEY}; sync/restart control operator and verify before finish"
     ;;
   finish)
     load_ring || fail "cannot finish absent ring"
-    [[ -n "$PREVIOUS" ]] || { log "rotation already finished for ${MAP_KEY}"; exit 0; }
+    [[ -n "$PREVIOUS" ]] || { sync_local_target_view "$RING"; log "rotation already finished for ${MAP_KEY}"; exit 0; }
     load_map
     [[ "$MAP_ACTIVE" == "$ACTIVE" ]] || fail "operator map has not activated the new key"
     store_ring "$(printf '%s' "$ACTIVE" | jq -Rsc '{active:.,previous:null}')"
+    sync_local_target_view "$RING"
     log "removed predecessor desired state for ${MAP_KEY}; rotation remains pending until target sync/redeploy proves old-key 401"
     ;;
   revoke)
@@ -268,7 +292,10 @@ case "$OPERATION" in
       if [[ "$MAP_ACTIVE" == "$ACTIVE" || "$MAP_ACTIVE" == "$PREVIOUS" ]]; then
         store_ring "$(mint_ring)"
       fi
+      sync_local_target_view "$RING"
       store_map_entry remove
+    else
+      sync_local_target_view "$RING"
     fi
     log "prepared revocation for ${MAP_KEY}; completion remains pending target/control sync and prior-key 401 proof"
     ;;
