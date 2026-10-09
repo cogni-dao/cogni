@@ -117,3 +117,20 @@ export function diffDeclaredVsApplied(input: {
       .filter((tag) => !declaredTags.has(tag)),
   };
 }
+
+/**
+ * THE gate predicate, stated once so every consumer agrees: a drift fails only when a DECLARED
+ * migration did not arrive.
+ *
+ * Absent drift (`null`/`undefined`) is NOT a failure. There is no drift to read when no receipt
+ * was ever collected — a node whose image predates the emitter, or whose Job log could not be
+ * read — and an unknown must never be laundered into a verdict. `unexpected` alone is likewise
+ * NOT a failure: an applied row the journal does not recognise is drift worth shouting about, but
+ * it is not "a declared migration did not arrive", and blocking on it would fail every node whose
+ * image is legitimately older than a row in its own ledger.
+ */
+export function hasMissingMigrations(
+  drift: MigrationDrift | null | undefined
+): boolean {
+  return (drift?.missing.length ?? 0) > 0;
+}
