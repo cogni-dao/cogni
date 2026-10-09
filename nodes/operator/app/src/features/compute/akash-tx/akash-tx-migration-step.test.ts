@@ -19,6 +19,8 @@ import type {
   AkashTxMigrationPort,
   AkashTxMigrationStep,
   ComputeWorkloadMigrationInput,
+  NodeMigrationReportStorePort,
+  RecordNodeMigrationReportInput,
 } from "@/ports";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
@@ -46,13 +48,46 @@ class FakeMigration implements AkashTxMigrationPort {
   calls: ComputeWorkloadMigrationInput[] = [];
   outcome: "succeeded" | "running" | "failed" = "succeeded";
   throws?: Error;
+  /** What the node's own migrator printed, when this fake is asked for a receipt. */
+  receiptStdout: string | null = null;
 
   async ensure(input: ComputeWorkloadMigrationInput) {
     this.calls.push(input);
     if (this.throws) throw this.throws;
     return this.outcome;
   }
+
+  async readReceipt() {
+    return this.receiptStdout;
+  }
 }
+
+/** Receipt-cell writer. Records what it was asked to key the cell on, and nothing else. */
+class FakeReports implements NodeMigrationReportStorePort {
+  readonly recorded: RecordNodeMigrationReportInput[] = [];
+
+  async record(input: RecordNodeMigrationReportInput) {
+    this.recorded.push(input);
+    return "recorded" as const;
+  }
+
+  async read() {
+    return null;
+  }
+}
+
+/** The line the fork image's migrator prints on a successful migrate. */
+const RECEIPT_STDOUT = [
+  "migrate complete: 1 migration(s) applied + verified",
+  `COGNI_MIGRATION_RECEIPT_V1 ${JSON.stringify({
+    node: "toks9",
+    declared: ["0000_init", "0001_next"],
+    applied: [{ tag: "0000_init", hash: "abc", appliedAtMs: 1 }],
+  })}`,
+].join("\n");
+
+/** The immutable node UUID the caller's own allocation receipt binds to this workload. */
+const NODE_ID = "f66b260b-4633-41e2-8711-b7c1b8449cc1";
 
 function recordingLogger(): AkashTxLogger & {
   lines: { level: string; marker: string; fields: Record<string, unknown> }[];
@@ -213,6 +248,70 @@ describe("runMigrationStep", () => {
     expect(log.lines.map((line) => line.marker)).toEqual([
       "akash_tx_migration_capability_missing",
     ]);
+  });
+});
+
+describe("runMigrationStep receipt collection", () => {
+  it("keys the receipt cell on the RECEIPT-BOUND node id, never on the workload slug", async () => {
+    // The whole bug. `record` used to be handed `nodeSlug` and resolve `node_id` by selecting
+    // the operator's `nodes` registry — a table with ENABLE + FORCE row-level security and one
+    // `tenant_isolation` policy keyed on `current_setting('app.current_user_id')`. The akash-tx
+    // actuator holds the RLS-enforced app role and opens no tenant scope, so that select
+    // SUCCEEDED and matched ZERO rows for every node in the fleet: production logged
+    // `outcome: "node_not_registered"` with declaredCount 32 / appliedCount 32 / missingCount 0,
+    // and `node_migration_reports` stayed empty. The cell key now arrives already resolved.
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT;
+    const reports = new FakeReports();
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, reports, log },
+        { ...INPUT, nodeId: NODE_ID, step: step() }
+      )
+    ).resolves.toBe("succeeded");
+
+    expect(reports.recorded).toEqual([
+      {
+        nodeId: NODE_ID,
+        environment: "candidate-a",
+        declared: ["0000_init", "0001_next"],
+        applied: [{ tag: "0000_init", hash: "abc", appliedAtMs: 1 }],
+        bundleDigest: DIGEST,
+        reporter: "migration-job",
+      },
+    ]);
+    // Counts and enums only — a migration tag is row content and never reaches a log line.
+    expect(
+      log.lines.find(
+        (line) => line.marker === "akash_tx_migration_receipt_recorded"
+      )?.fields
+    ).toMatchObject({
+      outcome: "recorded",
+      declaredCount: 2,
+      appliedCount: 1,
+      missingCount: 1,
+    });
+  });
+
+  it("says the metadata did not land — and writes NOTHING — when no node id is bound yet", async () => {
+    // A workload's very first observe precedes its first create, so the allocation receipt that
+    // binds the node id may not exist yet. That is a FACT, not an error: the phase is still
+    // `succeeded`, the write is skipped, and the next tick carries the metadata.
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT;
+    const reports = new FakeReports();
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep({ migration, reports, log }, { ...INPUT, step: step() })
+    ).resolves.toBe("succeeded");
+
+    expect(reports.recorded).toEqual([]);
+    expect(log.lines.map((line) => line.marker)).toContain(
+      "akash_tx_migration_receipt_unbound"
+    );
   });
 });
 

@@ -4,14 +4,16 @@
 /**
  * Module: `@adapters/server/observability/drizzle-node-migration-report.adapter`
  * Purpose: Persist and serve a node's APPLIED migration receipt from the OPERATOR's own Postgres.
- * Scope: Two statements against `node_migration_reports` plus one slug lookup against `nodes`; does not
+ * Scope: Two statements against `node_migration_reports` and nothing else; does not resolve identity,
  *   connect to any node database, hold a node DSN, or interpret drift.
  * Invariants:
  *   - ONLY_OPERATOR_POSTGRES: every statement here runs against the injected operator Drizzle
  *     client. There is no code path, and no credential, by which this adapter reaches `cogni_<node>`.
- *   - NODE_ID_IS_RESOLVED_HERE: `record` is handed a workload slug and resolves `node_id` from the
- *     operator registry itself, so the stored key cannot be influenced by the reporter. An
- *     unregistered slug is reported as `node_not_registered` and writes NOTHING.
+ *   - TOUCHES_NO_TENANT_TABLE: `node_migration_reports` is the ONLY table named here. `record` used
+ *     to resolve `node_id` by selecting `nodes` — FORCE row-level-security tenant state — and the
+ *     akash-tx actuator holds an RLS-enforced app role with no session, so that select returned zero
+ *     rows for every node that exists and the receipt was never written. The caller states the
+ *     receipt-bound `node_id` instead (port WRITE_KEY_IS_THE_RECEIPT_BOUND_NODE).
  *   - NO_ROW_CONTENTS_LEAK: this adapter logs nothing. Receipt payloads (tags, hashes) are returned
  *     to an authorized reader and are never written to a log line or an event by this layer.
  * Side-effects: IO (Postgres via the injected Drizzle client)
@@ -29,7 +31,7 @@ import type {
   RecordNodeMigrationReportInput,
   RecordNodeMigrationReportOutcome,
 } from "@/ports";
-import { nodeMigrationReports, nodes } from "@/shared/db/schema";
+import { nodeMigrationReports } from "@/shared/db/schema";
 import type { AppliedMigration } from "@/shared/migrations/migration-receipt";
 
 export class DrizzleNodeMigrationReportStore
@@ -42,18 +44,13 @@ export class DrizzleNodeMigrationReportStore
   ): Promise<RecordNodeMigrationReportOutcome> {
     const db = await this.getDb();
 
-    // The write key is DERIVED, never supplied: the reporter names the workload it migrated and
-    // the operator's own registry says which node_id that is. A reporter therefore cannot write
-    // another node's cell even if it wanted to — there is no field on the wire that would let it.
-    const [registryRow] = await db
-      .select({ id: nodes.id })
-      .from(nodes)
-      .where(eq(nodes.slug, input.nodeSlug))
-      .limit(1);
-    if (!registryRow) return "node_not_registered";
-
+    // The write key is the node id the operator's own allocation receipt already bound to this
+    // workload before any Console transaction (IDENTITY_IS_AUTHORITATIVE_NOT_INFERRED). Nothing
+    // on an inbound request body can name it, so a reporter still cannot write another node's
+    // cell — and resolving it HERE is what silently voided every receipt, because the only
+    // registry this adapter could ask is tenant-scoped and this process has no tenant.
     const row = {
-      nodeId: registryRow.id,
+      nodeId: input.nodeId,
       environment: input.environment,
       declared: input.declared,
       applied: input.applied,

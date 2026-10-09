@@ -39,6 +39,8 @@ import type {
   ComputeCostStorePort,
   ComputeResourceCostEvidence,
   ComputeWorkloadMigrationInput,
+  NodeMigrationReportStorePort,
+  RecordNodeMigrationReportInput,
 } from "@/ports";
 import { AkashTxError } from "@/ports";
 
@@ -97,13 +99,40 @@ class FakeMigration implements AkashTxMigrationPort {
   calls: ComputeWorkloadMigrationInput[] = [];
   outcome: "succeeded" | "running" | "failed" = "succeeded";
   throws?: Error;
+  /** What the node's own migrator printed; null = this fake produced no receipt. */
+  receiptStdout: string | null = null;
 
   async ensure(input: ComputeWorkloadMigrationInput) {
     this.calls.push(input);
     if (this.throws) throw this.throws;
     return this.outcome;
   }
+
+  async readReceipt() {
+    return this.receiptStdout;
+  }
 }
+
+/** Receipt-cell writer. Records the key it was handed, so a test can prove WHERE it came from. */
+class FakeReports implements NodeMigrationReportStorePort {
+  readonly recorded: RecordNodeMigrationReportInput[] = [];
+
+  async record(input: RecordNodeMigrationReportInput) {
+    this.recorded.push(input);
+    return "recorded" as const;
+  }
+
+  async read() {
+    return null;
+  }
+}
+
+/** The line the fork image's migrator prints on a successful migrate. */
+const RECEIPT_STDOUT = `COGNI_MIGRATION_RECEIPT_V1 ${JSON.stringify({
+  node: "toks9",
+  declared: ["0000_init"],
+  applied: [{ tag: "0000_init", hash: "abc", appliedAtMs: 1 }],
+})}`;
 
 /** Console error shape the adapter publishes (name + code); mapped structurally. */
 function consoleError(code: string, httpStatus?: number): Error {
@@ -2437,5 +2466,84 @@ describe("AkashTxActuator provider strikes (task.5153)", () => {
         leaseId: "7001",
       }),
     ]);
+  });
+});
+
+describe("AkashTxActuator release-migration receipt identity", () => {
+  /** The actuator as the akash-tx composition root wires it: with a receipt store. */
+  function buildWithReports() {
+    const ledger = new FakeLedger();
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT;
+    const reports = new FakeReports();
+    const log = recordingLogger();
+    const costs = costDeps();
+    const actuator = new AkashTxActuator({
+      console: new FakeConsole(),
+      ledger,
+      log,
+      migration,
+      migrationReports: reports,
+      costEvidence: costs.costEvidence,
+      costStore: costs.costStore,
+      providerConsumerAccountId: costs.providerConsumerAccountId,
+    });
+    return { actuator, ledger, migration, reports, log };
+  }
+
+  it("keys the cell on the node id its OWN allocation receipt binds, not on the slug", async () => {
+    // The proven cause of the lost receipts: the write key used to be re-derived from the
+    // workload slug via the `nodes` registry, which is FORCE row-level security and therefore
+    // invisible to this session-less process — every receipt was discarded as
+    // `node_not_registered` while 32 of 32 declared migrations were applied. The key now comes
+    // from the durable allocation receipt, whose node_id arrived explicitly on the PAID wire and
+    // is NOT NULL and write-once. `workload` here is deliberately a DIFFERENT string from the
+    // receipt's own, so a slug-derived key could not pass this test.
+    const { actuator, ledger, reports } = buildWithReports();
+    seedAllocated(ledger);
+
+    await expect(
+      actuator.observe({
+        cogniKey: "k1",
+        workload: "toks9",
+        environment: "candidate-a",
+        migration: STEP,
+      })
+    ).resolves.toMatchObject({ migration: { phase: "succeeded" } });
+
+    expect(reports.recorded).toEqual([
+      {
+        nodeId: IDENTITY.nodeId,
+        environment: "candidate-a",
+        declared: ["0000_init"],
+        applied: [{ tag: "0000_init", hash: "abc", appliedAtMs: 1 }],
+        bundleDigest: STEP.bundleDigest,
+        reporter: "migration-job",
+      },
+    ]);
+  });
+
+  it("still migrates — and still reports the phase — when no receipt binds the key yet", async () => {
+    // A workload's first observe precedes its first create by construction, so there is nothing
+    // to resolve an identity from. NEVER_REFUSES holds: the phase is unchanged and only the
+    // metadata waits for the tick after the lease exists.
+    const { actuator, reports, log } = buildWithReports();
+
+    await expect(
+      actuator.observe({
+        cogniKey: "k1",
+        workload: "toks9",
+        environment: "candidate-a",
+        migration: STEP,
+      })
+    ).resolves.toMatchObject({
+      found: false,
+      migration: { phase: "succeeded" },
+    });
+
+    expect(reports.recorded).toEqual([]);
+    expect(log.lines.map((line) => line.marker)).toContain(
+      "akash_tx_migration_receipt_unbound"
+    );
   });
 });
