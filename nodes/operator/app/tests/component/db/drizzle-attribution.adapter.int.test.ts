@@ -2074,9 +2074,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       const [stewardActor] = await db
         .select({ id: actors.id })
         .from(actors)
-        .where(
-          and(eq(actors.kind, "user"), eq(actors.userId, steward.user.id))
-        )
+        .where(and(eq(actors.kind, "user"), eq(actors.userId, steward.user.id)))
         .limit(1);
       if (!stewardActor) throw new Error("Expected steward actor");
       const agentIds = [crypto.randomUUID(), crypto.randomUUID()];

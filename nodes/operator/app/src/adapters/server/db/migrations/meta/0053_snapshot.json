@@ -8,87 +8,289 @@
       "name": "actor_bindings",
       "schema": "",
       "columns": {
-        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
-        "actor_id": { "name": "actor_id", "type": "text", "primaryKey": false, "notNull": true },
-        "provider": { "name": "provider", "type": "text", "primaryKey": false, "notNull": true },
-        "external_id": { "name": "external_id", "type": "text", "primaryKey": false, "notNull": true },
-        "provider_login": { "name": "provider_login", "type": "text", "primaryKey": false, "notNull": false },
-        "evidence_event_id": { "name": "evidence_event_id", "type": "text", "primaryKey": false, "notNull": true },
-        "created_at": { "name": "created_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true, "default": "now()" },
-        "closed_at": { "name": "closed_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": false }
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_id": {
+          "name": "external_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_login": {
+          "name": "provider_login",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "evidence_event_id": {
+          "name": "evidence_event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
       },
       "indexes": {
         "actor_bindings_active_source_unique": {
           "name": "actor_bindings_active_source_unique",
           "columns": [
-            { "expression": "provider", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "external_id", "isExpression": false, "asc": true, "nulls": "last" }
+            {
+              "expression": "provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "external_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
           ],
           "isUnique": true,
           "where": "\"actor_bindings\".\"closed_at\" IS NULL",
-          "concurrently": false, "method": "btree", "with": {}
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "actor_bindings_actor_id_idx": {
           "name": "actor_bindings_actor_id_idx",
-          "columns": [{ "expression": "actor_id", "isExpression": false, "asc": true, "nulls": "last" }],
-          "isUnique": false, "concurrently": false, "method": "btree", "with": {}
+          "columns": [
+            {
+              "expression": "actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "actor_bindings_actor_id_actors_id_fk": { "name": "actor_bindings_actor_id_actors_id_fk", "tableFrom": "actor_bindings", "tableTo": "actors", "columnsFrom": ["actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
-        "actor_bindings_evidence_event_id_actor_binding_events_id_fk": { "name": "actor_bindings_evidence_event_id_actor_binding_events_id_fk", "tableFrom": "actor_bindings", "tableTo": "actor_binding_events", "columnsFrom": ["evidence_event_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+        "actor_bindings_actor_id_actors_id_fk": {
+          "name": "actor_bindings_actor_id_actors_id_fk",
+          "tableFrom": "actor_bindings",
+          "tableTo": "actors",
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "actor_bindings_evidence_event_id_actor_binding_events_id_fk": {
+          "name": "actor_bindings_evidence_event_id_actor_binding_events_id_fk",
+          "tableFrom": "actor_bindings",
+          "tableTo": "actor_binding_events",
+          "columnsFrom": ["evidence_event_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
       },
-      "compositePrimaryKeys": {}, "uniqueConstraints": {}, "policies": {}, "checkConstraints": {}, "isRLSEnabled": true
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": true
     },
     "public.actor_beneficiary_policies": {
       "name": "actor_beneficiary_policies",
       "schema": "",
       "columns": {
-        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
-        "earned_by_actor_id": { "name": "earned_by_actor_id", "type": "text", "primaryKey": false, "notNull": true },
-        "beneficiary_actor_id": { "name": "beneficiary_actor_id", "type": "text", "primaryKey": false, "notNull": true },
-        "policy_version": { "name": "policy_version", "type": "text", "primaryKey": false, "notNull": true },
-        "authorized_by_actor_id": { "name": "authorized_by_actor_id", "type": "text", "primaryKey": false, "notNull": true },
-        "evidence": { "name": "evidence", "type": "jsonb", "primaryKey": false, "notNull": true },
-        "effective_from": { "name": "effective_from", "type": "timestamp with time zone", "primaryKey": false, "notNull": true },
-        "effective_to": { "name": "effective_to", "type": "timestamp with time zone", "primaryKey": false, "notNull": false },
-        "created_at": { "name": "created_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true, "default": "now()" }
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "earned_by_actor_id": {
+          "name": "earned_by_actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "beneficiary_actor_id": {
+          "name": "beneficiary_actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "policy_version": {
+          "name": "policy_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "authorized_by_actor_id": {
+          "name": "authorized_by_actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence": {
+          "name": "evidence",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effective_from": {
+          "name": "effective_from",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effective_to": {
+          "name": "effective_to",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
       },
       "indexes": {
         "actor_beneficiary_policies_version_unique": {
           "name": "actor_beneficiary_policies_version_unique",
           "columns": [
-            { "expression": "earned_by_actor_id", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "policy_version", "isExpression": false, "asc": true, "nulls": "last" }
+            {
+              "expression": "earned_by_actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "policy_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
           ],
-          "isUnique": true, "concurrently": false, "method": "btree", "with": {}
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "actor_beneficiary_policies_effective_from_unique": {
           "name": "actor_beneficiary_policies_effective_from_unique",
           "columns": [
-            { "expression": "earned_by_actor_id", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "effective_from", "isExpression": false, "asc": true, "nulls": "last" }
+            {
+              "expression": "earned_by_actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "effective_from",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
           ],
-          "isUnique": true, "concurrently": false, "method": "btree", "with": {}
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "actor_beneficiary_policies_effective_idx": {
           "name": "actor_beneficiary_policies_effective_idx",
           "columns": [
-            { "expression": "earned_by_actor_id", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "effective_from", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "effective_to", "isExpression": false, "asc": true, "nulls": "last" }
+            {
+              "expression": "earned_by_actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "effective_from",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "effective_to",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
           ],
-          "isUnique": false, "concurrently": false, "method": "btree", "with": {}
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "actor_beneficiary_policies_earned_by_actor_id_actors_id_fk": { "name": "actor_beneficiary_policies_earned_by_actor_id_actors_id_fk", "tableFrom": "actor_beneficiary_policies", "tableTo": "actors", "columnsFrom": ["earned_by_actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
-        "actor_beneficiary_policies_beneficiary_actor_id_actors_id_fk": { "name": "actor_beneficiary_policies_beneficiary_actor_id_actors_id_fk", "tableFrom": "actor_beneficiary_policies", "tableTo": "actors", "columnsFrom": ["beneficiary_actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
-        "actor_beneficiary_policies_authorized_by_actor_id_actors_id_fk": { "name": "actor_beneficiary_policies_authorized_by_actor_id_actors_id_fk", "tableFrom": "actor_beneficiary_policies", "tableTo": "actors", "columnsFrom": ["authorized_by_actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+        "actor_beneficiary_policies_earned_by_actor_id_actors_id_fk": {
+          "name": "actor_beneficiary_policies_earned_by_actor_id_actors_id_fk",
+          "tableFrom": "actor_beneficiary_policies",
+          "tableTo": "actors",
+          "columnsFrom": ["earned_by_actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "actor_beneficiary_policies_beneficiary_actor_id_actors_id_fk": {
+          "name": "actor_beneficiary_policies_beneficiary_actor_id_actors_id_fk",
+          "tableFrom": "actor_beneficiary_policies",
+          "tableTo": "actors",
+          "columnsFrom": ["beneficiary_actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "actor_beneficiary_policies_authorized_by_actor_id_actors_id_fk": {
+          "name": "actor_beneficiary_policies_authorized_by_actor_id_actors_id_fk",
+          "tableFrom": "actor_beneficiary_policies",
+          "tableTo": "actors",
+          "columnsFrom": ["authorized_by_actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
       },
-      "compositePrimaryKeys": {}, "uniqueConstraints": {}, "policies": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
       "checkConstraints": {
-        "actor_beneficiary_policies_window_check": { "name": "actor_beneficiary_policies_window_check", "value": "\"actor_beneficiary_policies\".\"effective_to\" IS NULL OR \"actor_beneficiary_policies\".\"effective_to\" > \"actor_beneficiary_policies\".\"effective_from\"" }
+        "actor_beneficiary_policies_window_check": {
+          "name": "actor_beneficiary_policies_window_check",
+          "value": "\"actor_beneficiary_policies\".\"effective_to\" IS NULL OR \"actor_beneficiary_policies\".\"effective_to\" > \"actor_beneficiary_policies\".\"effective_from\""
+        }
       },
       "isRLSEnabled": true
     },
@@ -96,55 +298,227 @@
       "name": "actor_contribution_allocations",
       "schema": "",
       "columns": {
-        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
-        "node_id": { "name": "node_id", "type": "uuid", "primaryKey": false, "notNull": true },
-        "scope_id": { "name": "scope_id", "type": "uuid", "primaryKey": false, "notNull": true },
-        "epoch_id": { "name": "epoch_id", "type": "bigint", "primaryKey": false, "notNull": true },
-        "receipt_id": { "name": "receipt_id", "type": "text", "primaryKey": false, "notNull": true },
-        "contract_version": { "name": "contract_version", "type": "text", "primaryKey": false, "notNull": true },
-        "earned_by_actor_id": { "name": "earned_by_actor_id", "type": "text", "primaryKey": false, "notNull": true },
-        "beneficiary_actor_id": { "name": "beneficiary_actor_id", "type": "text", "primaryKey": false, "notNull": true },
-        "beneficiary_policy_id": { "name": "beneficiary_policy_id", "type": "text", "primaryKey": false, "notNull": true },
-        "beneficiary_policy_version": { "name": "beneficiary_policy_version", "type": "text", "primaryKey": false, "notNull": true },
-        "contribution_cutoff": { "name": "contribution_cutoff", "type": "timestamp with time zone", "primaryKey": false, "notNull": true },
-        "source_evidence": { "name": "source_evidence", "type": "jsonb", "primaryKey": false, "notNull": true },
-        "source_evidence_hash": { "name": "source_evidence_hash", "type": "text", "primaryKey": false, "notNull": true },
-        "signer_actor_id": { "name": "signer_actor_id", "type": "text", "primaryKey": false, "notNull": true },
-        "signer_wallet": { "name": "signer_wallet", "type": "text", "primaryKey": false, "notNull": true },
-        "signature": { "name": "signature", "type": "text", "primaryKey": false, "notNull": true },
-        "signed_at": { "name": "signed_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true },
-        "created_at": { "name": "created_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true, "default": "now()" }
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope_id": {
+          "name": "scope_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "epoch_id": {
+          "name": "epoch_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "receipt_id": {
+          "name": "receipt_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contract_version": {
+          "name": "contract_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "earned_by_actor_id": {
+          "name": "earned_by_actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "beneficiary_actor_id": {
+          "name": "beneficiary_actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "beneficiary_policy_id": {
+          "name": "beneficiary_policy_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "beneficiary_policy_version": {
+          "name": "beneficiary_policy_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contribution_cutoff": {
+          "name": "contribution_cutoff",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_evidence": {
+          "name": "source_evidence",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_evidence_hash": {
+          "name": "source_evidence_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "signer_actor_id": {
+          "name": "signer_actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "signer_wallet": {
+          "name": "signer_wallet",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "signature": {
+          "name": "signature",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "signed_at": {
+          "name": "signed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
       },
       "indexes": {
         "actor_contribution_allocations_receipt_version_unique": {
           "name": "actor_contribution_allocations_receipt_version_unique",
           "columns": [
-            { "expression": "node_id", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "epoch_id", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "receipt_id", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "contract_version", "isExpression": false, "asc": true, "nulls": "last" }
+            {
+              "expression": "node_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "epoch_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "receipt_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "contract_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
           ],
-          "isUnique": true, "concurrently": false, "method": "btree", "with": {}
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "actor_contribution_allocations_beneficiary_idx": {
           "name": "actor_contribution_allocations_beneficiary_idx",
           "columns": [
-            { "expression": "beneficiary_actor_id", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "epoch_id", "isExpression": false, "asc": true, "nulls": "last" }
+            {
+              "expression": "beneficiary_actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "epoch_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
           ],
-          "isUnique": false, "concurrently": false, "method": "btree", "with": {}
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "actor_contribution_allocations_epoch_id_epochs_id_fk": { "name": "actor_contribution_allocations_epoch_id_epochs_id_fk", "tableFrom": "actor_contribution_allocations", "tableTo": "epochs", "columnsFrom": ["epoch_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
-        "actor_contribution_allocations_earned_by_actor_id_actors_id_fk": { "name": "actor_contribution_allocations_earned_by_actor_id_actors_id_fk", "tableFrom": "actor_contribution_allocations", "tableTo": "actors", "columnsFrom": ["earned_by_actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
-        "actor_contribution_allocations_beneficiary_actor_id_actors_id_fk": { "name": "actor_contribution_allocations_beneficiary_actor_id_actors_id_fk", "tableFrom": "actor_contribution_allocations", "tableTo": "actors", "columnsFrom": ["beneficiary_actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
-        "actor_contribution_allocations_beneficiary_policy_id_actor_beneficiary_policies_id_fk": { "name": "actor_contribution_allocations_beneficiary_policy_id_actor_beneficiary_policies_id_fk", "tableFrom": "actor_contribution_allocations", "tableTo": "actor_beneficiary_policies", "columnsFrom": ["beneficiary_policy_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
-        "actor_contribution_allocations_signer_actor_id_actors_id_fk": { "name": "actor_contribution_allocations_signer_actor_id_actors_id_fk", "tableFrom": "actor_contribution_allocations", "tableTo": "actors", "columnsFrom": ["signer_actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+        "actor_contribution_allocations_epoch_id_epochs_id_fk": {
+          "name": "actor_contribution_allocations_epoch_id_epochs_id_fk",
+          "tableFrom": "actor_contribution_allocations",
+          "tableTo": "epochs",
+          "columnsFrom": ["epoch_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "actor_contribution_allocations_earned_by_actor_id_actors_id_fk": {
+          "name": "actor_contribution_allocations_earned_by_actor_id_actors_id_fk",
+          "tableFrom": "actor_contribution_allocations",
+          "tableTo": "actors",
+          "columnsFrom": ["earned_by_actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "actor_contribution_allocations_beneficiary_actor_id_actors_id_fk": {
+          "name": "actor_contribution_allocations_beneficiary_actor_id_actors_id_fk",
+          "tableFrom": "actor_contribution_allocations",
+          "tableTo": "actors",
+          "columnsFrom": ["beneficiary_actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "actor_contribution_allocations_beneficiary_policy_id_actor_beneficiary_policies_id_fk": {
+          "name": "actor_contribution_allocations_beneficiary_policy_id_actor_beneficiary_policies_id_fk",
+          "tableFrom": "actor_contribution_allocations",
+          "tableTo": "actor_beneficiary_policies",
+          "columnsFrom": ["beneficiary_policy_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "actor_contribution_allocations_signer_actor_id_actors_id_fk": {
+          "name": "actor_contribution_allocations_signer_actor_id_actors_id_fk",
+          "tableFrom": "actor_contribution_allocations",
+          "tableTo": "actors",
+          "columnsFrom": ["signer_actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
       },
-      "compositePrimaryKeys": {}, "uniqueConstraints": {}, "policies": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
       "checkConstraints": {
-        "actor_contribution_allocations_contract_check": { "name": "actor_contribution_allocations_contract_check", "value": "\"actor_contribution_allocations\".\"contract_version\" = 'actor.contribution.allocation.v1'" }
+        "actor_contribution_allocations_contract_check": {
+          "name": "actor_contribution_allocations_contract_check",
+          "value": "\"actor_contribution_allocations\".\"contract_version\" = 'actor.contribution.allocation.v1'"
+        }
       },
       "isRLSEnabled": true
     },
@@ -152,44 +526,155 @@
       "name": "actor_binding_events",
       "schema": "",
       "columns": {
-        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true },
-        "actor_id": { "name": "actor_id", "type": "text", "primaryKey": false, "notNull": true },
-        "previous_actor_id": { "name": "previous_actor_id", "type": "text", "primaryKey": false, "notNull": false },
-        "provider": { "name": "provider", "type": "text", "primaryKey": false, "notNull": true },
-        "external_id": { "name": "external_id", "type": "text", "primaryKey": false, "notNull": true },
-        "provider_login": { "name": "provider_login", "type": "text", "primaryKey": false, "notNull": false },
-        "event_type": { "name": "event_type", "type": "text", "primaryKey": false, "notNull": true },
-        "authorized_by_actor_id": { "name": "authorized_by_actor_id", "type": "text", "primaryKey": false, "notNull": true },
-        "evidence": { "name": "evidence", "type": "jsonb", "primaryKey": false, "notNull": true },
-        "effective_at": { "name": "effective_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true },
-        "created_at": { "name": "created_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true, "default": "now()" }
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "previous_actor_id": {
+          "name": "previous_actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_id": {
+          "name": "external_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_login": {
+          "name": "provider_login",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "authorized_by_actor_id": {
+          "name": "authorized_by_actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence": {
+          "name": "evidence",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effective_at": {
+          "name": "effective_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
       },
       "indexes": {
         "actor_binding_events_source_idx": {
           "name": "actor_binding_events_source_idx",
           "columns": [
-            { "expression": "provider", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "external_id", "isExpression": false, "asc": true, "nulls": "last" },
-            { "expression": "effective_at", "isExpression": false, "asc": true, "nulls": "last" }
+            {
+              "expression": "provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "external_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "effective_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
           ],
-          "isUnique": false, "concurrently": false, "method": "btree", "with": {}
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "actor_binding_events_actor_id_idx": {
           "name": "actor_binding_events_actor_id_idx",
-          "columns": [{ "expression": "actor_id", "isExpression": false, "asc": true, "nulls": "last" }],
-          "isUnique": false, "concurrently": false, "method": "btree", "with": {}
+          "columns": [
+            {
+              "expression": "actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
-        "actor_binding_events_actor_id_actors_id_fk": { "name": "actor_binding_events_actor_id_actors_id_fk", "tableFrom": "actor_binding_events", "tableTo": "actors", "columnsFrom": ["actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
-        "actor_binding_events_previous_actor_id_actors_id_fk": { "name": "actor_binding_events_previous_actor_id_actors_id_fk", "tableFrom": "actor_binding_events", "tableTo": "actors", "columnsFrom": ["previous_actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" },
-        "actor_binding_events_authorized_by_actor_id_actors_id_fk": { "name": "actor_binding_events_authorized_by_actor_id_actors_id_fk", "tableFrom": "actor_binding_events", "tableTo": "actors", "columnsFrom": ["authorized_by_actor_id"], "columnsTo": ["id"], "onDelete": "no action", "onUpdate": "no action" }
+        "actor_binding_events_actor_id_actors_id_fk": {
+          "name": "actor_binding_events_actor_id_actors_id_fk",
+          "tableFrom": "actor_binding_events",
+          "tableTo": "actors",
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "actor_binding_events_previous_actor_id_actors_id_fk": {
+          "name": "actor_binding_events_previous_actor_id_actors_id_fk",
+          "tableFrom": "actor_binding_events",
+          "tableTo": "actors",
+          "columnsFrom": ["previous_actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "actor_binding_events_authorized_by_actor_id_actors_id_fk": {
+          "name": "actor_binding_events_authorized_by_actor_id_actors_id_fk",
+          "tableFrom": "actor_binding_events",
+          "tableTo": "actors",
+          "columnsFrom": ["authorized_by_actor_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "actor_binding_events_type_check": { "name": "actor_binding_events_type_check", "value": "\"actor_binding_events\".\"event_type\" IN ('bound', 'transferred_out', 'transferred_in', 'revoked')" }
+        "actor_binding_events_type_check": {
+          "name": "actor_binding_events_type_check",
+          "value": "\"actor_binding_events\".\"event_type\" IN ('bound', 'transferred_out', 'transferred_in', 'revoked')"
+        }
       },
       "isRLSEnabled": true
     },
