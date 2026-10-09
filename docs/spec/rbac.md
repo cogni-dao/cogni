@@ -15,7 +15,7 @@ tags: [authorization]
 # Authorization (RBAC/ReBAC) Design
 
 > [!CRITICAL]
-> Every protected action requires `AuthorizationPort.check(actor, subject?, action, resource, context)`. When `subject` is present (agent acting on behalf of user), BOTH the subject's permission AND the actor's delegation must be verified. OpenFGA is the sole source of truth.
+> Every protected action requires `AuthorizationPort.check(actor, subject?, action, resource, context)`. When `subject` is present (agent acting on behalf of user), the subject's permission and actor delegation must both be verified; account reads additionally require the actor's conditioned `can_act_as` on that exact account. OpenFGA is the sole source of truth.
 
 ## Goal
 
@@ -193,7 +193,7 @@ authorization and audit:
 | ------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Human direct | `actor=user:N/H, account=N/B`                               | `user:N/H can_read billing_account:N/B`                                                    |
 | Agent direct | `actor=agent:N/A, account=N/B`                              | `agent:N/A can_read billing_account:N/B`                                                   |
-| Agent OBO    | `actor=agent:N/A, subject=user:N/H, account=N/B, grant=N/G` | `N/H can_read N/B` AND `N/G` binds `N/A`, `N/H`, `N/B`, `account.read`, and is not expired |
+| Agent OBO    | `actor=agent:N/A, subject=user:N/H, account=N/B, grant=G`   | `N/H can_read N/B` AND `N/A delegates N/H` AND conditioned `N/A can_act_as N/B`            |
 
 For a direct API agent, an explicit `billing_account_id` may be request input only
 as resource selection; the server derives `(node_id, actor_id)` from the credential,
@@ -260,37 +260,35 @@ condition grant_not_expired(current_time: timestamp, expires_at: timestamp) {
 type billing_account
   relations
     define owner: [user]
-    define reader: [user, agent, agent with grant_not_expired] or owner
-    define can_read: reader
-    define grantor: [user] or owner
-    define can_grant: grantor
-
-# One object represents one account.read OBO grant. The type fixes the
-# capability; its tuple set fixes actor, subject, account, and expiry.
-type account_read_delegation
-  relations
-    define subject: [user]
-    define account: [billing_account]
+    define reader: [user with grant_not_expired, agent with grant_not_expired]
     define delegate: [agent with grant_not_expired]
-    define can_use: delegate
+    define can_read: owner or reader
+    define can_grant: owner
+    define can_act_as: delegate
 ```
 
-For `ExecutionIdentity { agent:N/A, user:N/H, billing_account:N/B, grant:N/G }`, OBO
-authorization verifies all four facts with server-supplied `current_time`:
+For `ExecutionIdentity { agent:N/A, user:N/H, billing_account:N/B, grantId:G }`,
+P0 OBO authorization verifies the Pareto three-leg intersection, with
+server-supplied `current_time` on the conditioned account tuple:
 
 1. `user:N/H can_read billing_account:N/B`;
-2. `agent:N/A can_use account_read_delegation:N/G`;
-3. `user:N/H subject account_read_delegation:N/G`;
-4. `billing_account:N/B account account_read_delegation:N/G`.
+2. `agent:N/A delegates user:N/H`;
+3. `agent:N/A can_act_as billing_account:N/B` and the tuple is not expired.
 
-This prevents a valid grant ID from being replayed with a different human,
-account, agent, or capability. A local grant row cannot stand in for any check.
-Direct access writes a conditioned `reader` tuple when expiry is required and
-checks only `can_read` on the exact account.
+The node-qualified actor, subject, and exact account are server-bound. `grantId`
+is immutable workflow/audit correlation for the authoritative tuple set; OpenFGA
+does not check a local grant object, and a local grant row cannot stand in for any
+leg. Direct access writes a conditioned `reader` tuple and checks only `can_read`
+on the exact account. A dedicated delegation object is P1 only if this three-leg
+contract later proves insufficient.
 
-### Legacy Limitation: Global Delegation
+### Global Delegation Is Only One Leg
 
-The current `user.delegates` relation is global—not scoped to tenant or graph. An agent with delegation can act on behalf of the user across all resources the user can access. It is not acceptable authority for P0 account-data access; the scoped `account_read_delegation` above supersedes it for that action.
+The current `user.delegates` relation is global—not scoped to tenant or graph. It
+is necessary subject consent but never sufficient account authority. P0 intersects
+it with the subject's `can_read` on the exact account and the agent's conditioned
+`can_act_as` on that same account, so a global subject relationship cannot widen
+the account set.
 
 **P0 Mitigations:**
 
@@ -298,9 +296,8 @@ The current `user.delegates` relation is global—not scoped to tenant or graph.
 2. MCP-discovered agents MUST NOT receive delegation (per MCP_UNTRUSTED_BY_DEFAULT)
 3. Delegation issuance requires explicit user action in UI
 
-Other action families may migrate to their own resource/capability-scoped grant
-objects. Do not generalize account access back into a global delegation merely to
-reuse the current relation.
+Other action families may add resource/capability-scoped relations. Do not treat
+the global subject relation alone as authority merely to reuse the current model.
 
 ---
 
@@ -315,7 +312,7 @@ reuse the current relation.
 | `node.flight`                 | `node:{node_id}`                         | `check(actor, can_flight, node:{node_id})`                          | `authz_denied` |
 | `billing_account.read`        | `billing_account:{node_id}/{id}`         | `check(actor-or-subject, can_read, billing_account:{node_id}/{id})` | `authz_denied` |
 | `billing_account.grant`       | `billing_account:{node_id}/{id}`         | `check(human, can_grant, billing_account:{node_id}/{id})`           | `authz_denied` |
-| `account_read_delegation.use` | `account_read_delegation:{node_id}/{id}` | server-bound membership set in §P0 delta                            | `authz_denied` |
+| `billing_account.act_as`      | `billing_account:{node_id}/{id}`         | `check(agent, can_act_as, billing_account:{node_id}/{id})`          | `authz_denied` |
 
 **Delegation relation:** `user.delegates` grants agents the right to act on behalf of user. Dual-check queries `user.act_as` when `subject` is present.
 
@@ -360,14 +357,17 @@ adapter add these versioned capabilities:
 - idempotent tuple write/delete followed by semantic readback.
 
 Approval order is: higher-consistency `can_grant` on exact account → write the
-authoritative conditioned tuple set → higher-consistency verification of the
-intended allow → mark the local request/projection approved. A write timeout has
-unknown outcome and remains pending for reconciliation.
+authoritative subject-delegation plus conditioned exact-account tuple set →
+higher-consistency verification of the intended three-leg allow → mark the local
+request/projection approved with immutable `grantId` correlation. A write timeout
+has unknown outcome and remains pending for reconciliation.
 
-Revoke order is: delete the authoritative tuple set → higher-consistency verify
-the intended semantic result → acknowledge → update the local projection. If an
-independent valid path still allows access, report that remaining authority
-instead of claiming a full revoke. If OpenFGA is unavailable, fail closed.
+Revoke order is: delete the conditioned exact-account `delegate` tuple first →
+higher-consistency verify the three-leg decision now denies → clean up the global
+subject-delegation tuple only when no other active grant needs it → acknowledge →
+update the local projection. If an independent valid path still allows access,
+report that remaining authority instead of claiming a full revoke. If OpenFGA is
+unavailable, fail closed.
 Higher-consistency bypasses enabled OpenFGA caches in supported deployments; it
 is a required acceptance mode, not a claim of universal linearizability.
 
@@ -380,7 +380,6 @@ OpenFGA references: [conditional relationship tuples and Check context](https://
 
 - `tenant:{node_id}/{id}` — node-local billing account / tenant
 - `billing_account:{node_id}/{billing_account_id}` — node-local account-data permission boundary
-- `account_read_delegation:{node_id}/{grant_id}` — one node-local server-bound OBO account-read grant
 - `node:{node_id}` — node operational boundary
 - `graph:{node_id}/{id}` — node-local graph definition
 - `tool:{node_id}/{id}` — node-local tool ID (for example `core__get_current_time`)

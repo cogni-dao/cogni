@@ -130,8 +130,9 @@ The actor roadmap now has one cross-node contract:
   exchange is deferred hardening.
 - OpenFGA is the sole permission/delegation authority. Direct AI account access
   checks `agent:N/A` on exact account `billing_account:N/B`; OBO execution
-  additionally binds and checks human `user:N/H`, account `N/B`, capability, and
-  grant `N/G`. Local rows and RLS are workflow/defense only.
+  intersects human `user:N/H can_read N/B`, agent `N/A delegates N/H`, and
+  conditioned `N/A can_act_as N/B`. `grant_id` correlates the authoritative tuple
+  set for workflow/audit only. Local rows and RLS are workflow/defense only.
 - `actor_bindings` enforces one active actor per `(provider,
 immutable_external_id)` inside a node. A credential key is never a binding.
 

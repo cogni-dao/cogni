@@ -172,8 +172,10 @@ Two execution modes are intentionally distinct:
   `billing_account:N/B`. Caller input selects a resource; it never authorizes it.
 - **On-behalf-of (OBO):** the server closes over an immutable
   `ExecutionIdentity { actorPrincipal: agent:N/A, subjectPrincipal: user:N/H,
-billingAccountId: B, grantId: G }`. Authorization checks both `H` on `B` and
-  the exact scoped delegation from `A` to `H` for `B` and the action.
+billingAccountId: B, grantId: G }`. Authorization intersects three authoritative
+  facts: `H can_read B`, `A delegates H`, and conditioned `A can_act_as B`.
+  `grantId` is immutable workflow/audit correlation for that tuple set; it is not
+  an authorization object and a local grant row can never allow access.
 
 `subjectId`, OBO `billingAccountId`, and `grantId` never come from request data,
 model output, tool arguments, or `RunnableConfig.configurable`. Direct API input
