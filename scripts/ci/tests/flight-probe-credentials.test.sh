@@ -13,6 +13,7 @@ TMPROOT="$(mktemp -d -t flight-probe-credentials.XXXXXX)"
 trap 'rm -rf "$TMPROOT"' EXIT
 FAKEBIN="$TMPROOT/bin"
 BAO_ROOT="$TMPROOT/openbao"
+SSH_ARGV_LOG="$TMPROOT/ssh-argv.log"
 mkdir -p "$FAKEBIN" "$BAO_ROOT"
 
 cat > "$FAKEBIN/ssh" <<'EOF'
@@ -21,6 +22,7 @@ while [ "$#" -gt 0 ] && [[ "$1" == -* ]]; do
   case "$1" in -i|-o) shift 2 ;; *) shift ;; esac
 done
 [ "$#" -gt 0 ] && shift
+[ -z "${FAKE_SSH_ARGV_LOG:-}" ] || printf '%s\n' "$*" >> "$FAKE_SSH_ARGV_LOG"
 PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
 EOF
 chmod +x "$FAKEBIN/ssh"
@@ -29,14 +31,17 @@ cat > "$FAKEBIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = create ] && [ "${2:-}" = token ]; then echo jwt-token; exit 0; fi
 if [ "${1:-}" != exec ]; then exit 2; fi
-args=("$@")
 cmd="$*"
 if [[ "$cmd" == *"auth/kubernetes/login"* ]]; then echo writer-token; exit 0; fi
 
-path="${args[$((${#args[@]} - 2))]}"
-last="${args[$((${#args[@]} - 1))]}"
+# Credential operations stream BAO_TOKEN as the first stdin line to a shell in
+# the OpenBao container. It must not appear in the pod-exec command argv.
+if [[ "$cmd" == *"sh -c"* && "$cmd" == *"exec bao"* ]]; then
+  IFS= read -r token
+  [ "$token" = writer-token ] || exit 3
+fi
+path="$(printf '%s' "$cmd" | sed -n "s/.*'\\(cogni\\/[^']*\\)'.*/\\1/p")"
 if [[ "$cmd" == *"bao kv get -format=json"* ]]; then
-  path="$last"
   dir="${FAKE_BAO_ROOT}/${path}"
   if [ ! -d "$dir" ]; then echo "No value found at ${path}" >&2; exit 2; fi
   version="$(cat "$dir/.version")"
@@ -79,6 +84,7 @@ run_lifecycle() {
     FLIGHT_PROBE_SSH_BIN="$FAKEBIN/ssh" \
     FAKE_REMOTE_PATH="$FAKEBIN" \
     FAKE_BAO_ROOT="$BAO_ROOT" \
+    FAKE_SSH_ARGV_LOG="$SSH_ARGV_LOG" \
     SSH_OPTS='-i fake' \
     bash scripts/ci/flight-probe-credentials.sh "$op" candidate-a node-template >"$out" 2>&1
 }
@@ -115,18 +121,35 @@ test "$(jq -r '.previous' "$RING_FILE")" = "$OLD"
 run_lifecycle finish "$TMPROOT/finish.out"
 test "$(jq -r '.active' "$RING_FILE")" = "$NEW"
 test "$(jq -r '.previous' "$RING_FILE")" = null
+grep -q 'remains pending.*old-key 401' "$TMPROOT/finish.out"
 
 # revoke re-keys the target before removing operator authority; retry is stable.
 run_lifecycle revoke "$TMPROOT/revoke.out"
 REVOKED_ACTIVE="$(jq -r '.active' "$RING_FILE")"
 test "$REVOKED_ACTIVE" != "$NEW"
 test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key] // empty' "$MAP_FILE")" = ""
+grep -q 'prepared revocation.*pending.*401' "$TMPROOT/revoke.out"
 run_lifecycle revoke "$TMPROOT/revoke-retry.out"
 test "$(jq -r '.active' "$RING_FILE")" = "$REVOKED_ACTIVE"
 
 for secret in "$OLD" "$NEW" "$REVOKED_ACTIVE"; do
   ! grep -R -qF "$secret" "$TMPROOT"/*.out
+  ! grep -qF "$secret" "$SSH_ARGV_LOG"
 done
+! grep -qF writer-token "$SSH_ARGV_LOG"
+
+# Strict bounded ring: an unknown third field fails closed and is not healed or
+# leaked by ordinary materialization.
+THIRD_SECRET="$(openssl rand -base64 32)"
+jq -cn --arg active "$REVOKED_ACTIVE" --arg third "$THIRD_SECRET" \
+  '{active:$active,previous:null,third:$third}' > "$RING_FILE"
+set +e
+run_lifecycle materialize "$TMPROOT/invalid-ring.out"
+invalid_rc=$?
+set -e
+test "$invalid_rc" -ne 0
+grep -q 'invalid bounded ring' "$TMPROOT/invalid-ring.out"
+! grep -qF "$THIRD_SECRET" "$TMPROOT/invalid-ring.out"
 
 # A non-control writer can never create another authority.
 set +e

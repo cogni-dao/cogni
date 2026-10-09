@@ -13,7 +13,7 @@
 # after each durable phase:
 #   prepare  -> target ring accepts new(active)+old(previous); operator still sends old
 #   activate -> exact operator map entry switches to new; target still accepts both
-#   finish   -> previous is removed; old is revoked
+#   finish   -> previous is removed from desired state; old-key 401 proof completes rotation
 # A retry resumes the persisted phase and never mints a third key.
 
 set -euo pipefail
@@ -50,6 +50,7 @@ USAGE
 [[ "$SECRETS_CONTROL_ENV" == "$CONTROL_ENV" ]] \
   || fail "control-vault-only: SECRETS_CONTROL_ENV '$SECRETS_CONTROL_ENV' must equal FLEET_CONTROL_ENV '$CONTROL_ENV'"
 [[ -n "$TARGET_NODE" ]] || { usage; exit 2; }
+[[ "$TARGET_NODE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "invalid node slug '$TARGET_NODE'"
 [[ -n "${VM_HOST:-}" ]] || fail "VM_HOST is required"
 
 catalog_file="$CATALOG_ROOT/$TARGET_NODE.yaml"
@@ -73,14 +74,24 @@ BAO_TOKEN="$(
 [[ -n "$BAO_TOKEN" ]] || fail "could not mint ${CONTROL_ENV}-writer token"
 
 bao_exec() {
-  remote "kubectl exec ${1} -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao ${2}"
+  local mode="$1" command="$2"
+  # Stream the writer token into the container and consume it before `bao`
+  # starts. It never enters local ssh argv, remote shell argv, or the Kubernetes
+  # pod-exec command request. Payload mode leaves the remaining stdin for bao.
+  if [[ "$mode" == payload ]]; then
+    { printf '%s\n' "$BAO_TOKEN"; cat; } | remote \
+      "kubectl exec -i -n openbao openbao-0 -- sh -c 'IFS= read -r BAO_TOKEN; export BAO_TOKEN; export BAO_ADDR=http://127.0.0.1:8200; exec bao ${command}'"
+  else
+    printf '%s\n' "$BAO_TOKEN" | remote \
+      "kubectl exec -i -n openbao openbao-0 -- sh -c 'IFS= read -r BAO_TOKEN; export BAO_TOKEN; export BAO_ADDR=http://127.0.0.1:8200; exec bao ${command}'"
+  fi
 }
 
 # Globals populated by read_path: PATH_EXISTS, PATH_VERSION, PATH_DATA.
 read_path() {
   local path="$1" raw rc
   set +e
-  raw="$(bao_exec "" "kv get -format=json '${path}'" 2>&1)"
+  raw="$(bao_exec token-only "kv get -format=json '${path}'" 2>&1)"
   rc=$?
   set -e
   if [[ $rc -ne 0 ]]; then
@@ -102,9 +113,9 @@ write_field_cas() {
   payload="$(jq -cn --arg key "$key" --arg value "$value" '{($key):$value}')"
   set +e
   if [[ "$exists" == true ]]; then
-    out="$(printf '%s' "$payload" | bao_exec "-i" "kv patch -cas=${version} '${path}' -" 2>&1)"
+    out="$(printf '%s' "$payload" | bao_exec payload "kv patch -cas=${version} '${path}' -" 2>&1)"
   else
-    out="$(printf '%s' "$payload" | bao_exec "-i" "kv put -cas=0 '${path}' -" 2>&1)"
+    out="$(printf '%s' "$payload" | bao_exec payload "kv put -cas=0 '${path}' -" 2>&1)"
   fi
   rc=$?
   set -e
@@ -230,10 +241,10 @@ case "$OPERATION" in
     load_map
     [[ "$MAP_ACTIVE" == "$ACTIVE" ]] || fail "operator map has not activated the new key"
     store_ring "$(jq -cn --arg active "$ACTIVE" '{active:$active,previous:null}')"
-    log "removed predecessor for ${MAP_KEY}; sync/redeploy target and prove old-key rejection"
+    log "removed predecessor desired state for ${MAP_KEY}; rotation remains pending until target sync/redeploy proves old-key 401"
     ;;
   revoke)
-    load_ring || { store_map_entry remove; log "credential already absent for ${MAP_KEY}"; exit 0; }
+    load_ring || { store_map_entry remove; log "revocation state has no ring for ${MAP_KEY}; completion remains pending deployed old-key 401 proof"; exit 0; }
     load_map
     if [[ -n "$MAP_ACTIVE" ]]; then
       # Re-key target first: any crash is fail-closed because the still-present map
@@ -244,6 +255,6 @@ case "$OPERATION" in
       fi
       store_map_entry remove
     fi
-    log "revoked ${MAP_KEY}; sync/redeploy both consumers and prove prior-key rejection"
+    log "prepared revocation for ${MAP_KEY}; completion remains pending target/control sync and prior-key 401 proof"
     ;;
 esac
