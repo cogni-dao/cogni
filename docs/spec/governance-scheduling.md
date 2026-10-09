@@ -31,9 +31,8 @@ tags: [governance, scheduling, temporal]
 flowchart TD
     RS[".cogni/repo-spec.yaml<br/><i>governance.schedules[]</i>"] -->|getGovernanceConfig| SYNC
 
-    subgraph "App boot (instrumentation.ts self-fetch) — also manual ops trigger"
-        BOOT["instrumentation register()<br/><i>runGovernanceBootSync (retry+fail-soft)</i>"] --> OPS["POST /api/internal/ops/governance/schedules/sync<br/><i>Bearer INTERNAL_OPS_TOKEN</i>"]
-        OPS --> JOB["Job module<br/><i>pg_advisory_lock</i>"]
+    subgraph "App boot — no externally callable trigger"
+        BOOT["getContainer()<br/><i>startGovernanceSyncOnBoot (retry+fail-soft)</i>"] --> JOB["Job module<br/><i>pg_advisory_lock</i>"]
         JOB --> SYNC["syncGovernanceSchedules()"]
     end
 
@@ -45,7 +44,7 @@ flowchart TD
 
 > **💡 Preview Environments**
 >
-> Set `GOVERNANCE_SCHEDULES_ENABLED=false` to skip schedule sync in preview deployments (prevents duplicate governance operations). Defaults to `true`. The boot-sync helper honors this flag (skips before calling the endpoint); the endpoint also returns 204 when disabled.
+> Set `GOVERNANCE_SCHEDULES_ENABLED=false` to skip schedule sync in preview deployments (prevents duplicate governance operations). Defaults to `true`; the boot reconcile job honors the flag.
 
 ### Runtime Identity Model
 
@@ -89,15 +88,14 @@ governance:
 
 | Layer     | File                                                              | Responsibility                                    |
 | --------- | ----------------------------------------------------------------- | ------------------------------------------------- |
-| Boot      | `src/lib/governance-boot-sync.ts`                                 | Self-fetch trigger at startup (retry + fail-soft) |
-| Endpoint  | `src/app/api/internal/ops/governance/schedules/sync/route.ts`     | Internal auth + trigger                           |
+| Boot      | `src/bootstrap/startup-reconcile.ts`                              | Direct job trigger at startup (retry + fail-soft) |
 | Job       | `src/bootstrap/jobs/syncGovernanceSchedules.job.ts`               | Advisory lock + container wiring                  |
 | Service   | `packages/scheduler-core/src/services/syncGovernanceSchedules.ts` | Pure orchestration via ports                      |
 | Re-export | `src/features/governance/services/syncGovernanceSchedules.ts`     | Feature-layer convenience                         |
 
 ## Goal
 
-Repo-spec is source of truth for governance schedules. Temporal is derived state, synced idempotently at every node boot (and on-demand via the ops endpoint).
+Repo-spec is source of truth for governance schedules. Temporal is derived state, synced idempotently at every node boot.
 
 ## Non-Goals
 
@@ -127,10 +125,9 @@ Repo-spec is source of truth for governance schedules. Temporal is derived state
 | `src/shared/config/repoSpec.schema.ts`                            | `governanceScheduleSchema`       |
 | `src/shared/config/repoSpec.server.ts`                            | `getGovernanceConfig()` accessor |
 | `packages/scheduler-core/src/services/syncGovernanceSchedules.ts` | Canonical sync logic             |
-| `src/app/api/internal/ops/governance/schedules/sync/route.ts`     | Internal trigger endpoint        |
 | `src/bootstrap/jobs/syncGovernanceSchedules.job.ts`               | Job module (lock + wiring)       |
-| `src/lib/governance-boot-sync.ts`                                 | Boot-time self-sync trigger      |
-| `src/instrumentation.ts`                                          | Calls boot-sync in `register()`  |
+| `src/bootstrap/startup-reconcile.ts`                              | Boot-time direct sync trigger    |
+| `src/bootstrap/container.ts`                                      | Starts boot reconciliation       |
 | `src/app/api/internal/graphs/[graphId]/runs/route.ts`             | Input normalization + state key  |
 | `packages/scheduler-core/src/ports/schedule-control.port.ts`      | `listScheduleIds`                |
 | `packages/scheduler-core/src/ports/execution-grant.port.ts`       | `ensureGrant`                    |

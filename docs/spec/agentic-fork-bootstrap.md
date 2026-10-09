@@ -180,7 +180,6 @@ human gives 5 tokens
                           │                     LITELLM_MASTER_KEY,
                           │                     SCHEDULER_API_TOKEN,
                           │                     BILLING_INGEST_TOKEN,
-                          │                     INTERNAL_OPS_TOKEN,
                           │                     OPENCLAW_GATEWAY_TOKEN
                           │    • Step A:       SSH_DEPLOY_KEY, SOPS age key,
                           │                     VM_HOST

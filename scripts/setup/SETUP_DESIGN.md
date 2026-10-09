@@ -138,7 +138,6 @@ pnpm setup github --env production
        - See [OAuth App Setup Guide](../../docs/guides/oauth-app-setup.md) for step-by-step
      - `SCHEDULER_API_TOKEN` (generated random, ≥32 chars — scheduler-worker → app API bearer auth)
      - `BILLING_INGEST_TOKEN` (generated random, ≥32 chars — LiteLLM callback → billing ingest bearer auth)
-     - `INTERNAL_OPS_TOKEN` (generated random, ≥32 chars — deploy-time bearer auth for `/api/internal/ops/governance/schedules/sync`)
      - **GitHub App for attribution ingestion (optional — skipped if missing):**
        - `GH_REVIEW_APP_ID` + `GH_REVIEW_APP_PRIVATE_KEY_BASE64` (from github.com/organizations → Developer settings → GitHub Apps)
        - `GH_WEBHOOK_SECRET` (from the GitHub App's webhook settings page — the secret used for HMAC-SHA256 payload verification)

@@ -231,6 +231,11 @@ export type {
   ProviderContext,
 } from "./model-provider.port";
 export type { ModelProviderResolverPort } from "./model-provider-resolver.port";
+export type {
+  NodeActionHttpPort,
+  NodeActionHttpResponse,
+  NodeActionSignerPort,
+} from "./node-action.port";
 export type { NodeAddressPort } from "./node-address.port";
 export { NodeAddressError } from "./node-address.port";
 export type {

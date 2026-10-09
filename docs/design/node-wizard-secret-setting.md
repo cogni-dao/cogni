@@ -392,7 +392,7 @@ _shared` OpenBao scan (`preload_value`). That silently grants a node any value a
 ancestor happens to hold. Replace it with an explicit per-entry `inheritFrom`
 catalog field (does not exist yet — proposed). Until it lands, **generate
 per-node** rather than inherit caller-identity keys: `SCHEDULER_API_TOKEN`,
-`BILLING_INGEST_TOKEN`, `GH_WEBHOOK_SECRET`, `INTERNAL_OPS_TOKEN`.
+`BILLING_INGEST_TOKEN`, and `GH_WEBHOOK_SECRET`.
 
 ### Falsifying merge gate
 

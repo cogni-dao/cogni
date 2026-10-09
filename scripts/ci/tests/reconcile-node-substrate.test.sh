@@ -61,7 +61,6 @@ put_secret node-template DOLT_CREDS_KEYID dolt-key
 put_secret node-template DOLTHUB_API_TOKEN dolt-token
 put_secret node-template GH_WEBHOOK_SECRET existing-webhook
 put_secret node-template METRICS_TOKEN existing-metrics
-put_secret node-template INTERNAL_OPS_TOKEN existing-ops
 put_secret node-template SCHEDULER_API_TOKEN existing-scheduler
 put_secret node-template BILLING_INGEST_TOKEN existing-billing
 

@@ -124,6 +124,7 @@ export {
 export { DrizzleGovernanceStatusAdapter } from "./governance/drizzle-governance-status.adapter";
 export {
   JoseIdentityAttestationSigner,
+  JoseNodeActionSigner,
   OperatorIdentityAttestationRepository,
   type OperatorIdentityAttestationRepositoryConfig,
 } from "./identity/identity-attestation.adapter";
@@ -141,6 +142,7 @@ export {
   TemplateQueryError,
   type TemplateQueryErrorCode,
 } from "./metrics/mimir.adapter";
+export { HttpNodeActionAdapter } from "./node-actions/http-node-action.adapter";
 export {
   GitHubNodeDeploymentTopologyAdapter,
   type NodeDeploymentFileReader,

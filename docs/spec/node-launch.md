@@ -107,7 +107,7 @@ provisionNode(input: ProvisionInput)
   |
   |-- 3. generateNodeSecrets(node_id)
   |     Derive or generate: AUTH_SECRET, LITELLM_MASTER_KEY,
-  |     DB credentials, INTERNAL_OPS_TOKEN.
+  |     DB credentials, identity signing and encryption keys.
   |     Store in cluster Secret (namespace-scoped).
   |
   |-- 4. provisionDatabase(short_id)
@@ -296,7 +296,6 @@ Minimal addition. The app reads `infra.domain` to know its own URL. Everything e
 | AUTH_SECRET        | Per-node      | `crypto.randomBytes(32)`         |
 | LITELLM_MASTER_KEY | Per-node      | `sk-` + `crypto.randomBytes(24)` |
 | DB password        | Per-node      | `crypto.randomBytes(24)`         |
-| INTERNAL_OPS_TOKEN | Per-node      | `crypto.randomBytes(32)`         |
 | GHCR pull token    | Cluster-level | Shared                           |
 | SOPS age key       | Cluster-level | Shared                           |
 | Caddy TLS          | Cluster-level | ACME wildcard                    |

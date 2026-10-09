@@ -113,6 +113,45 @@
             "relation": "secrets_manager"
           }
         },
+        "support_reader": {
+          "union": {
+            "child": [
+              { "this": {} },
+              { "computedUserset": { "relation": "admin" } }
+            ]
+          }
+        },
+        "can_support_read": {
+          "computedUserset": {
+            "relation": "support_reader"
+          }
+        },
+        "repairer": {
+          "union": {
+            "child": [
+              { "this": {} },
+              { "computedUserset": { "relation": "admin" } }
+            ]
+          }
+        },
+        "can_repair": {
+          "computedUserset": {
+            "relation": "repairer"
+          }
+        },
+        "funds_recovery": {
+          "union": {
+            "child": [
+              { "this": {} },
+              { "computedUserset": { "relation": "admin" } }
+            ]
+          }
+        },
+        "can_recover_funds": {
+          "computedUserset": {
+            "relation": "funds_recovery"
+          }
+        },
         "production_promoter": {
           "union": {
             "child": [
@@ -179,6 +218,24 @@
               {
                 "type": "agent"
               }
+            ]
+          },
+          "support_reader": {
+            "directly_related_user_types": [
+              { "type": "user" },
+              { "type": "agent" }
+            ]
+          },
+          "repairer": {
+            "directly_related_user_types": [
+              { "type": "user" },
+              { "type": "agent" }
+            ]
+          },
+          "funds_recovery": {
+            "directly_related_user_types": [
+              { "type": "user" },
+              { "type": "agent" }
             ]
           },
           "production_promoter": {

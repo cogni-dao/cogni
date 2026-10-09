@@ -657,7 +657,6 @@ for node in operator; do
     --from-literal=POSTHOG_HOST='${POSTHOG_HOST}' \
     --from-literal=SCHEDULER_API_TOKEN='${SCHEDULER_API_TOKEN}' \
     --from-literal=BILLING_INGEST_TOKEN='${BILLING_INGEST_TOKEN}' \
-    --from-literal=INTERNAL_OPS_TOKEN='${INTERNAL_OPS_TOKEN}' \
     --from-literal=METRICS_TOKEN='${METRICS_TOKEN}' \
     --dry-run=client -o yaml | kubectl apply -f -"
   log_info "  Created ${node}-node-app-secrets"
@@ -675,7 +674,6 @@ ssh $SSH_OPTS root@"$VM_IP" "kubectl -n ${K8S_NAMESPACE} create secret generic s
   --from-literal=GH_REVIEW_APP_ID='${GH_REVIEW_APP_ID:-}' \
   --from-literal=GH_REVIEW_APP_PRIVATE_KEY_BASE64='${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}' \
   --from-literal=GH_WEBHOOK_SECRET='${GH_WEBHOOK_SECRET:-}' \
-  --from-literal=INTERNAL_OPS_TOKEN='${INTERNAL_OPS_TOKEN}' \
   --dry-run=client -o yaml | kubectl apply -f -"
 log_info "  Created scheduler-worker-secrets"
 

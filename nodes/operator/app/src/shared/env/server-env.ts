@@ -154,10 +154,6 @@ export const serverSchema = z.object({
   // each node's declared placement (NodeAddressPort → deployment_provider, bug.5106).
   // The static COGNI_NODE_ENDPOINTS configmap is only for the DB-less scheduler-worker.
 
-  // Internal ops token - Bearer auth for deploy-time internal operations endpoints
-  // Optional in schema to avoid breaking environments that do not use ops endpoints.
-  INTERNAL_OPS_TOKEN: z.string().min(32).optional(),
-
   // Governance schedules - Deploy-time schedule sync control
   // When false, governance schedule sync job is skipped (prevents duplicate ops in preview)
   // Default: true (enabled in production/staging)

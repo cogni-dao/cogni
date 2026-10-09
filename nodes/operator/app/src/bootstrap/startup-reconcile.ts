@@ -9,9 +9,8 @@
  *   process. Delegates all sync logic to the job; owns only the trigger + retry.
  * Invariants:
  *   - SELF_RECONCILE_ON_BOOT: a repo-spec change (e.g. an attribution_pipeline profile
- *     bump) activates on the next operator deploy with NO deploy-infra POST and NO
- *     INTERNAL_OPS_TOKEN. The ops route stays for manual re-sync; it is no longer the
- *     only activation path.
+ *     bump) activates on the next operator deploy with no deploy-infra callback or
+ *     standing authorization credential. There is deliberately no HTTP trigger.
  *   - RETRY_UNTIL_READY: Temporal is usually not reachable yet on first init, so a
  *     single shot would leave schedules stale. Retry with backoff until the job
  *     succeeds or attempts are exhausted (next deploy retries). The job's pg advisory
