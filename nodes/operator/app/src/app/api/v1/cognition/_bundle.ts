@@ -8,13 +8,18 @@
  *   that frames hub-delivered skills + domain pointers for a SessionStart hook.
  * Scope: Pure functions + the invariants constant. No I/O, no env, no container.
  * Invariants:
- *   - ONE_VOICE: a served orientation entry IS the constitution — the
- *     code-owned invariants + watch-gate render ONLY when no orientation
- *     exists (empty/unseeded hub fallback), never alongside it (task.5155).
+ *   - INVARIANTS_ARE_THE_FLOOR: the code-owned `SESSION_BOOTSTRAP_INVARIANTS` +
+ *     watch-gate render UNCONDITIONALLY — they are the always-present contract
+ *     spine that survives an empty/unreachable hub and the common fresh-node
+ *     case (story.5070). A served orientation renders ALONGSIDE as the node MAP,
+ *     augmenting the floor, never replacing it. This reverses the earlier
+ *     ONE_VOICE suppression (task.5155), whose real defect was that a map-only
+ *     orientation then dropped the contract entirely.
  *   - ORIENTATION_LOADED_IN_FULL: renders pointers (id + title + recall path)
  *     for skills/domains, but the current-node `<slug>-agent-orientation` entry
- *     is rendered IN FULL — the bootstrap IS the agent's operating map, so the
- *     git skeleton stays minimal and the Dolt orientation carries the substance.
+ *     is rendered IN FULL — the node MAP that rides alongside the invariant
+ *     floor, so the git skeleton stays minimal and the Dolt orientation carries
+ *     the node-specific substance.
  * Side-effects: none
  * Links: docs/spec/node-baas-architecture.md
  * @internal
@@ -204,10 +209,9 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
           .join("\n")
       : "| _(none)_ | | |";
 
-  // The map, not just the constitution: the current-node orientation entry
-  // rendered IN FULL — the bootstrap IS the orientation (no second recall).
-  // Falls back to a seed prompt when unset so the convention surfaces even
-  // before the entry exists.
+  // The node MAP that rides alongside the invariant floor: the current-node
+  // orientation entry rendered IN FULL (no second recall). Falls back to a seed
+  // prompt when unset so the convention surfaces even before the entry exists.
   const orientationLines = orientation
     ? ["## Orientation — recall this first", "", orientation.content]
     : [
@@ -216,24 +220,33 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
         `_No \`${name}-agent-orientation\` entry yet. Recall the hub, then seed one — the current-node operating map for agents (what this node is, where authority lives, what's safe, what to recall next) — and refine it as the repo changes._`,
       ];
 
-  // ONE VOICE: when the hub serves an orientation, it IS the constitution —
-  // the code-owned invariants + watch-gate would restate it in different words
-  // (the two-constitution bundle agents flailed past, task.5155). They render
-  // ONLY as the empty-hub fallback, their original design intent.
-  const fallbackConstitution = orientation
-    ? []
-    : [
-        "",
-        "## Tooling invariants",
-        "",
-        invariants,
-        "",
-        `_Your candidate (flight + validate target): \`https://${candidateHost}\` · Loki namespace \`cogni-candidate-a\`._`,
-        "",
-        "## Watch an async gate — CI · flight · deploy",
-        "",
-        SESSION_WATCH_GATE,
-      ];
+  // THE INVARIANT FLOOR — rendered UNCONDITIONALLY (story.5070). The code-owned
+  // `SESSION_BOOTSTRAP_INVARIANTS` + watch-gate are the always-present contract
+  // spine: they must survive an empty/unreachable hub AND the common fresh-node
+  // case where the hub serves only a map-only orientation. The earlier ONE_VOICE
+  // suppression (task.5155) dropped this floor whenever ANY orientation was
+  // served — so a map-only orientation silently shipped a session with no
+  // contract at all. The orientation above now renders ALONGSIDE as the node
+  // MAP (augment, never replace), not instead of the floor.
+  //
+  // DRY / migration note: orientations are being reduced to map-only (what this
+  // node is, where authority lives, what to recall next) and MUST NOT restate
+  // these terse axioms — the invariants are now the single always-present source
+  // of the contract. Stripping any residual axiom prose still embedded in a hub
+  // orientation entry is the migration's concern, tracked separately (story.5070
+  // step 7, human-merge-gated hub Dolt edit).
+  const toolingFloor = [
+    "",
+    "## Tooling invariants",
+    "",
+    invariants,
+    "",
+    `_Your candidate (flight + validate target): \`https://${candidateHost}\` · Loki namespace \`cogni-candidate-a\`._`,
+    "",
+    "## Watch an async gate — CI · flight · deploy",
+    "",
+    SESSION_WATCH_GATE,
+  ];
 
   return [
     `# ${name} — Cogni Session Cognition`,
@@ -243,7 +256,7 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     `> Delivered at session start from ${origin}/api/v1/cognition — replaces git-synced AGENTS.md sprawl. (node \`${node}\` · build \`${buildSha}\`)`,
     "",
     ...orientationLines,
-    ...fallbackConstitution,
+    ...toolingFloor,
     "",
     "## Skills index (recall full content from the hub before acting)",
     "",
@@ -257,12 +270,10 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
     "| --- | --- | --- |",
     domainRows,
     "",
-    // Deliberately OUTSIDE `fallbackConstitution`: this must render even when the
-    // hub serves an orientation. It does not restate the constitution (the
-    // ONE_VOICE concern of task.5155) — it is the node-relative endpoint contract,
-    // which a hub entry structurally cannot carry because `origin` is only known
-    // per-request. Without it agents fall back to harness-local slash commands
-    // that hardcode the operator apex and file every node's work onto operator.
+    // The node-relative endpoint contract — always rendered. A hub entry
+    // structurally cannot carry it because `origin` is only known per-request.
+    // Without it agents fall back to harness-local slash commands that hardcode
+    // the operator apex and file every node's work onto operator.
     "## Work items — this node's own ledger",
     "",
     `Your items live in THIS node's store (\`${origin}\`) — each node owns its own \`knowledge_<slug>\` database, so there is no central ledger to fall back to. ONE work item + ONE node per session.`,
