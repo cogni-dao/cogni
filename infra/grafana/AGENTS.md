@@ -71,3 +71,18 @@ The contract:
 | Liveness (steady-state runtime health)              | Grafana alert rules under `alerts/` (TODO)  | Pages on sustained failure                                                 |
 
 If you ever want to add "validate" back into the provision script, don't. Extend the verify layer instead.
+
+### Declaring state means declaring the WHOLE set (bug.5117)
+
+Provisioning converges: it creates/updates the catalog-derived datasources **and deletes every `cogni-<env>-*-postgres` datasource that is not in that set**. Declaring state is not enough if the declared set is only a subset — a create/update loop lets a datasource outlive the node it described, keeping whatever readonly-password epoch it was born with and retrying forever on Grafana's own health schedule. Measured 2026-10-08: 55 live datasources against a derived set of 21, and ~420 `FATAL: password authentication failed for user "app_readonly"` per hour on the production Postgres, every one from a datasource outside the roster.
+
+Rules for that prune:
+
+- Scope is `cogni-<the env being provisioned>-<node>-postgres` and `grafana-postgresql-datasource` only. Never another environment, never Loki/Prometheus. An over-broad delete is far worse than the bug.
+- An empty catalog-derived set **aborts** rather than pruning; otherwise a catalog read failure would delete the whole environment.
+- `GRAFANA_DATASOURCE_PRUNE=0` logs what it would delete and deletes nothing.
+- The prune is a delete-by-uid API call, not a runtime query, so it does not re-couple provision to connectivity.
+
+Verification keys on the datasource's own error, not the HTTP status: Grafana returns `results.<refId>.error` (e.g. SQLSTATE 28P01) inside a 200 envelope, and keying on the status code alone reported credential drift as verified.
+
+`tests/ci-invariants/grafana-datasource-convergence.spec.ts` pins all of the above by running the real scripts against a PATH-injected `curl` shim.
