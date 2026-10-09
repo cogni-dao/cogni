@@ -70,7 +70,7 @@ export const agentRequestPrincipalSchema = z
     credentialId: z.string().uuid(),
     billingAccountId: z.string().uuid(),
     displayName: z.string().nullable(),
-    legacyUserId: z.string().nullable(),
+    legacyUserId: z.string().uuid().nullable(),
   })
   .superRefine((value, ctx) => {
     if (principalLocalId(value.principalId) !== value.actorId.toLowerCase()) {
