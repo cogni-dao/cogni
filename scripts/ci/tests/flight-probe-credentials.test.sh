@@ -95,7 +95,7 @@ chmod +x "$FAKEBIN/kubectl"
 
 run_lifecycle() {
   local op="$1" out="$2"
-  env \
+  if ! env \
     PATH="$FAKEBIN:$PATH" \
     VM_HOST=fake \
     FLEET_CONTROL_ENV=production \
@@ -108,7 +108,10 @@ run_lifecycle() {
     FAKE_JQ_ARGV_LOG="$JQ_ARGV_LOG" \
     REAL_JQ="$REAL_JQ" \
     SSH_OPTS='-i fake' \
-    bash scripts/ci/flight-probe-credentials.sh "$op" candidate-a node-template >"$out" 2>&1
+    bash scripts/ci/flight-probe-credentials.sh "$op" candidate-a node-template >"$out" 2>&1; then
+    grep -Ei 'error|failed|invalid|check-and-set|no value|refus' "$out" >&2 || true
+    return 1
+  fi
 }
 
 NODE_ID="$(yq -N '.node_id' infra/catalog/node-template.yaml)"
