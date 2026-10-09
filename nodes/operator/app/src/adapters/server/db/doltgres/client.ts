@@ -34,6 +34,7 @@ export class DoltgresNotConfiguredError extends Error {
 }
 
 let _sql: Sql | null = null;
+let _readSql: Sql | null = null;
 let _adapter: DoltgresWorkItemAdapter | null = null;
 
 function createSql(): Sql {
@@ -55,6 +56,36 @@ function createSql(): Sql {
 export function getDoltgresSql(): Sql {
   if (!_sql) _sql = createSql();
   return _sql;
+}
+
+/**
+ * READ_LANE_IS_NOT_THE_WRITE_LANE (work-items-port.md § Concurrency Model).
+ * A separate pool for the QUERY port. The write client is deliberately `max: 1`
+ * because `dolt_checkout` is session state; routing reads through it made read
+ * concurrency structurally 1, so the dashboard's concurrent `list` calls
+ * serialized — measured here at avg 3705 ms / max 12339 ms per request, of
+ * which `operation.queue` alone was avg 2660 ms against a 677 ms query.
+ *
+ * This pool never calls `dolt_checkout` and never takes the advisory lock, so
+ * every read sees committed `main` and concurrency equals the pool width.
+ * Operator is the node that actually needs it: it carries the fleet's work-item
+ * traffic and serves the `/work` dashboard.
+ */
+function createReadSql(): Sql {
+  const env = serverEnv();
+  if (!env.DOLTGRES_URL) {
+    throw new DoltgresNotConfiguredError();
+  }
+  return buildDoltgresClient({
+    connectionString: env.DOLTGRES_URL,
+    applicationName: `cogni_work_items_read_${env.SERVICE_NAME ?? "app"}`,
+    max: 4,
+  });
+}
+
+function getDoltgresReadSql(): Sql {
+  if (!_readSql) _readSql = createReadSql();
+  return _readSql;
 }
 
 // NODE_IDENTITY_IS_THE_APP'S, NOT THIS MODULE'S. Work items are node-sovereign:
@@ -80,6 +111,7 @@ export function getDoltgresWorkItemsAdapter(
   if (!_adapter)
     _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
       idFloor: OPERATOR_ID_FLOOR,
+      readClient: getDoltgresReadSql(),
       // Conditional spread, not `logger?.child(...)`: `exactOptionalPropertyTypes`
       // rejects an explicit `undefined` for an optional property.
       ...(logger
