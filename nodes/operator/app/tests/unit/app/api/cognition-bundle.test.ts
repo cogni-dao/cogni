@@ -149,7 +149,7 @@ describe("renderBundleMarkdown", () => {
     );
   });
 
-  it("renders the current-node orientation entry IN FULL above the tooling invariants", () => {
+  it("renders the current-node orientation entry IN FULL alongside the tooling invariants", () => {
     const fullOrientation = [
       "**USE WHEN:** first read of every operator session.",
       "",
@@ -175,18 +175,21 @@ describe("renderBundleMarkdown", () => {
     expect(markdown).toContain("- Recall before write, refine over extend.");
     // No second-recall footer: the bootstrap IS the orientation.
     expect(markdown).not.toContain("for the full context");
-    // ONE VOICE (task.5155): a served orientation IS the constitution — the
-    // code-owned invariants + watch-gate must NOT render alongside it.
-    expect(markdown).not.toContain("## Tooling invariants");
-    expect(markdown).not.toContain("<watch-gate");
+    // INVARIANT FLOOR (story.5070): the code-owned invariants + watch-gate are
+    // the always-present contract spine. They render ALONGSIDE a served
+    // orientation (the node map), never suppressed by it — reversing the earlier
+    // ONE_VOICE suppression (task.5155) whose defect was that a served
+    // orientation dropped the contract.
+    expect(markdown).toContain("## Tooling invariants");
+    expect(markdown).toContain("<watch-gate");
   });
 
   // The work-item write seam is the one thing agents could NOT discover from a
   // node: `endpoints.workItems` is a bare URL, so agents fell back to
   // harness-local slash commands that hardcode the operator apex and filed every
-  // node's work onto operator. The section must therefore survive ONE_VOICE
-  // suppression (it is endpoint data, not a competing constitution) and must be
-  // origin-relative, which a hub-served orientation entry structurally cannot be.
+  // node's work onto operator. The section must render regardless of whether an
+  // orientation is served, and must be origin-relative, which a hub-served
+  // orientation entry structurally cannot be.
   it("always renders the node-relative work-item write seam, even with an orientation served", () => {
     const withOrientation = renderBundleMarkdown({
       ...baseInput,
@@ -208,9 +211,43 @@ describe("renderBundleMarkdown", () => {
       expect(markdown).toContain("There is no `in_progress`");
     }
 
-    // Guard the actual regression: ONE_VOICE kills the fallback constitution,
-    // and must not take the write seam with it.
-    expect(withOrientation).not.toContain("## Tooling invariants");
+    // The invariant floor is now unconditional (story.5070): a served
+    // orientation augments it, it does not suppress it.
+    expect(withOrientation).toContain("## Tooling invariants");
+  });
+
+  // The common fresh-node case: the hub serves a map-only orientation (what this
+  // node is, where authority lives, what to recall next) that carries NO
+  // agent-contract / axiom prose. Under the old ONE_VOICE suppression this
+  // silently shipped a session with no contract at all — the real story.5070
+  // defect. The invariant floor must still render.
+  it("renders the invariant floor even when a map-only orientation is served (story.5070)", () => {
+    const mapOnlyOrientation = [
+      "## What this node is",
+      "Operator coordinates code, deploys, and validation for Cogni nodes.",
+      "",
+      "## Where authority lives",
+      "RBAC via OpenFGA; promotes run as the operator principal.",
+      "",
+      "## What to recall next",
+      "Start with the cicd + validate-candidate skills.",
+    ].join("\n");
+    const markdown = renderBundleMarkdown({
+      ...baseInput,
+      orientation: {
+        id: "operator-agent-orientation",
+        content: mapOnlyOrientation,
+      },
+    });
+
+    // The map renders...
+    expect(markdown).toContain("## Orientation — recall this first");
+    expect(markdown).toContain(mapOnlyOrientation);
+    // ...and the code-owned contract floor renders ALONGSIDE it, not instead.
+    expect(markdown).toContain("## Tooling invariants");
+    expect(markdown).toContain(SESSION_WATCH_GATE);
+    // First invariant line, numbered — proof the full list, not a stub, is in.
+    expect(markdown).toContain(`1. ${baseInput.toolingInvariants[0]}`);
   });
 
   // The bundle is served to every harness (Claude Code, Codex, OpenAI, plain
