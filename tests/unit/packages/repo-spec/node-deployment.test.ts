@@ -14,6 +14,7 @@
 import {
   COGNI_NODE_APP_V1_DEPLOYMENT,
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS,
   extractNodeServices,
   hasDeclaredNodeDeployment,
   LEGACY_DEFAULT_NODE_DEPLOYMENT,
@@ -328,6 +329,57 @@ describe("node deployment repo-spec", () => {
     ).toThrow(/runtime_profile requires the public service/);
   });
 
+  it("admits one private workflow Worker profile and rejects public or duplicate Workers", () => {
+    const worker = {
+      ...APP,
+      name: "workflow-worker",
+      artifact: { name: "workflow-worker" },
+      visibility: "private" as const,
+      runtime_profile: "cogni-workflow-worker-v1" as const,
+    };
+    const profiled = buildTestRepoSpec({
+      deployment: {
+        services: [
+          { ...APP, runtime_profile: "cogni-node-app-v1" },
+          worker,
+        ],
+      },
+    });
+    expect(extractNodeServices(profiled)[1]?.runtimeProfile).toBe(
+      "cogni-workflow-worker-v1"
+    );
+
+    expect(() =>
+      buildTestRepoSpec({ deployment: { services: [APP, worker] } })
+    ).toThrow(/requires exactly one cogni-node-app-v1 sibling/);
+
+    expect(() =>
+      buildTestRepoSpec({
+        deployment: {
+          services: [
+            { ...APP, runtime_profile: "cogni-workflow-worker-v1" },
+          ],
+        },
+      })
+    ).toThrow(/requires a private service/);
+
+    expect(() =>
+      buildTestRepoSpec({
+        deployment: {
+          services: [
+            APP,
+            worker,
+            {
+              ...worker,
+              name: "workflow-worker-two",
+              artifact: { name: "workflow-worker-two" },
+            },
+          ],
+        },
+      })
+    ).toThrow(/at most one cogni-workflow-worker-v1/);
+  });
+
   it.each([
     {
       name: "no public service",
@@ -496,6 +548,13 @@ describe("cogni-node-app-v1 deployment contract", () => {
     expect(resolveRuntimeProfileSecretRefs({ secretRefs: custom })).toEqual(
       custom
     );
+
+    expect(
+      resolveRuntimeProfileSecretRefs({
+        runtimeProfile: "cogni-workflow-worker-v1",
+        secretRefs: [],
+      }).map((ref) => ref.key)
+    ).toEqual([...COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS]);
   });
 
   it("renders a clean YAML block (no empty secret_refs) that round-trips through the schema", () => {

@@ -329,6 +329,10 @@ Temporal connection, namespace, identity, queue, and health contract so nodes do
 secret list. Namespace lifecycle is catalog-driven; no static
 `TEMPORAL_CUSTODIED_NAMESPACES` list is an ownership source.
 
+Rollout is fail-closed: candidate/preview may prove namespace routing before server auth lands,
+but production materialization rejects the Worker profile until the self-hosted Temporal server
+enforces namespace-scoped authentication and authorization.
+
 **3. Create — node-direct.** The node app owns `RecurringWorkPort` and its Temporal client. It
 reconciles repo-spec schedules into its own namespace on the stable `agent-workflows` Task
 Queue. The operator is out of schedule CRUD. Reconciliation compares workflow type, input,

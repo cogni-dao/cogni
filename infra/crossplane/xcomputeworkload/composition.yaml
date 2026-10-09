@@ -170,9 +170,25 @@ spec:
             {{- range $spec.bundle.artifacts }}{{ $_ := set $images .name .image }}{{ end }}
             {{- $ports := dict }}
             {{- range $wl.services }}{{ $_ := set $ports .name (int .port) }}{{ end }}
+            {{- $workflowWorkerName := "" }}
+            {{- $workflowWorkerPort := 0 }}
+            {{- range $wl.services }}
+            {{- if eq (dig "runtimeProfile" "" .) "cogni-workflow-worker-v1" }}
+            {{- $workflowWorkerName = .name }}
+            {{- $workflowWorkerPort = int .port }}
+            {{- end }}
+            {{- end }}
+            {{- $hasWorkflowWorker := ne $workflowWorkerName "" }}
             {{- $substrate := dig "runtime" "substrateHost" "" $spec }}
             {{- $logPush := dig "runtime" "logPush" false $spec }}
             {{- $secretName := printf "%s-compute-env-secrets" $slug }}
+            {{- $nodeTemporalNamespace := printf "cogni-%s-%s" $env $spec.nodeId }}
+            {{- $temporalNamespace := printf "cogni-%s" $env }}
+            {{- $temporalTaskQueue := "scheduler-tasks" }}
+            {{- if $hasWorkflowWorker }}
+            {{- $temporalNamespace = $nodeTemporalNamespace }}
+            {{- $temporalTaskQueue = "agent-workflows" }}
+            {{- end }}
 
             {{- /*
               MIGRATION FACTS (bug.5116 order, task.5135 decoupling). Accumulated while lowering
@@ -189,13 +205,14 @@ spec:
             {{- $image := index $images $svc.artifact }}
             {{- $profile := dig "runtimeProfile" "" $svc }}
             {{- $isApp := eq $profile "cogni-node-app-v1" }}
+            {{- $isWorkflowWorker := eq $profile "cogni-workflow-worker-v1" }}
             {{- if $isApp }}{{ $appImage = $image }}{{ end }}
             {{- $e := dict }}
             {{- /* bindHost/port contract - identical to the legacy outer env block. */ -}}
             {{- $_ := set $e "HOST" $svc.bindHost }}
             {{- $_ := set $e "HOSTNAME" $svc.bindHost }}
             {{- $_ := set $e "PORT" (printf "%d" (int $svc.port)) }}
-            {{- if $isApp }}
+            {{- if or $isApp $isWorkflowWorker }}
             {{- $_ := set $e "APP_ENV" "production" }}
             {{- $_ := set $e "DEPLOY_ENVIRONMENT" $env }}
             {{- $_ := set $e "COGNI_REPO_SHA" $desiredSha }}
@@ -207,12 +224,24 @@ spec:
             */ -}}
             {{- if ne $substrate "" }}
             {{- $_ := set $e "TEMPORAL_ADDRESS" (printf "%s:7233" $substrate) }}
-            {{- $_ := set $e "TEMPORAL_NAMESPACE" (printf "cogni-%s" $env) }}
-            {{- $_ := set $e "TEMPORAL_TASK_QUEUE" "scheduler-tasks" }}
+            {{- $_ := set $e "TEMPORAL_NAMESPACE" $temporalNamespace }}
+            {{- $_ := set $e "TEMPORAL_TASK_QUEUE" $temporalTaskQueue }}
+            {{- end }}
+            {{- end }}
+            {{- if $isApp }}
+            {{- if ne $substrate "" }}
             {{- $_ := set $e "REDIS_URL" (printf "redis://%s:6379" $substrate) }}
             {{- $_ := set $e "LITELLM_BASE_URL" (printf "http://%s:4000" $substrate) }}
+            {{- if $hasWorkflowWorker }}
+            {{- $_ := set $e "SCHEDULER_WORKER_HEALTH_URL" (printf "http://%s:%d" $workflowWorkerName $workflowWorkerPort) }}
+            {{- else }}
             {{- $_ := set $e "SCHEDULER_WORKER_HEALTH_URL" (printf "http://%s:30900" $substrate) }}
             {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $isWorkflowWorker }}
+            {{- $_ := set $e "TEMPORAL_WORKER_DEPLOYMENT_NAME" (printf "node-%s-workflows" $spec.nodeId) }}
+            {{- $_ := set $e "TEMPORAL_WORKER_BUILD_ID" $desiredSha }}
             {{- end }}
             {{- /* bindings -> sibling service URLs (legacy bindingEnv). */ -}}
             {{- range $k, $target := $svc.bindings }}
@@ -232,7 +261,7 @@ spec:
             {{- $_ := set $e .key $ref }}
             {{- end }}
             {{- end }}
-            {{- if $isApp }}
+            {{- if or $isApp $isWorkflowWorker }}
             {{- /*
               APPLICATION-LOG IDENTITY (bug.5127). The node-template transport labels its
               streams {service="app", service_name=<slug>, node=<nodeId>, env, source="lease"}.
@@ -248,6 +277,8 @@ spec:
             {{- $_ := set $e "LOKI_PUSH_PASSWORD" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_TOKEN }}" $writerNs) }}
             {{- $_ := set $e "LOKI_PUSH_SOURCE" "lease" }}
             {{- end }}
+            {{- end }}
+            {{- if $isApp }}
             {{- /* buildNodeAppIdentityEnv() - these deliberately win over every key above. */ -}}
             {{- $_ := set $e "NODE_NAME" $slug }}
             {{- $_ := set $e "COGNI_REPO_PATH" "/app" }}

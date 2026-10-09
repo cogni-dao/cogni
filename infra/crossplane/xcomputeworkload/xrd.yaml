@@ -156,8 +156,12 @@ spec:
                   x-kubernetes-validations:
                     - rule: "self.services.filter(s, s.visibility == 'public').size() == 1"
                       message: exactly one workload service must be public
-                    - rule: "self.services.all(s, !has(s.runtimeProfile) || s.visibility == 'public')"
-                      message: runtimeProfile is allowed only on the public service
+                    - rule: "self.services.all(s, !has(s.runtimeProfile) || (s.runtimeProfile == 'cogni-node-app-v1' && s.visibility == 'public') || (s.runtimeProfile == 'cogni-workflow-worker-v1' && s.visibility == 'private'))"
+                      message: cogni-node-app-v1 must be public and cogni-workflow-worker-v1 must be private
+                    - rule: "self.services.filter(s, has(s.runtimeProfile) && s.runtimeProfile == 'cogni-workflow-worker-v1').size() <= 1"
+                      message: at most one cogni-workflow-worker-v1 service is allowed
+                    - rule: "self.services.filter(s, has(s.runtimeProfile) && s.runtimeProfile == 'cogni-workflow-worker-v1').size() == 0 || self.services.filter(s, has(s.runtimeProfile) && s.runtimeProfile == 'cogni-node-app-v1').size() == 1"
+                      message: cogni-workflow-worker-v1 requires exactly one cogni-node-app-v1 sibling
                     - rule: "self.services.all(s, s.bindings.all(k, s.bindings[k] != s.name && self.services.exists(t, t.name == s.bindings[k])))"
                       message: every binding must target a different declared sibling service
                   properties:
@@ -201,7 +205,8 @@ spec:
                             pattern: "^[a-z][a-z0-9-]{0,62}$"
                           runtimeProfile:
                             type: string
-                            enum: [cogni-node-app-v1]
+                            enum:
+                              [cogni-node-app-v1, cogni-workflow-worker-v1]
                           command:
                             type: array
                             maxItems: 32

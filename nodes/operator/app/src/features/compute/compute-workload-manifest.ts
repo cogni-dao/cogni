@@ -335,6 +335,14 @@ export function buildComputeWorkloadManifest(
       `[compute-workload-manifest] no service is deployable to ${input.environment}; every declared service is gated out by its envs allow-list`
     );
   }
+  const hasWorkflowWorker = envBundle.services.some(
+    ({ service }) => service.runtimeProfile === "cogni-workflow-worker-v1"
+  );
+  if (input.environment === "production" && hasWorkflowWorker) {
+    throw new Error(
+      "[compute-workload-manifest] cogni-workflow-worker-v1 is pre-production only until the shared Temporal server enforces namespace-scoped authentication and authorization"
+    );
+  }
 
   const services: DeclaredProvisionServiceSpec[] = envBundle.services.map(
     ({ artifact, service }) => {

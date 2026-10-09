@@ -3,9 +3,9 @@
 
 /**
  * Module: `@tests/unit/packages/repo-spec/node-schedules`
- * Purpose: Unit tests for the node-facing `schedules` block and extractNodeSchedules() — route XOR graph inference, platform-invariant rejection, and M8 foreign-node pinning.
+ * Purpose: Unit tests for the node-facing `schedules` block and extractNodeSchedules() — route/graph/workflow inference, platform-invariant rejection, and M8 foreign-node pinning.
  * Scope: Pure schema + accessor tests; does not perform I/O or exercise a runtime.
- * Invariants: A repo-spec cannot produce a foreign-nodeId schedule (M8); overlap/catchupWindow are not node-facing; exactly one of route/graph per entry.
+ * Invariants: A repo-spec cannot produce a foreign-nodeId schedule (M8); overlap/catchupWindow are not node-facing; exactly one target per entry.
  * Side-effects: none
  * Links: packages/repo-spec/src/schema.ts (nodeScheduleSchema), packages/repo-spec/src/accessors.ts (extractNodeSchedules)
  * @public
@@ -30,7 +30,7 @@ function specWithSchedules(nodeId: string, schedules: unknown[]) {
   };
 }
 
-describe("nodeScheduleSchema — route XOR graph", () => {
+describe("nodeScheduleSchema — exactly one target", () => {
   it("accepts an http-dispatch schedule with a relative route", () => {
     const parsed = nodeScheduleSchema.parse({
       id: "metrics-ingest",
@@ -52,6 +52,16 @@ describe("nodeScheduleSchema — route XOR graph", () => {
     expect(parsed.graph).toBe("sandbox:openclaw");
   });
 
+  it("accepts a node-owned Workflow schedule", () => {
+    const parsed = nodeScheduleSchema.parse({
+      id: "nightly-market-brief",
+      cron: "0 0 * * *",
+      workflow: "NightlyMarketBriefWorkflow",
+      payload: { market: "daily" },
+    });
+    expect(parsed.workflow).toBe("NightlyMarketBriefWorkflow");
+  });
+
   it("rejects an entry with BOTH route and graph", () => {
     expect(() =>
       nodeScheduleSchema.parse({
@@ -63,7 +73,7 @@ describe("nodeScheduleSchema — route XOR graph", () => {
     ).toThrow(/Exactly one of/);
   });
 
-  it("rejects an entry with NEITHER route nor graph", () => {
+  it("rejects an entry with NEITHER route, graph, nor workflow", () => {
     expect(() =>
       nodeScheduleSchema.parse({ id: "neither", cron: "0 0 * * *" })
     ).toThrow(/Exactly one of/);
@@ -144,11 +154,16 @@ describe("extractNodeSchedules — M8 node pinning", () => {
     expect(resolved.every((s) => s.nodeId === NODE_A)).toBe(true);
   });
 
-  it("infers kind from route XOR graph (no target enum)", () => {
+  it("infers kind from route, graph, or workflow (no target enum)", () => {
     const spec = parseRepoSpec(
       specWithSchedules(NODE_A, [
         { id: "http", cron: "*/15 * * * *", route: "/api/x" },
         { id: "graph", cron: "0 0 * * *", graph: "g1" },
+        {
+          id: "workflow",
+          cron: "0 1 * * *",
+          workflow: "NightlyMarketBriefWorkflow",
+        },
       ])
     );
     const resolved = extractNodeSchedules(spec);
@@ -157,6 +172,8 @@ describe("extractNodeSchedules — M8 node pinning", () => {
     expect(byId.http.route).toBe("/api/x");
     expect(byId.graph.kind).toBe("graph");
     expect(byId.graph.graph).toBe("g1");
+    expect(byId.workflow.kind).toBe("workflow");
+    expect(byId.workflow.workflow).toBe("NightlyMarketBriefWorkflow");
   });
 
   it("a repo-spec CANNOT produce a foreign-nodeId schedule (M8)", () => {

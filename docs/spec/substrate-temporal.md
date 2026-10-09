@@ -140,6 +140,12 @@ identity, build/version identity, and health port. Nodes declare only additional
 requires extending repo-spec runtime profiles to support the private Worker profile; copying the
 standard secret list into every node repo is rejected because it drifts.
 
+The first implementation admits this profile only in candidate/preview. It provisions the
+per-node namespace and wires the Worker, but production materialization fails closed until the
+self-hosted Temporal service enforces namespace-scoped authentication and authorization. A
+namespace without that server-side boundary is useful for pre-production routing proof, not a
+production tenant boundary.
+
 The Worker exposes only health/metrics. It opens no public ingress and connects outward to
 Temporal. The app owns schedule CRUD; the Worker never creates, updates, or deletes schedules.
 

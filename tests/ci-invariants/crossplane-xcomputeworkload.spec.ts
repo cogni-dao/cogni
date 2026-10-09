@@ -601,6 +601,25 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // Exactly-one-public-service exposure.
     expect(template).toContain('$public := eq $svc.visibility "public"');
   });
+
+  it("wires an opted-in private workflow Worker to its node namespace", () => {
+    expect(template).toContain(
+      'eq (dig "runtimeProfile" "" .) "cogni-workflow-worker-v1"'
+    );
+    expect(template).toContain(
+      '$nodeTemporalNamespace := printf "cogni-%s-%s" $env $spec.nodeId'
+    );
+    expect(template).toContain('$temporalTaskQueue = "agent-workflows"');
+    expect(template).toContain(
+      '$_ := set $e "TEMPORAL_WORKER_BUILD_ID" $desiredSha'
+    );
+    expect(template).toContain(
+      '$_ := set $e "TEMPORAL_WORKER_DEPLOYMENT_NAME" (printf "node-%s-workflows" $spec.nodeId)'
+    );
+    expect(template).toContain(
+      '$_ := set $e "SCHEDULER_WORKER_HEALTH_URL" (printf "http://%s:%d" $workflowWorkerName $workflowWorkerPort)'
+    );
+  });
 });
 
 describe("XComputeWorkload migration decoupling (task.5135)", () => {

@@ -10,7 +10,10 @@ import {
   computeWorkloadManifestFile,
 } from "./compute-workload-manifest";
 import { deploymentEnvironmentSchema } from "./node-deployment-provider";
-import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "./node-services-workload-spec";
+import {
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS,
+} from "./node-services-workload-spec";
 
 const SHA = "a".repeat(40);
 const DIGEST = "b".repeat(64);
@@ -168,6 +171,54 @@ describe("buildComputeWorkloadManifest", () => {
     expect(manifest.spec.workload.services[0]?.secretRefs).toEqual(
       REQUIRED_SECRET_REFS
     );
+  });
+
+  it("renders the workflow Worker profile in pre-production and fails production closed until Temporal auth exists", () => {
+    const workflowBundle: ResolvedNodeArtifactBundle = {
+      ...bundle,
+      services: bundle.services.map(({ service, ...resolved }, index) => ({
+        ...resolved,
+        service:
+          index === 1
+            ? {
+                ...service,
+                runtimeProfile: "cogni-workflow-worker-v1" as const,
+                bindings: { NODE_APP_URL: "web" },
+              }
+            : service,
+      })),
+    };
+
+    const candidate = buildComputeWorkloadManifest({
+      slug: "toks4",
+      environment: "candidate-a",
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle: workflowBundle,
+      publicHost: "toks4-test.cognidao.org",
+      computeApi: "crossplane",
+      leaseGeneration: 0,
+      runtime: { substrateHost: "cogni.vm.cognidao.org" },
+    });
+    expect(candidate.spec.workload.services[1]).toMatchObject({
+      runtimeProfile: "cogni-workflow-worker-v1",
+      bindings: { NODE_APP_URL: "web" },
+      secretRefs: COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS.map((key) => ({
+        key,
+      })),
+    });
+
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "production",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle: workflowBundle,
+        publicHost: "toks4.cognidao.org",
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+        runtime: { substrateHost: "cogni.vm.cognidao.org" },
+      })
+    ).toThrow(/pre-production only until.*Temporal.*authentication/);
   });
 
   it("emits the legacy kind with no Crossplane-only policy fields", () => {

@@ -298,6 +298,10 @@ than each node spec, owns the standard Temporal connection/auth/namespace/queue/
 the node declares only extra secrets and sibling bindings. This extends the existing
 `cogni-node-app-v1` pattern to a second named capability profile.
 
+The profile is initially a candidate/preview contract. Production materialization remains
+fail-closed until the shared self-hosted Temporal server enforces namespace-scoped authentication
+and authorization; namespace naming alone is not accepted as tenant isolation.
+
 The node-template carries the source package and default Worker service. CI publishes an
 immutable, attested GitHub Release tarball; consumers pin the exact release, as Poly already
 does for knowledge and work-item packages. A published package cannot contain `workspace:*`

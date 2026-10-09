@@ -17,6 +17,7 @@
 import type { ProvisionServiceSpec, ProvisionSpec } from "@cogni/ai-tools";
 import {
   hasDeclaredNodeDeployment,
+  type NodeServiceRuntimeProfileSpec,
   type RepoSpec,
   type ResolvedNodeArtifactBundle,
   renderNodeDeploymentYaml,
@@ -42,7 +43,7 @@ export interface NodeServicesProvisionServiceSpec extends ProvisionServiceSpec {
   /** Value-free requirements resolved server-side before provider I/O. */
   readonly secretRefs: readonly { readonly key: string }[];
   /** Explicit app compatibility selector; absent means generic runtime behavior. */
-  readonly runtimeProfile?: "cogni-node-app-v1";
+  readonly runtimeProfile?: NodeServiceRuntimeProfileSpec;
 }
 
 export interface NodeServicesWorkloadSpec
@@ -55,7 +56,10 @@ export interface NodeServicesWorkloadSpec
  * Re-exported from `@cogni/repo-spec`, where the profile itself is declared, so the node
  * scaffold that MINTS the block and the gate that REJECTS an incomplete one share one list.
  */
-export { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
+export {
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS,
+} from "@cogni/repo-spec";
 
 /**
  * Gate 1 — the earliest operator-owned read of a node's own repo-spec.
