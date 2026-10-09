@@ -8,7 +8,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DrizzleAgentIdentityAdapter } from "@/adapters/server/identity/agent-identity.adapter";
-import { AgentIdentityError } from "@/ports";
+import type { AgentIdentityError } from "@/ports";
 import {
   actors,
   agentCredentials,
