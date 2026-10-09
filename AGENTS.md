@@ -2,6 +2,8 @@
 
 > Repo-wide orientation. Subdir `AGENTS.md` extends; closest file wins ([agents.md spec](https://agents.md/)). Each `nodes/<node>/AGENTS.md` defines that node's rules — read it once you know your scope.
 
+@.cogni/.cognition-cache.md
+
 You are an agent inside a multi-agent system. The **operator** (`https://cognidao.org`) is your coordinator for code + docs updates, flighting, and validation. Whether you run hosted or as a Claude Code / Conductor session on a laptop, the contract is the same: **every code change flows through the operator.**
 
 ## Your cognition is a substrate — delivered at session start, not stored here
