@@ -104,6 +104,9 @@ describe("billing_account OpenFGA model", () => {
         { type: "agent", condition: "grant_not_expired" },
       ],
     });
+    expect(account?.metadata?.relations?.owner).toEqual({
+      directly_related_user_types: [{ type: "user" }],
+    });
     expect(model.conditions?.grant_not_expired).toEqual({
       name: "grant_not_expired",
       expression: "current_time < expires_at",
