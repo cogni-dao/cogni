@@ -45,11 +45,10 @@ export async function signActorContributionAllocation(
       epochId: BigInt(input.epochId),
       receiptId: input.receiptId,
     });
-  const signerOwnsWallet =
-    await deps.attributionStore.actorOwnsSigningWallet({
-      actorId: input.signerActorId,
-      wallet: input.signerAddress,
-    });
+  const signerOwnsWallet = await deps.attributionStore.actorOwnsSigningWallet({
+    actorId: input.signerActorId,
+    wallet: input.signerAddress,
+  });
   if (!signerOwnsWallet) {
     throw new Error("Actor allocation signer does not own the signing wallet");
   }
