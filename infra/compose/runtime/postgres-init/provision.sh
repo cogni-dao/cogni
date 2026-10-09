@@ -307,6 +307,23 @@ function provision_node_db() {
   run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT SELECT ON TABLES TO \"$APP_READONLY_USER\";"
   run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO \"$APP_READONLY_USER\";"
 
+  # A DECLARED MIGRATION IS NOT AN APPLIED MIGRATION, and a node developer could
+  # not tell the difference. Drizzle records what actually ran in
+  # `drizzle.__drizzle_migrations`, but the read-only role was granted USAGE on
+  # `public` only — so the one box-free SQL instrument a node dev has
+  # (scripts/grafana-postgres-query.sh) can read their data and not their schema
+  # history. Measured on production `cogni_poly` 2026-10-08:
+  #   select nspname, has_schema_privilege(current_user, nspname, 'USAGE') ...
+  #   -> drizzle=false, public=true
+  # So the migration ledger was one GRANT away from being answerable, and the
+  # answer was being asked for by SSH instead.
+  #
+  # SELECT on the ledger only. No USAGE on the schema's sequences, no default
+  # privileges: Drizzle owns this schema and nothing here should be able to
+  # write it. `IF EXISTS` because the schema appears on first migrate, so a
+  # freshly created database legitimately does not have it yet.
+  run_sql_as_root "$db_name" "DO \$\$ BEGIN IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN EXECUTE format('GRANT USAGE ON SCHEMA drizzle TO %I', '$APP_READONLY_USER'); EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO %I', '$APP_READONLY_USER'); END IF; END \$\$;"
+
   echo "   ✅ Node '$node' provisioned (db '$db_name')."
 }
 
