@@ -10,7 +10,7 @@
  *   time of writing), so content leaking back in would silently void it.
  * Scope: Route shell with auth + container mocked; the port is stubbed. No DB,
  *   no network.
- * Invariants: INDEX_CARRIES_NO_CONTENT
+ * Invariants: INDEX_CARRIES_NO_CONTENT, Q_MATCHES_USEWHEN_ONLY
  * Side-effects: none
  * Links: src/app/api/v1/knowledge/index/route.ts, packages/node-contracts/src/knowledge.index.v1.contract.ts
  */
@@ -153,6 +153,36 @@ describe("GET /api/v1/knowledge/index — routing projection", () => {
 
   it("rejects an invalid limit instead of silently clamping", async () => {
     const res = await GET(req("?limit=99999"));
+    expect(res.status).toBe(400);
+  });
+
+  it("forwards q to the port so the trigger filter is not done here", async () => {
+    // Q_MATCHES_USEWHEN_ONLY — the route must not reimplement matching; the
+    // port owns it (and the Doltgres adapter owns the case-fold), so the index
+    // and any other caller cannot drift on what `q` means.
+    port.listDomains.mockResolvedValue(["build-health"]);
+    port.listKnowledge.mockResolvedValue([storedRow()]);
+
+    const res = await GET(req("?q=naming%20a%20crash%20cause"));
+    expect(res.status).toBe(200);
+    expect(port.listKnowledge).toHaveBeenCalledWith("build-health", {
+      limit: 500,
+      q: "naming a crash cause",
+    });
+  });
+
+  it("omits q entirely when the caller did not ask for one", async () => {
+    port.listDomains.mockResolvedValue(["build-health"]);
+    port.listKnowledge.mockResolvedValue([storedRow()]);
+
+    await GET(req());
+    expect(port.listKnowledge).toHaveBeenCalledWith("build-health", {
+      limit: 500,
+    });
+  });
+
+  it("rejects an over-long q instead of passing it through", async () => {
+    const res = await GET(req(`?q=${"x".repeat(321)}`));
     expect(res.status).toBe(400);
   });
 });

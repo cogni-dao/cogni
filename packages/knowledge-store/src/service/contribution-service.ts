@@ -151,7 +151,17 @@ export function createContributionService(
     for (const edit of edits) {
       // delete + cite carry no entry payload — nothing for the write gates
       // (shape/provenance) to validate; forward unchanged.
-      if (edit.op === "delete" || edit.op === "cite") {
+      //
+      // `patch` is forwarded unchanged too, for a different reason: the gate
+      // chain validates a COMPLETE `KnowledgeEntryInput`, and `shapeGate`
+      // fails closed on a missing `content`/`title`. Running a partial through
+      // it would reject every legitimate trigger refinement with
+      // `content_empty`. Patch-aware gate rules are explicitly sequenced
+      // AFTER this op (task.5204 checklist item 8) — a field band is pointless
+      // while the only way to apply it is a 64 KiB whole-entry replace. Until
+      // then the `patch` partial's own Zod bounds (useWhen ≤320, title ≤256,
+      // ≤32 tags) are the floor, and `content` is unreachable by construction.
+      if (edit.op === "delete" || edit.op === "cite" || edit.op === "patch") {
         out.push(edit);
         continue;
       }

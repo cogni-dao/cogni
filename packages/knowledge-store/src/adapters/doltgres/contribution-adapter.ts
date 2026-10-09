@@ -19,6 +19,12 @@
  *   - try/finally restores dolt_checkout('main') and releases the connection on error.
  *   - knowledge_contributions metadata table on main tracks state/principal/idempotency.
  *   - Reads from a branch use reserved-conn checkout (AS OF deferred to v1).
+ *   - PATCH_CARRIES_NO_CONTENT: the `patch` edit op applies a partial SET built
+ *     from `KnowledgeEntryPatch`, which has no `content` and no `domain` field.
+ *     A trigger refinement is therefore structurally incapable of overwriting a
+ *     body or moving a shelf — deliberate, not an oversight (task.5204). The
+ *     SET runs on the session-pinned branch connection inside `withBranch`,
+ *     NEVER on `this.sql`, so the edit stays on `contrib/*` and reviewable.
  *   - EDO atomic-batch methods (createEdoHypothesis/Decision/Outcome) open a
  *     contrib branch and apply entry + N citations + (for outcomes) confidence
  *     recompute in one Dolt commit on the branch. Mirrors EdoCapability's
@@ -40,7 +46,12 @@ import type {
   ContributionRecord,
   ContributionState,
   KnowledgeContributionEdit,
+  KnowledgeEntryPatch,
   Principal,
+} from "../../domain/contribution-schemas.js";
+import {
+  KNOWLEDGE_ENTRY_PATCH_FIELDS,
+  knowledgeEntryPatchIsEmpty,
 } from "../../domain/contribution-schemas.js";
 import { stripDangerousControlChars } from "../../domain/sanitize.js";
 import type { CitationType } from "../../domain/schemas.js";
@@ -55,6 +66,7 @@ import {
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
   type CreateEdoOutcomeInput,
+  EmptyKnowledgePatchError,
   type KnowledgeContributionPort,
 } from "../../port/contribution.port.js";
 import {
@@ -67,7 +79,13 @@ import {
   type BranchSessionOptions,
   DoltBranchSessionRunner,
 } from "./session-admission.js";
-import { assertDomainRegistered, escapeRef, escapeValue } from "./util.js";
+import {
+  assertDomainRegistered,
+  escapeRef,
+  escapeValue,
+  type SqlColumnValue,
+  updateSetSql,
+} from "./util.js";
 
 function principalSlug(p: Principal): string {
   return (p.name ?? p.id)
@@ -233,6 +251,55 @@ async function currentHash(conn: ReservedSql, ref: string): Promise<string> {
     `SELECT dolt_hashof(${escapeRef(ref)}) AS dolt_hashof`
   );
   return parseDoltResult(rows[0] as Record<string, unknown>, "dolt_hashof");
+}
+
+/**
+ * Columns a `patch` may SET, branch-scoped.
+ *
+ * The capability this mirrors already exists one layer down:
+ * `DoltgresKnowledgeStoreAdapter.updateKnowledge` builds a partial SET from
+ * `knowledgeUpdateColumns` + `updateSetSql`. That path runs on `this.sql` —
+ * the POOLED client, which is checked out on `main`. A contribution edit must
+ * land on `contrib/*`, so it cannot use it; this builder feeds the same shared
+ * `updateSetSql` primitive but the caller applies it on the session-pinned
+ * `ReservedSql` inside `withBranch`, keeping the write reviewable.
+ *
+ * PATCH_CARRIES_NO_CONTENT: there is no `content` branch here and no `domain`
+ * branch here because `KnowledgeEntryPatch` has no such fields — the exclusion
+ * is enforced by the type, not by remembering to omit a case.
+ *
+ * `confidence_pct` is deliberately NOT reset (unlike `op:'update'`): sharpening
+ * a trigger does not restate the claim, so the row keeps its policy-managed
+ * confidence.
+ */
+function knowledgePatchColumns(
+  patch: KnowledgeEntryPatch,
+  provenance: { sourceRef: string; sourceNode: string }
+): SqlColumnValue[] {
+  const columns: SqlColumnValue[] = [];
+  if (patch.useWhen !== undefined) {
+    columns.push({
+      column: "use_when",
+      value: stripDangerousControlChars(patch.useWhen),
+    });
+  }
+  if (patch.title !== undefined) {
+    columns.push({
+      column: "title",
+      value: stripDangerousControlChars(patch.title),
+    });
+  }
+  if (patch.entryType !== undefined) {
+    columns.push({ column: "entry_type", value: patch.entryType });
+  }
+  if (patch.tags !== undefined) {
+    columns.push({ column: "tags", value: patch.tags });
+  }
+  // Same provenance stamp as every other contribution write.
+  columns.push({ column: "source_type", value: "external" });
+  columns.push({ column: "source_ref", value: provenance.sourceRef });
+  columns.push({ column: "source_node", value: provenance.sourceNode });
+  return columns;
 }
 
 async function assertKnowledgeRowExists(
@@ -626,6 +693,46 @@ async function applyEdit(input: {
       edit.citationType !== "tracks"
     ) {
       await recomputeConfidenceOnConn(conn, edit.citedId);
+    }
+    return;
+  }
+
+  if (edit.op === "patch") {
+    // PATCH_CARRIES_NO_CONTENT. The partial has no `content` and no `domain`
+    // field, so this path can touch neither: a trigger refinement is
+    // structurally incapable of overwriting a body or moving a shelf. That is
+    // the whole reason the op exists — `op:'update'` requires a full entry and
+    // therefore replays up to 64 KiB of body, and a stale resend clobbered
+    // `content` silently (task.5204). Replacing a body is still `op:'update'`,
+    // where the caller states that intent explicitly.
+    //
+    // No `assertDomainRegistered` here: with no `domain` in the partial the row
+    // stays on the shelf it is already on, so there is no new FK to check.
+    await assertKnowledgeRowExists(conn, edit.targetRowId);
+    if (knowledgeEntryPatchIsEmpty(edit.entry)) {
+      // Defense in depth — the wire schema rejects this first.
+      throw new EmptyKnowledgePatchError(edit.targetRowId, [
+        ...KNOWLEDGE_ENTRY_PATCH_FIELDS,
+      ]);
+    }
+    if (
+      edit.entry.useWhen !== undefined &&
+      !(await knowledgeColumnExists(conn, "use_when"))
+    ) {
+      throw new ContributionConflictError(
+        "cannot patch use_when: the knowledge table on this branch has no use_when column"
+      );
+    }
+    const setClauses = updateSetSql(
+      knowledgePatchColumns(edit.entry, { sourceRef: ref, sourceNode })
+    );
+    const result = await conn.unsafe(
+      `UPDATE knowledge SET ${setClauses}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
+    );
+    if (result.count === 0) {
+      throw new ContributionNotFoundError(
+        `knowledge row not found: ${edit.targetRowId}`
+      );
     }
     return;
   }

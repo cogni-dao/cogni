@@ -5,7 +5,14 @@
  * Module: `@cogni/knowledge-store/domain/contribution-schemas`
  * Purpose: Zod schemas for the external-agent knowledge contribution flow.
  * Scope: Pure validation schemas used by port, adapter, service, and HTTP contracts. Does not contain I/O, business logic, or framework dependencies.
- * Invariants: EXTERNAL_CONTRIB_VIA_BRANCH (per knowledge-data-plane spec).
+ * Invariants:
+ *   - EXTERNAL_CONTRIB_VIA_BRANCH (per knowledge-data-plane spec).
+ *   - PATCH_CARRIES_NO_CONTENT: the `patch` op's partial has no `content` and no
+ *     `domain` field at all, so a metadata refinement is structurally incapable
+ *     of overwriting a body or moving a shelf. This is load-bearing, not an
+ *     oversight — see `KnowledgeEntryPatchSchema`.
+ *   - PATCH_IS_NOT_EMPTY: a `patch` with no settable field is a typed
+ *     validation error, never a silent no-op write.
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md
  * @public
@@ -37,6 +44,51 @@ export const KnowledgeEntryInputSchema = z.object({
 export type KnowledgeEntryInput = z.infer<typeof KnowledgeEntryInputSchema>;
 
 /**
+ * The `patch` op's partial. Every field is optional and the destructive ones are
+ * ABSENT FROM THE SHAPE, not merely optional:
+ *
+ *   - **`content` is excluded on purpose (PATCH_CARRIES_NO_CONTENT).** Refining
+ *     a retrieval trigger is the most frequent intended edit; before this op the
+ *     only way to do it was `op:'update'`, which requires a full
+ *     `KnowledgeEntryInputSchema` and therefore replays up to 64 KiB of body —
+ *     so any drift or truncation in that resend silently clobbered `content`.
+ *     Keeping the field out of the type means no `patch`, however stale or
+ *     malformed, can reach the `content` column. Replacing a body stays
+ *     `op:'update'`, where the caller is explicitly stating that intent.
+ *   - **`domain` is excluded too.** Moving an entry between shelves is a
+ *     different, separately reviewable decision; it is not a side-effect of
+ *     sharpening a trigger. Use `op:'update'` for that.
+ *
+ * `z.strictObject` so an unknown key — notably a hopeful `content` — is a loud
+ * 400 instead of being dropped, which would let a caller believe a body write
+ * landed when it never could.
+ */
+export const KnowledgeEntryPatchSchema = z.strictObject({
+  useWhen: z.string().min(1).max(320).optional(),
+  title: z.string().min(1).max(256).optional(),
+  entryType: z.string().min(1).max(64).optional(),
+  tags: z.array(z.string().max(64)).max(32).optional(),
+});
+export type KnowledgeEntryPatch = z.infer<typeof KnowledgeEntryPatchSchema>;
+
+/** The fields a `patch` may set. Single source for the empty-partial check. */
+export const KNOWLEDGE_ENTRY_PATCH_FIELDS = [
+  "useWhen",
+  "title",
+  "entryType",
+  "tags",
+] as const satisfies readonly (keyof KnowledgeEntryPatch)[];
+
+/** True when a parsed patch names at least one field to set. */
+export function knowledgeEntryPatchIsEmpty(
+  patch: KnowledgeEntryPatch
+): boolean {
+  return KNOWLEDGE_ENTRY_PATCH_FIELDS.every(
+    (field) => patch[field] === undefined
+  );
+}
+
+/**
  * Citation edge types writable through the generic contribution flow. These
  * are the non-temporal knowledge edges from `CitationTypeSchema` (domain
  * `schemas.ts`); the hypothesis-loop edges (`evidence_for`, `derives_from`,
@@ -66,6 +118,11 @@ export const KnowledgeContributionEditSchema = z
       entry: KnowledgeEntryInputSchema,
     }),
     z.object({
+      op: z.literal("patch"),
+      targetRowId: z.string().min(1).max(256),
+      entry: KnowledgeEntryPatchSchema,
+    }),
+    z.object({
       op: z.literal("delete"),
       targetRowId: z.string().min(1).max(256),
       reason: z.string().min(1).max(512),
@@ -79,6 +136,17 @@ export const KnowledgeContributionEditSchema = z
     }),
   ])
   .superRefine((edit, ctx) => {
+    // PATCH_IS_NOT_EMPTY: `{op:'patch', entry:{}}` parses structurally (every
+    // field is optional) but would issue an UPDATE with no SET clause. Reject
+    // it at the wire so the caller gets a typed 400 naming the settable
+    // fields, rather than a 200 for a write that never happened.
+    if (edit.op === "patch" && knowledgeEntryPatchIsEmpty(edit.entry)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `patch must set at least one of: ${KNOWLEDGE_ENTRY_PATCH_FIELDS.join(", ")}. A patch deliberately cannot carry content or domain — use op:'update' to replace a body or move a shelf.`,
+        path: ["entry"],
+      });
+    }
     // A self-referential edge would let a row support/contradict its own
     // confidence — reject at the wire rather than in the adapter.
     if (edit.op === "cite" && edit.citingId === edit.citedId) {

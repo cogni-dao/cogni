@@ -9,6 +9,7 @@ spec_refs:
 work_items:
   - task.0425
   - task.5054
+  - task.5204
 created: 2026-04-29
 ---
 
@@ -41,7 +42,7 @@ This API lets external agents and less-trusted automation:
 
 - Open a short-lived `contrib/*` branch through HTTP.
 - Append multiple logical commit batches to that branch.
-- Insert, update, or deprecate `knowledge` rows through typed edit contracts.
+- Insert, patch, update, or deprecate `knowledge` rows through typed edit contracts.
 - Read the contribution record, commit timeline, and Dolt-backed review diff.
 - Close their own open branch.
 
@@ -257,9 +258,18 @@ type KnowledgeEntryInput = {
   confidencePct?: number;
 };
 
+// The `patch` partial. Note what is NOT here: `content` and `domain`.
+type KnowledgeEntryPatch = {
+  useWhen?: string; // ≤320
+  title?: string; // ≤256
+  entryType?: string; // ≤64
+  tags?: string[]; // ≤32
+};
+
 type KnowledgeContributionEdit =
   | { op: "insert"; entry: KnowledgeEntryInput }
   | { op: "update"; targetRowId: string; entry: KnowledgeEntryInput }
+  | { op: "patch"; targetRowId: string; entry: KnowledgeEntryPatch }
   | { op: "deprecate"; targetRowId: string; reason: string }
   | {
       op: "cite";
@@ -274,7 +284,78 @@ type KnowledgeContributionEdit =
 
 `targetRowId` is evaluated on the contribution branch after checkout, not on
 `main`. That allows commit 2 to update a row created by commit 1 on the same
-branch. A missing update/deprecate target fails before `dolt_commit`.
+branch. A missing update/patch/deprecate target fails before `dolt_commit`.
+
+#### `patch` — refine metadata without replaying the body
+
+**`PATCH_CARRIES_NO_CONTENT`.** `op:"patch"` applies a partial SET from
+`KnowledgeEntryPatch`, which has no `content` field and no `domain` field. This
+is the load-bearing property of the op, not an omission:
+
+- `op:"update"` carries a **complete** `KnowledgeEntryInput`, and that schema
+  requires `domain`, `title`, and `content` (≤65536). So before `patch`, the
+  only way to sharpen one line of `useWhen` was to resend up to 64 KiB of body
+  — and any drift or truncation in that resend overwrote `content` silently,
+  with a 200. Refining a retrieval trigger is the most frequent intended edit
+  ("refine over add"), and it was the most destructive call in the API
+  (task.5204).
+- Because `content` is absent from the **type**, no `patch` — however stale,
+  truncated, or malformed — can reach the `content` column. Replacing a body
+  stays `op:"update"`, where the caller is explicitly stating that intent.
+- `domain` is excluded for the same reason at a different altitude: moving an
+  entry between shelves is a separately reviewable decision, not a side-effect
+  of sharpening a trigger. Use `op:"update"`.
+- The partial is a **strict** object, so an unknown key (notably a hopeful
+  `content`) is a 400 rather than a silently dropped field. A caller can never
+  believe a body write landed when it structurally could not.
+
+**`PATCH_IS_NOT_EMPTY`.** `{op:"patch", entry:{}}` parses structurally — every
+field is optional — but would issue an `UPDATE` with no `SET` clause. The wire
+schema rejects it with a typed 400 naming the settable fields; the adapter
+throws `EmptyKnowledgePatchError` (also 400) as defense in depth. A no-op is
+never acknowledged as an applied write.
+
+Two further behaviours that differ from `op:"update"`:
+
+- **`confidence_pct` is preserved.** `update` resets it via the
+  initial-confidence policy because it restates the whole claim; a patch does
+  not restate the claim, so the row keeps its policy-managed confidence.
+- **The write-gate chain is skipped.** The gates validate a complete
+  `KnowledgeEntryInput` and `shapeGate` fails closed on a missing
+  `content`/`title`, so running a partial through it would reject every
+  legitimate trigger refinement with `content_empty`. Patch-aware gate rules
+  (including the `useWhen` length band) are sequenced _after_ this op in
+  task.5204 — a field band is pointless while the only way to apply it is a
+  64 KiB whole-entry replace. Until then the partial's own Zod bounds are the
+  floor.
+
+The SET runs on the session-pinned branch connection inside `withBranch`, never
+on the pooled client, so a patch lands on `contrib/*` and stays reviewable like
+every other edit. It stamps the same provenance as the other ops
+(`source_type='external'`, `source_ref='contribution:<id>:<seq>'`,
+`source_node=<principal_id>`).
+
+```jsonc
+// Sharpen one trigger. The body is not in the request and cannot be touched.
+{
+  "message": "sharpen the promote-digest trigger",
+  "edits": [
+    {
+      "op": "patch",
+      "targetRowId": "prod-promote-digest-only",
+      "entry": {
+        "useWhen": "use when a promote reports success but buildSha did not advance",
+      },
+    },
+  ],
+}
+```
+
+Finding the row to patch is the companion read: `GET /api/v1/knowledge/index?q=`
+filters the routing projection on `useWhen` (case-insensitive substring), so an
+agent can ask which triggers match its situation without downloading any
+bodies. `GET /knowledge` is deliberately left without `q` — it browses rows,
+the index routes, and two endpoints with sharp jobs beat one with modes.
 
 The `cite` op writes a typed edge into the `citations` table — the same
 primitive the EDO endpoints use, exposed for generic findings/scorecards so a

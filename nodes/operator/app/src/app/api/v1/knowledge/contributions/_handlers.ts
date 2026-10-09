@@ -21,6 +21,7 @@ import {
   ContributionNotFoundError,
   ContributionStateError,
   DomainNotRegisteredError,
+  EmptyKnowledgePatchError,
   KnowledgeBusyError,
   KnowledgeGateError,
   type PrincipalAuthSource,
@@ -75,6 +76,9 @@ function mapError(e: unknown): NextResponse {
   if (e instanceof ContributionConflictError)
     return NextResponse.json({ error: e.message }, { status: 409 });
   if (e instanceof DomainNotRegisteredError)
+    return NextResponse.json({ error: e.message }, { status: 400 });
+  // PATCH_IS_NOT_EMPTY — a no-op patch is a client contract error, not a 500.
+  if (e instanceof EmptyKnowledgePatchError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   // A cite/EDO edit whose target resolves on neither the branch nor main, or
   // whose edge type doesn't match the cited entry_type, is a client error —

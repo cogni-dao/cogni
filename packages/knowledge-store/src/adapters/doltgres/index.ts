@@ -214,7 +214,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async listKnowledge(
     domain: string,
-    opts?: { tags?: string[]; limit?: number }
+    opts?: { tags?: string[]; limit?: number; q?: string }
   ): Promise<Knowledge[]> {
     const conditions = [`domain = ${escapeValue(domain)}`];
 
@@ -228,6 +228,34 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     }
 
     const limit = opts?.limit ?? 100;
+    const needle = opts?.q?.trim().toLowerCase();
+
+    // `q` matches case-insensitively in the APP LAYER, not in Doltgres SQL —
+    // the same idiom `searchKnowledge` already uses, and for the same reason:
+    // Doltgres has no ILIKE, and LOWER() panics on out-of-line TEXT storage
+    // (*val.TextStorage). `use_when` is a `text` column too, so it carries the
+    // same hazard; there is no SQL case-folding idiom in this adapter that is
+    // proven safe on `text`. The `q` path therefore fetches the shelf (domain
+    // is indexed) WITHOUT the SQL LIMIT and truncates after filtering —
+    // limiting first would silently drop matches outside the newest N. Both
+    // collapse into the pgvector search index when it lands
+    // (DOLT_IS_SOURCE_OF_TRUTH).
+    if (needle) {
+      const rows = await this.sql.unsafe(
+        `SELECT * FROM knowledge WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC`
+      );
+      const matched: Knowledge[] = [];
+      for (const r of rows) {
+        const entry = rowToKnowledge(r as Record<string, unknown>);
+        // A null trigger never matches: an entry with no `useWhen` has not
+        // stated a situation, so it cannot claim to fit the caller's.
+        if (!entry.useWhen?.toLowerCase().includes(needle)) continue;
+        matched.push(entry);
+        if (matched.length >= limit) break;
+      }
+      return matched;
+    }
+
     const rows = await this.sql.unsafe(
       `SELECT * FROM knowledge WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ${limit}`
     );
