@@ -62,7 +62,9 @@
  *     rule now covers what observe ANSWERS, not only what it refuses: every observe states the
  *     migration verdict its response carries (`akash_tx_observe_migration_verdict`), because
  *     that one enum is what the composite reads to decide `MigrationFailed`, and nothing else
- *     in this process logs the RESPONSE (bug.5416).
+ *     in this process logs the RESPONSE (bug.5416). And every observe states what the COMPOSITE
+ *     decided (`akash_tx_observe_composite_verdict`) when the composition sends it: a
+ *     Composition cannot log, so this process is its only telemetry terminal (bug.5416).
  * Side-effects: IO (Akash Console transactions via the injected client; durable allocation and
  *   receipt-linked cost writes; one bounded serving probe per observe when asked)
  * Links: @ports/akash-tx.port, adapters/server/compute/akash-compute.adapter (SDL + provider
@@ -78,6 +80,7 @@ import {
   type AkashTxActuatorPort,
   type AkashTxAllocationLedgerPort,
   type AkashTxAllocationRecord,
+  type AkashTxCompositeVerdict,
   type AkashTxConsolePort,
   type AkashTxCreateResult,
   AkashTxError,
@@ -345,7 +348,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     migration?: AkashTxMigrationStep;
     workload?: string;
     environment?: string;
+    composite?: AkashTxCompositeVerdict;
   }): Promise<AkashTxObservation> {
+    // THE VERDICT THE COMPOSITE ALREADY REACHED, stated before anything else can throw
+    // (bug.5416). Ordered ahead of the release step on purpose: this reports the PREVIOUS
+    // tick's decision, so it owes nothing to this tick's work and must survive a refusal.
+    this.logCompositeVerdict(input);
     // The RELEASE step. It runs FIRST so the Job is ensured on the very first tick — before
     // there is any lease to observe — and its answer is carried onto whatever the observation
     // turns out to be. It never throws and never short-circuits: an observe that reported
@@ -938,6 +946,53 @@ export class AkashTxActuator implements AkashTxActuatorPort {
           : {}),
       }
     );
+  }
+
+  /**
+   * State the verdict THE COMPOSITE ITSELF REACHED — `status.phase` plus the
+   * `status.failure.reason` its own ranking produced (bug.5416).
+   *
+   * `akash_tx_observe_migration_verdict` proves the gate's INPUT. It cannot prove the composite
+   * ACTED on it: `composition.yaml` ranks a terminal refusal and `BootDeadlineExceeded` above
+   * `$migrationFailed`, so a response carrying `failed` and a composite reporting
+   * `BootDeadlineExceeded` are the SAME tick. Which branch won is knowable only to the
+   * composite — and a Crossplane Composition cannot log, emit an Event, or write a metric
+   * (Kubernetes records no Event for a status transition, and `function-go-templating` has no
+   * result meta-kind at any released version), so the observe it already makes every tick is
+   * its only telemetry channel. This line is that channel's terminal.
+   *
+   * Unconditional, NOT change-only, for the same reason as the migration verdict: a gate is a
+   * steady state and has to be readable as one by a bounded-window query. `reported: false`
+   * keeps "the composition does not send it" distinguishable from "the composite is healthy" —
+   * the absence of a marker says nothing at all.
+   *
+   * CARDINALITY: fields only, never stream labels, and the reason is contract-bounded to one
+   * `^[A-Za-z_][A-Za-z0-9_]{0,127}$` token. `failure.message` is NOT carried: it is free text
+   * holding SHAs, lease handles and second counts, and is unbounded by construction.
+   */
+  private logCompositeVerdict(input: {
+    cogniKey: string;
+    workload?: string;
+    environment?: string;
+    composite?: AkashTxCompositeVerdict;
+  }): void {
+    const fields = {
+      cogniKey: input.cogniKey,
+      ...(input.workload ? { workload: input.workload } : {}),
+      ...(input.environment ? { environment: input.environment } : {}),
+      reported: input.composite !== undefined,
+      ...(input.composite
+        ? {
+            compositePhase: input.composite.phase,
+            compositeFailureReason: input.composite.failureReason,
+          }
+        : {}),
+    };
+    if (input.composite?.phase === "Failed") {
+      this.log.error(fields, "akash_tx_observe_composite_verdict");
+      return;
+    }
+    this.log.info(fields, "akash_tx_observe_composite_verdict");
   }
 
   /**

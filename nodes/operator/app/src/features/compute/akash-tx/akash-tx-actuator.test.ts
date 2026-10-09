@@ -2712,3 +2712,116 @@ describe("AkashTxActuator observe migration verdict", () => {
     ]);
   });
 });
+
+/**
+ * bug.5416, second half. `akash_tx_observe_migration_verdict` proves what the RESPONSE carried;
+ * it cannot prove the composite acted, because `composition.yaml` ranks a terminal refusal and
+ * `BootDeadlineExceeded` above `$migrationFailed`. These pin the composite's own verdict line —
+ * the only telemetry a Composition can produce, since Kubernetes records no Event for a status
+ * transition and `function-go-templating` has no result meta-kind.
+ */
+describe("AkashTxActuator observe composite verdict", () => {
+  function verdicts(log: ReturnType<typeof recordingLogger>) {
+    return log.lines.filter(
+      (line) => line.marker === "akash_tx_observe_composite_verdict"
+    );
+  }
+
+  it("states the composite's phase and reason at error level when it FAILED", async () => {
+    const { actuator, log } = build();
+
+    await actuator.observe({
+      cogniKey: "k1",
+      workload: "poly",
+      environment: "candidate-a",
+      composite: { phase: "Failed", failureReason: "MigrationFailed" },
+    });
+
+    expect(verdicts(log)).toEqual([
+      {
+        level: "error",
+        marker: "akash_tx_observe_composite_verdict",
+        fields: {
+          cogniKey: "k1",
+          workload: "poly",
+          environment: "candidate-a",
+          reported: true,
+          compositePhase: "Failed",
+          compositeFailureReason: "MigrationFailed",
+        },
+      },
+    ]);
+  });
+
+  it("distinguishes the branch that WON from the migration verdict on the same tick", async () => {
+    // The whole point: a response carrying `failed` and a composite reporting
+    // `BootDeadlineExceeded` are one tick. Two markers, two facts, no re-derivation.
+    const { actuator, log } = build();
+
+    await actuator.observe({
+      cogniKey: "k1",
+      composite: { phase: "Failed", failureReason: "BootDeadlineExceeded" },
+    });
+
+    expect(verdicts(log)[0]?.fields).toMatchObject({
+      compositeFailureReason: "BootDeadlineExceeded",
+    });
+  });
+
+  it("states the cleared-failure sentinel rather than omitting it", async () => {
+    // `status.failure.reason` is written UNCONDITIONALLY by the composition (bug.5287); "None"
+    // is cleared, and a reader must see it to tell a healthy composite from a silent one.
+    const { actuator, log } = build();
+
+    await actuator.observe({
+      cogniKey: "k1",
+      composite: { phase: "Ready", failureReason: "None" },
+    });
+
+    expect(verdicts(log)).toEqual([
+      {
+        level: "info",
+        marker: "akash_tx_observe_composite_verdict",
+        fields: {
+          cogniKey: "k1",
+          reported: true,
+          compositePhase: "Ready",
+          compositeFailureReason: "None",
+        },
+      },
+    ]);
+  });
+
+  it("says the composite REPORTED NOTHING when the composition does not send it", async () => {
+    // The reader ships before the sender. Absence of a marker cannot be told apart from an
+    // operator that is not deployed, so the not-sent case gets its own line.
+    const { actuator, log } = build();
+
+    await actuator.observe({ cogniKey: "k1" });
+
+    expect(verdicts(log)).toEqual([
+      {
+        level: "info",
+        marker: "akash_tx_observe_composite_verdict",
+        fields: { cogniKey: "k1", reported: false },
+      },
+    ]);
+  });
+
+  it("carries no failure MESSAGE — the bounded reason token is the whole payload", async () => {
+    const { actuator, log } = build();
+
+    await actuator.observe({
+      cogniKey: "k1",
+      composite: { phase: "Failed", failureReason: "RecoveryLimitExceeded" },
+    });
+
+    const fields = verdicts(log)[0]?.fields ?? {};
+    expect(Object.keys(fields).sort()).toEqual([
+      "cogniKey",
+      "compositeFailureReason",
+      "compositePhase",
+      "reported",
+    ]);
+  });
+});
