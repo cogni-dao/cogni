@@ -258,12 +258,11 @@ type KnowledgeEntryInput = {
   confidencePct?: number;
 };
 
-// The `patch` partial. Note what is NOT here: `content` and `domain`.
+// The `patch` partial: ONLY fields no write gate governs. Note what is NOT
+// here — content, title, tags, id, domain, sourceType, sourceRef.
 type KnowledgeEntryPatch = {
   useWhen?: string; // ≤320
-  title?: string; // ≤256
   entryType?: string; // ≤64
-  tags?: string[]; // ≤32
 };
 
 type KnowledgeContributionEdit =
@@ -288,26 +287,47 @@ branch. A missing update/patch/deprecate target fails before `dolt_commit`.
 
 #### `patch` — refine metadata without replaying the body
 
-**`PATCH_CARRIES_NO_CONTENT`.** `op:"patch"` applies a partial SET from
-`KnowledgeEntryPatch`, which has no `content` field and no `domain` field. This
-is the load-bearing property of the op, not an omission:
+**`PATCH_CARRIES_ONLY_UNGATED_FIELDS` — the rule that decides what a patch may
+carry: a field is patchable only if no write gate governs it.**
 
-- `op:"update"` carries a **complete** `KnowledgeEntryInput`, and that schema
+The gate chain (`V0_DETERMINISTIC_GATES`) validates a whole
+`KnowledgeEntryInput`, so it structurally cannot run against a partial. Rather
+than let `patch` be an exception to the gates, the partial is narrowed to the
+fields the chain has no opinion about:
+
+| field       | gate coverage today              | patchable |
+| ----------- | -------------------------------- | --------- |
+| `useWhen`   | none — _this is the defect_      | ✅        |
+| `entryType` | none                             | ✅        |
+| `content`   | shape (`content_empty`)          | ❌        |
+| `title`     | shape (3–60, punctuation, `·`)   | ❌        |
+| `tags`      | shape (≤16 tags, each 1–32)      | ❌        |
+| `id`        | shape (kebab slug, 1–4 segments) | ❌        |
+| `sourceRef` | provenance                       | ❌        |
+| `domain`    | none, but a shelf move is review | ❌        |
+
+So `patch` is **not** a gate bypass and needs no gate chain of its own: there is
+nothing the chain would say about the two fields it can carry. Editing any
+gate-governed field stays `op:"update"`, where the caller states that intent
+explicitly and the chain runs in full. `useWhen`'s own rules — including the
+length band — land in task.5204 item 8; a band is pointless while the only way
+to apply it is a 64 KiB whole-entry replace.
+
+Why the op exists at all:
+
+- `op:"update"` carries a **whole** `KnowledgeEntryInput`, and that schema
   requires `domain`, `title`, and `content` (≤65536). So before `patch`, the
   only way to sharpen one line of `useWhen` was to resend up to 64 KiB of body
   — and any drift or truncation in that resend overwrote `content` silently,
   with a 200. Refining a retrieval trigger is the most frequent intended edit
   ("refine over add"), and it was the most destructive call in the API
   (task.5204).
-- Because `content` is absent from the **type**, no `patch` — however stale,
-  truncated, or malformed — can reach the `content` column. Replacing a body
-  stays `op:"update"`, where the caller is explicitly stating that intent.
-- `domain` is excluded for the same reason at a different altitude: moving an
-  entry between shelves is a separately reviewable decision, not a side-effect
-  of sharpening a trigger. Use `op:"update"`.
-- The partial is a **strict** object, so an unknown key (notably a hopeful
-  `content`) is a 400 rather than a silently dropped field. A caller can never
-  believe a body write landed when it structurally could not.
+- Because each excluded field is absent from the **type**, no `patch` — however
+  stale, truncated, or malformed — can reach those columns. The exclusion is
+  enforced by the type, not by remembering to omit a case in the adapter.
+- The partial is a **strict** object, so an unknown key (a hopeful `content`,
+  `title`, or `tags`) is a 400 rather than a silently dropped field. A caller
+  can never believe a write landed when it structurally could not.
 
 **`PATCH_IS_NOT_EMPTY`.** `{op:"patch", entry:{}}` parses structurally — every
 field is optional — but would issue an `UPDATE` with no `SET` clause. The wire
@@ -315,19 +335,11 @@ schema rejects it with a typed 400 naming the settable fields; the adapter
 throws `EmptyKnowledgePatchError` (also 400) as defense in depth. A no-op is
 never acknowledged as an applied write.
 
-Two further behaviours that differ from `op:"update"`:
+One further behaviour that differs from `op:"update"`:
 
 - **`confidence_pct` is preserved.** `update` resets it via the
   initial-confidence policy because it restates the whole claim; a patch does
   not restate the claim, so the row keeps its policy-managed confidence.
-- **The write-gate chain is skipped.** The gates validate a complete
-  `KnowledgeEntryInput` and `shapeGate` fails closed on a missing
-  `content`/`title`, so running a partial through it would reject every
-  legitimate trigger refinement with `content_empty`. Patch-aware gate rules
-  (including the `useWhen` length band) are sequenced _after_ this op in
-  task.5204 — a field band is pointless while the only way to apply it is a
-  64 KiB whole-entry replace. Until then the partial's own Zod bounds are the
-  floor.
 
 The SET runs on the session-pinned branch connection inside `withBranch`, never
 on the pooled client, so a patch lands on `contrib/*` and stays reviewable like

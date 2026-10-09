@@ -19,12 +19,14 @@
  *   - try/finally restores dolt_checkout('main') and releases the connection on error.
  *   - knowledge_contributions metadata table on main tracks state/principal/idempotency.
  *   - Reads from a branch use reserved-conn checkout (AS OF deferred to v1).
- *   - PATCH_CARRIES_NO_CONTENT: the `patch` edit op applies a partial SET built
- *     from `KnowledgeEntryPatch`, which has no `content` and no `domain` field.
- *     A trigger refinement is therefore structurally incapable of overwriting a
- *     body or moving a shelf — deliberate, not an oversight (task.5204). The
- *     SET runs on the session-pinned branch connection inside `withBranch`,
- *     NEVER on `this.sql`, so the edit stays on `contrib/*` and reviewable.
+ *   - PATCH_CARRIES_ONLY_UNGATED_FIELDS: the `patch` edit op applies a partial
+ *     SET built from `KnowledgeEntryPatch`, which carries ONLY fields no write
+ *     gate governs (`useWhen`, `entryType`). `content`, `title`, `tags`, `id`
+ *     and `domain` are absent from the type, so a trigger refinement is
+ *     structurally incapable of overwriting a body, bypassing the shape gate's
+ *     title/tag rules, or moving a shelf (task.5204). The SET runs on the
+ *     session-pinned branch connection inside `withBranch`, NEVER on
+ *     `this.sql`, so the edit stays on `contrib/*` and reviewable.
  *   - EDO atomic-batch methods (createEdoHypothesis/Decision/Outcome) open a
  *     contrib branch and apply entry + N citations + (for outcomes) confidence
  *     recompute in one Dolt commit on the branch. Mirrors EdoCapability's
@@ -264,9 +266,10 @@ async function currentHash(conn: ReservedSql, ref: string): Promise<string> {
  * `updateSetSql` primitive but the caller applies it on the session-pinned
  * `ReservedSql` inside `withBranch`, keeping the write reviewable.
  *
- * PATCH_CARRIES_NO_CONTENT: there is no `content` branch here and no `domain`
- * branch here because `KnowledgeEntryPatch` has no such fields — the exclusion
- * is enforced by the type, not by remembering to omit a case.
+ * PATCH_CARRIES_ONLY_UNGATED_FIELDS: there is no `content`, `title`, `tags` or
+ * `domain` branch here because `KnowledgeEntryPatch` has no such fields. The
+ * exclusion is enforced by the type, not by remembering to omit a case — so
+ * this function cannot drift into a gate bypass even if someone adds a case.
  *
  * `confidence_pct` is deliberately NOT reset (unlike `op:'update'`): sharpening
  * a trigger does not restate the claim, so the row keeps its policy-managed
@@ -283,17 +286,8 @@ function knowledgePatchColumns(
       value: stripDangerousControlChars(patch.useWhen),
     });
   }
-  if (patch.title !== undefined) {
-    columns.push({
-      column: "title",
-      value: stripDangerousControlChars(patch.title),
-    });
-  }
   if (patch.entryType !== undefined) {
     columns.push({ column: "entry_type", value: patch.entryType });
-  }
-  if (patch.tags !== undefined) {
-    columns.push({ column: "tags", value: patch.tags });
   }
   // Same provenance stamp as every other contribution write.
   columns.push({ column: "source_type", value: "external" });
@@ -698,13 +692,16 @@ async function applyEdit(input: {
   }
 
   if (edit.op === "patch") {
-    // PATCH_CARRIES_NO_CONTENT. The partial has no `content` and no `domain`
-    // field, so this path can touch neither: a trigger refinement is
-    // structurally incapable of overwriting a body or moving a shelf. That is
-    // the whole reason the op exists — `op:'update'` requires a full entry and
-    // therefore replays up to 64 KiB of body, and a stale resend clobbered
-    // `content` silently (task.5204). Replacing a body is still `op:'update'`,
-    // where the caller states that intent explicitly.
+    // PATCH_CARRIES_ONLY_UNGATED_FIELDS. The partial carries only `useWhen` and
+    // `entryType` — the two entry fields no write gate governs — so this path
+    // can touch neither a body nor any gate-governed field. That is the whole
+    // reason the op exists: `op:'update'` requires a full entry and therefore
+    // replays up to 64 KiB of body, and a stale resend clobbered `content`
+    // silently (task.5204). It is also why `patch` needs no gate chain of its
+    // own rather than skipping one — there is nothing for the chain to say
+    // about these fields yet (task.5204 item 8 adds the `useWhen` rules).
+    // Editing content/title/tags/domain stays `op:'update'`, where the caller
+    // states that intent explicitly and the gates run.
     //
     // No `assertDomainRegistered` here: with no `domain` in the partial the row
     // stays on the shelf it is already on, so there is no new FK to check.

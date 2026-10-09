@@ -9,9 +9,11 @@
  *   - RED CONTROL first: the pre-existing `op:'update'` path is shown to clobber
  *     `content` on a resend that drifts, so the green `patch` case cannot be
  *     mistaken for a body that was never at risk.
- *   - PATCH_CARRIES_NO_CONTENT: a patch that refines `useWhen` must leave
- *     `content` byte-identical, and an empty partial must be rejected rather
- *     than acknowledged as an applied write.
+ *   - PATCH_CARRIES_ONLY_UNGATED_FIELDS: a patch that refines `useWhen` must
+ *     leave `content` byte-identical, and must actively REFUSE every
+ *     gate-governed field (`content`, `title`, `tags`, `id`, `sourceRef`) plus
+ *     `domain` — so the op cannot become a route around the write-gate chain.
+ *     An empty partial must be rejected rather than acknowledged as a write.
  *   - Q_MATCHES_USEWHEN_ONLY: `q` matches the trigger, never the title or body.
  * Side-effects: Docker container, sub-process (migrator), database writes.
  * Links: packages/knowledge-store/src/domain/contribution-schemas.ts, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
@@ -232,23 +234,74 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     expect(after?.sourceRef).toMatch(/^contribution:.+:1$/);
   }, 180_000);
 
-  it("PATCH_CARRIES_NO_CONTENT: content and domain are not in the wire shape", async () => {
-    // Not merely optional — absent. A hopeful `content` is a 400, not a
-    // silently dropped key, so a caller can never believe a body write landed.
-    const withContent = KnowledgeContributionEditSchema.safeParse({
-      op: "patch",
-      targetRowId: "patch-keeps-body",
-      entry: { useWhen: "use when x", content: "sneaky body" },
-    });
-    expect(withContent.success).toBe(false);
+  it("PATCH_CARRIES_ONLY_UNGATED_FIELDS: every gate-governed field is refused", async () => {
+    // The op exists and `useWhen` alone is accepted (proved above), so each
+    // rejection here is the schema ACTIVELY refusing a field — not an artifact
+    // of the op being absent. A patch may carry only what no write gate
+    // governs; anything else must go through `op:'update'`, where the chain
+    // runs. These are 400s, not silently dropped keys, so a caller can never
+    // believe such a write landed.
+    const excluded: ReadonlyArray<[string, Record<string, unknown>]> = [
+      // shape gate: content_empty
+      ["content", { content: "sneaky body" }],
+      // shape gate: 3–60 chars, trailing punctuation, ` · ` separators
+      ["title", { title: "a title the shape gate would reject." }],
+      // shape gate: ≤16 tags, each 1–32 chars
+      ["tags", { tags: ["sneaky"] }],
+      // shape gate: kebab slug, 1–4 segments
+      ["id", { id: "some-other-row" }],
+      // provenance gate — the adapter stamps provenance itself
+      ["sourceType", { sourceType: "human" }],
+      ["sourceRef", { sourceRef: "https://example.invalid" }],
+      // ungated, but a shelf move is a separately reviewable decision
+      ["domain", { domain: "someother" }],
+      ["entityId", { entityId: "ent-1" }],
+      ["confidencePct", { confidencePct: 99 }],
+    ];
 
-    const withDomain = KnowledgeContributionEditSchema.safeParse({
-      op: "patch",
-      targetRowId: "patch-keeps-body",
-      entry: { useWhen: "use when x", domain: "someother" },
-    });
-    expect(withDomain.success).toBe(false);
+    for (const [field, extra] of excluded) {
+      const parsed = KnowledgeContributionEditSchema.safeParse({
+        op: "patch",
+        targetRowId: "patch-keeps-body",
+        entry: { useWhen: "use when the gate hole is closed", ...extra },
+      });
+      expect(parsed.success, `patch must refuse '${field}'`).toBe(false);
+    }
+
+    // Control: the two ungated fields are accepted, together and alone — so the
+    // loop above is not just "strictObject rejects everything".
+    expect(
+      KnowledgeContributionEditSchema.safeParse({
+        op: "patch",
+        targetRowId: "patch-keeps-body",
+        entry: { useWhen: "use when the gate hole is closed" },
+      }).success
+    ).toBe(true);
+    expect(
+      KnowledgeContributionEditSchema.safeParse({
+        op: "patch",
+        targetRowId: "patch-keeps-body",
+        entry: { entryType: "guide" },
+      }).success
+    ).toBe(true);
   });
+
+  it("GREEN: op:'patch' can refine entryType, the other ungated field", async () => {
+    await seedEntry("patch-entrytype", "use when classifying a shelf entry");
+    await contributeAndMerge("retyper", "reclassify via patch", [
+      {
+        op: "patch",
+        targetRowId: "patch-entrytype",
+        entry: { entryType: "guide" },
+      },
+    ]);
+
+    const after = await store.getKnowledge("patch-entrytype");
+    expect(after?.entryType).toBe("guide");
+    // Still byte-identical, and the trigger it did not name is untouched.
+    expect(after?.content).toBe(LONG_CONTENT);
+    expect(after?.useWhen).toBe("use when classifying a shelf entry");
+  }, 180_000);
 
   it("PATCH_IS_NOT_EMPTY: an empty partial is rejected, not a silent no-op", async () => {
     const parsed = KnowledgeContributionEditSchema.safeParse({
