@@ -112,6 +112,7 @@ export function getDoltgresWorkItemsAdapter(
     _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
       idFloor: OPERATOR_ID_FLOOR,
       readClient: getDoltgresReadSql(),
+      recreateReadClient: createReadSql,
       // Conditional spread, not `logger?.child(...)`: `exactOptionalPropertyTypes`
       // rejects an explicit `undefined` for an optional property.
       ...(logger

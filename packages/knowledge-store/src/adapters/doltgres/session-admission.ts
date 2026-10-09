@@ -363,7 +363,7 @@ export class DoltBranchSessionRunner {
           reason: "contended",
         });
         throw new KnowledgeBusyError(
-          "Another replica holds the knowledge write lock; retry shortly"
+          `Knowledge write lane remained busy for ${this.lockWaitMs}ms; retry shortly`
         );
       }
       await sleep(
