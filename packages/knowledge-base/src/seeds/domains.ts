@@ -4,7 +4,8 @@
 /**
  * Module: `@cogni/knowledge-base/seeds/domains`
  * Purpose: Base `domains` registry rows — the starter shelves every spawned node inherits.
- *   Every knowledge entry's `domain` column references one of these or a node-declared shelf.
+ *   Every knowledge entry's `domain` column references one of these or a shelf registered
+ *   directly in that node's Dolt `domains` table.
  * Scope: Seed data definitions only. Does not perform I/O.
  * Invariants: Domain `id`s are stable and the registry is APPEND-ONLY — the live API exposes
  *   GET and POST but no DELETE, so a registered shelf can never be removed. Add deliberately.
@@ -28,9 +29,11 @@ export interface NewDomain {
 // Operator's own 14 shelves are NOT here: a node must not inherit the
 // platform's internals. Nodes cite the operator hub for CI/CD and deploy
 // knowledge rather than copying it. Likewise each node's niche shelves and any
-// extra `use-*` surfaces are declared per-node in `.cogni/repo-spec.yaml` and
-// seeded from there, never in this shared base — that was cross-node
-// contamination. See knowledge entry `cogni-domain-taxonomy`.
+// extra `use-*` surfaces are approved against that node's live knowledge set,
+// then registered directly in its Dolt `domains` table. They are never declared
+// in `.cogni/repo-spec.yaml` and never added to this shared base — either would
+// duplicate the taxonomy source of truth or contaminate other nodes. See
+// knowledge entry `cogni-domain-taxonomy`.
 //
 // `skills` is intentionally absent: it is an entry_type (skill/guide/playbook),
 // not a domain.
@@ -74,7 +77,7 @@ export const BASE_DOMAIN_SEEDS: NewDomain[] = [
     id: "use-service",
     name: "Use: Service",
     description:
-      "How outside consumers use the service this node offers — the node's external surface. Declare further `use-*` shelves per node in repo-spec.",
+      "How outside consumers use the service this node offers — the node's external surface.",
   },
   {
     id: "build-agents",

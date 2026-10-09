@@ -4,9 +4,9 @@
 /**
  * Module: `@app/api/v1/knowledge/domains/route`
  * Purpose: HTTP endpoints for the knowledge domain registry — GET list with entry counts and POST register a new domain.
- * Scope: Cookie-session only. Does not contain business logic; delegates to _handlers.ts and the container's KnowledgeStorePort.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_HTTP_COOKIE_ONLY,
- *   DOMAIN_REGISTRY_VIA_UI, DOMAIN_REGISTER_AUTOCOMMITS.
+ * Scope: Authenticated principals only. Does not contain business logic; delegates to _handlers.ts and the container's KnowledgeStorePort.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_HTTP_AUTH_SPLIT,
+ *   DOMAIN_REGISTRY_VIA_API, DOMAIN_REGISTER_AUTOCOMMITS.
  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
  * Links: docs/spec/knowledge-domain-registry.md
  * @public
