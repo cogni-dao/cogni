@@ -79,6 +79,13 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
   the eval now grades delivery → envelope → research trace → synthesis → state continuity.
 - **Human rerun is in progress at `46046eabc9`:** Derek owns all fresh Conductor spawns; agents
   must not spawn local harnesses or treat repository tests/CI as the E2E gate.
+- **Latest human Opus 4.8 run is close-but-FAIL:** session
+  `9e7d2fd2-9371-4129-b4a7-dab3b63beac9` did the substantive work — hub reads plus a 13-tool
+  Explore audit found the correct “reconcile three engines, do not build a fourth” design. But it
+  narrated twice before tools, used non-dash preliminary Status, and claimed `10/10` sources while
+  `Followed` linked only `story.5056` and `story.5049`. Its own reasoning says it omitted local
+  skills/designs because they were not already verified URLs. Fix: local paths become GitHub blob
+  URLs at HEAD; `Followed` is exhaustive and its URL count reconciles with `ETA · Conf`.
 - **Distribution requirement is now explicit:** no shared cognition change is fleet-complete if
   each node or developer must hand-edit harness configuration. `docs/spec/node-baas-architecture.md`
   now separates (a) write-once Dolt cognition, (b) versioned `@cogni/*` runtime behavior, and

@@ -60,6 +60,12 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
   that proposes with `Followed = —`, reports zero sources, or has no retrieval actions in the
   turn trace is still a hard FAIL. Grade delivery → envelope → research trace → substantive
   synthesis → state continuity in that order. Never call a table-only shell a passing agent.
+- **`Followed` is the evidence ledger, not a sample.** The trace can prove excellent research
+  while the visible reply still fails provenance by citing only two convenient work items. Every
+  material orientation, skill/guide, hub entry, design/code source, and work item that shaped the
+  proposal must appear as a human URL in contract order. A local repo path is citable: convert it
+  to `https://github.com/<owner>/<repo>/blob/<HEAD_SHA>/<path>` (plus a line anchor when useful).
+  The source count in `ETA · Conf` must not exceed the distinct URLs in `Followed`.
 - **@import of an ABSENT file renders as literal text**, not empty-expansion. On a true first boot the hook writes the cache _during_ SessionStart — too late for the same session's `@import`, which resolves at context assembly. **Warm the cache in the pre-session step** (`scripts/conductor-worktree-setup.sh`) so first boot is non-empty; otherwise first boot is truncated and only the second boot is full.
 - **A failed hook fetch must not clobber the cache** — the loader only writes when the fetch returns non-empty, so a warm cache survives an expired key / hub outage. This is load-bearing: it's why warm workspaces keep working through an outage.
 - **Codex parity:** `.codex/config.toml` must keep `additionalContextLimit = 0`. Without it Codex head/tail-spills the bundle and cuts the middle of the contract.
@@ -90,7 +96,7 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
    the full rich contract.
 5. **Prove on the live harness.** The only proof is a fresh spawn (`claude -p` headless, or a
    real session) whose trace shows the required research before its first substantive proposal,
-   whose `Followed` links match sources actually consulted, and which sustains frozen state on the
+   whose `Followed` exhaustively links the material sources actually consulted, and which sustains frozen state on the
    next turn — AND a hub-down/expired-key boot that still renders the constitution. Byte
    round-trips, `/context`, and table shape are necessary but not sufficient.
 6. **Prove distribution separately.** Name the bootstrap cohort/materializer version, show which

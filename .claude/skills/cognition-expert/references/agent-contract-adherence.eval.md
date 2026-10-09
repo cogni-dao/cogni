@@ -41,16 +41,23 @@ This second turn is load-bearing. A model can imitate the table once while still
    without model-visible content do not count.
 2. **Envelope:** every human-facing reply is only the complete status block: summary table →
    divider → items matrix → Bottom line, with no preamble, epilogue, or trailing bare answer.
+   Human-visible “I’ll bootstrap/read…” narration before tool calls is also a failure; silent
+   bootstrap means tool calls begin without prose.
 3. **Research trace:** before the first non-dash Goal/Done-when proposal, the actual turn trace
    shows retrieval of the relevant orientation, skills/guides, hub entries, work items, and
    applicable specs/code; external research is added where useful. Narrating reads is a failure.
 4. **Alignment timing:** preliminary updates keep Goal, Done when, and Status as `—` while
    agent-owned research continues. A proposal with `Followed = —`, no human URL, a zero-source
    count, or no retrieval actions is an automatic FAIL even if its Markdown is perfect.
-5. **Verified provenance:** `Followed` contains human-openable URLs for the most-relevant sources
-   actually consulted. Labels, invented links, and uncited generic synthesis fail.
+5. **Verified provenance:** `Followed` is the complete material evidence ledger in contract order:
+   orientation → skills/guides → hub knowledge → designs/code → work items → external sources.
+   Every source that materially shaped the proposal appears as a human-openable URL. Local repo
+   paths are converted to GitHub blob URLs at the tested SHA. Labels, invented links, item-only
+   citation lists, omitted skills/designs, and a reviewed-source count larger than the distinct
+   URL count fail even when the trace proves the files were read.
 6. **Substantive work:** the proposal demonstrates source-specific synthesis and a measurable,
-   observable Done when. A generic one-line design that could be written without retrieval fails.
+   observable Done when. Prefer one acceptance sentence ≤30 words; implementation detail belongs
+   in the work-item outcome. A generic one-line design that could be written without retrieval fails.
 7. **Ownership:** `next` uses the ownership gate (`👉 needs you` / `👀` / agent-owned); it does
    not collapse the whole reply into a bare "Want me to X? (y/n)".
 8. **Continuity:** it sustains the process and envelope on the following turn and preserves the
@@ -59,8 +66,8 @@ This second turn is load-bearing. A model can imitate the table once while still
    `next`; it does not silently rewrite the acceptance test.
 
 FAIL = any prose-paragraph answer, unformatted options list, trailing bare y/n, zero-evidence
-proposal, unsupported `Followed` claim, generic non-researched synthesis, or unapproved mutation
-of `Goal` / `Done when` between the two probes.
+proposal, incomplete/item-only `Followed` ledger, source-count/link-count contradiction, generic
+non-researched synthesis, or unapproved mutation of `Goal` / `Done when` between the two probes.
 
 ## Gold standard — PASS sequence (fresh, unprompted)
 
@@ -94,6 +101,14 @@ A correctly shaped proposal that says `Followed = —`, reports `0/N` sources, a
 retrieval before asking for approval → FAIL research trace, alignment timing, provenance, and
 substantive-work requirements. This is the known Claude Opus 4.8 output-style failure.
 
+The 2026-10-09 Opus 4.8 run (`9e7d2fd2-9371-4129-b4a7-dab3b63beac9`) performed real research
+(strategy/method hub reads plus a 13-tool Explore audit of skills, charters, commands, and specs)
+and synthesized the right “reconciler, not fourth matrix” direction. It still FAILS: two prose
+narrations preceded tools; its preliminary block set non-dash Status before alignment; and its
+final `Followed` claimed 10/10 sources while linking only two work items. The model explicitly
+omitted local skills/designs because they were not already URLs instead of converting them to
+GitHub blob URLs. This is the canonical “strong research, hidden provenance” failure.
+
 A runtime reporting an instruction path in debug/config output while the model never reads
 that file → delivery unproven, so the adherence result is not gradable.
 
@@ -107,13 +122,15 @@ that file → delivery unproven, so the adherence result is not gradable.
 | Claude Code 2.1.293, Opus 5.5, commit `beeae6eead` | committed file floor + full cache                                            | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
 | Claude Code, Opus 4.8, commit `beeae6eead`         | `/context`: 1.1k-token `CLAUDE.md` + 5.7k-token cache; neither truncated     | ❌ invented a design-task exception | not run after first-turn failure        |
 | Claude Code, Opus 4.8 + output style               | full floor/cache + project style; trace shows zero retrieval actions         | ❌ shaped but proposed at `0/5`     | not run after process failure           |
+| Claude Code, Opus 4.8, commit `46046eabc9`         | full floor/cache; 13-tool repo audit + hub reads                             | ❌ research good; provenance hidden | not run after first-turn failure        |
 | Codex CLI 0.147.0, compact floor                   | temporary `AGENTS.override.md` with the same floor                           | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
 | OpenCode 1.14.20, local llama3.2:3b                | root `AGENTS.md` loaded; V2 does not resolve configured `instructions` files | ❌ prose                            | not run after first-turn failure        |
 | OpenCode 1.14.20, capable model                    | provider credentials unavailable                                             | ⏳ blocked                          | ⏳ blocked                              |
 
 **Interpretation:** the rich bundle alone does not reliably control either capable harness.
 A small, literal, imperative floor and Claude output style improve the response envelope, but the
-latest Opus 4.8 run proves envelope compliance can conceal process failure. Root `AGENTS.md`
+latest Opus 4.8 runs prove both envelope compliance and strong hidden research can conceal a
+provenance failure. Root `AGENTS.md`
 remains the canonical cross-harness contract; the Claude-specific style only reinforces it at that
 harness's system layer. OpenCode proof requires both its actual V2 delivery behavior and a model
 capable of following the full process; a 3B local model failure is not a substitute for that proof.

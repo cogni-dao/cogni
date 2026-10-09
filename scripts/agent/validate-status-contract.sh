@@ -71,6 +71,7 @@ extract_cell() {
 
 GOAL="$(extract_cell 'Goal')"
 DONE_WHEN="$(extract_cell 'Done when')"
+STATUS="$(extract_cell 'Status')"
 ETA_CONF="$(extract_cell 'ETA · Conf')"
 FOLLOWED="$(extract_cell 'Followed')"
 [[ -n "$GOAL" && -n "$DONE_WHEN" ]] ||
@@ -79,6 +80,8 @@ FOLLOWED="$(extract_cell 'Followed')"
 if [[ "$GOAL" == "—" || "$DONE_WHEN" == "—" ]]; then
   [[ "$GOAL" == "—" && "$DONE_WHEN" == "—" ]] ||
     block "Contract breach: before substantive alignment, Goal and Done when must both remain —. Continue research and rewrite the whole response."
+  [[ "$STATUS" == "—" ]] ||
+    block "Process-contract breach: before the evidence pass supports a proposal, Goal, Done when, and Status must all remain —. Continue research silently and rewrite the complete block."
   if ! printf '%s\n' "$MESSAGE" | awk -F'|' '
     $6 ~ /👉 needs you:|👀/ { found=1 }
     END { exit found ? 0 : 1 }
@@ -90,6 +93,22 @@ else
     block "Process-contract breach: a substantive proposal requires Followed to contain verified human URLs for sources actually consulted. Continue research; do not propose from an empty evidence base."
   if printf '%s\n' "$ETA_CONF" | grep -Eqi 'reviewed[[:space:]]+0|(^|[^0-9])0/[1-9][0-9]*|0[[:space:]]+sources'; then
     block "Process-contract breach: a substantive proposal cannot report zero reviewed sources. Keep Goal, Done when, and Status as —, complete the required research pass, then propose from evidence."
+  fi
+
+  URL_COUNT="$(printf '%s\n' "$FOLLOWED" | grep -Eo 'https://[^| )]+' | sort -u | wc -l | tr -d ' ')"
+  [[ "$URL_COUNT" -ge 3 ]] ||
+    block "Process-contract breach: Followed is an evidence ledger, not highlights. Cite at least the relevant guidance/knowledge, design/code, and work-item sources actually used."
+
+  printf '%s\n' "$FOLLOWED" | grep -Eq 'https://[^| )]+/(skills|knowledge)/' ||
+    block "Process-contract breach: Followed omits the orientation, skill, guide, or hub knowledge that informed the proposal. Convert local skill paths to human GitHub blob URLs and cite them."
+  printf '%s\n' "$FOLLOWED" | grep -Eq 'https://github\.com/[^| )]+/(blob|tree)/[^| )]+/(docs/|AGENTS\.md|scripts/|packages/|nodes/)' ||
+    block "Process-contract breach: Followed omits the applicable design or code source. Convert the local repo path to its human GitHub blob URL at the current SHA and cite it."
+  printf '%s\n' "$FOLLOWED" | grep -Eq 'https://cognidao\.org/work/items/' ||
+    block "Process-contract breach: Followed omits the work-item plane consulted for scope and ownership. Cite the human work-item URL."
+
+  REVIEWED_COUNT="$(printf '%s\n' "$ETA_CONF" | grep -Eo '[0-9]+/[0-9]+[[:space:]]+(relevant[[:space:]]+)?sources' | tail -n 1 | cut -d/ -f1 || true)"
+  if [[ -n "$REVIEWED_COUNT" && "$REVIEWED_COUNT" -gt "$URL_COUNT" ]]; then
+    block "Process-contract breach: ETA · Conf claims $REVIEWED_COUNT reviewed sources but Followed contains only $URL_COUNT distinct URLs. Add every material source actually used or correct the count."
   fi
 fi
 

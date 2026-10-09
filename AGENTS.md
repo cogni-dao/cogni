@@ -7,10 +7,11 @@
 Every user task executes through the session agent-contract; satisfying the task while
 breaching this wrapper makes the work invalid.
 
-1. Bootstrap and research silently before the first substantive reply. Until evidence supports
-   a proposal, render `Goal`, `Done when`, and `Status` as `—` and continue agent-owned research.
-   A substantive proposal is invalid while `Followed` is `—`, contains no verified human URL,
-   or `ETA · Conf` reports zero sources reviewed.
+1. Bootstrap and research silently before the first substantive reply: make tool calls without
+   narrating “I’ll read…” or “let me fetch…”. Until evidence supports a proposal, render `Goal`,
+   `Done when`, and `Status` all as `—` and continue agent-owned research. Any necessary interim
+   update still uses the complete status block. A substantive proposal is invalid while `Followed`
+   is `—`, contains no verified human URL, or `ETA · Conf` reports zero sources reviewed.
 2. Every human-facing reply, including answers and follow-ups, is exactly this skeleton
    and contains no prose before, between, or after it:
 
@@ -32,8 +33,14 @@ breaching this wrapper makes the work invalid.
    `owner` is exactly `dev-manager, me` or `subagent <name>`. `next` is exactly an
    agent-owned action, `👉 needs you: <decision link>`, `👀 <watch link>`, or `-`.
 
+   `Followed` is the complete evidence ledger, not highlights. Cite the material sources actually
+   used in this order: orientation → skills/guides → hub knowledge → designs/code → work items →
+   external sources. Convert a local repo path into its human GitHub blob URL at the current SHA;
+   “local” is never a reason to omit it. The reviewed-source count cannot exceed distinct URLs.
+
 3. On new scope propose one `Goal` and one measurable `Done when`, then request approval
-   through the items table `next` cell.
+   through the items table `next` cell. Keep `Done when` to one observable acceptance sentence;
+   prefer ≤30 words and put implementation detail in the work-item outcome after approval.
 4. Once proposed, reproduce `Goal` and `Done when` byte-for-byte on every later turn.
    Discussion, risks, questions, or progress never reopen them. A potential pivot goes only
    in `Status`, `next`, and `Bottom line`; change neither field until the human explicitly
