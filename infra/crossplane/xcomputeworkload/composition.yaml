@@ -170,25 +170,9 @@ spec:
             {{- range $spec.bundle.artifacts }}{{ $_ := set $images .name .image }}{{ end }}
             {{- $ports := dict }}
             {{- range $wl.services }}{{ $_ := set $ports .name (int .port) }}{{ end }}
-            {{- $appServiceName := "" }}
-            {{- $appServicePort := 0 }}
-            {{- $workflowWorkerName := "" }}
-            {{- $workflowWorkerPort := 0 }}
-            {{- range $wl.services }}
-            {{- $candidateProfile := dig "runtimeProfile" "" . }}
-            {{- if eq $candidateProfile "cogni-node-app-v1" }}
-            {{- $appServiceName = .name }}
-            {{- $appServicePort = int .port }}
-            {{- else if eq $candidateProfile "cogni-workflow-worker-v1" }}
-            {{- $workflowWorkerName = .name }}
-            {{- $workflowWorkerPort = int .port }}
-            {{- end }}
-            {{- end }}
-            {{- $hasWorkflowWorker := ne $workflowWorkerName "" }}
             {{- $substrate := dig "runtime" "substrateHost" "" $spec }}
             {{- $logPush := dig "runtime" "logPush" false $spec }}
             {{- $secretName := printf "%s-compute-env-secrets" $slug }}
-            {{- $nodeTemporalNamespace := printf "cogni-%s-%s" $env $spec.nodeId }}
 
             {{- /*
               MIGRATION FACTS (bug.5116 order, task.5135 decoupling). Accumulated while lowering
@@ -205,9 +189,31 @@ spec:
             {{- $image := index $images $svc.artifact }}
             {{- $profile := dig "runtimeProfile" "" $svc }}
             {{- $isApp := eq $profile "cogni-node-app-v1" }}
-            {{- $isWorkflowWorker := eq $profile "cogni-workflow-worker-v1" }}
             {{- if $isApp }}{{ $appImage = $image }}{{ end }}
             {{- $e := dict }}
+            {{- /* bindHost/port contract - identical to the legacy outer env block. */ -}}
+            {{- $_ := set $e "HOST" $svc.bindHost }}
+            {{- $_ := set $e "HOSTNAME" $svc.bindHost }}
+            {{- $_ := set $e "PORT" (printf "%d" (int $svc.port)) }}
+            {{- if $isApp }}
+            {{- $_ := set $e "APP_ENV" "production" }}
+            {{- $_ := set $e "DEPLOY_ENVIRONMENT" $env }}
+            {{- $_ := set $e "COGNI_REPO_SHA" $desiredSha }}
+            {{- /*
+              sharedSubstrateEnv(). The legacy controller derived this host from the DATABASE_URL
+              SECRET VALUE; an OSS engine that never sees a secret cannot, so it reads the
+              value-free spec.runtime.substrateHost instead. ABSENT degrades exactly like the
+              legacy unparseable-DSN branch: the whole block is omitted rather than guessed.
+            */ -}}
+            {{- if ne $substrate "" }}
+            {{- $_ := set $e "TEMPORAL_ADDRESS" (printf "%s:7233" $substrate) }}
+            {{- $_ := set $e "TEMPORAL_NAMESPACE" (printf "cogni-%s" $env) }}
+            {{- $_ := set $e "TEMPORAL_TASK_QUEUE" "scheduler-tasks" }}
+            {{- $_ := set $e "REDIS_URL" (printf "redis://%s:6379" $substrate) }}
+            {{- $_ := set $e "LITELLM_BASE_URL" (printf "http://%s:4000" $substrate) }}
+            {{- $_ := set $e "SCHEDULER_WORKER_HEALTH_URL" (printf "http://%s:30900" $substrate) }}
+            {{- end }}
+            {{- end }}
             {{- /* bindings -> sibling service URLs (legacy bindingEnv). */ -}}
             {{- range $k, $target := $svc.bindings }}
             {{- $_ := set $e $k (printf "http://%s:%d" $target (int (index $ports $target))) }}
@@ -226,55 +232,21 @@ spec:
             {{- $_ := set $e .key $ref }}
             {{- end }}
             {{- end }}
-            {{- /*
-              Profile and process values deliberately win over node-authored bindings/secret refs.
-              The profile owns this contract; allowing an extra ref named TEMPORAL_NAMESPACE or
-              NODE_APP_URL to replace it would turn a value-free declaration into cross-tenant
-              routing authority. Generic services still receive only their declared values.
-            */ -}}
-            {{- $_ := set $e "HOST" $svc.bindHost }}
-            {{- $_ := set $e "HOSTNAME" $svc.bindHost }}
-            {{- $_ := set $e "PORT" (printf "%d" (int $svc.port)) }}
-            {{- if or $isApp $isWorkflowWorker }}
-            {{- $_ := set $e "DEPLOY_ENVIRONMENT" $env }}
-            {{- $_ := set $e "COGNI_REPO_SHA" $desiredSha }}
-            {{- $_ := set $e "COGNI_NODE_ID" $spec.nodeId }}
-            {{- if ne $substrate "" }}
-            {{- $_ := set $e "TEMPORAL_ADDRESS" (printf "%s:7233" $substrate) }}
-            {{- if $isWorkflowWorker }}
-            {{- $_ := set $e "TEMPORAL_NAMESPACE" $nodeTemporalNamespace }}
-            {{- $_ := set $e "TEMPORAL_TASK_QUEUE" "agent-workflows" }}
-            {{- else }}
-            {{- $_ := set $e "TEMPORAL_NAMESPACE" (printf "cogni-%s" $env) }}
-            {{- $_ := set $e "TEMPORAL_TASK_QUEUE" "scheduler-tasks" }}
-            {{- end }}
-            {{- end }}
-            {{- end }}
             {{- if $isApp }}
             {{- /*
-              Legacy app-push identity (bug.5127). Private services must not receive these
-              credentials: the platform lease-log pump tails every declared service, including
-              crash loops, and assigns the service label from the SDL service name.
+              APPLICATION-LOG IDENTITY (bug.5127). The node-template transport labels its
+              streams {service="app", service_name=<slug>, node=<nodeId>, env, source="lease"}.
+              OPT-IN, unlike the legacy controller: a provider-http placeholder is FAIL-CLOSED
+              (an absent secret key fails the whole request) where the controller's direct read
+              was fail-open, and LOKI_LEASE_PUSH_* are `required: false` in the secrets catalog.
+              Enable it only where operator-env-secrets actually carries all three keys.
             */ -}}
+            {{- $_ := set $e "COGNI_NODE_ID" $spec.nodeId }}
             {{- if $logPush }}
             {{- $_ := set $e "LOKI_PUSH_URL" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_URL }}" $writerNs) }}
             {{- $_ := set $e "LOKI_PUSH_USER" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_USER }}" $writerNs) }}
             {{- $_ := set $e "LOKI_PUSH_PASSWORD" (printf "{{ operator-env-secrets:%s:LOKI_LEASE_PUSH_TOKEN }}" $writerNs) }}
             {{- $_ := set $e "LOKI_PUSH_SOURCE" "lease" }}
-            {{- end }}
-            {{- end }}
-            {{- if $isApp }}
-            {{- $_ := set $e "APP_ENV" "production" }}
-            {{- if ne $substrate "" }}
-            {{- $_ := set $e "REDIS_URL" (printf "redis://%s:6379" $substrate) }}
-            {{- $_ := set $e "LITELLM_BASE_URL" (printf "http://%s:4000" $substrate) }}
-            {{- $_ := set $e "SCHEDULER_WORKER_HEALTH_URL" (printf "http://%s:30900" $substrate) }}
-            {{- if $hasWorkflowWorker }}
-            {{- $_ := set $e "AGENT_WORKFLOW_TEMPORAL_ADDRESS" (printf "%s:7233" $substrate) }}
-            {{- $_ := set $e "AGENT_WORKFLOW_TEMPORAL_NAMESPACE" $nodeTemporalNamespace }}
-            {{- $_ := set $e "AGENT_WORKFLOW_TEMPORAL_TASK_QUEUE" "agent-workflows" }}
-            {{- $_ := set $e "AGENT_WORKFLOW_WORKER_HEALTH_URL" (printf "http://%s:%d" $workflowWorkerName $workflowWorkerPort) }}
-            {{- end }}
             {{- end }}
             {{- /* buildNodeAppIdentityEnv() - these deliberately win over every key above. */ -}}
             {{- $_ := set $e "NODE_NAME" $slug }}
@@ -282,11 +254,6 @@ spec:
             {{- $_ := set $e "AUTH_TRUST_HOST" "true" }}
             {{- $_ := set $e "NEXTAUTH_URL" (printf "https://%s" $publicHost) }}
             {{- $_ := set $e "APP_BASE_URL" (printf "https://%s" $publicHost) }}
-            {{- end }}
-            {{- if $isWorkflowWorker }}
-            {{- $_ := set $e "NODE_APP_URL" (printf "http://%s:%d" $appServiceName $appServicePort) }}
-            {{- $_ := set $e "TEMPORAL_WORKER_DEPLOYMENT_NAME" (printf "node-%s-workflows" $spec.nodeId) }}
-            {{- $_ := set $e "TEMPORAL_WORKER_BUILD_ID" $desiredSha }}
             {{- end }}
             {{- /* visibility -> expose. Public is the only service that takes the hostname. */ -}}
             {{- $public := eq $svc.visibility "public" }}

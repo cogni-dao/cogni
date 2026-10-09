@@ -601,42 +601,6 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // Exactly-one-public-service exposure.
     expect(template).toContain('$public := eq $svc.visibility "public"');
   });
-
-  it("wires an opted-in private workflow Worker to its node namespace", () => {
-    expect(template).toContain(
-      '$candidateProfile := dig "runtimeProfile" "" .'
-    );
-    expect(template).toContain(
-      'else if eq $candidateProfile "cogni-workflow-worker-v1"'
-    );
-    expect(template).toContain(
-      '$nodeTemporalNamespace := printf "cogni-%s-%s" $env $spec.nodeId'
-    );
-    expect(template).toContain(
-      '$_ := set $e "TEMPORAL_TASK_QUEUE" "agent-workflows"'
-    );
-    expect(template).toContain(
-      '$_ := set $e "TEMPORAL_WORKER_BUILD_ID" $desiredSha'
-    );
-    expect(template).toContain(
-      '$_ := set $e "TEMPORAL_WORKER_DEPLOYMENT_NAME" (printf "node-%s-workflows" $spec.nodeId)'
-    );
-    expect(template).toContain(
-      '$_ := set $e "AGENT_WORKFLOW_WORKER_HEALTH_URL" (printf "http://%s:%d" $workflowWorkerName $workflowWorkerPort)'
-    );
-    expect(template).toContain(
-      '$_ := set $e "AGENT_WORKFLOW_TEMPORAL_NAMESPACE" $nodeTemporalNamespace'
-    );
-    expect(template).toContain(
-      '$_ := set $e "NODE_APP_URL" (printf "http://%s:%d" $appServiceName $appServicePort)'
-    );
-    expect(template.lastIndexOf('$_ := set $e "NODE_APP_URL"')).toBeGreaterThan(
-      template.indexOf("range $k, $target := $svc.bindings")
-    );
-    expect(
-      template.lastIndexOf('$_ := set $e "TEMPORAL_NAMESPACE"')
-    ).toBeGreaterThan(template.indexOf("range $k, $target := $svc.bindings"));
-  });
 });
 
 describe("XComputeWorkload migration decoupling (task.5135)", () => {
