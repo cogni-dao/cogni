@@ -339,10 +339,7 @@ describe("node deployment repo-spec", () => {
     };
     const profiled = buildTestRepoSpec({
       deployment: {
-        services: [
-          { ...APP, runtime_profile: "cogni-node-app-v1" },
-          worker,
-        ],
+        services: [{ ...APP, runtime_profile: "cogni-node-app-v1" }, worker],
       },
     });
     expect(extractNodeServices(profiled)[1]?.runtimeProfile).toBe(
@@ -356,9 +353,7 @@ describe("node deployment repo-spec", () => {
     expect(() =>
       buildTestRepoSpec({
         deployment: {
-          services: [
-            { ...APP, runtime_profile: "cogni-workflow-worker-v1" },
-          ],
+          services: [{ ...APP, runtime_profile: "cogni-workflow-worker-v1" }],
         },
       })
     ).toThrow(/requires a private service/);
