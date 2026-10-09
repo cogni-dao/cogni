@@ -2957,10 +2957,11 @@ spec:
     };
   }
 
-  function contentHandler(catalog: string, slug: string) {
+  function contentHandler(catalog: string, slug: string, env = "production") {
     return (params: Record<string, unknown>) => {
       if (params.path === ".promote-state/source-sha-by-app.json") {
-        expect(params.ref).toBe(`deploy/production-${slug}`);
+        // A shared lane resolves ITS OWN pin branch — preview must never read production's.
+        expect(params.ref).toBe(`deploy/${env}-${slug}`);
         return {
           type: "file",
           encoding: "base64",
@@ -3022,6 +3023,48 @@ spec:
     expect(
       (dispatch?.params.inputs as Record<string, string>).node_source_sha
     ).toBeUndefined();
+  });
+
+  it("replays preview's OWN pin into the same full-infra workflow (bug.5409)", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentHandler(
+        inRepoCatalog,
+        "operator",
+        "preview"
+      ),
+      [DISPATCH]: () => ({}),
+    };
+
+    const result = await makeWriter().reconcileNodeInfra({
+      env: "preview",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+    });
+
+    expect(result).toMatchObject({
+      status: "dispatched",
+      env: "preview",
+      sourceSha: deployedSha,
+      sourceAddressing: "in_repo",
+    });
+    const dispatch = requests.find((request) => request.route === DISPATCH);
+    // No new workflow and no new lever: the SAME promote-and-deploy.yml with skip_infra=false,
+    // whose deploy-infra job is lane-bound and therefore binds preview's own VM_HOST.
+    expect(dispatch?.params).toMatchObject({
+      workflow_id: "promote-and-deploy.yml",
+      ref: "main",
+      inputs: {
+        environment: "preview",
+        nodes: "operator",
+        skip_infra: "false",
+        deploy_infra_mode: "full",
+        // INFRA_RECONCILE_PRESERVES_APP: source_sha === build_sha === the deployed pin, so the
+        // workflow re-resolves the image tag preview is already running.
+        source_sha: deployedSha,
+        build_sha: deployedSha,
+      },
+    });
   });
 
   it("replays a remote node pin as node_source_sha", async () => {

@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
-- **Last reviewed:** 2026-09-29 (GitHubRepoWriter fleet control-env input)
+- **Last reviewed:** 2026-10-09 (shared-lane infra reconcile: preview + production)
 
 ## Purpose
 

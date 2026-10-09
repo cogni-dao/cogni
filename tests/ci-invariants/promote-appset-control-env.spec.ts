@@ -39,6 +39,9 @@ const reconcileJob = body.match(
 const verifyJob = body.match(
   /^ {2}verify-deploy:\n([\s\S]*?)(?=^ {2}[a-z][a-z0-9-]+:\n)/m
 )?.[0];
+const deployInfraJob = body.match(
+  /^ {2}deploy-infra:\n([\s\S]*?)(?=^ {2}[a-z][a-z0-9-]+:\n)/m
+)?.[0];
 
 describe("promote AppSet control-env wiring (task.5141)", () => {
   it("binds Akash reconciliation to the fleet control environment", () => {
@@ -80,6 +83,25 @@ describe("promote AppSet control-env wiring (task.5141)", () => {
     expect(materializerAction).not.toContain(
       'cogni_operator_domain_for_env "$DEPLOYMENT_ENVIRONMENT" "${FORK_DOMAIN_ROOT:?}"'
     );
+  });
+
+  // INFRA_IS_LANE_BOUND (bug.5409): unlike reconcile-appset/promote-k8s/verify-deploy, the
+  // deploy-infra job must NOT take the Akash control-env redirect. Compose, the edge, the
+  // VM-materialized bridge secrets and the Grafana datasource roster are all properties of the
+  // lane's OWN VM. This is the single workflow fact that lets `infra-reconcile` admit
+  // `env: "preview"` with no new workflow, environment, or script — if a future change
+  // redirects it, preview's reconcile would silently converge production's VM instead.
+  it("keeps the substrate lane bound to its own environment and VM", () => {
+    expect(deployInfraJob).toBeDefined();
+    expect(deployInfraJob).toContain(
+      "environment: ${{ needs.decide.outputs.environment }}"
+    );
+    expect(deployInfraJob).toContain(
+      "DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}"
+    );
+    expect(deployInfraJob).not.toContain("FLEET_CONTROL_ENV ||");
+    // The one and only gate on the job is the caller's explicit skip_infra=false.
+    expect(deployInfraJob).toContain("inputs.skip_infra != 'true'");
   });
 
   it("observes the workload on control while probing the lane hostname", () => {
