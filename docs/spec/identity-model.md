@@ -462,37 +462,6 @@ Specs are **git-authoritative**. The system spans four hash-linked stores — **
 | LINEAGE_PINS_HASHES     | When a Dolt / Postgres / on-chain artifact depends on a spec or evidence, it records the upstream **content hash + ref** (git SHA + path; Dolt commit), not a copy. Mirrors `ENRICHER_SNAPSHOT_RULE`: if it isn't pinned, it doesn't exist for proof.                                                                     |
 | SIGNATURE_BINDS_SOURCES | At a signing inflection point, the EIP-712 typed data binds the source hashes of every layer that defined the outcome — extending `SIGNATURE_SCOPE_BOUND` to `node_id + scope_id + scope_spec_git_sha + evidence_dolt_commit + final_allocation_set_hash`. One signature is the merkle-join anchor: git ↔ dolt ↔ chain. |
 
-## P0 Delivery and Acceptance Sequence
-
-The smallest acceptance-preserving path is ordered; downstream nodes consume the
-shared contract rather than designing local variants.
-
-1. **Shared seams:** publish the discriminated `RequestPrincipal`, spawn/redeem/
-   rotate/recover wire contract, `ExecutionIdentity`, and account-scoped OpenFGA
-   contract (including conditional expiry and consistency controls).
-2. **Operator identity vertical:** implement actor, spawn grant, opaque credential,
-   two-phase rotation/recovery, and one additive `flock-leader` migration. Prove
-   old/revoked/cross-node credentials fail while actor and grants remain stable.
-3. **Operator attribution vertical:** bind the `flock-leader` provider identity to
-   the AI actor and carry one new real contribution through a versioned allocation:
-   AI earner, effective-time human beneficiary, verified pinned wallet. Preserve
-   all prior signed bytes.
-4. **Node-template reference:** consume the shared contracts with target-local
-   actors, credentials, bindings, and OpenFGA tuples. An operator credential must
-   fail there even in an equal-`AUTH_SECRET` regression fixture.
-5. **Poly proof:** move one read-only capability behind the shared direct/OBO
-   authorization seam. Prove exact-account allow, decoy-account non-disclosure,
-   authorize-before-cache, transaction-local RLS defense, immediate confirmed
-   revoke, and credential rotation without reapproval.
-6. **Cross-node close gate:** record exact build SHAs and correlate the same human,
-   AI, grant, account read, contribution, signed allocation, pinned wallet leaf,
-   publish, claim, and replay denial across operator, node-template, and Poly.
-
-P0 deliberately defers DPoP/asymmetric client installations, sophisticated
-rate-limit infrastructure, every Poly capability, fleet bulk migration, and the
-historical backlog fold. Those follow the contiguous proof; they do not weaken
-the append-only migration contract.
-
 ## Goal
 
 Provide a single, unambiguous reference for every identity primitive in the system. Eliminate confusion between deployment identity, governance domain, person identity, and payment tenancy. Prevent key overloading that leads to painful retrofits.

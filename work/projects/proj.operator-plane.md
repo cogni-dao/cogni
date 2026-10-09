@@ -130,6 +130,37 @@ consume it; it must not create a gateway-specific identity fork.
 
 ## Roadmap
 
+### Shared Identity P0 — Cross-Node Acceptance (story.5075)
+
+The smallest acceptance-preserving path is ordered; downstream nodes consume the
+shared contract rather than designing local variants.
+
+1. **Shared seams:** publish the discriminated `RequestPrincipal`, spawn/redeem/
+   rotate/recover wire contract, `ExecutionIdentity`, and account-scoped OpenFGA
+   contract (including conditional expiry and consistency controls).
+2. **Operator identity vertical:** implement actor, spawn grant, opaque credential,
+   two-phase rotation/recovery, and one additive `flock-leader` migration. Prove
+   old/revoked/cross-node credentials fail while actor and grants remain stable.
+3. **Operator attribution vertical:** bind the `flock-leader` provider identity to
+   the AI actor and carry one new real contribution through a versioned allocation:
+   AI earner, effective-time human beneficiary, verified pinned wallet. Preserve
+   all prior signed bytes.
+4. **Node-template reference:** consume the shared contracts with target-local
+   actors, credentials, bindings, and OpenFGA tuples. An operator credential must
+   fail there even in an equal-`AUTH_SECRET` regression fixture.
+5. **Poly proof:** move one read-only capability behind the shared direct/OBO
+   authorization seam. Prove exact-account allow, decoy-account non-disclosure,
+   authorize-before-cache, transaction-local RLS defense, immediate confirmed
+   revoke, and credential rotation without reapproval.
+6. **Cross-node close gate:** record exact build SHAs and correlate the same human,
+   AI, grant, account read, contribution, signed allocation, pinned wallet leaf,
+   publish, claim, and replay denial across operator, node-template, and Poly.
+
+P0 deliberately defers DPoP/asymmetric client installations, sophisticated
+rate-limit infrastructure, every Poly capability, fleet bulk migration, and the
+historical backlog fold. Those follow the contiguous proof; they do not weaken
+the append-only migration contract.
+
 ### v0 — Metered Gateway (MDI as Tenant #1)
 
 **Goal:** MDI routes LLM traffic through Cogni. Every call metered. Cost tracked per agent via header. Human operator funds account via USDC on Cogni website.
