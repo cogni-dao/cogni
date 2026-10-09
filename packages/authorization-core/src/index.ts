@@ -182,14 +182,26 @@ function nodeScopedReference(
 ): string {
   // OpenFGA permits exactly one ':' in an object/user reference. Keep the
   // node-local components inside the opaque ID with '/' as their delimiter.
+  assertReferenceComponent("nodeId", nodeId);
   const prefix = `${type}:${nodeId}/`;
-  if (localId.startsWith(prefix)) return localId;
+  if (localId.startsWith(prefix)) {
+    assertReferenceComponent("localId", localId.slice(prefix.length));
+    return localId;
+  }
 
   const typePrefix = `${type}:`;
-  const unqualifiedId = localId.startsWith(typePrefix)
-    ? localId.slice(typePrefix.length)
-    : localId;
-  return `${prefix}${unqualifiedId}`;
+  if (localId.startsWith(typePrefix)) {
+    throw new Error(`${type} reference belongs to a different node namespace`);
+  }
+
+  assertReferenceComponent("localId", localId);
+  return `${prefix}${localId}`;
+}
+
+function assertReferenceComponent(name: string, value: string): void {
+  if (value.length === 0 || value.includes(":") || value.includes("/")) {
+    throw new Error(`${name} must be a non-empty node-local identifier`);
+  }
 }
 
 export function relationForAuthzAction(action: AuthzAction): string {
