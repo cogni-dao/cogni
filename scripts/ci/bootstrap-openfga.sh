@@ -37,13 +37,35 @@ fi
 
 api_url="${OPENFGA_API_URL%/}"
 
+# Emits the response body on stdout; on any failure, emits OpenFGA's own answer
+# (status + body) to stderr and returns 22.
+#
+# NOT `curl -fsS`. With -f, curl exits 22 and throws the response body away, so a
+# rejected store/model write reached CI as a bare `exit 22` with no reason — and
+# because every caller is a `$(...)` command substitution, a `die` in here would
+# only exit the subshell. Three production infra deploys failed undiagnosably at
+# the model write before this was fixed (bug.5417). Same swallowed-error shape as
+# sync-app-webhook-secret.sh (bug.5404). 22 is preserved as the return code so
+# callers that tolerate failure with `|| return 1` keep working.
 curl_json() {
   local method="$1" path="$2"
   shift 2
-  curl -fsS -X "$method" "${api_url}${path}" \
+  local raw status body
+  if ! raw="$(curl -sS -w '\n%{http_code}' -X "$method" "${api_url}${path}" \
     "${auth_args[@]}" \
     -H "content-type: application/json" \
-    "$@"
+    "$@")"; then
+    log "${method} ${path}: curl transport failure"
+    return 22
+  fi
+  status="${raw##*$'\n'}"
+  body="${raw%$'\n'*}"
+  if [[ "$status" != 2* ]]; then
+    log "${method} ${path} -> HTTP ${status}"
+    log "${method} ${path} response: ${body:0:2000}"
+    return 22
+  fi
+  printf '%s' "$body"
 }
 
 wait_for_openfga() {
@@ -107,6 +129,7 @@ authorization_model_id_for_hash() {
   local store_id="$1" expected_hash="$2"
   local models_json model_id model_json hash
   models_json="$(curl_json GET "/stores/${store_id}/authorization-models?page_size=100")"
+  log "store ${store_id}: $(printf '%s' "$models_json" | jq -r '[.authorization_models[]?] | length') existing model(s); looking for hash ${expected_hash}"
 
   while IFS= read -r model_id; do
     [[ -n "$model_id" ]] || continue
@@ -148,7 +171,7 @@ if [[ -z "$authorization_model_id" ]]; then
       log "using existing configured authorization model"
       authorization_model_id="$OPENFGA_EXISTING_AUTHORIZATION_MODEL_ID"
     elif [[ -n "$configured_hash" ]]; then
-      log "configured authorization model hash differs from git model; writing new model"
+      log "configured authorization model hash differs from git model; writing new model (configured ${OPENFGA_EXISTING_AUTHORIZATION_MODEL_ID}=${configured_hash} vs git=${expected_hash})"
     fi
   fi
 
