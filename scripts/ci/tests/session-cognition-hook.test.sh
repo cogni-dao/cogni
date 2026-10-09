@@ -76,6 +76,44 @@ mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDA
 [[ "$(printf '%s' "$mutated_output" | jq -r '.decision')" == "block" ]] ||
   fail "status-contract Stop hook accepted mutated Goal state"
 
+ZERO_RESEARCH_MESSAGE='| 🎯 **Goal** | Design a strategy agent |
+|---|---|
+| **Done when** | Design is approved. |
+| **Status** | 🟡 proposed |
+| **ETA · Conf** | 2 hours · 40% + reviewed 0/5 sources |
+| **Followed** | — |
+
+---
+
+| item | owner | deliverable links | status | next |
+|---|---|---|---|---|
+| proposed story — strategy | dev-manager, me | - | 👉 needs you | 👉 needs you: approve scope |
+
+> 👉 **Bottom line —** Approve the proposal.'
+zero_research_output="$(jq -cn --arg message "$ZERO_RESEARCH_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$zero_research_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted a substantive zero-research proposal"
+
+PRELIMINARY_STOP_MESSAGE='| 🎯 **Goal** | — |
+|---|---|
+| **Done when** | — |
+| **Status** | — |
+| **ETA · Conf** | — · 0% + reviewed 0/5 sources |
+| **Followed** | — |
+
+---
+
+| item | owner | deliverable links | status | next |
+|---|---|---|---|---|
+| proposed story — strategy | dev-manager, me | - | 🔵 in progress | Research relevant sources |
+
+> 🔵 **Bottom line —** Researching the existing substrate.'
+preliminary_stop_output="$(jq -cn --arg message "$PRELIMINARY_STOP_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$preliminary_stop_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook allowed an agent-owned preliminary state to become a final reply"
+
 grep -Fq "if [[ \"\${CONDUCTOR_IS_LOCAL:-1}\" == \"1\" ]]; then" "$CONDUCTOR_SETUP" ||
   fail "Conductor setup does not guard user-hook installation to local workspaces"
 installer_line="$(grep -nF 'bash scripts/agent/install-codex-cognition-hook.sh' "$CONDUCTOR_SETUP" | cut -d: -f1)"

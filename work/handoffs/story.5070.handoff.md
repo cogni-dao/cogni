@@ -72,6 +72,11 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
 - **Server validation green:** PR head `19a7224a80` passed static, unit, component, operator
   build, title, CodeQL, and shell regressions. No local check/dev/test was run after the CEO's
   resource constraint; GitHub Actions is the authoritative validation receipt.
+- **Latest Opus 4.8 result is still FAIL:** the output style fixed the envelope, but the fresh
+  turn performed zero retrieval actions, proposed a Goal/Done-when anyway, emitted
+  `Followed = —`, and admitted `0/5` strategy entries read. The full contract requires silent
+  research before a substantive proposal. Envelope compliance was incorrectly called a pass;
+  the eval now grades delivery → envelope → research trace → synthesis → state continuity.
 - **The cache is NOT sprawl:** `.cogni/.cognition-cache.md` is gitignored (`.gitignore:127`), never
   committed, absent from a fresh clone. Git holds only the one-line `@import` pointer; the hub is source.
 - **Open / blocked:** On 2026-10-09 a fresh Claude Code 2.1.293 boot at operator `main`
@@ -108,7 +113,7 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
 - [x] Rebase #2633 on `main`; classify the new CI failures as external Docker Hub pull failures.
 - [x] Find a compact literal floor that passes two turns on fresh Claude and raw Codex variants.
 - [x] Validate the committed root floor + write-only hook with repository tests and fresh Opus 5.5/Codex boots.
-- [ ] Human-run fresh Conductor Opus 4.8 boot validates the project output-style correction.
+- [ ] Human-run fresh Conductor Opus 4.8 boot passes the strengthened substantive-process eval.
 - [ ] Authenticate a capable OpenCode provider and pass the same two-turn eval on OpenCode 1.14.20.
 - [ ] Merge #2633 through the operator only after CI + three-harness acceptance; then consider fleet propagation.
 - Human proof location is unambiguous: **before merge**, create fresh Claude/Codex/OpenCode

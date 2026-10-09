@@ -71,8 +71,27 @@ extract_cell() {
 
 GOAL="$(extract_cell 'Goal')"
 DONE_WHEN="$(extract_cell 'Done when')"
+ETA_CONF="$(extract_cell 'ETA · Conf')"
+FOLLOWED="$(extract_cell 'Followed')"
 [[ -n "$GOAL" && -n "$DONE_WHEN" ]] ||
   block "Contract breach: Goal and Done when must each occupy one complete table cell. Rewrite the whole response in the required shape."
+
+if [[ "$GOAL" == "—" || "$DONE_WHEN" == "—" ]]; then
+  [[ "$GOAL" == "—" && "$DONE_WHEN" == "—" ]] ||
+    block "Contract breach: before substantive alignment, Goal and Done when must both remain —. Continue research and rewrite the whole response."
+  if ! printf '%s\n' "$MESSAGE" | awk -F'|' '
+    $6 ~ /👉 needs you:|👀/ { found=1 }
+    END { exit found ? 0 : 1 }
+  '; then
+    block "Process-contract breach: Goal and Done when are still —, and no human or asynchronous gate exists. A preliminary status is not a legal stop; continue the agent-owned research now, then return with an evidence-backed proposal."
+  fi
+else
+  [[ "$FOLLOWED" != "—" && "$FOLLOWED" == *"https://"* ]] ||
+    block "Process-contract breach: a substantive proposal requires Followed to contain verified human URLs for sources actually consulted. Continue research; do not propose from an empty evidence base."
+  if printf '%s\n' "$ETA_CONF" | grep -Eqi 'reviewed[[:space:]]+0|(^|[^0-9])0/[1-9][0-9]*|0[[:space:]]+sources'; then
+    block "Process-contract breach: a substantive proposal cannot report zero reviewed sources. Keep Goal, Done when, and Status as —, complete the required research pass, then propose from evidence."
+  fi
+fi
 
 if [[ -n "$SCRATCHPAD_DIR" && -d "$SCRATCHPAD_DIR" ]]; then
   STATE_FILE="$SCRATCHPAD_DIR/cogni-status-contract.json"

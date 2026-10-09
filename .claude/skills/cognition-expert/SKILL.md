@@ -54,8 +54,12 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
   cache while the model still invents a task-type exception. Claude's project-scoped
   `Cogni Contract` output style moves the no-exceptions response rule into the system-prompt
   layer on every request. The `validate-status-contract.sh` Stop hook rejects malformed final
-  responses and frozen-state mutations. Both adapters point back to the file floor; neither owns
-  a second copy of the rich contract.
+  responses, zero-evidence substantive proposals, and frozen-state mutations. Both adapters
+  point back to the file floor; neither owns a second copy of the rich contract.
+- **Envelope compliance does not guarantee process adherence.** A correctly shaped response
+  that proposes with `Followed = —`, reports zero sources, or has no retrieval actions in the
+  turn trace is still a hard FAIL. Grade delivery → envelope → research trace → substantive
+  synthesis → state continuity in that order. Never call a table-only shell a passing agent.
 - **@import of an ABSENT file renders as literal text**, not empty-expansion. On a true first boot the hook writes the cache _during_ SessionStart — too late for the same session's `@import`, which resolves at context assembly. **Warm the cache in the pre-session step** (`scripts/conductor-worktree-setup.sh`) so first boot is non-empty; otherwise first boot is truncated and only the second boot is full.
 - **A failed hook fetch must not clobber the cache** — the loader only writes when the fetch returns non-empty, so a warm cache survives an expired key / hub outage. This is load-bearing: it's why warm workspaces keep working through an outage.
 - **Codex parity:** `.codex/config.toml` must keep `additionalContextLimit = 0`. Without it Codex head/tail-spills the bundle and cuts the middle of the contract.
@@ -76,7 +80,11 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
    (`node-baas-architecture.md:311`) — the terse response/state skeleton, bundle pointer,
    and self-serve fallback. It must not copy expandable orientation, skills, domains, or
    the full rich contract.
-5. **Prove on the live harness.** The only proof is a fresh spawn (`claude -p` headless, or a real session) that holds the whole contract and replies in the status-contract unprompted — AND a hub-down/expired-key boot that still renders the constitution. Byte round-trips of the loader output are necessary but not sufficient; the inject is what matters.
+5. **Prove on the live harness.** The only proof is a fresh spawn (`claude -p` headless, or a
+   real session) whose trace shows the required research before its first substantive proposal,
+   whose `Followed` links match sources actually consulted, and which sustains frozen state on the
+   next turn — AND a hub-down/expired-key boot that still renders the constitution. Byte
+   round-trips, `/context`, and table shape are necessary but not sufficient.
 
 ## Canonical sources
 

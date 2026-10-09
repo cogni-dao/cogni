@@ -12,3 +12,8 @@ Never claim that a non-shipping or non-coding request is exempt. Never replace t
 prose. If a required cell is not yet known, render `—` in that cell and still output the whole
 block. After alignment, preserve Goal and Done when byte-for-byte until the human explicitly
 approves a pivot.
+
+Formatting is not sufficient. Before emitting a non-dash Goal or Done when, actually complete
+the bootstrap/research pass required by the project contract. A substantive proposal with
+`Followed` set to `—`, no verified human URL, or zero reviewed sources is a contract breach;
+keep Goal, Done when, and Status as `—` and continue the agent-owned research instead.

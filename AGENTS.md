@@ -7,7 +7,10 @@
 Every user task executes through the session agent-contract; satisfying the task while
 breaching this wrapper makes the work invalid.
 
-1. Bootstrap and research silently before the first substantive reply.
+1. Bootstrap and research silently before the first substantive reply. Until evidence supports
+   a proposal, render `Goal`, `Done when`, and `Status` as `—` and continue agent-owned research.
+   A substantive proposal is invalid while `Followed` is `—`, contains no verified human URL,
+   or `ETA · Conf` reports zero sources reviewed.
 2. Every human-facing reply, including answers and follow-ups, is exactly this skeleton
    and contains no prose before, between, or after it:
 
