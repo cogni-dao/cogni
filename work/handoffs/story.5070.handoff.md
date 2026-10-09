@@ -6,7 +6,7 @@ status: active
 created: 2026-10-09
 updated: 2026-10-09
 branch: derekg1729/cognition-design
-last_commit: beeae6eead
+last_commit: 19a7224a80
 ---
 
 # Handoff: fresh agents adhere to the agent-contract unprompted
@@ -69,6 +69,9 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
   `Cogni Contract` output style. Per Claude Code's official architecture, this injects the terse
   no-task-type-exceptions response rule into the system-prompt layer on every request. The canonical
   skeleton remains in root `AGENTS.md`; the style is a harness adapter, not a second constitution.
+- **Server validation green:** PR head `19a7224a80` passed static, unit, component, operator
+  build, title, CodeQL, and shell regressions. No local check/dev/test was run after the CEO's
+  resource constraint; GitHub Actions is the authoritative validation receipt.
 - **The cache is NOT sprawl:** `.cogni/.cognition-cache.md` is gitignored (`.gitignore:127`), never
   committed, absent from a fresh clone. Git holds only the one-line `@import` pointer; the hub is source.
 - **Open / blocked:** On 2026-10-09 a fresh Claude Code 2.1.293 boot at operator `main`
@@ -108,6 +111,10 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
 - [ ] Human-run fresh Conductor Opus 4.8 boot validates the project output-style correction.
 - [ ] Authenticate a capable OpenCode provider and pass the same two-turn eval on OpenCode 1.14.20.
 - [ ] Merge #2633 through the operator only after CI + three-harness acceptance; then consider fleet propagation.
+- Human proof location is unambiguous: **before merge**, create fresh Claude/Codex/OpenCode
+  sessions in the existing Bratislava PR worktree on head `19a7224a80`; **after merge**, repeat
+  in a newly created worktree off merged `main`. Do not test premerge from `main`, where the fix
+  does not exist.
 - Risk: **delivery ≠ adherence** — the trap this whole story fell into; grade with the eval, never assert.
 - Risk: story.5070's hub `PATCH` 500s — this is **bug.5418** (it predates the `created_by_principal_id` column; a NULL-creator row passes `mayMutate` authz then fails `validateTransitionMatrix`'s proof → 500 + orphaned branch). NOT a build regression. Fixed in `@cogni/work-items` 0.1.8 (node-template #160, being driven to all 6 nodes). Items created today `PATCH` fine. Persist story.5070's outcome once operator promotes 0.1.8 — do NOT file a churn item as a workaround. The knowledge `/contributions/{id}/commits` 404 was **bug.5085** (bearer must be the inbox's author principal; orphaned after this session's key rotation) + a cite-referencing-a-same-commit-row quirk — open a fresh inbox under the current key, insert and cite in separate commits. Until then, state lives in this handoff + `.context/story5070-resume.md`.
 - Risk: local OpenCode proof currently measures `llama3.2:3b` capacity, not only substrate behavior;

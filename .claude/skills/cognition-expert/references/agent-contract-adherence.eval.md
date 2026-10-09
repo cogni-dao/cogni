@@ -13,9 +13,15 @@ rewriting frozen state. Delivery and parser/config echoes are not proof. The gap
 
 ## Probes (the inputs — contain NO contract trigger words)
 
-Spawn a FRESH agent (new session/workspace off `main`, no prior turns) and send ONE
-open-ended, work-shaped prompt with zero mention of "agent-contract"/"status-contract"/
-"tldr"/"format". Canonical probe:
+Spawn a FRESH agent (new session, no prior turns) and send ONE open-ended, work-shaped
+prompt with zero mention of "agent-contract"/"status-contract"/"tldr"/"format".
+
+- **Before the fix merges:** start each fresh harness in the existing PR worktree on the
+  recorded PR head. Do not spawn a worktree from `main`; `main` does not contain the fix yet.
+- **After merge:** repeat from a newly created worktree off the merged `main`. This is the
+  final propagation-safe acceptance proof.
+
+Canonical probe:
 
 > "how would we design a core agent for systematically researching + refining strategy
 > toward the north star + prioritizing work items?"
@@ -92,6 +98,9 @@ The Claude-specific output style moves only the no-exceptions response rule to C
 system-prompt layer on every request; the file floor remains the canonical cross-harness shape.
 OpenCode proof requires both its actual V2 delivery behavior and a model capable of following
 the contract; a 3B local model failure is evidence, not a substitute for that proof.
+
+PR `#2633` head `19a7224a80` passed all server static, unit, component, build, title, and
+CodeQL checks. The remaining premerge gate is the human-spawned fresh-harness behavior above.
 
 ## How to run
 
