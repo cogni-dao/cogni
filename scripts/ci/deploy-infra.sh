@@ -1628,23 +1628,51 @@ else
   exit 1
 fi
 
-ALLOY_CONFIG="/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy"
-ALLOY_HASH_FILE="/var/lib/cogni/alloy-config.sha256"
-if [[ -f "$ALLOY_CONFIG" ]]; then
-  mkdir -p /var/lib/cogni
-  NEW_ALLOY_HASH=$(hash_file "$ALLOY_CONFIG")
-  OLD_ALLOY_HASH=$(cat "$ALLOY_HASH_FILE" 2>/dev/null || echo "none")
-  if [[ "$NEW_ALLOY_HASH" != "$OLD_ALLOY_HASH" && "$NEW_ALLOY_HASH" != "no-hash-tool" ]]; then
-    log_info "Alloy config changed (hash: ${NEW_ALLOY_HASH:0:12}...), restarting container..."
-    $RUNTIME_COMPOSE restart alloy
-    echo "$NEW_ALLOY_HASH" > "$ALLOY_HASH_FILE"
-    log_info "Alloy restarted with new config"
-  else
-    log_info "Alloy config unchanged (hash: ${NEW_ALLOY_HASH:0:12}...), no restart needed"
+# RESTART_WHAT_ACTUALLY_CHANGED: `up -d` does NOT recreate a container when only the
+# CONTENT of a bind-mounted config changes — compose compares the service SPEC, so an
+# unchanged spec means no recreate. Every Alloy service therefore needs its own content
+# hash and its own restart.
+#
+# This gate used to hash one file (alloy-config.metrics.alloy) and restart one service
+# (alloy), while the runtime compose defines TWO: `alloy` consumes the metrics config and
+# `alloy-k8s-events` consumes alloy-config.k8s-events.alloy. An edit to the k8s-events
+# config was never hashed and its container never restarted, so the change shipped,
+# deployed green, and stayed inert — #2648's namespace allowlist sat on the VM unloaded
+# while {service="kubernetes-events",namespace="default"} read a flat zero, which looks
+# exactly like "no events occurred" (bug.5420).
+#
+# alloy-config.alloy is deliberately absent: it is logs-only for local dev and is mounted
+# by no runtime service (see infra/compose/runtime/configs/AGENTS.md).
+restart_alloy_service_if_config_changed() {
+  local config="$1" service="$2" hash_path="$3"
+  if [[ ! -f "$config" ]]; then
+    log_warn "Alloy config missing at $config, skipping restart check for $service"
+    return 0
   fi
-else
-  log_warn "Alloy config missing at $ALLOY_CONFIG, skipping restart check"
-fi
+  mkdir -p "$(dirname "$hash_path")"
+  local new_hash old_hash
+  new_hash="$(hash_file "$config")"
+  old_hash="$(cat "$hash_path" 2>/dev/null || echo "none")"
+  if [[ "$new_hash" != "$old_hash" && "$new_hash" != "no-hash-tool" ]]; then
+    log_info "Alloy config $(basename "$config") changed (hash: ${new_hash:0:12}...), restarting ${service}..."
+    $RUNTIME_COMPOSE restart "$service"
+    echo "$new_hash" > "$hash_path"
+    log_info "${service} restarted with new config"
+  else
+    log_info "Alloy config $(basename "$config") unchanged (hash: ${new_hash:0:12}...), ${service} not restarted"
+  fi
+}
+
+# The metrics config keeps its original hash path, so this change does not manufacture a
+# restart of a healthy collector on first run.
+restart_alloy_service_if_config_changed \
+  /opt/cogni-template-runtime/configs/alloy-config.metrics.alloy \
+  alloy \
+  /var/lib/cogni/alloy-config.sha256
+restart_alloy_service_if_config_changed \
+  /opt/cogni-template-runtime/configs/alloy-config.k8s-events.alloy \
+  alloy-k8s-events \
+  /var/lib/cogni/alloy-config.k8s-events.sha256
 
 log_info "[$(date -u +%H:%M:%S)] Installing db-backup systemd timer..."
 # Pause future triggers while replacing the unit, but never kill an in-progress
