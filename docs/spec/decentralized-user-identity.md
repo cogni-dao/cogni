@@ -1,22 +1,25 @@
 ---
 id: decentralized-user-identity
 type: spec
-title: User Identity + Account Bindings
+title: Human and AI Identity + Account Bindings
 status: active
 spec_state: active
 trust: reviewed
-summary: Stable user_id (UUID) as canonical identity. Wallet, Discord, and GitHub are evidenced bindings — never the identity itself. "Contributor" is a derived label, not an identity primitive. DID/VC portability deferred to P2.
+summary: Node-local human user_id and AI actor_id remain separate from evidenced wallet/provider bindings, replaceable credentials, permissions, attribution, beneficiary, and settlement.
 read_when: Working on identity, auth, account linking, RBAC actor types, user context injection, or ledger attribution
 implements: proj.decentralized-identity
 owner: derekg1729
 created: 2026-02-19
-verified: 2026-08-17
+verified: 2026-10-09
 tags: [identity, auth, web3]
 ---
 
-# User Identity + Account Bindings
+# Human and AI Identity + Account Bindings
 
-> Every user gets a stable `user_id` (UUID) at first contact — regardless of auth method. Wallet, Discord, and GitHub identities are evidenced bindings attached to that user, never used as the identity itself. "Contributor" is a derived label (has eligible contribution events), not a separate identity primitive.
+> Every human gets a stable node-local `user_id`; every AI gets a durable
+> node-local `actor_id`. Wallet, Discord, GitHub, and future portable identities
+> are evidenced bindings, never credentials, permissions, or the local identity
+> itself. "Contributor" is a derived label, not an identity primitive.
 
 ### Key References
 
@@ -26,14 +29,18 @@ tags: [identity, auth, web3]
 | **Research** | [DID-first identity refactor](../research/did-first-identity-refactor.md)                 | Gap analysis, library eval                 |
 | **Spec**     | [Identity Model](./identity-model.md)                                                     | Local user, actor, and binding boundaries  |
 | **Spec**     | [Authentication](./authentication.md)                                                     | SIWE flow, wallet-session                  |
-| **Spec**     | [RBAC](./rbac.md)                                                                         | Actor types (will drop wallet from format) |
+| **Spec**     | [RBAC](./rbac.md)                                                                         | Human/AI principals, direct and OBO checks |
 | **Spec**     | [User Context](./user-context.md)                                                         | Agent identity injection                   |
 | **Consumer** | [Attribution Pipeline](./attribution-pipeline-overview.md)                                | Identity claimant → local claim resolution |
 | **Consumer** | [proj.transparent-credit-payouts](../../work/projects/proj.transparent-credit-payouts.md) | Claimant and future actor migration        |
 
 ## Design
 
-### Identity Model
+### Current Human Account Model
+
+The following is the current as-built human binding model. It remains valid for
+human authentication while the shared actor ownership registry described below
+is implemented.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -79,6 +86,52 @@ Examples:
 **Why UUID instead of DID at P0?** DID requires crypto dependencies (ed25519, multicodec, base58btc) with zero user-facing value until federation. Ledger correctness needs stable, unique IDs — UUID does this. DID is a portability concern for P2, not an identity correctness concern for P0.
 
 **Why `user_id` not `contributor_id`?** "User" is the stable concept — accounts, billing, sessions, permissions all reference users. "Contributor" is contextual and mutable (a user exists before contributing). Naming the canonical ID `contributor_id` would leak domain assumptions into every table and API.
+
+### Target Shared Subject Model (P0)
+
+The actor layer generalizes evidenced ownership without turning an AI into a fake
+human account:
+
+```text
+users.id ──1:1── actors.id(kind=user)
+                       │
+agents ───────── actors.id(kind=agent)
+                       │ 1:N
+                       ▼
+            actor_bindings (current owner projection)
+            UNIQUE(provider, immutable_external_id)
+                       │
+                       ▼
+            identity_events (append-only evidence)
+```
+
+| Concept             | Identifier                          | Boundary                 | Authority                                          |
+| ------------------- | ----------------------------------- | ------------------------ | -------------------------------------------------- |
+| Human account       | `user_id`                           | One node/environment     | Human session and account relations                |
+| Economic/AI subject | `actor_id`                          | One node/environment     | Attribution; typed `agent:{actor_id}` RBAC subject |
+| External identity   | `(provider, immutable_external_id)` | Re-provable across nodes | Continuity and source provenance only              |
+| Agent credential    | `credential_id` + secret material   | One node/audience        | Authentication only                                |
+| Account permission  | OpenFGA relationship                | One node/store/resource  | Authorization only                                 |
+
+`actor_bindings` is the target ownership registry for both human and AI actors.
+Within one node, exactly one active actor owns a `(provider,
+immutable_external_id)` pair. `provider_login` is display data, never the key.
+Legacy `user_bindings` may remain as a compatibility projection for human flows,
+but it cannot independently claim ownership or race the actor registry. A bind or
+transfer transaction records append-only evidence and atomically changes the
+one active owner; historical receipt claimant keys never change.
+
+Cross-node continuity means re-proving the external binding and minting new local
+`user_id`, `actor_id`, credentials, and grants. Neither local UUIDs nor bearer/
+public-key credentials cross the seam. A key thumbprint may be ceremony evidence,
+but is never durable identity because credentials rotate.
+
+Provider authentication proves control of an external account. It does not
+decide whether that account represents a human or an AI. A human may bind a
+personal provider identity to the human actor. An authorized steward may bind an
+AI-operated provider identity to the AI actor. The binding target and evidence
+are explicit; matching names, wallet ownership, parentage, or an ambient session
+never selects the owner.
 
 ### Auth Flows
 
@@ -144,8 +197,10 @@ rewrite.
 Operator and node accounts remain independent. The operator does not export its
 `user_id`, wallet, or wallet-to-GitHub binding, and the node does not import an
 operator account. The only portable fact is the GitHub provider id authenticated
-in the broker round trip. The relying node binds that id to the local user who
-owned the one-time nonce.
+in the broker round trip. Today the relying node binds that id to the local human
+who owned the one-time nonce. The actor target binds it to a server-validated
+human or AI actor selected by that nonce's local intent; the broker still learns
+and signs no local actor ID.
 
 This follows `BINDING_IS_THE_MULTI_ENV_KEY` from the identity-model spec: a
 `user_id` is a node/environment-local surrogate, while the stable external
@@ -174,7 +229,8 @@ operator broker  (NO operator session is read at any point)
 node verifier
   → pin issuer + EdDSA JWKS + audience + nodeId + target origin + fingerprint
   → require the current local user to own the nonce
-  → atomically consume nonce and create/refresh that user's GitHub binding + evidence
+  → atomically consume nonce and apply its server-validated local binding intent:
+      current path = human user binding; actor path = authorized human/AI actor binding
 ```
 
 The protocol source is
@@ -203,19 +259,28 @@ The implementation follows the inside-out dependency boundary:
 | Bootstrap/facade | dependency composition and HTTP mapping only  | dependency composition and HTTP mapping only |
 
 `NO_AUTO_MERGE` remains authoritative: a GitHub provider id already owned by a
-different local user returns `already_linked` and is never re-pointed. Nonce
-consumption and the terminal binding decision share one database transaction;
-infrastructure failures roll the nonce consumption back.
+different local subject returns `already_linked` and is never re-pointed. The
+current implementation enforces this among users; the actor target enforces it
+across user and AI actors. Nonce consumption and the terminal binding decision
+share one database transaction; infrastructure failures roll the nonce
+consumption back.
 
 Git attribution first records the work under the stable external claimant key
 `identity:github:<id>`. It does not require a Cogni account and is not rewritten
 when someone later links that GitHub identity. At settlement/read time, a node
-may resolve that identity claimant through its own `user_bindings` to the local
-user who proved control of the GitHub account.
+resolves that identity claimant through its canonical local actor binding. The
+current human-only implementation resolves through `user_bindings`; additive
+migration maps those rows through their 1:1 human actors without changing the
+claimant key.
 
-For P0, this lets a locally authenticated human prove control of an
-agent-operated GitHub account such as `flock-leader` and claim its preserved
-identity allocation. The broker does not encode future actor/beneficiary policy.
+For a human-operated account, the local human may bind and resolve the preserved
+identity allocation. For an AI-operated account such as `flock-leader`, the
+attested provider identity binds to the AI actor, so the AI remains the earner;
+an independently accepted steward/policy may become the pinned beneficiary.
+`identity.attestation.v1` intentionally decides neither owner kind nor
+beneficiary. It attests only the freshly authorized GitHub fact. This semantic
+expansion happens after verification and does not mutate the frozen v1 wire
+contract, claims, descriptor, fingerprint, or conformance vectors.
 
 **Attestation is not git-specific.** `claimantKey()` is
 `identity:<provider>:<external_id>` and `user_bindings.provider` already admits
@@ -243,7 +308,10 @@ Business logic references `id` (= `user_id`). `walletAddress` is nullable — `n
 
 ## Goal
 
-Provide a stable, auth-method-agnostic identity inside each node. `users.id` works whether the user arrives via wallet, Discord, or any future auth method. Wallet and external accounts are evidenced bindings, not the identity itself. Attribution preserves external claimant provenance and resolves it through node-local bindings only when ownership or settlement needs a local account.
+Provide stable, auth-method-agnostic human and AI identities inside each node.
+Wallet and provider accounts are evidenced bindings, not credentials, permissions,
+or identity surrogates. Attribution preserves external claimant provenance,
+resolves AI authorship to the AI actor, and pins beneficiary and wallet separately.
 
 ## Non-Goals
 
@@ -261,9 +329,9 @@ Provide a stable, auth-method-agnostic identity inside each node. `users.id` wor
 | Rule                             | Constraint                                                                                                                                                                                                                                                                                  |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | USER_ID_AT_CREATION              | Every user gets a UUID minted at first contact. No user exists without one.                                                                                                                                                                                                                 |
-| CANONICAL_IS_USER_ID             | Business logic identity references use `user_id`, never `wallet_address`, `discord_user_id`, or DID.                                                                                                                                                                                        |
+| CANONICAL_IS_USER_ID             | Human account/session references use `user_id`, never `wallet_address`, `discord_user_id`, or DID. AI and economic attribution use `actor_id`; neither uses a binding as its local key.                                                                                                     |
 | BINDINGS_ARE_EVIDENCED           | Every binding has proof recorded in `identity_events.payload` (SIWE signature, bot challenge, PR link). Bindings table is current-state index only.                                                                                                                                         |
-| NO_AUTO_MERGE                    | If a binding's `(provider, external_id)` is already bound to a different user, the bind attempt fails. Never silently re-point. DB-enforced via UNIQUE.                                                                                                                                     |
+| NO_AUTO_MERGE                    | If `(provider, external_id)` has a different active actor owner, the bind attempt fails. Never silently re-point; transfer is a separate evidenced transition. Legacy human-only enforcement remains `UNIQUE` on `user_bindings`.                                                           |
 | SIWE_UNCHANGED                   | SIWE authentication continues working. Binding additions are additive — no existing auth flow breaks.                                                                                                                                                                                       |
 | ATTESTATION_V1_FROZEN            | Operator and node exchange and verify the same pinned protocol fingerprint; a one-sided drift fails closed.                                                                                                                                                                                 |
 | ATTESTATION_TLS_ONLY             | Issuer and target are exact canonical HTTPS origins without URL credentials, path, query, or fragment.                                                                                                                                                                                      |
@@ -271,10 +339,15 @@ Provide a stable, auth-method-agnostic identity inside each node. `users.id` wor
 | ATTESTATION_ACCOUNTS_INDEPENDENT | Operator user IDs, wallets, and binding relationships never cross the seam; only the node-scoped GitHub OAuth result is attested.                                                                                                                                                           |
 | ATTESTATION_SUBJECT_FROM_AUTHZ   | The attested GitHub identity comes ONLY from the authorization response correlated to that request. No broker leg reads an operator session or a stored binding — an ambient session choosing the subject is a confused deputy, and it bound the wrong account on the 2026-08-19 candidate. |
 | ATTESTATION_INTENT_IS_EXPLICIT   | `prompt=select_account` is necessary but NOT sufficient (picker only; no re-authentication; undocumented for 0/1 signed-in accounts). A confirmation naming the resolved login and the asking node is required before signing.                                                              |
-| CLAIMANT_PROVENANCE_PRESERVED    | Linking `identity:github:<id>` to a local user changes claim resolution, never the finalized record of which external identity produced the work.                                                                                                                                           |
+| CLAIMANT_PROVENANCE_PRESERVED    | Linking `identity:github:<id>` to a local actor changes claim resolution, never the finalized record of which external identity produced the work.                                                                                                                                          |
+| NODE_LOCAL_SUBJECTS              | `user_id`, `actor_id`, credentials, and OpenFGA grants are node/environment-local. Only evidenced external bindings are re-provable across nodes.                                                                                                                                           |
+| ONE_ACTIVE_EXTERNAL_OWNER        | One node has exactly one active actor owner for `(provider, immutable_external_id)`, enforced by the canonical actor-binding registry rather than application checks across two tables.                                                                                                     |
+| AI_SOURCE_STAYS_AI               | An AI-operated external identity binds to the AI actor. Human control, stewardship, OBO execution, or payout policy never rewrites the AI earner into a human.                                                                                                                              |
+| CREDENTIAL_IS_NOT_BINDING        | Opaque bearers, Ed25519 keys, access tokens, credential IDs, and key thumbprints authenticate; none is a portable identity binding or authorization grant.                                                                                                                                  |
+| STEWARD_IS_NOT_BENEFICIARY       | Accepted parent/steward state is effective-dated policy input. `beneficiary_actor_id` is separately selected and persisted; reassignment never moves finalized value.                                                                                                                       |
 | UUID_STAYS_AS_PK                 | `users.id` (UUID) remains the relational PK and FK target.                                                                                                                                                                                                                                  |
 | APPEND_ONLY_EVENTS               | `identity_events` rows are append-only. DB trigger rejects UPDATE/DELETE. Revocation creates a new event, never deletes rows.                                                                                                                                                               |
-| LEDGER_PRESERVES_CLAIMANT        | Finalized attribution references stable user or external-identity claimant keys; wallets and DIDs are resolved bindings, never canonical statement keys.                                                                                                                                    |
+| LEDGER_PRESERVES_CLAIMANT        | Existing finalized attribution preserves stable user/external claimant keys; vNext freezes actor earner plus beneficiary separately. Wallets and DIDs are resolved bindings, never canonical statement identity keys.                                                                       |
 
 ### Schema
 
@@ -336,6 +409,37 @@ Provide a stable, auth-method-agnostic identity inside each node. `users.id` wor
 | `display_name` | TEXT        | CHECK length ≤ 50       | User-chosen display name     |
 | `avatar_color` | TEXT        | CHECK hex `#RRGGBB`     | Avatar background color      |
 | `updated_at`   | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | Last profile update          |
+
+### Target Actor Binding Registry (P0 design; not yet implemented)
+
+The actor migration generalizes current human-only binding storage; it does not
+change `identity.attestation.v1`.
+
+**Table:** `actor_bindings` (canonical current-owner registry)
+
+| Column              | Type        | Constraints                       | Description                                    |
+| ------------------- | ----------- | --------------------------------- | ---------------------------------------------- |
+| `id`                | TEXT        | PK                                | Local row ID; not an identity primitive        |
+| `actor_id`          | TEXT        | FK → actors.id, NOT NULL          | Current human or AI owner                      |
+| `provider`          | TEXT        | NOT NULL                          | Namespaced provider (`wallet`, `github`, etc.) |
+| `external_id`       | TEXT        | NOT NULL                          | Provider's immutable subject identifier        |
+| `provider_login`    | TEXT        |                                   | Mutable display metadata only                  |
+| `evidence_event_id` | TEXT        | FK → identity_events.id, NOT NULL | Evidence authorizing this ownership state      |
+| `created_at`        | TIMESTAMPTZ | NOT NULL, DEFAULT NOW()           | Ownership interval start                       |
+| `closed_at`         | TIMESTAMPTZ |                                   | NULL only for the active owner                 |
+
+**Constraint:** unique active `(provider, external_id)` where `closed_at IS NULL`.
+Bind/transfer/revoke serializes on that key. Transfer closes the old row, inserts
+the successor, and appends both evidence events in one transaction; it never
+updates or deletes old evidence. The target `identity_events` owner reference is
+an additive `actor_id`: new actor-binding events require it, while existing
+append-only `user_id` events remain byte-for-byte unchanged and resolve through
+the human actor's 1:1 user link. Do not backfill by rewriting historical event
+payloads.
+
+`user_bindings` becomes a human compatibility projection derived through the
+`kind=user` actor. During migration, writes must use one coordinator so the legacy
+unique constraint and the actor registry cannot both claim authority.
 
 ### Display Name Fallback
 
@@ -409,15 +513,32 @@ pnpm check:docs    # docs metadata valid
 8. `identity_events` has a `bind` event for each new binding
 9. OAuth-only user hits payment endpoint → clean 403 (WalletRequiredError)
 
+**Shared human–AI target:**
+
+1. The same GitHub provider ID cannot be active for both a human and AI actor in
+   one node, including concurrent bind attempts.
+2. A verified `flock-leader` source binds to the `flock-leader` AI actor; a new
+   contribution freezes that actor as earner while an effective-time accepted
+   human steward is separately persisted as beneficiary.
+3. Reassigning the steward after the contribution cutoff changes only later
+   allocations. The original signed allocation and published wallet leaf remain
+   unchanged.
+4. Transferring a provider binding records append-only close/open evidence and
+   leaves every historical `identity:<provider>:<external_id>` claimant key and
+   `identity.attestation.v1` artifact byte-identical.
+5. The same external provider identity can be proved at another node, but the
+   target creates different local user/actor IDs, credential, and grants.
+
 ## Open Questions
 
 - [x] Backfill strategy: CTE + RETURNING migration in 0013 — idempotent, events only for inserted bindings.
-- [ ] Future: when RBAC actor type migrates from `user:{walletAddress}` to `user:{userId}`, does it happen in this spec or as an RBAC spec update?
+- [x] Runtime human principal is `user:{user_id}`; durable AI principal is
+      `agent:{actor_id}`. Exact authorization behavior belongs to RBAC.
 
 ## Related
 
 - [Authentication](./authentication.md) — SIWE flow, WALLET_SESSION_COHERENCE invariant
-- [RBAC](./rbac.md) — actor type `user:{walletAddress}` will migrate to `user:{userId}`
+- [RBAC](./rbac.md) — `user:{user_id}`, `agent:{actor_id}`, direct and OBO checks
 - [User Context](./user-context.md) — `opaqueId` will derive from user_id
 - [Accounts Design](./accounts-design.md) — billing identity references
 - [Security Auth](./security-auth.md) — auth surface identity resolution
