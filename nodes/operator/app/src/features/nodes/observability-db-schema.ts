@@ -22,13 +22,13 @@
  * @public
  */
 
-import type { NodeMigrationReportRecord } from "@/ports";
+import type { FlightEnv, NodeMigrationReportRecord } from "@/ports";
 import {
   type AppliedMigration,
   diffDeclaredVsApplied,
   type MigrationDrift,
 } from "@/shared/migrations/migration-receipt";
-import { FLIGHT_ENVS, type FlightEnv, isFlightEnv } from "./flight-status";
+import { FLIGHT_ENVS, isFlightEnv } from "./flight-status";
 
 export { FLIGHT_ENVS, type FlightEnv, isFlightEnv };
 
