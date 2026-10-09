@@ -6,7 +6,7 @@ status: active
 created: 2026-10-09
 updated: 2026-10-09
 branch: derekg1729/cognition-design
-last_commit: 19a7224a80
+last_commit: 46046eabc9
 ---
 
 # Handoff: fresh agents adhere to the agent-contract unprompted
@@ -77,6 +77,21 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
   `Followed = —`, and admitted `0/5` strategy entries read. The full contract requires silent
   research before a substantive proposal. Envelope compliance was incorrectly called a pass;
   the eval now grades delivery → envelope → research trace → synthesis → state continuity.
+- **Human rerun is in progress at `46046eabc9`:** Derek owns all fresh Conductor spawns; agents
+  must not spawn local harnesses or treat repository tests/CI as the E2E gate.
+- **Distribution requirement is now explicit:** no shared cognition change is fleet-complete if
+  each node or developer must hand-edit harness configuration. `docs/spec/node-baas-architecture.md`
+  now separates (a) write-once Dolt cognition, (b) versioned `@cogni/*` runtime behavior, and
+  (c) a narrow versioned/precondition-hashed materializer for root harness files. New nodes inherit
+  from node-template; existing nodes use reviewed upgrade PRs only as interim migration debt until
+  dependabot-for-nodes automates the cohort/codemod lane. Fork-wide source overlay stays forbidden.
+- **Dolt design drafted for human review:** contribution
+  `contrib-flock-leader-operator-72b1a38d` contains the canonical AI-readable
+  `cognition-substrate-bootstrap` reference plus the human HTML/SVG
+  `cognition-substrate-visual`. Inbox:
+  `https://cognidao.org/knowledge/inbox/contrib-flock-leader-operator-72b1a38d`.
+  Citation commits currently return HTTP 500 and must be added after the text row is merged; never
+  merge the visual as an unlinked sole source of truth.
 - **The cache is NOT sprawl:** `.cogni/.cognition-cache.md` is gitignored (`.gitignore:127`), never
   committed, absent from a fresh clone. Git holds only the one-line `@import` pointer; the hub is source.
 - **Open / blocked:** On 2026-10-09 a fresh Claude Code 2.1.293 boot at operator `main`
@@ -122,6 +137,10 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
   does not exist.
 - Risk: **delivery ≠ adherence** — the trap this whole story fell into; grade with the eval, never assert.
 - Risk: story.5070's hub `PATCH` 500s — this is **bug.5418** (it predates the `created_by_principal_id` column; a NULL-creator row passes `mayMutate` authz then fails `validateTransitionMatrix`'s proof → 500 + orphaned branch). NOT a build regression. Fixed in `@cogni/work-items` 0.1.8 (node-template #160, being driven to all 6 nodes). Items created today `PATCH` fine. Persist story.5070's outcome once operator promotes 0.1.8 — do NOT file a churn item as a workaround. The knowledge `/contributions/{id}/commits` 404 was **bug.5085** (bearer must be the inbox's author principal; orphaned after this session's key rotation) + a cite-referencing-a-same-commit-row quirk — open a fresh inbox under the current key, insert and cite in separate commits. Until then, state lives in this handoff + `.context/story5070-resume.md`.
+- 2026-10-09 16:03 PT retest: `PATCH /api/v1/work/items/story.5070` still returns HTTP 500, so
+  the ledger still contains the obsolete hook/additionalContext outcome. The exact replacement
+  Goal/Done-when and seven-point acceptance checklist remain persisted here and in
+  `.context/story5070-resume.md`; do not claim the work item was updated until a GET reads them back.
 - Risk: local OpenCode proof currently measures `llama3.2:3b` capacity, not only substrate behavior;
   record runtime + model and do not claim the harness passes until a capable model does.
 

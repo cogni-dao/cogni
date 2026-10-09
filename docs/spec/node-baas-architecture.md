@@ -319,7 +319,38 @@ This corrects the real `ONE_VOICE` defect (`_bundle.ts:219`): it suppressed the 
 
 Every node maintains exactly one living orientation entry; agents **refine it in place** (REFINE_OVER_EXTEND) whenever repo layout, scripts, CI, deploy, auth, or validation behavior changes — it is the living map, not a one-time doc. The bundle renders this entry **in full**, preferring the node-specific `<name>-agent-orientation` over the generic starter. Because full-render makes the entry's length the bundle's cost, keep the orientation entry tight and composite (cite deeper specs/skills, don't restate them).
 
-**Propagation.** A new node's knowledge hub is created empty (Doltgres data is not copied by forking the repo), so the orientation block ships as a seed: `@cogni/knowledge-base` base seeds carry a generic `cogni-agent-orientation` starter (`entryType: guide`) inherited by every node at `seed-doltgres` time, including `Cogni-DAO/node-template` and its forks (each carries its own `knowledge-base` copy; the seed is ported repo-by-repo since operator seeds do not auto-propagate). Each node then writes its node-owned, durable map as the sibling `<slug>-agent-orientation` (a re-seed may overwrite the shared starter, so refinement lives in the slug-specific entry). operator's own `operator-agent-orientation` cites `cognition-substrate-bootstrap` so the pattern compounds in the DAG.
+**Fleet distribution is a platform capability, never per-node × per-developer configuration.**
+The cognition design has two distribution lanes because its two ownership classes move at
+different speeds:
+
+| Change                                                                                                        | Canonical distribution lane                                                                                                                                                                                                                              | Developer experience                                                              |
+| ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Mission, orientation, skills, domains, rich agent-contract prose                                              | Write once to that node's Dolt hub; every session refreshes `/api/v1/cognition` into the local cache                                                                                                                                                     | No repo edit; no developer action after initial node registration                 |
+| Shared endpoint/composer/loader behavior                                                                      | Curated versioned `@cogni/*` package API, consumed by each node's declared platform cohort                                                                                                                                                               | Arrives with the repo dependency update                                           |
+| Harness-native files that must exist before packages or network (`AGENTS.md`, Claude/Codex/OpenCode adapters) | One versioned cognition-bootstrap manifest plus a fail-closed codemod/materializer; new nodes inherit it from `node-template`, existing nodes receive an ordinary reviewed upgrade PR until the operator's dependabot-for-nodes lane automates those PRs | Files are committed in the node repo; cloning or opening a worktree is sufficient |
+| Node credential and first cache warm                                                                          | One repo setup command; Conductor invokes it from the workspace bootstrap, other environments invoke the same command                                                                                                                                    | Register once through `/api/v1/agent/register`; never hand-edit harness config    |
+
+`ZERO_PER_DEVELOPER_CONFIG` is the acceptance boundary: a shared cognition change is not
+fleet-complete if every node developer must edit Claude/Codex/OpenCode settings, copy a prompt,
+or remember an install step. A developer may approve the harness's normal trust prompt and supply
+their node credential; all instruction files, hooks, cache wiring, and node URL derivation are
+repo-owned and deterministic. `FLEET_VERSION_OBSERVABLE` requires each node's discovery/cognition
+surface to expose the installed cognition-bootstrap cohort so the operator can identify drift
+without comparing source trees.
+
+Automatic fork-wide source overlay remains forbidden: it destroyed node product paths in
+bug.5304. The durable target is a versioned package for shared runtime behavior plus a narrow,
+precondition-hashed codemod for the few harness files that intrinsically must live at repo root.
+Until the updater exists, one reviewed PR per existing node is known migration debt, not the final
+distribution design and not “Done.”
+
+**Node knowledge formation.** A new node's knowledge hub is created empty (Doltgres data is not
+copied by forking the repo), so the orientation block ships as a seed: `@cogni/knowledge-base`
+base seeds carry a generic `cogni-agent-orientation` starter (`entryType: guide`) inherited by every
+node at `seed-doltgres` time. Each node then writes its node-owned durable map as the sibling
+`<slug>-agent-orientation` (a re-seed may overwrite the shared starter, so refinement lives in the
+slug-specific entry). Operator's own `operator-agent-orientation` cites
+`cognition-substrate-bootstrap` so the pattern compounds in the DAG.
 
 **Boundaries.** The bundle is **authed** — any principal (cookie-session human OR `cogni_ag_sk_v1_` agent bearer) gets skill/domain pointers (title, use-when, recall path) plus the current-node orientation entry rendered in full; other entry bodies stay behind the read routes. It sits behind the same gate as the read routes (`KNOWLEDGE_READ_REQUIRES_PRINCIPAL`), so the index does not diverge from the read surface; `GET /api/v1/agent/register` stays the one public bootstrap seam (register → key → cognition). Local/Conductor sessions persist that key in `.env.cogni`; the SessionStart loader reads `.env.cogni` itself and passes `COGNI_API_KEY` (or the current production `COGNI_API_KEY_PROD` during the transition) as the bearer. Root `AGENTS.md` drops to a thin bootstrap pointer at the bundle; node-scoped and subdir `AGENTS.md` files remain (closest-file-wins still holds for code-local rules). This is reversible: revert the PR and `AGENTS.md` carries the full orientation again.
 

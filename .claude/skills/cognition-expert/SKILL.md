@@ -68,6 +68,14 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
   the model yet. Do not claim injection because `opencode debug config` echoes paths;
   prove the model's received context on the installed version.
 - **The hook cap and the serve cap are different layers.** There is also a producer-side budget (`project_doc_max_bytes` on Codex); keep the bundle small enough for the tightest consumer (32 KiB).
+- **Session delivery and fleet distribution are different proofs.** A fix in the operator repo
+  proves neither existing-node adoption nor developer-zero-config. Rich Dolt cognition is
+  write-once/live-fetched; shared runtime behavior belongs in a versioned `@cogni/*` cohort;
+  root harness files require a narrow versioned, precondition-hashed materializer because they
+  must exist before packages or network. New nodes inherit from node-template. Existing per-node
+  PRs are interim migration debt until dependabot-for-nodes automates the upgrade lane. Never
+  resurrect fork-wide source overlay, and never call a change fleet-complete while developers
+  hand-edit Claude/Codex/OpenCode configuration.
 
 ## When you touch this, in order
 
@@ -85,6 +93,9 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
    whose `Followed` links match sources actually consulted, and which sustains frozen state on the
    next turn — AND a hub-down/expired-key boot that still renders the constitution. Byte
    round-trips, `/context`, and table shape are necessary but not sufficient.
+6. **Prove distribution separately.** Name the bootstrap cohort/materializer version, show which
+   nodes have adopted it, and show that a fresh developer clone receives the harness files without
+   manual configuration. Operator success is the canary, not fleet completion.
 
 ## Canonical sources
 
