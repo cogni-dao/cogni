@@ -32,9 +32,9 @@ export interface FlightProbeCredential {
 
 /** Resolve only an exact `{env,nodeId}` target. Missing and malformed config fail closed. */
 export interface FlightProbeCredentialResolver {
-  resolve(target: Pick<FlightProbeTarget, "env" | "nodeId">):
-    | FlightProbeCredential
-    | null;
+  resolve(
+    target: Pick<FlightProbeTarget, "env" | "nodeId">
+  ): FlightProbeCredential | null;
 }
 
 /** serving: the node answers /readyz 200 and exposes a /version buildSha. */

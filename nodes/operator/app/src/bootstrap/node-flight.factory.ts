@@ -14,17 +14,24 @@
 import {
   EnvFlightProbeCredentialResolver,
   HttpNodeProber,
+  isFlightProbeControlEnvironment,
 } from "@/adapters/server";
 import type { NodeProber } from "@/ports";
 import { serverEnv } from "@/shared/env";
 
 /**
  * Real-fetch prober for the liveness gate. Serving remains public; run-carries resolves one bounded
- * credential for the exact `{env,nodeId}` target. There is deliberately no fleet-wide fallback.
+ * credential for the exact `{env,nodeId}` target. Only the fleet-control operator may resolve the
+ * map (`DEPLOY_ENVIRONMENT === FLEET_CONTROL_ENV`, default production); every other env fails closed.
  */
 export function createNodeProber(): NodeProber {
+  const env = serverEnv();
   const credentials = new EnvFlightProbeCredentialResolver(
-    serverEnv().FLIGHT_PROBE_CREDENTIALS_JSON
+    env.FLIGHT_PROBE_CREDENTIALS_JSON,
+    isFlightProbeControlEnvironment({
+      deployEnvironment: env.DEPLOY_ENVIRONMENT,
+      fleetControlEnvironment: env.FLEET_CONTROL_ENV,
+    })
   );
   return new HttpNodeProber(credentials);
 }

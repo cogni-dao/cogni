@@ -147,7 +147,10 @@ export {
   type NodeDeploymentFileReader,
   PublicGitHubNodeDeploymentFileReader,
 } from "./node-deployment/github-node-deployment-topology.adapter";
-export { EnvFlightProbeCredentialResolver } from "./node-flight/flight-probe-credential.adapter";
+export {
+  EnvFlightProbeCredentialResolver,
+  isFlightProbeControlEnvironment,
+} from "./node-flight/flight-probe-credential.adapter";
 export { HttpNodeProber } from "./node-flight/node-prober.adapter";
 export {
   LiveNodeRegistryAdapter,

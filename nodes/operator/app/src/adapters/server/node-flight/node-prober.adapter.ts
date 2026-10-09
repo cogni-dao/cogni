@@ -23,7 +23,6 @@
  * @public
  */
 
-import { randomUUID } from "node:crypto";
 import { InternalFlightProbeOutputSchema } from "@cogni/node-contracts";
 import { z } from "zod";
 import type {
@@ -208,7 +207,6 @@ export class HttpNodeProber implements NodeProber {
           method: "POST",
           headers: {
             authorization: `Bearer ${credential.apiKey}`,
-            "idempotency-key": randomUUID(),
           },
         },
         RUN_CARRIES_TIMEOUT_MS
@@ -231,6 +229,15 @@ export class HttpNodeProber implements NodeProber {
           durationMs,
           runs: 0,
           detail: "probe-invalid-response",
+        };
+      }
+      const expectedPrincipalId = `service:${target.nodeId}/flight-prober`;
+      if (parsed.data.principalId !== expectedPrincipalId) {
+        return {
+          status: "fail",
+          durationMs,
+          runs: 0,
+          detail: "probe-principal-mismatch",
         };
       }
       return {

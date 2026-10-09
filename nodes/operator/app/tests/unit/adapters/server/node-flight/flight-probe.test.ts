@@ -11,7 +11,10 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EnvFlightProbeCredentialResolver } from "@/adapters/server/node-flight/flight-probe-credential.adapter";
+import {
+  EnvFlightProbeCredentialResolver,
+  isFlightProbeControlEnvironment,
+} from "@/adapters/server/node-flight/flight-probe-credential.adapter";
 import { HttpNodeProber } from "@/adapters/server/node-flight/node-prober.adapter";
 
 const target = {
@@ -28,7 +31,8 @@ afterEach(() => {
 describe("EnvFlightProbeCredentialResolver", () => {
   it("resolves only the exact env/node pair", () => {
     const resolver = new EnvFlightProbeCredentialResolver(
-      JSON.stringify({ [`${target.env}/${target.nodeId}`]: apiKey })
+      JSON.stringify({ [`${target.env}/${target.nodeId}`]: apiKey }),
+      true
     );
     expect(resolver.resolve(target)).toEqual({ apiKey });
     expect(resolver.resolve({ ...target, env: "preview" })).toBeNull();
@@ -42,14 +46,37 @@ describe("EnvFlightProbeCredentialResolver", () => {
 
   it("fails closed for absent, malformed, or short secret maps", () => {
     expect(
-      new EnvFlightProbeCredentialResolver(undefined).resolve(target)
+      new EnvFlightProbeCredentialResolver(undefined, true).resolve(target)
     ).toBeNull();
-    expect(new EnvFlightProbeCredentialResolver("{").resolve(target)).toBeNull();
+    expect(
+      new EnvFlightProbeCredentialResolver("{", true).resolve(target)
+    ).toBeNull();
     expect(
       new EnvFlightProbeCredentialResolver(
-        JSON.stringify({ [`${target.env}/${target.nodeId}`]: "short" })
+        JSON.stringify({ [`${target.env}/${target.nodeId}`]: "short" }),
+        true
       ).resolve(target)
     ).toBeNull();
+  });
+
+  it("refuses a valid map outside the fleet control environment", () => {
+    const serialized = JSON.stringify({
+      [`${target.env}/${target.nodeId}`]: apiKey,
+    });
+    const resolver = new EnvFlightProbeCredentialResolver(serialized, false);
+    expect(resolver.resolve(target)).toBeNull();
+    expect(
+      isFlightProbeControlEnvironment({
+        deployEnvironment: "candidate-a",
+        fleetControlEnvironment: undefined,
+      })
+    ).toBe(false);
+    expect(
+      isFlightProbeControlEnvironment({
+        deployEnvironment: "candidate-a",
+        fleetControlEnvironment: "candidate-a",
+      })
+    ).toBe(true);
   });
 });
 
@@ -111,6 +138,26 @@ describe("HttpNodeProber.runCarries", () => {
       status: "degraded",
       runs: 1,
       detail: "graph-error",
+    });
+  });
+
+  it("rejects a contract-valid proof from the wrong node principal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          ok: true,
+          runId: "33333333-3333-4333-8333-333333333333",
+          principalId:
+            "service:22222222-2222-4222-8222-222222222222/flight-prober",
+        })
+      )
+    );
+    const prober = new HttpNodeProber({ resolve: () => ({ apiKey }) });
+    await expect(prober.runCarries(target)).resolves.toMatchObject({
+      status: "fail",
+      runs: 0,
+      detail: "probe-principal-mismatch",
     });
   });
 

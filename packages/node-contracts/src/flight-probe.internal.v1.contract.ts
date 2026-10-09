@@ -19,7 +19,11 @@ import { z } from "zod";
 export const InternalFlightProbeOutputSchema = z.strictObject({
   ok: z.boolean(),
   runId: z.string().uuid(),
-  principalId: z.string().min(1),
+  principalId: z
+    .string()
+    .regex(
+      /^service:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/flight-prober$/i
+    ),
 });
 
 export type InternalFlightProbeOutput = z.infer<

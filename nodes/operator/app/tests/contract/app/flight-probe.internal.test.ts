@@ -12,11 +12,13 @@
 
 import { InternalFlightProbeOutputSchema } from "@cogni/node-contracts";
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const constants = vi.hoisted(() => ({
   nodeId: "11111111-1111-4111-8111-111111111111",
-  probeKey: "p".repeat(32),
+  activeKey: "p".repeat(32),
+  previousKey: "q".repeat(32),
+  buildSha: "a".repeat(40),
   runId: "33333333-3333-4333-8333-333333333333",
 }));
 
@@ -33,11 +35,16 @@ const fakes = vi.hoisted(() => {
 });
 
 const serverEnvMock = vi.hoisted(() =>
-  vi.fn(
-    (): { FLIGHT_PROBE_API_KEY: string | undefined } => ({
-      FLIGHT_PROBE_API_KEY: "p".repeat(32),
-    })
-  )
+  vi.fn((): {
+    FLIGHT_PROBE_API_KEY: string | undefined;
+    APP_BUILD_SHA: string | undefined;
+  } => ({
+    FLIGHT_PROBE_API_KEY: JSON.stringify({
+      active: "p".repeat(32),
+      previous: null,
+    }),
+    APP_BUILD_SHA: "a".repeat(40),
+  }))
 );
 
 vi.mock("@/shared/env", () => ({ serverEnv: () => serverEnvMock() }));
@@ -68,12 +75,17 @@ vi.mock("@/bootstrap/http", () => ({
 
 import { POST } from "@/app/api/internal/flight-probe/route";
 
-function request(token?: string): NextRequest {
+function request(token?: string, callerFlightId?: string): NextRequest {
   return new NextRequest("http://localhost/api/internal/flight-probe", {
     method: "POST",
     headers: {
       ...(token ? { authorization: `Bearer ${token}` } : {}),
-      "idempotency-key": "probe-attempt-1",
+      ...(callerFlightId
+        ? {
+            "idempotency-key": callerFlightId,
+            "x-flight-id": callerFlightId,
+          }
+        : {}),
     },
   });
 }
@@ -81,8 +93,13 @@ function request(token?: string): NextRequest {
 describe("POST /api/internal/flight-probe", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockReturnValue(42 * 15 * 60 * 1000 + 1);
     serverEnvMock.mockReturnValue({
-      FLIGHT_PROBE_API_KEY: constants.probeKey,
+      FLIGHT_PROBE_API_KEY: JSON.stringify({
+        active: constants.activeKey,
+        previous: constants.previousKey,
+      }),
+      APP_BUILD_SHA: constants.buildSha,
     });
     fakes.getBillingAccountById.mockResolvedValue({
       id: "00000000-0000-4000-8000-00000000b000",
@@ -93,6 +110,10 @@ describe("POST /api/internal/flight-probe", () => {
     fakes.start.mockResolvedValue(fakes.handle);
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("rejects missing and wrong node-local credentials before side effects", async () => {
     expect((await POST(request())).status).toBe(401);
     expect((await POST(request("wrong"))).status).toBe(401);
@@ -100,15 +121,55 @@ describe("POST /api/internal/flight-probe", () => {
     expect(fakes.start).not.toHaveBeenCalled();
   });
 
+  it("rejects a non-canonical service principal at the wire contract", () => {
+    expect(
+      InternalFlightProbeOutputSchema.safeParse({
+        ok: true,
+        runId: constants.runId,
+        principalId: "service:wrong-node/flight-prober",
+      }).success
+    ).toBe(false);
+  });
+
   it("returns 503 rather than falling back to another service token", async () => {
-    serverEnvMock.mockReturnValue({ FLIGHT_PROBE_API_KEY: undefined });
-    const response = await POST(request(constants.probeKey));
+    serverEnvMock.mockReturnValue({
+      FLIGHT_PROBE_API_KEY: undefined,
+      APP_BUILD_SHA: constants.buildSha,
+    });
+    const response = await POST(request(constants.activeKey));
     expect(response.status).toBe(503);
     expect(fakes.start).not.toHaveBeenCalled();
   });
 
+  it("accepts active and previous only during a bounded rotation", async () => {
+    expect((await POST(request(constants.activeKey))).status).toBe(200);
+    expect((await POST(request(constants.previousKey))).status).toBe(200);
+
+    serverEnvMock.mockReturnValue({
+      FLIGHT_PROBE_API_KEY: JSON.stringify({
+        active: constants.activeKey,
+        previous: null,
+      }),
+      APP_BUILD_SHA: constants.buildSha,
+    });
+    expect((await POST(request(constants.previousKey))).status).toBe(401);
+  });
+
+  it("fails closed for malformed or oversized key rings", async () => {
+    serverEnvMock.mockReturnValue({
+      FLIGHT_PROBE_API_KEY: JSON.stringify({
+        active: constants.activeKey,
+        previous: constants.previousKey,
+        third: "r".repeat(32),
+      }),
+      APP_BUILD_SHA: constants.buildSha,
+    });
+    expect((await POST(request(constants.activeKey))).status).toBe(503);
+    expect(fakes.start).not.toHaveBeenCalled();
+  });
+
   it("starts the fixed local workflow as the stable service principal", async () => {
-    const response = await POST(request(constants.probeKey));
+    const response = await POST(request(constants.activeKey));
     expect(response.status).toBe(200);
     expect(
       InternalFlightProbeOutputSchema.parse(await response.json())
@@ -122,7 +183,8 @@ describe("POST /api/internal/flight-probe", () => {
       "GraphRunWorkflow",
       expect.objectContaining({
         taskQueue: `scheduler-tasks-${constants.nodeId}`,
-        workflowId: `flight-probe:${constants.nodeId}:probe-attempt-1`,
+        workflowId: `flight-probe:${constants.nodeId}:${constants.buildSha}:42`,
+        workflowIdReusePolicy: "REJECT_DUPLICATE",
         args: [
           expect.objectContaining({
             nodeId: constants.nodeId,
@@ -130,6 +192,7 @@ describe("POST /api/internal/flight-probe", () => {
             executionGrantId: null,
             runKind: "system_webhook",
             triggerSource: "flight_probe",
+            triggerRef: `${constants.buildSha}:42`,
             requestedBy: `service:${constants.nodeId}/flight-prober`,
             input: expect.objectContaining({
               actorUserId: "00000000-0000-4000-8000-00000000a001",
@@ -142,15 +205,27 @@ describe("POST /api/internal/flight-probe", () => {
     );
   });
 
+  it("ignores caller flight IDs and caps execution to one Temporal identity per server window", async () => {
+    await POST(request(constants.activeKey, "attacker-choice-1"));
+    await POST(request(constants.activeKey, "attacker-choice-2"));
+
+    const first = fakes.start.mock.calls[0]?.[1];
+    const second = fakes.start.mock.calls[1]?.[1];
+    expect(first?.workflowId).toBe(
+      `flight-probe:${constants.nodeId}:${constants.buildSha}:42`
+    );
+    expect(second?.workflowId).toBe(first?.workflowId);
+  });
+
   it("reports a created downstream-error run as contract-valid ok:false", async () => {
     fakes.result.mockResolvedValue({ ok: false, runId: constants.runId });
-    const response = await POST(request(constants.probeKey));
-    expect(InternalFlightProbeOutputSchema.parse(await response.json())).toEqual(
-      {
-        ok: false,
-        runId: constants.runId,
-        principalId: `service:${constants.nodeId}/flight-prober`,
-      }
-    );
+    const response = await POST(request(constants.activeKey));
+    expect(
+      InternalFlightProbeOutputSchema.parse(await response.json())
+    ).toEqual({
+      ok: false,
+      runId: constants.runId,
+      principalId: `service:${constants.nodeId}/flight-prober`,
+    });
   });
 });
