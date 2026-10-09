@@ -3379,42 +3379,39 @@ spec:
     );
   });
 
-  it(
-    "dispatches an exact OpenFGA model change with explicit authorization collateral",
-    async () => {
-      const runId = 34722512026;
-      routeHandlers = {
-        ...candidateReviewHandlers([
-          "infra/openfga/rbac-model.json",
-          "packages/authorization-core/src/adapters/openfga-authorization.adapter.ts",
-          "packages/authorization-core/src/index.ts",
-          "packages/authorization-core/src/test/fake-authorization.adapter.ts",
-          "packages/authorization-core/tests/authorization-core.test.ts",
-          "packages/authorization-core/tests/rbac-model.test.ts",
-        ]),
-        [DISPATCH]: () => ({
-          workflow_run_id: runId,
-          run_url: `https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/${runId}`,
-          html_url: `https://github.com/Cogni-DAO/cogni/actions/runs/${runId}`,
-        }),
-      };
+  it("dispatches an exact OpenFGA model change with explicit authorization collateral", async () => {
+    const runId = 34722512026;
+    routeHandlers = {
+      ...candidateReviewHandlers([
+        "infra/openfga/rbac-model.json",
+        "packages/authorization-core/src/adapters/openfga-authorization.adapter.ts",
+        "packages/authorization-core/src/index.ts",
+        "packages/authorization-core/src/test/fake-authorization.adapter.ts",
+        "packages/authorization-core/tests/authorization-core.test.ts",
+        "packages/authorization-core/tests/rbac-model.test.ts",
+      ]),
+      [DISPATCH]: () => ({
+        workflow_run_id: runId,
+        run_url: `https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/${runId}`,
+        html_url: `https://github.com/Cogni-DAO/cogni/actions/runs/${runId}`,
+      }),
+    };
 
-      await expect(
-        makeWriter().reconcileNodeInfra({
-          env: "candidate-a",
-          parentOwner: "Cogni-DAO",
-          parentRepo: "cogni",
-          slug: "operator",
-          sourceSha: candidateSourceSha,
-        })
-      ).resolves.toMatchObject({
-        status: "dispatched",
-        lane: "compose",
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
         sourceSha: candidateSourceSha,
-        runId,
-      });
-    }
-  );
+      })
+    ).resolves.toMatchObject({
+      status: "dispatched",
+      lane: "compose",
+      sourceSha: candidateSourceSha,
+      runId,
+    });
+  });
 
   it("does not let OpenFGA collateral select an infra lane by itself", async () => {
     routeHandlers = candidateReviewHandlers([
