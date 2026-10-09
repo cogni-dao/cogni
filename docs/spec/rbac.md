@@ -189,11 +189,11 @@ When `subject` is absent (direct user or service action):
 Direct and OBO access are different grants and must remain visibly different in
 authorization and audit:
 
-| Mode         | Server-bound execution identity                             | Required OpenFGA result                                                                    |
-| ------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Human direct | `actor=user:N/H, account=N/B`                               | `user:N/H can_read billing_account:N/B`                                                    |
-| Agent direct | `actor=agent:N/A, account=N/B`                              | `agent:N/A can_read billing_account:N/B`                                                   |
-| Agent OBO    | `actor=agent:N/A, subject=user:N/H, account=N/B, grant=G`   | `N/H can_read N/B` AND `N/A delegates N/H` AND conditioned `N/A can_act_as N/B`            |
+| Mode         | Server-bound execution identity                           | Required OpenFGA result                                                         |
+| ------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Human direct | `actor=user:N/H, account=N/B`                             | `user:N/H can_read billing_account:N/B`                                         |
+| Agent direct | `actor=agent:N/A, account=N/B`                            | `agent:N/A can_read billing_account:N/B`                                        |
+| Agent OBO    | `actor=agent:N/A, subject=user:N/H, account=N/B, grant=G` | `N/H can_read N/B` AND `N/A delegates N/H` AND conditioned `N/A can_act_as N/B` |
 
 For a direct API agent, an explicit `billing_account_id` may be request input only
 as resource selection; the server derives `(node_id, actor_id)` from the credential,
@@ -303,16 +303,16 @@ the global subject relation alone as authority merely to reuse the current model
 
 ## Action→Relation Mapping
 
-| Action                        | Resource Type                            | OpenFGA Check                                                       | Error Code     |
-| ----------------------------- | ---------------------------------------- | ------------------------------------------------------------------- | -------------- |
-| `tool.execute`                | `tool:{node_id}/{id}`                    | `check(actor, can_execute, tool:{node_id}/{id})`                    | `authz_denied` |
-| `connection.use`              | `connection:{node_id}/{id}`              | `check(actor, can_use, connection:{node_id}/{id})`                  | `authz_denied` |
-| `graph.invoke`                | `graph:{node_id}/{id}`                   | `check(actor, can_invoke, graph:{node_id}/{id})`                    | `authz_denied` |
-| `user.act_as`                 | `user:{node_id}/{user_id}`               | `check(actor, delegates, user:{node_id}/{user_id})`                 | `authz_denied` |
-| `node.flight`                 | `node:{node_id}`                         | `check(actor, can_flight, node:{node_id})`                          | `authz_denied` |
-| `billing_account.read`        | `billing_account:{node_id}/{id}`         | `check(actor-or-subject, can_read, billing_account:{node_id}/{id})` | `authz_denied` |
-| `billing_account.grant`       | `billing_account:{node_id}/{id}`         | `check(human, can_grant, billing_account:{node_id}/{id})`           | `authz_denied` |
-| `billing_account.act_as`      | `billing_account:{node_id}/{id}`         | `check(agent, can_act_as, billing_account:{node_id}/{id})`          | `authz_denied` |
+| Action                   | Resource Type                    | OpenFGA Check                                                       | Error Code     |
+| ------------------------ | -------------------------------- | ------------------------------------------------------------------- | -------------- |
+| `tool.execute`           | `tool:{node_id}/{id}`            | `check(actor, can_execute, tool:{node_id}/{id})`                    | `authz_denied` |
+| `connection.use`         | `connection:{node_id}/{id}`      | `check(actor, can_use, connection:{node_id}/{id})`                  | `authz_denied` |
+| `graph.invoke`           | `graph:{node_id}/{id}`           | `check(actor, can_invoke, graph:{node_id}/{id})`                    | `authz_denied` |
+| `user.act_as`            | `user:{node_id}/{user_id}`       | `check(actor, delegates, user:{node_id}/{user_id})`                 | `authz_denied` |
+| `node.flight`            | `node:{node_id}`                 | `check(actor, can_flight, node:{node_id})`                          | `authz_denied` |
+| `billing_account.read`   | `billing_account:{node_id}/{id}` | `check(actor-or-subject, can_read, billing_account:{node_id}/{id})` | `authz_denied` |
+| `billing_account.grant`  | `billing_account:{node_id}/{id}` | `check(human, can_grant, billing_account:{node_id}/{id})`           | `authz_denied` |
+| `billing_account.act_as` | `billing_account:{node_id}/{id}` | `check(agent, can_act_as, billing_account:{node_id}/{id})`          | `authz_denied` |
 
 **Delegation relation:** `user.delegates` grants agents the right to act on behalf of user. Dual-check queries `user.act_as` when `subject` is present.
 
