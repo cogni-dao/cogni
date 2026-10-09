@@ -6,10 +6,7 @@ import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getServerSessionUser } from "@/lib/auth/server";
-import {
-  agentIdentityErrorResponse,
-  isSameOriginMutation,
-} from "../_shared";
+import { agentIdentityErrorResponse, isSameOriginMutation } from "../_shared";
 
 export const runtime = "nodejs";
 
