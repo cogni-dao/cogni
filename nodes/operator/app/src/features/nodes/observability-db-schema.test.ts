@@ -22,6 +22,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   diffDeclaredVsApplied,
+  hasMissingMigrations as driftHasMissingMigrations,
   MIGRATION_RECEIPT_MARKER,
   parseMigrationReceipt,
 } from "@/shared/migrations/migration-receipt";
@@ -107,6 +108,39 @@ describe("diffDeclaredVsApplied", () => {
         applied: [{ tag: "0001_a" }, { tag: "0002_b" }],
       })
     ).toEqual({ missing: [], unexpected: ["0002_b"] });
+  });
+});
+
+describe("hasMissingMigrations — the ONE gate predicate", () => {
+  it("absent drift is NOT a failure", () => {
+    // The whole safety property. `null` is what every unknown collapses to: no receipt was ever
+    // collected, the Job log could not be read, the line was malformed, the node id was not bound
+    // yet. A node in any of those states must deploy normally.
+    expect(driftHasMissingMigrations(null)).toBe(false);
+    expect(driftHasMissingMigrations(undefined)).toBe(false);
+  });
+
+  it("clean drift is not a failure, and `unexpected` ALONE is not either", () => {
+    expect(driftHasMissingMigrations({ missing: [], unexpected: [] })).toBe(
+      false
+    );
+    // An applied row the journal does not recognise means the IMAGE rolled back past its schema.
+    // Loud, but it is not "a declared migration did not arrive" — it must never block a deploy.
+    expect(
+      driftHasMissingMigrations({
+        missing: [],
+        unexpected: ["unknown:1791098285556"],
+      })
+    ).toBe(false);
+  });
+
+  it("a declared migration that did not arrive IS a failure", () => {
+    expect(
+      driftHasMissingMigrations({
+        missing: ["0071_gigantic_sister_grimm"],
+        unexpected: [],
+      })
+    ).toBe(true);
   });
 });
 

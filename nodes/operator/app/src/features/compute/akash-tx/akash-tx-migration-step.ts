@@ -33,14 +33,20 @@
  *     OWN migrator printed and stores it as operator deployment metadata, keyed by the `node_id`
  *     the caller's allocation receipt already binds to this workload. The operator never connects
  *     to `cogni_<node>` to learn what was applied, and never asks the tenant-scoped `nodes`
- *     registry who the workload is — the one lookup that silently voided every receipt.
+ *     registry who the workload is — the one lookup that silently voided every receipt. That
+ *     receipt is also the only input to the DRIFT GATE, which fails a `succeeded` Job into a
+ *     `failed` PHASE on exactly one definite signal — a receipt was READ and it names a declared
+ *     tag the database does not hold (bug.5415). No receipt, no capability, no bound node id, and
+ *     `unexpected`-only ledger rows are UNKNOWNS or non-blocking drift: they keep reporting
+ *     `succeeded`, because an unknown must never be laundered into a verdict.
  *   - OUTCOME_IS_OBSERVABLE: every phase emits a structured log marker before it is returned
  *     (bug.5115: a refusal that only reached CR status was invisible for hours). A `failed`
  *     phase additionally reaches the composite as a named status reason.
  * Side-effects: IO (one migration-proof call per invocation; the Kubernetes adapter behind the
  *   port creates the per-digest Job on first ask and reads it thereafter)
  * Links: @ports/akash-tx.port, @ports/compute-workload-migration.port,
- *   adapters/server/compute/kubernetes-migration-job.adapter, bug.5116, bug.5140, task.5135
+ *   adapters/server/compute/kubernetes-migration-job.adapter, @shared/migrations/migration-receipt,
+ *   bug.5116, bug.5140, bug.5415, task.5135
  * @internal
  */
 
@@ -53,6 +59,8 @@ import type {
 } from "@/ports";
 import {
   diffDeclaredVsApplied,
+  hasMissingMigrations,
+  type MigrationDrift,
   parseMigrationReceipt,
 } from "@/shared/migrations/migration-receipt";
 
@@ -139,7 +147,8 @@ export interface AkashTxMigrationStepDeps {
   /**
    * Where a collected receipt is stored as operator-held deployment METADATA. Absent means the
    * receipt is simply not collected — the schema readout then honestly says "never reported"
-   * rather than implying an empty schema.
+   * rather than implying an empty schema, and the drift gate cannot fire, because there is no
+   * reported state to fail.
    */
   readonly reports?: NodeMigrationReportStorePort;
   readonly log: AkashTxLogger;
@@ -158,8 +167,11 @@ export interface AkashTxMigrationStepDeps {
  * FORCE row-level-security tenant state, and from this session-less process that lookup returned
  * zero rows for every node in the fleet, so every receipt was discarded as `node_not_registered`.
  *
- * Non-throwing and non-blocking, like everything else in this module: a receipt that cannot be
- * collected or stored must never turn a succeeded migration into a phase the composite acts on.
+ * Non-throwing, like everything else in this module. It returns the drift it READ, or `null` for
+ * "no verdict" — every path that could not obtain and durably store a receipt answers `null`, and
+ * `null` is NOT "clean". That distinction is the whole safety property of the drift gate: an
+ * unreadable Job log, a missing capability, a malformed line and an unbound node id are all
+ * UNKNOWNS, and an unknown must never block a deploy.
  */
 async function recordReceipt(
   deps: AkashTxMigrationStepDeps,
@@ -172,13 +184,13 @@ async function recordReceipt(
     readonly containerName: string;
     readonly fields: Record<string, unknown>;
   }
-): Promise<void> {
+): Promise<MigrationDrift | null> {
   const { reports, migration } = deps;
-  if (!reports || !migration?.readReceipt) return;
+  if (!reports || !migration?.readReceipt) return null;
   const { nodeId } = input;
   if (!nodeId) {
     deps.log.warn(input.fields, "akash_tx_migration_receipt_unbound");
-    return;
+    return null;
   }
   try {
     const stdout = await migration.readReceipt({
@@ -187,10 +199,15 @@ async function recordReceipt(
       namespace: input.namespace,
       containerName: input.containerName,
     });
+    // ABSENT, not empty. `readReceipt` answers `null` when no pod log could be read at all (the
+    // 403 class that `compute_workload_migration_receipt_log_unreadable` names), and
+    // `parseMigrationReceipt` answers `null` when the stdout it did read carries no marker or a
+    // truncated/malformed one. Neither is a receipt that says "I applied nothing" — only a PARSED
+    // receipt with an empty `applied` array says that, and only that one gets a verdict.
     const receipt = stdout ? parseMigrationReceipt(stdout) : null;
     if (!receipt) {
       deps.log.info(input.fields, "akash_tx_migration_receipt_absent");
-      return;
+      return null;
     }
     const outcome = await reports.record({
       nodeId,
@@ -201,7 +218,8 @@ async function recordReceipt(
       reporter: "migration-job",
     });
     const drift = diffDeclaredVsApplied(receipt);
-    // Counts and enums only: a migration tag is row content and never reaches a log line.
+    // Counts and enums only on THIS line — it fires on every tick. Named tags appear once, on the
+    // `akash_tx_migration_drift_missing` verdict, and only for the image's own journal (reportDrift).
     deps.log.info(
       {
         ...input.fields,
@@ -212,6 +230,7 @@ async function recordReceipt(
       },
       "akash_tx_migration_receipt_recorded"
     );
+    return drift;
   } catch (error) {
     deps.log.error(
       {
@@ -220,7 +239,54 @@ async function recordReceipt(
       },
       "akash_tx_migration_receipt_failed"
     );
+    return null;
   }
+}
+
+/** Cap on named tags per line: enough to act on, bounded against a 1000-migration journal. */
+const DRIFT_TAGS_LOGGED = 20;
+
+/**
+ * Report the drift a receipt carried, and say whether it FAILS the step.
+ *
+ * Two different loudnesses on purpose (the asymmetry is the point):
+ *   - `missing` — a tag the IMAGE declared that the database does not hold. A developer's
+ *     migration did not arrive. This blocks: `akash_tx_migration_drift_missing` at error, and the
+ *     step reports `failed`.
+ *   - `unexpected` — a row in the database the image's journal does not recognise, i.e. an image
+ *     rolled BACK past its schema. Worth shouting about, but it is NOT "a declared migration did
+ *     not arrive", and blocking on it would fail every legitimately-older image. Warn only.
+ *
+ * Privacy: `missing` tags are IMAGE content — migration filenames out of the journal the image
+ * ships, already served by `GET /nodes/{id}/observability/db/schema` — so naming them is what
+ * makes the line actionable without an API round-trip. `unexpected` tags are DATABASE ROW content
+ * (e.g. a bare ledger timestamp) and stay counted, never named. Bounded either way.
+ */
+function reportDrift(
+  deps: AkashTxMigrationStepDeps,
+  input: {
+    readonly drift: MigrationDrift | null;
+    readonly nodeId?: string | undefined;
+    readonly fields: Record<string, unknown>;
+  }
+): boolean {
+  const { drift } = input;
+  if (!drift) return false;
+  const counts = {
+    ...input.fields,
+    ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+    missingCount: drift.missing.length,
+    unexpectedCount: drift.unexpected.length,
+  };
+  if (drift.unexpected.length > 0) {
+    deps.log.warn(counts, "akash_tx_migration_drift_unexpected");
+  }
+  if (!hasMissingMigrations(drift)) return false;
+  deps.log.error(
+    { ...counts, missing: drift.missing.slice(0, DRIFT_TAGS_LOGGED) },
+    "akash_tx_migration_drift_missing"
+  );
+  return true;
 }
 
 /**
@@ -270,11 +336,13 @@ export async function runMigrationStep(
   }
 
   if (outcome === "succeeded") {
+    // The JOB's outcome, which is a different fact from the step's verdict below: a Job can exit 0
+    // having applied less than its image declared, and that is exactly the drift this step now
+    // gates on. Both lines are emitted so the two facts stay separately greppable.
     deps.log.info(fields, "akash_tx_migration_succeeded");
     // Declared-vs-applied becomes comparable here, and only here: the migrator just told us what
-    // it applied. Awaited so the receipt is durable before the phase is reported, but it cannot
-    // change the phase (NEVER_REFUSES) — recordReceipt swallows everything.
-    await recordReceipt(deps, {
+    // it applied. Awaited so the receipt is durable before the phase is reported.
+    const drift = await recordReceipt(deps, {
       workload: input.workload,
       ...(input.nodeId ? { nodeId: input.nodeId } : {}),
       environment: input.environment,
@@ -286,6 +354,21 @@ export async function runMigrationStep(
         cogniNodeAppMigrationPhases({ doltgres })[0]?.name ?? "migrate",
       fields,
     });
+    // THE DRIFT GATE. A definite signal only: a receipt WAS read and it names a declared tag the
+    // database does not hold. Still a PHASE, never a throw — the composite turns it into
+    // `status.failure.reason: MigrationFailed` (retryable:false) and the lease is untouched, so
+    // the previous digest keeps serving while a human repairs the schema. Nothing weaker reaches
+    // here: no receipt, no capability, no bound node id and `unexpected`-only all answer
+    // `succeeded`, because an unknown is not a failure.
+    if (
+      reportDrift(deps, {
+        drift,
+        ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+        fields,
+      })
+    ) {
+      return "failed";
+    }
     return "succeeded";
   }
   if (outcome === "running") {

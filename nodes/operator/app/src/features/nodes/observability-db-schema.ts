@@ -15,10 +15,12 @@
  *     env updates one place and this readout follows.
  *   - DRIFT_IS_THE_GATE: `drift.missing` is non-empty exactly when the image declared a migration the
  *     database does not hold. That is the fail-loud signal a promote gate consumes; this module states
- *     the fact and takes no action on it.
+ *     the fact and takes no action on it — the ACTING consumer is the akash-tx migration step, which
+ *     shares this module's `hasMissingMigrations` predicate rather than re-deriving it (bug.5415).
  * Side-effects: none
  * Links: shared/migrations/migration-receipt.ts, @ports/node-migration-report.port,
- *   app/api/v1/nodes/[id]/observability/db/schema/route.ts
+ *   app/api/v1/nodes/[id]/observability/db/schema/route.ts,
+ *   features/compute/akash-tx/akash-tx-migration-step.ts
  * @public
  */
 
@@ -26,6 +28,7 @@ import type { FlightEnv, NodeMigrationReportRecord } from "@/ports";
 import {
   type AppliedMigration,
   diffDeclaredVsApplied,
+  hasMissingMigrations as driftHasMissingMigrations,
   type MigrationDrift,
 } from "@/shared/migrations/migration-receipt";
 import { FLIGHT_ENVS, isFlightEnv } from "./flight-status";
@@ -106,10 +109,14 @@ export function shapeSchemaReadout(input: {
 }
 
 /**
- * The gate predicate (the second half of the goal, stated once here so the eventual promote gate
- * and any UI badge agree). A readout fails the gate when it REPORTED drift; `never_reported` is
- * explicitly NOT a failure — an unknown must not be laundered into a verdict.
+ * The gate predicate at READOUT altitude. A readout fails the gate when it REPORTED missing
+ * migrations; `never_reported` carries a null drift and is explicitly NOT a failure — an unknown
+ * must not be laundered into a verdict.
+ *
+ * Delegates to the shared drift-level predicate rather than re-deriving the comparison, so this
+ * badge and the akash-tx migration step that actually BLOCKS on it (`runMigrationStep`) can never
+ * disagree about what "missing" means.
  */
 export function hasMissingMigrations(readout: SchemaReadout): boolean {
-  return (readout.drift?.missing.length ?? 0) > 0;
+  return driftHasMissingMigrations(readout.drift);
 }
