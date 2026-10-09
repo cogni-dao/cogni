@@ -64,6 +64,7 @@ export {
   type AkashTxAllocationLedgerPort,
   type AkashTxAllocationRecord,
   type AkashTxAllocationState,
+  type AkashTxCompositeVerdict,
   type AkashTxConsolePort,
   type AkashTxCreateResult,
   AkashTxError,

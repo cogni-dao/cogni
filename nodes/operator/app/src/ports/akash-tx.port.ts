@@ -162,6 +162,34 @@ export type AkashTxMigrationPhase =
   | "unavailable";
 
 /**
+ * The verdict the COMPOSITE ITSELF computed and wrote to `XComputeWorkload.status` — the
+ * `phase` plus the `failure.reason` its own go-template ranked, echoed back to the one process
+ * in this system that has a log plane (bug.5416).
+ *
+ * WHY THIS EXISTS AT ALL. `AkashTxMigrationPhase` is the gate's INPUT: it proves what the
+ * observe RESPONSE carried. It cannot prove the composite ACTED on it, because
+ * `composition.yaml` ranks a terminal refusal and `BootDeadlineExceeded` ABOVE
+ * `$migrationFailed` — so a response carrying `failed` and a composite reporting
+ * `BootDeadlineExceeded` are the same tick. Only the composite can state which branch won, and
+ * a Crossplane Composition has no way to log, emit an Event, or write a metric: Kubernetes
+ * records no Event for a status transition, and `function-go-templating` has no result/event
+ * meta-kind at any released version. The HTTP call it already makes every tick is therefore its
+ * ONLY telemetry channel.
+ *
+ * `failureReason` is the XRD's cleared-failure sentinel `"None"` when nothing failed — never
+ * absent — because the composition emits `status.failure` unconditionally for exactly that
+ * reason (bug.5287). A bounded reason TOKEN is the whole payload: the matching
+ * `failure.message` is free text carrying SHAs and lease handles, and is deliberately off this
+ * wire.
+ */
+export interface AkashTxCompositeVerdict {
+  /** The composite's own `status.phase`. */
+  readonly phase: "Progressing" | "Ready" | "Failed";
+  /** The composite's own `status.failure.reason`; `"None"` means cleared, never absent. */
+  readonly failureReason: string;
+}
+
+/**
  * The release-step seam. Structurally satisfied by `ComputeWorkloadMigrationPort`
  * (`KubernetesMigrationJobAdapter`), so the actuator and the frozen controller drive migration
  * currency with ONE implementation — including its `compute_workload_migration_job_infra_retry`
@@ -219,6 +247,11 @@ export interface AkashTxActuatorPort {
     /** Workload slug + environment, required only when `migration` is attached. */
     workload?: string;
     environment?: string;
+    /**
+     * The verdict the composite wrote on its PREVIOUS tick. Reported, never read: no
+     * observation, probe, migration or transaction may branch on it (bug.5416).
+     */
+    composite?: AkashTxCompositeVerdict;
   }): Promise<AkashTxObservation>;
   create(input: {
     cogniKey: string;

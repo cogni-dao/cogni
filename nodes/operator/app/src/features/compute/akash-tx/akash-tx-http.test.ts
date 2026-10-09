@@ -467,6 +467,52 @@ describe("akash-tx dispatcher", () => {
     });
   });
 
+  it("carries the composite's own verdict on OBSERVE", async () => {
+    // bug.5416: the composite is the only party that knows which of its ranked branches won,
+    // and it has no log plane of its own. The unpaid tick is its telemetry channel.
+    let seen: unknown;
+    const dispatch = dispatcherFor(
+      stubActuator({
+        observe: async (input) => {
+          seen = input;
+          return { found: false };
+        },
+      })
+    );
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/observe",
+      authorization: AUTH,
+      body: JSON.stringify({
+        cogniKey: VALID_CREATE.cogniKey,
+        composite: { phase: "Failed", failureReason: "MigrationFailed" },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(seen).toMatchObject({
+      composite: { phase: "Failed", failureReason: "MigrationFailed" },
+    });
+  });
+
+  it("refuses a composite verdict whose reason is not a bounded token", async () => {
+    // The bound is the cardinality control: a free-text reason would put a message, a SHA or a
+    // lease handle onto a telemetry field. A strict object + pattern rejects it at the edge.
+    const dispatch = dispatcherFor(stubActuator());
+    const response = await dispatch({
+      method: "POST",
+      path: "/v1/akash/observe",
+      authorization: AUTH,
+      body: JSON.stringify({
+        cogniKey: VALID_CREATE.cogniKey,
+        composite: {
+          phase: "Failed",
+          failureReason: "migration for bundle digest of abc123 failed",
+        },
+      }),
+    });
+    expect(response.status).toBe(400);
+  });
+
   it("refuses a release step that names no digest", async () => {
     // The step is a strict object: an under-specified one is a schema error, not a silent pass.
     const dispatch = dispatcherFor(stubActuator());

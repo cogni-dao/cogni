@@ -167,6 +167,14 @@ function toObserveInput(parsed: AkashTxObserveInput) {
       : {}),
     ...(parsed.workload ? { workload: parsed.workload } : {}),
     ...(parsed.environment ? { environment: parsed.environment } : {}),
+    ...(parsed.composite
+      ? {
+          composite: {
+            phase: parsed.composite.phase,
+            failureReason: parsed.composite.failureReason,
+          },
+        }
+      : {}),
   };
 }
 
