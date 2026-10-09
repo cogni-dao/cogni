@@ -21,7 +21,7 @@
  * @internal
  */
 
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   type InternalFlightProbeOutput,
   InternalFlightProbeOutputSchema,
@@ -82,9 +82,9 @@ function extractBearer(authHeader: string | null): string | null {
 }
 
 function safeCompare(a: string, b: string): boolean {
-  const left = Buffer.from(a, "utf8");
-  const right = Buffer.from(b, "utf8");
-  return left.length === right.length && timingSafeEqual(left, right);
+  const left = createHash("sha256").update(a, "utf8").digest();
+  const right = createHash("sha256").update(b, "utf8").digest();
+  return timingSafeEqual(left, right);
 }
 
 function servicePrincipal(nodeId: string): string {
