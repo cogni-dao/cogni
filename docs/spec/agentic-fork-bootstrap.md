@@ -391,15 +391,16 @@ authority, founder holds only a signed consent.
 
 ## Pointers
 
-| Doc                                                                                                           | Role                                                |
-| ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| [`scripts/setup/SETUP_DESIGN.md`](../../scripts/setup/SETUP_DESIGN.md)                                        | Today's canonical secret list (the ~30)             |
-| [`.claude/skills/node-setup/SKILL.md`](../../.claude/skills/node-setup/SKILL.md)                              | Agent orchestration loop (Phases 0–7)               |
-| [`docs/runbooks/INFRASTRUCTURE_SETUP.md`](../runbooks/INFRASTRUCTURE_SETUP.md)                                | VM provisioning runbook (Cherry + SSH + tofu)       |
-| [`.claude/skills/dns-ops/SKILL.md`](../../.claude/skills/dns-ops/SKILL.md)                                    | Cloudflare DNS automation (slot #2)                 |
-| [`scripts/ci/deploy-infra.sh`](../../scripts/ci/deploy-infra.sh)                                              | `REQUIRED_SECRETS` array — the deploy-side env gate |
-| [`nodes/<node>/app/src/shared/env/server-env.ts`](../../nodes/node-template/app/src/shared/env/server-env.ts) | App boot env schema (Zod)                           |
-| [`docs/spec/node-launch.md`](node-launch.md)                                                                  | vNext-vNext zero-touch target                       |
+| Doc                                                                                                           | Role                                                                   |
+| ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| [`scripts/setup/SETUP_DESIGN.md`](../../scripts/setup/SETUP_DESIGN.md)                                        | Today's canonical secret list (the ~30)                                |
+| [`docs/guides/agent-identity-setup.md`](../guides/agent-identity-setup.md)                                    | How to set up the bot/agent identity (§GitHub Admin Role prerequisite) |
+| [`.claude/skills/node-setup/SKILL.md`](../../.claude/skills/node-setup/SKILL.md)                              | Agent orchestration loop (Phases 0–7)                                  |
+| [`docs/runbooks/INFRASTRUCTURE_SETUP.md`](../runbooks/INFRASTRUCTURE_SETUP.md)                                | VM provisioning runbook (Cherry + SSH + tofu)                          |
+| [`.claude/skills/dns-ops/SKILL.md`](../../.claude/skills/dns-ops/SKILL.md)                                    | Cloudflare DNS automation (slot #2)                                    |
+| [`scripts/ci/deploy-infra.sh`](../../scripts/ci/deploy-infra.sh)                                              | `REQUIRED_SECRETS` array — the deploy-side env gate                    |
+| [`nodes/<node>/app/src/shared/env/server-env.ts`](../../nodes/node-template/app/src/shared/env/server-env.ts) | App boot env schema (Zod)                                              |
+| [`docs/spec/node-launch.md`](node-launch.md)                                                                  | vNext-vNext zero-touch target                                          |
 
 ## Invariants
 

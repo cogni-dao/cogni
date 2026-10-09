@@ -220,6 +220,8 @@ If you use [Claude Code on the web](https://claude.ai/code) (remote sessions), y
 
 The repo's `.claude/settings.json` SessionStart hook reads these vars and configures `git config` automatically.
 
+> Use a **dedicated agent identity** here, not your personal one — a distinct GitHub account + verified email with scoped, revocable permissions. See [Agent Identity Setup](./agent-identity-setup.md) for why (GitHub attributes commits by author _email_, not display name) and how.
+
 ## Troubleshooting
 
 ### Problem: `pnpm db:setup` fails with connection error
@@ -232,6 +234,7 @@ The repo's `.claude/settings.json` SessionStart hook reads these vars and config
 
 ## Related
 
+- [Agent Identity Setup](./agent-identity-setup.md) — give an AI/coding agent its own git + GitHub identity with scoped, revocable permissions
 - [Environments Spec](../spec/environments.md) — deployment modes and stack configurations
 - [Databases Spec](../spec/databases.md) — migration architecture and database setup
 - [Testing Guide](./testing.md) — testing strategy and adapter patterns
