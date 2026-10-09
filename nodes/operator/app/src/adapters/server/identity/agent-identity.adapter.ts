@@ -12,14 +12,15 @@
  */
 
 import {
-  createHash,
+  hkdfSync,
   randomBytes,
   randomUUID,
+  scryptSync,
   timingSafeEqual,
 } from "node:crypto";
 import {
-  actors,
   actorStewardshipEvents,
+  actors,
   agentCredentials,
   agentRecoveryGrants,
   agentSpawnGrants,
@@ -29,9 +30,9 @@ import type { AgentRequestPrincipal } from "@cogni/node-contracts";
 import { and, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Database } from "@/adapters/server/db/client";
 import {
-  AgentIdentityError,
   type AgentCredentialMaterial,
   type AgentCredentialStatus,
+  AgentIdentityError,
   type AgentIdentityPort,
 } from "@/ports";
 
@@ -47,14 +48,14 @@ const MAX_OUTSTANDING_GRANTS_PER_ISSUER = 5;
 
 type ParsedCredential = { readonly id: string; readonly secret: string };
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
+function hashOpaque(label: string, value: string): string {
+  return scryptSync(value, `cogni-agent-v2:${label}`, 32).toString("hex");
 }
 
 function deriveSecret(label: string, material: string): string {
-  return createHash("sha256")
-    .update(`${label}\0${material}`, "utf8")
-    .digest("base64url");
+  return Buffer.from(
+    hkdfSync("sha256", material, "cogni-agent-v2", label, 32)
+  ).toString("base64url");
 }
 
 function randomToken(prefix: string): string {
@@ -154,7 +155,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
     idempotencyKey: string;
   }): Promise<{ grantId: string; token: string; expiresAt: string }> {
     const token = randomToken(SPAWN_TOKEN_PREFIX);
-    const tokenHash = sha256(token);
+    const tokenHash = hashOpaque("spawn-grant", token);
     const now = this.now();
     const expiresAt = new Date(now.getTime() + SPAWN_TTL_MS);
 
@@ -232,7 +233,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
   }
 
   async redeemSpawnGrant(token: string): Promise<AgentCredentialMaterial> {
-    const tokenHash = sha256(token);
+    const tokenHash = hashOpaque("spawn-grant", token);
     const now = this.now();
     return this.db.transaction(async (tx) => {
       await tx.execute(
@@ -329,7 +330,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         id: credentialId,
         actorId,
         nodeId: this.nodeId,
-        secretHash: sha256(secret),
+        secretHash: hashOpaque("credential", secret),
         status: "active",
         authenticateUntil,
         renewUntil,
@@ -381,7 +382,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
       row.nodeId !== this.nodeId ||
       row.credentialStatus !== "active" ||
       row.actorStatus !== "active" ||
-      !hashesEqual(row.secretHash, sha256(parsed.secret))
+      !hashesEqual(row.secretHash, hashOpaque("credential", parsed.secret))
     ) {
       return null;
     }
@@ -442,7 +443,10 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         lockedCurrent.credentialStatus !== "active" ||
         lockedCurrent.actorStatus !== "active" ||
         lockedCurrent.renewUntil < now ||
-        !hashesEqual(lockedCurrent.secretHash, sha256(parsed.secret))
+        !hashesEqual(
+          lockedCurrent.secretHash,
+          hashOpaque("credential", parsed.secret)
+        )
       ) {
         throw new AgentIdentityError(
           "invalid_credential",
@@ -459,11 +463,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           )
         )
         .limit(1);
-      if (
-        pending &&
-        pending.pendingExpiresAt &&
-        pending.pendingExpiresAt > now
-      ) {
+      if (pending?.pendingExpiresAt && pending.pendingExpiresAt > now) {
         if (pending.rotationIdempotencyKey !== input.idempotencyKey) {
           throw new AgentIdentityError(
             "rotation_pending",
@@ -500,7 +500,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         id: credentialId,
         actorId: current.principal.actorId,
         nodeId: this.nodeId,
-        secretHash: sha256(secret),
+        secretHash: hashOpaque("credential", secret),
         status: "pending",
         predecessorCredentialId: parsed.id,
         rotationIdempotencyKey: input.idempotencyKey,
@@ -574,7 +574,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         !row ||
         row.nodeId !== this.nodeId ||
         row.actorStatus !== "active" ||
-        !hashesEqual(row.secretHash, sha256(parsed.secret))
+        !hashesEqual(row.secretHash, hashOpaque("credential", parsed.secret))
       ) {
         throw new AgentIdentityError(
           "invalid_credential",
@@ -650,7 +650,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
       const grantId = randomUUID();
       await tx.insert(agentRecoveryGrants).values({
         id: grantId,
-        tokenHash: sha256(token),
+        tokenHash: hashOpaque("recovery-grant", token),
         nodeId: this.nodeId,
         actorId: input.actorId,
         issuerActorId: issuer.id,
@@ -662,7 +662,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
   }
 
   async recover(token: string): Promise<AgentCredentialMaterial> {
-    const tokenHash = sha256(token);
+    const tokenHash = hashOpaque("recovery-grant", token);
     const secret = deriveSecret("recover-credential", token);
     const now = this.now();
     return this.db.transaction(async (tx) => {
@@ -736,7 +736,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         id: credentialId,
         actorId: grant.actorId,
         nodeId: this.nodeId,
-        secretHash: sha256(secret),
+        secretHash: hashOpaque("credential", secret),
         status: "active",
         authenticateUntil,
         renewUntil,
@@ -822,7 +822,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         });
         actor = { id: actorId, billingAccountId: billing.id };
       }
-      const secretHash = sha256(secret);
+      const secretHash = hashOpaque("credential", secret);
       const [existing] = await tx
         .select()
         .from(agentCredentials)

@@ -11,7 +11,6 @@ import { DrizzleAgentIdentityAdapter } from "@/adapters/server/identity/agent-id
 import { AgentIdentityError } from "@/ports";
 import {
   actors,
-  actorStewardshipEvents,
   agentCredentials,
   agentRecoveryGrants,
   agentSpawnGrants,
@@ -43,13 +42,7 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
   afterAll(async () => {
     await db.delete(agentRecoveryGrants);
     await db.delete(agentCredentials);
-    await db.delete(actorStewardshipEvents);
     await db.delete(agentSpawnGrants);
-    await db.delete(actors);
-    await db
-      .delete(billingAccounts)
-      .where(eq(billingAccounts.id, billingAccountId));
-    await db.delete(users).where(eq(users.id, userId));
   });
 
   async function spawn(name = "test-agent") {

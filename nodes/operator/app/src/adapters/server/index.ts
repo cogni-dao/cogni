@@ -122,12 +122,12 @@ export {
   type ProbeDeployConfig,
 } from "./deploy/probe-deploy.adapter";
 export { DrizzleGovernanceStatusAdapter } from "./governance/drizzle-governance-status.adapter";
+export { DrizzleAgentIdentityAdapter } from "./identity/agent-identity.adapter";
 export {
   JoseIdentityAttestationSigner,
   OperatorIdentityAttestationRepository,
   type OperatorIdentityAttestationRepositoryConfig,
 } from "./identity/identity-attestation.adapter";
-export { DrizzleAgentIdentityAdapter } from "./identity/agent-identity.adapter";
 export {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,

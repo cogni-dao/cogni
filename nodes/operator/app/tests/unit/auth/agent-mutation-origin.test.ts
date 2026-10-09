@@ -6,10 +6,13 @@ import { isSameOriginMutation } from "@/app/api/v1/agent/_shared";
 
 describe("agent cookie mutation origin", () => {
   it("accepts an exact Origin/Host match", () => {
-    const request = new Request("https://node.example/api/v1/agent/spawn-grants", {
-      method: "POST",
-      headers: { host: "node.example", origin: "https://node.example" },
-    });
+    const request = new Request(
+      "https://node.example/api/v1/agent/spawn-grants",
+      {
+        method: "POST",
+        headers: { host: "node.example", origin: "https://node.example" },
+      }
+    );
 
     expect(isSameOriginMutation(request)).toBe(true);
   });
