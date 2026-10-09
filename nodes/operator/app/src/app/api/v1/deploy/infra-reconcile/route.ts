@@ -4,20 +4,26 @@
 /**
  * Module: `@app/api/v1/deploy/infra-reconcile`
  * Purpose: RBAC-gated shared-infrastructure control through the existing deploy verb.
- * Scope: Operator node only. Production replays the existing full-infra workflow; candidate-a
- *   classifies one exact reviewed PR as Compose/edge workflow or control-plane GitOps-ref work.
+ * Scope: Operator node only. Preview and production replay the existing full-infra workflow for
+ *   their own lane; candidate-a instead classifies one exact reviewed PR as Compose/edge or
+ *   control-plane GitOps-ref work, and no env accepts a caller-chosen workflow, ref, or mode.
  * Invariants:
- *   - AUTHZ_BEFORE_SIDE_EFFECT: the temporary bootstrap action `node.promote_production` is
- *     checked before dispatch; story.5028 splits the dedicated infra permission after model boot.
+ *   - AUTHZ_BEFORE_SIDE_EFFECT: the env's gate is checked before dispatch — `node.manage_envs`
+ *     for preview (the authority that already activates the env and performs its manual promote,
+ *     `PREVIEW_IS_MANUAL_TOO`), the temporary `node.promote_production` bootstrap bridge for
+ *     production and candidate-a (story.5028 splits the dedicated infra permission).
  *   - PROMOTION_RUNS_AS_THE_OPERATOR: no caller GitHub credential crosses this route.
  *   - SHARED_INFRA_OPERATOR_ONLY: a node-scoped promoter cannot restart another node's shared VM.
- *   - INFRA_RECONCILE_PRESERVES_APP: production accepts no SHA/ref and resolves deployed state;
- *     candidate-a changes only infra workflow/ref state, never the app source map.
+ *   - INFRA_RECONCILE_PRESERVES_APP: a shared lane (preview | production) accepts no SHA/ref and
+ *     resolves its OWN deployed pin; candidate-a changes only infra workflow/ref state.
  *   - CANDIDATE_INFRA_IS_TYPED: candidate-a accepts only sourceSha; lane/repo/ref/workflow/mode
  *     remain server-owned and the adapter validates the PR head plus a single affected-path class.
+ *   - EVERY_REACHABLE_ENV_CONVERGES: preview is a member of this union (bug.5409). Without it
+ *     preview's derived substrate — Grafana datasources, the per-DB Postgres exporter, VM-
+ *     materialized bridge secrets — froze at whatever last hand-provisioned it.
  *   - ENV_SCOPED_PARENT: the environment's App targets only its configured deployment parent.
  * Side-effects: IO (authz check, GitHub workflow dispatch or Git ref update)
- * Links: story.5027, docs/spec/cicd-platform-boundary.md
+ * Links: story.5027, bug.5409, docs/spec/cicd-platform-boundary.md
  * @public
  */
 
@@ -43,12 +49,30 @@ const infraReconcileInput = z.discriminatedUnion("env", [
     nodeId: z.string().min(1),
     env: z.literal("production"),
   }),
+  // SHARED_LANE_TAKES_NO_SOURCE: preview takes production's shape, NOT candidate-a's. A shared
+  // long-lived lane has a deployed pin the adapter resolves from `deploy/preview-<slug>`; a
+  // caller-supplied sha here would turn the infra lever into an app promote (bug.5409).
+  z.strictObject({
+    nodeId: z.string().min(1),
+    env: z.literal("preview"),
+  }),
   z.strictObject({
     nodeId: z.string().min(1),
     env: z.literal("candidate-a"),
     sourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
   }),
 ]);
+
+/**
+ * ENV_GATES_THE_LEVER: preview rides `node.manage_envs` — the SAME authority that activates the
+ * env and performs the manual preview promote (`PREVIEW_IS_MANUAL_TOO`, deploy/promote/route.ts).
+ * Production and candidate-a keep the `node.promote_production` bootstrap bridge (story.5028 is
+ * the least-privilege destination). Preview does NOT get a new role and does NOT borrow
+ * production's: a preview-lane substrate change must not require the irreversible-env grant.
+ */
+function infraAuthzAction(env: "production" | "preview" | "candidate-a") {
+  return env === "preview" ? "node.manage_envs" : "node.promote_production";
+}
 
 export const POST = wrapRouteHandlerWithLogging(
   {
@@ -107,7 +131,7 @@ export const POST = wrapRouteHandlerWithLogging(
     }
     const decision = await authorization.check({
       actorId: `user:${sessionUser.id}`,
-      action: "node.promote_production",
+      action: infraAuthzAction(parsed.data.env),
       resource: `node:${node.id}`,
       context: { tenantId: billingAccount.id, nodeId: node.id },
     });
@@ -142,7 +166,9 @@ export const POST = wrapRouteHandlerWithLogging(
               sourceSha: parsed.data.sourceSha,
             })
           : await deployPlane.reconcileNodeInfra({
-              env: "production",
+              // Shared long-lived lane (preview | production): ONE code path, the env is the only
+              // difference. The adapter resolves that lane's own deployed pin.
+              env: parsed.data.env,
               parentOwner,
               parentRepo,
               slug: node.slug,

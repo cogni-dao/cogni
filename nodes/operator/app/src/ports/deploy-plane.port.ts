@@ -105,13 +105,21 @@ export interface NodePromoteResult {
   readonly runApiUrl: string;
 }
 
+/**
+ * The shared long-lived lanes an infra reconcile can replay. Both resolve their own deployed pin
+ * from `deploy/<env>-<slug>` and accept NO caller SHA — a shared lane's app digest is deployed
+ * truth, not a request parameter (bug.5409). Candidate-a is deliberately absent: it is a
+ * PR-scoped slot, so its arm below takes the reviewed PR head instead.
+ */
+export type SharedLaneInfraEnv = "preview" | "production";
+
 export type ReconcileNodeInfraInput =
   | {
-      /** Existing production full-infra replay; the caller cannot select its source. */
-      readonly env: "production";
+      /** Existing shared-lane full-infra replay; the caller cannot select its source. */
+      readonly env: SharedLaneInfraEnv;
       readonly parentOwner: string;
       readonly parentRepo: string;
-      /** Node whose production-promoter grant authorized the shared infra operation. */
+      /** Node whose env grant authorized the shared infra operation. */
       readonly slug: string;
     }
   | {
@@ -128,7 +136,7 @@ export type ReconcileNodeInfraInput =
 export type NodeInfraReconcileResult =
   | {
       readonly status: "dispatched";
-      readonly env: "production";
+      readonly env: SharedLaneInfraEnv;
       /** Existing deployed source pin reused so the infra reconcile cannot advance the app. */
       readonly sourceSha: string;
       readonly sourceAddressing: "remote_source" | "in_repo";
@@ -382,8 +390,10 @@ export interface DeployPlanePort {
   }): Promise<string | null>;
 
   /**
-   * Existing deploy authority for shared infrastructure. Production replays the current app pin
-   * through the full-infra workflow. Candidate-a classifies a reviewed PR into exactly one lane:
+   * Existing deploy authority for shared infrastructure. A shared long-lived lane (preview or
+   * production) replays ITS OWN current app pin through the full-infra workflow — same code path,
+   * the env is the only difference, so preview's derived substrate can no longer freeze at
+   * whatever last hand-provisioned it (bug.5409). Candidate-a classifies a reviewed PR into one lane:
    * Compose/edge dispatches the existing candidate infra workflow, while control-plane changes
    * select the dedicated `deploy/candidate-a-control-plane` GitOps ref. Both preserve app digests;
    * callers cannot select a lane, repo, arbitrary ref, workflow, or mode. Authorization is enforced

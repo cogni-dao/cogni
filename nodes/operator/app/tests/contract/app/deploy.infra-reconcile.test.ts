@@ -4,15 +4,17 @@
 /**
  * Module: `@tests/contract/app/deploy.infra-reconcile`
  * Purpose: Contract tests for the operator-mediated shared-infrastructure deploy verb.
- * Scope: Auth, strict production/candidate inputs, operator-node scope, RBAC, and adapter failures.
+ * Scope: Auth, strict shared-lane/candidate inputs, operator-node scope, RBAC, and adapter failures; does not reach GitHub.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: every deny path performs zero deploy-plane calls.
  *   - CALLER_CANNOT_SELECT_SOURCE: SHA, ref, workflow, and infra mode are not API inputs.
- *     Production accepts no source; candidate-a accepts only one exact source SHA.
+ *     Preview and production accept no source; candidate-a accepts only one exact source SHA.
+ *   - PREVIEW_GATE_IS_MANAGE_ENVS: preview rides `node.manage_envs` (bug.5409), never the
+ *     irreversible-env `node.promote_production` grant that production and candidate-a use.
  *   - SHARED_INFRA_OPERATOR_ONLY: a promoter for another node cannot reconcile the shared VM.
  *   - ENV_SCOPED_PARENT: candidate/test and production use their own configured parent repos.
  * Side-effects: none
- * Links: story.5027, src/app/api/v1/deploy/infra-reconcile/route.ts
+ * Links: story.5027, bug.5409, src/app/api/v1/deploy/infra-reconcile/route.ts
  * @internal
  */
 
@@ -173,7 +175,11 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
   });
 
   it.each([
-    { nodeId: NODE_ID, env: "preview" },
+    { nodeId: NODE_ID, env: "canary" },
+    // SHARED_LANE_TAKES_NO_SOURCE: preview is accepted (bug.5409) but, like production, only in
+    // its no-source shape — a caller sha would turn the infra lever into an app promote.
+    { nodeId: NODE_ID, env: "preview", sourceSha: SOURCE_SHA },
+    { nodeId: NODE_ID, env: "preview", deployInfraMode: "full" },
     { nodeId: NODE_ID, env: "production", sourceSha: SOURCE_SHA },
     { nodeId: NODE_ID, env: "production", workflow: "anything.yml" },
     { nodeId: NODE_ID, env: "production", deployInfraMode: "full" },
@@ -260,6 +266,61 @@ describe("POST /api/v1/deploy/infra-reconcile", () => {
       parentRepo: "test-repo",
       slug: "operator",
     });
+  });
+
+  it("gates preview on node.manage_envs, not the production grant, then dispatches", async () => {
+    mockDeployPlane.reconcileNodeInfra.mockResolvedValue({
+      status: "dispatched",
+      env: "preview",
+      sourceSha: SOURCE_SHA,
+      sourceAddressing: "in_repo",
+      workflowUrl: "https://github.com/test-owner/test-repo/actions",
+    });
+
+    const res = await post({ nodeId: NODE_ID, env: "preview" });
+
+    expect(res.status).toBe(200);
+    expect(authzState.check).toHaveBeenCalledWith({
+      actorId: `user:${TEST_SESSION_USER_1.id}`,
+      action: "node.manage_envs",
+      resource: `node:${NODE_ID}`,
+      context: { tenantId: "billing-1", nodeId: NODE_ID },
+    });
+    // The SHARED-LANE shape: env only. No sourceSha reaches the plane, so the lane's own
+    // deployed pin is the single source of the replayed app digest.
+    expect(mockDeployPlane.reconcileNodeInfra).toHaveBeenCalledWith({
+      env: "preview",
+      parentOwner: "test-owner",
+      parentRepo: "test-repo",
+      slug: "operator",
+    });
+    expect(await res.json()).toMatchObject({
+      status: "dispatched",
+      env: "preview",
+      sourceSha: SOURCE_SHA,
+    });
+  });
+
+  it("denies a preview infra reconcile without node.manage_envs and performs no side effect", async () => {
+    authzState.decision = "authz_denied";
+    const res = await post({ nodeId: NODE_ID, env: "preview" });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "authz_denied" });
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "node.manage_envs" })
+    );
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-operator node's preview infra reconcile before authz", async () => {
+    dbState.node = { id: NODE_ID, slug: "poly" };
+    const res = await post({ nodeId: NODE_ID, env: "preview" });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: "infra_reconcile_operator_only",
+    });
+    expect(authzState.check).not.toHaveBeenCalled();
+    expect(mockDeployPlane.reconcileNodeInfra).not.toHaveBeenCalled();
   });
 
   it("uses the same authorized verb to select only candidate-a control-plane source", async () => {
