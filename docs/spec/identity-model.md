@@ -81,7 +81,7 @@ tags: [identity, architecture, governance]
 │    │  ─ Economic subject (earns, spends, attributed)          │     │
 │    │  ─ Kinds: user | agent | system | org                    │     │
 │    │  ─ user actors: 1:1 FK to users.id                       │     │
-│    │  ─ agent actors: durable RBAC subject agent:{actor_id}     │     │
+│    │  ─ agent actors: RBAC subject agent:{node_id}/{actor_id}    │     │
 │    │  ─ spawned-by and accepted steward are distinct relations │     │
 │    │  ─ Lives in: actors.id, charge_receipts, epoch_allocs    │     │
 │    │  ─ Bindings: actor_bindings (wallets, OAuth, ext refs)   │     │
@@ -145,27 +145,33 @@ Runtime RBAC uses typed string references to durable local subjects. The typed
 reference may contain a database identifier; the reference is not a credential,
 secret, external identity, or global identity.
 
-| Runtime Field  | Format                    | Source of Truth                                    | Purpose                                      |
-| -------------- | ------------------------- | -------------------------------------------------- | -------------------------------------------- |
-| `actorId`      | `user:{user_id}`          | Browser session                                    | Direct human execution                       |
-| `actorId`      | `agent:{actor_id}`        | Active node-local agent credential                 | Direct or delegated AI execution             |
-| `actorId`      | `service:{service_name}`  | Internal service bootstrap                         | Internal service execution                   |
-| `subjectId`    | `user:{user_id}`          | Server-issued execution grant/session context only | Human authority for on-behalf-of execution   |
-| `tenantId`     | `{billing_account_id}`    | Authorized account selection or execution grant    | Tenancy/RLS boundary and audit key           |
-| `credentialId` | `{credential_id}`         | Node-local credential lookup                       | Authentication lifecycle and audit reference |
-| `graphId`      | `{provider}:{graph_name}` | Graph catalog / execution request                  | Graph-scoped authorization context           |
+| Runtime Field  | Format                             | Source of Truth                                    | Purpose                                      |
+| -------------- | ---------------------------------- | -------------------------------------------------- | -------------------------------------------- |
+| `actorId`      | `user:{node_id}/{user_id}`         | Browser session + serving node                     | Direct human execution                       |
+| `actorId`      | `agent:{node_id}/{actor_id}`       | Active node-local agent credential                 | Direct or delegated AI execution             |
+| `actorId`      | `service:{node_id}/{service_name}` | Internal service bootstrap + serving node          | Internal service execution                   |
+| `subjectId`    | `user:{node_id}/{user_id}`         | Server-issued execution grant/session context only | Human authority for on-behalf-of execution   |
+| `tenantId`     | `{billing_account_id}`             | Authorized account selection or execution grant    | Tenancy/RLS boundary and audit key           |
+| `credentialId` | `{credential_id}`                  | Node-local credential lookup                       | Authentication lifecycle and audit reference |
+| `graphId`      | `{provider}:{graph_name}`          | Graph catalog / execution request                  | Graph-scoped authorization context           |
 
-`agent:{actor_id}` is the one durable AI authorization subject. Do not create a
-parallel durable `agent_id`. Credentials rotate and access contexts expire while
-the actor reference, OpenFGA tuples, attribution, and bindings remain stable.
+`actor_id` is the one durable node-local AI identity; do not create a parallel
+durable `agent_id`. The OpenFGA store is shared within an environment, while
+users, actors, and accounts are node-local, so every OpenFGA subject is encoded
+with the serving `node_id` as the object-ID prefix after OpenFGA's single type
+separator (for example `agent:{node_id}/{actor_id}`). Bare `agent:{actor_id}` and
+`user:{user_id}` strings must never enter the shared graph. Credentials rotate
+and access contexts expire
+while the node-qualified OpenFGA subject, attribution, and bindings remain stable.
 
 Two execution modes are intentionally distinct:
 
-- **Direct agent:** authenticate `agent:A`, let the caller select an explicit
-  account from its authorized self-list, and check `agent:A` on that exact
-  `billing_account:B`. Caller input selects a resource; it never authorizes it.
+- **Direct agent:** authenticate local actor `A` at node `N`, derive
+  `agent:N/A`, let the caller select an explicit account from its authorized
+  self-list, and check `agent:N/A` on that exact
+  `billing_account:N/B`. Caller input selects a resource; it never authorizes it.
 - **On-behalf-of (OBO):** the server closes over an immutable
-  `ExecutionIdentity { actorPrincipal: agent:A, subjectPrincipal: user:H,
+  `ExecutionIdentity { actorPrincipal: agent:N/A, subjectPrincipal: user:N/H,
 billingAccountId: B, grantId: G }`. Authorization checks both `H` on `B` and
   the exact scoped delegation from `A` to `H` for `B` and the action.
 
@@ -244,7 +250,7 @@ spawn grant → active credential → pending successor → successor confirmed
 
 Ed25519 proof-of-possession, nonce/jti exchange, 15-minute access tokens, and
 per-installation credentials are deferred hardening. They may replace the P0
-authenticator without replacing `agent:{actor_id}` or replaying permissions.
+authenticator without replacing `agent:{node_id}/{actor_id}` or replaying permissions.
 A credential key or thumbprint is never cross-node identity because credentials
 rotate.
 
@@ -275,20 +281,25 @@ different times.**
    remains attributed to the AI actor even when a human controls its provider
    account, approves its work, or ultimately receives value.
 2. Beneficiary policy evaluates the accepted-steward/policy state effective at
-   the canonical contribution or receipt cutoff captured by the evidence. It
-   persists `beneficiary_actor_id`, the cutoff, policy version, and relationship
-   evidence no later than allocation signing. It never looks up the parent current
-   at a later allocation or claim time.
+   the canonical contribution or receipt cutoff captured by the evidence, but
+   stewardship is input only. The policy must explicitly select and pin either
+   the agent, a human/org actor, or treasury as `beneficiary_actor_id`; it cannot
+   derive the beneficiary from parentage alone. It persists the beneficiary,
+   cutoff, policy version, and relationship evidence no later than allocation
+   signing. It never looks up the parent current at a later allocation or claim
+   time. For the `flock-leader` migration, the claim ceremony must explicitly
+   select Derek's human actor if Derek is to receive its rewards.
 3. At cumulative distribution materialization, the system resolves the pinned
    beneficiary's current verified wallet and pins `claimant_wallet` plus binding
    evidence in the manifest leaf. If no verified wallet exists, the liability
    remains unresolved; no fallback wallet is invented. Published leaves never
    move.
 
-The default future-allocation policy may choose an accepted human/org steward;
-an unclaimed agent defaults to self unless a scope policy names treasury. This is
-a policy input, not an identity implication. OBO `subjectId`, billing ownership,
-OpenFGA tuples, and wallet control never choose the beneficiary implicitly.
+An agent may own tokens itself, and a scope policy may select an accepted
+human/org steward or treasury, but the chosen rule and its result are explicit.
+There is no identity-level "parent receives rewards" default. OBO `subjectId`,
+billing ownership, OpenFGA tuples, and wallet control never choose the beneficiary
+implicitly.
 Reassignment affects only contributions after its effective time. Historical
 evidence without a trustworthy cutoff or relationship state requires explicit
 governance adjudication, never a current-parent lookup.
@@ -296,22 +307,27 @@ governance adjudication, never a current-parent lookup.
 The current claimant resolver remains user-centric
 (`user:{user_id}` / `identity:{provider}:{externalId}`). Actor earners and the
 versioned earned-by/beneficiary statement are target work. Existing signed
-statements and `identity.attestation.v1` remain byte-for-byte valid; migration is
-append-only resolution into a later cumulative fold, never history rewrite.
+statements and `identity.attestation.v1` remain byte-for-byte valid. Once an epoch
+has a cumulative manifest, that manifest is frozen. An unresolved or late-resolved
+beneficiary becomes an append-only pending claimant liability consumed exactly
+once by a later cumulative fold; it never rewrites the old statement or manifest.
+The durable liability reader/consume-once path is required target work and must not
+be inferred from the current per-epoch finalize implementation.
 
 ## AI Agent Node Developer Identity
 
-The target developer principal is the same durable AI subject used everywhere
-else: `agent:{actor_id}`. Authentication proves that principal; OpenFGA separately
+The target developer principal is the node-qualified shared-store reference to
+the same durable AI subject used everywhere else: `agent:{node_id}/{actor_id}`.
+Authentication proves the local actor and serving node; OpenFGA separately
 grants it a role on one `node:{node_id}`. Registration, parentage, billing tenancy,
 and source bindings grant no node authority.
 
-| Step           | Principal          | Authoritative fact                                                                                        |
-| -------------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
-| Spawn/redeem   | `agent:{actor_id}` | Node-local actor and active credential; no node role                                                      |
-| Request        | `agent:{actor_id}` | `node_access_requests` workflow row plus evidenced GitHub binding; row is not authority                   |
-| Approve/revoke | Human/admin        | Write/delete `node:{node_id}#developer@agent:{actor_id}` in OpenFGA; GitHub collaborator is a side-effect |
-| Flight         | `agent:{actor_id}` | `node.flight` check on exact `node:{node_id}`                                                             |
+| Step           | Principal                    | Authoritative fact                                                                                                  |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Spawn/redeem   | local `actor_id`             | Node-local actor and active credential; no node role                                                                |
+| Request        | `agent:{node_id}/{actor_id}` | `node_access_requests` workflow row plus evidenced GitHub binding; row is not authority                             |
+| Approve/revoke | Human/admin                  | Write/delete `node:{node_id}#developer@agent:{node_id}/{actor_id}` in OpenFGA; GitHub collaborator is a side-effect |
+| Flight         | `agent:{node_id}/{actor_id}` | `node.flight` check on exact `node:{node_id}`                                                                       |
 
 **Two planes from one approval (`TWO_PLANE_DEVELOPER_GRANT`, rbac.md §6a).**
 OpenFGA controls operational capability; GitHub controls branch push for the
@@ -325,8 +341,10 @@ account, and a 30-day HMAC bearer, while developer tuples use
 `user:{agent_user_id}`. Upgrade must prove that exact legacy principal and an
 accepted steward/recovery ceremony, create one agent actor/credential while
 preserving the billing account, read the authoritative tuple set from OpenFGA,
-add equivalent `agent:{actor_id}` tuples, verify exact capability behavior, then
-remove the legacy tuples after a grace period. Historical receipts, claimant
+add equivalent node-qualified `agent:{node_id}/{actor_id}` tuples, verify exact
+capability behavior, then remove the legacy tuples after a grace period. Existing
+human and node-local resource tuples follow the same additive qualify, verify,
+remove sequence. Historical receipts, claimant
 keys, bindings, and signed statements are not rewritten. Never discover machine
 users by nullable wallet, display name, or GitHub login; prove `flock-leader`
 first, then migrate the fleet from evidence.
@@ -390,14 +408,14 @@ node_id>` (read from the child repo), never a fresh UUID — so identity cannot 
 
 These are hard constraints. Violating any of them is a design error.
 
-| Key                  | Must Never Be Used For                                                                                                                                                            |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `node_id`            | Governance domain, epoch scoping, project identity, DAO ownership. It is infrastructure only.                                                                                     |
-| `scope_id`           | Deployment identity, infra routing, DB tenancy. It is governance only.                                                                                                            |
-| `user_id`            | Replaced by `wallet_address`, Discord snowflake, GitHub numeric ID, or DID. Those are bindings.                                                                                   |
-| `billing_account_id` | Governance scoping, contribution attribution, deployment identity. It is payment tenancy only.                                                                                    |
-| `actor_id`           | Secret/authenticator, payment tenancy, governance voting rights, wallet address. A typed `agent:{actor_id}` may reference it as an RBAC subject; the bare ID never authenticates. |
-| `dao_address`        | Database primary key, tenant scoping, deployment routing. It is an on-chain attribute only.                                                                                       |
+| Key                  | Must Never Be Used For                                                                                                                                                             |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node_id`            | Governance domain, epoch scoping, project identity, DAO ownership. It is infrastructure only.                                                                                      |
+| `scope_id`           | Deployment identity, infra routing, DB tenancy. It is governance only.                                                                                                             |
+| `user_id`            | Replaced by `wallet_address`, Discord snowflake, GitHub numeric ID, or DID. Those are bindings.                                                                                    |
+| `billing_account_id` | Governance scoping, contribution attribution, deployment identity. It is payment tenancy only.                                                                                     |
+| `actor_id`           | Secret/authenticator, payment tenancy, governance voting rights, wallet address. OpenFGA references it only through `agent:{node_id}/{actor_id}`; the bare ID never authenticates. |
+| `dao_address`        | Database primary key, tenant scoping, deployment routing. It is an on-chain attribute only.                                                                                        |
 
 **Synonym prohibition:** Do not introduce `org_id`, `account_id`, `tenant_id` (DB column), `project_id` (DB column), or `contributor_id` as new terms. The six keys above are the complete set. External provider IDs (e.g., WalletConnect project ID, Terraform workspace ID) must be namespaced (e.g., `walletconnect_project_id`) to avoid collision with `scope_id`.
 

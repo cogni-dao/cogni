@@ -60,6 +60,7 @@ MDI server.js
 | `epoch_allocations.actor_id` | FK → actors (planned, bridges to user_id)                                     | Reward attribution: which actor earned this epoch                            |
 | signed allocation            | `earned_by_actor_id, beneficiary_actor_id, cutoff, policy_version`            | Immutable authorship and effective-time entitlement                          |
 | distribution leaf            | `beneficiary_actor_id, claimant_wallet, binding_evidence_hash`                | Wallet pinned when the cumulative manifest is materialized                   |
+| pending claimant liability   | `allocation_ref, beneficiary_actor_id, amount, resolved_at, consumed_fold`    | Append-only late-resolution carry-forward, consumed exactly once             |
 
 ### Actor kinds
 
@@ -79,10 +80,13 @@ Four facts, kept strictly separate:
 3. **`claimant_wallet`** — where value is sent (resolved and pinned at cumulative manifest materialization)
 4. **parent/steward relationship evidence** — policy input, never the beneficiary field itself
 
-**Default policy:** Agents accrue rewards (`earned_by_actor_id` is always the
-agent). Provenance is never rewritten — the agent earned it, period. The policy
-may select an accepted human/org steward or treasury as beneficiary; an unclaimed
-agent defaults to self. These facts are never collapsed. Governance rights
+**Policy:** Agents accrue rewards (`earned_by_actor_id` is always the agent).
+Provenance is never rewritten — the agent earned it, period. A versioned scope
+policy must explicitly select and persist the beneficiary: the agent itself, a
+human/org actor, or treasury. Accepted stewardship is evidence the policy may
+consider, never an automatic redirect. For `flock-leader`, a claim ceremony must
+explicitly select Derek's human actor if Derek is to receive the rewards. These
+facts are never collapsed. Governance rights
 (voting, proposals), OBO subject, account ownership, and OpenFGA permission are
 separate policy layers — economic attribution implies none of them.
 
@@ -95,6 +99,12 @@ it never falls back to the current parent. At cumulative materialization, resolv
 the beneficiary's current verified wallet and pin it with evidence. Finalized
 allocations and published leaves are never re-derived or moved.
 
+The first cumulative manifest for an epoch is frozen. A beneficiary or wallet
+resolved after that fold becomes an append-only pending claimant liability,
+consumed exactly once by a later cumulative fold. The present finalizer processes
+only current-epoch lines, so a durable liability reader/consume-once path is
+required work; the roadmap must not describe carry-forward as already built.
+
 ### Relationship to proj.transparent-credit-payouts
 
 `epoch_allocations.user_id` is the current canonical reward subject (humans only). When `actors` ships (v1), allocations gain `actor_id` alongside `user_id`. Human actors bridge 1:1 via `actors WHERE kind='user'`. Agent actors enable a new attribution path: gateway usage → actor → epoch rewards. No changes to existing epoch invariants (STATEMENT_DETERMINISTIC, ALL_MATH_BIGINT).
@@ -106,8 +116,10 @@ The actor roadmap now has one cross-node contract:
 - Each node mints local users, actors, credentials, bindings, and grants. Stable
   provider bindings are re-proved across nodes; local UUIDs and bearers are never
   copied.
-- `agent:{actor_id}` is the durable AI OpenFGA principal. `credential_id` is a
-  replaceable authenticator. `billing_account_id` remains tenancy only.
+- `actor_id` is the durable node-local AI identity. The environment-shared
+  OpenFGA graph uses `agent:{node_id}/{actor_id}` (and node-qualifies every other
+  local subject/resource). `credential_id` is a replaceable authenticator.
+  `billing_account_id` remains tenancy only, never actor ownership or beneficiary.
 - Spawn issuance creates a one-use pending grant; idempotent redemption creates
   the actor and first credential. `spawned_by_actor_id` is immutable provenance;
   `parent_actor_id` is an effective-dated accepted human/org stewardship
@@ -117,9 +129,9 @@ The actor roadmap now has one cross-node contract:
   and grants; recovery never re-registers. Ed25519/DPoP plus 15-minute access-token
   exchange is deferred hardening.
 - OpenFGA is the sole permission/delegation authority. Direct AI account access
-  checks `agent:A` on exact account `B`; OBO execution additionally binds and
-  checks human `H`, account `B`, capability, and grant `G`. Local rows and RLS are
-  workflow/defense only.
+  checks `agent:N/A` on exact account `billing_account:N/B`; OBO execution
+  additionally binds and checks human `user:N/H`, account `N/B`, capability, and
+  grant `N/G`. Local rows and RLS are workflow/defense only.
 - `actor_bindings` enforces one active actor per `(provider,
 immutable_external_id)` inside a node. A credential key is never a binding.
 
@@ -143,8 +155,10 @@ shared contract rather than designing local variants.
    old/revoked/cross-node credentials fail while actor and grants remain stable.
 3. **Operator attribution vertical:** bind the `flock-leader` provider identity to
    the AI actor and carry one new real contribution through a versioned allocation:
-   AI earner, effective-time human beneficiary, verified pinned wallet. Preserve
-   all prior signed bytes.
+   AI earner, explicitly selected effective-time Derek beneficiary, verified
+   pinned wallet. Preserve all prior signed bytes. Prove a late resolution enters
+   an append-only pending liability exactly once in a later fold without changing
+   the first manifest.
 4. **Node-template reference:** consume the shared contracts with target-local
    actors, credentials, bindings, and OpenFGA tuples. An operator credential must
    fail there even in an equal-`AUTH_SECRET` regression fixture.

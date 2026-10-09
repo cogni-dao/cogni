@@ -2,8 +2,8 @@
 id: decentralized-user-identity
 type: spec
 title: Human and AI Identity + Account Bindings
-status: draft
-spec_state: proposed
+status: active
+spec_state: active
 trust: reviewed
 summary: Node-local human user_id and AI actor_id remain separate from evidenced wallet/provider bindings, replaceable credentials, permissions, attribution, beneficiary, and settlement.
 read_when: Working on identity, auth, account linking, RBAC actor types, user context injection, or ledger attribution
@@ -87,7 +87,7 @@ Examples:
 
 **Why `user_id` not `contributor_id`?** "User" is the stable concept — accounts, billing, sessions, permissions all reference users. "Contributor" is contextual and mutable (a user exists before contributing). Naming the canonical ID `contributor_id` would leak domain assumptions into every table and API.
 
-### Target Shared Subject Model (P0)
+### Proposed Shared Subject Model (P0 target; unbuilt)
 
 The actor layer generalizes evidenced ownership without turning an AI into a fake
 human account:
@@ -105,13 +105,14 @@ agents ───────── actors.id(kind=agent)
             identity_events (append-only evidence)
 ```
 
-| Concept             | Identifier                          | Boundary                 | Authority                                          |
-| ------------------- | ----------------------------------- | ------------------------ | -------------------------------------------------- |
-| Human account       | `user_id`                           | One node/environment     | Human session and account relations                |
-| Economic/AI subject | `actor_id`                          | One node/environment     | Attribution; typed `agent:{actor_id}` RBAC subject |
-| External identity   | `(provider, immutable_external_id)` | Re-provable across nodes | Continuity and source provenance only              |
-| Agent credential    | `credential_id` + secret material   | One node/audience        | Authentication only                                |
-| Account permission  | OpenFGA relationship                | One node/store/resource  | Authorization only                                 |
+| Concept             | Identifier                          | Boundary                                   | Authority                                                       |
+| ------------------- | ----------------------------------- | ------------------------------------------ | --------------------------------------------------------------- |
+| Human account       | `user_id`                           | One node/environment                       | Human session and account relations                             |
+| Economic/AI subject | `actor_id`                          | One node/environment                       | Attribution; local durable AI identity                          |
+| OpenFGA subject     | `agent:{node_id}/{actor_id}`        | Shared environment store                   | Node-qualified authorization reference; never portable identity |
+| External identity   | `(provider, immutable_external_id)` | Re-provable across nodes                   | Continuity and source provenance only                           |
+| Agent credential    | `credential_id` + secret material   | One node/audience                          | Authentication only                                             |
+| Account permission  | OpenFGA relationship                | Shared store/exact node-qualified resource | Authorization only                                              |
 
 `actor_bindings` is the target ownership registry for both human and AI actors.
 Within one node, exactly one active actor owns a `(provider,
@@ -125,6 +126,14 @@ Cross-node continuity means re-proving the external binding and minting new loca
 `user_id`, `actor_id`, credentials, and grants. Neither local UUIDs nor bearer/
 public-key credentials cross the seam. A key thumbprint may be ceremony evidence,
 but is never durable identity because credentials rotate.
+
+The OpenFGA runtime is shared infrastructure within an environment. Therefore its
+node-local subjects and resources embed `node_id` (for example
+`agent:{node_id}/{actor_id}` and
+`billing_account:{node_id}/{billing_account_id}`). The slash is inside the object
+ID; OpenFGA retains exactly one `type:id` separator. This is collision-safe encoding,
+not cross-node identity: the underlying actor/account and every grant remain local,
+and `billing_account_id` remains tenancy rather than authorship or beneficiary.
 
 Provider authentication proves control of an external account. It does not
 decide whether that account represents a human or an AI. A human may bind a
@@ -276,11 +285,21 @@ claimant key.
 For a human-operated account, the local human may bind and resolve the preserved
 identity allocation. For an AI-operated account such as `flock-leader`, the
 attested provider identity binds to the AI actor, so the AI remains the earner;
-an independently accepted steward/policy may become the pinned beneficiary.
+the applicable allocation policy must independently and explicitly select the
+beneficiary. If Derek is to receive `flock-leader` rewards, the claim ceremony
+selects and pins Derek's human actor; stewardship alone never redirects them.
+The policy may instead select the agent itself (agents may own tokens), an org,
+or treasury.
 `identity.attestation.v1` intentionally decides neither owner kind nor
 beneficiary. It attests only the freshly authorized GitHub fact. This semantic
 expansion happens after verification and does not mutate the frozen v1 wire
 contract, claims, descriptor, fingerprint, or conformance vectors.
+
+Once an epoch has a cumulative manifest, that manifest is immutable. A claimant
+whose beneficiary or wallet resolves late is recorded as an append-only pending
+liability and consumed exactly once by a later cumulative fold. The current
+per-epoch finalizer does not yet provide that durable carry-forward reader, so it
+is required implementation work rather than as-built behavior.
 
 **Attestation is not git-specific.** `claimantKey()` is
 `identity:<provider>:<external_id>` and `user_bindings.provider` already admits
@@ -340,11 +359,12 @@ resolves AI authorship to the AI actor, and pins beneficiary and wallet separate
 | ATTESTATION_SUBJECT_FROM_AUTHZ   | The attested GitHub identity comes ONLY from the authorization response correlated to that request. No broker leg reads an operator session or a stored binding — an ambient session choosing the subject is a confused deputy, and it bound the wrong account on the 2026-08-19 candidate. |
 | ATTESTATION_INTENT_IS_EXPLICIT   | `prompt=select_account` is necessary but NOT sufficient (picker only; no re-authentication; undocumented for 0/1 signed-in accounts). A confirmation naming the resolved login and the asking node is required before signing.                                                              |
 | CLAIMANT_PROVENANCE_PRESERVED    | Linking `identity:github:<id>` to a local actor changes claim resolution, never the finalized record of which external identity produced the work.                                                                                                                                          |
-| NODE_LOCAL_SUBJECTS              | `user_id`, `actor_id`, credentials, and OpenFGA grants are node/environment-local. Only evidenced external bindings are re-provable across nodes.                                                                                                                                           |
+| NODE_LOCAL_SUBJECTS              | `user_id`, `actor_id`, credentials, and OpenFGA grants are node/environment-local. The environment-shared OpenFGA graph encodes local subjects/resources with `node_id`; only evidenced external bindings are re-provable across nodes.                                                     |
 | ONE_ACTIVE_EXTERNAL_OWNER        | One node has exactly one active actor owner for `(provider, immutable_external_id)`, enforced by the canonical actor-binding registry rather than application checks across two tables.                                                                                                     |
 | AI_SOURCE_STAYS_AI               | An AI-operated external identity binds to the AI actor. Human control, stewardship, OBO execution, or payout policy never rewrites the AI earner into a human.                                                                                                                              |
 | CREDENTIAL_IS_NOT_BINDING        | Opaque bearers, Ed25519 keys, access tokens, credential IDs, and key thumbprints authenticate; none is a portable identity binding or authorization grant.                                                                                                                                  |
 | STEWARD_IS_NOT_BENEFICIARY       | Accepted parent/steward state is effective-dated policy input. `beneficiary_actor_id` is separately selected and persisted; reassignment never moves finalized value.                                                                                                                       |
+| FOLDED_MANIFEST_IS_IMMUTABLE     | The first cumulative manifest for an epoch is frozen. Late beneficiary/wallet resolution creates an append-only pending liability consumed exactly once by a later fold; it never overwrites a prior statement, manifest, or leaf.                                                          |
 | UUID_STAYS_AS_PK                 | `users.id` (UUID) remains the relational PK and FK target.                                                                                                                                                                                                                                  |
 | APPEND_ONLY_EVENTS               | `identity_events` rows are append-only. DB trigger rejects UPDATE/DELETE. Revocation creates a new event, never deletes rows.                                                                                                                                                               |
 | LEDGER_PRESERVES_CLAIMANT        | Existing finalized attribution preserves stable user/external claimant keys; vNext freezes actor earner plus beneficiary separately. Wallets and DIDs are resolved bindings, never canonical statement identity keys.                                                                       |
@@ -518,8 +538,9 @@ pnpm check:docs    # docs metadata valid
 1. The same GitHub provider ID cannot be active for both a human and AI actor in
    one node, including concurrent bind attempts.
 2. A verified `flock-leader` source binds to the `flock-leader` AI actor; a new
-   contribution freezes that actor as earner while an effective-time accepted
-   human steward is separately persisted as beneficiary.
+   contribution freezes that actor as earner while the claim ceremony explicitly
+   selects and persists Derek's human actor as beneficiary independently of
+   stewardship.
 3. Reassigning the steward after the contribution cutoff changes only later
    allocations. The original signed allocation and published wallet leaf remain
    unchanged.
@@ -528,17 +549,24 @@ pnpm check:docs    # docs metadata valid
    `identity.attestation.v1` artifact byte-identical.
 5. The same external provider identity can be proved at another node, but the
    target creates different local user/actor IDs, credential, and grants.
+6. Shared-store OpenFGA references for two nodes cannot collide: each subject,
+   billing account, delegation, graph, tool, connection, and service is qualified
+   by its serving `node_id`.
+7. If beneficiary/wallet resolution occurs after an epoch's first fold, the old
+   manifest remains byte-identical and one append-only liability appears exactly
+   once in a later cumulative fold.
 
 ## Open Questions
 
 - [x] Backfill strategy: CTE + RETURNING migration in 0013 — idempotent, events only for inserted bindings.
-- [x] Runtime human principal is `user:{user_id}`; durable AI principal is
-      `agent:{actor_id}`. Exact authorization behavior belongs to RBAC.
+- [x] Runtime human and AI OpenFGA principals are node-qualified
+      (`user:{node_id}/{user_id}`, `agent:{node_id}/{actor_id}`); exact
+      authorization behavior belongs to RBAC.
 
 ## Related
 
 - [Authentication](./authentication.md) — SIWE flow, WALLET_SESSION_COHERENCE invariant
-- [RBAC](./rbac.md) — `user:{user_id}`, `agent:{actor_id}`, direct and OBO checks
+- [RBAC](./rbac.md) — node-qualified human/AI principals, direct and OBO checks
 - [User Context](./user-context.md) — `opaqueId` will derive from user_id
 - [Accounts Design](./accounts-design.md) — billing identity references
 - [Security Auth](./security-auth.md) — auth surface identity resolution

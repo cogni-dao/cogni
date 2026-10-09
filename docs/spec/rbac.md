@@ -2,8 +2,7 @@
 id: rbac-spec
 type: spec
 title: Authorization (RBAC/ReBAC) Design
-status: draft
-spec_state: proposed
+status: active
 trust: draft
 summary: OpenFGA-only authorization for node-local human, AI, and service principals, including exact-account direct and server-bound on-behalf-of delegation.
 read_when: Implementing authorization checks, tool permissions, or on-behalf-of delegation
@@ -56,7 +55,7 @@ coverage from the proposed first-class AI and account-data delta.
    defense-in-depth state. None may independently allow a permission or delegation.
 
 8. **EXACT_ACCOUNT_BEFORE_CACHE_OR_QUERY**: Account-data access authorizes the
-   exact `billing_account:{billing_account_id}` before reading cache or database.
+   exact `billing_account:{node_id}/{billing_account_id}` before reading cache or database.
    Omission or ambiguity never guesses an owned or delegated account. Every query
    still predicates that exact account after authorization.
 
@@ -68,6 +67,14 @@ coverage from the proposed first-class AI and account-data delta.
 10. **CONDITIONAL_GRANT_TIME_IS_SERVER_TIME**: Expiring permission/delegation
     uses an OpenFGA conditioned tuple. The server supplies `current_time` to Check;
     caller/model/tool input and a scheduled local delete are not expiry authority.
+
+11. **SHARED_STORE_REFS_ARE_NODE_QUALIFIED**: The OpenFGA graph is shared within
+    an environment while users, actors, billing accounts, grants, graphs, tools,
+    connections, and services are node-local. Every such subject and resource ID
+    therefore embeds `node_id` as `{node_id}/{local_id}` inside the OpenFGA object
+    ID (preserving exactly one `type:id` separator); a bare local UUID or service
+    name must never enter the shared graph. Qualification prevents collision only: it does not change
+    identity, tenancy, attribution, beneficiary, or ownership semantics.
 
 ---
 
@@ -96,7 +103,7 @@ Authorization operates across three distinct layers with different purposes:
 | Connection broker token materialization  | Pending hardening   | Broker receives `{ actorId, tenantId }`; `connection.use` OpenFGA check is not wired in task.5010                                                                                     |
 | Graph invocation entry                   | Pending hardening   | `graph.invoke` check at `GraphExecutorPort.runGraph()` is not wired in task.5010                                                                                                      |
 | Authz audit metrics/events               | Pending hardening   | Current adapter returns decision details; durable `authz.check` event/metric emission is P1                                                                                           |
-| First-class AI principal                 | Target (unbuilt)    | `agent:{actor_id}` resolved by stateful node-local credential; current HMAC machine bearer still resolves to `user:{agent_user_id}`                                                   |
+| First-class AI principal                 | Target (unbuilt)    | `agent:{node_id}/{actor_id}` derived from a stateful node-local credential; current HMAC machine bearer still resolves to bare `user:{agent_user_id}`                                 |
 | Billing-account permissions              | Target (unbuilt)    | `billing_account.read/grant`, scoped OBO delegation, conditional tuples/check context, and higher-consistency option are not in the current model/port                                |
 | Poly capability grants                   | Migration input     | Current local grant rows remain a second authority until approval/revoke writes OpenFGA and rows become workflow/projection only                                                      |
 
@@ -129,16 +136,17 @@ immutable model is written only when the hash changes or no prior model exists.
 
 ## Actor Types
 
-| Type    | Format                  | Description                                         |
-| ------- | ----------------------- | --------------------------------------------------- |
-| User    | `user:{user_id}`        | Node-local human account                            |
-| Agent   | `agent:{actor_id}`      | Durable node-local AI actor; credential-independent |
-| Service | `service:{serviceName}` | Internal service (scheduler, worker)                |
+| Type    | Shared-store format               | Description                                         |
+| ------- | --------------------------------- | --------------------------------------------------- |
+| User    | `user:{node_id}/{user_id}`        | Node-local human account                            |
+| Agent   | `agent:{node_id}/{actor_id}`      | Durable node-local AI actor; credential-independent |
+| Service | `service:{node_id}/{serviceName}` | Node-local internal service (scheduler, worker)     |
 
 `user_id` is the canonical person identifier. Wallet addresses, OAuth provider
 IDs, credential IDs, bearer strings, and key thumbprints are credentials or
-bindings, never RBAC actors. The typed `agent:{actor_id}` reference does not make
-the bare UUID an authenticator.
+bindings, never RBAC actors. The typed `agent:{node_id}/{actor_id}` reference does
+not make the bare UUID an authenticator. `node_id` qualifies a local subject in
+the environment-shared store; it does not make the node its owner or beneficiary.
 
 **Actor** = who is making the request.
 **Subject** = on whose behalf (a human user in P0; only present for delegated
@@ -158,7 +166,7 @@ When `subject` is present (agent acting on behalf of user):
 │ 1. OpenFGA: ALLOW(subject, action, resource)?                       │
 │    └─ Does the USER have permission for this action?                │
 │                                                                     │
-│ 2. OpenFGA: ALLOW(actor, 'user.act_as', user:{subject})?            │
+│ 2. OpenFGA: ALLOW(actor, 'user.act_as', user:{node}/{subject})?     │
 │    └─ Is the AGENT authorized to act on behalf of this user?        │
 │                                                                     │
 │ 3. BOTH must return ALLOW. Either DENY → reject.                    │
@@ -181,15 +189,16 @@ When `subject` is absent (direct user or service action):
 Direct and OBO access are different grants and must remain visibly different in
 authorization and audit:
 
-| Mode         | Server-bound execution identity                     | Required OpenFGA result                                                        |
-| ------------ | --------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Human direct | `actor=user:H, account=B`                           | `user:H can_read billing_account:B`                                            |
-| Agent direct | `actor=agent:A, account=B`                          | `agent:A can_read billing_account:B`                                           |
-| Agent OBO    | `actor=agent:A, subject=user:H, account=B, grant=G` | `H can_read B` AND `G` binds `A`, `H`, `B`, `account.read`, and is not expired |
+| Mode         | Server-bound execution identity                             | Required OpenFGA result                                                                    |
+| ------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Human direct | `actor=user:N/H, account=N/B`                               | `user:N/H can_read billing_account:N/B`                                                    |
+| Agent direct | `actor=agent:N/A, account=N/B`                              | `agent:N/A can_read billing_account:N/B`                                                   |
+| Agent OBO    | `actor=agent:N/A, subject=user:N/H, account=N/B, grant=N/G` | `N/H can_read N/B` AND `N/G` binds `N/A`, `N/H`, `N/B`, `account.read`, and is not expired |
 
 For a direct API agent, an explicit `billing_account_id` may be request input only
-as resource selection; the server derives `agent:A` from the credential and checks
-that exact resource. For internal/model-driven OBO execution, actor, subject,
+as resource selection; the server derives `(node_id, actor_id)` from the credential,
+encodes `agent:N/A`, and checks node-qualified exact resource
+`billing_account:N/B`. For internal/model-driven OBO execution, actor, subject,
 account, action, and grant are all closed over by the server-issued
 `ExecutionIdentity`; none comes from tool arguments.
 
@@ -241,7 +250,7 @@ type connection
 
 **Parent Relations:** `tool.graph` and `connection.tenant` are required for computed permissions (`can_invoke from graph`, `member from tenant`).
 
-### P0 account-data delta (target)
+### Proposed P0 Account-Data Delta (target; unbuilt)
 
 ```dsl
 condition grant_not_expired(current_time: timestamp, expires_at: timestamp) {
@@ -266,13 +275,13 @@ type account_read_delegation
     define can_use: delegate
 ```
 
-For `ExecutionIdentity { agent:A, user:H, billing_account:B, grant:G }`, OBO
+For `ExecutionIdentity { agent:N/A, user:N/H, billing_account:N/B, grant:N/G }`, OBO
 authorization verifies all four facts with server-supplied `current_time`:
 
-1. `user:H can_read billing_account:B`;
-2. `agent:A can_use account_read_delegation:G`;
-3. `user:H subject account_read_delegation:G`;
-4. `billing_account:B account account_read_delegation:G`.
+1. `user:N/H can_read billing_account:N/B`;
+2. `agent:N/A can_use account_read_delegation:N/G`;
+3. `user:N/H subject account_read_delegation:N/G`;
+4. `billing_account:N/B account account_read_delegation:N/G`.
 
 This prevents a valid grant ID from being replayed with a different human,
 account, agent, or capability. A local grant row cannot stand in for any check.
@@ -297,24 +306,28 @@ reuse the current relation.
 
 ## Action→Relation Mapping
 
-| Action                        | Resource Type                  | OpenFGA Check                                             | Error Code     |
-| ----------------------------- | ------------------------------ | --------------------------------------------------------- | -------------- |
-| `tool.execute`                | `tool:{id}`                    | `check(actor, can_execute, tool:{id})`                    | `authz_denied` |
-| `connection.use`              | `connection:{id}`              | `check(actor, can_use, connection:{id})`                  | `authz_denied` |
-| `graph.invoke`                | `graph:{id}`                   | `check(actor, can_invoke, graph:{id})`                    | `authz_denied` |
-| `user.act_as`                 | `user:{user_id}`               | `check(actor, delegates, user:{user_id})`                 | `authz_denied` |
-| `node.flight`                 | `node:{node_id}`               | `check(actor, can_flight, node:{node_id})`                | `authz_denied` |
-| `billing_account.read`        | `billing_account:{id}`         | `check(actor-or-subject, can_read, billing_account:{id})` | `authz_denied` |
-| `billing_account.grant`       | `billing_account:{id}`         | `check(human, can_grant, billing_account:{id})`           | `authz_denied` |
-| `account_read_delegation.use` | `account_read_delegation:{id}` | server-bound membership set in §P0 delta                  | `authz_denied` |
+| Action                        | Resource Type                            | OpenFGA Check                                                       | Error Code     |
+| ----------------------------- | ---------------------------------------- | ------------------------------------------------------------------- | -------------- |
+| `tool.execute`                | `tool:{node_id}/{id}`                    | `check(actor, can_execute, tool:{node_id}/{id})`                    | `authz_denied` |
+| `connection.use`              | `connection:{node_id}/{id}`              | `check(actor, can_use, connection:{node_id}/{id})`                  | `authz_denied` |
+| `graph.invoke`                | `graph:{node_id}/{id}`                   | `check(actor, can_invoke, graph:{node_id}/{id})`                    | `authz_denied` |
+| `user.act_as`                 | `user:{node_id}/{user_id}`               | `check(actor, delegates, user:{node_id}/{user_id})`                 | `authz_denied` |
+| `node.flight`                 | `node:{node_id}`                         | `check(actor, can_flight, node:{node_id})`                          | `authz_denied` |
+| `billing_account.read`        | `billing_account:{node_id}/{id}`         | `check(actor-or-subject, can_read, billing_account:{node_id}/{id})` | `authz_denied` |
+| `billing_account.grant`       | `billing_account:{node_id}/{id}`         | `check(human, can_grant, billing_account:{node_id}/{id})`           | `authz_denied` |
+| `account_read_delegation.use` | `account_read_delegation:{node_id}/{id}` | server-bound membership set in §P0 delta                            | `authz_denied` |
 
 **Delegation relation:** `user.delegates` grants agents the right to act on behalf of user. Dual-check queries `user.act_as` when `subject` is present.
 
 **Node developer relation:** `node.developer` grants an actor operational
 developer authority for one node. Current registered AI agents are legacy
 user-backed machine principals (`user:{agent_user_id}`). The target approval
-writes `agent:{actor_id}`. Add equivalent tuples and verify behavior before
-removing the legacy subject; credential rotation never touches either tuple.
+writes `agent:{node_id}/{actor_id}`. Add equivalent tuples and verify behavior
+before removing the legacy subject; credential rotation never touches either tuple.
+All existing bare human subjects and node-local resource IDs follow the same
+additive migration: add the node-qualified tuple, verify the exact allow/deny
+behavior, then remove the legacy tuple. Never rename or rewrite a live tuple in
+place.
 
 ---
 
@@ -330,7 +343,7 @@ removing the legacy subject; credential rotation never touches either tuple.
 
 **Never from:** Request body, query params, tool args, `RunnableConfig.configurable`.
 
-## Shared AuthorizationPort Target
+## Proposed Shared AuthorizationPort Target (unbuilt)
 
 The current port supports unconditional single tuples and latency-oriented
 checks only. Account delegation cannot ship until the shared port and OpenFGA
@@ -365,13 +378,19 @@ OpenFGA references: [conditional relationship tuples and Check context](https://
 
 ## Resource ID Format
 
-- `tenant:{id}` — billing account / tenant
-- `billing_account:{billing_account_id}` — account-data permission boundary
-- `account_read_delegation:{grant_id}` — one server-bound OBO account-read grant
+- `tenant:{node_id}/{id}` — node-local billing account / tenant
+- `billing_account:{node_id}/{billing_account_id}` — node-local account-data permission boundary
+- `account_read_delegation:{node_id}/{grant_id}` — one node-local server-bound OBO account-read grant
 - `node:{node_id}` — node operational boundary
-- `graph:{id}` — graph definition
-- `tool:{id}` — tool ID (namespaced: `core__get_current_time`)
-- `connection:{id}` — connection UUID
+- `graph:{node_id}/{id}` — node-local graph definition
+- `tool:{node_id}/{id}` — node-local tool ID (for example `core__get_current_time`)
+- `connection:{node_id}/{id}` — node-local connection UUID
+
+The slash is inside the object ID; all strings retain OpenFGA's single
+`type:id` separator. These are OpenFGA object strings, not new system identity keys. In particular,
+qualifying `billing_account` with `node_id` does not make the node, actor, DAO,
+steward, or beneficiary the payer/account owner; `billing_account_id` remains the
+orthogonal tenancy and spend boundary from the identity model.
 
 ---
 
@@ -379,11 +398,11 @@ OpenFGA references: [conditional relationship tuples and Check context](https://
 
 ### 1. Actor vs Subject
 
-| Scenario                | Actor               | Subject          | Checks                                                                          |
-| ----------------------- | ------------------- | ---------------- | ------------------------------------------------------------------------------- |
-| User executes directly  | `user:{user_id}`    | —                | `ALLOW(user, action, resource)`                                                 |
-| Agent on behalf of user | `agent:{actor_id}`  | `user:{user_id}` | `ALLOW(user, action, resource)` AND exact server-bound scoped delegation checks |
-| Service (scheduler)     | `service:scheduler` | —                | `ALLOW(service, action, resource)`                                              |
+| Scenario                | Actor                         | Subject                    | Checks                                                                          |
+| ----------------------- | ----------------------------- | -------------------------- | ------------------------------------------------------------------------------- |
+| User executes directly  | `user:{node_id}/{user_id}`    | —                          | `ALLOW(user, action, resource)`                                                 |
+| Agent on behalf of user | `agent:{node_id}/{actor_id}`  | `user:{node_id}/{user_id}` | `ALLOW(user, action, resource)` AND exact server-bound scoped delegation checks |
+| Service (scheduler)     | `service:{node_id}/scheduler` | —                          | `ALLOW(service, action, resource)`                                              |
 
 **Why dual-check for OBO?** The user must have the permission, AND the agent must be delegated. This prevents:
 
@@ -406,11 +425,12 @@ If `subjectId` came from request parameters, an agent could claim to act on beha
 │ ─────────────────                                                   │
 │ 1. Extract JWT from session/bearer                                  │
 │ 2. Determine actor type:                                            │
-│    - Session JWT → user:{user_id}                                    │
+│    - Current session JWT → user:{user_id} (legacy migration input)   │
 │    - Legacy HMAC machine bearer → user:{agent_user_id} (migration)   │
-│    - Stateful agent bearer → agent:{actor_id}                        │
-│    - OBO execution grant → agent:{actor_id} + bound subject/account  │
-│    - Service key → service:{serviceName}                            │
+│    - Target session → user:{node_id}/{user_id}                       │
+│    - Stateful agent bearer → agent:{node_id}/{actor_id}              │
+│    - OBO grant → node-qualified agent + bound subject/account        │
+│    - Service key → service:{node_id}/{serviceName}                  │
 │ 3. Attach { actorId, subjectId?, tenantId } to request context      │
 │ 4. Forward to graph executor / tool runner                          │
 └─────────────────────────────────────────────────────────────────────┘
@@ -554,13 +574,14 @@ New node spawn + external AI agent flow:
 **Target first-class-agent flow:**
 
 1. An authenticated spawner issues a one-use node-local spawn grant; redemption
-   creates `agent:{actor_id}` plus its stateful credential. Registration grants no
-   node role and creates no fake user.
+   creates a local `actor_id` plus its stateful credential. The serving node derives
+   shared-store subject `agent:{node_id}/{actor_id}`. Registration grants no node
+   role and creates no fake user.
 2. The agent establishes an evidenced GitHub `actor_binding`. A declared login may
    start workflow, but cannot be the ownership authority.
-3. `agent:{actor_id}` files the tracking request for exact `node:{node_id}`.
+3. `agent:{node_id}/{actor_id}` files the tracking request for exact `node:{node_id}`.
 4. Approval verifies the human's exact grant authority, writes
-   `node:{node_id}#developer@agent:{actor_id}` in OpenFGA, confirms the allow with
+   `node:{node_id}#developer@agent:{node_id}/{actor_id}` in OpenFGA, confirms the allow with
    higher consistency, then marks workflow state approved and provisions branch
    push for the evidenced GitHub login. Revoke deletes and confirms OpenFGA first.
 5. Credential rotate/recover preserves the actor and tuple, so the agent never
