@@ -604,12 +604,17 @@ describe("XComputeWorkload Composition (task.5096)", () => {
 
   it("wires an opted-in private workflow Worker to its node namespace", () => {
     expect(template).toContain(
-      'eq (dig "runtimeProfile" "" .) "cogni-workflow-worker-v1"'
+      '$candidateProfile := dig "runtimeProfile" "" .'
+    );
+    expect(template).toContain(
+      'else if eq $candidateProfile "cogni-workflow-worker-v1"'
     );
     expect(template).toContain(
       '$nodeTemporalNamespace := printf "cogni-%s-%s" $env $spec.nodeId'
     );
-    expect(template).toContain('$temporalTaskQueue = "agent-workflows"');
+    expect(template).toContain(
+      '$_ := set $e "TEMPORAL_TASK_QUEUE" "agent-workflows"'
+    );
     expect(template).toContain(
       '$_ := set $e "TEMPORAL_WORKER_BUILD_ID" $desiredSha'
     );
