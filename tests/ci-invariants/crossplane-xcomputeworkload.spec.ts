@@ -625,9 +625,9 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(template).toContain(
       '$_ := set $e "NODE_APP_URL" (printf "http://%s:%d" $appServiceName $appServicePort)'
     );
-    expect(
-      template.lastIndexOf('$_ := set $e "NODE_APP_URL"')
-    ).toBeGreaterThan(template.indexOf("range $k, $target := $svc.bindings"));
+    expect(template.lastIndexOf('$_ := set $e "NODE_APP_URL"')).toBeGreaterThan(
+      template.indexOf("range $k, $target := $svc.bindings")
+    );
     expect(
       template.lastIndexOf('$_ := set $e "TEMPORAL_NAMESPACE"')
     ).toBeGreaterThan(template.indexOf("range $k, $target := $svc.bindings"));
