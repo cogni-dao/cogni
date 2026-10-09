@@ -171,9 +171,9 @@ export const nodeScheduleSchema = z
     /** IANA timezone (defaults to UTC) */
     timezone: z.string().default("UTC"),
     /**
-     * Relative HTTP route on the node's OWN host (http-dispatch). The node-owned
-     * starter Workflow dispatches POST {nodeUrl}{route} under the node's identity. Mutually
-     * exclusive with `graph` and `workflow`. Must be a leading-slash relative path.
+     * Relative HTTP route on the node's OWN host (http-dispatch). The compatibility lane
+     * handles this target in P0; a versioned future cutover may map it to a node starter
+     * Workflow. Mutually exclusive with `graph` and `workflow`. Must be a leading-slash path.
      */
     route: z
       .string()
@@ -182,7 +182,7 @@ export const nodeScheduleSchema = z
         "route must be a relative path beginning with '/' on the node's own host (no scheme/host)"
       )
       .optional(),
-    /** Graph id to execute through the starter scheduled-graph Workflow. */
+    /** Graph id executed by the compatibility lane in P0. */
     graph: z.string().min(1).optional(),
     /** Node-owned Temporal Workflow type registered by the private workflow Worker. */
     workflow: z

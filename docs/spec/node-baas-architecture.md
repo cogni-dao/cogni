@@ -315,8 +315,9 @@ node product workflow ownership moves.
 Migration uses a separate app client contract: legacy `TEMPORAL_*` and
 `SCHEDULER_WORKER_HEALTH_URL` remain pointed at the centralized compatibility lane, while
 `AGENT_WORKFLOW_TEMPORAL_*` and `AGENT_WORKFLOW_WORKER_HEALTH_URL` select the node namespace and
-private Worker. Merely adding the Worker profile therefore cannot reroute or orphan existing
-scheduled work.
+private Worker. P0 sends only explicit `workflow` schedule targets through that client; existing
+`graph` and `route` targets stay on the compatibility lane. Merely adding the Worker profile
+therefore cannot reroute, duplicate, or orphan existing scheduled work.
 
 ## Cognition Substrate
 

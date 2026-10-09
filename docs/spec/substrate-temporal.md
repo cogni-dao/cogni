@@ -164,8 +164,12 @@ creating a schedule that can never execute.
 The migration seam is explicit. Existing app code continues to read `TEMPORAL_*` and
 `SCHEDULER_WORKER_HEALTH_URL` for the centralized compatibility lane. `RecurringWorkPort` reads
 `AGENT_WORKFLOW_TEMPORAL_*`, and app readiness reads `AGENT_WORKFLOW_WORKER_HEALTH_URL`, for the
-node-owned lane. Declaring a Worker cannot silently retarget existing schedules. The node-owned
-client is enabled only in environments where the Worker service materializes.
+node-owned lane. In P0, only schedule entries with the explicit `workflow` target enter that
+lane; existing `graph` and `route` entries remain on the compatibility lane. Merely declaring or
+deploying a Worker therefore cannot duplicate existing billable schedules. The node-owned client
+is enabled only in environments where the Worker service materializes. Moving graph/route sugar
+later requires an explicit versioned schedule-contract cutover, never inference from Worker
+presence.
 
 ### One-call substrate health
 
@@ -304,8 +308,9 @@ per node and fail-closed:
 
 1. Publish the runtime and add the node-template Worker service.
 2. Provision the node-template namespace and deploy app + Worker from one artifact bundle.
-3. Pause each old schedule before creating its equivalent in the node namespace; preserve the
-   stable business idempotency key; prove the new poller; then delete the old schedule.
+3. Pause each old graph/route schedule before replacing it with an explicit `workflow` entry in
+   the node namespace; preserve the stable business idempotency key; prove the new poller; then
+   delete the old schedule.
 4. Prove one scheduled Temporal Workflow containing a LangGraph run on node-template.
 5. Repeat with a Poly-owned Workflow on Poly.
 6. Remove node-template and Poly queues/namespaces from centralized worker compatibility routing.

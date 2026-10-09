@@ -334,10 +334,12 @@ Rollout is fail-closed: candidate/preview may prove namespace routing before ser
 but production materialization rejects the Worker profile until the self-hosted Temporal server
 enforces namespace-scoped authentication and authorization.
 
-**3. Create — node-direct.** The node app owns `RecurringWorkPort` and its Temporal client. It
-reconciles repo-spec schedules into its own namespace on the stable `agent-workflows` Task
-Queue. The operator is out of schedule CRUD. Reconciliation compares workflow type, input,
-cron/calendar, timezone, and Task Queue; a queue change is never silently skipped.
+**3. Create — node-direct.** The node app owns `RecurringWorkPort` and its Temporal client. P0
+reconciles repo-spec entries carrying the explicit `workflow` target into its own namespace on
+the stable `agent-workflows` Task Queue. Existing `graph` and `route` entries remain on the
+centralized compatibility lane until each is deliberately migrated. The operator is out of CRUD
+for node-owned entries. Reconciliation compares workflow type, input, cron/calendar, timezone,
+and Task Queue; a queue change is never silently skipped.
 
 During migration this client reads `AGENT_WORKFLOW_TEMPORAL_*`. The app's legacy `TEMPORAL_*`
 client and `SCHEDULER_WORKER_HEALTH_URL` remain unchanged until its old schedules are paused and
