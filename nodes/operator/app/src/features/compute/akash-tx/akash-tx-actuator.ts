@@ -925,8 +925,46 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         cogniKey: input.cogniKey,
         environment: input.environment,
         workload: input.workload,
+        ...(this.migrationReports
+          ? { nodeId: await this.receiptBoundNodeId(input.cogniKey) }
+          : {}),
       }
     );
+  }
+
+  /**
+   * WHICH NODE this key's workload belongs to, from the ONE place in the operator that holds an
+   * authoritative answer this process can actually read: its own durable allocation receipt,
+   * whose `node_id` was supplied explicitly on the paid wire and is NOT NULL and write-once
+   * (`akash_tx_allocations` IDENTITY_IS_AUTHORITATIVE_NOT_INFERRED / IDENTITY_IS_WRITE_ONCE).
+   *
+   * Deliberately NOT the `nodes` registry: that table is ENABLE + FORCE row-level security, this
+   * process holds the RLS-enforced app role and never opens a tenant scope, so a slug lookup
+   * there succeeds and returns ZERO rows — which is how 32-of-32 applied migrations were reported
+   * as `node_not_registered` and thrown away. Deliberately NOT parsed out of `cogniKey` either:
+   * the key's composition is the caller's business and the Composition says so.
+   *
+   * Undefined — never a throw, never a refusal — when no receipt binds the key yet (a workload's
+   * very first observe precedes its first create by construction) or when the ledger cannot be
+   * read. The migration still runs; only the metadata waits for the next tick.
+   */
+  private async receiptBoundNodeId(
+    cogniKey: string
+  ): Promise<string | undefined> {
+    try {
+      const record = await this.ledger.read({ cogniKey });
+      return record?.identity.nodeId;
+    } catch (error) {
+      this.log.warn(
+        {
+          cogniKey,
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        },
+        "akash_tx_migration_receipt_identity_unreadable"
+      );
+      return undefined;
+    }
   }
 
   /**

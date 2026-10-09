@@ -7,9 +7,12 @@
  * Scope: Record one receipt / read one cell. Does not run migrations, does not reach a node
  *   database, and does not decide what drift means — the gate is the caller's policy.
  * Invariants:
- *   - WRITE_KEY_IS_DERIVED_NEVER_SUPPLIED: `record` takes the WORKLOAD the operator is already
- *     reconciling (`nodeSlug` + `environment`) and the implementation resolves `node_id` from the
- *     operator's own registry. No caller can name another node's cell.
+ *   - WRITE_KEY_IS_THE_RECEIPT_BOUND_NODE: `record` is handed the `node_id` the operator's OWN
+ *     durable allocation receipt already binds to the workload being reconciled — the write-once
+ *     UUID the spend for that same workload is attributed to. It is never a slug, never parsed out
+ *     of `cogniKey`, and never re-derived from the `nodes` registry: that table is FORCE
+ *     row-level-security tenant state, so an operator-internal writer holding no user session sees
+ *     ZERO rows there and could only ever report "not registered" for every node that exists.
  *   - READS_ARE_OPERATOR_LOCAL: `read` answers from operator Postgres only; a missing cell is
  *     `null` (never reported), which is NOT the same as a cell whose `applied` is empty.
  * Side-effects: none
@@ -33,8 +36,12 @@ export interface NodeMigrationReportRecord {
 
 /** What a reporter hands over after a successful migrate. */
 export interface RecordNodeMigrationReportInput {
-  /** The workload slug being reconciled — resolved to `node_id` by the implementation. */
-  readonly nodeSlug: string;
+  /**
+   * The immutable repo-spec node UUID for the workload that just migrated, as the operator's
+   * own durable allocation receipt binds it. Resolved by the reconcile path from the receipt,
+   * NOT from anything on a request body — see WRITE_KEY_IS_THE_RECEIPT_BOUND_NODE.
+   */
+  readonly nodeId: string;
   readonly environment: string;
   readonly declared: readonly string[];
   readonly applied: readonly AppliedMigration[];
@@ -42,13 +49,15 @@ export interface RecordNodeMigrationReportInput {
   readonly reporter: string;
 }
 
-/** Why a `record` call did not land. Enumerated so the caller can log an enum, never a row. */
-export type RecordNodeMigrationReportOutcome =
-  | "recorded"
-  | "node_not_registered";
+/**
+ * How a `record` call landed. Still an enum so the caller logs an enum and never a row — and
+ * still a union, deliberately: `node_not_registered` was retired with the registry lookup that
+ * produced it, and the next member will be a storage outcome, never an identity one.
+ */
+export type RecordNodeMigrationReportOutcome = "recorded";
 
 export interface NodeMigrationReportStorePort {
-  /** Upsert the `(node_id, environment)` cell. Resolves `node_id` itself; never trusts a caller's. */
+  /** Upsert the `(node_id, environment)` cell from the receipt-bound node id. */
   record(
     input: RecordNodeMigrationReportInput
   ): Promise<RecordNodeMigrationReportOutcome>;

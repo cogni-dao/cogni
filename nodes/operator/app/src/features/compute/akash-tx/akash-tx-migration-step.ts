@@ -30,8 +30,10 @@
  *     to this process's own, which for a foreign-custodied lane resolved that name to the PAYING
  *     env's Secret — and left the receipt where the lane then read it as its own proof.
  *   - RECEIPT_IS_METADATA_NOT_DATA_ACCESS: on `succeeded` this step collects the receipt the node's
- *     OWN migrator printed and stores it as operator deployment metadata, keyed by the workload
- *     being reconciled. The operator never connects to `cogni_<node>` to learn what was applied.
+ *     OWN migrator printed and stores it as operator deployment metadata, keyed by the `node_id`
+ *     the caller's allocation receipt already binds to this workload. The operator never connects
+ *     to `cogni_<node>` to learn what was applied, and never asks the tenant-scoped `nodes`
+ *     registry who the workload is — the one lookup that silently voided every receipt.
  *   - OUTCOME_IS_OBSERVABLE: every phase emits a structured log marker before it is returned
  *     (bug.5115: a refusal that only reached CR status was invisible for hours). A `failed`
  *     phase additionally reaches the composite as a named status reason.
@@ -121,8 +123,14 @@ export interface AkashTxMigrationStepInput {
   readonly step: AkashTxMigrationStep;
   readonly cogniKey: string;
   readonly environment: string;
-  /** The workload/node slug — `spec.name` on the wire. */
+  /** The workload/node slug — `spec.name` on the wire. Names the Job, never the receipt cell. */
   readonly workload: string;
+  /**
+   * The immutable node UUID this workload's allocation receipt is bound to, when the caller could
+   * read it. Absent means the receipt cell cannot be keyed yet — the migration still runs and
+   * still reports its phase, and the metadata lands on a later tick (see recordReceipt).
+   */
+  readonly nodeId?: string | undefined;
 }
 
 export interface AkashTxMigrationStepDeps {
@@ -138,11 +146,17 @@ export interface AkashTxMigrationStepDeps {
 }
 
 /**
- * Collect the receipt the node's own migrator printed and store it against the workload THIS CALL
- * is reconciling. There is no caller-supplied node on this path: the key is the workload the
- * actuator was asked to observe, which is the same derivation that makes
- * ENVIRONMENT_IS_THE_WORKLOAD'S true for the Job itself. Nothing here reaches a node database —
- * the migrator read its own ledger with its own DSN and printed the answer.
+ * Collect the receipt the node's own migrator printed and store it against the NODE this call is
+ * reconciling. The cell key is `nodeId` — the write-once UUID the caller's own allocation receipt
+ * bound to this workload before any Console transaction — not the slug, which is renameable and is
+ * identity for nothing. Nothing here reaches a node database: the migrator read its own ledger with
+ * its own DSN and printed the answer.
+ *
+ * `nodeId` absent is a FACT, not an error: the only honest thing to do is say the metadata did not
+ * land and let the next tick carry it (`ensure` keeps answering `succeeded` for the same digest).
+ * It is NOT re-derived from the slug here — the previous shape asked the `nodes` registry, which is
+ * FORCE row-level-security tenant state, and from this session-less process that lookup returned
+ * zero rows for every node in the fleet, so every receipt was discarded as `node_not_registered`.
  *
  * Non-throwing and non-blocking, like everything else in this module: a receipt that cannot be
  * collected or stored must never turn a succeeded migration into a phase the composite acts on.
@@ -151,6 +165,7 @@ async function recordReceipt(
   deps: AkashTxMigrationStepDeps,
   input: {
     readonly workload: string;
+    readonly nodeId?: string | undefined;
     readonly environment: string;
     readonly bundleDigest: string;
     readonly namespace: string;
@@ -160,6 +175,11 @@ async function recordReceipt(
 ): Promise<void> {
   const { reports, migration } = deps;
   if (!reports || !migration?.readReceipt) return;
+  const { nodeId } = input;
+  if (!nodeId) {
+    deps.log.warn(input.fields, "akash_tx_migration_receipt_unbound");
+    return;
+  }
   try {
     const stdout = await migration.readReceipt({
       nodeSlug: input.workload,
@@ -173,7 +193,7 @@ async function recordReceipt(
       return;
     }
     const outcome = await reports.record({
-      nodeSlug: input.workload,
+      nodeId,
       environment: input.environment,
       declared: receipt.declared,
       applied: receipt.applied,
@@ -256,6 +276,7 @@ export async function runMigrationStep(
     // change the phase (NEVER_REFUSES) — recordReceipt swallows everything.
     await recordReceipt(deps, {
       workload: input.workload,
+      ...(input.nodeId ? { nodeId: input.nodeId } : {}),
       environment: input.environment,
       bundleDigest,
       namespace: workloadNamespace(input.environment),
