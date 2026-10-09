@@ -110,17 +110,46 @@ canonical_model_json() {
         else .
         end
       );
-    def strip_nulls:
+    # STRIP_PROTOBUF_DEFAULTS: OpenFGA serializes an authorization model with its
+    # protobuf defaults populated, so reading back the very model you just wrote returns
+    # extra keys that were never in git. Measured from candidate-a store
+    # 01KZC94YDQBZ63Q0624FMRAGE0 against the model this script had just written:
+    #   "module": ""       (on every type_definition and every metadata.relations entry)
+    #   "condition": ""    (on every userset entry)
+    #   "object": ""       (on computedUserset inside tupleToUserset)
+    #   "relations": {}    (on type_definitions that declare no relations)
+    #   "conditions": {}   (top level, where git has no conditions at all)
+    # An absent scalar and an empty-string scalar are the SAME model to OpenFGA, so
+    # dropping them is a normalization, not an edit — and the git model contains no
+    # empty-string value anywhere, so the write body is untouched.
+    #
+    # Empty OBJECTS are only dropped for protobuf MAP fields, by name. `{}` is
+    # load-bearing elsewhere in a model: `"this": {}` is the direct-relation marker
+    # (16 occurrences here), and this projection is also the POST body, so a blanket
+    # empty-object strip would rewrite the authorization model being written.
+    def strip_protobuf_defaults:
       walk(
         if type == "object" then
-          with_entries(select(.value != null))
+          with_entries(
+            .key as $k
+            | .value as $v
+            | select(
+                $v != null
+                and $v != ""
+                and (
+                  ($v | type) != "object"
+                  or ($v | length) > 0
+                  or (["relations", "conditions", "metadata"] | index($k) | not)
+                )
+              )
+          )
         else .
         end
       );
 
     if has("authorization_model") then .authorization_model else . end
     | {schema_version, type_definitions, conditions}
-    | strip_nulls
+    | strip_protobuf_defaults
     | normalize_keys
   '
 }
@@ -150,6 +179,22 @@ authorization_model_hash_for_id() {
   printf '%s' "$model_json" | canonical_model_json | model_hash
 }
 
+# WHY_IT_DIFFERS_MUST_BE_IN_THE_LOG: `hash differs from git model` is unactionable on
+# its own — it was emitted on every production deploy for a month while the model file
+# was untouched, and it is what identified the five defaults above in a single run. Any
+# future asymmetry (a field OpenFGA starts defaulting, a key this projection does not
+# normalize) shows up here as the actual differing lines.
+log_canonical_model_diff() {
+  local store_id="$1" model_id="$2" expected_hash_label="$3"
+  local deployed
+  deployed="$(curl_json GET "/stores/${store_id}/authorization-models/${model_id}" | canonical_model_json)" || return 0
+  log "canonical diff, deployed model ${model_id} (<) vs git ${expected_hash_label} (>):"
+  diff <(printf '%s\n' "$deployed") <(printf '%s\n' "$expected_canonical") 2>/dev/null |
+    head -40 |
+    while IFS= read -r line; do log "  ${line}"; done || true
+  return 0
+}
+
 wait_for_openfga
 
 store_id="$(store_id_for_name)"
@@ -162,6 +207,7 @@ fi
 [[ -n "$store_id" && "$store_id" != "null" ]] || die "could not resolve store id"
 
 canonical="$(canonical_model_json < "$OPENFGA_MODEL_FILE")"
+expected_canonical="$canonical"
 expected_hash="$(printf '%s' "$canonical" | model_hash)"
 authorization_model_id="$(authorization_model_id_for_hash "$store_id" "$expected_hash")"
 if [[ -z "$authorization_model_id" ]]; then
@@ -172,6 +218,7 @@ if [[ -z "$authorization_model_id" ]]; then
       authorization_model_id="$OPENFGA_EXISTING_AUTHORIZATION_MODEL_ID"
     elif [[ -n "$configured_hash" ]]; then
       log "configured authorization model hash differs from git model; writing new model (configured ${OPENFGA_EXISTING_AUTHORIZATION_MODEL_ID}=${configured_hash} vs git=${expected_hash})"
+      log_canonical_model_diff "$store_id" "$OPENFGA_EXISTING_AUTHORIZATION_MODEL_ID" "$expected_hash"
     fi
   fi
 
