@@ -3,17 +3,19 @@
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 # Hermetic control-vault lifecycle proof for task.5223.
 
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
 TMPROOT="$(mktemp -d -t flight-probe-credentials.XXXXXX)"
+FAILED_LINE=unknown
+trap 'FAILED_LINE=$LINENO' ERR
 on_exit() {
   local rc=$?
   if [ "$rc" -ne 0 ]; then
-    printf 'FAIL: flight-probe-credentials.test.sh at line %s\n' "${BASH_LINENO[0]:-unknown}" >&2
+    printf 'FAIL: flight-probe-credentials.test.sh at line %s\n' "$FAILED_LINE" >&2
   fi
   rm -rf "$TMPROOT"
   exit "$rc"
