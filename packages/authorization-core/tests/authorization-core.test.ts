@@ -63,9 +63,6 @@ describe("relationForAuthzAction", () => {
     expect(authzGraphResource("g")).toBe("graph:g");
     expect(authzNodeResource("n")).toBe("node:n");
     expect(authzNodeUserPrincipal("node-1", "alice")).toBe("user:node-1/alice");
-    expect(authzNodeUserPrincipal("node-1", "user:alice")).toBe(
-      "user:node-1/alice"
-    );
     expect(authzNodeAgentPrincipal("node-1", "agent-1")).toBe(
       "agent:node-1/agent-1"
     );
@@ -80,6 +77,18 @@ describe("relationForAuthzAction", () => {
     ).toBe("billing_account:node-1/b");
     expect(authzBillingAccountResource("node-2", "b")).not.toBe(
       authzBillingAccountResource("node-1", "b")
+    );
+    expect(() =>
+      authzNodeAgentPrincipal("node-1", "agent:node-2/agent-1")
+    ).toThrow("different node namespace");
+    expect(() => authzNodeAgentPrincipal("node-1", "agent/1")).toThrow(
+      "node-local identifier"
+    );
+    expect(() => authzNodeUserPrincipal("node-1", "user:alice")).toThrow(
+      "different node namespace"
+    );
+    expect(() => authzBillingAccountResource("node/1", "b")).toThrow(
+      "node-local identifier"
     );
     expect(authzGrantExpiresAt("2026-11-01T00:00:00.000Z")).toEqual({
       name: AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
