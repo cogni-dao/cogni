@@ -469,6 +469,18 @@ const CandidateControlPlaneApplicationSchema = z.strictObject({
 
 type CandidateInfraLane = "compose" | "control_plane";
 
+// A reviewed authorization-model change necessarily carries the model consumer and its proofs in
+// the same PR. Keep this list exact: these files may accompany the OpenFGA model, but they do not
+// select an infra lane on their own and cannot widen candidate infra dispatch to arbitrary package
+// changes.
+const CANDIDATE_OPENFGA_COLLATERAL_PATHS = new Set([
+  "packages/authorization-core/src/adapters/openfga-authorization.adapter.ts",
+  "packages/authorization-core/src/index.ts",
+  "packages/authorization-core/src/test/fake-authorization.adapter.ts",
+  "packages/authorization-core/tests/authorization-core.test.ts",
+  "packages/authorization-core/tests/rbac-model.test.ts",
+]);
+
 function candidateInfraPathLane(
   path: string
 ): CandidateInfraLane | "collateral" | null {
@@ -480,6 +492,7 @@ function candidateInfraPathLane(
     return "control_plane";
   }
   if (
+    path === "infra/openfga/rbac-model.json" ||
     path.startsWith("infra/compose/edge/") ||
     path.startsWith("infra/compose/runtime/") ||
     path.startsWith("infra/k8s/argocd/image-updater/") ||
@@ -501,6 +514,7 @@ function candidateInfraPathLane(
   }
   if (
     path === "infra/AGENTS.md" ||
+    CANDIDATE_OPENFGA_COLLATERAL_PATHS.has(path) ||
     path.endsWith("/AGENTS.md") ||
     path.startsWith("scripts/ci/tests/") ||
     path.startsWith("tests/ci-invariants/") ||
