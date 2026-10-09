@@ -13,9 +13,13 @@ set -euo pipefail
 COGNI_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 HOOK_DIR="$COGNI_CODEX_HOME/hooks"
 HOOK_PATH="$HOOK_DIR/cogni-session-cognition.sh"
+REFRESH_PATH="$HOOK_DIR/cogni-refresh-agent-credential.sh"
 CONFIG_PATH="$COGNI_CODEX_HOME/config.toml"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 mkdir -p "$HOOK_DIR"
+cp "$SCRIPT_DIR/refresh-agent-credential.sh" "$REFRESH_PATH"
+chmod +x "$REFRESH_PATH"
 
 cat >"$HOOK_PATH" <<'HOOK'
 #!/usr/bin/env bash
@@ -28,6 +32,8 @@ set -u
 CACHE_FILE=".cogni/.cognition-cache.md"
 REFRESH_TTL_SECONDS=900
 FETCH_TIMEOUT=6
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CREDENTIAL_REFRESH="$HOOK_DIR/cogni-refresh-agent-credential.sh"
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "$repo_root" ]]; then
@@ -111,6 +117,7 @@ case "$node_slug" in
   operator | cogni-template | "") url="https://cognidao.org/api/v1/cognition" ;;
   *) url="https://${node_slug}.cognidao.org/api/v1/cognition" ;;
 esac
+api_base="${url%/cognition}"
 
 agent_key="${COGNI_NODE_API_KEY:-$(read_env_file_value COGNI_NODE_API_KEY)}"
 
@@ -145,7 +152,10 @@ cache_is_repo_tracked() {
 refresh_in_background() {
   cache_is_stale || return 0
   (
-    local fresh
+    local fresh refreshed_file_key
+    "$CREDENTIAL_REFRESH" "$repo_root/.env.cogni" "$api_base" || true
+    refreshed_file_key="$(read_env_file_value COGNI_NODE_API_KEY)"
+    agent_key="${refreshed_file_key:-${COGNI_NODE_API_KEY:-}}"
     fresh="$(fetch_bundle)"
     [[ -n "$fresh" ]] && write_cache_atomic "$fresh"
   ) >/dev/null 2>&1 &
@@ -177,7 +187,8 @@ Do not continue silently. Tell the user that session cognition did not load and
 ask them to bootstrap the node credentials, then restart or resume the agent.
 
 Most common fixes:
-- register a NODE agent via /api/v1/agent/register
+- ask an authorized human for a one-use node agent spawn grant
+- redeem it via /api/v1/agent/register with {"spawnToken":"..."}
 - save COGNI_NODE_API_KEY in the clone-root .env.cogni
 - review and trust this user-level SessionStart hook via /hooks
 
