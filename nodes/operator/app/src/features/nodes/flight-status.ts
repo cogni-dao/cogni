@@ -11,7 +11,8 @@
  *   - RUNGS_ARE_ORDERED: serving precedes run-carries; a failed serving rung short-circuits run-carries
  *     (no chat probe against a 525 edge).
  *   - HOST_CONVENTION mirrors hostForNode() (resolve.ts) + the env→subdomain map (candidate-a→test).
- *   - NO_CLUSTER_AUTH: verification is external + Cogni-token only — never GH/kubectl/Argo creds.
+ *   - GOVERNED_SERVICE_AUTH: run-carries uses the exact node/env flight-prober credential; never an
+ *     agent identity, scheduler token, GH/kubectl/Argo credential, or fleet-wide fallback.
  * Side-effects: none (prober injected)
  * Links: src/ports/node-flight.port.ts, src/shared/node-registry/resolve.ts, task.5021
  * @public
@@ -60,7 +61,7 @@ export async function verifyFlightStatus(
       const serving = await prober.serving(host);
       const runCarries: RunCarriesResult =
         serving.status === "pass"
-          ? await prober.runCarries(host)
+          ? await prober.runCarries({ nodeId, env, host })
           : {
               status: "skip",
               durationMs: 0,
@@ -81,11 +82,12 @@ export async function verifyFlightStatus(
 const okRun = (s: string) => s === "pass" || s === "degraded";
 
 /**
- * Fail-loud LIVENESS gate for ONE (node, env), proven by the two PUBLIC rungs: `serving` (`/readyz`)
- * and `run-carries` (a real graph run completes). A completed run transitively proves the substrate —
+ * Fail-loud LIVENESS gate for ONE (node, env), proven by public `serving` (`/readyz`) and governed
+ * `run-carries` (a real graph run completes). A completed run transitively proves the substrate —
  * the scheduler-worker polled `scheduler-tasks-<nodeId>`, the `SCHEDULER_API_TOKEN` matched (no 401),
  * the graph ran, and the run was written — so the verdict needs no cluster/Grafana auth. `live` is true
  * iff serving passes AND the run carries (pass|degraded); a failed serving short-circuits run-carries.
+ * A missing node ID fails closed before credential resolution.
  */
 export async function assertLive(
   params: {
@@ -101,15 +103,24 @@ export async function assertLive(
   const host = hostForEnv(slug, primary, env, baseDomain);
 
   const serving = await prober.serving(host);
-  const runCarries: RunCarriesResult =
-    serving.status === "pass"
-      ? await prober.runCarries(host)
-      : {
-          status: "skip",
-          durationMs: 0,
-          runs: 0,
-          detail: `skipped:serving-${serving.status}`,
-        };
+  let runCarries: RunCarriesResult;
+  if (serving.status !== "pass") {
+    runCarries = {
+      status: "skip",
+      durationMs: 0,
+      runs: 0,
+      detail: `skipped:serving-${serving.status}`,
+    };
+  } else if (!nodeId) {
+    runCarries = {
+      status: "fail",
+      durationMs: 0,
+      runs: 0,
+      detail: "probe-node-id-missing",
+    };
+  } else {
+    runCarries = await prober.runCarries({ nodeId, env, host });
+  }
 
   const failures: string[] = [];
   if (serving.status !== "pass") failures.push(`serving:${serving.readyzCode}`);

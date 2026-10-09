@@ -55,6 +55,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - OperatorWalletPort
 - ReceiptDelivery + ReceiptDeliveryTarget (catalog-routed operator→child attribution receipts)
 - NodeAddressPort + NodeAddressError (PLACEMENT_DECIDES_THE_ADDRESS — the one seam every operator→node client uses to turn a slug into a base URL)
+- NodeProber + FlightProbeCredentialResolver (public serving plus exact `{env,nodeId}` governed run-carries credential; no fleet fallback)
 - IdentityAttestationRepositoryPort, IdentityAttestationSignerPort
 - TreasurySettlementPort, TreasurySettlementOutcome
 - DeployPlanePort, including operator App-backed app promotion and the operator-only production infra reconcile contract

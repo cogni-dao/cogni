@@ -31,6 +31,10 @@ const optionalString = z.preprocess(
   emptyToUndefined,
   z.string().min(1).optional()
 );
+const optionalSecret = z.preprocess(
+  emptyToUndefined,
+  z.string().min(32).optional()
+);
 
 export interface EnvValidationMeta {
   code: "INVALID_ENV";
@@ -148,6 +152,12 @@ export const serverSchema = z.object({
   // Also the Bearer for operator-gateway → owning-node attribution receipt delivery
   // (POST {nodeUrl}/api/internal/attribution/receipts), mirroring the graph-dispatch identity.
   SCHEDULER_API_TOKEN: z.string().min(32),
+
+  // Governed run-carries probe (task.5218). The target verifies only its node-local key;
+  // the operator resolves outbound credentials by exact `{env}/{nodeId}` JSON-map key.
+  // Both remain optional until task.5223 provisions and materializes them per environment.
+  FLIGHT_PROBE_API_KEY: optionalSecret,
+  FLIGHT_PROBE_CREDENTIALS_JSON: optionalString,
 
   // NOTE: the operator app does NOT read a static COGNI_NODE_ENDPOINTS map. NORTH_STAR — the
   // operator resolves nodes from its OWN DB registry (listRoutableNodes) and their ADDRESS from

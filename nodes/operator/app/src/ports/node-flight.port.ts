@@ -3,8 +3,8 @@
 
 /**
  * Module: `@ports/node-flight`
- * Purpose: Contract + data types for the substrate VERIFICATION GATE — probe a node's public surface
- *   to prove it serves AND carries a real graph run, per env. Implemented by an adapter; consumed by
+ * Purpose: Contract + data types for the substrate VERIFICATION GATE — probe a node's public serving
+ *   surface and its governed flight-probe endpoint to prove it carries a real graph run, per env.
  *   the flight-status feature. No implementation here.
  * Scope: Types + the NodeProber port only. No I/O.
  * Side-effects: none
@@ -18,6 +18,25 @@ export type FlightEnv = "candidate-a" | "preview" | "production";
 /** A single rung verdict. `skip` = an upstream rung failed so this one was not probed. */
 export type RungStatus = "pass" | "degraded" | "fail" | "skip";
 
+/** Exact node/environment target for a governed run-carries probe. */
+export interface FlightProbeTarget {
+  readonly nodeId: string;
+  readonly env: FlightEnv;
+  readonly host: string;
+}
+
+/** Opaque, node-audienced credential. It is never an agent or contributor identity. */
+export interface FlightProbeCredential {
+  readonly apiKey: string;
+}
+
+/** Resolve only an exact `{env,nodeId}` target. Missing and malformed config fail closed. */
+export interface FlightProbeCredentialResolver {
+  resolve(target: Pick<FlightProbeTarget, "env" | "nodeId">):
+    | FlightProbeCredential
+    | null;
+}
+
 /** serving: the node answers /readyz 200 and exposes a /version buildSha. */
 export interface ServingResult {
   readonly status: RungStatus;
@@ -26,7 +45,7 @@ export interface ServingResult {
 }
 
 /**
- * run-carries: a freshly-registered agent's graph completion actually produces a run.
+ * run-carries: a stable node-local flight-prober service principal actually produces a run.
  * `pass` = run created AND a normal completion. `degraded` = run created but the completion errored
  * DOWNSTREAM of creation (e.g. insufficient_quota) — the substrate carried the run, the failure moved
  * past it. `fail` = no run created (hang / no Temporal poller / worker-401).
@@ -35,7 +54,7 @@ export interface RunCarriesResult {
   readonly status: RungStatus;
   readonly durationMs: number;
   readonly runs: number;
-  /** human-readable: "poem", "insufficient_quota", "hang:no-run", "register-failed", … */
+  /** human-readable: "probe-complete", "graph-error", "hang:no-run", "probe-http-401", … */
   readonly detail: string;
 }
 
@@ -83,12 +102,12 @@ export interface NodeIdentity {
   };
 }
 
-/** Injected I/O. The adapter exercises a node's PUBLIC surface only — no cluster/GH/Grafana auth. */
+/** Injected I/O. Serving is public; run-carries uses a bounded node-local service credential. */
 export interface NodeProber {
   /** GET https://<host>/readyz + /version. */
   serving(host: string): Promise<ServingResult>;
-  /** Register a throwaway agent, run the free `poet` graph, read back the run count. */
-  runCarries(host: string): Promise<RunCarriesResult>;
+  /** Run the fixed flight probe with the exact target's provisioned service credential. */
+  runCarries(target: FlightProbeTarget): Promise<RunCarriesResult>;
   /**
    * GET https://<host>/.well-known/agent.json and return its `identity` block,
    * Zod-parsed defensively. Returns `null` when the host is unreachable OR when the
@@ -99,7 +118,7 @@ export interface NodeProber {
   identity(host: string): Promise<NodeIdentity | null>;
 }
 
-/** The two PUBLIC live rungs for one node in one env. */
+/** The public serving rung plus governed run-carries rung for one node in one env. */
 export interface LiveProbes {
   readonly serving: ServingResult;
   readonly runCarries: RunCarriesResult;
@@ -107,8 +126,8 @@ export interface LiveProbes {
 
 /**
  * Fail-loud liveness verdict for one (node, env). `live` is true ONLY when serving passes AND the run
- * carries (pass|degraded). Both rungs are PUBLIC — a completed run transitively proves the substrate
- * (worker polled the queue, token matched, run written), so no Grafana token is needed for the verdict.
+ * carries (pass|degraded). A completed governed probe transitively proves the substrate (worker polled
+ * the queue, scheduler callback authenticated, run written), so no Grafana token is needed.
  */
 export interface AssertLiveResult {
   readonly nodeId: string | undefined;
