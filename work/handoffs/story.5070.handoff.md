@@ -6,7 +6,7 @@ status: active
 created: 2026-10-09
 updated: 2026-10-09
 branch: derekg1729/cognition-design
-last_commit: 58273bc06c
+last_commit: beeae6eead
 ---
 
 # Handoff: fresh agents adhere to the agent-contract unprompted
@@ -60,6 +60,15 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
   Static/analysis passed; build/component/unit failed only while pulling Docker Hub images (timeouts
   and HTTP 429), not from a branch test assertion. The compact floor + write-only hook are now being
   added on this branch and require fresh harness proof before merge.
+- **Conductor Claude failure isolated:** the human-run Opus 4.8 session at commit `beeae6eead`
+  answered the canonical design probe in prose and explicitly invented an exemption: “This is a
+  design question, so … rather than running the shipping-contract.” Its `/context` dump proves this
+  was not the old truncation bug: the complete 1.1k-token `CLAUDE.md` floor and 5.7k-token cognition
+  cache were separate Memory Files with 947.9k tokens free. Delivery passed; adherence failed.
+- **Claude-specific correction:** `.claude/settings.json` now selects a project-scoped
+  `Cogni Contract` output style. Per Claude Code's official architecture, this injects the terse
+  no-task-type-exceptions response rule into the system-prompt layer on every request. The canonical
+  skeleton remains in root `AGENTS.md`; the style is a harness adapter, not a second constitution.
 - **The cache is NOT sprawl:** `.cogni/.cognition-cache.md` is gitignored (`.gitignore:127`), never
   committed, absent from a fresh clone. Git holds only the one-line `@import` pointer; the hub is source.
 - **Open / blocked:** On 2026-10-09 a fresh Claude Code 2.1.293 boot at operator `main`
@@ -95,7 +104,8 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
 
 - [x] Rebase #2633 on `main`; classify the new CI failures as external Docker Hub pull failures.
 - [x] Find a compact literal floor that passes two turns on fresh Claude and raw Codex variants.
-- [ ] Validate the committed root floor + write-only hook with repository tests and fresh Claude/Codex boots.
+- [x] Validate the committed root floor + write-only hook with repository tests and fresh Opus 5.5/Codex boots.
+- [ ] Human-run fresh Conductor Opus 4.8 boot validates the project output-style correction.
 - [ ] Authenticate a capable OpenCode provider and pass the same two-turn eval on OpenCode 1.14.20.
 - [ ] Merge #2633 through the operator only after CI + three-harness acceptance; then consider fleet propagation.
 - Risk: **delivery ≠ adherence** — the trap this whole story fell into; grade with the eval, never assert.

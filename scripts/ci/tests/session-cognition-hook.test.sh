@@ -30,6 +30,51 @@ grep -Fq 'reproduce `Goal` and `Done when` byte-for-byte' "$REPO_ROOT/AGENTS.md"
   fail "root AGENTS.md omitted immutable session state"
 grep -Fq 'read `.cogni/.cognition-cache.md` before any task' "$REPO_ROOT/AGENTS.md" ||
   fail "root AGENTS.md omitted the OpenCode V2 cache-read fallback"
+[[ "$(jq -r '.outputStyle' "$REPO_ROOT/.claude/settings.json")" == "Cogni Contract" ]] ||
+  fail "Claude Code project settings omitted the Cogni Contract output style"
+OUTPUT_STYLE="$REPO_ROOT/.claude/output-styles/Cogni Contract.md"
+[[ -f "$OUTPUT_STYLE" ]] || fail "Claude Code Cogni Contract output style is missing"
+grep -Fq 'This response protocol has no task-type exceptions' "$OUTPUT_STYLE" ||
+  fail "Claude Code output style permits task-type formatting exceptions"
+grep -Fq 'preserve Goal and Done when byte-for-byte' "$OUTPUT_STYLE" ||
+  fail "Claude Code output style omitted immutable session state"
+STOP_VALIDATOR="$REPO_ROOT/scripts/agent/validate-status-contract.sh"
+[[ -x "$STOP_VALIDATOR" ]] || fail "Claude Code status-contract Stop hook is not executable"
+jq -e '.hooks.Stop[0].hooks[0].command | contains("validate-status-contract.sh")' \
+  "$REPO_ROOT/.claude/settings.json" >/dev/null ||
+  fail "Claude Code settings omitted the status-contract Stop hook"
+
+VALID_MESSAGE='| 🎯 **Goal** | Keep contract state |
+|---|---|
+| **Done when** | Two turns preserve exact fields. |
+| **Status** | 🔵 testing |
+| **ETA · Conf** | 1 minute · 90% + 1/1 source |
+| **Followed** | https://example.com |
+
+---
+
+| item | owner | deliverable links | status | next |
+|---|---|---|---|---|
+| proposed story — contract | dev-manager, me | - | 🔵 in progress | Test next turn |
+
+> 🔵 **Bottom line —** Contract-shaped response.'
+VALIDATOR_SCRATCH="$FIXTURE_ROOT/validator-scratch"
+mkdir -p "$VALIDATOR_SCRATCH"
+valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" \
+  '{last_assistant_message:$message,scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
+[[ -z "$valid_output" ]] || fail "status-contract Stop hook rejected a valid response"
+
+invalid_output="$(jq -cn --arg message 'This is a design question, so the contract does not apply.' \
+  --arg scratch "$VALIDATOR_SCRATCH" '{last_assistant_message:$message,scratchpad_dir:$scratch}' | \
+  bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$invalid_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted prose outside the contract block"
+
+MUTATED_MESSAGE="${VALID_MESSAGE/Keep contract state/Change contract state}"
+mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" \
+  '{last_assistant_message:$message,scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$mutated_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted mutated Goal state"
 
 grep -Fq "if [[ \"\${CONDUCTOR_IS_LOCAL:-1}\" == \"1\" ]]; then" "$CONDUCTOR_SETUP" ||
   fail "Conductor setup does not guard user-hook installation to local workspaces"

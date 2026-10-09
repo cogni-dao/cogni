@@ -73,18 +73,23 @@ that file → delivery unproven, so the adherence result is not gradable.
 
 ## Current result
 
-| harness / variant                     | delivery evidence                                                            | first turn                         | state-pressure follow-up                |
-| ------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------- |
-| Claude Code 2.1.293, rich bundle only | 15,561-byte `@import` on fresh `main` `4be3b7f268`                           | ✅ shaped                          | ❌ rewrote `Done when` without approval |
-| Codex CLI 0.147.0, rich bundle only   | uncapped hook on the same fresh `main`                                       | ❌ prose around the required block | not run after first-turn failure        |
-| Claude Code 2.1.293, compact floor    | temporary `CLAUDE.local.md` with the literal skeleton and immutable fields   | ✅ **PASS**                        | ✅ **PASS**, fields byte-identical      |
-| Codex CLI 0.147.0, compact floor      | temporary `AGENTS.override.md` with the same floor                           | ✅ **PASS**                        | ✅ **PASS**, fields byte-identical      |
-| OpenCode 1.14.20, local llama3.2:3b   | root `AGENTS.md` loaded; V2 does not resolve configured `instructions` files | ❌ prose                           | not run after first-turn failure        |
-| OpenCode 1.14.20, capable model       | provider credentials unavailable                                             | ⏳ blocked                         | ⏳ blocked                              |
+| harness / variant                                  | delivery evidence                                                            | first turn                          | state-pressure follow-up                |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------- |
+| Claude Code 2.1.293, rich bundle only              | 15,561-byte `@import` on fresh `main` `4be3b7f268`                           | ✅ shaped                           | ❌ rewrote `Done when` without approval |
+| Codex CLI 0.147.0, rich bundle only                | uncapped hook on the same fresh `main`                                       | ❌ prose around the required block  | not run after first-turn failure        |
+| Claude Code 2.1.293, compact floor                 | temporary `CLAUDE.local.md` with the literal skeleton and immutable fields   | ✅ **PASS**                         | ✅ **PASS**, fields byte-identical      |
+| Claude Code 2.1.293, Opus 5.5, commit `beeae6eead` | committed file floor + full cache                                            | ✅ **PASS**                         | ✅ **PASS**, fields byte-identical      |
+| Claude Code, Opus 4.8, commit `beeae6eead`         | `/context`: 1.1k-token `CLAUDE.md` + 5.7k-token cache; neither truncated     | ❌ invented a design-task exception | not run after first-turn failure        |
+| Claude Code, Opus 4.8 + output style               | `Cogni Contract` project style repeats no-exceptions rule every request      | ⏳ awaiting human fresh boot        | ⏳ awaiting human fresh boot            |
+| Codex CLI 0.147.0, compact floor                   | temporary `AGENTS.override.md` with the same floor                           | ✅ **PASS**                         | ✅ **PASS**, fields byte-identical      |
+| OpenCode 1.14.20, local llama3.2:3b                | root `AGENTS.md` loaded; V2 does not resolve configured `instructions` files | ❌ prose                            | not run after first-turn failure        |
+| OpenCode 1.14.20, capable model                    | provider credentials unavailable                                             | ⏳ blocked                          | ⏳ blocked                              |
 
 **Interpretation:** the rich bundle alone does not reliably control either capable harness.
-A small, literal, imperative floor fixes both Claude and Codex in the isolated variant. The
-repository implementation must reproduce that result without temporary override files.
+A small, literal, imperative floor fixes Codex and Claude Opus 5.5, but Opus 4.8 still
+semantically overrode the fully delivered floor by claiming that a design question was exempt.
+The Claude-specific output style moves only the no-exceptions response rule to Claude's
+system-prompt layer on every request; the file floor remains the canonical cross-harness shape.
 OpenCode proof requires both its actual V2 delivery behavior and a model capable of following
 the contract; a 3B local model failure is evidence, not a substitute for that proof.
 
