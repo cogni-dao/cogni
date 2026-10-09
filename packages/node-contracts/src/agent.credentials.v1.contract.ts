@@ -34,6 +34,12 @@ function principalLocalId(principalId: string): string {
   return principalId.slice(principalId.lastIndexOf("/") + 1).toLowerCase();
 }
 
+function principalNodeId(principalId: string): string {
+  return principalId
+    .slice(principalId.indexOf(":") + 1, principalId.lastIndexOf("/"))
+    .toLowerCase();
+}
+
 export const userPrincipalIdSchema = nodeQualifiedPrincipalSchema("user");
 export const agentPrincipalIdSchema = nodeQualifiedPrincipalSchema("agent");
 
@@ -62,7 +68,7 @@ export const agentRequestPrincipalSchema = z
     principalId: agentPrincipalIdSchema,
     actorId: z.string().uuid(),
     credentialId: z.string().uuid(),
-    billingAccountId: z.string().min(1),
+    billingAccountId: z.string().uuid(),
     displayName: z.string().nullable(),
     legacyUserId: z.string().nullable(),
   })
@@ -85,12 +91,26 @@ export type HumanRequestPrincipal = z.infer<typeof humanRequestPrincipalSchema>;
 export type AgentRequestPrincipal = z.infer<typeof agentRequestPrincipalSchema>;
 export type RequestPrincipal = z.infer<typeof requestPrincipalSchema>;
 
-export const executionIdentitySchema = z.object({
-  actorPrincipal: agentPrincipalIdSchema,
-  subjectPrincipal: userPrincipalIdSchema.nullable(),
-  billingAccountId: z.string().min(1),
-  grantId: z.string().min(1).nullable(),
-});
+export const executionIdentitySchema = z
+  .object({
+    actorPrincipal: agentPrincipalIdSchema,
+    subjectPrincipal: userPrincipalIdSchema.nullable(),
+    billingAccountId: z.string().uuid(),
+    grantId: z.string().min(1).nullable(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.subjectPrincipal &&
+      principalNodeId(value.actorPrincipal) !==
+        principalNodeId(value.subjectPrincipal)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "actor and subject principals must belong to the same node",
+        path: ["subjectPrincipal"],
+      });
+    }
+  });
 export type ExecutionIdentity = z.infer<typeof executionIdentitySchema>;
 
 export const agentCredentialOutputSchema = z
@@ -99,7 +119,7 @@ export const agentCredentialOutputSchema = z
     principalId: agentPrincipalIdSchema,
     credentialId: z.string().uuid(),
     apiKey: z.string().min(32),
-    billingAccountId: z.string().min(1),
+    billingAccountId: z.string().uuid(),
     authenticateUntil: z.string().datetime(),
     renewUntil: z.string().datetime(),
   })
