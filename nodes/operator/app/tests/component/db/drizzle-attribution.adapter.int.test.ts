@@ -34,10 +34,10 @@ import {
 } from "@tests/_fixtures/attribution/seed-attribution";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { seedTestActor, type TestActor } from "@tests/_fixtures/stack/seed";
-import { actors, userBindings } from "@/shared/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { actors, userBindings } from "@/shared/db/schema";
 
 /** Unwrap DrizzleQueryError → underlying PostgresError message */
 function drizzleCause(err: unknown): string {

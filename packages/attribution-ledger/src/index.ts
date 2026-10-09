@@ -11,18 +11,6 @@
  * @public
  */
 
-// Allocation algorithm framework (pure, deterministic)
-export {
-  computeProposedAllocations,
-  computeReceiptWeights,
-  deriveAllocationAlgoRef,
-  type ProposedAllocation,
-  type ReceiptForWeighting,
-  type ReceiptUnitWeight,
-  type SelectedReceiptForAllocation,
-  validateWeightConfig,
-} from "./allocation";
-
 export {
   ACTOR_ALLOCATION_DOMAIN_NAME,
   ACTOR_ALLOCATION_DOMAIN_VERSION,
@@ -34,6 +22,17 @@ export {
   type FrozenActorContributionAllocation,
   freezeActorContributionAllocation,
 } from "./actor-contribution-allocation";
+// Allocation algorithm framework (pure, deterministic)
+export {
+  computeProposedAllocations,
+  computeReceiptWeights,
+  deriveAllocationAlgoRef,
+  type ProposedAllocation,
+  type ReceiptForWeighting,
+  type ReceiptUnitWeight,
+  type SelectedReceiptForAllocation,
+  validateWeightConfig,
+} from "./allocation";
 
 // Evaluation envelope validation
 export {
@@ -169,8 +168,8 @@ export type {
   InsertReceiptClaimantsParams,
   InsertReceiptParams,
   InsertSelectionAutoParams,
-  InsertSignedActorContributionAllocationParams,
   InsertSignatureParams,
+  InsertSignedActorContributionAllocationParams,
   InsertStatementParams,
   InsertUserProjectionParams,
   OverrideStore,
