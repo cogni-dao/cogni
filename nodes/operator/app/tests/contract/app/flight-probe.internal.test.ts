@@ -197,8 +197,8 @@ describe("POST /api/internal/flight-probe", () => {
             triggerRef: `${constants.buildSha}:42`,
             requestedBy: `service:${constants.nodeId}/flight-prober`,
             input: expect.objectContaining({
-              actorUserId: "00000000-0000-4000-8000-00000000a001",
-              billingAccountId: "00000000-0000-4000-8000-00000000b000",
+              actorUserId: "00000000-0000-4000-a000-000000000001",
+              billingAccountId: "00000000-0000-4000-b000-000000000000",
               virtualKeyId: "virtual-key",
             }),
           }),
