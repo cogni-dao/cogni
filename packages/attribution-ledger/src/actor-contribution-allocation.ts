@@ -14,11 +14,11 @@
  * @public
  */
 
+import { sha256OfCanonicalJson } from "./hashing";
 import {
   type EIP712DeploymentEnvironment,
   parseEIP712DeploymentEnvironment,
 } from "./signing";
-import { sha256OfCanonicalJson } from "./hashing";
 
 export const ACTOR_CONTRIBUTION_ALLOCATION_VERSION =
   "actor.contribution.allocation.v1" as const;
