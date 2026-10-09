@@ -28,6 +28,11 @@ export {
   type RunFinalizeEpochDeps,
   runFinalizeEpoch,
 } from "./finalize/run-finalize-epoch";
+export {
+  signActorContributionAllocation,
+  type SignActorContributionAllocationDeps,
+  type SignActorContributionAllocationInput,
+} from "./finalize/sign-actor-contribution-allocation";
 export { createEchoAdapter } from "./plugins/echo/adapter";
 // Echo plugin
 export {

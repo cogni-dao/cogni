@@ -13,13 +13,16 @@
 
 import { createHash } from "node:crypto";
 import {
+  ACTOR_CONTRIBUTION_ALLOCATION_VERSION,
   ATTRIBUTION_STATEMENT_TYPES,
+  buildActorContributionAllocationTypedData,
   buildCanonicalMessage,
   buildEIP712TypedData,
   computeApproverSetHash,
   EIP712_DEPLOYMENT_ENVIRONMENTS,
   EIP712_DOMAIN_NAME,
   EIP712_DOMAIN_VERSION,
+  freezeActorContributionAllocation,
   parseEIP712DeploymentEnvironment,
 } from "@cogni/attribution-ledger";
 import { verifyTypedData } from "viem";
@@ -336,5 +339,90 @@ describe("EIP-712 sign/verify round-trip", () => {
         signature: legacySignature,
       })
     ).resolves.toBe(false);
+  });
+});
+
+describe("ActorContributionAllocation v1", () => {
+  const facts = {
+    nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+    scopeId: "a28a8b1e-1f9d-5cd5-9329-569e4819feda",
+    epochId: "43",
+    receiptId: "github:pr:cogni-dao/cogni:2659",
+    earnedByActorId: "flock-leader-actor",
+    beneficiaryActorId: "derek-actor",
+    beneficiaryPolicyId: "policy-flock-leader-derek-v1",
+    beneficiaryPolicyVersion: "flock-leader-beneficiary.v1",
+    contributionCutoff: "2026-10-09T12:34:56.000Z",
+    sourceEvidence: {
+      provider: "github",
+      immutableExternalId: "295942454",
+      payloadHash: "payload-hash",
+      bindingEvidenceEventId: "binding-event-1",
+    },
+  } as const;
+
+  it("keeps the AI earner separate from the explicitly selected human beneficiary", async () => {
+    const allocation = await freezeActorContributionAllocation(facts);
+    expect(allocation.contractVersion).toBe(
+      ACTOR_CONTRIBUTION_ALLOCATION_VERSION
+    );
+    expect(allocation.earnedByActorId).toBe("flock-leader-actor");
+    expect(allocation.beneficiaryActorId).toBe("derek-actor");
+    expect(allocation.earnedByActorId).not.toBe(allocation.beneficiaryActorId);
+  });
+
+  it("is deterministic and signs the cutoff, policy, and source evidence", async () => {
+    const [first, second] = await Promise.all([
+      freezeActorContributionAllocation(facts),
+      freezeActorContributionAllocation({
+        ...facts,
+        sourceEvidence: {
+          bindingEvidenceEventId: "binding-event-1",
+          payloadHash: "payload-hash",
+          immutableExternalId: "295942454",
+          provider: "github",
+        },
+      }),
+    ]);
+    expect(first).toEqual(second);
+    const typedData = buildActorContributionAllocationTypedData({
+      allocation: first,
+      chainId: 8453,
+      deploymentEnvironment: "candidate-a",
+    });
+    expect(typedData.message).toMatchObject({
+      allocationRef: first.allocationRef,
+      earnedByActorId: "flock-leader-actor",
+      beneficiaryActorId: "derek-actor",
+      beneficiaryPolicyVersion: "flock-leader-beneficiary.v1",
+      contributionCutoff: "2026-10-09T12:34:56.000Z",
+      sourceEvidenceHash: first.sourceEvidenceHash,
+    });
+  });
+
+  it("does not mutate the legacy AttributionStatement v2 envelope", () => {
+    const legacy = buildEIP712TypedData({
+      nodeId: facts.nodeId,
+      scopeId: facts.scopeId,
+      epochId: "42",
+      finalAllocationSetHash: "abc123def456",
+      poolTotalCredits: "10000",
+      chainId: 8453,
+      deploymentEnvironment: "candidate-a",
+    });
+    expect(legacy.domain).toEqual({
+      name: "Cogni Attribution",
+      version: "2",
+      chainId: 8453,
+    });
+    expect(legacy.primaryType).toBe("AttributionStatement");
+    expect(Object.keys(legacy.message)).toEqual([
+      "nodeId",
+      "scopeId",
+      "epochId",
+      "deploymentEnvironment",
+      "finalAllocationSetHash",
+      "poolTotalCredits",
+    ]);
   });
 });
