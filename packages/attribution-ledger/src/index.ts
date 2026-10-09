@@ -34,6 +34,21 @@ export {
   validateWeightConfig,
 } from "./allocation";
 
+export {
+  type ActorAwareSettlementPlan,
+  type ActorSettlementAmount,
+  computeActorAwareSettlementPlan,
+  type LegacySettlementAmount,
+} from "./actor-distribution-settlement";
+
+export type {
+  ActorBeneficiaryWalletResolution,
+  ActorBeneficiaryWalletResolver,
+  ActorWalletBindingEvidence,
+  ActorWalletResolutionFailureCode,
+  ActorWalletResolutionFailureEvidence,
+} from "./actor-wallet-resolution";
+
 // Evaluation envelope validation
 export {
   validateEvaluationEnvelope,
@@ -136,6 +151,8 @@ export type {
   ActorBeneficiaryPolicyRecord,
   ActorBindingRecord,
   ActorContributionAllocationRecord,
+  ActorDistributionLiabilityRecord,
+  ActorDistributionSettlementRecord,
   AttributionEpoch,
   AttributionEvaluation,
   AttributionPoolComponent,
@@ -175,6 +192,7 @@ export type {
   OverrideStore,
   PoolComponentInsertResult,
   PoolStore,
+  PendingActorDistributionLiability,
   ProjectionStore,
   ReceiptClaimantsRecord,
   ReceiptStore,

@@ -20,12 +20,17 @@
 import {
   buildCumulativeEpochDistribution,
   type ClaimantWalletResolver,
+  type DaoTokenCumulativeDistribution,
   type FinalizedEpochStatement,
   type HexAddress,
   type PriorCumulativeBalance,
 } from "@cogni/aragon-osx";
 import {
+  type ActorBeneficiaryWalletResolver,
   type AttributionStore,
+  type ReceiptClaimantsRecord,
+  type ReceiptUnitWeight,
+  type SubjectOverride,
   applyReceiptWeightOverrides,
   buildEIP712TypedData,
   buildReceiptWeightOverrideSnapshots,
@@ -41,6 +46,7 @@ import { dispatchAllocator } from "@cogni/attribution-pipeline-contracts";
 import { verifyTypedData } from "viem";
 
 import type { DefaultRegistries } from "../registry";
+import { buildActorCumulativeFold } from "./actor-cumulative-fold";
 
 /**
  * 18-decimal base-unit scale for the GovernanceERC20. The per-epoch mint delta
@@ -147,6 +153,8 @@ export interface RunFinalizeEpochDeps {
    * cumulative-root building (off-chain ledger still finalizes).
    */
   readonly walletResolver: ClaimantWalletResolver | null;
+  /** Actor beneficiary resolver; reads only frozen beneficiary actor bindings. */
+  readonly actorWalletResolver?: ActorBeneficiaryWalletResolver | null;
   /**
    * bug.5020 per-node distribution-config gateway. Resolves the FINALIZING node's
    * governance from ITS OWN repo-spec (SPECS_GIT_AUTHORITATIVE). Null (or a transient
@@ -230,6 +238,7 @@ export async function runFinalizeEpoch(
     distributorAddress: repoSpecDistributorAddress,
     emissionsHolderAddress: repoSpecEmissionsHolderAddress,
     walletResolver,
+    actorWalletResolver,
     distributionConfigClient,
     deploymentEnvironment: unvalidatedDeploymentEnvironment,
     logger,
@@ -345,6 +354,11 @@ export async function runFinalizeEpoch(
       readonly credit_amount: string;
       readonly receipt_ids: readonly string[];
     }>;
+    readonly actorFoldInputs?: {
+      readonly receiptWeights: readonly ReceiptUnitWeight[];
+      readonly lockedClaimants: readonly ReceiptClaimantsRecord[];
+      readonly overrides: readonly SubjectOverride[];
+    };
   }): Promise<FinalizeEpochOutput["cumulativeDistribution"]> {
     // FREEZE (bug.5022): once an epoch's manifest is persisted it is IMMUTABLE. A repair /
     // re-finalize must never re-fold and OVERWRITE it — a re-fold that picks up a newly
@@ -407,11 +421,23 @@ export async function runFinalizeEpoch(
     // per-account leaf amounts (each cumulative leaf carries the account's
     // cumulative-to-date). We find the highest epoch id BEFORE this one that has a
     // persisted manifest. No new store method: enumerate epochs and read manifests.
-    const allEpochs = await attributionStore.listEpochs(nodeId);
+    const [allEpochs, targetEpoch] = await Promise.all([
+      attributionStore.listEpochs(nodeId),
+      attributionStore.getEpoch(args.epochId),
+    ]);
+    if (!targetEpoch) {
+      throw new Error(`Distribution target epoch ${args.epochId} disappeared`);
+    }
     const priorEpochIds = allEpochs
-      .map((e) => e.id)
-      .filter((id) => id < args.epochId)
-      .sort((a, b) => (a > b ? -1 : a < b ? 1 : 0)); // descending
+      .filter(
+        (candidate) => candidate.periodEnd <= targetEpoch.periodStart
+      )
+      .sort((a, b) => {
+        const byPeriodEnd = b.periodEnd.getTime() - a.periodEnd.getTime();
+        if (byPeriodEnd !== 0) return byPeriodEnd;
+        return a.id > b.id ? -1 : a.id < b.id ? 1 : 0;
+      })
+      .map((candidate) => candidate.id);
 
     let priorManifest: Awaited<
       ReturnType<typeof attributionStore.getDistributionManifestForEpoch>
@@ -469,23 +495,108 @@ export async function runFinalizeEpoch(
       })),
     };
 
-    if (mintDelta <= 0n && priorCumulative.length === 0) {
-      logger.info(
-        { epochId: args.epochId.toString() },
-        "Cumulative distribution skipped — zero mint delta and no prior cumulative balance"
-      );
-      return null;
-    }
+    const [currentActorAllocations, unfoldedActorAllocations, pendingLiabilities] =
+      await Promise.all([
+        attributionStore.listActorContributionAllocationsForEpoch(args.epochId),
+        attributionStore.listUnfoldedActorContributionAllocationsForEpoch(
+          args.epochId
+        ),
+        attributionStore.listPendingActorDistributionLiabilities(args.epochId),
+      ]);
+    const actorAware =
+      currentActorAllocations.length > 0 || pendingLiabilities.length > 0;
 
-    const { distribution, blockers, unresolvedClaimantKeys } =
-      await buildCumulativeEpochDistribution(
+    let distribution: DaoTokenCumulativeDistribution | null;
+    let blockers: readonly { readonly code: string }[] = [];
+    let unresolvedClaimantKeys: readonly string[] = [];
+    let actorLiabilities: Parameters<
+      typeof attributionStore.insertActorDistributionLiabilities
+    >[0] = [];
+    let actorSettlements: NonNullable<
+      Parameters<
+        typeof attributionStore.upsertDistributionManifest
+      >[0]["actorSettlements"]
+    > = [];
+
+    if (actorAware) {
+      if (!actorWalletResolver) {
+        throw new Error(
+          "Actor allocations require the actor beneficiary wallet resolver"
+        );
+      }
+      let actorFoldInputs = args.actorFoldInputs;
+      if (!actorFoldInputs) {
+        const repairEpoch = await attributionStore.getEpoch(args.epochId);
+        if (!repairEpoch?.allocationAlgoRef) {
+          throw new Error(
+            "Actor fold repair requires the locked allocator config"
+          );
+        }
+        const [lockedClaimants, selections, overrideRecords, evaluations] =
+          await Promise.all([
+            attributionStore.loadLockedClaimants(args.epochId),
+            attributionStore.getSelectedReceiptsForAllocation(args.epochId),
+            attributionStore.getReviewSubjectOverridesForEpoch(args.epochId),
+            attributionStore.getEvaluationsForEpoch(args.epochId, "locked"),
+          ]);
+        const rawWeights = await dispatchAllocator(
+          registries.allocators,
+          repairEpoch.allocationAlgoRef,
+          {
+            receipts: selections,
+            weightConfig: repairEpoch.weightConfig,
+            evaluations: toEvaluationPayloadMap(evaluations),
+            profileConfig: null,
+          }
+        );
+        const overrides = toReviewSubjectOverrides(overrideRecords);
+        actorFoldInputs = {
+          receiptWeights: applyReceiptWeightOverrides(rawWeights, overrides),
+          lockedClaimants,
+          overrides,
+        };
+      }
+      const actorFold = await buildActorCumulativeFold({
+        distributionId: finalized.distributionId,
+        nodeId,
+        scopeId,
+        foldEpochId: args.epochId,
+        statementHash: args.finalAllocationSetHash,
+        chainId,
+        tokenAddress: effectiveTokenAddress as HexAddress,
+        totalTokenAmount: mintDelta,
+        receiptWeights: actorFoldInputs.receiptWeights,
+        lockedClaimants: actorFoldInputs.lockedClaimants,
+        overrides: actorFoldInputs.overrides,
+        currentActorAllocations,
+        unfoldedActorAllocations,
+        pendingLiabilities,
+        priorCumulative,
+        legacyWalletResolver: walletResolver,
+        actorWalletResolver,
+      });
+      distribution = actorFold.distribution;
+      actorLiabilities = actorFold.liabilities;
+      actorSettlements = actorFold.settlements;
+      unresolvedClaimantKeys = actorFold.unresolvedClaimantKeys;
+    } else {
+      const legacy = await buildCumulativeEpochDistribution(
         finalized,
         mintDelta,
         priorCumulative,
         walletResolver
       );
+      distribution = legacy.distribution;
+      blockers = legacy.blockers;
+      unresolvedClaimantKeys = legacy.unresolvedClaimantKeys;
+    }
 
     if (!distribution) {
+      if (actorLiabilities.length > 0) {
+        await attributionStore.insertActorDistributionLiabilities(
+          actorLiabilities
+        );
+      }
       logger.warn(
         {
           epochId: args.epochId.toString(),
@@ -521,6 +632,8 @@ export async function runFinalizeEpoch(
         leafHash: leaf.leafHash,
         proof: [...leaf.proof],
       })),
+      actorLiabilities,
+      actorSettlements,
     });
 
     logger.info(
@@ -850,6 +963,11 @@ export async function runFinalizeEpoch(
         credit_amount: line.creditAmount.toString(),
         receipt_ids: [...line.receiptIds],
       })),
+      actorFoldInputs: {
+        receiptWeights,
+        lockedClaimants,
+        overrides,
+      },
     });
   } catch (err) {
     logger.error(

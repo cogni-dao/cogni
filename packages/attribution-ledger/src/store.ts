@@ -24,6 +24,10 @@
  */
 
 import type { FrozenActorContributionAllocation } from "./actor-contribution-allocation";
+import type {
+  ActorWalletBindingEvidence,
+  ActorWalletResolutionFailureEvidence,
+} from "./actor-wallet-resolution";
 import type { SelectedReceiptForAllocation } from "./allocation";
 import type {
   AttributionClaimant,
@@ -212,6 +216,43 @@ export interface ActorContributionAllocationRecord
   readonly signerWallet: string;
   readonly signature: string;
   readonly signedAt: Date;
+  readonly createdAt: Date;
+}
+
+export interface ActorDistributionLiabilityRecord {
+  readonly id: string;
+  readonly allocationRef: string;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly sourceEpochId: bigint;
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly contributionCutoff: Date;
+  readonly tokenAmount: bigint;
+  readonly sourceEvidenceHash: string;
+  readonly signerActorId: string;
+  readonly resolverFailure: ActorWalletResolutionFailureEvidence;
+  readonly createdAt: Date;
+}
+
+export interface PendingActorDistributionLiability
+  extends ActorDistributionLiabilityRecord {
+  readonly allocation: ActorContributionAllocationRecord;
+}
+
+export interface ActorDistributionSettlementRecord {
+  readonly id: string;
+  readonly allocationRef: string;
+  readonly liabilityId: string | null;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly sourceEpochId: bigint;
+  readonly foldEpochId: bigint;
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly tokenAmount: bigint;
+  readonly claimantWallet: string;
+  readonly resolverEvidence: ActorWalletBindingEvidence;
   readonly createdAt: Date;
 }
 
@@ -502,6 +543,14 @@ export interface InsertDistributionManifestParams {
   readonly totalAllocated: bigint;
   readonly distributorAddress?: string | null;
   readonly leaves: readonly DistributionLeafRecord[];
+  readonly actorLiabilities?: readonly Omit<
+    ActorDistributionLiabilityRecord,
+    "id" | "createdAt"
+  >[];
+  readonly actorSettlements?: readonly Omit<
+    ActorDistributionSettlementRecord,
+    "id" | "createdAt"
+  >[];
 }
 
 /**
@@ -543,6 +592,42 @@ export interface DistributionManifestStore {
   getDistributionLeavesForEpoch(
     epochId: bigint
   ): Promise<readonly DistributionLeafRecord[]>;
+
+  /** Every frozen actor allocation for this epoch, ordered by allocationRef. */
+  listActorContributionAllocationsForEpoch(
+    epochId: bigint
+  ): Promise<readonly ActorContributionAllocationRecord[]>;
+
+  /**
+   * Frozen actor allocations created for this epoch that have neither a
+   * liability nor a settlement yet, ordered by allocationRef. A same-epoch
+   * retry therefore cannot re-resolve or reprice an already-frozen liability.
+   */
+  listUnfoldedActorContributionAllocationsForEpoch(
+    epochId: bigint
+  ): Promise<readonly ActorContributionAllocationRecord[]>;
+
+  /**
+   * Unresolved actor liabilities from canonically earlier epochs, not merely a
+   * lexically/numerically smaller identifier, and not yet consumed by a
+   * settlement row. The signed allocation is joined so the resolver consumes
+   * frozen provenance.
+   */
+  listPendingActorDistributionLiabilities(
+    targetEpochId: bigint
+  ): Promise<readonly PendingActorDistributionLiability[]>;
+
+  /**
+   * Idempotently persist liabilities when no cumulative manifest can be built
+   * (for example, the first epoch has only unresolved actor beneficiaries).
+   * An existing allocationRef must match every immutable economic field.
+   */
+  insertActorDistributionLiabilities(
+    liabilities: readonly Omit<
+      ActorDistributionLiabilityRecord,
+      "id" | "createdAt"
+    >[]
+  ): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

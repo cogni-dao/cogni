@@ -757,3 +757,117 @@ export const epochDistributionLeaves = pgTable(
     index("epoch_distribution_leaves_epoch_idx").on(table.epochId),
   ]
 );
+
+/**
+ * An actor allocation whose explicitly frozen beneficiary had no usable wallet
+ * at its original fold. `token_amount` is the exact base-unit entitlement from
+ * that fold; later epochs carry this value forward without repricing it.
+ */
+export const actorDistributionLiabilities = pgTable(
+  "actor_distribution_liabilities",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    allocationRef: text("allocation_ref")
+      .notNull()
+      .references(() => actorContributionAllocations.id),
+    nodeId: uuid("node_id").notNull(),
+    scopeId: uuid("scope_id").notNull(),
+    sourceEpochId: bigint("source_epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    earnedByActorId: text("earned_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    beneficiaryActorId: text("beneficiary_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    contributionCutoff: timestamp("contribution_cutoff", {
+      withTimezone: true,
+    }).notNull(),
+    tokenAmount: numeric("token_amount", { mode: "bigint" }).notNull(),
+    sourceEvidenceHash: text("source_evidence_hash").notNull(),
+    signerActorId: text("signer_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    resolverFailureJson: jsonb("resolver_failure_json")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("actor_distribution_liabilities_allocation_unique").on(
+      table.allocationRef
+    ),
+    check(
+      "actor_distribution_liabilities_amount_positive",
+      sql`${table.tokenAmount} > 0`
+    ),
+    index("actor_distribution_liabilities_beneficiary_idx").on(
+      table.beneficiaryActorId,
+      table.sourceEpochId
+    ),
+  ]
+).enableRLS();
+
+/**
+ * Append-only proof that one actor allocation entered one cumulative fold.
+ * UNIQUE(allocation_ref) is the exact-once guard. `liability_id` is present only
+ * when a previously unresolved entitlement is consumed by a later fold.
+ */
+export const actorDistributionSettlements = pgTable(
+  "actor_distribution_settlements",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    allocationRef: text("allocation_ref")
+      .notNull()
+      .references(() => actorContributionAllocations.id),
+    liabilityId: uuid("liability_id").references(
+      () => actorDistributionLiabilities.id
+    ),
+    nodeId: uuid("node_id").notNull(),
+    scopeId: uuid("scope_id").notNull(),
+    sourceEpochId: bigint("source_epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    foldEpochId: bigint("fold_epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    earnedByActorId: text("earned_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    beneficiaryActorId: text("beneficiary_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    tokenAmount: numeric("token_amount", { mode: "bigint" }).notNull(),
+    claimantWallet: text("claimant_wallet").notNull(),
+    claimantWalletLower: text("claimant_wallet_lower").notNull(),
+    resolverEvidenceJson: jsonb("resolver_evidence_json")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("actor_distribution_settlements_allocation_unique").on(
+      table.allocationRef
+    ),
+    uniqueIndex("actor_distribution_settlements_liability_unique")
+      .on(table.liabilityId)
+      .where(sql`${table.liabilityId} IS NOT NULL`),
+    check(
+      "actor_distribution_settlements_amount_positive",
+      sql`${table.tokenAmount} > 0`
+    ),
+    check(
+      "actor_distribution_settlements_wallet_lower_check",
+      sql`${table.claimantWalletLower} = lower(${table.claimantWallet})`
+    ),
+    index("actor_distribution_settlements_fold_idx").on(table.foldEpochId),
+    index("actor_distribution_settlements_wallet_idx").on(
+      table.claimantWalletLower
+    ),
+  ]
+).enableRLS();
