@@ -109,6 +109,7 @@ case "$node_slug" in
   operator | cogni-template | "") URL="https://cognidao.org/api/v1/cognition" ;;
   *) URL="https://${node_slug}.cognidao.org/api/v1/cognition" ;;
 esac
+API_BASE="${URL%/cognition}"
 
 # Bearer = this node's NODE account key (environment first, then ./.env.cogni).
 AGENT_KEY="${COGNI_NODE_API_KEY:-$(read_env_file_value COGNI_NODE_API_KEY)}"
@@ -151,6 +152,13 @@ cache_is_repo_tracked() {
 refresh_in_background() {
   cache_is_stale || return 0
   (
+    # The credential file is shared by symlink across Conductor worktrees. A
+    # lock + two durable slots let one process rotate while every other reader
+    # continues using the predecessor until server confirmation succeeds.
+    bash "$REPO_ROOT/scripts/agent/refresh-agent-credential.sh" \
+      "$REPO_ROOT/.env.cogni" "$API_BASE"
+    refreshed_file_key="$(read_env_file_value COGNI_NODE_API_KEY)"
+    AGENT_KEY="${refreshed_file_key:-${COGNI_NODE_API_KEY:-}}"
     fresh="$(fetch_bundle)"
     [ -n "$fresh" ] && write_cache_atomic "$fresh"
   ) >/dev/null 2>&1 &
@@ -185,7 +193,8 @@ bundle from:
   $URL
 
 This is a setup step, not an outage. To bootstrap:
-- register a NODE agent via /api/v1/agent/register
+- ask an authorized human for a one-use node agent spawn grant
+- redeem it via /api/v1/agent/register with {"spawnToken":"..."}
 - save COGNI_NODE_API_KEY in the clone-root .env.cogni
 - for Codex, review and trust the repo's SessionStart hook via /hooks
 

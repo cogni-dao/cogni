@@ -41,6 +41,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+import { actorBeneficiaryPolicies, actors } from "./identity";
 import { users } from "./refs";
 
 // ---------------------------------------------------------------------------
@@ -138,6 +139,71 @@ export const ingestionReceipts = pgTable(
     index("ingestion_receipts_platform_user_idx").on(table.platformUserId),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Actor allocation inputs — additive vNext identity for one contribution
+// ---------------------------------------------------------------------------
+
+/**
+ * Immutable, signed actor allocation input for one selected contribution.
+ * task.5220 consumes `id` as allocation_ref and derives value from the existing
+ * finalized receipt-weight path; this table never rewrites legacy claimant rows.
+ */
+export const actorContributionAllocations = pgTable(
+  "actor_contribution_allocations",
+  {
+    id: text("id").primaryKey(),
+    nodeId: uuid("node_id").notNull(),
+    scopeId: uuid("scope_id").notNull(),
+    epochId: bigint("epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    receiptId: text("receipt_id").notNull(),
+    contractVersion: text("contract_version").notNull(),
+    earnedByActorId: text("earned_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    beneficiaryActorId: text("beneficiary_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    beneficiaryPolicyId: text("beneficiary_policy_id")
+      .notNull()
+      .references(() => actorBeneficiaryPolicies.id),
+    beneficiaryPolicyVersion: text("beneficiary_policy_version").notNull(),
+    contributionCutoff: timestamp("contribution_cutoff", {
+      withTimezone: true,
+    }).notNull(),
+    sourceEvidence: jsonb("source_evidence")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    sourceEvidenceHash: text("source_evidence_hash").notNull(),
+    signerActorId: text("signer_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    signerWallet: text("signer_wallet").notNull(),
+    signature: text("signature").notNull(),
+    signedAt: timestamp("signed_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "actor_contribution_allocations_contract_check",
+      sql`${table.contractVersion} = 'actor.contribution.allocation.v1'`
+    ),
+    uniqueIndex("actor_contribution_allocations_receipt_version_unique").on(
+      table.nodeId,
+      table.epochId,
+      table.receiptId,
+      table.contractVersion
+    ),
+    index("actor_contribution_allocations_beneficiary_idx").on(
+      table.beneficiaryActorId,
+      table.epochId
+    ),
+  ]
+).enableRLS();
 
 // ---------------------------------------------------------------------------
 // Selection Layer: Epoch membership + admin decisions (mutable until finalize)

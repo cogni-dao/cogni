@@ -23,6 +23,7 @@
  * @public
  */
 
+import type { FrozenActorContributionAllocation } from "./actor-contribution-allocation";
 import type { SelectedReceiptForAllocation } from "./allocation";
 import type {
   AttributionClaimant,
@@ -182,6 +183,38 @@ export interface SelectedReceiptWithMetadata
   readonly payloadHash: string;
 }
 
+export interface ActorBindingRecord {
+  readonly id: string;
+  readonly actorId: string;
+  readonly provider: string;
+  readonly externalId: string;
+  readonly providerLogin: string | null;
+  readonly evidenceEventId: string;
+  readonly createdAt: Date;
+  readonly closedAt: Date | null;
+}
+
+export interface ActorBeneficiaryPolicyRecord {
+  readonly id: string;
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly policyVersion: string;
+  readonly authorizedByActorId: string;
+  readonly evidence: Record<string, unknown>;
+  readonly effectiveFrom: Date;
+  readonly effectiveTo: Date | null;
+  readonly createdAt: Date;
+}
+
+export interface ActorContributionAllocationRecord
+  extends FrozenActorContributionAllocation {
+  readonly signerActorId: string;
+  readonly signerWallet: string;
+  readonly signature: string;
+  readonly signedAt: Date;
+  readonly createdAt: Date;
+}
+
 // ---------------------------------------------------------------------------
 // Write-side parameter types
 // ---------------------------------------------------------------------------
@@ -200,6 +233,35 @@ export interface InsertReceiptParams {
   readonly producerVersion: string;
   readonly eventTime: Date;
   readonly retrievedAt: Date;
+}
+
+export interface BindActorExternalIdentityParams {
+  readonly actorId: string;
+  readonly provider: string;
+  readonly externalId: string;
+  readonly providerLogin?: string | null;
+  /** Required when transferring an existing source to a different actor. */
+  readonly expectedCurrentActorId?: string;
+  readonly authorizedByActorId: string;
+  readonly evidence: Record<string, unknown>;
+  readonly effectiveAt: Date;
+}
+
+export interface InsertActorBeneficiaryPolicyParams {
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly policyVersion: string;
+  readonly authorizedByActorId: string;
+  readonly evidence: Record<string, unknown>;
+  readonly effectiveFrom: Date;
+}
+
+export interface InsertSignedActorContributionAllocationParams {
+  readonly allocation: FrozenActorContributionAllocation;
+  readonly signerActorId: string;
+  readonly signerWallet: string;
+  readonly signature: string;
+  readonly signedAt: Date;
 }
 
 export interface UpsertSelectionParams {
@@ -807,6 +869,42 @@ export interface IdentityResolver {
   getUserDisplayNames(userIds: string[]): Promise<Map<string, string>>;
 }
 
+/** Canonical external ownership + explicit beneficiary + signed actor input. */
+export interface ActorAttributionStore {
+  bindActorExternalIdentity(
+    params: BindActorExternalIdentityParams
+  ): Promise<ActorBindingRecord>;
+
+  insertActorBeneficiaryPolicy(
+    params: InsertActorBeneficiaryPolicyParams
+  ): Promise<ActorBeneficiaryPolicyRecord>;
+
+  /**
+   * Resolve source ownership and explicit policy exactly as of receipt event_time.
+   * task.5220 consumes the returned allocationRef; this never reads current parent,
+   * billing owner, OBO subject, or wallet to choose a beneficiary.
+   */
+  prepareActorContributionAllocation(params: {
+    readonly nodeId: string;
+    readonly epochId: bigint;
+    readonly receiptId: string;
+  }): Promise<FrozenActorContributionAllocation>;
+
+  insertSignedActorContributionAllocation(
+    params: InsertSignedActorContributionAllocationParams
+  ): Promise<ActorContributionAllocationRecord>;
+
+  getActorContributionAllocation(
+    allocationRef: string
+  ): Promise<ActorContributionAllocationRecord | null>;
+
+  /** Signer actor must be the explicit policy authorizer and own this wallet. */
+  actorOwnsSigningWallet(params: {
+    readonly actorId: string;
+    readonly wallet: string;
+  }): Promise<boolean>;
+}
+
 // ---------------------------------------------------------------------------
 // Composed port interface
 // ---------------------------------------------------------------------------
@@ -825,4 +923,5 @@ export interface AttributionStore
     OverrideStore,
     FinalAllocationStore,
     DistributionManifestStore,
+    ActorAttributionStore,
     IdentityResolver {}
