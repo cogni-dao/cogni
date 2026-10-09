@@ -5,7 +5,7 @@
  * Module: `@/proxy`
  * Purpose: Next.js 16 proxy (formerly middleware) for route protection.
  * Scope: Root-level proxy. Enforces session auth on /api/v1/* routes and page-level routing (redirect unauthenticated users away from app routes, redirect authenticated users from landing to /chat). Does not handle public infrastructure endpoints (e.g., /api/metrics, /api/health).
- * Invariants: /api/v1/public/* accessible without auth; /api/v1/* with cogni_ag_sk_v1_ bearer
+ * Invariants: /api/v1/public/* accessible without auth; /api/v1/* with a versioned Cogni agent bearer
  *   passes through (route handler validates token); other /api/v1/* require session.
  *   Single authority for auth routing — no client-side redirect logic.
  * Side-effects: none
@@ -50,16 +50,21 @@ function isAppRoute(pathname: string): boolean {
   );
 }
 
-const AGENT_BEARER_PREFIX = "Bearer cogni_ag_sk_v1_";
+const AGENT_BEARER_PREFIXES = [
+  "Bearer cogni_ag_sk_v1_",
+  "Bearer cogni_ag_sk_v2_",
+] as const;
 const SIGN_IN_PARAM = "signIn";
 const CALLBACK_PARAM = "callbackUrl";
 
 function isPublicApiRoute(pathname: string): boolean {
-  // Agent register is the one bootstrap seam left open: register → key →
-  // everything else (cognition included) requires that principal.
+  // Spawn/recovery redemption are one-use-token bootstrap seams. They mint a
+  // credential for an already-authorized durable actor; neither creates an
+  // anonymous principal.
   return (
     pathname.startsWith("/api/v1/public/") ||
-    pathname === "/api/v1/agent/register"
+    pathname === "/api/v1/agent/register" ||
+    pathname === "/api/v1/agent/recover"
   );
 }
 
@@ -70,8 +75,8 @@ function isAgentApiRoute(pathname: string): boolean {
 }
 
 function hasAgentBearer(req: NextRequest): boolean {
-  return (
-    req.headers.get("authorization")?.startsWith(AGENT_BEARER_PREFIX) ?? false
+  return AGENT_BEARER_PREFIXES.some((prefix) =>
+    req.headers.get("authorization")?.startsWith(prefix)
   );
 }
 

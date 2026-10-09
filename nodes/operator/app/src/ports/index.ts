@@ -350,3 +350,4 @@ export type {
   WorkItemSessionRecord,
   WorkItemSessionStatus,
 } from "./work-item-session.port";
+export * from "./agent-identity.port";
