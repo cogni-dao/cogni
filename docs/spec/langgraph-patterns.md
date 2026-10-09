@@ -5,12 +5,12 @@ title: LangGraph Patterns
 status: draft
 spec_state: draft
 trust: draft
-summary: Architecture patterns and invariants for shared and node-local LangGraph workflows across InProc and Server execution paths.
-read_when: Working with LangGraph graphs, modifying AI execution pipeline, or understanding package boundaries.
+summary: Architecture patterns and invariants for node-owned LangGraph graphs, including composition inside durable Temporal agent workflows.
+read_when: Working with LangGraph graphs, durable agent workflows, AI execution, or graph package boundaries.
 implements:
 owner: derekg1729
 created: 2026-02-07
-verified:
+verified: 2026-10-09
 tags: [ai-graphs, langgraph]
 ---
 
@@ -50,6 +50,12 @@ Define the package boundaries, execution paths, and invariants that govern LangG
 
 9. **NO_PARALLEL_REQUEST_TYPES**: Providers use `GraphRunRequest`/`GraphRunResult` from `@/ports`.
 
+10. **GRAPH_IS_NOT_THE_DURABLE_OUTER_LOOP**: LangGraph owns reasoning and graph-state checkpoints. Temporal owns schedules, cross-graph coordination, retries around external boundaries, timers, signals, and externally visible writes. A scheduled or long-lived agent is a Temporal Workflow containing graph runs, not a graph pretending to be the scheduler.
+
+11. **NODE_OWNS_EFFECTIVE_GRAPH_AND_WORKFLOW_CATALOGS**: A node's `packages/graphs` and `packages/workflows` are released together with its app and Worker. Shared packages supply runtime mechanics; they never select a node's product graph or workflow policy.
+
+12. **PERSISTENCE_IS_EXPLICIT**: In-memory LangGraph checkpointers are development-only. A production graph that must resume inside a run uses a persistent checkpointer and stable `thread_id`. Temporal history does not automatically checkpoint internal LangGraph nodes when a whole graph is executed as one Activity.
+
 ## Design
 
 ### Architecture Contract
@@ -65,12 +71,48 @@ Define the package boundaries, execution paths, and invariants that govern LangG
 
 ### Execution Paths
 
-| Path       | Adapter                       | Use Case                                             |
-| ---------- | ----------------------------- | ---------------------------------------------------- |
-| **InProc** | `InProcCompletionUnitAdapter` | Next.js process; billing via executeCompletionUnit() |
-| **Server** | `LangGraphServerAdapter`      | External LangGraph Server container                  |
+| Path                 | Adapter                                                                  | Use Case                                                                 |
+| -------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| **InProc**           | `InProcCompletionUnitAdapter`                                            | Next.js process; billing via executeCompletionUnit()                     |
+| **Server**           | `LangGraphServerAdapter`                                                 | External LangGraph Server container                                      |
+| **Durable workflow** | Node-owned Temporal Worker → private graph-run API → `GraphExecutorPort` | Scheduled/multi-step/HITL orchestration with graph runs as durable steps |
 
 All AI execution flows through `GraphExecutorPort`. The executor choice is an implementation detail behind the unified interface.
+
+### Durable Agent Workflow Composition
+
+An "AI graph workflow" is named a **durable agent workflow** in Cogni: a Temporal Workflow
+containing one or more LangGraph runs plus durable Activities, timers, signals, or child
+Workflows. This makes the two state machines explicit instead of blending their guarantees.
+
+```text
+Temporal Schedule / API / webhook
+  → node-owned Temporal Workflow                 durable outer state machine
+      → Activity or child: run graph             retry/idempotency boundary
+          → node app GraphExecutorPort
+              → node-owned LangGraph catalog     reasoning/dataflow state machine
+                  → persistent checkpointer      optional intra-graph resume/HITL
+      → Activity: commit/publish result           idempotent external write
+```
+
+The Pareto implementation deliberately calls the node app's private graph-run API. That path
+already owns execution grants, `graph_runs`, billing receipts, streaming, and AI telemetry.
+Running LangGraph directly inside the Worker would create a second billable execution path
+unless the complete graph-execution host is first made process-portable. It is a valid later
+optimization, not the P0 architecture.
+
+Durability is layered:
+
+| Failure boundary                     | Recovery owner                     | Required identity             |
+| ------------------------------------ | ---------------------------------- | ----------------------------- |
+| Worker process restart between steps | Temporal history                   | Workflow ID + Worker Build ID |
+| Whole graph Activity retry           | Temporal + graph-run idempotency   | schedule/run/step key         |
+| Graph node interruption/restart      | LangGraph checkpointer             | stable `thread_id`            |
+| External write retry                 | Temporal Activity + receiver dedup | stable business key           |
+
+Do not enable retries at all layers blindly. The Temporal Activity retry is the outer policy;
+graph/provider retries remain bounded, and externally visible effects must deduplicate on a
+business key independent of attempt number.
 
 ### Package Structure
 
@@ -242,6 +284,11 @@ func: async (args, runManager?, config?) => {
 | `@cogni/langgraph-graphs` | `toLangChainTool` (wraps + allowlist) | `@cogni/ai-tools`, `@langchain/core`                |
 | `@cogni/<node>-graphs`    | Node runtime catalog policy           | `@cogni/langgraph-graphs`, optional node graph code |
 
+For node-at-root repositories, the target names are `packages/graphs` (effective node graph
+catalog), `packages/workflows` (Temporal orchestration referring to graph IDs), and
+`services/workflow-worker` (process composition). Shared mechanics arrive through pinned,
+published `@cogni-dao/*` packages; node business definitions are never published as substrate.
+
 ### langgraph.json Configuration
 
 For Server path, graphs are registered in `packages/langgraph-server/langgraph.json`:
@@ -271,6 +318,9 @@ The `langgraph-server` package re-exports graphs from `@cogni/langgraph-graphs/g
 8. **No `streamEvents()` for InProc** — Use `invoke()` + AsyncQueue
 9. **No forked tool wrapper logic** — Single `makeLangChainTools` impl; thin wrappers resolve `toolExecFn` differently
 10. **No constructor args on `CogniCompletionAdapter`** — No-arg constructor; reads model from `configurable` and deps from ALS at invoke time
+11. **No full graph run hidden in a long synchronous HTTP handler without idempotency** — a Worker retry can otherwise rerun and recharge it
+12. **No material side effect inside a graph node without a durable idempotency boundary** — return a decision artifact and commit it in a Temporal Activity
+13. **No assumption that Temporal history checkpoints LangGraph nodes** — use a persistent LangGraph checkpointer when intra-graph recovery matters
 
 ### File Pointers
 
@@ -287,6 +337,8 @@ The `langgraph-server` package re-exports graphs from `@cogni/langgraph-graphs/g
 | `packages/langgraph-graphs/src/runtime/core/server-entrypoint.ts`   | createServerEntrypoint                    |
 | `packages/langgraph-graphs/langgraph.json`                          | LangGraph Server graph registration       |
 | `nodes/<node>/graphs/src/index.ts`                                  | Effective runtime catalog for one node    |
+| node `packages/workflows/`                                          | Temporal workflows composing graph IDs    |
+| node `services/workflow-worker/`                                    | Worker lifecycle and Activity composition |
 
 ## Acceptance Checks
 
@@ -300,6 +352,8 @@ The `langgraph-server` package re-exports graphs from `@cogni/langgraph-graphs/g
 1. Verify no `@langchain/*` imports exist in `src/` (`grep -r "@langchain" src/`)
 2. Verify node app imports catalog symbols from `@cogni/<node>-graphs`
 3. Verify graph catalog entries reference compiled graphs
+4. For each durable agent workflow, verify the graph step reaches `GraphExecutorPort` once and carries a stable idempotency key
+5. Verify production graphs requiring intra-run resume use a persistent checkpointer and stable `thread_id`
 
 ## Open Questions
 
@@ -314,3 +368,4 @@ The `langgraph-server` package re-exports graphs from `@cogni/langgraph-graphs/g
 - [Tool Use Spec](./tool-use.md) — Tool execution invariants
 - [Thread Persistence Spec](./thread-persistence.md) — UIMessage persistence, assistant_final accumulation
 - [AI Setup Spec](./ai-setup.md) — Correlation IDs, telemetry
+- [Temporal Patterns](./temporal-patterns.md) — Node-owned durable orchestration and deployment topology

@@ -8,7 +8,7 @@ summary: Temporal-based scheduling system for graph execution via internal HTTP 
 read_when: Implementing scheduled workflows, execution grants, or Temporal integration
 owner: derekg1729
 created: 2026-02-05
-verified: 2026-03-17
+verified: 2026-10-09
 tags: [scheduler]
 ---
 
@@ -16,6 +16,12 @@ tags: [scheduler]
 
 > [!CRITICAL]
 > Scheduled runs execute via **internal HTTP API** using durable **ExecutionGrants** (not user sessions). Worker calls `POST /api/internal/graphs/{graphId}/runs` with shared-secret auth—never imports graph execution code.
+
+> [!IMPORTANT]
+> This document describes the **as-built centralized compatibility lane**. The target is
+> node-sovereign: each node ships a private `workflow-worker` and node-owned Workflow bundle in
+> its own environment namespace, while preserving this same internal graph-run API as the one
+> billed execution path. See [Temporal Substrate](./substrate-temporal.md).
 
 ---
 
@@ -47,7 +53,7 @@ tags: [scheduler]
 
 ### Temporal-Specific Invariants
 
-10. **NAMESPACE_PER_ENV + QUEUE_PER_NODE_ISOLATION**: Temporal namespace = `cogni-{APP_ENV}` (cogni-test, cogni-production). Per task.0280 phase 2, each namespace runs **one task queue per node**: node apps submit to `${TEMPORAL_TASK_QUEUE}-${getNodeId()}`; the scheduler-worker pod spins up one Temporal `Worker` per canonical nodeId in `COGNI_NODE_ENDPOINTS` (UUIDs) plus one drain Worker on the legacy `${TEMPORAL_TASK_QUEUE}` queue. A failing node grows its own queue without starving siblings.
+10. **AS_BUILT_NAMESPACE_PER_ENV + QUEUE_PER_NODE_ISOLATION**: The compatibility lane uses `cogni-{APP_ENV}` plus `${TEMPORAL_TASK_QUEUE}-${getNodeId()}` and a centralized Worker. The target uses `cogni-<env>-<nodeId>` plus stable `agent-workflows`, polled by that node's own Worker. Task Queues isolate routing/throughput; only Namespaces provide the required credential/visibility boundary.
 
 11. **WORKER_NEVER_CONTROLS_SCHEDULES**: `scheduler-worker` must not depend on `ScheduleControlPort` or call Temporal schedule APIs. CRUD routes are the single authority. Enforce via dep-cruiser.
 
@@ -75,11 +81,11 @@ tags: [scheduler]
 
 ### Progression
 
-| Phase           | Worker Entry                                                    | Scheduler                | Status     |
-| --------------- | --------------------------------------------------------------- | ------------------------ | ---------- |
-| **1 (Legacy)**  | `src/scripts/run-scheduler-worker.ts`                           | Graphile Worker          | ✅ Deleted |
-| **2 (Current)** | `services/scheduler-worker/src/main.ts`                         | Temporal Schedules       | ✅ Merged  |
-| **3 (Next)**    | `services/scheduler-worker/src/workflows/graph-run.workflow.ts` | Unified GraphRunWorkflow | 🔲 Planned |
+| Phase           | Worker Entry                                           | Scheduler                          | Status     |
+| --------------- | ------------------------------------------------------ | ---------------------------------- | ---------- |
+| **1 (Legacy)**  | `src/scripts/run-scheduler-worker.ts`                  | Graphile Worker                    | ✅ Deleted |
+| **2 (Current)** | `services/scheduler-worker/src/main.ts`                | Temporal Schedules                 | ✅ Merged  |
+| **3 (Target)**  | node `services/workflow-worker` + `packages/workflows` | Node-owned durable agent workflows | 🔲 Planned |
 
 ### Package Extraction (Complete)
 
@@ -90,7 +96,7 @@ tags: [scheduler]
 | `src/adapters/server/scheduling/*`   | `@cogni/db-client`      |
 | `src/shared/db/schema.scheduling.ts` | `@cogni/db-schema`      |
 
-### Temporal Architecture
+### Temporal Architecture (centralized compatibility lane)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
