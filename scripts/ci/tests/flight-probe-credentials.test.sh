@@ -10,7 +10,15 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 cd "$REPO_ROOT"
 
 TMPROOT="$(mktemp -d -t flight-probe-credentials.XXXXXX)"
-trap 'rm -rf "$TMPROOT"' EXIT
+on_exit() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL: flight-probe-credentials.test.sh at line %s\n' "${BASH_LINENO[0]:-unknown}" >&2
+  fi
+  rm -rf "$TMPROOT"
+  exit "$rc"
+}
+trap on_exit EXIT
 FAKEBIN="$TMPROOT/bin"
 BAO_ROOT="$TMPROOT/openbao"
 SSH_ARGV_LOG="$TMPROOT/ssh-argv.log"
