@@ -50,12 +50,13 @@ breaching this wrapper makes the work invalid.
 
 ## Live cognition
 
-The imported, gitignored cache is the live source for the rich contract, orientation, skills,
-and knowledge map. If this harness shows the `@` line literally instead of expanding it,
-read `.cogni/.cognition-cache.md` before any task and obey it as project instructions.
+The gitignored cache is the live source for the rich contract, orientation, skills, and knowledge
+map. Harness adapters load it automatically: Claude expands the `@` import above, OpenCode combines
+the same file through committed `opencode.json` instructions, and Codex receives it from the hook.
 
-The shared SessionStart loader refreshes that cache from the current node's authenticated
-`/api/v1/cognition` endpoint. A failed refresh preserves the last good copy. On first setup,
+The shared session loader refreshes that cache from the current node's authenticated
+`/api/v1/cognition` endpoint; workspace setup warms it before the first agent starts. A failed
+refresh preserves the last good copy. On first setup,
 register through the public `/api/v1/agent/register` seam and save `COGNI_NODE_API_KEY` in
 the gitignored `.env.cogni`; operator CI/CD keys are not cognition credentials.
 

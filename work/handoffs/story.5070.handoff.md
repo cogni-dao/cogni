@@ -17,6 +17,29 @@ Goal = Fresh agents follow the agent-contract unprompted
 
 Done when = Fresh Claude, Codex, and opencode boots pass the sustained adherence eval.
 
+## 2026-10-09 16:45 PT — final review findings
+
+- **Critical review correction:** the branch claimed OpenCode needed an explicit cache read while
+  `_bundle.ts` simultaneously claimed `opencode.json` instructions. There was no `opencode.json`.
+  Current official OpenCode rules say project `instructions` files are automatically combined with
+  `AGENTS.md`. The branch now commits `opencode.json` pointing at the gitignored cache and removes
+  the manual-read claim from AGENTS, the cognition skill, the spec, and its shell regression.
+- **CI defect found, not waived:** the newest provenance guard made the validator's old one-URL
+  "valid" fixture invalid, so PR unit CI failed. The fixture now supplies the required knowledge,
+  design/code, and work-item URLs. No local test/check was run; GitHub Actions remains the machine
+  verification lane and human fresh sessions remain the E2E gate.
+- **Fleet correctness fix:** the Claude Stop validator no longer hard-codes operator work-item URLs;
+  it accepts every node's `https://<slug>.cognidao.org/work/items/...` ledger.
+- **Retrieval observability captured:** story.5078 owns the follow-on goal that fresh agents retrieve
+  cognition, knowledge, and work items without endpoint guessing/manual rescue, with correlated
+  outcome/latency/retry telemetry and a recurring human scorecard. Durable inbox
+  `contrib-flock-leader-operator-8cc045ea` records the evidence and extends both the cognition
+  substrate and observability finish-pass entries.
+- **story.5070 remains unwritable:** its PATCH again timed out after 20 seconds and a subsequent GET
+  confirmed revision 0/stale outcome. The exact Goal/Done-when remain here and in
+  `.context/story5070-resume.md`; story.5078 creation succeeded despite a response timeout, proving
+  the ambiguous-write problem the new observability story targets.
+
 Pickup: you own closing the **adherence** gap in the cognition bootstrap. The end-to-end goal
 is simple and behavioral — **a human spawns a fresh agent, and it responds in the agent-contract
 (the status-contract block) with ZERO human prompting to do so.** Fresh rich-bundle-only runs

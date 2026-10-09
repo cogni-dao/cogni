@@ -103,7 +103,7 @@ else
     block "Process-contract breach: Followed omits the orientation, skill, guide, or hub knowledge that informed the proposal. Convert local skill paths to human GitHub blob URLs and cite them."
   printf '%s\n' "$FOLLOWED" | grep -Eq 'https://github\.com/[^| )]+/(blob|tree)/[^| )]+/(docs/|AGENTS\.md|scripts/|packages/|nodes/)' ||
     block "Process-contract breach: Followed omits the applicable design or code source. Convert the local repo path to its human GitHub blob URL at the current SHA and cite it."
-  printf '%s\n' "$FOLLOWED" | grep -Eq 'https://cognidao\.org/work/items/' ||
+  printf '%s\n' "$FOLLOWED" | grep -Eq 'https://([a-z0-9-]+\.)?cognidao\.org/work/items/' ||
     block "Process-contract breach: Followed omits the work-item plane consulted for scope and ownership. Cite the human work-item URL."
 
   REVIEWED_COUNT="$(printf '%s\n' "$ETA_CONF" | grep -Eo '[0-9]+/[0-9]+[[:space:]]+(relevant[[:space:]]+)?sources' | tail -n 1 | cut -d/ -f1 || true)"

@@ -32,17 +32,15 @@ Everything here is one of two questions. Keep them separate; conflating them is 
 **The SessionStart hook is NOT a universal injection surface.** Treat it as cache
 acquisition first. Claude Code presents the cache through an instruction-file import and
 reinforces the universal response rule through a project-scoped output style;
-Codex can also inject the cache through uncapped hook stdout. Current OpenCode V2 only
-injects discovered `AGENTS.md` files: its `instructions` config is parsed but not
-resolved into model context, and it does not expand `@` references. Therefore the
-committed root `AGENTS.md` carries the terse universal floor and tells OpenCode to read
-the live cache explicitly before acting.
+Codex can also inject the cache through uncapped hook stdout. OpenCode does not expand
+`@` references, so committed project `opencode.json` names the cache in its
+`instructions` array; OpenCode combines those files with root `AGENTS.md` automatically.
 
 | harness         | instruction files                                                                                               | SessionStart hook                                                             | truncation override                                                    | proven delivery path                                   |
 | --------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ |
 | **Claude Code** | project output style + `CLAUDE.md`/`AGENTS.md` + `@import`s, injected every request                             | write cache only; `Stop` validates each final response                        | **NONE** (docs: no setting/env raises it)                              | style + file/cache + deterministic response validator  |
 | **Codex**       | `AGENTS.md`/`AGENTS.override.md`, whole under **`project_doc_max_bytes` = 32 KiB** (silently truncates past it) | stdout as developer context, `additionalContextLimit` defaults to 2500 tokens | **`additionalContextLimit = 0`** in `.codex/config.toml` → full inject | committed floor + hook-delivered live cache            |
-| **OpenCode V2** | discovered `AGENTS.md` files only; current `instructions` entries are retained but not resolved                 | no SessionStart injection                                                     | n/a                                                                    | committed floor + explicit tool-read of the live cache |
+| **OpenCode**    | root `AGENTS.md` + `opencode.json` `instructions` files, combined automatically                               | no SessionStart injection                                                     | n/a                                                                    | committed floor + instruction-loaded warm cache         |
 
 Keep the served bundle **< 32 KiB** so Codex never truncates it.
 
@@ -69,10 +67,10 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
 - **@import of an ABSENT file renders as literal text**, not empty-expansion. On a true first boot the hook writes the cache _during_ SessionStart — too late for the same session's `@import`, which resolves at context assembly. **Warm the cache in the pre-session step** (`scripts/conductor-worktree-setup.sh`) so first boot is non-empty; otherwise first boot is truncated and only the second boot is full.
 - **A failed hook fetch must not clobber the cache** — the loader only writes when the fetch returns non-empty, so a warm cache survives an expired key / hub outage. This is load-bearing: it's why warm workspaces keep working through an outage.
 - **Codex parity:** `.codex/config.toml` must keep `additionalContextLimit = 0`. Without it Codex head/tail-spills the bundle and cuts the middle of the contract.
-- **OpenCode version drift is real:** current V2 docs say only `AGENTS.md` is
-  discovered; `CLAUDE.md` fallback is gone and `instructions` entries do not reach
-  the model yet. Do not claim injection because `opencode debug config` echoes paths;
-  prove the model's received context on the installed version.
+- **OpenCode version drift is real:** it does not expand `@` references in `AGENTS.md`, but
+  current official rules document that `opencode.json` `instructions` files are combined with
+  `AGENTS.md`. Keep the repo-owned adapter and still prove received context on the installed
+  version; a parsed config is necessary evidence, not the live-model acceptance proof.
 - **The hook cap and the serve cap are different layers.** There is also a producer-side budget (`project_doc_max_bytes` on Codex); keep the bundle small enough for the tightest consumer (32 KiB).
 - **Session delivery and fleet distribution are different proofs.** A fix in the operator repo
   proves neither existing-node adoption nor developer-zero-config. Rich Dolt cognition is
@@ -89,7 +87,7 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
 2. **Constitution stays code-owned.** Never move the agent-contract/invariants into a hub entry that only renders on a healthy hub. If you find it there, that's the drift — pull it back to `SESSION_BOOTSTRAP_INVARIANTS`.
 3. **Deliver through the proven harness path.** Claude = project output style + file import +
    deterministic Stop validation; Codex = committed
-   floor + uncapped hook; OpenCode V2 = committed floor + explicit cache read.
+   floor + uncapped hook; OpenCode = committed floor + `opencode.json` instruction file.
 4. **AGENTS.md carries only the universal floor + bootstrap pointers**
    (`node-baas-architecture.md:311`) — the terse response/state skeleton, bundle pointer,
    and self-serve fallback. It must not copy expandable orientation, skills, domains, or
@@ -110,6 +108,6 @@ Keep the served bundle **< 32 KiB** so Codex never truncates it.
 | Cognition Substrate design (two axes, ownership split, thin-AGENTS.md boundary) | `docs/spec/node-baas-architecture.md` §Cognition Substrate (`:282-311`)                                                                                                            |
 | The delivery loader (fetch → cache → emit per runtime)                          | `scripts/agent/session-cognition.sh`                                                                                                                                               |
 | The bundle producer + `SESSION_BOOTSTRAP_INVARIANTS`                            | `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`                                                                                                                   |
-| Harness wiring                                                                  | `.claude/settings.json`, `.claude/output-styles/Cogni Contract.md`, `scripts/agent/validate-status-contract.sh`, `.codex/config.toml`, root `AGENTS.md`                            |
+| Harness wiring                                                                  | `.claude/settings.json`, `.claude/output-styles/Cogni Contract.md`, `scripts/agent/validate-status-contract.sh`, `.codex/config.toml`, `opencode.json`, root `AGENTS.md`            |
 | Harness docs                                                                    | Claude Code memory/hooks (code.claude.com/docs/en/{memory,hooks}), Codex prompting/config (developers.openai.com), OpenCode V2 instructions (dev.opencode.ai/v2/docs/instructions) |
 | What becomes a skill vs hub entry vs spec                                       | [`knowledge-syntropy-expert`](../knowledge-syntropy-expert/SKILL.md)                                                                                                               |

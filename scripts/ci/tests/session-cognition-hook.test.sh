@@ -28,8 +28,8 @@ grep -Fq 'Every human-facing reply, including answers and follow-ups, is exactly
   "$REPO_ROOT/AGENTS.md" || fail "root AGENTS.md omitted the universal response floor"
 grep -Fq 'reproduce `Goal` and `Done when` byte-for-byte' "$REPO_ROOT/AGENTS.md" ||
   fail "root AGENTS.md omitted immutable session state"
-grep -Fq 'read `.cogni/.cognition-cache.md` before any task' "$REPO_ROOT/AGENTS.md" ||
-  fail "root AGENTS.md omitted the OpenCode V2 cache-read fallback"
+[[ "$(jq -r '.instructions[0]' "$REPO_ROOT/opencode.json")" == ".cogni/.cognition-cache.md" ]] ||
+  fail "OpenCode project config omitted automatic cognition instructions"
 [[ "$(jq -r '.outputStyle' "$REPO_ROOT/.claude/settings.json")" == "Cogni Contract" ]] ||
   fail "Claude Code project settings omitted the Cogni Contract output style"
 OUTPUT_STYLE="$REPO_ROOT/.claude/output-styles/Cogni Contract.md"
@@ -48,8 +48,8 @@ VALID_MESSAGE='| 🎯 **Goal** | Keep contract state |
 |---|---|
 | **Done when** | Two turns preserve exact fields. |
 | **Status** | 🔵 testing |
-| **ETA · Conf** | 1 minute · 90% + 1/1 source |
-| **Followed** | https://example.com |
+| **ETA · Conf** | 1 minute · 90% + reviewed 3/3 sources |
+| **Followed** | https://cognidao.org/knowledge/cognition-substrate-bootstrap · https://github.com/cogni-dao/cogni/blob/main/docs/spec/node-baas-architecture.md · https://cognidao.org/work/items/story.5070 |
 
 ---
 
