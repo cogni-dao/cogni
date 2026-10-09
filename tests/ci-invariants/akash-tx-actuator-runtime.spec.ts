@@ -7,7 +7,7 @@
  *   Each one is a silent, deploy-time-only failure otherwise: nothing in CI builds these
  *   overlays, and the symptom is a connection error hours later on a manifest that renders
  *   perfectly (task.5102).
- * Scope: Static assertions over the app-lane manifests + the image entrypoint wiring; does not
+ * Scope: Static assertions over the actuator's manifests, RBAC and entrypoint wiring; does not
  *   render kustomize, reach a cluster, or touch a provider.
  * Invariants:
  *   - ADDRESS_IS_THE_CONTRACT: the Service is named exactly `akash-tx-actuator` on port 8080,
@@ -30,16 +30,19 @@
  *   - ENTRYPOINT_EXISTS: the Deployment's command path is the path the Dockerfile copies.
  *   - PAID_TRANSACTION_DRAINS_ON_ROLLOUT: process + pod grace exceed the complete
  *     create/bid/lease transaction, so a rollout cannot strand a handle before provider bind.
- *   - LEAST_KUBERNETES_PRIVILEGE: the actuator runs as its OWN ServiceAccount, bound to a
- *     namespaced Role that grants exactly the migration prover's calls (batch/jobs
- *     get+list+create+delete, pods list) and NOTHING else — no computeworkloads, no leases, no
- *     events, no configmaps, no ClusterRole (story.5016).
- * Side-effects: IO (reads infra/k8s, the secrets catalog, and the operator image manifests)
+ *   - LEAST_KUBERNETES_PRIVILEGE: the actuator runs as its OWN ServiceAccount bound to namespaced
+ *     Roles granting EXACTLY the migration prover's adapter calls — derived from the adapter
+ *     source, so a new call with no grant fails CI — and NOTHING else: no computeworkloads, no
+ *     leases, no events, no configmaps, no ClusterRole (story.5016).
+ *   - ONE_REACH_THREE_COPIES: the own-namespace Role, the ArgoCD lane-access manifest and the
+ *     workflow-applied render script state the SAME rule set, or one plane silently 403s.
+ * Side-effects: IO (reads infra/k8s + scripts/ci, the secrets catalog, and the image manifests)
  * Links: infra/k8s/base/akash-tx-actuator, infra/crossplane/xcomputeworkload/composition.yaml,
  *   nodes/operator/app/src/bootstrap/akash-tx-actuator.ts, task.5102, story.5016
  * @public
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -75,6 +78,76 @@ const ACTUATOR_OWNED_KEYS = [
 
 const BASE = "infra/k8s/base/akash-tx-actuator";
 const OVERLAY = "infra/k8s/overlays/candidate-a/operator";
+/** The adapter whose calls DEFINE the grant, and the two other places that grant is restated. */
+const MIGRATION_ADAPTER =
+  "nodes/operator/app/src/adapters/server/compute/kubernetes-migration-job.adapter.ts";
+const LANE_ACCESS =
+  "infra/k8s/base/akash-tx-actuator-lane-access/lane-access.yaml";
+const LANE_ACCESS_RENDER = "scripts/ci/render-akash-tx-actuator-lane-access.sh";
+/**
+ * Kubernetes API call -> the grant it needs. This table is the ONLY place the mapping is written
+ * down, and the test below proves the adapter calls exactly these methods — so a new call with
+ * no grant fails CI. That is the failure PR #2629 shipped: it added `readNamespacedPodLog` and
+ * no `pods/log`, and because RBAC implies neither a subresource from its parent nor `get` from
+ * `list`, every migration receipt read 403'd in every environment.
+ */
+const ADAPTER_CALL_GRANTS: Record<
+  string,
+  {
+    readonly apiGroup: string;
+    readonly resource: string;
+    readonly verb: string;
+  }
+> = {
+  readNamespacedJob: { apiGroup: "batch", resource: "jobs", verb: "get" },
+  createNamespacedJob: { apiGroup: "batch", resource: "jobs", verb: "create" },
+  listNamespacedJob: { apiGroup: "batch", resource: "jobs", verb: "list" },
+  deleteNamespacedJob: { apiGroup: "batch", resource: "jobs", verb: "delete" },
+  listNamespacedPod: { apiGroup: "", resource: "pods", verb: "list" },
+  readNamespacedPodLog: { apiGroup: "", resource: "pods/log", verb: "get" },
+};
+
+interface RbacRule {
+  readonly apiGroups: readonly string[];
+  readonly resources: readonly string[];
+  readonly verbs: readonly string[];
+}
+
+/** Order-free shape, so "the same reach" is comparable across three file formats. */
+function fingerprint(rules: readonly RbacRule[] | undefined): string[] {
+  return (rules ?? [])
+    .map((rule) => {
+      const groups = [...rule.apiGroups].sort().join("+");
+      const resources = [...rule.resources].sort().join("+");
+      return `${groups}|${resources}|${[...rule.verbs].sort().join("+")}`;
+    })
+    .sort();
+}
+
+/** The reach the adapter's own call sites require, grouped exactly as a Role groups it. */
+function requiredFingerprint(): string[] {
+  const byResource = new Map<string, Set<string>>();
+  for (const { apiGroup, resource, verb } of Object.values(
+    ADAPTER_CALL_GRANTS
+  )) {
+    const key = `${apiGroup}|${resource}`;
+    const verbs = byResource.get(key) ?? new Set<string>();
+    verbs.add(verb);
+    byResource.set(key, verbs);
+  }
+  return [...byResource.entries()]
+    .map(([key, verbs]) => `${key}|${[...verbs].sort().join("+")}`)
+    .sort();
+}
+
+/** Every `kind: Role` rule set in a multi-document YAML stream, in document order. */
+function roleRules(documents: string): RbacRule[][] {
+  return yaml
+    .parseAllDocuments(documents)
+    .map((document) => document.toJS() as { kind?: string; rules?: RbacRule[] })
+    .filter((document) => document?.kind === "Role")
+    .map((role) => role.rules ?? []);
+}
 /**
  * The FUNDED/writer environments — exactly those whose overlay must ship the actuator base,
  * transformer, and the two actuator ExternalSecrets. Derived from the single source of truth
@@ -506,15 +579,9 @@ describe("akash-tx-actuator runtime", () => {
     ]);
 
     const [role, binding] = rbac;
-    // Exact equality, not `toContain`: the point of this test is what is ABSENT.
-    expect(role?.rules).toEqual([
-      {
-        apiGroups: ["batch"],
-        resources: ["jobs"],
-        verbs: ["get", "list", "create", "delete"],
-      },
-      { apiGroups: [""], resources: ["pods"], verbs: ["list"] },
-    ]);
+    // Exact equality, not `toContain`: the point of this test is what is ABSENT. Derived from
+    // ADAPTER_CALL_GRANTS rather than restated, so the Role cannot drift behind the adapter.
+    expect(fingerprint(role?.rules)).toEqual(requiredFingerprint());
     expect(binding?.roleRef).toEqual({
       apiGroup: "rbac.authorization.k8s.io",
       kind: "Role",
@@ -523,6 +590,49 @@ describe("akash-tx-actuator runtime", () => {
     expect(binding?.subjects).toEqual([
       { kind: "ServiceAccount", name: SERVICE_NAME },
     ]);
+  });
+
+  it("grants every Kubernetes call the migration adapter actually makes", () => {
+    // The regression guard for the receipt-collection outage. `pods/log` is a SEPARATE resource
+    // from `pods` and `get` a separate verb from `list`, so a Role covering the adapter's other
+    // calls says nothing about this one — and the adapter swallows the 403 by design (a missing
+    // receipt must never fail a migration), which is why the gap stayed invisible for the whole
+    // life of the feature. Derive the grant from the call sites instead of trusting a reviewer.
+    const adapter = read(MIGRATION_ADAPTER);
+    const called = new Set(
+      [...adapter.matchAll(/this\.(?:batch|pods)\.([A-Za-z]+)\(/g)].map(
+        (match) => match[1] as string
+      )
+    );
+    expect([...called].sort()).toEqual(Object.keys(ADAPTER_CALL_GRANTS).sort());
+  });
+
+  it("states ONE reach in all three places the actuator's RBAC is written", () => {
+    // The adapter's reach lives in three artifacts on three delivery planes: the overlay-built
+    // own-namespace Role, the ArgoCD-reconciled lane-access manifest (which selfHeals, so it
+    // WINS any disagreement), and the render script the deploy workflows kubectl-apply. PR #2629
+    // updated none of them; a fix that updated only one would leave production collecting
+    // receipts while every custodied lane kept 403ing.
+    const required = requiredFingerprint();
+
+    const laneRoles = roleRules(read(LANE_ACCESS));
+    expect(laneRoles.length).toBeGreaterThan(0);
+    for (const rules of laneRoles) {
+      expect(fingerprint(rules)).toEqual(required);
+    }
+
+    for (const controlEnvironment of ["production", "candidate-a"] as const) {
+      const rendered = execFileSync(
+        "bash",
+        [path.join(REPO_ROOT, LANE_ACCESS_RENDER), controlEnvironment],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+      );
+      const renderedRoles = roleRules(rendered);
+      expect(renderedRoles.length, controlEnvironment).toBe(2);
+      for (const rules of renderedRoles) {
+        expect(fingerprint(rules), controlEnvironment).toEqual(required);
+      }
+    }
   });
 
   it("starts an entrypoint the image actually contains", () => {
