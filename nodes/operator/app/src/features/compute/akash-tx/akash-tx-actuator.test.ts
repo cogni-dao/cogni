@@ -2547,3 +2547,168 @@ describe("AkashTxActuator release-migration receipt identity", () => {
     );
   });
 });
+
+/**
+ * bug.5416: the drift gate FIRED on candidate-a (`akash_tx_migration_drift_missing`, poly) and
+ * whether it GATED anything was unreadable from telemetry — the composite decides from the
+ * observe RESPONSE, and the response was never logged. These pin the verdict line.
+ */
+describe("AkashTxActuator observe migration verdict", () => {
+  /** A receipt with drift on BOTH axes: one declared tag absent, one ledger row unrecognised. */
+  const DECLARED_BUT_MISSING = "0071_gigantic_sister_grimm";
+  const DATABASE_ONLY_ROW = "0070_row_the_image_never_declared";
+  const DRIFTED_RECEIPT_STDOUT = `COGNI_MIGRATION_RECEIPT_V1 ${JSON.stringify({
+    node: "toks9",
+    declared: ["0000_init", DECLARED_BUT_MISSING],
+    applied: [
+      { tag: "0000_init", hash: "abc", appliedAtMs: 1 },
+      { tag: DATABASE_ONLY_ROW, hash: "def", appliedAtMs: 2 },
+    ],
+  })}`;
+
+  function buildWithReports(receiptStdout: string) {
+    const ledger = new FakeLedger();
+    const migration = new FakeMigration();
+    migration.receiptStdout = receiptStdout;
+    const log = recordingLogger();
+    const costs = costDeps();
+    const actuator = new AkashTxActuator({
+      console: new FakeConsole(),
+      ledger,
+      log,
+      migration,
+      migrationReports: new FakeReports(),
+      costEvidence: costs.costEvidence,
+      costStore: costs.costStore,
+      providerConsumerAccountId: costs.providerConsumerAccountId,
+    });
+    return { actuator, ledger, migration, log };
+  }
+
+  function verdicts(log: ReturnType<typeof recordingLogger>) {
+    return log.lines.filter(
+      (line) => line.marker === "akash_tx_observe_migration_verdict"
+    );
+  }
+
+  it("states the phase the response carries, exactly once per observe", async () => {
+    const { actuator, ledger, log } = buildWithReports(RECEIPT_STDOUT);
+    seedAllocated(ledger);
+
+    const observation = await actuator.observe({
+      cogniKey: "k1",
+      workload: "toks9",
+      environment: "candidate-a",
+      migration: STEP,
+    });
+
+    expect(observation.migration).toEqual({ phase: "succeeded" });
+    expect(verdicts(log)).toEqual([
+      {
+        level: "info",
+        marker: "akash_tx_observe_migration_verdict",
+        fields: {
+          cogniKey: "k1",
+          workload: "toks9",
+          environment: "candidate-a",
+          bundleDigest: STEP.bundleDigest,
+          requested: true,
+          phase: "succeeded",
+        },
+      },
+    ]);
+  });
+
+  it("states a FAILED verdict at error level when the drift gate fails the step", async () => {
+    // The gate's input, readable on its own without re-deriving it from
+    // `akash_tx_migration_succeeded` + `akash_tx_migration_drift_missing`. `phase: "failed"` is
+    // the one value `composition.yaml` turns into status.failure.reason: MigrationFailed.
+    const { actuator, ledger, log } = buildWithReports(DRIFTED_RECEIPT_STDOUT);
+    seedAllocated(ledger);
+
+    const observation = await actuator.observe({
+      cogniKey: "k1",
+      workload: "toks9",
+      environment: "candidate-a",
+      migration: STEP,
+    });
+
+    expect(observation.migration).toEqual({ phase: "failed" });
+    expect(verdicts(log)).toEqual([
+      expect.objectContaining({
+        level: "error",
+        fields: expect.objectContaining({ requested: true, phase: "failed" }),
+      }),
+    ]);
+  });
+
+  it("never names a migration tag — least of all one read out of the database", async () => {
+    // PROVENANCE (bug.5415, preserved): declared/missing tags are IMAGE content and may be
+    // named on the drift verdict; `unexpected` tags are DATABASE ROW content and are counted,
+    // never named. This line is an ENUM plus the caller's own identifiers, so it carries
+    // NEITHER — and the database-sourced tag must not appear anywhere in it.
+    const { actuator, ledger, log } = buildWithReports(DRIFTED_RECEIPT_STDOUT);
+    seedAllocated(ledger);
+
+    await actuator.observe({
+      cogniKey: "k1",
+      workload: "toks9",
+      environment: "candidate-a",
+      migration: STEP,
+    });
+
+    const serialized = JSON.stringify(verdicts(log));
+    expect(serialized).not.toContain(DATABASE_ONLY_ROW);
+    expect(serialized).not.toContain(DECLARED_BUT_MISSING);
+    expect(serialized).not.toContain("0000_init");
+    // And the provenance rule itself still holds on the line that DOES name tags.
+    const driftLine = log.lines.find(
+      (line) => line.marker === "akash_tx_migration_drift_missing"
+    );
+    expect(driftLine?.fields.missing).toEqual([DECLARED_BUT_MISSING]);
+    expect(JSON.stringify(driftLine)).not.toContain(DATABASE_ONLY_ROW);
+  });
+
+  it("says the gate was NOT CONSULTED when the composite attached no step", async () => {
+    // A composite that stops attaching the step makes the gate silently inert. `requested:
+    // false` with no `phase` keeps that distinguishable from a gate that passed — the absence
+    // of a marker cannot be told apart from an operator that is not deployed.
+    const { actuator, ledger, log } = buildWithReports(RECEIPT_STDOUT);
+    seedAllocated(ledger);
+
+    const observation = await actuator.observe({ cogniKey: "k1" });
+
+    expect(observation.migration).toBeUndefined();
+    expect(verdicts(log)).toEqual([
+      {
+        level: "info",
+        marker: "akash_tx_observe_migration_verdict",
+        fields: { cogniKey: "k1", requested: false },
+      },
+    ]);
+  });
+
+  it("states `unavailable` at warn level when the step's target was unstated", async () => {
+    const { actuator, ledger, log } = buildWithReports(RECEIPT_STDOUT);
+    seedAllocated(ledger);
+
+    const observation = await actuator.observe({
+      cogniKey: "k1",
+      migration: STEP,
+    });
+
+    expect(observation.migration).toEqual({ phase: "unavailable" });
+    expect(verdicts(log)).toEqual([
+      {
+        level: "warn",
+        marker: "akash_tx_observe_migration_verdict",
+        fields: {
+          cogniKey: "k1",
+          bundleDigest: STEP.bundleDigest,
+          requested: true,
+          phase: "unavailable",
+        },
+      },
+    ]);
+  });
+});
