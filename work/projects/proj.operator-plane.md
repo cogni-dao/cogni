@@ -10,7 +10,7 @@ summary: "Establish actor_id as the canonical economic primitive (earns/spends/a
 outcome: "External projects route LLM traffic through Cogni gateway, metered per-actor. Actors (human or agent) earn epoch rewards under the same actor_id that tracks their spend. Reward rollup policy keeps governance rights separate from economic attribution."
 assignees: derekg1729
 created: 2026-02-26
-updated: 2026-02-26
+updated: 2026-10-09
 labels: [dao, billing, gateway, multi-tenant, agents]
 ---
 
@@ -50,41 +50,131 @@ MDI server.js
 
 ### Core entities
 
-| Entity                       | Key fields                                                     | Purpose                                                      |
-| ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
-| `actors`                     | `id, tenant_id, kind, parent_actor_id, label, status`          | Economic subject — who earned, who spent, who was attributed |
-| `actor_bindings`             | `actor_id, provider, external_id`                              | External refs: wallets, OAuth IDs, platform identities       |
-| `budget_allocations`         | `actor_id, funded_by_actor_id, limit, spent, policy`           | Delegated spend slices                                       |
-| `charge_receipts.actor_id`   | FK → actors (nullable, v1+; v0 uses `external_agent_ref` TEXT) | Usage attribution: which actor made this LLM call            |
-| `epoch_allocations.actor_id` | FK → actors (planned, bridges to user_id)                      | Reward attribution: which actor earned this epoch            |
-| `claims`                     | `actor_id, statement_id, wallet, amount` (future)              | On-chain reward claiming                                     |
+| Entity                       | Key fields                                                                    | Purpose                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `actors`                     | `id, billing_account_id, kind, spawned_by_actor_id, parent_actor_id, status`  | Durable economic subject; spawn provenance and current steward stay distinct |
+| `actor_bindings`             | `actor_id, provider, immutable_external_id, evidence_event_id, closed_at`     | One node-local ownership registry for human and AI external identities       |
+| `actor_credentials`          | `id, actor_id, node_id, secret_hash, status, authenticate_until, renew_until` | Replaceable node-local authentication; never the actor or permission         |
+| `budget_allocations`         | `actor_id, funded_by_actor_id, limit, spent, policy`                          | Delegated spend slices                                                       |
+| `charge_receipts.actor_id`   | FK → actors (nullable, v1+; v0 uses `external_agent_ref` TEXT)                | Usage attribution: which actor made this LLM call                            |
+| `epoch_allocations.actor_id` | FK → actors (planned, bridges to user_id)                                     | Reward attribution: which actor earned this epoch                            |
+| signed allocation            | `earned_by_actor_id, beneficiary_actor_id, cutoff, policy_version`            | Immutable authorship and effective-time entitlement                          |
+| distribution leaf            | `beneficiary_actor_id, claimant_wallet, binding_evidence_hash`                | Wallet pinned when the cumulative manifest is materialized                   |
+| pending claimant liability   | `allocation_ref, beneficiary_actor_id, amount, resolved_at, consumed_fold`    | Append-only late-resolution carry-forward, consumed exactly once             |
 
 ### Actor kinds
 
-| Kind     | Description                                    | Example                 |
-| -------- | ---------------------------------------------- | ----------------------- |
-| `user`   | Human person. 1:1 FK to `users.id`.            | Connor (MDI operator)   |
-| `agent`  | AI agent. Has `parent_actor_id` for hierarchy. | MDI agent "Kai"         |
-| `system` | Internal system processes. Sentinel.           | `cogni_system`          |
-| `org`    | Treasury / collective. No direct login.        | MDI collective treasury |
+| Kind     | Description                                                                         | Example                 |
+| -------- | ----------------------------------------------------------------------------------- | ----------------------- |
+| `user`   | Human person. 1:1 FK to `users.id`.                                                 | Connor (MDI operator)   |
+| `agent`  | AI agent. Has immutable spawner provenance and optional accepted human/org steward. | MDI agent "Kai"         |
+| `system` | Internal system processes. Sentinel.                                                | `cogni_system`          |
+| `org`    | Treasury / collective. No direct login.                                             | MDI collective treasury |
 
 ### Reward rollup policy
 
-Three layers, kept strictly separate:
+Four facts, kept strictly separate:
 
 1. **`earned_by_actor_id`** — who did the work (always an actor_id, human or agent)
-2. **`beneficiary_actor_id`** — who can claim the reward (defaults to self for humans, parent for agents)
-3. **`claimant_wallet`** — where value is sent (resolved from actor_bindings at claim time)
+2. **`beneficiary_actor_id`** — who is entitled under the effective allocation policy
+3. **`claimant_wallet`** — where value is sent (resolved and pinned at cumulative manifest materialization)
+4. **parent/steward relationship evidence** — policy input, never the beneficiary field itself
 
-**Default policy:** Agents accrue rewards (`earned_by_actor_id` is always the agent). Provenance is never rewritten — the agent earned it, period. `beneficiary_actor_id` determines who may benefit (defaults to parent human or org treasury for agents). `claimant_wallet` is resolved from `actor_bindings` only at claim time. These three fields are never collapsed into one. Governance rights (voting, proposals) are a separate policy layer — economic attribution does NOT imply political participation.
+**Policy:** Agents accrue rewards (`earned_by_actor_id` is always the agent).
+Provenance is never rewritten — the agent earned it, period. A versioned scope
+policy must explicitly select and persist the beneficiary: the agent itself, a
+human/org actor, or treasury. Accepted stewardship is evidence the policy may
+consider, never an automatic redirect. For `flock-leader`, a claim ceremony must
+explicitly select Derek's human actor if Derek is to receive the rewards. These
+facts are never collapsed. Governance rights
+(voting, proposals), OBO subject, account ownership, and OpenFGA permission are
+separate policy layers — economic attribution implies none of them.
 
-**`beneficiary_actor_id` is derived by policy but persisted on the reward record.** Resolution rule: nearest claimable ancestor, explicit override, or tenant treasury — evaluated at allocation time and stored. Not re-derived at read time. If ownership/governance changes after allocation, existing records are immutable — only future allocations reflect the new policy. This preserves auditability: a third party can verify who was entitled to what, when.
+**`beneficiary_actor_id` is derived by policy but persisted on the signed reward
+record.** The policy evaluates accepted-steward state effective at the canonical
+contribution/receipt cutoff, not the parent current when allocation happens.
+Persist the cutoff, policy version, and relationship evidence. Reassignment
+affects only work after its effective time. Historical ambiguity is adjudicated;
+it never falls back to the current parent. At cumulative materialization, resolve
+the beneficiary's current verified wallet and pin it with evidence. Finalized
+allocations and published leaves are never re-derived or moved.
+
+The first cumulative manifest for an epoch is frozen. A beneficiary or wallet
+resolved after that fold becomes an append-only pending claimant liability,
+consumed exactly once by a later cumulative fold. The present finalizer processes
+only current-epoch lines, so a durable liability reader/consume-once path is
+required work; the roadmap must not describe carry-forward as already built.
 
 ### Relationship to proj.transparent-credit-payouts
 
 `epoch_allocations.user_id` is the current canonical reward subject (humans only). When `actors` ships (v1), allocations gain `actor_id` alongside `user_id`. Human actors bridge 1:1 via `actors WHERE kind='user'`. Agent actors enable a new attribution path: gateway usage → actor → epoch rewards. No changes to existing epoch invariants (STATEMENT_DETERMINISTIC, ALL_MATH_BIGINT).
 
+### Shared human–AI identity standard
+
+The actor roadmap now has one cross-node contract:
+
+- Each node mints local users, actors, credentials, bindings, and grants. Stable
+  provider bindings are re-proved across nodes; local UUIDs and bearers are never
+  copied.
+- `actor_id` is the durable node-local AI identity. The environment-shared
+  OpenFGA graph uses `agent:{node_id}/{actor_id}` (and node-qualifies every other
+  local subject/resource). `credential_id` is a replaceable authenticator.
+  `billing_account_id` remains tenancy only, never actor ownership or beneficiary.
+- Spawn issuance creates a one-use pending grant; idempotent redemption creates
+  the actor and first credential. `spawned_by_actor_id` is immutable provenance;
+  `parent_actor_id` is an effective-dated accepted human/org stewardship
+  projection. Neither implies permission or beneficiary.
+- P0 credentials are 256-bit opaque bearers stored hashed and resolved in the
+  target node's store. Two-phase rotation and renew-only grace keep the same actor
+  and grants; recovery never re-registers. Ed25519/DPoP plus 15-minute access-token
+  exchange is deferred hardening.
+- OpenFGA is the sole permission/delegation authority. Direct AI account access
+  checks `agent:N/A` on exact account `billing_account:N/B`; OBO execution
+  intersects human `user:N/H can_read N/B`, agent `N/A delegates N/H`, and
+  conditioned `N/A can_act_as N/B`. `grant_id` correlates the authoritative tuple
+  set for workflow/audit only. Local rows and RLS are workflow/defense only.
+- `actor_bindings` enforces one active actor per `(provider,
+immutable_external_id)` inside a node. A credential key is never a binding.
+
+This contract is specified in [identity-model.md](../../docs/spec/identity-model.md),
+[decentralized-user-identity.md](../../docs/spec/decentralized-user-identity.md),
+and [rbac.md](../../docs/spec/rbac.md). This paused project's v1 actor lane may
+consume it; it must not create a gateway-specific identity fork.
+
 ## Roadmap
+
+### Shared Identity P0 — Cross-Node Acceptance (story.5075)
+
+The smallest acceptance-preserving path is ordered; downstream nodes consume the
+shared contract rather than designing local variants.
+
+1. **Shared seams:** publish the discriminated `RequestPrincipal`, spawn/redeem/
+   rotate/recover wire contract, `ExecutionIdentity`, and account-scoped OpenFGA
+   contract (including conditional expiry and consistency controls).
+2. **Operator identity vertical:** implement actor, spawn grant, opaque credential,
+   two-phase rotation/recovery, and one additive `flock-leader` migration. Prove
+   old/revoked/cross-node credentials fail while actor and grants remain stable.
+3. **Operator attribution vertical:** bind the `flock-leader` provider identity to
+   the AI actor and carry one new real contribution through a versioned allocation:
+   AI earner, explicitly selected effective-time Derek beneficiary, verified
+   pinned wallet. Preserve all prior signed bytes. Prove a late resolution enters
+   an append-only pending liability exactly once in a later fold without changing
+   the first manifest.
+4. **Node-template reference:** consume the shared contracts with target-local
+   actors, credentials, bindings, and OpenFGA tuples. An operator credential must
+   fail there even in an equal-`AUTH_SECRET` regression fixture.
+5. **Poly proof:** move one read-only capability behind the shared direct/OBO
+   authorization seam. Prove exact-account allow, decoy-account non-disclosure,
+   authorize-before-cache, transaction-local RLS defense, immediate confirmed
+   revoke, and credential rotation without reapproval.
+6. **Cross-node close gate:** record exact build SHAs and correlate the same human,
+   AI, grant, account read, contribution, signed allocation, pinned wallet leaf,
+   publish, claim, and replay denial across operator, node-template, and Poly.
+
+P0 deliberately defers DPoP/asymmetric client installations, sophisticated
+rate-limit infrastructure, every Poly capability, fleet bulk migration, and the
+historical backlog fold. Those follow the contiguous proof; they do not weaken
+the append-only migration contract.
 
 ### v0 — Metered Gateway (MDI as Tenant #1)
 
@@ -123,14 +213,18 @@ Three layers, kept strictly separate:
 
 ### v1 — Agent Budgets (First-Class Actors)
 
-**Goal:** Agents become DB entities with their own API keys and budget allocations. Parent can allocate credits to child. Child blocked when budget exhausted.
+**Goal:** Agents become DB entities with their own API keys and budget allocations. An explicitly authorized funder can allocate credits to an agent; stewardship alone grants no spend authority. The agent is blocked when its budget is exhausted.
 
 **Big rocks:**
 
-- `actors` table — agent as a first-class entity (kind: user | agent | system)
-- `budget_allocations` — parent carves N credits for child, child burns independently
-- `actor_credentials` — per-agent API keys (not just per-tenant)
-- Spawn endpoint — create agent + allocate budget in one call
+- `actors` table — first-class subject (kind: user | agent | system | org),
+  immutable spawner provenance, effective-dated accepted steward events
+- `budget_allocations` — authorized funder carves N credits for an agent, which burns independently
+- `actor_credentials` — stateful node-local opaque bearer, two-phase rotation,
+  renew-only grace, revoke, and steward recovery onto the same actor
+- Spawn grant + redemption — authenticated, one-use, limited, idempotent actor creation
+- `actor_bindings` — unique external-owner registry shared by humans and AIs
+- OpenFGA account/delegation seam — direct and server-bound OBO modes
 - Budget enforcement — preflight checks agent's allocation, not just tenant pool
 
 **Funding model:** Still USDC-funded by human at the top. The human's credits are the tenant pool. Agents get slices of that pool. No on-chain token usage yet.
@@ -139,10 +233,12 @@ Three layers, kept strictly separate:
 
 | Deliverable                                       | Status      | Est | Work Item  |
 | ------------------------------------------------- | ----------- | --- | ---------- |
-| `actors` table + domain model                     | Not Started | 2   | story.0117 |
+| `actors` + spawn/steward event domain model       | Not Started | 2   | story.0117 |
 | `budget_allocations` + delegation logic           | Not Started | 2   | story.0117 |
-| `actor_credentials` + per-agent API keys          | Not Started | 2   | story.0117 |
-| Spawn endpoint (create agent + budget)            | Not Started | 1   | story.0117 |
+| `actor_credentials` + rotate/recover lifecycle    | Not Started | 2   | story.0117 |
+| Spawn issue/redeem endpoint + limits              | Not Started | 1   | story.0117 |
+| Unique human/AI `actor_bindings` ownership        | Not Started | 2   | story.0117 |
+| OpenFGA exact-account direct/OBO authorization    | Not Started | 2   | story.0117 |
 | Budget enforcement in preflight                   | Not Started | 1   | story.0117 |
 | OpenClaw skill (getBalance, getUsage, spawnAgent) | Not Started | 2   | story.0118 |
 
@@ -190,11 +286,15 @@ Three layers, kept strictly separate:
 
 - Sub-DAO factory — parent DAO spawns child with initial treasury allocation
 - Cross-DAO agent mobility — agents can operate across DAO boundaries
-- Federated identity — actor recognized across multiple DAOs
+- Federated identity — external binding re-proved into each node's local actor;
+  never a copied global `actor_id` or credential
 - SDK extraction — `@cogni/billing-core`, `@cogni/gateway-middleware` for self-hosted mode
 
 ## Constraints
 
+- **Version labels are project-local.** This roadmap's gateway v0/v1 predates the
+  shared identity P0. Any first-class actor implementation follows the shared P0
+  contract above even if delivered under this project's v1 milestone.
 - **v0 is maximally simple.** Freeform agent ID header, single tenant pool, human-funded. No new tables beyond charge_receipts column.
 - **v1 adds structure.** Actor table, budget delegation, per-agent keys. Still off-chain, still human-funded.
 - **v2 adds economics.** Epoch rewards create a feedback loop. Still DB-based settlement.
