@@ -126,6 +126,13 @@ This follows Temporal's recommendation that
 be the default production deployment model; AI agents that live across deployments use pinning
 with Continue-as-New upgrade boundaries.
 
+The concrete release handshake is health-gated: the Worker starts with `useWorkerVersioning`,
+deployment name `node-<nodeId>-workflows`, and source SHA as Build ID; its health response exposes
+that identity. The app verifies the expected SHA, sets the version current through its node-scoped
+Temporal client, verifies the routing state, and only then reconciles schedules. This requires
+Temporal TypeScript SDK >=1.12 and server >=1.29.1; Temporal UI >=2.38 is an operational
+prerequisite before production support. Startup alone never promotes a Worker version.
+
 ### Deployment
 
 The node's repo-spec declares `workflow-worker` as a private service. The existing exact-set
@@ -136,7 +143,8 @@ URL.
 The service opts into `runtime_profile: cogni-workflow-worker-v1`. Like
 `cogni-node-app-v1`, the profile owns its standard runtime contract: Temporal address,
 node/environment namespace, namespace-scoped authentication material, stable Task Queue, node
-identity, build/version identity, and health port. Nodes declare only additional secrets. This
+identity, build/version identity, health port, and the private URL of the required app sibling.
+Nodes declare only additional secrets and non-standard bindings. This
 requires extending repo-spec runtime profiles to support the private Worker profile; copying the
 standard secret list into every node repo is rejected because it drifts.
 
@@ -148,6 +156,52 @@ production tenant boundary.
 
 The Worker exposes only health/metrics. It opens no public ingress and connects outward to
 Temporal. The app owns schedule CRUD; the Worker never creates, updates, or deletes schedules.
+`/readyz` returns node ID, namespace, Task Queue, deployment name, Build ID, and registered
+Workflow types. Before activation/reconciliation, the app verifies those fields against its own
+repo-spec and source SHA; an unknown declared Workflow type fails reconciliation instead of
+creating a schedule that can never execute.
+
+The migration seam is explicit. Existing app code continues to read `TEMPORAL_*` and
+`SCHEDULER_WORKER_HEALTH_URL` for the centralized compatibility lane. `RecurringWorkPort` reads
+`AGENT_WORKFLOW_TEMPORAL_*`, and app readiness reads `AGENT_WORKFLOW_WORKER_HEALTH_URL`, for the
+node-owned lane. Declaring a Worker cannot silently retarget existing schedules. The node-owned
+client is enabled only in environments where the Worker service materializes.
+
+### One-call substrate health
+
+Temporal wiring must never be inferred from process uptime or the absence of errors. Every node
+ships an authenticated `GET /api/v1/temporal/health` diagnostic and a thin
+`pnpm temporal:health -- --env <env>` command that calls the deployed node endpoint with the
+node-agent credential. The endpoint returns one bounded snapshot (five-second total budget):
+
+- resolved mode (`compatibility` or `sovereign`), namespace, Task Queue, node ID, environment,
+  and app source SHA;
+- Temporal frontend/namespace reachability;
+- server-observed Workflow and Activity pollers, including their last-access times;
+- private Worker readiness, registered Workflow catalog, deployment name, and Build ID;
+- current Worker Deployment Version and whether it exactly matches the app source SHA;
+- declared/reconciled/paused schedule counts plus stable drift reason codes; and
+- the most recent due schedule action and Workflow result, when one is expected.
+
+The response is `healthy`, `degraded`, or `unhealthy`; it is never green merely because the app
+can open a Temporal connection. A sovereign lane is healthy only when both poller types are fresh,
+the private Worker identity/catalog match the node declaration, the current Build ID equals the
+app SHA, and schedule drift is zero. A compatibility lane is named as such rather than masquerading
+as sovereign. Raw Workflow input, results, tokens, secrets, and prompts are never returned.
+
+The CLI renders the failed checks and exits non-zero for `degraded`, `unhealthy`, authentication,
+timeout, or malformed responses. It is the first operator/node-agent diagnostic and the
+candidate-flight evidence source. `/readyz?deep=1` reuses the same inspector and fails closed;
+ordinary `/readyz` remains serving-readiness and does not drain public traffic for an asynchronous
+substrate outage.
+
+The health inspector emits exactly one terminal `substrate.temporal.health_checked` event with a
+stable reason code and duration. Metrics record the last successful inspection timestamp, current
+poller presence by task type, schedule drift count, and inspection result/duration. All inherit
+`nodeId` / `node_id`; no run, schedule, Workflow, or Build ID becomes a metric label. The operator
+probes this endpoint on a fixed interval and alerts when a required poller disappears, exact-SHA
+routing diverges, schedule drift persists, or successful inspection goes stale. Worker logs remain
+available independently through the standard per-service log proxy, including crash loops.
 
 ## Graph execution: preserve one billed path
 
@@ -221,9 +275,12 @@ The current `@cogni/temporal-workflows` package is split by ownership:
 2. Operator provisions namespace and scoped runtime identity.
 3. CI publishes the exact-set app + Worker artifact bundle from one source SHA.
 4. Operator deploys both services; Worker readiness proves a poller on `agent-workflows`.
-5. Node app reconciles schedules only after the compatible Worker is ready.
-6. Validation records namespace, Task Queue, Workflow/run IDs, Worker Build ID, app build SHA,
-   graph run, and final result.
+5. Node app verifies the Worker's Build ID, activates that exact Worker Deployment Version, then
+   reconciles schedules.
+6. `pnpm temporal:health -- --env <env>` returns healthy with fresh Workflow and Activity pollers,
+   exact-SHA routing, and zero schedule drift.
+7. Validation records the health snapshot, namespace, Task Queue, Workflow/run IDs, Worker Build
+   ID, app build SHA, graph run, and final result.
 
 ### Remove
 
@@ -259,12 +316,15 @@ central worker.
 For node-template and Poly independently, capture:
 
 1. deployed app and Worker artifacts resolve to the same source SHA;
-2. Worker poller is healthy in the node's environment namespace on `agent-workflows`;
+2. Worker poller is healthy in the node's environment namespace on `agent-workflows`, and the
+   current Worker Deployment Version Build ID equals that source SHA;
 3. a Temporal Schedule starts the intended node-owned Workflow type;
 4. that Workflow contains a LangGraph graph run through `GraphExecutorPort`;
 5. `execution_requests`, `graph_runs`, billing receipt, logs/metrics, and Temporal history agree
    on one execution identity;
-6. the old centralized schedule is absent or paused, proving no duplicate billable path.
+6. the authenticated Temporal health endpoint and CLI report healthy, exact-SHA, fresh Workflow
+   and Activity pollers, zero schedule drift, and the expected completed run; and
+7. the old centralized schedule is absent or paused, proving no duplicate billable path.
 
 ## Rejected shapes
 

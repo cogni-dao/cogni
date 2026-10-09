@@ -30,6 +30,25 @@ function specWithSchedules(nodeId: string, schedules: unknown[]) {
   };
 }
 
+const APP_SERVICE = {
+  name: "app",
+  artifact: { name: "app" },
+  port: 3000,
+  visibility: "public" as const,
+  runtime_profile: "cogni-node-app-v1" as const,
+  resources: { cpu_units: 0.5, memory_mi: 512, storage_mi: 512 },
+};
+
+const WORKFLOW_WORKER_SERVICE = {
+  name: "workflow-worker",
+  artifact: { name: "workflow-worker" },
+  port: 9090,
+  visibility: "private" as const,
+  runtime_profile: "cogni-workflow-worker-v1" as const,
+  envs: ["candidate-a", "preview"] as const,
+  resources: { cpu_units: 0.5, memory_mi: 512, storage_mi: 512 },
+};
+
 describe("nodeScheduleSchema — exactly one target", () => {
   it("accepts an http-dispatch schedule with a relative route", () => {
     const parsed = nodeScheduleSchema.parse({
@@ -77,6 +96,20 @@ describe("nodeScheduleSchema — exactly one target", () => {
     expect(() =>
       nodeScheduleSchema.parse({ id: "neither", cron: "0 0 * * *" })
     ).toThrow(/Exactly one of/);
+  });
+
+  it("rejects a node-owned Workflow schedule without its private Worker profile", () => {
+    expect(() =>
+      parseRepoSpec(
+        specWithSchedules(NODE_A, [
+          {
+            id: "nightly-market-brief",
+            cron: "0 0 * * *",
+            workflow: "NightlyMarketBriefWorkflow",
+          },
+        ])
+      )
+    ).toThrow(/requires deployment\.services.*cogni-workflow-worker-v1/);
   });
 
   it("rejects an absolute/foreign URL in route (SSRF / cross-tenant)", () => {
@@ -155,8 +188,8 @@ describe("extractNodeSchedules — M8 node pinning", () => {
   });
 
   it("infers kind from route, graph, or workflow (no target enum)", () => {
-    const spec = parseRepoSpec(
-      specWithSchedules(NODE_A, [
+    const spec = parseRepoSpec({
+      ...specWithSchedules(NODE_A, [
         { id: "http", cron: "*/15 * * * *", route: "/api/x" },
         { id: "graph", cron: "0 0 * * *", graph: "g1" },
         {
@@ -164,8 +197,11 @@ describe("extractNodeSchedules — M8 node pinning", () => {
           cron: "0 1 * * *",
           workflow: "NightlyMarketBriefWorkflow",
         },
-      ])
-    );
+      ]),
+      deployment: {
+        services: [APP_SERVICE, WORKFLOW_WORKER_SERVICE],
+      },
+    });
     const resolved = extractNodeSchedules(spec);
     const byId = Object.fromEntries(resolved.map((s) => [s.id, s]));
     expect(byId.http.kind).toBe("http-dispatch");

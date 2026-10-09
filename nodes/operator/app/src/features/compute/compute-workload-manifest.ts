@@ -338,10 +338,22 @@ export function buildComputeWorkloadManifest(
   const hasWorkflowWorker = envBundle.services.some(
     ({ service }) => service.runtimeProfile === "cogni-workflow-worker-v1"
   );
-  if (input.environment === "production" && hasWorkflowWorker) {
-    throw new Error(
-      "[compute-workload-manifest] cogni-workflow-worker-v1 is pre-production only until the shared Temporal server enforces namespace-scoped authentication and authorization"
-    );
+  if (hasWorkflowWorker) {
+    if (input.environment === "production") {
+      throw new Error(
+        "[compute-workload-manifest] cogni-workflow-worker-v1 is pre-production only until the shared Temporal server enforces namespace-scoped authentication and authorization"
+      );
+    }
+    if (input.computeApi !== "crossplane") {
+      throw new Error(
+        "[compute-workload-manifest] cogni-workflow-worker-v1 requires the Crossplane compute authority that supplies its runtime profile"
+      );
+    }
+    if (!input.runtime) {
+      throw new Error(
+        "[compute-workload-manifest] cogni-workflow-worker-v1 requires runtime.substrateHost for Temporal connectivity"
+      );
+    }
   }
 
   const services: DeclaredProvisionServiceSpec[] = envBundle.services.map(

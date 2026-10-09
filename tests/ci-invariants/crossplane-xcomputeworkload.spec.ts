@@ -617,8 +617,20 @@ describe("XComputeWorkload Composition (task.5096)", () => {
       '$_ := set $e "TEMPORAL_WORKER_DEPLOYMENT_NAME" (printf "node-%s-workflows" $spec.nodeId)'
     );
     expect(template).toContain(
-      '$_ := set $e "SCHEDULER_WORKER_HEALTH_URL" (printf "http://%s:%d" $workflowWorkerName $workflowWorkerPort)'
+      '$_ := set $e "AGENT_WORKFLOW_WORKER_HEALTH_URL" (printf "http://%s:%d" $workflowWorkerName $workflowWorkerPort)'
     );
+    expect(template).toContain(
+      '$_ := set $e "AGENT_WORKFLOW_TEMPORAL_NAMESPACE" $nodeTemporalNamespace'
+    );
+    expect(template).toContain(
+      '$_ := set $e "NODE_APP_URL" (printf "http://%s:%d" $appServiceName $appServicePort)'
+    );
+    expect(
+      template.lastIndexOf('$_ := set $e "NODE_APP_URL"')
+    ).toBeGreaterThan(template.indexOf("range $k, $target := $svc.bindings"));
+    expect(
+      template.lastIndexOf('$_ := set $e "TEMPORAL_NAMESPACE"')
+    ).toBeGreaterThan(template.indexOf("range $k, $target := $svc.bindings"));
   });
 });
 

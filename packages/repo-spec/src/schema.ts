@@ -135,13 +135,13 @@ export type GovernanceSpec = z.infer<typeof governanceSpecSchema>;
  *
  * This is the left edge a node owns (CATALOG_IS_SSOT / node-baas "node declares
  * shape, operator wires env"): a node declares a recurring job in its own
- * repo-spec; the operator runs it on schedule under that node's tenant identity.
+ * repo-spec; the node app creates it and the node Worker runs it under that node's identity.
  *
  * Invariants (review G3 — node↔Temporal tenant interface):
- *   - WORKFLOWTYPE_FROM_ROUTE_XOR_GRAPH: exactly one of `route` (http-dispatch →
- *     NodeTaskWorkflow) or `graph` (graph run → GraphRunWorkflow) is set. There is
+ *   - WORKFLOWTYPE_FROM_EXACTLY_ONE_TARGET: exactly one of `route` (http-dispatch →
+ *     NodeTaskWorkflow), `graph` (graph run → GraphRunWorkflow), or `workflow` is set. There is
  *     NO node-facing `target` enum — that is operator vocabulary; the workflowType
- *     is *inferred* from which field is present (route XOR graph).
+ *     is inferred from the declared field.
  *   - PLATFORM_OVERLAP_AND_CATCHUP: `overlap`/`catchupWindow` are NOT node-facing.
  *     They are platform invariants the operator fixes (OVERLAP_SKIP_DEFAULT /
  *     CATCHUP_WINDOW_ZERO). The schema does not accept them — a node cannot tune them.
@@ -171,8 +171,8 @@ export const nodeScheduleSchema = z
     /** IANA timezone (defaults to UTC) */
     timezone: z.string().default("UTC"),
     /**
-     * Relative HTTP route on the node's OWN host (http-dispatch). The operator
-     * dispatches POST {nodeUrl}{route} under the node's tenant principal. Mutually
+     * Relative HTTP route on the node's OWN host (http-dispatch). The node-owned
+     * starter Workflow dispatches POST {nodeUrl}{route} under the node's identity. Mutually
      * exclusive with `graph` and `workflow`. Must be a leading-slash relative path.
      */
     route: z
@@ -193,8 +193,8 @@ export const nodeScheduleSchema = z
       )
       .optional(),
     /**
-     * Opaque job payload forwarded verbatim to the node's route / graph input.
-     * The operator never interprets it; the node's handler owns its meaning.
+     * Opaque job payload forwarded verbatim to the node's route / graph / Workflow input.
+     * The substrate never interprets it; the node's handler owns its meaning.
      */
     payload: z.record(z.string(), z.unknown()).default({}),
   })
@@ -962,10 +962,11 @@ export const repoSpecSchema = z
 
     /**
      * Node-facing recurring-work schedules (story.5008). The node declares
-     * recurring jobs; the operator reconciles them into Temporal Schedules under
-     * the node's tenant identity (see syncNodeSchedules). Optional — defaults to
+     * recurring jobs; its RecurringWorkPort reconciles them into its Temporal namespace.
+     * The operator-owned syncNodeSchedules remains the compatibility path. Optional — defaults to
      * empty. Distinct from `governance.schedules` (operator charters): this is the
-     * node-author-facing contract (route XOR graph; no operator vocab leak).
+     * node-author-facing contract (exactly one route, graph, or workflow target;
+     * no operator vocab leak).
      */
     schedules: nodeSchedulesSchema.optional().default([]),
 
@@ -993,6 +994,22 @@ export const repoSpecSchema = z
   // spec — rejecting an unknown key would break a fork mid-flight. Cogni-owned specs must NOT
   // accumulate undeclared keys; that discipline is enforced by code review on this repo, and every
   // field Cogni itself relies on is modeled above (so a Cogni block never rides passthrough).
-  .passthrough();
+  .passthrough()
+  .superRefine((spec, ctx) => {
+    const declaresNodeWorkflow = spec.schedules.some(
+      (schedule) => schedule.workflow !== undefined
+    );
+    const declaresWorkflowWorker = spec.deployment?.services.some(
+      (service) => service.runtime_profile === "cogni-workflow-worker-v1"
+    );
+    if (declaresNodeWorkflow && !declaresWorkflowWorker) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["schedules"],
+        message:
+          "A schedule with `workflow` requires deployment.services to declare cogni-workflow-worker-v1",
+      });
+    }
+  });
 
 export type RepoSpec = z.infer<typeof repoSpecSchema>;

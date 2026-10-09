@@ -225,7 +225,7 @@ describe("buildNodeServicesWorkloadSpec", () => {
             ? {
                 ...service,
                 runtimeProfile: "cogni-workflow-worker-v1" as const,
-                bindings: { NODE_APP_URL: "app" },
+                bindings: {},
               }
             : service,
       })),
@@ -241,7 +241,7 @@ describe("buildNodeServicesWorkloadSpec", () => {
       secretRefs: COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS.map((key) => ({
         key,
       })),
-      env: { NODE_APP_URL: "http://app:3200" },
+      env: {},
     });
   });
 });

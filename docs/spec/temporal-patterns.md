@@ -316,8 +316,8 @@ deployment:
         dockerfile: services/workflow-worker/Dockerfile
       port: 9090
       visibility: private
+      envs: [candidate-a, preview]
       runtime_profile: cogni-workflow-worker-v1
-      bindings: { NODE_APP_URL: app }
       bind_host: 0.0.0.0
       resources: { cpu_units: 0.5, memory_mi: 512, storage_mi: 512 }
 ```
@@ -326,7 +326,8 @@ deployment:
 identity, materializes the secrets, and deploys the private Worker from the same source-SHA
 artifact bundle as the app. The `cogni-workflow-worker-v1` runtime profile owns the standard
 Temporal connection, namespace, identity, queue, and health contract so nodes do not copy a
-secret list. Namespace lifecycle is catalog-driven; no static
+secret list. It also derives the private `NODE_APP_URL` from the required app-profile sibling.
+Namespace lifecycle is catalog-driven; no static
 `TEMPORAL_CUSTODIED_NAMESPACES` list is an ownership source.
 
 Rollout is fail-closed: candidate/preview may prove namespace routing before server auth lands,
@@ -337,6 +338,12 @@ enforces namespace-scoped authentication and authorization.
 reconciles repo-spec schedules into its own namespace on the stable `agent-workflows` Task
 Queue. The operator is out of schedule CRUD. Reconciliation compares workflow type, input,
 cron/calendar, timezone, and Task Queue; a queue change is never silently skipped.
+
+During migration this client reads `AGENT_WORKFLOW_TEMPORAL_*`. The app's legacy `TEMPORAL_*`
+client and `SCHEDULER_WORKER_HEALTH_URL` remain unchanged until its old schedules are paused and
+removed. The new Worker profile must never globally retarget existing Temporal callers as a
+side effect of being declared. If the private Worker is environment-gated out, node-workflow
+reconciliation is disabled in that environment.
 
 **4. Execute — node-owned Worker.** `services/workflow-worker` imports the node's workflow
 bundle, registers the node's Activities, and polls `agent-workflows`. A graph step calls the
@@ -490,6 +497,26 @@ queue, not a per-process queue. The node Worker uses Temporal Worker Versioning 
 name `node-<nodeId>-workflows` and source commit as Build ID. Short scheduled workflows are
 `PINNED`; long agent/entity workflows use `PINNED` plus Continue-as-New upgrades.
 
+Versioning is a release protocol, not just Worker configuration. The runtime package requires
+Temporal TypeScript SDK >=1.12 and a self-hosted server >=1.29.1. After the Worker health endpoint
+reports the expected source-SHA Build ID, `RecurringWorkPort` idempotently sets that deployment
+version current, verifies it through Temporal, and only then reconciles schedules. A Worker never
+self-promotes before its app peer verifies exact-SHA readiness. Temporal UI >=2.38 is an
+operational prerequisite before this becomes a production-supported lane.
+
+The private `/readyz` response includes node ID, namespace, Task Queue, deployment name, Build ID,
+and registered Workflow types. The app matches all six against its repo-spec and expected source
+SHA before activating the version. A declared `workflow` missing from that catalog is a hard
+reconcile error, not a schedule that is allowed to fail later.
+
+Node operators do not diagnose this chain by reading startup logs. Every node exposes the bounded,
+authenticated `/api/v1/temporal/health` snapshot defined in
+[Temporal Substrate](./substrate-temporal.md#one-call-substrate-health), and node-template ships
+`pnpm temporal:health -- --env <env>` as its stable human/agent entry point. The inspector asks
+Temporal directly for fresh Workflow and Activity pollers, then joins that server-side truth with
+the private Worker's catalog/Build ID and the app's schedule-reconciliation state. A process being
+alive, a successful connection, or an old poller entry is insufficient.
+
 > **As-built divergence:** the centralized `scheduler-worker` currently polls every node queue
 > across one or more environment namespaces, driven by `COGNI_NODE_ENDPOINTS` and
 > `TEMPORAL_CUSTODIED_NAMESPACES`. That static cross-product caused bug.5212 when a namespace was
@@ -501,7 +528,8 @@ name `node-<nodeId>-workflows` and source commit as Build ID. Short scheduled wo
 1. **Package and template:** publish `@cogni-dao/agent-workflow-runtime`; add node-owned
    `packages/workflows` and private `services/workflow-worker` to node-template.
 2. **Provision and prove node-template:** create its node namespace/identity, dual-register the
-   existing generic scheduled graph workflow, and deploy app + Worker from one artifact bundle.
+   existing generic scheduled graph workflow, deploy app + Worker from one artifact bundle, then
+   activate the health-verified source SHA as the current Worker Deployment Version.
 3. **Migrate schedules:** pause each old schedule, create the equivalent schedule in the new
    namespace with the same business identity/idempotency key, verify its poller, then delete the
    old schedule. Never leave both enabled.
@@ -537,6 +565,9 @@ name `node-<nodeId>-workflows` and source commit as Build ID. Short scheduled wo
 1. Verify all Workflow code contains no I/O — only Activity calls, conditionals, and deterministic transforms
 2. Verify all Activities are idempotent (check for idempotency keys on side effects)
 3. Verify schedules use `overlap: SKIP` and `catchupWindow: 0`
+4. Verify the current Worker Deployment Version Build ID equals the app and bundle source SHA
+5. Run `pnpm temporal:health -- --env <env>` and verify both poller types are fresh, schedule drift
+   is zero, and the most recent due execution has a terminal result
 
 **Automated:**
 

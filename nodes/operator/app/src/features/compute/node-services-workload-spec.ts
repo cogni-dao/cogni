@@ -42,7 +42,7 @@ export interface LegacyCogniAppCompatibilityInput
 export interface NodeServicesProvisionServiceSpec extends ProvisionServiceSpec {
   /** Value-free requirements resolved server-side before provider I/O. */
   readonly secretRefs: readonly { readonly key: string }[];
-  /** Explicit app compatibility selector; absent means generic runtime behavior. */
+  /** Explicit runtime contract selector; absent means generic runtime behavior. */
   readonly runtimeProfile?: NodeServiceRuntimeProfileSpec;
 }
 

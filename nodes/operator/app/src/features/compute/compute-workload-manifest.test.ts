@@ -183,7 +183,7 @@ describe("buildComputeWorkloadManifest", () => {
             ? {
                 ...service,
                 runtimeProfile: "cogni-workflow-worker-v1" as const,
-                bindings: { NODE_APP_URL: "web" },
+                bindings: {},
               }
             : service,
       })),
@@ -201,7 +201,7 @@ describe("buildComputeWorkloadManifest", () => {
     });
     expect(candidate.spec.workload.services[1]).toMatchObject({
       runtimeProfile: "cogni-workflow-worker-v1",
-      bindings: { NODE_APP_URL: "web" },
+      bindings: {},
       secretRefs: COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS.map((key) => ({
         key,
       })),
@@ -219,6 +219,30 @@ describe("buildComputeWorkloadManifest", () => {
         runtime: { substrateHost: "cogni.vm.cognidao.org" },
       })
     ).toThrow(/pre-production only until.*Temporal.*authentication/);
+
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "candidate-a",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle: workflowBundle,
+        publicHost: "toks4-test.cognidao.org",
+        computeApi: "legacy",
+        leaseGeneration: 0,
+      })
+    ).toThrow(/requires the Crossplane compute authority/);
+
+    expect(() =>
+      buildComputeWorkloadManifest({
+        slug: "toks4",
+        environment: "candidate-a",
+        bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+        bundle: workflowBundle,
+        publicHost: "toks4-test.cognidao.org",
+        computeApi: "crossplane",
+        leaseGeneration: 0,
+      })
+    ).toThrow(/requires runtime\.substrateHost/);
   });
 
   it("emits the legacy kind with no Crossplane-only policy fields", () => {

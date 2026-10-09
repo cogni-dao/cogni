@@ -99,14 +99,11 @@ can run 5 replicas in production while its app runs 1 — same node identity, di
 services, independent scaling. `node_id` is the join key (identity · UI · RBAC ·
 catalog projection); each **service** of that node is what actually deploys and scales.
 
-> **Today's reality + the gap.** Most nodes ship only the `app/` unit; recurring work
-> runs on the **shared** generic worker (RecurringWorkPort, below), so a node rarely
-> needs its own service yet. A node that needs a **custom, independently-scaled
-> service** (its own worker process, not the shared one) is the escape hatch — it
-> declares the unit in **its own** `services/` and the operator wires per-(node,
-> service, env) deploy + scale. That per-node-service deploy/scale wiring is **not
-> first-class yet** (the catalog models one deployable per row); it is the forward
-> work this `node → services → deployments` model names.
+> **Today's reality + the gap.** Most nodes ship only the `app/` unit, and their recurring
+> graph/route work still runs on the centralized compatibility Worker. The target makes a
+> private node-owned Workflow Worker a standard service rather than an escape hatch. P0 deploys
+> app + Worker as co-located services in one workload revision; independent per-service scaling
+> remains forward work because the catalog still models one deployable workload per row.
 
 ### Node-controlled surfaces
 
@@ -129,9 +126,9 @@ The operator may reject invalid declarations, but it should not require a root p
 ### Node→Temporal seam (recurring work)
 
 Recurring work is a node-controlled surface, fully specified elsewhere — the row above
-is the summary. The **substrate model** (one shared generic worker, per-node queues, and
-**node-direct** schedule creation with the operator out of the create path; a per-node
-worker only as an opt-in sovereign escape hatch) is in
+is the summary. The **target substrate model** (node-direct schedule creation, a private
+node-owned Worker, and one namespace per node/environment, with the centralized Worker retained
+only as a migration compatibility lane) is in
 [Temporal Substrate](./substrate-temporal.md). The **execution model**
 (`NodeTaskWorkflow` / `GraphRunWorkflow`, grant↔node binding, the per-node dispatch
 principal, decommission teardown) is in
@@ -295,7 +292,8 @@ knowledge and work-item substrates:
 
 The private service opts into `runtime_profile: cogni-workflow-worker-v1`. The profile, rather
 than each node spec, owns the standard Temporal connection/auth/namespace/queue/health contract;
-the node declares only extra secrets and sibling bindings. This extends the existing
+the operator also derives its `NODE_APP_URL` from the required app-profile sibling. The node
+declares only extra secrets and non-standard sibling bindings. This extends the existing
 `cogni-node-app-v1` pattern to a second named capability profile.
 
 The profile is initially a candidate/preview contract. Production materialization remains
@@ -313,6 +311,12 @@ public app and private Worker are exact-set artifacts from one source commit and
 one workload revision. This prevents the schedule creator and poller from silently shipping
 different code. Operator governance/ledger workflows remain operator-owned services; only
 node product workflow ownership moves.
+
+Migration uses a separate app client contract: legacy `TEMPORAL_*` and
+`SCHEDULER_WORKER_HEALTH_URL` remain pointed at the centralized compatibility lane, while
+`AGENT_WORKFLOW_TEMPORAL_*` and `AGENT_WORKFLOW_WORKER_HEALTH_URL` select the node namespace and
+private Worker. Merely adding the Worker profile therefore cannot reroute or orphan existing
+scheduled work.
 
 ## Cognition Substrate
 
