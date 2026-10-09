@@ -1,6 +1,6 @@
 ---
 name: node-template-sync
-description: Use when a node-template change must reach existing node repositories, when auditing old cogni-operator/node-template-{sync,upstream} PRs, or when asking why automatic fork sync did not run. Automatic fork source sync is retired after bug.5304; this skill routes shared behavior to packages/workflows and residual changes to explicit reviewed node PRs.
+description: Use when a node-template change must reach existing node repositories, when auditing old cogni-operator/node-template-{sync,upstream} PRs, or when asking why automatic fork sync did not run. Automatic fork source sync is retired after bug.5304; this skill routes shared behavior to a curated public `@cogni/*` package API or a pinned reusable workflow, and residual changes to explicit reviewed node PRs.
 ---
 
 # Node-template distribution — automatic source sync is retired
