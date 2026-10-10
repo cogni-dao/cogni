@@ -430,7 +430,8 @@ export async function runFinalizeEpoch(
     }
     const priorEpochIds = allEpochs
       .filter(
-        (candidate) => candidate.periodEnd <= targetEpoch.periodStart
+        (candidate) =>
+          candidate.periodEnd.getTime() <= targetEpoch.periodStart.getTime()
       )
       .sort((a, b) => {
         const byPeriodEnd = b.periodEnd.getTime() - a.periodEnd.getTime();
