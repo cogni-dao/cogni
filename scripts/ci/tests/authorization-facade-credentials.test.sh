@@ -39,6 +39,8 @@ preflight_line="$(grep -n 'Refuse an invalid finish/cancel BEFORE' "$projector" 
 map_line="$(grep -n '^OPERATOR_PATH=' "$projector" | cut -d: -f1)"
 test "$preflight_line" -lt "$map_line"
 grep -q 'cancel refused after activation' "$projector"
+grep -q 'credential overlap pending; use explicit activate/finish/cancel' "$authority"
+grep -q 'no third credential minted' "$authority"
 
 # Projection fetches reject redirects and plaintext origins at both hops.
 test "$(grep -c 'redirect: "error"' "$fetcher")" -eq 2

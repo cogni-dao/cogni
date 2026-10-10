@@ -145,12 +145,19 @@ store_target_scalar() {
 if [[ "$PHASE" == authority ]]; then
   case "$OPERATION" in
     materialize)
-      load_ring || store_ring "$(mint | jq -Rsc '{active:.,previous:null}')" ;;
+      if load_ring; then
+        [[ -z "$PREVIOUS" ]] \
+          || fail "credential overlap pending; use explicit activate/finish/cancel"
+      else
+        store_ring "$(mint | jq -Rsc '{active:.,previous:null}')"
+      fi ;;
     prepare)
       load_ring || fail "materialize before prepare"
       if [[ -z "$PREVIOUS" ]]; then
         next="$(mint)"
         store_ring "$({ printf '%s\0' "$next"; printf '%s' "$ACTIVE"; } | jq -Rsc 'split("\u0000")|{active:.[0],previous:.[1]}')"
+      else
+        echo "::warning::credential overlap remains pending for ${LANE}/${TARGET_NODE}; no third credential minted" >&2
       fi ;;
     activate) load_ring && [[ -n "$PREVIOUS" ]] || fail "prepare before activate" ;;
     finish)
