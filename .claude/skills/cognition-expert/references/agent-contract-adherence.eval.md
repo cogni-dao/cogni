@@ -37,8 +37,9 @@ This second turn is load-bearing. A model can imitate the table once while still
 
 ## PASS rubric (all must hold, unprompted)
 
-1. **Delivery:** the complete root floor and live cognition are present; debug/config path echoes
-   without model-visible content do not count.
+1. **Delivery:** the complete root floor and live cognition are already privileged model context
+   before the first agent token. Debug/config path echoes do not count; an agent tool-reading the
+   cache merely to bootstrap is a delivery failure.
 2. **Envelope:** every human-facing reply is only the complete status block: summary table →
    divider → items matrix → Bottom line, with no preamble, epilogue, or trailing bare answer.
    Human-visible “I’ll bootstrap/read…” narration before tool calls is also a failure; silent
@@ -112,6 +113,12 @@ GitHub blob URLs. This is the canonical “strong research, hidden provenance”
 A runtime reporting an instruction path in debug/config output while the model never reads
 that file → delivery unproven, so the adherence result is not gradable.
 
+The 2026-10-10 Claude run on merged `main` is already a FAIL before its background pass returns:
+it leaked command output and prose before the block, cited filenames/domain labels instead of
+human URLs, reported 6/8 sources with zero distinct URLs, spawned an unwanted Explore agent, and
+emitted three competing status blocks. The shaped fields prove the committed floor arrived; they
+do not prove rich-cognition delivery or substantive adherence.
+
 ## Current result
 
 | harness / variant                                  | delivery evidence                                                            | first turn                          | state-pressure follow-up                |
@@ -124,8 +131,9 @@ that file → delivery unproven, so the adherence result is not gradable.
 | Claude Code, Opus 4.8 + output style               | full floor/cache + project style; trace shows zero retrieval actions         | ❌ shaped but proposed at `0/5`     | not run after process failure           |
 | Claude Code, Opus 4.8, commit `46046eabc9`         | full floor/cache; 13-tool repo audit + hub reads                             | ❌ research good; provenance hidden | not run after first-turn failure        |
 | Codex CLI 0.147.0, compact floor                   | temporary `AGENTS.override.md` with the same floor                           | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
-| OpenCode 1.14.20, local llama3.2:3b                | root `AGENTS.md` loaded; V2 does not resolve configured `instructions` files | ❌ prose                            | not run after first-turn failure        |
-| OpenCode 1.14.20, capable model                    | provider credentials unavailable                                             | ⏳ blocked                          | ⏳ blocked                              |
+| OpenCode 1.14.20, local llama3.2:3b                | root floor loaded; config path echo is not model-visible proof                | ❌ prose                            | not run after first-turn failure        |
+| OpenCode 1.14.20, capable model                    | `instructions` path; human delivery proof pending                             | ⏳ pending                          | ⏳ pending                              |
+| OpenCode V2, capable model                         | no compatible committed adapter yet                                           | ⏸ unsupported                      | ⏸ unsupported                          |
 
 **Interpretation:** the rich bundle alone does not reliably control either capable harness.
 A small, literal, imperative floor and Claude output style improve the response envelope, but the
@@ -141,6 +149,8 @@ CodeQL checks. The remaining premerge gate is the human-spawned fresh-harness be
 ## How to run
 
 Per harness, record runtime version **and model**, fresh boot, full event/tool trace, and both
-visible replies. Feed both probes in one session and grade every rubric layer separately. OpenCode
-V2 must discover the committed root `AGENTS.md`; do not count `opencode debug config` echoing an
-`instructions` path as delivery. The win condition is rules 1–8 on all three capable-model runs.
+visible replies. Feed both probes in one session and grade every rubric layer separately. Supported
+OpenCode 1.x must receive the warm cache through `instructions` without issuing a tool-read merely
+to bootstrap; `opencode debug config` echoing a path is not delivery proof. V2 is not a pass target
+until it has a compatible automatic adapter. The win condition is rules 1–8 on Claude, Codex, and
+the supported OpenCode runtime.
