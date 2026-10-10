@@ -722,6 +722,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    secrets: inherit
     with:
       lane: ${{ needs.decide.outputs.environment }}
       node: ${{ matrix.node }}
