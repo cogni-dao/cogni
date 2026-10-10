@@ -12,7 +12,9 @@ describe("OpenBaoAuthorizationFacadeProjectionAdapter", () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ auth: { client_token: "bao-token" } }))
+        new Response(JSON.stringify({ auth: { client_token: "bao-token" } }), {
+          headers: { "content-type": "application/json" },
+        })
       )
       .mockResolvedValueOnce(
         new Response(
@@ -22,7 +24,8 @@ describe("OpenBaoAuthorizationFacadeProjectionAdapter", () => {
                 [NODE_ID]: JSON.stringify({ active: ACTIVE, previous: null }),
               },
             },
-          })
+          }),
+          { headers: { "content-type": "application/json" } }
         )
       );
     const adapter = new OpenBaoAuthorizationFacadeProjectionAdapter({
@@ -58,8 +61,9 @@ describe("OpenBaoAuthorizationFacadeProjectionAdapter", () => {
 
   it("fails closed without making the authority read when OIDC is rejected", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ errors: ["permission denied"] }), {
-        status: 403,
+        new Response(JSON.stringify({ errors: ["permission denied"] }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
       })
     );
     const adapter = new OpenBaoAuthorizationFacadeProjectionAdapter({
@@ -82,7 +86,9 @@ describe("OpenBaoAuthorizationFacadeProjectionAdapter", () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ auth: { client_token: "bao-token" } }))
+        new Response(JSON.stringify({ auth: { client_token: "bao-token" } }), {
+          headers: { "content-type": "application/json" },
+        })
       )
       .mockResolvedValueOnce(
         new Response(
@@ -95,7 +101,8 @@ describe("OpenBaoAuthorizationFacadeProjectionAdapter", () => {
                 }),
               },
             },
-          })
+          }),
+          { headers: { "content-type": "application/json" } }
         )
       );
     const adapter = new OpenBaoAuthorizationFacadeProjectionAdapter({
