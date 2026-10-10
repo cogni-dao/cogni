@@ -241,4 +241,46 @@ for invalid_host in '-oProxyCommand=touch injected' 'fake host' '.fake' 'fake.' 
   grep -q 'invalid VM_HOST' "$TMPROOT/invalid-host-shape.out"
 done
 
+# REPO_SPEC_IS_IDENTITY_SSOT: an in-repo node resolves through its readable
+# repo-spec even though the catalog correctly omits node_id.
+operator_id="$(
+  COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" bash -c \
+    '. scripts/ci/lib/image-tags.sh; node_id_for_target operator'
+)"
+test "$operator_id" = "$(yq -N '.node_id' nodes/operator/.cogni/repo-spec.yaml)"
+
+# Every selected type:node must have a canonical UUID. A catalog row without a
+# readable identity may never be silently excluded from credential projection.
+IDENTITY_ROOT="$TMPROOT/identity-tree"
+mkdir -p "$IDENTITY_ROOT/infra/catalog" "$IDENTITY_ROOT/nodes/missing-id/.cogni"
+cat > "$IDENTITY_ROOT/infra/catalog/missing-id.yaml" <<'EOF'
+name: missing-id
+type: node
+path_prefix: nodes/missing-id/
+deployment_provider:
+  candidate-a: k3s
+EOF
+cat > "$IDENTITY_ROOT/nodes/missing-id/.cogni/repo-spec.yaml" <<'EOF'
+schema_version: "1.0"
+intent:
+  name: missing-id
+EOF
+
+set +e
+env VM_HOST=fake FLEET_CONTROL_ENV=production SECRETS_CONTROL_ENV=production \
+  COGNI_CATALOG_ROOT="$IDENTITY_ROOT/infra/catalog" \
+  bash scripts/ci/flight-probe-credentials.sh materialize candidate-a missing-id \
+  >"$TMPROOT/missing-node-id.out" 2>&1
+missing_node_id_rc=$?
+printf '{"active":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","previous":null}' | \
+  env VM_HOST=fake COGNI_CATALOG_ROOT="$IDENTITY_ROOT/infra/catalog" \
+  bash scripts/ci/project-flight-probe-ring.sh candidate-a missing-id materialize \
+  >"$TMPROOT/missing-project-node-id.out" 2>&1
+missing_project_node_id_rc=$?
+set -e
+test "$missing_node_id_rc" -ne 0
+test "$missing_project_node_id_rc" -ne 0
+grep -q "node_id missing for 'missing-id'" "$TMPROOT/missing-node-id.out"
+grep -q "node_id missing for 'missing-id'" "$TMPROOT/missing-project-node-id.out"
+
 echo "PASS: flight-probe-credentials.test.sh"

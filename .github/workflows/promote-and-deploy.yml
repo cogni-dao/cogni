@@ -82,8 +82,6 @@ jobs:
       has_targets: ${{ steps.targets.outputs.has_targets }}
       node_targets_json: ${{ steps.targets.outputs.node_targets_json }}
       has_node_targets: ${{ steps.targets.outputs.has_node_targets }}
-      flight_probe_node_targets_json: ${{ steps.targets.outputs.flight_probe_node_targets_json }}
-      has_flight_probe_node_targets: ${{ steps.targets.outputs.has_flight_probe_node_targets }}
       k3s_targets_json: ${{ steps.targets.outputs.k3s_targets_json }}
       k3s_node_targets_json: ${{ steps.targets.outputs.k3s_node_targets_json }}
       has_k3s_node_targets: ${{ steps.targets.outputs.has_k3s_node_targets }}
@@ -715,20 +713,22 @@ jobs:
 
   flight-probe-project:
     needs: decide
-    if: needs.decide.outputs.has_flight_probe_node_targets == 'true'
+    if: needs.decide.outputs.has_node_targets == 'true'
     strategy:
       fail-fast: false
       matrix:
-        node: ${{ fromJson(needs.decide.outputs.flight_probe_node_targets_json) }}
+        node: ${{ fromJson(needs.decide.outputs.node_targets_json) }}
     uses: ./.github/workflows/flight-probe-project.yml
     permissions:
       contents: read
       id-token: write
-    secrets: inherit
     with:
       lane: ${{ needs.decide.outputs.environment }}
       node: ${{ matrix.node }}
       operation: materialize
+    secrets:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
 
   # Per-node provider preflight on EVERY env (Invariants 16-17). All nodes
   # materialize source:agent secrets and reconcile placement-neutral state (DB,

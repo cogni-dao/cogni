@@ -9,8 +9,6 @@ import {
 export interface DeploymentTargetSelection {
   readonly deployment: readonly string[];
   readonly substrate: readonly string[];
-  /** Node-local identities eligible for `service:{node_id}/flight-prober`. */
-  readonly flightProbe: readonly string[];
   readonly offCluster: readonly string[];
   readonly providers: Readonly<Record<string, "akash" | "k3s">>;
   readonly k3s: readonly string[];
@@ -62,7 +60,6 @@ export function resolveDeploymentTargets(input: {
   const providers: Record<string, "akash" | "k3s"> = {};
   const deployment: string[] = [];
   const substrate: string[] = [];
-  const flightProbe: string[] = [];
   const offCluster: string[] = [];
   const k3s: string[] = [];
   const k3sNodes: string[] = [];
@@ -87,7 +84,6 @@ export function resolveDeploymentTargets(input: {
     if (row.type !== "node") continue;
     deployment.push(target);
     substrate.push(target);
-    if (hasFlightProbeIdentity(row, target)) flightProbe.push(target);
     if (provider === "akash") {
       offCluster.push(target);
       sourceRepositories[target] = parseSourceRepository(row, target);
@@ -100,7 +96,6 @@ export function resolveDeploymentTargets(input: {
   return {
     deployment,
     substrate,
-    flightProbe,
     offCluster,
     providers,
     k3s,
@@ -191,7 +186,6 @@ export function resolvePromoteDeploymentTargets(input: {
   ];
   const providers: Record<string, "akash" | "k3s"> = {};
   const substrate: string[] = [];
-  const flightProbe: string[] = [];
   const k3sNodes: string[] = [];
   const previewForward: Record<string, boolean> = {};
   for (const target of deployment) {
@@ -208,7 +202,6 @@ export function resolvePromoteDeploymentTargets(input: {
       input.previewForwardMode === true && isInEnvironment(row, "preview");
     if (row.type === "node") {
       substrate.push(target);
-      if (hasFlightProbeIdentity(row, target)) flightProbe.push(target);
       if (provider === "k3s") k3sNodes.push(target);
     }
   }
@@ -216,7 +209,6 @@ export function resolvePromoteDeploymentTargets(input: {
   return {
     deployment,
     substrate,
-    flightProbe,
     offCluster,
     providers,
     k3s,
@@ -226,22 +218,6 @@ export function resolvePromoteDeploymentTargets(input: {
     previewForward,
     infra,
   };
-}
-
-const NODE_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-function hasFlightProbeIdentity(
-  row: Readonly<Record<string, unknown>>,
-  target: string
-): boolean {
-  if (row.node_id === undefined) return false;
-  if (typeof row.node_id !== "string" || !NODE_ID.test(row.node_id)) {
-    throw new Error(
-      `[deployment-targets] Flight-probe target ${target} has invalid node_id`
-    );
-  }
-  return true;
 }
 
 function parseSourceSha(
