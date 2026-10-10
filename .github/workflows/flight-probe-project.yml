@@ -70,7 +70,7 @@ jobs:
           set -euo pipefail
           [ -n "$VM_HOST" ] && [ -n "$SSH_DEPLOY_KEY" ]
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
       - name: Reconcile control-vault authority
@@ -102,7 +102,7 @@ jobs:
           set -euo pipefail
           [ -n "$VM_HOST" ] && [ -n "$SSH_DEPLOY_KEY" ]
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
       - name: Resolve fixed control endpoint and catalog identity
