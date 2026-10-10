@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/ci-invariants/authorization-core-publication`
  * Purpose: Pin the public authorization artifact's release and ownership boundary.
- * Scope: Static assertions over package metadata/source, repo policy, and publication workflow.
+ * Scope: Static assertions over package metadata/source, repo policy, and publication workflow. Does not publish artifacts.
  * Invariants:
  *   - RELEASE_REQUIRES_POLICY_GATES: a main ancestor is insufficient; every repo-policy check passes on the tagged SHA.
  *   - RAW_ADAPTER_STAYS_OPERATOR_ONLY: node consumers cannot import the direct OpenFGA adapter from the package root.
@@ -124,7 +124,7 @@ describe("authorization-core publication", () => {
     expect(packageJson.exports).toHaveProperty("./operator");
     expect(packageIndex).not.toContain("OpenFgaAuthorizationAdapter");
     expect(packageOperatorEntry).toContain("OpenFgaAuthorizationAdapter");
-    expect(packageOperatorEntry).toContain("Independently governed nodes");
+    expect(packageOperatorEntry).toContain("independently governed nodes");
   });
 
   it("does not expose the shared OpenFGA authority to node apps", () => {

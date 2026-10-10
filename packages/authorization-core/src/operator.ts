@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/authorization-core/operator`
  * Purpose: Expose the raw OpenFGA adapter to Cogni's trusted operator control plane.
- * Scope: Operator-only entrypoint. Independently governed nodes must use the mediated remote adapter.
+ * Scope: Operator-only entrypoint. Does not authorize independently governed nodes to reach raw OpenFGA.
  * Invariants: Raw OpenFGA reachability never crosses the operator trust boundary.
  * Side-effects: none
  * Links: docs/spec/rbac.md, task.5226
