@@ -11,13 +11,13 @@ spec:
   nodeId: 557d8b59-8e3b-42f0-9aeb-a5c171296556
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/levelup@sha256:785f36d5e50af28381b39e97dfb5e4d11ca510384d59687359741a7e0c56bc1d
+    ref: ghcr.io/cogni-dao/levelup@sha256:230f05c33171472e60820ec83bf29c5829eda9fddabc570145fd84d4e2601015
     source:
       repository: cogni-dao/levelup
-      sha: c0ac3cd0580b0ee98a18e4d91a40ee99af5f8704
+      sha: 164804577bed5447ab3a6aae6d060fc1768f579b
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/levelup@sha256:ef8efc96c0428c0aa4212b2c98d7a133d05926d16f12c60477a1c1e4a78e98f5
+        image: ghcr.io/cogni-dao/levelup@sha256:aa2626f3b48b84f6917fe6e3b298054666b9de313acc8473b77dc95c5b9aa8e4
   workload:
     name: levelup
     publicHost: levelup.cognidao.org
@@ -34,6 +34,7 @@ spec:
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
+          - key: FLIGHT_PROBE_API_KEY
         port: 3200
         visibility: public
         bindings: {}
