@@ -96,7 +96,7 @@ export async function mutateNodeBillingAccountAccess(
     action: "billing_account.grant",
     resource: account,
     context: { tenantId: input.billingAccountId, nodeId },
-  });
+  }, { consistency: "higher_consistency" });
   if (grantorDecision.decision !== "allow") {
     return grantorDecision.code === "authz_unavailable"
       ? unavailable("grantor authority check unavailable")
@@ -120,18 +120,24 @@ export async function mutateNodeBillingAccountAccess(
     const subject = authzNodeUserPrincipal(nodeId, subjectUserId);
     const agent = authzNodeAgentPrincipal(nodeId, input.target.id);
     const [subjectRead, userDelegation] = await Promise.all([
-      deps.authorization.check({
-        actorId: subject,
-        action: "billing_account.read",
-        resource: account,
-        context: { tenantId: input.billingAccountId, nodeId },
-      }),
-      deps.authorization.check({
-        actorId: agent,
-        action: "user.act_as",
-        resource: subject,
-        context: { tenantId: input.billingAccountId, nodeId },
-      }),
+      deps.authorization.check(
+        {
+          actorId: subject,
+          action: "billing_account.read",
+          resource: account,
+          context: { tenantId: input.billingAccountId, nodeId },
+        },
+        { consistency: "higher_consistency" }
+      ),
+      deps.authorization.check(
+        {
+          actorId: agent,
+          action: "user.act_as",
+          resource: subject,
+          context: { tenantId: input.billingAccountId, nodeId },
+        },
+        { consistency: "higher_consistency" }
+      ),
     ]);
     if (
       subjectRead.code === "authz_unavailable" ||
@@ -160,7 +166,7 @@ export async function mutateNodeBillingAccountAccess(
   } as const;
 
   return input.operation === "grant"
-    ? deps.authorization.writeRelations([tuple], {
+    ? deps.authorization.replaceRelation(tuple, {
         confirm: "higher_consistency",
       })
     : deps.authorization.deleteRelations([tuple], {

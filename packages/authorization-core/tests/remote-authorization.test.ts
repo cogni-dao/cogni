@@ -16,7 +16,7 @@ const OTHER_NODE_ID = "22222222-2222-4222-8222-222222222222";
 const USER_ID = "33333333-3333-4333-8333-333333333333";
 const AGENT_ID = "44444444-4444-4444-8444-444444444444";
 const ACCOUNT_ID = "55555555-5555-4555-8555-555555555555";
-const TOKEN = `cogni_naz_sk_v1_${NODE_ID}_${"a".repeat(64)}`;
+const TOKEN = `cogni_naz_sk_v2_candidate-a_${NODE_ID}_${"a".repeat(64)}`;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -31,6 +31,27 @@ describe("authorizationFacadeNodeIdFromToken", () => {
     expect(() =>
       authorizationFacadeNodeIdFromToken(`cogni_naz_sk_v1_${NODE_ID}_short`)
     ).toThrow("invalid authorization facade service credential");
+  });
+
+  it("selects the active token from a strict bounded credential ring", () => {
+    const adapter = new RemoteAuthorizationAdapter({
+      baseUrl: "https://operator.example",
+      serviceToken: JSON.stringify({ active: TOKEN, previous: null }),
+      testOnlyFetchImpl: vi.fn<typeof fetch>(),
+    });
+    expect(adapter).toBeInstanceOf(RemoteAuthorizationAdapter);
+    expect(
+      () =>
+        new RemoteAuthorizationAdapter({
+          baseUrl: "https://operator.example",
+          serviceToken: JSON.stringify({
+            active: TOKEN,
+            previous: null,
+            third: TOKEN,
+          }),
+          testOnlyFetchImpl: vi.fn<typeof fetch>(),
+        })
+    ).toThrow("invalid authorization facade credential ring");
   });
 });
 
@@ -108,6 +129,25 @@ describe("RemoteAuthorizationAdapter", () => {
         action: "billing_account.read",
         resource: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
         context: { tenantId: ACCOUNT_ID, nodeId: NODE_ID },
+      })
+    ).resolves.toMatchObject({ decision: "deny", code: "authz_denied" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("denies an account/RLS tenant mismatch before transport", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const adapter = new RemoteAuthorizationAdapter({
+      baseUrl: "https://operator.example",
+      serviceToken: TOKEN,
+      testOnlyFetchImpl: fetchImpl,
+    });
+
+    await expect(
+      adapter.check({
+        actorId: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+        action: "billing_account.read",
+        resource: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+        context: { tenantId: USER_ID, nodeId: NODE_ID },
       })
     ).resolves.toMatchObject({ decision: "deny", code: "authz_denied" });
     expect(fetchImpl).not.toHaveBeenCalled();

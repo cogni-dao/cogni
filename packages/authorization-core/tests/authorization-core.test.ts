@@ -224,6 +224,27 @@ describe("OpenFgaAuthorizationAdapter", () => {
     });
   });
 
+  it("passes higher consistency through authority-bearing checks", async () => {
+    const seen: Array<OpenFgaCheckOptions | undefined> = [];
+    const client = {
+      async check(
+        _request: OpenFgaCheckRequest,
+        options?: OpenFgaCheckOptions
+      ): Promise<{ allowed: boolean }> {
+        seen.push(options);
+        return { allowed: true };
+      },
+    } satisfies OpenFgaCheckClient;
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+    });
+
+    await authz.check(baseCheck, { consistency: "higher_consistency" });
+    expect(seen).toEqual([{ consistency: "HIGHER_CONSISTENCY" }]);
+  });
+
   it("keeps deny distinct from unavailable", async () => {
     const denyClient = {
       async check(): Promise<{ allowed: boolean }> {
@@ -575,6 +596,58 @@ describe("OpenFgaAuthorizationAdapter", () => {
         options: { consistency: "HIGHER_CONSISTENCY" },
       }))
     );
+  });
+
+  it("atomically replaces a conditioned tuple key before confirming the requested grant", async () => {
+    const replacements: unknown[] = [];
+    const client = {
+      async check(): Promise<{ allowed: boolean }> {
+        return { allowed: true };
+      },
+      async write(body: unknown, options: unknown): Promise<void> {
+        replacements.push({ body, options });
+      },
+      async writeTuples(): Promise<void> {},
+      async deleteTuples(): Promise<void> {},
+    } satisfies OpenFgaWriteClient;
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+    });
+    const tuple = {
+      user: authzNodeAgentPrincipal("node-1", "reader"),
+      relation: "reader",
+      object: authzBillingAccountResource("node-1", "acct-1"),
+      condition: authzGrantExpiresAt("2026-10-10T00:00:00.000Z"),
+    } satisfies AuthzRelationTuple;
+
+    await expect(
+      authz.replaceRelation(tuple, { confirm: "higher_consistency" })
+    ).resolves.toEqual({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    expect(replacements).toEqual([
+      {
+        body: {
+          deletes: [
+            {
+              user: tuple.user,
+              relation: tuple.relation,
+              object: tuple.object,
+            },
+          ],
+          writes: [tuple],
+        },
+        options: {
+          conflict: {
+            onDuplicateWrites: "error",
+            onMissingDeletes: "ignore",
+          },
+        },
+      },
+    ]);
   });
 
   it("confirms writes and revokes through higher-consistency checks", async () => {

@@ -49,6 +49,7 @@ function authorizationWith(
     deleteRelation: vi.fn(writeSuccess),
     writeRelations: vi.fn(writeSuccess),
     deleteRelations: vi.fn(writeSuccess),
+    replaceRelation: vi.fn(writeSuccess),
   };
 }
 
@@ -91,7 +92,11 @@ describe("authorization facade policy", () => {
       decision: "failure",
       code: "authz_write_denied",
     });
-    expect(authorization.writeRelations).not.toHaveBeenCalled();
+    expect(authorization.replaceRelation).not.toHaveBeenCalled();
+    expect(authorization.check).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "billing_account.grant" }),
+      { consistency: "higher_consistency" }
+    );
   });
 
   it("writes only one conditioned same-node reader tuple and requests higher consistency", async () => {
@@ -109,15 +114,13 @@ describe("authorization facade policy", () => {
       }
     );
 
-    expect(authorization.writeRelations).toHaveBeenCalledWith(
-      [
-        {
-          user: authzNodeUserPrincipal(NODE_ID, SUBJECT_ID),
-          relation: "reader",
-          object: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
-          condition: authzGrantExpiresAt(EXPIRES_AT),
-        },
-      ],
+    expect(authorization.replaceRelation).toHaveBeenCalledWith(
+      {
+        user: authzNodeUserPrincipal(NODE_ID, SUBJECT_ID),
+        relation: "reader",
+        object: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+        condition: authzGrantExpiresAt(EXPIRES_AT),
+      },
       { confirm: "higher_consistency" }
     );
   });
@@ -147,16 +150,24 @@ describe("authorization facade policy", () => {
       "billing_account.read",
       "user.act_as",
     ]);
-    expect(authorization.writeRelations).toHaveBeenCalledWith(
-      [
-        {
-          user: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
-          relation: "delegate",
-          object: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
-          condition: authzGrantExpiresAt(EXPIRES_AT),
-        },
-      ],
+    expect(authorization.replaceRelation).toHaveBeenCalledWith(
+      {
+        user: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+        relation: "delegate",
+        object: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+        condition: authzGrantExpiresAt(EXPIRES_AT),
+      },
       { confirm: "higher_consistency" }
+    );
+    expect(authorization.check).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ action: "billing_account.read" }),
+      { consistency: "higher_consistency" }
+    );
+    expect(authorization.check).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ action: "user.act_as" }),
+      { consistency: "higher_consistency" }
     );
   });
 

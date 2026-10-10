@@ -79,20 +79,19 @@ constructs the OpenFGA adapter when both `OPENFGA_API_URL` and
 `OPENFGA_STORE_ID` are present, so service reachability can ship before policy
 activation.
 
-Authorization-facade credential rotation is a governed, two-phase lifecycle:
+Authorization-facade credentials are lane-bound (`v2_<lane>_<node_id>`) and
+rotate only through the fleet-control credential workflow. The control vault owns
+the bounded `{active,previous}` authority ring. It projects the raw sender ring to
+the node workload's custodian and a verifier-only digest ring to the lane-local
+operator through the same GitHub-OIDC/down-trust pattern used by flight-probe
+credentials. The facade rejects a bearer whose embedded lane differs from its own
+`DEPLOY_ENVIRONMENT`, so every check reaches that lane's OpenFGA graph.
 
-1. A human with the node's `node.manage_secrets` permission calls
-   `POST /api/v1/nodes/<node_id>/authorization-credential/rotate` with the explicit
-   target `env`. The serving operator admits only its existing down-trust secret
-   lanes, generates the value, writes OpenBao, never returns it, and responds `202`
-   with `state: prepared`.
-2. The existing operator verb — `POST /api/v1/vcs/flight` for candidate-a or
-   `POST /api/v1/deploy/promote` for preview/production — redeploys that exact
-   node/environment, which rematerializes its OpenBao-backed secret projection.
-3. Completion requires live proof that the redeployed workload authenticates
-   through the facade with the active credential and that the prior credential
-   receives `401` after the ten-minute N-1 overlap. Until both hold, the rotation
-   remains prepared; an OpenBao version write is never reported as completion.
+Prepare, deploy/verify, activate, and finish/cancel are distinct CAS-guarded phases.
+No deadline can invalidate the running credential before activation. Completion
+requires live proof that the redeployed workload authenticates with the new active
+credential and that the captured prior credential receives `401` after finish;
+an authority or projection write alone is never reported as rotation completion.
 
 OpenFGA authorization models are immutable. The bootstrap hashes the canonical
 JSON model and records that hash with the resolved model ID. Re-running deploys

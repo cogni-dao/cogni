@@ -11,7 +11,7 @@
  * @internal
  */
 
-import { authorizationFacadeNodeIdFromToken } from "@cogni/authorization-core";
+import { authorizationFacadeCredentialFromToken } from "@cogni/authorization-core";
 
 import { createOperatorSecretsPlane } from "@/bootstrap/capabilities/operator-secrets-plane";
 import { resolveServiceDb } from "@/bootstrap/container";
@@ -80,16 +80,16 @@ export async function authenticateAuthorizationFacadeRequest(
     return { ok: false, status: 401, errorCode: "invalid_service_credential" };
   }
 
-  let nodeId: string;
+  let credential: ReturnType<typeof authorizationFacadeCredentialFromToken>;
   try {
-    nodeId = authorizationFacadeNodeIdFromToken(token);
+    credential = authorizationFacadeCredentialFromToken(token);
   } catch {
     return { ok: false, status: 401, errorCode: "invalid_service_credential" };
   }
 
   // Node identity is embedded in the credential format, so this bucket executes
   // before any DB or OpenBao IO and cannot be evaded by spoofing forwarding headers.
-  if (!nodeCandidateLimiter.consume(nodeId)) {
+  if (!nodeCandidateLimiter.consume(credential.nodeId)) {
     return { ok: false, status: 429, errorCode: "rate_limited" };
   }
 
@@ -104,8 +104,16 @@ export async function authenticateAuthorizationFacadeRequest(
   }
 
   try {
-    const node = await resolveNodeRef(resolveServiceDb(), nodeId);
+    const node = await resolveNodeRef(resolveServiceDb(), credential.nodeId);
     if (!node) {
+      return {
+        ok: false,
+        status: 401,
+        errorCode: "invalid_service_credential",
+      };
+    }
+    const lane = credential.lane ?? deployEnv;
+    if (lane !== deployEnv || !node.deployEnvs.includes(lane)) {
       return {
         ok: false,
         status: 401,
@@ -115,7 +123,7 @@ export async function authenticateAuthorizationFacadeRequest(
     const plane = createOperatorSecretsPlane(env);
     const valid = await plane.verifySecret({
       nodeSlug: node.slug,
-      env: deployEnv,
+      env: lane,
       key: AUTHORIZATION_FACADE_TOKEN_KEY,
       presentedValue: token,
     });
@@ -126,7 +134,7 @@ export async function authenticateAuthorizationFacadeRequest(
         errorCode: "invalid_service_credential",
       };
     }
-    return authenticatedNodeLimiter.consume(nodeId)
+    return authenticatedNodeLimiter.consume(credential.nodeId)
       ? { ok: true, node }
       : { ok: false, status: 429, errorCode: "rate_limited" };
   } catch {

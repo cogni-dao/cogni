@@ -289,9 +289,12 @@ AUTHZ_TOKEN_FILE="$BAO_ROOT/cogni/candidate-a/node-template/AUTHORIZATION_FACADE
 test -f "$AUTHZ_TOKEN_FILE" \
   || { echo "materialize did not mint AUTHORIZATION_FACADE_TOKEN" >&2; exit 1; }
 AUTHZ_NODE_ID="$(yq -N '.node_id' infra/catalog/node-template.yaml)"
-AUTHZ_TOKEN="$(cat "$AUTHZ_TOKEN_FILE")"
-[[ "$AUTHZ_TOKEN" =~ ^cogni_naz_sk_v1_${AUTHZ_NODE_ID}_[0-9a-f]{64}$ ]] \
-  || { echo "AUTHORIZATION_FACADE_TOKEN must embed the exact node_id plus 256 random bits" >&2; exit 1; }
+AUTHZ_RING="$(cat "$AUTHZ_TOKEN_FILE")"
+AUTHZ_TOKEN="$(jq -er '.active' <<<"$AUTHZ_RING")"
+jq -e '(keys | sort) == ["active","previous"] and .previous == null' <<<"$AUTHZ_RING" >/dev/null \
+  || { echo "AUTHORIZATION_FACADE_TOKEN must be a strict bounded ring" >&2; exit 1; }
+[[ "$AUTHZ_TOKEN" =~ ^cogni_naz_sk_v2_candidate-a_${AUTHZ_NODE_ID}_[0-9a-f]{64}$ ]] \
+  || { echo "AUTHORIZATION_FACADE_TOKEN must embed the exact lane, node_id, and 256 random bits" >&2; exit 1; }
 # Postgres DSNs composed sole-source here, embedding the per-node app_<node> role
 # (regression guard: a shared app_user DSN is the bug.5002 split-brain we killed)
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_URL" \

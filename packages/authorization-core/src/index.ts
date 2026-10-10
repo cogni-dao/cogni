@@ -59,6 +59,11 @@ export interface AuthzCheckParams {
   readonly context: AuthzContext;
 }
 
+export interface AuthzCheckOptions {
+  /** Read the latest tuple state for authority-bearing mutation preconditions. */
+  readonly consistency?: "higher_consistency";
+}
+
 export interface AuthzSubcheck {
   readonly name: "permission" | "delegation";
   readonly user: string;
@@ -83,7 +88,10 @@ export type AuthzDecision =
 
 /** Read-only authorization boundary safe for independently governed nodes. */
 export interface AuthorizationCheckPort {
-  check(params: AuthzCheckParams): Promise<AuthzDecision>;
+  check(
+    params: AuthzCheckParams,
+    options?: AuthzCheckOptions
+  ): Promise<AuthzDecision>;
 }
 
 /** Raw relation mutation boundary. Trusted operator code only. */
@@ -102,6 +110,11 @@ export interface AuthorizationRelationAdminPort {
   ): Promise<AuthzWriteDecision>;
   deleteRelations(
     tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  /** Atomically replace one tuple key, including its relationship condition. */
+  replaceRelation(
+    tuple: AuthzRelationTuple,
     options?: AuthzMutationOptions
   ): Promise<AuthzWriteDecision>;
 }
@@ -294,8 +307,12 @@ export function relationForAuthzAction(action: AuthzAction): string {
 
 export {
   AUTHORIZATION_FACADE_TOKEN_PREFIX,
+  authorizationFacadeCredentialFromToken,
+  authorizationFacadeCredentialRingFromValue,
   authorizationFacadeNodeIdFromToken,
   RemoteAuthorizationAdapter,
+  type AuthorizationFacadeCredentialIdentity,
+  type AuthorizationFacadeCredentialRing,
   type RemoteAuthorizationAdapterConfig,
 } from "./adapters/remote-authorization.adapter";
 export { FakeAuthorizationAdapter } from "./test/fake-authorization.adapter";
