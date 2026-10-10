@@ -69,9 +69,15 @@ done
 
 catalog_file="$CATALOG_ROOT/$TARGET_NODE.yaml"
 [[ -f "$catalog_file" ]] || fail "unknown node '$TARGET_NODE' (missing $catalog_file)"
-NODE_ID="$(yq -N '.node_id // ""' "$catalog_file")"
+# REPO_SPEC_IS_IDENTITY_SSOT. The shared resolver reads in-repo identities from
+# their repo-spec and only uses catalog.node_id for remote-source projections.
+COGNI_CATALOG_ROOT="$CATALOG_ROOT"
+# shellcheck source=lib/image-tags.sh
+. "$SCRIPT_DIR/lib/image-tags.sh"
+NODE_ID="$(node_id_for_target "$TARGET_NODE")" \
+  || fail "node identity missing for '$TARGET_NODE'"
 [[ "$NODE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
-  || fail "catalog node_id for '$TARGET_NODE' is not a UUID"
+  || fail "node_id for '$TARGET_NODE' is not a UUID"
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
 SSH_OPTS_ARR+=(-o ControlMaster=auto -o "ControlPath=${TMPDIR:-/tmp}/cogni-flight-probe-%r@%h-%p" -o ControlPersist=180)

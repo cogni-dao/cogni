@@ -18,7 +18,6 @@ describe("resolveDeploymentTargets", () => {
             name: "node-template",
             type: "node",
             envs: ["candidate-a"],
-            node_id: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c",
           },
           {
             name: "toks4",
@@ -27,7 +26,6 @@ describe("resolveDeploymentTargets", () => {
             source_repo: "https://github.com/cogni-dao/toks4",
             source_sha: "0123456789abcdef0123456789abcdef01234567",
             deployment_provider: { "candidate-a": "akash" },
-            node_id: "11111111-1111-4111-8111-111111111111",
           },
           { name: "scheduler-worker", type: "service" },
         ],
@@ -37,7 +35,6 @@ describe("resolveDeploymentTargets", () => {
     ).toEqual({
       deployment: ["node-template", "toks4"],
       substrate: ["node-template", "toks4"],
-      flightProbe: ["node-template", "toks4"],
       offCluster: ["toks4"],
       providers: {
         "node-template": "k3s",
@@ -61,7 +58,6 @@ describe("resolveDeploymentTargets", () => {
         source_repo: "https://github.com/cogni-dao/toks4",
         source_sha: "0123456789abcdef0123456789abcdef01234567",
         deployment_provider: { "candidate-a": "akash" },
-        node_id: "11111111-1111-4111-8111-111111111111",
       },
     ];
 
@@ -74,7 +70,6 @@ describe("resolveDeploymentTargets", () => {
     ).toEqual({
       deployment: ["operator"],
       substrate: ["operator"],
-      flightProbe: [],
       offCluster: [],
       providers: { operator: "k3s" },
       k3s: ["operator"],
@@ -91,7 +86,6 @@ describe("resolveDeploymentTargets", () => {
     ).toEqual({
       deployment: ["toks4"],
       substrate: ["toks4"],
-      flightProbe: ["toks4"],
       offCluster: ["toks4"],
       providers: { toks4: "akash" },
       k3s: [],
@@ -129,23 +123,6 @@ describe("resolveDeploymentTargets", () => {
       })
     ).toThrow("Flight target poly is not configured for candidate-a");
   });
-
-  it("fails closed when a flight-probe identity is present but malformed", () => {
-    expect(() =>
-      resolveDeploymentTargets({
-        catalogRows: [
-          {
-            name: "broken-node",
-            type: "node",
-            envs: ["candidate-a"],
-            node_id: "not-a-uuid",
-          },
-        ],
-        environment: "candidate-a",
-        flightTargets: ["broken-node"],
-      })
-    ).toThrow("Flight-probe target broken-node has invalid node_id");
-  });
 });
 
 describe("resolvePromoteDeploymentTargets", () => {
@@ -154,7 +131,6 @@ describe("resolvePromoteDeploymentTargets", () => {
       name: "legacy",
       type: "node",
       envs: ["preview", "production"],
-      node_id: "22222222-2222-4222-8222-222222222222",
     },
     { name: "scheduler-worker", type: "service" },
     {
@@ -164,7 +140,6 @@ describe("resolvePromoteDeploymentTargets", () => {
       source_repo: "https://github.com/Cogni-DAO/external.git",
       source_sha: "0123456789abcdef0123456789abcdef01234567",
       deployment_provider: { preview: "akash" },
-      node_id: "33333333-3333-4333-8333-333333333333",
     },
   ];
 
@@ -179,7 +154,6 @@ describe("resolvePromoteDeploymentTargets", () => {
     ).toEqual({
       deployment: ["scheduler-worker", "legacy", "external"],
       substrate: ["legacy", "external"],
-      flightProbe: ["legacy", "external"],
       offCluster: ["external"],
       providers: {
         "scheduler-worker": "k3s",
