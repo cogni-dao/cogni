@@ -19,6 +19,7 @@
 import type { InferSelectModel } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   check,
   index,
   jsonb,
@@ -29,7 +30,235 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-import { users } from "./refs";
+import { billingAccounts, users } from "./refs";
+
+export const ACTOR_KINDS = ["user", "agent", "system", "org"] as const;
+export type ActorKind = (typeof ACTOR_KINDS)[number];
+
+export const ACTOR_STATUSES = ["active", "suspended"] as const;
+export type ActorStatus = (typeof ACTOR_STATUSES)[number];
+
+/** Durable economic and authorization subjects. Credentials never identify actors. */
+export const actors = pgTable(
+  "actors",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").$type<ActorKind>().notNull(),
+    displayName: text("display_name"),
+    userId: text("user_id").references(() => users.id),
+    legacyUserId: text("legacy_user_id").references(() => users.id),
+    billingAccountId: text("billing_account_id")
+      .notNull()
+      .references(() => billingAccounts.id),
+    spawnedByActorId: text("spawned_by_actor_id").references(
+      (): AnyPgColumn => actors.id
+    ),
+    parentActorId: text("parent_actor_id").references(
+      (): AnyPgColumn => actors.id
+    ),
+    status: text("status").$type<ActorStatus>().notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "actors_kind_check",
+      sql`${table.kind} IN ('user', 'agent', 'system', 'org')`
+    ),
+    check(
+      "actors_status_check",
+      sql`${table.status} IN ('active', 'suspended')`
+    ),
+    check(
+      "actors_user_shape_check",
+      sql`(${table.kind} = 'user' AND ${table.userId} IS NOT NULL) OR (${table.kind} <> 'user' AND ${table.userId} IS NULL)`
+    ),
+    uniqueIndex("actors_user_id_unique")
+      .on(table.userId)
+      .where(sql`${table.userId} IS NOT NULL`),
+    uniqueIndex("actors_legacy_user_id_unique")
+      .on(table.legacyUserId)
+      .where(sql`${table.legacyUserId} IS NOT NULL`),
+    index("actors_billing_account_id_idx").on(table.billingAccountId),
+    index("actors_parent_actor_id_idx").on(table.parentActorId),
+  ]
+).enableRLS();
+
+/** Append-only evidence for accepted stewardship projection changes. */
+export const actorStewardshipEvents = pgTable(
+  "actor_stewardship_events",
+  {
+    id: text("id").primaryKey(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => actors.id),
+    parentActorId: text("parent_actor_id").references(() => actors.id),
+    eventType: text("event_type").notNull(),
+    authorizedByActorId: text("authorized_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "actor_stewardship_events_type_check",
+      sql`${table.eventType} IN ('accepted', 'revoked', 'reassigned')`
+    ),
+    index("actor_stewardship_events_actor_id_idx").on(table.actorId),
+  ]
+).enableRLS();
+
+export const AGENT_GRANT_STATUSES = ["pending", "redeemed", "revoked"] as const;
+
+/** One-use, hash-only grant that is the only unauthenticated agent spawn seam. */
+export const agentSpawnGrants = pgTable(
+  "agent_spawn_grants",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull().unique(),
+    nodeId: text("node_id").notNull(),
+    issuerActorId: text("issuer_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    acceptedParentActorId: text("accepted_parent_actor_id").references(
+      () => actors.id
+    ),
+    billingAccountId: text("billing_account_id")
+      .notNull()
+      .references(() => billingAccounts.id),
+    agentName: text("agent_name").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    redeemedActorId: text("redeemed_actor_id").references(() => actors.id),
+    redeemedAt: timestamp("redeemed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "agent_spawn_grants_status_check",
+      sql`${table.status} IN ('pending', 'redeemed', 'revoked')`
+    ),
+    uniqueIndex("agent_spawn_grants_issuer_idempotency_unique").on(
+      table.issuerActorId,
+      table.idempotencyKey
+    ),
+    index("agent_spawn_grants_issuer_status_idx").on(
+      table.issuerActorId,
+      table.status
+    ),
+    index("agent_spawn_grants_billing_status_idx").on(
+      table.billingAccountId,
+      table.status
+    ),
+  ]
+).enableRLS();
+
+export const AGENT_CREDENTIAL_STATUSES = [
+  "pending",
+  "active",
+  "revoked",
+] as const;
+export type AgentCredentialStatus = (typeof AGENT_CREDENTIAL_STATUSES)[number];
+
+/** Node-local, hash-only agent bearers. The stable principal is actors.id. */
+export const agentCredentials = pgTable(
+  "agent_credentials",
+  {
+    id: text("id").primaryKey(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => actors.id),
+    nodeId: text("node_id").notNull(),
+    secretHash: text("secret_hash").notNull().unique(),
+    status: text("status")
+      .$type<AgentCredentialStatus>()
+      .notNull()
+      .default("pending"),
+    predecessorCredentialId: text("predecessor_credential_id").references(
+      (): AnyPgColumn => agentCredentials.id
+    ),
+    rotationIdempotencyKey: text("rotation_idempotency_key"),
+    replacedByCredentialId: text("replaced_by_credential_id").references(
+      (): AnyPgColumn => agentCredentials.id
+    ),
+    issuedAt: timestamp("issued_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    authenticateUntil: timestamp("authenticate_until", {
+      withTimezone: true,
+    }).notNull(),
+    renewUntil: timestamp("renew_until", { withTimezone: true }).notNull(),
+    pendingExpiresAt: timestamp("pending_expires_at", { withTimezone: true }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "agent_credentials_status_check",
+      sql`${table.status} IN ('pending', 'active', 'revoked')`
+    ),
+    check(
+      "agent_credentials_windows_check",
+      sql`${table.renewUntil} > ${table.authenticateUntil}`
+    ),
+    uniqueIndex("agent_credentials_pending_predecessor_unique")
+      .on(table.predecessorCredentialId)
+      .where(sql`${table.status} = 'pending'`),
+    index("agent_credentials_actor_status_idx").on(table.actorId, table.status),
+    index("agent_credentials_node_status_idx").on(table.nodeId, table.status),
+  ]
+).enableRLS();
+
+/** Human/steward-authorized, one-use recovery onto an existing actor. */
+export const agentRecoveryGrants = pgTable(
+  "agent_recovery_grants",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull().unique(),
+    nodeId: text("node_id").notNull(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => actors.id),
+    issuerActorId: text("issuer_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    redeemedCredentialId: text("redeemed_credential_id").references(
+      () => agentCredentials.id
+    ),
+    redeemedAt: timestamp("redeemed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "agent_recovery_grants_status_check",
+      sql`${table.status} IN ('pending', 'redeemed', 'revoked')`
+    ),
+    uniqueIndex("agent_recovery_grants_issuer_idempotency_unique").on(
+      table.issuerActorId,
+      table.idempotencyKey
+    ),
+    index("agent_recovery_grants_actor_status_idx").on(
+      table.actorId,
+      table.status
+    ),
+  ]
+).enableRLS();
 
 /**
  * User bindings — current-state index linking external accounts to users.
