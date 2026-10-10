@@ -237,7 +237,8 @@ export class RemoteAuthorizationAdapter
         decision: "deny",
         code: "authz_denied",
         checks: [],
-        reason: "authorization facade requires same-node billing-account references",
+        reason:
+          "authorization facade requires same-node billing-account references",
       };
     }
 
@@ -270,11 +271,15 @@ export class RemoteAuthorizationAdapter
       }
       return (
         parsedDecision(await response.json()) ??
-        unavailable("operator authorization facade returned an invalid decision")
+        unavailable(
+          "operator authorization facade returned an invalid decision"
+        )
       );
     } catch (error) {
       return unavailable(
-        error instanceof Error ? error.message : "authorization facade unavailable"
+        error instanceof Error
+          ? error.message
+          : "authorization facade unavailable"
       );
     }
   }
@@ -328,7 +333,9 @@ export class RemoteAuthorizationAdapter
       );
     } catch (error) {
       return writeUnavailable(
-        error instanceof Error ? error.message : "authorization facade unavailable"
+        error instanceof Error
+          ? error.message
+          : "authorization facade unavailable"
       );
     }
   }

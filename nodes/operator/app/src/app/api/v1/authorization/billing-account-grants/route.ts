@@ -38,7 +38,9 @@ export const POST = wrapRouteHandlerWithLogging(
         { status: body.reason === "too_large" ? 413 : 400 }
       );
     }
-    const parsed = authorizationFacadeGrantOperation.input.safeParse(body.value);
+    const parsed = authorizationFacadeGrantOperation.input.safeParse(
+      body.value
+    );
     if (!parsed.success) {
       return NextResponse.json({ error: "invalid_request" }, { status: 400 });
     }

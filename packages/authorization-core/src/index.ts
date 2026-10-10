@@ -292,10 +292,10 @@ export function relationForAuthzAction(action: AuthzAction): string {
   }
 }
 
-export { FakeAuthorizationAdapter } from "./test/fake-authorization.adapter";
 export {
   AUTHORIZATION_FACADE_TOKEN_PREFIX,
+  authorizationFacadeNodeIdFromToken,
   RemoteAuthorizationAdapter,
   type RemoteAuthorizationAdapterConfig,
-  authorizationFacadeNodeIdFromToken,
 } from "./adapters/remote-authorization.adapter";
+export { FakeAuthorizationAdapter } from "./test/fake-authorization.adapter";
