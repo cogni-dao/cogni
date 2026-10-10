@@ -1030,15 +1030,41 @@ jobs:
           path: assert-marker-out/assert-ok-${{ matrix.node }}.txt
           retention-days: 1
 
+  authorization-facade-credential-project:
+    needs: decide
+    if: needs.decide.outputs.has_deployment_node_targets == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.deployment_node_targets_json) }}
+    uses: ./.github/workflows/authorization-facade-credential-project.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      lane: candidate-a
+      node: ${{ matrix.node }}
+      operation: materialize
+    secrets:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+
   node-substrate:
     needs:
-      [decide, reconcile-appset, reconcile-dns, prepare-substrate-deploy-branch]
+      [
+        decide,
+        reconcile-appset,
+        reconcile-dns,
+        prepare-substrate-deploy-branch,
+        authorization-facade-credential-project,
+      ]
     if: |
       always() &&
       needs.decide.outputs.has_substrate_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success' &&
-      needs.prepare-substrate-deploy-branch.result == 'success'
+      needs.prepare-substrate-deploy-branch.result == 'success' &&
+      needs.authorization-facade-credential-project.result == 'success'
     strategy:
       fail-fast: false
       matrix:

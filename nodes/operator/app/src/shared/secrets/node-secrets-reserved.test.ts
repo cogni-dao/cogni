@@ -33,6 +33,7 @@ describe("node-secrets reserved-key guard (gate 2)", () => {
     // secret-materialize.sh's key_is_agent_generated set.
     expect(isNodeOwnedSecretKey("CONNECTIONS_ENCRYPTION_KEY")).toBe(false);
     expect(isNodeOwnedSecretKey("INTERNAL_OPS_TOKEN")).toBe(false);
+    expect(isNodeOwnedSecretKey("AUTHORIZATION_FACADE_TOKEN")).toBe(false);
     expect(isNodeOwnedSecretKey("METRICS_TOKEN")).toBe(false);
     expect(isNodeOwnedSecretKey("GH_WEBHOOK_SECRET")).toBe(false);
     expect(isNodeOwnedSecretKey("POLY_WALLET_AEAD_KEY_HEX")).toBe(false);
@@ -53,6 +54,9 @@ describe("off-cluster-workload secret boundary (gate 3, provenance-keyed)", () =
     expect(isOffClusterWorkloadSecretKey("AUTH_SECRET")).toBe(true);
     expect(isOffClusterWorkloadSecretKey("DATABASE_URL")).toBe(true);
     expect(isOffClusterWorkloadSecretKey("LITELLM_VIRTUAL_KEY")).toBe(true);
+    expect(isOffClusterWorkloadSecretKey("AUTHORIZATION_FACADE_TOKEN")).toBe(
+      true
+    );
   });
 
   it.each([

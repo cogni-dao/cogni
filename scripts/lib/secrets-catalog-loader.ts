@@ -85,6 +85,7 @@ export type Capability = z.infer<typeof CapabilitySchema>;
 const GenerateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("base64"), bytes: z.number().int().positive() }),
   z.object({ kind: z.literal("hex"), bytes: z.number().int().positive() }),
+  z.object({ kind: z.literal("authorization-facade-projected") }),
   z.object({
     kind: z.literal("sk-cogni"),
     randHexBytes: z.number().int().positive(),
@@ -427,6 +428,12 @@ function generatorFor(g: z.infer<typeof GenerateSchema>): () => string {
       return () => rand64(g.bytes);
     case "hex":
       return () => randHex(g.bytes);
+    case "authorization-facade-projected":
+      return () => {
+        throw new Error(
+          "AUTHORIZATION_FACADE_TOKEN is minted only by the authorization-facade credential lifecycle"
+        );
+      };
     case "sk-cogni":
       return () => `sk-cogni-${randHex(g.randHexBytes)}`;
     case "static":
