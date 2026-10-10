@@ -5,9 +5,9 @@
 /**
  * Module: `@scripts/ci/fetch-flight-probe-ring`
  * Purpose: Exchange GitHub OIDC for one catalog node's bounded flight-prober ring.
- * Scope: Reads the control operator projection endpoint and emits only the validated ring on stdout.
+ * Scope: Reads the control projection endpoint; does not persist or log credentials.
  * Invariants: OIDC is target-lane-audienced; response is no-store and bounded; errors expose no values.
- * Side-effects: Network IO to GitHub OIDC and the fixed control operator endpoint.
+ * Side-effects: IO (GitHub OIDC and fixed control operator HTTPS requests)
  * Links: .github/workflows/flight-probe-project.yml, scripts/ci/project-flight-probe-ring.sh
  * @internal
  */
