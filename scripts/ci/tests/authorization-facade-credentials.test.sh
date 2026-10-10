@@ -23,7 +23,7 @@ fetcher=scripts/ci/fetch-authorization-facade-ring.mjs
 # A raw value may cross a process boundary only through stdin: OpenBao payloads,
 # the fetcher→projector pipe, and curl --config -. Never put it in a command URL,
 # command-line --arg, trace mode, or a diagnostic.
-! grep -Eq '(set -x|curl[^\n]*(ACTIVE|PREVIOUS|WORKLOAD)|jq[^\n]+--arg[^\n]+\$(ACTIVE|PREVIOUS|WORKLOAD)|echo[^\n]+\$(ACTIVE|PREVIOUS|WORKLOAD))' "$authority" "$projector"
+! grep -Eq '(set -x|curl.*\$(ACTIVE|PREVIOUS|WORKLOAD)|jq.*--arg.*\$(ACTIVE|PREVIOUS|WORKLOAD)|echo.*\$(ACTIVE|PREVIOUS|WORKLOAD))' "$authority" "$projector"
 grep -q 'node scripts/ci/fetch-authorization-facade-ring.mjs |' "$workflow"
 grep -q "curl .*--config -" "$projector"
 
