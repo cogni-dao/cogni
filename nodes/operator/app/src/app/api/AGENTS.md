@@ -79,6 +79,8 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
+  - `/api/v1/authorization/check` [POST] - node-workload-authenticated, same-node billing-account read/OBO check through the mediated OpenFGA facade
+  - `/api/v1/authorization/billing-account-grants` [POST] - node-workload-authenticated semantic reader/OBO grant or revoke; no raw tuples
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 

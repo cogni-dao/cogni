@@ -1733,6 +1733,20 @@ else
   fi
   seed_kv openfga OPENFGA_DB_PASSWORD "$OPENFGA_DB_PASSWORD"
 
+  # OpenFGA's public HTTP listener is reachable by node workloads, so it must
+  # authenticate every request. This preshared key is infrastructure custody,
+  # never a node secret: Compose consumes it from the openfga path and only the
+  # trusted operator receives a copy through its own OpenBao/ESO bucket.
+  # SET-ONCE preserves a live key across idempotent reprovisioning.
+  OPENFGA_API_TOKEN="$(bao_get_field openfga OPENFGA_API_TOKEN)"
+  if [[ -n "$OPENFGA_API_TOKEN" ]]; then
+    log_info "Seeding cogni/${DEPLOY_ENV}/openfga/* — OPENFGA_API_TOKEN present, reusing (set-once)"
+  else
+    OPENFGA_API_TOKEN="$(randHex 32)"
+    log_info "Seeding cogni/${DEPLOY_ENV}/openfga/* — minting fresh OPENFGA_API_TOKEN"
+  fi
+  seed_kv openfga OPENFGA_API_TOKEN "$OPENFGA_API_TOKEN"
+
   # TEMPORAL_DB_PASSWORD is the same shared-infra DB-cred class: the dedicated
   # temporal-postgres superuser, baked into the volume at first-init and read by
   # deploy-infra via the ${env}-db-reader seam (cogni/<env>/_shared). bootstrap.sh

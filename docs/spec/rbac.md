@@ -79,6 +79,25 @@ constructs the OpenFGA adapter when both `OPENFGA_API_URL` and
 `OPENFGA_STORE_ID` are present, so service reachability can ship before policy
 activation.
 
+Deployed environments require OpenFGA preshared authn. The set-once
+`OPENFGA_API_TOKEN` is custodied at `cogni/<env>/openfga`, copied only to
+`cogni/<env>/operator` through governed infra reconciliation, and never
+projected to node workloads.
+
+Authorization-facade credentials are lane-bound (`v2_<lane>_<node_id>`) and
+rotate only through the fleet-control credential workflow. The control vault owns
+the bounded `{active,previous}` authority ring. It projects the raw sender ring to
+the node workload's custodian and a verifier-only digest ring to the lane-local
+operator through the same GitHub-OIDC/down-trust pattern used by flight-probe
+credentials. The facade rejects a bearer whose embedded lane differs from its own
+`DEPLOY_ENVIRONMENT`, so every check reaches that lane's OpenFGA graph.
+
+Prepare, deploy/verify, activate, and finish/cancel are distinct CAS-guarded phases.
+No deadline can invalidate the running credential before activation. Completion
+requires live proof that the redeployed workload authenticates with the new active
+credential and that the captured prior credential receives `401` after finish;
+an authority or projection write alone is never reported as rotation completion.
+
 OpenFGA authorization models are immutable. The bootstrap hashes the canonical
 JSON model and records that hash with the resolved model ID. Re-running deploys
 reuse the existing model ID when the authored model hash is unchanged; a new
@@ -88,11 +107,12 @@ immutable model is written only when the hash changes or no prior model exists.
 
 ## Actor Types
 
-| Type    | Format                  | Description                          |
-| ------- | ----------------------- | ------------------------------------ |
-| User    | `user:{user_id}`        | Human or user-bound machine token    |
-| Agent   | `agent:{agentId}`       | Autonomous agent (graph instance)    |
-| Service | `service:{serviceName}` | Internal service (scheduler, worker) |
+- **User** — `user:{node_id}/{user_id}`: node-local human in the
+  environment-shared graph.
+- **Agent** — `agent:{node_id}/{actor_id}`: node-local autonomous agent in the
+  environment-shared graph.
+- **Service** — `service:{serviceName}`: internal service such as scheduler or
+  worker.
 
 `user_id` is the canonical person identifier. Wallet addresses, OAuth provider
 IDs, and bearer token strings are credentials or bindings, never RBAC actors.
@@ -220,6 +240,28 @@ principals without changing the `node.flight` route check.
 | Scheduler job        | `src/adapters/server/scheduler/`                 | Hardcoded to job owner at job creation |
 
 **Never from:** Request body, query params, tool args, `RunnableConfig.configurable`.
+
+The mediated node facade is the one bounded P0 exception to the generic request-body
+rule. A per-node/per-environment workload credential authenticates a node backend,
+and that backend may assert a node-local subject ID. The operator derives the node
+namespace from the credential, checks the exact subject's account permission and the
+agent's existing `user.act_as` delegation, and never accepts a caller-supplied node
+namespace or raw tuple. A compromised node backend can therefore impersonate its own
+local users—authority it already has over that node's DB and accounts—but cannot gain
+cross-node authority. Non-repudiable signed human/session proof is P1.
+
+### Mediated node facade
+
+Independently governed nodes never receive the shared OpenFGA store/model credentials.
+They use `RemoteAuthorizationAdapter`, which can express only same-node
+`billing_account.read` checks plus semantic reader/OBO grant and revoke. Every mutation
+first verifies the asserted human currently has `can_grant` on that exact account.
+Reader grants write only conditioned `reader`; OBO grants require an existing subject
+read edge and existing human→agent delegation, then write only the conditioned,
+account-scoped `delegate` edge. Mutation success is confirmed with
+`HIGHER_CONSISTENCY`. The facade cannot seed `owner`/`can_grant`, mutate node roles, or
+write arbitrary relations. Credential custody, digest projection, and rotation are
+owned separately by task.5228; this facade consumes only the projected verifier ring.
 
 ---
 

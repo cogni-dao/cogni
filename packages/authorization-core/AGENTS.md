@@ -37,17 +37,19 @@ Shared authorization port, resource helpers, deterministic test fake, and truste
 
 ## Public Surface
 
-- `AuthorizationPort`
+- `AuthorizationCheckPort`, `AuthorizationRelationAdminPort`, `AuthorizationPort`
+- `BillingAccountGrantAdministrationPort`, semantic billing-account grant types
 - `AuthzCheckParams`, `AuthzDecision`, `AuthzAction`, `AuthzContext`
 - `AuthzRelationTuple`, `AuthzWriteDecision`
 - `authzToolResource`, `authzConnectionResource`, `authzGraphResource`, `authzUserResource`
 - `relationForAuthzAction`
 - `FakeAuthorizationAdapter`
+- `RemoteAuthorizationAdapter`, `authorizationFacadeNodeIdFromToken`
 - `@cogni/authorization-core/operator`: `OpenFgaAuthorizationAdapter` (trusted control plane only)
 
 ## Responsibilities
 
-- This directory **does**: define shared authz contracts; map Cogni actions to OpenFGA relations; implement OpenFGA checks and tuple writes through the official SDK; provide deterministic tests fakes.
+- This directory **does**: define shared authz contracts; provide the portable check-only/semantic remote adapter; map Cogni actions to OpenFGA relations; implement operator-only OpenFGA checks and tuple writes through the official SDK; provide deterministic tests fakes.
 - This directory **does not**: read env vars; own OpenFGA deployment; define local role tables; import node app code.
 
 ## Usage

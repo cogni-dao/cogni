@@ -59,6 +59,11 @@ export interface AuthzCheckParams {
   readonly context: AuthzContext;
 }
 
+export interface AuthzCheckOptions {
+  /** Read the latest tuple state for authority-bearing mutation preconditions. */
+  readonly consistency?: "higher_consistency";
+}
+
 export interface AuthzSubcheck {
   readonly name: "permission" | "delegation";
   readonly user: string;
@@ -81,8 +86,16 @@ export type AuthzDecision =
       readonly reason?: string;
     };
 
-export interface AuthorizationPort {
-  check(params: AuthzCheckParams): Promise<AuthzDecision>;
+/** Read-only authorization boundary safe for independently governed nodes. */
+export interface AuthorizationCheckPort {
+  check(
+    params: AuthzCheckParams,
+    options?: AuthzCheckOptions
+  ): Promise<AuthzDecision>;
+}
+
+/** Raw relation mutation boundary. Trusted operator code only. */
+export interface AuthorizationRelationAdminPort {
   writeRelation(
     tuple: AuthzRelationTuple,
     options?: AuthzMutationOptions
@@ -91,7 +104,25 @@ export interface AuthorizationPort {
     tuple: AuthzRelationTuple,
     options?: AuthzMutationOptions
   ): Promise<AuthzWriteDecision>;
+  writeRelations(
+    tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  deleteRelations(
+    tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  /** Atomically replace one tuple key, including its relationship condition. */
+  replaceRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
 }
+
+/** Full operator-internal authorization boundary. */
+export interface AuthorizationPort
+  extends AuthorizationCheckPort,
+    AuthorizationRelationAdminPort {}
 
 export interface AuthzRelationCondition {
   readonly name: string;
@@ -120,9 +151,52 @@ export type AuthzWriteDecision =
     }
   | {
       readonly decision: "failure";
-      readonly code: "authz_write_unavailable";
+      readonly code: "authz_write_denied" | "authz_write_unavailable";
       readonly reason?: string;
     };
+
+export type BillingAccountGrantRole = "reader" | "obo";
+
+export type BillingAccountGrantTarget =
+  | { readonly kind: "user"; readonly id: string }
+  | { readonly kind: "agent"; readonly id: string };
+
+export interface BillingAccountGrantInput {
+  /** Same-node human asserted by the node backend; operator verifies can_grant. */
+  readonly grantorUserId: string;
+  readonly billingAccountId: string;
+  readonly target: BillingAccountGrantTarget;
+  readonly role: BillingAccountGrantRole;
+  /** Required for an OBO bundle; omitted for a direct reader grant. */
+  readonly subjectUserId?: string;
+  /** Required for grants; ignored for revocation. */
+  readonly expiresAt: string;
+  readonly requestId?: string;
+}
+
+export interface BillingAccountRevokeInput {
+  /** Same-node human asserted by the node backend; operator verifies can_grant. */
+  readonly grantorUserId: string;
+  readonly billingAccountId: string;
+  readonly target: BillingAccountGrantTarget;
+  readonly role: BillingAccountGrantRole;
+  /** Required for an OBO bundle; omitted for a direct reader revoke. */
+  readonly subjectUserId?: string;
+  readonly requestId?: string;
+}
+
+/**
+ * Semantic account-grant boundary. It cannot express owner, node-role, or arbitrary
+ * relation writes; the operator independently verifies the grantor's can_grant edge.
+ */
+export interface BillingAccountGrantAdministrationPort {
+  grantBillingAccountAccess(
+    input: BillingAccountGrantInput
+  ): Promise<AuthzWriteDecision>;
+  revokeBillingAccountAccess(
+    input: BillingAccountRevokeInput
+  ): Promise<AuthzWriteDecision>;
+}
 
 export function authzToolResource(toolId: string): string {
   return `tool:${toolId}`;
@@ -231,4 +305,12 @@ export function relationForAuthzAction(action: AuthzAction): string {
   }
 }
 
+export {
+  AUTHORIZATION_FACADE_TOKEN_PREFIX,
+  type AuthorizationFacadeCredentialIdentity,
+  authorizationFacadeCredentialFromToken,
+  authorizationFacadeNodeIdFromToken,
+  RemoteAuthorizationAdapter,
+  type RemoteAuthorizationAdapterConfig,
+} from "./adapters/remote-authorization.adapter";
 export { FakeAuthorizationAdapter } from "./test/fake-authorization.adapter";

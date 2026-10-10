@@ -53,7 +53,7 @@
   - `ToolSpec` - Canonical tool definition (JSONSchema7 inputSchema)
   - `ToolInvocationRecord` - Tool execution record (timing, result, error)
   - `ToolRedactionConfig` - Redaction config for tool output
-  - `createToolRunner` - Canonical tool execution pipeline (policy enforcement, optional AuthorizationPort check, validation, redaction)
+  - `createToolRunner` - Canonical tool execution pipeline (policy enforcement, optional AuthorizationCheckPort check, validation, redaction)
   - `ToolPolicy`, `createToolAllowlistPolicy`, `DENY_ALL_POLICY` - Tool policy interface and helpers
   - `BoundToolRuntime` - Minimal runtime interface (no Zod dependency)
   - `ToolSourcePort` - Port interface for tool sources (static, MCP)

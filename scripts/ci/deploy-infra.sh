@@ -909,6 +909,48 @@ source_operator_database_service_url
 OPENFGA_DB_PASSWORD="$(openbao_get_field openfga OPENFGA_DB_PASSWORD)"
 [[ -n "$OPENFGA_DB_PASSWORD" ]] || log_fatal "OPENFGA_DB_PASSWORD absent from OpenBao cogni/${DEPLOY_ENVIRONMENT}/openfga — provision Phase 5c must seed it (never fall back to a divergent .env value)"
 export OPENFGA_DB_PASSWORD
+
+ensure_openfga_api_token() {
+  local current="" generated="" jwt="" tok="" persisted="" attempt
+  current="$(openbao_get_field openfga OPENFGA_API_TOKEN)"
+  if [[ -n "$current" ]]; then
+    printf '%s' "$current"
+    return 0
+  fi
+
+  command -v openssl >/dev/null 2>&1 \
+    || log_fatal "openssl is required to mint the OpenFGA preshared credential"
+  generated="$(openssl rand -hex 32)"
+  for attempt in 1 2 3; do
+    jwt="$(timeout 15 kubectl create token openbao-writer -n default 2>/dev/null)" || jwt=""
+    if [[ -n "$jwt" ]]; then
+      tok="$(timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+        bao write -field=token auth/kubernetes/login \
+        "role=${DEPLOY_ENVIRONMENT}-writer" "jwt=${jwt}" 2>/dev/null)" || tok=""
+    fi
+    if [[ -n "$tok" ]] && printf '%s' "$generated" | timeout 20 kubectl exec -i -n openbao openbao-0 -- \
+      env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$tok" \
+      bao kv patch "cogni/${DEPLOY_ENVIRONMENT}/openfga" OPENFGA_API_TOKEN=- >/dev/null 2>&1; then
+      rm -f "${BAO_CACHE_DIR}/path-openfga.json" "$BAO_TOKEN_FILE"
+      persisted="$(openbao_get_field openfga OPENFGA_API_TOKEN)"
+      [[ "$persisted" == "$generated" ]] \
+        || log_fatal "OpenFGA preshared credential write did not verify"
+      printf '%s' "$persisted"
+      return 0
+    fi
+    [[ "$attempt" -lt 3 ]] && sleep 3
+  done
+  log_fatal "OPENFGA_API_TOKEN absent and governed OpenBao set-once mint failed"
+}
+
+# No node receives this credential. It is consumed only by the OpenFGA service,
+# bootstrap client, and trusted operator adapter. Existing environments converge
+# idempotently on their next governed infra reconcile.
+OPENFGA_API_TOKEN="$(ensure_openfga_api_token)"
+[[ -n "$OPENFGA_API_TOKEN" ]] \
+  || log_fatal "OPENFGA_API_TOKEN absent after governed reconciliation"
+OPENFGA_AUTHN_METHOD=preshared
+export OPENFGA_API_TOKEN OPENFGA_AUTHN_METHOD
 # TEMPORAL_DB_PASSWORD — same shared-infra DB-cred class as OPENFGA (dedicated
 # temporal-postgres superuser). Read via the ungated ${env}-db-reader seam, not the
 # operator-env-secrets-gated reader, so a fresh provision (SSOT off) binds it instead
@@ -1060,11 +1102,10 @@ append_env_if_set "$RUNTIME_ENV" POLY_WALLET_AEAD_KEY_ID "${POLY_WALLET_AEAD_KEY
 append_env_if_set "$RUNTIME_ENV" POLY_CLOB_GEO_BLOCK_TOKEN "${POLY_CLOB_GEO_BLOCK_TOKEN-}"
 # BYO-AI: Connection encryption
 append_env_if_set "$RUNTIME_ENV" CONNECTIONS_ENCRYPTION_KEY "${CONNECTIONS_ENCRYPTION_KEY-}"
-# OpenFGA authn is disabled by default for the VM-internal service. When
-# enabled, seed OPENFGA_API_TOKEN through the environment/OpenBao path; never
-# commit it in manifests.
-append_env_if_set "$RUNTIME_ENV" OPENFGA_AUTHN_METHOD "${OPENFGA_AUTHN_METHOD-}"
-append_env_if_set "$RUNTIME_ENV" OPENFGA_API_TOKEN "${OPENFGA_API_TOKEN-}"
+# The listener is reachable from node workloads. Preshared auth is mandatory;
+# the key is infrastructure/operator custody and is never projected to nodes.
+printf '%s=%s\n' OPENFGA_AUTHN_METHOD "$OPENFGA_AUTHN_METHOD" >> "$RUNTIME_ENV"
+printf '%s=%s\n' OPENFGA_API_TOKEN "$OPENFGA_API_TOKEN" >> "$RUNTIME_ENV"
 # Grafana observability
 derive_pdc_defaults_from_token
 append_env_if_set "$RUNTIME_ENV" GRAFANA_URL "${GRAFANA_URL-}"
@@ -1539,11 +1580,12 @@ patch_operator_openfga_config() {
   # intact bucket. `put` is now unreachable except on proven absence.
   path="cogni/${DEPLOY_ENVIRONMENT}/operator"
   set +e
-  patch_out=$(timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+  patch_out=$(printf '%s' "$OPENFGA_API_TOKEN" | timeout 20 kubectl exec -i -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
     bao kv patch "$path" \
       "OPENFGA_STORE_ID=${OPENFGA_STORE_ID}" \
       "OPENFGA_AUTHORIZATION_MODEL_ID=${OPENFGA_AUTHORIZATION_MODEL_ID}" \
-      "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" 2>&1)
+      "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" \
+      "OPENFGA_API_TOKEN=-" 2>&1)
   patch_rc=$?
   set -e
   if [[ $patch_rc -eq 0 ]]; then
@@ -1558,11 +1600,12 @@ patch_operator_openfga_config() {
   # cannot clobber siblings (mirrors provision seed_kv fix a54f24809b).
   if printf '%s' "$patch_out" | grep -qiE 'no value found|does not exist|not found|code: 404'; then
     log_warn "operator bucket ${path} absent — creating it with a fresh put"
-    timeout 20 kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
+    printf '%s' "$OPENFGA_API_TOKEN" | timeout 20 kubectl exec -i -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="${tok}" \
       bao kv put "$path" \
         "OPENFGA_STORE_ID=${OPENFGA_STORE_ID}" \
         "OPENFGA_AUTHORIZATION_MODEL_ID=${OPENFGA_AUTHORIZATION_MODEL_ID}" \
-        "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" >/dev/null || return 1
+        "OPENFGA_AUTHORIZATION_MODEL_HASH=${OPENFGA_AUTHORIZATION_MODEL_HASH}" \
+        "OPENFGA_API_TOKEN=-" >/dev/null || return 1
     return 0
   fi
 
@@ -1573,7 +1616,7 @@ patch_operator_openfga_config() {
 }
 
 refresh_operator_openfga_secret() {
-  local k8s_ns="cogni-${DEPLOY_ENVIRONMENT}" es_name="" candidate synced_store_id synced_model_id
+  local k8s_ns="cogni-${DEPLOY_ENVIRONMENT}" es_name="" candidate synced_store_id synced_model_id synced_api_token
   for candidate in operator-env-secrets env-secrets; do
     if kubectl -n "$k8s_ns" get externalsecret "$candidate" >/dev/null 2>&1; then
       es_name="$candidate"
@@ -1601,8 +1644,12 @@ refresh_operator_openfga_secret() {
       -o jsonpath='{.data.OPENFGA_STORE_ID}' 2>/dev/null | base64 -d 2>/dev/null || true)
     synced_model_id=$(kubectl -n "$k8s_ns" get secret operator-env-secrets \
       -o jsonpath='{.data.OPENFGA_AUTHORIZATION_MODEL_ID}' 2>/dev/null | base64 -d 2>/dev/null || true)
-    if [[ "$synced_store_id" == "$OPENFGA_STORE_ID" && "$synced_model_id" == "$OPENFGA_AUTHORIZATION_MODEL_ID" ]]; then
-      log_info "operator-env-secrets contains current OpenFGA runtime IDs"
+    synced_api_token=$(kubectl -n "$k8s_ns" get secret operator-env-secrets \
+      -o jsonpath='{.data.OPENFGA_API_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    if [[ "$synced_store_id" == "$OPENFGA_STORE_ID" \
+      && "$synced_model_id" == "$OPENFGA_AUTHORIZATION_MODEL_ID" \
+      && "$synced_api_token" == "$OPENFGA_API_TOKEN" ]]; then
+      log_info "operator-env-secrets contains current OpenFGA runtime IDs and credential"
       return 0
     fi
     sleep 2
@@ -2072,7 +2119,7 @@ SECEOF
         [[ -n "$pod" ]] || continue
         if kubectl -n "${K8S_NS}" wait "pod/${pod}" --for=condition=Ready --timeout=5s >/dev/null 2>&1 \
           && kubectl -n "${K8S_NS}" exec "$pod" -c app -- /bin/sh -c \
-            'test -n "${OPENFGA_API_URL:-}" && test -n "${OPENFGA_STORE_ID:-}" && test -n "${OPENFGA_AUTHORIZATION_MODEL_ID:-}"' 2>/dev/null; then
+            'test -n "${OPENFGA_API_URL:-}" && test -n "${OPENFGA_STORE_ID:-}" && test -n "${OPENFGA_AUTHORIZATION_MODEL_ID:-}" && test -n "${OPENFGA_API_TOKEN:-}"' 2>/dev/null; then
           return 0
         fi
       done <<< "$pods"
@@ -2107,7 +2154,7 @@ SECEOF
       [[ -n "$pod" ]] || continue
       printf 'operator pod %s env key presence:\n' "$pod"
       kubectl -n "${K8S_NS}" exec "$pod" -c app -- /bin/sh -c '
-        for key in OPENFGA_API_URL OPENFGA_STORE_ID OPENFGA_AUTHORIZATION_MODEL_ID; do
+        for key in OPENFGA_API_URL OPENFGA_STORE_ID OPENFGA_AUTHORIZATION_MODEL_ID OPENFGA_API_TOKEN; do
           eval "value=\${$key:-}"
           if [ -n "$value" ]; then
             printf "%s=present\n" "$key"

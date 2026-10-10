@@ -25,7 +25,7 @@ import {
   createToolRunner,
 } from "@cogni/ai-core";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
-import type { AuthorizationPort } from "@cogni/authorization-core";
+import type { AuthorizationCheckPort } from "@cogni/authorization-core";
 import {
   type CompletionFn,
   type CreateGraphFn,
@@ -107,7 +107,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     private readonly getMcpToolSource: () => Promise<ToolSourcePort | null> = () =>
       Promise.resolve(null),
     nodeBundle: readonly CatalogBoundTool[] = [],
-    private readonly authorization?: AuthorizationPort
+    private readonly authorization?: AuthorizationCheckPort
   ) {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
