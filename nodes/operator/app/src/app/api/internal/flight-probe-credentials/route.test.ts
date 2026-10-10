@@ -44,7 +44,10 @@ describe("flight-probe credential projection route", () => {
     const res = await handleFlightProbeCredentialProjection(request(), d);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
-    await expect(res.json()).resolves.toEqual({ active: ACTIVE, previous: null });
+    await expect(res.json()).resolves.toEqual({
+      active: ACTIVE,
+      previous: null,
+    });
     expect(d.readRing).toHaveBeenCalledWith({
       oidcJwt: "github-oidc-jwt",
       lane: "candidate-a",

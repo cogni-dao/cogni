@@ -49,7 +49,8 @@ try {
   const oidcText = await oidcResponse.text();
   if (oidcText.length > 16_384) fail();
   const oidcBody = JSON.parse(oidcText);
-  if (typeof oidcBody.value !== "string" || oidcBody.value.length > 8192) fail();
+  if (typeof oidcBody.value !== "string" || oidcBody.value.length > 8192)
+    fail();
 
   const endpoint = new URL("/api/internal/flight-probe-credentials", base);
   const response = await fetch(endpoint, {

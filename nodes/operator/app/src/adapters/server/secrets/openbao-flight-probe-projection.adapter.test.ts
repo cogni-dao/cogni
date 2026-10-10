@@ -61,26 +61,28 @@ describe("OpenBaoFlightProbeProjectionAdapter", () => {
     );
   });
 
-  it.each(["expired", "wrong-audience", "foreign-repo", "wrong-lane"])(
-    "fails closed when OpenBao rejects %s identity",
-    async () => {
-      const adapter = new OpenBaoFlightProbeProjectionAdapter({
-        addr: "http://openbao.openbao.svc:8200",
-        fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(
-          new Response(JSON.stringify({ errors: ["permission denied"] }), {
-            status: 403,
-          })
-        ),
-      });
-      await expect(
-        adapter.readRing({
-          oidcJwt: "rejected-jwt",
-          lane: "candidate-a",
-          nodeId: NODE_ID,
+  it.each([
+    "expired",
+    "wrong-audience",
+    "foreign-repo",
+    "wrong-lane",
+  ])("fails closed when OpenBao rejects %s identity", async () => {
+    const adapter = new OpenBaoFlightProbeProjectionAdapter({
+      addr: "http://openbao.openbao.svc:8200",
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ errors: ["permission denied"] }), {
+          status: 403,
         })
-      ).rejects.toMatchObject({ code: "oidc_rejected" });
-    }
-  );
+      ),
+    });
+    await expect(
+      adapter.readRing({
+        oidcJwt: "rejected-jwt",
+        lane: "candidate-a",
+        nodeId: NODE_ID,
+      })
+    ).rejects.toMatchObject({ code: "oidc_rejected" });
+  });
 
   it("rejects malformed or oversized stored rings", async () => {
     const fetchImpl = vi

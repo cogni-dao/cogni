@@ -57,7 +57,10 @@ export type ProjectionDeps = {
   }) => void;
 };
 
-function response(status: number, body: Record<string, unknown>): Response {
+function response(
+  status: number,
+  body: Record<string, unknown>
+): NextResponse<Record<string, unknown>> {
   return NextResponse.json(body, {
     status,
     headers: { "Cache-Control": "no-store" },
@@ -103,7 +106,7 @@ async function readBoundedJson(request: Request): Promise<unknown> {
 export async function handleFlightProbeCredentialProjection(
   request: Request,
   deps: ProjectionDeps
-): Promise<Response> {
+): Promise<NextResponse<Record<string, unknown>>> {
   if (!isTls(request) || !deps.isControl()) {
     deps.audit({ outcome: "denied" });
     return response(401, { error: "unauthorized" });
