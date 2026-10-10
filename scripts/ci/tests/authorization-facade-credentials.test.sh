@@ -33,6 +33,13 @@ grep -q 'AUTHORIZATION_FACADE_VERIFIER_RINGS_JSON' "$projector"
 grep -q 'sha256sum' "$projector"
 ! grep -Eq 'MAP_FIELD=AUTHORIZATION_FACADE_(TOKEN|CREDENTIAL)' "$projector"
 
+# A rejected finish/cancel cannot partially revoke the credential that remains
+# loaded by the workload: state preflight must precede verifier-map mutation.
+preflight_line="$(grep -n 'Refuse an invalid finish/cancel BEFORE' "$projector" | cut -d: -f1)"
+map_line="$(grep -n '^OPERATOR_PATH=' "$projector" | cut -d: -f1)"
+test "$preflight_line" -lt "$map_line"
+grep -q 'cancel refused after activation' "$projector"
+
 # Projection fetches reject redirects and plaintext origins at both hops.
 test "$(grep -c 'redirect: "error"' "$fetcher")" -eq 2
 grep -q 'base.protocol !== "https:"' "$fetcher"
