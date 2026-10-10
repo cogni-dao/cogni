@@ -100,6 +100,7 @@ jobs:
         run: |
           bash scripts/ci/render-scheduler-worker-endpoints.sh --check
           bash scripts/ci/render-node-appset.sh --check
+          bash scripts/ci/render-network-nodes.sh --check
           bash scripts/ci/render-node-overlays.sh --check
 
   # Fast gate: install → typecheck → lint
@@ -465,6 +466,11 @@ jobs:
       # didn't regenerate it (run `pnpm gen:scheduler-worker-endpoints`).
       - name: scheduler node routing drift
         run: bash scripts/ci/render-scheduler-worker-endpoints.sh --check
+
+      # Runtime cannot fs-glob infra/catalog, so this static roster is a generated
+      # fleet projection rather than fleet-specific operator source.
+      - name: network node roster drift (CATALOG_IS_SSOT)
+        run: bash scripts/ci/render-network-nodes.sh --check
 
       # Per-node ApplicationSet drift (CATALOG_IS_SSOT + LANE_ISOLATION, axiom
       # 18). One AppSet object per (env, node) is derived from the catalog rows

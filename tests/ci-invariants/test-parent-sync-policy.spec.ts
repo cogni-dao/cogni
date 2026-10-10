@@ -107,9 +107,18 @@ describe("test-parent divergence policy", () => {
     "infra/k8s/base/scheduler-worker/configmap.yaml",
     "infra/compose/edge/configs/Caddyfile.tmpl",
     "infra/catalog/operator.yaml",
+    "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts",
     ".cogni/repo-spec.yaml",
   ])("requires the generated control-plane path, frees only its content — %s", (p) => {
     expect(policy.hubDisposition(p)).toBe("content_free");
+  });
+
+  it("regenerates the mirror runtime roster from the restored catalog", () => {
+    const sync = fs.readFileSync(
+      path.join(REPO_ROOT, "scripts/ci/sync-test-parent.mjs"),
+      "utf8"
+    );
+    expect(sync).toContain('render-network-nodes.sh", "--write"');
   });
 
   // CONTENT_MAY_DIFFER_WINS — the control-plane cases above are nested inside these omissions.

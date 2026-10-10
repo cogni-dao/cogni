@@ -156,6 +156,9 @@ divergences:
       - "infra/catalog/operator.yaml"
       - "infra/catalog/scheduler-worker.yaml"
       - "infra/catalog/node-template.yaml"
+      # Runtime cannot ship the catalog; mirror sync regenerates this projection from the
+      # restored mirror catalog with the canonical render-network-nodes.sh.
+      - "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts"
       # 3 — env desired state rendered FROM the roster. Present on both sides, content per-roster.
       - "infra/k8s/overlays/*/*.yaml" # per-env root kustomization/namespace — enumerates the env's components
       - "infra/k8s/overlays/*/operator/**" # control-plane node, every env

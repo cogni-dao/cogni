@@ -171,6 +171,16 @@ const main = async () => {
       ]);
     }
 
+    // The mirror owns a different catalog, so regenerate the runtime projection after restoring
+    // that roster. Shared renderer + mirror-owned inputs keeps this automatic and reproducible.
+    const networkRoster =
+      "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts";
+    execFileSync("bash", ["scripts/ci/render-network-nodes.sh", "--write"], {
+      cwd: clone,
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    git(clone, ["add", "--", networkRoster]);
+
     const tree = git(clone, ["write-tree"]).trim();
     if (tree === git(clone, ["rev-parse", `${mirrorSha}^{tree}`]).trim()) {
       console.log("✅ mirror already matches policy — up_to_date, no PR.");
