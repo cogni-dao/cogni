@@ -1038,6 +1038,10 @@ jobs:
       matrix:
         node: ${{ fromJson(needs.decide.outputs.deployment_node_targets_json) }}
     uses: ./.github/workflows/flight-probe-project.yml
+    # Reusable workflows do not inherit caller secrets implicitly. The called
+    # jobs bind their own production/candidate environments, but without this
+    # handoff both VM_HOST and SSH_DEPLOY_KEY resolve empty before projection.
+    secrets: inherit
     permissions:
       contents: read
       id-token: write
