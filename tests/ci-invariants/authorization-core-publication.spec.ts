@@ -7,7 +7,7 @@
  * Scope: Static assertions over package metadata/source, repo policy, and publication workflow.
  * Invariants:
  *   - RELEASE_REQUIRES_POLICY_GATES: a main ancestor is insufficient; every repo-policy check passes on the tagged SHA.
- *   - PACKAGE_STAYS_CANONICAL: the artifact intentionally includes Cogni's OpenFGA adapter and SDK dependency.
+ *   - RAW_ADAPTER_STAYS_OPERATOR_ONLY: node consumers cannot import the direct OpenFGA adapter from the package root.
  * Side-effects: IO (reads committed JSON, TypeScript, and workflow YAML).
  * Links: task.5224, packages/authorization-core, .github/workflows/publish-authorization-core.yml
  * @public
@@ -56,9 +56,14 @@ const packageJson = JSON.parse(
   readonly private?: boolean;
   readonly version: string;
   readonly dependencies?: Readonly<Record<string, string>>;
+  readonly exports?: Readonly<Record<string, unknown>>;
 };
 const packageIndex = readFileSync(
   path.join(REPO_ROOT, "packages/authorization-core/src/index.ts"),
+  "utf8"
+);
+const packageOperatorEntry = readFileSync(
+  path.join(REPO_ROOT, "packages/authorization-core/src/operator.ts"),
   "utf8"
 );
 const requiredCheckScript = readFileSync(
@@ -112,11 +117,14 @@ describe("authorization-core publication", () => {
     expect(tagStep).toContain("refs/tags/${tag}");
   });
 
-  it("publishes the existing adapter-bearing package rather than a shadow contract", () => {
+  it("publishes one canonical package with a segregated operator adapter", () => {
     expect(packageJson.private).not.toBe(true);
     expect(packageJson.version).toBe("0.1.0");
     expect(packageJson.dependencies?.["@openfga/sdk"]).toBe("0.9.6");
-    expect(packageIndex).toContain("OpenFgaAuthorizationAdapter");
+    expect(packageJson.exports).toHaveProperty("./operator");
+    expect(packageIndex).not.toContain("OpenFgaAuthorizationAdapter");
+    expect(packageOperatorEntry).toContain("OpenFgaAuthorizationAdapter");
+    expect(packageOperatorEntry).toContain("Independently governed nodes");
   });
 
   it("does not expose the shared OpenFGA authority to node apps", () => {

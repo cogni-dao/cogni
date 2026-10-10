@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Shared authorization port, OpenFGA adapter, resource helpers, and deterministic test fake for node-template-based Cogni nodes. This package is the RBAC spine consumed by operator, node-template, and future node-template forks.
+Shared authorization port, resource helpers, deterministic test fake, and trusted-operator OpenFGA adapter for node-template-based Cogni nodes.
 
 ## Pointers
 
@@ -42,8 +42,8 @@ Shared authorization port, OpenFGA adapter, resource helpers, and deterministic 
 - `AuthzRelationTuple`, `AuthzWriteDecision`
 - `authzToolResource`, `authzConnectionResource`, `authzGraphResource`, `authzUserResource`
 - `relationForAuthzAction`
-- `OpenFgaAuthorizationAdapter`
 - `FakeAuthorizationAdapter`
+- `@cogni/authorization-core/operator`: `OpenFgaAuthorizationAdapter` (trusted control plane only)
 
 ## Responsibilities
 
@@ -60,4 +60,5 @@ vitest run --config packages/authorization-core/vitest.config.ts
 
 ## Notes
 
-- Runtime node composition roots decide whether to instantiate the OpenFGA adapter from env.
+- Independently governed nodes must never import `@cogni/authorization-core/operator` or receive raw shared OpenFGA configuration. They consume the mediated `RemoteAuthorizationAdapter` delivered by `task.5226`.
+- Only the trusted operator composition root may instantiate the raw `OpenFgaAuthorizationAdapter`.

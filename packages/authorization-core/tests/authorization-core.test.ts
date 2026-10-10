@@ -26,6 +26,9 @@ import {
   authzNodeUserPrincipal,
   authzToolResource,
   FakeAuthorizationAdapter,
+  relationForAuthzAction,
+} from "../src/index";
+import {
   OpenFgaAuthorizationAdapter,
   type OpenFgaCheckClient,
   type OpenFgaCheckOptions,
@@ -33,8 +36,7 @@ import {
   type OpenFgaReadClient,
   type OpenFgaStoreClient,
   type OpenFgaWriteClient,
-  relationForAuthzAction,
-} from "../src/index";
+} from "../src/operator";
 
 const baseCheck = {
   actorId: "user:alice",
