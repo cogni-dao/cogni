@@ -18,6 +18,12 @@ data:
   TEMPORAL_NAMESPACE: "cogni-preview"
   TEMPORAL_TASK_QUEUE: "scheduler-tasks"
   REDIS_URL: "redis://redis-external:6379"
+  # k3s-only internal OpenFGA endpoint. Store/model IDs are projected from the
+  # operator bootstrap into each node's own OpenBao/ESO scope. No shared bearer
+  # is delivered: the in-cluster endpoint is protected by the cluster boundary.
+  # Off-cluster/Akash workloads do not consume this ConfigMap and therefore fail
+  # closed until a separately reviewed private transport exists.
+  OPENFGA_API_URL: "http://operator-openfga-external:8080"
   # Repo-spec baked into image at /app/.cogni/repo-spec.yaml (no git-sync needed).
   # Updated every CI build via COPY in Dockerfile.
   COGNI_REPO_PATH: "/app"
