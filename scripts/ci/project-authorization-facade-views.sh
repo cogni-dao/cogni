@@ -86,6 +86,22 @@ write_field() {
   fail "lane KV CAS did not converge"
 }
 
+# Refuse an invalid finish/cancel BEFORE narrowing the verifier overlap. A
+# cancel attempted after activation must leave the active credential accepted;
+# changing the digest map first would strand the live workload on a rejected
+# token even though the operation ultimately failed.
+if [[ "$PROVIDER" == k3s ]]; then
+  TARGET_PATH="cogni/${LANE}/${TARGET_NODE}"
+  read_path "$TARGET_PATH"
+  current="$(jq -r '.AUTHORIZATION_FACADE_TOKEN // empty' <<<"$PATH_DATA")"
+  if [[ "$OPERATION" == cancel && "$current" != "$PREVIOUS" ]]; then
+    fail "cancel refused after activation"
+  fi
+  if [[ "$OPERATION" == finish && "$current" != "$ACTIVE" ]]; then
+    fail "finish refused before activation"
+  fi
+fi
+
 OPERATOR_PATH="cogni/${LANE}/operator"
 MAP_FIELD=AUTHORIZATION_FACADE_VERIFIER_RINGS_JSON
 for attempt in 1 2 3 4 5; do
@@ -102,11 +118,6 @@ for attempt in 1 2 3 4 5; do
 done
 
 if [[ "$PROVIDER" == k3s ]]; then
-  TARGET_PATH="cogni/${LANE}/${TARGET_NODE}"
-  read_path "$TARGET_PATH"
-  current="$(jq -r '.AUTHORIZATION_FACADE_TOKEN // empty' <<<"$PATH_DATA")"
-  if [[ "$OPERATION" == cancel && "$current" != "$PREVIOUS" ]]; then fail "cancel refused after activation"; fi
-  if [[ "$OPERATION" == finish && "$current" != "$ACTIVE" ]]; then fail "finish refused before activation"; fi
   write_field "$TARGET_PATH" AUTHORIZATION_FACADE_TOKEN "$WORKLOAD"
 fi
 
