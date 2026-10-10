@@ -262,6 +262,47 @@ clientLogger.warn(EVENT_NAMES.CLIENT_CHAT_STREAM_ERROR, { messageId });
 
 **Error Metrics:** `ai_llm_errors_total` receives pre-normalized `AiExecutionErrorCode` from the completion layer. Metrics never introspect error objects or use string heuristics. See [Error Handling Architecture](ERROR_HANDLING_ARCHITECTURE.md#ai-execution-errors).
 
+### Temporal substrate visibility
+
+Temporal is the durable execution backbone, so "the app is up" and "Temporal accepted a client
+connection" are not health proof. Node-template provides two views over one shared bounded health
+inspector:
+
+- authenticated `GET /api/v1/temporal/health` for a structured, machine-readable snapshot;
+- `pnpm temporal:health -- --env <env>` for the instant human/agent check against a deployed node.
+
+The snapshot joins direct facts from each owner: Temporal namespace reachability and Workflow plus
+Activity pollers; the private Worker's `/readyz` identity, catalog, deployment, and Build ID; the
+app's expected source SHA and repo-spec schedules; Worker Deployment routing; and the latest due
+execution. It reports `healthy`, `degraded`, or `unhealthy` with stable reason codes. The command
+exits non-zero for every non-healthy, unauthorized, timed-out, or malformed response. Compatibility
+mode is always identified explicitly.
+
+Instrumentation follows the normal node observability contract:
+
+- Health operation: one terminal `substrate.temporal.health_checked` event with result, reason
+  code, duration, mode, and counts. Node identity is inherited; inputs, results, and secrets are
+  excluded.
+- Inspection freshness: `temporal_substrate_last_success_timestamp_seconds`, with only the default
+  `node_id` label.
+- Server-side pollers: `temporal_substrate_pollers`, labeled only with the fixed
+  `task_type=workflow|activity` enum.
+- Schedule reconciliation: `temporal_schedule_drift`, aggregated across schedules. Schedule ID is a
+  log field, never a metric label.
+- Inspector behavior: `temporal_substrate_checks_total` and
+  `temporal_substrate_check_duration_seconds`, labeled only with result and reason enums.
+
+The operator calls the diagnostic at a fixed interval. Alerts are direct and actionable: required
+poller absent/stale, Worker/app/current Build ID mismatch, persistent schedule drift, or stale last
+successful inspection. A due schedule that has no terminal run is separate from a schedule that is
+not yet due. Ordinary `/readyz` stays a non-draining serving probe; `/readyz?deep=1` reuses the
+Temporal inspector and fails closed for deployment validation. Worker stdout/stderr is collected
+as its own service by the platform log pump, so startup/auth/crash-loop failures remain readable
+even when the app cannot reach the Worker.
+
+See [Temporal Substrate](./substrate-temporal.md#one-call-substrate-health) for the response and
+acceptance contract.
+
 ---
 
 ## Current Shortcomings

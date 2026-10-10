@@ -263,6 +263,9 @@ grep -q -- "-n cogni-candidate-a delete externalsecret env-secrets" "$REMOTE_ROO
 grep -q -- "-n cogni-candidate-a annotate externalsecret operator-env-secrets force-sync=" "$REMOTE_ROOT/kubectl.log"
 grep -q -- "-n cogni-candidate-a wait --for=condition=Ready externalsecret/operator-env-secrets --timeout=120s" "$REMOTE_ROOT/kubectl.log"
 grep -q -- "-n cogni-candidate-a get secret operator-env-secrets" "$REMOTE_ROOT/kubectl.log"
+operator_node_id="$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)"
+grep -q -- "--ns cogni-candidate-a" "$REMOTE_ROOT/docker.log"
+grep -q -- "--ns cogni-candidate-a-${operator_node_id}" "$REMOTE_ROOT/docker.log"
 # READ-ONLY on OpenBao: secret-materialize is the sole writer. After reconcile the
 # node bank must hold ONLY the per-node creds we pre-seeded — reconcile writes
 # nothing (no source:agent app keys, no DSNs). This locks the zero-write posture.

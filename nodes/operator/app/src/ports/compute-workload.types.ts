@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import type { NodeServiceRuntimeProfileSpec } from "@cogni/repo-spec";
+
 export interface ComputeWorkloadSource {
   readonly repository: string;
   readonly sha: string;
@@ -28,7 +30,7 @@ export interface ComputeWorkloadSecretRef {
 export interface DeclaredProvisionServiceSpec {
   readonly name: string;
   readonly artifact: string;
-  readonly runtimeProfile?: "cogni-node-app-v1";
+  readonly runtimeProfile?: NodeServiceRuntimeProfileSpec;
   readonly secretRefs?: readonly ComputeWorkloadSecretRef[];
   readonly command?: readonly string[];
   readonly args?: readonly string[];

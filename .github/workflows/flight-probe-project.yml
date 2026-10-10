@@ -1,0 +1,161 @@
+name: Flight Probe Credential Projection
+
+on:
+  workflow_call:
+    inputs:
+      lane:
+        required: true
+        type: string
+      node:
+        required: true
+        type: string
+      operation:
+        required: false
+        type: string
+        default: materialize
+    secrets:
+      # GitHub requires callers to pass each named secret capability before the
+      # called job's environment-scoped value can take precedence. Callers map
+      # only these names; the flight-probe credential itself never crosses the
+      # workflow-call boundary.
+      VM_HOST:
+        required: true
+      SSH_DEPLOY_KEY:
+        required: true
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Target lane
+        required: true
+        type: choice
+        options: [candidate-a, preview, production]
+      node:
+        description: Catalog node slug
+        required: true
+        type: string
+      operation:
+        description: Credential lifecycle phase
+        required: true
+        type: choice
+        default: materialize
+        options: [materialize, prepare, activate, finish, revoke]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flight-probe-project-${{ inputs.lane }}-${{ inputs.node }}
+  cancel-in-progress: false
+
+jobs:
+  authority:
+    runs-on: ubuntu-latest
+    environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+    outputs:
+      provider: ${{ steps.target.outputs.provider }}
+      requires_projection: ${{ steps.target.outputs.requires_projection }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: main
+      - name: Validate target and resolve placement
+        id: target
+        env:
+          CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+          LANE: ${{ inputs.lane }}
+          NODE: ${{ inputs.node }}
+        run: |
+          set -euo pipefail
+          [[ "$LANE" =~ ^(candidate-a|preview|production)$ ]]
+          [[ "$CONTROL_ENV" =~ ^(candidate-a|preview|production)$ ]]
+          [[ "$NODE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+          catalog="infra/catalog/${NODE}.yaml"
+          [ -f "$catalog" ]
+          provider="$(yq -N '.deployment_provider[strenv(LANE)] // "k3s"' "$catalog")"
+          [[ "$provider" =~ ^(k3s|akash)$ ]]
+          # A target in the control lane shares the authoritative vault. Only a
+          # k3s target in another lane needs the OIDC cross-env projection seam.
+          requires_projection=false
+          if [[ "$provider" == k3s && "$LANE" != "$CONTROL_ENV" ]]; then
+            requires_projection=true
+          fi
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+          echo "requires_projection=$requires_projection" >> "$GITHUB_OUTPUT"
+      - name: Configure control-vault SSH
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$VM_HOST" ] && [ -n "$SSH_DEPLOY_KEY" ]
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+      - name: Reconcile control-vault authority
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30
+          FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+          SECRETS_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+          FLIGHT_PROBE_LOCAL_TARGET_VIEW: ${{ steps.target.outputs.requires_projection != 'true' && 'true' || 'false' }}
+        run: bash scripts/ci/flight-probe-credentials.sh "${{ inputs.operation }}" "${{ inputs.lane }}" "${{ inputs.node }}"
+
+  target:
+    needs: authority
+    if: needs.authority.outputs.requires_projection == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.lane }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: main
+      - name: Configure target-vault SSH
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$VM_HOST" ] && [ -n "$SSH_DEPLOY_KEY" ]
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+      - name: Resolve fixed control endpoint and catalog identity
+        id: target
+        env:
+          CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+          FORK_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+          CANDIDATE_CONTROL_DOMAIN: ${{ vars.CANDIDATE_OPERATOR_DOMAIN }}
+          NODE: ${{ inputs.node }}
+        run: |
+          set -euo pipefail
+          case "$CONTROL_ENV" in
+            production) control_url="https://${FORK_ROOT}" ;;
+            preview) control_url="https://preview.${FORK_ROOT}" ;;
+            candidate-a) control_url="https://${CANDIDATE_CONTROL_DOMAIN:-test.${FORK_ROOT}}" ;;
+            *) echo "::error::unsupported fleet control env"; exit 1 ;;
+          esac
+          # REPO_SPEC_IS_IDENTITY_SSOT: in-repo nodes resolve through their
+          # readable repo-spec; remote-source nodes use the drift-gated catalog
+          # projection. Every selected type:node must resolve or the flight fails.
+          . scripts/ci/lib/image-tags.sh
+          node_id="$(node_id_for_target "$NODE")"
+          [[ "$node_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          echo "control_url=$control_url" >> "$GITHUB_OUTPUT"
+          echo "node_id=$node_id" >> "$GITHUB_OUTPUT"
+      - name: Fetch OIDC-bound ring and project target view
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30
+          FLIGHT_PROBE_CONTROL_URL: ${{ steps.target.outputs.control_url }}
+          FLIGHT_PROBE_LANE: ${{ inputs.lane }}
+          FLIGHT_PROBE_NODE_ID: ${{ steps.target.outputs.node_id }}
+          DOMAIN: ${{ vars.DOMAIN }}
+        run: |
+          set -euo pipefail
+          node scripts/ci/fetch-flight-probe-ring.mjs |
+            bash scripts/ci/project-flight-probe-ring.sh "${{ inputs.lane }}" "${{ inputs.node }}" "${{ inputs.operation }}"

@@ -16,6 +16,7 @@ import type {
   GateConfig,
   KnowledgeSpec,
   NodeRegistryEntry,
+  NodeServiceRuntimeProfileSpec,
   OperatorWalletSpec,
   RepoSpec,
   StewardWalletSpec,
@@ -79,7 +80,7 @@ export interface InboundPaymentConfig {
  * carries the declaring node's identity. Downstream (syncNodeSchedules) treats
  * `nodeId` as authoritative for routing + the workflowId (`node-task:{nodeId}:{id}`).
  *
- * `kind` is the *inferred* workflowType selector (route XOR graph) — there is no
+ * `kind` is the inferred workflowType selector (route, graph, or workflow) — there is no
  * node-facing `target` enum; the operator vocabulary stays operator-side.
  */
 export interface NodeScheduleConfig {
@@ -89,12 +90,14 @@ export interface NodeScheduleConfig {
   nodeId: string;
   cron: string;
   timezone: string;
-  /** Inferred from which of route/graph is present. */
-  kind: "http-dispatch" | "graph";
+  /** Inferred from which of route/graph/workflow is present. */
+  kind: "http-dispatch" | "graph" | "workflow";
   /** Relative route on the node's own host — set iff kind === "http-dispatch". */
   route?: string;
   /** Graph id — set iff kind === "graph". */
   graph?: string;
+  /** Node-owned Temporal Workflow type — set iff kind === "workflow". */
+  workflow?: string;
   /** Opaque payload forwarded verbatim. */
   payload: Record<string, unknown>;
 }
@@ -119,7 +122,7 @@ export interface NodeServiceConfig {
    * not listed here (see buildComputeWorkloadManifest).
    */
   readonly envs?: readonly ("candidate-a" | "preview" | "production")[];
-  readonly runtimeProfile?: "cogni-node-app-v1";
+  readonly runtimeProfile?: NodeServiceRuntimeProfileSpec;
   readonly bindings: Readonly<Record<string, string>>;
   readonly secretRefs: readonly { readonly key: string }[];
   readonly bindHost: "0.0.0.0";
@@ -342,15 +345,19 @@ export function extractGovernanceConfig(spec: RepoSpec): GovernanceConfig {
  * declared inside a schedule entry — so a repo-spec is structurally incapable of
  * producing a schedule for a foreign node.
  *
- * `kind` (the workflowType selector) is inferred from route XOR graph; the schema
+ * `kind` (the workflowType selector) is inferred from the one declared target; the schema
  * already guarantees exactly one is present, so this is a pure mapping.
  */
 export function extractNodeSchedules(spec: RepoSpec): NodeScheduleConfig[] {
   const ownNodeId = spec.node_id;
   const declared = spec.schedules ?? [];
   return declared.map((entry) => {
-    const kind: "http-dispatch" | "graph" =
-      entry.route !== undefined ? "http-dispatch" : "graph";
+    const kind: "http-dispatch" | "graph" | "workflow" =
+      entry.route !== undefined
+        ? "http-dispatch"
+        : entry.graph !== undefined
+          ? "graph"
+          : "workflow";
     return {
       id: entry.id,
       nodeId: ownNodeId,
@@ -359,6 +366,7 @@ export function extractNodeSchedules(spec: RepoSpec): NodeScheduleConfig[] {
       kind,
       ...(entry.route !== undefined ? { route: entry.route } : {}),
       ...(entry.graph !== undefined ? { graph: entry.graph } : {}),
+      ...(entry.workflow !== undefined ? { workflow: entry.workflow } : {}),
       payload: entry.payload,
     };
   });
