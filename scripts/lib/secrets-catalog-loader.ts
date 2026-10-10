@@ -86,6 +86,10 @@ const GenerateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("base64"), bytes: z.number().int().positive() }),
   z.object({ kind: z.literal("hex"), bytes: z.number().int().positive() }),
   z.object({
+    kind: z.literal("flight-probe-key-ring"),
+    bytes: z.number().int().min(32),
+  }),
+  z.object({
     kind: z.literal("sk-cogni"),
     randHexBytes: z.number().int().positive(),
   }),
@@ -184,6 +188,9 @@ const CatalogEntrySchema = z
     url: z.string().url().optional(),
     perEnv: z.boolean().optional(),
     repoLevel: z.boolean().optional(),
+    // Generated only by a dedicated runtime materializer. setup-secrets must
+    // never stage it in GitHub Environment Secrets as a parallel authority.
+    materializeOnly: z.boolean().optional(),
     generate: GenerateSchema.optional(),
     transform: TransformSchema.optional(),
   })
@@ -217,6 +224,7 @@ export interface Secret {
   generate?: () => string;
   perEnv?: boolean;
   repoLevel?: boolean;
+  materializeOnly?: boolean;
   transform?: (value: string) => string;
 }
 
@@ -412,6 +420,8 @@ function catalogEntryToSecret(entry: CatalogEntry): Secret {
   if (entry.syncTo !== undefined) secret.syncTo = entry.syncTo;
   if (entry.perEnv !== undefined) secret.perEnv = entry.perEnv;
   if (entry.repoLevel !== undefined) secret.repoLevel = entry.repoLevel;
+  if (entry.materializeOnly !== undefined)
+    secret.materializeOnly = entry.materializeOnly;
   if (entry.generate !== undefined) {
     secret.generate = generatorFor(entry.generate);
   }
@@ -427,6 +437,8 @@ function generatorFor(g: z.infer<typeof GenerateSchema>): () => string {
       return () => rand64(g.bytes);
     case "hex":
       return () => randHex(g.bytes);
+    case "flight-probe-key-ring":
+      return () => JSON.stringify({ active: rand64(g.bytes), previous: null });
     case "sk-cogni":
       return () => `sk-cogni-${randHex(g.randHexBytes)}`;
     case "static":

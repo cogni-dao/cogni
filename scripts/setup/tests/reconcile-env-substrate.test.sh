@@ -79,6 +79,10 @@ grep -q "bao write auth/kubernetes/role/production-db-reader" "$TMPROOT/run1.log
 grep -q "bao write auth/kubernetes/role/production-writer .*bound_service_account_names=openbao-writer,openbao-operator" "$TMPROOT/run1.log" || { echo "writer role must bind BOTH SAs (additive rename)" >&2; exit 1; }
 grep -q "bao write auth/kubernetes/role/eso-reader" "$TMPROOT/run1.log" || { echo "run1 must bind eso-reader" >&2; exit 1; }
 grep -q "bao write auth/github-actions/role/gha-production-writer" "$TMPROOT/run1.log" || { echo "run1 must bind gha-production-writer" >&2; exit 1; }
+grep -q 'path "cogni/data/candidate-a/flight-prober" { capabilities = \["read"\] }' "$TMPROOT/run1.log" || { echo "projection policy must read only the candidate-a authority bucket" >&2; exit 1; }
+grep -q 'auth/github-actions/role/gha-candidate-a-flight-probe-reader .*bound_subject=repo:Cogni-DAO/cogni:environment:candidate-a .*bound_audiences=cogni-flight-probe-projection' "$TMPROOT/run1.log" || { echo "projection role must bind exact repo/environment and dedicated audience" >&2; exit 1; }
+grep -q 'job_workflow_ref.*Cogni-DAO/cogni/.github/workflows/flight-probe-project.yml@refs/heads/main' "$TMPROOT/run1.log" || { echo "projection role must bind the exact reusable workflow ref" >&2; exit 1; }
+! grep -q 'flight-probe-reader.*operator' "$TMPROOT/run1.log" || { echo "projection reader must not gain an operator bucket" >&2; exit 1; }
 
 # ── Run 2: re-run against the now-provisioned env — NO SA creates (idempotent) ─
 run
@@ -94,5 +98,9 @@ run candidate-a candidate-a
 grep -q 'path "cogni/data/preview/\*"' "$TMPROOT/cmd.log" || { echo "isolated fleet control must custody preview secrets" >&2; exit 1; }
 grep -q 'path "cogni/data/production/\*"' "$TMPROOT/cmd.log" || { echo "isolated fleet control must custody production secrets" >&2; exit 1; }
 grep -q "bao write auth/kubernetes/role/candidate-a-writer" "$TMPROOT/cmd.log" || { echo "isolated fleet must bind candidate-a writer" >&2; exit 1; }
+
+# A non-control vault never gets a projection identity or authority reader.
+run preview production
+! grep -q 'flight-probe-reader' "$TMPROOT/cmd.log" || { echo "non-control vault must omit projection roles" >&2; exit 1; }
 
 echo "PASS: reconcile-env-substrate.test.sh"

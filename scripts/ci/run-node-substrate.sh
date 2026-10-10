@@ -36,6 +36,7 @@ TARGET_NODE="${2:?usage: run-node-substrate.sh <env> <node>}"
 
 # Script paths overridable for tests (mirrors the *_SSH_BIN seam in the callees).
 MATERIALIZE_BIN="${RUN_NODE_SUBSTRATE_MATERIALIZE_BIN:-$SCRIPT_DIR/secret-materialize.sh}"
+FLIGHT_PROBE_BIN="${RUN_NODE_SUBSTRATE_FLIGHT_PROBE_BIN:-$SCRIPT_DIR/flight-probe-credentials.sh}"
 RECONCILE_BIN="${RUN_NODE_SUBSTRATE_RECONCILE_BIN:-$SCRIPT_DIR/reconcile-node-substrate.sh}"
 ASSERT_BIN="${RUN_NODE_SUBSTRATE_ASSERT_BIN:-$SCRIPT_DIR/assert-target-substrate.sh}"
 DEPLOYMENT_PROVIDER="${DEPLOYMENT_PROVIDER:-k3s}"
@@ -140,6 +141,10 @@ lane_degraded() {
 
 if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   bash "$MATERIALIZE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+  if [ "$DEPLOY_ENVIRONMENT" = "${FLEET_CONTROL_ENV:-production}" ]; then
+    SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" \
+      bash "$FLIGHT_PROBE_BIN" materialize "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+  fi
   # Then every OTHER lane of this node that THIS cluster reconciles. Catalog-derived, so a
   # lane added by a catalog edit is materialized with no code change, and a node with no
   # such lane (every k3s row, every production-only node) enumerates nothing.
@@ -162,9 +167,20 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
       continue
     }
     echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} reconciles ${lane}/${TARGET_NODE} — materializing that lane's secrets into THIS vault (bug.5206), domain ${lane_domain}"
+    set +e
     SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" DOMAIN="$lane_domain" \
-      bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE" \
-      || lane_degraded "$lane" materialize $?
+      bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE"
+    materialize_rc=$?
+    set -e
+    if [ "$materialize_rc" -ne 0 ]; then
+      lane_degraded "$lane" materialize "$materialize_rc"
+      continue
+    fi
+    if [ "$DEPLOY_ENVIRONMENT" = "${FLEET_CONTROL_ENV:-production}" ]; then
+      SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" \
+        bash "$FLIGHT_PROBE_BIN" materialize "$lane" "$TARGET_NODE" \
+        || lane_degraded "$lane" flight-probe-materialize $?
+    fi
   done
 else
   # A FOREIGN-CUSTODIED LANE HAS NO SUBSTRATE ON ITS OWN VM, so its own flight reconciles
