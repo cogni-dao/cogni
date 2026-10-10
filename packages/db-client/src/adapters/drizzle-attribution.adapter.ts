@@ -1710,6 +1710,11 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     targetEpochId: bigint
   ): Promise<readonly PendingActorDistributionLiability[]> {
     const targetEpoch = await this.resolveEpochScoped(targetEpochId);
+    if (targetEpoch.status !== "finalized" || !targetEpoch.closedAt) {
+      throw new Error(
+        `Actor liabilities require a finalized target epoch ${targetEpochId}`
+      );
+    }
     const sourceEpoch = alias(epochs, "actor_liability_source_epoch");
     const rows = await this.db
       .select({
@@ -1740,7 +1745,13 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           eq(actorDistributionLiabilities.scopeId, this.scopeId),
           eq(actorDistributionLiabilities.nodeId, targetEpoch.nodeId),
           eq(sourceEpoch.status, "finalized"),
+          isNotNull(sourceEpoch.closedAt),
           lte(sourceEpoch.periodEnd, targetEpoch.periodStart),
+          lte(sourceEpoch.closedAt, targetEpoch.closedAt),
+          lte(
+            actorDistributionLiabilities.contributionCutoff,
+            targetEpoch.periodStart
+          ),
           isNull(actorDistributionSettlements.id)
         )
       )
