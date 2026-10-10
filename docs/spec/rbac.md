@@ -90,8 +90,8 @@ immutable model is written only when the hash changes or no prior model exists.
 
 | Type    | Format                  | Description                          |
 | ------- | ----------------------- | ------------------------------------ |
-| User    | `user:{user_id}`        | Human or user-bound machine token    |
-| Agent   | `agent:{agentId}`       | Autonomous agent (graph instance)    |
+| User    | `user:{node_id}/{user_id}`        | Node-local human in the environment-shared graph    |
+| Agent   | `agent:{node_id}/{actor_id}`       | Node-local autonomous agent in the environment-shared graph    |
 | Service | `service:{serviceName}` | Internal service (scheduler, worker) |
 
 `user_id` is the canonical person identifier. Wallet addresses, OAuth provider
@@ -217,9 +217,32 @@ principals without changing the `node.flight` route check.
 | -------------------- | ------------------------------------------------ | -------------------------------------- |
 | Session middleware   | `src/proxy.ts`                                   | Extracted from session JWT claims      |
 | Agent grant issuance | `src/features/agents/services/grant.ts` (future) | Bound when grant is created            |
+| Node authorization facade | `/api/v1/authorization/check` | Same-node service credential fixes `node_id`; operator verifies the exact subject/account/delegation legs |
 | Scheduler job        | `src/adapters/server/scheduler/`                 | Hardcoded to job owner at job creation |
 
 **Never from:** Request body, query params, tool args, `RunnableConfig.configurable`.
+
+The mediated node facade is the one bounded P0 exception to the generic request-body
+rule. A per-node/per-environment workload credential authenticates a node backend,
+and that backend may assert a node-local subject ID. The operator derives the node
+namespace from the credential, checks the exact subject's account permission and the
+agent's existing `user.act_as` delegation, and never accepts a caller-supplied node
+namespace or raw tuple. A compromised node backend can therefore impersonate its own
+local users—authority it already has over that node's DB and accounts—but cannot gain
+cross-node authority. Non-repudiable signed human/session proof is P1.
+
+### Mediated node facade
+
+Independently governed nodes never receive the shared OpenFGA store/model credentials.
+They use `RemoteAuthorizationAdapter`, which can express only same-node
+`billing_account.read` checks plus semantic reader/OBO grant and revoke. Every mutation
+first verifies the asserted human currently has `can_grant` on that exact account.
+Reader grants write only conditioned `reader`; OBO grants require an existing subject
+read edge and existing human→agent delegation, then write only the conditioned,
+account-scoped `delegate` edge. Mutation success is confirmed with
+`HIGHER_CONSISTENCY`. The facade cannot seed `owner`/`can_grant`, mutate node roles, or
+write arbitrary relations. Credential rotation accepts only the immediately previous
+OpenBao KV version for a bounded rollout window.
 
 ---
 

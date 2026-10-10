@@ -525,6 +525,58 @@ describe("OpenFgaAuthorizationAdapter", () => {
     expect(deleted).toEqual([tuple]);
   });
 
+  it("writes a semantic bundle atomically and confirms every tuple at higher consistency", async () => {
+    const writeCalls: AuthzRelationTuple[][] = [];
+    const checks: Array<{
+      request: OpenFgaCheckRequest;
+      options: OpenFgaCheckOptions | undefined;
+    }> = [];
+    const client = {
+      async check(
+        request: OpenFgaCheckRequest,
+        options?: OpenFgaCheckOptions
+      ): Promise<{ allowed: boolean }> {
+        checks.push({ request, options });
+        return { allowed: true };
+      },
+      async writeTuples(tuples: AuthzRelationTuple[]): Promise<void> {
+        writeCalls.push(tuples);
+      },
+      async deleteTuples(): Promise<void> {},
+    } satisfies OpenFgaWriteClient;
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+    });
+    const tuples = [
+      {
+        user: "user:node-1/alice",
+        relation: "reader",
+        object: "billing_account:node-1/account-1",
+      },
+      {
+        user: "agent:node-1/coder",
+        relation: "delegate",
+        object: "billing_account:node-1/account-1",
+      },
+    ] satisfies AuthzRelationTuple[];
+
+    await expect(
+      authz.writeRelations(tuples, { confirm: "higher_consistency" })
+    ).resolves.toEqual({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    expect(writeCalls).toEqual([tuples]);
+    expect(checks).toEqual(
+      tuples.map((tuple) => ({
+        request: tuple,
+        options: { consistency: "HIGHER_CONSISTENCY" },
+      }))
+    );
+  });
+
   it("confirms writes and revokes through higher-consistency checks", async () => {
     let relationPresent = false;
     const checks: Array<{

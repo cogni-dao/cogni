@@ -21,7 +21,7 @@ interface BucketState {
   lastSeen: number; // Timestamp of last update (ms)
 }
 
-interface RateLimiterConfig {
+export interface RateLimiterConfig {
   maxTokens: number; // Bucket capacity (e.g., 10)
   refillRate: number; // Tokens per second (e.g., 10/60 = 0.166...)
   burstSize: number; // Burst allowance beyond maxTokens (e.g., 5)

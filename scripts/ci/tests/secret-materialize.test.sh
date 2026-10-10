@@ -283,6 +283,15 @@ for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
   test -f "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
     || { echo "materialize did not generate per-node $k" >&2; exit 1; }
 done
+# Per-node authorization workload identity embeds the canonical repo-spec UUID;
+# it is never shared across node or environment boundaries.
+AUTHZ_TOKEN_FILE="$BAO_ROOT/cogni/candidate-a/node-template/AUTHORIZATION_FACADE_TOKEN"
+test -f "$AUTHZ_TOKEN_FILE" \
+  || { echo "materialize did not mint AUTHORIZATION_FACADE_TOKEN" >&2; exit 1; }
+AUTHZ_NODE_ID="$(yq -N '.node_id' infra/catalog/node-template.yaml)"
+AUTHZ_TOKEN="$(cat "$AUTHZ_TOKEN_FILE")"
+[[ "$AUTHZ_TOKEN" =~ ^cogni_naz_sk_v1_${AUTHZ_NODE_ID}_[0-9a-f]{64}$ ]] \
+  || { echo "AUTHORIZATION_FACADE_TOKEN must embed the exact node_id plus 256 random bits" >&2; exit 1; }
 # Postgres DSNs composed sole-source here, embedding the per-node app_<node> role
 # (regression guard: a shared app_user DSN is the bug.5002 split-brain we killed)
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_URL" \
@@ -326,7 +335,8 @@ test "$(grep -c '^generate ' "$LITELLM_LOG")" = 1 \
 
 # No secret value leaked to output, including LiteLLM master/virtual values.
 if grep -q 'sk-or-operator-canonical\|sk-or-stale-divergent\|writer-token\|sk-cogni-operator-master' "$TMPROOT/out.txt" \
-  || grep -qF "$VK" "$TMPROOT/out.txt"; then
+  || grep -qF "$VK" "$TMPROOT/out.txt" \
+  || grep -qF "$AUTHZ_TOKEN" "$TMPROOT/out.txt"; then
   echo "secret value leaked to output" >&2
   exit 1
 fi

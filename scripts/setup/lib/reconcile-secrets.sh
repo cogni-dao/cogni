@@ -272,11 +272,16 @@ _compose_node_value() {
     printf 'https://%s' "$(host_for_node "$node" "$DOMAIN")"; return 0
   fi
   if [[ "$source" == "agent" && "$service" != "_shared" && "$shared" != "true" \
-        && "$kind" =~ ^(base64|hex|sk-cogni)$ ]]; then
+        && "$kind" =~ ^(base64|hex|sk-cogni|node-authz-token)$ ]]; then
     case "$kind" in
       base64) rand64 "$(_cat_field "$k" '.generate.bytes')" ;;
       hex) randHex "$(_cat_field "$k" '.generate.bytes')" ;;
       sk-cogni) printf 'sk-cogni-%s' "$(randHex 24)" ;;
+      node-authz-token)
+        local node_id
+        node_id="$(node_id_for_target "$node")" || return 1
+        printf 'cogni_naz_sk_v1_%s_%s' "$node_id" "$(randHex "$(_cat_field "$k" '.generate.randHexBytes')")"
+        ;;
     esac
     return 0
   fi

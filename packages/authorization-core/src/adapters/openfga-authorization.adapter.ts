@@ -453,6 +453,13 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     tuple: AuthzRelationTuple,
     options?: AuthzMutationOptions
   ): Promise<AuthzWriteDecision> {
+    return this.writeRelations([tuple], options);
+  }
+
+  async writeRelations(
+    tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision> {
     const client = this.client;
     if (!isOpenFgaWriteClient(client)) {
       return {
@@ -466,7 +473,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
       await withRetry(
         () =>
           withTimeout(
-            client.writeTuples([tuple], {
+            client.writeTuples([...tuples], {
               conflict: { onDuplicateWrites: "ignore" },
             }),
             this.writeTimeoutMs,
@@ -477,7 +484,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
         isRetryableWriteError
       );
       if (options?.confirm === "higher_consistency") {
-        return this.confirmRelation(tuple, true);
+        return this.confirmRelations(tuples, true);
       }
       return { decision: "success", code: "authz_write_success" };
     } catch (error) {
@@ -496,6 +503,13 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     tuple: AuthzRelationTuple,
     options?: AuthzMutationOptions
   ): Promise<AuthzWriteDecision> {
+    return this.deleteRelations([tuple], options);
+  }
+
+  async deleteRelations(
+    tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision> {
     const client = this.client;
     if (!isOpenFgaWriteClient(client)) {
       return {
@@ -509,7 +523,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
       await withRetry(
         () =>
           withTimeout(
-            client.deleteTuples([tupleKeyWithoutCondition(tuple)], {
+            client.deleteTuples(tuples.map(tupleKeyWithoutCondition), {
               conflict: { onMissingDeletes: "ignore" },
             }),
             this.writeTimeoutMs,
@@ -520,7 +534,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
         isRetryableWriteError
       );
       if (options?.confirm === "higher_consistency") {
-        return this.confirmRelation(tuple, false);
+        return this.confirmRelations(tuples, false);
       }
       return { decision: "success", code: "authz_write_success" };
     } catch (error) {
@@ -605,32 +619,36 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     return { current_time: this.now().toISOString() };
   }
 
-  private async confirmRelation(
-    tuple: AuthzRelationTuple,
+  private async confirmRelations(
+    tuples: readonly AuthzRelationTuple[],
     expectedAllowed: boolean
   ): Promise<AuthzWriteDecision> {
     try {
-      const conditionContext =
-        tuple.condition?.name === AUTHZ_GRANT_NOT_EXPIRED_CONDITION
-          ? { current_time: this.now().toISOString() }
-          : undefined;
-      const response = await withTimeout(
-        this.client.check(
-          {
-            user: tuple.user,
-            relation: tuple.relation,
-            object: tuple.object,
-            ...(conditionContext !== undefined
-              ? { context: conditionContext }
-              : {}),
-          },
-          { consistency: ConsistencyPreference.HigherConsistency }
-        ),
-        this.timeoutMs,
-        "confirmation"
+      const responses = await Promise.all(
+        tuples.map((tuple) => {
+          const conditionContext =
+            tuple.condition?.name === AUTHZ_GRANT_NOT_EXPIRED_CONDITION
+              ? { current_time: this.now().toISOString() }
+              : undefined;
+          return withTimeout(
+            this.client.check(
+              {
+                user: tuple.user,
+                relation: tuple.relation,
+                object: tuple.object,
+                ...(conditionContext !== undefined
+                  ? { context: conditionContext }
+                  : {}),
+              },
+              { consistency: ConsistencyPreference.HigherConsistency }
+            ),
+            this.timeoutMs,
+            "confirmation"
+          );
+        })
       );
 
-      if (response.allowed === expectedAllowed) {
+      if (responses.every((response) => response.allowed === expectedAllowed)) {
         return { decision: "success", code: "authz_write_success" };
       }
       return {

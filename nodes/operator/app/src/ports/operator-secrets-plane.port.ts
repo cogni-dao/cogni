@@ -52,6 +52,15 @@ export interface WriteNodeSecretResult {
   readonly path: string;
 }
 
+export interface VerifyNodeSecretInput {
+  readonly nodeSlug: string;
+  readonly env: string;
+  readonly key: string;
+  /** Compared inside the adapter and never returned or logged. */
+  readonly presentedValue: string;
+}
+
 export interface OperatorSecretsPlanePort {
   writeSecret(input: WriteNodeSecretInput): Promise<WriteNodeSecretResult>;
+  verifySecret(input: VerifyNodeSecretInput): Promise<boolean>;
 }

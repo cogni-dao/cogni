@@ -13,12 +13,18 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function makeAdapter(fetchImpl: typeof fetch): OpenBaoSecretsAdapter {
+function makeAdapter(
+  fetchImpl: typeof fetch,
+  overrides: Partial<
+    ConstructorParameters<typeof OpenBaoSecretsAdapter>[0]
+  > = {}
+): OpenBaoSecretsAdapter {
   return new OpenBaoSecretsAdapter({
     addr: ADDR,
     role: "candidate-a-node-secrets-writer",
     readServiceAccountToken: async () => "projected-sa-jwt",
     fetchImpl,
+    ...overrides,
   });
 }
 
@@ -148,5 +154,99 @@ describe("OpenBaoSecretsAdapter", () => {
       version: 2,
       path: "cogni/candidate-a/akash-tx-actuator/AKASH_ACTUATOR_CONSOLE_API_KEY",
     });
+  });
+
+  it("verifies the current node credential without returning its value", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      const u = String(url);
+      expect(u).not.toContain("presented-secret");
+      if (u.endsWith("/auth/kubernetes/login")) {
+        return jsonResponse({ auth: { client_token: "s.client" } });
+      }
+      expect(u).toBe(`${ADDR}/v1/cogni/data/candidate-a/poly`);
+      return jsonResponse({
+        data: {
+          data: { AUTHORIZATION_FACADE_TOKEN: "presented-secret" },
+          metadata: { version: 7, created_time: "2026-10-09T12:00:00Z" },
+        },
+      });
+    });
+
+    await expect(
+      makeAdapter(fetchImpl).verifySecret({
+        nodeSlug: "poly",
+        env: "candidate-a",
+        key: "AUTHORIZATION_FACADE_TOKEN",
+        presentedValue: "presented-secret",
+      })
+    ).resolves.toBe(true);
+  });
+
+  it("accepts exactly the previous KV version during the bounded rotation overlap", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      const u = String(url);
+      if (u.endsWith("/auth/kubernetes/login")) {
+        return jsonResponse({ auth: { client_token: "s.client" } });
+      }
+      if (u.endsWith("?version=6")) {
+        return jsonResponse({
+          data: {
+            data: { AUTHORIZATION_FACADE_TOKEN: "old-token" },
+            metadata: { version: 6 },
+          },
+        });
+      }
+      return jsonResponse({
+        data: {
+          data: { AUTHORIZATION_FACADE_TOKEN: "new-token" },
+          metadata: { version: 7, created_time: "2026-10-09T12:00:00Z" },
+        },
+      });
+    });
+    const adapter = makeAdapter(fetchImpl, {
+      now: () => new Date("2026-10-09T12:05:00Z"),
+      credentialOverlapMs: 10 * 60_000,
+    });
+
+    await expect(
+      adapter.verifySecret({
+        nodeSlug: "poly",
+        env: "candidate-a",
+        key: "AUTHORIZATION_FACADE_TOKEN",
+        presentedValue: "old-token",
+      })
+    ).resolves.toBe(true);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `${ADDR}/v1/cogni/data/candidate-a/poly?version=6`,
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  it("rejects the previous credential after the overlap without reading old versions", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      const u = String(url);
+      if (u.endsWith("/auth/kubernetes/login")) {
+        return jsonResponse({ auth: { client_token: "s.client" } });
+      }
+      expect(u).not.toContain("?version=");
+      return jsonResponse({
+        data: {
+          data: { AUTHORIZATION_FACADE_TOKEN: "new-token" },
+          metadata: { version: 7, created_time: "2026-10-09T12:00:00Z" },
+        },
+      });
+    });
+
+    await expect(
+      makeAdapter(fetchImpl, {
+        now: () => new Date("2026-10-09T12:11:00Z"),
+        credentialOverlapMs: 10 * 60_000,
+      }).verifySecret({
+        nodeSlug: "poly",
+        env: "candidate-a",
+        key: "AUTHORIZATION_FACADE_TOKEN",
+        presentedValue: "old-token",
+      })
+    ).resolves.toBe(false);
   });
 });

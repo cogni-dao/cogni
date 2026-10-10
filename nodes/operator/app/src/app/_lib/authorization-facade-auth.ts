@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * Module: `@app/_lib/authorization-facade-auth`
+ * Purpose: Authenticate node workloads at the operator-mediated authorization facade.
+ * Scope: Bearer parsing, server-derived node resolution, OpenBao verification, and rate limiting.
+ * Invariants: NODE_FROM_CREDENTIAL; EXACT_NODE_SECRET_PATH; NO_TOKEN_LOGGING; FAIL_CLOSED.
+ * Side-effects: DB and OpenBao reads; in-memory rate-limit state.
+ * Links: task.5226, src/app/api/v1/authorization
+ * @internal
+ */
+
+import { authorizationFacadeNodeIdFromToken } from "@cogni/authorization-core";
+
+import { createOperatorSecretsPlane } from "@/bootstrap/capabilities/operator-secrets-plane";
+import { resolveServiceDb } from "@/bootstrap/container";
+import { TokenBucketRateLimiter } from "@/bootstrap/http";
+import {
+  type ResolvedNodeRef,
+  resolveNodeRef,
+} from "@/features/nodes/node-lookup";
+import { serverEnv } from "@/shared/env";
+
+const AUTHORIZATION_FACADE_TOKEN_KEY = "AUTHORIZATION_FACADE_TOKEN";
+
+const credentialAttemptLimiter = new TokenBucketRateLimiter({
+  maxTokens: 30,
+  refillRate: 0.5,
+  burstSize: 10,
+});
+
+const authenticatedNodeLimiter = new TokenBucketRateLimiter({
+  maxTokens: 120,
+  refillRate: 2,
+  burstSize: 20,
+});
+
+export type AuthorizationFacadeAuthentication =
+  | { readonly ok: true; readonly node: ResolvedNodeRef }
+  | {
+      readonly ok: false;
+      readonly status: 401 | 429 | 503;
+      readonly errorCode:
+        | "invalid_service_credential"
+        | "rate_limited"
+        | "authorization_facade_unavailable";
+    };
+
+function bearerToken(request: Request): string | undefined {
+  const value = request.headers.get("authorization");
+  if (!value?.startsWith("Bearer ")) return undefined;
+  const token = value.slice("Bearer ".length);
+  return token.length > 0 && token.trim() === token ? token : undefined;
+}
+
+function clientAddress(request: Request): string {
+  return (
+    request.headers.get("x-real-ip")?.trim() ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "unknown"
+  );
+}
+
+/**
+ * The service credential proves only a node workload identity. P0 intentionally
+ * lets that already-trusted node backend assert one of its local human IDs; each
+ * mutation separately proves that exact human's current `can_grant`. A compromised
+ * node can impersonate its own local users (it already controls their local DB and
+ * account data), but the derived namespace prevents any cross-node authority.
+ */
+export async function authenticateAuthorizationFacadeRequest(
+  request: Request
+): Promise<AuthorizationFacadeAuthentication> {
+  if (!credentialAttemptLimiter.consume(clientAddress(request))) {
+    return { ok: false, status: 429, errorCode: "rate_limited" };
+  }
+  const token = bearerToken(request);
+  if (!token) {
+    return { ok: false, status: 401, errorCode: "invalid_service_credential" };
+  }
+
+  let nodeId: string;
+  try {
+    nodeId = authorizationFacadeNodeIdFromToken(token);
+  } catch {
+    return { ok: false, status: 401, errorCode: "invalid_service_credential" };
+  }
+
+  const env = serverEnv();
+  const deployEnv = env.DEPLOY_ENVIRONMENT;
+  if (!deployEnv) {
+    return {
+      ok: false,
+      status: 503,
+      errorCode: "authorization_facade_unavailable",
+    };
+  }
+
+  try {
+    const node = await resolveNodeRef(resolveServiceDb(), nodeId);
+    if (!node) {
+      return {
+        ok: false,
+        status: 401,
+        errorCode: "invalid_service_credential",
+      };
+    }
+    const plane = createOperatorSecretsPlane(env);
+    const valid = await plane.verifySecret({
+      nodeSlug: node.slug,
+      env: deployEnv,
+      key: AUTHORIZATION_FACADE_TOKEN_KEY,
+      presentedValue: token,
+    });
+    if (!valid) {
+      return {
+        ok: false,
+        status: 401,
+        errorCode: "invalid_service_credential",
+      };
+    }
+    return authenticatedNodeLimiter.consume(nodeId)
+      ? { ok: true, node }
+      : { ok: false, status: 429, errorCode: "rate_limited" };
+  } catch {
+    return {
+      ok: false,
+      status: 503,
+      errorCode: "authorization_facade_unavailable",
+    };
+  }
+}
