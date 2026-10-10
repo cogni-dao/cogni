@@ -1117,7 +1117,25 @@ jobs:
           NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
           STATUS_URL: ${{ needs.decide.outputs.status_url }}
           SUBSTRATE_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/node-substrate-reconcile-${{ matrix.node }}.json
-        run: bash ci-src/scripts/ci/run-node-substrate.sh candidate-a "${{ matrix.node }}"
+        run: |
+          set -euo pipefail
+          substrate_runner="ci-src/scripts/ci/run-node-substrate.sh"
+          # The default node-ref lane executes substrate automation from the trusted workflow
+          # ref, never from an arbitrary node source. Operator self-flights are the narrow
+          # exception: when the dispatched workflow commit and reviewed app commit are the
+          # SAME SHA, use that exact tree so substrate-script changes can earn pre-merge
+          # candidate proof. A feature workflow ref is already an explicit privileged dispatch;
+          # equality keeps it from becoming a generic remote-source code-execution seam.
+          if [ "${{ matrix.node }}" = "operator" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then
+            app_sha="$(git -C app-src rev-parse HEAD)"
+            [ "$app_sha" = "$GITHUB_SHA" ] || {
+              echo "::error::exact self-flight source mismatch: workflow=$GITHUB_SHA app=$app_sha"
+              exit 1
+            }
+            substrate_runner="app-src/scripts/ci/run-node-substrate.sh"
+            echo "[candidate-proof] exact operator self-flight uses reviewed substrate runner at $GITHUB_SHA"
+          fi
+          bash "$substrate_runner" candidate-a "${{ matrix.node }}"
 
       # Per-cell success marker (Axiom 18). assert-substrate + flight + verify
       # gate on THIS node's marker, never the matrix-aggregate node-substrate

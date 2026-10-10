@@ -19,6 +19,9 @@
  *     writer, AppSet, verification checkout, and ancestry check share one resolver.
  *   ISOLATED_FLEET_ROOT_IS_LOCAL: a non-canonical candidate reconciles the
  *     apply-once control-plane root to its own protected main before AppSets.
+ *   EXACT_SELF_FLIGHT_PROVES_SUBSTRATE_SCRIPTS: the operator may execute the
+ *     reviewed app-source substrate runner only when workflow and app are the
+ *     same commit; all remote or mismatched source flights stay on ci-src.
  * Side-effects: IO (reads .github/workflows/candidate-flight.yml)
  * Links: docs/spec/ci-cd.md axioms 17-20, docs/spec/node-ci-cd-contract.md artifact contract
  * @public
@@ -233,6 +236,29 @@ describe("candidate-a manifest source", () => {
     );
     expect(WORKFLOW).toContain(
       '"app-src/infra/k8s/overlays/candidate-a/${NODE}/"'
+    );
+  });
+
+  it("uses reviewed substrate scripts only for an exact operator self-flight", () => {
+    const substrate = namedStep(
+      "node-substrate",
+      "Run node substrate (materialize -> reconcile)"
+    ).run;
+
+    expect(substrate).toBeTypeOf("string");
+    expect(substrate).toContain(
+      'substrate_runner="ci-src/scripts/ci/run-node-substrate.sh"'
+    );
+    expect(substrate).toContain(
+      'if [ "${{ matrix.node }}" = "operator" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+    );
+    expect(substrate).toContain('app_sha="$(git -C app-src rev-parse HEAD)"');
+    expect(substrate).toContain('[ "$app_sha" = "$GITHUB_SHA" ]');
+    expect(substrate).toContain(
+      'substrate_runner="app-src/scripts/ci/run-node-substrate.sh"'
+    );
+    expect(substrate).toContain(
+      'bash "$substrate_runner" candidate-a "${{ matrix.node }}"'
     );
   });
 
