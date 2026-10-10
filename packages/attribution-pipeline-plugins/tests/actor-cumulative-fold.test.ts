@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/attribution-pipeline-plugins/tests/actor-cumulative-fold`
  * Purpose: Prove actor beneficiary routing and exactly-once immutable liability carry-forward behavior.
- * Scope: Unit tests for the actor cumulative fold with in-memory resolver doubles; no database or network access.
+ * Scope: Unit tests for the actor cumulative fold with in-memory resolver doubles. Does not access a database or network.
  * Invariants: PINNED_WALLET_CREDITED, LIABILITY_AMOUNT_NOT_REPRICED, NON_SORTABLE_EPOCH_IDS_SAFE.
  * Side-effects: none
  * Links: packages/attribution-pipeline-plugins/src/finalize/actor-cumulative-fold.ts
