@@ -228,6 +228,9 @@ grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
   || fail "'$TARGET_NODE' is not in the '$DEPLOY_ENVIRONMENT' node-set (envs: $(yq -r '.envs | join(",")' "$node_catalog_file")) — add the env to infra/catalog/${TARGET_NODE}.yaml to deploy it here"
 
 node_db="$(node_database_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")"
+node_id="$(node_id_for_target "$TARGET_NODE")" \
+  || fail "node_id missing for '$TARGET_NODE' (REPO_SPEC_IS_IDENTITY_SSOT)"
+node_temporal_namespace="cogni-${DEPLOY_ENVIRONMENT}-${node_id}"
 
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
 # bug.5159 — multiplex every remote call over ONE ssh connection. Each remote() used to
@@ -552,6 +555,20 @@ remote "TEMPORAL_NAMESPACE='cogni-${DEPLOY_ENVIRONMENT}' \
   bash /tmp/ensure-temporal-namespace.sh" \
   || fail "temporal namespace ensure failed (rc=$?) for cogni-${DEPLOY_ENVIRONMENT} on ${SUBSTRATE_CONTROL_ENV}'s Temporal"
 mark_row temporal_namespace ensured "cogni-${DEPLOY_ENVIRONMENT} registered on ${SUBSTRATE_CONTROL_ENV}'s Temporal (idempotent)"
+
+# NODE-SOVEREIGN WORKFLOW NAMESPACE. Provision it from the catalog lifecycle even before a node
+# opts into the private Worker profile, so enabling `cogni-workflow-worker-v1` is a pure app
+# release and never races a paid workload boot against namespace registration. The UUID comes
+# from node_id_for_target (repo-spec SSOT with the drift-gated catalog projection fallback), not
+# from the human slug. Existing centralized schedules remain in cogni-<lane>; creating this
+# namespace alone moves no traffic and starts no Worker.
+CURRENT_ROW="node_temporal_namespace"
+remote "TEMPORAL_NAMESPACE='${node_temporal_namespace}' \
+  TEMPORAL_CONTAINER=cogni-runtime-temporal-1 \
+  TEMPORAL_TIMEOUT=60 \
+  bash /tmp/ensure-temporal-namespace.sh" \
+  || fail "node Temporal namespace ensure failed (rc=$?) for ${node_temporal_namespace} on ${SUBSTRATE_CONTROL_ENV}'s Temporal"
+mark_row node_temporal_namespace ensured "${node_temporal_namespace} registered on ${SUBSTRATE_CONTROL_ENV}'s Temporal (idempotent)"
 
 CURRENT_ROW="remote_reconcile"
 # Breadcrumbs ([remote] … ok) after every sub-step, stdout so they stream live:
