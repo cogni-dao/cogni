@@ -53,6 +53,7 @@ jobs:
     environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
     outputs:
       provider: ${{ steps.target.outputs.provider }}
+      requires_projection: ${{ steps.target.outputs.requires_projection }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
@@ -60,17 +61,26 @@ jobs:
       - name: Validate target and resolve placement
         id: target
         env:
+          CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
           LANE: ${{ inputs.lane }}
           NODE: ${{ inputs.node }}
         run: |
           set -euo pipefail
           [[ "$LANE" =~ ^(candidate-a|preview|production)$ ]]
+          [[ "$CONTROL_ENV" =~ ^(candidate-a|preview|production)$ ]]
           [[ "$NODE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
           catalog="infra/catalog/${NODE}.yaml"
           [ -f "$catalog" ]
           provider="$(yq -N '.deployment_provider[strenv(LANE)] // "k3s"' "$catalog")"
           [[ "$provider" =~ ^(k3s|akash)$ ]]
+          # A target in the control lane shares the authoritative vault. Only a
+          # k3s target in another lane needs the OIDC cross-env projection seam.
+          requires_projection=false
+          if [[ "$provider" == k3s && "$LANE" != "$CONTROL_ENV" ]]; then
+            requires_projection=true
+          fi
           echo "provider=$provider" >> "$GITHUB_OUTPUT"
+          echo "requires_projection=$requires_projection" >> "$GITHUB_OUTPUT"
       - name: Configure control-vault SSH
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
@@ -88,12 +98,12 @@ jobs:
           SSH_OPTS: -i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30
           FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
           SECRETS_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-          FLIGHT_PROBE_LOCAL_TARGET_VIEW: ${{ steps.target.outputs.provider == 'akash' && 'true' || 'false' }}
+          FLIGHT_PROBE_LOCAL_TARGET_VIEW: ${{ steps.target.outputs.requires_projection != 'true' && 'true' || 'false' }}
         run: bash scripts/ci/flight-probe-credentials.sh "${{ inputs.operation }}" "${{ inputs.lane }}" "${{ inputs.node }}"
 
   target:
     needs: authority
-    if: needs.authority.outputs.provider == 'k3s'
+    if: needs.authority.outputs.requires_projection == 'true'
     runs-on: ubuntu-latest
     environment: ${{ inputs.lane }}
     permissions:
