@@ -66,6 +66,8 @@ jobs:
       has_preflight_node_targets: ${{ steps.substrate-targets.outputs.has_substrate_node_targets }}
       deployment_node_targets_json: ${{ steps.substrate-targets.outputs.deployment_node_targets_json }}
       has_deployment_node_targets: ${{ steps.substrate-targets.outputs.has_deployment_node_targets }}
+      flight_probe_node_targets_json: ${{ steps.substrate-targets.outputs.flight_probe_node_targets_json }}
+      has_flight_probe_node_targets: ${{ steps.substrate-targets.outputs.has_flight_probe_node_targets }}
       external_compute_node_targets_json: ${{ steps.substrate-targets.outputs.external_compute_node_targets_json }}
       has_external_compute_node_targets: ${{ steps.substrate-targets.outputs.has_external_compute_node_targets }}
       deployment_provider_by_target_json: ${{ steps.substrate-targets.outputs.deployment_provider_by_target_json }}
@@ -1032,11 +1034,11 @@ jobs:
 
   flight-probe-project:
     needs: decide
-    if: needs.decide.outputs.has_deployment_node_targets == 'true'
+    if: needs.decide.outputs.has_flight_probe_node_targets == 'true'
     strategy:
       fail-fast: false
       matrix:
-        node: ${{ fromJson(needs.decide.outputs.deployment_node_targets_json) }}
+        node: ${{ fromJson(needs.decide.outputs.flight_probe_node_targets_json) }}
     uses: ./.github/workflows/flight-probe-project.yml
     permissions:
       contents: read

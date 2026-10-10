@@ -303,6 +303,7 @@ async function selectDeploymentTargets(input: {
   const {
     deployment,
     substrate,
+    flightProbe,
     offCluster,
     providers,
     k3s,
@@ -317,6 +318,8 @@ async function selectDeploymentTargets(input: {
   const outputs = {
     deployment_node_targets_json: JSON.stringify(deployment),
     has_deployment_node_targets: String(deployment.length > 0),
+    flight_probe_node_targets_json: JSON.stringify(flightProbe),
+    has_flight_probe_node_targets: String(flightProbe.length > 0),
     substrate_node_targets_json: JSON.stringify(substrate),
     has_substrate_node_targets: String(substrate.length > 0),
     external_compute_node_targets_json: JSON.stringify(offCluster),
@@ -399,6 +402,8 @@ async function selectPromoteTargets(input: {
     has_targets: String(selection.deployment.length > 0),
     node_targets_json: JSON.stringify(selection.substrate),
     has_node_targets: String(selection.substrate.length > 0),
+    flight_probe_node_targets_json: JSON.stringify(selection.flightProbe),
+    has_flight_probe_node_targets: String(selection.flightProbe.length > 0),
     k3s_targets_json: JSON.stringify(selection.k3s),
     has_k3s_targets: String(selection.k3s.length > 0),
     k3s_node_targets_json: JSON.stringify(selection.k3sNodes),
