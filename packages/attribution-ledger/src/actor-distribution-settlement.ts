@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Deterministic settlement routing for the additive actor-allocation path.
- * Legacy statement bytes remain untouched: receipts carrying a frozen actor
- * allocation are replaced only in the distribution plan, while every other
- * receipt continues through the legacy claimant split.
+ * Module: `@cogni/attribution-ledger/actor-distribution-settlement`
+ * Purpose: Deterministically route finalized receipt weights to frozen actor beneficiaries and legacy claimants.
+ * Scope: Pure settlement arithmetic over immutable allocation and claimant inputs; does not resolve wallets or perform I/O.
+ * Invariants: ACTOR_AMOUNT_FROZEN_AT_FIRST_FOLD, LARGEST_REMAINDER_DETERMINISTIC, LEGACY_RECEIPTS_PRESERVED.
+ * Side-effects: none
+ * Links: docs/spec/attribution-ledger.md, docs/spec/identity-model.md
+ * @public
  */
 
 import type { ReceiptUnitWeight } from "./allocation";

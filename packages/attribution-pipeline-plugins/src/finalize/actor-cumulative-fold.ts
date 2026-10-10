@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Actor-aware additive fold. Legacy statement/manifest bytes stay unchanged. */
+/**
+ * Module: `@cogni/attribution-pipeline-plugins/finalize/actor-cumulative-fold`
+ * Purpose: Fold frozen actor allocations and pending liabilities into a cumulative token distribution.
+ * Scope: Pure orchestration over injected wallet resolvers; does not persist rows, mutate prior manifests, or send funds.
+ * Invariants: LIABILITY_AMOUNT_IMMUTABLE, LIABILITY_SETTLED_ONCE, LEGACY_BYTES_UNCHANGED, FROZEN_BENEFICIARY_ONLY.
+ * Side-effects: Calls injected read-only wallet resolvers.
+ * Links: docs/spec/attribution-ledger.md, docs/spec/identity-model.md
+ * @public
+ */
 
 import {
   buildDaoTokenCumulativeDistribution,
