@@ -16,17 +16,14 @@ import {
   type ActorContributionAllocationRecord,
   type ActorDistributionLiabilityRecord,
   type ActorDistributionSettlementRecord,
+  computeActorAwareSettlementPlan,
   type PendingActorDistributionLiability,
   type ReceiptClaimantsRecord,
   type ReceiptUnitWeight,
   type SubjectOverride,
-  computeActorAwareSettlementPlan,
 } from "@cogni/attribution-ledger";
 
-type NewLiability = Omit<
-  ActorDistributionLiabilityRecord,
-  "id" | "createdAt"
->;
+type NewLiability = Omit<ActorDistributionLiabilityRecord, "id" | "createdAt">;
 type NewSettlement = Omit<
   ActorDistributionSettlementRecord,
   "id" | "createdAt"
@@ -39,9 +36,7 @@ export interface ActorCumulativeFoldResult {
   readonly unresolvedClaimantKeys: readonly string[];
 }
 
-function missingResolution(
-  allocation: ActorContributionAllocationRecord
-) {
+function missingResolution(allocation: ActorContributionAllocationRecord) {
   return {
     code: "beneficiary_wallet_unbound" as const,
     beneficiaryActorId: allocation.beneficiaryActorId,
@@ -160,7 +155,8 @@ export async function buildActorCumulativeFold(input: {
       });
       continue;
     }
-    const failure = resolution?.failureEvidence ?? missingResolution(allocation);
+    const failure =
+      resolution?.failureEvidence ?? missingResolution(allocation);
     liabilities.push({
       allocationRef: allocation.allocationRef,
       nodeId: allocation.nodeId,

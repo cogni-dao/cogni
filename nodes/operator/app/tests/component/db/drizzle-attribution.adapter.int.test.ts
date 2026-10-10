@@ -2078,7 +2078,9 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       ).rejects.toThrow("Actor liability idempotency conflict");
       expect(
         await adapter.listUnfoldedActorContributionAllocationsForEpoch(epoch.id)
-      ).toEqual([expect.objectContaining({ allocationRef: persisted.allocationRef })]);
+      ).toEqual([
+        expect.objectContaining({ allocationRef: persisted.allocationRef }),
+      ]);
 
       await adapter.insertActorDistributionLiabilities([frozenLiability]);
       await expect(
@@ -2161,8 +2163,9 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         "actor-settlement-cleanup"
       );
       await adapter.finalizeEpoch(nextEpoch.id, 0n);
-      const pending =
-        await adapter.listPendingActorDistributionLiabilities(nextEpoch.id);
+      const pending = await adapter.listPendingActorDistributionLiabilities(
+        nextEpoch.id
+      );
       expect(pending).toEqual([
         expect.objectContaining({
           allocationRef: persisted.allocationRef,
@@ -2172,6 +2175,10 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       ]);
       const liability = pending[0];
       if (!liability) throw new Error("Expected pending actor liability");
+      const resolverEvidence = walletResolution[0]?.bindingEvidence;
+      if (!resolverEvidence) {
+        throw new Error("Expected pinned Derek wallet binding evidence");
+      }
       const manifestWithSettlement = {
         nodeId: TEST_NODE_ID,
         scopeId: TEST_SCOPE_ID,
@@ -2196,7 +2203,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
             beneficiaryActorId: derekActor.id,
             tokenAmount: 17n,
             claimantWallet: signer.address,
-            resolverEvidence: walletResolution[0]!.bindingEvidence!,
+            resolverEvidence,
           },
         ],
       };
