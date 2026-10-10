@@ -50,6 +50,13 @@
       "when": 1791406372340,
       "tag": "0006_damp_cassandra_nova",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791484682166,
+      "tag": "0007_parallel_preak",
+      "breakpoints": true
     }
   ]
 }

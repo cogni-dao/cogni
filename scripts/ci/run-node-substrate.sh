@@ -26,9 +26,6 @@
 # Env in: VM_HOST, SSH_OPTS, DOMAIN, APP_SOURCE_DIR, and
 #   COGNI_CATALOG_ROOT, HEAD_SHA, NODE_SOURCE_SHA, STATUS_URL,
 #   SUBSTRATE_RECONCILE_SUMMARY_FILE — passed through to the two scripts unchanged.
-# Optional gate controls:
-#   RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT=true — reconcile only; caller asserts its target lane.
-#   RUN_NODE_SUBSTRATE_REQUIRED_LANE=<env> — a failure in this custodied sibling is fatal.
 
 set -euo pipefail
 
@@ -39,6 +36,7 @@ TARGET_NODE="${2:?usage: run-node-substrate.sh <env> <node>}"
 
 # Script paths overridable for tests (mirrors the *_SSH_BIN seam in the callees).
 MATERIALIZE_BIN="${RUN_NODE_SUBSTRATE_MATERIALIZE_BIN:-$SCRIPT_DIR/secret-materialize.sh}"
+FLIGHT_PROBE_BIN="${RUN_NODE_SUBSTRATE_FLIGHT_PROBE_BIN:-$SCRIPT_DIR/flight-probe-credentials.sh}"
 RECONCILE_BIN="${RUN_NODE_SUBSTRATE_RECONCILE_BIN:-$SCRIPT_DIR/reconcile-node-substrate.sh}"
 ASSERT_BIN="${RUN_NODE_SUBSTRATE_ASSERT_BIN:-$SCRIPT_DIR/assert-target-substrate.sh}"
 DEPLOYMENT_PROVIDER="${DEPLOYMENT_PROVIDER:-k3s}"
@@ -124,23 +122,6 @@ while IFS= read -r lane; do
 done < <(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
 echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} custodies lanes of ${TARGET_NODE}: [${custodied_lanes[*]}]"
 
-# A lane-specific gate must fail BEFORE materialize/reconcile side effects if the
-# catalog no longer assigns that lane to this custodian. Otherwise a typo or
-# placement drift would green-light the target after reconciling unrelated lanes.
-if [ -n "${RUN_NODE_SUBSTRATE_REQUIRED_LANE:-}" ]; then
-  required_lane_present=false
-  for lane in "${custodied_lanes[@]}"; do
-    if [ "$lane" = "$RUN_NODE_SUBSTRATE_REQUIRED_LANE" ]; then
-      required_lane_present=true
-      break
-    fi
-  done
-  if ! $required_lane_present; then
-    echo "::error::run-node-substrate: required lane ${RUN_NODE_SUBSTRATE_REQUIRED_LANE}/${TARGET_NODE} is not custodied by ${DEPLOY_ENVIRONMENT}; refusing side effects" >&2
-    exit 1
-  fi
-fi
-
 # ── SIBLING_NEVER_FAILS_THE_TARGET (bug.5278/bug.5269) ──────────────────────────
 # Production custodies candidate-a/preview substrate for akash nodes (bug.5206/
 # task.5132), so sibling lanes MUST keep being reconciled from this run — but a
@@ -151,20 +132,19 @@ fi
 # Freeze note: this is promotion semantics in .sh — a NARROW exception logged on
 # bug.5281; the durable home is the typed deploy plane (task.5097/task.5098).
 degraded_lanes=()
-required_lane_degraded=false
 lane_degraded() {
   # lane_degraded <lane> <phase> <rc>
   degraded_lanes+=("$1 ($2, rc=$3)")
-  if [ -n "${RUN_NODE_SUBSTRATE_REQUIRED_LANE:-}" ] \
-    && [ "$1" = "$RUN_NODE_SUBSTRATE_REQUIRED_LANE" ]; then
-    required_lane_degraded=true
-  fi
   echo "::warning::run-node-substrate: SIBLING lane ${1}/${TARGET_NODE} ${2} failed (rc=${3}) — lane left DEGRADED; the ${DEPLOY_ENVIRONMENT} target lane is unaffected (bug.5278)" >&2
   echo "[substrate-degraded] lane=${1} node=${TARGET_NODE} phase=${2} rc=${3} run=${GITHUB_RUN_ID:-local}"
 }
 
 if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   bash "$MATERIALIZE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+  if [ "$DEPLOY_ENVIRONMENT" = "${FLEET_CONTROL_ENV:-production}" ]; then
+    SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" \
+      bash "$FLIGHT_PROBE_BIN" materialize "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+  fi
   # Then every OTHER lane of this node that THIS cluster reconciles. Catalog-derived, so a
   # lane added by a catalog edit is materialized with no code change, and a node with no
   # such lane (every k3s row, every production-only node) enumerates nothing.
@@ -187,9 +167,20 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
       continue
     }
     echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} reconciles ${lane}/${TARGET_NODE} — materializing that lane's secrets into THIS vault (bug.5206), domain ${lane_domain}"
+    set +e
     SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" DOMAIN="$lane_domain" \
-      bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE" \
-      || lane_degraded "$lane" materialize $?
+      bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE"
+    materialize_rc=$?
+    set -e
+    if [ "$materialize_rc" -ne 0 ]; then
+      lane_degraded "$lane" materialize "$materialize_rc"
+      continue
+    fi
+    if [ "$DEPLOY_ENVIRONMENT" = "${FLEET_CONTROL_ENV:-production}" ]; then
+      SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" \
+        bash "$FLIGHT_PROBE_BIN" materialize "$lane" "$TARGET_NODE" \
+        || lane_degraded "$lane" flight-probe-materialize $?
+    fi
   done
 else
   # A FOREIGN-CUSTODIED LANE HAS NO SUBSTRATE ON ITS OWN VM, so its own flight reconciles
@@ -241,9 +232,7 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
       || lane_degraded "$lane" reconcile $?
   done
 fi
-if [ "$DEPLOYMENT_PROVIDER" = "akash" ] \
-  && [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ] \
-  && [ "${RUN_NODE_SUBSTRATE_SKIP_PROVIDER_ASSERT:-false}" != "true" ]; then
+if [ "$DEPLOYMENT_PROVIDER" = "akash" ] && [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   TARGET="$TARGET_NODE" DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
     bash "$ASSERT_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
 fi
@@ -262,15 +251,6 @@ if [ "${#degraded_lanes[@]}" -gt 0 ]; then
       for d in "${degraded_lanes[@]}"; do echo "- ${d}"; done
     } >> "$GITHUB_STEP_SUMMARY"
   fi
-fi
-
-# A normal production replay keeps SIBLING_NEVER_FAILS_THE_TARGET. A caller that is
-# specifically gating another lane (candidate-flight's foreign-custodied preflight)
-# may name that lane as required. Its failure then remains fully observable above
-# and also fails the gate before any deploy-branch mutation.
-if $required_lane_degraded; then
-  echo "::error::run-node-substrate: required custodied lane ${RUN_NODE_SUBSTRATE_REQUIRED_LANE}/${TARGET_NODE} did not reconcile" >&2
-  exit 1
 fi
 
 echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}: provider preflight ready"

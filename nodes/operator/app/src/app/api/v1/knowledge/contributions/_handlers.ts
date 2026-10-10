@@ -21,6 +21,8 @@ import {
   ContributionNotFoundError,
   ContributionStateError,
   DomainNotRegisteredError,
+  EmptyKnowledgePatchError,
+  KnowledgeBusyError,
   KnowledgeGateError,
   type PrincipalAuthSource,
   sessionUserToPrincipal,
@@ -57,6 +59,14 @@ function authSource(request: Request): PrincipalAuthSource {
 }
 
 function mapError(e: unknown): NextResponse {
+  // Admission control refused, reserved, or lock-contended: nothing was
+  // applied, so this is retryable capacity pressure, never a client conflict.
+  // 409 here would tell an agent its write was rejected on the merits.
+  if (e instanceof KnowledgeBusyError)
+    return NextResponse.json(
+      { error: e.message, retryable: true },
+      { status: 503, headers: { "Retry-After": "2" } }
+    );
   if (e instanceof ContributionForbiddenError)
     return NextResponse.json({ error: e.message }, { status: 403 });
   if (e instanceof ContributionNotFoundError)
@@ -66,6 +76,9 @@ function mapError(e: unknown): NextResponse {
   if (e instanceof ContributionConflictError)
     return NextResponse.json({ error: e.message }, { status: 409 });
   if (e instanceof DomainNotRegisteredError)
+    return NextResponse.json({ error: e.message }, { status: 400 });
+  // PATCH_IS_NOT_EMPTY — a no-op patch is a client contract error, not a 500.
+  if (e instanceof EmptyKnowledgePatchError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   // A cite/EDO edit whose target resolves on neither the branch nor main, or
   // whose edge type doesn't match the cited entry_type, is a client error —

@@ -3,9 +3,9 @@
 
 /**
  * Module: `@app/api/v1/knowledge/index/route`
- * Purpose: GET /api/v1/knowledge/index — the routing projection. Returns id + entryType + retrieval trigger per entry WITHOUT content, so an agent can choose a shelf entry without downloading bodies.
- * Scope: Any authenticated principal (cookie-session human OR bearer agent), mirroring the list route. Reads via container.knowledgeStorePort.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL, INDEX_CARRIES_NO_CONTENT.
+ * Purpose: GET /api/v1/knowledge/index — the routing projection. Returns id + entryType + retrieval trigger per entry WITHOUT content, so an agent can choose a shelf entry without downloading bodies, optionally filtered to the triggers matching `?q=`.
+ * Scope: Any authenticated principal (cookie-session human OR bearer agent), mirroring the list route. Reads via container.knowledgeStorePort. Does not search titles or bodies — `q` matches the retrieval trigger only.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL, INDEX_CARRIES_NO_CONTENT, Q_MATCHES_USEWHEN_ONLY.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
  * Links: packages/node-contracts/src/knowledge.index.v1.contract.ts
  * @public
@@ -48,6 +48,7 @@ export const GET = wrapRouteHandlerWithLogging(
       limit: url.searchParams.get("limit")
         ? Number(url.searchParams.get("limit"))
         : undefined,
+      q: url.searchParams.get("q") ?? undefined,
     });
     if (!parsed.success) {
       return NextResponse.json(
@@ -55,15 +56,18 @@ export const GET = wrapRouteHandlerWithLogging(
         { status: 400 }
       );
     }
-    const { domain, limit } = parsed.data;
+    const { domain, limit, q } = parsed.data;
 
     const allDomains = await port.listDomains();
     const targets = domain
       ? allDomains.filter((d) => d === domain)
       : allDomains;
 
+    // Q_MATCHES_USEWHEN_ONLY: the port filters on `useWhen`, so `total` below
+    // reports matches considered, not shelf size — a caller can still detect a
+    // truncating `limit`.
     const perDomain = await Promise.all(
-      targets.map((d) => port.listKnowledge(d, { limit }))
+      targets.map((d) => port.listKnowledge(d, { limit, ...(q ? { q } : {}) }))
     );
 
     // Project explicitly. INDEX_CARRIES_NO_CONTENT: content and title are
@@ -85,7 +89,12 @@ export const GET = wrapRouteHandlerWithLogging(
     });
 
     ctx.log.info(
-      { count: items.length, total: all.length, domain: domain ?? null },
+      {
+        count: items.length,
+        total: all.length,
+        domain: domain ?? null,
+        q: q ?? null,
+      },
       "knowledge.index_success"
     );
 

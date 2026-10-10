@@ -52,6 +52,55 @@ export class WorkItemsBackendNotReadyError extends Error {
   }
 }
 
+/**
+ * Thrown when the store refused the mutation for the calling principal.
+ * PERMANENT: the adapter's write authority is author-scoped, so the identical
+ * request can never succeed — the route answers 403, never a retryable 5xx.
+ */
+export class WorkItemAuthorizationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkItemAuthorizationError";
+  }
+}
+
+/**
+ * Thrown when the store was momentarily unavailable (query timeout, destroyed
+ * connection, contended Dolt operation branch). RETRYABLE: the identical
+ * request typically succeeds on the next attempt — the route answers 503 with
+ * a retry hint, never an opaque 500.
+ */
+export class WorkItemsBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkItemsBusyError";
+  }
+}
+
+/**
+ * Normalize a store-layer throw into a facade-owned error (bug.5408).
+ *
+ * The Doltgres adapter throws structurally identical errors whose `name` is
+ * stable; the facade detects by name and returns its OWN copy so the app layer
+ * never imports the adapter subpath — the same technique the
+ * `InvalidCursorError` note above describes. An unrecognized error is returned
+ * UNCHANGED so the route still answers 500: the catch is deliberately narrow.
+ */
+function mapStoreError(e: unknown): unknown {
+  const name = (e as Error)?.name;
+  const message = (e as Error)?.message ?? "";
+  if (name === "DoltgresNotConfiguredError") {
+    return new WorkItemsBackendNotReadyError(message);
+  }
+  if (name === "WorkItemAuthorizationError") {
+    return new WorkItemAuthorizationError(message);
+  }
+  if (name === "WorkItemsBusyError") {
+    return new WorkItemsBusyError(message);
+  }
+  return e;
+}
+
 function toDto(item: WorkItem): WorkItemDto {
   return {
     id: item.id as string,
@@ -218,10 +267,7 @@ export async function createWorkItem(
     );
     return toDto(created);
   } catch (e) {
-    if ((e as Error)?.name === "DoltgresNotConfiguredError") {
-      throw new WorkItemsBackendNotReadyError((e as Error).message);
-    }
-    throw e;
+    throw mapStoreError(e);
   }
 }
 
@@ -241,10 +287,7 @@ export async function patchWorkItem(
     if (!patched) throw new WorkItemNotFoundError(input.id);
     return toDto(patched);
   } catch (e) {
-    if ((e as Error)?.name === "DoltgresNotConfiguredError") {
-      throw new WorkItemsBackendNotReadyError((e as Error).message);
-    }
-    throw e;
+    throw mapStoreError(e);
   }
 }
 
@@ -259,9 +302,6 @@ export async function deleteWorkItem(
       authorTagFromSession(sessionUser)
     );
   } catch (e) {
-    if ((e as Error)?.name === "DoltgresNotConfiguredError") {
-      throw new WorkItemsBackendNotReadyError((e as Error).message);
-    }
-    throw e;
+    throw mapStoreError(e);
   }
 }

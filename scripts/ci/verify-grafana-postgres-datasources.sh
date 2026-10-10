@@ -83,12 +83,20 @@ for db_name in "${grafana_dbs[@]}"; do
       -H "Authorization: Bearer ${GRAFANA_SERVICE_ACCOUNT_TOKEN}" \
       -H "content-type: application/json" \
       --data @"$query_file")
+    # HTTP 200 is NOT success. Grafana returns the datasource's own failure
+    # inside the envelope (`results.<refId>.error`, e.g. SQLSTATE 28P01), and
+    # has been observed doing so under a 200 — so keying on the status code
+    # alone reported credential drift as verified (bug.5117).
+    query_error=""
     if [[ "$status" == "200" ]]; then
-      log "verified ${uid} (attempt ${attempt}/${attempts})"
-      ok=1
-      break
+      query_error="$(jq -r '[.results[]?.error // empty] | join("; ")' "$response_file" 2>/dev/null || true)"
+      if [[ -z "$query_error" ]]; then
+        log "verified ${uid} (attempt ${attempt}/${attempts})"
+        ok=1
+        break
+      fi
     fi
-    log "attempt ${attempt}/${attempts} for ${uid} returned HTTP ${status}"
+    log "attempt ${attempt}/${attempts} for ${uid} returned HTTP ${status}${query_error:+ with query error: ${query_error}}"
     if (( attempt < attempts )); then
       sleep "$((backoff_seconds * attempt))"
     else

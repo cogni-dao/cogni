@@ -118,6 +118,7 @@ const ALLOWED_ROOT_ENTRIES = new Set<string>([
   "eslint.config.mjs",
   "infra",
   "nodes",
+  "opencode.json",
   "package.json",
   "packages",
   "playwright.config.mjs",

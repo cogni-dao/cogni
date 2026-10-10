@@ -69,10 +69,13 @@ function batch(job?: V1Job, jobs: V1Job[] = []) {
   };
 }
 
-function pods(items: V1Pod[] = []) {
+function pods(items: V1Pod[] = [], logBody = "") {
   return {
     listNamespacedPod: vi.fn(async (..._args: unknown[]) => ({
       body: { items },
+    })),
+    readNamespacedPodLog: vi.fn(async (..._args: unknown[]) => ({
+      body: logBody,
     })),
   };
 }
@@ -553,5 +556,96 @@ describe("KubernetesMigrationJobAdapter lane scoping", () => {
 
     const [namespace] = api.createNamespacedJob.mock.calls[0] ?? [];
     expect(namespace).toBe(NAMESPACE);
+  });
+});
+
+describe("readReceipt", () => {
+  const RECEIPT =
+    'COGNI_MIGRATION_RECEIPT_V1 {"node":"toks","declared":[],"applied":[]}';
+
+  /** A pod that completed — the one whose stdout describes the end state. */
+  const succeededPod = (name: string): V1Pod =>
+    ({ metadata: { name }, status: { phase: "Succeeded" } }) as V1Pod;
+
+  it("reads the named phase container of this digest's pod, in the workload namespace", async () => {
+    const podApi = pods([succeededPod("migrate-toks-abc-xyz")], RECEIPT);
+    const adapter = adapterOf(batch(), podApi);
+    await expect(
+      adapter.readReceipt({
+        nodeSlug: "toks",
+        bundleDigest: DIGEST,
+        namespace: "cogni-candidate-a",
+        containerName: "migrate",
+      })
+    ).resolves.toBe(RECEIPT);
+    const [podName, namespace, container] =
+      podApi.readNamespacedPodLog.mock.calls[0] ?? [];
+    expect(podName).toBe("migrate-toks-abc-xyz");
+    expect(namespace).toBe("cogni-candidate-a");
+    expect(container).toBe("migrate");
+  });
+
+  it("returns null rather than throwing when the pods cannot be read", async () => {
+    const podApi = pods([]);
+    podApi.listNamespacedPod.mockRejectedValue(new Error("api down"));
+    const log = warnLog();
+    const adapter = adapterOf(batch(), podApi, log);
+    await expect(
+      adapter.readReceipt({
+        nodeSlug: "toks",
+        bundleDigest: DIGEST,
+        containerName: "migrate",
+      })
+    ).resolves.toBeNull();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ node: "toks" }),
+      "compute_workload_migration_receipt_pods_unlistable"
+    );
+  });
+
+  it("names the status code when the pod log itself is forbidden", async () => {
+    // THE REGRESSION. `pods/log` is a separate RBAC resource from `pods` and `get` a separate
+    // verb from `list`, so the grant that lets the line above LIST pods does not let this read
+    // them. A 403 here is swallowed on purpose — a missing receipt must never fail a migration
+    // that succeeded — which made it indistinguishable from "the migrator printed nothing" and
+    // hid the missing grant behind `akash_tx_migration_receipt_absent` in every environment at
+    // once. It must still SAY the status code.
+    const podApi = pods([succeededPod("migrate-toks-abc-xyz")], RECEIPT);
+    podApi.readNamespacedPodLog.mockRejectedValue(
+      Object.assign(new Error('pods "migrate-toks-abc-xyz" is forbidden'), {
+        statusCode: 403,
+      })
+    );
+    const log = warnLog();
+    const adapter = adapterOf(batch(), podApi, log);
+    await expect(
+      adapter.readReceipt({
+        nodeSlug: "toks",
+        bundleDigest: DIGEST,
+        namespace: "cogni-candidate-a",
+        containerName: "migrate",
+      })
+    ).resolves.toBeNull();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: "toks",
+        pod: "migrate-toks-abc-xyz",
+        container: "migrate",
+        namespace: "cogni-candidate-a",
+        statusCode: 403,
+      }),
+      "compute_workload_migration_receipt_log_unreadable"
+    );
+  });
+
+  it("returns null for a malformed digest instead of throwing", async () => {
+    const adapter = adapterOf(batch(), pods([], RECEIPT));
+    await expect(
+      adapter.readReceipt({
+        nodeSlug: "toks",
+        bundleDigest: "not-a-digest",
+        containerName: "migrate",
+      })
+    ).resolves.toBeNull();
   });
 });

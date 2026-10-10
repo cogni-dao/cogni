@@ -13,11 +13,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  assertBundleWithinBudget,
   renderBundleMarkdown,
   resolveOrientation,
   SESSION_BOOTSTRAP_INVARIANTS,
-  SESSION_COGNITION_MAX_BYTES,
   SESSION_WATCH_GATE,
 } from "@/app/api/v1/cognition/_bundle";
 
@@ -55,19 +53,12 @@ const SKILL_WITH_TRIGGER = {
   domain: "method",
 };
 
-describe("bundle budget — realistic shapes must have headroom in CI", () => {
-  // The existing guard test proves assertBundleWithinBudget THROWS over the
-  // limit. That converts silent truncation into a loud failure, but the failure
-  // lands at runtime: /api/v1/cognition 500s and every agent session boots with
-  // NO cognition. These tests move the detection into CI by rendering realistic
-  // worst-case shapes instead of a synthetic "x".repeat().
-  //
-  // Measured on prod 2026-10-07 (buildSha f112873ef5cd, operator hub):
-  //   bundle 15,100 bytes of 16,384 — 1,284 headroom
-  //   20 indexed rows, use_when median 134 chars, max 314
-  const MEASURED_ROWS = 20;
-  const MEASURED_MAX_TRIGGER = 314;
-
+describe("bundle growth — large indexes render whole, no serve-side ceiling (story.5070)", () => {
+  // The hub is designed to accumulate: every new skill/guide/playbook adds a row.
+  // Delivery is now uncapped on both runtimes (Codex raw stdout with spill off;
+  // Claude Code structured additionalContext), so the producer no longer enforces
+  // a byte ceiling. The former 16 KB cap (bug.5284) would have rejected this shape
+  // at the source and 500'd /api/v1/cognition; growth must now render whole.
   function indexOf(rows: number, triggerLen: number) {
     return Array.from({ length: rows }, (_, i) => ({
       id: `build-compute-entry-${i}`,
@@ -78,38 +69,18 @@ describe("bundle budget — realistic shapes must have headroom in CI", () => {
     }));
   }
 
-  it("stays within budget at today's measured shape", () => {
+  it("renders a bundle well past the former 16 KB cap, whole and untruncated", () => {
     const md = renderBundleMarkdown({
       ...baseInput,
-      skillsIndex: indexOf(MEASURED_ROWS, MEASURED_MAX_TRIGGER),
-    });
-    expect(() => assertBundleWithinBudget(md)).not.toThrow();
-  });
-
-  it("fails loudly if the index grows past what the ceiling allows", () => {
-    // Not aspirational: this is the growth path. Every new skill/guide/playbook
-    // entry adds a row, and the hub is designed to accumulate. When this test
-    // starts failing, the bundle must become a router (task.5197) rather than
-    // have the budget raised.
-    const md = renderBundleMarkdown({
-      ...baseInput,
-      skillsIndex: indexOf(80, MEASURED_MAX_TRIGGER),
-    });
-    expect(() => assertBundleWithinBudget(md)).toThrow(/maximum is/);
-  });
-
-  it("reports how much headroom today's shape actually leaves", () => {
-    const md = renderBundleMarkdown({
-      ...baseInput,
-      skillsIndex: indexOf(MEASURED_ROWS, MEASURED_MAX_TRIGGER),
+      skillsIndex: indexOf(80, 314),
     });
     const bytes = new TextEncoder().encode(
       `${md.replace(/\n+$/, "")}\n`
     ).byteLength;
-    const headroom = SESSION_COGNITION_MAX_BYTES - bytes;
-    // A guard with no margin is a guard that fires in production. Keep enough
-    // room for one orientation edit.
-    expect(headroom).toBeGreaterThan(512);
+    // Past the old ceiling — which would have thrown here.
+    expect(bytes).toBeGreaterThan(16 * 1024);
+    // The last row is present ⇒ nothing was dropped.
+    expect(md).toContain("build-compute-entry-79");
   });
 });
 
@@ -178,7 +149,7 @@ describe("renderBundleMarkdown", () => {
     );
   });
 
-  it("renders the current-node orientation entry IN FULL above the tooling invariants", () => {
+  it("renders the current-node orientation entry IN FULL alongside the tooling invariants", () => {
     const fullOrientation = [
       "**USE WHEN:** first read of every operator session.",
       "",
@@ -204,18 +175,21 @@ describe("renderBundleMarkdown", () => {
     expect(markdown).toContain("- Recall before write, refine over extend.");
     // No second-recall footer: the bootstrap IS the orientation.
     expect(markdown).not.toContain("for the full context");
-    // ONE VOICE (task.5155): a served orientation IS the constitution — the
-    // code-owned invariants + watch-gate must NOT render alongside it.
-    expect(markdown).not.toContain("## Tooling invariants");
-    expect(markdown).not.toContain("<watch-gate");
+    // INVARIANT FLOOR (story.5070): the code-owned invariants + watch-gate are
+    // the always-present contract spine. They render ALONGSIDE a served
+    // orientation (the node map), never suppressed by it — reversing the earlier
+    // ONE_VOICE suppression (task.5155) whose defect was that a served
+    // orientation dropped the contract.
+    expect(markdown).toContain("## Tooling invariants");
+    expect(markdown).toContain("<watch-gate");
   });
 
   // The work-item write seam is the one thing agents could NOT discover from a
   // node: `endpoints.workItems` is a bare URL, so agents fell back to
   // harness-local slash commands that hardcode the operator apex and filed every
-  // node's work onto operator. The section must therefore survive ONE_VOICE
-  // suppression (it is endpoint data, not a competing constitution) and must be
-  // origin-relative, which a hub-served orientation entry structurally cannot be.
+  // node's work onto operator. The section must render regardless of whether an
+  // orientation is served, and must be origin-relative, which a hub-served
+  // orientation entry structurally cannot be.
   it("always renders the node-relative work-item write seam, even with an orientation served", () => {
     const withOrientation = renderBundleMarkdown({
       ...baseInput,
@@ -237,9 +211,43 @@ describe("renderBundleMarkdown", () => {
       expect(markdown).toContain("There is no `in_progress`");
     }
 
-    // Guard the actual regression: ONE_VOICE kills the fallback constitution,
-    // and must not take the write seam with it.
-    expect(withOrientation).not.toContain("## Tooling invariants");
+    // The invariant floor is now unconditional (story.5070): a served
+    // orientation augments it, it does not suppress it.
+    expect(withOrientation).toContain("## Tooling invariants");
+  });
+
+  // The common fresh-node case: the hub serves a map-only orientation (what this
+  // node is, where authority lives, what to recall next) that carries NO
+  // agent-contract / axiom prose. Under the old ONE_VOICE suppression this
+  // silently shipped a session with no contract at all — the real story.5070
+  // defect. The invariant floor must still render.
+  it("renders the invariant floor even when a map-only orientation is served (story.5070)", () => {
+    const mapOnlyOrientation = [
+      "## What this node is",
+      "Operator coordinates code, deploys, and validation for Cogni nodes.",
+      "",
+      "## Where authority lives",
+      "RBAC via OpenFGA; promotes run as the operator principal.",
+      "",
+      "## What to recall next",
+      "Start with the cicd + validate-candidate skills.",
+    ].join("\n");
+    const markdown = renderBundleMarkdown({
+      ...baseInput,
+      orientation: {
+        id: "operator-agent-orientation",
+        content: mapOnlyOrientation,
+      },
+    });
+
+    // The map renders...
+    expect(markdown).toContain("## Orientation — recall this first");
+    expect(markdown).toContain(mapOnlyOrientation);
+    // ...and the code-owned contract floor renders ALONGSIDE it, not instead.
+    expect(markdown).toContain("## Tooling invariants");
+    expect(markdown).toContain(SESSION_WATCH_GATE);
+    // First invariant line, numbered — proof the full list, not a stub, is in.
+    expect(markdown).toContain(`1. ${baseInput.toolingInvariants[0]}`);
   });
 
   // The bundle is served to every harness (Claude Code, Codex, OpenAI, plain
@@ -306,17 +314,6 @@ describe("renderBundleMarkdown", () => {
     // watch-gate DO render — a session on an empty hub still gets the rules.
     expect(markdown).toContain("## Tooling invariants");
     expect(markdown).toContain("<watch-gate");
-  });
-
-  it("fails closed before a SessionStart bundle can exceed its strict byte budget", () => {
-    // The presenter appends one final newline to the body.
-    const atBudget = "x".repeat(SESSION_COGNITION_MAX_BYTES - 1);
-    const overBudget = `${atBudget}x`;
-
-    expect(() => assertBundleWithinBudget(atBudget)).not.toThrow();
-    expect(() => assertBundleWithinBudget(overBudget)).toThrow(
-      `maximum is ${SESSION_COGNITION_MAX_BYTES}`
-    );
   });
 });
 

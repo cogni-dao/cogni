@@ -19,8 +19,13 @@
 #
 # VERBS ARE DERIVED FROM THE ADAPTER, not copied: KubernetesMigrationJobAdapter calls
 # readNamespacedJob (get), createNamespacedJob (create), listNamespacedJob (list),
-# deleteNamespacedJob (delete) and listNamespacedPod (list). Identical to the actuator's
-# own-namespace Role in ../akash-tx-actuator/rbac.yaml — same code, same reach, one namespace over.
+# deleteNamespacedJob (delete), listNamespacedPod (list) and readNamespacedPodLog (get
+# pods/log). Identical to the actuator's own-namespace Role in ../akash-tx-actuator/rbac.yaml —
+# same code, same reach, one namespace over. "Identical" is now ENFORCED
+# (tests/ci-invariants/akash-tx-actuator-runtime.spec.ts): the adapter's reach is written down in
+# THREE places — that Role, this file, and scripts/ci/render-akash-tx-actuator-lane-access.sh —
+# and PR #2629 added `pods/log` to the CODE and to none of them, which is why receipt collection
+# 403'd silently in every environment at once.
 #
 # THE SUBJECT NAME CARRIES THE OVERLAY'S `namePrefix: operator-`. The actuator's ServiceAccount is
 # declared bare in ../akash-tx-actuator/service-account.yaml and lands as
@@ -47,6 +52,9 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -74,6 +82,9 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

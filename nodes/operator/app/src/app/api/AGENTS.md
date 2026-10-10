@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-09-11
+- **Last reviewed:** 2026-10-09
 - **Status:** draft
 
 ## Purpose
@@ -50,8 +50,10 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/nodes/[id]/activate-distributions` [POST] - terminal owner/developer-gated repo-spec PR; verifies distributor ownership/token and paired CAS publishing authority before recording active
   - `/api/v1/nodes/[id]/distributions-status` [GET] - owner/developer-gated read of the git-plane activation record (repo-spec main + open/merged activation PR + distributor addresses)
   - `/api/v1/nodes/[id]/reset-dao` [POST] - owner-only destructive reset of a node's DAO record (clears dao/token, status -> dao_pending) so it can be re-formed
-  - `/api/v1/deploy/infra-reconcile` [POST] - production-promoter-gated, operator-node-only infra reconcile through the operator GitHub App; preserves the deployed app source pin
+  - `/api/v1/nodes/[id]/observability/db/schema` [GET] - developer-gated (`node.flight`) read of a node's APPLIED migration state per `?env=`, from operator-held deployment metadata reported by the node's own migrator; distinguishes `never_reported` from reported-with-zero. The operator never queries a node database.
+  - `/api/v1/deploy/infra-reconcile` [POST] - operator-node-only infra reconcile through the operator GitHub App; preserves the requested lane's deployed app source pin. `preview` is env-manager-gated (`node.manage_envs`), `production`/`candidate-a` production-promoter-gated
   - `/api/internal/billing/ingest` [POST] - LiteLLM generic_api callback receiver (bearer auth, Docker-internal only)
+  - `/api/internal/flight-probe-credentials` [POST] - control-only GitHub-OIDC projection of one catalog node's bounded flight-prober key ring
   - `/api/internal/ops/governance/schedules/sync` [POST] - deploy-time governance sync trigger (bearer auth)
   - `/api/v1/chat/completions` [POST] - OpenAI-compatible chat completions (streaming + non-streaming, `cogni_status` extension); see [completions spec](../../../docs/spec/completions-api.md)
   - `/api/v1/ai/chat` [POST] - streaming chat with server-authoritative thread persistence

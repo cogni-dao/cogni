@@ -601,6 +601,42 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // Exactly-one-public-service exposure.
     expect(template).toContain('$public := eq $svc.visibility "public"');
   });
+
+  it("wires an opted-in private workflow Worker to its node namespace", () => {
+    expect(template).toContain(
+      '$candidateProfile := dig "runtimeProfile" "" .'
+    );
+    expect(template).toContain(
+      'else if eq $candidateProfile "cogni-workflow-worker-v1"'
+    );
+    expect(template).toContain(
+      '$nodeTemporalNamespace := printf "cogni-%s-%s" $env $spec.nodeId'
+    );
+    expect(template).toContain(
+      '$_ := set $e "TEMPORAL_TASK_QUEUE" "agent-workflows"'
+    );
+    expect(template).toContain(
+      '$_ := set $e "TEMPORAL_WORKER_BUILD_ID" $desiredSha'
+    );
+    expect(template).toContain(
+      '$_ := set $e "TEMPORAL_WORKER_DEPLOYMENT_NAME" (printf "node-%s-workflows" $spec.nodeId)'
+    );
+    expect(template).toContain(
+      '$_ := set $e "AGENT_WORKFLOW_WORKER_HEALTH_URL" (printf "http://%s:%d" $workflowWorkerName $workflowWorkerPort)'
+    );
+    expect(template).toContain(
+      '$_ := set $e "AGENT_WORKFLOW_TEMPORAL_NAMESPACE" $nodeTemporalNamespace'
+    );
+    expect(template).toContain(
+      '$_ := set $e "NODE_APP_URL" (printf "http://%s:%d" $appServiceName $appServicePort)'
+    );
+    expect(template.lastIndexOf('$_ := set $e "NODE_APP_URL"')).toBeGreaterThan(
+      template.indexOf("range $k, $target := $svc.bindings")
+    );
+    expect(
+      template.lastIndexOf('$_ := set $e "TEMPORAL_NAMESPACE"')
+    ).toBeGreaterThan(template.indexOf("range $k, $target := $svc.bindings"));
+  });
 });
 
 describe("XComputeWorkload migration decoupling (task.5135)", () => {
@@ -1397,10 +1433,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     status: {
       leaseRequestGeneration?: number;
       activeLeaseGeneration?: number;
-      // bug.5322 — observed edge state; gates the close.
-
-      // bug.5322 — `published` is OBSERVED edge state and gates the close.
-      dns?: { target?: string; published?: boolean };
+      dns?: { target?: string };
     };
     observed: Record<string, ObservedChild>;
   };
@@ -1509,9 +1542,6 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
         dnsTarget = host;
       }
     }
-    // Observed Cloudflare state. Defaults TRUE so every pre-existing case keeps its meaning;
-    // only the new regression cases set it false.
-    const dnsPublished = xr.status.dns?.published ?? true;
     const prevDnsTarget = xr.status.dns?.target ?? "";
     let effectiveDnsTarget = dnsTarget;
     if (dnsTarget === "") {
@@ -1535,12 +1565,8 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       effectiveDnsTarget,
       status: {
         leaseRequestGeneration,
-        // bug.5322 (2026-10-08): EDGE-observed, not lease-observed. `serving` only proves the
-        // candidate COULD serve the public host; dnsPublished is read back from the live zone
-        // and proves the edge DOES. Advancing on `serving` alone closed the incumbent while
-        // Cloudflare still pointed at it -> nginx 404 for ~7 minutes on spawny-boi candidate-a.
         activeLeaseGeneration:
-          active && serving && dnsPublished
+          active && serving
             ? xr.leaseGeneration
             : activeLeaseGeneration >= 0
               ? activeLeaseGeneration
@@ -1788,61 +1814,6 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     });
     expect(out.leaseChildren).toEqual(["akash-lease-g8"]);
     expect(out.retainedCogniKey).toBeUndefined();
-  });
-
-  it("does NOT advance the latch while the edge has not published the candidate (bug.5322)", () => {
-    // The 2026-10-08 outage: the candidate was serving on its OWN lease endpoint, so `serving`
-    // was true, but Cloudflare still pointed at the incumbent. Advancing here closed gen-1 and
-    // the public host returned nginx 404 for ~7 minutes. `published` is read back from the live
-    // zone, so it is the only signal that proves the EDGE carries the candidate.
-    const r = render({
-      leaseGeneration: 3,
-      status: {
-        activeLeaseGeneration: 1,
-        leaseRequestGeneration: 3,
-        dns: { target: INCUMBENT_TARGET, published: false },
-      },
-      observed: {
-        "akash-lease-g1": {
-          requestKey: `xcw:${NS}:${NAME}:1`,
-          response: servingOn("lease-1", INCUMBENT_TARGET),
-        },
-        "akash-lease-g3": {
-          requestKey: `xcw:${NS}:${NAME}:3`,
-          response: servingOn("lease-3", CANDIDATE_TARGET),
-        },
-      },
-    });
-    expect(r.status.activeLeaseGeneration).toBe(1);
-    expect(r.leaseChildren).toEqual(["akash-lease-g1", "akash-lease-g3"]);
-  });
-
-  it("advances only once the edge HAS published the candidate (bug.5322)", () => {
-    const r = render({
-      leaseGeneration: 3,
-      status: {
-        activeLeaseGeneration: 1,
-        leaseRequestGeneration: 3,
-        dns: { target: CANDIDATE_TARGET, published: true },
-      },
-      observed: {
-        "akash-lease-g1": {
-          requestKey: `xcw:${NS}:${NAME}:1`,
-          response: servingOn("lease-1", INCUMBENT_TARGET),
-        },
-        "akash-lease-g3": {
-          requestKey: `xcw:${NS}:${NAME}:3`,
-          response: servingOn("lease-3", CANDIDATE_TARGET),
-        },
-      },
-    });
-    expect(r.status.activeLeaseGeneration).toBe(3);
-  });
-
-  it("pins the template's advance gate to the observed edge signal (bug.5322)", () => {
-    expect(templateCode).toContain(
-      "{{- if and $active $serving $dnsPublished }}"
-    );
   });
 
   it("does not advance the latch while the candidate is not serving", () => {

@@ -23,7 +23,8 @@
  *     lease. Namespace-per-workload is the whole fix; every existing Job name is unchanged and
  *     no already-proven digest re-runs.
  *   - VALUE_FREE: DATABASE_URL reaches the Job only as a secretKeyRef; secret values never
- *     transit the controller.
+ *     transit the controller. `readReceipt` reads the migrator's stdout, which carries migration
+ *     tags/hashes and no DSN; the controller still holds no credential that can read a node DB.
  *   - RECONCILER_OWNS_POLICY: bounded in-Job retries (backoffLimit 2, safe because the
  *     migrator is idempotent + advisory-locked); terminality decisions belong to the caller.
  *   - SCRIPT_FAILURE_IS_TERMINAL: only a migrate container that actually ran and exited
@@ -56,6 +57,9 @@ import {
 const DIGEST_PATTERN = /^sha256:([0-9a-f]{64})$/;
 const MANAGED_BY_LABEL_VALUE = "compute-workload-controller";
 const ACTIVE_DEADLINE_SECONDS = 600;
+/** Receipt reads are bounded: the marker line is printed last, so a short tail is enough. */
+const RECEIPT_LOG_TAIL_LINES = 40;
+const RECEIPT_LOG_LIMIT_BYTES = 256 * 1024;
 
 function statusCode(error: unknown): number | undefined {
   if (!error || typeof error !== "object") return undefined;
@@ -174,7 +178,7 @@ type BatchApi = Pick<
   | "deleteNamespacedJob"
 >;
 
-type PodsApi = Pick<CoreV1Api, "listNamespacedPod">;
+type PodsApi = Pick<CoreV1Api, "listNamespacedPod" | "readNamespacedPodLog">;
 
 /** Structural pino subset: infra-retry decisions must be visible, not silent. */
 export interface MigrationJobLogger {
@@ -318,6 +322,95 @@ export class KubernetesMigrationJobAdapter
       if (statusCode(error) !== 404) throw transient();
     }
     return "running";
+  }
+
+  /**
+   * The migrator's stdout for this digest, bounded. Best-effort and NEVER throwing: the receipt is
+   * deployment metadata about a migration that already succeeded, so failing to read it must not
+   * change any verdict. Prefers a pod that actually reached Succeeded.
+   *
+   * `pods/log` IS A SEPARATE GRANT from `pods` (and `get` a separate verb from `list`). This
+   * method shipped with no RBAC change, so every call 403'd and the swallowing catch below
+   * reported that as "the node printed no receipt" — in every environment, 1:1 with every
+   * success, for the whole life of the feature. The grant now exists in all three places the
+   * actuator's reach is written down; the WARN is the other half of the fix, so the next
+   * unreadable log says WHY instead of being indistinguishable from an absent receipt.
+   */
+  async readReceipt(input: {
+    readonly nodeSlug: string;
+    readonly bundleDigest: string;
+    readonly namespace?: string | undefined;
+    readonly containerName: string;
+  }): Promise<string | null> {
+    let name: string;
+    try {
+      name = migrationJobName(input.nodeSlug, input.bundleDigest);
+    } catch {
+      return null;
+    }
+    const namespace = input.namespace ?? this.namespace;
+    try {
+      const list = await this.pods.listNamespacedPod(
+        namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `job-name=${name}`
+      );
+      const pods = list.body.items ?? [];
+      const ordered = [
+        ...pods.filter((pod) => pod.status?.phase === "Succeeded"),
+        ...pods.filter((pod) => pod.status?.phase !== "Succeeded"),
+      ];
+      for (const pod of ordered) {
+        const podName = pod.metadata?.name;
+        if (!podName) continue;
+        try {
+          const log = await this.pods.readNamespacedPodLog(
+            podName,
+            namespace,
+            input.containerName,
+            false,
+            undefined,
+            RECEIPT_LOG_LIMIT_BYTES,
+            undefined,
+            false,
+            undefined,
+            RECEIPT_LOG_TAIL_LINES
+          );
+          const body = log.body;
+          if (typeof body === "string" && body.length > 0) return body;
+        } catch (error) {
+          // This pod cannot speak; try the next one — but say so. A 403 here and a pod that
+          // genuinely printed nothing are the same `null` to the caller, and that ambiguity is
+          // exactly what made the missing `pods/log` grant invisible.
+          this.log?.warn(
+            {
+              job: name,
+              node: input.nodeSlug,
+              pod: podName,
+              container: input.containerName,
+              namespace,
+              statusCode: statusCode(error),
+            },
+            "compute_workload_migration_receipt_log_unreadable"
+          );
+        }
+      }
+    } catch (error) {
+      this.log?.warn(
+        {
+          job: name,
+          node: input.nodeSlug,
+          namespace,
+          statusCode: statusCode(error),
+        },
+        "compute_workload_migration_receipt_pods_unlistable"
+      );
+      return null;
+    }
+    return null;
   }
 
   /** Best-effort: keep exactly one durable skip marker per node once a newer digest wins. */

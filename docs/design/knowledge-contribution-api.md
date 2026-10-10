@@ -2,13 +2,14 @@
 id: knowledge-contribution-api
 type: design
 title: "Knowledge Contribution API — HTTP wrapper for Dolt knowledge branches"
-status: draft
+status: accepted
 spec_refs:
   - knowledge-data-plane-spec
   - agent-contributor-protocol
 work_items:
   - task.0425
   - task.5054
+  - task.5204
 created: 2026-04-29
 ---
 
@@ -41,7 +42,7 @@ This API lets external agents and less-trusted automation:
 
 - Open a short-lived `contrib/*` branch through HTTP.
 - Append multiple logical commit batches to that branch.
-- Insert, update, or deprecate `knowledge` rows through typed edit contracts.
+- Insert, replace, patch, delete, or cite through one typed edit union.
 - Read the contribution record, commit timeline, and Dolt-backed review diff.
 - Close their own open branch.
 
@@ -51,6 +52,13 @@ still use `core__knowledge_write` directly on `main`.
 The same contract is mounted by every knowledge-capable node. Node apps provide
 auth/session resolution and container wiring; the reusable behavior lives in
 `@cogni/knowledge-store` and `@cogni/node-contracts`.
+
+One contribution is one review inbox for one work item or PR. Before opening
+it, read both planes: merged knowledge through `/knowledge` or
+`/knowledge/index`, then the current principal's open contributions and their
+`/diff`s. Append related commits to the existing inbox; open another inbox for
+unrelated work. The live editorial standard and exact human review flow are
+served from the `knowledge-contribution-flow` hub entry.
 
 ## Non-Goals In This API
 
@@ -65,7 +73,7 @@ specifically does not add:
 - Real RBAC tables / per-user knowledge RLS.
 - Cross-node fan-out (one contribution targets one node).
 - MCP tool for knowledge contribution (HTTP only in v0).
-- Confidence promotion ladder beyond `30 → operator-set value on merge`.
+- Confidence policy or promotion; authors and mergers cannot set confidence.
 
 ## Considered & rejected: staging-table alternative
 
@@ -95,7 +103,7 @@ recreate the diff/review surface Dolt already exposes.
 │ service/                                                              │
 │   contribution-service.ts       createContributionService(deps)      │
 │ domain/                                                               │
-│   contribution.schema.ts        edit + record + commit schemas        │
+│   contribution-schemas.ts       edit + record + commit schemas        │
 └──────────────────────────────┬───────────────────────────────────────┘
                                │
                                │ service exposes framework-agnostic
@@ -126,11 +134,11 @@ recreate the diff/review surface Dolt already exposes.
 
 ### Where `knowledge` schema lives
 
-- **Generic shape** (id, domain, title, content, tags, ...) lives in
-  `nodes/node-template/packages/knowledge/src/schema.ts`, so a fresh node forks
-  the same knowledge hub baseline.
-- **Operator schema** re-exports the node-template knowledge tables and owns only
-  operator-local contribution metadata tables.
+- **Generic shape** (id, domain, title, content, useWhen, tags, ...) lives in
+  `packages/knowledge-base/src/schema.ts` and ships in
+  `@cogni-dao/knowledge-store`.
+- **Operator schema** re-exports that base from
+  `nodes/operator/packages/doltgres-schema/src/knowledge.ts`.
 - **Per-node companion tables** (e.g. `poly_market_categories`) stay node-private — that's the entire reason node-local schema packages exist.
 
 ### Branch lifecycle
@@ -187,7 +195,7 @@ know:
 - which authenticated principal opened a contribution;
 - which principal authored each HTTP append request;
 - whether an app-level contribution is open, merged, or closed;
-- idempotency and quota enforcement;
+- idempotency and lifecycle enforcement;
 - which Dolt commit hashes belong to the contribution timeline.
 
 Do not use these tables to answer questions Dolt can answer from the commit
@@ -252,29 +260,126 @@ type KnowledgeEntryInput = {
   entityId?: string;
   title: string;
   content: string;
+  useWhen?: string; // 1–320
   entryType?: string;
   tags?: string[];
-  confidencePct?: number;
+};
+
+// The `patch` partial: ONLY fields no write gate governs. Note what is NOT
+// here — content, title, tags, id, domain, sourceType, sourceRef.
+type KnowledgeEntryPatch = {
+  useWhen?: string; // ≤320
+  entryType?: string; // ≤64
 };
 
 type KnowledgeContributionEdit =
   | { op: "insert"; entry: KnowledgeEntryInput }
   | { op: "update"; targetRowId: string; entry: KnowledgeEntryInput }
-  | { op: "deprecate"; targetRowId: string; reason: string }
+  | { op: "patch"; targetRowId: string; entry: KnowledgeEntryPatch }
+  | { op: "delete"; targetRowId: string; reason: string }
   | {
       op: "cite";
       citingId: string;
       citedId: string;
       // non-temporal knowledge edges only; the hypothesis-loop edges
       // (evidence_for/derives_from/validates/invalidates) stay behind /edo/*.
-      citationType: "supports" | "contradicts" | "extends" | "supersedes";
+      citationType:
+        | "supports"
+        | "contradicts"
+        | "extends"
+        | "supersedes"
+        | "tracks";
       context?: string;
     };
 ```
 
 `targetRowId` is evaluated on the contribution branch after checkout, not on
 `main`. That allows commit 2 to update a row created by commit 1 on the same
-branch. A missing update/deprecate target fails before `dolt_commit`.
+branch. A missing update/patch/delete target fails before `dolt_commit`.
+
+#### `patch` — refine metadata without replaying the body
+
+**`PATCH_CARRIES_ONLY_UNGATED_FIELDS` — the rule that decides what a patch may
+carry: a field is patchable only if no write gate governs it.**
+
+The gate chain (`V0_DETERMINISTIC_GATES`) validates a whole
+`KnowledgeEntryInput`, so it structurally cannot run against a partial. Rather
+than let `patch` be an exception to the gates, the partial is narrowed to the
+fields the chain has no opinion about:
+
+| field       | gate coverage today              | patchable |
+| ----------- | -------------------------------- | --------- |
+| `useWhen`   | editorial review; wire 1–320     | ✅        |
+| `entryType` | none                             | ✅        |
+| `content`   | shape (`content_empty`)          | ❌        |
+| `title`     | shape (3–60, punctuation, `·`)   | ❌        |
+| `tags`      | shape (≤16 tags, each 1–32)      | ❌        |
+| `id`        | shape (kebab slug, 1–4 segments) | ❌        |
+| `sourceRef` | provenance                       | ❌        |
+| `domain`    | none, but a shelf move is review | ❌        |
+
+So `patch` is **not** a gate bypass and needs no gate chain of its own: there is
+nothing the chain would say about the two fields it can carry. Editing any
+gate-governed field stays `op:"update"`, where the caller states that intent
+explicitly and the chain runs in full. `useWhen` is structurally bounded to
+1–320 characters; the contribution guide owns its editorial standard. A future
+semantic gate may automate that review without widening the patch shape.
+
+Why the op exists at all:
+
+- `op:"update"` carries a **whole** `KnowledgeEntryInput`, and that schema
+  requires `domain`, `title`, and `content` (≤65536). So before `patch`, the
+  only way to sharpen one line of `useWhen` was to resend up to 64 KiB of body
+  — and any drift or truncation in that resend overwrote `content` silently,
+  with a 200. Refining a retrieval trigger is the most frequent intended edit
+  ("refine over add"), and it was the most destructive call in the API
+  (task.5204).
+- Because each excluded field is absent from the **type**, no `patch` — however
+  stale, truncated, or malformed — can reach those columns. The exclusion is
+  enforced by the type, not by remembering to omit a case in the adapter.
+- The partial is a **strict** object, so an unknown key (a hopeful `content`,
+  `title`, or `tags`) is a 400 rather than a silently dropped field. A caller
+  can never believe a write landed when it structurally could not.
+
+**`PATCH_IS_NOT_EMPTY`.** `{op:"patch", entry:{}}` parses structurally — every
+field is optional — but would issue an `UPDATE` with no `SET` clause. The wire
+schema rejects it with a typed 400 naming the settable fields; the adapter
+throws `EmptyKnowledgePatchError` (also 400) as defense in depth. A no-op is
+never acknowledged as an applied write.
+
+One further behaviour that differs from `op:"update"`:
+
+- **`confidence_pct` is preserved.** `update` resets it via the
+  initial-confidence policy because it restates the whole claim; a patch does
+  not restate the claim, so the row keeps its policy-managed confidence.
+
+The SET runs on the session-pinned branch connection inside `withBranch`, never
+on the pooled client, so a patch lands on `contrib/*` and stays reviewable like
+every other edit. It stamps the same provenance as the other ops
+(`source_type='external'`, `source_ref='contribution:<id>:<seq>'`,
+`source_node=<principal_id>`).
+
+```jsonc
+// Sharpen one trigger. The body is not in the request and cannot be touched.
+{
+  "message": "sharpen the promote-digest trigger",
+  "edits": [
+    {
+      "op": "patch",
+      "targetRowId": "prod-promote-digest-only",
+      "entry": {
+        "useWhen": "use when a promote reports success but buildSha did not advance",
+      },
+    },
+  ],
+}
+```
+
+Finding the row to patch is the companion read: `GET /api/v1/knowledge/index?q=`
+filters the routing projection on `useWhen` (case-insensitive substring), so an
+agent can ask which triggers match its situation without downloading any
+bodies. `GET /knowledge` is deliberately left without `q` — it browses rows,
+the index routes, and two endpoints with sharp jobs beat one with modes.
 
 The `cite` op writes a typed edge into the `citations` table — the same
 primitive the EDO endpoints use, exposed for generic findings/scorecards so a
@@ -311,37 +416,26 @@ Branch-local validation and append writes use reserved-connection checkout. A
 future read-only endpoint may use `AS OF '<branch>'` if Doltgres support is
 verified, but this is not required for the Pareto MVP.
 
-### Connection pinning
+### Branch-session admission and connection pinning
 
-`postgres.js` is a connection **pool**. `sql.unsafe('dolt_checkout(...)')` followed by `sql.unsafe('INSERT...')` may land on different physical connections — checkout would apply to a connection that the next call doesn't use. A process-level mutex doesn't fix this.
+`dolt_checkout` is session state, while `postgres.js` is a pool. Every branch
+operation therefore runs through `DoltBranchSessionRunner`, never a bare
+`sql.reserve()`:
 
-**Correct pattern:** every branch op runs inside a single `await sql.reserve(async (conn) => { ... })`. The reserved connection is pinned for the closure's duration; checkout + insert + commit + checkout-back all execute on it. On exception, `try/finally` restores `dolt_checkout('main')` before releasing.
+1. a FIFO queue admits one branch operation before it can reserve a connection;
+2. a dedicated branch client (`max: 1`) is separate from the ordinary read pool;
+3. a plain priming query plus `reserve()` share one acquisition deadline;
+4. `pg_try_advisory_lock(KNOWLEDGE_BRANCH_LOCK_KEY)` serializes branch work across replicas;
+5. one reserved session performs checkout, edits, commit, metadata update, and checkout-back;
+6. `finally` restores `main`; a wedged branch client is terminated and recreated.
 
-```typescript
-async appendCommit(input) {
-  return await this.sql.reserve(async (conn) => {
-    try {
-      await conn.unsafe(`SELECT dolt_checkout('${esc(branch)}')`);
-      for (const edit of input.edits) {
-        await applyContributionEdit(conn, edit);
-      }
-      await conn.unsafe(`SELECT dolt_commit('-Am', '${esc(message)}')`);
-      const [{ hash }] = await conn.unsafe(`SELECT dolt_hashof('${esc(branch)}') AS hash`);
-      await conn.unsafe(`SELECT dolt_checkout('main')`);
-      await conn.unsafe(`UPDATE knowledge_contributions SET head_commit = ..., commit_count = ...`);
-      await conn.unsafe(`INSERT INTO knowledge_contribution_commits (...) VALUES (...)`);
-      await conn.unsafe(`SELECT dolt_commit('-Am', 'contrib-meta: ${esc(id)}:${seq}')`);
-      return commitRecord;
-    } finally {
-      try { await conn.unsafe(`SELECT dolt_checkout('main')`); } catch { /* swallow */ }
-    }
-  });
-}
-```
+Admission, connection acquisition, or advisory-lock timeout throws retryable
+`KnowledgeBusyError` and maps to HTTP 503. Nothing was applied, so replay is
+safe. Ordinary reads never depend on this write-side proof and keep using their
+own pool.
 
-Connection pinning and append ordering are separate concerns. The reserved
-connection keeps Dolt checkout state coherent for one operation. Append ordering
-also needs a per-contribution critical section and an optimistic metadata guard:
+Session admission and append ordering are separate concerns. Appending also
+uses the contribution's recorded head and an optimistic metadata guard:
 
 1. serialize appends for the same contribution inside the current process;
 2. read `base_commit`, `head_commit`, and `commit_count`;
@@ -370,8 +464,8 @@ them here.
 
 Non-obvious contract invariants the Zod schemas can't express:
 
-- `targetRowId` lives on `update`/`deprecate` edits, not on `KnowledgeEntryInput`. Insert is unscoped; mutate is target-scoped.
-- `edits` accepts a **mixed-op batch**: one POST can apply `insert + update + deprecate` together atomically in a single Dolt commit (`min:1, max:50`).
+- `targetRowId` lives on `update`/`patch`/`delete` edits, not on `KnowledgeEntryInput`. Insert is unscoped; mutate is target-scoped.
+- `edits` accepts a **mixed-op batch**: one POST can apply any of the five ops together atomically in a single Dolt commit (`min:1, max:50`).
 - `update.targetRowId` is resolved against the **contribution branch**, not main. Commit 2 can target a row inserted by commit 1 on the same branch.
 - The contribution service enforces owner-only append, owner-or-admin close, session-only merge. Bearer-token agents are `kind: 'agent'` and cannot merge.
 
@@ -411,10 +505,11 @@ curl -X POST "$URL/api/v1/knowledge/contributions" \
     "edits": [{
       "op": "insert",
       "entry": {
-        "id": "poly:target-overlap-2026-w21",
-        "domain": "poly",
-        "title": "Target overlap scorecard · 2026-w21",
+        "id": "target-overlap-scorecard",
+        "domain": "prediction-market",
+        "title": "Target overlap changes weekly",
         "content": "...",
+        "useWhen": "comparing candidate copy-trade targets by wallet overlap",
         "entryType": "scorecard"
       }
     }],
@@ -470,18 +565,22 @@ curl -X POST "$URL/api/v1/knowledge/contributions" \
 
 One commit, two row changes. Diff returns `modified` + `added` together.
 
-### Deprecate
+### Delete only dead, uncited rows
 
 ```bash
 curl -X POST "$URL/api/v1/knowledge/contributions/$CID/commits" \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{
-    "message": "deprecate superseded scorecard",
-    "edits": [{ "op": "deprecate", "targetRowId": "poly:target-overlap-2026-w20", "reason": "superseded by 2026-w21" }]
+    "message": "remove a disposable validation probe",
+    "edits": [{ "op": "delete", "targetRowId": "validation-probe", "reason": "disposable probe; no durable claim" }]
   }'
 ```
 
-Sets `status='deprecated'` + `source_ref='contribution:<id>:<seq>'` on the row; never deletes (`DEPRECATE_NOT_DELETE`).
+The adapter refuses a delete when any live inbound citation exists and removes
+the row's outbound edges before the row. Dolt history remains the tombstone.
+Use this for probes, duplicates, or demonstrably dead rows. For superseded
+knowledge, preserve history explicitly: add/refine the replacement and create a
+`supersedes` edge instead of deleting the old row.
 
 ### List · get · diff · commits
 
@@ -503,61 +602,47 @@ curl -X POST "$URL/api/v1/knowledge/contributions/$CID/close" \
 # Merge (session cookie only — Bearer agents get 403)
 curl -X POST "$URL/api/v1/knowledge/contributions/$CID/merge" \
   -H "Cookie: $SESSION_COOKIE" -H "Content-Type: application/json" \
-  -d '{ "confidencePct": 60 }'
+  -d '{}'
 ```
 
-`confidencePct` is optional; omitted = pass-through of each row's stamped value. Provided = apply uniformly to every row stamped `source_ref LIKE 'contribution:<id>:%'`.
+Confidence is policy-owned. Neither the contribution body nor the merge body
+accepts `confidencePct`.
 
 ## Rate limit / abuse
 
-| Limit                            | Value | Enforcement                                            |
-| -------------------------------- | ----- | ------------------------------------------------------ |
-| Open contributions per principal | 10    | Service `create` checks before port call               |
-| Edits per commit                 | 50    | Zod contract                                           |
-| Bytes per `content` field        | 65536 | Zod contract                                           |
-| Bytes per request total          | 64KB  | Next route handler `request.body.size` check           |
-| Idempotency-Key TTL              | 24h   | Unique partial index `(principal_id, idempotency_key)` |
+| Limit                     | Value | Enforcement                                                   |
+| ------------------------- | ----- | ------------------------------------------------------------- |
+| Edits per commit          | 50    | Zod contract                                                  |
+| Bytes per `content` field | 65536 | Zod contract                                                  |
+| `useWhen` length          | 1–320 | Zod contract                                                  |
+| Idempotency key length    | 8–64  | Zod contract + unique `(principal_id, idempotency_key)` index |
 
-429 on quota; 413 on body size; 200 with existing record on idempotency-key replay.
-
-## Spec edits (deferred to implementation PR)
-
-`docs/spec/knowledge-data-plane.md`:
-
-1. **Non-Goals** — replace "Branching, remotes, or cross-node sharing — single branch (`main`) only" with "Dolt remotes, long-lived personal branches, rebase UI, review threads, and cross-node fan-out."
-2. **Invariants** — add:
-   - `EXTERNAL_CONTRIB_VIA_BRANCH` — external-agent writes to `knowledge` go through `contrib/<agent>-<id>` branches; only session principals merge to `main`
-   - `KNOWLEDGE_TABLE_ON_EVERY_NODE` — every knowledge-database node has the `knowledge` table
-   - `INTERNAL_WRITES_TO_MAIN` — `core__knowledge_write` (agent runtime) writes straight to `main`; branching is the external-only path
-   - `CONTRIBUTION_METADATA_ON_MAIN` — contribution state and app-auth attribution pointers live in `knowledge_contributions` / `knowledge_contribution_commits` on main
-   - `KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION` — v0 merge gate is session only; branch owners can close their own open contributions
-   - `ATTRIBUTION_INDEX_ONLY` — contribution metadata points at Dolt commit hashes and does not replace Dolt history
+There is deliberately no one-principal-one-inbox or fixed open-inbox quota.
+Each work item or PR gets its own focused contribution. Replaying a create with
+the same idempotency key returns the existing record instead of creating a
+duplicate.
 
 ## Open Questions
 
-| Q                                                                                             | Status                                                                                                                                             |
-| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Should review diff use `main...branch` or `main, branch` in the current Doltgres build?       | Prefer three-dot PR semantics; component test decides the adapter implementation.                                                                  |
-| Does `sql.reserve()` pin reliably across `unsafe()` calls on our postgres.js + Doltgres pair? | Per postgres.js v3 docs yes; component-test confirmation against Doltgres required.                                                                |
-| Should `merge` require explicit confidence promotion or default-passthrough?                  | Default-passthrough in v0; required in v1 once flow is exercised.                                                                                  |
-| Do append guards need a cross-process DB advisory lock?                                       | v0 uses in-process serialization plus branch-head/metadata guards; component race test decides whether this is enough for one operator deployment. |
-| Branch-namespace GC for stale `contrib/*` branches — manual `/close-stale`, or 30-day cron?   | v0 = no GC; quota caps the worst case; v1 work item.                                                                                               |
-| Can read-only branch views use `AS OF '<branch>'`?                                            | Non-gating; reserved-connection checkout is sufficient for append validation in the MVP.                                                           |
+| Q                                                                                           | Status                                                                                                                |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Should review diff use `main...branch` or `main, branch` in the current Doltgres build?     | Stable v0 uses `DOLT_DIFF(base_commit, recorded_head, 'knowledge')`; native three-dot remains an adapter-only option. |
+| Branch-namespace GC for stale `contrib/*` branches — manual `/close-stale`, or 30-day cron? | v0 = no GC; owners can close their own branches; v1 work item.                                                        |
+| Can read-only branch views use `AS OF '<branch>'`?                                          | Non-gating; reserved-connection checkout is sufficient for append validation in the MVP.                              |
 
 ## Test surface
 
-- **Unit** (`@cogni/knowledge-store`) — service factory: quota, owner-only append/close, session-only merge, contract Zod parse round-trips.
+- **Unit** (`@cogni/knowledge-store`) — service factory: idempotency replay, owner-only append/close, session-only merge, contract Zod parse round-trips.
 - **Component** (testcontainer Doltgres) — adapter `create → appendCommit ×3 → listCommits → diff → merge`; branch-local update target created by an earlier commit; merge conflict maps to `ContributionConflictError`; close drops branch + writes metadata; reserved-conn restores `main` on error.
 - **Stack** (operator app + Doltgres) — `/api/v1/agent/register` bearer creates and appends; bearer merge rejected; session merge accepted; `GET /commits` returns attribution records.
 
 ## Risks
 
-- **Reserved-conn long-held during 50-entry insert** — postgres.js pool may starve under contention; v0 has at most 10 open contribs per principal, low-traffic. v1 concern with pool tuning
+- **Reserved-conn long-held during 50-entry insert** — branch work is admitted above a dedicated single-connection pool; ordinary reads use a separate pool. Saturation returns retryable `KnowledgeBusyError` instead of consuming read capacity.
 - **Connection-state leak on adapter error** — try/finally restores `main`; component test exercises error paths
-- **Distributed append race** — process-local serialization prevents ordinary
-  same-instance races; `head_commit`/`commit_count` guards reject stale metadata.
-  A multi-instance deployment may still need a DB advisory lock or equivalent
-  lease before appending to the same contribution branch.
+- **Distributed append race** — the branch-session advisory lock serializes
+  operations across replicas; `head_commit`/`commit_count` guards still reject
+  stale metadata before a sequence number is recorded.
 - **Diff mode mismatch** — three-dot diff is review-correct, but current Doltgres table-function restrictions may force two-revision calls. Keep this inside the adapter.
 - **Three-way merge on `dolt_merge`** — branch was created from `main` HEAD at create; if `main` advances before merge (concurrent internal writes), merge is three-way. Conflicts on `knowledge.id` return 409 (`ContributionConflictError`); v0 does not implement rebase.
 - **Additive optional columns do not strand open branches** — append code inspects the checked-out contribution branch schema before referencing an optional knowledge column. A branch cut before `knowledge.use_when` remains writable; a current-schema branch persists the field. This is compatibility for additive optional columns, not a rebase mechanism.

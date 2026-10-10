@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Session-start cognition loader — shared by the Claude Code (.claude/settings.json)
-# and Codex (.codex/config.toml) SessionStart hooks. Presents THIS node's own
-# cognition bundle on stdout; both runtimes inject it into context.
+# and Codex (.codex/config.toml) SessionStart hooks. Refreshes THIS node's own
+# cognition cache; only Codex also consumes hook stdout as its injection channel.
 #
 # Design: LOCAL-FIRST PRESENT + ASYNC REFRESH. The hook fires on every
 # startup/resume/compact and on every process respawn — so it must NEVER put a
@@ -27,7 +27,6 @@
 # (cognidao.org — CI/CD only: flight, deploy, secrets; never used by this loader).
 set -u
 
-SESSION_COGNITION_MAX_BYTES=16384
 CACHE_FILE=".cogni/.cognition-cache.md"
 REFRESH_TTL_SECONDS=900   # only refresh in the background if cache older than this
 FETCH_TIMEOUT=6           # bound the foreground first-boot fetch
@@ -48,27 +47,20 @@ if [ -n "${CODEX_THREAD_ID:-}" ]; then
   trap 'rmdir "$COGNI_HOOK_LOCK" 2>/dev/null || true' EXIT
 fi
 
-bundle_bytes() {
-  # Match the exact stdout shape below: command substitution removes trailing
-  # newlines and presentation restores exactly one.
-  printf '%s\n' "$1" | LC_ALL=C wc -c | tr -d '[:space:]'
-}
-
-bundle_fits_budget() {
-  [ "$(bundle_bytes "$1")" -le "$SESSION_COGNITION_MAX_BYTES" ]
-}
-
-oversized_bundle_notice() {
-  actual_bytes="$1"
-  source_name="$2"
-  cat <<EOF
-COGNI COGNITION — bundle rejected before injection
-
-The $source_name bundle is $actual_bytes bytes, above the strict
-$SESSION_COGNITION_MAX_BYTES-byte SessionStart ceiling. Nothing was truncated
-or partially injected. Reduce the node orientation/index at $URL, then restart
-or resume the agent.
-EOF
+# emit_agent_context <text> — surface <text> only where the hook is the selected
+# injection channel. The bundle is a live projection of the Dolt knowledge hub.
+# Harnesses ingest it differently:
+#   - Codex reads raw stdout as developer context and the .codex/config.toml
+#     `additionalContextLimit = 0` disables its head/tail spill, so the full
+#     payload lands untruncated.
+#   - Claude Code expands AGENTS.md @imports before/at SessionStart, so hook output
+#     is too late for that session and duplicates a preview of the same bundle.
+#     Its hook is therefore write-only; the committed AGENTS.md floor covers a
+#     cold first boot and the warmed cache supplies the rich contract thereafter.
+emit_agent_context() {
+  if [ -n "${CODEX_THREAD_ID:-}" ]; then
+    printf '%s\n' "$1"
+  fi
 }
 
 read_env_file_value() {
@@ -147,20 +139,14 @@ refresh_in_background() {
   cache_is_stale || return 0
   (
     fresh="$(fetch_bundle)"
-    [ -n "$fresh" ] && bundle_fits_budget "$fresh" && write_cache_atomic "$fresh"
+    [ -n "$fresh" ] && write_cache_atomic "$fresh"
   ) >/dev/null 2>&1 &
 }
 
 # PRESENTATION — local-first. If we have ever oriented, boot is offline-safe and
 # a hub outage is invisible; we just refresh in the background for next time.
 if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ] && ! cache_is_repo_tracked; then
-  cached="$(cat "$CACHE_FILE")"
-  if bundle_fits_budget "$cached"; then
-    printf '%s\n' "$cached"
-    refresh_in_background
-    exit 0
-  fi
-  oversized_bundle_notice "$(bundle_bytes "$cached")" "cached"
+  emit_agent_context "$(cat "$CACHE_FILE")"
   refresh_in_background
   exit 0
 fi
@@ -170,19 +156,15 @@ fi
 # Bounded fetch.
 bundle="$(fetch_bundle)"
 if [ -n "$bundle" ]; then
-  if ! bundle_fits_budget "$bundle"; then
-    oversized_bundle_notice "$(bundle_bytes "$bundle")" "fetched"
-    exit 0
-  fi
   write_cache_atomic "$bundle"
-  printf '%s\n' "$bundle"
+  emit_agent_context "$bundle"
   exit 0
 fi
 
 # First boot AND fetch failed. Be honest, never cry wolf — separate a setup gap
 # (no key) from a key-present failure, without a second network probe.
 if [ -z "$AGENT_KEY" ]; then
-  cat <<EOF
+  emit_agent_context "$(cat <<EOF
 COGNI COGNITION — no node credentials yet (first boot)
 
 No COGNI_NODE_API_KEY was found, so this session could not load its cognition
@@ -197,8 +179,9 @@ This is a setup step, not an outage. To bootstrap:
 Then restart or resume the agent. (Once it loads once, it is cached locally and
 survives hub outages.)
 EOF
+)"
 else
-  cat <<EOF
+  emit_agent_context "$(cat <<EOF
 COGNI COGNITION — could not load bundle (first boot, no cache)
 
 A credential IS present, so this is NOT a missing-key setup problem. Either the
@@ -209,4 +192,5 @@ Check hub health (cognidao.org/version) and that GET /api/v1/cognition resolves
 with your key. Proceed with the repo's own AGENTS.md + skills meanwhile —
 cognition caches itself once it loads, and then survives hub outages.
 EOF
+)"
 fi

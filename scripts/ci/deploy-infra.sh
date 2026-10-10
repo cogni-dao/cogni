@@ -26,6 +26,9 @@
 #   - App/migrator/scheduler-worker containers are NOT started (k8s handles those)
 #   - DB migrations are NOT run (k8s PreSync hook handles those)
 #   - SSH_KEEPALIVE: All SSH connections use ServerAliveInterval to survive long operations.
+#   - SSH_MULTIPLEXED (bug.5159): every ssh/scp/rsync leg rides ONE ControlMaster
+#     transport over a per-run mktemp socket, so the ~12-leg deploy performs a
+#     single handshake and cannot trip sshd's MaxStartups admission control.
 #   - INFRA_REF_IS_EXPLICIT (task.0314): rsync source is a clean worktree of --ref,
 #     never the caller's working tree.
 # Callers:
@@ -367,6 +370,60 @@ for secret in "${OPTIONAL_SECRETS[@]}"; do
 done
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# SSH connection multiplexing (bug.5159)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ONE TRANSPORT PER DEPLOY. The tail of this script opens TWELVE separate SSH
+# handshakes to the same VM back to back (1 mkdir ssh, 3 rsync, 6 scp, 1 verify
+# ssh, 1 exec ssh), and `on_fail` opens seven more while dumping diagnostics.
+# sshd's admission control (`MaxStartups`, default 10:30:100, plus the
+# per-source penalties newer OpenSSH applies) sheds new connections DURING the
+# banner exchange once that burst forms, which surfaces as
+#   kex_exchange_identification: read: Connection reset by peer
+#   scp: Connection closed
+# on a random early leg — never on the long-running remote command, and never
+# as an auth or VM-down error. Measured on two production deploys on 2026-10-09
+# (runs 37868061021, 37868723855) while the app itself served 200s.
+#
+# `ControlMaster=auto` collapses all of it to one authenticated transport: the
+# first call authenticates and becomes the master, every later ssh/scp/rsync
+# rides it as a channel and performs NO handshake. That is the structural fix —
+# it removes the burst rather than retrying into it. deploy-infra was the last
+# SSH-heavy CI path still unconverted; reconcile-node-substrate.sh and
+# secret-materialize.sh already multiplex for this same bug.
+#
+# COLLISION SAFETY. The socket lives in a `mktemp -d` directory, so two deploys
+# can never share one: concurrent runs for DIFFERENT environments (a candidate-a
+# infra flight during a production promote) each get their own directory, and so
+# do two runs for the SAME environment. The socket is additionally named
+# `<env>-%h` so a human reading `lsof` can tell which lane and which VM a live
+# master belongs to, and `%h` keeps it correct-by-construction if this script
+# ever addresses a second host. A fixed `/tmp/...` path would have done neither.
+#
+# `ControlMaster=auto` (not `=yes`) also means a dead or stale master is not
+# fatal: ssh falls back to opening its own connection. rsync gets the same opts
+# through `-e "ssh $SSH_OPTS"`, so its legs are channels too.
+SSH_MUX_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cogni-mux-XXXXXX")"
+SSH_MUX_CONTROL_PATH="$SSH_MUX_DIR/${ENVIRONMENT}-%h"
+# A unix socket path is capped (~104 bytes). The components are fixed-length in
+# CI, so this guard never fires there; it exists so an unusual TMPDIR fails with
+# a cause instead of ssh's bare "ControlPath too long" on every leg.
+if (( ${#SSH_MUX_DIR} + ${#ENVIRONMENT} + ${#VM_HOST} + 2 > 100 )); then
+    log_error "SSH ControlPath would exceed the unix-socket limit: ${SSH_MUX_DIR}/${ENVIRONMENT}-${VM_HOST}"
+    log_error "Set TMPDIR to a shorter directory and re-run."
+    exit 1
+fi
+SSH_OPTS="$SSH_OPTS -o ControlMaster=auto -o ControlPath=$SSH_MUX_CONTROL_PATH -o ControlPersist=120"
+log_info "SSH multiplexing enabled (ControlPath: $SSH_MUX_CONTROL_PATH)"
+
+# Tear the master down rather than leaving it to ControlPersist. Installed into
+# the existing EXIT trap below, next to cleanup_worktree.
+cleanup_ssh_mux() {
+    [[ -n "${SSH_MUX_DIR:-}" ]] || return 0
+    ssh -o "ControlPath=$SSH_MUX_CONTROL_PATH" -O exit root@"$VM_HOST" >/dev/null 2>&1 || true
+    rm -rf "$SSH_MUX_DIR"
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Artifact directory
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ARTIFACT_DIR="${RUNNER_TEMP:-/tmp}/deploy-infra-${GITHUB_RUN_ID:-$$}"
@@ -384,7 +441,7 @@ cleanup_worktree() {
         git -C "$CALLER_REPO" worktree remove --force "$SRC_WORKTREE" 2>/dev/null || rm -rf "$SRC_WORKTREE"
     fi
 }
-trap cleanup_worktree EXIT
+trap 'cleanup_worktree; cleanup_ssh_mux' EXIT
 
 log_info "Resolving source worktree at ref: $REF"
 # Fetch the ref to handle shallow clones (GHA typically checks out with fetch-depth=1)

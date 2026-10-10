@@ -7,9 +7,10 @@
  *   outcome is a PHASE and none of them throws, and the per-digest migration contract handed to
  *   the runner is still byte-identical to the one the frozen controller used.
  * Scope: Unit tests over a fake runner. Touches no Kubernetes API, no Akash Console, no DB.
- * Invariants: no outcome is silent; NO outcome is a refusal.
+ * Invariants: no outcome is silent; NO outcome is a refusal; the drift gate fails ONLY on a receipt
+ *   that was read and names a declared tag the database does not hold (bug.5415).
  * Side-effects: none
- * Links: ./akash-tx-migration-step, bug.5116, bug.5140, task.5135
+ * Links: ./akash-tx-migration-step, bug.5116, bug.5140, bug.5415, task.5135
  * @internal
  */
 
@@ -19,6 +20,8 @@ import type {
   AkashTxMigrationPort,
   AkashTxMigrationStep,
   ComputeWorkloadMigrationInput,
+  NodeMigrationReportStorePort,
+  RecordNodeMigrationReportInput,
 } from "@/ports";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
@@ -46,13 +49,85 @@ class FakeMigration implements AkashTxMigrationPort {
   calls: ComputeWorkloadMigrationInput[] = [];
   outcome: "succeeded" | "running" | "failed" = "succeeded";
   throws?: Error;
+  /** What the node's own migrator printed, when this fake is asked for a receipt. */
+  receiptStdout: string | null = null;
+  /** The 403 class: the pod log exists but this process may not read it (#2638). */
+  readReceiptThrows?: Error;
 
   async ensure(input: ComputeWorkloadMigrationInput) {
     this.calls.push(input);
     if (this.throws) throw this.throws;
     return this.outcome;
   }
+
+  async readReceipt() {
+    if (this.readReceiptThrows) throw this.readReceiptThrows;
+    return this.receiptStdout;
+  }
 }
+
+/** Receipt-cell writer. Records what it was asked to key the cell on, and nothing else. */
+class FakeReports implements NodeMigrationReportStorePort {
+  readonly recorded: RecordNodeMigrationReportInput[] = [];
+
+  async record(input: RecordNodeMigrationReportInput) {
+    this.recorded.push(input);
+    return "recorded" as const;
+  }
+
+  async read() {
+    return null;
+  }
+}
+
+/** What the fork image's migrator prints on a successful migrate. */
+function receiptStdout(body: {
+  readonly declared: readonly string[];
+  readonly applied: readonly {
+    readonly tag: string;
+    readonly hash: string;
+    readonly appliedAtMs: number;
+  }[];
+}): string {
+  return [
+    `migrate complete: ${body.applied.length} migration(s) applied + verified`,
+    `COGNI_MIGRATION_RECEIPT_V1 ${JSON.stringify({ node: "toks9", ...body })}`,
+  ].join("\n");
+}
+
+const APPLIED_INIT = { tag: "0000_init", hash: "abc", appliedAtMs: 1 };
+const APPLIED_NEXT = { tag: "0001_next", hash: "def", appliedAtMs: 2 };
+
+/** Declared == applied: the database holds exactly what the image ships. */
+const RECEIPT_STDOUT = receiptStdout({
+  declared: ["0000_init", "0001_next"],
+  applied: [APPLIED_INIT, APPLIED_NEXT],
+});
+
+/**
+ * poly/candidate-a, as the live readout found it (bug.5415): counts matched 85/85 while the SETS
+ * diverged — one declared tag never arrived AND one ledger row the journal does not recognise.
+ * Reduced to two migrations; the shape is what matters.
+ */
+const RECEIPT_STDOUT_MISSING = receiptStdout({
+  declared: ["0000_init", "0001_next"],
+  applied: [
+    APPLIED_INIT,
+    { tag: "unknown:1791098285556", hash: "", appliedAtMs: 2 },
+  ],
+});
+
+/** `unexpected` ONLY: an image legitimately older than a row in its own ledger. Not a failure. */
+const RECEIPT_STDOUT_UNEXPECTED_ONLY = receiptStdout({
+  declared: ["0000_init"],
+  applied: [
+    APPLIED_INIT,
+    { tag: "unknown:1791098285556", hash: "", appliedAtMs: 2 },
+  ],
+});
+
+/** The immutable node UUID the caller's own allocation receipt binds to this workload. */
+const NODE_ID = "f66b260b-4633-41e2-8711-b7c1b8449cc1";
 
 function recordingLogger(): AkashTxLogger & {
   lines: { level: string; marker: string; fields: Record<string, unknown> }[];
@@ -213,6 +288,236 @@ describe("runMigrationStep", () => {
     expect(log.lines.map((line) => line.marker)).toEqual([
       "akash_tx_migration_capability_missing",
     ]);
+  });
+});
+
+describe("runMigrationStep receipt collection", () => {
+  it("keys the receipt cell on the RECEIPT-BOUND node id, never on the workload slug", async () => {
+    // The whole bug. `record` used to be handed `nodeSlug` and resolve `node_id` by selecting
+    // the operator's `nodes` registry — a table with ENABLE + FORCE row-level security and one
+    // `tenant_isolation` policy keyed on `current_setting('app.current_user_id')`. The akash-tx
+    // actuator holds the RLS-enforced app role and opens no tenant scope, so that select
+    // SUCCEEDED and matched ZERO rows for every node in the fleet: production logged
+    // `outcome: "node_not_registered"` with declaredCount 32 / appliedCount 32 / missingCount 0,
+    // and `node_migration_reports` stayed empty. The cell key now arrives already resolved.
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT;
+    const reports = new FakeReports();
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, reports, log },
+        { ...INPUT, nodeId: NODE_ID, step: step() }
+      )
+    ).resolves.toBe("succeeded");
+
+    expect(reports.recorded).toEqual([
+      {
+        nodeId: NODE_ID,
+        environment: "candidate-a",
+        declared: ["0000_init", "0001_next"],
+        applied: [APPLIED_INIT, APPLIED_NEXT],
+        bundleDigest: DIGEST,
+        reporter: "migration-job",
+      },
+    ]);
+    expect(
+      log.lines.find(
+        (line) => line.marker === "akash_tx_migration_receipt_recorded"
+      )?.fields
+    ).toMatchObject({
+      outcome: "recorded",
+      declaredCount: 2,
+      appliedCount: 2,
+      missingCount: 0,
+    });
+  });
+
+  it("says the metadata did not land — and writes NOTHING — when no node id is bound yet", async () => {
+    // A workload's very first observe precedes its first create, so the allocation receipt that
+    // binds the node id may not exist yet. That is a FACT, not an error: the phase is still
+    // `succeeded`, the write is skipped, and the next tick carries the metadata.
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT;
+    const reports = new FakeReports();
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep({ migration, reports, log }, { ...INPUT, step: step() })
+    ).resolves.toBe("succeeded");
+
+    expect(reports.recorded).toEqual([]);
+    expect(log.lines.map((line) => line.marker)).toContain(
+      "akash_tx_migration_receipt_unbound"
+    );
+  });
+});
+
+describe("runMigrationStep drift gate (bug.5415)", () => {
+  /** The one failing condition: a receipt was READ and names a declared tag that did not arrive. */
+  it("FAILS a succeeded Job when a declared migration did not arrive, and names it", async () => {
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT_MISSING;
+    const reports = new FakeReports();
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, reports, log },
+        { ...INPUT, nodeId: NODE_ID, step: step() }
+      )
+    ).resolves.toBe("failed");
+
+    // Loud and greppable: its own marker, the missing tags, and which node/env/digest.
+    const line = log.lines.find(
+      (entry) => entry.marker === "akash_tx_migration_drift_missing"
+    );
+    expect(line?.level).toBe("error");
+    expect(line?.fields).toMatchObject({
+      workload: "toks9",
+      environment: "candidate-a",
+      bundleDigest: DIGEST,
+      nodeId: NODE_ID,
+      missing: ["0001_next"],
+      missingCount: 1,
+      unexpectedCount: 1,
+    });
+    // A ledger row the journal does not recognise is DATABASE content: counted, never named.
+    expect(JSON.stringify(log.lines)).not.toContain("unknown:1791098285556");
+    // Detection still reports: the readout must stay honest even though the step failed.
+    expect(reports.recorded).toHaveLength(1);
+  });
+
+  it("does NOT fail on `unexpected` alone — it warns", async () => {
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT_UNEXPECTED_ONLY;
+    const reports = new FakeReports();
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, reports, log },
+        { ...INPUT, nodeId: NODE_ID, step: step() }
+      )
+    ).resolves.toBe("succeeded");
+
+    const markers = log.lines.map((line) => line.marker);
+    expect(markers).toContain("akash_tx_migration_drift_unexpected");
+    expect(markers).not.toContain("akash_tx_migration_drift_missing");
+    expect(
+      log.lines.find(
+        (line) => line.marker === "akash_tx_migration_drift_unexpected"
+      )
+    ).toMatchObject({ level: "warn", fields: { unexpectedCount: 1 } });
+  });
+
+  it("NEVER fails when nothing was ever reported — an unknown is not a verdict", async () => {
+    // A node whose migrator image predates the receipt emitter prints no marker at all. There is
+    // no drift to read, so there is no verdict, so the deploy proceeds. THE load-bearing property.
+    const migration = new FakeMigration();
+    migration.receiptStdout = "migrate complete: 0 migration(s) applied";
+    const reports = new FakeReports();
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, reports, log },
+        { ...INPUT, nodeId: NODE_ID, step: step() }
+      )
+    ).resolves.toBe("succeeded");
+
+    const markers = log.lines.map((line) => line.marker);
+    expect(markers).toContain("akash_tx_migration_receipt_absent");
+    expect(markers).not.toContain("akash_tx_migration_drift_missing");
+    expect(reports.recorded).toEqual([]);
+  });
+
+  it("NEVER fails when the receipt log could not be READ (the 403 class)", async () => {
+    // `readReceipt` answers null when no pod log could be fetched — the grant gap #2638 closed.
+    // No receipt means no verdict; it is NOT a receipt reporting an empty applied set.
+    const migration = new FakeMigration();
+    migration.receiptStdout = null;
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, reports: new FakeReports(), log },
+        { ...INPUT, nodeId: NODE_ID, step: step() }
+      )
+    ).resolves.toBe("succeeded");
+    expect(log.lines.map((line) => line.marker)).not.toContain(
+      "akash_tx_migration_drift_missing"
+    );
+  });
+
+  it("NEVER fails when the receipt read THROWS", async () => {
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT_MISSING;
+    migration.readReceiptThrows = new Error("forbidden");
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, reports: new FakeReports(), log },
+        { ...INPUT, nodeId: NODE_ID, step: step() }
+      )
+    ).resolves.toBe("succeeded");
+
+    const markers = log.lines.map((line) => line.marker);
+    expect(markers).toContain("akash_tx_migration_receipt_failed");
+    expect(markers).not.toContain("akash_tx_migration_drift_missing");
+  });
+
+  it("NEVER fails on drift when no node id is bound yet", async () => {
+    // Pre-create ticks have no allocation receipt to key the cell on, so the readout would say
+    // `never_reported` — and the gate only fires on a REPORTED state.
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT_MISSING;
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, reports: new FakeReports(), log },
+        { ...INPUT, step: step() }
+      )
+    ).resolves.toBe("succeeded");
+    expect(log.lines.map((line) => line.marker)).not.toContain(
+      "akash_tx_migration_drift_missing"
+    );
+  });
+
+  it("NEVER fails on drift when no receipt store is wired at all", async () => {
+    const migration = new FakeMigration();
+    migration.receiptStdout = RECEIPT_STDOUT_MISSING;
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, log },
+        { ...INPUT, nodeId: NODE_ID, step: step() }
+      )
+    ).resolves.toBe("succeeded");
+    expect(log.lines.map((line) => line.marker)).not.toContain(
+      "akash_tx_migration_drift_missing"
+    );
+  });
+
+  it("does not consult drift at all for a running or failed Job", async () => {
+    const migration = new FakeMigration();
+    migration.outcome = "running";
+    migration.receiptStdout = RECEIPT_STDOUT_MISSING;
+    const log = recordingLogger();
+
+    await expect(
+      runMigrationStep(
+        { migration, reports: new FakeReports(), log },
+        { ...INPUT, nodeId: NODE_ID, step: step() }
+      )
+    ).resolves.toBe("running");
+    expect(log.lines.map((line) => line.marker)).not.toContain(
+      "akash_tx_migration_drift_missing"
+    );
   });
 });
 

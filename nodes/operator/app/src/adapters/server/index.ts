@@ -152,12 +152,17 @@ export {
   type LiveNodeRegistryDeps,
 } from "./node-registry/live-node-registry.adapter";
 export {
+  NETWORK_NODES,
+  type NetworkNode,
+} from "./node-registry/network-nodes.data";
+export {
   type LivenessRollup,
   type NodeLiveness,
   type ProdLivenessConfig,
   type ProdLivenessDeps,
   resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
+export { DrizzleNodeMigrationReportStore } from "./observability/drizzle-node-migration-report.adapter";
 export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
 export { HttpLokiPusher } from "./observability/loki-push.adapter";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
@@ -180,6 +185,10 @@ export {
   type GithubReviewAdapter,
 } from "./review/github-review.adapter";
 // Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
+export {
+  OpenBaoFlightProbeProjectionAdapter,
+  type OpenBaoFlightProbeProjectionDeps,
+} from "./secrets/openbao-flight-probe-projection.adapter";
 export {
   OpenBaoSecretsAdapter,
   type OpenBaoSecretsAdapterDeps,

@@ -2957,10 +2957,11 @@ spec:
     };
   }
 
-  function contentHandler(catalog: string, slug: string) {
+  function contentHandler(catalog: string, slug: string, env = "production") {
     return (params: Record<string, unknown>) => {
       if (params.path === ".promote-state/source-sha-by-app.json") {
-        expect(params.ref).toBe(`deploy/production-${slug}`);
+        // A shared lane resolves ITS OWN pin branch — preview must never read production's.
+        expect(params.ref).toBe(`deploy/${env}-${slug}`);
         return {
           type: "file",
           encoding: "base64",
@@ -3022,6 +3023,48 @@ spec:
     expect(
       (dispatch?.params.inputs as Record<string, string>).node_source_sha
     ).toBeUndefined();
+  });
+
+  it("replays preview's OWN pin into the same full-infra workflow (bug.5409)", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentHandler(
+        inRepoCatalog,
+        "operator",
+        "preview"
+      ),
+      [DISPATCH]: () => ({}),
+    };
+
+    const result = await makeWriter().reconcileNodeInfra({
+      env: "preview",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+    });
+
+    expect(result).toMatchObject({
+      status: "dispatched",
+      env: "preview",
+      sourceSha: deployedSha,
+      sourceAddressing: "in_repo",
+    });
+    const dispatch = requests.find((request) => request.route === DISPATCH);
+    // No new workflow and no new lever: the SAME promote-and-deploy.yml with skip_infra=false,
+    // whose deploy-infra job is lane-bound and therefore binds preview's own VM_HOST.
+    expect(dispatch?.params).toMatchObject({
+      workflow_id: "promote-and-deploy.yml",
+      ref: "main",
+      inputs: {
+        environment: "preview",
+        nodes: "operator",
+        skip_infra: "false",
+        deploy_infra_mode: "full",
+        // INFRA_RECONCILE_PRESERVES_APP: source_sha === build_sha === the deployed pin, so the
+        // workflow re-resolves the image tag preview is already running.
+        source_sha: deployedSha,
+        build_sha: deployedSha,
+      },
+    });
   });
 
   it("replays a remote node pin as node_source_sha", async () => {
@@ -3334,6 +3377,81 @@ spec:
     expect(requests.some((request) => request.route.includes("git/ref"))).toBe(
       false
     );
+  });
+
+  it("dispatches an exact OpenFGA model change with explicit authorization collateral", async () => {
+    const runId = 34722512026;
+    routeHandlers = {
+      ...candidateReviewHandlers([
+        "infra/openfga/rbac-model.json",
+        "packages/authorization-core/src/adapters/openfga-authorization.adapter.ts",
+        "packages/authorization-core/src/index.ts",
+        "packages/authorization-core/src/test/fake-authorization.adapter.ts",
+        "packages/authorization-core/tests/authorization-core.test.ts",
+        "packages/authorization-core/tests/rbac-model.test.ts",
+      ]),
+      [DISPATCH]: () => ({
+        workflow_run_id: runId,
+        run_url: `https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/${runId}`,
+        html_url: `https://github.com/Cogni-DAO/cogni/actions/runs/${runId}`,
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).resolves.toMatchObject({
+      status: "dispatched",
+      lane: "compose",
+      sourceSha: candidateSourceSha,
+      runId,
+    });
+  });
+
+  it("does not let OpenFGA collateral select an infra lane by itself", async () => {
+    routeHandlers = candidateReviewHandlers([
+      "packages/authorization-core/tests/rbac-model.test.ts",
+    ]);
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_infra_change_missing",
+      status: 422,
+    });
+    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+  });
+
+  it("rejects authorization package paths outside the explicit OpenFGA collateral set", async () => {
+    routeHandlers = candidateReviewHandlers([
+      "infra/openfga/rbac-model.json",
+      "packages/authorization-core/package.json",
+    ]);
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_infra_path_rejected",
+      status: 422,
+    });
+    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
   });
 
   it("fails closed when GitHub omits native candidate infra run identity", async () => {

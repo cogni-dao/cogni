@@ -220,18 +220,23 @@ Postgres-native types, snake_case columns, Drizzle conventions. Doltgres is Post
 
 Curated domain knowledge that agents reference during reasoning.
 
-| Column           | Type        | Constraints           | Description                                                     |
-| ---------------- | ----------- | --------------------- | --------------------------------------------------------------- |
-| `id`             | text        | PK                    | Deterministic or human-readable                                 |
-| `domain`         | text        | NOT NULL              | `prediction-market`, `reservations`, `infrastructure`, etc.     |
-| `entity_id`      | text        |                       | Stable subject key (optional — not all knowledge has a subject) |
-| `title`          | text        | NOT NULL              | Human-readable summary                                          |
-| `content`        | text        | NOT NULL              | The knowledge claim or fact                                     |
-| `confidence_pct` | integer     |                       | 0–100 (null if not applicable)                                  |
-| `source_type`    | text        | NOT NULL              | `human`, `analysis_signal`, `external`, `derived`               |
-| `source_ref`     | text        |                       | Pointer to origin (signal ID, URL, paper, etc.)                 |
-| `tags`           | jsonb       |                       | Searchable tags                                                 |
-| `created_at`     | timestamptz | NOT NULL, default now |                                                                 |
+| Column           | Type        | Constraints           | Description                                                                                           |
+| ---------------- | ----------- | --------------------- | ----------------------------------------------------------------------------------------------------- |
+| `id`             | text        | PK                    | Deterministic or human-readable                                                                       |
+| `domain`         | text        | NOT NULL              | Registered shelf such as `build-delivery` or `use-ship`                                               |
+| `entity_id`      | text        |                       | Stable subject key (optional — not all knowledge has a subject)                                       |
+| `title`          | text        | NOT NULL              | One-line claim summary                                                                                |
+| `content`        | text        | NOT NULL              | The knowledge claim, guide, or fact                                                                   |
+| `use_when`       | text        |                       | One-line retrieval trigger — the reader's situation; nullable for legacy rows                         |
+| `entry_type`     | text        | NOT NULL              | Content role (`finding`, `rule`, `guide`, `skill`, `html`, EDO beats, and the other registered types) |
+| `status`         | text        | NOT NULL              | `draft` through `canonical`, plus `deprecated`                                                        |
+| `confidence_pct` | integer     | NOT NULL, default 40  | Policy-initialized and recomputed; never author-set                                                   |
+| `source_type`    | text        | NOT NULL              | `human`, `agent`, `analysis_signal`, `external`, `derived`                                            |
+| `source_ref`     | text        |                       | Pointer to origin or contribution commit                                                              |
+| `source_node`    | text        |                       | Principal/node attribution                                                                            |
+| `tags`           | jsonb       |                       | Compact facets; relationships stay in `citations`                                                     |
+| `created_at`     | timestamptz | NOT NULL, default now |                                                                                                       |
+| `updated_at`     | timestamptz | NOT NULL, default now |                                                                                                       |
 
 Examples:
 
@@ -250,7 +255,7 @@ interface KnowledgeStorePort {
   getKnowledge(id: string): Promise<Knowledge | null>;
   listKnowledge(
     domain: string,
-    opts?: { tags?: string[]; limit?: number }
+    opts?: { tags?: string[]; limit?: number; q?: string }
   ): Promise<Knowledge[]>;
   searchKnowledge(
     domain: string,
@@ -295,7 +300,22 @@ Causal/evaluative concerns (resolver, confidence recompute) live on a separate `
 
 ## Agent Access
 
-Agents access knowledge through the tool catalog, not raw database connections.
+Agents never use raw database connections. Internal graph code uses the tool
+catalog; external developers and standalone agents use the authenticated HTTP
+surface mounted by each node.
+
+### HTTP read surface
+
+| Need                    | Endpoint                                                                                               | Contract                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| Choose what to load     | `GET /api/v1/knowledge/index?q=<situation>[&domain=<shelf>]`                                           | Content-free routing rows: `id`, `domain`, `entryType`, `useWhen`. `q` matches `useWhen` only, case-insensitively. |
+| Read one selected entry | `GET /api/v1/knowledge/{id}`                                                                           | Full merged row, including body and provenance.                                                                    |
+| Browse a known shelf    | `GET /api/v1/knowledge?domain=<shelf>`                                                                 | Full merged rows; deliberately no `q`.                                                                             |
+| Inspect unmerged work   | `GET /api/v1/knowledge/contributions?state=open`, then `GET /api/v1/knowledge/contributions/{id}/diff` | Contribution branches are invisible to merged-plane reads.                                                         |
+
+All four reads accept either a cookie-session human or a bearer agent. The
+two-step routing path is intentional: index first, body second. The index never
+returns `content`, and its `q` is not full-text search over claims.
 
 ### Tool Catalog
 
@@ -317,22 +337,27 @@ nodes/{node}/app/src/bootstrap/     ← env vars → client → adapter → capa
 
 `createKnowledgeCapability(port)` lives in `packages/knowledge-store/` (pure function, shared across all nodes). It wraps `KnowledgeStorePort` as a `KnowledgeCapability` with auto-commit on every write. Per-node bootstrap creates the Doltgres client from env vars and passes the port.
 
-### Confidence Defaults
+### Confidence Initialization
 
-| Level    | Score | When                                                               |
-| -------- | ----- | ------------------------------------------------------------------ |
-| Draft    | 30%   | Default for all new agent writes                                   |
-| Verified | 80%   | Human-reviewed or agent-confirmed with fresh sources               |
-| Hardened | 95%   | Outcome-validated, statistically significant, repeatedly confirmed |
+Confidence is policy-owned, never author-set. The baseline-v0 initializer is
+defined in `packages/knowledge-store/src/domain/confidence-policy.ts` and
+detailed in [knowledge-syntropy](./knowledge-syntropy.md#1-confidence-is-computed-not-assigned): agent 30, analysis signal 40, external 50, human 70, and derived 40 until citations recompute it. Contribution and merge payloads do not accept `confidencePct`.
 
 ### Agent Recall Protocol
 
-Agents search knowledge BEFORE web search. The recall loop:
+Agents search knowledge BEFORE web search and read both the merged and branch
+planes before writing:
 
-1. `core__knowledge_search(domain, query)` — check existing knowledge
-2. Found + high confidence? → Use it, cite the entry ID
-3. Found but stale/low confidence? → Re-research, update via `core__knowledge_write`
-4. Not found? → `core__web_search`, then `core__knowledge_write` to save findings
+1. External reader: call `/knowledge/index?q=<situation>`, then `/knowledge/{id}` for the selected body. Internal graph: use `core__knowledge_search`/`core__knowledge_read`.
+2. List the current principal's open contributions and inspect each relevant `/diff`; branch rows do not appear in merged reads.
+3. Found + current? Use it and cite the entry ID. Found but stale or muddy? Refine it in place. Not found? Research, then write one atomic entry that cites a merged parent or sibling.
+4. External bearer writes through `/knowledge/contributions`; internal trusted tools may write `main`. A bearer agent never merges its own branch.
+
+`useWhen` is the routing trigger. It names a concrete reader situation using
+queryable vocabulary and distinguishes the entry from its nearest sibling; it
+does not summarize the answer. Refine only `useWhen` with strict
+`op:"patch"`. Use full `op:"update"` when changing `content`, `title`, `tags`,
+or `domain`, because those fields run the complete write-gate chain.
 
 ---
 
@@ -501,6 +526,9 @@ Given same observations + same knowledge commit → same analysis outputs.
 | FORK_TAKES_KNOWLEDGE            | When a node self-hosts, it takes its Doltgres database with full commit history.                                                                                                                                                                                                                                                                                                                                                                                                           |
 | SCHEMA_VIA_DRIZZLE_PRESYNC      | Knowledge-plane schema is applied by the node's drizzle-kit migrator as a k8s PreSync Job. `provision.sh` creates databases + roles only; it never issues DDL.                                                                                                                                                                                                                                                                                                                             |
 | AUTO_COMMIT_ON_WRITE            | Every `core__knowledge_write` call commits via the capability layer (`SELECT dolt_commit('-Am', ...)`). The schema migrator also commits post-migration via `stamp-commit.mjs`.                                                                                                                                                                                                                                                                                                            |
+| EXTERNAL_CONTRIB_VIA_BRANCH     | Bearer-agent editorial writes use short-lived `contrib/*` branches. Owners may append/close; only a session user may merge to `main`.                                                                                                                                                                                                                                                                                                                                                      |
+| INDEX_ROUTES_WITHOUT_CONTENT    | `GET /api/v1/knowledge/index` returns only `id`, `domain`, `entryType`, and `useWhen`; optional `q` matches `useWhen` only. Read the chosen full body through `GET /api/v1/knowledge/{id}`.                                                                                                                                                                                                                                                                                                |
+| PATCH_PRESERVES_BODY            | Contribution `patch` is strict and may set only `useWhen` and `entryType`; content/title/tags/domain changes require full `update` and its write gates.                                                                                                                                                                                                                                                                                                                                    |
 | RUNTIME_URL_IS_SUPERUSER        | `DOLTGRES_URL_<NODE>` runtime secret connects as the `postgres` superuser. Doltgres 0.56 RBAC is non-functional (GRANT silently no-ops); revisit when upstream lands working role access.                                                                                                                                                                                                                                                                                                  |
 | NODES_BOOT_EMPTY                | New nodes boot with **empty content** — `knowledge`, `citations`, and `sources` rows are zero. Nodes do not inherit operator-curated knowledge claims. Reference data — the `domains` registry — IS migrator-seeded with the base set per [knowledge-domain-registry](./knowledge-domain-registry.md) § Seeding. The dev-only `scripts/db/seed-doltgres.mts` populates local dev only, never production.                                                                                   |
 | MIRROR_REPO_SPEC_REMOTE_ONLY    | DoltHub remote mirror (`<owner>/knowledge-<node>`) is Cogni-owned in v0 and declared only in the node repo-spec at `knowledge.remote`. Runtime does not read a remote URL from env; if repo-spec has no `knowledge.remote`, post-merge mirror is disabled. `DOLTHUB_OWNER` is explicit environment config for node publish: production uses `cogni-dao`; candidate/test/preview must use a non-production DoltHub org. Push still gates on Dolt creds installed in the Doltgres container. |
@@ -511,7 +539,7 @@ Given same observations + same knowledge commit → same analysis outputs.
 ## Non-Goals
 
 - Replacing Postgres for hot operational data (awareness plane stays where it is)
-- Cross-node sharing or branching — single branch (`main`) only. The DoltHub mirror (v0 → `<owner>/knowledge-<node>`) is a one-way publication of `main`, not a federation primitive.
+- Long-lived personal branches, rebase UI, review threads, or cross-node fan-out. Short-lived reviewed `contrib/*` branches are the external-write path; the DoltHub mirror (v0 → `<owner>/knowledge-<node>`) remains a one-way publication of `main`, not a federation primitive.
 - Operator → node seed on provision — nodes boot empty
 - Real-time knowledge updates during analysis (read at start, not mid-flight)
 - Automatic promotion without any validation gate (human or statistical)
@@ -519,23 +547,27 @@ Given same observations + same knowledge commit → same analysis outputs.
 
 ### File Pointers
 
-| File                                                            | Purpose                                                                                           |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `packages/knowledge-store/src/port/knowledge-store.port.ts`     | `KnowledgeStorePort` interface                                                                    |
-| `packages/knowledge-store/src/adapters/doltgres/`               | `DoltgresKnowledgeStoreAdapter` + `buildDoltgresClient()`                                         |
-| `packages/knowledge-store/src/capability.ts`                    | `createKnowledgeCapability()` — wraps port with auto-commit on writes                             |
-| `packages/ai-tools/src/tools/knowledge-{read,search,write}.ts`  | Tool contracts + impls (registered in `TOOL_CATALOG`)                                             |
-| `nodes/poly/packages/doltgres-schema/`                          | Per-node Doltgres drizzle schema (re-exports base `knowledge`; companion tables here)             |
-| `nodes/poly/drizzle.doltgres.config.ts`                         | drizzle-kit config for poly's Doltgres plane (dialect-separated from Postgres)                    |
-| `nodes/poly/app/src/adapters/server/db/doltgres-migrations/`    | Checked-in drizzle-kit output                                                                     |
-| `nodes/poly/packages/doltgres-schema/stamp-commit.mjs`          | Post-migrate `dolt_commit` hook (per dolthub/dolt#4843 — DDL doesn't auto-commit)                 |
-| `infra/k8s/base/poly-doltgres/`                                 | PreSync Job manifest (`migrate-poly-doltgres`)                                                    |
-| `infra/compose/runtime/doltgres-init/provision.sh`              | Idempotent database + role provisioning (no DDL)                                                  |
-| `infra/compose/runtime/doltgres-init/install-creds.sh`          | Entrypoint wrapper — installs DoltHub keypair at `/root/.dolt/creds/<keyid>.jwk` from env         |
-| `packages/knowledge-store/src/adapters/doltgres/dolt-remote.ts` | `createDoltgresPusher` (lazy `dolt_remote add` + `dolt_push`), `wrapPushSafe` (fire-and-forget)   |
-| `packages/knowledge-store/src/service/contribution-service.ts`  | `ContributionServiceDeps.pushMainOnMerge` — optional post-merge mirror hook                       |
-| `docs/runbooks/dolthub-remote-bootstrap.md`                     | One-time setup: API repo create, `dolt creds new`, pubkey paste, prod-only secret provisioning    |
-| `scripts/ci/deploy-infra.sh`                                    | Derives `DOLTGRES_*` from `POSTGRES_ROOT_PASSWORD`, writes `DOLTGRES_URL_<NODE>` into k8s secrets |
+| File                                                                 | Purpose                                                                                           |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `packages/knowledge-store/src/port/knowledge-store.port.ts`          | `KnowledgeStorePort` interface                                                                    |
+| `packages/knowledge-store/src/adapters/doltgres/`                    | `DoltgresKnowledgeStoreAdapter` + `buildDoltgresClient()`                                         |
+| `packages/knowledge-base/src/schema.ts`                              | Generic knowledge, citation, domain, source, and contribution tables                              |
+| `packages/node-contracts/src/knowledge.index.v1.contract.ts`         | Content-free `useWhen` routing projection                                                         |
+| `packages/node-contracts/src/knowledge.contributions.v1.contract.ts` | External contribution request/response envelopes                                                  |
+| `packages/knowledge-store/src/capability.ts`                         | `createKnowledgeCapability()` — wraps port with auto-commit on writes                             |
+| `packages/ai-tools/src/tools/knowledge-{read,search,write}.ts`       | Tool contracts + impls (registered in `TOOL_CATALOG`)                                             |
+| `nodes/poly/packages/doltgres-schema/`                               | Per-node Doltgres drizzle schema (re-exports base `knowledge`; companion tables here)             |
+| `nodes/poly/drizzle.doltgres.config.ts`                              | drizzle-kit config for poly's Doltgres plane (dialect-separated from Postgres)                    |
+| `nodes/poly/app/src/adapters/server/db/doltgres-migrations/`         | Checked-in drizzle-kit output                                                                     |
+| `nodes/poly/packages/doltgres-schema/stamp-commit.mjs`               | Post-migrate `dolt_commit` hook (per dolthub/dolt#4843 — DDL doesn't auto-commit)                 |
+| `infra/k8s/base/poly-doltgres/`                                      | PreSync Job manifest (`migrate-poly-doltgres`)                                                    |
+| `infra/compose/runtime/doltgres-init/provision.sh`                   | Idempotent database + role provisioning (no DDL)                                                  |
+| `infra/compose/runtime/doltgres-init/install-creds.sh`               | Entrypoint wrapper — installs DoltHub keypair at `/root/.dolt/creds/<keyid>.jwk` from env         |
+| `packages/knowledge-store/src/adapters/doltgres/dolt-remote.ts`      | `createDoltgresPusher` (lazy `dolt_remote add` + `dolt_push`), `wrapPushSafe` (fire-and-forget)   |
+| `packages/knowledge-store/src/service/contribution-service.ts`       | `ContributionServiceDeps.pushMainOnMerge` — optional post-merge mirror hook                       |
+| `nodes/operator/app/src/app/api/v1/knowledge/`                       | Reference per-node route bindings for list, index, get, domains, and contributions                |
+| `docs/runbooks/dolthub-remote-bootstrap.md`                          | One-time setup: API repo create, `dolt creds new`, pubkey paste, prod-only secret provisioning    |
+| `scripts/ci/deploy-infra.sh`                                         | Derives `DOLTGRES_*` from `POSTGRES_ROOT_PASSWORD`, writes `DOLTGRES_URL_<NODE>` into k8s secrets |
 
 ## Open Questions
 

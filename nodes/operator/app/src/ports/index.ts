@@ -64,6 +64,7 @@ export {
   type AkashTxAllocationLedgerPort,
   type AkashTxAllocationRecord,
   type AkashTxAllocationState,
+  type AkashTxCompositeVerdict,
   type AkashTxConsolePort,
   type AkashTxCreateResult,
   AkashTxError,
@@ -154,6 +155,7 @@ export type {
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,
+  SharedLaneInfraEnv,
 } from "./deploy-plane.port";
 export type { EpochsRead } from "./epochs-read.port";
 export { EpochsReadError } from "./epochs-read.port";
@@ -249,6 +251,12 @@ export type {
   RungStatus,
   ServingResult,
 } from "./node-flight.port";
+export type {
+  NodeMigrationReportRecord,
+  NodeMigrationReportStorePort,
+  RecordNodeMigrationReportInput,
+  RecordNodeMigrationReportOutcome,
+} from "./node-migration-report.port";
 export type {
   NodeKind,
   NodeRegistryPort,

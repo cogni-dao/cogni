@@ -69,6 +69,21 @@ function phaseNotReadyReason(status: Record<string, unknown>): string {
     : "phase_not_ready";
 }
 
+/**
+ * The composite's own serving verdict, named alongside any phase reason.
+ *
+ * `serving` is the field the canon treats as authoritative for "is this lease
+ * carrying traffic", so a promote-gate timeout must state it rather than leave the
+ * reader to infer it from a phase that may be latched.
+ */
+function servingSuffix(status: Record<string, unknown>): string {
+  return status.serving === true
+    ? "serving=true"
+    : status.serving === false
+      ? "serving=false"
+      : "serving=absent";
+}
+
 /** Compare live controller state with the exact Git-rendered desired state. */
 export function assessComputeWorkloadReadiness(input: {
   readonly expected: unknown;
@@ -234,8 +249,20 @@ function assessXComputeWorkloadReadiness(input: {
       };
     }
   }
+  // `phase` is checked first, so without the serving suffix a latched phase and a
+  // genuinely dead lease produce the SAME reason. They need opposite responses:
+  // `akash-mint-legibility-traps` records that `status.phase` recomputes each tick
+  // but LATCHES a prior generation's failure until the composite serves the desired
+  // SHA, so `phase_not_ready` beside `serving=true` and an already-matched bundle is
+  // the expected shape of a converging deploy — while `serving=false` is the lease
+  // actually not carrying traffic. poly promote run 37720716454 timed out on bare
+  // `phase_not_ready` 900s after the app began serving the desired SHA, and the log
+  // could not say which of the two it was (bug.5390).
   if (status.phase !== "Ready") {
-    return { ready: false, reason: phaseNotReadyReason(status) };
+    return {
+      ready: false,
+      reason: `${phaseNotReadyReason(status)}:${servingSuffix(status)}`,
+    };
   }
   if (status.serving !== true) {
     return { ready: false, reason: "not_serving" };

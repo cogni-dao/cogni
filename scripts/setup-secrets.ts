@@ -445,6 +445,12 @@ async function main() {
   let lastCategory = "";
 
   for (const secret of filtered) {
+    // Dedicated control-plane materializers own these generated runtime values.
+    // Staging one in GitHub Environment Secrets would create a second authority.
+    if (secret.materializeOnly) {
+      skipped++;
+      continue;
+    }
     if (secret.category !== lastCategory) {
       console.log(
         `\n${"═".repeat(2)} ${BOLD}${secret.category}${RESET} ${"═".repeat(60 - secret.category.length)}`

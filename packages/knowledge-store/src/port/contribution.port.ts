@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/port/contribution.port`
  * Purpose: Port interface for external-agent knowledge contributions backed by Dolt branches.
  * Scope: Interface + typed error classes. Does not contain implementation, I/O, or framework dependencies.
- * Invariants: EXTERNAL_CONTRIB_VIA_BRANCH, EDO_BEARER_VIA_CONTRIB_BRANCH, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION.
+ * Invariants: EXTERNAL_CONTRIB_VIA_BRANCH, EDO_BEARER_VIA_CONTRIB_BRANCH, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION, PATCH_CARRIES_NO_CONTENT.
  *   Appending/closing is allowed for the contribution owner; merge requires an admin session.
  *   Bearer-authenticated EDO writes (hypothesis/decision/outcome) MUST open a
  *   contrib branch — the dedicated `createEdo*` methods apply the multi-row
@@ -205,5 +205,24 @@ export class ContributionForbiddenError extends Error {
   constructor(message: string = "forbidden") {
     super(message);
     this.name = "ContributionForbiddenError";
+  }
+}
+
+/**
+ * PATCH_IS_NOT_EMPTY — an `op:'patch'` edit named no settable field.
+ *
+ * The wire schema already rejects this (`KnowledgeContributionEditSchema`
+ * superRefine), so reaching the adapter means a caller bypassed the contract.
+ * Thrown rather than issuing an UPDATE with an empty SET clause, so a no-op
+ * can never be acknowledged as an applied write. Maps to HTTP 400.
+ */
+export class EmptyKnowledgePatchError extends Error {
+  readonly targetRowId: string;
+  constructor(targetRowId: string, settableFields: readonly string[]) {
+    super(
+      `patch for '${targetRowId}' set no fields; must set at least one of: ${settableFields.join(", ")}`
+    );
+    this.name = "EmptyKnowledgePatchError";
+    this.targetRowId = targetRowId;
   }
 }

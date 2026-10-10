@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-09-11
+- **Last reviewed:** 2026-10-09
 - **Status:** draft
 
 ## Purpose
@@ -52,8 +52,9 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
   - Infra: `/health`, `/openapi.json`, `/meta/route-manifest` (via `(infra)/*`)
   - API: `/api/auth/*`, `/api/v1/chat/completions`
   - Internal ops: `/api/internal/ops/governance/schedules/sync` [POST] (deploy-only trigger)
+  - Flight-prober projection: `/api/internal/flight-probe-credentials` [POST] (control-only, GitHub OIDC)
   - Agent discovery: `/.well-known/agent.json` [GET] — public discovery document for machine clients
-  - Production infra reconcile: `/api/v1/deploy/infra-reconcile` [POST] — production-promoter-gated on the operator node; dispatches via the operator GitHub App and preserves the app pin
+  - Shared-lane infra reconcile: `/api/v1/deploy/infra-reconcile` [POST] — operator node only; `preview` env-manager-gated, `production`/`candidate-a` production-promoter-gated. Dispatches via the operator GitHub App and preserves the requested lane's app pin
   - Attestation JWKS: `/.well-known/jwks.json` [GET] — public keys for verifying operator-signed identity attestations (task.5024)
 - **Files considered API:** layout.tsx, page.tsx, loading.tsx, error.tsx, api/\*\*/route.ts, (infra)/\*\*/route.ts, .well-known/\*\*/route.ts
 - **Suspense / error boundaries:** each route group exposes a

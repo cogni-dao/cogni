@@ -21,6 +21,19 @@ loki.source.kubernetes_events "events" {
     // wire path; its events were invisible while a lease-create POST silently
     // never arrived.
     "crossplane-system",
+    // bug.5416: events whose involved object is CLUSTER-SCOPED carry no namespace of
+    // their own, so client-go's makeEvent files them under `default` — they never appear
+    // in crossplane-system. That silently hid the entire cluster-scoped plane:
+    // CompositionRevision/Composition/XRD, Provider + Function (and their Revisions),
+    // ClusterProviderConfig, plus kubelet's Node events (NodeNotReady, *Pressure).
+    // Observed: `CompositionRevision/xcomputeworkload-akash-8c6fb2f` emitting into
+    // `default` while namespace="default" was absent from this list, so it was dropped.
+    // Nothing in infra/ or nodes/ deploys INTO `default`, so this watch adds only
+    // cluster-scoped-object events, not workload chatter. Kept whole rather than
+    // kind-filtered on purpose: bug.5011 (openbao/ESO) and bug.5219 (crossplane-system)
+    // were both "the gate was too narrow" outages, and a kind allowlist here would
+    // pre-decide which cluster-scoped failure we are allowed to see next.
+    "default",
     "cogni-candidate-a",
     "cogni-preview",
     "cogni-production",

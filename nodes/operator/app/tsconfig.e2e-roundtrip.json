@@ -74,8 +74,6 @@
       "@cogni/scheduler-core/*": ["packages/scheduler-core/src/*"],
       "@cogni/temporal-workflows": ["packages/temporal-workflows/src/index.ts"],
       "@cogni/temporal-workflows/*": ["packages/temporal-workflows/src/*"],
-      "@cogni/work-items": ["packages/work-items/src/index.ts"],
-      "@cogni/work-items/*": ["packages/work-items/src/*"],
       "@cogni/operator-doltgres-schema": [
         "nodes/operator/packages/doltgres-schema/src/index.ts"
       ],

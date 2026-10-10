@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/work/items/route`
  * Purpose: HTTP endpoints for listing and creating work items.
  * Scope: Auth-protected GET (list — markdown ∪ Doltgres) and POST (create — Doltgres only).
- * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, ID_RANGE_RESERVED.
+ * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, ID_RANGE_RESERVED, CODED_WRITE_ERRORS.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
  * Links: contracts/work.items.{list,create}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @public
@@ -21,10 +21,11 @@ import {
   createWorkItem,
   InvalidCursorError,
   listWorkItems,
-  WorkItemsBackendNotReadyError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+
+import { workItemsWriteErrorResponse } from "./_errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -123,15 +124,11 @@ export const POST = wrapRouteHandlerWithLogging(
         status: 201,
       });
     } catch (e) {
-      if (e instanceof WorkItemsBackendNotReadyError) {
-        return NextResponse.json({ error: e.message }, { status: 503 });
-      }
-      if ((e as Error)?.name === "WorkItemAlreadyExistsError") {
-        return NextResponse.json(
-          { error: (e as Error).message },
-          { status: 409 }
-        );
-      }
+      // Coded responses: 403 authz_denied (permanent), 503 work_items_busy
+      // (retryable), 503 not-ready, 409 exists. Anything unrecognized rethrows
+      // to the wrapper's 500 — the catch is NOT broadened (bug.5408).
+      const coded = workItemsWriteErrorResponse(ctx, e);
+      if (coded) return coded;
       throw e;
     }
   }

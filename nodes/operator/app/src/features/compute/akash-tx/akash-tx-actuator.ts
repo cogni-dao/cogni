@@ -58,12 +58,18 @@
  *     identical SDL thrashes a not-yet-serving node; the gate skips only that case and any real
  *     spec change still applies + records the new hash.
  *   - REFUSAL_IS_OBSERVABLE: every refusal emits a structured log line before it throws
- *     (bug.5115: a wallet block that only reached CR status was invisible for hours).
+ *     (bug.5115: a wallet block that only reached CR status was invisible for hours). The same
+ *     rule now covers what observe ANSWERS, not only what it refuses: every observe states the
+ *     migration verdict its response carries (`akash_tx_observe_migration_verdict`), because
+ *     that one enum is what the composite reads to decide `MigrationFailed`, and nothing else
+ *     in this process logs the RESPONSE (bug.5416). And every observe states what the COMPOSITE
+ *     decided (`akash_tx_observe_composite_verdict`) when the composition sends it: a
+ *     Composition cannot log, so this process is its only telemetry terminal (bug.5416).
  * Side-effects: IO (Akash Console transactions via the injected client; durable allocation and
  *   receipt-linked cost writes; one bounded serving probe per observe when asked)
  * Links: @ports/akash-tx.port, adapters/server/compute/akash-compute.adapter (SDL + provider
  *   screening stay there), adapters/server/compute/akash-tx-allocation-ledger.adapter,
- *   ./akash-tx-wallet, ./akash-tx-http, task.5095
+ *   ./akash-tx-wallet, ./akash-tx-http, task.5095, bug.5416
  * @internal
  */
 
@@ -74,6 +80,7 @@ import {
   type AkashTxActuatorPort,
   type AkashTxAllocationLedgerPort,
   type AkashTxAllocationRecord,
+  type AkashTxCompositeVerdict,
   type AkashTxConsolePort,
   type AkashTxCreateResult,
   AkashTxError,
@@ -91,6 +98,7 @@ import {
   type AkashTxWorkloadIdentity,
   type ComputeCostEvidencePort,
   type ComputeCostStorePort,
+  type NodeMigrationReportStorePort,
 } from "@/ports";
 
 import { runMigrationStep } from "./akash-tx-migration-step";
@@ -127,6 +135,12 @@ export interface AkashTxActuatorDeps {
    * this seam can no longer stop a lease from being created (task.5135).
    */
   readonly migration?: AkashTxMigrationPort;
+  /**
+   * Where a successful migration's RECEIPT is stored as operator-held deployment metadata
+   * (`node_migration_reports`). Omitted → receipts are not collected and the node's schema
+   * readout honestly says "never reported". Never a credential on a node database.
+   */
+  readonly migrationReports?: NodeMigrationReportStorePort;
   /** Paired, receipt-linked cost seams. Production wiring supplies both or startup fails. */
   readonly costEvidence: ComputeCostEvidencePort;
   readonly costStore: ComputeCostStorePort;
@@ -302,6 +316,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   private readonly log: AkashTxLogger;
   private readonly probe?: AkashTxServingProbe;
   private readonly migration?: AkashTxMigrationPort;
+  private readonly migrationReports?: NodeMigrationReportStorePort;
   private readonly costEvidence: ComputeCostEvidencePort;
   private readonly costStore: ComputeCostStorePort;
   private readonly providerConsumerAccountId: string;
@@ -318,6 +333,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     this.log = deps.log ?? NOOP_LOGGER;
     if (deps.probe) this.probe = deps.probe;
     if (deps.migration) this.migration = deps.migration;
+    if (deps.migrationReports) this.migrationReports = deps.migrationReports;
     this.costEvidence = deps.costEvidence;
     this.costStore = deps.costStore;
     this.providerConsumerAccountId = deps.providerConsumerAccountId;
@@ -332,13 +348,22 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     migration?: AkashTxMigrationStep;
     workload?: string;
     environment?: string;
+    composite?: AkashTxCompositeVerdict;
   }): Promise<AkashTxObservation> {
+    // THE VERDICT THE COMPOSITE ALREADY REACHED, stated before anything else can throw
+    // (bug.5416). Ordered ahead of the release step on purpose: this reports the PREVIOUS
+    // tick's decision, so it owes nothing to this tick's work and must survive a refusal.
+    this.logCompositeVerdict(input);
     // The RELEASE step. It runs FIRST so the Job is ensured on the very first tick — before
     // there is any lease to observe — and its answer is carried onto whatever the observation
     // turns out to be. It never throws and never short-circuits: an observe that reported
     // "found: false" must keep reporting it, because that is the signal Crossplane uses to
     // create the lease, and a database has no business vetoing that (task.5135).
     const migration = await this.releaseMigration(input);
+    // THE VERDICT THE COMPOSITE WILL READ, stated once per observe (bug.5416). Everything
+    // upstream of this line logs how the step WENT; only this line logs what the RESPONSE
+    // carries, which is the single value `composition.yaml` turns into `MigrationFailed`.
+    this.logMigrationVerdict(input, migration);
     const withMigration = (
       observation: AkashTxObservation
     ): AkashTxObservation =>
@@ -909,14 +934,155 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       {
         log: this.log,
         ...(this.migration ? { migration: this.migration } : {}),
+        ...(this.migrationReports ? { reports: this.migrationReports } : {}),
       },
       {
         step: input.migration,
         cogniKey: input.cogniKey,
         environment: input.environment,
         workload: input.workload,
+        ...(this.migrationReports
+          ? { nodeId: await this.receiptBoundNodeId(input.cogniKey) }
+          : {}),
       }
     );
+  }
+
+  /**
+   * State the verdict THE COMPOSITE ITSELF REACHED — `status.phase` plus the
+   * `status.failure.reason` its own ranking produced (bug.5416).
+   *
+   * `akash_tx_observe_migration_verdict` proves the gate's INPUT. It cannot prove the composite
+   * ACTED on it: `composition.yaml` ranks a terminal refusal and `BootDeadlineExceeded` above
+   * `$migrationFailed`, so a response carrying `failed` and a composite reporting
+   * `BootDeadlineExceeded` are the SAME tick. Which branch won is knowable only to the
+   * composite — and a Crossplane Composition cannot log, emit an Event, or write a metric
+   * (Kubernetes records no Event for a status transition, and `function-go-templating` has no
+   * result meta-kind at any released version), so the observe it already makes every tick is
+   * its only telemetry channel. This line is that channel's terminal.
+   *
+   * Unconditional, NOT change-only, for the same reason as the migration verdict: a gate is a
+   * steady state and has to be readable as one by a bounded-window query. `reported: false`
+   * keeps "the composition does not send it" distinguishable from "the composite is healthy" —
+   * the absence of a marker says nothing at all.
+   *
+   * CARDINALITY: fields only, never stream labels, and the reason is contract-bounded to one
+   * `^[A-Za-z_][A-Za-z0-9_]{0,127}$` token. `failure.message` is NOT carried: it is free text
+   * holding SHAs, lease handles and second counts, and is unbounded by construction.
+   */
+  private logCompositeVerdict(input: {
+    cogniKey: string;
+    workload?: string;
+    environment?: string;
+    composite?: AkashTxCompositeVerdict;
+  }): void {
+    const fields = {
+      cogniKey: input.cogniKey,
+      ...(input.workload ? { workload: input.workload } : {}),
+      ...(input.environment ? { environment: input.environment } : {}),
+      reported: input.composite !== undefined,
+      ...(input.composite
+        ? {
+            compositePhase: input.composite.phase,
+            compositeFailureReason: input.composite.failureReason,
+          }
+        : {}),
+    };
+    if (input.composite?.phase === "Failed") {
+      this.log.error(fields, "akash_tx_observe_composite_verdict");
+      return;
+    }
+    this.log.info(fields, "akash_tx_observe_composite_verdict");
+  }
+
+  /**
+   * State the migration verdict THIS OBSERVE RESPONSE CARRIES — the exact value the composite
+   * reads as `dig "migration" "phase" "" $resp` and turns into `status.failure.reason:
+   * MigrationFailed` (bug.5416).
+   *
+   * Every other migration marker in this feature reports how the STEP went: the Job's outcome,
+   * the receipt, the drift. None of them is the gate's input. A `succeeded` Job that failed the
+   * drift gate logs `akash_tx_migration_succeeded` AND `akash_tx_migration_drift_missing`, and a
+   * reader still has to re-derive which phase the wire ended up with. This line removes the
+   * derivation: one marker, one `phase`, per response.
+   *
+   * Unconditional, NOT change-only. A verdict that is logged only when it CHANGES is invisible
+   * to every bounded window query — which is precisely the failure bug.5416 reports (four
+   * 30-minute Loki searches, zero results, while the gate was demonstrably firing). A gate is a
+   * steady state, so it has to be readable as one. The cost is one line per observe against the
+   * ~20 this feature already emits per digest per 10 minutes.
+   *
+   * PRIVACY, inherited from bug.5415: this line carries an ENUM and the caller's own identifiers.
+   * No tags, no counts sourced from a database row, no DSN, no receipt content. Named migration
+   * tags appear in exactly one place — `akash_tx_migration_drift_missing`, image content only.
+   */
+  private logMigrationVerdict(
+    input: {
+      cogniKey: string;
+      migration?: AkashTxMigrationStep;
+      workload?: string;
+      environment?: string;
+    },
+    phase: AkashTxMigrationPhase | undefined
+  ): void {
+    const fields = {
+      cogniKey: input.cogniKey,
+      ...(input.workload ? { workload: input.workload } : {}),
+      ...(input.environment ? { environment: input.environment } : {}),
+      ...(input.migration
+        ? { bundleDigest: input.migration.bundleDigest }
+        : {}),
+      // `requested: false` is a DIFFERENT fact from any phase, and worth one line: it is how a
+      // gate that was never consulted at all — a composite that stopped attaching the step —
+      // stays distinguishable from a gate that passed. `phase` is absent on exactly that path,
+      // because that is what the response carries.
+      requested: input.migration !== undefined,
+      ...(phase ? { phase } : {}),
+    };
+    if (phase === "failed") {
+      this.log.error(fields, "akash_tx_observe_migration_verdict");
+      return;
+    }
+    if (phase === "unavailable") {
+      this.log.warn(fields, "akash_tx_observe_migration_verdict");
+      return;
+    }
+    this.log.info(fields, "akash_tx_observe_migration_verdict");
+  }
+
+  /**
+   * WHICH NODE this key's workload belongs to, from the ONE place in the operator that holds an
+   * authoritative answer this process can actually read: its own durable allocation receipt,
+   * whose `node_id` was supplied explicitly on the paid wire and is NOT NULL and write-once
+   * (`akash_tx_allocations` IDENTITY_IS_AUTHORITATIVE_NOT_INFERRED / IDENTITY_IS_WRITE_ONCE).
+   *
+   * Deliberately NOT the `nodes` registry: that table is ENABLE + FORCE row-level security, this
+   * process holds the RLS-enforced app role and never opens a tenant scope, so a slug lookup
+   * there succeeds and returns ZERO rows — which is how 32-of-32 applied migrations were reported
+   * as `node_not_registered` and thrown away. Deliberately NOT parsed out of `cogniKey` either:
+   * the key's composition is the caller's business and the Composition says so.
+   *
+   * Undefined — never a throw, never a refusal — when no receipt binds the key yet (a workload's
+   * very first observe precedes its first create by construction) or when the ledger cannot be
+   * read. The migration still runs; only the metadata waits for the next tick.
+   */
+  private async receiptBoundNodeId(
+    cogniKey: string
+  ): Promise<string | undefined> {
+    try {
+      const record = await this.ledger.read({ cogniKey });
+      return record?.identity.nodeId;
+    } catch (error) {
+      this.log.warn(
+        {
+          cogniKey,
+          causeMessage:
+            error instanceof Error ? error.message : "unknown cause",
+        },
+        "akash_tx_migration_receipt_identity_unreadable"
+      );
+      return undefined;
+    }
   }
 
   /**

@@ -66,6 +66,7 @@ import type {
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
   ResolveNodeRepoInput,
+  SharedLaneInfraEnv,
 } from "@/ports";
 import {
   appsetPath,
@@ -468,6 +469,18 @@ const CandidateControlPlaneApplicationSchema = z.strictObject({
 
 type CandidateInfraLane = "compose" | "control_plane";
 
+// A reviewed authorization-model change necessarily carries the model consumer and its proofs in
+// the same PR. Keep this list exact: these files may accompany the OpenFGA model, but they do not
+// select an infra lane on their own and cannot widen candidate infra dispatch to arbitrary package
+// changes.
+const CANDIDATE_OPENFGA_COLLATERAL_PATHS = new Set([
+  "packages/authorization-core/src/adapters/openfga-authorization.adapter.ts",
+  "packages/authorization-core/src/index.ts",
+  "packages/authorization-core/src/test/fake-authorization.adapter.ts",
+  "packages/authorization-core/tests/authorization-core.test.ts",
+  "packages/authorization-core/tests/rbac-model.test.ts",
+]);
+
 function candidateInfraPathLane(
   path: string
 ): CandidateInfraLane | "collateral" | null {
@@ -479,6 +492,7 @@ function candidateInfraPathLane(
     return "control_plane";
   }
   if (
+    path === "infra/openfga/rbac-model.json" ||
     path.startsWith("infra/compose/edge/") ||
     path.startsWith("infra/compose/runtime/") ||
     path.startsWith("infra/k8s/argocd/image-updater/") ||
@@ -500,6 +514,7 @@ function candidateInfraPathLane(
   }
   if (
     path === "infra/AGENTS.md" ||
+    CANDIDATE_OPENFGA_COLLATERAL_PATHS.has(path) ||
     path.endsWith("/AGENTS.md") ||
     path.startsWith("scripts/ci/tests/") ||
     path.startsWith("tests/ci-invariants/") ||
@@ -1749,9 +1764,11 @@ export class GitHubRepoWriter implements DeployPlanePort {
   }
 
   /**
-   * Production infra reconcile with no app advancement. The current deploy-branch pin is resolved
-   * by the operator App and replayed into the existing promote workflow; the caller supplies no SHA
-   * or workflow ref. This keeps the dangerous shared-Compose lever source-addressed and fail-closed.
+   * Shared-lane infra reconcile with no app advancement. The lane's OWN current deploy-branch pin
+   * (`deploy/<env>-<slug>`) is resolved by the operator App and replayed into the existing promote
+   * workflow; the caller supplies no SHA or workflow ref. This keeps the dangerous shared-Compose
+   * lever source-addressed and fail-closed. Preview takes this path, not candidate-a's: it is a
+   * shared long-lived lane with a deployed pin to resolve, not a PR-scoped slot (bug.5409).
    */
   async reconcileNodeInfra(
     input: ReconcileNodeInfraInput
@@ -1770,14 +1787,14 @@ export class GitHubRepoWriter implements DeployPlanePort {
     if (pin.kind === "missing") {
       throw deployPlaneError(
         "deploy_state_missing",
-        `production deploy state not found for ${slug}`,
+        `${env} deploy state not found for ${slug}`,
         404
       );
     }
     if (pin.kind === "invalid") {
       throw deployPlaneError(
         "invalid_deploy_state",
-        `invalid production deploy state for ${slug}`,
+        `invalid ${env} deploy state for ${slug}`,
         409
       );
     }
@@ -2180,7 +2197,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
   private async dispatchNodeInfraReconcile(input: {
     owner: string;
     repo: string;
-    env: "production";
+    /**
+     * Shared long-lived lane only. `promote-and-deploy.yml`'s `deploy-infra` job is lane-bound
+     * (`environment: needs.decide.outputs.environment`), so `preview` binds the preview GitHub
+     * Environment and its own `VM_HOST` — no control-env redirect, no new workflow.
+     */
+    env: SharedLaneInfraEnv;
     slug: string;
     sourceSha?: string;
     nodeSourceSha?: string;
@@ -2212,7 +2234,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     return {
       dispatched: true,
       workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/promote-and-deploy.yml`,
-      message: `Production infra reconcile dispatched for ${input.slug}.`,
+      message: `${input.env} infra reconcile dispatched for ${input.slug}.`,
     };
   }
 

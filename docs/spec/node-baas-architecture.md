@@ -4,12 +4,12 @@ type: spec
 title: Node Backend-as-a-Service Architecture
 status: draft
 trust: draft
-summary: "Product and package shape for node-at-repo-root repos: app code, node-owned packages, managed database/knowledge substrates, and the MVP path from today's node-template."
-read_when: "Designing node-template at repo root, deciding node package layout, adding node-owned Postgres or Doltgres schema/client packages, or planning node wizard MVP scope outside CI/CD."
+summary: "Product and package shape for node-at-repo-root repos: app code, node-owned graphs and durable workflows, managed substrates, and the MVP path from today's node-template."
+read_when: "Designing node-template at repo root, deciding node package/service layout, adding node-owned graphs, durable workflows, Postgres, or Doltgres packages, or planning node wizard MVP scope outside CI/CD."
 implements: []
 owner: cogni-dev
 created: 2026-06-05
-verified: 2026-06-25
+verified: 2026-10-09
 tags:
   - node-template
   - packages
@@ -99,39 +99,36 @@ can run 5 replicas in production while its app runs 1 — same node identity, di
 services, independent scaling. `node_id` is the join key (identity · UI · RBAC ·
 catalog projection); each **service** of that node is what actually deploys and scales.
 
-> **Today's reality + the gap.** Most nodes ship only the `app/` unit; recurring work
-> runs on the **shared** generic worker (RecurringWorkPort, below), so a node rarely
-> needs its own service yet. A node that needs a **custom, independently-scaled
-> service** (its own worker process, not the shared one) is the escape hatch — it
-> declares the unit in **its own** `services/` and the operator wires per-(node,
-> service, env) deploy + scale. That per-node-service deploy/scale wiring is **not
-> first-class yet** (the catalog models one deployable per row); it is the forward
-> work this `node → services → deployments` model names.
+> **Today's reality + the gap.** Most nodes ship only the `app/` unit, and their recurring
+> graph/route work still runs on the centralized compatibility Worker. The target makes a
+> private node-owned Workflow Worker a standard service rather than an escape hatch. P0 deploys
+> app + Worker as co-located services in one workload revision; independent per-service scaling
+> remains forward work because the catalog still models one deployable workload per row.
 
 ### Node-controlled surfaces
 
 A sovereign node must be able to change these without an operator code PR:
 
-| Surface          | Node-owned artifact                                            | Operator reaction                                                                                                  |
-| ---------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Operational data | `packages/postgres` schema and migrations                      | provision/apply the node's Postgres migration against that node's DB                                               |
-| Knowledge data   | `packages/doltgres` schema and migrations                      | provision/apply the node's Doltgres migration, then commit DDL into Dolt history                                   |
-| Graph behavior   | `packages/graphs` catalog and definitions                      | route execution to the node image and observe runs                                                                 |
-| API/tool surface | node-local `packages/contracts` or `app/src/contracts`         | expose only through the node app image unless promoted to shared contracts                                         |
-| Secrets          | `.cogni/secrets-catalog.yaml` key declarations                 | create OpenBao paths, ESO manifests, and per-env values                                                            |
-| Storage          | `.cogni/node.yaml` bucket/object declarations                  | provision object store credentials and lifecycle policy                                                            |
-| Streams          | `.cogni/node.yaml` stream declarations and event contracts     | provision Redis/SSE/WebSocket substrate when enabled                                                               |
-| Recurring work   | a Temporal **client** + ops **route(s)** (`RecurringWorkPort`) | provision per-node queue + namespace-scoped Temporal creds; run generic workflows on the shared worker (see below) |
-| Runtime shape    | `k8s/base`, health endpoints, ports                            | render overlays, AppSets, gateway routes                                                                           |
+| Surface           | Node-owned artifact                                                                               | Operator reaction                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Operational data  | `packages/postgres` schema and migrations                                                         | provision/apply the node's Postgres migration against that node's DB                  |
+| Knowledge data    | `packages/doltgres` schema and migrations                                                         | provision/apply the node's Doltgres migration, then commit DDL into Dolt history      |
+| Graph behavior    | `packages/graphs` catalog and definitions                                                         | route execution to the node image and observe runs                                    |
+| API/tool surface  | node-local `packages/contracts` or `app/src/contracts`                                            | expose only through the node app image unless promoted to shared contracts            |
+| Secrets           | `.cogni/secrets-catalog.yaml` key declarations                                                    | create OpenBao paths, ESO manifests, and per-env values                               |
+| Storage           | `.cogni/node.yaml` bucket/object declarations                                                     | provision object store credentials and lifecycle policy                               |
+| Streams           | `.cogni/node.yaml` stream declarations and event contracts                                        | provision Redis/SSE/WebSocket substrate when enabled                                  |
+| Durable workflows | Temporal client + `packages/workflows` + private `services/workflow-worker` + `RecurringWorkPort` | provision per-node namespace/identity; deploy app + Worker from one source-SHA bundle |
+| Runtime shape     | `k8s/base`, health endpoints, ports                                                               | render overlays, AppSets, gateway routes                                              |
 
 The operator may reject invalid declarations, but it should not require a root package or infra code edit for routine node evolution.
 
 ### Node→Temporal seam (recurring work)
 
 Recurring work is a node-controlled surface, fully specified elsewhere — the row above
-is the summary. The **substrate model** (one shared generic worker, per-node queues, and
-**node-direct** schedule creation with the operator out of the create path; a per-node
-worker only as an opt-in sovereign escape hatch) is in
+is the summary. The **target substrate model** (node-direct schedule creation, a private
+node-owned Worker, and one namespace per node/environment, with the centralized Worker retained
+only as a migration compatibility lane) is in
 [Temporal Substrate](./substrate-temporal.md). The **execution model**
 (`NodeTaskWorkflow` / `GraphRunWorkflow`, grant↔node binding, the per-node dispatch
 principal, decommission teardown) is in
@@ -261,23 +258,66 @@ A minted node must be born-reviewable: `.cogni/rules/` ships in the node repo be
 
 Cogni's BaaS surface should be small, composable, and portable:
 
-| Cogni substrate      | Node declares                                                                                                                                                                                                              | Operator provides                                                                                                                                                                                                                                                                                                                                                  |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Postgres             | `packages/postgres`, migrations, required DSNs                                                                                                                                                                             | per-node DB, roles, RLS hardening, backups                                                                                                                                                                                                                                                                                                                         |
-| Doltgres             | `packages/doltgres`, migrations, knowledge domains                                                                                                                                                                         | per-node `knowledge_<node>` DB, migrator wiring, commit validation                                                                                                                                                                                                                                                                                                 |
-| Auth/RLS             | app routes and tenant context usage                                                                                                                                                                                        | app/service/read-only roles, DSN secrets                                                                                                                                                                                                                                                                                                                           |
-| Authorization        | authz checks + protected actions in app routes; capability gating in the secrets fan                                                                                                                                       | shared OpenFGA store/model, env-shared authz graph, `OPENFGA_*` runtime-config delivery, DB role + backup                                                                                                                                                                                                                                                          |
-| Graphs               | `packages/graphs` definitions                                                                                                                                                                                              | execution host, routing, observability substrate where shared                                                                                                                                                                                                                                                                                                      |
-| Temporal / Recurring | a Temporal **client** to create schedules + ops **route(s)** to receive dispatch + per-node dispatch credential (`RecurringWorkPort`); **no** custom workflow code (a per-node worker is an opt-in sovereign escape hatch) | shared cluster + per-node `scheduler-tasks-<id>` queue; **one shared worker** runs only generic workflows (`NodeTaskWorkflow`/`GraphRunWorkflow`); namespace-scoped Temporal creds via ESO — **node-direct create**, operator out of the create path — see [Temporal Substrate](./substrate-temporal.md), execution in [Temporal Patterns](./temporal-patterns.md) |
-| Streams              | event contracts and consumers                                                                                                                                                                                              | Redis/SSE/WebSocket substrate where needed                                                                                                                                                                                                                                                                                                                         |
-| Storage              | bucket/object metadata expectations                                                                                                                                                                                        | object store, credentials, lifecycle policies                                                                                                                                                                                                                                                                                                                      |
-| Secrets              | key names and consumers                                                                                                                                                                                                    | OpenBao values, ESO manifests, rotation path                                                                                                                                                                                                                                                                                                                       |
-| Observability Access | which substrates it emits to (logs / AI traces / analytics / DB)                                                                                                                                                           | per-node-scoped READ on `developer` grant — operator **proxies** the query pinned to the node (`{node="<id>"}` for Loki, `nodeId=<id>` for Langfuse AI traces; dev holds no env-wide token), not a credential issuer — see [Substrate Access-Grant Plane](./substrate-access-grant.md)                                                                             |
-| Gateway              | service ports and health routes                                                                                                                                                                                            | domain, TLS, Caddy/ingress, per-env route                                                                                                                                                                                                                                                                                                                          |
-| Studio/Wizard        | node metadata and capabilities                                                                                                                                                                                             | operator UI, publish, flight, validation                                                                                                                                                                                                                                                                                                                           |
-| Cognition            | knowledge entries (skills/guides/playbooks), registered domains                                                                                                                                                            | session-start kickstart bundle (`/api/v1/cognition`), advertised via `/.well-known/agent.json`                                                                                                                                                                                                                                                                     |
+| Cogni substrate         | Node declares                                                                                                                                                      | Operator provides                                                                                                                                                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postgres                | `packages/postgres`, migrations, required DSNs                                                                                                                     | per-node DB, roles, RLS hardening, backups                                                                                                                                                                                                                                             |
+| Doltgres                | `packages/doltgres`, migrations, knowledge domains                                                                                                                 | per-node `knowledge_<node>` DB, migrator wiring, commit validation                                                                                                                                                                                                                     |
+| Auth/RLS                | app routes and tenant context usage                                                                                                                                | app/service/read-only roles, DSN secrets                                                                                                                                                                                                                                               |
+| Authorization           | authz checks + protected actions in app routes; capability gating in the secrets fan                                                                               | shared OpenFGA store/model, env-shared authz graph, `OPENFGA_*` runtime-config delivery, DB role + backup                                                                                                                                                                              |
+| Graphs                  | `packages/graphs` definitions                                                                                                                                      | execution host, routing, observability substrate where shared                                                                                                                                                                                                                          |
+| Durable Agent Workflows | `packages/graphs`, `packages/workflows`, private `services/workflow-worker`, schedules, and node-direct `RecurringWorkPort`; app + Worker ship from one source SHA | shared Temporal service; one namespace/runtime identity per `(node, env)`; secret, deployment, visibility, and lifecycle wiring; published starter runtime from node-template — see [Temporal Patterns](./temporal-patterns.md) and [LangGraph Patterns](./langgraph-patterns.md)      |
+| Streams                 | event contracts and consumers                                                                                                                                      | Redis/SSE/WebSocket substrate where needed                                                                                                                                                                                                                                             |
+| Storage                 | bucket/object metadata expectations                                                                                                                                | object store, credentials, lifecycle policies                                                                                                                                                                                                                                          |
+| Secrets                 | key names and consumers                                                                                                                                            | OpenBao values, ESO manifests, rotation path                                                                                                                                                                                                                                           |
+| Observability Access    | which substrates it emits to (logs / AI traces / analytics / DB)                                                                                                   | per-node-scoped READ on `developer` grant — operator **proxies** the query pinned to the node (`{node="<id>"}` for Loki, `nodeId=<id>` for Langfuse AI traces; dev holds no env-wide token), not a credential issuer — see [Substrate Access-Grant Plane](./substrate-access-grant.md) |
+| Gateway                 | service ports and health routes                                                                                                                                    | domain, TLS, Caddy/ingress, per-env route                                                                                                                                                                                                                                              |
+| Studio/Wizard           | node metadata and capabilities                                                                                                                                     | operator UI, publish, flight, validation                                                                                                                                                                                                                                               |
+| Cognition               | knowledge entries (skills/guides/playbooks), registered domains                                                                                                    | session-start kickstart bundle (`/api/v1/cognition`), advertised via `/.well-known/agent.json`                                                                                                                                                                                         |
 
 The invariant is: **node declares shape; operator wires environment**.
+
+### Durable agent workflow substrate
+
+The node-sovereign unit is not a naked LangGraph graph and not an operator-owned scheduled
+callback. It is a **durable agent workflow**: node-owned Temporal orchestration containing one
+or more node-owned LangGraph graph runs. The split follows the same successful pattern as the
+knowledge and work-item substrates:
+
+| Layer                | Lives where                                                              | Owns                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| Product definitions  | node repo `packages/graphs` + `packages/workflows`                       | prompts, tools, graph topology, workflow sequencing, signals, timers, result policy                                    |
+| Process lifecycle    | node repo `services/workflow-worker`                                     | Worker registration, Activity adapters, health, metrics, graceful shutdown                                             |
+| Reusable SDK/runtime | immutable `@cogni-dao/agent-workflow-runtime` release from node-template | starter scheduled graph/route workflows, schedule contracts, retry profiles, Worker bootstrap; no node business policy |
+| Managed substrate    | operator                                                                 | Temporal service, per-node namespace and runtime identity, secrets, placement, observability, add/remove lifecycle     |
+
+The private service opts into `runtime_profile: cogni-workflow-worker-v1`. The profile, rather
+than each node spec, owns the standard Temporal connection/auth/namespace/queue/health contract;
+the operator also derives its `NODE_APP_URL` from the required app-profile sibling. The node
+declares only extra secrets and non-standard sibling bindings. This extends the existing
+`cogni-node-app-v1` pattern to a second named capability profile.
+
+The profile is initially a candidate/preview contract. Production materialization remains
+fail-closed until the shared self-hosted Temporal server enforces namespace-scoped authentication
+and authorization; namespace naming alone is not accepted as tenant isolation.
+
+The node-template carries the source package and default Worker service. CI publishes an
+immutable, attested GitHub Release tarball; consumers pin the exact release, as Poly already
+does for knowledge and work-item packages. A published package cannot contain `workspace:*`
+runtime dependencies. Node-specific workflows stay in the node repository and release with
+that node; they are never copied into or dynamically loaded by a centralized Worker.
+
+The existing multi-service artifact bundle already provides the deployment primitive: the
+public app and private Worker are exact-set artifacts from one source commit and materialize as
+one workload revision. This prevents the schedule creator and poller from silently shipping
+different code. Operator governance/ledger workflows remain operator-owned services; only
+node product workflow ownership moves.
+
+Migration uses a separate app client contract: legacy `TEMPORAL_*` and
+`SCHEDULER_WORKER_HEALTH_URL` remain pointed at the centralized compatibility lane, while
+`AGENT_WORKFLOW_TEMPORAL_*` and `AGENT_WORKFLOW_WORKER_HEALTH_URL` select the node namespace and
+private Worker. P0 sends only explicit `workflow` schedule targets through that client; existing
+`graph` and `route` targets stay on the compatibility lane. Merely adding the Worker profile
+therefore cannot reroute, duplicate, or orphan existing scheduled work.
 
 ## Cognition Substrate
 
@@ -295,9 +335,22 @@ Supabase delivers Auth, Storage, and a generated API as managed services. The sa
 
 The bundle's stance is **constitution + map**: the code-owned invariants say how every agent must behave; the repo-spec mission says why this node exists; the orientation entry is the current-node map an agent needs to start (where to edit, what not to run, what can break prod/candidate, what to recall next). The git skeleton is deliberately **minimal** — invariants + section frame + recall pointers — and the substance is the Dolt orientation entry, rendered **IN FULL** so the bootstrap _is_ the operating map (no second recall to be useful). Everything else (skills, domains) stays **index-first**: pointers only, never full bodies. The invariants are kept as terse axioms (not paragraphs), and the bundle surfaces the node's derived candidate host (`operator` → `test.cognidao.org`, else `<slug>-test.cognidao.org`) so "validate on candidate" names a concrete URL instead of an env agents must guess.
 
-The response carries a fully-rendered `markdown` field that a **SessionStart hook** echoes to stdout; both Claude Code and Codex inject SessionStart stdout into the model's context, so one operator endpoint feeds both runtimes identically. The hook is wired once per runtime and calls a single shared loader (`scripts/agent/session-cognition.sh`): Claude Code via `.claude/settings.json`, Codex via `.codex/config.toml` (identical `hooks.SessionStart` → `type:"command"` shape). The loader derives the node's production cognition URL from `.cogni/repo-spec.yaml` `intent.name` (`operator`/`cogni-template` → `https://cognidao.org/api/v1/cognition`, every other slug → `https://<slug>.cognidao.org/api/v1/cognition`) and falls back to operator if a node hub is not live yet. The mechanism is symmetric; the one asymmetry is trust — Codex runs a repo-committed `.codex/` hook only after a one-time approval (`/hooks`), whereas this repo's `.claude` hooks are already trusted. Runtimes without a session hook self-serve the same repo-spec-derived URL.
+**Delivery is the instruction-FILE channel, not the hook. The SessionStart hook is a fetch-and-write side-effect, never the injection surface** — because a hook is not a universal inject path across harnesses:
 
-**The v0 ownership split is deliberate.** The _irreducible_ invariants are code-owned because they must render even when the hub is empty or unreachable — a session must always bootstrap. Everything _expandable_ (skills, guides, growing domain expertise) is hub-delivered and refined in place via the contribution flow, never by editing this file. As the merge-to-`main` knowledge flow is exercised, the invariants can migrate into a hub `rule` entry; until then they stay code-owned so the substrate has no chicken-and-egg.
+| harness     | model-visible channel                                            | SessionStart hook                                                                   | override                                   |
+| ----------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------ |
+| Claude Code | output style + `CLAUDE.md`/`AGENTS.md` + `@import`s + Stop check | hook stdout is capped; write cache at start and validate the final response at Stop | **none** (no setting/env raises it)        |
+| Codex       | `AGENTS.md`, whole under `project_doc_max_bytes` (32 KiB)        | `additionalContext` default 2500 tokens, spills                                     | `additionalContextLimit = 0` → full inject |
+| OpenCode    | root `AGENTS.md` + `opencode.json` instruction files             | no SessionStart injection; workspace setup warms the referenced cache               | n/a                                        |
+
+So the shared loader (`scripts/agent/session-cognition.sh`) **fetches** the node's bundle (URL derived from `.cogni/repo-spec.yaml` `intent.name`: `operator`/`cogni-template` → `https://cognidao.org/api/v1/cognition`, else `https://<slug>.cognidao.org/api/v1/cognition`; falls back to operator) and **writes it to one file**, `.cogni/.cognition-cache.md`. Claude Code ingests that file whole through `CLAUDE.md`/`AGENTS.md` `@import`; its project-scoped `Cogni Contract` output style reinforces the universal no-exceptions response rule in the system-prompt layer on every request, and a deterministic Stop hook rejects a malformed final block, a zero-evidence substantive proposal, or an unapproved Goal/Done-when mutation. These Claude adapters refer to the canonical file contract instead of copying its rich prose. The deterministic check is only a floor: the live-harness eval must also inspect the retrieval trace and cited synthesis, because a correct envelope is not substantive adherence. Codex receives the cache from hook stdout with `additionalContextLimit = 0`. OpenCode does not expand `@` references, so committed `opencode.json` names the same cache in its `instructions` array; per OpenCode's rules contract, that file is combined automatically with root `AGENTS.md`. A failed fetch leaves any warm cache untouched, so a warm workspace survives a hub outage or expired key. Because file instructions resolve at context assembly — before/at hook time — a fresh workspace needs the cache present up front; where a pre-session step exists (`scripts/conductor-worktree-setup.sh`), warm it there. But that step is **Conductor-local only** — hosted operator agents, CI, raw clones, and `claude.ai/code` run no such step, so a cold boot during a hub outage gets nothing from the cache. That is exactly why the **committed invariant skeleton in root `AGENTS.md` is the universal cold-boot floor**: it needs no network and renders the contract's response/state spine regardless of harness, hub, or cache state. Claude's SessionStart hook is write-only to avoid duplicate capped output; Codex's one asymmetry is trust, because its repo-committed hook runs only after one-time `/hooks` approval. See [`cognition-expert`](../../.claude/skills/cognition-expert/SKILL.md) for the full matrix + gotchas.
+
+**The ownership split renders in two tiers so a session always bootstraps — and the rich contract stays refine-in-place.** Do NOT code-own the full contract prose (that reintroduces the two-constitution duplication ONE_VOICE/task.5155 removed, and taxes every wording tweak of the highest-velocity cognition doc with a fleet redeploy). Instead:
+
+- **Terse invariant skeleton** (`SESSION_BOOTSTRAP_INVARIANTS` — ONE-work-item, cite-first, the CICD sequence, Done=behavior, persist, drive-autonomously, plus a one-line "you are bound by the agent-contract; recall + obey it") is **code-owned, committed into the node's own repo, and rendered UNCONDITIONALLY** — never suppressed by a served orientation. Because it is committed, it reaches the agent even when the hub/endpoint is unreachable: it is the **cold-boot floor**.
+- **Rich agent-contract prose** (full process + status + communication rules) stays **hub-served and refined in place** via the contribution flow. The hub orientation carries it and **augments** the skeleton; a map-only orientation simply leaves the skeleton as the floor.
+
+This corrects the real `ONE_VOICE` defect (`_bundle.ts:219`): it suppressed the code invariants whenever _any_ orientation was served, so a **map-only** orientation (the common fresh-node case) silently dropped the contract. Rendering the terse skeleton unconditionally fixes that with **no duplication** (the skeleton is axioms, not the prose) and **no refine-in-place regression**. Migration must be intent-atomic: reduce each orientation seed + the operator entry to map-plus-rich-contract (never the terse axioms) in the same change that stops suppressing the skeleton. **Note:** the 2026-10-08 "fresh agents contract-less" outage was a **delivery** failure — a cold cache plus a 401 on the authed endpoint (`SESSION_BOOTSTRAP_INVARIANTS` travels that same door, so moving ownership would not have helped); its fix is the committed skeleton + warm cache below, not contract ownership.
 
 **Node identity: mission seed + agent-orientation entry.** Two artifacts give an agent its bearings, split by mutability:
 
@@ -306,7 +359,38 @@ The response carries a fully-rendered `markdown` field that a **SessionStart hoo
 
 Every node maintains exactly one living orientation entry; agents **refine it in place** (REFINE_OVER_EXTEND) whenever repo layout, scripts, CI, deploy, auth, or validation behavior changes — it is the living map, not a one-time doc. The bundle renders this entry **in full**, preferring the node-specific `<name>-agent-orientation` over the generic starter. Because full-render makes the entry's length the bundle's cost, keep the orientation entry tight and composite (cite deeper specs/skills, don't restate them).
 
-**Propagation.** A new node's knowledge hub is created empty (Doltgres data is not copied by forking the repo), so the orientation block ships as a seed: `@cogni/knowledge-base` base seeds carry a generic `cogni-agent-orientation` starter (`entryType: guide`) inherited by every node at `seed-doltgres` time, including `Cogni-DAO/node-template` and its forks (each carries its own `knowledge-base` copy; the seed is ported repo-by-repo since operator seeds do not auto-propagate). Each node then writes its node-owned, durable map as the sibling `<slug>-agent-orientation` (a re-seed may overwrite the shared starter, so refinement lives in the slug-specific entry). operator's own `operator-agent-orientation` cites `cognition-substrate-bootstrap` so the pattern compounds in the DAG.
+**Fleet distribution is a platform capability, never per-node × per-developer configuration.**
+The cognition design has two distribution lanes because its two ownership classes move at
+different speeds:
+
+| Change                                                                                                        | Canonical distribution lane                                                                                                                                                                                                                              | Developer experience                                                              |
+| ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Mission, orientation, skills, domains, rich agent-contract prose                                              | Write once to that node's Dolt hub; every session refreshes `/api/v1/cognition` into the local cache                                                                                                                                                     | No repo edit; no developer action after initial node registration                 |
+| Shared endpoint/composer/loader behavior                                                                      | Curated versioned `@cogni/*` package API, consumed by each node's declared platform cohort                                                                                                                                                               | Arrives with the repo dependency update                                           |
+| Harness-native files that must exist before packages or network (`AGENTS.md`, Claude/Codex/OpenCode adapters) | One versioned cognition-bootstrap manifest plus a fail-closed codemod/materializer; new nodes inherit it from `node-template`, existing nodes receive an ordinary reviewed upgrade PR until the operator's dependabot-for-nodes lane automates those PRs | Files are committed in the node repo; cloning or opening a worktree is sufficient |
+| Node credential and first cache warm                                                                          | One repo setup command; Conductor invokes it from the workspace bootstrap, other environments invoke the same command                                                                                                                                    | Register once through `/api/v1/agent/register`; never hand-edit harness config    |
+
+`ZERO_PER_DEVELOPER_CONFIG` is the acceptance boundary: a shared cognition change is not
+fleet-complete if every node developer must edit Claude/Codex/OpenCode settings, copy a prompt,
+or remember an install step. A developer may approve the harness's normal trust prompt and supply
+their node credential; all instruction files, hooks, cache wiring, and node URL derivation are
+repo-owned and deterministic. `FLEET_VERSION_OBSERVABLE` requires each node's discovery/cognition
+surface to expose the installed cognition-bootstrap cohort so the operator can identify drift
+without comparing source trees.
+
+Automatic fork-wide source overlay remains forbidden: it destroyed node product paths in
+bug.5304. The durable target is a versioned package for shared runtime behavior plus a narrow,
+precondition-hashed codemod for the few harness files that intrinsically must live at repo root.
+Until the updater exists, one reviewed PR per existing node is known migration debt, not the final
+distribution design and not “Done.”
+
+**Node knowledge formation.** A new node's knowledge hub is created empty (Doltgres data is not
+copied by forking the repo), so the orientation block ships as a seed: `@cogni/knowledge-base`
+base seeds carry a generic `cogni-agent-orientation` starter (`entryType: guide`) inherited by every
+node at `seed-doltgres` time. Each node then writes its node-owned durable map as the sibling
+`<slug>-agent-orientation` (a re-seed may overwrite the shared starter, so refinement lives in the
+slug-specific entry). Operator's own `operator-agent-orientation` cites
+`cognition-substrate-bootstrap` so the pattern compounds in the DAG.
 
 **Boundaries.** The bundle is **authed** — any principal (cookie-session human OR `cogni_ag_sk_v1_` agent bearer) gets skill/domain pointers (title, use-when, recall path) plus the current-node orientation entry rendered in full; other entry bodies stay behind the read routes. It sits behind the same gate as the read routes (`KNOWLEDGE_READ_REQUIRES_PRINCIPAL`), so the index does not diverge from the read surface; `GET /api/v1/agent/register` stays the one public bootstrap seam (register → key → cognition). Local/Conductor sessions persist that key in `.env.cogni`; the SessionStart loader reads `.env.cogni` itself and passes `COGNI_API_KEY` (or the current production `COGNI_API_KEY_PROD` during the transition) as the bearer. Root `AGENTS.md` drops to a thin bootstrap pointer at the bundle; node-scoped and subdir `AGENTS.md` files remain (closest-file-wins still holds for code-local rules). This is reversible: revert the PR and `AGENTS.md` carries the full orientation again.
 
@@ -331,7 +415,8 @@ A 2026-06-05 package import audit found that most root packages are genuine shar
 - app-wide platform packages are imported by operator, node-template, and remaining hosted node artifacts: `@cogni/ai-core`, `@cogni/ai-tools`, `@cogni/db-client`, `@cogni/db-schema`, `@cogni/ids`, `@cogni/node-contracts`, `@cogni/node-core`, `@cogni/node-shared`, `@cogni/node-streams`, `@cogni/node-ui-kit`, `@cogni/scheduler-core`, `@cogni/work-items`;
 - graph substrate is shared: `@cogni/langgraph-graphs`, `@cogni/graph-execution-core`, `@cogni/graph-execution-host`;
 - knowledge substrate is shared: `@cogni/knowledge-base` is imported by node-local Doltgres schema packages, and `@cogni/knowledge-store` is imported by apps and Doltgres packages;
-- some root packages are operator-plane utilities rather than node-product packages: `@cogni/dns-ops`, `@cogni/temporal-workflows`, attribution pipeline packages.
+- some root packages are operator-plane utilities rather than node-product packages: `@cogni/dns-ops` and attribution pipeline packages;
+- `@cogni/temporal-workflows` currently mixes reusable scheduled-graph mechanics with operator governance/ledger workflows. Split the reusable node runtime into the published node-template package; keep operator workflows operator-owned.
 
 So the first migration should not be a broad carve-out from root `packages/`. Moving shared substrate into a node would make the template look cleaner but would damage the current dependency truth.
 
@@ -386,15 +471,19 @@ For node-template projection work, prefer changing the projected node-at-root re
 
 The highest-value moves, based on the current package layout, are:
 
-| Priority | Move                                                                                                                       | Why                                                                                                                               |
-| -------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 1        | Keep `Cogni-DAO/node-template` graph packages node-at-root                                                                 | Makes the template repo read as one product with a package layer; low conceptual risk because it is already node-local.           |
-| 2        | node-at-root `packages/doltgres-schema` → `packages/doltgres`                                                              | Names the knowledge plane by capability instead of implementation detail; keeps schema/client/adapter helpers together.           |
-| 3        | Add node-at-root `.cogni/node.yaml`                                                                                        | Gives the wizard/operator a compact substrate declaration without moving code.                                                    |
-| 4        | Add `packages/postgres` only when a node-local operational table appears                                                   | Avoids empty scaffolding while preserving the intended split.                                                                     |
-| 5        | Audit operator-only root packages separately: `@cogni/temporal-workflows`, `@cogni/dns-ops`, attribution pipeline packages | These may be operator-plane packages, not node packages. Moving them is lower value than fixing the node-template artifact shape. |
+| Priority | Move                                                                                           | Why                                                                                                            |
+| -------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 1        | Add node-template `packages/workflows` + private `services/workflow-worker`                    | Makes graphs and durable orchestration node-owned from birth; uses the existing multi-service artifact bundle. |
+| 2        | Publish `@cogni-dao/agent-workflow-runtime` from node-template                                 | Gives nodes one pinned bootstrap/runtime contract without fork-copied plumbing.                                |
+| 3        | Keep node graph packages node-at-root and pair them with the workflow catalog                  | Makes the node repo read as one product: graphs reason, workflows coordinate.                                  |
+| 4        | node-at-root `packages/doltgres-schema` → `packages/doltgres`                                  | Names the knowledge plane by capability instead of implementation detail.                                      |
+| 5        | Add node-at-root `.cogni/node.yaml`; add `packages/postgres` only with a real node-local table | Keeps substrate declaration compact and avoids empty scaffolding.                                              |
 
-Packages that should **not** move in the MVP: `@cogni/db-client`, `@cogni/db-schema`, `@cogni/knowledge-base`, `@cogni/knowledge-store`, `@cogni/langgraph-graphs`, `@cogni/graph-execution-core`, `@cogni/graph-execution-host`, `@cogni/node-contracts`, `@cogni/node-core`, `@cogni/node-shared`, `@cogni/node-ui-kit`. They are shared substrate today.
+Packages that should **not** move in the MVP: `@cogni/db-client`, `@cogni/db-schema`, `@cogni/knowledge-base`, `@cogni/knowledge-store`, `@cogni/langgraph-graphs`, `@cogni/graph-execution-core`, `@cogni/graph-execution-host`, `@cogni/node-contracts`, `@cogni/node-core`, `@cogni/node-shared`, `@cogni/node-ui-kit`. They are shared substrate today. The MVP also does not move graph execution into the Worker: it calls the app's private graph-run API so billing, run persistence, and telemetry keep one execution path.
+
+The new runtime package is intentionally additive. Node code continues to import and program
+against pinned `@langchain/langgraph` and `@temporalio/*` SDKs directly; Cogni owns the deployment
+and operational contract, not a proprietary graph or Workflow abstraction.
 
 ## MVP
 

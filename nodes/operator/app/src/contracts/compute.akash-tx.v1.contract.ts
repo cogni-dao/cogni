@@ -172,6 +172,26 @@ const SourceShaSchema = z
   .string()
   .regex(/^[0-9a-f]{40}$/, "expected a full sha");
 
+const CompositeFailureReasonSchema = z
+  .string()
+  .regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/, "expected an XRD reason token");
+
+/**
+ * The verdict the composite computed and wrote to its OWN status on the previous tick
+ * (bug.5416). REPORT-ONLY by construction: it rides `observe`, the unpaid tick, and no field of
+ * it appears on the create/update/delete bodies, which enumerate their own keys precisely so a
+ * field added for another action can never reach the wire that spends money.
+ *
+ * `failureReason` is bounded to the pattern the XRD already constrains
+ * `status.failure.reason` to. That bound is the point: one token, no separators, 128 chars, so
+ * the verdict is readable as an enum and can never carry a message, a SHA or a lease handle.
+ * The matching `failure.message` is free text and is deliberately NOT on this wire.
+ */
+export const AkashTxCompositeVerdictSchema = z.strictObject({
+  phase: z.enum(["Progressing", "Ready", "Failed"]),
+  failureReason: CompositeFailureReasonSchema,
+});
+
 /**
  * Observe is the UNPAID tick: no wallet slot, no Console POST, no ledger claim. That is exactly
  * why the release-side migration step rides here and not on create/update — asking a question
@@ -197,6 +217,12 @@ export const AkashTxObserveInputSchema = z.strictObject({
    */
   workload: ServiceNameSchema.optional(),
   environment: EnvironmentSchema.optional(),
+  /**
+   * What the COMPOSITE decided last tick, stated by the composite itself (bug.5416). Optional
+   * so an observe from a composition that does not send it stays byte-identical to the
+   * pre-bug.5416 wire — which is the whole reason this reader ships BEFORE the sender does.
+   */
+  composite: AkashTxCompositeVerdictSchema.optional(),
 });
 
 export const AkashTxCreateInputSchema = z.strictObject({
@@ -293,6 +319,9 @@ export const AkashTxErrorOutputSchema = z.strictObject({
 export type AkashTxMigrationStep = z.infer<typeof AkashTxMigrationStepSchema>;
 export type AkashTxMigrationPhase = z.infer<typeof AkashTxMigrationPhaseSchema>;
 export type AkashTxIdentity = z.infer<typeof AkashTxIdentitySchema>;
+export type AkashTxCompositeVerdict = z.infer<
+  typeof AkashTxCompositeVerdictSchema
+>;
 export type AkashTxObserveInput = z.infer<typeof AkashTxObserveInputSchema>;
 export type AkashTxLeaseLogSourcesInput = z.infer<
   typeof AkashTxLeaseLogSourcesInputSchema

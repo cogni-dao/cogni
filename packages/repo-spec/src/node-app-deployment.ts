@@ -27,7 +27,11 @@
 
 import { stringify } from "yaml";
 
-import type { NodeDeploymentSpec, NodeServiceSpec } from "./schema.js";
+import type {
+  NodeDeploymentSpec,
+  NodeServiceRuntimeProfileSpec,
+  NodeServiceSpec,
+} from "./schema.js";
 
 /**
  * Logical secret keys the `cogni-node-app-v1` runtime profile requires to boot.
@@ -60,7 +64,32 @@ export const COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS = [
   "LITELLM_VIRTUAL_KEY",
   "SCHEDULER_API_TOKEN",
   "BILLING_INGEST_TOKEN",
+  // Stable node-local service credential. The value is a bounded two-key JSON ring so
+  // rotation can overlap old/new without a fleet bearer or an authentication gap.
+  "FLIGHT_PROBE_API_KEY",
 ] as const;
+
+/**
+ * Secret needed for the private Activity hop back into the node app. Temporal connection
+ * details are non-secret profile env today; namespace-scoped Temporal credentials join this
+ * contract when the self-hosted server enables its authentication/authorization boundary.
+ */
+export const COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS = [
+  "SCHEDULER_API_TOKEN",
+] as const;
+
+function requiredSecretKeysForRuntimeProfile(
+  runtimeProfile: NodeServiceRuntimeProfileSpec | undefined
+): readonly string[] {
+  switch (runtimeProfile) {
+    case "cogni-node-app-v1":
+      return COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS;
+    case "cogni-workflow-worker-v1":
+      return COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS;
+    default:
+      return [];
+  }
+}
 
 /**
  * The single public Next.js app service every freshly-minted Cogni node ships with.
@@ -104,14 +133,12 @@ export const LEGACY_DEFAULT_NODE_DEPLOYMENT: NodeDeploymentSpec = {
 
 /** Required keys a runtime-profiled service has not explicitly declared, in contract order. */
 export function missingRuntimeProfileSecretKeys(input: {
-  readonly runtimeProfile?: "cogni-node-app-v1" | undefined;
+  readonly runtimeProfile?: NodeServiceRuntimeProfileSpec | undefined;
   readonly secretRefs: readonly { readonly key: string }[];
 }): readonly string[] {
-  if (input.runtimeProfile !== "cogni-node-app-v1") return [];
+  const required = requiredSecretKeysForRuntimeProfile(input.runtimeProfile);
   const declared = new Set(input.secretRefs.map((ref) => ref.key));
-  return COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS.filter(
-    (key) => !declared.has(key)
-  );
+  return required.filter((key) => !declared.has(key));
 }
 
 /**
@@ -124,13 +151,14 @@ export function missingRuntimeProfileSecretKeys(input: {
  * with no recognized runtime profile is returned unchanged (its refs are whatever it declared).
  */
 export function resolveRuntimeProfileSecretRefs(input: {
-  readonly runtimeProfile?: "cogni-node-app-v1" | undefined;
+  readonly runtimeProfile?: NodeServiceRuntimeProfileSpec | undefined;
   readonly secretRefs: readonly { readonly key: string }[];
 }): readonly { readonly key: string }[] {
-  if (input.runtimeProfile !== "cogni-node-app-v1") return input.secretRefs;
+  const required = requiredSecretKeysForRuntimeProfile(input.runtimeProfile);
+  if (required.length === 0) return input.secretRefs;
   const seen = new Set<string>();
   const resolved: { readonly key: string }[] = [];
-  for (const key of COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS) {
+  for (const key of required) {
     if (!seen.has(key)) {
       seen.add(key);
       resolved.push({ key });

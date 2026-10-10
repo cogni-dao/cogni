@@ -151,7 +151,18 @@ export function createContributionService(
     for (const edit of edits) {
       // delete + cite carry no entry payload — nothing for the write gates
       // (shape/provenance) to validate; forward unchanged.
-      if (edit.op === "delete" || edit.op === "cite") {
+      //
+      // `patch` is forwarded unchanged too, and this is NOT a gate bypass:
+      // PATCH_CARRIES_ONLY_UNGATED_FIELDS. The partial can carry only `useWhen`
+      // and `entryType`, the two entry fields neither v0 gate has an opinion
+      // about — `shapeGate` governs id/title/content/tags, `provenanceGate`
+      // governs sourceType/sourceRef. Every gate-governed field is absent from
+      // `KnowledgeEntryPatchSchema`, so running the chain here would have
+      // nothing to check; and a caller wanting to change one of those must use
+      // `op:'update'`, which does run the chain. `useWhen`'s own rules land in
+      // task.5204 item 8 — a band is pointless while the only way to apply it
+      // is a 64 KiB whole-entry replace.
+      if (edit.op === "delete" || edit.op === "cite" || edit.op === "patch") {
         out.push(edit);
         continue;
       }

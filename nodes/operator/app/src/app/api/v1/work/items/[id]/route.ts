@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/work/items/[id]/route`
  * Purpose: HTTP endpoints for getting, patching, and deleting a single work item by ID.
  * Scope: Auth-protected GET (markdown ∪ Doltgres routed by ID range), PATCH (Doltgres only), and DELETE (Doltgres hard-delete with dolt_log audit).
- * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, HARD_DELETE_RECOVERABLE_VIA_DOLT_REVERT.
+ * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, HARD_DELETE_RECOVERABLE_VIA_DOLT_REVERT, CODED_WRITE_ERRORS.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -22,11 +22,11 @@ import {
   deleteWorkItem,
   getWorkItem,
   patchWorkItem,
-  WorkItemNotFoundError,
-  WorkItemsBackendNotReadyError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+
+import { workItemsWriteErrorResponse } from "../_errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -102,12 +102,11 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       ctx.log.info({ workItemId: id }, "work.items.patch_success");
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
-      if (e instanceof WorkItemNotFoundError) {
-        return NextResponse.json({ error: e.message }, { status: 404 });
-      }
-      if (e instanceof WorkItemsBackendNotReadyError) {
-        return NextResponse.json({ error: e.message }, { status: 503 });
-      }
+      // Coded responses: 403 authz_denied (permanent), 503 work_items_busy
+      // (retryable), 503 not-ready, 404 missing. Anything unrecognized rethrows
+      // to the wrapper's 500 — the catch is NOT broadened (bug.5408).
+      const coded = workItemsWriteErrorResponse(ctx, e);
+      if (coded) return coded;
       throw e;
     }
   }
@@ -156,9 +155,10 @@ export const DELETE = wrapRouteHandlerWithLogging<{
         workItemsDeleteOperation.output.parse({ id, deleted: true })
       );
     } catch (e) {
-      if (e instanceof WorkItemsBackendNotReadyError) {
-        return NextResponse.json({ error: e.message }, { status: 503 });
-      }
+      // Same coded mapping as PATCH; unrecognized errors still reach the
+      // wrapper's 500 (bug.5408).
+      const coded = workItemsWriteErrorResponse(ctx, e);
+      if (coded) return coded;
       throw e;
     }
   }

@@ -6,6 +6,12 @@
 # custodies this fleet. The control environment is configuration: production in
 # the canonical fleet, candidate-a in the isolated test fleet. Never grant a
 # ClusterRole; each foreign lane gets only the Job/Pod verbs used by migrations.
+#
+# THE RULES HERE ARE THE SAME SET as the actuator's own-namespace Role
+# (infra/k8s/base/akash-tx-actuator/rbac.yaml) and the ArgoCD-reconciled
+# infra/k8s/base/akash-tx-actuator-lane-access/lane-access.yaml — one adapter, one reach, three
+# copies. tests/ci-invariants/akash-tx-actuator-runtime.spec.ts pins all three together, because
+# PR #2629 added readNamespacedPodLog (get pods/log) to the adapter and to none of them.
 
 set -euo pipefail
 
@@ -35,6 +41,9 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

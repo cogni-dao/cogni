@@ -14,7 +14,13 @@
  *   action (run-ci, merge, flight) runs through the operator API gated by the same
  *   owner-granted RBAC tuple — the lone human step.
  * Scope: Pure string/object construction. No IO.
- * Links: node-launch-handoff, api/v1/vcs/{run-ci,merge,flight} routes (#1792, #1801)
+ * Invariants: STARTER_SHELVES_MIRROR_BASE_DOMAIN_SEEDS — `NODE_STARTER_SHELF_IDS`
+ *   must equal the ids in `packages/knowledge-base/src/seeds/domains.ts`
+ *   (`BASE_DOMAIN_SEEDS`), which is the source of truth. The operator app does not
+ *   depend on `@cogni/knowledge-base` (a drizzle schema package), so the list is
+ *   mirrored here as prompt text and pinned by `tests/meta/launch-pack-starter-shelves`.
+ * Links: node-launch-handoff, api/v1/vcs/{run-ci,merge,flight} routes (#1792, #1801),
+ *   knowledge entry `cogni-domain-taxonomy`, task.5196
  * @public
  */
 
@@ -26,6 +32,22 @@ export const NODE_LAUNCH_PACK_KNOWLEDGE_ID = "node-launch-handoff";
 const KNOWLEDGE_TITLE = "AI assistant launch pack for node formation";
 const KNOWLEDGE_BASE_URL = "https://cognidao.org";
 const OPERATOR_API_ROOT = "https://cognidao.org";
+
+/**
+ * The starter shelves every spawned node registers on its OWN hub. Mirrors
+ * `BASE_DOMAIN_SEEDS` (`packages/knowledge-base/src/seeds/domains.ts`), which
+ * is the source of truth — a spawned node never runs the local-dev seeder, so
+ * the first agent is the only thing that puts these rows in a node's registry.
+ */
+export const NODE_STARTER_SHELF_IDS = [
+  "meta",
+  "mission",
+  "strategy",
+  "method",
+  "use-service",
+  "build-agents",
+  "build-product",
+] as const;
 
 export interface NodeLaunchPackInput {
   readonly nodeId: string;
@@ -102,6 +124,10 @@ export function buildNodeLaunchPack(
     "Credential bootstrap depends on how you opened this node repo:",
     "- Local Conductor workspace: let the committed setup finish. It auto-registers this node's `COGNI_NODE_API_KEY` when absent, saves it in the canonical primary checkout's `.env.cogni`, symlinks that file into this workspace, and installs the stable user-level Codex cognition hook. Open `/hooks` once to trust that SessionStart hook; later local worktrees reuse the same trusted hook path.",
     "- Non-Conductor or manual clone: if `.env.cogni` has no `COGNI_NODE_API_KEY`, run /contribute-to-cogni against the operator endpoint root to register and save the node key, then recall the Cogni knowledge block above (it is auth-gated).",
+    "",
+    `Register this node's knowledge shelves BEFORE your first knowledge write. A spawned node's hub boots with no starter shelves, so every \`domain\` value has nowhere valid to point. Register these seven on THIS node's own hub — not the operator's — one \`POST <node-base-url>/api/v1/knowledge/domains\` per shelf with \`{"id":"<id>","name":"<Name>","description":"<one line>"}\` and your node bearer; 201 means registered:`,
+    `  ${NODE_STARTER_SHELF_IDS.join(", ")}`,
+    `\`use-*\` is the service surface THIS node offers outside consumers; \`build-*\` is the machinery that provides it — both relative to this hub, never to the operator's. Recall \`cogni-domain-taxonomy\` from the operator endpoint root for the approved names, descriptions, and rationale, and copy them verbatim. The registry is APPEND-ONLY — POST exists, DELETE does not — so register exactly these seven and nothing else; a typo is permanent. Niche shelves for this node's own subject matter are declared in \`.cogni/repo-spec.yaml\` first, then registered the same way; never register the operator platform's internal shelves here. Each environment has its own \`knowledge_<slug>\` database, so registration is per-env: do it on the Candidate URL while you validate, and repeat it against the node's production host after promotion.`,
     "",
     "The exact end-to-end procedure lives in the reusable guides, NOT this prompt — follow them as the source of truth so this handoff can never drift from the live operator routes:",
     "- `cicd-e2e-required-sequence` — the required ordered steps and the operator API call for each (request access → branch-push → run-ci → flight → validate → merge → promote). The privileged steps (flight/merge/promote) are operator-bridged via your Bearer key, never personal `gh`.",

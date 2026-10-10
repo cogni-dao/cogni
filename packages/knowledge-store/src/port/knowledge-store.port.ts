@@ -46,6 +46,23 @@ export interface NewDomain {
   description?: string;
 }
 
+/**
+ * The knowledge write plane is saturated or recovering; the caller may retry.
+ *
+ * Distinct from a state or validation error: nothing was decided about the
+ * request, so replaying it is safe. Routes map this to 503, never 409 — a 409
+ * would tell an agent its write was rejected on the merits (bug.5391).
+ */
+export class KnowledgeBusyError extends Error {
+  readonly code = "KNOWLEDGE_BUSY" as const;
+  readonly retryable = true as const;
+
+  constructor(message = "Knowledge write plane is busy; retry shortly") {
+    super(message);
+    this.name = "KnowledgeBusyError";
+  }
+}
+
 export class DomainNotRegisteredError extends Error {
   readonly domain: string;
   constructor(domain: string) {
@@ -147,9 +164,19 @@ export class EdoEntryTypeRequiresAtomicToolError extends Error {
 export interface KnowledgeStorePort {
   // --- Read ---
   getKnowledge(id: string): Promise<Knowledge | null>;
+  /**
+   * Rows on one shelf, newest first.
+   *
+   * `q` is a case-insensitive substring match against `useWhen` ONLY — the
+   * retrieval trigger, the field that names the reader's situation. It is the
+   * filter `/knowledge/index` needs to answer "which triggers match mine?"
+   * without downloading bodies (task.5204). Rows whose `useWhen` is null never
+   * match. Full-text over title/content stays `searchKnowledge`; these are two
+   * questions, not one endpoint with modes.
+   */
   listKnowledge(
     domain: string,
-    opts?: { tags?: string[]; limit?: number }
+    opts?: { tags?: string[]; limit?: number; q?: string }
   ): Promise<Knowledge[]>;
   searchKnowledge(
     domain: string,
