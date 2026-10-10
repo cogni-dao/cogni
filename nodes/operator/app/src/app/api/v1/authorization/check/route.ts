@@ -91,8 +91,23 @@ export const POST = wrapRouteHandlerWithLogging(
       },
       "authorization_facade.check_decided"
     );
+    const wireDecision = {
+      decision: decision.decision,
+      code: decision.code,
+      checks: decision.checks.map((check) => ({
+        name: check.name,
+        user: check.user,
+        relation: check.relation,
+        object: check.object,
+        decision: check.decision,
+        code: check.code,
+      })),
+      ...(decision.decision === "deny" && decision.reason !== undefined
+        ? { reason: decision.reason }
+        : {}),
+    };
     return NextResponse.json(
-      authorizationFacadeCheckOperation.output.parse(decision),
+      authorizationFacadeCheckOperation.output.parse(wireDecision),
       { status }
     );
   }

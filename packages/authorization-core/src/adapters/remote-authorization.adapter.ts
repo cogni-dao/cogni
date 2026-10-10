@@ -21,11 +21,16 @@ import type {
   BillingAccountRevokeInput,
 } from "../index";
 
-export const AUTHORIZATION_FACADE_TOKEN_PREFIX = "cogni_naz_sk_v1_";
+export const AUTHORIZATION_FACADE_TOKEN_PREFIX = "cogni_naz_sk_v2_";
+const LEGACY_AUTHORIZATION_FACADE_TOKEN_PREFIX = "cogni_naz_sk_v1_";
 const NODE_ID_PATTERN =
   "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const TOKEN_PATTERN = new RegExp(
-  `^${AUTHORIZATION_FACADE_TOKEN_PREFIX}(${NODE_ID_PATTERN})_[0-9a-f]{64}$`,
+  `^${AUTHORIZATION_FACADE_TOKEN_PREFIX}(candidate-a|preview|production)_(${NODE_ID_PATTERN})_[0-9a-f]{64}$`,
+  "i"
+);
+const LEGACY_TOKEN_PATTERN = new RegExp(
+  `^${LEGACY_AUTHORIZATION_FACADE_TOKEN_PREFIX}(${NODE_ID_PATTERN})_[0-9a-f]{64}$`,
   "i"
 );
 const QUALIFIED_PATTERN = new RegExp(
@@ -42,6 +47,16 @@ export interface RemoteAuthorizationAdapterConfig {
   readonly testOnlyFetchImpl?: typeof fetch;
 }
 
+export interface AuthorizationFacadeCredentialIdentity {
+  readonly nodeId: string;
+  readonly lane?: "candidate-a" | "preview" | "production";
+}
+
+export interface AuthorizationFacadeCredentialRing {
+  readonly active: string;
+  readonly previous: string | null;
+}
+
 type QualifiedReference = {
   readonly kind: "user" | "agent" | "billing_account";
   readonly nodeId: string;
@@ -49,11 +64,53 @@ type QualifiedReference = {
 };
 
 export function authorizationFacadeNodeIdFromToken(token: string): string {
+  return authorizationFacadeCredentialFromToken(token).nodeId;
+}
+
+export function authorizationFacadeCredentialFromToken(
+  token: string
+): AuthorizationFacadeCredentialIdentity {
   const match = TOKEN_PATTERN.exec(token);
-  if (!match?.[1]) {
-    throw new Error("invalid authorization facade service credential");
+  if (match?.[1] && match[2]) {
+    return {
+      lane: match[1].toLowerCase() as NonNullable<
+        AuthorizationFacadeCredentialIdentity["lane"]
+      >,
+      nodeId: match[2].toLowerCase(),
+    };
   }
-  return match[1].toLowerCase();
+  const legacy = LEGACY_TOKEN_PATTERN.exec(token);
+  if (legacy?.[1]) return { nodeId: legacy[1].toLowerCase() };
+  throw new Error("invalid authorization facade service credential");
+}
+
+export function authorizationFacadeCredentialRingFromValue(
+  value: string
+): AuthorizationFacadeCredentialRing {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(value);
+  } catch {
+    authorizationFacadeCredentialFromToken(value);
+    return { active: value, previous: null };
+  }
+  if (
+    !isRecord(decoded) ||
+    !hasOnlyKeys(decoded, ["active", "previous"]) ||
+    typeof decoded.active !== "string" ||
+    (decoded.previous !== null && typeof decoded.previous !== "string") ||
+    decoded.previous === decoded.active
+  ) {
+    throw new Error("invalid authorization facade credential ring");
+  }
+  authorizationFacadeCredentialFromToken(decoded.active);
+  if (decoded.previous !== null) {
+    authorizationFacadeCredentialFromToken(decoded.previous);
+  }
+  return {
+    active: decoded.active,
+    previous: decoded.previous,
+  };
 }
 
 function qualifiedReference(value: string): QualifiedReference | undefined {
@@ -201,8 +258,11 @@ export class RemoteAuthorizationAdapter
       throw new Error("authorization facade requires HTTPS");
     }
     this.baseUrl = baseUrl.href.replace(/\/+$/, "");
-    this.serviceToken = config.serviceToken;
-    this.nodeId = authorizationFacadeNodeIdFromToken(config.serviceToken);
+    const ring = authorizationFacadeCredentialRingFromValue(
+      config.serviceToken
+    );
+    this.serviceToken = ring.active;
+    this.nodeId = authorizationFacadeNodeIdFromToken(ring.active);
     this.timeoutMs = config.timeoutMs ?? 1_500;
     this.fetchImpl = config.testOnlyFetchImpl ?? fetch;
   }
@@ -231,7 +291,8 @@ export class RemoteAuthorizationAdapter
       account.nodeId !== this.nodeId ||
       (subject !== undefined && subject.nodeId !== this.nodeId) ||
       (params.context.nodeId !== undefined &&
-        params.context.nodeId.toLowerCase() !== this.nodeId)
+        params.context.nodeId.toLowerCase() !== this.nodeId) ||
+      params.context.tenantId.toLowerCase() !== account.localId.toLowerCase()
     ) {
       return {
         decision: "deny",

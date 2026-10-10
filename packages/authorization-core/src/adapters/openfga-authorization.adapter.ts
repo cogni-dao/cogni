@@ -21,6 +21,7 @@ import {
   AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
   type AuthorizationPort,
   type AuthzCheckParams,
+  type AuthzCheckOptions,
   type AuthzDecision,
   type AuthzListDecision,
   type AuthzMutationOptions,
@@ -54,6 +55,20 @@ export interface OpenFgaCheckClient {
 }
 
 export interface OpenFgaWriteClient extends OpenFgaCheckClient {
+  write?(
+    body: {
+      readonly writes?: AuthzRelationTuple[];
+      readonly deletes?: Array<
+        Pick<AuthzRelationTuple, "user" | "relation" | "object">
+      >;
+    },
+    options?: {
+      readonly conflict?: {
+        readonly onDuplicateWrites?: "error" | "ignore";
+        readonly onMissingDeletes?: "error" | "ignore";
+      };
+    }
+  ): Promise<unknown>;
   writeTuples(
     tuples: AuthzRelationTuple[],
     options?: {
@@ -230,6 +245,27 @@ class StoreNameResolvingOpenFgaClient
       throw new Error("OpenFGA write client unavailable");
     }
     return client.writeTuples(tuples, options);
+  }
+
+  async write(
+    body: {
+      readonly writes?: AuthzRelationTuple[];
+      readonly deletes?: Array<
+        Pick<AuthzRelationTuple, "user" | "relation" | "object">
+      >;
+    },
+    options?: {
+      readonly conflict?: {
+        readonly onDuplicateWrites?: "error" | "ignore";
+        readonly onMissingDeletes?: "error" | "ignore";
+      };
+    }
+  ): Promise<unknown> {
+    const client = await this.resolveClient();
+    if (!isOpenFgaReplaceClient(client)) {
+      throw new Error("OpenFGA write client unavailable");
+    }
+    return client.write(body, options);
   }
 
   async deleteTuples(
@@ -463,10 +499,13 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     }
   }
 
-  async check(params: AuthzCheckParams): Promise<AuthzDecision> {
+  async check(
+    params: AuthzCheckParams,
+    options?: AuthzCheckOptions
+  ): Promise<AuthzDecision> {
     const checks = this.planChecks(params);
     const results = await Promise.all(
-      checks.map((check) => this.runCheck(check))
+      checks.map((check) => this.runCheck(check, options))
     );
 
     if (results.some((result) => result.code === "authz_unavailable")) {
@@ -585,6 +624,57 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     }
   }
 
+  async replaceRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision> {
+    const client = this.client;
+    if (!isOpenFgaReplaceClient(client)) {
+      return {
+        decision: "failure",
+        code: "authz_write_unavailable",
+        reason: "OpenFGA write client unavailable",
+      };
+    }
+
+    try {
+      await withRetry(
+        () =>
+          withTimeout(
+            client.write(
+              {
+                deletes: [tupleKeyWithoutCondition(tuple)],
+                writes: [tuple],
+              },
+              {
+                conflict: {
+                  // Never acknowledge a retained older condition as success.
+                  // The server applies this delete+write as one transaction.
+                  onDuplicateWrites: "error",
+                  onMissingDeletes: "ignore",
+                },
+              }
+            ),
+            this.writeTimeoutMs,
+            "replace"
+          ),
+        this.writeMaxRetries,
+        this.writeRetryBackoffMs,
+        isRetryableWriteError
+      );
+      if (options?.confirm === "higher_consistency") {
+        return this.confirmRelations([tuple], true);
+      }
+      return { decision: "success", code: "authz_write_success" };
+    } catch (error) {
+      return {
+        decision: "failure",
+        code: "authz_write_unavailable",
+        reason: `OpenFGA replace unavailable: ${errorMessage(error)}`,
+      };
+    }
+  }
+
   async listRelations(user: string): Promise<AuthzListDecision> {
     const client = this.client;
     if (!isOpenFgaReadClient(client)) {
@@ -668,15 +758,23 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     ];
   }
 
-  private async runCheck(check: PlannedSubcheck): Promise<AuthzSubcheck> {
+  private async runCheck(
+    check: PlannedSubcheck,
+    options?: AuthzCheckOptions
+  ): Promise<AuthzSubcheck> {
     try {
       const response = await withTimeout(
-        this.client.check({
-          user: check.user,
-          relation: check.relation,
-          object: check.object,
-          ...(check.context !== undefined ? { context: check.context } : {}),
-        }),
+        this.client.check(
+          {
+            user: check.user,
+            relation: check.relation,
+            object: check.object,
+            ...(check.context !== undefined ? { context: check.context } : {}),
+          },
+          options?.consistency === "higher_consistency"
+            ? { consistency: ConsistencyPreference.HigherConsistency }
+            : undefined
+        ),
         this.timeoutMs,
         "check"
       );
@@ -770,4 +868,11 @@ function isOpenFgaReadClient(
   client: OpenFgaCheckClient
 ): client is OpenFgaReadClient {
   return "read" in client;
+}
+
+function isOpenFgaReplaceClient(
+  client: OpenFgaCheckClient
+): client is OpenFgaWriteClient &
+  Required<Pick<OpenFgaWriteClient, "write">> {
+  return isOpenFgaWriteClient(client) && "write" in client;
 }
