@@ -15,8 +15,8 @@
  *   - NO_SECRETS_IN_CONTEXT: the writer token + value are never logged; value goes
  *     in the JSON body only, never a query string or argv.
  *   - PATCH_PRESERVES_SIBLINGS: existing node path → merge-patch, never clobber.
- *   - ROTATION_RING_IS_EXPLICIT: facade verification accepts only the current
- *     projected active/previous ring; unrelated KV bucket versions have no effect.
+ *   - ROTATION_OVERLAP_IS_BOUNDED: verification may accept only KV version N-1 and
+ *     only while current version N is within the configured rollout window.
  * Side-effects: IO (reads the projected SA token file; OpenBao HTTP API).
  * Links: docs/design/node-self-serve-secrets.md, scripts/secrets/set-secret.sh
  *   (the put-vs-patch gate this mirrors), src/ports/operator-secrets-plane.port.ts
@@ -24,8 +24,6 @@
  */
 
 import { timingSafeEqual } from "node:crypto";
-
-import { authorizationFacadeCredentialRingFromValue } from "@cogni/authorization-core";
 
 import type {
   OperatorSecretsPlanePort,
@@ -43,6 +41,10 @@ export interface OpenBaoSecretsAdapterDeps {
   readonly readServiceAccountToken: () => Promise<string>;
   /** Defaults to global `fetch`; injected in unit tests. */
   readonly fetchImpl?: typeof fetch;
+  /** Bounded previous-version acceptance during an ESO rollout. Defaults to ten minutes. */
+  readonly credentialOverlapMs?: number;
+  /** Clock injected for deterministic overlap tests. */
+  readonly now?: () => Date;
 }
 
 interface KvWriteResponse {
@@ -54,6 +56,7 @@ interface KvReadResponse {
     readonly data?: Readonly<Record<string, unknown>>;
     readonly metadata?: {
       readonly version?: number;
+      readonly created_time?: string;
     };
   };
 }
@@ -63,12 +66,16 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
   private readonly role: string;
   private readonly readServiceAccountToken: () => Promise<string>;
   private readonly fetchImpl: typeof fetch;
+  private readonly credentialOverlapMs: number;
+  private readonly now: () => Date;
 
   constructor(deps: OpenBaoSecretsAdapterDeps) {
     this.addr = deps.addr.replace(/\/+$/, "");
     this.role = deps.role;
     this.readServiceAccountToken = deps.readServiceAccountToken;
     this.fetchImpl = deps.fetchImpl ?? fetch;
+    this.credentialOverlapMs = deps.credentialOverlapMs ?? 10 * 60_000;
+    this.now = deps.now ?? (() => new Date());
   }
 
   async writeSecret(
@@ -94,11 +101,24 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
     const token = await this.login();
     const current = await this.readSecretVersion(token, input);
     if (!current) return false;
-    const stored = current.data?.[input.key];
-    if (input.key !== "AUTHORIZATION_FACADE_TOKEN") {
-      return secretMatches(input.presentedValue, stored);
+    if (secretMatches(input.presentedValue, current.data?.[input.key])) {
+      return true;
     }
-    return authorizationFacadeCredentialMatches(input.presentedValue, stored);
+
+    // Rotation continuity: ESO may still project the immediately previous value
+    // while OpenBao already exposes the new current version. Accept exactly N-1,
+    // and only for a bounded interval stamped by OpenBao's current version.
+    const version = current.metadata?.version;
+    const createdAt = Date.parse(current.metadata?.created_time ?? "");
+    const ageMs = this.now().getTime() - createdAt;
+    const withinOverlap =
+      Number.isFinite(createdAt) &&
+      ageMs >= 0 &&
+      ageMs <= this.credentialOverlapMs;
+    if (!version || version <= 1 || !withinOverlap) return false;
+
+    const previous = await this.readSecretVersion(token, input, version - 1);
+    return secretMatches(input.presentedValue, previous?.data?.[input.key]);
   }
 
   private async readSecretVersion(
@@ -190,22 +210,6 @@ function secretMatches(presented: string, expected: unknown): boolean {
     presentedBytes.length === expectedBytes.length &&
     timingSafeEqual(presentedBytes, expectedBytes)
   );
-}
-
-function authorizationFacadeCredentialMatches(
-  presented: string,
-  stored: unknown
-): boolean {
-  if (typeof stored !== "string") return false;
-  try {
-    const ring = authorizationFacadeCredentialRingFromValue(stored);
-    return (
-      secretMatches(presented, ring.active) ||
-      secretMatches(presented, ring.previous)
-    );
-  } catch {
-    return false;
-  }
 }
 
 function httpError(

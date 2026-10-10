@@ -278,10 +278,9 @@ _compose_node_value() {
       hex) randHex "$(_cat_field "$k" '.generate.bytes')" ;;
       sk-cogni) printf 'sk-cogni-%s' "$(randHex 24)" ;;
       node-authz-token)
-        local node_id active
+        local node_id
         node_id="$(node_id_for_target "$node")" || return 1
-        active="cogni_naz_sk_v2_${DEPLOY_ENVIRONMENT}_${node_id}_$(randHex "$(_cat_field "$k" '.generate.randHexBytes')")"
-        printf '{"active":"%s","previous":null}' "$active"
+        printf 'cogni_naz_sk_v1_%s_%s' "$node_id" "$(randHex "$(_cat_field "$k" '.generate.randHexBytes')")"
         ;;
     esac
     return 0

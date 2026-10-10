@@ -33,26 +33,6 @@ describe("authorizationFacadeNodeIdFromToken", () => {
     ).toThrow("invalid authorization facade service credential");
   });
 
-  it("selects the active token from a strict bounded credential ring", () => {
-    const adapter = new RemoteAuthorizationAdapter({
-      baseUrl: "https://operator.example",
-      serviceToken: JSON.stringify({ active: TOKEN, previous: null }),
-      testOnlyFetchImpl: vi.fn<typeof fetch>(),
-    });
-    expect(adapter).toBeInstanceOf(RemoteAuthorizationAdapter);
-    expect(
-      () =>
-        new RemoteAuthorizationAdapter({
-          baseUrl: "https://operator.example",
-          serviceToken: JSON.stringify({
-            active: TOKEN,
-            previous: null,
-            third: TOKEN,
-          }),
-          testOnlyFetchImpl: vi.fn<typeof fetch>(),
-        })
-    ).toThrow("invalid authorization facade credential ring");
-  });
 });
 
 describe("RemoteAuthorizationAdapter", () => {

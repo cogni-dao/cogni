@@ -13,7 +13,7 @@
 
 import { authorizationFacadeCredentialFromToken } from "@cogni/authorization-core";
 
-import { createOperatorSecretsPlane } from "@/bootstrap/capabilities/operator-secrets-plane";
+import { createAuthorizationFacadeCredentialVerifier } from "@/bootstrap/capabilities/authorization-facade-credential-verifier";
 import { resolveServiceDb } from "@/bootstrap/container";
 import { TokenBucketRateLimiter } from "@/bootstrap/http";
 import {
@@ -21,8 +21,6 @@ import {
   resolveNodeRef,
 } from "@/features/nodes/node-lookup";
 import { serverEnv } from "@/shared/env";
-
-const AUTHORIZATION_FACADE_TOKEN_KEY = "AUTHORIZATION_FACADE_TOKEN";
 
 const globalCredentialAttemptLimiter = new TokenBucketRateLimiter({
   maxTokens: 240,
@@ -112,22 +110,28 @@ export async function authenticateAuthorizationFacadeRequest(
         errorCode: "invalid_service_credential",
       };
     }
-    const lane = credential.lane ?? deployEnv;
-    if (lane !== deployEnv || !node.deployEnvs.includes(lane)) {
+    const lane = credential.lane;
+    if (!lane || lane !== deployEnv || !node.deployEnvs.includes(lane)) {
       return {
         ok: false,
         status: 401,
         errorCode: "invalid_service_credential",
       };
     }
-    const plane = createOperatorSecretsPlane(env);
-    const valid = await plane.verifySecret({
-      nodeSlug: node.slug,
-      env: lane,
-      key: AUTHORIZATION_FACADE_TOKEN_KEY,
-      presentedValue: token,
+    const verifier = createAuthorizationFacadeCredentialVerifier(env);
+    const verification = await verifier.verify({
+      lane,
+      nodeId: node.nodeId,
+      presentedCredential: token,
     });
-    if (!valid) {
+    if (verification.decision === "unavailable") {
+      return {
+        ok: false,
+        status: 503,
+        errorCode: "authorization_facade_unavailable",
+      };
+    }
+    if (verification.decision !== "valid") {
       return {
         ok: false,
         status: 401,

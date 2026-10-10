@@ -268,6 +268,10 @@ export type {
   VerificationStatus,
 } from "./onchain-verifier.port";
 export type {
+  AuthorizationFacadeCredentialVerification,
+  AuthorizationFacadeCredentialVerifierPort,
+} from "./authorization-facade-credential-verifier.port";
+export type {
   OperatorSecretsPlanePort,
   SecretWriteOp,
   VerifyNodeSecretInput,
