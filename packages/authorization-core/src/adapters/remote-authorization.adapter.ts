@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/authorization-core/adapters/remote-authorization`
  * Purpose: Portable, semantic client for the operator-mediated authorization facade.
- * Scope: Billing-account read checks and grant/revoke only. Never forwards raw tuples.
+ * Scope: Billing-account read checks and grant/revoke only. Does not forward raw tuples.
  * Invariants: NODE_FROM_CREDENTIAL; SAME_NODE_ONLY; NO_RAW_TUPLES; FAIL_CLOSED_WITH_DISTINCTION.
  * Side-effects: IO (HTTP fetch)
  * Links: task.5226, docs/spec/rbac.md

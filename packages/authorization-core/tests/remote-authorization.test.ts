@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/authorization-core/tests/remote-authorization`
+ * Purpose: Contract tests for the portable authorization-facade client.
+ * Scope: Package-local tests with an injected fetch implementation only. Does not call network services.
+ * Invariants: HTTPS_ONLY; STRICT_WIRE_VALIDATION; SAME_NODE_ONLY; ACCOUNT_MATCHES_TENANT; FAIL_CLOSED.
+ * Side-effects: none
+ * Links: task.5226, docs/spec/rbac.md
+ * @internal
+ */
 
 import { describe, expect, it, vi } from "vitest";
 
