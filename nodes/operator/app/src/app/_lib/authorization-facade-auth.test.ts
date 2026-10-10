@@ -3,15 +3,17 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const verifySecret = vi.fn();
+const verifyCredential = vi.fn();
 const resolveNodeRef = vi.fn();
 
 const NODE_ID = "11111111-1111-4111-8111-111111111111";
 const TOKEN = `cogni_naz_sk_v2_production_${NODE_ID}_${"a".repeat(64)}`;
 const FOREIGN_LANE_TOKEN = `cogni_naz_sk_v2_candidate-a_${NODE_ID}_${"b".repeat(64)}`;
 
-vi.mock("@/bootstrap/capabilities/operator-secrets-plane", () => ({
-  createOperatorSecretsPlane: () => ({ verifySecret }),
+vi.mock("@/bootstrap/capabilities/authorization-facade-credential-verifier", () => ({
+  createAuthorizationFacadeCredentialVerifier: () => ({
+    verify: verifyCredential,
+  }),
 }));
 vi.mock("@/bootstrap/container", () => ({
   resolveServiceDb: () => ({ kind: "service-db" }),
@@ -32,9 +34,8 @@ describe("authenticateAuthorizationFacadeRequest", () => {
       slug: "poly",
       deployEnvs: ["production"],
       activityEnv: "production",
-      deploymentProviders: {},
     });
-    verifySecret.mockResolvedValue(true);
+    verifyCredential.mockResolvedValue({ decision: "valid" });
   });
 
   it("rejects a credential bound to a different authorization lane", async () => {
@@ -48,7 +49,7 @@ describe("authenticateAuthorizationFacadeRequest", () => {
         })
       )
     ).resolves.toMatchObject({ status: 401 });
-    expect(verifySecret).not.toHaveBeenCalled();
+    expect(verifyCredential).not.toHaveBeenCalled();
   });
 
   it("derives the node from the credential and verifies only that node/env path", async () => {
@@ -66,11 +67,10 @@ describe("authenticateAuthorizationFacadeRequest", () => {
       { kind: "service-db" },
       NODE_ID
     );
-    expect(verifySecret).toHaveBeenCalledWith({
-      nodeSlug: "poly",
-      env: "production",
-      key: "AUTHORIZATION_FACADE_TOKEN",
-      presentedValue: TOKEN,
+    expect(verifyCredential).toHaveBeenCalledWith({
+      lane: "production",
+      nodeId: NODE_ID,
+      presentedCredential: TOKEN,
     });
   });
 
@@ -95,7 +95,7 @@ describe("authenticateAuthorizationFacadeRequest", () => {
       )
     ).resolves.toMatchObject({ status: 401 });
 
-    verifySecret.mockResolvedValueOnce(false);
+    verifyCredential.mockResolvedValueOnce({ decision: "invalid" });
     await expect(
       authenticateAuthorizationFacadeRequest(
         new Request("https://operator.example", {

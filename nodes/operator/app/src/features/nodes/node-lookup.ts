@@ -22,8 +22,6 @@ import type { Database } from "@cogni/db-client";
 import { eq, or, type SQL } from "drizzle-orm";
 
 import { nodes } from "@/shared/db/nodes";
-import type { NodeDeploymentPlacement } from "@/shared/node-registry/placement";
-import { toNodeDeploymentPlacement } from "@/shared/node-registry/placement";
 
 /** The canonical identity of one node, resolved from a `{id}` path segment. */
 export interface ResolvedNodeRef {
@@ -35,8 +33,6 @@ export interface ResolvedNodeRef {
   readonly deployEnvs: readonly string[];
   /** Singleton environment allowed to schedule epochs and ingest activity. */
   readonly activityEnv: string;
-  /** Catalog-projected placement used by server-derived lane custody policy. */
-  readonly deploymentProviders: NodeDeploymentPlacement;
 }
 
 const UUID_RE =
@@ -77,7 +73,6 @@ export async function resolveNodeRef(
       slug: nodes.slug,
       deployEnvs: nodes.deployEnvs,
       activityEnv: nodes.activityEnv,
-      deploymentProviders: nodes.deploymentProviders,
     })
     .from(nodes)
     .where(nodeIdOrSlug(idOrSlug))
@@ -89,9 +84,6 @@ export async function resolveNodeRef(
         slug: row.slug,
         deployEnvs: row.deployEnvs,
         activityEnv: row.activityEnv,
-        deploymentProviders: toNodeDeploymentPlacement(
-          row.deploymentProviders
-        ),
       }
     : null;
 }

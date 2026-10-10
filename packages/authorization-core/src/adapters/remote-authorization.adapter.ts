@@ -52,11 +52,6 @@ export interface AuthorizationFacadeCredentialIdentity {
   readonly lane?: "candidate-a" | "preview" | "production";
 }
 
-export interface AuthorizationFacadeCredentialRing {
-  readonly active: string;
-  readonly previous: string | null;
-}
-
 type QualifiedReference = {
   readonly kind: "user" | "agent" | "billing_account";
   readonly nodeId: string;
@@ -82,35 +77,6 @@ export function authorizationFacadeCredentialFromToken(
   const legacy = LEGACY_TOKEN_PATTERN.exec(token);
   if (legacy?.[1]) return { nodeId: legacy[1].toLowerCase() };
   throw new Error("invalid authorization facade service credential");
-}
-
-export function authorizationFacadeCredentialRingFromValue(
-  value: string
-): AuthorizationFacadeCredentialRing {
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(value);
-  } catch {
-    authorizationFacadeCredentialFromToken(value);
-    return { active: value, previous: null };
-  }
-  if (
-    !isRecord(decoded) ||
-    !hasOnlyKeys(decoded, ["active", "previous"]) ||
-    typeof decoded.active !== "string" ||
-    (decoded.previous !== null && typeof decoded.previous !== "string") ||
-    decoded.previous === decoded.active
-  ) {
-    throw new Error("invalid authorization facade credential ring");
-  }
-  authorizationFacadeCredentialFromToken(decoded.active);
-  if (decoded.previous !== null) {
-    authorizationFacadeCredentialFromToken(decoded.previous);
-  }
-  return {
-    active: decoded.active,
-    previous: decoded.previous,
-  };
 }
 
 function qualifiedReference(value: string): QualifiedReference | undefined {
@@ -258,11 +224,8 @@ export class RemoteAuthorizationAdapter
       throw new Error("authorization facade requires HTTPS");
     }
     this.baseUrl = baseUrl.href.replace(/\/+$/, "");
-    const ring = authorizationFacadeCredentialRingFromValue(
-      config.serviceToken
-    );
-    this.serviceToken = ring.active;
-    this.nodeId = authorizationFacadeNodeIdFromToken(ring.active);
+    this.serviceToken = config.serviceToken;
+    this.nodeId = authorizationFacadeNodeIdFromToken(config.serviceToken);
     this.timeoutMs = config.timeoutMs ?? 1_500;
     this.fetchImpl = config.testOnlyFetchImpl ?? fetch;
   }
