@@ -96,9 +96,7 @@ describe("authorization-core publication", () => {
     ).run;
     expect(gate).toContain("assert-repo-policy-checks.sh");
     expect(requiredCheckScript).toContain(".cogni/repo-policy.json");
-    expect(requiredCheckScript).toContain(
-      "commits/${COMMIT_SHA}/check-runs"
-    );
+    expect(requiredCheckScript).toContain("commits/${COMMIT_SHA}/check-runs");
     expect(requiredCheckScript).toContain('run.status === "completed"');
     expect(requiredCheckScript).toContain('run.conclusion === "success"');
   });
@@ -111,7 +109,7 @@ describe("authorization-core publication", () => {
     expect(mainGate).toContain('GITHUB_REF" != "refs/heads/main');
     expect(mainGate).toContain('GITHUB_SHA" != "$main_sha');
     expect(tagStep).toContain("ACTIONS_AUTOMATION_BOT_PAT is required");
-    expect(tagStep).toContain('refs/tags/${tag}');
+    expect(tagStep).toContain("refs/tags/${tag}");
   });
 
   it("publishes the existing adapter-bearing package rather than a shadow contract", () => {
