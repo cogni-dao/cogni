@@ -1041,11 +1041,13 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    secrets: inherit
     with:
       lane: candidate-a
       node: ${{ matrix.node }}
       operation: materialize
+    secrets:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
 
   node-substrate:
     needs:

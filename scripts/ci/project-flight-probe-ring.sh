@@ -37,8 +37,12 @@ valid_host "$VM_HOST" || fail "invalid VM_HOST"
 
 catalog_file="$CATALOG_ROOT/$TARGET_NODE.yaml"
 [[ -f "$catalog_file" ]] || fail "unknown catalog node"
-NODE_ID="$(yq -N '.node_id // ""' "$catalog_file")"
-[[ "$NODE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || fail "catalog node_id is invalid"
+COGNI_CATALOG_ROOT="$CATALOG_ROOT"
+# shellcheck source=lib/image-tags.sh
+. "$SCRIPT_DIR/lib/image-tags.sh"
+NODE_ID="$(node_id_for_target "$TARGET_NODE")" \
+  || fail "node identity is missing"
+[[ "$NODE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || fail "node_id is invalid"
 provider="$(LANE="$LANE" yq -N '.deployment_provider[strenv(LANE)] // "k3s"' "$catalog_file")"
 [[ "$provider" == k3s ]] || fail "projection target is not k3s"
 

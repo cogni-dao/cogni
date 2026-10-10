@@ -722,11 +722,13 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    secrets: inherit
     with:
       lane: ${{ needs.decide.outputs.environment }}
       node: ${{ matrix.node }}
       operation: materialize
+    secrets:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
 
   # Per-node provider preflight on EVERY env (Invariants 16-17). All nodes
   # materialize source:agent secrets and reconcile placement-neutral state (DB,
