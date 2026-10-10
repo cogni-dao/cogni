@@ -28,6 +28,7 @@ import type {
   ActorBeneficiaryPolicyRecord,
   ActorBindingRecord,
   ActorContributionAllocationRecord,
+  ActorDistributionLiabilityRecord,
   AttributionEpoch,
   AttributionEvaluation,
   AttributionPoolComponent,
@@ -56,6 +57,7 @@ import type {
   InsertSignedActorContributionAllocationParams,
   InsertStatementParams,
   InsertUserProjectionParams,
+  PendingActorDistributionLiability,
   PoolComponentInsertResult,
   ReceiptClaimantsRecord,
   ReviewSubjectOverrideRecord,
@@ -70,6 +72,7 @@ import type {
   UpsertSelectionParams,
 } from "@cogni/attribution-ledger";
 import {
+  canonicalJsonStringify,
   EpochNotFoundError,
   EpochNotInReviewError,
   EpochNotOpenError,
@@ -78,6 +81,8 @@ import {
 } from "@cogni/attribution-ledger";
 import {
   actorContributionAllocations,
+  actorDistributionLiabilities,
+  actorDistributionSettlements,
   epochDistributionLeaves,
   epochDistributionManifests,
   epochEvaluations,
@@ -116,6 +121,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import type { Database } from "../client";
 
 // ── Row mappers ─────────────────────────────────────────────────
@@ -466,6 +472,27 @@ function toActorContributionAllocation(
     signerWallet: row.signerWallet,
     signature: row.signature,
     signedAt: row.signedAt,
+    createdAt: row.createdAt,
+  };
+}
+
+function toActorDistributionLiability(
+  row: typeof actorDistributionLiabilities.$inferSelect
+): ActorDistributionLiabilityRecord {
+  return {
+    id: row.id,
+    allocationRef: row.allocationRef,
+    nodeId: row.nodeId,
+    scopeId: row.scopeId,
+    sourceEpochId: row.sourceEpochId,
+    earnedByActorId: row.earnedByActorId,
+    beneficiaryActorId: row.beneficiaryActorId,
+    contributionCutoff: row.contributionCutoff,
+    tokenAmount: row.tokenAmount,
+    sourceEvidenceHash: row.sourceEvidenceHash,
+    signerActorId: row.signerActorId,
+    resolverFailure:
+      row.resolverFailureJson as unknown as ActorDistributionLiabilityRecord["resolverFailure"],
     createdAt: row.createdAt,
   };
 }
@@ -1524,6 +1551,43 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         );
       }
 
+      if (params.actorLiabilities && params.actorLiabilities.length > 0) {
+        await tx.insert(actorDistributionLiabilities).values(
+          params.actorLiabilities.map((liability) => ({
+            allocationRef: liability.allocationRef,
+            nodeId: liability.nodeId,
+            scopeId: liability.scopeId,
+            sourceEpochId: liability.sourceEpochId,
+            earnedByActorId: liability.earnedByActorId,
+            beneficiaryActorId: liability.beneficiaryActorId,
+            contributionCutoff: liability.contributionCutoff,
+            tokenAmount: liability.tokenAmount,
+            sourceEvidenceHash: liability.sourceEvidenceHash,
+            signerActorId: liability.signerActorId,
+            resolverFailureJson: { ...liability.resolverFailure },
+          }))
+        );
+      }
+
+      if (params.actorSettlements && params.actorSettlements.length > 0) {
+        await tx.insert(actorDistributionSettlements).values(
+          params.actorSettlements.map((settlement) => ({
+            allocationRef: settlement.allocationRef,
+            liabilityId: settlement.liabilityId,
+            nodeId: settlement.nodeId,
+            scopeId: settlement.scopeId,
+            sourceEpochId: settlement.sourceEpochId,
+            foldEpochId: settlement.foldEpochId,
+            earnedByActorId: settlement.earnedByActorId,
+            beneficiaryActorId: settlement.beneficiaryActorId,
+            tokenAmount: settlement.tokenAmount,
+            claimantWallet: settlement.claimantWallet,
+            claimantWalletLower: settlement.claimantWallet.toLowerCase(),
+            resolverEvidenceJson: { ...settlement.resolverEvidence },
+          }))
+        );
+      }
+
       return toDistributionManifest(manifest);
     });
   }
@@ -1590,6 +1654,180 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       .from(epochDistributionLeaves)
       .where(eq(epochDistributionLeaves.manifestId, manifestRow.id));
     return leafRows.map(toDistributionLeaf);
+  }
+
+  async listUnfoldedActorContributionAllocationsForEpoch(
+    epochId: bigint
+  ): Promise<readonly ActorContributionAllocationRecord[]> {
+    await this.resolveEpochScoped(epochId);
+    const rows = await this.db
+      .select({ allocation: actorContributionAllocations })
+      .from(actorContributionAllocations)
+      .leftJoin(
+        actorDistributionLiabilities,
+        eq(
+          actorDistributionLiabilities.allocationRef,
+          actorContributionAllocations.id
+        )
+      )
+      .leftJoin(
+        actorDistributionSettlements,
+        eq(
+          actorDistributionSettlements.allocationRef,
+          actorContributionAllocations.id
+        )
+      )
+      .where(
+        and(
+          eq(actorContributionAllocations.epochId, epochId),
+          eq(actorContributionAllocations.scopeId, this.scopeId),
+          isNull(actorDistributionLiabilities.id),
+          isNull(actorDistributionSettlements.id)
+        )
+      )
+      .orderBy(actorContributionAllocations.id);
+    return rows.map((row) => toActorContributionAllocation(row.allocation));
+  }
+
+  async listActorContributionAllocationsForEpoch(
+    epochId: bigint
+  ): Promise<readonly ActorContributionAllocationRecord[]> {
+    await this.resolveEpochScoped(epochId);
+    const rows = await this.db
+      .select()
+      .from(actorContributionAllocations)
+      .where(
+        and(
+          eq(actorContributionAllocations.epochId, epochId),
+          eq(actorContributionAllocations.scopeId, this.scopeId)
+        )
+      )
+      .orderBy(actorContributionAllocations.id);
+    return rows.map(toActorContributionAllocation);
+  }
+
+  async listPendingActorDistributionLiabilities(
+    targetEpochId: bigint
+  ): Promise<readonly PendingActorDistributionLiability[]> {
+    const targetEpoch = await this.resolveEpochScoped(targetEpochId);
+    if (targetEpoch.status !== "finalized" || !targetEpoch.closedAt) {
+      throw new Error(
+        `Actor liabilities require a finalized target epoch ${targetEpochId}`
+      );
+    }
+    const sourceEpoch = alias(epochs, "actor_liability_source_epoch");
+    const rows = await this.db
+      .select({
+        liability: actorDistributionLiabilities,
+        allocation: actorContributionAllocations,
+      })
+      .from(actorDistributionLiabilities)
+      .innerJoin(
+        actorContributionAllocations,
+        eq(
+          actorContributionAllocations.id,
+          actorDistributionLiabilities.allocationRef
+        )
+      )
+      .innerJoin(
+        sourceEpoch,
+        eq(sourceEpoch.id, actorDistributionLiabilities.sourceEpochId)
+      )
+      .leftJoin(
+        actorDistributionSettlements,
+        eq(
+          actorDistributionSettlements.allocationRef,
+          actorDistributionLiabilities.allocationRef
+        )
+      )
+      .where(
+        and(
+          eq(actorDistributionLiabilities.scopeId, this.scopeId),
+          eq(actorDistributionLiabilities.nodeId, targetEpoch.nodeId),
+          eq(sourceEpoch.status, "finalized"),
+          isNotNull(sourceEpoch.closedAt),
+          lte(sourceEpoch.periodEnd, targetEpoch.periodStart),
+          lte(sourceEpoch.closedAt, targetEpoch.closedAt),
+          lte(
+            actorDistributionLiabilities.contributionCutoff,
+            targetEpoch.periodStart
+          ),
+          isNull(actorDistributionSettlements.id)
+        )
+      )
+      .orderBy(
+        sourceEpoch.periodEnd,
+        actorDistributionLiabilities.allocationRef
+      );
+    return rows.map((row) => ({
+      ...toActorDistributionLiability(row.liability),
+      allocation: toActorContributionAllocation(row.allocation),
+    }));
+  }
+
+  async insertActorDistributionLiabilities(
+    liabilities: readonly Omit<
+      ActorDistributionLiabilityRecord,
+      "id" | "createdAt"
+    >[]
+  ): Promise<void> {
+    if (liabilities.length === 0) return;
+    await this.validateEpochIds([
+      ...new Set(liabilities.map((liability) => liability.sourceEpochId)),
+    ]);
+    await this.db.transaction(async (tx) => {
+      for (const liability of liabilities) {
+        const [inserted] = await tx
+          .insert(actorDistributionLiabilities)
+          .values({
+            allocationRef: liability.allocationRef,
+            nodeId: liability.nodeId,
+            scopeId: liability.scopeId,
+            sourceEpochId: liability.sourceEpochId,
+            earnedByActorId: liability.earnedByActorId,
+            beneficiaryActorId: liability.beneficiaryActorId,
+            contributionCutoff: liability.contributionCutoff,
+            tokenAmount: liability.tokenAmount,
+            sourceEvidenceHash: liability.sourceEvidenceHash,
+            signerActorId: liability.signerActorId,
+            resolverFailureJson: { ...liability.resolverFailure },
+          })
+          .onConflictDoNothing({
+            target: actorDistributionLiabilities.allocationRef,
+          })
+          .returning();
+        if (inserted) continue;
+        const [existing] = await tx
+          .select()
+          .from(actorDistributionLiabilities)
+          .where(
+            eq(
+              actorDistributionLiabilities.allocationRef,
+              liability.allocationRef
+            )
+          )
+          .limit(1);
+        if (
+          !existing ||
+          existing.nodeId !== liability.nodeId ||
+          existing.scopeId !== liability.scopeId ||
+          existing.sourceEpochId !== liability.sourceEpochId ||
+          existing.earnedByActorId !== liability.earnedByActorId ||
+          existing.beneficiaryActorId !== liability.beneficiaryActorId ||
+          existing.contributionCutoff.getTime() !==
+            liability.contributionCutoff.getTime() ||
+          existing.tokenAmount !== liability.tokenAmount ||
+          existing.sourceEvidenceHash !== liability.sourceEvidenceHash ||
+          existing.signerActorId !== liability.signerActorId ||
+          canonicalJsonStringify(existing.resolverFailureJson) !==
+            canonicalJsonStringify(liability.resolverFailure)
+        ) {
+          throw new Error(
+            `Actor liability idempotency conflict for ${liability.allocationRef}`
+          );
+        }
+      }
+    });
   }
 
   // ── Atomic finalize ────────────────────────────────────────

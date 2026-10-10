@@ -22,6 +22,20 @@ export {
   type FrozenActorContributionAllocation,
   freezeActorContributionAllocation,
 } from "./actor-contribution-allocation";
+export {
+  type ActorAwareSettlementPlan,
+  type ActorSettlementAmount,
+  computeActorAwareSettlementPlan,
+  type LegacySettlementAmount,
+} from "./actor-distribution-settlement";
+
+export type {
+  ActorBeneficiaryWalletResolution,
+  ActorBeneficiaryWalletResolver,
+  ActorWalletBindingEvidence,
+  ActorWalletResolutionFailureCode,
+  ActorWalletResolutionFailureEvidence,
+} from "./actor-wallet-resolution";
 // Allocation algorithm framework (pure, deterministic)
 export {
   computeProposedAllocations,
@@ -136,6 +150,8 @@ export type {
   ActorBeneficiaryPolicyRecord,
   ActorBindingRecord,
   ActorContributionAllocationRecord,
+  ActorDistributionLiabilityRecord,
+  ActorDistributionSettlementRecord,
   AttributionEpoch,
   AttributionEvaluation,
   AttributionPoolComponent,
@@ -173,6 +189,7 @@ export type {
   InsertStatementParams,
   InsertUserProjectionParams,
   OverrideStore,
+  PendingActorDistributionLiability,
   PoolComponentInsertResult,
   PoolStore,
   ProjectionStore,

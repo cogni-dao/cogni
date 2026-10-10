@@ -1472,6 +1472,9 @@ function buildFinalizeEpochDeps(logger: FinalizeLogger): RunFinalizeEpochDeps {
   const serviceDb = getServiceDb();
   const tokenomics = getNodeTokenomicsConfig();
   const { excludedLogins, sourceRefs } = getLedgerSelectionConfig();
+  const walletResolver = tokenomics.tokenAddress
+    ? new DrizzleClaimantWalletResolver(serviceDb)
+    : null;
   return {
     attributionStore: new DrizzleAttributionAdapter(serviceDb, getScopeId()),
     registries: createDefaultRegistries({ excludedLogins, sourceRefs }),
@@ -1481,9 +1484,8 @@ function buildFinalizeEpochDeps(logger: FinalizeLogger): RunFinalizeEpochDeps {
     tokenAddress: tokenomics.tokenAddress,
     distributorAddress: tokenomics.distributorAddress,
     emissionsHolderAddress: getEmissionsHolderAddress(),
-    walletResolver: tokenomics.tokenAddress
-      ? new DrizzleClaimantWalletResolver(serviceDb)
-      : null,
+    walletResolver,
+    actorWalletResolver: walletResolver,
     distributionConfigClient: resolveNodeDistributionConfigResolver(),
     deploymentEnvironment: serverEnv().DEPLOY_ENVIRONMENT,
     logger,

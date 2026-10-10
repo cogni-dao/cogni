@@ -20,9 +20,19 @@ import type {
   ClaimantWalletResolver,
   HexAddress,
 } from "@cogni/aragon-osx";
-import { userBindings } from "@cogni/db-schema/identity";
+import type {
+  ActorBeneficiaryWalletResolution,
+  ActorBeneficiaryWalletResolver,
+  ActorContributionAllocationRecord,
+} from "@cogni/attribution-ledger";
+import {
+  actorBindingEvents,
+  actorBindings,
+  actors,
+  userBindings,
+} from "@cogni/db-schema/identity";
 import { users } from "@cogni/db-schema/refs";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 
 import type { Database } from "../client";
 
@@ -77,7 +87,9 @@ function parseClaimantKey(claimantKey: string): ParsedClaimant {
  *     (provider='wallet', external_id=address), falling back to users.wallet_address
  *     (the SIWE primary). Both hold the same checksummed address in practice.
  */
-export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
+export class DrizzleClaimantWalletResolver
+  implements ClaimantWalletResolver, ActorBeneficiaryWalletResolver
+{
   constructor(private readonly db: Database) {}
 
   async resolveWallets(
@@ -125,6 +137,119 @@ export class DrizzleClaimantWalletResolver implements ClaimantWalletResolver {
         userId,
         wallet,
       } satisfies ClaimantWalletResolution;
+    });
+  }
+
+  async resolveBeneficiaryWallets(
+    allocations: readonly ActorContributionAllocationRecord[]
+  ): Promise<readonly ActorBeneficiaryWalletResolution[]> {
+    const uniqueAllocations = [
+      ...new Map(
+        allocations.map((allocation) => [allocation.allocationRef, allocation])
+      ).values(),
+    ];
+    const beneficiaryIds = [
+      ...new Set(
+        uniqueAllocations.map((allocation) => allocation.beneficiaryActorId)
+      ),
+    ];
+    if (beneficiaryIds.length === 0) return [];
+
+    const actorRows = await this.db
+      .select({ id: actors.id, status: actors.status })
+      .from(actors)
+      .where(inArray(actors.id, beneficiaryIds));
+    const activeById = new Map(
+      actorRows.map((actor) => [actor.id, actor.status === "active"])
+    );
+
+    const bindingRows = await this.db
+      .select({
+        id: actorBindings.id,
+        actorId: actorBindings.actorId,
+        externalId: actorBindings.externalId,
+        evidenceEventId: actorBindings.evidenceEventId,
+        createdAt: actorBindings.createdAt,
+        eventType: actorBindingEvents.eventType,
+        authorizedByActorId: actorBindingEvents.authorizedByActorId,
+        effectiveAt: actorBindingEvents.effectiveAt,
+        evidence: actorBindingEvents.evidence,
+      })
+      .from(actorBindings)
+      .innerJoin(
+        actorBindingEvents,
+        and(
+          eq(actorBindingEvents.id, actorBindings.evidenceEventId),
+          eq(actorBindingEvents.actorId, actorBindings.actorId),
+          eq(actorBindingEvents.provider, actorBindings.provider),
+          eq(actorBindingEvents.externalId, actorBindings.externalId)
+        )
+      )
+      .where(
+        and(
+          inArray(actorBindings.actorId, beneficiaryIds),
+          eq(actorBindings.provider, "wallet"),
+          isNull(actorBindings.closedAt)
+        )
+      );
+    const bindingsByActor = new Map<string, typeof bindingRows>();
+    for (const row of bindingRows) {
+      const rows = bindingsByActor.get(row.actorId) ?? [];
+      rows.push(row);
+      bindingsByActor.set(row.actorId, rows);
+    }
+
+    return uniqueAllocations.map((allocation) => {
+      const beneficiaryActorId = allocation.beneficiaryActorId;
+      const rows = [...(bindingsByActor.get(beneficiaryActorId) ?? [])].sort(
+        (a, b) => a.id.localeCompare(b.id)
+      );
+      const failure = (
+        code:
+          | "beneficiary_actor_inactive"
+          | "beneficiary_wallet_unbound"
+          | "beneficiary_wallet_ambiguous"
+          | "beneficiary_wallet_invalid"
+      ): ActorBeneficiaryWalletResolution => ({
+        allocationRef: allocation.allocationRef,
+        beneficiaryActorId,
+        wallet: null,
+        bindingEvidence: null,
+        failureEvidence: {
+          code,
+          beneficiaryActorId,
+          observedBindingIds: rows.map((row) => row.id),
+        },
+      });
+
+      if (activeById.get(beneficiaryActorId) !== true) {
+        return failure("beneficiary_actor_inactive");
+      }
+      if (rows.length === 0) return failure("beneficiary_wallet_unbound");
+      if (rows.length !== 1) return failure("beneficiary_wallet_ambiguous");
+      const binding = rows[0];
+      if (!binding) return failure("beneficiary_wallet_unbound");
+      const wallet = toHexAddress(binding.externalId);
+      if (!wallet) return failure("beneficiary_wallet_invalid");
+
+      return {
+        allocationRef: allocation.allocationRef,
+        beneficiaryActorId,
+        wallet,
+        bindingEvidence: {
+          bindingId: binding.id,
+          evidenceEventId: binding.evidenceEventId,
+          actorId: beneficiaryActorId,
+          provider: "wallet",
+          externalId: binding.externalId,
+          bindingCreatedAt: binding.createdAt.toISOString(),
+          eventType: binding.eventType,
+          authorizedByActorId: binding.authorizedByActorId,
+          effectiveAt: binding.effectiveAt.toISOString(),
+          bindingEvidence: binding.evidence,
+        },
+        failureEvidence: null,
+      };
     });
   }
 
