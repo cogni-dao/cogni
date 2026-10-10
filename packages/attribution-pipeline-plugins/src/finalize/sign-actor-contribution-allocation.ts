@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/attribution-pipeline-plugins/finalize/sign-actor-contribution-allocation`
  * Purpose: Resolve, verify, and persist one signed actor contribution allocation.
- * Scope: Orchestration over AttributionStore plus viem signature verification.
+ * Scope: Orchestration over AttributionStore plus viem signature verification. Does not infer ownership or beneficiary policy.
  * Invariants: EXPLICIT_BENEFICIARY; SOURCE_OWNER_AT_CUTOFF; LEGACY_STATEMENT_UNCHANGED.
- * Side-effects: DB reads/writes through the store; EIP-712 signature verification.
+ * Side-effects: IO (AttributionStore DB reads/writes and viem EIP-712 verification).
  * Links: story.5075, task.5219
  * @public
  */

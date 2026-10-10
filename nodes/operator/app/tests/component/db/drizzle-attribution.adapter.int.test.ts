@@ -34,10 +34,10 @@ import {
 } from "@tests/_fixtures/attribution/seed-attribution";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { seedTestActor, type TestActor } from "@tests/_fixtures/stack/seed";
-import { actors, userBindings } from "@/shared/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { actors, userBindings } from "@/shared/db/schema";
 
 /** Unwrap DrizzleQueryError → underlying PostgresError message */
 function drizzleCause(err: unknown): string {
@@ -2041,6 +2041,18 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         .where(and(eq(actors.kind, "user"), eq(actors.userId, future.user.id)))
         .limit(1);
       if (!futureActor) throw new Error("Expected future beneficiary actor");
+      await expect(
+        adapter.insertActorBeneficiaryPolicy({
+          earnedByActorId: flockLeaderActorId,
+          beneficiaryActorId: futureActor.id,
+          policyVersion: "flock-leader-beneficiary.backdated-rejected",
+          authorizedByActorId: futureActor.id,
+          evidence: { ceremony: "backdated-reassignment-must-fail" },
+          effectiveFrom: new Date("2026-10-02T11:00:00.000Z"),
+        })
+      ).rejects.toThrow(
+        "Beneficiary policy cannot backdate across a frozen actor allocation"
+      );
       await adapter.insertActorBeneficiaryPolicy({
         earnedByActorId: flockLeaderActorId,
         beneficiaryActorId: futureActor.id,
@@ -2049,6 +2061,18 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         evidence: { ceremony: "future-only-reassignment" },
         effectiveFrom: new Date("2026-10-04T00:00:00.000Z"),
       });
+      await expect(
+        adapter.insertActorBeneficiaryPolicy({
+          earnedByActorId: flockLeaderActorId,
+          beneficiaryActorId: derekActor.id,
+          policyVersion: "flock-leader-beneficiary.out-of-order-rejected",
+          authorizedByActorId: derekActor.id,
+          evidence: { ceremony: "out-of-order-policy-must-fail" },
+          effectiveFrom: new Date("2026-10-03T00:00:00.000Z"),
+        })
+      ).rejects.toThrow(
+        "Beneficiary policy effectiveFrom must be strictly after the latest policy"
+      );
       expect(
         await adapter.getActorContributionAllocation(persisted.allocationRef)
       ).toMatchObject({ beneficiaryActorId: derekActor.id });
