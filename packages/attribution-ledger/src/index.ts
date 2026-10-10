@@ -11,6 +11,17 @@
  * @public
  */
 
+export {
+  ACTOR_ALLOCATION_DOMAIN_NAME,
+  ACTOR_ALLOCATION_DOMAIN_VERSION,
+  ACTOR_CONTRIBUTION_ALLOCATION_TYPES,
+  ACTOR_CONTRIBUTION_ALLOCATION_VERSION,
+  type ActorContributionAllocationFacts,
+  type ActorContributionAllocationTypedData,
+  buildActorContributionAllocationTypedData,
+  type FrozenActorContributionAllocation,
+  freezeActorContributionAllocation,
+} from "./actor-contribution-allocation";
 // Allocation algorithm framework (pure, deterministic)
 export {
   computeProposedAllocations,
@@ -121,6 +132,10 @@ export {
 
 // Store port interface + types
 export type {
+  ActorAttributionStore,
+  ActorBeneficiaryPolicyRecord,
+  ActorBindingRecord,
+  ActorContributionAllocationRecord,
   AttributionEpoch,
   AttributionEvaluation,
   AttributionPoolComponent,
@@ -129,6 +144,7 @@ export type {
   AttributionStatementLineRecord,
   AttributionStatementSignature,
   AttributionStore,
+  BindActorExternalIdentityParams,
   ClaimantStore,
   CloseIngestionWithEvaluationsParams,
   CursorStore,
@@ -145,6 +161,7 @@ export type {
   IdentityResolver,
   IngestionCursor,
   IngestionReceipt,
+  InsertActorBeneficiaryPolicyParams,
   InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,
@@ -152,6 +169,7 @@ export type {
   InsertReceiptParams,
   InsertSelectionAutoParams,
   InsertSignatureParams,
+  InsertSignedActorContributionAllocationParams,
   InsertStatementParams,
   InsertUserProjectionParams,
   OverrideStore,

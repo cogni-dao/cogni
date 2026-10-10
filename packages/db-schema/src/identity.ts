@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/db-schema/identity`
  * Purpose: User identity binding tables — links external accounts (wallet, Discord, GitHub, Google) to users.
- * Scope: Defines user_bindings (current-state index) and identity_events (append-only audit trail). Does not contain queries or business logic.
+ * Scope: Defines the canonical actor identity registry, explicit beneficiary policy, and legacy user-binding compatibility projection. Does not contain queries or business logic.
  * Invariants:
  * - BINDINGS_ARE_EVIDENCED: Proof lives in identity_events.payload, not on the binding row.
  * - NO_AUTO_MERGE: UNIQUE(provider, external_id) — same external ID for same provider can't bind to two users.
@@ -113,6 +113,132 @@ export const actorStewardshipEvents = pgTable(
       sql`${table.eventType} IN ('accepted', 'revoked', 'reassigned')`
     ),
     index("actor_stewardship_events_actor_id_idx").on(table.actorId),
+  ]
+).enableRLS();
+
+export const ACTOR_BINDING_EVENT_TYPES = [
+  "bound",
+  "transferred_out",
+  "transferred_in",
+  "revoked",
+] as const;
+
+/**
+ * Append-only evidence for canonical external-identity ownership changes.
+ * Credentials, mutable provider logins, and legacy user projections are never
+ * ownership authority.
+ */
+export const actorBindingEvents = pgTable(
+  "actor_binding_events",
+  {
+    id: text("id").primaryKey(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => actors.id),
+    previousActorId: text("previous_actor_id").references(() => actors.id),
+    provider: text("provider").notNull(),
+    externalId: text("external_id").notNull(),
+    providerLogin: text("provider_login"),
+    eventType: text("event_type").notNull(),
+    authorizedByActorId: text("authorized_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "actor_binding_events_type_check",
+      sql`${table.eventType} IN ('bound', 'transferred_out', 'transferred_in', 'revoked')`
+    ),
+    index("actor_binding_events_source_idx").on(
+      table.provider,
+      table.externalId,
+      table.effectiveAt
+    ),
+    index("actor_binding_events_actor_id_idx").on(table.actorId),
+  ]
+).enableRLS();
+
+/**
+ * The one current-owner registry for external identities across human and AI
+ * actors. Historical ownership lives in actor_binding_events; a transfer closes
+ * the old row and opens a new one atomically.
+ */
+export const actorBindings = pgTable(
+  "actor_bindings",
+  {
+    id: text("id").primaryKey(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => actors.id),
+    provider: text("provider").notNull(),
+    externalId: text("external_id").notNull(),
+    providerLogin: text("provider_login"),
+    evidenceEventId: text("evidence_event_id")
+      .notNull()
+      .references(() => actorBindingEvents.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("actor_bindings_active_source_unique")
+      .on(table.provider, table.externalId)
+      .where(sql`${table.closedAt} IS NULL`),
+    index("actor_bindings_actor_id_idx").on(table.actorId),
+  ]
+).enableRLS();
+
+/**
+ * Effective-dated, explicitly authorized beneficiary selection. Stewardship is
+ * stored separately and never supplies an implicit beneficiary default.
+ */
+export const actorBeneficiaryPolicies = pgTable(
+  "actor_beneficiary_policies",
+  {
+    id: text("id").primaryKey(),
+    earnedByActorId: text("earned_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    beneficiaryActorId: text("beneficiary_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    policyVersion: text("policy_version").notNull(),
+    authorizedByActorId: text("authorized_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
+    effectiveFrom: timestamp("effective_from", {
+      withTimezone: true,
+    }).notNull(),
+    effectiveTo: timestamp("effective_to", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "actor_beneficiary_policies_window_check",
+      sql`${table.effectiveTo} IS NULL OR ${table.effectiveTo} > ${table.effectiveFrom}`
+    ),
+    uniqueIndex("actor_beneficiary_policies_version_unique").on(
+      table.earnedByActorId,
+      table.policyVersion
+    ),
+    uniqueIndex("actor_beneficiary_policies_effective_from_unique").on(
+      table.earnedByActorId,
+      table.effectiveFrom
+    ),
+    index("actor_beneficiary_policies_effective_idx").on(
+      table.earnedByActorId,
+      table.effectiveFrom,
+      table.effectiveTo
+    ),
   ]
 ).enableRLS();
 

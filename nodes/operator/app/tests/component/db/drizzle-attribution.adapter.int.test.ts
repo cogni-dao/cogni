@@ -12,10 +12,12 @@
  */
 
 import {
+  buildActorContributionAllocationTypedData,
   EpochNotFoundError,
   EpochNotInReviewError,
   EpochNotOpenError,
 } from "@cogni/attribution-ledger";
+import { signActorContributionAllocation } from "@cogni/attribution-pipeline-plugins";
 import { DrizzleAttributionAdapter } from "@cogni/db-client";
 import {
   epochWindow,
@@ -32,8 +34,10 @@ import {
 } from "@tests/_fixtures/attribution/seed-attribution";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { seedTestActor, type TestActor } from "@tests/_fixtures/stack/seed";
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { actors, userBindings } from "@/shared/db/schema";
 
 /** Unwrap DrizzleQueryError → underlying PostgresError message */
 function drizzleCause(err: unknown): string {
@@ -1903,6 +1907,233 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         expect(row.epochId).toBe(claimantEpochId);
         expect(row.nodeId).toBe(TEST_NODE_ID);
       }
+    });
+  });
+
+  describe("actor contribution allocation v1", () => {
+    const signer = privateKeyToAccount(
+      "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    );
+
+    it("freezes flock-leader as earner and Derek as explicit beneficiary", async () => {
+      const derek = await seedTestActor(db, { walletAddress: signer.address });
+      const externalId = `295942454-${derek.user.id}`;
+      await db.insert(userBindings).values({
+        id: crypto.randomUUID(),
+        userId: derek.user.id,
+        provider: "github",
+        externalId,
+        providerLogin: "flock-leader",
+        createdAt: new Date("2026-09-01T00:00:00.000Z"),
+      });
+      const [derekActor] = await db
+        .select({ id: actors.id })
+        .from(actors)
+        .where(and(eq(actors.kind, "user"), eq(actors.userId, derek.user.id)))
+        .limit(1);
+      if (!derekActor) throw new Error("Expected canonical Derek actor");
+
+      const flockLeaderActorId = crypto.randomUUID();
+      await db.insert(actors).values({
+        id: flockLeaderActorId,
+        kind: "agent",
+        displayName: "flock-leader",
+        billingAccountId: derek.billingAccountId,
+        spawnedByActorId: derekActor.id,
+        parentActorId: derekActor.id,
+      });
+      await adapter.bindActorExternalIdentity({
+        actorId: flockLeaderActorId,
+        provider: "github",
+        externalId,
+        providerLogin: "flock-leader",
+        expectedCurrentActorId: derekActor.id,
+        authorizedByActorId: derekActor.id,
+        evidence: { ceremony: "github-source-claim-v1" },
+        effectiveAt: new Date("2026-10-01T00:00:00.000Z"),
+      });
+      await adapter.insertActorBeneficiaryPolicy({
+        earnedByActorId: flockLeaderActorId,
+        beneficiaryActorId: derekActor.id,
+        policyVersion: "flock-leader-beneficiary.v1",
+        authorizedByActorId: derekActor.id,
+        evidence: { ceremony: "human-ai-beneficiary-claim-v1" },
+        effectiveFrom: new Date("2026-10-01T00:00:00.000Z"),
+      });
+
+      const epoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        periodStart: new Date("2026-10-01T00:00:00.000Z"),
+        periodEnd: new Date("2026-10-08T00:00:00.000Z"),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      const receiptId = `github:pr:cogni-dao/cogni:${epoch.id}`;
+      await adapter.insertIngestionReceipts([
+        makeIngestionReceipt({
+          receiptId,
+          platformUserId: externalId,
+          platformLogin: "flock-leader",
+          artifactUrl: "https://github.com/cogni-dao/cogni/pull/2662",
+          payloadHash: "new-flock-leader-contribution-payload",
+          eventTime: new Date("2026-10-02T12:00:00.000Z"),
+          retrievedAt: new Date("2026-10-02T12:00:01.000Z"),
+        }),
+      ]);
+      await adapter.insertSelectionDoNothing([
+        makeSelectionAuto({ epochId: epoch.id, receiptId }),
+      ]);
+
+      const prepared = await adapter.prepareActorContributionAllocation({
+        nodeId: TEST_NODE_ID,
+        epochId: epoch.id,
+        receiptId,
+      });
+      expect(prepared).toMatchObject({
+        earnedByActorId: flockLeaderActorId,
+        beneficiaryActorId: derekActor.id,
+        beneficiaryPolicyVersion: "flock-leader-beneficiary.v1",
+        contributionCutoff: "2026-10-02T12:00:00.000Z",
+      });
+      const typedData = buildActorContributionAllocationTypedData({
+        allocation: prepared,
+        chainId: 8453,
+        deploymentEnvironment: "test",
+      });
+      const signature = await signer.signTypedData({
+        domain: typedData.domain,
+        types: typedData.types,
+        primaryType: typedData.primaryType,
+        message: typedData.message,
+      });
+      const persisted = await signActorContributionAllocation(
+        {
+          attributionStore: adapter,
+          nodeId: TEST_NODE_ID,
+          chainId: 8453,
+          deploymentEnvironment: "test",
+          now: () => new Date("2026-10-03T00:00:00.000Z"),
+        },
+        {
+          epochId: epoch.id.toString(),
+          receiptId,
+          signerActorId: derekActor.id,
+          signerAddress: signer.address,
+          signature,
+        }
+      );
+      expect(persisted).toMatchObject({
+        allocationRef: prepared.allocationRef,
+        earnedByActorId: flockLeaderActorId,
+        beneficiaryActorId: derekActor.id,
+      });
+
+      const future = await seedTestActor(db);
+      await db.insert(userBindings).values({
+        id: crypto.randomUUID(),
+        userId: future.user.id,
+        provider: "github",
+        externalId: `future-${externalId}`,
+      });
+      const [futureActor] = await db
+        .select({ id: actors.id })
+        .from(actors)
+        .where(and(eq(actors.kind, "user"), eq(actors.userId, future.user.id)))
+        .limit(1);
+      if (!futureActor) throw new Error("Expected future beneficiary actor");
+      await expect(
+        adapter.insertActorBeneficiaryPolicy({
+          earnedByActorId: flockLeaderActorId,
+          beneficiaryActorId: futureActor.id,
+          policyVersion: "flock-leader-beneficiary.backdated-rejected",
+          authorizedByActorId: futureActor.id,
+          evidence: { ceremony: "backdated-reassignment-must-fail" },
+          effectiveFrom: new Date("2026-10-02T11:00:00.000Z"),
+        })
+      ).rejects.toThrow(
+        "Beneficiary policy cannot backdate across a frozen actor allocation"
+      );
+      await adapter.insertActorBeneficiaryPolicy({
+        earnedByActorId: flockLeaderActorId,
+        beneficiaryActorId: futureActor.id,
+        policyVersion: "flock-leader-beneficiary.v2",
+        authorizedByActorId: futureActor.id,
+        evidence: { ceremony: "future-only-reassignment" },
+        effectiveFrom: new Date("2026-10-04T00:00:00.000Z"),
+      });
+      await expect(
+        adapter.insertActorBeneficiaryPolicy({
+          earnedByActorId: flockLeaderActorId,
+          beneficiaryActorId: derekActor.id,
+          policyVersion: "flock-leader-beneficiary.out-of-order-rejected",
+          authorizedByActorId: derekActor.id,
+          evidence: { ceremony: "out-of-order-policy-must-fail" },
+          effectiveFrom: new Date("2026-10-03T00:00:00.000Z"),
+        })
+      ).rejects.toThrow(
+        "Beneficiary policy effectiveFrom must be strictly after the latest policy"
+      );
+      expect(
+        await adapter.getActorContributionAllocation(persisted.allocationRef)
+      ).toMatchObject({ beneficiaryActorId: derekActor.id });
+
+      await adapter.closeIngestion(
+        epoch.id,
+        [],
+        "actor-allocation-cleanup",
+        "weight-sum-v0",
+        "actor-allocation-cleanup"
+      );
+      await adapter.finalizeEpoch(epoch.id, 0n);
+    });
+
+    it("allows exactly one concurrent owner for an external identity", async () => {
+      const steward = actor;
+      await db.insert(userBindings).values({
+        id: crypto.randomUUID(),
+        userId: steward.user.id,
+        provider: "github",
+        externalId: `steward-${steward.user.id}`,
+      });
+      const [stewardActor] = await db
+        .select({ id: actors.id })
+        .from(actors)
+        .where(and(eq(actors.kind, "user"), eq(actors.userId, steward.user.id)))
+        .limit(1);
+      if (!stewardActor) throw new Error("Expected steward actor");
+      const agentIds = [crypto.randomUUID(), crypto.randomUUID()];
+      await db.insert(actors).values(
+        agentIds.map((id) => ({
+          id,
+          kind: "agent" as const,
+          billingAccountId: steward.billingAccountId,
+          spawnedByActorId: stewardActor.id,
+          parentActorId: stewardActor.id,
+        }))
+      );
+      const externalId = `concurrent-${steward.user.id}`;
+      const results = await Promise.allSettled(
+        agentIds.map((actorId) =>
+          adapter.bindActorExternalIdentity({
+            actorId,
+            provider: "github",
+            externalId,
+            authorizedByActorId: stewardActor.id,
+            evidence: { ceremony: "concurrency-proof" },
+            effectiveAt: new Date("2026-10-05T00:00:00.000Z"),
+          })
+        )
+      );
+      expect(
+        results.filter((result) => result.status === "fulfilled")
+      ).toHaveLength(1);
+      expect(
+        results.filter((result) => result.status === "rejected")
+      ).toHaveLength(1);
+      const canonical = await db.execute(
+        sql`select actor_id from actor_bindings where provider = 'github' and external_id = ${externalId} and closed_at is null`
+      );
+      expect(canonical).toHaveLength(1);
     });
   });
 });

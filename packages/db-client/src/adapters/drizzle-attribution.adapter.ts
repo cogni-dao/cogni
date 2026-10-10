@@ -25,6 +25,9 @@
  */
 
 import type {
+  ActorBeneficiaryPolicyRecord,
+  ActorBindingRecord,
+  ActorContributionAllocationRecord,
   AttributionEpoch,
   AttributionEvaluation,
   AttributionPoolComponent,
@@ -33,6 +36,7 @@ import type {
   AttributionStatementLineRecord,
   AttributionStatementSignature,
   AttributionStore,
+  BindActorExternalIdentityParams,
   CloseIngestionWithEvaluationsParams,
   DistributionClaimRecord,
   DistributionLeafRecord,
@@ -41,6 +45,7 @@ import type {
   FinalClaimantAllocationRecord,
   IngestionCursor,
   IngestionReceipt,
+  InsertActorBeneficiaryPolicyParams,
   InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,
@@ -48,6 +53,7 @@ import type {
   InsertReceiptParams,
   InsertSelectionAutoParams,
   InsertSignatureParams,
+  InsertSignedActorContributionAllocationParams,
   InsertStatementParams,
   InsertUserProjectionParams,
   PoolComponentInsertResult,
@@ -68,8 +74,10 @@ import {
   EpochNotInReviewError,
   EpochNotOpenError,
   type EpochStatus,
+  freezeActorContributionAllocation,
 } from "@cogni/attribution-ledger";
 import {
+  actorContributionAllocations,
   epochDistributionLeaves,
   epochDistributionManifests,
   epochEvaluations,
@@ -85,11 +93,20 @@ import {
   ingestionCursors,
   ingestionReceipts,
 } from "@cogni/db-schema/attribution";
-import { userBindings } from "@cogni/db-schema/identity";
+import {
+  actorBeneficiaryPolicies,
+  actorBindingEvents,
+  actorBindings,
+  actors,
+  userBindings,
+} from "@cogni/db-schema/identity";
 import { userProfiles } from "@cogni/db-schema/profile";
+import { users } from "@cogni/db-schema/refs";
 import {
   and,
+  desc,
   eq,
+  gt,
   gte,
   inArray,
   isNotNull,
@@ -392,6 +409,63 @@ function toEvaluation(
     payloadHash: row.payloadHash,
     payloadJson: row.payloadJson,
     payloadRef: row.payloadRef,
+    createdAt: row.createdAt,
+  };
+}
+
+function toActorBinding(
+  row: typeof actorBindings.$inferSelect
+): ActorBindingRecord {
+  return {
+    id: row.id,
+    actorId: row.actorId,
+    provider: row.provider,
+    externalId: row.externalId,
+    providerLogin: row.providerLogin,
+    evidenceEventId: row.evidenceEventId,
+    createdAt: row.createdAt,
+    closedAt: row.closedAt,
+  };
+}
+
+function toActorBeneficiaryPolicy(
+  row: typeof actorBeneficiaryPolicies.$inferSelect
+): ActorBeneficiaryPolicyRecord {
+  return {
+    id: row.id,
+    earnedByActorId: row.earnedByActorId,
+    beneficiaryActorId: row.beneficiaryActorId,
+    policyVersion: row.policyVersion,
+    authorizedByActorId: row.authorizedByActorId,
+    evidence: row.evidence,
+    effectiveFrom: row.effectiveFrom,
+    effectiveTo: row.effectiveTo,
+    createdAt: row.createdAt,
+  };
+}
+
+function toActorContributionAllocation(
+  row: typeof actorContributionAllocations.$inferSelect
+): ActorContributionAllocationRecord {
+  return {
+    allocationRef: row.id,
+    contractVersion:
+      row.contractVersion as ActorContributionAllocationRecord["contractVersion"],
+    nodeId: row.nodeId,
+    scopeId: row.scopeId,
+    epochId: row.epochId.toString(),
+    receiptId: row.receiptId,
+    earnedByActorId: row.earnedByActorId,
+    beneficiaryActorId: row.beneficiaryActorId,
+    beneficiaryPolicyId: row.beneficiaryPolicyId,
+    beneficiaryPolicyVersion: row.beneficiaryPolicyVersion,
+    contributionCutoff: row.contributionCutoff.toISOString(),
+    sourceEvidence: row.sourceEvidence,
+    sourceEvidenceHash: row.sourceEvidenceHash,
+    signerActorId: row.signerActorId,
+    signerWallet: row.signerWallet,
+    signature: row.signature,
+    signedAt: row.signedAt,
     createdAt: row.createdAt,
   };
 }
@@ -1881,6 +1955,454 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       .where(eq(epochReviewSubjectOverrides.epochId, epochId))
       .orderBy(epochReviewSubjectOverrides.subjectRef);
     return rows.map(toReviewSubjectOverride);
+  }
+
+  // ── Actor identity + contribution allocation v1 ─────────────
+
+  async bindActorExternalIdentity(
+    params: BindActorExternalIdentityParams
+  ): Promise<ActorBindingRecord> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`actor-binding:${params.provider}:${params.externalId}`}))`
+      );
+      const [targetRows, authorizerRows] = await Promise.all([
+        tx
+          .select({ id: actors.id, kind: actors.kind, userId: actors.userId })
+          .from(actors)
+          .where(
+            and(eq(actors.id, params.actorId), eq(actors.status, "active"))
+          )
+          .limit(1),
+        tx
+          .select({ id: actors.id })
+          .from(actors)
+          .where(
+            and(
+              eq(actors.id, params.authorizedByActorId),
+              eq(actors.status, "active")
+            )
+          )
+          .limit(1),
+      ]);
+      const target = targetRows[0];
+      const authorizer = authorizerRows[0];
+      if (!target || !authorizer) {
+        throw new Error("Binding target and authorizer must be active actors");
+      }
+
+      const [current] = await tx
+        .select()
+        .from(actorBindings)
+        .where(
+          and(
+            eq(actorBindings.provider, params.provider),
+            eq(actorBindings.externalId, params.externalId),
+            isNull(actorBindings.closedAt)
+          )
+        )
+        .limit(1)
+        .for("update");
+
+      if (current?.actorId === params.actorId) return toActorBinding(current);
+      if (current) {
+        if (
+          params.expectedCurrentActorId !== current.actorId ||
+          params.authorizedByActorId !== current.actorId
+        ) {
+          throw new Error(
+            "External identity transfer requires the explicit current owner"
+          );
+        }
+        if (params.effectiveAt < current.createdAt) {
+          throw new Error("External identity transfer cannot be backdated");
+        }
+        await tx.insert(actorBindingEvents).values({
+          id: crypto.randomUUID(),
+          actorId: current.actorId,
+          previousActorId: current.actorId,
+          provider: current.provider,
+          externalId: current.externalId,
+          providerLogin: current.providerLogin,
+          eventType: "transferred_out",
+          authorizedByActorId: params.authorizedByActorId,
+          evidence: params.evidence,
+          effectiveAt: params.effectiveAt,
+        });
+        await tx
+          .update(actorBindings)
+          .set({ closedAt: params.effectiveAt })
+          .where(eq(actorBindings.id, current.id));
+        await tx
+          .delete(userBindings)
+          .where(
+            and(
+              eq(userBindings.provider, current.provider),
+              eq(userBindings.externalId, current.externalId)
+            )
+          );
+      }
+
+      const eventId = crypto.randomUUID();
+      await tx.insert(actorBindingEvents).values({
+        id: eventId,
+        actorId: params.actorId,
+        previousActorId: current?.actorId ?? null,
+        provider: params.provider,
+        externalId: params.externalId,
+        providerLogin: params.providerLogin ?? null,
+        eventType: current ? "transferred_in" : "bound",
+        authorizedByActorId: params.authorizedByActorId,
+        evidence: params.evidence,
+        effectiveAt: params.effectiveAt,
+      });
+      const [binding] = await tx
+        .insert(actorBindings)
+        .values({
+          id: crypto.randomUUID(),
+          actorId: params.actorId,
+          provider: params.provider,
+          externalId: params.externalId,
+          providerLogin: params.providerLogin ?? null,
+          evidenceEventId: eventId,
+          createdAt: params.effectiveAt,
+        })
+        .returning();
+      if (!binding) throw new Error("Actor binding insert returned no row");
+
+      if (target.kind === "user" && target.userId) {
+        await tx.insert(userBindings).values({
+          id: crypto.randomUUID(),
+          userId: target.userId,
+          provider: params.provider,
+          externalId: params.externalId,
+          providerLogin: params.providerLogin ?? null,
+          createdAt: params.effectiveAt,
+        });
+      }
+      return toActorBinding(binding);
+    });
+  }
+
+  async insertActorBeneficiaryPolicy(
+    params: InsertActorBeneficiaryPolicyParams
+  ): Promise<ActorBeneficiaryPolicyRecord> {
+    if (params.authorizedByActorId !== params.beneficiaryActorId) {
+      throw new Error(
+        "P0 beneficiary claim must be explicitly authorized by the beneficiary actor"
+      );
+    }
+    if (Object.keys(params.evidence).length === 0) {
+      throw new Error("Beneficiary policy requires ceremony evidence");
+    }
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${params.earnedByActorId}`}))`
+      );
+      const [earnerRows, beneficiaryRows] = await Promise.all([
+        tx
+          .select({ id: actors.id, kind: actors.kind })
+          .from(actors)
+          .where(
+            and(
+              eq(actors.id, params.earnedByActorId),
+              eq(actors.status, "active")
+            )
+          )
+          .limit(1),
+        tx
+          .select({ id: actors.id, kind: actors.kind })
+          .from(actors)
+          .where(
+            and(
+              eq(actors.id, params.beneficiaryActorId),
+              eq(actors.status, "active")
+            )
+          )
+          .limit(1),
+      ]);
+      const earner = earnerRows[0];
+      const beneficiary = beneficiaryRows[0];
+      if (earner?.kind !== "agent" || beneficiary?.kind !== "user") {
+        throw new Error(
+          "P0 beneficiary claim requires an active agent earner and human beneficiary"
+        );
+      }
+      const [latestPolicyRows, latestAllocationRows] = await Promise.all([
+        tx
+          .select({ effectiveFrom: actorBeneficiaryPolicies.effectiveFrom })
+          .from(actorBeneficiaryPolicies)
+          .where(
+            eq(actorBeneficiaryPolicies.earnedByActorId, params.earnedByActorId)
+          )
+          .orderBy(desc(actorBeneficiaryPolicies.effectiveFrom))
+          .limit(1),
+        tx
+          .select({
+            contributionCutoff: actorContributionAllocations.contributionCutoff,
+          })
+          .from(actorContributionAllocations)
+          .where(
+            eq(
+              actorContributionAllocations.earnedByActorId,
+              params.earnedByActorId
+            )
+          )
+          .orderBy(desc(actorContributionAllocations.contributionCutoff))
+          .limit(1),
+      ]);
+      const latestPolicy = latestPolicyRows[0];
+      if (
+        latestPolicy &&
+        params.effectiveFrom.getTime() <= latestPolicy.effectiveFrom.getTime()
+      ) {
+        throw new Error(
+          "Beneficiary policy effectiveFrom must be strictly after the latest policy"
+        );
+      }
+      const latestAllocation = latestAllocationRows[0];
+      if (
+        latestAllocation &&
+        params.effectiveFrom.getTime() <=
+          latestAllocation.contributionCutoff.getTime()
+      ) {
+        throw new Error(
+          "Beneficiary policy cannot backdate across a frozen actor allocation"
+        );
+      }
+      const [row] = await tx
+        .insert(actorBeneficiaryPolicies)
+        .values({
+          id: crypto.randomUUID(),
+          earnedByActorId: params.earnedByActorId,
+          beneficiaryActorId: params.beneficiaryActorId,
+          policyVersion: params.policyVersion,
+          authorizedByActorId: params.authorizedByActorId,
+          evidence: params.evidence,
+          effectiveFrom: params.effectiveFrom,
+        })
+        .returning();
+      if (!row) throw new Error("Beneficiary policy insert returned no row");
+      return toActorBeneficiaryPolicy(row);
+    });
+  }
+
+  async prepareActorContributionAllocation(params: {
+    readonly nodeId: string;
+    readonly epochId: bigint;
+    readonly receiptId: string;
+  }) {
+    const epoch = await this.resolveEpochScoped(params.epochId);
+    if (epoch.nodeId !== params.nodeId) {
+      throw new EpochNotFoundError(params.epochId.toString());
+    }
+    const [selected] = await this.db
+      .select({ receipt: ingestionReceipts })
+      .from(epochSelection)
+      .innerJoin(
+        ingestionReceipts,
+        and(
+          eq(ingestionReceipts.nodeId, epochSelection.nodeId),
+          eq(ingestionReceipts.receiptId, epochSelection.receiptId)
+        )
+      )
+      .where(
+        and(
+          eq(epochSelection.nodeId, params.nodeId),
+          eq(epochSelection.epochId, params.epochId),
+          eq(epochSelection.receiptId, params.receiptId),
+          eq(epochSelection.included, true)
+        )
+      )
+      .limit(1);
+    if (!selected) {
+      throw new Error("Actor allocation requires an included epoch receipt");
+    }
+    const receipt = selected.receipt;
+    const [binding] = await this.db
+      .select()
+      .from(actorBindings)
+      .where(
+        and(
+          eq(actorBindings.provider, receipt.source),
+          eq(actorBindings.externalId, receipt.platformUserId),
+          lte(actorBindings.createdAt, receipt.eventTime),
+          or(
+            isNull(actorBindings.closedAt),
+            gt(actorBindings.closedAt, receipt.eventTime)
+          )
+        )
+      )
+      .orderBy(desc(actorBindings.createdAt))
+      .limit(1);
+    if (!binding) {
+      throw new Error(
+        "Receipt source has no actor owner at contribution cutoff"
+      );
+    }
+    const [policy] = await this.db
+      .select()
+      .from(actorBeneficiaryPolicies)
+      .where(
+        and(
+          eq(actorBeneficiaryPolicies.earnedByActorId, binding.actorId),
+          lte(actorBeneficiaryPolicies.effectiveFrom, receipt.eventTime),
+          or(
+            isNull(actorBeneficiaryPolicies.effectiveTo),
+            gt(actorBeneficiaryPolicies.effectiveTo, receipt.eventTime)
+          )
+        )
+      )
+      .orderBy(desc(actorBeneficiaryPolicies.effectiveFrom))
+      .limit(1);
+    if (!policy) {
+      throw new Error(
+        "Agent contribution has no explicit beneficiary policy at cutoff"
+      );
+    }
+    return freezeActorContributionAllocation({
+      nodeId: params.nodeId,
+      scopeId: epoch.scopeId,
+      epochId: params.epochId.toString(),
+      receiptId: receipt.receiptId,
+      earnedByActorId: binding.actorId,
+      beneficiaryActorId: policy.beneficiaryActorId,
+      beneficiaryPolicyId: policy.id,
+      beneficiaryPolicyVersion: policy.policyVersion,
+      contributionCutoff: receipt.eventTime.toISOString(),
+      sourceEvidence: {
+        provider: receipt.source,
+        immutableExternalId: receipt.platformUserId,
+        providerLogin: receipt.platformLogin,
+        payloadHash: receipt.payloadHash,
+        artifactUrl: receipt.artifactUrl,
+        bindingId: binding.id,
+        bindingEvidenceEventId: binding.evidenceEventId,
+      },
+    });
+  }
+
+  async actorOwnsSigningWallet(params: {
+    readonly actorId: string;
+    readonly wallet: string;
+  }): Promise<boolean> {
+    const [row] = await this.db
+      .select({ walletAddress: users.walletAddress })
+      .from(actors)
+      .innerJoin(users, eq(actors.userId, users.id))
+      .where(
+        and(
+          eq(actors.id, params.actorId),
+          eq(actors.kind, "user"),
+          eq(actors.status, "active")
+        )
+      )
+      .limit(1);
+    return row?.walletAddress?.toLowerCase() === params.wallet.toLowerCase();
+  }
+
+  async insertSignedActorContributionAllocation(
+    params: InsertSignedActorContributionAllocationParams
+  ): Promise<ActorContributionAllocationRecord> {
+    const initial = await this.prepareActorContributionAllocation({
+      nodeId: params.allocation.nodeId,
+      epochId: BigInt(params.allocation.epochId),
+      receiptId: params.allocation.receiptId,
+    });
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${initial.earnedByActorId}`}))`
+      );
+      const prepared = await this.prepareActorContributionAllocation({
+        nodeId: params.allocation.nodeId,
+        epochId: BigInt(params.allocation.epochId),
+        receiptId: params.allocation.receiptId,
+      });
+      if (prepared.allocationRef !== params.allocation.allocationRef) {
+        throw new Error("Actor allocation facts diverged before persistence");
+      }
+      const [policy] = await tx
+        .select({
+          authorizedByActorId: actorBeneficiaryPolicies.authorizedByActorId,
+        })
+        .from(actorBeneficiaryPolicies)
+        .where(eq(actorBeneficiaryPolicies.id, prepared.beneficiaryPolicyId))
+        .limit(1);
+      if (policy?.authorizedByActorId !== params.signerActorId) {
+        throw new Error(
+          "Allocation signer is not the beneficiary policy authorizer"
+        );
+      }
+      if (
+        !(await this.actorOwnsSigningWallet({
+          actorId: params.signerActorId,
+          wallet: params.signerWallet,
+        }))
+      ) {
+        throw new Error(
+          "Allocation signer wallet is not owned by signer actor"
+        );
+      }
+
+      const [inserted] = await tx
+        .insert(actorContributionAllocations)
+        .values({
+          id: prepared.allocationRef,
+          nodeId: prepared.nodeId,
+          scopeId: prepared.scopeId,
+          epochId: BigInt(prepared.epochId),
+          receiptId: prepared.receiptId,
+          contractVersion: prepared.contractVersion,
+          earnedByActorId: prepared.earnedByActorId,
+          beneficiaryActorId: prepared.beneficiaryActorId,
+          beneficiaryPolicyId: prepared.beneficiaryPolicyId,
+          beneficiaryPolicyVersion: prepared.beneficiaryPolicyVersion,
+          contributionCutoff: new Date(prepared.contributionCutoff),
+          sourceEvidence: { ...prepared.sourceEvidence },
+          sourceEvidenceHash: prepared.sourceEvidenceHash,
+          signerActorId: params.signerActorId,
+          signerWallet: params.signerWallet.toLowerCase(),
+          signature: params.signature,
+          signedAt: params.signedAt,
+        })
+        .onConflictDoNothing({ target: actorContributionAllocations.id })
+        .returning();
+      if (inserted) return toActorContributionAllocation(inserted);
+      const [existing] = await tx
+        .select()
+        .from(actorContributionAllocations)
+        .where(
+          and(
+            eq(actorContributionAllocations.id, prepared.allocationRef),
+            eq(actorContributionAllocations.scopeId, this.scopeId)
+          )
+        )
+        .limit(1);
+      if (
+        !existing ||
+        existing.signature !== params.signature ||
+        existing.signerWallet !== params.signerWallet.toLowerCase()
+      ) {
+        throw new Error("Actor allocation idempotency conflict");
+      }
+      return toActorContributionAllocation(existing);
+    });
+  }
+
+  async getActorContributionAllocation(
+    allocationRef: string
+  ): Promise<ActorContributionAllocationRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(actorContributionAllocations)
+      .where(
+        and(
+          eq(actorContributionAllocations.id, allocationRef),
+          eq(actorContributionAllocations.scopeId, this.scopeId)
+        )
+      )
+      .limit(1);
+    return row ? toActorContributionAllocation(row) : null;
   }
 
   // ── Identity resolution ───────────────────────────────────────
