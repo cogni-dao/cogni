@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@scripts/ci/fetch-flight-probe-ring`
+ * Purpose: Exchange GitHub OIDC for one catalog node's bounded flight-prober ring.
+ * Scope: Reads the control operator projection endpoint and emits only the validated ring on stdout.
+ * Invariants: OIDC is target-lane-audienced; response is no-store and bounded; errors expose no values.
+ * Side-effects: Network IO to GitHub OIDC and the fixed control operator endpoint.
+ * Links: .github/workflows/flight-probe-project.yml, scripts/ci/project-flight-probe-ring.sh
+ * @internal
+ */
 
 const audience = "cogni-flight-probe-projection";
 const controlUrl = process.env.FLIGHT_PROBE_CONTROL_URL;
