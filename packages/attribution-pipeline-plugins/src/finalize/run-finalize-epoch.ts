@@ -27,8 +27,8 @@ import {
 } from "@cogni/aragon-osx";
 import {
   type ActorBeneficiaryWalletResolver,
-  applyReceiptWeightOverrides,
   type AttributionStore,
+  applyReceiptWeightOverrides,
   buildEIP712TypedData,
   buildReceiptWeightOverrideSnapshots,
   claimantKey,

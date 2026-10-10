@@ -1,12 +1,22 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+/**
+ * Module: `@cogni/attribution-pipeline-plugins/tests/actor-cumulative-fold`
+ * Purpose: Prove actor beneficiary routing and exactly-once immutable liability carry-forward behavior.
+ * Scope: Unit tests for the actor cumulative fold with in-memory resolver doubles; no database or network access.
+ * Invariants: PINNED_WALLET_CREDITED, LIABILITY_AMOUNT_NOT_REPRICED, NON_SORTABLE_EPOCH_IDS_SAFE.
+ * Side-effects: none
+ * Links: packages/attribution-pipeline-plugins/src/finalize/actor-cumulative-fold.ts
+ * @internal
+ */
+
+import type { ClaimantWalletResolver } from "@cogni/aragon-osx";
 import type {
   ActorBeneficiaryWalletResolver,
   ActorContributionAllocationRecord,
   PendingActorDistributionLiability,
 } from "@cogni/attribution-ledger";
-import type { ClaimantWalletResolver } from "@cogni/aragon-osx";
 import { describe, expect, it } from "vitest";
 
 import { buildActorCumulativeFold } from "../src/finalize/actor-cumulative-fold";
@@ -155,8 +165,10 @@ describe("actor cumulative fold", () => {
     expect(original.liabilities).toHaveLength(1);
     expect(original.liabilities[0]?.tokenAmount).toBe(10n * 10n ** 18n);
 
+    const frozenLiability = original.liabilities[0];
+    if (!frozenLiability) throw new Error("Expected frozen actor liability");
     const pending: PendingActorDistributionLiability = {
-      ...original.liabilities[0]!,
+      ...frozenLiability,
       id: "liability:not-sortable-a",
       createdAt: new Date("2026-10-03T00:00:00.000Z"),
       allocation: actorAllocation,

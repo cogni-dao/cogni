@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Read-only actor-beneficiary wallet resolution contract for distribution folds. */
+/**
+ * Module: `@cogni/attribution-ledger/actor-wallet-resolution`
+ * Purpose: Define the read-only actor-beneficiary wallet resolution contract and its frozen evidence.
+ * Scope: Domain types and port only; does not query identity state, infer ownership, or perform I/O.
+ * Invariants: BENEFICIARY_FROM_FROZEN_ALLOCATION, WALLET_EVIDENCE_PINNED, UNRESOLVED_IS_EXPLICIT.
+ * Side-effects: none
+ * Links: docs/spec/identity-model.md, docs/spec/decentralized-user-identity.md
+ * @public
+ */
 
 import type { ActorContributionAllocationRecord } from "./store";
 

@@ -16,15 +16,15 @@
  */
 
 import type {
-  ActorBeneficiaryWalletResolution,
-  ActorBeneficiaryWalletResolver,
-  ActorContributionAllocationRecord,
-} from "@cogni/attribution-ledger";
-import type {
   ClaimantWalletResolution,
   ClaimantWalletResolver,
   HexAddress,
 } from "@cogni/aragon-osx";
+import type {
+  ActorBeneficiaryWalletResolution,
+  ActorBeneficiaryWalletResolver,
+  ActorContributionAllocationRecord,
+} from "@cogni/attribution-ledger";
 import {
   actorBindingEvents,
   actorBindings,
