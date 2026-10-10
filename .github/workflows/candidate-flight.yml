@@ -1030,15 +1030,38 @@ jobs:
           path: assert-marker-out/assert-ok-${{ matrix.node }}.txt
           retention-days: 1
 
+  flight-probe-project:
+    needs: decide
+    if: needs.decide.outputs.has_deployment_node_targets == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.deployment_node_targets_json) }}
+    uses: ./.github/workflows/flight-probe-project.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      lane: candidate-a
+      node: ${{ matrix.node }}
+      operation: materialize
+
   node-substrate:
     needs:
-      [decide, reconcile-appset, reconcile-dns, prepare-substrate-deploy-branch]
+      [
+        decide,
+        reconcile-appset,
+        reconcile-dns,
+        prepare-substrate-deploy-branch,
+        flight-probe-project,
+      ]
     if: |
       always() &&
       needs.decide.outputs.has_substrate_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success' &&
-      needs.prepare-substrate-deploy-branch.result == 'success'
+      needs.prepare-substrate-deploy-branch.result == 'success' &&
+      needs.flight-probe-project.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -1166,7 +1189,14 @@ jobs:
           labels: workflow=candidate-flight kind=target_substrate_reconcile slot=candidate-a
 
   flight:
-    needs: [decide, reconcile-appset, node-substrate, assert-substrate]
+    needs:
+      [
+        decide,
+        reconcile-appset,
+        node-substrate,
+        assert-substrate,
+        flight-probe-project,
+      ]
     # Per-cell isolation (Axiom 18): this job runs whenever there are flight
     # targets. It does NOT gate on the matrix-aggregate node-substrate /
     # assert-substrate result — that rollup goes failure if ANY node's substrate
@@ -1176,7 +1206,8 @@ jobs:
     if: |
       always() &&
       needs.decide.outputs.has_flight_targets == 'true' &&
-      needs.reconcile-appset.result == 'success'
+      needs.reconcile-appset.result == 'success' &&
+      (needs.flight-probe-project.result == 'success' || needs.flight-probe-project.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:

@@ -152,6 +152,10 @@ export {
   type LiveNodeRegistryDeps,
 } from "./node-registry/live-node-registry.adapter";
 export {
+  NETWORK_NODES,
+  type NetworkNode,
+} from "./node-registry/network-nodes.data";
+export {
   type LivenessRollup,
   type NodeLiveness,
   type ProdLivenessConfig,
@@ -181,6 +185,10 @@ export {
   type GithubReviewAdapter,
 } from "./review/github-review.adapter";
 // Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
+export {
+  OpenBaoFlightProbeProjectionAdapter,
+  type OpenBaoFlightProbeProjectionDeps,
+} from "./secrets/openbao-flight-probe-projection.adapter";
 export {
   OpenBaoSecretsAdapter,
   type OpenBaoSecretsAdapterDeps,
