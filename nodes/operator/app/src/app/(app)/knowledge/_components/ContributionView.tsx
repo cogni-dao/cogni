@@ -31,7 +31,10 @@ import { RelativeTime } from "./RelativeTime";
 
 export function ContributionView({ id }: { readonly id: string }) {
   const queryClient = useQueryClient();
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{
+    action: "merge" | "reject";
+    reason: string;
+  } | null>(null);
 
   const query = useQuery({
     queryKey: ["knowledge", "contribution", id],
@@ -50,16 +53,24 @@ export function ContributionView({ id }: { readonly id: string }) {
   const mergeMutation = useMutation({
     mutationFn: (contributionId: string) => mergeContribution(contributionId),
     onMutate: () => setActionError(null),
-    onSuccess: invalidateContribution,
-    onError: (error) => setActionError(errorMessage(error)),
+    onSuccess: () => {
+      setActionError(null);
+      invalidateContribution();
+    },
+    onError: (error) =>
+      setActionError({ action: "merge", reason: errorMessage(error) }),
   });
 
   const closeMutation = useMutation({
     mutationFn: (vars: { contributionId: string; reason: string }) =>
       closeContribution(vars.contributionId, vars.reason),
     onMutate: () => setActionError(null),
-    onSuccess: invalidateContribution,
-    onError: (error) => setActionError(errorMessage(error)),
+    onSuccess: () => {
+      setActionError(null);
+      invalidateContribution();
+    },
+    onError: (error) =>
+      setActionError({ action: "reject", reason: errorMessage(error) }),
   });
 
   return (
@@ -134,10 +145,17 @@ export function ContributionView({ id }: { readonly id: string }) {
 
           {actionError && (
             <Alert variant="destructive">
-              <AlertTitle>Couldn't merge</AlertTitle>
+              <AlertTitle>
+                {actionError.action === "merge"
+                  ? "Couldn't merge"
+                  : "Couldn't reject"}
+              </AlertTitle>
               <AlertDescription className="flex flex-col items-start gap-2">
-                <span>{actionError}</span>
-                <CopyForAiButton item={query.data} reason={actionError} />
+                <span>{actionError.reason}</span>
+                <CopyForAiButton
+                  item={query.data}
+                  reason={actionError.reason}
+                />
               </AlertDescription>
             </Alert>
           )}
