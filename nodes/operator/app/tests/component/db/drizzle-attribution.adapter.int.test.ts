@@ -18,7 +18,10 @@ import {
   EpochNotOpenError,
 } from "@cogni/attribution-ledger";
 import { signActorContributionAllocation } from "@cogni/attribution-pipeline-plugins";
-import { DrizzleAttributionAdapter } from "@cogni/db-client";
+import {
+  DrizzleAttributionAdapter,
+  DrizzleClaimantWalletResolver,
+} from "@cogni/db-client";
 import {
   epochWindow,
   makeEvaluation,
@@ -2027,6 +2030,45 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         earnedByActorId: flockLeaderActorId,
         beneficiaryActorId: derekActor.id,
       });
+      const walletResolution = await new DrizzleClaimantWalletResolver(
+        db
+      ).resolveBeneficiaryWallets([persisted]);
+      expect(walletResolution).toEqual([
+        expect.objectContaining({
+          allocationRef: persisted.allocationRef,
+          beneficiaryActorId: derekActor.id,
+          wallet: signer.address,
+          bindingEvidence: expect.objectContaining({
+            actorId: derekActor.id,
+            provider: "wallet",
+          }),
+        }),
+      ]);
+
+      const frozenLiability = {
+        allocationRef: persisted.allocationRef,
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        sourceEpochId: epoch.id,
+        earnedByActorId: flockLeaderActorId,
+        beneficiaryActorId: derekActor.id,
+        contributionCutoff: new Date(persisted.contributionCutoff),
+        tokenAmount: 17n,
+        sourceEvidenceHash: persisted.sourceEvidenceHash,
+        signerActorId: persisted.signerActorId,
+        resolverFailure: {
+          code: "beneficiary_wallet_unbound" as const,
+          beneficiaryActorId: derekActor.id,
+          observedBindingIds: [],
+        },
+      };
+      await adapter.insertActorDistributionLiabilities([frozenLiability]);
+      await expect(
+        adapter.insertActorDistributionLiabilities([frozenLiability])
+      ).resolves.toBeUndefined();
+      expect(
+        await adapter.listUnfoldedActorContributionAllocationsForEpoch(epoch.id)
+      ).toEqual([]);
 
       const future = await seedTestActor(db);
       await db.insert(userBindings).values({
@@ -2085,6 +2127,69 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         "actor-allocation-cleanup"
       );
       await adapter.finalizeEpoch(epoch.id, 0n);
+
+      const nextEpoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        periodStart: new Date("2026-10-08T00:00:00.000Z"),
+        periodEnd: new Date("2026-10-15T00:00:00.000Z"),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      const pending =
+        await adapter.listPendingActorDistributionLiabilities(nextEpoch.id);
+      expect(pending).toEqual([
+        expect.objectContaining({
+          allocationRef: persisted.allocationRef,
+          sourceEpochId: epoch.id,
+          tokenAmount: 17n,
+        }),
+      ]);
+      const liability = pending[0];
+      if (!liability) throw new Error("Expected pending actor liability");
+      const manifestWithSettlement = {
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        epochId: nextEpoch.id,
+        distributionId: `epoch-${nextEpoch.id}`,
+        statementHash: "0xactor-liability-statement",
+        merkleRoot: "0xactor-liability-root",
+        chainId: 8453,
+        tokenAddress: "0x2222222222222222222222222222222222222222",
+        distributionAmount: 17n,
+        totalAllocated: 17n,
+        leaves: [],
+        actorSettlements: [
+          {
+            allocationRef: persisted.allocationRef,
+            liabilityId: liability.id,
+            nodeId: TEST_NODE_ID,
+            scopeId: TEST_SCOPE_ID,
+            sourceEpochId: epoch.id,
+            foldEpochId: nextEpoch.id,
+            earnedByActorId: flockLeaderActorId,
+            beneficiaryActorId: derekActor.id,
+            tokenAmount: 17n,
+            claimantWallet: signer.address,
+            resolverEvidence: walletResolution[0]!.bindingEvidence!,
+          },
+        ],
+      };
+      await adapter.upsertDistributionManifest(manifestWithSettlement);
+      expect(
+        await adapter.listPendingActorDistributionLiabilities(nextEpoch.id)
+      ).toEqual([]);
+      await expect(
+        adapter.upsertDistributionManifest(manifestWithSettlement)
+      ).rejects.toThrow();
+
+      await adapter.closeIngestion(
+        nextEpoch.id,
+        [],
+        "actor-settlement-cleanup",
+        "weight-sum-v0",
+        "actor-settlement-cleanup"
+      );
+      await adapter.finalizeEpoch(nextEpoch.id, 0n);
     });
 
     it("allows exactly one concurrent owner for an external identity", async () => {
