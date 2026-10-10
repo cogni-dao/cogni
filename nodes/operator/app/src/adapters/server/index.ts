@@ -152,6 +152,10 @@ export {
   type LiveNodeRegistryDeps,
 } from "./node-registry/live-node-registry.adapter";
 export {
+  NETWORK_NODES,
+  type NetworkNode,
+} from "./node-registry/network-nodes.data";
+export {
   type LivenessRollup,
   type NodeLiveness,
   type ProdLivenessConfig,

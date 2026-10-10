@@ -6,8 +6,10 @@
  * The delivery layer sees a narrow capability and never imports infrastructure.
  */
 
-import { OpenBaoFlightProbeProjectionAdapter } from "@/adapters/server";
-import { NETWORK_NODES } from "@/adapters/server/node-registry/network-nodes.data";
+import {
+  NETWORK_NODES,
+  OpenBaoFlightProbeProjectionAdapter,
+} from "@/adapters/server";
 import { serverEnv } from "@/shared/env";
 
 export interface FlightProbeProjectionCapability {
