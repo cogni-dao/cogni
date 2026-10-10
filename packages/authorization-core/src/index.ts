@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni/authorization-core`
- * Purpose: Shared AuthorizationPort contract, OpenFGA mapping helpers, OpenFGA adapter, and deterministic fake.
- * Scope: Pure package boundary for node-template-based RBAC. Does not load runtime env or select node adapters.
+ * Purpose: Shared AuthorizationPort contract, OpenFGA mapping helpers, and deterministic fake.
+ * Scope: Portable package boundary for node-template-based RBAC. Does not expose a raw OpenFGA client.
  * Invariants: OpenFGA is the sole permission/delegation source; deny by default; unavailable fails closed with a distinct code.
  * Side-effects: none
  * Links: docs/spec/rbac.md, docs/spec/access-control-charter.md
@@ -231,13 +231,4 @@ export function relationForAuthzAction(action: AuthzAction): string {
   }
 }
 
-export {
-  OpenFgaAuthorizationAdapter,
-  type OpenFgaAuthorizationAdapterConfig,
-  type OpenFgaCheckClient,
-  type OpenFgaCheckOptions,
-  type OpenFgaCheckRequest,
-  type OpenFgaStoreClient,
-  type OpenFgaWriteClient,
-} from "./adapters/openfga-authorization.adapter";
 export { FakeAuthorizationAdapter } from "./test/fake-authorization.adapter";
