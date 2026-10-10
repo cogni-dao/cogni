@@ -47,13 +47,27 @@ function checksFor(params: AuthzCheckParams): readonly AuthzSubcheck[] {
 
   if (!params.subjectId) return [permission];
 
+  const subjectDelegation = {
+    name: "delegation" as const,
+    user: params.actorId,
+    relation: relationForAuthzAction("user.act_as"),
+    object: authzUserResource(params.subjectId),
+    decision: "deny" as const,
+    code: "authz_denied" as const,
+  };
+
+  if (params.action !== "billing_account.read") {
+    return [permission, subjectDelegation];
+  }
+
   return [
     permission,
+    subjectDelegation,
     {
       name: "delegation",
       user: params.actorId,
-      relation: relationForAuthzAction("user.act_as"),
-      object: authzUserResource(params.subjectId),
+      relation: relationForAuthzAction("billing_account.act_as"),
+      object: params.resource,
       decision: "deny",
       code: "authz_denied",
     },
@@ -119,5 +133,9 @@ export class FakeAuthorizationAdapter implements AuthorizationPort {
 }
 
 function relationKey(tuple: AuthzRelationTuple): string {
-  return JSON.stringify(tuple);
+  return JSON.stringify({
+    user: tuple.user,
+    relation: tuple.relation,
+    object: tuple.object,
+  });
 }

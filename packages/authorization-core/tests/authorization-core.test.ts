@@ -14,14 +14,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
   type AuthzCheckParams,
+  type AuthzRelationTuple,
+  authzBillingAccountResource,
   authzConnectionResource,
+  authzGrantExpiresAt,
   authzGraphResource,
+  authzNodeAgentPrincipal,
   authzNodeResource,
+  authzNodeUserPrincipal,
   authzToolResource,
   FakeAuthorizationAdapter,
   OpenFgaAuthorizationAdapter,
   type OpenFgaCheckClient,
+  type OpenFgaCheckOptions,
   type OpenFgaCheckRequest,
   type OpenFgaStoreClient,
   type OpenFgaWriteClient,
@@ -41,6 +48,9 @@ describe("relationForAuthzAction", () => {
     expect(relationForAuthzAction("connection.use")).toBe("can_use");
     expect(relationForAuthzAction("graph.invoke")).toBe("can_invoke");
     expect(relationForAuthzAction("user.act_as")).toBe("delegates");
+    expect(relationForAuthzAction("billing_account.read")).toBe("can_read");
+    expect(relationForAuthzAction("billing_account.grant")).toBe("can_grant");
+    expect(relationForAuthzAction("billing_account.act_as")).toBe("can_act_as");
     expect(relationForAuthzAction("node.flight")).toBe("can_flight");
     expect(relationForAuthzAction("node.manage_secrets")).toBe(
       "can_manage_secrets"
@@ -52,6 +62,38 @@ describe("relationForAuthzAction", () => {
     expect(authzConnectionResource("c")).toBe("connection:c");
     expect(authzGraphResource("g")).toBe("graph:g");
     expect(authzNodeResource("n")).toBe("node:n");
+    expect(authzNodeUserPrincipal("node-1", "alice")).toBe("user:node-1/alice");
+    expect(authzNodeAgentPrincipal("node-1", "agent-1")).toBe(
+      "agent:node-1/agent-1"
+    );
+    expect(authzNodeAgentPrincipal("node-1", "agent:node-1/agent-1")).toBe(
+      "agent:node-1/agent-1"
+    );
+    expect(authzBillingAccountResource("node-1", "b")).toBe(
+      "billing_account:node-1/b"
+    );
+    expect(
+      authzBillingAccountResource("node-1", "billing_account:node-1/b")
+    ).toBe("billing_account:node-1/b");
+    expect(authzBillingAccountResource("node-2", "b")).not.toBe(
+      authzBillingAccountResource("node-1", "b")
+    );
+    expect(() =>
+      authzNodeAgentPrincipal("node-1", "agent:node-2/agent-1")
+    ).toThrow("different node namespace");
+    expect(() => authzNodeAgentPrincipal("node-1", "agent/1")).toThrow(
+      "node-local identifier"
+    );
+    expect(() => authzNodeUserPrincipal("node-1", "user:alice")).toThrow(
+      "different node namespace"
+    );
+    expect(() => authzBillingAccountResource("node/1", "b")).toThrow(
+      "node-local identifier"
+    );
+    expect(authzGrantExpiresAt("2026-11-01T00:00:00.000Z")).toEqual({
+      name: AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
+      context: { expires_at: "2026-11-01T00:00:00.000Z" },
+    });
   });
 });
 
@@ -96,6 +138,43 @@ describe("FakeAuthorizationAdapter", () => {
       checks: [
         { name: "permission", user: "user:alice", relation: "can_execute" },
         { name: "delegation", user: "agent:chat-v1", relation: "delegates" },
+      ],
+    });
+  });
+
+  it("mirrors exact-account OBO delegation without changing legacy OBO", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    const account = authzBillingAccountResource("node-1", "acct-1");
+    const oboCheck = {
+      actorId: authzNodeAgentPrincipal("node-1", "poly-brain"),
+      subjectId: authzNodeUserPrincipal("node-1", "alice"),
+      action: "billing_account.read",
+      resource: account,
+      context: { tenantId: "tenant:one" },
+    } satisfies AuthzCheckParams;
+    authz.allow(oboCheck);
+
+    await expect(authz.check(oboCheck)).resolves.toMatchObject({
+      decision: "allow",
+      checks: [
+        {
+          name: "permission",
+          user: "user:node-1/alice",
+          relation: "can_read",
+          object: account,
+        },
+        {
+          name: "delegation",
+          user: "agent:node-1/poly-brain",
+          relation: "delegates",
+          object: "user:node-1/alice",
+        },
+        {
+          name: "delegation",
+          user: "agent:node-1/poly-brain",
+          relation: "can_act_as",
+          object: account,
+        },
       ],
     });
   });
@@ -212,6 +291,164 @@ describe("OpenFgaAuthorizationAdapter", () => {
     ]);
   });
 
+  it("checks direct agent reads and human grant authority on the exact account", async () => {
+    const seen: OpenFgaCheckRequest[] = [];
+    const client = {
+      async check(request: OpenFgaCheckRequest): Promise<{ allowed: boolean }> {
+        seen.push(request);
+        return { allowed: true };
+      },
+    } satisfies OpenFgaCheckClient;
+    const now = new Date("2026-10-09T22:00:00.000Z");
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+      now: () => now,
+    });
+    const account = authzBillingAccountResource("node-1", "acct-1");
+
+    await expect(
+      authz.check({
+        actorId: authzNodeAgentPrincipal("node-1", "reader"),
+        action: "billing_account.read",
+        resource: account,
+        context: { tenantId: "tenant:one" },
+      })
+    ).resolves.toMatchObject({ decision: "allow" });
+    await expect(
+      authz.check({
+        actorId: authzNodeUserPrincipal("node-1", "alice"),
+        action: "billing_account.grant",
+        resource: account,
+        context: { tenantId: "tenant:one" },
+      })
+    ).resolves.toMatchObject({ decision: "allow" });
+
+    expect(seen).toEqual([
+      {
+        user: "agent:node-1/reader",
+        relation: "can_read",
+        object: account,
+        context: { current_time: now.toISOString() },
+      },
+      {
+        user: "user:node-1/alice",
+        relation: "can_grant",
+        object: account,
+      },
+    ]);
+  });
+
+  it("scopes billing-account OBO delegation to the same exact resource", async () => {
+    const seen: OpenFgaCheckRequest[] = [];
+    const client = {
+      async check(request: OpenFgaCheckRequest): Promise<{ allowed: boolean }> {
+        seen.push(request);
+        return { allowed: true };
+      },
+    } satisfies OpenFgaCheckClient;
+    const now = new Date("2026-10-09T22:00:00.000Z");
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+      now: () => now,
+    });
+    const account = authzBillingAccountResource("node-1", "acct-1");
+
+    await expect(
+      authz.check({
+        actorId: authzNodeAgentPrincipal("node-1", "poly-brain"),
+        subjectId: authzNodeUserPrincipal("node-1", "alice"),
+        action: "billing_account.read",
+        resource: account,
+        context: { tenantId: "tenant:one" },
+      })
+    ).resolves.toMatchObject({ decision: "allow" });
+
+    expect(seen).toEqual([
+      {
+        user: "user:node-1/alice",
+        relation: "can_read",
+        object: account,
+        context: { current_time: now.toISOString() },
+      },
+      {
+        user: "agent:node-1/poly-brain",
+        relation: "delegates",
+        object: "user:node-1/alice",
+      },
+      {
+        user: "agent:node-1/poly-brain",
+        relation: "can_act_as",
+        object: account,
+        context: { current_time: now.toISOString() },
+      },
+    ]);
+  });
+
+  it("requires both subject and exact-account delegation for OBO reads", async () => {
+    const client = {
+      async check(request: OpenFgaCheckRequest): Promise<{ allowed: boolean }> {
+        return { allowed: request.relation !== "delegates" };
+      },
+    } satisfies OpenFgaCheckClient;
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+    });
+
+    await expect(
+      authz.check({
+        actorId: authzNodeAgentPrincipal("node-1", "poly-brain"),
+        subjectId: authzNodeUserPrincipal("node-1", "alice"),
+        action: "billing_account.read",
+        resource: authzBillingAccountResource("node-1", "acct-1"),
+        context: { tenantId: "tenant:one" },
+      })
+    ).resolves.toMatchObject({
+      decision: "deny",
+      code: "authz_denied",
+      checks: [
+        { relation: "can_read", decision: "allow" },
+        { relation: "delegates", decision: "deny" },
+        { relation: "can_act_as", decision: "allow" },
+      ],
+    });
+  });
+
+  it("fails closed when OpenFGA evaluates a conditional grant as expired", async () => {
+    const expiresAt = "2026-10-09T21:59:59.000Z";
+    const client = {
+      async check(request: OpenFgaCheckRequest): Promise<{ allowed: boolean }> {
+        const currentTime = request.context?.current_time;
+        return {
+          allowed: typeof currentTime === "string" && currentTime < expiresAt,
+        };
+      },
+    } satisfies OpenFgaCheckClient;
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+      now: () => new Date("2026-10-09T22:00:00.000Z"),
+    });
+
+    await expect(
+      authz.check({
+        actorId: authzNodeAgentPrincipal("node-1", "reader"),
+        action: "billing_account.read",
+        resource: authzBillingAccountResource("node-1", "acct-1"),
+        context: { tenantId: "tenant:one" },
+      })
+    ).resolves.toMatchObject({
+      decision: "deny",
+      code: "authz_denied",
+    });
+  });
+
   it("resolves a stable store name before checking", async () => {
     const seen: OpenFgaCheckRequest[] = [];
     const client = {
@@ -284,6 +521,120 @@ describe("OpenFgaAuthorizationAdapter", () => {
     });
     expect(written).toEqual([tuple]);
     expect(deleted).toEqual([tuple]);
+  });
+
+  it("confirms writes and revokes through higher-consistency checks", async () => {
+    let relationPresent = false;
+    const checks: Array<{
+      request: OpenFgaCheckRequest;
+      options: OpenFgaCheckOptions | undefined;
+    }> = [];
+    const written: AuthzRelationTuple[] = [];
+    const deleted: Array<
+      Pick<AuthzRelationTuple, "user" | "relation" | "object">
+    > = [];
+    const client = {
+      async check(
+        request: OpenFgaCheckRequest,
+        options?: OpenFgaCheckOptions
+      ): Promise<{ allowed: boolean }> {
+        checks.push({ request, options });
+        return { allowed: relationPresent };
+      },
+      async writeTuples(tuples: AuthzRelationTuple[]): Promise<void> {
+        written.push(...tuples);
+        relationPresent = true;
+      },
+      async deleteTuples(
+        tuples: Array<Pick<AuthzRelationTuple, "user" | "relation" | "object">>
+      ): Promise<void> {
+        deleted.push(...tuples);
+        relationPresent = false;
+      },
+    } satisfies OpenFgaWriteClient;
+    const now = new Date("2026-10-09T22:00:00.000Z");
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+      now: () => now,
+    });
+    const tuple = {
+      user: authzNodeAgentPrincipal("node-1", "reader"),
+      relation: "reader",
+      object: authzBillingAccountResource("node-1", "acct-1"),
+      condition: authzGrantExpiresAt("2026-11-01T00:00:00.000Z"),
+    } satisfies AuthzRelationTuple;
+
+    await expect(
+      authz.writeRelation(tuple, { confirm: "higher_consistency" })
+    ).resolves.toMatchObject({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    await expect(
+      authz.deleteRelation(tuple, { confirm: "higher_consistency" })
+    ).resolves.toMatchObject({
+      decision: "success",
+      code: "authz_write_success",
+    });
+
+    expect(written).toEqual([tuple]);
+    expect(deleted).toEqual([
+      {
+        user: tuple.user,
+        relation: tuple.relation,
+        object: tuple.object,
+      },
+    ]);
+    expect(checks).toEqual([
+      {
+        request: {
+          user: tuple.user,
+          relation: tuple.relation,
+          object: tuple.object,
+          context: { current_time: now.toISOString() },
+        },
+        options: { consistency: "HIGHER_CONSISTENCY" },
+      },
+      {
+        request: {
+          user: tuple.user,
+          relation: tuple.relation,
+          object: tuple.object,
+          context: { current_time: now.toISOString() },
+        },
+        options: { consistency: "HIGHER_CONSISTENCY" },
+      },
+    ]);
+  });
+
+  it("fails closed when higher-consistency confirmation disagrees", async () => {
+    const client = {
+      async check(): Promise<{ allowed: boolean }> {
+        return { allowed: false };
+      },
+      async writeTuples(): Promise<void> {},
+      async deleteTuples(): Promise<void> {},
+    } satisfies OpenFgaWriteClient;
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+    });
+    const tuple = {
+      user: authzNodeAgentPrincipal("node-1", "reader"),
+      relation: "reader",
+      object: authzBillingAccountResource("node-1", "acct-1"),
+    };
+
+    await expect(
+      authz.writeRelation(tuple, { confirm: "higher_consistency" })
+    ).resolves.toMatchObject({
+      decision: "failure",
+      code: "authz_write_unavailable",
+      reason: expect.stringContaining("confirmation mismatch"),
+    });
   });
 
   const retryTuple = {

@@ -16,6 +16,9 @@ export type AuthzAction =
   | "connection.use"
   | "graph.invoke"
   | "user.act_as"
+  | "billing_account.read"
+  | "billing_account.grant"
+  | "billing_account.act_as"
   | "node.flight"
   | "node.manage_secrets"
   | "node.promote_production"
@@ -26,6 +29,9 @@ export const AUTHZ_ACTIONS = [
   "connection.use",
   "graph.invoke",
   "user.act_as",
+  "billing_account.read",
+  "billing_account.grant",
+  "billing_account.act_as",
   "node.flight",
   "node.manage_secrets",
   "node.promote_production",
@@ -77,14 +83,34 @@ export type AuthzDecision =
 
 export interface AuthorizationPort {
   check(params: AuthzCheckParams): Promise<AuthzDecision>;
-  writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
-  deleteRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
+  writeRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  deleteRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+}
+
+export interface AuthzRelationCondition {
+  readonly name: string;
+  readonly context?: Readonly<Record<string, unknown>>;
 }
 
 export interface AuthzRelationTuple {
   readonly user: string;
   readonly relation: string;
   readonly object: string;
+  readonly condition?: AuthzRelationCondition;
+}
+
+export interface AuthzMutationOptions {
+  /**
+   * Confirm the post-mutation relation state through OpenFGA's
+   * HIGHER_CONSISTENCY read path before reporting success.
+   */
+  readonly confirm?: "higher_consistency";
 }
 
 export type AuthzWriteDecision =
@@ -114,8 +140,68 @@ export function authzUserResource(userId: string): string {
   return userId.startsWith("user:") ? userId : `user:${userId}`;
 }
 
+/**
+ * Qualify node-local identities before they enter the env-shared OpenFGA store.
+ * The node segment is a namespace boundary only; it does not imply ownership.
+ */
+export function authzNodeUserPrincipal(nodeId: string, userId: string): string {
+  return nodeScopedReference("user", nodeId, userId);
+}
+
+export function authzNodeAgentPrincipal(
+  nodeId: string,
+  actorId: string
+): string {
+  return nodeScopedReference("agent", nodeId, actorId);
+}
+
+export function authzBillingAccountResource(
+  nodeId: string,
+  billingAccountId: string
+): string {
+  return nodeScopedReference("billing_account", nodeId, billingAccountId);
+}
+
 export function authzNodeResource(nodeId: string): string {
   return `node:${nodeId}`;
+}
+
+export const AUTHZ_GRANT_NOT_EXPIRED_CONDITION = "grant_not_expired";
+
+export function authzGrantExpiresAt(expiresAt: string): AuthzRelationCondition {
+  return {
+    name: AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
+    context: { expires_at: expiresAt },
+  };
+}
+
+function nodeScopedReference(
+  type: "user" | "agent" | "billing_account",
+  nodeId: string,
+  localId: string
+): string {
+  // OpenFGA permits exactly one ':' in an object/user reference. Keep the
+  // node-local components inside the opaque ID with '/' as their delimiter.
+  assertReferenceComponent("nodeId", nodeId);
+  const prefix = `${type}:${nodeId}/`;
+  if (localId.startsWith(prefix)) {
+    assertReferenceComponent("localId", localId.slice(prefix.length));
+    return localId;
+  }
+
+  const typePrefix = `${type}:`;
+  if (localId.startsWith(typePrefix)) {
+    throw new Error(`${type} reference belongs to a different node namespace`);
+  }
+
+  assertReferenceComponent("localId", localId);
+  return `${prefix}${localId}`;
+}
+
+function assertReferenceComponent(name: string, value: string): void {
+  if (value.length === 0 || value.includes(":") || value.includes("/")) {
+    throw new Error(`${name} must be a non-empty node-local identifier`);
+  }
 }
 
 export function relationForAuthzAction(action: AuthzAction): string {
@@ -128,6 +214,12 @@ export function relationForAuthzAction(action: AuthzAction): string {
       return "can_invoke";
     case "user.act_as":
       return "delegates";
+    case "billing_account.read":
+      return "can_read";
+    case "billing_account.grant":
+      return "can_grant";
+    case "billing_account.act_as":
+      return "can_act_as";
     case "node.flight":
       return "can_flight";
     case "node.manage_secrets":
@@ -143,6 +235,8 @@ export {
   OpenFgaAuthorizationAdapter,
   type OpenFgaAuthorizationAdapterConfig,
   type OpenFgaCheckClient,
+  type OpenFgaCheckOptions,
+  type OpenFgaCheckRequest,
   type OpenFgaStoreClient,
   type OpenFgaWriteClient,
 } from "./adapters/openfga-authorization.adapter";

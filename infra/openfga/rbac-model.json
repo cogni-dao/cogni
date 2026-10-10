@@ -205,6 +205,77 @@
       }
     },
     {
+      "type": "billing_account",
+      "relations": {
+        "owner": {
+          "this": {}
+        },
+        "reader": {
+          "this": {}
+        },
+        "delegate": {
+          "this": {}
+        },
+        "can_read": {
+          "union": {
+            "child": [
+              {
+                "computedUserset": {
+                  "relation": "owner"
+                }
+              },
+              {
+                "computedUserset": {
+                  "relation": "reader"
+                }
+              }
+            ]
+          }
+        },
+        "can_grant": {
+          "computedUserset": {
+            "relation": "owner"
+          }
+        },
+        "can_act_as": {
+          "computedUserset": {
+            "relation": "delegate"
+          }
+        }
+      },
+      "metadata": {
+        "relations": {
+          "owner": {
+            "directly_related_user_types": [
+              {
+                "type": "user"
+              }
+            ]
+          },
+          "reader": {
+            "directly_related_user_types": [
+              {
+                "type": "user",
+                "condition": "grant_not_expired"
+              },
+              {
+                "type": "agent",
+                "condition": "grant_not_expired"
+              }
+            ]
+          },
+          "delegate": {
+            "directly_related_user_types": [
+              {
+                "type": "agent",
+                "condition": "grant_not_expired"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
       "type": "graph",
       "relations": {
         "owner": {
@@ -387,5 +458,19 @@
         }
       }
     }
-  ]
+  ],
+  "conditions": {
+    "grant_not_expired": {
+      "name": "grant_not_expired",
+      "expression": "current_time < expires_at",
+      "parameters": {
+        "current_time": {
+          "type_name": "TYPE_NAME_TIMESTAMP"
+        },
+        "expires_at": {
+          "type_name": "TYPE_NAME_TIMESTAMP"
+        }
+      }
+    }
+  }
 }
