@@ -65,6 +65,7 @@ export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   "CONNECTIONS_ENCRYPTION_KEY", // AES key for BYO-AI connections at rest
   "INTERNAL_OPS_TOKEN", // deploy → governance schedule sync auth
   "FLIGHT_PROBE_API_KEY", // fleet-control-owned service credential ring
+  "AUTHORIZATION_FACADE_TOKEN", // fleet-control authority; raw projection is lane/node-scoped
   "METRICS_TOKEN", // Prometheus scrape → /api/metrics auth
   "GH_WEBHOOK_SECRET", // GitHub App webhook HMAC (dual-plane: must byte-match the App)
   "POLY_WALLET_AEAD_KEY_HEX", // poly wallet AEAD key (clobber = wallet decryption loss)

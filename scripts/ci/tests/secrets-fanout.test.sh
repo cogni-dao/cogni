@@ -96,6 +96,10 @@ r=0
 seeded node-template FLIGHT_PROBE_API_KEY && r=1
 seeded poly FLIGHT_PROBE_API_KEY && r=1
 assert "$r" "ordinary node fan-out omits control-owned FLIGHT_PROBE_API_KEY"
+r=0
+seeded node-template AUTHORIZATION_FACADE_TOKEN && r=1
+seeded poly AUTHORIZATION_FACADE_TOKEN && r=1
+assert "$r" "ordinary node fan-out omits lifecycle-owned AUTHORIZATION_FACADE_TOKEN"
 
 # 2. CONNECTIONS_ENCRYPTION_KEY distinct per node (cross-node decryption isolation).
 nt_cek=$(val_for node-template CONNECTIONS_ENCRYPTION_KEY); cn_cek=$(val_for poly CONNECTIONS_ENCRYPTION_KEY)
@@ -223,7 +227,8 @@ assert "$([[ ${#DERIVED[@]} -gt 0 ]] && echo 0 || echo 1)" "print-pod-keys emits
 # 10a. Authoritative: pod-consumed keys MUST be in the derived set (the five
 #      dual-consumed keys + GH_REVIEW_APP_*, silently absent from the hand-list).
 for k in OPENROUTER_API_KEY POSTHOG_API_KEY POSTHOG_HOST EVM_RPC_URL POLYGON_RPC_URL \
-  GH_REVIEW_APP_ID GH_REVIEW_APP_PRIVATE_KEY_BASE64 FLIGHT_PROBE_API_KEY; do
+  GH_REVIEW_APP_ID GH_REVIEW_APP_PRIVATE_KEY_BASE64 FLIGHT_PROBE_API_KEY \
+  AUTHORIZATION_FACADE_TOKEN; do
   r=0; in_derived "$k" || r=1
   assert "$r" "pod key $k ∈ derived universe"
 done

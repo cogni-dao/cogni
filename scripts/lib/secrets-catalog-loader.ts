@@ -90,6 +90,9 @@ const GenerateSchema = z.discriminatedUnion("kind", [
     bytes: z.number().int().min(32),
   }),
   z.object({
+    kind: z.literal("authorization-facade-projected"),
+  }),
+  z.object({
     kind: z.literal("sk-cogni"),
     randHexBytes: z.number().int().positive(),
   }),
@@ -439,6 +442,12 @@ function generatorFor(g: z.infer<typeof GenerateSchema>): () => string {
       return () => randHex(g.bytes);
     case "flight-probe-key-ring":
       return () => JSON.stringify({ active: rand64(g.bytes), previous: null });
+    case "authorization-facade-projected":
+      return () => {
+        throw new Error(
+          "AUTHORIZATION_FACADE_TOKEN is minted only by the authorization-facade credential lifecycle"
+        );
+      };
     case "sk-cogni":
       return () => `sk-cogni-${randHex(g.randHexBytes)}`;
     case "static":

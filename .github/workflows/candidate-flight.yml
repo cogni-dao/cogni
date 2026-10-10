@@ -1049,6 +1049,25 @@ jobs:
       VM_HOST: ${{ secrets.VM_HOST }}
       SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
 
+  authorization-facade-credential-project:
+    needs: decide
+    if: needs.decide.outputs.has_deployment_node_targets == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.deployment_node_targets_json) }}
+    uses: ./.github/workflows/authorization-facade-credential-project.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      lane: candidate-a
+      node: ${{ matrix.node }}
+      operation: materialize
+    secrets:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+
   node-substrate:
     needs:
       [
@@ -1057,6 +1076,7 @@ jobs:
         reconcile-dns,
         prepare-substrate-deploy-branch,
         flight-probe-project,
+        authorization-facade-credential-project,
       ]
     if: |
       always() &&
@@ -1064,7 +1084,8 @@ jobs:
       needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success' &&
       needs.prepare-substrate-deploy-branch.result == 'success' &&
-      needs.flight-probe-project.result == 'success'
+      needs.flight-probe-project.result == 'success' &&
+      needs.authorization-facade-credential-project.result == 'success'
     strategy:
       fail-fast: false
       matrix:
