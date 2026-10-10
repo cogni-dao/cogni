@@ -83,6 +83,10 @@ export {
   type AkashTxWorkloadIdentity,
 } from "./akash-tx.port";
 export type {
+  AuthorizationFacadeCredentialVerification,
+  AuthorizationFacadeCredentialVerifierPort,
+} from "./authorization-facade-credential-verifier.port";
+export type {
   AttributionEpoch,
   AttributionPoolComponent,
   AttributionSelection,
@@ -333,10 +337,6 @@ export type {
   VerificationResult,
   VerificationStatus,
 } from "./onchain-verifier.port";
-export type {
-  AuthorizationFacadeCredentialVerification,
-  AuthorizationFacadeCredentialVerifierPort,
-} from "./authorization-facade-credential-verifier.port";
 export type {
   OperatorSecretsPlanePort,
   SecretWriteOp,

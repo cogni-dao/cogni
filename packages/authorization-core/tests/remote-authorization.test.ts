@@ -32,7 +32,6 @@ describe("authorizationFacadeNodeIdFromToken", () => {
       authorizationFacadeNodeIdFromToken(`cogni_naz_sk_v1_${NODE_ID}_short`)
     ).toThrow("invalid authorization facade service credential");
   });
-
 });
 
 describe("RemoteAuthorizationAdapter", () => {

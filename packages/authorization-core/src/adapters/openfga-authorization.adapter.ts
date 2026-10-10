@@ -20,8 +20,8 @@ import {
 import {
   AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
   type AuthorizationPort,
-  type AuthzCheckParams,
   type AuthzCheckOptions,
+  type AuthzCheckParams,
   type AuthzDecision,
   type AuthzListDecision,
   type AuthzMutationOptions,
@@ -872,7 +872,6 @@ function isOpenFgaReadClient(
 
 function isOpenFgaReplaceClient(
   client: OpenFgaCheckClient
-): client is OpenFgaWriteClient &
-  Required<Pick<OpenFgaWriteClient, "write">> {
+): client is OpenFgaWriteClient & Required<Pick<OpenFgaWriteClient, "write">> {
   return isOpenFgaWriteClient(client) && "write" in client;
 }
