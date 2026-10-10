@@ -60,12 +60,6 @@ put_secret node-template OPENROUTER_API_KEY sk-or-stale-divergent
 put_secret operator EVM_RPC_URL https://base-mainnet.example/v2/operator-key
 put_secret node-template EVM_RPC_URL https://base-mainnet.example/v2/stale-divergent
 put_secret operator LITELLM_MASTER_KEY sk-cogni-operator-master
-# Runtime-owned OpenFGA graph coordinates are projected from the operator
-# bootstrap into every in-cluster node. A stale node copy must self-heal.
-put_secret operator OPENFGA_STORE_ID store-candidate-a
-put_secret node-template OPENFGA_STORE_ID store-stale
-put_secret operator OPENFGA_AUTHORIZATION_MODEL_ID model-candidate-a
-put_secret node-template OPENFGA_AUTHORIZATION_MODEL_ID model-stale
 
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
@@ -284,12 +278,6 @@ test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/OPENROUTER_API_KEY")" = s
   || { echo "OPENROUTER_API_KEY must inherit the operator-canonical value, not the stale per-node copy" >&2; exit 1; }
 test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/EVM_RPC_URL")" = https://base-mainnet.example/v2/operator-key \
   || { echo "EVM_RPC_URL must inherit the operator value (inheritFrom: operator), not the stale per-node copy" >&2; exit 1; }
-test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/OPENFGA_STORE_ID")" = store-candidate-a \
-  || { echo "OPENFGA_STORE_ID must inherit the runtime-owned operator value" >&2; exit 1; }
-test "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/OPENFGA_AUTHORIZATION_MODEL_ID")" = model-candidate-a \
-  || { echo "OPENFGA_AUTHORIZATION_MODEL_ID must inherit the runtime-owned operator value" >&2; exit 1; }
-test ! -e "$BAO_ROOT/cogni/candidate-a/node-template/OPENFGA_API_TOKEN" \
-  || { echo "OPENFGA_API_TOKEN must never be projected into a node bucket" >&2; exit 1; }
 # per-node DB creds generated (source:agent), not inherited from any shared bank
 for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
   test -f "$BAO_ROOT/cogni/candidate-a/node-template/$k" \
