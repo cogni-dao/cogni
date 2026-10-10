@@ -5,6 +5,7 @@ import {
   type AuthorizationPort,
   type AuthzCheckParams,
   type AuthzDecision,
+  type AuthzWriteDecision,
   authzBillingAccountResource,
   authzGrantExpiresAt,
   authzNodeAgentPrincipal,
@@ -35,27 +36,19 @@ function deny(): AuthzDecision {
   return { decision: "deny", code: "authz_denied", checks: [] };
 }
 
+async function writeSuccess(): Promise<AuthzWriteDecision> {
+  return { decision: "success", code: "authz_write_success" };
+}
+
 function authorizationWith(
   check: (params: AuthzCheckParams) => Promise<AuthzDecision>
 ): AuthorizationPort {
   return {
     check: vi.fn(check),
-    writeRelation: vi.fn(async () => ({
-      decision: "success",
-      code: "authz_write_success",
-    })),
-    deleteRelation: vi.fn(async () => ({
-      decision: "success",
-      code: "authz_write_success",
-    })),
-    writeRelations: vi.fn(async () => ({
-      decision: "success",
-      code: "authz_write_success",
-    })),
-    deleteRelations: vi.fn(async () => ({
-      decision: "success",
-      code: "authz_write_success",
-    })),
+    writeRelation: vi.fn(writeSuccess),
+    deleteRelation: vi.fn(writeSuccess),
+    writeRelations: vi.fn(writeSuccess),
+    deleteRelations: vi.fn(writeSuccess),
   };
 }
 

@@ -30,7 +30,12 @@ import { parse } from "yaml";
 import { SUBSTRATE_RESERVED_KEYS } from "@/shared/secrets/node-secrets-reserved.data";
 
 /** Mirrors `key_is_agent_generated()` in scripts/ci/secret-materialize.sh. */
-const RANDOM_GENERATE_KINDS = new Set(["base64", "hex", "sk-cogni"]);
+const RANDOM_GENERATE_KINDS = new Set([
+  "base64",
+  "hex",
+  "sk-cogni",
+  "node-authz-token",
+]);
 
 /** Walk up to the repo root so the test survives being moved. */
 function catalogPath(): string {

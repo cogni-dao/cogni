@@ -63,6 +63,20 @@ async function post(body: unknown): Promise<Response> {
   );
 }
 
+async function postRaw(body: string): Promise<Response> {
+  const { POST } = await import("./route");
+  return POST(
+    new Request(
+      "https://operator.example/api/v1/authorization/billing-account-grants",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }
+    ) as NextRequest
+  );
+}
+
 describe("POST /api/v1/authorization/billing-account-grants", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -142,6 +156,16 @@ describe("POST /api/v1/authorization/billing-account-grants", () => {
     });
     const response = await post(validBody);
     expect(response.status).toBe(429);
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized body before credential or backend IO", async () => {
+    const response = await postRaw(
+      JSON.stringify({ padding: "x".repeat(9_000) })
+    );
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: "invalid_request" });
+    expect(authenticate).not.toHaveBeenCalled();
     expect(mutate).not.toHaveBeenCalled();
   });
 });

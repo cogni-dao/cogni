@@ -15,6 +15,7 @@ import type { AuthzDecision } from "@cogni/authorization-core";
 import { NextResponse } from "next/server";
 
 import { authenticateAuthorizationFacadeRequest } from "@/app/_lib/authorization-facade-auth";
+import { readBoundedJson } from "@/app/_lib/bounded-json-body";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { authorizationFacadeCheckOperation } from "@/contracts/authorization-facade.v1.contract";
@@ -22,10 +23,23 @@ import { checkNodeBillingAccountAccess } from "@/features/authorization";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+const MAX_REQUEST_BYTES = 8 * 1024;
 
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "authorization.facade.check", auth: { mode: "none" } },
   async (ctx, request) => {
+    const body = await readBoundedJson(request, MAX_REQUEST_BYTES);
+    if (!body.ok) {
+      return NextResponse.json(
+        { error: "invalid_request" },
+        { status: body.reason === "too_large" ? 413 : 400 }
+      );
+    }
+    const parsed = authorizationFacadeCheckOperation.input.safeParse(body.value);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "invalid_request" }, { status: 400 });
+    }
+
     const workload = await authenticateAuthorizationFacadeRequest(request);
     if (!workload.ok) {
       ctx.log.warn(
@@ -33,22 +47,13 @@ export const POST = wrapRouteHandlerWithLogging(
         "authorization_facade.authentication_denied"
       );
       return NextResponse.json(
-        { error: workload.errorCode },
+        {
+          error:
+            workload.status === 401
+              ? "authorization_facade_denied"
+              : "authorization_facade_unavailable",
+        },
         { status: workload.status }
-      );
-    }
-
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "invalid_json" }, { status: 400 });
-    }
-    const parsed = authorizationFacadeCheckOperation.input.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: "invalid_input", issues: parsed.error.issues },
-        { status: 400 }
       );
     }
 
