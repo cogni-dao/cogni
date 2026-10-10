@@ -14,7 +14,7 @@
 import { defineConfig } from "tsup";
 
 export const tsupConfig = defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/operator.ts"],
   format: ["esm"],
   dts: false,
   clean: false,

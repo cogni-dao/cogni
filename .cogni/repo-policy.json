@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "cogni.repo-policy.v1",
+  "ruleset": {
+    "name": "main-release-required-ci",
+    "target": "default_branch",
+    "enforcement": "active",
+    "requiredStatusChecks": {
+      "contexts": ["unit", "component", "static", "manifest"]
+    }
+  }
+}
