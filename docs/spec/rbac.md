@@ -71,13 +71,18 @@ OpenFGA runs as shared VM runtime infrastructure, not as a node-scoped k8s app.
 | Image         | `openfga/openfga:v1.17.1@sha256:ff96f68d2f03a029e051027415c106295c782084daeef0934479f04a3fdc2d57`                                                                                                                                                                                                                                                     |
 | Pod endpoint  | Operator overlays set `OPENFGA_API_URL=http://operator-openfga-external:8080` through ConfigMap                                                                                                                                                                                                                                                       |
 | Store config  | `scripts/ci/deploy-infra.sh` runs `scripts/ci/bootstrap-openfga.sh` after the OpenFGA runtime is healthy. The bootstrap creates or finds store `cogni-<env>-rbac`, writes or reuses `infra/openfga/rbac-model.json`, and records `OPENFGA_STORE_ID` / `OPENFGA_AUTHORIZATION_MODEL_ID` into `cogni/<env>/operator` for ESO delivery to operator pods. |
-| Secret config | OpenFGA preshared authn is mandatory in deployed environments. The set-once `OPENFGA_API_TOKEN` is custodied at `cogni/<env>/openfga`, copied only to `cogni/<env>/operator` through the governed infra reconcile, and never projected to node workloads.                                                                                                                                                                                                             |
+| Secret config | `OPENFGA_API_TOKEN` is only needed when OpenFGA authn is enabled; seed it through OpenBao/ESO as `cogni/<env>/operator/OPENFGA_API_TOKEN`                                                                                                                                                                                                             |
 | Network       | Port 8080 is published for k3s pod access through VM DNS and dropped on the public NIC by `infra/provision/cherry/harden-docker-public-ports.sh`                                                                                                                                                                                                      |
 
 `OPENFGA_API_URL` may exist before a store is bootstrapped. The operator only
 constructs the OpenFGA adapter when both `OPENFGA_API_URL` and
 `OPENFGA_STORE_ID` are present, so service reachability can ship before policy
 activation.
+
+Deployed environments require OpenFGA preshared authn. The set-once
+`OPENFGA_API_TOKEN` is custodied at `cogni/<env>/openfga`, copied only to
+`cogni/<env>/operator` through governed infra reconciliation, and never
+projected to node workloads.
 
 Authorization-facade credentials are lane-bound (`v2_<lane>_<node_id>`) and
 rotate only through the fleet-control credential workflow. The control vault owns
@@ -102,11 +107,12 @@ immutable model is written only when the hash changes or no prior model exists.
 
 ## Actor Types
 
-| Type    | Format                  | Description                          |
-| ------- | ----------------------- | ------------------------------------ |
-| User    | `user:{node_id}/{user_id}`        | Node-local human in the environment-shared graph    |
-| Agent   | `agent:{node_id}/{actor_id}`       | Node-local autonomous agent in the environment-shared graph    |
-| Service | `service:{serviceName}` | Internal service (scheduler, worker) |
+- **User** — `user:{node_id}/{user_id}`: node-local human in the
+  environment-shared graph.
+- **Agent** — `agent:{node_id}/{actor_id}`: node-local autonomous agent in the
+  environment-shared graph.
+- **Service** — `service:{serviceName}`: internal service such as scheduler or
+  worker.
 
 `user_id` is the canonical person identifier. Wallet addresses, OAuth provider
 IDs, and bearer token strings are credentials or bindings, never RBAC actors.
@@ -231,7 +237,6 @@ principals without changing the `node.flight` route check.
 | -------------------- | ------------------------------------------------ | -------------------------------------- |
 | Session middleware   | `src/proxy.ts`                                   | Extracted from session JWT claims      |
 | Agent grant issuance | `src/features/agents/services/grant.ts` (future) | Bound when grant is created            |
-| Node authorization facade | `/api/v1/authorization/check` | Same-node service credential fixes `node_id`; operator verifies the exact subject/account/delegation legs |
 | Scheduler job        | `src/adapters/server/scheduler/`                 | Hardcoded to job owner at job creation |
 
 **Never from:** Request body, query params, tool args, `RunnableConfig.configurable`.
@@ -255,8 +260,8 @@ Reader grants write only conditioned `reader`; OBO grants require an existing su
 read edge and existing human→agent delegation, then write only the conditioned,
 account-scoped `delegate` edge. Mutation success is confirmed with
 `HIGHER_CONSISTENCY`. The facade cannot seed `owner`/`can_grant`, mutate node roles, or
-write arbitrary relations. Credential rotation accepts only the immediately previous
-OpenBao KV version for a bounded rollout window.
+write arbitrary relations. Credential custody, digest projection, and rotation are
+owned separately by task.5228; this facade consumes only the projected verifier ring.
 
 ---
 

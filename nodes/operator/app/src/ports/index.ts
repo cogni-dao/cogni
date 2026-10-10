@@ -82,10 +82,6 @@ export {
   type AkashTxWorkloadIdentity,
 } from "./akash-tx.port";
 export type {
-  AuthorizationFacadeCredentialVerification,
-  AuthorizationFacadeCredentialVerifierPort,
-} from "./authorization-facade-credential-verifier.port";
-export type {
   AttributionEpoch,
   AttributionPoolComponent,
   AttributionSelection,
@@ -96,6 +92,10 @@ export type {
   IngestionCursor,
   IngestionReceipt,
 } from "./attribution-store.port";
+export type {
+  AuthorizationFacadeCredentialVerification,
+  AuthorizationFacadeCredentialVerifierPort,
+} from "./authorization-facade-credential-verifier.port";
 export type {
   BillingContext,
   BillingResolver,
