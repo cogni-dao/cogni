@@ -75,6 +75,7 @@ import {
   EpochNotFoundError,
   EpochNotInReviewError,
   EpochNotOpenError,
+  canonicalJsonStringify,
   type EpochStatus,
   freezeActorContributionAllocation,
 } from "@cogni/attribution-ledger";
@@ -1804,8 +1805,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           existing.tokenAmount !== liability.tokenAmount ||
           existing.sourceEvidenceHash !== liability.sourceEvidenceHash ||
           existing.signerActorId !== liability.signerActorId ||
-          JSON.stringify(existing.resolverFailureJson) !==
-            JSON.stringify(liability.resolverFailure)
+          canonicalJsonStringify(existing.resolverFailureJson) !==
+            canonicalJsonStringify(liability.resolverFailure)
         ) {
           throw new Error(
             `Actor liability idempotency conflict for ${liability.allocationRef}`
