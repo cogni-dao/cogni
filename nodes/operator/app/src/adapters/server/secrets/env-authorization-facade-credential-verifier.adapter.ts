@@ -22,15 +22,13 @@ const RingSchema = z.strictObject({
   activeSha256: DigestSchema,
   previousSha256: DigestSchema.nullable(),
 });
-const MapSchema = z
-  .record(z.string(), RingSchema)
-  .superRefine((value, ctx) => {
-    for (const key of Object.keys(value)) {
-      if (!MAP_KEY.test(key)) {
-        ctx.addIssue({ code: "custom", path: [key], message: "invalid map key" });
-      }
+const MapSchema = z.record(z.string(), RingSchema).superRefine((value, ctx) => {
+  for (const key of Object.keys(value)) {
+    if (!MAP_KEY.test(key)) {
+      ctx.addIssue({ code: "custom", path: [key], message: "invalid map key" });
     }
-  });
+  }
+});
 
 export class EnvAuthorizationFacadeCredentialVerifierAdapter
   implements AuthorizationFacadeCredentialVerifierPort

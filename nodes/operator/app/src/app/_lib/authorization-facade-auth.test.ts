@@ -10,11 +10,14 @@ const NODE_ID = "11111111-1111-4111-8111-111111111111";
 const TOKEN = `cogni_naz_sk_v2_production_${NODE_ID}_${"a".repeat(64)}`;
 const FOREIGN_LANE_TOKEN = `cogni_naz_sk_v2_candidate-a_${NODE_ID}_${"b".repeat(64)}`;
 
-vi.mock("@/bootstrap/capabilities/authorization-facade-credential-verifier", () => ({
-  createAuthorizationFacadeCredentialVerifier: () => ({
-    verify: verifyCredential,
-  }),
-}));
+vi.mock(
+  "@/bootstrap/capabilities/authorization-facade-credential-verifier",
+  () => ({
+    createAuthorizationFacadeCredentialVerifier: () => ({
+      verify: verifyCredential,
+    }),
+  })
+);
 vi.mock("@/bootstrap/container", () => ({
   resolveServiceDb: () => ({ kind: "service-db" }),
 }));

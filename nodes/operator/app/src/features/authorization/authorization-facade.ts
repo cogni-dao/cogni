@@ -91,12 +91,15 @@ export async function mutateNodeBillingAccountAccess(
 ): Promise<AuthzWriteDecision> {
   const account = authzBillingAccountResource(nodeId, input.billingAccountId);
   const grantor = authzNodeUserPrincipal(nodeId, input.grantorUserId);
-  const grantorDecision = await deps.authorization.check({
-    actorId: grantor,
-    action: "billing_account.grant",
-    resource: account,
-    context: { tenantId: input.billingAccountId, nodeId },
-  }, { consistency: "higher_consistency" });
+  const grantorDecision = await deps.authorization.check(
+    {
+      actorId: grantor,
+      action: "billing_account.grant",
+      resource: account,
+      context: { tenantId: input.billingAccountId, nodeId },
+    },
+    { consistency: "higher_consistency" }
+  );
   if (grantorDecision.decision !== "allow") {
     return grantorDecision.code === "authz_unavailable"
       ? unavailable("grantor authority check unavailable")
