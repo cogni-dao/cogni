@@ -81,14 +81,27 @@ export type AuthzDecision =
       readonly reason?: string;
     };
 
-export interface AuthorizationPort {
+/** Read-only authorization boundary safe for independently governed nodes. */
+export interface AuthorizationCheckPort {
   check(params: AuthzCheckParams): Promise<AuthzDecision>;
+}
+
+/** Raw relation mutation boundary. Trusted operator code only. */
+export interface AuthorizationRelationAdminPort {
   writeRelation(
     tuple: AuthzRelationTuple,
     options?: AuthzMutationOptions
   ): Promise<AuthzWriteDecision>;
   deleteRelation(
     tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  writeRelations(
+    tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision>;
+  deleteRelations(
+    tuples: readonly AuthzRelationTuple[],
     options?: AuthzMutationOptions
   ): Promise<AuthzWriteDecision>;
   /**
@@ -100,6 +113,11 @@ export interface AuthorizationPort {
    */
   listRelations(user: string): Promise<AuthzListDecision>;
 }
+
+/** Full operator-internal authorization boundary. */
+export interface AuthorizationPort
+  extends AuthorizationCheckPort,
+    AuthorizationRelationAdminPort {}
 
 export interface AuthzRelationCondition {
   readonly name: string;
@@ -128,7 +146,7 @@ export type AuthzWriteDecision =
     }
   | {
       readonly decision: "failure";
-      readonly code: "authz_write_unavailable";
+      readonly code: "authz_write_denied" | "authz_write_unavailable";
       readonly reason?: string;
     };
 
@@ -143,6 +161,49 @@ export type AuthzListDecision =
       readonly code: "authz_list_unavailable";
       readonly reason?: string;
     };
+
+export type BillingAccountGrantRole = "reader" | "obo";
+
+export type BillingAccountGrantTarget =
+  | { readonly kind: "user"; readonly id: string }
+  | { readonly kind: "agent"; readonly id: string };
+
+export interface BillingAccountGrantInput {
+  /** Same-node human asserted by the node backend; operator verifies can_grant. */
+  readonly grantorUserId: string;
+  readonly billingAccountId: string;
+  readonly target: BillingAccountGrantTarget;
+  readonly role: BillingAccountGrantRole;
+  /** Required for an OBO bundle; omitted for a direct reader grant. */
+  readonly subjectUserId?: string;
+  /** Required for grants; ignored for revocation. */
+  readonly expiresAt: string;
+  readonly requestId?: string;
+}
+
+export interface BillingAccountRevokeInput {
+  /** Same-node human asserted by the node backend; operator verifies can_grant. */
+  readonly grantorUserId: string;
+  readonly billingAccountId: string;
+  readonly target: BillingAccountGrantTarget;
+  readonly role: BillingAccountGrantRole;
+  /** Required for an OBO bundle; omitted for a direct reader revoke. */
+  readonly subjectUserId?: string;
+  readonly requestId?: string;
+}
+
+/**
+ * Semantic account-grant boundary. It cannot express owner, node-role, or arbitrary
+ * relation writes; the operator independently verifies the grantor's can_grant edge.
+ */
+export interface BillingAccountGrantAdministrationPort {
+  grantBillingAccountAccess(
+    input: BillingAccountGrantInput
+  ): Promise<AuthzWriteDecision>;
+  revokeBillingAccountAccess(
+    input: BillingAccountRevokeInput
+  ): Promise<AuthzWriteDecision>;
+}
 
 export function authzToolResource(toolId: string): string {
   return `tool:${toolId}`;
@@ -252,3 +313,9 @@ export function relationForAuthzAction(action: AuthzAction): string {
 }
 
 export { FakeAuthorizationAdapter } from "./test/fake-authorization.adapter";
+export {
+  AUTHORIZATION_FACADE_TOKEN_PREFIX,
+  RemoteAuthorizationAdapter,
+  type RemoteAuthorizationAdapterConfig,
+  authorizationFacadeNodeIdFromToken,
+} from "./adapters/remote-authorization.adapter";

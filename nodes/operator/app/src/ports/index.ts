@@ -336,6 +336,7 @@ export type {
 export type {
   OperatorSecretsPlanePort,
   SecretWriteOp,
+  VerifyNodeSecretInput,
   WriteNodeSecretInput,
   WriteNodeSecretResult,
 } from "./operator-secrets-plane.port";
