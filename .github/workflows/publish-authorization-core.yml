@@ -2,13 +2,19 @@ name: Publish Authorization Core
 
 # @cogni/authorization-core is owned here, at the policy source. Nodes consume
 # an immutable public Release asset rather than copying the package or requiring
-# registry credentials. workflow_dispatch rehearses the artifact only; a tag is
-# the sole publication authority.
+# registry credentials. A governed main-only dispatch creates the version tag
+# with the existing automation-bot authority; that tag is the sole publication
+# trigger. No developer credential needs tag-write authority.
 on:
   push:
     tags:
       - "authorization-core-v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: Exact authorization-core semver to release
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -26,7 +32,62 @@ env:
   TAG_PREFIX: "authorization-core-v"
 
 jobs:
+  release-tag:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Dispatch must target the exact main tip
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          main_sha="$(git rev-parse origin/main)"
+          if [ "$GITHUB_REF" != "refs/heads/main" ] || [ "$GITHUB_SHA" != "$main_sha" ]; then
+            echo "::error::release dispatch must run against the exact origin/main tip"
+            exit 1
+          fi
+
+      - name: Requested version must match package version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be an exact x.y.z semver"
+            exit 1
+          fi
+          package_version="$(node -p "require('./' + process.env.PACKAGE_DIR + '/package.json').version")"
+          if [ "$REQUESTED_VERSION" != "$package_version" ]; then
+            echo "::error::requested ${REQUESTED_VERSION} does not match package ${package_version}"
+            exit 1
+          fi
+
+      - name: Main tip must have passed every required check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ci/assert-repo-policy-checks.sh "$GITHUB_SHA"
+
+      - name: Create immutable release tag with governed authority
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          : "${GH_TOKEN:?ACTIONS_AUTOMATION_BOT_PAT is required}"
+          tag="${TAG_PREFIX}${REQUESTED_VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "::error::tag ${tag} already exists; versions are immutable"
+            exit 1
+          fi
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${tag}" \
+            -f sha="$GITHUB_SHA"
+
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -47,47 +108,9 @@ jobs:
       # and a tag may target any historical ancestor. Release only bytes whose
       # exact commit reported every check named by the repository policy.
       - name: Tagged commit must have passed every required check
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          COMMIT_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/commits/${COMMIT_SHA}/check-runs?per_page=100" \
-            --jq '.check_runs[] | {name, status, conclusion}' > /tmp/check-runs.ndjson
-          node -e '
-            const fs = require("node:fs");
-            const policy = JSON.parse(fs.readFileSync(".cogni/repo-policy.json", "utf8"));
-            const required = policy?.ruleset?.requiredStatusChecks?.contexts ?? [];
-            if (required.length === 0) {
-              console.error("repo-policy declares no required checks - refusing to publish ungated bytes");
-              process.exit(1);
-            }
-            const runs = fs.readFileSync("/tmp/check-runs.ndjson", "utf8")
-              .split("\n").filter(Boolean).map((line) => JSON.parse(line));
-            const problems = [];
-            for (const context of required) {
-              const matching = runs.filter((run) => run.name === context);
-              if (matching.length === 0) {
-                problems.push(`${context}: never reported on this commit`);
-                continue;
-              }
-              const passed = matching.some(
-                (run) => run.status === "completed" && run.conclusion === "success"
-              );
-              if (!passed) {
-                const seen = matching.map((run) => `${run.status}/${run.conclusion}`).join(", ");
-                problems.push(`${context}: ${seen}`);
-              }
-            }
-            if (problems.length > 0) {
-              console.error(`refusing to publish: required checks not green on ${process.env.COMMIT_SHA}`);
-              for (const problem of problems) console.error(`  ${problem}`);
-              process.exit(1);
-            }
-            console.log(`all ${required.length} required checks green on ${process.env.COMMIT_SHA}`);
-          '
+        run: bash scripts/ci/assert-repo-policy-checks.sh "$GITHUB_SHA"
 
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
@@ -106,7 +129,6 @@ jobs:
         run: pnpm --filter "$PACKAGE_NAME" test
 
       - name: Tag must match package version
-        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           version="$(node -p "require('./' + process.env.PACKAGE_DIR + '/package.json').version")"
@@ -117,7 +139,6 @@ jobs:
           fi
 
       - name: Version must be unpublished
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -163,13 +184,11 @@ jobs:
           test -n "$(node -p "require('./' + process.env.PACKAGE_DIR + '/package.json').license ?? ''")"
 
       - name: Attest exact tarball
-        if: github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ steps.pack.outputs.tgz }}
 
       - name: Attach public release asset
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

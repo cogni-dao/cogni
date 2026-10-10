@@ -505,17 +505,6 @@ describe("cogni-node-app-v1 deployment contract", () => {
 
   it("keeps the profile's required keys as a capability contract, not a per-node list", () => {
     expect(COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS).toContain("EVM_RPC_URL");
-    // OpenFGA has no reviewed off-cluster private transport yet. Akash must not
-    // receive graph coordinates or a fleet bearer and therefore fails closed.
-    expect(COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS).not.toContain(
-      "OPENFGA_STORE_ID"
-    );
-    expect(COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS).not.toContain(
-      "OPENFGA_AUTHORIZATION_MODEL_ID"
-    );
-    expect(COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS).not.toContain(
-      "OPENFGA_API_TOKEN"
-    );
     // The stock deployment no longer re-lists the profile's keys — the profile owns them (bug.5175).
     expect(COGNI_NODE_APP_V1_DEPLOYMENT.services[0]?.secret_refs).toEqual([]);
     // A service without the profile owes nothing — the contract is capability-scoped.

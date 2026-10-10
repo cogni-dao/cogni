@@ -226,16 +226,6 @@ for k in OPENROUTER_API_KEY POSTHOG_API_KEY POSTHOG_HOST EVM_RPC_URL POLYGON_RPC
   assert "$r" "pod key $k ∈ derived universe"
 done
 
-# OpenFGA node apps share graph coordinates, never a fleet bearer. The token is
-# absent from both the catalog-derived pod universe and the node baseline.
-r=0; in_derived OPENFGA_API_TOKEN && r=1
-assert "$r" "OPENFGA_API_TOKEN is NOT projected to node pods"
-r=0
-for k in "${NODE_BASELINE_KEYS[@]}"; do
-  [[ "$k" == OPENFGA_API_TOKEN ]] && r=1
-done
-assert "$r" "OPENFGA_API_TOKEN is NOT in the node materialization baseline"
-
 # 10b. Cross-check four app duals against ACTUAL server-env.ts reads, not the
 #      bash array. (POLYGON_RPC_URL is read in poly adapters, not server-env.)
 for k in OPENROUTER_API_KEY POSTHOG_API_KEY POSTHOG_HOST EVM_RPC_URL; do

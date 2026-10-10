@@ -238,7 +238,7 @@ export interface Secret {
   required: boolean;
   category: string;
   description: string;
-  source: "agent" | "human" | "derived";
+  source: "agent" | "human";
   syncTo?: SyncTarget;
   url?: string;
   steps: string[];
