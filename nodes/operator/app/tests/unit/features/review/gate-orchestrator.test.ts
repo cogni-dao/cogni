@@ -169,3 +169,91 @@ describe("runGates", () => {
     expect(result.gateResults).toHaveLength(0);
   });
 });
+
+/**
+ * FAIL_ON_ERROR_IS_HONOURED (bug.5327).
+ *
+ * These pin BEHAVIOUR, not wording: `fail_on_error` was parsed into `gatesConfig.failOnError` and
+ * then read by nobody, so the monorepo — which sets `fail_on_error: true` — got six days of silent
+ * `neutral` while the review plane was insolvent. The distinction that matters is *inability* vs
+ * *no opinion*: only the former may be escalated.
+ */
+describe("runGates — fail_on_error honours inability", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const aiGates: GateConfig[] = [
+    { type: "ai-rule", with: { rule_file: "r.yaml" } },
+  ];
+
+  it("escalates an ERRORED gate to fail when failOnError is true", async () => {
+    vi.mocked(evaluateAiRule).mockResolvedValue({
+      gateId: "r",
+      gateType: "ai-rule",
+      status: "neutral",
+      errored: true,
+      errorCode: "insufficient_credits",
+      summary: 'Could NOT evaluate rule "r" — Insufficient credits',
+    });
+
+    const result = await runGates(aiGates, evidence, {
+      ...baseDeps,
+      failOnError: true,
+    });
+
+    expect(result.conclusion).toBe("fail");
+    expect(result.gateResults[0]?.errorCode).toBe("insufficient_credits");
+  });
+
+  it("leaves an ERRORED gate neutral when failOnError is false (prior behaviour)", async () => {
+    vi.mocked(evaluateAiRule).mockResolvedValue({
+      gateId: "r",
+      gateType: "ai-rule",
+      status: "neutral",
+      errored: true,
+      errorCode: "insufficient_credits",
+      summary: "Could NOT evaluate",
+    });
+
+    const result = await runGates(aiGates, evidence, {
+      ...baseDeps,
+      failOnError: false,
+    });
+
+    expect(result.conclusion).toBe("neutral");
+  });
+
+  it("does NOT escalate a genuinely neutral gate — inability is not the same as no opinion", async () => {
+    vi.mocked(evaluateAiRule).mockResolvedValue({
+      gateId: "r",
+      gateType: "ai-rule",
+      status: "neutral",
+      summary: 'Rule "r" neutral (missing metrics)',
+    });
+
+    const result = await runGates(aiGates, evidence, {
+      ...baseDeps,
+      failOnError: true,
+    });
+
+    expect(result.conclusion).toBe("neutral");
+  });
+
+  it("marks a crashed gate as errored so failOnError can see it", async () => {
+    vi.mocked(evaluateAiRule).mockRejectedValue(new Error("boom"));
+
+    const result = await runGates(aiGates, evidence, {
+      ...baseDeps,
+      failOnError: true,
+    });
+
+    expect(result.gateResults[0]?.errored).toBe(true);
+    expect(result.conclusion).toBe("fail");
+  });
+});

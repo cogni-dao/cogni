@@ -14,6 +14,18 @@ verified: 2026-03-15
 tags: [web3, billing, wallet, openrouter]
 ---
 
+> **PARTIALLY RETIRED 2026-09-30 — not deleted, and deliberately so.**
+>
+> | part                                                                           | state                                                                                                                                            |
+> | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+> | OpenRouter as the **AI provider**                                              | **LIVE.** Every model routes through it (`infra/compose/runtime/configs/litellm.config.yaml`), and `OPENROUTER_API_KEY` is a live runtime secret |
+> | The **Coinbase Commerce credit top-up** path (`POST /api/v1/credits/coinbase`) | **DEAD.** OpenRouter removed it; it returns `410 Gone`. No `fundOpenRouterTopUp` call survives in non-test code                                  |
+>
+> Outbound provider payment is superseded by x402 per [x402-e2e.md](./x402-e2e.md), under the boundary
+> in [node-operator-x402.md](./node-operator-x402.md). Retained because live code still cites it
+> (`shared/env/server-env.ts:365`) and because the provider half is current — a blanket purge would
+> have mislabelled a live dependency as dead.
+
 # Web3 → OpenRouter Credit Top-Up
 
 > When a user pays for credits, the system automatically provisions OpenRouter with the exact provider cost — derived from existing billing constants, never hardcoded.

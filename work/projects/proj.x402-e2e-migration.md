@@ -16,6 +16,16 @@ labels: [billing, x402, web3, provider, migration]
 
 # x402 E2E Migration: Hyperbolic + Per-Request Settlement
 
+> **REALIGNED 2026-09-30.** The "no credit_ledger, no Privy, no Splits" framing in this project's
+> summary/outcome is **superseded**. Corrected boundary: **credits stay** as the node-local human
+> on-ramp; **USDC via x402 is the node↔node rail**; custody is the non-custodial Privy owner quorum
+> from [node-payments-empowerment](../../docs/design/node-payments-empowerment.md); Splits remain the
+> inbound revenue rail. Authority:
+> [node-operator-x402.md](../../docs/spec/node-operator-x402.md) +
+> [`node-service-usdc-northstar`](https://cognidao.org/knowledge/node-service-usdc-northstar).
+> The load-bearing unbuilt piece is the **buy side** (outbound signer + spend cap + price list +
+> `treasurer`/`spender` grant) — tracked in `story.5056`.
+
 > Spec: [x402-e2e.md](../../docs/spec/x402-e2e.md)
 > Research: [gateway-billing-analysis.md](../../docs/research/gateway-billing-analysis.md)
 > Supersedes: [proj.ai-operator-wallet.md](proj.ai-operator-wallet.md) (Privy + Splits + Coinbase Commerce approach)

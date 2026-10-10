@@ -179,7 +179,27 @@ _(none — planned work tracked in proj.payments-enhancements.md: pre-call max-c
 
 ## Forward Path
 
-The `credit_ledger` and prepaid credit model documented here is the current as-built system. The forward path ([x402 per-request settlement](./x402-e2e.md)) eliminates credit balances — users pay per-request via x402 `upto` scheme (USDC on Base). `charge_receipts` and the LiteLLM cost oracle remain unchanged across both models.
+**Corrected 2026-09-30.** An earlier version of this section said x402 "eliminates credit balances".
+That is wrong as stated, and the error let three specs describe three different futures.
+
+Credits and x402 are **two rails divided by the node boundary**, not two eras:
+
+```text
+human --credits (node-local, USD-denominated, a spend cap)--> a node
+node  --USDC via x402 (per-request, on-chain)--------------->  another node
+```
+
+- **Credits stay** as the node-local human on-ramp and the pre-auth for node-local AI spend. A person
+  wants a cap, not to sign USDC per request. `credit_ledger` and this document's invariants remain
+  as-built.
+- **Node↔node settlement is USDC**, because a credit balance lives in ONE node's Postgres — billing
+  another node in credits needs a database both can write, which makes its owner a central bank and
+  contradicts `NO_FINANCIAL_INTERMEDIATION` in [node-operator-x402.md](./node-operator-x402.md).
+- `charge_receipts` + the LiteLLM cost oracle are unchanged on both rails.
+
+Authority for the boundary: [node-operator-x402.md](./node-operator-x402.md) (north-star contract)
+and the hub rule [`node-service-usdc-northstar`](https://cognidao.org/knowledge/node-service-usdc-northstar).
+Gap analysis + e2e workflows: [node-service-billing-foundations](../research/node-service-billing-foundations.md).
 
 ## Related
 

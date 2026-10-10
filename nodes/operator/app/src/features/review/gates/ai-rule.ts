@@ -39,6 +39,29 @@ export const EvaluationOutputSchema = z.object({
 
 export type EvaluationOutput = z.infer<typeof EvaluationOutputSchema>;
 
+/**
+ * Map a graph-execution failure to a stable, alertable code.
+ *
+ * `insufficient_credits` and `unknown_model` are operator-side faults that present identically to a
+ * benign result unless named — see the `starvation-not-a-verdict` knowledge rule.
+ */
+function classifyGraphFailure(reason: string): string {
+  const r = reason.toLowerCase();
+  if (
+    r.includes("insufficient credits") ||
+    r.includes("insufficient_credits")
+  ) {
+    return "insufficient_credits";
+  }
+  if (
+    r.includes("model") &&
+    (r.includes("not found") || r.includes("unknown"))
+  ) {
+    return "unknown_model";
+  }
+  return "graph_execution_failed";
+}
+
 /** Parsed evaluation: metric name → prompt text. */
 function extractEvaluations(
   rule: Rule
@@ -98,11 +121,19 @@ export async function evaluateAiRule(params: {
   const final = await result.final;
 
   if (!final.ok) {
+    // INABILITY_IS_NOT_A_VERDICT (bug.5327): the graph did not run, so this gate has no verdict —
+    // it has an EXCUSE. Marking `errored` lets `fail_on_error` escalate it and keeps the summary
+    // from reading like a clean evaluation. The raw reason is surfaced verbatim because the two
+    // real-world causes ("Insufficient credits", an unresolvable model id) are both operator
+    // actions, and burying them in a collapsed summary body cost six days of silent outage.
+    const reason = final.error ?? "unknown error";
     return {
       gateId: rule.id,
       gateType: "ai-rule",
       status: "neutral",
-      summary: `AI evaluation failed: ${final.error ?? "unknown error"}`,
+      errored: true,
+      errorCode: classifyGraphFailure(reason),
+      summary: `Could NOT evaluate rule "${rule.id}" — ${reason}`,
     };
   }
 

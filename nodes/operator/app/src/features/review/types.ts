@@ -20,6 +20,18 @@ export interface GateResult {
   readonly gateType: string;
   readonly status: GateStatus;
   readonly summary: string;
+  /**
+   * True when the gate could NOT be evaluated (crash, timeout, LLM/graph error, no credits) as
+   * opposed to having evaluated and reached no opinion.
+   *
+   * INABILITY_IS_NOT_A_VERDICT (bug.5327): both cases used to collapse into bare `neutral`, so a
+   * review plane that was broke for six days rendered identically to a clean PR — `1 passed |
+   * 0 failed | 3 neutral`, which reads as "fine". This flag is what lets `fail_on_error` tell them
+   * apart, and what keeps the summary honest about which happened.
+   */
+  readonly errored?: boolean;
+  /** Stable machine-readable reason when `errored` is true (e.g. `insufficient_credits`). */
+  readonly errorCode?: string;
   /** Per-metric scores (only for ai-rule gates). */
   readonly metrics?: ReadonlyArray<{
     readonly metric: string;
