@@ -28,6 +28,8 @@
  *   - OVERLAP_BEFORE_CLOSE: a lease close is IRREVERSIBLE and its idempotence key is refused
  *     forever once settled, so the outgoing lease is held open until the incoming one is proven
  *     serving and DNS has flipped. Never more than two lease children for one (node, env).
+ *   - WORKFLOW_WORKER_FAILS_CLOSED: admission rejects a Worker without Temporal topology and
+ *     rejects production until namespace-scoped server authorization exists.
  * Side-effects: IO (reads repo manifests)
  * Links: story.5016 R2.3, task.5095, task.5096, infra/crossplane/AGENTS.md
  * @public
@@ -178,6 +180,33 @@ describe("XComputeWorkload composite API (task.5096)", () => {
     const refItem = (service.secretRefs as YamlObject).items as YamlObject;
     expect(Object.keys(refItem.properties as YamlObject)).toEqual(["key"]);
     expect(refItem.required).toEqual(["key"]);
+  });
+
+  it("fails closed when a workflow Worker lacks Temporal topology or targets production", () => {
+    const rules = specObjectSchema["x-kubernetes-validations"] as YamlObject[];
+    const ruleTexts = rules.map((validation) => validation.rule as string);
+    const messages = rules.map((validation) => validation.message as string);
+
+    expect(
+      ruleTexts.some(
+        (rule) =>
+          rule.includes("cogni-workflow-worker-v1") &&
+          rule.includes("has(self.runtime)")
+      )
+    ).toBe(true);
+    expect(
+      ruleTexts.some(
+        (rule) =>
+          rule.includes("cogni-workflow-worker-v1") &&
+          rule.includes("self.environment != 'production'")
+      )
+    ).toBe(true);
+    expect(messages).toContain(
+      "cogni-workflow-worker-v1 requires runtime.substrateHost for Temporal connectivity"
+    );
+    expect(messages).toContain(
+      "cogni-workflow-worker-v1 is pre-production only until Temporal namespace authorization is enforced"
+    );
   });
 
   it("owns BOOT_SLO_OR_CLOSE, which task.5095 explicitly left unowned", () => {

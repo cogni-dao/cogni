@@ -85,6 +85,17 @@ spec:
                   message: every service must reference a declared bundle artifact
                 - rule: "self.bundle.artifacts.all(a, self.workload.services.exists(s, s.artifact == a.name))"
                   message: every bundle artifact must be used by at least one service
+                # WORKFLOW_WORKER_FAILS_CLOSED. The materializer enforces both rules before it
+                # writes an XR, but the XRD is the admission boundary and must reject a direct or
+                # stale writer that bypasses that application-layer guard.
+                - rule: >-
+                    self.workload.services.filter(s, has(s.runtimeProfile) && s.runtimeProfile == 'cogni-workflow-worker-v1').size() == 0 ||
+                    has(self.runtime)
+                  message: cogni-workflow-worker-v1 requires runtime.substrateHost for Temporal connectivity
+                - rule: >-
+                    self.workload.services.filter(s, has(s.runtimeProfile) && s.runtimeProfile == 'cogni-workflow-worker-v1').size() == 0 ||
+                    self.environment != 'production'
+                  message: cogni-workflow-worker-v1 is pre-production only until Temporal namespace authorization is enforced
                 # PLACEMENT_CHANGE_REQUIRES_FRESH_KEY. This must live at spec scope: a
                 # field-scoped rule cannot inspect sibling leaseGeneration and therefore
                 # made the env-manager's documented placement+bump transaction impossible.
@@ -253,15 +264,17 @@ spec:
                             { type: integer, minimum: 128, maximum: 1048576 }
                 runtime:
                   description: >-
-                    Value-free runtime topology for the `cogni-node-app-v1` profile. The legacy
-                    controller DERIVED this from the hostname inside the DATABASE_URL SECRET
-                    VALUE, which an OSS engine that never sees a secret structurally cannot do.
-                    Stating it is therefore not new policy — it is the same policy, moved from a
-                    place only a privileged process could read it to a place desired state can
-                    declare it. A hostname is not a credential; the DSN that contains it is, and
-                    that stays a placeholder. ABSENT is supported and degrades EXACTLY like the
+                    Value-free runtime topology for the `cogni-node-app-v1` and
+                    `cogni-workflow-worker-v1` profiles. The legacy controller DERIVED this from
+                    the hostname inside the DATABASE_URL SECRET VALUE, which an OSS engine that
+                    never sees a secret structurally cannot do. Stating it is therefore not new
+                    policy — it is the same policy, moved from a place only a privileged process
+                    could read it to a place desired state can declare it. A hostname is not a
+                    credential; the DSN that contains it is, and that stays a placeholder. ABSENT
+                    remains supported for compatibility workloads and degrades exactly like the
                     legacy path did on an unparseable DSN: the substrate env block is omitted
-                    (no Temporal / Redis / LiteLLM wiring) rather than guessed.
+                    rather than guessed. A workflow Worker cannot use that compatibility fallback;
+                    admission requires this block so its Temporal wiring never fails silently.
                   type: object
                   required: [substrateHost]
                   properties:
