@@ -141,6 +141,18 @@ export const authorizationFacadeGrantOperation = {
   output: AuthzWriteDecisionSchema,
 } as const;
 
+export const authorizationFacadeCredentialRotateOperation = {
+  id: "authorization.facade.credential.rotate.v1",
+  input: z.strictObject({}),
+  output: z.strictObject({
+    state: z.literal("prepared"),
+    version: z.number().int().nonnegative(),
+    path: z.string().min(1),
+    overlapWindowSeconds: z.number().int().positive(),
+    requiredNext: z.literal("redeploy_and_verify"),
+  }),
+} as const;
+
 export type AuthorizationFacadeCheckInput = z.infer<
   typeof authorizationFacadeCheckOperation.input
 >;
