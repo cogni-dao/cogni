@@ -131,11 +131,11 @@ describe("nodeAppBaseUrl", () => {
 });
 
 describe("controlEnvFor (bug.5204/bug.5235 — FLEET_CONTROL_ENV twin of appset-paths.sh)", () => {
-  it("keeps production reconciled by production regardless of provider or fleet control env", () => {
+  it("routes every Akash lane through the fleet control env", () => {
     expect(controlEnvFor("production", "akash")).toBe("production");
     expect(controlEnvFor("production", "k3s")).toBe("production");
     expect(controlEnvFor("production", "akash", "candidate-a")).toBe(
-      "production"
+      "candidate-a"
     );
   });
 

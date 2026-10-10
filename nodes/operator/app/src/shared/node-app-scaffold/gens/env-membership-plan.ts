@@ -252,7 +252,7 @@ export type EnvAddShape =
     }
   /**
    * Externally built row: akash placement, crossplane authority, the FLEET CONTROL ENV reconciles
-   * the non-production lane. `controlEnv` is a `string` because the fleet control env is fleet
+   * every lane. `controlEnv` is a `string` because the fleet control env is fleet
    * config (`FLEET_CONTROL_ENV`, `controlEnvFor`) — `production` on cogni-dao, `candidate-a` on an
    * isolated test fleet — not necessarily one of this repo's own NodeFormationEnv literals.
    */
