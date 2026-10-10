@@ -43,6 +43,52 @@ jobs:
             exit 1
           fi
 
+      # A main ancestor is not necessarily gated: an admin can push directly,
+      # and a tag may target any historical ancestor. Release only bytes whose
+      # exact commit reported every check named by the repository policy.
+      - name: Tagged commit must have passed every required check
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/commits/${COMMIT_SHA}/check-runs?per_page=100" \
+            --jq '.check_runs[] | {name, status, conclusion}' > /tmp/check-runs.ndjson
+          node -e '
+            const fs = require("node:fs");
+            const policy = JSON.parse(fs.readFileSync(".cogni/repo-policy.json", "utf8"));
+            const required = policy?.ruleset?.requiredStatusChecks?.contexts ?? [];
+            if (required.length === 0) {
+              console.error("repo-policy declares no required checks - refusing to publish ungated bytes");
+              process.exit(1);
+            }
+            const runs = fs.readFileSync("/tmp/check-runs.ndjson", "utf8")
+              .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+            const problems = [];
+            for (const context of required) {
+              const matching = runs.filter((run) => run.name === context);
+              if (matching.length === 0) {
+                problems.push(`${context}: never reported on this commit`);
+                continue;
+              }
+              const passed = matching.some(
+                (run) => run.status === "completed" && run.conclusion === "success"
+              );
+              if (!passed) {
+                const seen = matching.map((run) => `${run.status}/${run.conclusion}`).join(", ");
+                problems.push(`${context}: ${seen}`);
+              }
+            }
+            if (problems.length > 0) {
+              console.error(`refusing to publish: required checks not green on ${process.env.COMMIT_SHA}`);
+              for (const problem of problems) console.error(`  ${problem}`);
+              process.exit(1);
+            }
+            console.log(`all ${required.length} required checks green on ${process.env.COMMIT_SHA}`);
+          '
+
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
