@@ -1929,6 +1929,14 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         providerLogin: "flock-leader",
         createdAt: new Date("2026-09-01T00:00:00.000Z"),
       });
+      await db.insert(userBindings).values({
+        id: crypto.randomUUID(),
+        userId: derek.user.id,
+        provider: "wallet",
+        externalId: signer.address,
+        providerLogin: null,
+        createdAt: new Date("2026-09-01T00:00:00.000Z"),
+      });
       const [derekActor] = await db
         .select({ id: actors.id })
         .from(actors)
