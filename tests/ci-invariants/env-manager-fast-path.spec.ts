@@ -74,6 +74,7 @@ describe("signed env-manager workflow fast path", () => {
     expect(runs).toContain("check-jsonschema");
     expect(runs).toContain("render-scheduler-worker-endpoints.sh --check");
     expect(runs).toContain("render-node-appset.sh --check");
+    expect(runs).toContain("render-network-nodes.sh --check");
     expect(runs).toContain("render-node-overlays.sh --check");
   });
 });

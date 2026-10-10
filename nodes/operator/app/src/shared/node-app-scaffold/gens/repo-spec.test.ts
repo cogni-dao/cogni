@@ -3,20 +3,17 @@
 
 /**
  * Module: `@shared/node-app-scaffold/gens/repo-spec`
- * Purpose: Pin BORN_REVIEWABLE — the minted `.cogni/repo-spec.yaml` must carry the default review
- *   gates, and the ai-rule filenames must match the external node-template's inherited rules — and
- *   BORN_DEPLOYABLE: the minted spec must declare a complete `deployment:` block so a fresh node is
- *   external-compute capable with zero hand-editing (task.5079).
- * Scope: Pure unit test over `renderRepoSpec` output; does not exercise the mint network path.
- * Invariants: minted spec has gates, has no `nodes:` registry (single-node-fork signal), and its
- *   ai-rule `rule_file`s match the template contract.
+ * Purpose: Pin TEMPLATE_SPEC_SHAPE — minting substitutes node identity into the exact inherited
+ *   template spec, preserving review gates, schedules, private Workers, and future extensions.
+ * Scope: Pure unit test over `renderRepoSpec` output; the adapter test owns the exact-fork-SHA read.
+ * Invariants: minted spec has template-owned gates/workflows/deployment, has no `nodes:` registry
+ *   (single-node-fork signal), and replaces only formation-owned identity/governance values.
  * Side-effects: none.
  * Links: src/shared/node-app-scaffold/gens/repo-spec, infra/catalog/node-template.yaml
  * @public
  */
 
 import {
-  COGNI_NODE_APP_V1_DEPLOYMENT,
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
   extractNodeServices,
   hasDeclaredNodeDeployment,
@@ -34,7 +31,96 @@ const TEMPLATE_RULE_FILES = [
   "repo-goal-alignment.yaml",
 ];
 
+const TEMPLATE_REPO_SPEC = `# Template comment must survive specialization.
+schema_version: "0.1.4"
+node_id: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c"
+scope_id: "b44d4394-3147-5787-acab-51546be6a3da"
+scope_key: default
+intent:
+  name: node-template
+  hook: "Build from this shared foundation"
+  mission: "Template mission"
+  brand:
+    icon: GitFork
+    color: "#22c55e"
+governance:
+  chain_id: "8453"
+activity_ledger:
+  epoch_length_days: 7
+  approvers:
+    - "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+  activity_sources:
+    github:
+      attribution_pipeline: cogni-v0.0
+      source_refs: ["Cogni-DAO/standalone-node"]
+payments:
+  status: pending_activation
+payments_out:
+  steward_wallet:
+    address: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+gates:
+  - type: review-limits
+    id: review_limits
+    with:
+      max_changed_files: 50
+      max_total_diff_kb: 1500
+  - type: ai-rule
+    with:
+      rule_file: pr-syntropy-coherence.yaml
+  - type: ai-rule
+    with:
+      rule_file: patterns-and-docs.yaml
+  - type: ai-rule
+    with:
+      rule_file: repo-goal-alignment.yaml
+schedules:
+  - id: node-template-daily-poem
+    cron: "0 0 * * *"
+    timezone: UTC
+    workflow: ScheduledGraphWorkflow
+    payload:
+      graphId: "langgraph:poet"
+deployment:
+  services:
+    - name: app
+      artifact:
+        name: app
+        context: .
+        dockerfile: Dockerfile
+        target: runner
+      port: 3200
+      visibility: public
+      runtime_profile: cogni-node-app-v1
+      bindings: {}
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 2
+        memory_mi: 2048
+        storage_mi: 4096
+    - name: workflow-worker
+      artifact:
+        name: workflow-worker
+        context: .
+        dockerfile: Dockerfile
+        target: workflow-worker
+      port: 9100
+      visibility: private
+      envs: [candidate-a]
+      runtime_profile: cogni-workflow-worker-v1
+      bindings: {}
+      secret_refs:
+        - key: SCHEDULER_API_TOKEN
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 1
+        memory_mi: 1024
+        storage_mi: 1024
+template_extension:
+  inherited: true
+`;
+
 const rendered = renderRepoSpec({
+  templateRepoSpec: TEMPLATE_REPO_SPEC,
   slug: "my-node",
   repoOwner: "cogni-dao-test",
   nodeId: "11111111-2222-4333-8444-555555555555",
@@ -57,7 +143,12 @@ interface ParsedGate {
 }
 interface ParsedSpec {
   node_id: string;
-  intent?: { name: string; mission?: string };
+  intent?: {
+    name: string;
+    hook?: string;
+    mission?: string;
+    brand?: Record<string, unknown>;
+  };
   activity_ledger?: {
     epoch_length_days: number;
     approvers: string[];
@@ -100,9 +191,15 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
     expect(spec.intent?.mission).toContain("my-node");
   });
 
+  it("does not leak node-template's tagline or brand into the new identity", () => {
+    expect(spec.intent?.hook).toBeUndefined();
+    expect(spec.intent?.brand).toBeUndefined();
+  });
+
   it("honours an explicit mission when provided", () => {
     const withMission = parseYaml(
       renderRepoSpec({
+        templateRepoSpec: TEMPLATE_REPO_SPEC,
         slug: "my-node",
         repoOwner: "cogni-dao-test",
         nodeId: "11111111-2222-4333-8444-555555555555",
@@ -167,10 +264,11 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
 
 describe("renderRepoSpec — BORN_DEPLOYABLE", () => {
   const parsed = parseRepoSpec(rendered);
+  const template = parseRepoSpec(TEMPLATE_REPO_SPEC);
 
-  it("declares its own deployment instead of inheriting the legacy fallback", () => {
+  it("preserves the exact template deployment instead of rebuilding an app-only fallback", () => {
     expect(hasDeclaredNodeDeployment(parsed)).toBe(true);
-    expect(parsed.deployment).toEqual(COGNI_NODE_APP_V1_DEPLOYMENT);
+    expect(parsed.deployment).toEqual(template.deployment);
   });
 
   it("declares exactly one public service with complete resources", () => {
@@ -185,7 +283,38 @@ describe("renderRepoSpec — BORN_DEPLOYABLE", () => {
     }
   });
 
-  it("mints a clean block: no per-node profile refs, resolved to the full contract at build time", () => {
+  it("preserves the private workflow Worker and its candidate environment gate", () => {
+    const worker = extractNodeServices(parsed).find(
+      (service) => service.runtimeProfile === "cogni-workflow-worker-v1"
+    );
+    expect(worker).toMatchObject({
+      name: "workflow-worker",
+      visibility: "private",
+      envs: ["candidate-a"],
+    });
+  });
+
+  it("preserves the node-owned schedule that targets the inherited Worker", () => {
+    expect(parsed.schedules).toEqual(template.schedules);
+    expect(parsed.schedules).toMatchObject([
+      {
+        id: "node-template-daily-poem",
+        workflow: "ScheduledGraphWorkflow",
+        payload: { graphId: "langgraph:poet" },
+      },
+    ]);
+  });
+
+  it("preserves template extensions unknown to the operator renderer", () => {
+    expect(
+      (parsed as unknown as Record<string, unknown>).template_extension
+    ).toEqual({ inherited: true });
+    expect(rendered).toContain(
+      "# Template comment must survive specialization."
+    );
+  });
+
+  it("keeps app profile refs implicit and resolves the full contract at build time", () => {
     const [app] = extractNodeServices(parsed);
     expect(app?.runtimeProfile).toBe("cogni-node-app-v1");
     // The minted spec does not re-list the profile's keys (bug.5175 prune)...

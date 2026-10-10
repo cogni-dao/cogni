@@ -55,8 +55,9 @@ function nodeRows(): CatalogEntry[] {
  * desired state and the PAYING cluster holds it; k3s rows stay with their own env's Argo.
  */
 function reconcilingCluster(env: string, provider: string | undefined): string {
-  if (env === "production") return "production";
-  return provider === "akash" ? "production" : env;
+  return provider === "akash"
+    ? process.env.FLEET_CONTROL_ENV?.trim() || "production"
+    : env;
 }
 
 const ROWS = nodeRows();

@@ -4,12 +4,12 @@
  * Module: `@shared/node-app-scaffold/gens/network-nodes`
  * Purpose: Single-file splice that adds a newly-published node to the committed web-node ROSTER
  *   (`src/adapters/server/node-registry/network-nodes.data.ts`). The operator runtime image ships only
- *   its own `.cogni` — NOT `infra/catalog/` — so the roster is a hand-lifted catalog projection kept
+ *   its own `.cogni` — NOT `infra/catalog/` — so the roster is a committed catalog projection kept
  *   honest by the drift guard `tests/unit/adapters/node-registry/network-nodes-catalog-drift.test.ts`
  *   (roster slug set MUST equal the catalog's `type: node` set). Before this splice the roster was
  *   maintained BY HAND, so every wizard publish PR (which adds the node to the catalog) failed the drift
- *   test and was un-mergeable. `buildFootprintEntries` now calls this so the publish PR is born drift-green
- *   — exactly like `insertCaddyBlock` / `insertSchedulerEndpoint`.
+ *   test and was un-mergeable. `buildFootprintEntries` uses this in the remote tree transaction;
+ *   `scripts/ci/render-network-nodes.sh` is the full-fleet repair/check path used by CI and mirror sync.
  * Scope: Pure string transform over the roster file's text — no IO, no env.
  * Invariants:
  *   - IDEMPOTENT_REFUSE: re-adding an already-present slug throws (mirrors insertSchedulerEndpoint); the

@@ -9,8 +9,8 @@
  *   from the node's OWN `/.well-known/agent.json` identity (a repo-spec projection), so a node customizes
  *   its gallery card by editing its repo-spec — never operator code. This roster mirrors the deploy
  *   catalog's web-serving nodes (`infra/catalog/<name>.yaml` with `type: node`), which the operator
- *   runtime image CANNOT fs-glob (it ships only its own `.cogni`, not `infra/catalog/`), so the slug set
- *   is hand-lifted and kept honest by a drift-guard unit test that re-reads the catalog at TEST time.
+ *   runtime image CANNOT fs-glob (it ships only its own `.cogni`, not `infra/catalog/`), so the roster is
+ *   generated at development/sync time and guarded against catalog drift in CI.
  * Scope: Static data only — no IO, no env, NO display literals. Each `name` matches
  *   `infra/catalog/<name>.yaml`. Infra-only catalog entries (`type: infra`/`service`: litellm, openfga,
  *   scheduler-worker) are EXCLUDED — they have no public web tier so they can never be a gallery card.
@@ -20,7 +20,7 @@
  *     network-nodes-catalog-drift.test.ts`): `name` ← catalog `type: node` set; `primary` ← catalog
  *     `is_primary_host`; `nodeId` ← catalog `node_id` (submodule) or `nodes/<slug>/.cogni/repo-spec.yaml`
  *     (in-repo), per `REPO_SPEC_IS_IDENTITY_SSOT` (infra/catalog/_schema.json). Any drift on any field
- *     fails the test. Publish keeps it green automatically via the `insertNetworkNode` splice.
+ *     fails the test. The full renderer and publish-time `insertNetworkNode` splice keep it green.
  *   - NO_OPERATOR_IDENTITY_LITERALS: this module holds NO title/tagline/thumbnail. Identity comes from the
  *     node's well-known projection at runtime (resolveNodeLiveness). The operator never names a node.
  *   - PRIMARY_SERVES_APEX (task.5078; docs/spec/ci-cd.md axiom 16): `primary: true` marks the single node
@@ -52,7 +52,7 @@ export interface NetworkNode {
  * The full deployed web-node roster, in display order. This is the gallery's candidate set: each slug is
  * probed for liveness + self-described identity (resolveNodeLiveness). The roster carries ONLY catalog
  * membership — slug, deployment id, and the primary flag — because the operator holds zero per-node
- * identity. The slug set is pinned to the catalog's `type: node` entries by the drift test.
+ * identity. `scripts/ci/render-network-nodes.sh` deterministically projects it from this fleet's catalog.
  */
 export const NETWORK_NODES: readonly NetworkNode[] = [
   {

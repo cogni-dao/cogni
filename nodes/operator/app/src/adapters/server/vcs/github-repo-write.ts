@@ -2779,11 +2779,29 @@ export class GitHubRepoWriter implements DeployPlanePort {
         409
       );
     }
-    const repoSpecSha = await this.createBlob(
+    // TEMPLATE_SPEC_SHAPE: specialize the repo-spec from the fork's EXACT inherited commit.
+    // Never reconstruct a thinner operator-owned copy: when node-template adds a schedule,
+    // private worker, gate, or future substrate block, the next wizard spawn inherits it without
+    // another control-plane release. Binding the read to baseCommitSha also avoids a main-moved
+    // race between fork creation and identity specialization.
+    const inheritedRepoSpec = await this.readFileAtRef(
       octokit,
       owner,
       slug,
-      renderRepoSpec({
+      ".cogni/repo-spec.yaml",
+      baseCommitSha
+    );
+    if (!inheritedRepoSpec) {
+      throw deployPlaneError(
+        "template_repo_spec_missing",
+        `node-template source drift: ${owner}/${slug}@${baseCommitSha} is missing .cogni/repo-spec.yaml`,
+        409
+      );
+    }
+    let specializedRepoSpec: string;
+    try {
+      specializedRepoSpec = renderRepoSpec({
+        templateRepoSpec: inheritedRepoSpec,
         slug,
         repoOwner: owner,
         nodeId: input.nodeId,
@@ -2794,7 +2812,19 @@ export class GitHubRepoWriter implements DeployPlanePort {
         tokenContract: input.tokenContract,
         knowledgeRemote: input.knowledgeRemote,
         mission: input.mission,
-      })
+      });
+    } catch (error) {
+      throw deployPlaneError(
+        "template_repo_spec_invalid",
+        `node-template source drift: ${owner}/${slug}@${baseCommitSha} has an invalid .cogni/repo-spec.yaml: ${String(error)}`,
+        409
+      );
+    }
+    const repoSpecSha = await this.createBlob(
+      octokit,
+      owner,
+      slug,
+      specializedRepoSpec
     );
     const externalSecretEntries: GitTreeEntry[] = [];
     for (const env of NODE_FORMATION_ENVS) {
