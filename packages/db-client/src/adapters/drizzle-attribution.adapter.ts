@@ -2133,17 +2133,13 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           .select({ effectiveFrom: actorBeneficiaryPolicies.effectiveFrom })
           .from(actorBeneficiaryPolicies)
           .where(
-            eq(
-              actorBeneficiaryPolicies.earnedByActorId,
-              params.earnedByActorId
-            )
+            eq(actorBeneficiaryPolicies.earnedByActorId, params.earnedByActorId)
           )
           .orderBy(desc(actorBeneficiaryPolicies.effectiveFrom))
           .limit(1),
         tx
           .select({
-            contributionCutoff:
-              actorContributionAllocations.contributionCutoff,
+            contributionCutoff: actorContributionAllocations.contributionCutoff,
           })
           .from(actorContributionAllocations)
           .where(
