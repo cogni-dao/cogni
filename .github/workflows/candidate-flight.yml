@@ -1048,7 +1048,13 @@ jobs:
 
   node-substrate:
     needs:
-      [decide, reconcile-appset, reconcile-dns, prepare-substrate-deploy-branch, flight-probe-project]
+      [
+        decide,
+        reconcile-appset,
+        reconcile-dns,
+        prepare-substrate-deploy-branch,
+        flight-probe-project,
+      ]
     if: |
       always() &&
       needs.decide.outputs.has_substrate_node_targets == 'true' &&
@@ -1166,7 +1172,13 @@ jobs:
 
   flight:
     needs:
-      [decide, reconcile-appset, node-substrate, assert-substrate, flight-probe-project]
+      [
+        decide,
+        reconcile-appset,
+        node-substrate,
+        assert-substrate,
+        flight-probe-project,
+      ]
     # Per-cell isolation (Axiom 18): this job runs whenever there are flight
     # targets. It does NOT gate on the matrix-aggregate node-substrate /
     # assert-substrate result — that rollup goes failure if ANY node's substrate
