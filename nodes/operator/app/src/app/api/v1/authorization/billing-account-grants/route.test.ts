@@ -164,7 +164,9 @@ describe("POST /api/v1/authorization/billing-account-grants", () => {
       JSON.stringify({ padding: "x".repeat(9_000) })
     );
     expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toEqual({ error: "invalid_request" });
+    await expect(response.json()).resolves.toEqual({
+      error: "invalid_request",
+    });
     expect(authenticate).not.toHaveBeenCalled();
     expect(mutate).not.toHaveBeenCalled();
   });
