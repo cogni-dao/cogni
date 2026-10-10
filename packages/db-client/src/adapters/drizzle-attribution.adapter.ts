@@ -492,7 +492,7 @@ function toActorDistributionLiability(
     sourceEvidenceHash: row.sourceEvidenceHash,
     signerActorId: row.signerActorId,
     resolverFailure:
-      row.resolverFailureJson as ActorDistributionLiabilityRecord["resolverFailure"],
+      row.resolverFailureJson as unknown as ActorDistributionLiabilityRecord["resolverFailure"],
     createdAt: row.createdAt,
   };
 }
