@@ -11,13 +11,13 @@ spec:
   nodeId: 921b1d1d-4ded-4a6d-b3f1-f7d6affa406a
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/red@sha256:f64a42a9d536261f485fa65e7737027c992474b44b1778ed2770d39fef49b594
+    ref: ghcr.io/cogni-dao/red@sha256:dffbf7e2941fdc2f71550b5b141b5519166cdd9d294b33778baf48cf3d8618a1
     source:
       repository: cogni-dao/red
-      sha: a4eefd4876963804e35cc9b1dba5d2cf716fce69
+      sha: 4b8055809684d3a5dfb342ff550711db840f8ff8
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/red@sha256:21e7092be190c1c03363269be18e3055c47acb8139cf8b268f7d48f707d0ef07
+        image: ghcr.io/cogni-dao/red@sha256:f2970110c1438db15cae9cdf92f062ceabb9c7f5ada1007ab35cf30c5cc9cd13
   workload:
     name: red
     publicHost: red.cognidao.org
@@ -34,6 +34,7 @@ spec:
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
+          - key: FLIGHT_PROBE_API_KEY
         port: 3200
         visibility: public
         bindings: {}
