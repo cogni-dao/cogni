@@ -12,6 +12,9 @@ export interface ActorWalletBindingEvidence {
   readonly provider: "wallet";
   readonly externalId: string;
   readonly bindingCreatedAt: string;
+  readonly eventType: string;
+  readonly authorizedByActorId: string;
+  readonly effectiveAt: string;
   readonly bindingEvidence: Readonly<Record<string, unknown>>;
 }
 

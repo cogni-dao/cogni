@@ -170,12 +170,20 @@ export class DrizzleClaimantWalletResolver
         externalId: actorBindings.externalId,
         evidenceEventId: actorBindings.evidenceEventId,
         createdAt: actorBindings.createdAt,
+        eventType: actorBindingEvents.eventType,
+        authorizedByActorId: actorBindingEvents.authorizedByActorId,
+        effectiveAt: actorBindingEvents.effectiveAt,
         evidence: actorBindingEvents.evidence,
       })
       .from(actorBindings)
       .innerJoin(
         actorBindingEvents,
-        eq(actorBindingEvents.id, actorBindings.evidenceEventId)
+        and(
+          eq(actorBindingEvents.id, actorBindings.evidenceEventId),
+          eq(actorBindingEvents.actorId, actorBindings.actorId),
+          eq(actorBindingEvents.provider, actorBindings.provider),
+          eq(actorBindingEvents.externalId, actorBindings.externalId)
+        )
       )
       .where(
         and(
@@ -235,6 +243,9 @@ export class DrizzleClaimantWalletResolver
           provider: "wallet",
           externalId: binding.externalId,
           bindingCreatedAt: binding.createdAt.toISOString(),
+          eventType: binding.eventType,
+          authorizedByActorId: binding.authorizedByActorId,
+          effectiveAt: binding.effectiveAt.toISOString(),
           bindingEvidence: binding.evidence,
         },
         failureEvidence: null,
