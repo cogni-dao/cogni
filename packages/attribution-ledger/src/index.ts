@@ -22,18 +22,6 @@ export {
   type FrozenActorContributionAllocation,
   freezeActorContributionAllocation,
 } from "./actor-contribution-allocation";
-// Allocation algorithm framework (pure, deterministic)
-export {
-  computeProposedAllocations,
-  computeReceiptWeights,
-  deriveAllocationAlgoRef,
-  type ProposedAllocation,
-  type ReceiptForWeighting,
-  type ReceiptUnitWeight,
-  type SelectedReceiptForAllocation,
-  validateWeightConfig,
-} from "./allocation";
-
 export {
   type ActorAwareSettlementPlan,
   type ActorSettlementAmount,
@@ -48,6 +36,17 @@ export type {
   ActorWalletResolutionFailureCode,
   ActorWalletResolutionFailureEvidence,
 } from "./actor-wallet-resolution";
+// Allocation algorithm framework (pure, deterministic)
+export {
+  computeProposedAllocations,
+  computeReceiptWeights,
+  deriveAllocationAlgoRef,
+  type ProposedAllocation,
+  type ReceiptForWeighting,
+  type ReceiptUnitWeight,
+  type SelectedReceiptForAllocation,
+  validateWeightConfig,
+} from "./allocation";
 
 // Evaluation envelope validation
 export {
@@ -190,9 +189,9 @@ export type {
   InsertStatementParams,
   InsertUserProjectionParams,
   OverrideStore,
+  PendingActorDistributionLiability,
   PoolComponentInsertResult,
   PoolStore,
-  PendingActorDistributionLiability,
   ProjectionStore,
   ReceiptClaimantsRecord,
   ReceiptStore,

@@ -27,11 +27,8 @@ import {
 } from "@cogni/aragon-osx";
 import {
   type ActorBeneficiaryWalletResolver,
-  type AttributionStore,
-  type ReceiptClaimantsRecord,
-  type ReceiptUnitWeight,
-  type SubjectOverride,
   applyReceiptWeightOverrides,
+  type AttributionStore,
   buildEIP712TypedData,
   buildReceiptWeightOverrideSnapshots,
   claimantKey,
@@ -40,6 +37,9 @@ import {
   computeFinalClaimantAllocationSetHash,
   explodeToClaimants,
   parseEIP712DeploymentEnvironment,
+  type ReceiptClaimantsRecord,
+  type ReceiptUnitWeight,
+  type SubjectOverride,
   toReviewSubjectOverrides,
 } from "@cogni/attribution-ledger";
 import { dispatchAllocator } from "@cogni/attribution-pipeline-contracts";
@@ -496,14 +496,17 @@ export async function runFinalizeEpoch(
       })),
     };
 
-    const [currentActorAllocations, unfoldedActorAllocations, pendingLiabilities] =
-      await Promise.all([
-        attributionStore.listActorContributionAllocationsForEpoch(args.epochId),
-        attributionStore.listUnfoldedActorContributionAllocationsForEpoch(
-          args.epochId
-        ),
-        attributionStore.listPendingActorDistributionLiabilities(args.epochId),
-      ]);
+    const [
+      currentActorAllocations,
+      unfoldedActorAllocations,
+      pendingLiabilities,
+    ] = await Promise.all([
+      attributionStore.listActorContributionAllocationsForEpoch(args.epochId),
+      attributionStore.listUnfoldedActorContributionAllocationsForEpoch(
+        args.epochId
+      ),
+      attributionStore.listPendingActorDistributionLiabilities(args.epochId),
+    ]);
     const actorAware =
       currentActorAllocations.length > 0 || pendingLiabilities.length > 0;
 

@@ -57,8 +57,8 @@ import type {
   InsertSignedActorContributionAllocationParams,
   InsertStatementParams,
   InsertUserProjectionParams,
-  PoolComponentInsertResult,
   PendingActorDistributionLiability,
+  PoolComponentInsertResult,
   ReceiptClaimantsRecord,
   ReviewSubjectOverrideRecord,
   SelectedReceiptForAllocation,
@@ -72,10 +72,10 @@ import type {
   UpsertSelectionParams,
 } from "@cogni/attribution-ledger";
 import {
+  canonicalJsonStringify,
   EpochNotFoundError,
   EpochNotInReviewError,
   EpochNotOpenError,
-  canonicalJsonStringify,
   type EpochStatus,
   freezeActorContributionAllocation,
 } from "@cogni/attribution-ledger";
@@ -1755,7 +1755,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           isNull(actorDistributionSettlements.id)
         )
       )
-      .orderBy(sourceEpoch.periodEnd, actorDistributionLiabilities.allocationRef);
+      .orderBy(
+        sourceEpoch.periodEnd,
+        actorDistributionLiabilities.allocationRef
+      );
     return rows.map((row) => ({
       ...toActorDistributionLiability(row.liability),
       allocation: toActorContributionAllocation(row.allocation),
@@ -1769,9 +1772,9 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     >[]
   ): Promise<void> {
     if (liabilities.length === 0) return;
-    await this.validateEpochIds(
-      [...new Set(liabilities.map((liability) => liability.sourceEpochId))]
-    );
+    await this.validateEpochIds([
+      ...new Set(liabilities.map((liability) => liability.sourceEpochId)),
+    ]);
     await this.db.transaction(async (tx) => {
       for (const liability of liabilities) {
         const [inserted] = await tx

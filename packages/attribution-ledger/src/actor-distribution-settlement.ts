@@ -48,7 +48,8 @@ function allocateAmounts(
   subjects: readonly WeightedSubject[],
   totalAmount: bigint
 ): ReadonlyMap<string, bigint> {
-  if (totalAmount < 0n) throw new RangeError("totalAmount must be non-negative");
+  if (totalAmount < 0n)
+    throw new RangeError("totalAmount must be non-negative");
   const totalUnits = subjects.reduce((sum, subject) => {
     if (subject.units < 0n) {
       throw new RangeError(`negative settlement units for ${subject.key}`);
@@ -137,7 +138,8 @@ export function computeActorAwareSettlementPlan(input: {
     actorAmounts: [...input.actorAllocations]
       .sort((a, b) => a.allocationRef.localeCompare(b.allocationRef))
       .flatMap((allocation) => {
-        const tokenAmount = amounts.get(`actor:${allocation.allocationRef}`) ?? 0n;
+        const tokenAmount =
+          amounts.get(`actor:${allocation.allocationRef}`) ?? 0n;
         return tokenAmount > 0n ? [{ allocation, tokenAmount }] : [];
       }),
     legacyAmounts: legacyAllocations
