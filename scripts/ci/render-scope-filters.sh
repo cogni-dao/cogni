@@ -11,16 +11,18 @@
 # This generator loops the on-disk `nodes/*` listing (minus operator) instead, so
 # a node formation (a new `nodes/<slug>/` dir) yields its filter + negation for free.
 #
-# `dorny/paths-filter` needs the filter inline in the workflow, so this script
-# generate-and-commits the region of `.github/workflows/ci.yaml` between the
-# `# >>> GENERATED scope-filters` / `# <<< GENERATED scope-filters` sentinels.
+# `dorny/paths-filter` accepts a multiline step output, so the workflow invokes
+# this script at runtime and passes the generated YAML directly to the action.
+# The workflow stays byte-identical across the hub and test-parent mirror while
+# each checkout classifies its own `nodes/*` roster. No generated roster state is
+# committed and no sync repair hand-edits workflow YAML.
 # `nodes/*` (not catalog type:node) is the SSOT because the gate keys on the
 # directory layout the parity tests read; classify.ts + single-node-scope-meta.spec.ts
 # agree with this same listing.
 #
-# Usage: render-scope-filters.sh            # write the filter block to stdout
-#        render-scope-filters.sh --write    # splice the block into ci.yaml in place
-#        render-scope-filters.sh --check    # fail if ci.yaml's block is stale
+# Usage: render-scope-filters.sh                 # write filter YAML to stdout
+#        render-scope-filters.sh --github-output # write filters=... to $GITHUB_OUTPUT
+#        render-scope-filters.sh --check         # verify workflow runtime wiring
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,10 +31,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NODES_DIR="$REPO_ROOT/nodes"
 WORKFLOW_PATH="$REPO_ROOT/.github/workflows/ci.yaml"
 OPERATOR_NODE="operator"
-BEGIN="# >>> GENERATED scope-filters (scripts/ci/render-scope-filters.sh) — DO NOT EDIT BY HAND"
-END="# <<< GENERATED scope-filters"
-# Indent of the filter body inside the `filters: |` literal block (12 spaces).
-INDENT="            "
 
 # Non-operator node slugs, sorted. The `nodes/*` directory listing is the SSOT.
 #
@@ -49,85 +47,71 @@ non_operator_nodes() {
   done | LC_ALL=C sort
 }
 
-# Emit the filter body (sentinel markers + per-node filters + operator `**` and
-# negations), each line prefixed with the in-YAML indent.
+# Emit the dorny filter YAML: per-node filters plus operator `**` and negations.
 render() {
   local nodes node
   mapfile -t nodes < <(non_operator_nodes)
 
-  printf '%s%s\n' "$INDENT" "$BEGIN"
   for node in "${nodes[@]}"; do
-    printf '%s%s:\n' "$INDENT" "$node"
-    printf "%s  - 'nodes/%s/**'\n" "$INDENT" "$node"
+    printf '%s:\n' "$node"
+    printf "  - 'nodes/%s/**'\n" "$node"
   done
-  printf '%s%s:\n' "$INDENT" "$OPERATOR_NODE"
-  printf "%s  - '**'\n" "$INDENT"
+  printf '%s:\n' "$OPERATOR_NODE"
+  printf "  - '**'\n"
   for node in "${nodes[@]}"; do
-    printf "%s  - '!nodes/%s/**'\n" "$INDENT" "$node"
+    printf "  - '!nodes/%s/**'\n" "$node"
   done
-  printf '%s%s\n' "$INDENT" "$END"
 }
 
-# Splice the rendered block into ci.yaml, replacing whatever currently sits
-# between the sentinel lines. awk reads the freshly rendered block from a file
-# (portable across BSD/dev + GNU/CI awk — a multiline `-v` var is rejected by
-# BSD awk), drops the old region inclusive of both sentinels, and injects the
-# new block at the BEGIN marker.
-write() {
-  local tmp block
-  tmp="$(mktemp)"
-  block="$(mktemp)"
-  render > "$block"
-  awk -v begin="$BEGIN" -v end="$END" -v blockfile="$block" '
-    index($0, begin) {
-      while ((getline line < blockfile) > 0) print line
-      close(blockfile)
-      skip = 1
-      next
-    }
-    skip && index($0, end) { skip = 0; next }
-    skip { next }
-    { print }
-  ' "$WORKFLOW_PATH" > "$tmp"
-  rm -f "$block"
-  if ! grep -qF "$BEGIN" "$tmp"; then
-    echo "[ERROR] $WORKFLOW_PATH is missing the '$BEGIN' sentinel; cannot splice." >&2
-    rm -f "$tmp"
-    exit 1
-  fi
-  mv "$tmp" "$WORKFLOW_PATH"
-}
-
-# Extract the committed block (sentinel-to-sentinel, inclusive) for diffing.
-committed_block() {
-  awk -v begin="$BEGIN" -v end="$END" '
-    index($0, begin) { grab = 1 }
-    grab { print }
-    grab && index($0, end) { exit }
-  ' "$WORKFLOW_PATH"
+# GitHub Actions multiline output consumed by dorny/paths-filter. The delimiter
+# is fixed because node slugs cannot contain it and the rendered body contains
+# only slugs plus path punctuation.
+write_github_output() {
+  : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is required for --github-output}"
+  {
+    echo "filters<<COGNI_SCOPE_FILTERS_EOF"
+    render
+    echo "COGNI_SCOPE_FILTERS_EOF"
+  } >> "$GITHUB_OUTPUT"
 }
 
 check() {
-  if ! grep -qF "$BEGIN" "$WORKFLOW_PATH"; then
-    echo "[ERROR] $WORKFLOW_PATH is missing the scope-filters sentinels." >&2
-    echo "        Wrap the dorny filter block with the GENERATED markers and run: pnpm gen:scope-filters" >&2
+  local rendered expected_nodes actual_nodes expected_operator actual_operator node
+  if ! grep -qF 'run: bash scripts/ci/render-scope-filters.sh --github-output' "$WORKFLOW_PATH" \
+    || ! grep -qF 'filters: ${{ steps.scope_filters.outputs.filters }}' "$WORKFLOW_PATH"; then
+    echo "[ERROR] $WORKFLOW_PATH does not consume runtime-generated scope filters." >&2
+    echo "        Keep the scope_filters step and pass its output to dorny/paths-filter." >&2
     exit 1
   fi
-  if ! diff -u <(committed_block) <(render); then
-    echo "[ERROR] $WORKFLOW_PATH single-node-scope filters are out of sync with nodes/*." >&2
-    echo "        A node was added/removed under nodes/ without regenerating the gate." >&2
-    echo "        Run: pnpm gen:scope-filters" >&2
+  rendered="$(render)"
+  expected_nodes="$(non_operator_nodes)"
+  actual_nodes="$(yq -r 'keys | .[] | select(. != "operator")' <<<"$rendered")"
+  if [ "$actual_nodes" != "$expected_nodes" ]; then
+    echo "[ERROR] rendered scope-filter keys do not match nodes/* minus operator." >&2
     exit 1
   fi
-  echo "single-node-scope filters are in sync with nodes/*."
+  expected_operator="**"
+  for node in $expected_nodes; do
+    if [ "$(NODE="$node" yq -r '.[strenv(NODE)][]' <<<"$rendered")" != "nodes/$node/**" ]; then
+      echo "[ERROR] rendered scope filter for '$node' is not its exact nodes/$node/** path." >&2
+      exit 1
+    fi
+    expected_operator="$expected_operator"$'\n'"!nodes/$node/**"
+  done
+  actual_operator="$(yq -r '.operator[]' <<<"$rendered")"
+  if [ "$actual_operator" != "$expected_operator" ]; then
+    echo "[ERROR] operator scope must be '**' plus one negation per non-operator node." >&2
+    exit 1
+  fi
+  echo "single-node-scope runtime wiring is healthy."
 }
 
 case "${1:-}" in
   --check) check ;;
-  --write) write ;;
+  --github-output) write_github_output ;;
   "") render ;;
   *)
-    echo "Usage: $0 [--check|--write]" >&2
+    echo "Usage: $0 [--check|--github-output]" >&2
     exit 2
     ;;
 esac
