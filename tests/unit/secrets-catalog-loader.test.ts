@@ -91,32 +91,6 @@ describe("secrets-catalog-loader · capability fan-out (v2)", () => {
       /mutually exclusive/
     );
   });
-
-  it("loads derived values without inventing a setup generator", () => {
-    writeOperatorCatalog(`
-  - name: OPENFGA_STORE_ID
-    tier: A1
-    appliesTo: all-nodes
-    consumedBy: [pod]
-    inheritFrom: operator
-    required: true
-    category: Authorization
-    source: derived
-    description: bootstrap-owned store identifier
-    steps: ["project from operator"]
-`);
-    const { secrets, routing } = loadSecretsCatalog({ repoRoot });
-    expect(secrets[0]).toMatchObject({
-      name: "OPENFGA_STORE_ID",
-      source: "derived",
-    });
-    expect(secrets[0]?.generate).toBeUndefined();
-    expect(routing.OPENFGA_STORE_ID).toMatchObject({
-      appliesTo: "all-nodes",
-      inheritFrom: "operator",
-      consumedBy: ["pod"],
-    });
-  });
 });
 
 describe("secrets-catalog-loader · openBaoPathFor (fan-out path resolution)", () => {

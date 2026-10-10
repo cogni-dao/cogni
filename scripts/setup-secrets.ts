@@ -387,11 +387,7 @@ async function main() {
     }
     const req = s.required ? "" : `${DIM}(opt)${RESET} `;
     const src =
-      s.source === "agent"
-        ? `${DIM}auto${RESET}`
-        : s.source === "derived"
-          ? `${DIM}derived${RESET}`
-          : `${YELLOW}human${RESET}`;
+      s.source === "agent" ? `${DIM}auto${RESET}` : `${YELLOW}human${RESET}`;
     if (s.repoLevel) {
       const rStatus = envStatus(repoSecrets.has(s.name));
       console.log(
@@ -524,17 +520,6 @@ async function main() {
         console.log(`  ${GREEN}${secret.name}${RESET} set (repo-level)`);
         set++;
       }
-      continue;
-    }
-
-    if (secret.source === "derived") {
-      // Runtime-derived values (for example OpenFGA store/model IDs) are
-      // minted by their owning bootstrap and projected from OpenBao. This
-      // interactive GitHub-secret writer is deliberately not an authority.
-      console.log(
-        `  ${DIM}${secret.name} — derived; provisioning projects it${RESET}`
-      );
-      skipped++;
       continue;
     }
 

@@ -26,8 +26,17 @@ const workflowText = readFileSync(
 );
 const workflow = yaml.parse(workflowText) as {
   readonly jobs: {
+    readonly "release-tag": {
+      readonly steps: readonly {
+        readonly name?: string;
+        readonly run?: string;
+      }[];
+    };
     readonly publish: {
-      readonly steps: readonly { readonly name?: string; readonly run?: string }[];
+      readonly steps: readonly {
+        readonly name?: string;
+        readonly run?: string;
+      }[];
     };
   };
 };
@@ -52,11 +61,24 @@ const packageIndex = readFileSync(
   path.join(REPO_ROOT, "packages/authorization-core/src/index.ts"),
   "utf8"
 );
+const requiredCheckScript = readFileSync(
+  path.join(REPO_ROOT, "scripts/ci/assert-repo-policy-checks.sh"),
+  "utf8"
+);
+const nodeAppConfig = readFileSync(
+  path.join(REPO_ROOT, "infra/k8s/base/node-app/configmap.yaml"),
+  "utf8"
+);
+const nodeMaterialization = readFileSync(
+  path.join(REPO_ROOT, "scripts/setup/lib/reconcile-secrets.sh"),
+  "utf8"
+);
 
 function namedStep(name: string): { readonly run?: string } {
-  const step = workflow.jobs.publish.steps.find(
-    (candidate) => candidate.name === name
-  );
+  const step = [
+    ...workflow.jobs["release-tag"].steps,
+    ...workflow.jobs.publish.steps,
+  ].find((candidate) => candidate.name === name);
   expect(step, `${name} step must exist`).toBeDefined();
   return step as { readonly run?: string };
 }
@@ -72,10 +94,24 @@ describe("authorization-core publication", () => {
     const gate = namedStep(
       "Tagged commit must have passed every required check"
     ).run;
-    expect(gate).toContain(".cogni/repo-policy.json");
-    expect(gate).toContain("commits/${COMMIT_SHA}/check-runs");
-    expect(gate).toContain('run.status === "completed"');
-    expect(gate).toContain('run.conclusion === "success"');
+    expect(gate).toContain("assert-repo-policy-checks.sh");
+    expect(requiredCheckScript).toContain(".cogni/repo-policy.json");
+    expect(requiredCheckScript).toContain(
+      "commits/${COMMIT_SHA}/check-runs"
+    );
+    expect(requiredCheckScript).toContain('run.status === "completed"');
+    expect(requiredCheckScript).toContain('run.conclusion === "success"');
+  });
+
+  it("creates release tags only through the governed main-tip dispatch", () => {
+    const mainGate = namedStep("Dispatch must target the exact main tip").run;
+    const tagStep = namedStep(
+      "Create immutable release tag with governed authority"
+    ).run;
+    expect(mainGate).toContain('GITHUB_REF" != "refs/heads/main');
+    expect(mainGate).toContain('GITHUB_SHA" != "$main_sha');
+    expect(tagStep).toContain("ACTIONS_AUTOMATION_BOT_PAT is required");
+    expect(tagStep).toContain('refs/tags/${tag}');
   });
 
   it("publishes the existing adapter-bearing package rather than a shadow contract", () => {
@@ -83,5 +119,10 @@ describe("authorization-core publication", () => {
     expect(packageJson.version).toBe("0.1.0");
     expect(packageJson.dependencies?.["@openfga/sdk"]).toBe("0.9.6");
     expect(packageIndex).toContain("OpenFgaAuthorizationAdapter");
+  });
+
+  it("does not expose the shared OpenFGA authority to node apps", () => {
+    expect(nodeAppConfig).not.toContain("OPENFGA_");
+    expect(nodeMaterialization).not.toContain("OPENFGA_");
   });
 });

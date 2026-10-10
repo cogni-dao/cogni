@@ -223,21 +223,10 @@ assert "$([[ ${#DERIVED[@]} -gt 0 ]] && echo 0 || echo 1)" "print-pod-keys emits
 # 10a. Authoritative: pod-consumed keys MUST be in the derived set (the five
 #      dual-consumed keys + GH_REVIEW_APP_*, silently absent from the hand-list).
 for k in OPENROUTER_API_KEY POSTHOG_API_KEY POSTHOG_HOST EVM_RPC_URL POLYGON_RPC_URL \
-  GH_REVIEW_APP_ID GH_REVIEW_APP_PRIVATE_KEY_BASE64 FLIGHT_PROBE_API_KEY \
-  OPENFGA_STORE_ID OPENFGA_AUTHORIZATION_MODEL_ID; do
+  GH_REVIEW_APP_ID GH_REVIEW_APP_PRIVATE_KEY_BASE64 FLIGHT_PROBE_API_KEY; do
   r=0; in_derived "$k" || r=1
   assert "$r" "pod key $k ∈ derived universe"
 done
-
-# OpenFGA node apps share graph coordinates, never a fleet bearer. The token is
-# absent from both the catalog-derived pod universe and the node baseline.
-r=0; in_derived OPENFGA_API_TOKEN && r=1
-assert "$r" "OPENFGA_API_TOKEN is NOT projected to node pods"
-r=0
-for k in "${NODE_BASELINE_KEYS[@]}"; do
-  [[ "$k" == OPENFGA_API_TOKEN ]] && r=1
-done
-assert "$r" "OPENFGA_API_TOKEN is NOT in the node materialization baseline"
 
 # 10b. Cross-check four app duals against ACTUAL server-env.ts reads, not the
 #      bash array. (POLYGON_RPC_URL is read in poly adapters, not server-env.)
