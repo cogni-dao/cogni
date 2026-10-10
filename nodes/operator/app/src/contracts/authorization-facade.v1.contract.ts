@@ -143,7 +143,9 @@ export const authorizationFacadeGrantOperation = {
 
 export const authorizationFacadeCredentialRotateOperation = {
   id: "authorization.facade.credential.rotate.v1",
-  input: z.strictObject({}),
+  input: z.strictObject({
+    env: z.enum(["candidate-a", "preview", "production"]),
+  }),
   output: z.strictObject({
     state: z.literal("prepared"),
     version: z.number().int().nonnegative(),

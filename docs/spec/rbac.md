@@ -82,9 +82,10 @@ activation.
 Authorization-facade credential rotation is a governed, two-phase lifecycle:
 
 1. A human with the node's `node.manage_secrets` permission calls
-   `POST /api/v1/nodes/<node_id>/authorization-credential/rotate` on the operator
-   serving that environment. The operator generates the value, writes OpenBao,
-   never returns it, and responds `202` with `state: prepared`.
+   `POST /api/v1/nodes/<node_id>/authorization-credential/rotate` with the explicit
+   target `env`. The serving operator admits only its existing down-trust secret
+   lanes, generates the value, writes OpenBao, never returns it, and responds `202`
+   with `state: prepared`.
 2. The existing operator verb — `POST /api/v1/vcs/flight` for candidate-a or
    `POST /api/v1/deploy/promote` for preview/production — redeploys that exact
    node/environment, which rematerializes its OpenBao-backed secret projection.
