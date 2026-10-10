@@ -309,7 +309,9 @@ describe("renderRepoSpec — BORN_DEPLOYABLE", () => {
     expect(
       (parsed as unknown as Record<string, unknown>).template_extension
     ).toEqual({ inherited: true });
-    expect(rendered).toContain("# Template comment must survive specialization.");
+    expect(rendered).toContain(
+      "# Template comment must survive specialization."
+    );
   });
 
   it("keeps app profile refs implicit and resolves the full contract at build time", () => {

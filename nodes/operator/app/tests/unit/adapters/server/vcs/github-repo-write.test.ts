@@ -257,9 +257,7 @@ function setHappyForkHandlers(): void {
         return {
           type: "file",
           encoding: "base64",
-          content: Buffer.from(TEST_NODE_TEMPLATE_REPO_SPEC).toString(
-            "base64"
-          ),
+          content: Buffer.from(TEST_NODE_TEMPLATE_REPO_SPEC).toString("base64"),
         };
       }
       expect(params).toMatchObject({ path: ".cogni/repo-policy.json" });
