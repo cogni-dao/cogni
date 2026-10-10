@@ -22,6 +22,7 @@ import { createOperatorSecretsPlane } from "@/bootstrap/capabilities/operator-se
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { authorizationFacadeCredentialRotateOperation } from "@/contracts/authorization-facade.v1.contract";
 import { serverEnv } from "@/shared/env";
+import { canWriteSecretsLane } from "@/shared/secrets/secrets-lane-trust.data";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,9 +37,20 @@ export const POST = wrapRouteHandlerWithLogging<{
     routeId: "nodes.authorization_credential.rotate",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx, _request, sessionUser, context) => {
+  async (ctx, request, sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
-    authorizationFacadeCredentialRotateOperation.input.parse({});
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "invalid_request" }, { status: 400 });
+    }
+    const parsed =
+      authorizationFacadeCredentialRotateOperation.input.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "invalid_request" }, { status: 400 });
+    }
+    const requestedEnv = parsed.data.env;
     const { id } = await context.params;
     const gate = await resolveNodeAndAuthorize({
       id,
@@ -58,7 +70,11 @@ export const POST = wrapRouteHandlerWithLogging<{
 
     const env = serverEnv();
     const deployEnv = env.DEPLOY_ENVIRONMENT;
-    if (!deployEnv || !gate.node.deployEnvs.includes(deployEnv)) {
+    if (
+      !deployEnv ||
+      !canWriteSecretsLane(deployEnv, requestedEnv, env.FLEET_CONTROL_ENV) ||
+      !gate.node.deployEnvs.includes(requestedEnv)
+    ) {
       return NextResponse.json(
         { error: "node_not_deployed_in_served_environment" },
         { status: 409 }
@@ -70,7 +86,7 @@ export const POST = wrapRouteHandlerWithLogging<{
       const credential = `${AUTHORIZATION_FACADE_TOKEN_PREFIX}${gate.node.nodeId}_${randomBytes(32).toString("hex")}`;
       const result = await plane.writeSecret({
         nodeSlug: gate.node.slug,
-        env: deployEnv,
+        env: requestedEnv,
         key: TOKEN_KEY,
         value: credential,
         op: "rotate",
@@ -87,7 +103,7 @@ export const POST = wrapRouteHandlerWithLogging<{
           authenticatedUserId: sessionUser.id,
           nodeId: gate.node.nodeId,
           nodeSlug: gate.node.slug,
-          env: deployEnv,
+          env: requestedEnv,
           version: result.version,
           state: output.state,
           requiredNext: output.requiredNext,

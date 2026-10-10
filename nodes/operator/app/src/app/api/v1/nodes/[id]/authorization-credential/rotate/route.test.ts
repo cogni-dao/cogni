@@ -20,7 +20,10 @@ vi.mock("@/bootstrap/capabilities/operator-secrets-plane", () => ({
   createOperatorSecretsPlane: () => ({ writeSecret }),
 }));
 vi.mock("@/shared/env", () => ({
-  serverEnv: () => ({ DEPLOY_ENVIRONMENT: "production" }),
+  serverEnv: () => ({
+    DEPLOY_ENVIRONMENT: "production",
+    FLEET_CONTROL_ENV: "production",
+  }),
 }));
 vi.mock("@/bootstrap/http", () => ({
   wrapRouteHandlerWithLogging:
@@ -37,12 +40,16 @@ vi.mock("@/bootstrap/http", () => ({
       ),
 }));
 
-async function post(): Promise<Response> {
+async function post(env = "production"): Promise<Response> {
   const { POST } = await import("./route");
   return POST(
     new Request(
       `https://operator.example/api/v1/nodes/${NODE_ID}/authorization-credential/rotate`,
-      { method: "POST" }
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ env }),
+      }
     ) as NextRequest,
     { params: Promise.resolve({ id: NODE_ID }) }
   );
@@ -106,6 +113,23 @@ describe("POST /api/v1/nodes/[id]/authorization-credential/rotate", () => {
     const response = await post();
     expect(response.status).toBe(403);
     expect(writeSecret).not.toHaveBeenCalled();
+  });
+
+  it("writes an explicit down-trust lane without inferring it from the server", async () => {
+    authorize.mockResolvedValue({
+      ok: true,
+      node: {
+        nodeId: NODE_ID,
+        slug: "poly",
+        deployEnvs: ["preview"],
+        activityEnv: "production",
+      },
+    });
+    const response = await post("preview");
+    expect(response.status).toBe(202);
+    expect(writeSecret).toHaveBeenCalledWith(
+      expect.objectContaining({ env: "preview" })
+    );
   });
 
   it("refuses a node absent from the served environment", async () => {
