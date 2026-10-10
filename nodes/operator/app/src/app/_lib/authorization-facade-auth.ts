@@ -4,9 +4,9 @@
 /**
  * Module: `@app/_lib/authorization-facade-auth`
  * Purpose: Authenticate node workloads at the operator-mediated authorization facade.
- * Scope: Bearer parsing, server-derived node resolution, OpenBao verification, and rate limiting.
- * Invariants: NODE_FROM_CREDENTIAL; EXACT_NODE_SECRET_PATH; NO_TOKEN_LOGGING; FAIL_CLOSED.
- * Side-effects: DB and OpenBao reads; in-memory rate-limit state.
+ * Scope: Bearer parsing, server-derived node resolution, lane-local digest verification, and rate limiting.
+ * Invariants: NODE_FROM_CREDENTIAL; EXACT_LANE_AND_NODE; NO_TOKEN_LOGGING; FAIL_CLOSED.
+ * Side-effects: DB reads; in-memory rate-limit state.
  * Links: task.5226, src/app/api/v1/authorization
  * @internal
  */
