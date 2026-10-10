@@ -335,15 +335,39 @@ Supabase delivers Auth, Storage, and a generated API as managed services. The sa
 
 The bundle's stance is **constitution + map**: the code-owned invariants say how every agent must behave; the repo-spec mission says why this node exists; the orientation entry is the current-node map an agent needs to start (where to edit, what not to run, what can break prod/candidate, what to recall next). The git skeleton is deliberately **minimal** — invariants + section frame + recall pointers — and the substance is the Dolt orientation entry, rendered **IN FULL** so the bootstrap _is_ the operating map (no second recall to be useful). Everything else (skills, domains) stays **index-first**: pointers only, never full bodies. The invariants are kept as terse axioms (not paragraphs), and the bundle surfaces the node's derived candidate host (`operator` → `test.cognidao.org`, else `<slug>-test.cognidao.org`) so "validate on candidate" names a concrete URL instead of an env agents must guess.
 
-**Delivery is the instruction-FILE channel, not the hook. The SessionStart hook is a fetch-and-write side-effect, never the injection surface** — because a hook is not a universal inject path across harnesses:
+**Delivery is native privileged context assembled before the first agent token, never a manual
+tool-read.** No single injection surface works across all harnesses, so each committed adapter uses
+the strongest native path its harness provides:
 
-| harness     | model-visible channel                                            | SessionStart hook                                                                   | override                                   |
-| ----------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------ |
-| Claude Code | output style + `CLAUDE.md`/`AGENTS.md` + `@import`s + Stop check | hook stdout is capped; write cache at start and validate the final response at Stop | **none** (no setting/env raises it)        |
-| Codex       | `AGENTS.md`, whole under `project_doc_max_bytes` (32 KiB)        | `additionalContext` default 2500 tokens, spills                                     | `additionalContextLimit = 0` → full inject |
-| OpenCode    | root `AGENTS.md` + `opencode.json` instruction files             | no SessionStart injection; workspace setup warms the referenced cache               | n/a                                        |
+| harness     | model-visible channel                                              | acquisition / enforcement                                                    |
+| ----------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Claude Code | `CLAUDE.md` imports root `AGENTS.md` + the cache                   | SessionStart writes; output style reinforces; Stop validates                 |
+| Codex       | root `AGENTS.md` + uncapped SessionStart developer context         | `additionalContextLimit = 0` prevents the default 2500-token spill           |
+| OpenCode 1.x | root `AGENTS.md` + `opencode.json.instructions`                   | workspace setup warms the referenced cache                                   |
 
-So the shared loader (`scripts/agent/session-cognition.sh`) **fetches** the node's bundle (URL derived from `.cogni/repo-spec.yaml` `intent.name`: `operator`/`cogni-template` → `https://cognidao.org/api/v1/cognition`, else `https://<slug>.cognidao.org/api/v1/cognition`; falls back to operator) and **writes it to one file**, `.cogni/.cognition-cache.md`. Claude Code ingests that file whole through `CLAUDE.md`/`AGENTS.md` `@import`; its project-scoped `Cogni Contract` output style reinforces the universal no-exceptions response rule in the system-prompt layer on every request, and a deterministic Stop hook rejects a malformed final block, a zero-evidence substantive proposal, or an unapproved Goal/Done-when mutation. These Claude adapters refer to the canonical file contract instead of copying its rich prose. The deterministic check is only a floor: the live-harness eval must also inspect the retrieval trace and cited synthesis, because a correct envelope is not substantive adherence. Codex receives the cache from hook stdout with `additionalContextLimit = 0`. OpenCode does not expand `@` references, so committed `opencode.json` names the same cache in its `instructions` array; per OpenCode's rules contract, that file is combined automatically with root `AGENTS.md`. A failed fetch leaves any warm cache untouched, so a warm workspace survives a hub outage or expired key. Because file instructions resolve at context assembly — before/at hook time — a fresh workspace needs the cache present up front; where a pre-session step exists (`scripts/conductor-worktree-setup.sh`), warm it there. But that step is **Conductor-local only** — hosted operator agents, CI, raw clones, and `claude.ai/code` run no such step, so a cold boot during a hub outage gets nothing from the cache. That is exactly why the **committed invariant skeleton in root `AGENTS.md` is the universal cold-boot floor**: it needs no network and renders the contract's response/state spine regardless of harness, hub, or cache state. Claude's SessionStart hook is write-only to avoid duplicate capped output; Codex's one asymmetry is trust, because its repo-committed hook runs only after one-time `/hooks` approval. See [`cognition-expert`](../../.claude/skills/cognition-expert/SKILL.md) for the full matrix + gotchas.
+The shared loader (`scripts/agent/session-cognition.sh`) **fetches** the node's bundle (URL derived
+from `.cogni/repo-spec.yaml` `intent.name`: `operator`/`cogni-template` →
+`https://cognidao.org/api/v1/cognition`, else `https://<slug>.cognidao.org/api/v1/cognition`) and
+**writes one file**, `.cogni/.cognition-cache.md`. Claude imports it through `CLAUDE.md`; keeping
+the `@` directive out of universal `AGENTS.md` prevents other harnesses from treating a
+Claude-specific directive as a task. Claude's project output style reinforces the universal
+no-exceptions response rule and its deterministic Stop hook rejects malformed, zero-evidence, or
+state-mutating final replies. Codex receives the cache from hook stdout with
+`additionalContextLimit = 0`. Supported OpenCode 1.x resolves the cache from `instructions`.
+OpenCode V2 currently parses but does not resolve that field, while its plugin configuration and
+implementation APIs are incompatible with older 1.x releases. V2 is therefore an explicit
+compatibility boundary: do not claim support until a version-gated adapter passes the same
+live-model eval. The supported path never asks the model to tool-read its own bootstrap.
+
+A failed fetch leaves any warm cache untouched, so a warm workspace survives a hub outage or
+expired key. A fresh workspace needs the cache present before file/plugin context assembly; where a
+pre-session step exists (`scripts/conductor-worktree-setup.sh`), it warms the cache. That step is
+**Conductor-local only** — hosted operator agents, CI, raw clones, and `claude.ai/code` may cold-boot
+without it. The committed invariant skeleton in root `AGENTS.md` is therefore the universal
+cold-boot floor: it renders the contract's response/state spine regardless of harness, hub, or
+cache. Codex's one asymmetry is trust, because its repo hook requires one-time `/hooks` approval.
+See [`cognition-expert`](../../.claude/skills/cognition-expert/SKILL.md) for the full matrix and
+gotchas.
 
 **The ownership split renders in two tiers so a session always bootstraps — and the rich contract stays refine-in-place.** Do NOT code-own the full contract prose (that reintroduces the two-constitution duplication ONE_VOICE/task.5155 removed, and taxes every wording tweak of the highest-velocity cognition doc with a fleet redeploy). Instead:
 

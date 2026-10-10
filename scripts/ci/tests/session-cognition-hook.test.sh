@@ -4,9 +4,10 @@
 
 # Hermetic regressions for bug.5284, bug.5359, and story.5070: Codex receives the
 # COMPLETE bundle through hook stdout with spill disabled; Claude Code's hook is
-# write-only because AGENTS.md owns presentation through the file channel. Tracked
-# snapshots must never be presented as live cognition, and the stable user hook
-# must stay reconciled.
+# write-only because CLAUDE.md owns presentation through the file channel. Supported
+# OpenCode 1.x uses its native automatic instruction adapter and never asks the agent
+# to read the cache. Tracked snapshots must never be presented as live cognition, and the stable
+# user hook must stay reconciled.
 
 set -euo pipefail
 
@@ -28,8 +29,16 @@ grep -Fq 'Every human-facing reply, including answers and follow-ups, is exactly
   "$REPO_ROOT/AGENTS.md" || fail "root AGENTS.md omitted the universal response floor"
 grep -Fq 'reproduce `Goal` and `Done when` byte-for-byte' "$REPO_ROOT/AGENTS.md" ||
   fail "root AGENTS.md omitted immutable session state"
+! grep -Fq '@.cogni/.cognition-cache.md' "$REPO_ROOT/AGENTS.md" ||
+  fail "universal AGENTS.md exposes a Claude-only import directive"
+[[ ! -L "$REPO_ROOT/CLAUDE.md" ]] ||
+  fail "CLAUDE.md must own its harness-specific imports, not symlink AGENTS.md"
+grep -Fxq '@AGENTS.md' "$REPO_ROOT/CLAUDE.md" ||
+  fail "CLAUDE.md omitted the universal root floor import"
+grep -Fxq '@.cogni/.cognition-cache.md' "$REPO_ROOT/CLAUDE.md" ||
+  fail "CLAUDE.md omitted the automatic rich-cognition import"
 [[ "$(jq -r '.instructions[0]' "$REPO_ROOT/opencode.json")" == ".cogni/.cognition-cache.md" ]] ||
-  fail "OpenCode project config omitted automatic cognition instructions"
+  fail "OpenCode 1.x config omitted automatic cognition instructions"
 [[ "$(jq -r '.outputStyle' "$REPO_ROOT/.claude/settings.json")" == "Cogni Contract" ]] ||
   fail "Claude Code project settings omitted the Cogni Contract output style"
 OUTPUT_STYLE="$REPO_ROOT/.claude/output-styles/Cogni Contract.md"
@@ -174,7 +183,7 @@ locked_output="$({
   fail "second concurrent presenter did not honor the per-thread lock"
 
 # story.5070 regression: a large cached bundle remains intact while Claude Code's
-# hook stays write-only. AGENTS.md owns presentation through its file import.
+# hook stays write-only. CLAUDE.md owns presentation through its file import.
 mkdir -p "$FIXTURE_ROOT/large/.cogni"
 head -c 17000 /dev/zero | tr '\0' x >"$FIXTURE_ROOT/large/.cogni/.cognition-cache.md"
 large_output="$({

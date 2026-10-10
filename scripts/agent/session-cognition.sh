@@ -53,7 +53,7 @@ fi
 #   - Codex reads raw stdout as developer context and the .codex/config.toml
 #     `additionalContextLimit = 0` disables its head/tail spill, so the full
 #     payload lands untruncated.
-#   - Claude Code expands AGENTS.md @imports before/at SessionStart, so hook output
+#   - Claude Code expands CLAUDE.md @imports before/at SessionStart, so hook output
 #     is too late for that session and duplicates a preview of the same bundle.
 #     Its hook is therefore write-only; the committed AGENTS.md floor covers a
 #     cold first boot and the warmed cache supplies the rich contract thereafter.
