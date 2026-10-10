@@ -2153,6 +2153,14 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         periodEnd: new Date("2026-10-15T00:00:00.000Z"),
         weightConfig: TEST_WEIGHT_CONFIG,
       });
+      await adapter.closeIngestion(
+        nextEpoch.id,
+        [],
+        "actor-settlement-cleanup",
+        "weight-sum-v0",
+        "actor-settlement-cleanup"
+      );
+      await adapter.finalizeEpoch(nextEpoch.id, 0n);
       const pending =
         await adapter.listPendingActorDistributionLiabilities(nextEpoch.id);
       expect(pending).toEqual([
@@ -2199,15 +2207,6 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       await expect(
         adapter.upsertDistributionManifest(manifestWithSettlement)
       ).rejects.toThrow();
-
-      await adapter.closeIngestion(
-        nextEpoch.id,
-        [],
-        "actor-settlement-cleanup",
-        "weight-sum-v0",
-        "actor-settlement-cleanup"
-      );
-      await adapter.finalizeEpoch(nextEpoch.id, 0n);
     });
 
     it("allows exactly one concurrent owner for an external identity", async () => {
