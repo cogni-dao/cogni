@@ -3,8 +3,7 @@
 
 /**
  * Module: `@tests/ci-invariants/single-node-scope-meta`
- * Purpose: Pins the `single-node-scope` job to runtime-generated `nodes/*` filters and asserts
- *          `dorny/paths-filter` is SHA-pinned.
+ * Purpose: Pins runtime-generated single-node-scope filters and the SHA-pinned dorny action.
  * Scope: Static structural test that reads the workflow. Does NOT shell out or invoke the action.
  * Invariants: DIRECTORY_IS_SOURCE_OF_TRUTH, NO_INFRA_ENUMERATION, ACTION_PINNED_BY_SHA (see work/items/task.0381.* §Invariants).
  * Side-effects: IO (reads .github/workflows/ci.yaml)
