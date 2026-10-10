@@ -711,17 +711,34 @@ jobs:
           path: out/
           retention-days: 1
 
+  flight-probe-project:
+    needs: decide
+    if: needs.decide.outputs.has_node_targets == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.node_targets_json) }}
+    uses: ./.github/workflows/flight-probe-project.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      lane: ${{ needs.decide.outputs.environment }}
+      node: ${{ matrix.node }}
+      operation: materialize
+
   # Per-node provider preflight on EVERY env (Invariants 16-17). All nodes
   # materialize source:agent secrets and reconcile placement-neutral state (DB,
   # ExternalSecret, shared runtime inventory). Only placement-specific steps branch:
   # k3s owns Caddy/NodePort edge mutation; Akash adds read-only controller/credential/
   # secret/egress assertions before promote-k8s writes a ComputeWorkload generation.
   node-substrate:
-    needs: [decide, reconcile-appset, reconcile-dns]
+    needs: [decide, reconcile-appset, reconcile-dns, flight-probe-project]
     if: |
       always() &&
       needs.decide.outputs.has_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
+      (needs.flight-probe-project.result == 'success' || needs.flight-probe-project.result == 'skipped') &&
       (
         needs.reconcile-dns.result == 'success' ||
         (needs.decide.outputs.has_k3s_node_targets != 'true' && needs.reconcile-dns.result == 'skipped')

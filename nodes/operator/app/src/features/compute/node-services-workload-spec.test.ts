@@ -8,6 +8,7 @@ import {
   buildLegacyCogniAppWorkloadSpec,
   buildNodeServicesWorkloadSpec,
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS,
 } from "./node-services-workload-spec";
 
 const NODE_ID = "00000000-0000-4000-8000-000000000001";
@@ -212,5 +213,35 @@ describe("buildNodeServicesWorkloadSpec", () => {
       ...REQUIRED_SECRET_REFS,
       { key: "MY_EXTRA_KEY" },
     ]);
+  });
+
+  it("supplies the private workflow Worker's Activity-hop secret contract", () => {
+    const workflowBundle = {
+      ...bundle,
+      services: bundle.services.map(({ service, ...resolved }, index) => ({
+        ...resolved,
+        service:
+          index === 1
+            ? {
+                ...service,
+                runtimeProfile: "cogni-workflow-worker-v1" as const,
+                bindings: {},
+              }
+            : service,
+      })),
+    };
+
+    const workload = buildNodeServicesWorkloadSpec({
+      slug: "workflow-node",
+      bundle: workflowBundle,
+    });
+
+    expect(workload.services[1]).toMatchObject({
+      runtimeProfile: "cogni-workflow-worker-v1",
+      secretRefs: COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS.map((key) => ({
+        key,
+      })),
+      env: {},
+    });
   });
 });
