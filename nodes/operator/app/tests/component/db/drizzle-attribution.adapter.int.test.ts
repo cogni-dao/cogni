@@ -2062,6 +2062,16 @@ describe("DrizzleAttributionAdapter (Component)", () => {
           observedBindingIds: [],
         },
       };
+      await expect(
+        adapter.insertActorDistributionLiabilities([
+          frozenLiability,
+          { ...frozenLiability, tokenAmount: 18n },
+        ])
+      ).rejects.toThrow("Actor liability idempotency conflict");
+      expect(
+        await adapter.listUnfoldedActorContributionAllocationsForEpoch(epoch.id)
+      ).toEqual([expect.objectContaining({ allocationRef: persisted.allocationRef })]);
+
       await adapter.insertActorDistributionLiabilities([frozenLiability]);
       await expect(
         adapter.insertActorDistributionLiabilities([frozenLiability])

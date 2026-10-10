@@ -1760,57 +1760,59 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     await this.validateEpochIds(
       [...new Set(liabilities.map((liability) => liability.sourceEpochId))]
     );
-    for (const liability of liabilities) {
-      const [inserted] = await this.db
-        .insert(actorDistributionLiabilities)
-        .values({
-          allocationRef: liability.allocationRef,
-          nodeId: liability.nodeId,
-          scopeId: liability.scopeId,
-          sourceEpochId: liability.sourceEpochId,
-          earnedByActorId: liability.earnedByActorId,
-          beneficiaryActorId: liability.beneficiaryActorId,
-          contributionCutoff: liability.contributionCutoff,
-          tokenAmount: liability.tokenAmount,
-          sourceEvidenceHash: liability.sourceEvidenceHash,
-          signerActorId: liability.signerActorId,
-          resolverFailureJson: { ...liability.resolverFailure },
-        })
-        .onConflictDoNothing({
-          target: actorDistributionLiabilities.allocationRef,
-        })
-        .returning();
-      if (inserted) continue;
-      const [existing] = await this.db
-        .select()
-        .from(actorDistributionLiabilities)
-        .where(
-          eq(
-            actorDistributionLiabilities.allocationRef,
-            liability.allocationRef
+    await this.db.transaction(async (tx) => {
+      for (const liability of liabilities) {
+        const [inserted] = await tx
+          .insert(actorDistributionLiabilities)
+          .values({
+            allocationRef: liability.allocationRef,
+            nodeId: liability.nodeId,
+            scopeId: liability.scopeId,
+            sourceEpochId: liability.sourceEpochId,
+            earnedByActorId: liability.earnedByActorId,
+            beneficiaryActorId: liability.beneficiaryActorId,
+            contributionCutoff: liability.contributionCutoff,
+            tokenAmount: liability.tokenAmount,
+            sourceEvidenceHash: liability.sourceEvidenceHash,
+            signerActorId: liability.signerActorId,
+            resolverFailureJson: { ...liability.resolverFailure },
+          })
+          .onConflictDoNothing({
+            target: actorDistributionLiabilities.allocationRef,
+          })
+          .returning();
+        if (inserted) continue;
+        const [existing] = await tx
+          .select()
+          .from(actorDistributionLiabilities)
+          .where(
+            eq(
+              actorDistributionLiabilities.allocationRef,
+              liability.allocationRef
+            )
           )
-        )
-        .limit(1);
-      if (
-        !existing ||
-        existing.nodeId !== liability.nodeId ||
-        existing.scopeId !== liability.scopeId ||
-        existing.sourceEpochId !== liability.sourceEpochId ||
-        existing.earnedByActorId !== liability.earnedByActorId ||
-        existing.beneficiaryActorId !== liability.beneficiaryActorId ||
-        existing.contributionCutoff.getTime() !==
-          liability.contributionCutoff.getTime() ||
-        existing.tokenAmount !== liability.tokenAmount ||
-        existing.sourceEvidenceHash !== liability.sourceEvidenceHash ||
-        existing.signerActorId !== liability.signerActorId ||
-        JSON.stringify(existing.resolverFailureJson) !==
-          JSON.stringify(liability.resolverFailure)
-      ) {
-        throw new Error(
-          `Actor liability idempotency conflict for ${liability.allocationRef}`
-        );
+          .limit(1);
+        if (
+          !existing ||
+          existing.nodeId !== liability.nodeId ||
+          existing.scopeId !== liability.scopeId ||
+          existing.sourceEpochId !== liability.sourceEpochId ||
+          existing.earnedByActorId !== liability.earnedByActorId ||
+          existing.beneficiaryActorId !== liability.beneficiaryActorId ||
+          existing.contributionCutoff.getTime() !==
+            liability.contributionCutoff.getTime() ||
+          existing.tokenAmount !== liability.tokenAmount ||
+          existing.sourceEvidenceHash !== liability.sourceEvidenceHash ||
+          existing.signerActorId !== liability.signerActorId ||
+          JSON.stringify(existing.resolverFailureJson) !==
+            JSON.stringify(liability.resolverFailure)
+        ) {
+          throw new Error(
+            `Actor liability idempotency conflict for ${liability.allocationRef}`
+          );
+        }
       }
-    }
+    });
   }
 
   // ── Atomic finalize ────────────────────────────────────────
