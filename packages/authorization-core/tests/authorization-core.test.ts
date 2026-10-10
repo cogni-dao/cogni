@@ -598,7 +598,7 @@ describe("OpenFgaAuthorizationAdapter", () => {
     );
   });
 
-  it("atomically replaces a conditioned tuple key before confirming the requested grant", async () => {
+  it("atomically replaces a conditioned tuple key, including a shorter expiry", async () => {
     const replacements: unknown[] = [];
     const client = {
       async check(): Promise<{ allowed: boolean }> {
@@ -615,15 +615,27 @@ describe("OpenFgaAuthorizationAdapter", () => {
       storeId: "store",
       client,
     });
-    const tuple = {
+    const originalTuple = {
       user: authzNodeAgentPrincipal("node-1", "reader"),
       relation: "reader",
       object: authzBillingAccountResource("node-1", "acct-1"),
+      condition: authzGrantExpiresAt("2026-11-01T00:00:00.000Z"),
+    } satisfies AuthzRelationTuple;
+    const shorterTuple = {
+      user: originalTuple.user,
+      relation: originalTuple.relation,
+      object: originalTuple.object,
       condition: authzGrantExpiresAt("2026-10-10T00:00:00.000Z"),
     } satisfies AuthzRelationTuple;
 
     await expect(
-      authz.replaceRelation(tuple, { confirm: "higher_consistency" })
+      authz.replaceRelation(originalTuple, { confirm: "higher_consistency" })
+    ).resolves.toEqual({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    await expect(
+      authz.replaceRelation(shorterTuple, { confirm: "higher_consistency" })
     ).resolves.toEqual({
       decision: "success",
       code: "authz_write_success",
@@ -633,12 +645,30 @@ describe("OpenFgaAuthorizationAdapter", () => {
         body: {
           deletes: [
             {
-              user: tuple.user,
-              relation: tuple.relation,
-              object: tuple.object,
+              user: originalTuple.user,
+              relation: originalTuple.relation,
+              object: originalTuple.object,
             },
           ],
-          writes: [tuple],
+          writes: [originalTuple],
+        },
+        options: {
+          conflict: {
+            onDuplicateWrites: "error",
+            onMissingDeletes: "ignore",
+          },
+        },
+      },
+      {
+        body: {
+          deletes: [
+            {
+              user: shorterTuple.user,
+              relation: shorterTuple.relation,
+              object: shorterTuple.object,
+            },
+          ],
+          writes: [shorterTuple],
         },
         options: {
           conflict: {

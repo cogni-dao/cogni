@@ -77,7 +77,7 @@ describe("authorization facade policy", () => {
     });
   });
 
-  it("refuses mutation before any write when the exact grantor lacks can_grant", async () => {
+  it("refuses mutation after just-revoked grantor authority at higher consistency", async () => {
     const authorization = authorizationWith(async () => deny());
     await expect(
       mutateNodeBillingAccountAccess({ authorization }, NODE_ID, {
