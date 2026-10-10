@@ -328,7 +328,7 @@ key_is_agent_generated() {
   [[ "$(_cat_field "$k" '.source')" == "agent" \
     && "$(_cat_field "$k" '.service')" != "_shared" \
     && "$(_cat_field "$k" '.shared')" != "true" \
-    && "$(_cat_field "$k" '.generate.kind')" =~ ^(base64|hex|sk-cogni|node-authz-token)$ ]]
+    && "$(_cat_field "$k" '.generate.kind')" =~ ^(base64|hex|sk-cogni)$ ]]
 }
 
 # Node-owned secrets only (node-baas-architecture.md: each node owns its own DB

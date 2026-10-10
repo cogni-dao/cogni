@@ -497,17 +497,6 @@ async function main() {
       continue;
     }
 
-    // Per-node workload identity embeds the repo-spec node UUID and is minted
-    // by secret-materialize against each exact node. This legacy env/repo
-    // prompt has no node-id authority and must never generate a shared value.
-    if (secret.name === "AUTHORIZATION_FACADE_TOKEN") {
-      console.log(
-        `  ${DIM}minted per node by secret-materialize; no env-level value${RESET}`
-      );
-      skipped++;
-      continue;
-    }
-
     // Repo-level secrets (CI, not deploy)
     if (secret.repoLevel) {
       const value = await prompt(

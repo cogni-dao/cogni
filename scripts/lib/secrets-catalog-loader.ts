@@ -89,10 +89,6 @@ const GenerateSchema = z.discriminatedUnion("kind", [
     kind: z.literal("sk-cogni"),
     randHexBytes: z.number().int().positive(),
   }),
-  z.object({
-    kind: z.literal("node-authz-token"),
-    randHexBytes: z.number().int().positive(),
-  }),
   z.object({ kind: z.literal("static"), value: z.string() }),
   // env-bound generators handled by setup-secrets.ts main loop, not the loader.
   // Catalog entry MUST set name to a value the main loop special-cases
@@ -433,12 +429,6 @@ function generatorFor(g: z.infer<typeof GenerateSchema>): () => string {
       return () => randHex(g.bytes);
     case "sk-cogni":
       return () => `sk-cogni-${randHex(g.randHexBytes)}`;
-    case "node-authz-token":
-      return () => {
-        throw new Error(
-          "node-authz-token requires a node_id and is minted only by secret-materialize"
-        );
-      };
     case "static":
       return () => g.value;
     case "special-cased-by-main":
