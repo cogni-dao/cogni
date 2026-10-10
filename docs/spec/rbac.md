@@ -79,6 +79,20 @@ constructs the OpenFGA adapter when both `OPENFGA_API_URL` and
 `OPENFGA_STORE_ID` are present, so service reachability can ship before policy
 activation.
 
+Authorization-facade credential rotation is a governed, two-phase lifecycle:
+
+1. A human with the node's `node.manage_secrets` permission calls
+   `POST /api/v1/nodes/<node_id>/authorization-credential/rotate` on the operator
+   serving that environment. The operator generates the value, writes OpenBao,
+   never returns it, and responds `202` with `state: prepared`.
+2. The existing operator verb — `POST /api/v1/vcs/flight` for candidate-a or
+   `POST /api/v1/deploy/promote` for preview/production — redeploys that exact
+   node/environment, which rematerializes its OpenBao-backed secret projection.
+3. Completion requires live proof that the redeployed workload authenticates
+   through the facade with the active credential and that the prior credential
+   receives `401` after the ten-minute N-1 overlap. Until both hold, the rotation
+   remains prepared; an OpenBao version write is never reported as completion.
+
 OpenFGA authorization models are immutable. The bootstrap hashes the canonical
 JSON model and records that hash with the resolved model ID. Re-running deploys
 reuse the existing model ID when the authored model hash is unchanged; a new
