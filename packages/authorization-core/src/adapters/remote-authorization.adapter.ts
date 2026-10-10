@@ -38,7 +38,8 @@ export interface RemoteAuthorizationAdapterConfig {
   readonly baseUrl: string;
   readonly serviceToken: string;
   readonly timeoutMs?: number;
-  readonly fetchImpl?: typeof fetch;
+  /** Test seam only. Production transport always uses the platform fetch. */
+  readonly testOnlyFetchImpl?: typeof fetch;
 }
 
 type QualifiedReference = {
@@ -90,6 +91,98 @@ function writeDenied(reason: string): AuthzWriteDecision {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[]
+): boolean {
+  const actual = Object.keys(value);
+  return (
+    actual.length === keys.length && actual.every((key) => keys.includes(key))
+  );
+}
+
+function parsedSubcheck(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (
+    !hasOnlyKeys(value, [
+      "name",
+      "user",
+      "relation",
+      "object",
+      "decision",
+      "code",
+    ])
+  ) {
+    return false;
+  }
+  return (
+    (value.name === "permission" || value.name === "delegation") &&
+    typeof value.user === "string" &&
+    typeof value.relation === "string" &&
+    typeof value.object === "string" &&
+    (value.decision === "allow" || value.decision === "deny") &&
+    (value.code === "authz_allowed" ||
+      value.code === "authz_denied" ||
+      value.code === "authz_unavailable")
+  );
+}
+
+function parsedDecision(value: unknown): AuthzDecision | undefined {
+  if (!isRecord(value) || !Array.isArray(value.checks)) return undefined;
+  if (!value.checks.every(parsedSubcheck)) return undefined;
+  if (
+    hasOnlyKeys(value, ["decision", "code", "checks"]) &&
+    value.decision === "allow" &&
+    value.code === "authz_allowed"
+  ) {
+    return value as unknown as AuthzDecision;
+  }
+  if (
+    hasOnlyKeys(
+      value,
+      value.reason === undefined
+        ? ["decision", "code", "checks"]
+        : ["decision", "code", "checks", "reason"]
+    ) &&
+    value.decision === "deny" &&
+    (value.code === "authz_denied" || value.code === "authz_unavailable") &&
+    (value.reason === undefined || typeof value.reason === "string")
+  ) {
+    return value as unknown as AuthzDecision;
+  }
+  return undefined;
+}
+
+function parsedWriteDecision(value: unknown): AuthzWriteDecision | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    hasOnlyKeys(value, ["decision", "code"]) &&
+    value.decision === "success" &&
+    value.code === "authz_write_success"
+  ) {
+    return value as unknown as AuthzWriteDecision;
+  }
+  if (
+    hasOnlyKeys(
+      value,
+      value.reason === undefined
+        ? ["decision", "code"]
+        : ["decision", "code", "reason"]
+    ) &&
+    value.decision === "failure" &&
+    (value.code === "authz_write_denied" ||
+      value.code === "authz_write_unavailable") &&
+    (value.reason === undefined || typeof value.reason === "string")
+  ) {
+    return value as unknown as AuthzWriteDecision;
+  }
+  return undefined;
+}
+
 export class RemoteAuthorizationAdapter
   implements AuthorizationCheckPort, BillingAccountGrantAdministrationPort
 {
@@ -100,11 +193,18 @@ export class RemoteAuthorizationAdapter
   private readonly fetchImpl: typeof fetch;
 
   constructor(config: RemoteAuthorizationAdapterConfig) {
-    this.baseUrl = config.baseUrl.replace(/\/+$/, "");
+    const baseUrl = new URL(config.baseUrl);
+    if (
+      baseUrl.protocol !== "https:" &&
+      config.testOnlyFetchImpl === undefined
+    ) {
+      throw new Error("authorization facade requires HTTPS");
+    }
+    this.baseUrl = baseUrl.href.replace(/\/+$/, "");
     this.serviceToken = config.serviceToken;
     this.nodeId = authorizationFacadeNodeIdFromToken(config.serviceToken);
     this.timeoutMs = config.timeoutMs ?? 1_500;
-    this.fetchImpl = config.fetchImpl ?? fetch;
+    this.fetchImpl = config.testOnlyFetchImpl ?? fetch;
   }
 
   async check(params: AuthzCheckParams): Promise<AuthzDecision> {
@@ -168,7 +268,10 @@ export class RemoteAuthorizationAdapter
           `operator authorization facade unavailable (status ${response.status})`
         );
       }
-      return (await response.json()) as AuthzDecision;
+      return (
+        parsedDecision(await response.json()) ??
+        unavailable("operator authorization facade returned an invalid decision")
+      );
     } catch (error) {
       return unavailable(
         error instanceof Error ? error.message : "authorization facade unavailable"
@@ -217,7 +320,12 @@ export class RemoteAuthorizationAdapter
           `operator authorization facade rejected mutation (status ${response.status})`
         );
       }
-      return (await response.json()) as AuthzWriteDecision;
+      return (
+        parsedWriteDecision(await response.json()) ??
+        writeUnavailable(
+          "operator authorization facade returned an invalid mutation decision"
+        )
+      );
     } catch (error) {
       return writeUnavailable(
         error instanceof Error ? error.message : "authorization facade unavailable"
@@ -236,6 +344,7 @@ export class RemoteAuthorizationAdapter
           "content-type": "application/json",
         },
         body: JSON.stringify(body),
+        redirect: "error",
         signal: controller.signal,
       });
     } finally {

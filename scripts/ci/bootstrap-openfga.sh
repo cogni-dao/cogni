@@ -152,6 +152,21 @@ authorization_model_hash_for_id() {
 
 wait_for_openfga
 
+# Deployed OpenFGA is reachable from node workloads, but the shared graph is
+# operator-only. Prove the raw HTTP surface rejects both anonymous and arbitrary
+# bearer callers before the privileged bootstrap client performs any graph IO.
+if [[ -n "${OPENFGA_API_TOKEN:-}" ]]; then
+  anonymous_status="$(curl -sS -o /dev/null -w '%{http_code}' "${api_url}/stores")"
+  [[ "$anonymous_status" == "401" ]] \
+    || die "OpenFGA raw API accepted an unauthenticated caller (HTTP ${anonymous_status})"
+  invalid_bearer_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+    -H 'Authorization: Bearer node-workload-credential-is-not-openfga' \
+    "${api_url}/stores")"
+  [[ "$invalid_bearer_status" == "401" ]] \
+    || die "OpenFGA raw API accepted a non-operator bearer (HTTP ${invalid_bearer_status})"
+  log "raw API authentication enforced (anonymous=401, non-operator=401)"
+fi
+
 store_id="$(store_id_for_name)"
 if [[ -z "$store_id" ]]; then
   log "creating store '${OPENFGA_STORE_NAME}'"

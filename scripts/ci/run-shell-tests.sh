@@ -47,6 +47,7 @@ MUTATORS=(
 PARALLEL=(
   set-secret.test.sh
   openbao-clobber-proof.test.sh
+  openfga-preshared-authn.test.sh
   secrets-fanout.test.sh
   secret-materialize.test.sh
   reconcile-node-substrate.test.sh

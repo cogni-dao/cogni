@@ -24,7 +24,13 @@ import { serverEnv } from "@/shared/env";
 
 const AUTHORIZATION_FACADE_TOKEN_KEY = "AUTHORIZATION_FACADE_TOKEN";
 
-const credentialAttemptLimiter = new TokenBucketRateLimiter({
+const globalCredentialAttemptLimiter = new TokenBucketRateLimiter({
+  maxTokens: 240,
+  refillRate: 4,
+  burstSize: 40,
+});
+
+const nodeCandidateLimiter = new TokenBucketRateLimiter({
   maxTokens: 30,
   refillRate: 0.5,
   burstSize: 10,
@@ -54,14 +60,6 @@ function bearerToken(request: Request): string | undefined {
   return token.length > 0 && token.trim() === token ? token : undefined;
 }
 
-function clientAddress(request: Request): string {
-  return (
-    request.headers.get("x-real-ip")?.trim() ||
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "unknown"
-  );
-}
-
 /**
  * The service credential proves only a node workload identity. P0 intentionally
  * lets that already-trusted node backend assert one of its local human IDs; each
@@ -72,7 +70,9 @@ function clientAddress(request: Request): string {
 export async function authenticateAuthorizationFacadeRequest(
   request: Request
 ): Promise<AuthorizationFacadeAuthentication> {
-  if (!credentialAttemptLimiter.consume(clientAddress(request))) {
+  // Fixed global bucket is intentionally independent of caller-controlled proxy
+  // headers. It bounds aggregate parsing work even when candidates are rotated.
+  if (!globalCredentialAttemptLimiter.consume("authorization-facade")) {
     return { ok: false, status: 429, errorCode: "rate_limited" };
   }
   const token = bearerToken(request);
@@ -85,6 +85,12 @@ export async function authenticateAuthorizationFacadeRequest(
     nodeId = authorizationFacadeNodeIdFromToken(token);
   } catch {
     return { ok: false, status: 401, errorCode: "invalid_service_credential" };
+  }
+
+  // Node identity is embedded in the credential format, so this bucket executes
+  // before any DB or OpenBao IO and cannot be evaded by spoofing forwarding headers.
+  if (!nodeCandidateLimiter.consume(nodeId)) {
+    return { ok: false, status: 429, errorCode: "rate_limited" };
   }
 
   const env = serverEnv();

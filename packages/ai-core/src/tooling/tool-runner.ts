@@ -20,7 +20,7 @@
  */
 
 import type {
-  AuthorizationPort,
+  AuthorizationCheckPort,
   AuthzDecision,
   AuthzDecisionCode,
 } from "@cogni/authorization-core";
@@ -76,7 +76,7 @@ export interface ToolRunnerConfig {
   readonly ctx?: ToolPolicyContext;
 
   /** Optional shared authorization port. When provided, tool execution fails closed before validation/execution. */
-  readonly authz?: AuthorizationPort;
+  readonly authz?: AuthorizationCheckPort;
 
   /** Actor performing tool execution. Required when authz is provided. */
   readonly actorId?: string;

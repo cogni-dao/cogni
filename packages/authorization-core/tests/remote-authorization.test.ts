@@ -48,7 +48,7 @@ describe("RemoteAuthorizationAdapter", () => {
     const adapter = new RemoteAuthorizationAdapter({
       baseUrl: "https://operator.example",
       serviceToken: TOKEN,
-      fetchImpl,
+      testOnlyFetchImpl: fetchImpl,
     });
 
     await expect(
@@ -63,6 +63,7 @@ describe("RemoteAuthorizationAdapter", () => {
       "https://operator.example/api/v1/authorization/check",
       expect.objectContaining({
         method: "POST",
+        redirect: "error",
         headers: expect.objectContaining({ authorization: `Bearer ${TOKEN}` }),
       })
     );
@@ -80,7 +81,7 @@ describe("RemoteAuthorizationAdapter", () => {
     const adapter = new RemoteAuthorizationAdapter({
       baseUrl: "https://operator.example/",
       serviceToken: TOKEN,
-      fetchImpl,
+      testOnlyFetchImpl: fetchImpl,
     });
 
     await adapter.check({
@@ -98,7 +99,7 @@ describe("RemoteAuthorizationAdapter", () => {
     const adapter = new RemoteAuthorizationAdapter({
       baseUrl: "https://operator.example",
       serviceToken: TOKEN,
-      fetchImpl,
+      testOnlyFetchImpl: fetchImpl,
     });
 
     await expect(
@@ -121,7 +122,7 @@ describe("RemoteAuthorizationAdapter", () => {
     const adapter = new RemoteAuthorizationAdapter({
       baseUrl: "https://operator.example",
       serviceToken: TOKEN,
-      fetchImpl,
+      testOnlyFetchImpl: fetchImpl,
     });
 
     await expect(
@@ -154,7 +155,7 @@ describe("RemoteAuthorizationAdapter", () => {
     const adapter = new RemoteAuthorizationAdapter({
       baseUrl: "https://operator.example",
       serviceToken: TOKEN,
-      fetchImpl,
+      testOnlyFetchImpl: fetchImpl,
     });
     await expect(
       adapter.grantBillingAccountAccess({
@@ -173,5 +174,45 @@ describe("RemoteAuthorizationAdapter", () => {
       code: "authz_write_denied",
     });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on malformed successful HTTP responses", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      json({ decision: "allow" })
+    );
+    const adapter = new RemoteAuthorizationAdapter({
+      baseUrl: "https://operator.example",
+      serviceToken: TOKEN,
+      testOnlyFetchImpl: fetchImpl,
+    });
+    await expect(
+      adapter.check({
+        actorId: authzNodeUserPrincipal(NODE_ID, USER_ID),
+        action: "billing_account.read",
+        resource: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+        context: { tenantId: ACCOUNT_ID, nodeId: NODE_ID },
+      })
+    ).resolves.toMatchObject({
+      decision: "deny",
+      code: "authz_unavailable",
+    });
+  });
+
+  it("requires HTTPS unless an explicit test transport is injected", () => {
+    expect(
+      () =>
+        new RemoteAuthorizationAdapter({
+          baseUrl: "http://operator.example",
+          serviceToken: TOKEN,
+        })
+    ).toThrow("authorization facade requires HTTPS");
+    expect(
+      () =>
+        new RemoteAuthorizationAdapter({
+          baseUrl: "http://operator.test",
+          serviceToken: TOKEN,
+          testOnlyFetchImpl: vi.fn<typeof fetch>(),
+        })
+    ).not.toThrow();
   });
 });
