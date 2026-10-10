@@ -762,6 +762,15 @@ jobs:
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
+      # Deployment tooling follows the workflow ref, not the application image
+      # being promoted. Otherwise a forward promotion of an older, already-built
+      # app SHA executes stale substrate logic and cannot be repaired by a
+      # workflow-only fix on main.
+      - name: Checkout workflow tooling
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          path: ci-src
+
       - name: Checkout app source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
@@ -855,7 +864,7 @@ jobs:
           DOMAIN: ${{ vars.DOMAIN }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: app-src/infra/catalog
-        run: bash app-src/scripts/ci/run-node-substrate.sh "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
+        run: bash ci-src/scripts/ci/run-node-substrate.sh "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
 
   deploy-infra:
     if: |
