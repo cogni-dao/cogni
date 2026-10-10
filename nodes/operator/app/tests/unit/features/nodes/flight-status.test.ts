@@ -4,14 +4,13 @@
 /**
  * Module: tests for `@features/nodes/flight-status` + the prober classifier.
  * Purpose: Pin the substrate-verification-gate logic: host derivation, root-zone stripping, the
- *   run-carries classifier (hang/poem/degraded/fail), and serving→run-carries short-circuit.
+ *   exact node/env probe targeting and serving→run-carries short-circuit.
  * Scope: Pure logic only — the verifier is exercised with a fake prober (no network/db).
  * Side-effects: none
  * Links: src/features/nodes/flight-status.ts, src/adapters/server/node-flight/node-prober.adapter.ts
  */
 
-import { describe, expect, it } from "vitest";
-import { classifyRunCarries } from "@/adapters/server/node-flight/node-prober.adapter";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertLive,
   hostForEnv,
@@ -20,7 +19,7 @@ import {
 } from "@/features/nodes/flight-status";
 import type { NodeProber, RunCarriesResult, ServingResult } from "@/ports";
 
-/** Build a fake NodeProber; both PUBLIC rungs default to pass-ish, override per test. */
+/** Build a fake NodeProber; both rungs default to pass-ish, override per test. */
 function makeProber(o: Partial<NodeProber> = {}): NodeProber {
   return {
     serving: async () => ({ status: "pass", readyzCode: 200, buildSha: "abc" }),
@@ -28,7 +27,7 @@ function makeProber(o: Partial<NodeProber> = {}): NodeProber {
       status: "pass",
       durationMs: 1,
       runs: 1,
-      detail: "poem",
+      detail: "probe-complete",
     }),
     identity: async () => null,
     ...o,
@@ -66,43 +65,6 @@ describe("rootDomain", () => {
     expect(rootDomain("test.cognidao.org")).toBe("cognidao.org");
     expect(rootDomain("preview.cognidao.org")).toBe("cognidao.org");
     expect(rootDomain("cognidao.org")).toBe("cognidao.org");
-  });
-});
-
-describe("classifyRunCarries", () => {
-  const base = { durationMs: 2000, runs: 1 };
-  it("fails on a hang (no run created)", () => {
-    expect(
-      classifyRunCarries({ ...base, runs: 0, hung: true, completionBody: null })
-        .status
-    ).toBe("fail");
-  });
-  it("passes when a poem comes back", () => {
-    const body = { choices: [{ message: { content: "Bridges of code" } }] };
-    expect(
-      classifyRunCarries({ ...base, hung: false, completionBody: body }).status
-    ).toBe("pass");
-  });
-  it("degrades when a run was created but the completion errors downstream", () => {
-    const body = { error: { code: "insufficient_quota" } };
-    const r = classifyRunCarries({
-      ...base,
-      hung: false,
-      completionBody: body,
-    });
-    expect(r.status).toBe("degraded");
-    expect(r.detail).toBe("insufficient_quota");
-  });
-  it("fails when no run was created and the completion errored pre-creation", () => {
-    const body = { error: { code: "invalid_api_key" } };
-    expect(
-      classifyRunCarries({
-        ...base,
-        runs: 0,
-        hung: false,
-        completionBody: body,
-      }).status
-    ).toBe("fail");
   });
 });
 
@@ -151,6 +113,34 @@ describe("verifyFlightStatus", () => {
     expect(r.allEnvsCarry).toBe(true);
     expect(r.envs).toHaveLength(3);
   });
+
+  it("selects the exact node and environment for every credential lookup", async () => {
+    const runCarries = vi.fn(async () => carry("pass"));
+    await verifyFlightStatus(
+      {
+        nodeId: "node-uuid",
+        slug: "beacon",
+        primary: false,
+        baseDomain: "cognidao.org",
+      },
+      makeProber({ runCarries })
+    );
+    expect(runCarries).toHaveBeenCalledWith({
+      nodeId: "node-uuid",
+      env: "candidate-a",
+      host: "beacon-test.cognidao.org",
+    });
+    expect(runCarries).toHaveBeenCalledWith({
+      nodeId: "node-uuid",
+      env: "preview",
+      host: "beacon-preview.cognidao.org",
+    });
+    expect(runCarries).toHaveBeenCalledWith({
+      nodeId: "node-uuid",
+      env: "production",
+      host: "beacon.cognidao.org",
+    });
+  });
 });
 
 describe("assertLive (fail-loud live gate)", () => {
@@ -188,5 +178,16 @@ describe("assertLive (fail-loud live gate)", () => {
     );
     expect(r.live).toBe(false);
     expect(r.failures.some((f) => f.includes("run-carries"))).toBe(true);
+  });
+
+  it("fails closed before probing when the registry has no node ID", async () => {
+    const runCarries = vi.fn();
+    const r = await assertLive(
+      { ...args, nodeId: undefined },
+      makeProber({ runCarries })
+    );
+    expect(r.live).toBe(false);
+    expect(r.probes.runCarries.detail).toBe("probe-node-id-missing");
+    expect(runCarries).not.toHaveBeenCalled();
   });
 });

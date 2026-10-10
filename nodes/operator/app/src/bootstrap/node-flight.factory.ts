@@ -11,14 +11,27 @@
  * @public
  */
 
-import { HttpNodeProber } from "@/adapters/server";
+import {
+  EnvFlightProbeCredentialResolver,
+  HttpNodeProber,
+  isFlightProbeControlEnvironment,
+} from "@/adapters/server";
 import type { NodeProber } from "@/ports";
+import { serverEnv } from "@/shared/env";
 
 /**
- * Real-fetch prober for the liveness gate — exercises a node's PUBLIC surface only (serving +
- * run-carries). The operator holds NO Grafana token; observability querying is a dev-direct RBAC
- * concern (docs/spec/grafana-observability-access.md), not an operator-API proxy.
+ * Real-fetch prober for the liveness gate. Serving remains public; run-carries resolves one bounded
+ * credential for the exact `{env,nodeId}` target. Only the fleet-control operator may resolve the
+ * map (`DEPLOY_ENVIRONMENT === FLEET_CONTROL_ENV`, default production); every other env fails closed.
  */
 export function createNodeProber(): NodeProber {
-  return new HttpNodeProber();
+  const env = serverEnv();
+  const credentials = new EnvFlightProbeCredentialResolver(
+    env.FLIGHT_PROBE_CREDENTIALS_JSON,
+    isFlightProbeControlEnvironment({
+      deployEnvironment: env.DEPLOY_ENVIRONMENT,
+      fleetControlEnvironment: env.FLEET_CONTROL_ENV,
+    })
+  );
+  return new HttpNodeProber(credentials);
 }

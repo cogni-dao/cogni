@@ -49,6 +49,10 @@ All contract files re-exported via `src/index.ts`. Selective re-export for `ai.c
 
 All require `Authorization: Bearer ${SCHEDULER_API_TOKEN}`.
 
+**Governed operator → node service contract:**
+
+- `flight-probe.internal.v1.contract` — `POST /api/internal/flight-probe`; fixed run-carries probe authenticated only by the target's node-local, max-two `FLIGHT_PROBE_API_KEY` rotation ring (never `SCHEDULER_API_TOKEN`)
+
 **Poly contracts moved out (task.0421):** the 13 `poly.*.v1.contract.ts` files now live in `@cogni/poly-node-contracts` (`nodes/poly/packages/node-contracts/`). This package exports cross-node shapes only.
 
 ## Responsibilities

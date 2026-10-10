@@ -149,6 +149,12 @@ export const serverSchema = z.object({
   // (POST {nodeUrl}/api/internal/attribution/receipts), mirroring the graph-dispatch identity.
   SCHEDULER_API_TOKEN: z.string().min(32),
 
+  // Governed run-carries probe (task.5218). The target verifies its strict max-two key JSON ring;
+  // the operator resolves outbound credentials by exact `{env}/{nodeId}` JSON-map key.
+  // Both remain optional until task.5223 provisions and materializes them per environment.
+  FLIGHT_PROBE_API_KEY: optionalString,
+  FLIGHT_PROBE_CREDENTIALS_JSON: optionalString,
+
   // NOTE: the operator app does NOT read a static COGNI_NODE_ENDPOINTS map. NORTH_STAR — the
   // operator resolves nodes from its OWN DB registry (listRoutableNodes) and their ADDRESS from
   // each node's declared placement (NodeAddressPort → deployment_provider, bug.5106).
