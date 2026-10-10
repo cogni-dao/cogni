@@ -1561,6 +1561,24 @@ HCL
         token_ttl=5m \
         token_max_ttl=5m \
         token_num_uses=2" >/dev/null
+
+      # Authorization-facade rotation uses a separate audience, exact workflow
+      # claim, and least-privilege path. The lane runner may read only its own
+      # authority ring; it never receives a fleet writer token.
+      ssh $SSH_OPTS root@"$VM_IP" \
+        "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao policy write ${DEPLOY_ENV}-${_lane}-authorization-facade-reader -" <<HCL
+path "cogni/data/${_lane}/authorization-facade" { capabilities = ["read"] }
+HCL
+      bao_exec "write auth/github-actions/role/gha-${_lane}-authorization-facade-reader \
+        role_type=jwt \
+        user_claim=sub \
+        bound_subject=repo:${GH_REPO}:environment:${_lane} \
+        bound_audiences=cogni-authorization-facade-projection \
+        bound_claims='{"repository":"${GH_REPO}","environment":"${_lane}","job_workflow_ref":"${GH_REPO}/.github/workflows/authorization-facade-credential-project.yml@refs/heads/main"}' \
+        policies=${DEPLOY_ENV}-${_lane}-authorization-facade-reader \
+        token_ttl=5m \
+        token_max_ttl=5m \
+        token_num_uses=2" >/dev/null
     done
     unset _lane
   fi
