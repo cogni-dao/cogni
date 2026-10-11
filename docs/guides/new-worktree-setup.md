@@ -34,7 +34,7 @@ git -C "$COGNI_TEMPLATE_ROOT" checkout main
 git -C "$COGNI_TEMPLATE_ROOT" pull --ff-only origin main
 ```
 
-Then create the workspace in Conductor and let setup run. The setup script fetches `origin/main`, ensures the primary checkout has a cognition bearer key, symlinks `.env.cogni` and `.local-auth` from the primary checkout, reconciles the stable user-level Codex cognition hook for local workspaces, installs dependencies, emits package declarations, and runs `pnpm worktree:check`. Cloud setup leaves the user-level Codex home untouched.
+Then create the workspace in Conductor and let setup run. The setup script fetches `origin/main`, ensures the primary checkout has a cognition bearer key, symlinks `.env.cogni` and `.local-auth` from the primary checkout, reconciles the stable user-level Codex cognition hook for local workspaces, installs dependencies from the local pnpm store while allowing newly pinned packages to download, emits package declarations, and runs `pnpm worktree:check`. A transient dependency-install failure is retried once. Cloud setup leaves the user-level Codex home untouched.
 
 Secrets and captured auth are symlinked, not copied, so rotations and refreshed storage states propagate to active worktrees. Session-start cognition reads `.env.cogni` directly and derives the node URL from `.cogni/repo-spec.yaml`, so no per-worktree environment export is needed after the one-time agent registration bootstrap saves `COGNI_NODE_API_KEY` there. Operator keys such as `COGNI_API_KEY_PROD` are for CI/CD authority and do not satisfy session cognition.
 
@@ -50,7 +50,7 @@ git worktree add ../cogni-template-worktrees/<branch-name> -b <branch-name> HEAD
 cd ../cogni-template-worktrees/<branch-name>
 
 # 3. Install dependencies (worktrees share .git but not node_modules)
-pnpm install --offline --frozen-lockfile
+pnpm install --prefer-offline --frozen-lockfile
 
 # 4. Check whether the worktree is ready for agent development
 pnpm worktree:check

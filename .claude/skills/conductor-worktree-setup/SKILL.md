@@ -33,7 +33,7 @@ The setup script also fetches `origin/main` and fast-forwards the primary checko
 ## Invariants
 
 - Ensure the primary checkout has `COGNI_NODE_API_KEY`, then symlink `.env.cogni` and `.local-auth` from the primary checkout; never copy them into worktrees. Operator keys such as `COGNI_API_KEY_PROD` are for CI/CD authority and do not satisfy session cognition, so Conductor workspaces must not require manual key exports after the one-time node-agent registration bootstrap.
-- Keep `pnpm install --offline --frozen-lockfile`, `pnpm packages:build`, and `pnpm worktree:check` in the setup path.
+- Keep `pnpm install --prefer-offline --frozen-lockfile`, one automatic retry, `pnpm packages:build`, and `pnpm worktree:check` in the setup path. `--prefer-offline` reuses the local store but may fetch a newly pinned tarball; strict `--offline` makes fresh worktrees fail whenever main adopts a package the developer has not cached yet.
 - Local setup (`CONDUCTOR_IS_LOCAL=1`, including the local default) must reconcile the stable user-level Codex cognition hook. Cloud setup must not modify a user-level Codex home.
 - Codex still requires one explicit `/hooks` trust for that stable user-level hook; automatic reconciliation does not bypass trust.
 - If the setup contract changes, update the script, this skill, `docs/guides/new-worktree-setup.md`, and launch-pack wording together.
