@@ -13,6 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 SUT="$REPO_ROOT/scripts/setup/reconcile-env-substrate.sh"
+PROVISION_SUT="$REPO_ROOT/scripts/setup/provision-env-vm.sh"
 
 TMPROOT=$(mktemp -d -t reconcile-env-substrate.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
@@ -52,7 +53,7 @@ if [ "$1" = "exec" ]; then
   printf '%s\n' "bao $bao_args" >> "$CMDLOG"
   case "$bao_args" in
     "secrets list"*|"auth list"*) echo '{}' ;;   # nothing enabled → exercise enable path
-    "policy write"*) cat >> "$CMDLOG" ;;          # capture HCL without values (policy only)
+    "policy write"*|"write auth/github-actions/role/gha-"*"flight-probe-reader -") cat >> "$CMDLOG" ;;
   esac
   exit 0
 fi
@@ -70,6 +71,17 @@ run() {
     bash "$SUT" "$target_env" >/dev/null 2>&1
 }
 
+# Both cold-start and day-two reconciliation must use JSON stdin for the map-valued
+# bound_claims field. A key=value string is rejected by the live OpenBao API.
+if grep -q "bound_claims=" "$SUT" "$PROVISION_SUT"; then
+  echo "projection roles must not encode bound_claims as CLI key=value strings" >&2
+  exit 1
+fi
+grep -q 'bao write auth/github-actions/role/gha-${_lane}-flight-probe-reader -' "$PROVISION_SUT" || {
+  echo "cold-start projection role must use JSON stdin" >&2
+  exit 1
+}
+
 # ── Run 1: fresh env (no SAs) — must CREATE both SAs + bind all roles ─────────
 run
 log1="$TMPROOT/cmd.log"; cp "$log1" "$TMPROOT/run1.log"
@@ -80,8 +92,10 @@ grep -q "bao write auth/kubernetes/role/production-writer .*bound_service_accoun
 grep -q "bao write auth/kubernetes/role/eso-reader" "$TMPROOT/run1.log" || { echo "run1 must bind eso-reader" >&2; exit 1; }
 grep -q "bao write auth/github-actions/role/gha-production-writer" "$TMPROOT/run1.log" || { echo "run1 must bind gha-production-writer" >&2; exit 1; }
 grep -q 'path "cogni/data/candidate-a/flight-prober" { capabilities = \["read"\] }' "$TMPROOT/run1.log" || { echo "projection policy must read only the candidate-a authority bucket" >&2; exit 1; }
-grep -q 'auth/github-actions/role/gha-candidate-a-flight-probe-reader .*bound_subject=repo:Cogni-DAO/cogni:environment:candidate-a .*bound_audiences=cogni-flight-probe-projection' "$TMPROOT/run1.log" || { echo "projection role must bind exact repo/environment and dedicated audience" >&2; exit 1; }
-grep -q 'job_workflow_ref.*Cogni-DAO/cogni/.github/workflows/flight-probe-project.yml@refs/heads/main' "$TMPROOT/run1.log" || { echo "projection role must bind the exact reusable workflow ref" >&2; exit 1; }
+grep -q 'bao write auth/github-actions/role/gha-candidate-a-flight-probe-reader -' "$TMPROOT/run1.log" || { echo "projection role must use JSON stdin" >&2; exit 1; }
+grep -q '"bound_subject":"repo:Cogni-DAO/cogni:environment:candidate-a"' "$TMPROOT/run1.log" || { echo "projection role must bind exact repo/environment" >&2; exit 1; }
+grep -q '"bound_audiences":\["cogni-flight-probe-projection"\]' "$TMPROOT/run1.log" || { echo "projection role must bind dedicated audience" >&2; exit 1; }
+grep -q '"bound_claims":{"repository":"Cogni-DAO/cogni","environment":"candidate-a","job_workflow_ref":"Cogni-DAO/cogni/.github/workflows/flight-probe-project.yml@refs/heads/main"}' "$TMPROOT/run1.log" || { echo "projection role must bind the exact reusable workflow claims" >&2; exit 1; }
 ! grep -q 'flight-probe-reader.*operator' "$TMPROOT/run1.log" || { echo "projection reader must not gain an operator bucket" >&2; exit 1; }
 
 # ── Run 2: re-run against the now-provisioned env — NO SA creates (idempotent) ─

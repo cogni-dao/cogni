@@ -1551,16 +1551,17 @@ HCL
         "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao policy write ${DEPLOY_ENV}-${_lane}-flight-probe-reader -" <<HCL
 path "cogni/data/${_lane}/flight-prober" { capabilities = ["read"] }
 HCL
-      bao_exec "write auth/github-actions/role/gha-${_lane}-flight-probe-reader \
-        role_type=jwt \
-        user_claim=sub \
-        bound_subject=repo:${GH_REPO}:environment:${_lane} \
-        bound_audiences=cogni-flight-probe-projection \
-        bound_claims='{\"repository\":\"${GH_REPO}\",\"environment\":\"${_lane}\",\"job_workflow_ref\":\"${GH_REPO}/.github/workflows/flight-probe-project.yml@refs/heads/main\"}' \
-        policies=${DEPLOY_ENV}-${_lane}-flight-probe-reader \
-        token_ttl=5m \
-        token_max_ttl=5m \
-        token_num_uses=2" >/dev/null
+      # `bound_claims` is a map and OpenBao deliberately rejects map fields passed
+      # as key=value CLI strings. Stream the complete JSON request instead.
+      jq -nc \
+        --arg subject "repo:${GH_REPO}:environment:${_lane}" \
+        --arg repository "${GH_REPO}" \
+        --arg environment "${_lane}" \
+        --arg workflow_ref "${GH_REPO}/.github/workflows/flight-probe-project.yml@refs/heads/main" \
+        --arg policy "${DEPLOY_ENV}-${_lane}-flight-probe-reader" \
+        '{role_type:"jwt",user_claim:"sub",bound_subject:$subject,bound_audiences:["cogni-flight-probe-projection"],bound_claims:{repository:$repository,environment:$environment,job_workflow_ref:$workflow_ref},policies:[$policy],token_ttl:"5m",token_max_ttl:"5m",token_num_uses:2}' |
+        ssh $SSH_OPTS root@"$VM_IP" \
+          "kubectl exec -i -n openbao openbao-0 -- env BAO_TOKEN='${ROOT_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao write auth/github-actions/role/gha-${_lane}-flight-probe-reader -" >/dev/null
     done
     unset _lane
   fi
