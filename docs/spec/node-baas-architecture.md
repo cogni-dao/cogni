@@ -339,11 +339,11 @@ The bundle's stance is **constitution + map**: the code-owned invariants say how
 tool-read.** No single injection surface works across all harnesses, so each committed adapter uses
 the strongest native path its harness provides:
 
-| harness     | model-visible channel                                              | acquisition / enforcement                                                    |
-| ----------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| Claude Code | `CLAUDE.md` imports root `AGENTS.md` + the cache                   | SessionStart writes; output style reinforces; Stop validates                 |
-| Codex       | root `AGENTS.md` + uncapped SessionStart developer context         | `additionalContextLimit = 0` prevents the default 2500-token spill           |
-| OpenCode 1.x | root `AGENTS.md` + `opencode.json.instructions`                   | workspace setup warms the referenced cache                                   |
+| harness      | model-visible channel                                      | acquisition / enforcement                                          |
+| ------------ | ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| Claude Code  | `CLAUDE.md` imports root `AGENTS.md` + the cache           | SessionStart writes; output style reinforces; Stop validates       |
+| Codex        | root `AGENTS.md` + uncapped SessionStart developer context | `additionalContextLimit = 0` prevents the default 2500-token spill |
+| OpenCode 1.x | root `AGENTS.md` + `opencode.json.instructions`            | workspace setup warms the referenced cache                         |
 
 The shared loader (`scripts/agent/session-cognition.sh`) **fetches** the node's bundle (URL derived
 from `.cogni/repo-spec.yaml` `intent.name`: `operator`/`cogni-template` →

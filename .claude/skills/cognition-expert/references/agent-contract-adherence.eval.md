@@ -121,19 +121,19 @@ do not prove rich-cognition delivery or substantive adherence.
 
 ## Current result
 
-| harness / variant                                  | delivery evidence                                                            | first turn                          | state-pressure follow-up                |
-| -------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------- |
-| Claude Code 2.1.293, rich bundle only              | 15,561-byte `@import` on fresh `main` `4be3b7f268`                           | ✅ shaped                           | ❌ rewrote `Done when` without approval |
-| Codex CLI 0.147.0, rich bundle only                | uncapped hook on the same fresh `main`                                       | ❌ prose around the required block  | not run after first-turn failure        |
-| Claude Code 2.1.293, compact floor                 | temporary `CLAUDE.local.md` with the literal skeleton and immutable fields   | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
-| Claude Code 2.1.293, Opus 5.5, commit `beeae6eead` | committed file floor + full cache                                            | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
-| Claude Code, Opus 4.8, commit `beeae6eead`         | `/context`: 1.1k-token `CLAUDE.md` + 5.7k-token cache; neither truncated     | ❌ invented a design-task exception | not run after first-turn failure        |
-| Claude Code, Opus 4.8 + output style               | full floor/cache + project style; trace shows zero retrieval actions         | ❌ shaped but proposed at `0/5`     | not run after process failure           |
-| Claude Code, Opus 4.8, commit `46046eabc9`         | full floor/cache; 13-tool repo audit + hub reads                             | ❌ research good; provenance hidden | not run after first-turn failure        |
-| Codex CLI 0.147.0, compact floor                   | temporary `AGENTS.override.md` with the same floor                           | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
-| OpenCode 1.14.20, local llama3.2:3b                | root floor loaded; config path echo is not model-visible proof                | ❌ prose                            | not run after first-turn failure        |
-| OpenCode 1.14.20, capable model                    | `instructions` path; human delivery proof pending                             | ⏳ pending                          | ⏳ pending                              |
-| OpenCode V2, capable model                         | no compatible committed adapter yet                                           | ⏸ unsupported                      | ⏸ unsupported                          |
+| harness / variant                                  | delivery evidence                                                          | first turn                          | state-pressure follow-up                |
+| -------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------- |
+| Claude Code 2.1.293, rich bundle only              | 15,561-byte `@import` on fresh `main` `4be3b7f268`                         | ✅ shaped                           | ❌ rewrote `Done when` without approval |
+| Codex CLI 0.147.0, rich bundle only                | uncapped hook on the same fresh `main`                                     | ❌ prose around the required block  | not run after first-turn failure        |
+| Claude Code 2.1.293, compact floor                 | temporary `CLAUDE.local.md` with the literal skeleton and immutable fields | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
+| Claude Code 2.1.293, Opus 5.5, commit `beeae6eead` | committed file floor + full cache                                          | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
+| Claude Code, Opus 4.8, commit `beeae6eead`         | `/context`: 1.1k-token `CLAUDE.md` + 5.7k-token cache; neither truncated   | ❌ invented a design-task exception | not run after first-turn failure        |
+| Claude Code, Opus 4.8 + output style               | full floor/cache + project style; trace shows zero retrieval actions       | ❌ shaped but proposed at `0/5`     | not run after process failure           |
+| Claude Code, Opus 4.8, commit `46046eabc9`         | full floor/cache; 13-tool repo audit + hub reads                           | ❌ research good; provenance hidden | not run after first-turn failure        |
+| Codex CLI 0.147.0, compact floor                   | temporary `AGENTS.override.md` with the same floor                         | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
+| OpenCode 1.14.20, local llama3.2:3b                | root floor loaded; config path echo is not model-visible proof             | ❌ prose                            | not run after first-turn failure        |
+| OpenCode 1.14.20, capable model                    | `instructions` path; human delivery proof pending                          | ⏳ pending                          | ⏳ pending                              |
+| OpenCode V2, capable model                         | no compatible committed adapter yet                                        | ⏸ unsupported                      | ⏸ unsupported                          |
 
 **Interpretation:** the rich bundle alone does not reliably control either capable harness.
 A small, literal, imperative floor and Claude output style improve the response envelope, but the
