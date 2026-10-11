@@ -136,7 +136,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
-    if (!existingAccess.ok && existingAccess.errorCode === "authz_unavailable") {
+    if (
+      !existingAccess.ok &&
+      existingAccess.errorCode === "authz_unavailable"
+    ) {
       logTerminal({
         outcome: "error",
         status: 503,
