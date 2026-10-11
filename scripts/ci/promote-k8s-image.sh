@@ -4,7 +4,8 @@
 
 # Script: scripts/ci/promote-k8s-image.sh
 # Purpose: Update k8s overlay with new image digest for any app/node.
-# Note: sed uses GNU extensions (0, address). Runs in CI (ubuntu). Local use: review diff only.
+# The image selector rewrite uses yq so the exact promotion primitive is portable
+# between CI (Linux) and operator workstations (macOS).
 # Invariants:
 #   - IMAGE_IMMUTABILITY: Uses @sha256: digest, never mutable tags
 #   - MANIFEST_DRIVEN_DEPLOY: Promotion = overlay change → Argo CD syncs
@@ -69,16 +70,18 @@ log_info "Promoting $APP image in $ENV overlay"
 log_info "  Image: $IMAGE_NAME"
 log_info "  Digest: $IMAGE_DIGEST"
 
-# Update the kustomization.yaml images section
-# Replace newName with image name
-sed -i.bak "0,/newName: .*/s|newName: .*|newName: ${IMAGE_NAME}|" "$OVERLAY_FILE"
-
-# Replace newTag with digest (first run) or update existing digest
-if grep -q 'newTag:' "$OVERLAY_FILE"; then
-  sed -i.bak "0,/newTag: .*/s|.*newTag:.*|    digest: \"${IMAGE_DIGEST}\"|" "$OVERLAY_FILE"
-elif grep -q 'digest:' "$OVERLAY_FILE"; then
-  sed -i.bak "0,/digest: .*/s|digest: .*|digest: \"${IMAGE_DIGEST}\"|" "$OVERLAY_FILE"
+# Update the first image selector, preserving the established app-first overlay
+# contract while avoiding GNU-sed-only `0,/pattern/` semantics. A local proof
+# must exercise the same deterministic writer as CI; it may not hand-edit YAML.
+if ! command -v yq >/dev/null 2>&1; then
+  log_error "yq is required to promote an immutable image digest"
+  exit 1
 fi
+IMAGE_NAME="$IMAGE_NAME" IMAGE_DIGEST="$IMAGE_DIGEST" yq -i '
+  .images[0].newName = strenv(IMAGE_NAME) |
+  .images[0].digest = strenv(IMAGE_DIGEST) |
+  del(.images[0].newTag)
+' "$OVERLAY_FILE"
 
 # The scheduler-worker exposes IMAGE_DIGEST from its ConfigMap on /version.
 # Keep that runtime claim byte-aligned with the promoted image selector; a
@@ -95,8 +98,6 @@ if [[ "$APP" == "scheduler-worker" ]]; then
     exit 1
   fi
 fi
-
-rm -f "${OVERLAY_FILE}.bak"
 
 log_info "Updated $OVERLAY_FILE"
 

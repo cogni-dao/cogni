@@ -70,6 +70,8 @@ printf '%s\n' \
 )
 
 overlay="$TMPROOT/promote/infra/k8s/overlays/production/scheduler-worker/kustomization.yaml"
+grep -q 'digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$overlay"
+! grep -q 'newTag:' "$overlay"
 grep -q 'value: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$overlay"
 
 echo "PASS: scheduler-worker-artifact-identity.test.sh"
