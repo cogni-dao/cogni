@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/node-contracts/flight-probe.internal.v1`
+ * Purpose: Frozen wire contract for the bounded operator-to-node run-carries probe.
+ * Scope: Schemas only. Does not verify credentials or execute workflows; those stay in the node app.
+ * Invariants:
+ *   - FIXED_OPERATION: the caller cannot choose graph, prompt, model, billing account, or actor.
+ *   - SERVICE_NOT_CONTRIBUTOR: principalId is the stable `service:{nodeId}/flight-prober` subject.
+ *   - RUN_LEDGER_PROOF: every successful response names the run created by GraphRunWorkflow.
+ * Side-effects: none
+ * Links: task.5218, POST /api/internal/flight-probe
+ * @internal
+ */
+
+import { z } from "zod";
+
+export const InternalFlightProbeOutputSchema = z.strictObject({
+  ok: z.boolean(),
+  runId: z.string().uuid(),
+  principalId: z
+    .string()
+    .regex(
+      /^service:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/flight-prober$/i
+    ),
+});
+
+export type InternalFlightProbeOutput = z.infer<
+  typeof InternalFlightProbeOutputSchema
+>;

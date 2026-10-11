@@ -3,14 +3,15 @@
 
 /**
  * Module: `@adapters/server/node-flight/node-prober`
- * Purpose: Real-fetch implementation of NodeProber — exercises a node's PUBLIC surface exactly as an
- *   external dev would (register an agent, run the free `poet` graph, read back runs) AND reads its
- *   self-described identity from `/.well-known/agent.json`. No cluster/GH auth.
- * Scope: HTTP I/O only. Classification rules live in the feature; this adapter just measures + reports.
+ * Purpose: Real-fetch implementation of NodeProber — reads a node's public serving/identity surfaces
+ *   and exercises its bounded governed flight-probe endpoint with a node-audienced service credential.
+ * Scope: HTTP I/O, exact credential resolution, and transport-result classification only.
  * Invariants:
- *   - PUBLIC_SURFACE_ONLY: hits https://<host>/{readyz,version,api/v1/agent/register,chat/completions,agent/runs,.well-known/agent.json}.
- *   - RUN_CARRIES_IS_TRUTH: a created run (runs>=1) + fast return = the substrate carried it, even if the
- *     completion errors downstream (insufficient_quota → degraded, not fail). A 60s hang with runs=0 = fail.
+ *   - NO_THROWAWAY_ACTORS: run-carries never registers an agent; it calls the fixed internal probe as
+ *     the target's stable `service:{nodeId}/flight-prober` principal.
+ *   - EXACT_TARGET_CREDENTIAL: credential lookup is exact `{env,nodeId}` with no shared fallback.
+ *   - RUN_CARRIES_IS_TRUTH: a contract-valid response names the created run. A downstream graph error
+ *     is degraded; a timeout, missing credential, auth rejection, or malformed response is fail.
  *   - IDENTITY_IS_ZOD_PARSED: the well-known `identity` block is parsed defensively — a node not yet
  *     projecting identity returns generic JSON with no `identity` ⇒ `null` (never a throw), and a malformed
  *     block degrades to null rather than corrupting a gallery card.
@@ -22,8 +23,11 @@
  * @public
  */
 
+import { InternalFlightProbeOutputSchema } from "@cogni/node-contracts";
 import { z } from "zod";
 import type {
+  FlightProbeCredentialResolver,
+  FlightProbeTarget,
   NodeIdentity,
   NodeProber,
   RunCarriesResult,
@@ -136,6 +140,10 @@ function readBuildSha(body: unknown): string | null {
 }
 
 export class HttpNodeProber implements NodeProber {
+  constructor(
+    private readonly credentialResolver: FlightProbeCredentialResolver
+  ) {}
+
   async serving(host: string): Promise<ServingResult> {
     let readyzCode = 0;
     try {
@@ -180,153 +188,71 @@ export class HttpNodeProber implements NodeProber {
     }
   }
 
-  async runCarries(host: string): Promise<RunCarriesResult> {
-    // 1. Register a throwaway agent on the node (per-node key, free poet graph).
-    let apiKey = "";
-    try {
-      const reg = await fetchWithTimeout(
-        `https://${host}/api/v1/agent/register`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: `flight-gate-${Date.now()}` }),
-        },
-        SERVING_TIMEOUT_MS
-      );
-      if (reg.ok) {
-        const j: unknown = await reg.json();
-        if (j && typeof j === "object" && "apiKey" in j) {
-          const v = (j as { apiKey?: unknown }).apiKey;
-          if (typeof v === "string") apiKey = v;
-        }
-      }
-    } catch {
-      apiKey = "";
-    }
-    if (!apiKey) {
+  async runCarries(target: FlightProbeTarget): Promise<RunCarriesResult> {
+    const credential = this.credentialResolver.resolve(target);
+    if (!credential) {
       return {
         status: "fail",
         durationMs: 0,
         runs: 0,
-        detail: "register-failed",
+        detail: "probe-credential-missing",
       };
     }
 
-    // 2. Run the free poet graph. Time it: a hang (no Temporal poller / worker-401) blocks ~60s.
-    const auth = { Authorization: `Bearer ${apiKey}` };
     const start = Date.now();
-    let completionBody: unknown = null;
-    let hung = false;
     try {
       const resp = await fetchWithTimeout(
-        `https://${host}/api/v1/chat/completions`,
+        `https://${target.host}/api/internal/flight-probe`,
         {
           method: "POST",
-          headers: { ...auth, "content-type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-4o-mini",
-            graph_name: "poet",
-            messages: [{ role: "user", content: "flight-status gate ping" }],
-          }),
+          headers: {
+            authorization: `Bearer ${credential.apiKey}`,
+          },
         },
         RUN_CARRIES_TIMEOUT_MS
       );
-      try {
-        completionBody = await resp.json();
-      } catch {
-        completionBody = null; // SSE / empty — run state is read from /agent/runs below
+      const durationMs = Date.now() - start;
+      if (!resp.ok) {
+        return {
+          status: "fail",
+          durationMs,
+          runs: 0,
+          detail: `probe-http-${resp.status}`,
+        };
       }
-    } catch {
-      hung = true; // aborted at the timeout = the hang we hunt
-    }
-    const durationMs = Date.now() - start;
-
-    // 3. Did a run actually get created? This is the substrate-carried-it signal.
-    const runs = await this.countRuns(host, auth);
-
-    return classifyRunCarries({ hung, runs, durationMs, completionBody });
-  }
-
-  private async countRuns(
-    host: string,
-    auth: Record<string, string>
-  ): Promise<number> {
-    try {
-      const r = await fetchWithTimeout(
-        `https://${host}/api/v1/agent/runs`,
-        { method: "GET", headers: auth },
-        SERVING_TIMEOUT_MS
+      const parsed = InternalFlightProbeOutputSchema.safeParse(
+        await resp.json()
       );
-      if (!r.ok) return 0;
-      const j: unknown = await r.json();
-      const arr = Array.isArray(j)
-        ? j
-        : j && typeof j === "object"
-          ? ((j as Record<string, unknown>).runs ??
-            (j as Record<string, unknown>).items ??
-            (j as Record<string, unknown>).data)
-          : undefined;
-      return Array.isArray(arr) ? arr.length : 0;
+      if (!parsed.success) {
+        return {
+          status: "fail",
+          durationMs,
+          runs: 0,
+          detail: "probe-invalid-response",
+        };
+      }
+      const expectedPrincipalId = `service:${target.nodeId}/flight-prober`;
+      if (parsed.data.principalId !== expectedPrincipalId) {
+        return {
+          status: "fail",
+          durationMs,
+          runs: 0,
+          detail: "probe-principal-mismatch",
+        };
+      }
+      return {
+        status: parsed.data.ok ? "pass" : "degraded",
+        durationMs,
+        runs: 1,
+        detail: parsed.data.ok ? "probe-complete" : "graph-error",
+      };
     } catch {
-      return 0;
+      return {
+        status: "fail",
+        durationMs: Date.now() - start,
+        runs: 0,
+        detail: "hang:no-run",
+      };
     }
   }
-}
-
-/** Pure classifier — exported for unit tests. */
-export function classifyRunCarries(input: {
-  readonly hung: boolean;
-  readonly runs: number;
-  readonly durationMs: number;
-  readonly completionBody: unknown;
-}): RunCarriesResult {
-  const { hung, runs, durationMs, completionBody } = input;
-
-  if (hung) {
-    return { status: "fail", durationMs, runs, detail: "hang:no-run" };
-  }
-
-  // A normal completion → poem/text content present.
-  const content = extractContent(completionBody);
-  if (content) {
-    return { status: "pass", durationMs, runs, detail: "poem" };
-  }
-
-  // No content but an error → run carried IFF a run row exists (failure moved downstream of creation).
-  const errCode = extractErrorCode(completionBody);
-  if (runs >= 1) {
-    return {
-      status: "degraded",
-      durationMs,
-      runs,
-      detail: errCode ?? "run-created:no-content",
-    };
-  }
-
-  // No run, no content, didn't hang → completion rejected before run creation (auth/billing-preflight).
-  return {
-    status: "fail",
-    durationMs,
-    runs,
-    detail: errCode ?? "no-run-created",
-  };
-}
-
-function extractContent(body: unknown): string | null {
-  if (!body || typeof body !== "object") return null;
-  const choices = (body as { choices?: unknown }).choices;
-  if (!Array.isArray(choices) || choices.length === 0) return null;
-  const msg = (choices[0] as { message?: { content?: unknown } }).message;
-  const c = msg?.content;
-  return typeof c === "string" && c.length > 0 ? c : null;
-}
-
-function extractErrorCode(body: unknown): string | null {
-  if (!body || typeof body !== "object") return null;
-  const err = (body as { error?: unknown }).error;
-  if (!err || typeof err !== "object") return null;
-  const e = err as { code?: unknown; type?: unknown };
-  if (typeof e.code === "string") return e.code;
-  if (typeof e.type === "string") return e.type;
-  return null;
 }

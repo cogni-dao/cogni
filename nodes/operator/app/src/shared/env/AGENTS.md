@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-09-15
+- **Last reviewed:** 2026-10-09
 - **Status:** draft
 
 ## Purpose
@@ -64,6 +64,7 @@ Single source of truth for environment variables. Lazy validation with Zod preve
 - Runtime: `NODE_ENV`, `APP_ENV`, `SERVICE_NAME`, `DEPLOY_ENVIRONMENT`, `PORT`, `PINO_LOG_LEVEL`
 - Database: `DATABASE_URL`, `DATABASE_SERVICE_URL`; both are explicit DSNs, no component-piece fallback, startup rejects same-user/superuser DSNs
 - LLM/billing/ops: `LITELLM_BASE_URL`, `LITELLM_MASTER_KEY`, `LITELLM_MVP_API_KEY`, `OPENROUTER_API_KEY`, `BILLING_INGEST_TOKEN`, `SCHEDULER_API_TOKEN`, `INTERNAL_OPS_TOKEN`
+- Flight probes: `FLIGHT_PROBE_API_KEY` (target-local strict `{active,previous}` JSON ring, max two), `FLIGHT_PROBE_CREDENTIALS_JSON` (control-operator-only exact `{env}/{nodeId}` active-key lookup; no fallback)
 - Auth/session: `AUTH_SECRET`
 - Authorization: `OPENFGA_API_URL`, `OPENFGA_STORE_ID`, `OPENFGA_AUTHORIZATION_MODEL_ID`, `OPENFGA_API_TOKEN`; `OPENFGA_STORE_ID` is required when OpenFGA activation vars are present
 - Metrics/analytics: `METRICS_TOKEN`, `PROMETHEUS_REMOTE_WRITE_URL`, `PROMETHEUS_QUERY_URL`, `PROMETHEUS_READ_USERNAME`, `PROMETHEUS_READ_PASSWORD`, `ANALYTICS_K_THRESHOLD`, `ANALYTICS_QUERY_TIMEOUT_MS`
