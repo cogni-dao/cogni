@@ -212,6 +212,34 @@ export function setBuildInfo(version: string, commitSha: string) {
 }
 
 // =============================================================================
+// Shared Temporal Substrate Diagnostic Metrics
+// =============================================================================
+
+export const temporalSubstratePollerFresh = getOrCreateGauge(
+  "temporal_substrate_poller_fresh",
+  "Whether the newest server-observed poller is fresh (1) for each task type",
+  ["task_type"] as const
+);
+
+export const temporalSubstrateChecksTotal = getOrCreateCounter(
+  "temporal_substrate_checks_total",
+  "Completed shared Temporal substrate diagnostics",
+  ["result", "reason"] as const
+);
+
+export const temporalSubstrateCheckDurationMs = getOrCreateHistogram(
+  "temporal_substrate_check_duration_ms",
+  "Shared Temporal substrate diagnostic duration in milliseconds",
+  ["result", "reason"] as const,
+  [25, 50, 100, 250, 500, 1000, 2000, 3000, 5000]
+);
+
+export const temporalSubstrateLastSuccessTimestampSeconds = getOrCreateGauge(
+  "temporal_substrate_last_success_timestamp_seconds",
+  "Unix timestamp of the last successful shared Temporal substrate diagnostic"
+);
+
+// =============================================================================
 // BYO-AI Auth Metrics (alertable — critical auth path)
 // =============================================================================
 

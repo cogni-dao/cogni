@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `scripts/lib/temporal-scheduled-probe`
+ * Module: `@scripts/lib/temporal-scheduled-probe`
  * Purpose: Prove one node's existing schedule → shared worker → LangGraph path.
- * Scope: Authenticated public node APIs plus an injected Loki reader. No direct
- *   database or Temporal access, and no runtime product imports.
+ * Scope: Authenticated public node APIs plus an injected Loki reader. Does not
+ *   access a database or Temporal directly, or import runtime product code.
  * Invariants:
  *   - Uses the existing schedule and agent-run APIs only.
  *   - Uses the platform free model with its bare model ID.
  *   - Identifies the exact new graphRunId by diffing the caller's run ledger.
  *   - Always attempts schedule deletion and proves API-level absence.
  *   - Requires one Loki record correlated by both scheduleId and graphRunId.
- * Side-effects: Remote HTTP reads/writes through injected or global fetch.
+ * Side-effects: IO (remote HTTP reads/writes through injected or global fetch)
  * Links: task.5239, docs/guides/agent-api-validation.md
  * @public
  */

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `tests/unit/scripts/temporal-scheduled-probe`
+ * Module: `@tests/unit/scripts/temporal-scheduled-probe`
  * Purpose: Prove the live scheduled-graph harness is bounded, correlated, and cleanup-safe.
- * Scope: Mocked HTTP/Loki dependencies only. No network, database, Temporal, time, or RNG.
+ * Scope: Mocked HTTP/Loki dependencies only. Does not use network, database, Temporal, time, or RNG.
  * Invariants: Exact new-run diff, free-model payload, Loki correlation, and finally cleanup.
  * Side-effects: none
  * Links: scripts/lib/temporal-scheduled-probe.mjs, task.5239

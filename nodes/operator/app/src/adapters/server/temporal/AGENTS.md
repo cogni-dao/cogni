@@ -5,11 +5,12 @@
 ## Metadata
 
 - **Owners:** @cogni-dao
+- **Last reviewed:** 2026-10-11
 - **Status:** stable
 
 ## Purpose
 
-Temporal schedule control adapter implementing `ScheduleControlPort` for schedule lifecycle management (create/update/pause/resume/delete/describe).
+Temporal schedule control plus read-only, server-observed shared-worker health diagnostics.
 
 ## Pointers
 
@@ -31,8 +32,8 @@ Temporal schedule control adapter implementing `ScheduleControlPort` for schedul
 
 ## Public Surface
 
-- **Exports:** `TemporalScheduleControlAdapter`, `TemporalScheduleControlConfig`
-- **Env/Config keys:** `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE` (all required)
+- **Exports:** schedule control types and shared Temporal health inspection/types
+- **Env/Config keys:** `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `SCHEDULER_WORKER_HEALTH_URL`
 - **Files considered API:** `index.ts`
 
 ## Ports
@@ -43,7 +44,7 @@ Temporal schedule control adapter implementing `ScheduleControlPort` for schedul
 
 ## Responsibilities
 
-- This directory **does**: Implement schedule lifecycle control via Temporal client
+- This directory **does**: Implement schedule lifecycle control and read server-observed pollers plus worker identity
 - This directory **does not**: Handle workflow execution, graph logic, or worker tasks
 
 ## Usage
