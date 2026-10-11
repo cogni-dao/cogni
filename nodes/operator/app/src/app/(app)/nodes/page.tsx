@@ -10,18 +10,13 @@
  * @public
  */
 
-import { withTenantScope } from "@cogni/db-client";
-import { type UserId, userActor } from "@cogni/ids";
-import { desc, eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import type { ReactElement } from "react";
-import { resolveAppDb, resolveNodeRegistry } from "@/bootstrap/container";
+import { listOwnedNodes } from "@/app/_facades/nodes/owned.server";
 import { PageContainer, SectionCard } from "@/components";
 import { NodeTile } from "@/features/nodes/components/NodeTile";
 import { nodeSummaryToTileView } from "@/features/nodes/components/nodeTileView";
 import { getServerSessionUser } from "@/lib/auth/server";
-import type { NodeSummary } from "@/ports";
-import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { titleCaseSlug } from "@/shared/node-registry/resolve";
 
 import { NewNodeForm } from "./NewNodeForm.client";
@@ -36,21 +31,7 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
     redirect("/");
   }
 
-  const db = resolveAppDb();
-  const [rows, publicNodes] = await Promise.all([
-    withTenantScope(db, userActor(session.id as UserId), async (tx) =>
-      tx
-        .select()
-        .from(nodes)
-        .where(eq(nodes.ownerUserId, session.id))
-        .orderBy(desc(nodes.createdAt))
-        .limit(50)
-    ),
-    resolveNodeRegistry().listPublic(),
-  ]);
-  const publicNodeBySlug = new Map(
-    publicNodes.map((node) => [node.slug, node])
-  );
+  const rows = await listOwnedNodes(session.id);
 
   return (
     <PageContainer maxWidth="full" className="max-w-7xl">
@@ -69,29 +50,29 @@ export default async function SetupNodesPage(): Promise<ReactElement> {
         ) : (
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {rows.map((n) => {
-              const display = NODE_STATUS_DISPLAY[n.status as NodeStatus];
-              const publicNode =
-                publicNodeBySlug.get(n.slug) ??
-                ({
-                  slug: n.slug,
-                  nodeId: n.id,
-                  title: titleCaseSlug(n.slug),
-                  tagline: "",
-                  kind: "full-app",
-                  href: `/nodes/${n.id}`,
-                } satisfies NodeSummary);
+              const display = NODE_STATUS_DISPLAY[n.status];
               return (
                 <NodeTile
                   key={n.id}
-                  node={nodeSummaryToTileView(publicNode, {
-                    href: `/nodes/${n.id}`,
-                    status: {
-                      label: display.label,
-                      intent: display.intent,
-                      presentation: "dot",
+                  node={nodeSummaryToTileView(
+                    {
+                      slug: n.slug,
+                      nodeId: n.id,
+                      title: titleCaseSlug(n.slug),
+                      tagline: "",
+                      kind: "full-app",
+                      href: `/nodes/${n.id}`,
                     },
-                    density: "compact",
-                  })}
+                    {
+                      href: `/nodes/${n.id}`,
+                      status: {
+                        label: display.label,
+                        intent: display.intent,
+                        presentation: "dot",
+                      },
+                      density: "compact",
+                    }
+                  )}
                 />
               );
             })}

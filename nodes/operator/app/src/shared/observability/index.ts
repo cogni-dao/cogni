@@ -30,6 +30,7 @@ export const EVENT_NAMES = {
   NODE_DISTRIBUTION_ACTIVATION_COMPLETE:
     "feature.node_distribution_activation.complete",
   NODE_DAO_RESET_COMPLETE: "feature.node_dao_reset.complete",
+  NODE_OWNER_LIST_COMPLETE: "feature.node_owner_list.complete",
   // defineScheduledJob dispatcher: one cron fire of a registered scheduled job.
   SCHEDULED_JOB_DISPATCH_RECEIVED: "feature.scheduled_job.dispatch_received",
   SCHEDULED_JOB_DISPATCH_COMPLETE: "feature.scheduled_job.dispatch_complete",
