@@ -137,6 +137,14 @@ build_target() {
   local args=(--platform "$PLATFORM" --file "$dockerfile")
   if [ "$type" = "node" ]; then
     args+=(--target runner --build-arg "BUILD_SHA=${git_sha}")
+  elif [ "$target" = "scheduler-worker" ]; then
+    # The worker has no public app /version endpoint, so its health server is
+    # the artifact-identity authority. Bake the same immutable source SHA used
+    # by the image tag plus the build timestamp into that endpoint.
+    args+=(
+      --build-arg "GIT_SHA=${git_sha}"
+      --build-arg "BUILD_TS=${build_timestamp}"
+    )
   fi
   args+=(
     --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY:-cogni-dao/cogni}"

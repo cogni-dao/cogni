@@ -80,6 +80,22 @@ elif grep -q 'digest:' "$OVERLAY_FILE"; then
   sed -i.bak "0,/digest: .*/s|digest: .*|digest: \"${IMAGE_DIGEST}\"|" "$OVERLAY_FILE"
 fi
 
+# The scheduler-worker exposes IMAGE_DIGEST from its ConfigMap on /version.
+# Keep that runtime claim byte-aligned with the promoted image selector; a
+# placeholder here makes an immutable deployment impossible to identify even
+# when Kubernetes is running the correct digest.
+if [[ "$APP" == "scheduler-worker" ]]; then
+  if ! grep -q 'path: /data/IMAGE_DIGEST' "$OVERLAY_FILE"; then
+    log_error "scheduler-worker overlay must patch /data/IMAGE_DIGEST"
+    exit 1
+  fi
+  sed -i.bak '\|path: /data/IMAGE_DIGEST|{n;s|\( *value: *\).*|\1"'"${IMAGE_DIGEST}"'"|;}' "$OVERLAY_FILE"
+  if ! grep -q "value: \"${IMAGE_DIGEST}\"" "$OVERLAY_FILE"; then
+    log_error "failed to synchronize scheduler-worker IMAGE_DIGEST"
+    exit 1
+  fi
+fi
+
 rm -f "${OVERLAY_FILE}.bak"
 
 log_info "Updated $OVERLAY_FILE"

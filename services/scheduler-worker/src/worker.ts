@@ -70,6 +70,24 @@ export function isCanonicalNodeId(nodeId: string): boolean {
 }
 
 /**
+ * Resolve the Temporal namespaces this shared worker is responsible for.
+ * The primary lane is always first; custodied lanes are trimmed, deduplicated,
+ * and may not create a duplicate primary poller.
+ */
+export function workerNamespaces(
+  primaryNamespace: string,
+  custodiedNamespacesRaw: string
+): string[] {
+  const custodied = custodiedNamespacesRaw
+    .split(",")
+    .map((namespace) => namespace.trim())
+    .filter(
+      (namespace) => namespace.length > 0 && namespace !== primaryNamespace
+    );
+  return [primaryNamespace, ...new Set(custodied)];
+}
+
+/**
  * True if an error thrown by `NativeConnection.connect` looks transient — a
  * DNS / transport / reachability blip that a retry could clear — rather than a
  * permanent misconfiguration. Matches broadly on error type/name and message:
@@ -313,11 +331,10 @@ export async function startSchedulerWorker(
   // `cogni-<lane>`, and the SCHEDULER_API_TOKEN it inherits is already this env's — so
   // serving it is one more Worker per namespace and nothing else. Empty by default, so a
   // cluster that custodies no foreign lane behaves byte-identically.
-  const custodiedNamespaces = (env.TEMPORAL_CUSTODIED_NAMESPACES ?? "")
-    .split(",")
-    .map((n) => n.trim())
-    .filter((n) => n.length > 0 && n !== env.TEMPORAL_NAMESPACE);
-  const namespaces = [env.TEMPORAL_NAMESPACE, ...new Set(custodiedNamespaces)];
+  const namespaces = workerNamespaces(
+    env.TEMPORAL_NAMESPACE,
+    env.TEMPORAL_CUSTODIED_NAMESPACES ?? ""
+  );
 
   type StartedWorker = {
     taskQueue: string;
@@ -375,6 +392,11 @@ export async function startSchedulerWorker(
   logWorkerEvent(logger, WORKER_EVENT_NAMES.LIFECYCLE_STARTING, {
     phase: "polling",
     queues: started.map((s) => s.taskQueue),
+    namespaces: [...new Set(started.map((s) => s.namespace))],
+    workers: started.map(({ namespace, taskQueue }) => ({
+      namespace,
+      taskQueue,
+    })),
   });
 
   return {

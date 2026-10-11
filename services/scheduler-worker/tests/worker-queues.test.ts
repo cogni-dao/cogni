@@ -11,7 +11,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { isCanonicalNodeId, nodeTaskQueueName } from "../src/worker.js";
+import {
+  isCanonicalNodeId,
+  nodeTaskQueueName,
+  workerNamespaces,
+} from "../src/worker.js";
 
 describe("isCanonicalNodeId", () => {
   it("accepts lowercase UUID v4 strings", () => {
@@ -65,5 +69,22 @@ describe("nodeTaskQueueName", () => {
     const consumerQueue = nodeTaskQueueName(prefix, nodeId);
     const submitterQueue = `${prefix}-${nodeId}`;
     expect(consumerQueue).toBe(submitterQueue);
+  });
+});
+
+describe("workerNamespaces", () => {
+  it("keeps the primary lane and normalizes custodied namespaces", () => {
+    expect(
+      workerNamespaces(
+        "cogni-production",
+        " cogni-candidate-a, cogni-preview,cogni-preview, "
+      )
+    ).toEqual(["cogni-production", "cogni-candidate-a", "cogni-preview"]);
+  });
+
+  it("never duplicates the primary namespace", () => {
+    expect(
+      workerNamespaces("cogni-production", "cogni-production,cogni-candidate-a")
+    ).toEqual(["cogni-production", "cogni-candidate-a"]);
   });
 });

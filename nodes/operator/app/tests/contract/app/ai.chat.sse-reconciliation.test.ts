@@ -204,6 +204,48 @@ describe("Chat SSE Reconciliation", () => {
     vi.mocked(isModelAllowed).mockResolvedValue(true);
   });
 
+  it("flushes workflow acceptance before the first Redis event", async () => {
+    let releaseRedis!: () => void;
+    const redisGate = new Promise<void>((resolve) => {
+      releaseRedis = resolve;
+    });
+    const stream = (async function* (): AsyncIterable<AiEvent> {
+      await redisGate;
+      yield { type: "assistant_final", content: "finished" };
+      yield { type: "done" };
+    })();
+
+    vi.mocked(completionStream).mockResolvedValue({
+      stream,
+      final: Promise.resolve({
+        ok: true as const,
+        requestId: "test-req-id",
+        usage: { promptTokens: 1, completionTokens: 1 },
+        finishReason: "stop",
+      }),
+    });
+
+    const res = await chatPOST(buildChatRequest());
+    const events = readSseEvents(res)[Symbol.asyncIterator]();
+    const first = await events.next();
+
+    expect(first).toMatchObject({
+      done: false,
+      value: {
+        type: "data-status",
+        data: {
+          data: { phase: "thinking", label: "Queued" },
+          transient: true,
+        },
+      },
+    });
+
+    releaseRedis();
+    while (!(await events.next()).done) {
+      // Drain the response so the route's stream work completes.
+    }
+  });
+
   it("reconciles truncated deltas with assistant_final — full text arrives", async () => {
     // Arrange: deltas deliver only the first half of text
     const halfLen = Math.floor(FULL_TEXT.length / 2);

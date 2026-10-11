@@ -321,6 +321,18 @@ export const POST = wrapRouteHandlerWithLogging(
       const uiStream = createUIMessageStream({
         execute: async ({ writer }) => {
           try {
+            // Flush durable workflow acceptance immediately. In workflow-start
+            // mode the Temporal worker may not emit a Redis event for several
+            // seconds; an empty SSE body during that queue wait can be detached
+            // by an edge/client idle timeout even though the workflow succeeds.
+            // This transient chunk is display-only and keeps the response body
+            // observable until the replayable run stream begins.
+            writer.write({
+              type: "data-status",
+              data: { phase: "thinking", label: "Queued" },
+              transient: true,
+            } as UIMessageChunk);
+
             let eventSeq = 0;
             const startedToolCallIds = new Set<string>();
 

@@ -69,6 +69,7 @@ PARALLEL=(
   render-node-appset.test.sh
   operator-rollout-strategy.test.sh
   scheduler-runtime-routing.test.sh
+  scheduler-worker-artifact-identity.test.sh
   session-cognition-hook.test.sh
   no-automatic-fork-source-sync.test.sh
 )
