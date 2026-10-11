@@ -126,7 +126,7 @@ preliminary_stop_output="$(jq -cn --arg message "$PRELIMINARY_STOP_MESSAGE" \
 grep -Fq "if [[ \"\${CONDUCTOR_IS_LOCAL:-1}\" == \"1\" ]]; then" "$CONDUCTOR_SETUP" ||
   fail "Conductor setup does not guard user-hook installation to local workspaces"
 installer_line="$(grep -nF 'bash scripts/agent/install-codex-cognition-hook.sh' "$CONDUCTOR_SETUP" | cut -d: -f1)"
-dependency_line="$(grep -nF 'pnpm install --prefer-offline --frozen-lockfile' "$CONDUCTOR_SETUP" | cut -d: -f1)"
+dependency_line="$(grep -nF 'pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile' "$CONDUCTOR_SETUP" | cut -d: -f1)"
 [[ -n "$installer_line" && -n "$dependency_line" && "$installer_line" -lt "$dependency_line" ]] ||
   fail "Conductor setup does not reconcile the user hook before dependency install"
 

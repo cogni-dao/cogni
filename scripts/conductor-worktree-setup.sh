@@ -152,19 +152,6 @@ link_from_primary() {
   ln -sfn "$src_path" "$name"
 }
 
-install_dependencies() {
-  local attempt=1
-
-  while ! pnpm install --prefer-offline --frozen-lockfile; do
-    if [[ "$attempt" -ge 2 ]]; then
-      return 1
-    fi
-
-    warn "dependency install failed; retrying once"
-    attempt=$((attempt + 1))
-  done
-}
-
 require_primary_checkout
 refresh_primary_main
 refresh_workspace_base_ref
@@ -191,6 +178,6 @@ fi
 # blocks setup (the hook retries each session).
 bash scripts/agent/session-cognition.sh >/dev/null 2>&1 || true
 
-install_dependencies
+pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile
 pnpm packages:build
 pnpm worktree:check

@@ -50,7 +50,7 @@ git worktree add ../cogni-template-worktrees/<branch-name> -b <branch-name> HEAD
 cd ../cogni-template-worktrees/<branch-name>
 
 # 3. Install dependencies (worktrees share .git but not node_modules)
-pnpm install --prefer-offline --frozen-lockfile
+pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile
 
 # 4. Check whether the worktree is ready for agent development
 pnpm worktree:check
