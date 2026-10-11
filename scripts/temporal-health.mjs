@@ -4,35 +4,47 @@
 
 /**
  * Module: `@scripts/temporal-health`
- * Purpose: Run the authenticated shared Temporal health diagnostic from one command.
- * Scope: Reads one node health route and prints its evidence. Does not mutate workflows or schedules.
- * Invariants: Exit 0 requires HTTP success and a healthy payload; all unknown or failed states exit nonzero.
- * Side-effects: IO (reads repo spec and environment, performs HTTP request, writes stdout)
- * Links: task.5238, scripts/lib/temporal-health-client.mjs
+ * Purpose: Run the complete shared-worker Temporal proof from one command.
+ * Scope: Proves Poly and node-template workflow paths. Does not deploy or promote.
+ * Invariants: Exit 0 requires every proof stage; output never contains secrets.
+ * Side-effects: IO (remote actor registration, chat run, and temporary schedules)
+ * Links: story.5076, task.5238, task.5239
  * @public
  */
 
-import {
-  readTemporalHealth,
-  resolveTemporalHealthTarget,
-  TEMPORAL_HEALTH_CLI_REASON,
-} from "./lib/temporal-health-client.mjs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
-function parseArgs(argv) {
-  const result = { env: "candidate-a", url: null };
+import { TEMPORAL_HEALTH_CLI_REASON } from "./lib/temporal-health-client.mjs";
+import {
+  runTemporalHealthProof,
+  temporalProofFailure,
+} from "./lib/temporal-proof-orchestrator.mjs";
+
+export function parseTemporalHealthArgs(argv) {
+  const result = { environment: undefined, urls: {}, expectedShas: {} };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--env") {
-      result.env = argv[++index];
-    } else if (arg === "--url") {
-      result.url = argv[++index];
+      result.environment = argv[++index];
+    } else if (arg === "--poly-url" || arg === "--url") {
+      result.urls.poly = argv[++index];
+    } else if (arg === "--node-template-url") {
+      result.urls["node-template"] = argv[++index];
+    } else if (arg === "--poly-sha") {
+      result.expectedShas.poly = argv[++index];
+    } else if (arg === "--node-template-sha") {
+      result.expectedShas["node-template"] = argv[++index];
     } else if (arg === "--help" || arg === "-h") {
       result.help = true;
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
-  if (!["candidate-a", "preview", "production"].includes(result.env)) {
+  if (
+    result.environment !== undefined &&
+    !["candidate-a", "preview", "production"].includes(result.environment)
+  ) {
     throw new Error("--env must be candidate-a, preview, or production");
   }
   return result;
@@ -42,56 +54,57 @@ function print(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function main() {
+export async function main(argv = process.argv.slice(2), dependencies = {}) {
   let args;
   try {
-    args = parseArgs(process.argv.slice(2));
-  } catch (error) {
+    args = parseTemporalHealthArgs(argv);
+  } catch {
     print({
       status: "error",
       reason: TEMPORAL_HEALTH_CLI_REASON.CLI_INVALID,
-      message: error.message,
+      phase: "arguments",
     });
     return 2;
   }
 
   if (args.help) {
     process.stdout.write(
-      "Usage: pnpm temporal:health [--env candidate-a|preview|production] [--url https://node.example]\n"
+      "Usage: pnpm temporal:health [--env candidate-a|preview|production] [--poly-url URL] [--node-template-url URL] [--poly-sha SHA] [--node-template-sha SHA]\n"
     );
     return 0;
   }
 
-  const apiKey = process.env.COGNI_NODE_API_KEY;
-  if (!apiKey) {
-    print({
-      status: "error",
-      reason: TEMPORAL_HEALTH_CLI_REASON.AUTH_MISSING,
-      message:
-        "COGNI_NODE_API_KEY is required (normally loaded from .env.cogni)",
-    });
-    return 2;
-  }
-
-  let baseUrl;
   try {
-    baseUrl = resolveTemporalHealthTarget({
-      repoRoot: process.cwd(),
-      env: args.env,
-      url: args.url,
-    });
+    const result = await runTemporalHealthProof(
+      {
+        repoRoot: process.cwd(),
+        environment: args.environment,
+        urls: args.urls,
+        expectedShas: args.expectedShas,
+      },
+      dependencies
+    );
+    print(result);
+    return 0;
   } catch (error) {
-    print({
-      status: "error",
-      reason: TEMPORAL_HEALTH_CLI_REASON.TARGET_INVALID,
-      message: error.message,
-    });
-    return 2;
+    const failure = temporalProofFailure(error);
+    print(failure);
+    return [
+      TEMPORAL_HEALTH_CLI_REASON.CLI_INVALID,
+      TEMPORAL_HEALTH_CLI_REASON.PROOF_CONFIGURATION_INVALID,
+    ].includes(failure.reason)
+      ? 2
+      : 1;
   }
-
-  const result = await readTemporalHealth({ baseUrl, apiKey });
-  print(result.body);
-  return result.exitCode;
 }
 
-process.exitCode = await main();
+function isMainModule() {
+  return (
+    process.argv[1] &&
+    pathToFileURL(resolve(process.argv[1])).href === import.meta.url
+  );
+}
+
+if (isMainModule()) {
+  process.exitCode = await main();
+}

@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@scripts/lib/temporal-loki-evidence`
- * Purpose: Read exact schedule/run evidence from Grafana Cloud Loki for the
- *   scheduled Temporal proof harness.
- * Scope: Read-only Grafana datasource-proxy query_range IO. The caller owns
- *   target discovery and passes the node UUID plus environment explicitly.
+ * Purpose: Read exact schedule/run evidence from Grafana Cloud Loki.
+ * Scope: Reads bounded Grafana queries. Does not write logs or expose credentials.
  * Invariants:
  *   - Queries are pinned to the exact env and scheduler-worker stream. The
  *     stream `node` label is the physical k8s host, never the Cogni node UUID.
@@ -15,7 +13,7 @@
  *   - Query time and result count are bounded.
  *   - Grafana credentials are header-only and never appear in output/errors.
  *   - Missing credentials, malformed responses, and zero hits fail closed.
- * Side-effects: network (Grafana Cloud Loki read only)
+ * Side-effects: IO (read-only Grafana Cloud Loki request)
  * Links: scripts/lib/temporal-scheduled-probe.mjs,
  *   docs/spec/observability.md#logql-queries, task.5239
  * @public

@@ -3,12 +3,13 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Prove the node's durable chat path without browser/session state.
- *
- * The probe registers a throwaway machine actor, starts one free-model poet
- * turn, requires body-visible workflow acceptance followed by a terminal SSE
- * frame, then verifies the exact X-Run-Id is terminal in the agent run ledger.
- * It does not inspect schedules or Loki and never prints the issued API key.
+ * Module: `@scripts/lib/temporal-chat-probe`
+ * Purpose: Prove durable free-model chat reaches a correlated terminal run.
+ * Scope: Uses public agent APIs and SSE. Does not inspect schedules or Loki.
+ * Invariants: Requires queued acceptance, terminal SSE, and exact terminal run ID.
+ * Side-effects: IO (optional actor registration, chat run, and run-ledger reads)
+ * Links: story.5076, task.5238, task.5239
+ * @public
  */
 
 import { randomUUID } from "node:crypto";
@@ -33,27 +34,18 @@ export async function runTemporalChatProbe(options, dependencies = {}) {
   const pollIntervalMs = options?.pollIntervalMs ?? 500;
   const requestTimeoutMs = options?.requestTimeoutMs ?? 15_000;
 
-  const registration = await fetchJson(
-    fetchImpl,
-    `${baseUrl}/api/v1/agent/register`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: `temporal-chat-probe-${now()}-${randomUUID().slice(0, 8)}`,
-      }),
-    },
-    requestTimeoutMs,
-    "agent registration"
-  );
-  if (typeof registration.apiKey !== "string" || registration.apiKey === "") {
-    throw new Error("agent registration returned no apiKey");
+  if (
+    options?.apiKey !== undefined &&
+    (typeof options.apiKey !== "string" || options.apiKey.length === 0)
+  ) {
+    throw new Error("apiKey must be a non-empty string");
   }
+  const apiKey = options?.apiKey ?? (await registerProbeActor());
 
   const chatResponse = await fetchImpl(`${baseUrl}/api/v1/ai/chat`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${registration.apiKey}`,
+      authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
@@ -117,7 +109,7 @@ export async function runTemporalChatProbe(options, dependencies = {}) {
     const runs = await fetchJson(
       fetchImpl,
       `${baseUrl}/api/v1/agent/runs?limit=100`,
-      { headers: { authorization: `Bearer ${registration.apiKey}` } },
+      { headers: { authorization: `Bearer ${apiKey}` } },
       requestTimeoutMs,
       "agent run lookup"
     );
@@ -141,6 +133,26 @@ export async function runTemporalChatProbe(options, dependencies = {}) {
     streamTerminal: terminalFrame.type,
     runStatus: terminalRun.status,
   };
+
+  async function registerProbeActor() {
+    const registration = await fetchJson(
+      fetchImpl,
+      `${baseUrl}/api/v1/agent/register`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: `temporal-chat-probe-${now()}-${randomUUID().slice(0, 8)}`,
+        }),
+      },
+      requestTimeoutMs,
+      "agent registration"
+    );
+    if (typeof registration.apiKey !== "string" || registration.apiKey === "") {
+      throw new Error("agent registration returned no apiKey");
+    }
+    return registration.apiKey;
+  }
 }
 
 function normalizeBaseUrl(value) {

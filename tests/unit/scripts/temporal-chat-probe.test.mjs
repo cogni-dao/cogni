@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+/**
+ * Module: `@tests/unit/scripts/temporal-chat-probe`
+ * Purpose: Prove terminal chat orchestration and caller-key reuse.
+ * Scope: Uses mocked fetch and streams. Does not access live node APIs.
+ * Invariants: Tests queued acceptance, terminal frames, exact run IDs, and no re-registration.
+ * Side-effects: none
+ * Links: scripts/lib/temporal-chat-probe.mjs, story.5076, task.5238
+ * @internal
+ */
+
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -80,6 +90,45 @@ test("proves queued-to-terminal chat and the exact terminal run", async () => {
 
   const lookup = calls[2];
   assert.equal(lookup.init.headers.authorization, "Bearer agent-secret");
+});
+
+test("reuses a caller key without registering another actor", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/api/v1/ai/chat")) {
+      return sseResponse(
+        [
+          {
+            type: "data-status",
+            data: { phase: "thinking", label: "Queued" },
+            transient: true,
+          },
+          { type: "finish", finishReason: "stop" },
+        ],
+        RUN_ID
+      );
+    }
+    if (String(url).includes("/api/v1/agent/runs?limit=100")) {
+      return jsonResponse(200, {
+        runs: [{ runId: RUN_ID, status: "success" }],
+      });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const result = await runTemporalChatProbe(
+    { baseUrl: "https://poly.example.test", apiKey: "shared-key" },
+    { fetchImpl }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(
+    calls.some((call) => call.url.endsWith("/api/v1/agent/register")),
+    false
+  );
+  assert.equal(calls[0].init.headers.authorization, "Bearer shared-key");
+  assert.equal(calls[1].init.headers.authorization, "Bearer shared-key");
 });
 
 test("rejects a stream whose first frame is not queued acceptance", async () => {

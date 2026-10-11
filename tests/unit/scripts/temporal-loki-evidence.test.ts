@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/unit/scripts/temporal-loki-evidence`
  * Purpose: Prove exact, bounded, credential-safe Loki evidence reads.
- * Scope: Mocked fetch only; no live Grafana or Loki access.
+ * Scope: Uses mocked fetch only. Does not access live Grafana or Loki.
  * Invariants: Worker/env pinning, triple-ID correlation, bounded range, fail closed.
  * Side-effects: none
  * Links: scripts/lib/temporal-loki-evidence.mjs, task.5239

@@ -23,6 +23,13 @@ export const TEMPORAL_HEALTH_CLI_REASON = Object.freeze({
   REQUEST_TIMEOUT: "request_timeout",
   REQUEST_FAILED: "request_failed",
   RESPONSE_MALFORMED: "response_malformed",
+  APP_SHA_MISMATCH: "app_sha_mismatch",
+  WORKER_ARTIFACT_MIXED: "worker_artifact_mixed",
+  REGISTRATION_FAILED: "registration_failed",
+  CHAT_TERMINAL_MISSING: "chat_terminal_missing",
+  PROOF_CONFIGURATION_INVALID: "proof_configuration_invalid",
+  LOKI_EVIDENCE_MISSING: "loki_evidence_missing",
+  EXECUTION_FAILED: "execution_failed",
   // Shared vocabulary for the scheduled-probe stage (task.5239).
   SCHEDULE_DRIFT: "schedule_drift",
   EXECUTION_STALE: "execution_stale",
