@@ -38,6 +38,8 @@ export type NodeRbacFailure = {
   readonly ok: false;
   readonly status: 404 | 503 | 403;
   readonly errorCode: "node_not_found" | "authz_unavailable" | "authz_denied";
+  /** Canonical node id, present whenever the node resolved before authorization failed. */
+  readonly nodeId?: string | undefined;
   /** The resolved slug, present when the node resolved but authz failed (for logging). */
   readonly slug?: string | undefined;
 };
@@ -67,6 +69,7 @@ export async function resolveNodeAndAuthorize(input: {
       ok: false,
       status: 503,
       errorCode: "authz_unavailable",
+      nodeId: node.nodeId,
       slug: node.slug,
     };
   }
@@ -83,9 +86,16 @@ export async function resolveNodeAndAuthorize(input: {
           ok: false,
           status: 503,
           errorCode: "authz_unavailable",
+          nodeId: node.nodeId,
           slug: node.slug,
         }
-      : { ok: false, status: 403, errorCode: "authz_denied", slug: node.slug };
+      : {
+          ok: false,
+          status: 403,
+          errorCode: "authz_denied",
+          nodeId: node.nodeId,
+          slug: node.slug,
+        };
   }
 
   return { ok: true, node };

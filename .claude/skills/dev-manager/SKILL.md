@@ -33,6 +33,13 @@ Every Cogni repo (`cogni-template`, `node-template`) ships `conductor.json` → 
 COGNI_TEMPLATE_ROOT=<primary checkout> bash scripts/conductor-worktree-setup.sh
 ```
 
+This includes manager-created nested worktrees under `.context/`: creating the git worktree is not
+bootstrap. Before handing one to an agent, require a readable `.env.cogni` linked from that repo's
+primary checkout. The manager owns operator-plane flight/merge with its already-approved operator
+principal; implementation subagents never mint another operator principal or file duplicate RBAC
+requests. A role request is needed only when the operator returns `201 pending`; `200 approved`
+means the current principal already holds the role.
+
 **Why this is a manager concern, not a dev detail:** a fresh worktree has an empty `node_modules`, so `vitest` dies with `ERR_MODULE_NOT_FOUND` and `pnpm typecheck` emits a wall of `Cannot find module '@cogni/*'`. Those are **absent `dist/`, not real type errors** — an agent that hand-rolls `pnpm install` instead of running the script reads them as a broken diff and burns a cycle debugging its own change. Point agents at the script; never let them improvise the bootstrap.
 
 **Local compute is a shared, finite resource.** `next build` (Turbopack) and full `vitest` suites are the documented cause of Conductor ballooning and freezing the human's Mac. CI already runs both on every PR and is the authority. Budget: typecheck + the targeted test file locally; push and let CI do full builds and full suites. Never run a production build just to confirm something CI will confirm for free.

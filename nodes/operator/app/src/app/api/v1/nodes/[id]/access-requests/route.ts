@@ -9,8 +9,10 @@
  * Scope: Bearer/session caller requests access FOR ITSELF; agentUserId is the authenticated
  *   principal, never the body. `role` defaults to `developer` (v0). The agent also declares its own
  *   `githubLogin` here (rbac.md §6a) so the owner's approve can grant push without supplying one.
- *   Writes a tracking row only — OpenFGA role tuples remain the authority.
- * Invariants: AUTH_REQUIRED, SELF_REQUEST_ONLY, NOT_AUTHORITY, IDEMPOTENT_REOPEN, PUSH_LOGIN_FROM_REQUEST.
+ *   OpenFGA is checked first: an already-effective role returns `approved` without reopening the
+ *   tracking row; only a real deny writes/reopens `pending`.
+ * Invariants: AUTH_REQUIRED, SELF_REQUEST_ONLY, OPENFGA_IS_AUTHORITY, IDEMPOTENT_WHEN_GRANTED,
+ *   PUSH_LOGIN_FROM_REQUEST.
  * Side-effects: IO (Postgres read + upsert)
  * Links: docs/spec/rbac.md §6, src/features/nodes/access-requests.ts
  * @public
@@ -20,12 +22,14 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { upsertAccessRequest } from "@/features/nodes/access-requests";
-import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
+import {
+  actionForNodeAccessRole,
+  upsertAccessRequest,
+} from "@/features/nodes/access-requests";
 import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
-import { nodes } from "@/shared/db/nodes";
 import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
 
 export const runtime = "nodejs";
@@ -116,14 +120,12 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
 
     const role = parsed.data?.role ?? "developer";
 
-    const db = resolveServiceDb();
-    const existing = await db
-      .select({ id: nodes.id })
-      .from(nodes)
-      .where(nodeIdOrSlug(id))
-      .limit(1);
-    const node = existing[0];
-    if (!node) {
+    const existingAccess = await resolveNodeAndAuthorize({
+      id,
+      userId: sessionUser.id,
+      action: actionForNodeAccessRole(role),
+    });
+    if (!existingAccess.ok && existingAccess.errorCode === "node_not_found") {
       logTerminal({
         outcome: "error",
         status: 404,
@@ -134,9 +136,45 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       });
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
-    // `{id}` may be a slug; the tracking FK is the canonical node identity (`nodes.id`).
-    const nodeRowId = node.id;
+    if (!existingAccess.ok && existingAccess.errorCode === "authz_unavailable") {
+      logTerminal({
+        outcome: "error",
+        status: 503,
+        nodeId: existingAccess.nodeId ?? id,
+        agentUserId: sessionUser.id,
+        role,
+        errorCode: "authz_unavailable",
+      });
+      return NextResponse.json(
+        { error: "authorization unavailable", errorCode: "authz_unavailable" },
+        { status: 503 }
+      );
+    }
 
+    const nodeRowId = existingAccess.ok
+      ? existingAccess.node.nodeId
+      : existingAccess.nodeId;
+    if (!nodeRowId) {
+      throw new Error("resolved node RBAC result omitted nodeId");
+    }
+
+    if (existingAccess.ok) {
+      logTerminal({
+        outcome: "success",
+        status: 200,
+        nodeId: nodeRowId,
+        agentUserId: sessionUser.id,
+        role,
+      });
+      return NextResponse.json({
+        nodeId: nodeRowId,
+        agentUserId: sessionUser.id,
+        role,
+        status: "approved",
+      });
+    }
+
+    const db = resolveServiceDb();
     await upsertAccessRequest(db, {
       nodeId: nodeRowId,
       agentUserId: sessionUser.id,

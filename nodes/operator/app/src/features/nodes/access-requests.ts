@@ -14,6 +14,7 @@
  * @public
  */
 
+import type { AuthzAction } from "@cogni/authorization-core";
 import type { Database } from "@cogni/db-client";
 import { users } from "@cogni/db-schema/refs";
 import { and, desc, eq, sql } from "drizzle-orm";
@@ -23,6 +24,18 @@ import {
   type NodeAccessRole,
   nodeAccessRequests,
 } from "@/shared/db/node-access-requests";
+
+const ACCESS_ROLE_ACTION = {
+  developer: "node.flight",
+  secrets_manager: "node.manage_secrets",
+  production_promoter: "node.promote_production",
+  env_manager: "node.manage_envs",
+} as const satisfies Record<NodeAccessRole, AuthzAction>;
+
+/** Capability that proves the requested role is already effective in OpenFGA. */
+export function actionForNodeAccessRole(role: NodeAccessRole): AuthzAction {
+  return ACCESS_ROLE_ACTION[role];
+}
 
 export interface NodeAccessRequestRow {
   readonly id: string;
@@ -37,9 +50,10 @@ export interface NodeAccessRequestRow {
 }
 
 /**
- * Idempotently open a pending access request for one (node, agent). Re-requesting reopens the
- * single row to `pending` rather than inserting a duplicate. `githubLogin` is the agent's OWN
- * declared GitHub identity (rbac.md §6a) — re-declared on each request, consumed at approve.
+ * Idempotently open a pending access request for one (node, agent). The route calls this only after
+ * OpenFGA denies the requested capability; re-requesting a denied/revoked request reopens its single
+ * row rather than inserting a duplicate. `githubLogin` is the agent's OWN declared GitHub identity
+ * (rbac.md §6a) — re-declared on each request, consumed at approve.
  */
 export async function upsertAccessRequest(
   db: Database,

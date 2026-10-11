@@ -5,8 +5,9 @@
  * Module: `@tests/contract/app/nodes.access-requests`
  * Purpose: Contract tests for the agent-facing node access-request endpoint.
  * Scope: Verifies POST /api/v1/nodes/[id]/access-requests requires identity, requests for the
- *   authenticated principal only, and idempotently upserts a single pending tracking row.
- * Invariants: AUTH_REQUIRED, SELF_REQUEST_ONLY, IDEMPOTENT_REOPEN, NOT_AUTHORITY.
+ *   authenticated principal only, preserves already-effective OpenFGA authority, and upserts a
+ *   pending tracking row only on a real deny.
+ * Invariants: AUTH_REQUIRED, SELF_REQUEST_ONLY, OPENFGA_IS_AUTHORITY, IDEMPOTENT_WHEN_GRANTED.
  * Side-effects: none
  * Links: nodes/operator/app/src/app/api/v1/nodes/[id]/access-requests/route.ts
  * @internal
@@ -18,13 +19,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const NODE_ID = "11111111-1111-4111-8111-111111111111";
 
-const dbState = vi.hoisted(() => ({
-  node: null as { id: string } | null,
-}));
 const upsert = vi.hoisted(() => ({
   values: vi.fn(),
   onConflict: vi.fn(),
 }));
+const mockAuthorize = vi.hoisted(() => vi.fn());
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const mockLogger = vi.hoisted(() => ({
   child: vi.fn(),
@@ -34,13 +33,6 @@ const mockLogger = vi.hoisted(() => ({
 }));
 
 const mockServiceDb = {
-  select: () => ({
-    from: () => ({
-      where: () => ({
-        limit: () => (dbState.node ? [dbState.node] : []),
-      }),
-    }),
-  }),
   insert: () => ({
     values: (v: unknown) => {
       upsert.values(v);
@@ -67,6 +59,10 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: () => mockGetSessionUser(),
 }));
 
+vi.mock("@/app/_lib/node-rbac", () => ({
+  resolveNodeAndAuthorize: (input: unknown) => mockAuthorize(input),
+}));
+
 import * as appHandler from "@/app/api/v1/nodes/[id]/access-requests/route";
 
 describe("POST /api/v1/nodes/[id]/access-requests", () => {
@@ -74,7 +70,13 @@ describe("POST /api/v1/nodes/[id]/access-requests", () => {
     vi.clearAllMocks();
     mockLogger.child.mockReturnValue(mockLogger);
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
-    dbState.node = { id: NODE_ID };
+    mockAuthorize.mockResolvedValue({
+      ok: false,
+      status: 403,
+      errorCode: "authz_denied",
+      nodeId: NODE_ID,
+      slug: "operator",
+    });
   });
 
   it("opens a pending request for the authenticated agent", async () => {
@@ -134,6 +136,34 @@ describe("POST /api/v1/nodes/[id]/access-requests", () => {
     );
   });
 
+  it("returns approved without reopening a request when OpenFGA already allows the role", async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      node: { nodeId: NODE_ID, slug: "operator" },
+    });
+
+    await testApiHandler({
+      appHandler,
+      params: { id: NODE_ID },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: "developer" }),
+        });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({
+          nodeId: NODE_ID,
+          agentUserId: TEST_SESSION_USER_1.id,
+          role: "developer",
+          status: "approved",
+        });
+      },
+    });
+
+    expect(upsert.values).not.toHaveBeenCalled();
+  });
+
   it("rejects an unauthenticated caller before any write", async () => {
     mockGetSessionUser.mockResolvedValue(null);
 
@@ -154,7 +184,11 @@ describe("POST /api/v1/nodes/[id]/access-requests", () => {
   });
 
   it("returns 404 for an unknown node without writing", async () => {
-    dbState.node = null;
+    mockAuthorize.mockResolvedValue({
+      ok: false,
+      status: 404,
+      errorCode: "node_not_found",
+    });
 
     await testApiHandler({
       appHandler,
@@ -166,6 +200,35 @@ describe("POST /api/v1/nodes/[id]/access-requests", () => {
           body: JSON.stringify({}),
         });
         expect(res.status).toBe(404);
+      },
+    });
+
+    expect(upsert.values).not.toHaveBeenCalled();
+  });
+
+  it("fails closed without reopening a request when authorization is unavailable", async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: false,
+      status: 503,
+      errorCode: "authz_unavailable",
+      nodeId: NODE_ID,
+      slug: "operator",
+    });
+
+    await testApiHandler({
+      appHandler,
+      params: { id: NODE_ID },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        expect(res.status).toBe(503);
+        expect(await res.json()).toEqual({
+          error: "authorization unavailable",
+          errorCode: "authz_unavailable",
+        });
       },
     });
 
