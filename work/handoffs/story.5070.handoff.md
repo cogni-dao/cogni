@@ -129,8 +129,9 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
   the proposed `Done when`, revealing a gap between the frozen format eval and the full contract.
   Propagation to node-template/fleet remains **HALTED** until the stronger operator adherence proof
   passes. Hub write-path is degraded (work-item `PATCH` → 500,
-  knowledge `/contributions/{id}/commits` → 404); `vcs/merge` works. Operator key is `flock-leader-operator`
-  (userId `f97e06f4-…`, RBAC developer+secrets_manager+production_promoter+env_manager granted).
+  knowledge `/contributions/{id}/commits` → 404); `vcs/merge` works. Credential variable names
+  may alias one bearer and do not prove RBAC; verify cognition authentication and each protected
+  node action separately before diagnosing or rotating a key.
 
 ## Design / Implementation Target
 

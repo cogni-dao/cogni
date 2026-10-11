@@ -1,7 +1,5 @@
 # AGENTS.md — Cogni session floor
 
-@.cogni/.cognition-cache.md
-
 ## Non-negotiable execution wrapper
 
 Every user task executes through the session agent-contract; satisfying the task while
@@ -51,8 +49,10 @@ breaching this wrapper makes the work invalid.
 ## Live cognition
 
 The gitignored cache is the live source for the rich contract, orientation, skills, and knowledge
-map. Harness adapters load it automatically: Claude expands the `@` import above, OpenCode combines
-the same file through committed `opencode.json` instructions, and Codex receives it from the hook.
+map. It is already model-visible before the first reply: Claude imports it from committed
+`CLAUDE.md`, Codex receives it as uncapped SessionStart developer context, and the supported
+OpenCode 1.x runtime combines it through `opencode.json`. Never manually read the cache merely to
+bootstrap; a required tool-read means the harness adapter failed.
 
 The shared session loader refreshes that cache from the current node's authenticated
 `/api/v1/cognition` endpoint; workspace setup warms it before the first agent starts. A failed
