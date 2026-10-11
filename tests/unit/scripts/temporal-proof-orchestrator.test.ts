@@ -270,6 +270,29 @@ describe("runTemporalHealthProof", () => {
     expect(dependencies.runScheduled).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["error", "error"],
+    ["finish", "error"],
+    ["error", "success"],
+  ])("fails closed when chat reports stream=%s run=%s", async (streamTerminal, runStatus) => {
+    const dependencies = successfulDependencies();
+    dependencies.runChat.mockResolvedValueOnce({
+      ok: true,
+      runId: "chat-run",
+      streamTerminal,
+      runStatus,
+    });
+
+    await expect(
+      runTemporalHealthProof({ targets: TARGETS }, dependencies)
+    ).rejects.toMatchObject({
+      reason: TEMPORAL_HEALTH_CLI_REASON.CHAT_TERMINAL_MISSING,
+      phase: "chat",
+      target: "poly",
+    });
+    expect(dependencies.runScheduled).not.toHaveBeenCalled();
+  });
+
   it("fails when a healthy route serves a different app SHA than the catalog", async () => {
     const dependencies = successfulDependencies();
     dependencies.readHealth.mockResolvedValueOnce({

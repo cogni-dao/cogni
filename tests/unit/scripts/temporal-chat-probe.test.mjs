@@ -177,6 +177,57 @@ test("rejects a stream that never emits a terminal frame", async () => {
   );
 });
 
+test("rejects an error SSE terminal even when the run is terminal", async () => {
+  const fetchImpl = sequenceFetch([
+    jsonResponse(201, { apiKey: "agent-secret" }),
+    sseResponse(
+      [
+        {
+          type: "data-status",
+          data: { phase: "thinking", label: "Queued" },
+          transient: true,
+        },
+        { type: "error", errorText: "failed" },
+      ],
+      RUN_ID
+    ),
+  ]);
+
+  await assert.rejects(
+    runTemporalChatProbe(
+      { baseUrl: "https://poly.example.test" },
+      { fetchImpl }
+    ),
+    /chat stream ended with error/
+  );
+});
+
+test("rejects a non-success exact ledger row", async () => {
+  const fetchImpl = sequenceFetch([
+    jsonResponse(201, { apiKey: "agent-secret" }),
+    sseResponse(
+      [
+        {
+          type: "data-status",
+          data: { phase: "thinking", label: "Queued" },
+          transient: true,
+        },
+        { type: "finish", finishReason: "stop" },
+      ],
+      RUN_ID
+    ),
+    jsonResponse(200, { runs: [{ runId: RUN_ID, status: "error" }] }),
+  ]);
+
+  await assert.rejects(
+    runTemporalChatProbe(
+      { baseUrl: "https://poly.example.test" },
+      { fetchImpl }
+    ),
+    new RegExp(`run ${RUN_ID} ended with non-success status error`)
+  );
+});
+
 test("requires the X-Run-Id to match a terminal ledger row", async () => {
   let nowMs = 0;
   const fetchImpl = sequenceFetch([
@@ -188,7 +239,7 @@ test("requires the X-Run-Id to match a terminal ledger row", async () => {
           data: { phase: "thinking", label: "Queued" },
           transient: true,
         },
-        { type: "error", errorText: "failed" },
+        { type: "finish", finishReason: "stop" },
       ],
       RUN_ID
     ),

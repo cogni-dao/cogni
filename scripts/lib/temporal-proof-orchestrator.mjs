@@ -371,8 +371,8 @@ export async function runTemporalHealthProof(options = {}, dependencies = {}) {
   if (
     chat?.ok !== true ||
     typeof chat.runId !== "string" ||
-    !["finish", "error"].includes(chat.streamTerminal) ||
-    typeof chat.runStatus !== "string"
+    chat.streamTerminal !== "finish" ||
+    chat.runStatus !== "success"
   ) {
     throw new TemporalProofError(
       TEMPORAL_HEALTH_CLI_REASON.CHAT_TERMINAL_MISSING,

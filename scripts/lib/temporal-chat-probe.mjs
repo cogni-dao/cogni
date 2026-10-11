@@ -97,7 +97,11 @@ export async function runTemporalChatProbe(options, dependencies = {}) {
       throw new Error("timed out waiting for terminal SSE frame");
     }
     const frame = await stream.nextWithin(remainingMs, "terminal SSE frame");
-    if (frame.type === "finish" || frame.type === "error") {
+    if (frame.type === "error") {
+      await stream.cancel();
+      throw new Error("chat stream ended with error");
+    }
+    if (frame.type === "finish") {
       terminalFrame = frame;
     }
   }
@@ -118,6 +122,11 @@ export async function runTemporalChatProbe(options, dependencies = {}) {
     }
     const exactRun = runs.runs.find((run) => run?.runId === runId);
     if (exactRun && TERMINAL_RUN_STATUSES.has(exactRun.status)) {
+      if (exactRun.status !== "success") {
+        throw new Error(
+          `run ${runId} ended with non-success status ${exactRun.status}`
+        );
+      }
       terminalRun = exactRun;
       break;
     }
