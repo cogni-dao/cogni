@@ -2,18 +2,14 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
 namespace: cogni-production
-
 resources:
   - ../../../base/scheduler-worker
-
 # Image digest — updated by manual PR for production promotion.
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:0e5d66e7f7411b46b5fce3ffbfb1c51e1357b74309510da7fa0affddca0acb7d"
-
+    digest: sha256:e5bf82ad88974c539d11479671c503d4b082f6ecb48c02f843828264a6679cfc
 patches:
   # GENERATED sibling (render-scheduler-worker-endpoints.sh): this env's
   # PROVIDER-RESOLVED COGNI_NODE_ENDPOINTS. bug.5094 — a node placed on akash has
@@ -21,10 +17,8 @@ patches:
   # the shared base. Listed first so the base default is replaced before the
   # env-specific ops below apply.
   - path: node-endpoints.patch.yaml
-
   # Production has no users and no memory headroom - see the file header.
   - path: replicas.patch.yaml
-
   - target:
       kind: ConfigMap
       name: scheduler-worker-config
@@ -35,13 +29,20 @@ patches:
       - op: add
         path: /data/DEPLOY_ENVIRONMENT
         value: "production"
+      # bug.5212 — the lanes this cluster CUSTODIES. An akash node's non-production lane is
+      # reconciled and paid for here, so it submits its workflows to THIS Temporal under
+      # cogni-<lane>. Without these the queue has no poller and the lane's schedules never
+      # fire — silently. The SCHEDULER_API_TOKEN the lane inherits is already this env's, so
+      # no token plumbing changes. Mirrors SECRETS_LANE_TRUST[production].
+      - op: add
+        path: /data/TEMPORAL_CUSTODIED_NAMESPACES
+        value: "cogni-candidate-a,cogni-preview"
       - op: replace
         path: /data/IMAGE_DIGEST
-        value: "production-placeholder-scheduler-worker"
-
+        value: "sha256:e5bf82ad88974c539d11479671c503d4b082f6ecb48c02f843828264a6679cfc"
   # bug.0295: VM discovery via DNS (cogni.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
-  - target: { kind: Service, name: temporal }
+  - target: {kind: Service, name: temporal}
     patch: |
       apiVersion: v1
       kind: Service
@@ -51,7 +52,7 @@ patches:
         type: ExternalName
         externalName: cogni.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: postgres }
+  - target: {kind: Service, name: postgres}
     patch: |
       apiVersion: v1
       kind: Service
@@ -61,7 +62,7 @@ patches:
         type: ExternalName
         externalName: cogni.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: app }
+  - target: {kind: Service, name: app}
     patch: |
       apiVersion: v1
       kind: Service
@@ -71,21 +72,21 @@ patches:
         type: ExternalName
         externalName: cogni.vm.cognidao.org
         clusterIP: null
-  - target: { kind: EndpointSlice, name: temporal-1 }
+  - target: {kind: EndpointSlice, name: temporal-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: temporal-1
-  - target: { kind: EndpointSlice, name: postgres-1 }
+  - target: {kind: EndpointSlice, name: postgres-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: postgres-1
-  - target: { kind: EndpointSlice, name: app-1 }
+  - target: {kind: EndpointSlice, name: app-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1

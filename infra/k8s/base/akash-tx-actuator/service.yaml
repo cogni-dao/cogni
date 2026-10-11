@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+#
+# THE ADDRESS IS THE CONTRACT. infra/crossplane/xcomputeworkload/composition.yaml builds
+# `http://akash-tx-actuator.<ns>.svc.cluster.local:8080` from the XR's namespace alone, so
+# this Service must be named EXACTLY `akash-tx-actuator` in every environment namespace.
+# The operator overlays apply `namePrefix: operator-`, which would render it as
+# `operator-akash-tx-actuator` and leave every OBSERVE at connection-refused — see
+# ../akash-tx-actuator-service-name for the transformer that restores the name.
+#
+# ClusterIP and nothing else: bearer-authed private wallet writer. Never an Ingress, never a
+# NodePort, never a public route.
+apiVersion: v1
+kind: Service
+metadata:
+  name: akash-tx-actuator
+  labels:
+    app.kubernetes.io/name: akash-tx-actuator
+    app.kubernetes.io/part-of: cogni
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: akash-tx-actuator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
