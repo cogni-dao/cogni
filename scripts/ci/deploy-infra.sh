@@ -859,6 +859,39 @@ else
   log_warn "operator-env-secrets not present; using workflow env values for fresh-env compatibility"
 fi
 
+# Human-managed GitHub App credentials enter through the protected GitHub
+# Environment, but established runtimes read only OpenBao. Reconcile the
+# authenticated, environment-bound pair BEFORE OpenBao shadows the workflow
+# values below. Typed configuration faults do not block unrelated infra; an
+# operational failure after authentication does, because silently claiming a
+# rotation succeeded would strand every VCS flight on stale credentials.
+if [[ -n "${GH_REVIEW_APP_ID:-}" || -n "${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}" ]]; then
+  app_credential_result="$(
+    DEPLOY_ENVIRONMENT="$DEPLOY_ENVIRONMENT" \
+    GH_REVIEW_APP_ID="${GH_REVIEW_APP_ID:-}" \
+    GH_REVIEW_APP_PRIVATE_KEY_BASE64="${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}" \
+    EXPECTED_WEBHOOK_HOST="${DOMAIN:-}" \
+    GITHUB_APP_CREDENTIAL_OPERATION=reconcile-openbao \
+    bash /tmp/sync-app-webhook-secret.sh
+  )" || log_fatal "GitHub App credential reconciliation failed"
+  app_credential_state="$(sed -n 's/^GITHUB_APP_CREDENTIAL_STATE=//p' <<<"$app_credential_result" | tail -1)"
+  case "$app_credential_state" in
+    current|rotated)
+      log_info "GitHub App credential reconciliation: ${app_credential_state}"
+      # The helper may have written OpenBao after an earlier read populated the
+      # path cache. Drop only that cache so the runtime render reads the new pair.
+      rm -f "${BAO_CACHE_DIR}/path-operator.json"
+      ;;
+    unconfigured|incomplete|invalid|unverified|misbound)
+      log_warn "GitHub App credential reconciliation: ${app_credential_state}; no credential write performed"
+      ;;
+    *)
+      log_fatal "GitHub App credential reconciliation returned no recognized state"
+      ;;
+  esac
+  unset app_credential_result app_credential_state
+fi
+
 source_openbao_runtime_key() {
   local mode="$1" key="$2" svc value
   shift 2

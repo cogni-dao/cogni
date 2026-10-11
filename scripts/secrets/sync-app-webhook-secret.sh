@@ -18,6 +18,11 @@
 # Inputs (env): GH_REVIEW_APP_ID, GH_REVIEW_APP_PRIVATE_KEY_BASE64, GH_WEBHOOK_SECRET.
 # Missing any → SKIP (a node-app without a GitHub App has nothing to sync).
 # Idempotent: PATCH is a no-op when the App already holds the value.
+#
+# GITHUB_APP_CREDENTIAL_OPERATION=reconcile-openbao changes the final operation:
+# after authenticating the protected Environment pair and proving its webhook
+# host, reconcile it into cogni/<env>/operator and push ESO. This makes the
+# human-managed Environment the rotation ingress while OpenBao stays runtime SSoT.
 
 set -euo pipefail
 
@@ -26,18 +31,47 @@ err() { printf '[sync-app-webhook] %s\n' "$*" >&2; }
 APP_ID="${GH_REVIEW_APP_ID:-}"
 PK_B64="${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}"
 WEBHOOK_SECRET="${GH_WEBHOOK_SECRET:-}"
+OPERATION="${GITHUB_APP_CREDENTIAL_OPERATION:-sync-webhook}"
+CURL="${RECONCILE_GITHUB_APP_CURL:-curl}"
 
-if [[ -z "$APP_ID" || -z "$PK_B64" || -z "$WEBHOOK_SECRET" ]]; then
+case "$OPERATION" in
+  sync-webhook|reconcile-openbao) ;;
+  *) err "FATAL: unknown GITHUB_APP_CREDENTIAL_OPERATION '$OPERATION'"; exit 1 ;;
+esac
+
+credential_state() {
+  [[ "$OPERATION" == "reconcile-openbao" ]] || return 0
+  printf 'GITHUB_APP_CREDENTIAL_STATE=%s\n' "$1"
+}
+
+if [[ "$OPERATION" == "reconcile-openbao" && -z "$APP_ID" && -z "$PK_B64" ]]; then
+  credential_state unconfigured
+  exit 0
+fi
+if [[ "$OPERATION" == "reconcile-openbao" && ( -z "$APP_ID" || -z "$PK_B64" ) ]]; then
+  err "REFUSING rotation — GitHub App credential pair is incomplete"
+  credential_state incomplete
+  exit 0
+fi
+if [[ "$OPERATION" == "sync-webhook" && ( -z "$APP_ID" || -z "$PK_B64" || -z "$WEBHOOK_SECRET" ) ]]; then
   err "skip — no GitHub App configured (need GH_REVIEW_APP_ID + GH_REVIEW_APP_PRIVATE_KEY_BASE64 + GH_WEBHOOK_SECRET)"
   exit 0
 fi
 
-for cmd in openssl curl; do
+for cmd in openssl "$CURL"; do
   command -v "$cmd" >/dev/null 2>&1 || { err "FATAL: $cmd not on PATH"; exit 1; }
 done
 
 pem="$(mktemp)"; trap 'rm -f "$pem"' EXIT
-printf '%s' "$PK_B64" | base64 -d > "$pem" 2>/dev/null || { err "FATAL: GH_REVIEW_APP_PRIVATE_KEY_BASE64 is not valid base64"; exit 1; }
+if ! printf '%s' "$PK_B64" | base64 -d > "$pem" 2>/dev/null; then
+  if [[ "$OPERATION" == "reconcile-openbao" ]]; then
+    err "REFUSING rotation — private key is not valid base64"
+    credential_state invalid
+    exit 0
+  fi
+  err "FATAL: GH_REVIEW_APP_PRIVATE_KEY_BASE64 is not valid base64"
+  exit 1
+fi
 
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 
@@ -45,7 +79,15 @@ b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 now="$(date +%s)"
 header="$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)"
 payload="$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$((now - 60))" "$((now + 540))" "$APP_ID" | b64url)"
-sig="$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign "$pem" -binary | b64url)"
+if ! sig="$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign "$pem" -binary 2>/dev/null | b64url)"; then
+  if [[ "$OPERATION" == "reconcile-openbao" ]]; then
+    err "REFUSING rotation — private key cannot sign an RS256 JWT"
+    credential_state invalid
+    exit 0
+  fi
+  err "FATAL: private key cannot sign an RS256 JWT"
+  exit 1
+fi
 jwt="${header}.${payload}.${sig}"
 
 api="https://api.github.com"
@@ -70,7 +112,7 @@ gh_get() {
   local path="$1" tmp rc
   tmp="$(mktemp)"
   set +e
-  GH_GET_STATUS="$(curl -sS -o "$tmp" -w '%{http_code}' \
+  GH_GET_STATUS="$($CURL -sS -o "$tmp" -w '%{http_code}' \
     -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" \
     "${api}${path}" 2>&1)"
   rc=$?
@@ -111,6 +153,7 @@ case "$GH_GET_STATUS" in
   401 | 403)
     err "REFUSING to sync — GitHub rejected these App credentials (HTTP ${GH_GET_STATUS}) for GH_REVIEW_APP_ID ${APP_ID}"
     err "The environment holds a dead or mismatched App credential; fix the credential, not the App. Skipping so a creds fault cannot fail the whole deploy."
+    credential_state invalid
     exit 0
     ;;
   *)
@@ -135,6 +178,7 @@ if [[ -n "${EXPECTED_WEBHOOK_HOST:-}" ]]; then
     2??) ;;
     401 | 403)
       err "REFUSING to sync — App '${slug}' will not disclose its hook config (HTTP ${GH_GET_STATUS}), so the cross-env guard cannot be evaluated"
+      credential_state unverified
       exit 0
       ;;
     *)
@@ -146,11 +190,105 @@ if [[ -n "${EXPECTED_WEBHOOK_HOST:-}" ]]; then
   hook_host="${hook_url#*://}"; hook_host="${hook_host%%/*}"
   if [[ "$hook_host" != "$EXPECTED_WEBHOOK_HOST" ]]; then
     err "REFUSING cross-env sync — App '${slug}' delivers to '${hook_host}', this env is '${EXPECTED_WEBHOOK_HOST}' (env holds another env's App creds — fix the creds, not the App)"
+    credential_state misbound
     exit 0
   fi
 fi
 
-code="$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH \
+if [[ "$OPERATION" == "reconcile-openbao" ]]; then
+  ENV_NAME="${DEPLOY_ENVIRONMENT:-}"
+  KUBECTL="${RECONCILE_GITHUB_APP_KUBECTL:-kubectl}"
+  case "$ENV_NAME" in
+    candidate-a|preview|production) ;;
+    *) err "FATAL: DEPLOY_ENVIRONMENT must be candidate-a, preview, or production"; exit 1 ;;
+  esac
+  command -v jq >/dev/null 2>&1 || { err "FATAL: jq not on PATH"; exit 1; }
+  command -v "$KUBECTL" >/dev/null 2>&1 || { err "FATAL: $KUBECTL not on PATH"; exit 1; }
+
+  mint_writer_token() {
+    local sa jwt_out login_out attempt
+    for sa in openbao-writer openbao-operator; do
+      if $KUBECTL get sa "$sa" -n default >/dev/null 2>&1; then
+        for attempt in 1 2 3; do
+          jwt_out="$($KUBECTL create token "$sa" -n default 2>/dev/null || true)"
+          [[ -n "$jwt_out" ]] || { [[ "$attempt" -lt 3 ]] && sleep "$attempt"; continue; }
+          login_out="$($KUBECTL exec -n openbao openbao-0 -- \
+            env BAO_ADDR=http://127.0.0.1:8200 \
+            bao write -field=token auth/kubernetes/login \
+            "role=${ENV_NAME}-writer" "jwt=${jwt_out}" 2>/dev/null || true)"
+          if [[ -n "$login_out" ]]; then
+            printf '%s' "$login_out"
+            return 0
+          fi
+          [[ "$attempt" -lt 3 ]] && sleep "$attempt"
+        done
+      fi
+    done
+    return 1
+  }
+
+  writer_token="$(mint_writer_token)" || { err "FATAL: could not mint ${ENV_NAME}-writer token"; exit 1; }
+  path="cogni/${ENV_NAME}/operator"
+  current_json="$($KUBECTL exec -n openbao openbao-0 -- \
+    env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$writer_token" \
+    bao kv get -format=json "$path" 2>/dev/null)" \
+    || { err "FATAL: could not read ${path}"; exit 1; }
+  current_id="$(jq -r '.data.data.GH_REVIEW_APP_ID // empty' <<<"$current_json")"
+  current_key="$(jq -r '.data.data.GH_REVIEW_APP_PRIVATE_KEY_BASE64 // empty' <<<"$current_json")"
+  desired_fp="$(printf '%s\0%s' "$APP_ID" "$PK_B64" | sha256sum | cut -c1-12)"
+  if [[ "$current_id" == "$APP_ID" && "$current_key" == "$PK_B64" ]]; then
+    err "current — App '${slug}' credential fp=${desired_fp} already matches OpenBao"
+    credential_state current
+    exit 0
+  fi
+
+  patch_key() {
+    local key="$1" value="$2"
+    printf '%s' "$value" | $KUBECTL exec -i -n openbao openbao-0 -- \
+      env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$writer_token" \
+      bao kv patch "$path" "${key}=-" >/dev/null
+  }
+  # ESO is pushed only after both writes, so a partial operational failure is
+  # never deliberately projected as a mismatched pair.
+  patch_key GH_REVIEW_APP_PRIVATE_KEY_BASE64 "$PK_B64" \
+    || { err "FATAL: failed to patch GH_REVIEW_APP_PRIVATE_KEY_BASE64"; exit 1; }
+  patch_key GH_REVIEW_APP_ID "$APP_ID" \
+    || { err "FATAL: failed to patch GH_REVIEW_APP_ID"; exit 1; }
+
+  namespace="cogni-${ENV_NAME}"
+  external_secret=""
+  for candidate in operator-env-secrets env-secrets; do
+    if $KUBECTL -n "$namespace" get externalsecret "$candidate" >/dev/null 2>&1; then
+      external_secret="$candidate"
+      break
+    fi
+  done
+  if [[ -n "$external_secret" ]]; then
+    $KUBECTL -n "$namespace" annotate externalsecret "$external_secret" \
+      "force-sync=$(date +%s)" --overwrite >/dev/null \
+      || { err "FATAL: OpenBao changed but ESO force-sync failed"; exit 1; }
+    landed=false
+    for _ in $(seq 1 15); do
+      projected_id="$($KUBECTL -n "$namespace" get secret operator-env-secrets \
+        -o jsonpath='{.data.GH_REVIEW_APP_ID}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+      projected_key="$($KUBECTL -n "$namespace" get secret operator-env-secrets \
+        -o jsonpath='{.data.GH_REVIEW_APP_PRIVATE_KEY_BASE64}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+      if [[ "$projected_id" == "$APP_ID" && "$projected_key" == "$PK_B64" ]]; then
+        landed=true
+        break
+      fi
+      sleep 2
+    done
+    "$landed" || { err "FATAL: OpenBao changed but ESO did not project the pair within 30s"; exit 1; }
+  else
+    err "fresh environment — no operator ExternalSecret yet; OpenBao is ready for first projection"
+  fi
+  err "rotated — App '${slug}' credential fp=${desired_fp} authenticated, wrote OpenBao, and reached ESO"
+  credential_state rotated
+  exit 0
+fi
+
+code="$($CURL -sS -o /dev/null -w '%{http_code}' -X PATCH \
   -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" \
   "$api/app/hook/config" \
   -d "$(printf '{"secret":"%s"}' "$WEBHOOK_SECRET")")"
