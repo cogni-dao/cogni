@@ -25,10 +25,14 @@
 # a port of `toProvisionSpec` + `legacyCogniAppEnv` in the bespoke controller, and the two must
 # stay byte-comparable — that equality is what makes this a migration rather than a rewrite.
 #
-# NO SECRET VALUES CROSS THIS FILE. Each `secretRefs[].key` becomes a provider-http
-# `{{ name:namespace:key }}` placeholder. The OSS provider resolves it from the environment's
-# existing ESO-managed Secret at request time and preserves the placeholder form in spec,
-# status.requestDetails and its own logs. The actuator's bearer token is the same mechanism.
+# NO SECRET VALUES CROSS THIS FILE. Each runtime-consumed `secretRefs[].key` becomes a
+# provider-http `{{ name:namespace:key }}` placeholder. The control-plane-only
+# `FLIGHT_PROBE_API_KEY` ring is deliberately materialized in the environment Secret but never
+# sent to the workload: provider-http v1.0.15 substitutes placeholders as raw text after JSON
+# serialization, so its JSON ring would corrupt the actuator request body. The OSS provider
+# resolves every remaining placeholder from the existing ESO-managed Secret at request time and
+# preserves the placeholder form in spec, status.requestDetails and its own logs. The actuator's
+# bearer token is the same mechanism.
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
@@ -224,12 +228,23 @@ spec:
               under its own name - byte-identical to legacyCogniAppEnv's destructure.
             */ -}}
             {{- range (dig "secretRefs" (list) $svc) }}
+            {{- /*
+              MATERIALIZE_ONLY_MEANS_NOT_RUNTIME. This bounded JSON ring authenticates the
+              operator's flight probe; the node process never reads it. Keeping the key in
+              secretRefs ensures the target view is materialized, but lowering it into the SDL
+              is both unnecessary authority and invalid JSON with provider-http v1.0.15: its raw
+              placeholder replacement inserts {"active":...,"previous":...} inside an already
+              quoted JSON string. Omit only this catalog-declared materialize-only key; every
+              actual runtime credential keeps the generic lowering below.
+            */ -}}
+            {{- if ne .key "FLIGHT_PROBE_API_KEY" }}
             {{- $ref := printf "{{ %s:%s:%s }}" $secretName $ns .key }}
             {{- if and $isApp (eq .key "DOLTGRES_URL") }}{{ $appDoltgres = true }}{{ end }}
             {{- if and $isApp (eq .key "LITELLM_VIRTUAL_KEY") }}
             {{- $_ := set $e "LITELLM_MASTER_KEY" $ref }}
             {{- else }}
             {{- $_ := set $e .key $ref }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if $isApp }}

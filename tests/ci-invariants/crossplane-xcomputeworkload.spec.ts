@@ -574,6 +574,12 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     expect(template).toContain("CLOUDFLARE_API_TOKEN }}");
     expect(template).toContain("akash-tx-actuator-auth:%s:token");
 
+    // The flight-prober credential is a JSON key ring owned by the delivery control plane,
+    // not a node runtime input. provider-http v1.0.15 performs raw placeholder substitution
+    // after JSON serialization, so lowering this one materialize-only key would corrupt every
+    // Akash CREATE/UPDATE body at its first quote. It must be explicitly fenced from the SDL.
+    expect(template).toContain('if ne .key "FLIGHT_PROBE_API_KEY"');
+
     // Nothing that looks like a materialized credential may appear anywhere in the directory.
     for (const file of [
       "xrd.yaml",
