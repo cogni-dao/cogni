@@ -8,13 +8,16 @@
  * Scope: Read-only Grafana datasource-proxy query_range IO. The caller owns
  *   target discovery and passes the node UUID plus environment explicitly.
  * Invariants:
- *   - Queries are pinned to exact env and node stream labels.
- *   - Both scheduleId and graphRunId are required line filters and rechecked.
+ *   - Queries are pinned to the exact env and scheduler-worker stream. The
+ *     stream `node` label is the physical k8s host, never the Cogni node UUID.
+ *   - Target nodeId, scheduleId, and graphRunId are line filters and every
+ *     returned entry is locally rechecked for all three exact JSON values.
  *   - Query time and result count are bounded.
  *   - Grafana credentials are header-only and never appear in output/errors.
  *   - Missing credentials, malformed responses, and zero hits fail closed.
  * Side-effects: network (Grafana Cloud Loki read only)
- * Links: scripts/lib/temporal-scheduled-probe.mjs, task.5239
+ * Links: scripts/lib/temporal-scheduled-probe.mjs,
+ *   docs/spec/observability.md#logql-queries, task.5239
  * @public
  */
 
@@ -107,7 +110,20 @@ export function buildTemporalEvidenceQuery({
   scheduleId,
   graphRunId,
 }) {
-  return `{env=${logqlString(environment)},node=${logqlString(nodeId)}} |= ${logqlString(scheduleId)} |= ${logqlString(graphRunId)}`;
+  return `{env=${logqlString(environment)},service="scheduler-worker"} |= ${logqlString(nodeId)} |= ${logqlString(scheduleId)} |= ${logqlString(graphRunId)}`;
+}
+
+function containsExactValue(value, expected) {
+  if (value === expected) return true;
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsExactValue(entry, expected));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some((entry) =>
+      containsExactValue(entry, expected)
+    );
+  }
+  return false;
 }
 
 function exploreUrl({ baseUrl, datasourceUid, query, startMs, endMs }) {
@@ -306,11 +322,13 @@ export function createTemporalLokiEvidenceReader(options = {}) {
     }
     const entries = parseLokiResponse(body).filter(
       (entry) =>
-        entry.line.includes(scheduleId) && entry.line.includes(graphRunId)
+        entry.parsed?.nodeId === nodeId &&
+        containsExactValue(entry.parsed, scheduleId) &&
+        containsExactValue(entry.parsed, graphRunId)
     );
     if (entries.length === 0) {
       throw new TemporalLokiEvidenceError(
-        "Loki returned no entry correlated by scheduleId and graphRunId",
+        "Loki returned no entry correlated by nodeId, scheduleId, and graphRunId",
         "loki_no_hit"
       );
     }

@@ -5,7 +5,7 @@
  * Module: `@tests/unit/scripts/temporal-loki-evidence`
  * Purpose: Prove exact, bounded, credential-safe Loki evidence reads.
  * Scope: Mocked fetch only; no live Grafana or Loki access.
- * Invariants: Node/env pinning, dual-ID correlation, bounded range, fail closed.
+ * Invariants: Worker/env pinning, triple-ID correlation, bounded range, fail closed.
  * Side-effects: none
  * Links: scripts/lib/temporal-loki-evidence.mjs, task.5239
  * @public
@@ -34,7 +34,11 @@ const INPUT = {
 
 function lokiResponse(
   values: Array<[string, string]>,
-  labels = { env: "candidate-a", node: INPUT.target.nodeId }
+  labels = {
+    env: "candidate-a",
+    service: "scheduler-worker",
+    node: "f97f68f2-physical-k8s-host",
+  }
 ) {
   return new Response(
     JSON.stringify({
@@ -59,7 +63,7 @@ function reader(fetchImpl: ReturnType<typeof vi.fn>, overrides = {}) {
 }
 
 describe("buildTemporalEvidenceQuery", () => {
-  it("pins exact environment and node labels plus both correlation IDs", () => {
+  it("pins the worker stream and line-filters all three correlation IDs", () => {
     expect(
       buildTemporalEvidenceQuery({
         ...INPUT.target,
@@ -67,7 +71,7 @@ describe("buildTemporalEvidenceQuery", () => {
         graphRunId: GRAPH_RUN_ID,
       })
     ).toBe(
-      `{env="candidate-a",node="8913a24a-92f6-41e0-ab3b-ef8101298364"} |= "schedule-exact" |= "run-exact"`
+      `{env="candidate-a",service="scheduler-worker"} |= "8913a24a-92f6-41e0-ab3b-ef8101298364" |= "schedule-exact" |= "run-exact"`
     );
   });
 
@@ -86,9 +90,10 @@ describe("buildTemporalEvidenceQuery", () => {
 describe("createTemporalLokiEvidenceReader", () => {
   it("runs a bounded query_range and returns normalized exact evidence", async () => {
     const line = JSON.stringify({
-      event: "worker.activity.graph_completed",
-      temporalScheduleId: SCHEDULE_ID,
-      graphRunId: GRAPH_RUN_ID,
+      event: "worker.activity.run_created",
+      nodeId: INPUT.target.nodeId,
+      dbScheduleId: SCHEDULE_ID,
+      runId: GRAPH_RUN_ID,
     });
     const fetchImpl = vi.fn(async () =>
       lokiResponse([["1791722280000000000", line]])
@@ -102,7 +107,8 @@ describe("createTemporalLokiEvidenceReader", () => {
         line,
         labels: {
           env: "candidate-a",
-          node: INPUT.target.nodeId,
+          service: "scheduler-worker",
+          node: "f97f68f2-physical-k8s-host",
         },
         parsed: JSON.parse(line),
       },
@@ -122,7 +128,7 @@ describe("createTemporalLokiEvidenceReader", () => {
       "/api/datasources/proxy/uid/grafanacloud-logs/loki/api/v1/query_range"
     );
     expect(url.searchParams.get("query")).toBe(
-      `{env="candidate-a",node="${INPUT.target.nodeId}"} |= "schedule-exact" |= "run-exact"`
+      `{env="candidate-a",service="scheduler-worker"} |= "${INPUT.target.nodeId}" |= "schedule-exact" |= "run-exact"`
     );
     expect(url.searchParams.get("start")).toBe("1791722040000000000");
     expect(url.searchParams.get("end")).toBe("1791722400000000000");
@@ -133,8 +139,13 @@ describe("createTemporalLokiEvidenceReader", () => {
   });
 
   it("caps a stale schedule query to the configured maximum range", async () => {
+    const line = JSON.stringify({
+      nodeId: INPUT.target.nodeId,
+      dbScheduleId: SCHEDULE_ID,
+      runId: GRAPH_RUN_ID,
+    });
     const fetchImpl = vi.fn(async () =>
-      lokiResponse([["1791722399000000000", `${SCHEDULE_ID} ${GRAPH_RUN_ID}`]])
+      lokiResponse([["1791722399000000000", line]])
     );
     const read = reader(fetchImpl, { maxRangeMs: 120_000 });
 
@@ -187,17 +198,40 @@ describe("createTemporalLokiEvidenceReader", () => {
     });
   });
 
-  it("fails closed when Loki has no exact dual-ID hit", async () => {
+  it("fails closed when Loki has no exact triple-ID hit", async () => {
     const fetchImpl = vi.fn(async () =>
       lokiResponse([
-        ["1791722280000000000", `${SCHEDULE_ID} wrong-run`],
-        ["1791722270000000000", `wrong-schedule ${GRAPH_RUN_ID}`],
+        [
+          "1791722290000000000",
+          JSON.stringify({
+            nodeId: "wrong-node",
+            dbScheduleId: SCHEDULE_ID,
+            runId: GRAPH_RUN_ID,
+          }),
+        ],
+        [
+          "1791722280000000000",
+          JSON.stringify({
+            nodeId: INPUT.target.nodeId,
+            dbScheduleId: SCHEDULE_ID,
+            runId: "wrong-run",
+          }),
+        ],
+        [
+          "1791722270000000000",
+          JSON.stringify({
+            nodeId: INPUT.target.nodeId,
+            dbScheduleId: "wrong-schedule",
+            runId: GRAPH_RUN_ID,
+          }),
+        ],
       ])
     );
 
     await expect(reader(fetchImpl)(INPUT)).rejects.toMatchObject({
       phase: "loki_no_hit",
-      message: "Loki returned no entry correlated by scheduleId and graphRunId",
+      message:
+        "Loki returned no entry correlated by nodeId, scheduleId, and graphRunId",
     });
   });
 
