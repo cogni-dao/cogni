@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/deploy/promote`
- * Purpose: Manual promotion request — operator-dispatched, RBAC-gated promote of a node to preview or production.
+ * Purpose: Manual promotion request — operator-dispatched, RBAC-gated promote of a node or bounded shared service.
  * Scope: Authorizes per-env (`node.promote_production` for production, `node.manage_envs` for preview) then dispatches promote-and-deploy.yml via the operator GitHub App.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: the env's gate — `node.promote_production` (→ `can_promote_production`) for production, `node.manage_envs` (→ `can_manage_envs`) for preview — is checked before any dispatch.
@@ -19,6 +19,9 @@
  *   - FORWARD_ONLY_BY_DEFAULT: source-addressed and production preview-forward promotes refuse an
  *     off-main or backward source pin before workflow dispatch. `allowRollback:true` is explicit and
  *     remains behind the same env-specific RBAC gate.
+ *   - SERVICE_PROMOTION_IS_BOUNDED: a service request is production-only, operator-node authorized,
+ *     catalog-validated as `type: service`, and adapter-allowlisted; callers cannot choose workflow
+ *     inputs beyond the service slug.
  * Side-effects: IO (authz check, GitHub workflow_dispatch)
  * Links: docs/spec/node-ci-cd-contract.md § Env-promotion progression, docs/spec/rbac.md, docs/spec/cicd-platform-boundary.md
  * @public
@@ -39,16 +42,35 @@ import { serverEnv } from "@/shared/env";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const promoteInput = z.object({
-  nodeId: z.string().min(1),
-  // preview: the activation trigger for a lane's first write (story.5039) — without it, an env
-  // activated via the env verb never serves until a node-repo merge manufactures the auto path.
-  // production: the RBAC-gated manual dispatch, unchanged.
-  env: z.enum(["preview", "production"]),
-  sourceSha: z.string().optional(),
-  // Deliberate rollback is explicit and still requires the normal env-specific RBAC grant.
-  allowRollback: z.boolean().optional().default(false),
-});
+const promoteInput = z
+  .object({
+    nodeId: z.string().min(1),
+    // preview: the activation trigger for a lane's first write (story.5039) — without it, an env
+    // activated via the env verb never serves until a node-repo merge manufactures the auto path.
+    // production: the RBAC-gated manual dispatch, unchanged.
+    env: z.enum(["preview", "production"]),
+    sourceSha: z.string().optional(),
+    // Deliberate rollback is explicit and still requires the normal env-specific RBAC grant.
+    allowRollback: z.boolean().optional().default(false),
+    service: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]*$/)
+      .optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (
+      input.service !== undefined &&
+      (input.env !== "production" ||
+        input.sourceSha !== undefined ||
+        input.allowRollback)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "service promotion is production-only and does not accept sourceSha or allowRollback",
+      });
+    }
+  });
 
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "deploy.promote", auth: { mode: "required", getSessionUser } },
@@ -63,7 +85,7 @@ export const POST = wrapRouteHandlerWithLogging(
     if (!parsed.success) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
-    const { nodeId, env, sourceSha, allowRollback } = parsed.data;
+    const { nodeId, env, sourceSha, allowRollback, service } = parsed.data;
 
     const db = resolveServiceDb();
     const nodeRows = await db
@@ -74,6 +96,12 @@ export const POST = wrapRouteHandlerWithLogging(
     const node = nodeRows[0];
     if (!node) {
       return NextResponse.json({ error: "node_not_found" }, { status: 404 });
+    }
+    if (service !== undefined && node.slug !== "operator") {
+      return NextResponse.json(
+        { error: "service_promotion_operator_only" },
+        { status: 403 }
+      );
     }
 
     const billingRows = await db
@@ -134,8 +162,9 @@ export const POST = wrapRouteHandlerWithLogging(
       // preview-forward branch after the typed plane validates preview's recorded provenance. A
       // promote that resolves ZERO targets (env not in the node's catalog
       // envs) still refuses loudly downstream (bug.5203, #2296) — no pre-filtering here.
-      const result =
-        sourceSha !== undefined
+      const result = service
+        ? await deployPlane.dispatchServicePromote({ owner, repo, service })
+        : sourceSha !== undefined
           ? await deployPlane.promoteNode({
               env,
               parentOwner: owner,
@@ -178,6 +207,7 @@ export const POST = wrapRouteHandlerWithLogging(
           routeId: ctx.routeId,
           nodeId: node.id,
           slug: node.slug,
+          service,
           errorCode: typedCode,
           err: message,
         },

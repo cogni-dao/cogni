@@ -76,6 +76,13 @@ export interface PromoteNodeFromPreviewInput {
   readonly allowRollback?: boolean;
 }
 
+export interface PromoteServiceInput {
+  readonly owner: string;
+  readonly repo: string;
+  /** Catalog slug. The adapter owns the bounded allowlist and validates `type: service`. */
+  readonly service: string;
+}
+
 export interface PruneNodeEnvironmentInput {
   readonly parentOwner: string;
   readonly parentRepo: string;
@@ -419,4 +426,13 @@ export interface DeployPlanePort {
     sourceSha?: string;
     nodeSourceSha?: string;
   }): Promise<ObservedWorkflowDispatchResult>;
+
+  /**
+   * Promote one explicitly supported catalog service through the existing production workflow.
+   * The adapter validates the live parent catalog row before dispatch and owns the bounded target
+   * allowlist; callers cannot choose an environment, workflow, ref, source SHA, or infra mode.
+   */
+  dispatchServicePromote(
+    input: PromoteServiceInput
+  ): Promise<ObservedWorkflowDispatchResult>;
 }
