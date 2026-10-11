@@ -268,6 +268,14 @@ export type {
   VerificationStatus,
 } from "./onchain-verifier.port";
 export type {
+  AppCredentialVerification,
+  GithubAppIdentityPort,
+  OperatorAppCredentialsStorePort,
+  StoredAppCredentialPair,
+  WriteAppCredentialPairInput,
+  WriteAppCredentialPairResult,
+} from "./operator-app-credentials.port";
+export type {
   OperatorSecretsPlanePort,
   SecretWriteOp,
   WriteNodeSecretInput,
