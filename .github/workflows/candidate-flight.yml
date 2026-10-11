@@ -36,7 +36,10 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
   SLOT: candidate-a
   OVERLAY_ENV: candidate-a
-  # Public workload zone for fork-aware generated scheduler routes.
+  # Public workload zone for fork-aware generated scheduler routes. This must
+  # remain distinct from the substrate/control root in isolated test fleets.
+  DOMAIN: ${{ vars.DOMAIN || vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+  # Shared substrate/control root for a plain fork.
   FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
   # FLEET_CONTROL_ENV (subtask.5007): the env whose cluster reconciles + pays for akash
   # lanes. Default 'production' (cogni-dao fleet); an isolated fleet (cogni-test-org) sets
@@ -1623,10 +1626,9 @@ jobs:
       - name: Checkout app source (PR catalog + base manifests)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          # PR flights reconcile the PR's catalog/manifests. Node-ref flights reconcile the
-          # target fleet's workflow source; an in-repo operator SHA can come from canonical and
-          # must not replace an isolated fork's catalog/domain state.
-          ref: ${{ inputs.pr_number != '' && needs.decide.outputs.head_sha || github.sha }}
+          # `decide` is the single authority: PR and in-repo node-ref flights use the
+          # reviewed head; remote-node flights resolve head_sha to this workflow revision.
+          ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
 
       - name: Reconcile scheduler-worker routing (propagate to per-env deploy branch)
