@@ -17,8 +17,6 @@
  *   DEPLOY_REPO_OWNS_APPSET: AppSet reconciliation renders repoURL for the
  *     repository that owns the deploy branch instead of the canonical default;
  *     writer, AppSet, verification checkout, and ancestry check share one resolver.
- *   ISOLATED_FLEET_ROOT_IS_LOCAL: a non-canonical candidate reconciles the
- *     apply-once control-plane root to its own protected main before AppSets.
  *   EXACT_SELF_FLIGHT_PROVES_SUBSTRATE_SCRIPTS: the operator may execute the
  *     reviewed app-source substrate runner only when workflow and app are the
  *     same commit; all remote or mismatched source flights stay on ci-src.
@@ -185,24 +183,6 @@ describe("candidate-a manifest source", () => {
     expect(wait.env?.GH_REPO).toBe(
       "${{ steps.deploy-repo.outputs.repository }}"
     );
-  });
-
-  it("reconciles an isolated fleet root before applying its AppSet", () => {
-    const root = namedStep(
-      "reconcile-appset",
-      "Reconcile isolated fleet control-plane root"
-    );
-
-    expect(root.if).toBe("steps.ssh-setup.outputs.has_vm == 'true'");
-    expect(root.run).toContain('== "cogni-dao/cogni"');
-    expect(root.run).toContain(
-      'desired_repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"'
-    );
-    expect(root.run).toContain(
-      "targetRevision: deploy/candidate-a-control-plane#targetRevision: main"
-    );
-    expect(root.run).toContain(".status.operationState.phase");
-    expect(root.run).toContain("|Healthy|Succeeded");
   });
 
   it("selects the flighted source SHA for an in-repo node-ref", () => {

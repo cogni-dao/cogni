@@ -81,6 +81,8 @@ Define the contract that:
 
 14. **OWNER_APP_BOUNDARY_FAILS_CLOSED**: every `role: test-parent` artifact declares the non-secret GitHub App ID + slug allowed to write its owner. The workflow mints with that manifest ID, masks decoded key material before workflow output, and verifies the returned App slug before any repository write. It never selects an App ID from a generic environment secret. A stale cross-environment keypair therefore fails authentication instead of widening authority or writing to the wrong org.
 
+15. **CONTROL_PLANE_SOURCE_FOLLOWS_DEPLOYMENT**: a self-managing environment root and every child app-of-apps it owns MUST resolve from the repository that owns that deployment. The canonical candidate fleet follows the reviewed canonical deploy ref; an isolated test parent follows its protected main. These manifests are required `content_may_differ` paths, so refresh preserves repository authority without allowing any leg of the reconciliation chain to disappear. Candidate flights MUST NOT repair this boundary with recurring `kubectl apply`; Argo continuously enforces the Git-owned state.
+
 ---
 
 ## Topology
