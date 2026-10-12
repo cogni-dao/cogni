@@ -153,7 +153,6 @@ describe("GitHubVcsAdapter candidate workflow refs", () => {
       inputs: {
         pr_number: "2691",
         head_sha: SOURCE_SHA,
-        workflow_source_sha: SOURCE_SHA,
       },
     });
   });
@@ -175,7 +174,6 @@ describe("GitHubVcsAdapter candidate workflow refs", () => {
       inputs: {
         pr_number: "2691",
         head_sha: SOURCE_SHA,
-        workflow_source_sha: SOURCE_SHA,
       },
     });
   });

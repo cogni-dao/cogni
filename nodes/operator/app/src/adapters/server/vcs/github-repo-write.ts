@@ -2272,7 +2272,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
               // existing PR mode so candidate-flight resolves every affected parent target.
               pr_number: String(reviewedWorkflow.prNumber),
               head_sha: reviewedWorkflow.resolvedSha,
-              workflow_source_sha: reviewedWorkflow.resolvedSha,
             }
           : {
               node_slug: input.slug,

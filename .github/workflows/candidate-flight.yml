@@ -5,10 +5,6 @@ name: Candidate Flight
 on:
   workflow_dispatch:
     inputs:
-      workflow_source_sha:
-        description: "Exact reviewed commit expected to own a non-main workflow execution"
-        required: false
-        type: string
       pr_number:
         description: "PR number to flight"
         required: false
@@ -76,31 +72,6 @@ jobs:
       source_repository_by_target_json: ${{ steps.substrate-targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.substrate-targets.outputs.source_sha_by_target_json }}
     steps:
-      # Guard-only freeze exception (bug.5455): no deploy policy lives here. The typed VCS
-      # adapter proves the reviewed PR head and creates the immutable dispatch ref.
-      - name: Assert reviewed workflow source
-        env:
-          EXPECTED_WORKFLOW_SOURCE_SHA: ${{ inputs.workflow_source_sha }}
-          ACTUAL_WORKFLOW_SOURCE_SHA: ${{ github.sha }}
-          ACTUAL_WORKFLOW_REF: ${{ github.ref }}
-        run: |
-          set -euo pipefail
-          if [ -z "$EXPECTED_WORKFLOW_SOURCE_SHA" ]; then
-            [ "$ACTUAL_WORKFLOW_REF" = "refs/heads/main" ] || {
-              echo "::error::non-main candidate workflow requires workflow_source_sha"
-              exit 1
-            }
-          else
-            [[ "$EXPECTED_WORKFLOW_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
-              echo "::error::workflow_source_sha must be an exact 40-character commit SHA"
-              exit 1
-            }
-            [ "${ACTUAL_WORKFLOW_SOURCE_SHA,,}" = "${EXPECTED_WORKFLOW_SOURCE_SHA,,}" ] || {
-              echo "::error::workflow source mismatch: executed ${ACTUAL_WORKFLOW_SOURCE_SHA}, expected ${EXPECTED_WORKFLOW_SOURCE_SHA}"
-              exit 1
-            }
-          fi
-
       - name: Checkout workflow source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:

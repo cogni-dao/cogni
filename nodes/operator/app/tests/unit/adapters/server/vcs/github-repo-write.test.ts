@@ -4108,7 +4108,6 @@ describe("GitHubRepoWriter.dispatchNodeRefCandidateFlight", () => {
       inputs: {
         pr_number: "2691",
         head_sha: sourceSha,
-        workflow_source_sha: sourceSha,
       },
     });
   });

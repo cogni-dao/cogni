@@ -480,7 +480,6 @@ export class GitHubVcsAdapter implements VcsCapability {
           // instead of pretending the parent SHA is a single child-node image.
           pr_number: String(reviewedWorkflow.prNumber),
           head_sha: reviewedWorkflow.resolvedSha,
-          workflow_source_sha: reviewedWorkflow.resolvedSha,
         }
       : {
           node_slug: params.nodeSlug,
