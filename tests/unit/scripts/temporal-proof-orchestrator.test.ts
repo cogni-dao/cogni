@@ -31,6 +31,7 @@ const TARGETS = [
     nodeId: "4b06359a-a859-4399-888e-a8c7a6696f7e",
     sourceSha: "242266ad474aee590e2fbafcad08a0431d350b45",
     environment: "production",
+    workerEnvironment: "production",
     baseUrl: "https://poly.cognidao.org",
   },
   {
@@ -38,6 +39,7 @@ const TARGETS = [
     nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c",
     sourceSha: "654e5f2132cdc774a329f24c69340170e4721d2a",
     environment: "production",
+    workerEnvironment: "production",
     baseUrl: "https://node-template.cognidao.org",
   },
 ];

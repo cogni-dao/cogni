@@ -6,7 +6,7 @@
  * Purpose: Read exact schedule/run evidence from Grafana Cloud Loki.
  * Scope: Reads bounded Grafana queries. Does not write logs or expose credentials.
  * Invariants:
- *   - Queries are pinned to the exact env and scheduler-worker stream. The
+ *   - Queries are pinned to the worker's exact control env and scheduler-worker stream. The
  *     stream `node` label is the physical k8s host, never the Cogni node UUID.
  *   - Target nodeId, scheduleId, and graphRunId are line filters and every
  *     returned entry is locally rechecked for all three exact JSON values.
@@ -257,8 +257,8 @@ export function createTemporalLokiEvidenceReader(options = {}) {
 
   return async function readLokiEvidence(input) {
     const environment = requiredString(
-      input?.target?.environment,
-      "target.environment"
+      input?.target?.workerEnvironment ?? input?.target?.environment,
+      "target.workerEnvironment"
     );
     const nodeId = requiredString(input?.target?.nodeId, "target.nodeId");
     const scheduleId = requiredString(input?.scheduleId, "scheduleId");

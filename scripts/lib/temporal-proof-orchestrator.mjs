@@ -117,6 +117,14 @@ export function resolveTemporalProofTargets({
       nodeId: row.node_id,
       sourceSha: expectedSourceSha,
       environment: targetEnvironment,
+      // Akash non-production lanes are reconciled by the production control
+      // plane, so their shared-worker logs carry env=production. Keep workload
+      // and worker environments distinct for exact Loki correlation.
+      workerEnvironment:
+        row?.deployment_provider?.[targetEnvironment] === "akash" &&
+        targetEnvironment !== "production"
+          ? "production"
+          : targetEnvironment,
       baseUrl: normalizeUrl(
         urls[name] ?? defaultBaseUrl(name, targetEnvironment),
         name

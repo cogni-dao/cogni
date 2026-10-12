@@ -26,6 +26,7 @@ const INPUT = {
     name: "poly",
     nodeId: "8913a24a-92f6-41e0-ab3b-ef8101298364",
     environment: "candidate-a",
+    workerEnvironment: "production",
   },
   scheduleId: SCHEDULE_ID,
   graphRunId: GRAPH_RUN_ID,
@@ -35,7 +36,7 @@ const INPUT = {
 function lokiResponse(
   values: Array<[string, string]>,
   labels = {
-    env: "candidate-a",
+    env: "production",
     service: "scheduler-worker",
     node: "f97f68f2-physical-k8s-host",
   }
@@ -106,7 +107,7 @@ describe("createTemporalLokiEvidenceReader", () => {
         timestampNs: "1791722280000000000",
         line,
         labels: {
-          env: "candidate-a",
+          env: "production",
           service: "scheduler-worker",
           node: "f97f68f2-physical-k8s-host",
         },
@@ -128,7 +129,7 @@ describe("createTemporalLokiEvidenceReader", () => {
       "/api/datasources/proxy/uid/grafanacloud-logs/loki/api/v1/query_range"
     );
     expect(url.searchParams.get("query")).toBe(
-      `{env="candidate-a",service="scheduler-worker"} |= "${INPUT.target.nodeId}" |= "schedule-exact" |= "run-exact"`
+      `{env="production",service="scheduler-worker"} |= "${INPUT.target.nodeId}" |= "schedule-exact" |= "run-exact"`
     );
     expect(url.searchParams.get("start")).toBe("1791722040000000000");
     expect(url.searchParams.get("end")).toBe("1791722400000000000");
