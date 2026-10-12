@@ -236,8 +236,21 @@ OVERLAY_DST="${WORKDIR}/${OVERLAY_SUBPATH}"
 }
 CURRENT_IMAGE_NAME="$(yq -N '.images[0].newName // .images[0].name // ""' "$OVERLAY_DST")"
 CURRENT_IMAGE_DIGEST="$(yq -N '.images[0].digest // ""' "$OVERLAY_DST")"
+CURRENT_SOURCE_SHA="$(python3 - "$WORKDIR/.promote-state/source-sha-by-app.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        print(json.load(handle).get("scheduler-worker", ""))
+except (FileNotFoundError, json.JSONDecodeError):
+    print("")
+PY
+)"
 [[ "$CURRENT_IMAGE_NAME" == ghcr.io/* && "$CURRENT_IMAGE_DIGEST" =~ ^sha256:[0-9a-fA-F]{64}$ ]] || {
   echo "[ERROR] deployed scheduler-worker overlay has no immutable image identity" >&2
+  exit 1
+}
+[[ "$CURRENT_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+  echo "[ERROR] deployed scheduler-worker source identity missing from source-sha map" >&2
   exit 1
 }
 
@@ -265,7 +278,8 @@ mv "${OVERLAY_DST}.tmp" "$OVERLAY_DST"
   cd "$WORKDIR"
   bash "$SCRIPT_DIR/promote-k8s-image.sh" --no-commit \
     --env "$DEPLOY_ENV" --app scheduler-worker \
-    --digest "${CURRENT_IMAGE_NAME}@${CURRENT_IMAGE_DIGEST}"
+    --digest "${CURRENT_IMAGE_NAME}@${CURRENT_IMAGE_DIGEST}" \
+    --source-sha "$CURRENT_SOURCE_SHA"
 )
 git -C "$WORKDIR" add -A "$OVERLAY_SUBPATH"
 

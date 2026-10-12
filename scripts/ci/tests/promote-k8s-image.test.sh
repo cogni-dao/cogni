@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 # Regression: a scheduler-worker promotion must update both the immutable image
-# pin and the IMAGE_DIGEST value exposed by /version in one overlay mutation.
+# pin plus GIT_SHA/IMAGE_DIGEST values exposed by /version in one mutation.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,10 +17,12 @@ cp "$REPO_ROOT/infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yam
   "$TMPROOT/infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml"
 
 DIGEST="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+SOURCE_SHA="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 (
   cd "$TMPROOT"
   bash "$PROMOTE" --no-commit --env candidate-a --app scheduler-worker \
-    --digest "ghcr.io/cogni-dao/cogni-template@${DIGEST}"
+    --digest "ghcr.io/cogni-dao/cogni-template@${DIGEST}" \
+    --source-sha "$SOURCE_SHA"
 )
 
 OVERLAY="$TMPROOT/infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml"
@@ -35,5 +37,15 @@ awk -v expected="$DIGEST" '
   }
   END { if (!found) exit 1 }
 ' "$OVERLAY"
+awk -v expected="$SOURCE_SHA" '
+  /path: \/data\/GIT_SHA/ { awaiting = 1; next }
+  awaiting && /^[[:space:]]*value:/ {
+    gsub(/^[[:space:]]*value:[[:space:]]*"?|"?[[:space:]]*$/, "")
+    if ($0 != expected) exit 1
+    found = 1
+    awaiting = 0
+  }
+  END { if (!found) exit 1 }
+' "$OVERLAY"
 
-echo "PASS: scheduler-worker image pin and /version digest identity move atomically"
+echo "PASS: scheduler-worker image pin and /version source+digest identity move atomically"

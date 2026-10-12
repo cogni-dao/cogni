@@ -151,6 +151,10 @@ patches:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cogni-testing.org
 YAML
+mkdir -p "$DEPLOY_DIR/.promote-state"
+cat >"$DEPLOY_DIR/.promote-state/source-sha-by-app.json" <<'JSON'
+{"scheduler-worker":"cccccccccccccccccccccccccccccccccccccccc"}
+JSON
 
 git -C "$DEPLOY_DIR" init -q
 git -C "$DEPLOY_DIR" config user.email t@t.t
@@ -190,6 +194,8 @@ grep -q 'digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   || fail "env overlay changed the deployed image digest"
 [ "$(grep -c 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$OVERLAY")" = 2 ] \
   || fail "image digest and observable IMAGE_DIGEST were not restored together"
+grep -q 'value: "cccccccccccccccccccccccccccccccccccccccc"' "$OVERLAY" \
+  || fail "observable GIT_SHA was not restored from the deploy source-sha map"
 ! grep -q 'cogni-testing.org' "$OVERLAY" \
   || fail "foreign workload domain remained in the shared substrate overlay"
 echo "PASS: substrate topology healed while image identity stayed pinned"
