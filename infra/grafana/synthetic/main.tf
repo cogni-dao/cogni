@@ -1,11 +1,14 @@
 terraform {
   required_version = ">= 1.8.0"
 
-  # The fleet monitor must not depend on one laptop's local state. Credentials
-  # are supplied only through PG_CONN_STR; no backend secret belongs in git or
-  # a saved plan. The checks keep running in Grafana if this database is down.
-  backend "pg" {
-    schema_name = "grafana_fleet_state"
+  # The fleet monitor must not depend on a laptop or any database it observes.
+  # Bucket, endpoint, and prefix-scoped credentials are supplied at init time;
+  # no backend credential belongs in git or a saved plan. The S3 protocol keeps
+  # this portable across AWS S3 and versioned MinIO/Ceph-compatible stores.
+  backend "s3" {
+    key          = "grafana/fleet-reliability/terraform.tfstate"
+    use_lockfile = true
+    encrypt      = true
   }
 
   required_providers {
