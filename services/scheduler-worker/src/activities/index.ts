@@ -362,8 +362,11 @@ export function createActivities(deps: ActivityDeps) {
       // Handle HTTP errors
       const errorText = await response.text();
       const durationMs = performance.now() - start;
+      const transientClientStatus = [408, 409, 429].includes(response.status);
       const errorType =
-        response.status >= 400 && response.status < 500
+        response.status >= 400 &&
+        response.status < 500 &&
+        !transientClientStatus
           ? "non_retryable"
           : "retryable";
 
@@ -388,9 +391,15 @@ export function createActivities(deps: ActivityDeps) {
         WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR
       );
 
-      // 4xx errors are non-retryable (auth, validation, business logic failures)
-      // 5xx errors and network errors should be retried
-      if (response.status >= 400 && response.status < 500) {
+      // 409 means the first delivery is still executing behind a lost/expired
+      // edge response. The persisted Idempotency-Key makes replay safe, and a
+      // later attempt receives the cached terminal result. 408/429 are also
+      // transient. Other 4xx responses are permanent contract/auth failures.
+      if (
+        response.status >= 400 &&
+        response.status < 500 &&
+        !transientClientStatus
+      ) {
         throw ApplicationFailure.nonRetryable(
           `Internal API client error: ${response.status} - ${errorText}`,
           "InternalApiClientError",
@@ -398,9 +407,9 @@ export function createActivities(deps: ActivityDeps) {
         );
       }
 
-      // 5xx errors - let Temporal retry
+      // Transient 408/409/429 and 5xx errors - let Temporal retry.
       throw new Error(
-        `Internal API server error: ${response.status} - ${errorText}`
+        `Internal API transient error: ${response.status} - ${errorText}`
       );
     }
 

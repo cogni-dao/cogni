@@ -487,4 +487,82 @@ describe("executeGraphActivity", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it.each([
+    408, 409, 429, 520,
+  ])("leaves transient HTTP %s retryable for Temporal", async (status) => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status,
+      text: () => Promise.resolve("transient"),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const activities = createActivities({
+      grantAdapter: {} as Parameters<
+        typeof createActivities
+      >[0]["grantAdapter"],
+      runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
+      config: {
+        nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
+        schedulerApiToken: "test-token-min-32-characters-long",
+      },
+      logger: mockLogger,
+    });
+
+    await expect(
+      activities.executeGraphActivity({
+        nodeId: "operator",
+        temporalScheduleId: FIXED_IDS.scheduleId,
+        graphId: FIXED_IDS.graphId,
+        executionGrantId: FIXED_IDS.grantId,
+        input: {},
+        scheduledFor: "2025-01-15T10:00:00.000Z",
+        runId: FIXED_IDS.runId,
+      })
+    ).rejects.toMatchObject({
+      message: `Internal API transient error: ${status} - transient`,
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps permanent 422 contract errors non-retryable", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      text: () => Promise.resolve("payload mismatch"),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const activities = createActivities({
+      grantAdapter: {} as Parameters<
+        typeof createActivities
+      >[0]["grantAdapter"],
+      runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
+      config: {
+        nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
+        schedulerApiToken: "test-token-min-32-characters-long",
+      },
+      logger: mockLogger,
+    });
+
+    await expect(
+      activities.executeGraphActivity({
+        nodeId: "operator",
+        temporalScheduleId: FIXED_IDS.scheduleId,
+        graphId: FIXED_IDS.graphId,
+        executionGrantId: FIXED_IDS.grantId,
+        input: {},
+        scheduledFor: "2025-01-15T10:00:00.000Z",
+        runId: FIXED_IDS.runId,
+      })
+    ).rejects.toMatchObject({
+      type: "InternalApiClientError",
+    });
+
+    vi.unstubAllGlobals();
+  });
 });

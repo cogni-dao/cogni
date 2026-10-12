@@ -276,6 +276,57 @@ describe("proveScheduledLangGraph", () => {
     );
     expect(scheduleListCount).toBe(2);
   });
+
+  it("retries cleanup when the first DELETE response is lost", async () => {
+    const { fetchImpl } = createSuccessfulFetch();
+    let deleteAttempts = 0;
+    fetchImpl.mockImplementation(
+      async (url: string | URL, init?: RequestInit) => {
+        const href = String(url);
+        if (href.includes("/api/v1/agent/runs")) {
+          const polls = fetchImpl.mock.calls.filter(([calledUrl]) =>
+            String(calledUrl).includes("/api/v1/agent/runs")
+          ).length;
+          return jsonResponse({
+            runs:
+              polls === 1
+                ? []
+                : [
+                    {
+                      runId: "probe-run",
+                      graphId: "langgraph:poet",
+                      runKind: "system_scheduled",
+                      status: "success",
+                    },
+                  ],
+          });
+        }
+        if (href.endsWith("/api/v1/schedules") && init?.method === "POST") {
+          return jsonResponse({ id: SCHEDULE_ID }, 201);
+        }
+        if (init?.method === "DELETE") {
+          deleteAttempts += 1;
+          if (deleteAttempts === 1) throw new TypeError("response lost");
+          return new Response(null, { status: 204 });
+        }
+        if (href.endsWith("/api/v1/schedules")) {
+          return jsonResponse({ schedules: [] });
+        }
+        throw new Error(`Unexpected request: ${href}`);
+      }
+    );
+    const readLokiEvidence = vi.fn(async ({ scheduleId, graphRunId }) => ({
+      entries: [{ scheduleId, graphRunId }],
+    }));
+
+    const result = await proveScheduledLangGraph(
+      TARGET,
+      deterministicOptions(fetchImpl, readLokiEvidence)
+    );
+
+    expect(result.cleanup).toEqual({ deleteStatus: 204, absent: true });
+    expect(deleteAttempts).toBe(2);
+  });
 });
 
 describe("proveScheduledLangGraphTargets", () => {

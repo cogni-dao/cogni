@@ -37,8 +37,26 @@ export const EXTERNAL_API_ACTIVITY_OPTIONS = {
   },
 } as const satisfies ActivityOptions;
 
-/** Graph execution profile: 15-min timeout, no retry (idempotency collision risk). */
+/**
+ * Generic HTTP dispatch profile: 15-min timeout, no retry until the target
+ * route's idempotency contract is proven.
+ */
 export const GRAPH_EXECUTION_ACTIVITY_OPTIONS = {
   startToCloseTimeout: "15 minutes",
   retry: { maximumAttempts: 1 },
+} as const satisfies ActivityOptions;
+
+/**
+ * Durable graph execution profile. The graph route persists Idempotency-Key
+ * before execution and returns cached terminal results, so retrying transient
+ * transport/5xx/409 responses cannot duplicate graph execution or billing.
+ */
+export const IDEMPOTENT_GRAPH_EXECUTION_ACTIVITY_OPTIONS = {
+  startToCloseTimeout: "15 minutes",
+  retry: {
+    initialInterval: "5 seconds",
+    maximumInterval: "30 seconds",
+    backoffCoefficient: 2,
+    maximumAttempts: 6,
+  },
 } as const satisfies ActivityOptions;

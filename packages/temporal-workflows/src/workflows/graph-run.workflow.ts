@@ -20,7 +20,7 @@
  */
 
 import { proxyActivities, uuid4, workflowInfo } from "@temporalio/workflow";
-import { GRAPH_EXECUTION_ACTIVITY_OPTIONS } from "../activity-profiles.js";
+import { IDEMPOTENT_GRAPH_EXECUTION_ACTIVITY_OPTIONS } from "../activity-profiles.js";
 import type { SchedulerActivities } from "../activity-types.js";
 
 /**
@@ -55,9 +55,11 @@ const {
   },
 });
 
-// Graph execution: 15-min timeout, no retry (idempotency collision risk).
+// Graph execution is retry-safe because the node persists Idempotency-Key
+// before doing work and returns the cached outcome on replay. Transient 409,
+// 5xx, and transport failures therefore retry without duplicate execution.
 const { executeGraphActivity } = proxyActivities<SchedulerActivities>(
-  GRAPH_EXECUTION_ACTIVITY_OPTIONS
+  IDEMPOTENT_GRAPH_EXECUTION_ACTIVITY_OPTIONS
 );
 
 /**

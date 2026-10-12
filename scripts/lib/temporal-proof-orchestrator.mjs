@@ -190,7 +190,9 @@ export async function registerTemporalProbeActor(
 function scheduledFailure(error, target) {
   if (error instanceof TemporalProofError) return error;
   if (error instanceof AggregateError) {
-    return scheduledFailure(error.errors[0], target);
+    // Cleanup is the stronger invariant: a failed probe may be retried, while
+    // an orphaned schedule keeps executing. Surface cleanup failure first.
+    return scheduledFailure(error.errors.at(-1), target);
   }
   if (error instanceof TemporalLokiEvidenceError) {
     return new TemporalProofError(

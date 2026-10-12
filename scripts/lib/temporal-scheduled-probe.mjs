@@ -204,19 +204,37 @@ function requireCorrelatedLokiEvidence(result, scheduleId, graphRunId) {
 }
 
 async function cleanupSchedule(deps, target, scheduleId) {
-  const deleteResponse = await fetchStatus(
-    deps.fetchImpl,
-    `${target.baseUrl}/api/v1/schedules/${encodeURIComponent(scheduleId)}`,
-    { method: "DELETE", headers: authHeaders(target.apiKey) },
-    "delete_schedule",
-    deps.requestTimeoutMs
-  );
-  if (deleteResponse.status !== 204 && deleteResponse.status !== 404) {
-    const body = await deleteResponse.text();
-    throw new TemporalScheduledProbeError(
-      `delete_schedule failed with HTTP ${deleteResponse.status}${body ? `: ${body}` : ""}`,
-      { phase: "delete_schedule" }
-    );
+  let deleteResponse = null;
+  let deleteError = null;
+  for (let attempt = 1; attempt <= deps.cleanupAttempts; attempt += 1) {
+    try {
+      deleteResponse = await fetchStatus(
+        deps.fetchImpl,
+        `${target.baseUrl}/api/v1/schedules/${encodeURIComponent(scheduleId)}`,
+        { method: "DELETE", headers: authHeaders(target.apiKey) },
+        "delete_schedule",
+        deps.requestTimeoutMs
+      );
+      if (deleteResponse.status === 204 || deleteResponse.status === 404) break;
+      if (deleteResponse.status < 500) {
+        const body = await deleteResponse.text();
+        throw new TemporalScheduledProbeError(
+          `delete_schedule failed with HTTP ${deleteResponse.status}${body ? `: ${body}` : ""}`,
+          { phase: "delete_schedule" }
+        );
+      }
+      deleteError = new TemporalScheduledProbeError(
+        `delete_schedule failed with HTTP ${deleteResponse.status}`,
+        { phase: "delete_schedule" }
+      );
+    } catch (error) {
+      deleteError = error;
+      deleteResponse = null;
+    }
+    if (attempt < deps.cleanupAttempts) await deps.sleep(deps.cleanupRetryMs);
+  }
+  if (!deleteResponse || ![204, 404].includes(deleteResponse.status)) {
+    throw deleteError;
   }
 
   const listed = await fetchJson(
@@ -290,6 +308,8 @@ export async function proveScheduledLangGraph(targetInput, options = {}) {
     timeoutMs: options.timeoutMs ?? 10 * 60_000,
     pollIntervalMs: options.pollIntervalMs ?? 2_000,
     requestTimeoutMs: options.requestTimeoutMs ?? 15_000,
+    cleanupAttempts: options.cleanupAttempts ?? 3,
+    cleanupRetryMs: options.cleanupRetryMs ?? 1_000,
     graphId: options.graphId ?? "langgraph:poet",
   };
   if (typeof deps.fetchImpl !== "function") {

@@ -391,6 +391,31 @@ describe("runTemporalHealthProof", () => {
       runTemporalHealthProof({ targets: TARGETS }, dependencies)
     ).rejects.toMatchObject({ reason, target: "poly" });
   });
+
+  it("surfaces cleanup failure over the original probe failure", async () => {
+    const dependencies = successfulDependencies();
+    dependencies.runScheduled.mockRejectedValueOnce(
+      new AggregateError(
+        [
+          new TemporalScheduledProbeError("run failed", {
+            phase: "terminal_run",
+          }),
+          new TemporalScheduledProbeError("delete failed", {
+            phase: "delete_schedule",
+          }),
+        ],
+        "probe and cleanup failed"
+      )
+    );
+
+    await expect(
+      runTemporalHealthProof({ targets: TARGETS }, dependencies)
+    ).rejects.toMatchObject({
+      reason: TEMPORAL_HEALTH_CLI_REASON.SCHEDULE_DRIFT,
+      phase: "delete_schedule",
+      target: "poly",
+    });
+  });
 });
 
 describe("registration and terminal failure output", () => {
