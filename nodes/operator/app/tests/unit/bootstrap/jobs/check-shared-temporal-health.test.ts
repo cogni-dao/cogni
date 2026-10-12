@@ -15,14 +15,42 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   inspect: vi.fn(),
+  inspectSchedules: vi.fn(),
   counterInc: vi.fn(),
+  driftSet: vi.fn(),
   durationObserve: vi.fn(),
   lastSuccessSet: vi.fn(),
   pollerSet: vi.fn(),
+  rows: [
+    {
+      dbScheduleId: "00000000-0000-4000-8000-000000000001",
+      temporalScheduleId: "probe-schedule",
+      enabled: true,
+      timezone: "UTC",
+      input: { message: "probe" },
+    },
+  ],
 }));
 
-vi.mock("@/adapters/server/temporal", () => ({
+vi.mock("@/adapters/server", () => ({
   inspectSharedTemporalHealth: (...args: unknown[]) => mocks.inspect(...args),
+  inspectSharedTemporalScheduleHealth: (...args: unknown[]) =>
+    mocks.inspectSchedules(...args),
+  TEMPORAL_HEALTH_MAX_SCHEDULES: 50,
+}));
+
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({
+    scheduleControl: {
+      describeSchedule: vi.fn(),
+      listScheduleIds: vi.fn(),
+    },
+  }),
+  resolveServiceDb: () => ({
+    select: () => ({
+      from: () => ({ limit: () => Promise.resolve(mocks.rows) }),
+    }),
+  }),
 }));
 
 vi.mock("@/shared/config", () => ({ getNodeId: () => "node-123" }));
@@ -38,6 +66,7 @@ vi.mock("@/shared/env/server-env", () => ({
 }));
 
 vi.mock("@/shared/observability/server/metrics", () => ({
+  temporalScheduleDrift: { set: mocks.driftSet },
   temporalSubstrateChecksTotal: {
     labels: () => ({ inc: mocks.counterInc }),
   },
@@ -65,6 +94,19 @@ describe("checkSharedTemporalHealth job", () => {
       durationMs: 42,
       pollers: { workflow: { status: "fresh" }, activity: { status: "fresh" } },
     });
+    mocks.inspectSchedules.mockResolvedValue({
+      status: "healthy",
+      reason: "ok",
+      declaredCount: 1,
+      observedCount: 1,
+      reconciledCount: 1,
+      pausedCount: 0,
+      driftCount: 0,
+      driftReasons: [],
+      dueCount: 1,
+      terminalCount: 1,
+      latestDueExecution: null,
+    });
   });
 
   it("uses exact /version sources and the current node's shared queue", async () => {
@@ -82,9 +124,54 @@ describe("checkSharedTemporalHealth job", () => {
         buildTime: "2026-10-11T11:00:00.000Z",
       },
     });
+    expect(mocks.inspectSchedules).toHaveBeenCalledWith(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [
+          {
+            dbScheduleId: "00000000-0000-4000-8000-000000000001",
+            temporalScheduleId: "probe-schedule",
+            enabled: true,
+            timezone: "UTC",
+            input: { message: "probe" },
+          },
+        ],
+        expectedTaskQueue: "scheduler-tasks-node-123",
+      },
+      {
+        describeSchedule: expect.any(Function),
+        listScheduleIds: expect.any(Function),
+      }
+    );
     expect(mocks.counterInc).toHaveBeenCalledOnce();
-    expect(mocks.durationObserve).toHaveBeenCalledWith(42);
+    expect(mocks.durationObserve).toHaveBeenCalledWith(expect.any(Number));
     expect(mocks.pollerSet).toHaveBeenCalledTimes(2);
+    expect(mocks.driftSet).toHaveBeenCalledWith(0);
     expect(mocks.lastSuccessSet).toHaveBeenCalledOnce();
+  });
+
+  it("fails the combined check when a due execution is stale", async () => {
+    mocks.inspectSchedules.mockResolvedValue({
+      status: "unhealthy",
+      reason: "stale_execution",
+      declaredCount: 1,
+      observedCount: 1,
+      reconciledCount: 1,
+      pausedCount: 0,
+      driftCount: 0,
+      driftReasons: [],
+      dueCount: 1,
+      terminalCount: 0,
+      latestDueExecution: null,
+    });
+
+    const result = await checkSharedTemporalHealth();
+
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: "stale_execution",
+      schedules: { dueCount: 1, terminalCount: 0 },
+    });
+    expect(mocks.lastSuccessSet).not.toHaveBeenCalled();
   });
 });

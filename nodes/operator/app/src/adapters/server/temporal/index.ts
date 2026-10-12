@@ -31,3 +31,18 @@ export {
   TEMPORAL_POLLER_MAX_AGE_MS,
   workerPollerIdentity,
 } from "./shared-temporal-health.adapter";
+export {
+  type ExpectedTemporalSchedule,
+  inspectSharedTemporalScheduleHealth,
+  type LatestDueExecutionHealth,
+  type SharedTemporalScheduleDriftReason,
+  type SharedTemporalScheduleHealth,
+  type SharedTemporalScheduleHealthDeps,
+  type SharedTemporalScheduleHealthInput,
+  type SharedTemporalScheduleHealthReason,
+  type SharedTemporalWorkflowStatus,
+  TEMPORAL_DUE_EXECUTION_GRACE_MS,
+  TEMPORAL_HEALTH_MAX_NAMESPACE_SCHEDULES,
+  TEMPORAL_HEALTH_MAX_SCHEDULES,
+  TEMPORAL_SCHEDULE_INSPECTION_TIMEOUT_MS,
+} from "./shared-temporal-schedule-health.adapter";

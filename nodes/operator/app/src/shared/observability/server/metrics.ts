@@ -221,6 +221,11 @@ export const temporalSubstratePollerFresh = getOrCreateGauge(
   ["task_type"] as const
 );
 
+export const temporalScheduleDrift = getOrCreateGauge(
+  "temporal_schedule_drift",
+  "Number of declared schedules whose Temporal state differs from the node declaration"
+);
+
 export const temporalSubstrateChecksTotal = getOrCreateCounter(
   "temporal_substrate_checks_total",
   "Completed shared Temporal substrate diagnostics",

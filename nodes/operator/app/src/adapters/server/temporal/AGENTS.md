@@ -32,7 +32,7 @@ Temporal schedule control plus read-only, server-observed shared-worker health d
 
 ## Public Surface
 
-- **Exports:** schedule control types and shared Temporal health inspection/types
+- **Exports:** schedule control types plus shared Temporal poller, schedule-drift, and due-execution health inspection/types
 - **Env/Config keys:** `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `SCHEDULER_WORKER_HEALTH_URL`
 - **Files considered API:** `index.ts`
 
@@ -44,7 +44,7 @@ Temporal schedule control plus read-only, server-observed shared-worker health d
 
 ## Responsibilities
 
-- This directory **does**: Implement schedule lifecycle control and read server-observed pollers plus worker identity
+- This directory **does**: Implement schedule lifecycle control and read server-observed pollers, worker identity, schedule drift, and due Workflow terminal state
 - This directory **does not**: Handle workflow execution, graph logic, or worker tasks
 
 ## Usage

@@ -335,10 +335,20 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
           ? (action.args[0] as Record<string, unknown>)
           : null;
       const actionInput: ScheduleDescription["input"] = actionArgs
-        ? ((actionArgs.input as ScheduleDescription["input"]) ?? null)
+        ? actionArgs.route && typeof actionArgs.route === "string"
+          ? ({
+              route: actionArgs.route,
+              payload:
+                actionArgs.payload && typeof actionArgs.payload === "object"
+                  ? actionArgs.payload
+                  : {},
+            } as ScheduleDescription["input"])
+          : ((actionArgs.input as ScheduleDescription["input"]) ?? null)
         : null;
       const actionDbScheduleId: string | null = actionArgs
-        ? ((actionArgs.dbScheduleId as string | null) ?? null)
+        ? ((actionArgs.dbScheduleId as string | null) ??
+          (actionArgs.scheduleId as string | null) ??
+          null)
         : null;
       // bug.5023: expose the action's task queue so a queue migration (e.g. shared
       // `ledger-tasks` → per-node `ledger-tasks-<nodeId>`) is detected as drift.
@@ -346,9 +356,28 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
         action.type === "startWorkflow" && typeof action.taskQueue === "string"
           ? action.taskQueue
           : null;
+      const lastWorkflow =
+        lastAction?.action.type === "startWorkflow"
+          ? lastAction.action.workflow
+          : null;
+      const lastWorkflowDescription = lastWorkflow
+        ? await client.workflow
+            .getHandle(lastWorkflow.workflowId, undefined, {
+              firstExecutionRunId: lastWorkflow.firstExecutionRunId,
+            })
+            .describe()
+            // A retained Schedule action can outlive Workflow visibility. Keep
+            // the action identity and report UNKNOWN so health classifies a
+            // due action without terminal proof as stale_execution.
+            .catch(() => null)
+        : null;
 
       return {
         scheduleId,
+        nodeId:
+          actionArgs && typeof actionArgs.nodeId === "string"
+            ? actionArgs.nodeId
+            : null,
         nextRunAtIso: nextTime ? nextTime.toISOString() : null,
         lastRunAtIso: lastAction ? lastAction.scheduledAt.toISOString() : null,
         isPaused: description.state.paused,
@@ -356,6 +385,13 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
         timezone: tz,
         input: actionInput,
         dbScheduleId: actionDbScheduleId,
+        lastWorkflowId: lastWorkflow?.workflowId ?? null,
+        lastWorkflowRunId: lastWorkflow?.firstExecutionRunId ?? null,
+        lastWorkflowStatus:
+          lastWorkflowDescription?.status.name === "UNSPECIFIED"
+            ? "UNKNOWN"
+            : (lastWorkflowDescription?.status.name ??
+              (lastWorkflow ? "UNKNOWN" : null)),
         taskQueue: actionTaskQueue,
       };
     } catch (error) {
@@ -386,7 +422,7 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
     }
   }
 
-  async listScheduleIds(prefix: string): Promise<string[]> {
+  async listScheduleIds(prefix: string, limit?: number): Promise<string[]> {
     const client = await this.getClient();
 
     try {
@@ -394,6 +430,7 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
       for await (const schedule of client.schedule.list()) {
         if (schedule.scheduleId.startsWith(prefix)) {
           ids.push(schedule.scheduleId);
+          if (limit !== undefined && ids.length >= limit) break;
         }
       }
       return ids;

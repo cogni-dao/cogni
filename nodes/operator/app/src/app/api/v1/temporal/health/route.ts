@@ -31,6 +31,7 @@ export const GET = wrapRouteHandlerWithLogging(
       event: EVENT_NAMES.SUBSTRATE_TEMPORAL_HEALTH_CHECKED,
       outcome: result.status === "healthy" ? "success" : "error",
       reasonCode: result.reason,
+      mode: result.mode,
       nodeId: result.nodeId,
       namespace: result.namespace,
       taskQueue: result.taskQueue,
@@ -41,6 +42,20 @@ export const GET = wrapRouteHandlerWithLogging(
       appBuildSha: result.app.buildSha,
       workerSha: result.worker?.sha ?? null,
       workerImageDigest: result.worker?.imageDigest ?? null,
+      scheduleDeclaredCount: result.schedules.declaredCount,
+      scheduleObservedCount: result.schedules.observedCount,
+      scheduleReconciledCount: result.schedules.reconciledCount,
+      schedulePausedCount: result.schedules.pausedCount,
+      scheduleDriftCount: result.schedules.driftCount,
+      scheduleDriftReasons: result.schedules.driftReasons,
+      dueExecutionCount: result.schedules.dueCount,
+      terminalExecutionCount: result.schedules.terminalCount,
+      latestDueWorkflowId:
+        result.schedules.latestDueExecution?.workflowId ?? null,
+      latestDueWorkflowRunId:
+        result.schedules.latestDueExecution?.firstExecutionRunId ?? null,
+      latestDueWorkflowStatus:
+        result.schedules.latestDueExecution?.status ?? null,
       durationMs: result.durationMs,
     };
 

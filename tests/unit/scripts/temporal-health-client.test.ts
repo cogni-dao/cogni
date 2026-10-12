@@ -25,8 +25,26 @@ describe("Temporal health CLI client", () => {
   const healthyBody = {
     status: "healthy",
     reason: "ok",
+    mode: "compatibility",
+    nodeId: "node-123",
+    namespace: "cogni-candidate-a",
+    taskQueue: "scheduler-tasks-node-123",
     app: { buildSha: appSha },
     worker: { sha: workerSha, imageDigest: workerDigest },
+    pollers: {
+      workflow: { status: "fresh" },
+      activity: { status: "fresh" },
+    },
+    schedules: {
+      status: "healthy",
+      reason: "ok",
+      declaredCount: 1,
+      observedCount: 1,
+      reconciledCount: 1,
+      driftCount: 0,
+      dueCount: 1,
+      terminalCount: 1,
+    },
   };
 
   it("resolves canonical operator and node deployment hosts", () => {
@@ -89,6 +107,32 @@ describe("Temporal health CLI client", () => {
     expect(TEMPORAL_HEALTH_CLI_REASON).toMatchObject({
       APP_IDENTITY_DRIFT: "app_identity_drift",
       WORKER_IDENTITY_DRIFT: "worker_identity_drift",
+    });
+  });
+
+  it("rejects a false-green payload without schedule and execution proof", async () => {
+    const result = await readTemporalHealth({
+      baseUrl: "https://node.example",
+      apiKey: "secret",
+      expectedAppSha: appSha,
+      expectedWorkerSha: workerSha,
+      expectedWorkerDigest: workerDigest,
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            status: "healthy",
+            reason: "ok",
+            app: healthyBody.app,
+            worker: healthyBody.worker,
+          }),
+          { status: 200 }
+        )
+      ),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      body: { reason: "response_malformed" },
     });
   });
 

@@ -68,6 +68,34 @@ export function resolveTemporalHealthTarget({ repoRoot, env, url }) {
   return parsed.origin;
 }
 
+function isHealthyProof(body) {
+  return (
+    body?.status === "healthy" &&
+    body.reason === "ok" &&
+    body.mode === "compatibility" &&
+    typeof body.nodeId === "string" &&
+    body.nodeId.length > 0 &&
+    typeof body.namespace === "string" &&
+    body.namespace.length > 0 &&
+    typeof body.taskQueue === "string" &&
+    body.taskQueue.length > 0 &&
+    body.pollers?.workflow?.status === "fresh" &&
+    body.pollers?.activity?.status === "fresh" &&
+    body.schedules?.status === "healthy" &&
+    body.schedules?.reason === "ok" &&
+    Number.isInteger(body.schedules?.declaredCount) &&
+    Number.isInteger(body.schedules?.observedCount) &&
+    Number.isInteger(body.schedules?.reconciledCount) &&
+    Number.isInteger(body.schedules?.driftCount) &&
+    Number.isInteger(body.schedules?.dueCount) &&
+    Number.isInteger(body.schedules?.terminalCount) &&
+    body.schedules.driftCount === 0 &&
+    body.schedules.observedCount === body.schedules.declaredCount &&
+    body.schedules.reconciledCount === body.schedules.declaredCount &&
+    body.schedules.terminalCount === body.schedules.dueCount
+  );
+}
+
 export async function readTemporalHealth({
   baseUrl,
   apiKey,
@@ -94,6 +122,15 @@ export async function readTemporalHealth({
       };
     }
     if (response.ok && body.status === "healthy") {
+      if (!isHealthyProof(body)) {
+        return {
+          exitCode: 1,
+          body: {
+            status: "error",
+            reason: TEMPORAL_HEALTH_CLI_REASON.RESPONSE_MALFORMED,
+          },
+        };
+      }
       if (
         typeof body.app?.buildSha !== "string" ||
         !/^[0-9a-f]{40}$/i.test(body.app.buildSha) ||
@@ -150,7 +187,7 @@ export async function readTemporalHealth({
       }
     }
     return {
-      exitCode: response.ok && body.status === "healthy" ? 0 : 1,
+      exitCode: response.ok && isHealthyProof(body) ? 0 : 1,
       body,
     };
   } catch (error) {

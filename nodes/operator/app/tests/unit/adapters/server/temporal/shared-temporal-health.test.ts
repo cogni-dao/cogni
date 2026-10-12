@@ -96,6 +96,7 @@ describe("shared Temporal health adapter", () => {
     expect(result).toMatchObject({
       status: "healthy",
       reason: "ok",
+      mode: "compatibility",
       nodeId: "node-123",
       namespace: "cogni-production",
       taskQueue: "scheduler-tasks-node-123",

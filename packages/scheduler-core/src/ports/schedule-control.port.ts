@@ -69,6 +69,8 @@ export interface CreateScheduleParams {
 export interface ScheduleDescription {
   /** Schedule ID */
   readonly scheduleId: string;
+  /** Originating node ID from the Schedule action args, when declared. */
+  readonly nodeId?: string | null;
   /** Next scheduled run time (ISO string), null if paused/none */
   readonly nextRunAtIso: string | null;
   /** Last run time (ISO string), null if never run */
@@ -83,6 +85,21 @@ export interface ScheduleDescription {
   readonly input: JsonValue | null;
   /** DB schedule UUID from workflow args, null if Temporal-only (legacy) */
   readonly dbScheduleId: string | null;
+  /** Workflow ID started by the most recent Schedule action, when one exists. */
+  readonly lastWorkflowId?: string | null;
+  /** First execution Run ID started by the most recent Schedule action. */
+  readonly lastWorkflowRunId?: string | null;
+  /** Current terminal/running state of the most recent Schedule action's Workflow chain. */
+  readonly lastWorkflowStatus?:
+    | "RUNNING"
+    | "COMPLETED"
+    | "FAILED"
+    | "CANCELLED"
+    | "TERMINATED"
+    | "CONTINUED_AS_NEW"
+    | "TIMED_OUT"
+    | "UNKNOWN"
+    | null;
   /**
    * Current task queue of the schedule's startWorkflow action, null/absent when the
    * adapter can't read it. Enables queue-migration drift detection (bug.5023): moving
@@ -249,8 +266,9 @@ export interface ScheduleControlPort {
    * Used by governance sync to discover existing governance: schedules.
    *
    * @param prefix - Prefix to filter by (e.g., "governance:")
+   * @param limit - Optional fail-safe maximum; stops listing once reached
    * @returns Array of matching schedule IDs
    * @throws ScheduleControlUnavailableError if backend unavailable
    */
-  listScheduleIds(prefix: string): Promise<string[]>;
+  listScheduleIds(prefix: string, limit?: number): Promise<string[]>;
 }

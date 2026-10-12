@@ -47,15 +47,24 @@ function parseArgs(argv) {
   if (!["candidate-a", "preview", "production"].includes(result.env)) {
     throw new Error("--env must be candidate-a, preview, or production");
   }
-  if (!result.help && !/^[0-9a-f]{40}$/i.test(result.expectedAppSha ?? "")) {
+  if (
+    !result.help &&
+    result.expectedAppSha !== undefined &&
+    !/^[0-9a-f]{40}$/i.test(result.expectedAppSha)
+  ) {
     throw new Error("--expected-app-sha must be an exact 40-character SHA");
   }
-  if (!result.help && !/^[0-9a-f]{40}$/i.test(result.expectedWorkerSha ?? "")) {
+  if (
+    !result.help &&
+    result.expectedWorkerSha !== undefined &&
+    !/^[0-9a-f]{40}$/i.test(result.expectedWorkerSha)
+  ) {
     throw new Error("--expected-worker-sha must be an exact 40-character SHA");
   }
   if (
     !result.help &&
-    !/^sha256:[0-9a-f]{64}$/i.test(result.expectedWorkerDigest ?? "")
+    result.expectedWorkerDigest !== undefined &&
+    !/^sha256:[0-9a-f]{64}$/i.test(result.expectedWorkerDigest)
   ) {
     throw new Error("--expected-worker-digest must be an exact sha256 digest");
   }
@@ -81,7 +90,7 @@ async function main() {
 
   if (args.help) {
     process.stdout.write(
-      "Usage: pnpm temporal:health --expected-app-sha SHA --expected-worker-sha SHA --expected-worker-digest sha256:DIGEST [--env candidate-a|preview|production] [--url https://node.example]\n"
+      "Usage: pnpm temporal:health [--env candidate-a|preview|production] [--url https://node.example] [--expected-app-sha SHA] [--expected-worker-sha SHA] [--expected-worker-digest sha256:DIGEST]\n"
     );
     return 0;
   }

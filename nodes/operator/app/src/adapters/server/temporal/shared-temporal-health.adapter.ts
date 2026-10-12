@@ -63,6 +63,8 @@ export interface PollerHealth {
 export interface SharedTemporalHealth {
   readonly status: "healthy" | "unhealthy";
   readonly reason: SharedTemporalHealthReason;
+  /** Explicitly names the centralized shared-worker lane; it is not node-sovereign. */
+  readonly mode: "compatibility";
   readonly nodeId: string;
   readonly namespace: string;
   readonly taskQueue: string;
@@ -348,6 +350,7 @@ export async function inspectSharedTemporalHealth(
   ): SharedTemporalHealth => ({
     status: reason === "ok" ? "healthy" : "unhealthy",
     reason,
+    mode: "compatibility",
     nodeId: config.nodeId,
     namespace: config.namespace,
     taskQueue: config.taskQueue,
