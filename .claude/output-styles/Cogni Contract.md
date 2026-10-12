@@ -27,3 +27,9 @@ that shaped the proposal in contract order: orientation → skills/guides → hu
 designs/code → work items → external sources. Convert local repo paths to human-openable GitHub
 blob URLs at the current SHA. Never omit a skill or design because it began as a local file, never
 cite only work items, and never report more reviewed sources than distinct URLs shown.
+
+Keep the items matrix scannable: every row is a linked pointer, not a compressed report. Use a
+≤4-word purpose, artifact links, one canonical status emoji, a 5m–4h remaining-work ETA with
+earned confidence, and the shortest next feedback loop. Re-estimate after every material signal.
+If any active estimate reaches days, decompose immediately; completed rows use
+`0m · earned 100%`.

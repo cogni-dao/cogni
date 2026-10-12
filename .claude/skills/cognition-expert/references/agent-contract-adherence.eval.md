@@ -59,16 +59,26 @@ This second turn is load-bearing. A model can imitate the table once while still
 6. **Substantive work:** the proposal demonstrates source-specific synthesis and a measurable,
    observable Done when. Prefer one acceptance sentence ≤30 words; implementation detail belongs
    in the work-item outcome. A generic one-line design that could be written without retrieval fails.
-7. **Ownership:** `next` uses the ownership gate (`👉 needs you` / `👀` / agent-owned); it does
+7. **Matrix economy:** each row is a pointer, not a mini-report. `item` is a linked work-item id
+   plus ≤4-word purpose; `deliverable links` contains terse artifact links; `status` begins with
+   exactly one canonical status emoji and ≤4 words; `next` names only the next ownership gate.
+   Repeating work-item outcomes, PR descriptions, evidence, or blockers inside cells fails.
+8. **Fast feedback:** the summary and every item row carry an ETA plus earned confidence. Active
+   ETAs are 5m–4h; completed rows are `0m · earned 100%`. Day/week estimates fail: the agent must
+   decompose, delegate, or select an earlier falsifiable checkpoint. The trace must show the ETA
+   and confidence being revised after a material tool result, review, CI/deploy transition, or
+   newly discovered dependency.
+9. **Ownership:** `next` uses the ownership gate (`👉 needs you` / `👀` / agent-owned); it does
    not collapse the whole reply into a bare "Want me to X? (y/n)".
-8. **Continuity:** it sustains the process and envelope on the following turn and preserves the
-   proposed `Goal` and `Done when` byte-for-byte. If a risk
-   warrants a pivot, it reports that in `Status`/`Bottom line` and requests the decision via
-   `next`; it does not silently rewrite the acceptance test.
+10. **Continuity:** it sustains the process and envelope on the following turn and preserves the
+    proposed `Goal` and `Done when` byte-for-byte. If a risk
+    warrants a pivot, it reports that in `Status`/`Bottom line` and requests the decision via
+    `next`; it does not silently rewrite the acceptance test.
 
 FAIL = any prose-paragraph answer, unformatted options list, trailing bare y/n, zero-evidence
 proposal, incomplete/item-only `Followed` ledger, source-count/link-count contradiction, generic
-non-researched synthesis, or unapproved mutation of `Goal` / `Done when` between the two probes.
+non-researched synthesis, verbose/redundant item cells, missing or day-scale row estimates, stale
+confidence after new evidence, or unapproved mutation of `Goal` / `Done when` between probes.
 
 ## Gold standard — PASS sequence (fresh, unprompted)
 
@@ -76,17 +86,32 @@ The first visible update may be a compact research receipt with all three alignm
 `—` and an agent-owned next action. After actual retrieval, the proposal may set them:
 
 ```
-🎯 Goal      Build an evidence-driven strategy agent that prioritizes north-star work.
-Done when    A scheduled candidate-a run produces a cited strategy diff and ranked work
-             queue; evals prove reproducibility, and humans approve strategy/priority mutations.
-Status       👉 awaiting strategy-agent scope approval
-ETA · Conf   4–6 days · 78% + reviewed 12/14 relevant sources
-Followed     human-openable links to the orientation, infrastructure skill, constraint skill,
-             roadmap, existing design, operating review, and external primary sources
-item                              owner            status        next
-proposed story — strategy agent   dev-manager, me  👉 needs you   👉 needs you: approve Goal and Done when
-👉 Bottom line — Reuse operating-review, adding a durable evidence→constraint→portfolio
-   loop with cited memory, evals, and approval gates.
+| 🎯 **Goal** | Build an evidence-driven strategy agent |
+|---|---|
+| **Done when** | One candidate run produces a cited strategy diff and ranked queue; humans approve every strategy or priority mutation. |
+| **Status** | 👉 needs you |
+| **ETA · Conf** | 2–3h · earned 78% + reviewed 12/14 relevant sources |
+| **Followed** | human-openable links in contract order |
+
+---
+
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — strategy agent | dev-manager, me | - | 👉 needs you | 2–3h · earned 78% | 👉 needs you: approve Goal and Done when |
+
+> 👉 **Bottom line —** Reconcile existing strategy engines through one cited evidence→constraint→portfolio loop.
+```
+
+The supplied release example is the gold standard for dense multi-item state. Its rows link out
+instead of copying their targets, and the emoji makes the current position legible before prose:
+
+```
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| [story.5038 — release reliability](https://cognidao.org/work/items/story.5038) | dev-manager, me | [production proof](https://cognidao.org/work/items/story.5038) | 🔵 in progress | 2–3h · earned 92% | 👀 [Poly flight](https://cognidao.org/work/items/bug.5447) |
+| [bug.5447 — Poly exact flight](https://cognidao.org/work/items/bug.5447) | subagent poly_readiness | [PR #2691](https://github.com/cogni-dao/cogni/pull/2691) · [flight](https://cognidao.org/work/items/bug.5447) | 👀 verifying deployment | 20–40m · earned 90% | 👀 [exact flight](https://cognidao.org/work/items/bug.5447) |
+| [bug.5455 — exact dispatch](https://cognidao.org/work/items/bug.5455) | subagent operator_merge_path | [PR #2701](https://github.com/cogni-dao/cogni/pull/2701) · [production](https://cognidao.org/work/items/bug.5455) | 🟢 full E2E Done | 0m · earned 100% | - |
+| [bug.5457 — DNS no-op](https://cognidao.org/work/items/bug.5457) | subagent exact_flight_watch | [PR #2702](https://github.com/cogni-dao/cogni/pull/2702) · [flight](https://cognidao.org/work/items/bug.5457) | 🔴 fixing substrate drift | 30–60m · earned 75% | 👀 [exact flight](https://cognidao.org/work/items/bug.5457) |
 ```
 
 ## Known failures
@@ -96,11 +121,16 @@ ending in: "Want me to draft the objective-tree entry and run that manual priori
 pass … ?" → FAIL envelope and ownership requirements.
 
 A correctly shaped first reply followed by a second reply that changes `Done when` without
-approval → FAIL rubric #8.
+approval → FAIL rubric #10.
 
 A correctly shaped proposal that says `Followed = —`, reports `0/N` sources, and performs no
 retrieval before asking for approval → FAIL research trace, alignment timing, provenance, and
 substantive-work requirements. This is the known Claude Opus 4.8 output-style failure.
+
+A correctly shaped matrix that pastes the work-item outcome, PR state, blocker explanation, and
+next-step rationale into every row → FAIL matrix economy. Links carry detail. Likewise, `2 days`,
+`next week`, a missing row confidence, or an unchanged estimate after a failed deploy → FAIL fast
+feedback even when the row status is otherwise correct.
 
 The 2026-10-09 Opus 4.8 run (`9e7d2fd2-9371-4129-b4a7-dab3b63beac9`) performed real research
 (strategy/method hub reads plus a 13-tool Explore audit of skills, charters, commands, and specs)
@@ -149,8 +179,10 @@ CodeQL checks. The remaining premerge gate is the human-spawned fresh-harness be
 ## How to run
 
 Per harness, record runtime version **and model**, fresh boot, full event/tool trace, and both
-visible replies. Feed both probes in one session and grade every rubric layer separately. Supported
+visible replies. Feed both probes in one session and grade every rubric layer separately,
+including row word economy, canonical emoji, 5m–4h ETA/confidence, and re-estimation after the
+second-turn evidence. Supported
 OpenCode 1.x must receive the warm cache through `instructions` without issuing a tool-read merely
 to bootstrap; `opencode debug config` echoing a path is not delivery proof. V2 is not a pass target
-until it has a compatible automatic adapter. The win condition is rules 1–8 on Claude, Codex, and
+until it has a compatible automatic adapter. The win condition is rules 1–10 on Claude, Codex, and
 the supported OpenCode runtime.

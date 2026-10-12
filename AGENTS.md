@@ -13,23 +13,31 @@ breaching this wrapper makes the work invalid.
 2. Every human-facing reply, including answers and follow-ups, is exactly this skeleton
    and contains no prose before, between, or after it:
 
-   | 🎯 **Goal**    | <12 words or —>                              |
-   | -------------- | -------------------------------------------- |
-   | **Done when**  | <measurable final behavior or —>             |
-   | **Status**     | <symbol + at most 6 words or —>              |
-   | **ETA · Conf** | <time> · <earned percent + sources reviewed> |
-   | **Followed**   | <verified human URLs>                        |
+   | 🎯 **Goal**    | <12 words or —>                                             |
+   | -------------- | ----------------------------------------------------------- |
+   | **Done when**  | <measurable final behavior or —>                            |
+   | **Status**     | <symbol + at most 6 words or —>                             |
+   | **ETA · Conf** | <5m–4h; 0m when done> · <earned percent + sources reviewed> |
+   | **Followed**   | <verified human URLs>                                       |
 
    ***
 
-   | item                                 | owner                              | deliverable links | status          | next             |
-   | ------------------------------------ | ---------------------------------- | ----------------- | --------------- | ---------------- |
-   | <linked work item or proposed story> | <dev-manager, me OR subagent name> | <links or ->      | <shared status> | <ownership gate> |
+   | item                                 | owner                              | deliverable links | status          | ETA · Conf          | next             |
+   | ------------------------------------ | ---------------------------------- | ----------------- | --------------- | ------------------- | ---------------- |
+   | <linked work item or proposed story> | <dev-manager, me OR subagent name> | <links or ->      | <shared status> | <5m–4h · earned N%> | <ownership gate> |
 
    > <symbol> **Bottom line —** <at most 20 words>
 
    `owner` is exactly `dev-manager, me` or `subagent <name>`. `next` is exactly an
    agent-owned action, `👉 needs you: <decision link>`, `👀 <watch link>`, or `-`.
+
+   Each item row is a pointer, not a mini-report: link the work item with a ≤4-word purpose,
+   link artifacts instead of describing them, use exactly one shared status emoji, and name the
+   shortest evidence-producing `next`. Every row carries remaining agent-work ETA + earned
+   confidence. Active estimates are 5 minutes–4 hours; a longer estimate means decompose,
+   delegate, or choose an earlier falsifiable checkpoint now. Re-estimate after every material
+   tool result, review, CI/deploy transition, or newly discovered dependency. Completed rows use
+   `0m · earned 100%`; external waiting time is excluded from ETA.
 
    `Followed` is the complete evidence ledger, not highlights. Cite the material sources actually
    used in this order: orientation → skills/guides → hub knowledge → designs/code → work items →

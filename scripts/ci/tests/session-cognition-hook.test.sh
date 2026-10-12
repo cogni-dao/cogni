@@ -29,6 +29,10 @@ grep -Fq 'Every human-facing reply, including answers and follow-ups, is exactly
   "$REPO_ROOT/AGENTS.md" || fail "root AGENTS.md omitted the universal response floor"
 grep -Fq 'reproduce `Goal` and `Done when` byte-for-byte' "$REPO_ROOT/AGENTS.md" ||
   fail "root AGENTS.md omitted immutable session state"
+grep -Eq '\| status[[:space:]]+\| ETA · Conf[[:space:]]+\| next' "$REPO_ROOT/AGENTS.md" ||
+  fail "root AGENTS.md omitted per-row ETA and confidence"
+grep -Fq 'Active estimates are 5 minutes–4 hours' "$REPO_ROOT/AGENTS.md" ||
+  fail "root AGENTS.md permits day-scale feedback loops"
 ! grep -Fq '@.cogni/.cognition-cache.md' "$REPO_ROOT/AGENTS.md" ||
   fail "universal AGENTS.md exposes a Claude-only import directive"
 [[ ! -L "$REPO_ROOT/CLAUDE.md" ]] ||
@@ -47,6 +51,8 @@ grep -Fq 'This response protocol has no task-type exceptions' "$OUTPUT_STYLE" ||
   fail "Claude Code output style permits task-type formatting exceptions"
 grep -Fq 'preserve Goal and Done when byte-for-byte' "$OUTPUT_STYLE" ||
   fail "Claude Code output style omitted immutable session state"
+grep -Fq '5m–4h remaining-work ETA' "$OUTPUT_STYLE" ||
+  fail "Claude Code output style omitted short-horizon row estimates"
 STOP_VALIDATOR="$REPO_ROOT/scripts/agent/validate-status-contract.sh"
 [[ -x "$STOP_VALIDATOR" ]] || fail "Claude Code status-contract Stop hook is not executable"
 jq -e '.hooks.Stop[0].hooks[0].command | contains("validate-status-contract.sh")' \
@@ -57,14 +63,14 @@ VALID_MESSAGE='| 🎯 **Goal** | Keep contract state |
 |---|---|
 | **Done when** | Two turns preserve exact fields. |
 | **Status** | 🔵 testing |
-| **ETA · Conf** | 1 minute · 90% + reviewed 3/3 sources |
+| **ETA · Conf** | 15m · earned 90% + reviewed 3/3 sources |
 | **Followed** | https://cognidao.org/knowledge/cognition-substrate-bootstrap · https://github.com/cogni-dao/cogni/blob/main/AGENTS.md · https://cognidao.org/knowledge/node-baas-substrate-model · https://cognidao.org/work/items/story.5070 |
 
 ---
 
-| item | owner | deliverable links | status | next |
-|---|---|---|---|---|
-| proposed story — contract | dev-manager, me | - | 🔵 in progress | Test next turn |
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — contract | dev-manager, me | - | 🔵 in progress | 10m · earned 90% | Test next turn |
 
 > 🔵 **Bottom line —** Contract-shaped response.'
 VALIDATOR_SCRATCH="$FIXTURE_ROOT/validator-scratch"
@@ -73,11 +79,56 @@ valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_
   '{last_assistant_message:$message,scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
 [[ -z "$valid_output" ]] || fail "status-contract Stop hook rejected a valid response"
 
+DONE_MESSAGE="${VALID_MESSAGE/🔵 testing/🟢 full E2E Done}"
+DONE_MESSAGE="${DONE_MESSAGE/15m · earned 90%/0m · earned 100%}"
+DONE_MESSAGE="${DONE_MESSAGE/🔵 in progress/🟢 full E2E Done}"
+DONE_MESSAGE="${DONE_MESSAGE/10m · earned 90%/0m · earned 100%}"
+DONE_MESSAGE="${DONE_MESSAGE/Test next turn/-}"
+done_output="$(jq -cn --arg message "$DONE_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ -z "$done_output" ]] || fail "status-contract Stop hook rejected a completed 0m response"
+
 invalid_output="$(jq -cn --arg message 'This is a design question, so the contract does not apply.' \
   --arg scratch "$VALIDATOR_SCRATCH" '{last_assistant_message:$message,scratchpad_dir:$scratch}' | \
   bash "$STOP_VALIDATOR")"
 [[ "$(printf '%s' "$invalid_output" | jq -r '.decision')" == "block" ]] ||
   fail "status-contract Stop hook accepted prose outside the contract block"
+
+DAY_SCALE_MESSAGE="${VALID_MESSAGE/10m · earned 90%/2 days · earned 90%}"
+day_scale_output="$(jq -cn --arg message "$DAY_SCALE_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$day_scale_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted a day-scale item estimate"
+
+LONG_HOUR_MESSAGE="${VALID_MESSAGE/10m · earned 90%/5h · earned 90%}"
+long_hour_output="$(jq -cn --arg message "$LONG_HOUR_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$long_hour_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted an item estimate beyond four hours"
+
+NO_ROW_CONFIDENCE_MESSAGE="${VALID_MESSAGE/10m · earned 90%/10m}"
+no_row_confidence_output="$(jq -cn --arg message "$NO_ROW_CONFIDENCE_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$no_row_confidence_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted an item ETA without earned confidence"
+
+IMPOSSIBLE_CONFIDENCE_MESSAGE="${VALID_MESSAGE/10m · earned 90%/10m · earned 120%}"
+impossible_confidence_output="$(jq -cn --arg message "$IMPOSSIBLE_CONFIDENCE_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$impossible_confidence_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted confidence above 100 percent"
+
+VERBOSE_ITEM_MESSAGE="${VALID_MESSAGE/proposed story — contract/proposed story — this purpose contains far too many words}"
+verbose_item_output="$(jq -cn --arg message "$VERBOSE_ITEM_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$verbose_item_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted a verbose item purpose"
+
+DUPLICATE_STATUS_MESSAGE="${VALID_MESSAGE/🔵 in progress/🔵 🔴 in progress}"
+duplicate_status_output="$(jq -cn --arg message "$DUPLICATE_STATUS_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$duplicate_status_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted multiple item status emojis"
 
 MUTATED_MESSAGE="${VALID_MESSAGE/Keep contract state/Change contract state}"
 mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" \
@@ -94,9 +145,9 @@ ZERO_RESEARCH_MESSAGE='| 🎯 **Goal** | Design a strategy agent |
 
 ---
 
-| item | owner | deliverable links | status | next |
-|---|---|---|---|---|
-| proposed story — strategy | dev-manager, me | - | 👉 needs you | 👉 needs you: approve scope |
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — strategy | dev-manager, me | - | 👉 needs you | 15m · earned 40% | 👉 needs you: approve scope |
 
 > 👉 **Bottom line —** Approve the proposal.'
 zero_research_output="$(jq -cn --arg message "$ZERO_RESEARCH_MESSAGE" \
@@ -113,9 +164,9 @@ PRELIMINARY_STOP_MESSAGE='| 🎯 **Goal** | — |
 
 ---
 
-| item | owner | deliverable links | status | next |
-|---|---|---|---|---|
-| proposed story — strategy | dev-manager, me | - | 🔵 in progress | Research relevant sources |
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — strategy | dev-manager, me | - | 🔵 in progress | 15m · earned 20% | Research relevant sources |
 
 > 🔵 **Bottom line —** Researching the existing substrate.'
 preliminary_stop_output="$(jq -cn --arg message "$PRELIMINARY_STOP_MESSAGE" \

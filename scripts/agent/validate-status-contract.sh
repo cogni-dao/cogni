@@ -35,8 +35,8 @@ printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*Followed\*\*[[:space:]]*
   block "Contract breach: the status block is missing its Followed row. Rewrite the whole response in the required shape."
 printf '%s\n' "$MESSAGE" | grep -Eq '^([*][*][*]|---)$' ||
   block "Contract breach: the status block is missing the divider before its items table. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*item[[:space:]]*\|[[:space:]]*owner[[:space:]]*\|[[:space:]]*deliverable links[[:space:]]*\|[[:space:]]*status[[:space:]]*\|[[:space:]]*next[[:space:]]*\|' ||
-  block "Contract breach: the status block is missing its items table. Rewrite the whole response in the required shape."
+printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*item[[:space:]]*\|[[:space:]]*owner[[:space:]]*\|[[:space:]]*deliverable links[[:space:]]*\|[[:space:]]*status[[:space:]]*\|[[:space:]]*ETA · Conf[[:space:]]*\|[[:space:]]*next[[:space:]]*\|' ||
+  block "Contract breach: the items table must include item, owner, deliverable links, status, ETA · Conf, and next. Rewrite the whole response in the required shape."
 
 case "$last_nonempty" in
   '>'*'**Bottom line —**'*) ;;
@@ -69,6 +69,25 @@ extract_cell() {
   '
 }
 
+validate_short_eta() {
+  local value="$1"
+  local duration normalized lower upper unit
+
+  duration="${value%%·*}"
+  normalized="$(printf '%s' "$duration" | tr '[:upper:]' '[:lower:]' | sed -E 's/[[:space:]]+//g; s/minutes?/m/g; s/hours?/h/g')"
+  printf '%s' "$normalized" | grep -Eq '^[0-9]+([–-][0-9]+)?[mh]$' || return 1
+
+  lower="$(printf '%s' "$normalized" | grep -Eo '^[0-9]+')"
+  upper="$(printf '%s' "$normalized" | grep -Eo '[0-9]+' | tail -n 1)"
+  unit="${normalized#"${normalized%?}"}"
+
+  if [[ "$unit" == "m" ]]; then
+    [[ "$lower" -ge 5 && "$lower" -le "$upper" && "$upper" -le 240 ]]
+  else
+    [[ "$lower" -ge 1 && "$lower" -le "$upper" && "$upper" -le 4 ]]
+  fi
+}
+
 GOAL="$(extract_cell 'Goal')"
 DONE_WHEN="$(extract_cell 'Done when')"
 STATUS="$(extract_cell 'Status')"
@@ -76,6 +95,72 @@ ETA_CONF="$(extract_cell 'ETA · Conf')"
 FOLLOWED="$(extract_cell 'Followed')"
 [[ -n "$GOAL" && -n "$DONE_WHEN" ]] ||
   block "Contract breach: Goal and Done when must each occupy one complete table cell. Rewrite the whole response in the required shape."
+
+if [[ "$ETA_CONF" != —* ]]; then
+  printf '%s' "$ETA_CONF" | grep -Eq '·[[:space:]]*earned[[:space:]]+[0-9]+%' ||
+    block "Feedback-loop breach: top-level ETA must include earned confidence. Rewrite the complete block."
+  top_confidence="$(printf '%s' "$ETA_CONF" | grep -Eo 'earned[[:space:]]+[0-9]+%' | head -n 1 | grep -Eo '[0-9]+')"
+  [[ -n "$top_confidence" && "$top_confidence" -le 100 ]] ||
+    block "Feedback-loop breach: top-level earned confidence must be 0–100%. Rewrite the complete block."
+  if [[ "$ETA_CONF" == 0m* ]]; then
+    [[ "$STATUS" == 🟢* && "$ETA_CONF" == *"earned 100%"* ]] ||
+      block "Feedback-loop breach: top-level 0m is reserved for a green completed Goal at earned 100% confidence. Rewrite the complete block."
+  elif ! validate_short_eta "$ETA_CONF"; then
+    block "Feedback-loop breach: top-level ETA must be a 5m–4h estimate such as 15m, 45–90m, or 2–3h. Decompose day-scale work and rewrite the complete block."
+  fi
+fi
+
+row_error="$(printf '%s\n' "$MESSAGE" | awk -F'|' '
+  BEGIN { in_items=0 }
+  $2 ~ /^[[:space:]]*item[[:space:]]*$/ { in_items=1; next }
+  in_items && $0 ~ /^\|[[:space:]-]+\|/ { next }
+  in_items && $0 !~ /^\|/ { in_items=0 }
+  in_items && NF >= 8 {
+    item=$2; status=$5; eta=$6
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", item)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", status)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", eta)
+
+    visible_item=item
+    sub(/\]\([^)]*\)[[:space:]]*$/, "]", visible_item)
+    gsub(/\[|\]/, "", visible_item)
+    purpose_count=split(visible_item, item_parts, /[[:space:]]+—[[:space:]]+/)
+    if (purpose_count < 2) { print "item:missing-purpose"; exit }
+    word_count=split(item_parts[purpose_count], purpose_words, /[[:space:]]+/)
+    if (word_count > 4) { print "item:verbose"; exit }
+
+    status_without_emoji=status
+    emoji_count=gsub(/🔵|👀|👉|🟡|🔴|🟢/, "", status_without_emoji)
+    if (status !~ /^(🔵|👀|👉|🟡|🔴|🟢)/ || emoji_count != 1) { print "status:" status; exit }
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", status_without_emoji)
+    status_word_count=split(status_without_emoji, status_words, /[[:space:]]+/)
+    if (status_word_count > 4) { print "status:verbose"; exit }
+    if (eta == "") { print "eta:missing"; exit }
+    print "row:" status "\t" eta
+  }
+')"
+
+while IFS=$'\t' read -r marker row_eta; do
+  [[ -n "$marker" ]] || continue
+  case "$marker" in
+    item:*) block "Contract breach: each item must be a linked id or proposed story plus a purpose of at most four words. Move detail behind links and rewrite the complete block." ;;
+    status:*) block "Contract breach: each item status must start with exactly one canonical status emoji. Rewrite the complete block." ;;
+    eta:*) block "Feedback-loop breach: every item row needs ETA · Conf. Rewrite the complete block." ;;
+    row:*)
+      row_status="${marker#row:}"
+      if [[ "$row_eta" == "0m · earned 100%" ]]; then
+        [[ "$row_status" == 🟢* ]] || block "Feedback-loop breach: only a completed green row may use 0m · earned 100%. Rewrite the complete block."
+      else
+        validate_short_eta "$row_eta" || block "Feedback-loop breach: each active row ETA must be 5m–4h. Decompose day-scale work and rewrite the complete block."
+        printf '%s' "$row_eta" | grep -Eq '·[[:space:]]*earned[[:space:]]+[0-9]+%' ||
+          block "Feedback-loop breach: each item row must pair ETA with earned confidence. Rewrite the complete block."
+        row_confidence="$(printf '%s' "$row_eta" | grep -Eo 'earned[[:space:]]+[0-9]+%' | head -n 1 | grep -Eo '[0-9]+')"
+        [[ -n "$row_confidence" && "$row_confidence" -le 100 ]] ||
+          block "Feedback-loop breach: each item row earned confidence must be 0–100%. Rewrite the complete block."
+      fi
+      ;;
+  esac
+done <<<"$row_error"
 
 if [[ "$GOAL" == "—" || "$DONE_WHEN" == "—" ]]; then
   [[ "$GOAL" == "—" && "$DONE_WHEN" == "—" ]] ||
