@@ -1,0 +1,151 @@
+apiVersion: v1
+data:
+  COGNI_NODE_ENDPOINTS: beacon=https://beacon.cognidao.org,f97f68f2-8406-4a3b-b5a9-d579b779f19d=https://beacon.cognidao.org,levelup=https://levelup.cognidao.org,557d8b59-8e3b-42f0-9aeb-a5c171296556=https://levelup.cognidao.org,node-template=https://node-template.cognidao.org,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=https://node-template.cognidao.org,operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,poly=https://poly.cognidao.org,4b06359a-a859-4399-888e-a8c7a6696f7e=https://poly.cognidao.org,red=https://red.cognidao.org,921b1d1d-4ded-4a6d-b3f1-f7d6affa406a=https://red.cognidao.org,toks5=https://toks5.cognidao.org,f66b260b-4633-41e2-8711-b7c1b8449cc1=https://toks5.cognidao.org
+  DEPLOY_ENVIRONMENT: production
+  HEALTH_PORT: "9000"
+  IMAGE_DIGEST: sha256:e5bf82ad88974c539d11479671c503d4b082f6ecb48c02f843828264a6679cfc
+  LOG_LEVEL: info
+  SERVICE_NAME: scheduler-worker
+  TEMPORAL_ADDRESS: temporal:7233
+  TEMPORAL_CUSTODIED_NAMESPACES: cogni-candidate-a,cogni-preview
+  TEMPORAL_NAMESPACE: cogni-production
+  TEMPORAL_TASK_QUEUE: scheduler-tasks
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: scheduler-worker
+    app.kubernetes.io/part-of: cogni
+  name: scheduler-worker-config
+  namespace: cogni-production
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+  name: app
+  namespace: cogni-production
+spec:
+  externalName: cogni.vm.cognidao.org
+  ports:
+  - name: http
+    port: 3000
+    protocol: TCP
+  type: ExternalName
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+  name: postgres
+  namespace: cogni-production
+spec:
+  externalName: cogni.vm.cognidao.org
+  ports:
+  - name: postgres
+    port: 5432
+    protocol: TCP
+  type: ExternalName
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: scheduler-worker
+    app.kubernetes.io/part-of: cogni
+  name: scheduler-worker
+  namespace: cogni-production
+spec:
+  ports:
+  - name: health
+    nodePort: 30900
+    port: 9000
+    protocol: TCP
+    targetPort: health
+  selector:
+    app.kubernetes.io/name: scheduler-worker
+  type: NodePort
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+  name: temporal
+  namespace: cogni-production
+spec:
+  externalName: cogni.vm.cognidao.org
+  ports:
+  - name: grpc
+    port: 7233
+    protocol: TCP
+  type: ExternalName
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    reloader.stakater.com/auto: "true"
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: scheduler-worker
+    app.kubernetes.io/part-of: cogni
+  name: scheduler-worker
+  namespace: cogni-production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scheduler-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: scheduler-worker
+        app.kubernetes.io/part-of: cogni
+    spec:
+      containers:
+      - envFrom:
+        - secretRef:
+            name: scheduler-worker-secrets
+        - configMapRef:
+            name: scheduler-worker-config
+        image: ghcr.io/cogni-dao/cogni-template@sha256:e5bf82ad88974c539d11479671c503d4b082f6ecb48c02f843828264a6679cfc
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /livez
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 2
+        name: scheduler-worker
+        ports:
+        - containerPort: 9000
+          name: health
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 2
+        resources:
+          limits:
+            cpu: "2"
+            memory: 1Gi
+          requests:
+            cpu: 250m
+            memory: 256Mi
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /livez
+            port: health
+          periodSeconds: 5
+          timeoutSeconds: 2
+      terminationGracePeriodSeconds: 30
