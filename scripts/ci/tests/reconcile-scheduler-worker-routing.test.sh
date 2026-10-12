@@ -10,8 +10,8 @@
 #      the Reloader-annotated deployment) and commits it.
 #   2. idempotent: a second run with an unchanged source is a no-op (status "noop",
 #      no new commit) — so sibling flights don't churn the shared branch.
-#   3. preserves the env overlay: the reconcile only touches base/, never the
-#      digest-pinning overlay, so promotion state survives.
+#   3. heals the env overlay from the lane substrate authority while preserving
+#      the deployed immutable image identity.
 #   4. emits a structured JSON summary for Grafana.
 #
 # Uses DEPLOY_BRANCH_DIR (reuse a local checkout, no clone/push) as the test seam,
@@ -68,7 +68,7 @@ metadata:
     reloader.stakater.com/auto: "true"
 YAML
 
-# Protected-main routing authority of the repository Argo actually watches.
+# Routing + lane-bootstrap authorities of the repository Argo actually watches.
 AUTHORITY_DIR="$TMPROOT/test-parent-main"
 mkdir -p "$AUTHORITY_DIR/$SUBPATH" "$(dirname "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH")"
 cat >"$AUTHORITY_DIR/$SUBPATH/configmap.yaml" <<YAML
@@ -86,6 +86,29 @@ metadata:
   name: scheduler-worker-config
 data:
   COGNI_NODE_ENDPOINTS: "$TEST_PARENT_ENDPOINTS"
+YAML
+cat >"$AUTHORITY_DIR/infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml" <<'YAML'
+images:
+  - name: ghcr.io/cogni-dao/cogni-template
+    newName: ghcr.io/cogni-dao/cogni-template
+    digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+patches:
+  - target:
+      kind: ConfigMap
+      name: scheduler-worker-config
+    patch: |
+      - op: replace
+        path: /data/IMAGE_DIGEST
+        value: "candidate-a-placeholder-scheduler-worker"
+  - target: { kind: Service, name: temporal }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: temporal
+      spec:
+        type: ExternalName
+        externalName: cogni-candidate-a.vm.cognidao.org
 YAML
 
 # ── Fixture: a deploy/<env>-scheduler-worker checkout with the OLD configmap +
@@ -108,9 +131,26 @@ OVERLAY="$DEPLOY_DIR/infra/k8s/overlays/candidate-a/scheduler-worker/kustomizati
 cat >"$OVERLAY" <<'YAML'
 images:
   - name: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:DEADBEEFpinned"
+    newName: ghcr.io/cogni-dao/cogni-template
+    digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+patches:
+  - target:
+      kind: ConfigMap
+      name: scheduler-worker-config
+    patch: |
+      - op: replace
+        path: /data/IMAGE_DIGEST
+        value: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  - target: { kind: Service, name: temporal }
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: temporal
+      spec:
+        type: ExternalName
+        externalName: cogni-candidate-a.vm.cogni-testing.org
 YAML
-OVERLAY_BEFORE="$(cat "$OVERLAY")"
 
 git -C "$DEPLOY_DIR" init -q
 git -C "$DEPLOY_DIR" config user.email t@t.t
@@ -122,6 +162,7 @@ run() {
   APP_SOURCE_DIR="$APP_SRC" \
     DEPLOY_BRANCH_DIR="$DEPLOY_DIR" \
     SWR_ROUTE_AUTHORITY_DIR="$AUTHORITY_DIR" \
+    SWR_SUBSTRATE_AUTHORITY_DIR="$AUTHORITY_DIR" \
     SWR_RECONCILE_SUMMARY_FILE="$TMPROOT/summary.json" \
     bash "$RECONCILE" candidate-a
 }
@@ -142,10 +183,16 @@ grep -q "reloader.stakater.com/auto" "$DEPLOY_DIR/$SUBPATH/deployment.yaml" \
   || fail "Reloader annotation missing after propagation"
 echo "PASS: composes real canonical + test-parent rosters without clobbering either authority"
 
-# ── 2. Overlay digest preserved (reconcile only touches base/) ─────────────────
-[ "$(cat "$OVERLAY")" = "$OVERLAY_BEFORE" ] \
-  || fail "env overlay was modified — digest-pin must be preserved"
-echo "PASS: env overlay (pinned digest) preserved"
+# ── 2. Overlay topology heals without changing promoted image identity ────────
+grep -q 'externalName: cogni-candidate-a.vm.cognidao.org' "$OVERLAY" \
+  || fail "env overlay did not heal from the lane substrate authority"
+grep -q 'digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' "$OVERLAY" \
+  || fail "env overlay changed the deployed image digest"
+[ "$(grep -c 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$OVERLAY")" = 2 ] \
+  || fail "image digest and observable IMAGE_DIGEST were not restored together"
+! grep -q 'cogni-testing.org' "$OVERLAY" \
+  || fail "foreign workload domain remained in the shared substrate overlay"
+echo "PASS: substrate topology healed while image identity stayed pinned"
 
 # ── 3. Summary JSON is structured + status=updated-local ───────────────────────
 [ -f "$TMPROOT/summary.json" ] || fail "no summary JSON written"

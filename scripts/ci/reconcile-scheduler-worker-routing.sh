@@ -32,9 +32,10 @@
 # on akash has no in-cluster Service, and its public host is per-env). Both must
 # reach the deploy branch or a node-add would only half-arrive.
 #
-# The overlay's kustomization.yaml — which pins the image digest + patches
-# TEMPORAL_NAMESPACE — is NEVER touched, so promotion state is preserved. Only
-# base/scheduler-worker/ and the GENERATED node-endpoints patch travel.
+# The overlay topology comes from the watched repository's environment bootstrap
+# branch (deploy/<env>), which owns the lane's substrate hostname. The current
+# scheduler image digest is restored after that refresh, so a foreign app-source
+# flight cannot replace the shared worker's VM target or roll back its image.
 #
 # Idempotent: re-running with an unchanged catalog produces no diff → no commit
 # (status "noop"). The single per-env CI concurrency group serializes flights so
@@ -53,11 +54,16 @@
 #   SWR_ROUTE_AUTHORITY_DIR checkout of the watched repository's protected-main
 #                      routing authority (tests/local only). Production clones
 #                      read origin/main from SWR_DEPLOY_REPOSITORY.
+#   SWR_SUBSTRATE_AUTHORITY_DIR checkout containing deploy/<env>'s scheduler
+#                      overlay topology (tests/local only). Production reads
+#                      the watched repository's deploy/<env> branch.
 #   DEPLOY_BRANCH_DIR  reuse an existing deploy-branch checkout instead of cloning
 #                      (tests / local). When set, no clone and no push.
 #   DRY_RUN=1          render + diff only; never push (commits locally for the diff).
 #   SWR_RECONCILE_SUMMARY_FILE  optional path to receive one structured JSON summary.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 rc=0 # assigned by the EXIT traps below ($? at fire time); declared for shellcheck.
 DEPLOY_ENV=""
@@ -77,10 +83,11 @@ BRANCH="deploy/${DEPLOY_ENV}-scheduler-worker"
 BOOTSTRAP_BRANCH="deploy/${DEPLOY_ENV}"
 SUBPATH="infra/k8s/base/scheduler-worker"
 SRC_DIR="${APP_SOURCE_DIR}/${SUBPATH}"
-# GENERATED, non-promotion file. Copied on its own so the overlay's
-# kustomization.yaml (promotion state) is never rewritten from main.
+# GENERATED routing data comes from the reviewed app source. The sibling
+# kustomization topology is reconciled separately from the lane bootstrap ref.
 ENDPOINTS_SUBPATH="infra/k8s/overlays/${DEPLOY_ENV}/scheduler-worker/node-endpoints.patch.yaml"
 ENDPOINTS_SRC="${APP_SOURCE_DIR}/${ENDPOINTS_SUBPATH}"
+OVERLAY_SUBPATH="infra/k8s/overlays/${DEPLOY_ENV}/scheduler-worker/kustomization.yaml"
 AUTHORITY_BASE_PATH="$SUBPATH/configmap.yaml"
 AUTHORITY_ENDPOINTS_PATH="$ENDPOINTS_SUBPATH"
 
@@ -221,6 +228,46 @@ else
   )
 fi
 trap 'rc=$?; [ -n "$CLONED_DIR" ] && rm -rf "$CLONED_DIR"; if [ "$rc" -ne 0 ] && [ "$SUMMARY_WRITTEN" != "true" ]; then write_summary "failure"; fi' EXIT
+
+OVERLAY_DST="${WORKDIR}/${OVERLAY_SUBPATH}"
+[ -f "$OVERLAY_DST" ] || {
+  echo "[ERROR] deployed scheduler-worker overlay missing: $OVERLAY_DST" >&2
+  exit 1
+}
+CURRENT_IMAGE_NAME="$(yq -N '.images[0].newName // .images[0].name // ""' "$OVERLAY_DST")"
+CURRENT_IMAGE_DIGEST="$(yq -N '.images[0].digest // ""' "$OVERLAY_DST")"
+[[ "$CURRENT_IMAGE_NAME" == ghcr.io/* && "$CURRENT_IMAGE_DIGEST" =~ ^sha256:[0-9a-fA-F]{64}$ ]] || {
+  echo "[ERROR] deployed scheduler-worker overlay has no immutable image identity" >&2
+  exit 1
+}
+
+substrate_overlay_yaml() {
+  if [ -n "${SWR_SUBSTRATE_AUTHORITY_DIR:-}" ]; then
+    [ -f "${SWR_SUBSTRATE_AUTHORITY_DIR}/${OVERLAY_SUBPATH}" ] || {
+      echo "[ERROR] substrate overlay authority missing: ${SWR_SUBSTRATE_AUTHORITY_DIR}/${OVERLAY_SUBPATH}" >&2
+      return 1
+    }
+    cat "${SWR_SUBSTRATE_AUTHORITY_DIR}/${OVERLAY_SUBPATH}"
+  else
+    git -C "$WORKDIR" show "origin/${BOOTSTRAP_BRANCH}:${OVERLAY_SUBPATH}" || {
+      echo "[ERROR] substrate overlay authority missing at origin/${BOOTSTRAP_BRANCH}:${OVERLAY_SUBPATH}" >&2
+      return 1
+    }
+  fi
+}
+
+# Lane topology follows the watched deployment repository, never whichever app
+# repository happened to flight last. Restore the already-deployed immutable
+# image identity before the optional same-transaction promotion replaces it.
+substrate_overlay_yaml > "${OVERLAY_DST}.tmp"
+mv "${OVERLAY_DST}.tmp" "$OVERLAY_DST"
+(
+  cd "$WORKDIR"
+  bash "$SCRIPT_DIR/promote-k8s-image.sh" --no-commit \
+    --env "$DEPLOY_ENV" --app scheduler-worker \
+    --digest "${CURRENT_IMAGE_NAME}@${CURRENT_IMAGE_DIGEST}"
+)
+git -C "$WORKDIR" add -A "$OVERLAY_SUBPATH"
 
 # The watched repository owns an independent active candidate roster. Compose
 # that protected-main authority with the reviewed app-source authority; never
