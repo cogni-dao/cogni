@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import {
   isCanonicalNodeId,
   nodeTaskQueueName,
-  workerNamespaces,
+  workerRoutes,
 } from "../src/worker.js";
 
 describe("isCanonicalNodeId", () => {
@@ -72,19 +72,72 @@ describe("nodeTaskQueueName", () => {
   });
 });
 
-describe("workerNamespaces", () => {
-  it("keeps the primary lane and normalizes custodied namespaces", () => {
+describe("workerRoutes", () => {
+  const primary =
+    "operator=https://operator.example,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=https://operator.example,poly=https://poly.example,4b06359a-a859-4399-888e-a8c7a6696f7e=https://poly.example";
+  const candidate =
+    "poly=https://poly-test.example,4b06359a-a859-4399-888e-a8c7a6696f7e=https://poly-test.example";
+
+  it("bounds foreign lanes to their own node queues and omits legacy drain", () => {
     expect(
-      workerNamespaces(
+      workerRoutes(
         "cogni-production",
-        " cogni-candidate-a, cogni-preview,cogni-preview, "
+        primary,
+        JSON.stringify({ "cogni-candidate-a": candidate }),
+        "scheduler-tasks"
       )
-    ).toEqual(["cogni-production", "cogni-candidate-a", "cogni-preview"]);
+    ).toEqual([
+      {
+        namespace: "cogni-production",
+        endpointsRaw: primary,
+        taskQueues: [
+          "scheduler-tasks-4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+          "scheduler-tasks-4b06359a-a859-4399-888e-a8c7a6696f7e",
+          "scheduler-tasks",
+        ],
+        isPrimary: true,
+      },
+      {
+        namespace: "cogni-candidate-a",
+        endpointsRaw: candidate,
+        taskQueues: ["scheduler-tasks-4b06359a-a859-4399-888e-a8c7a6696f7e"],
+        isPrimary: false,
+      },
+    ]);
   });
 
-  it("never duplicates the primary namespace", () => {
-    expect(
-      workerNamespaces("cogni-production", "cogni-production,cogni-candidate-a")
-    ).toEqual(["cogni-production", "cogni-candidate-a"]);
+  it("fails closed on malformed custody JSON", () => {
+    expect(() =>
+      workerRoutes(
+        "cogni-production",
+        primary,
+        "candidate-a",
+        "scheduler-tasks"
+      )
+    ).toThrow("must be a JSON object");
+  });
+
+  it("rejects a custodied route without a canonical node UUID", () => {
+    expect(() =>
+      workerRoutes(
+        "cogni-production",
+        primary,
+        JSON.stringify({
+          "cogni-candidate-a": "poly=https://poly-test.example",
+        }),
+        "scheduler-tasks"
+      )
+    ).toThrow("has no canonical node UUID endpoint");
+  });
+
+  it("rejects the primary namespace in the custody map", () => {
+    expect(() =>
+      workerRoutes(
+        "cogni-production",
+        primary,
+        JSON.stringify({ "cogni-production": candidate }),
+        "scheduler-tasks"
+      )
+    ).toThrow("differ from primary namespace");
   });
 });

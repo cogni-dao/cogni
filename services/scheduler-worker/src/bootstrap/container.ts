@@ -79,7 +79,7 @@ export interface ServiceContainer {
  * Parse COGNI_NODE_ENDPOINTS env var into a Map<nodeId, baseUrl>.
  * Format: "operator=http://operator-app:3000,poly=http://poly-app:3100"
  */
-function parseNodeEndpoints(raw: string): Map<string, string> {
+export function parseNodeEndpoints(raw: string): Map<string, string> {
   const map = new Map<string, string>();
   for (const pair of raw.split(",")) {
     const [key, ...rest] = pair.trim().split("=");
@@ -174,12 +174,16 @@ export interface AttributionContainer {
  * Build the service container from validated env and logger.
  * This is the only place that instantiates concrete adapters.
  */
-export function createContainer(config: Env, logger: Logger): ServiceContainer {
+export function createContainer(
+  config: Env,
+  logger: Logger,
+  nodeEndpointsRaw = config.COGNI_NODE_ENDPOINTS
+): ServiceContainer {
   // Per task.0280: the scheduler path holds no DB credentials. Grant validation,
   // graph_runs create/update all flow through the owning node's internal API,
   // authenticated by SCHEDULER_API_TOKEN. nodeId → nodeUrl lookup via the
   // COGNI_NODE_ENDPOINTS map, same one executeGraphActivity already uses.
-  const nodeEndpoints = parseNodeEndpoints(config.COGNI_NODE_ENDPOINTS);
+  const nodeEndpoints = parseNodeEndpoints(nodeEndpointsRaw);
   // One structured line with the FULL parsed routing table (slugs + URLs, not
   // secrets). COGNI_NODE_ENDPOINTS is injected once at pod start, so a stale
   // configmap silently routes chat dispatch at dead hosts (story.5016 /
