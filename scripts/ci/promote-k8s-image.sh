@@ -82,6 +82,22 @@ fi
 
 rm -f "${OVERLAY_FILE}.bak"
 
+# The scheduler-worker publishes IMAGE_DIGEST on /version and embeds it in its
+# Temporal poller identity. Update that runtime claim in the same promotion
+# transaction as the immutable image selector.
+if [[ "$APP" == "scheduler-worker" ]]; then
+  if ! grep -q 'path: /data/IMAGE_DIGEST' "$OVERLAY_FILE"; then
+    log_error "scheduler-worker overlay must patch /data/IMAGE_DIGEST"
+    exit 1
+  fi
+  sed -i.bak '\|path: /data/IMAGE_DIGEST|{n;s|\( *value: *\).*|\1"'"${IMAGE_DIGEST}"'"|;}' "$OVERLAY_FILE"
+  rm -f "${OVERLAY_FILE}.bak"
+  if ! grep -q "value: \"${IMAGE_DIGEST}\"" "$OVERLAY_FILE"; then
+    log_error "failed to synchronize scheduler-worker IMAGE_DIGEST"
+    exit 1
+  fi
+fi
+
 log_info "Updated $OVERLAY_FILE"
 
 # Commit and push if in CI and --no-commit not passed

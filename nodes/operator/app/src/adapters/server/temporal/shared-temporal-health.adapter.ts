@@ -7,6 +7,7 @@
  * Scope: Reads scheduler-worker build identity and Temporal pollers. Never starts workflows or mutates schedules/workers.
  * Invariants:
  *   - POLLERS_ARE_SERVER_OBSERVED: both Workflow and Activity pollers come from DescribeTaskQueue.
+ *   - POLLER_IDENTITY_BINDS_ARTIFACT: both poller types report the exact scheduler-worker SHA and image digest returned by /version.
  *   - FRESH_OR_UNHEALTHY: the newest poll for each task type must be no older than 120 seconds.
  *   - ARTIFACT_IDENTITY_FAILS_CLOSED: unknown, placeholder, missing, or malformed source SHA/digest is unhealthy.
  *   - BOUNDED_DIAGNOSTIC: connection, RPC, and HTTP reads have deadlines; no retry loop.
@@ -28,6 +29,7 @@ export type SharedTemporalHealthReason =
   | "app_identity_invalid"
   | "worker_unreachable"
   | "worker_identity_invalid"
+  | "worker_identity_mixed"
   | "temporal_unavailable"
   | "workflow_poller_missing"
   | "workflow_poller_malformed"
@@ -86,11 +88,17 @@ interface TimestampLike {
 }
 
 interface PollerLike {
+  readonly identity?: string | null;
   readonly lastAccessTime?: TimestampLike | null;
 }
 
 interface DescribeTaskQueueResponseLike {
   readonly pollers?: readonly PollerLike[] | null;
+}
+
+interface AssessedPollers {
+  readonly health: PollerHealth;
+  readonly freshIdentities: readonly string[];
 }
 
 interface WorkflowServiceLike {
@@ -123,6 +131,20 @@ function isExactDigest(value: string): boolean {
 
 function isSentinel(value: string): boolean {
   return /unknown|placeholder/i.test(value);
+}
+
+function normalizeDigest(value: string): string | null {
+  const match = value.match(/sha256:[0-9a-f]{64}$/i);
+  return match?.[0].toLowerCase() ?? null;
+}
+
+export function workerPollerIdentity(
+  worker: SchedulerWorkerVersionIdentity
+): string {
+  const digest = normalizeDigest(worker.imageDigest);
+  return digest
+    ? `cogni:scheduler-worker:${worker.sha.toLowerCase()}:${digest}`
+    : "cogni:scheduler-worker:invalid";
 }
 
 export function isValidAppIdentity(app: AppVersionIdentity): boolean {
@@ -211,6 +233,32 @@ export function assessPollers(
   };
 }
 
+function assessPollerDetails(
+  pollers: readonly PollerLike[] | null | undefined,
+  nowMs: number
+): AssessedPollers {
+  const rows = pollers ?? [];
+  const health = assessPollers(rows, nowMs);
+  if (health.status !== "fresh") return { health, freshIdentities: [] };
+
+  const freshIdentities = [
+    ...new Set(
+      rows.flatMap((poller) => {
+        const timestampMs = timestampToMs(poller.lastAccessTime);
+        if (timestampMs === null || typeof poller.identity !== "string") {
+          return [];
+        }
+        const ageMs = nowMs - timestampMs;
+        return ageMs >= -MAX_FUTURE_SKEW_MS &&
+          ageMs <= TEMPORAL_POLLER_MAX_AGE_MS
+          ? [poller.identity]
+          : [];
+      })
+    ),
+  ];
+  return { health, freshIdentities };
+}
+
 function reasonForPoller(
   taskType: SharedTemporalTaskType,
   health: PollerHealth
@@ -250,8 +298,8 @@ async function readPollers(
   connection: TemporalConnectionLike,
   config: SharedTemporalHealthConfig,
   nowMs: number
-): Promise<Readonly<Record<SharedTemporalTaskType, PollerHealth>>> {
-  const read = async (taskQueueType: number): Promise<PollerHealth> => {
+): Promise<Readonly<Record<SharedTemporalTaskType, AssessedPollers>>> {
+  const read = async (taskQueueType: number): Promise<AssessedPollers> => {
     const response = await connection.withDeadline(
       Date.now() + RPC_TIMEOUT_MS,
       () =>
@@ -263,7 +311,7 @@ async function readPollers(
           taskQueueType,
         })
     );
-    return assessPollers(response.pollers, nowMs);
+    return assessPollerDetails(response.pollers, nowMs);
   };
 
   const [workflow, activity] = await Promise.all([read(1), read(2)]);
@@ -336,7 +384,12 @@ export async function inspectSharedTemporalHealth(
   const workerRead =
     workerResult.status === "fulfilled" ? workerResult.value : null;
   const pollers =
-    pollerResult.status === "fulfilled" ? pollerResult.value : EMPTY_POLLERS;
+    pollerResult.status === "fulfilled"
+      ? {
+          workflow: pollerResult.value.workflow.health,
+          activity: pollerResult.value.activity.health,
+        }
+      : EMPTY_POLLERS;
 
   if (!workerRead?.reachable) {
     return finish("worker_unreachable", null, pollers);
@@ -354,5 +407,20 @@ export async function inspectSharedTemporalHealth(
   const activityReason = reasonForPoller("activity", pollers.activity);
   if (activityReason)
     return finish(activityReason, workerRead.identity, pollers);
+
+  const expectedIdentity = workerPollerIdentity(workerRead.identity);
+  const workflowIdentities = pollerResult.value.workflow.freshIdentities;
+  const activityIdentities = pollerResult.value.activity.freshIdentities;
+  if (workflowIdentities.length === 0 || activityIdentities.length === 0) {
+    return finish("worker_identity_invalid", workerRead.identity, pollers);
+  }
+  if (
+    workflowIdentities.length !== 1 ||
+    activityIdentities.length !== 1 ||
+    workflowIdentities[0] !== expectedIdentity ||
+    activityIdentities[0] !== expectedIdentity
+  ) {
+    return finish("worker_identity_mixed", workerRead.identity, pollers);
+  }
   return finish("ok", workerRead.identity, pollers);
 }

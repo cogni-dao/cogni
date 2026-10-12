@@ -23,10 +23,8 @@ export const TEMPORAL_HEALTH_CLI_REASON = Object.freeze({
   REQUEST_TIMEOUT: "request_timeout",
   REQUEST_FAILED: "request_failed",
   RESPONSE_MALFORMED: "response_malformed",
-  // Shared vocabulary for the scheduled-probe stage (task.5239).
-  SCHEDULE_DRIFT: "schedule_drift",
-  EXECUTION_STALE: "execution_stale",
-  RECENT_TERMINAL_MISSING: "recent_terminal_missing",
+  APP_IDENTITY_DRIFT: "app_identity_drift",
+  WORKER_IDENTITY_DRIFT: "worker_identity_drift",
 });
 
 export function readNodeSlug(repoRoot) {
@@ -73,6 +71,9 @@ export function resolveTemporalHealthTarget({ repoRoot, env, url }) {
 export async function readTemporalHealth({
   baseUrl,
   apiKey,
+  expectedAppSha,
+  expectedWorkerSha,
+  expectedWorkerDigest,
   fetchImpl = globalThis.fetch,
   timeoutMs = 4_500,
 }) {
@@ -91,6 +92,63 @@ export async function readTemporalHealth({
           httpStatus: response.status,
         },
       };
+    }
+    if (response.ok && body.status === "healthy") {
+      if (
+        typeof body.app?.buildSha !== "string" ||
+        !/^[0-9a-f]{40}$/i.test(body.app.buildSha) ||
+        typeof body.worker?.sha !== "string" ||
+        !/^[0-9a-f]{40}$/i.test(body.worker.sha) ||
+        typeof body.worker?.imageDigest !== "string" ||
+        !/(?:^|@)sha256:[0-9a-f]{64}$/i.test(body.worker.imageDigest)
+      ) {
+        return {
+          exitCode: 1,
+          body: {
+            status: "error",
+            reason: TEMPORAL_HEALTH_CLI_REASON.RESPONSE_MALFORMED,
+          },
+        };
+      }
+      if (
+        expectedAppSha &&
+        body.app.buildSha.toLowerCase() !== expectedAppSha.toLowerCase()
+      ) {
+        return {
+          exitCode: 1,
+          body: {
+            status: "unhealthy",
+            reason: TEMPORAL_HEALTH_CLI_REASON.APP_IDENTITY_DRIFT,
+            expected: expectedAppSha,
+            observed: body.app.buildSha,
+          },
+        };
+      }
+      const observedDigest = body.worker.imageDigest.match(
+        /sha256:[0-9a-f]{64}$/i
+      )?.[0];
+      if (
+        (expectedWorkerSha &&
+          body.worker.sha.toLowerCase() !== expectedWorkerSha.toLowerCase()) ||
+        (expectedWorkerDigest &&
+          observedDigest?.toLowerCase() !== expectedWorkerDigest.toLowerCase())
+      ) {
+        return {
+          exitCode: 1,
+          body: {
+            status: "unhealthy",
+            reason: TEMPORAL_HEALTH_CLI_REASON.WORKER_IDENTITY_DRIFT,
+            expected: {
+              sha: expectedWorkerSha,
+              imageDigest: expectedWorkerDigest,
+            },
+            observed: {
+              sha: body.worker.sha,
+              imageDigest: observedDigest,
+            },
+          },
+        };
+      }
     }
     return {
       exitCode: response.ok && body.status === "healthy" ? 0 : 1,

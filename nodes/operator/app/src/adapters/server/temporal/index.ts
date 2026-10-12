@@ -29,4 +29,5 @@ export {
   type SharedTemporalHealthReason,
   type SharedTemporalTaskType,
   TEMPORAL_POLLER_MAX_AGE_MS,
+  workerPollerIdentity,
 } from "./shared-temporal-health.adapter";

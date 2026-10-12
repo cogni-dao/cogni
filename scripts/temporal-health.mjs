@@ -19,13 +19,25 @@ import {
 } from "./lib/temporal-health-client.mjs";
 
 function parseArgs(argv) {
-  const result = { env: "candidate-a", url: null };
+  const result = {
+    env: "candidate-a",
+    url: null,
+    expectedAppSha: process.env.EXPECTED_APP_SHA,
+    expectedWorkerSha: process.env.EXPECTED_WORKER_SHA,
+    expectedWorkerDigest: process.env.EXPECTED_WORKER_DIGEST,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--env") {
       result.env = argv[++index];
     } else if (arg === "--url") {
       result.url = argv[++index];
+    } else if (arg === "--expected-app-sha") {
+      result.expectedAppSha = argv[++index];
+    } else if (arg === "--expected-worker-sha") {
+      result.expectedWorkerSha = argv[++index];
+    } else if (arg === "--expected-worker-digest") {
+      result.expectedWorkerDigest = argv[++index];
     } else if (arg === "--help" || arg === "-h") {
       result.help = true;
     } else {
@@ -34,6 +46,21 @@ function parseArgs(argv) {
   }
   if (!["candidate-a", "preview", "production"].includes(result.env)) {
     throw new Error("--env must be candidate-a, preview, or production");
+  }
+  if (!result.help && !/^[0-9a-f]{40}$/i.test(result.expectedAppSha ?? "")) {
+    throw new Error("--expected-app-sha must be an exact 40-character SHA");
+  }
+  if (
+    !result.help &&
+    !/^[0-9a-f]{40}$/i.test(result.expectedWorkerSha ?? "")
+  ) {
+    throw new Error("--expected-worker-sha must be an exact 40-character SHA");
+  }
+  if (
+    !result.help &&
+    !/^sha256:[0-9a-f]{64}$/i.test(result.expectedWorkerDigest ?? "")
+  ) {
+    throw new Error("--expected-worker-digest must be an exact sha256 digest");
   }
   return result;
 }
@@ -57,7 +84,7 @@ async function main() {
 
   if (args.help) {
     process.stdout.write(
-      "Usage: pnpm temporal:health [--env candidate-a|preview|production] [--url https://node.example]\n"
+      "Usage: pnpm temporal:health --expected-app-sha SHA --expected-worker-sha SHA --expected-worker-digest sha256:DIGEST [--env candidate-a|preview|production] [--url https://node.example]\n"
     );
     return 0;
   }
@@ -89,7 +116,13 @@ async function main() {
     return 2;
   }
 
-  const result = await readTemporalHealth({ baseUrl, apiKey });
+  const result = await readTemporalHealth({
+    baseUrl,
+    apiKey,
+    expectedAppSha: args.expectedAppSha,
+    expectedWorkerSha: args.expectedWorkerSha,
+    expectedWorkerDigest: args.expectedWorkerDigest,
+  });
   print(result.body);
   return result.exitCode;
 }

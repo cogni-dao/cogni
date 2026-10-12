@@ -19,6 +19,16 @@ import {
 } from "../../../scripts/lib/temporal-health-client.mjs";
 
 describe("Temporal health CLI client", () => {
+  const appSha = "a".repeat(40);
+  const workerSha = "b".repeat(40);
+  const workerDigest = `sha256:${"c".repeat(64)}`;
+  const healthyBody = {
+    status: "healthy",
+    reason: "ok",
+    app: { buildSha: appSha },
+    worker: { sha: workerSha, imageDigest: workerDigest },
+  };
+
   it("resolves canonical operator and node deployment hosts", () => {
     expect(defaultBaseUrl("operator", "candidate-a")).toBe(
       "https://test.cognidao.org"
@@ -33,7 +43,7 @@ describe("Temporal health CLI client", () => {
 
   it("passes only a successful healthy response", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ status: "healthy", reason: "ok" }), {
+      new Response(JSON.stringify(healthyBody), {
         status: 200,
       })
     );
@@ -41,6 +51,9 @@ describe("Temporal health CLI client", () => {
     const result = await readTemporalHealth({
       baseUrl: "https://test.cognidao.org",
       apiKey: "secret",
+      expectedAppSha: appSha,
+      expectedWorkerSha: workerSha,
+      expectedWorkerDigest: workerDigest,
       fetchImpl,
     });
 
@@ -72,11 +85,28 @@ describe("Temporal health CLI client", () => {
     expect(result).toEqual({ exitCode: 1, body });
   });
 
-  it("reserves stable scheduled-proof failure codes", () => {
+  it("reserves stable exact-artifact drift codes", () => {
     expect(TEMPORAL_HEALTH_CLI_REASON).toMatchObject({
-      SCHEDULE_DRIFT: "schedule_drift",
-      EXECUTION_STALE: "execution_stale",
-      RECENT_TERMINAL_MISSING: "recent_terminal_missing",
+      APP_IDENTITY_DRIFT: "app_identity_drift",
+      WORKER_IDENTITY_DRIFT: "worker_identity_drift",
+    });
+  });
+
+  it("fails closed when the deployed app SHA differs", async () => {
+    const result = await readTemporalHealth({
+      baseUrl: "https://node.example",
+      apiKey: "secret",
+      expectedAppSha: "d".repeat(40),
+      expectedWorkerSha: workerSha,
+      expectedWorkerDigest: workerDigest,
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(healthyBody), { status: 200 })
+      ),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      body: { reason: "app_identity_drift" },
     });
   });
 });

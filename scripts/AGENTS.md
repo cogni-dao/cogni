@@ -37,7 +37,7 @@ Build-time scripts for migrations, seeds, type generation, development utilities
 
 - **Exports:** none
 - **CLI (if any):** Migration, seed, database drop, validation, worktree readiness, workspace-check/package-build orchestration, and `pnpm temporal:health`
-- **Env/Config keys:** Database connection, development flags, `COGNI_NODE_API_KEY`, `TURBO_SCM_BASE`/`TURBO_SCM_HEAD` scope overrides, CI-style test env fallbacks for `run-turbo-checks.sh`
+- **Env/Config keys:** Database connection, development flags, `COGNI_NODE_API_KEY`, `EXPECTED_APP_SHA`, `EXPECTED_WORKER_SHA`, `EXPECTED_WORKER_DIGEST`, `TURBO_SCM_BASE`/`TURBO_SCM_HEAD` scope overrides, CI-style test env fallbacks for `run-turbo-checks.sh`
 - **Files considered API:** setup/bootstrap.sh and setup/provision-env-vm.sh (bootstrap/provisioning), conductor-worktree-setup.sh (Conductor workspace bootstrap), temporal-health.mjs (authenticated read-only Temporal diagnostic), validate-agents-md.mjs (validation script), db/drop-test-db.ts (test database utility), grafana-pdc-token-preflight.sh / grafana-postgres-datasource.sh / grafana-postgres-query.sh (Grafana Cloud Postgres support helpers), worktree-check.sh (fresh-worktree readiness check), run-turbo-checks.sh (workspace-scoped local check helper), run-scoped-package-build.mjs (affected package declaration helper)
 
 ## Ports (optional)

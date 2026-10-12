@@ -17,6 +17,7 @@ import {
   inspectSharedTemporalHealth,
   parseWorkerIdentity,
   TEMPORAL_POLLER_MAX_AGE_MS,
+  workerPollerIdentity,
 } from "@/adapters/server/temporal";
 
 const NOW_MS = Date.parse("2026-10-11T12:00:00.000Z");
@@ -62,7 +63,12 @@ function validWorkerIdentity() {
 
 function healthyDeps(overrides: Record<string, unknown> = {}) {
   const describeTaskQueue = vi.fn().mockResolvedValue({
-    pollers: [{ lastAccessTime: timestamp(NOW_MS - 1_000) }],
+    pollers: [
+      {
+        identity: workerPollerIdentity(validWorkerIdentity()),
+        lastAccessTime: timestamp(NOW_MS - 1_000),
+      },
+    ],
   });
   const close = vi.fn().mockResolvedValue(undefined);
   const connect = vi.fn().mockResolvedValue({
@@ -159,7 +165,12 @@ describe("shared Temporal health adapter", () => {
         pollers:
           taskQueueType === 1
             ? pollers
-            : [{ lastAccessTime: timestamp(NOW_MS) }],
+            : [
+                {
+                  identity: workerPollerIdentity(validWorkerIdentity()),
+                  lastAccessTime: timestamp(NOW_MS),
+                },
+              ],
       })
     );
 
@@ -174,6 +185,7 @@ describe("shared Temporal health adapter", () => {
       Promise.resolve({
         pollers: [
           {
+            identity: workerPollerIdentity(validWorkerIdentity()),
             lastAccessTime: timestamp(
               taskQueueType === 2
                 ? NOW_MS - TEMPORAL_POLLER_MAX_AGE_MS - 1
@@ -253,6 +265,27 @@ describe("shared Temporal health adapter", () => {
 
     expect(result.reason).toBe("temporal_unavailable");
     expect(deps.close).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when fresh Workflow and Activity pollers report mixed artifacts", async () => {
+    const deps = healthyDeps();
+    deps.describeTaskQueue.mockImplementation(({ taskQueueType }) =>
+      Promise.resolve({
+        pollers: [
+          {
+            identity:
+              taskQueueType === 1
+                ? workerPollerIdentity(validWorkerIdentity())
+                : `cogni:scheduler-worker:${"d".repeat(40)}:${IMAGE_DIGEST}`,
+            lastAccessTime: timestamp(NOW_MS),
+          },
+        ],
+      })
+    );
+
+    await expect(
+      inspectSharedTemporalHealth(config, deps)
+    ).resolves.toMatchObject({ reason: "worker_identity_mixed" });
   });
 });
 
