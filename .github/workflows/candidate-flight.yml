@@ -29,8 +29,10 @@ permissions:
   statuses: write
 
 concurrency:
-  group: candidate-flight-${{ inputs.pr_number || format('{0}-{1}', inputs.node_slug, inputs.source_sha) }}
-  cancel-in-progress: true
+  # One stable queue per PR or node. In particular, a newer node-ref request
+  # must wait instead of racing or canceling the active deployment transaction.
+  group: candidate-flight-${{ inputs.pr_number || inputs.node_slug }}
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
@@ -361,12 +363,15 @@ jobs:
           environment: candidate-a
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
-          port_scope: ${{ (vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a' && 'all' || 'runtime' }}
 
-  # A foreign-custodied lane keeps its databases on the CONTROL env's VM while
-  # Temporal/Redis/LiteLLM live on the lane VM. This job opens only database
-  # ports on the control host; it never moves VM keys or runtime secret values
-  # across environment boundaries (task.5241 owns the missing typed binding).
+  # A foreign-custodied lane's substrate (Postgres/Temporal/LiteLLM) lives on the
+  # CONTROL env's VM (production for cogni-dao nodes), not the candidate VM. The
+  # job above hardens the candidate VM only, so the Akash provider NAT hole for
+  # such lanes never reaches the machine their substrate answers from: the leased
+  # app boots but readyz?deep=1 dies on unreachable Postgres/Temporal. Same
+  # lane-vs-control conflation as bug.5216. This twin binds environment:
+  # production for its VM secrets while rendering the candidate-a lane allowlist —
+  # the action already separates those two concerns.
   reconcile-compute-egress-control:
     needs: decide
     if: needs.decide.result == 'success'
@@ -390,7 +395,6 @@ jobs:
           environment: candidate-a
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
-          port_scope: database
 
   prepare-substrate-deploy-branch:
     needs:

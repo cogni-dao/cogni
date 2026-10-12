@@ -349,7 +349,7 @@ For node-template and Poly independently, capture:
 
 - [Temporal Patterns](./temporal-patterns.md) — determinism, schedule semantics, Worker versioning, and migration.
 - [LangGraph Patterns](./langgraph-patterns.md) — graph runtime, persistence, and the Temporal boundary.
-- [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) — node-declares/operator-wires ownership model.
+- [Node BaaS Architecture](./node-baas-architecture.md) — node-declares/operator-wires ownership model.
 - [Substrate Access-Grant Plane](./substrate-access-grant.md) — why namespace, not Task Queue, is the Temporal auth boundary.
 - [Temporal TypeScript durable-agent samples](https://github.com/temporalio/samples-typescript/tree/main/openai-agents) — agent orchestration in Workflows with model/tool I/O in Activities.
 - [node-template package publication #144](https://github.com/cogni-dao/node-template/pull/144) and [#152](https://github.com/cogni-dao/node-template/pull/152) — immutable GitHub Release package precedent.

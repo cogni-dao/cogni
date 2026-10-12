@@ -62,6 +62,7 @@ interface WorkflowJob {
 }
 
 const parsed = yaml.parse(WORKFLOW) as {
+  concurrency?: { group?: unknown; "cancel-in-progress"?: boolean };
   on?: {
     workflow_dispatch?: {
       inputs?: Record<string, { required?: boolean; type?: string }>;
@@ -79,6 +80,13 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
+  it("queues duplicate same-node flights without cancellation", () => {
+    expect(parsed.concurrency?.group).toBe(
+      "candidate-flight-${{ inputs.pr_number || inputs.node_slug }}"
+    );
+    expect(parsed.concurrency?.["cancel-in-progress"]).toBe(false);
+  });
+
   it("keeps the k3s control domain separate from an isolated Akash workload zone", () => {
     const targetDomain =
       "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}";
@@ -314,23 +322,6 @@ describe("candidate-a manifest source", () => {
     expect(parsed.jobs.flight.if).toContain(
       "needs.reconcile-scheduler-worker-routing.result == 'success'"
     );
-  });
-
-  it("keeps candidate runtime and foreign-control database firewall grants separate", () => {
-    expect(
-      namedStep(
-        "reconcile-compute-egress",
-        "Reconcile catalog-derived external compute egress"
-      ).with?.port_scope
-    ).toBe(
-      "${{ (vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a' && 'all' || 'runtime' }}"
-    );
-    expect(
-      namedStep(
-        "reconcile-compute-egress-control",
-        "Reconcile lane egress on the control-env substrate VM"
-      ).with?.port_scope
-    ).toBe("database");
   });
 
   it("fails candidate verification unless worker /version matches SHA and digest", () => {
