@@ -65,6 +65,8 @@ describe("vcs_flight_candidate contract", () => {
     expect(desc).toContain("not auto-flight");
     expect(desc).toContain("source");
     expect(desc).toContain("do not use pr numbers");
+    expect(desc).toContain("core__vcs_get_ci_status");
+    expect(desc).toContain("allgreen");
   });
 
   it("allowlist contains public nodeRef fields only", () => {
@@ -88,6 +90,35 @@ describe("vcs_flight_candidate input schema", () => {
     });
     expect(ok.nodeSlug).toBe("creative");
     expect(ok.sourceSha).toBe(SOURCE_SHA);
+  });
+
+  it("accepts a same-repository workflow branch and rejects cross-repo syntax", () => {
+    const ok = vcsFlightCandidateContract.inputSchema.parse({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      nodeSlug: "operator",
+      sourceSha: SOURCE_SHA,
+      workflowRef: "bug.5455-safe-workflow-ref",
+    });
+    expect(ok.workflowRef).toBe("bug.5455-safe-workflow-ref");
+
+    for (const workflowRef of [
+      "attacker:cogni-flight",
+      "attacker/cogni@branch",
+      "../main",
+      "refs/heads/main.lock",
+      SOURCE_SHA,
+    ]) {
+      expect(() =>
+        vcsFlightCandidateContract.inputSchema.parse({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          nodeSlug: "operator",
+          sourceSha: SOURCE_SHA,
+          workflowRef,
+        })
+      ).toThrow();
+    }
   });
 
   it("rejects PR-shaped and non-SHA inputs", () => {
@@ -182,6 +213,39 @@ describe("vcs_flight_candidate implementation", () => {
         sourceSha: SOURCE_SHA,
       })
     ).rejects.toThrow(/VcsCapability not configured/);
+  });
+
+  it("delegates an explicit reviewed workflow ref", async () => {
+    const spy = vi.fn<
+      Parameters<VcsCapability["dispatchCandidateFlight"]>,
+      Promise<DispatchCandidateFlightResult>
+    >(async (params) => ({
+      dispatched: true,
+      nodeSlug: params.nodeSlug,
+      sourceSha: params.sourceSha,
+      workflowUrl:
+        "https://github.com/Cogni-DAO/cogni/actions/workflows/candidate-flight.yml",
+      message: "ok",
+    }));
+    const impl = createVcsFlightCandidateImplementation({
+      vcsCapability: makeVcsStub(spy),
+    });
+
+    await impl.execute({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      nodeSlug: "operator",
+      sourceSha: SOURCE_SHA,
+      workflowRef: "bug.5455-safe-workflow-ref",
+    });
+
+    expect(spy).toHaveBeenCalledWith({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      nodeSlug: "operator",
+      sourceSha: SOURCE_SHA,
+      workflowRef: "bug.5455-safe-workflow-ref",
+    });
   });
 });
 

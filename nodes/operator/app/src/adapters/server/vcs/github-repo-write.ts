@@ -117,6 +117,7 @@ import {
 } from "@/shared/node-repo-policy";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { classifyEnvManagerCommit } from "@/shared/vcs/env-manager-pr";
+import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
 
 const ENV_MANAGER_CHANGE_TYPE = "cogni.env-manager.v1";
 
@@ -2243,18 +2244,34 @@ export class GitHubRepoWriter implements DeployPlanePort {
     repo: string;
     slug: string;
     sourceSha: string;
+    workflowRef?: string;
   }): Promise<CandidateFlightDispatchResult> {
     const octokit = await this.getOctokit(input.owner, input.repo);
+    const reviewedWorkflow = input.workflowRef
+      ? await resolveReviewedWorkflowRef({
+          octokit,
+          owner: input.owner,
+          repo: input.repo,
+          workflowRef: input.workflowRef,
+          sourceSha: input.sourceSha,
+        })
+      : null;
+    const workflowRef = reviewedWorkflow?.dispatchRef ?? "main";
     await octokit.request(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
       {
         owner: input.owner,
         repo: input.repo,
         workflow_id: "candidate-flight.yml",
-        ref: "main",
+        // GitHub accepts a branch/tag, not a raw commit SHA. Explicit refs dispatch through an
+        // operator-created content-addressed branch whose target was verified above.
+        ref: workflowRef,
         inputs: {
           node_slug: input.slug,
-          source_sha: input.sourceSha,
+          source_sha: reviewedWorkflow?.resolvedSha ?? input.sourceSha,
+          ...(reviewedWorkflow
+            ? { workflow_source_sha: reviewedWorkflow.resolvedSha }
+            : {}),
         },
         request: { signal: AbortSignal.timeout(15_000) },
       }

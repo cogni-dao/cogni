@@ -4,12 +4,13 @@
 /**
  * Module: `@cogni/ai-tools/tools/vcs-flight-candidate`
  * Purpose: AI tool that dispatches the `candidate-flight.yml` workflow for a nodeRef.
- * Scope: State-changing CI dispatch — thin wrapper over VcsCapability.dispatchCandidateFlight; does not import LangChain, does not check CI prerequisites (the workflow owns that), does not poll for the resulting run_id (racey).
+ * Scope: State-changing CI dispatch — thin wrapper over VcsCapability.dispatchCandidateFlight. Does NOT import LangChain, duplicate getCiStatus policy, or poll for the resulting run_id.
  * Invariants:
  *   - TOOL_ID_NAMESPACED: ID is `core__vcs_flight_candidate`
  *   - EFFECT_TYPED: effect is `state_change`
  *   - NO_AUTO_FLIGHT: enforced by prompt and tool description, not code. Agent must be
- *     explicitly instructed; the workflow itself owns slot lease + CI prerequisites.
+ *     explicitly instructed; the workflow itself owns the slot lease. The agent must call
+ *     core__vcs_get_ci_status and require allGreen before this tool.
  * Side-effects: IO (dispatches GitHub Actions workflow via VcsCapability)
  * Links: task.0297, task.0242
  * @public
@@ -41,10 +42,15 @@ export const VcsFlightCandidateInputSchema = z.object({
   workflowRef: z
     .string()
     .min(1)
+    .max(255)
+    .regex(
+      /^(?![0-9a-f]{40}$)(?!.*(?:\.\.|\/\/|@\{|\.lock(?:\/|$)))(?![./])(?!.*[./]$)[A-Za-z0-9][A-Za-z0-9._/-]*$/i
+    )
     .optional()
     .describe(
-      "Optional branch/ref from which to load candidate-flight.yml. Defaults to " +
-        "'main'. Set to a feature branch to test workflow changes before merging."
+      "Optional same-repository branch or tag from which to load candidate-flight.yml. " +
+        "Raw commit SHAs are unsupported; defaults to 'main'. The adapter accepts it only when it resolves exactly to " +
+        "sourceSha and sourceSha is the head of an open same-repository PR to main."
     ),
 });
 export type VcsFlightCandidateInput = z.infer<
@@ -83,6 +89,7 @@ export const vcsFlightCandidateContract: ToolContract<
     "Argo to roll the candidate-a pods. " +
     "The child repo must already have published image_repository:sha-<sourceSha>; " +
     "do not use PR numbers as artifact identity. " +
+    "Before dispatch, call core__vcs_get_ci_status and require allGreen. " +
     "Do NOT auto-flight: only call when a human or scheduled run has explicitly " +
     "requested it. Only one flight per agent run. After this call, use " +
     "the workflow URL to observe the resulting `candidate-flight` run.",
