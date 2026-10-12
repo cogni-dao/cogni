@@ -11,15 +11,15 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:71148e7c29fdd0ba15f71d3ef0709d4fc8adf8709adeba61e5eff2831de351d8
+    ref: ghcr.io/cogni-dao/poly@sha256:fd2ddf587dab4e463498951a1140a120f82a561b0631e71c645bb367cdc6e98b
     source:
       repository: cogni-dao/poly
-      sha: dd05593876f19acf4b6d9d5e12f3af18fb68a607
+      sha: 21ea4d407d087c4f33184066cb9024f7ffd6a8bb
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:99435edcd144be2a141856bdb830c3491af6fe1d22be768f1787e07c1a1b8e0b
+        image: ghcr.io/cogni-dao/poly@sha256:5b5580aa54d08a97fcef3c4ec3e8ca3b9cebc4c0c002108ba6fd7bb510be6493
       - name: paper-trader
-        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:8d2dfc58bcfeae5df46a8afed1fb2d3832344ad05c8e47f4d7a762fe59fed9d8
+        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:ee2bc32ee324a0c7e21ff76ae32263d50f32d3a589109b74bbc48656aeae33c5
   workload:
     name: poly
     publicHost: poly-test.cognidao.org
@@ -36,7 +36,6 @@ spec:
           - key: LITELLM_VIRTUAL_KEY
           - key: SCHEDULER_API_TOKEN
           - key: BILLING_INGEST_TOKEN
-          - key: FLIGHT_PROBE_API_KEY
           - key: PAPER_ENFORCE_MODE
           - key: POLYGON_RPC_URL
           - key: PRIVY_USER_WALLETS_APP_ID
@@ -67,7 +66,7 @@ spec:
   bootPolicy:
     onDeadline: Close
     onGiveUp: Replace
-  leaseGeneration: 40
+  leaseGeneration: 39
   placement:
     requiredCountries:
       - BE
