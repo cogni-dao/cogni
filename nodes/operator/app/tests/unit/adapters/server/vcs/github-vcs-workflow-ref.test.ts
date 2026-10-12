@@ -151,8 +151,8 @@ describe("GitHubVcsAdapter candidate workflow refs", () => {
     ).toMatchObject({
       ref: `cogni-flight/${SOURCE_SHA}`,
       inputs: {
-        node_slug: "operator",
-        source_sha: SOURCE_SHA,
+        pr_number: "2691",
+        head_sha: SOURCE_SHA,
         workflow_source_sha: SOURCE_SHA,
       },
     });
@@ -173,7 +173,8 @@ describe("GitHubVcsAdapter candidate workflow refs", () => {
       requests.find(({ route }) => route === DISPATCH)?.params
     ).toMatchObject({
       inputs: {
-        source_sha: SOURCE_SHA,
+        pr_number: "2691",
+        head_sha: SOURCE_SHA,
         workflow_source_sha: SOURCE_SHA,
       },
     });

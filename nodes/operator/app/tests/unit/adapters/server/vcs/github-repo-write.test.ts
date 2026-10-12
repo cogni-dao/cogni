@@ -4106,8 +4106,8 @@ describe("GitHubRepoWriter.dispatchNodeRefCandidateFlight", () => {
     ).toMatchObject({
       ref: `cogni-flight/${sourceSha}`,
       inputs: {
-        node_slug: "operator",
-        source_sha: sourceSha,
+        pr_number: "2691",
+        head_sha: sourceSha,
         workflow_source_sha: sourceSha,
       },
     });

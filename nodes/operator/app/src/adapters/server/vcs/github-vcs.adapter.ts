@@ -473,13 +473,19 @@ export class GitHubVcsAdapter implements VcsCapability {
       : null;
     const workflowRef = reviewedWorkflow?.dispatchRef ?? "main";
 
-    const inputs: Record<string, string> = {
-      node_slug: params.nodeSlug,
-      source_sha: reviewedWorkflow?.resolvedSha ?? params.sourceSha,
-    };
-    if (reviewedWorkflow) {
-      inputs.workflow_source_sha = reviewedWorkflow.resolvedSha;
-    }
+    const inputs: Record<string, string> = reviewedWorkflow
+      ? {
+          // A self-flight is a parent-repository PR, so use the workflow's existing PR lane.
+          // That lane derives the complete affected target set (operator, scheduler-worker, …)
+          // instead of pretending the parent SHA is a single child-node image.
+          pr_number: String(reviewedWorkflow.prNumber),
+          head_sha: reviewedWorkflow.resolvedSha,
+          workflow_source_sha: reviewedWorkflow.resolvedSha,
+        }
+      : {
+          node_slug: params.nodeSlug,
+          source_sha: params.sourceSha,
+        };
 
     await octokit.request(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",

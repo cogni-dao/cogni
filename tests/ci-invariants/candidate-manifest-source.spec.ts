@@ -69,6 +69,21 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
+  it("fails closed when non-main workflow code lacks its exact reviewed SHA", () => {
+    const guard = namedStep("decide", "Assert reviewed workflow source");
+
+    expect(guard.env?.EXPECTED_WORKFLOW_SOURCE_SHA).toBe(
+      "${{ inputs.workflow_source_sha }}"
+    );
+    expect(guard.env?.ACTUAL_WORKFLOW_SOURCE_SHA).toBe("${{ github.sha }}");
+    expect(guard.run).toContain(
+      '[ "$ACTUAL_WORKFLOW_REF" = "refs/heads/main" ]'
+    );
+    expect(guard.run).toContain(
+      '[ "${ACTUAL_WORKFLOW_SOURCE_SHA,,}" = "${EXPECTED_WORKFLOW_SOURCE_SHA,,}" ]'
+    );
+  });
+
   it("keeps the k3s control domain separate from an isolated Akash workload zone", () => {
     const targetDomain =
       "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}";

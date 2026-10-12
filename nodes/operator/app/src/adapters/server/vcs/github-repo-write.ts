@@ -2266,13 +2266,18 @@ export class GitHubRepoWriter implements DeployPlanePort {
         // GitHub accepts a branch/tag, not a raw commit SHA. Explicit refs dispatch through an
         // operator-created content-addressed branch whose target was verified above.
         ref: workflowRef,
-        inputs: {
-          node_slug: input.slug,
-          source_sha: reviewedWorkflow?.resolvedSha ?? input.sourceSha,
-          ...(reviewedWorkflow
-            ? { workflow_source_sha: reviewedWorkflow.resolvedSha }
-            : {}),
-        },
+        inputs: reviewedWorkflow
+          ? {
+              // Reviewed workflow code is necessarily a same-repository parent PR. Dispatch the
+              // existing PR mode so candidate-flight resolves every affected parent target.
+              pr_number: String(reviewedWorkflow.prNumber),
+              head_sha: reviewedWorkflow.resolvedSha,
+              workflow_source_sha: reviewedWorkflow.resolvedSha,
+            }
+          : {
+              node_slug: input.slug,
+              source_sha: input.sourceSha,
+            },
         request: { signal: AbortSignal.timeout(15_000) },
       }
     );
