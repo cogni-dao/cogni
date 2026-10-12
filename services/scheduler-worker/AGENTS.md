@@ -84,7 +84,7 @@ src/
 - **CLI:** `pnpm --filter @cogni/scheduler-worker-service dev|build|start`
 - **Env:** Validated in `src/bootstrap/env.ts` via Zod.
   - **Required**: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE` (used as prefix; actual queues are `${prefix}-${nodeId}`), `SCHEDULER_API_TOKEN` (secret), `COGNI_NODE_ENDPOINTS` (must include UUID aliases — e.g. `operator=http://app:3000,4ff8eac1-...=http://app:3000,...`).
-  - **Optional**: `DATABASE_URL` (ledger/attribution path only — scheduler path holds no DB creds), `GH_REVIEW_APP_ID`, `GH_REVIEW_APP_PRIVATE_KEY_BASE64`, `GH_REPOS`, `LOG_LEVEL`, `SERVICE_NAME`, `HEALTH_PORT`.
+  - **Optional**: `TEMPORAL_CUSTODIED_NODE_ENDPOINTS` (catalog-generated JSON map of foreign namespace → lane-scoped endpoint CSV), `DATABASE_URL` (ledger/attribution path only — scheduler path holds no DB creds), `GH_REVIEW_APP_ID`, `GH_REVIEW_APP_PRIVATE_KEY_BASE64`, `GH_REPOS`, `LOG_LEVEL`, `SERVICE_NAME`, `HEALTH_PORT`.
   - Identity (`node_id`, `scope_id`, `chain_id`) read from `.cogni/repo-spec.yaml` via `@cogni/repo-spec` at bootstrap (baked into Docker image).
 - **Metrics:** `temporal_activity_duration_ms`, `temporal_activity_errors_total{error_type=retryable|non_retryable}`, `temporal_worker_info`, `scheduler_worker_node_reachable_at_boot{node_id}` (boot-time probe, never gates).
 - **Files considered API:** `src/main.ts` (entry point), `Dockerfile`

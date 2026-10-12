@@ -29,7 +29,7 @@ import { createGoalLoopActivities } from "./activities/goal-loop.js";
 import { createActivities } from "./activities/index.js";
 import { createReviewActivities } from "./activities/review.js";
 import { createSweepActivities } from "./activities/sweep.js";
-import { createContainer } from "./bootstrap/container.js";
+import { createContainer, parseNodeEndpoints } from "./bootstrap/container.js";
 import type { Env } from "./bootstrap/env.js";
 import { logWorkerEvent, WORKER_EVENT_NAMES } from "./observability/index.js";
 import type { Logger } from "./observability/logger.js";
@@ -67,6 +67,84 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function isCanonicalNodeId(nodeId: string): boolean {
   return UUID_RE.test(nodeId);
+}
+
+export interface SchedulerWorkerRoute {
+  readonly namespace: string;
+  readonly endpointsRaw: string;
+  readonly taskQueues: readonly string[];
+  readonly isPrimary: boolean;
+}
+
+/**
+ * Build the exact namespace/queue/routing matrix this process may serve.
+ *
+ * The primary namespace owns the full environment endpoint map and the legacy
+ * drain queue. A foreign-custodied namespace owns only its catalog-generated
+ * node subset and never polls the legacy queue. This prevents both failure
+ * modes of the old namespace multiplier: O(namespaces x fleet) Worker growth,
+ * and candidate workflows being dispatched through production URLs.
+ */
+export function workerRoutes(
+  primaryNamespace: string,
+  primaryEndpointsRaw: string,
+  custodiedEndpointsRaw: string,
+  taskQueuePrefix: string
+): SchedulerWorkerRoute[] {
+  const primaryEndpoints = parseNodeEndpoints(primaryEndpointsRaw);
+  const primaryNodeIds = [...primaryEndpoints.keys()].filter(isCanonicalNodeId);
+  const routes: SchedulerWorkerRoute[] = [
+    {
+      namespace: primaryNamespace,
+      endpointsRaw: primaryEndpointsRaw,
+      taskQueues: [
+        ...primaryNodeIds.map((id) => nodeTaskQueueName(taskQueuePrefix, id)),
+        taskQueuePrefix,
+      ],
+      isPrimary: true,
+    },
+  ];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(custodiedEndpointsRaw || "{}");
+  } catch {
+    throw new Error(
+      "TEMPORAL_CUSTODIED_NODE_ENDPOINTS must be a JSON object mapping namespace to endpoint CSV"
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      "TEMPORAL_CUSTODIED_NODE_ENDPOINTS must be a JSON object mapping namespace to endpoint CSV"
+    );
+  }
+
+  for (const [namespace, endpointsRaw] of Object.entries(parsed)) {
+    if (!namespace.trim() || namespace === primaryNamespace) {
+      throw new Error(
+        `Custodied Temporal namespace must be non-empty and differ from primary namespace: ${namespace}`
+      );
+    }
+    if (typeof endpointsRaw !== "string" || !endpointsRaw.trim()) {
+      throw new Error(
+        `Custodied Temporal namespace ${namespace} must declare a non-empty endpoint CSV`
+      );
+    }
+    const endpoints = parseNodeEndpoints(endpointsRaw);
+    const nodeIds = [...endpoints.keys()].filter(isCanonicalNodeId);
+    if (nodeIds.length === 0) {
+      throw new Error(
+        `Custodied Temporal namespace ${namespace} has no canonical node UUID endpoint`
+      );
+    }
+    routes.push({
+      namespace,
+      endpointsRaw,
+      taskQueues: nodeIds.map((id) => nodeTaskQueueName(taskQueuePrefix, id)),
+      isPrimary: false,
+    });
+  }
+  return routes;
 }
 
 /**
@@ -282,15 +360,14 @@ export async function startSchedulerWorker(
   });
   const workflowBundle = await bundleWorkflowCode({ workflowsPath });
 
-  // Per QUEUE_PER_NODE_ISOLATION: build the nodeId set from the endpoint map
-  // (filtering to UUIDs, which are canonical; slug entries are convenience
-  // aliases for URL lookup), create one Worker per node, and always include
-  // the legacy queue as a drain until all Schedules are rewritten.
-  const nodeIds = [...container.config.nodeEndpoints.keys()].filter(
-    isCanonicalNodeId
-  );
   const legacyQueue = env.TEMPORAL_TASK_QUEUE;
-  if (nodeIds.length === 0) {
+  const routes = workerRoutes(
+    env.TEMPORAL_NAMESPACE,
+    env.COGNI_NODE_ENDPOINTS,
+    env.TEMPORAL_CUSTODIED_NODE_ENDPOINTS,
+    legacyQueue
+  );
+  if (routes[0]?.taskQueues.length === 1) {
     // Fail-loud config drift check: node-app submitters use repo-spec UUIDs
     // as the nodeId, so a worker with no UUID endpoints will starve every
     // per-node queue. k8s overlays and compose files MUST register UUID
@@ -303,21 +380,24 @@ export async function startSchedulerWorker(
       "COGNI_NODE_ENDPOINTS has no UUID nodeId entries — worker will only poll the legacy drain queue and all new per-node submissions will starve. Add repo-spec UUID aliases to COGNI_NODE_ENDPOINTS."
     );
   }
-  const queues = new Set<string>([
-    ...nodeIds.map((id) => nodeTaskQueueName(legacyQueue, id)),
-    legacyQueue,
-  ]);
-
-  // THE NAMESPACES THIS WORKER SERVES (bug.5212). Its own, plus every lane the cluster
-  // CUSTODIES. A foreign-custodied lane submits to this same Temporal server under
-  // `cogni-<lane>`, and the SCHEDULER_API_TOKEN it inherits is already this env's — so
-  // serving it is one more Worker per namespace and nothing else. Empty by default, so a
-  // cluster that custodies no foreign lane behaves byte-identically.
-  const custodiedNamespaces = (env.TEMPORAL_CUSTODIED_NAMESPACES ?? "")
-    .split(",")
-    .map((n) => n.trim())
-    .filter((n) => n.length > 0 && n !== env.TEMPORAL_NAMESPACE);
-  const namespaces = [env.TEMPORAL_NAMESPACE, ...new Set(custodiedNamespaces)];
+  const routeActivities = routes.map((route) => {
+    if (route.isPrimary) return { route, activities: allActivities };
+    const routeContainer = createContainer(env, logger, route.endpointsRaw);
+    return {
+      route,
+      // Foreign-custodied lanes serve node-owned GraphRunWorkflow only. Review,
+      // sweep, and governance schedules belong to the primary operator lane.
+      activities: createActivities({
+        grantAdapter: routeContainer.grantAdapter,
+        runAdapter: routeContainer.runAdapter,
+        nodePrincipalResolver: routeContainer.nodePrincipalResolver,
+        config: routeContainer.config,
+        logger:
+          routeContainer.logger.child?.({ component: "activities" }) ??
+          routeContainer.logger,
+      }),
+    };
+  });
 
   type StartedWorker = {
     taskQueue: string;
@@ -326,8 +406,9 @@ export async function startSchedulerWorker(
     run: Promise<void>;
   };
   const started: StartedWorker[] = [];
-  for (const namespace of namespaces)
-    for (const taskQueue of queues) {
+  for (const { route, activities } of routeActivities)
+    for (const taskQueue of route.taskQueues) {
+      const { namespace } = route;
       try {
         const worker = await Worker.create({
           connection,
@@ -335,7 +416,7 @@ export async function startSchedulerWorker(
           taskQueue,
           // Reuse the single pre-built bundle instead of re-bundling per queue.
           workflowBundle,
-          activities: allActivities,
+          activities,
         });
         const run = worker.run();
         // Per-worker isolation: log the failure, do NOT let it reject the
@@ -355,12 +436,13 @@ export async function startSchedulerWorker(
         logWorkerEvent(logger, WORKER_EVENT_NAMES.LIFECYCLE_STARTING, {
           namespace,
           taskQueue,
-          isLegacyDrain: taskQueue === legacyQueue,
+          isLegacyDrain: route.isPrimary && taskQueue === legacyQueue,
+          routeNodeCount: parseNodeEndpoints(route.endpointsRaw).size,
           phase: "worker_created",
         });
       } catch (err) {
         logger.error(
-          { taskQueue, err },
+          { namespace, taskQueue, err },
           "Failed to start Temporal Worker for queue — continuing with remaining queues"
         );
       }
@@ -375,6 +457,11 @@ export async function startSchedulerWorker(
   logWorkerEvent(logger, WORKER_EVENT_NAMES.LIFECYCLE_STARTING, {
     phase: "polling",
     queues: started.map((s) => s.taskQueue),
+    namespaces: [...new Set(started.map((s) => s.namespace))],
+    workers: started.map(({ namespace, taskQueue }) => ({
+      namespace,
+      taskQueue,
+    })),
   });
 
   return {

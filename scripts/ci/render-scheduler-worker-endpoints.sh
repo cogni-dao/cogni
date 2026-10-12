@@ -35,6 +35,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # shellcheck source=scripts/ci/lib/image-tags.sh
 source "$SCRIPT_DIR/lib/image-tags.sh"
+# shellcheck source=scripts/ci/lib/appset-paths.sh
+source "$SCRIPT_DIR/lib/appset-paths.sh"
 # shellcheck source=scripts/setup/lib/fork-identity.sh
 source "$SCRIPT_DIR/../setup/lib/fork-identity.sh"
 
@@ -81,14 +83,48 @@ render_env() {
   node_internal_service_endpoint_csv "$env" "$domain"
 }
 
+# Namespace-specific routes for foreign lanes reconciled by one control env.
+# The catalog owns both lane membership and placement; control_env_for() owns
+# reconciliation authority. This deliberately emits only the foreign nodes,
+# never the control env's entire fleet.
+render_custodied_routes() {
+  local control_env="$1" lane domain node node_id url endpoints sep result='{}'
+  while read -r lane; do
+    [ -n "$lane" ] || continue
+    [ "$lane" != "$control_env" ] || continue
+    domain="$(domain_for_env "$lane" "$FORK_ROOT")" \
+      || { echo "[ERROR] cannot derive a public domain for env '$lane'" >&2; return 1; }
+    endpoints=""
+    sep=""
+    for node in "${NODE_TARGETS[@]}"; do
+      target_in_env "$node" "$lane" || continue
+      [ "$(control_env_for "$lane" "$node")" = "$control_env" ] || continue
+      node_id="$(node_id_for_target "$node")" || return 1
+      url="$(node_app_url_for_target "$node" "$lane" "$domain")" || return 1
+      endpoints+="${sep}${node}=${url},${node_id}=${url}"
+      sep=","
+    done
+    [ -n "$endpoints" ] || continue
+    result="$(jq -c --arg namespace "cogni-${lane}" --arg endpoints "$endpoints" \
+      '. + {($namespace): $endpoints}' <<<"$result")"
+  done < <(overlay_envs)
+  printf '%s' "$result"
+}
+
 patch_path() {
   printf '%s/%s/scheduler-worker/%s' "$OVERLAY_ROOT" "$1" "$PATCH_BASENAME"
 }
 
 write_patch() {
-  local env="$1" file endpoints
+  local env="$1" file endpoints custody_routes custody_yaml
   file="$(patch_path "$env")"
   endpoints="$(render_env "$env")" || return 1
+  custody_routes="$(render_custodied_routes "$env")" || return 1
+  if [ "$custody_routes" = "{}" ]; then
+    custody_yaml='"{}"'
+  else
+    custody_yaml="'${custody_routes}'"
+  fi
   cat >"$file" <<YAML
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
@@ -107,6 +143,7 @@ metadata:
   name: scheduler-worker-config
 data:
   COGNI_NODE_ENDPOINTS: "${endpoints}"
+  TEMPORAL_CUSTODIED_NODE_ENDPOINTS: ${custody_yaml}
 YAML
 }
 
@@ -115,6 +152,13 @@ read_patch() {
   file="$(patch_path "$1")"
   [ -f "$file" ] || { printf ''; return 0; }
   yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$file"
+}
+
+read_custodied_routes() {
+  local file
+  file="$(patch_path "$1")"
+  [ -f "$file" ] || { printf ''; return 0; }
+  yq -N '.data.TEMPORAL_CUSTODIED_NODE_ENDPOINTS // ""' "$file"
 }
 
 # Node routing renders from catalog metadata only. A remote-source node's catalog
@@ -151,6 +195,14 @@ check() {
       echo "  ${actual:-<missing>}" >&2
       rc=1
     fi
+    expected="$(render_custodied_routes "$env")" || { rc=1; continue; }
+    actual="$(read_custodied_routes "$env")"
+    if [ "$actual" != "$expected" ]; then
+      echo "[ERROR] $(patch_path "$env") has stale/absent TEMPORAL_CUSTODIED_NODE_ENDPOINTS for env '$env'." >&2
+      echo "Expected: $expected" >&2
+      echo "Actual: ${actual:-<missing>}" >&2
+      rc=1
+    fi
     kustomization="$OVERLAY_ROOT/$env/scheduler-worker/kustomization.yaml"
     if ! grep -q "$PATCH_BASENAME" "$kustomization"; then
       echo "[ERROR] $kustomization does not apply $PATCH_BASENAME — the env would silently fall back to the all-k3s base default." >&2
@@ -177,6 +229,7 @@ write() {
   local endpoints env
   endpoints="$(render)"
   ENDPOINTS="$endpoints" yq -i '.data.COGNI_NODE_ENDPOINTS = strenv(ENDPOINTS)' "$CONFIGMAP_PATH"
+  yq -i '.data.TEMPORAL_CUSTODIED_NODE_ENDPOINTS = "{}" | .data.TEMPORAL_CUSTODIED_NODE_ENDPOINTS style="double"' "$CONFIGMAP_PATH"
   echo "wrote placement-default endpoints → $CONFIGMAP_PATH"
   while read -r env; do
     [ -n "$env" ] || continue
