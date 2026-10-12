@@ -50,6 +50,9 @@
 #   GITHUB_REPOSITORY  owner/repo to clone (required unless DEPLOY_BRANCH_DIR set).
 #   SWR_DEPLOY_REPOSITORY owner/repo actually watched by Argo for this k3s cell.
 #                      Defaults to GITHUB_REPOSITORY for non-mirrored fleets.
+#   SWR_ROUTE_AUTHORITY_DIR checkout of the watched repository's protected-main
+#                      routing authority (tests/local only). Production clones
+#                      read origin/main from SWR_DEPLOY_REPOSITORY.
 #   DEPLOY_BRANCH_DIR  reuse an existing deploy-branch checkout instead of cloning
 #                      (tests / local). When set, no clone and no push.
 #   DRY_RUN=1          render + diff only; never push (commits locally for the diff).
@@ -78,6 +81,8 @@ SRC_DIR="${APP_SOURCE_DIR}/${SUBPATH}"
 # kustomization.yaml (promotion state) is never rewritten from main.
 ENDPOINTS_SUBPATH="infra/k8s/overlays/${DEPLOY_ENV}/scheduler-worker/node-endpoints.patch.yaml"
 ENDPOINTS_SRC="${APP_SOURCE_DIR}/${ENDPOINTS_SUBPATH}"
+AUTHORITY_BASE_PATH="$SUBPATH/configmap.yaml"
+AUTHORITY_ENDPOINTS_PATH="$ENDPOINTS_SUBPATH"
 
 ENDPOINTS_COUNT=0
 NODE_COUNT=0
@@ -186,13 +191,10 @@ if command -v yq >/dev/null 2>&1; then
     ENDPOINTS_CSV="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$SRC_DIR/configmap.yaml" 2>/dev/null || true)"
   fi
 fi
-if [ -n "$ENDPOINTS_CSV" ]; then
-  ENDPOINTS_COUNT="$(awk -F',' '{print NF}' <<<"$ENDPOINTS_CSV")"
-  # slug aliases only (skip uuid=... aliases): one per node.
-  NODE_COUNT="$(tr ',' '\n' <<<"$ENDPOINTS_CSV" | grep -cvE '^[0-9a-f]{8}-' || true)"
-fi
-echo "Reconciling scheduler-worker routing for env '${DEPLOY_ENV}' → ${BRANCH}"
-echo "  ${NODE_COUNT} node(s), ${ENDPOINTS_COUNT} endpoint alias(es)"
+command -v yq >/dev/null 2>&1 || {
+  echo "[ERROR] yq is required to compose scheduler-worker route authorities" >&2
+  exit 1
+}
 
 # ── Resolve the deploy-branch checkout ────────────────────────────────────────
 CLONED_DIR=""
@@ -207,6 +209,7 @@ else
   git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" "$WORKDIR"
   (
     cd "$WORKDIR"
+    git fetch --quiet origin main
     git fetch --quiet origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
     if git rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" >/dev/null; then
       git checkout -B "$BRANCH" "origin/${BRANCH}" >/dev/null 2>&1
@@ -219,6 +222,75 @@ else
 fi
 trap 'rc=$?; [ -n "$CLONED_DIR" ] && rm -rf "$CLONED_DIR"; if [ "$rc" -ne 0 ] && [ "$SUMMARY_WRITTEN" != "true" ]; then write_summary "failure"; fi' EXIT
 
+# The watched repository owns an independent active candidate roster. Compose
+# that protected-main authority with the reviewed app-source authority; never
+# replace one fleet's pollers with another fleet's configmap. Equal duplicate
+# aliases are harmless (operator/node-template); a different destination for the
+# same alias is ambiguous authority and fails closed.
+authority_yaml() {
+  local rel="$1"
+  if [ -n "${SWR_ROUTE_AUTHORITY_DIR:-}" ]; then
+    [ -f "${SWR_ROUTE_AUTHORITY_DIR}/${rel}" ] || {
+      echo "[ERROR] watched-repository route authority missing: ${SWR_ROUTE_AUTHORITY_DIR}/${rel}" >&2
+      return 1
+    }
+    cat "${SWR_ROUTE_AUTHORITY_DIR}/${rel}"
+  else
+    git -C "$WORKDIR" show "origin/main:${rel}" || {
+      echo "[ERROR] watched-repository route authority missing at origin/main:${rel}" >&2
+      return 1
+    }
+  fi
+}
+
+yaml_endpoints() {
+  yq -N '.data.COGNI_NODE_ENDPOINTS // ""' 2>/dev/null
+}
+
+merge_endpoint_authorities() {
+  local watched_csv="$1" reviewed_csv="$2"
+  WATCHED_ENDPOINTS="$watched_csv" REVIEWED_ENDPOINTS="$reviewed_csv" python3 - <<'PY'
+import os
+
+routes = {}
+origins = {}
+for origin, raw in (
+    ("watched protected main", os.environ["WATCHED_ENDPOINTS"]),
+    ("reviewed application source", os.environ["REVIEWED_ENDPOINTS"]),
+):
+    for entry in filter(None, raw.split(",")):
+        alias, sep, endpoint = entry.partition("=")
+        if not sep or not alias or not endpoint:
+            raise SystemExit(f"invalid scheduler endpoint entry from {origin}: {entry!r}")
+        if alias in routes and routes[alias] != endpoint:
+            raise SystemExit(
+                f"scheduler endpoint collision for {alias!r}: "
+                f"{origins[alias]}={routes[alias]!r}, {origin}={endpoint!r}"
+            )
+        routes[alias] = endpoint
+        origins.setdefault(alias, origin)
+
+if not routes:
+    raise SystemExit("scheduler endpoint authorities composed to an empty map")
+print(",".join(f"{alias}={routes[alias]}" for alias in sorted(routes)))
+PY
+}
+
+WATCHED_BASE_CSV="$(authority_yaml "$AUTHORITY_BASE_PATH" | yaml_endpoints)"
+WATCHED_ENV_CSV="$(authority_yaml "$AUTHORITY_ENDPOINTS_PATH" | yaml_endpoints)"
+REVIEWED_BASE_CSV="$(yaml_endpoints < "$SRC_DIR/configmap.yaml")"
+REVIEWED_ENV_CSV="$ENDPOINTS_CSV"
+[ -n "$REVIEWED_ENV_CSV" ] || REVIEWED_ENV_CSV="$REVIEWED_BASE_CSV"
+[ -n "$WATCHED_ENV_CSV" ] || WATCHED_ENV_CSV="$WATCHED_BASE_CSV"
+
+COMPOSITE_BASE_CSV="$(merge_endpoint_authorities "$WATCHED_BASE_CSV" "$REVIEWED_BASE_CSV")"
+COMPOSITE_ENV_CSV="$(merge_endpoint_authorities "$WATCHED_ENV_CSV" "$REVIEWED_ENV_CSV")"
+ENDPOINTS_COUNT="$(awk -F',' '{print NF}' <<<"$COMPOSITE_ENV_CSV")"
+NODE_COUNT="$(tr ',' '\n' <<<"$COMPOSITE_ENV_CSV" | grep -cvE '^[0-9a-f]{8}-' || true)"
+
+echo "Reconciling scheduler-worker routing for env '${DEPLOY_ENV}' → ${BRANCH}"
+echo "  composed ${NODE_COUNT} node(s), ${ENDPOINTS_COUNT} endpoint alias(es) from watched + reviewed authorities"
+
 DST_DIR="${WORKDIR}/${SUBPATH}"
 mkdir -p "$DST_DIR"
 
@@ -226,6 +298,9 @@ mkdir -p "$DST_DIR"
 # annotated deployment + services). --delete keeps it byte-identical to main so a
 # pre-#1609 deploy branch also gains the Reloader annotation.
 rsync -a --delete "$SRC_DIR/" "$DST_DIR/"
+COMPOSITE_ENDPOINTS="$COMPOSITE_BASE_CSV" yq -i \
+  '.data.COGNI_NODE_ENDPOINTS = strenv(COMPOSITE_ENDPOINTS)' \
+  "$DST_DIR/configmap.yaml"
 
 # Propagate this env's GENERATED provider-resolved endpoints patch. Absent at an
 # older ref → warn + skip (mirrors the renderer-absent path above) rather than
@@ -233,6 +308,9 @@ rsync -a --delete "$SRC_DIR/" "$DST_DIR/"
 if [ -f "$ENDPOINTS_SRC" ]; then
   mkdir -p "$(dirname "${WORKDIR}/${ENDPOINTS_SUBPATH}")"
   cp "$ENDPOINTS_SRC" "${WORKDIR}/${ENDPOINTS_SUBPATH}"
+  COMPOSITE_ENDPOINTS="$COMPOSITE_ENV_CSV" yq -i \
+    '.data.COGNI_NODE_ENDPOINTS = strenv(COMPOSITE_ENDPOINTS)' \
+    "${WORKDIR}/${ENDPOINTS_SUBPATH}"
   git -C "$WORKDIR" add -A "$ENDPOINTS_SUBPATH"
 else
   echo "::warning::${ENDPOINTS_SUBPATH} absent at this ref — propagating base routing only"

@@ -128,6 +128,31 @@ diff -u "$EXPECTED_A" "$TMPROOT/candidate-a.rules" \
   || fail "candidate-a rules differ from expected (env union + first-wins dedupe)"
 ok "candidate-a renders exactly its env's CIDRs, port-scoped, deduped"
 
+# A foreign control VM custodies only Postgres + Doltgres. Candidate provider
+# CIDRs must never inherit Redis/LiteLLM/Temporal exposure on production.
+DB_ONLY="$TMPROOT/candidate-a.database.list"
+bash "$RENDERER" candidate-a database > "$DB_ONLY"
+grep -q '^80.200.246.35/32:5432,5435$' "$DB_ONLY" \
+  || fail "database role must render only 5432/5435"
+if grep -qE '6379|4000|7233' "$DB_ONLY"; then
+  fail "database role exposed a runtime port"
+fi
+ok "foreign control role exposes exactly database ports 5432/5435"
+
+RUNTIME_ONLY="$TMPROOT/candidate-a.runtime.list"
+bash "$RENDERER" candidate-a runtime > "$RUNTIME_ONLY"
+grep -q '^80.200.246.35/32:6379,4000,7233$' "$RUNTIME_ONLY" \
+  || fail "runtime role must render only 6379/4000/7233"
+if grep -qE ':.*5432|:.*5435' "$RUNTIME_ONLY"; then
+  fail "runtime role exposed a database port"
+fi
+ok "lane runtime role excludes database custody ports"
+
+if bash "$RENDERER" candidate-a arbitrary >/dev/null 2>&1; then
+  fail "renderer must reject an unknown port scope"
+fi
+ok "renderer rejects unknown port scopes"
+
 grep -q '203.0.113.7' "$OUT_A" && fail "preview-only CIDR leaked into candidate-a"
 ok "preview-only CIDR excluded from candidate-a"
 

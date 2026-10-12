@@ -5,6 +5,10 @@ name: Candidate Flight
 on:
   workflow_dispatch:
     inputs:
+      workflow_source_sha:
+        description: "Exact reviewed commit that owns this workflow execution"
+        required: true
+        type: string
       pr_number:
         description: "PR number to flight"
         required: false
@@ -73,6 +77,24 @@ jobs:
       source_repository_by_target_json: ${{ steps.substrate-targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.substrate-targets.outputs.source_sha_by_target_json }}
     steps:
+      # The VCS capability dispatches the reviewed workflow ref explicitly. Fail
+      # before checkout, API reads, artifact resolution, or any deploy write if
+      # GitHub executed a different revision (bug.5455).
+      - name: Assert exact workflow source
+        env:
+          EXPECTED_WORKFLOW_SOURCE_SHA: ${{ inputs.workflow_source_sha }}
+          ACTUAL_WORKFLOW_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_WORKFLOW_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "::error::workflow_source_sha must be an exact 40-character commit SHA"
+            exit 1
+          }
+          [[ "${ACTUAL_WORKFLOW_SOURCE_SHA,,}" == "${EXPECTED_WORKFLOW_SOURCE_SHA,,}" ]] || {
+            echo "::error::workflow source mismatch: executed ${ACTUAL_WORKFLOW_SOURCE_SHA}, expected ${EXPECTED_WORKFLOW_SOURCE_SHA}"
+            exit 1
+          }
+
       - name: Checkout workflow source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
@@ -361,15 +383,12 @@ jobs:
           environment: candidate-a
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
+          port_scope: ${{ (vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a' && 'all' || 'runtime' }}
 
-  # A foreign-custodied lane's substrate (Postgres/Temporal/LiteLLM) lives on the
-  # CONTROL env's VM (production for cogni-dao nodes), not the candidate VM. The
-  # job above hardens the candidate VM only, so the Akash provider NAT hole for
-  # such lanes never reaches the machine their substrate answers from: the leased
-  # app boots but readyz?deep=1 dies on unreachable Postgres/Temporal. Same
-  # lane-vs-control conflation as bug.5216. This twin binds environment:
-  # production for its VM secrets while rendering the candidate-a lane allowlist —
-  # the action already separates those two concerns.
+  # A foreign-custodied lane keeps its databases on the CONTROL env's VM while
+  # Temporal/Redis/LiteLLM live on the lane VM. This job opens only database
+  # ports on the control host; it never moves VM keys or runtime secret values
+  # across environment boundaries (task.5241 owns the missing typed binding).
   reconcile-compute-egress-control:
     needs: decide
     if: needs.decide.result == 'success'
@@ -393,6 +412,7 @@ jobs:
           environment: candidate-a
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
+          port_scope: database
 
   prepare-substrate-deploy-branch:
     needs:
@@ -1305,13 +1325,14 @@ jobs:
         run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 
       - name: Download resolved-pr-images
-        if: env.DEPLOYMENT_PROVIDER == 'k3s'
+        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
         with:
           name: resolved-pr-images
           path: ${{ runner.temp }}/
 
       - name: Prepare per-node deploy branch workspace
+        if: matrix.node != 'scheduler-worker'
         env:
           GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
           DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
@@ -1332,7 +1353,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Snapshot deploy-branch overlay digests (pre-rsync)
-        if: env.DEPLOYMENT_PROVIDER == 'k3s'
+        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
         id: snapshot
         working-directory: deploy-branch
         env:
@@ -1344,6 +1365,7 @@ jobs:
           sed 's/^/  /' "$SNAPSHOT_FILE"
 
       - name: Sync base + per-node overlay + per-node catalog to deploy branch
+        if: matrix.node != 'scheduler-worker'
         env:
           NODE: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
@@ -1381,7 +1403,7 @@ jobs:
 
       - name: Promote this node's digest
         id: promote
-        if: env.DEPLOYMENT_PROVIDER == 'k3s'
+        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
         working-directory: deploy-branch
         env:
           PAYLOAD_FILE: ${{ runner.temp }}/resolved-pr-images.json
@@ -1392,7 +1414,7 @@ jobs:
         run: NODES="$NODE" bash ../ci-src/scripts/ci/promote-build-payload.sh
 
       - name: Record external workload source identity
-        if: env.DEPLOYMENT_PROVIDER == 'akash'
+        if: env.DEPLOYMENT_PROVIDER == 'akash' && matrix.node != 'scheduler-worker'
         working-directory: deploy-branch
         env:
           APP: ${{ matrix.node }}
@@ -1400,7 +1422,7 @@ jobs:
         run: bash ../ci-src/scripts/ci/update-source-sha-map.sh
 
       - name: Restore non-promoted overlay digests (post-rsync self-heal)
-        if: env.DEPLOYMENT_PROVIDER == 'k3s'
+        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
         working-directory: deploy-branch
         env:
           PROMOTED_APPS: ${{ steps.promote.outputs.promoted_apps }}
@@ -1430,6 +1452,7 @@ jobs:
           done
 
       - name: Commit and push to per-node deploy branch
+        if: matrix.node != 'scheduler-worker'
         id: push-deploy
         working-directory: deploy-branch
         env:
@@ -1457,7 +1480,7 @@ jobs:
       # GHA matrix-job outputs collapse to the last cell's value; per-node
       # artifact is the per-cell contract verify-candidate reads.
       - name: Upload per-cell deploy_branch_sha artifact
-        if: always()
+        if: always() && matrix.node != 'scheduler-worker'
         env:
           NODE: ${{ matrix.node }}
           DEPLOY_SHA: ${{ steps.push-deploy.outputs.deploy_branch_sha }}
@@ -1465,7 +1488,7 @@ jobs:
           mkdir -p deploy-sha-out
           printf '%s' "${DEPLOY_SHA:-}" > "deploy-sha-out/deploy-sha-${NODE}.txt"
       - name: Upload artifact
-        if: always()
+        if: always() && matrix.node != 'scheduler-worker'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deploy-sha-${{ matrix.node }}
@@ -1612,7 +1635,9 @@ jobs:
   reconcile-scheduler-worker-routing:
     needs: [decide]
     if: needs.decide.result == 'success'
-    # Serialize per-env so concurrent node flights never race on the shared branch.
+    # This is the ONLY writer of deploy/candidate-a-scheduler-worker. Routing and
+    # an optional scheduler image promotion are committed locally and pushed
+    # together, so concurrent flights cannot interleave two clone→push writers.
     concurrency:
       group: reconcile-scheduler-worker-routing-candidate-a
       cancel-in-progress: false
@@ -1682,12 +1707,37 @@ jobs:
             exit 1
           }
 
+      - name: Prepare scheduler-worker deploy branch workspace
+        env:
+          GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
+          DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
+          PER_NODE_BRANCH: deploy/candidate-a-scheduler-worker
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" deploy-branch
+          git -C deploy-branch fetch origin main "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
+          if git -C deploy-branch rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
+            git -C deploy-branch checkout -B "$PER_NODE_BRANCH" "origin/$PER_NODE_BRANCH"
+          else
+            echo "::error::${PER_NODE_BRANCH} is missing; refusing to invent the shared worker authority"
+            exit 1
+          fi
+          git -C deploy-branch config user.name "github-actions[bot]"
+          git -C deploy-branch config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Download scheduler-worker build payload
+        if: contains(fromJSON(needs.decide.outputs.flight_targets_json), 'scheduler-worker')
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: resolved-pr-images
+          path: ${{ runner.temp }}/
+
       - name: Reconcile scheduler-worker routing (propagate to per-env deploy branch)
         working-directory: app-src
         env:
           GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
           APP_SOURCE_DIR: "."
-          SWR_DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
+          DEPLOY_BRANCH_DIR: ${{ github.workspace }}/deploy-branch
           SWR_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/swr-reconcile-summary.json
           SWR_RECONCILE_HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           SWR_RECONCILE_NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
@@ -1703,6 +1753,47 @@ jobs:
             exit 0
           fi
           bash scripts/ci/reconcile-scheduler-worker-routing.sh candidate-a
+
+      - name: Promote scheduler-worker in the same branch transaction
+        id: promote-scheduler
+        if: contains(fromJSON(needs.decide.outputs.flight_targets_json), 'scheduler-worker')
+        working-directory: deploy-branch
+        env:
+          PAYLOAD_FILE: ${{ runner.temp }}/resolved-pr-images.json
+          OVERLAY_ENV: candidate-a
+          COGNI_CATALOG_ROOT: ../app-src/infra/catalog
+        run: NODES=scheduler-worker bash ../app-src/scripts/ci/promote-build-payload.sh
+
+      - name: Commit and push atomic scheduler-worker desired state
+        id: push-scheduler
+        working-directory: deploy-branch
+        env:
+          PER_NODE_BRANCH: deploy/candidate-a-scheduler-worker
+          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "candidate-flight scheduler-worker: sha-${HEAD_SHA}"
+          fi
+          git push origin "HEAD:${PER_NODE_BRANCH}"
+          echo "deploy_branch_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Write scheduler-worker deploy SHA marker
+        if: contains(fromJSON(needs.decide.outputs.flight_targets_json), 'scheduler-worker')
+        env:
+          DEPLOY_SHA: ${{ steps.push-scheduler.outputs.deploy_branch_sha }}
+        run: |
+          mkdir -p deploy-sha-out
+          printf '%s' "$DEPLOY_SHA" > deploy-sha-out/deploy-sha-scheduler-worker.txt
+
+      - name: Upload scheduler-worker deploy SHA artifact
+        if: contains(fromJSON(needs.decide.outputs.flight_targets_json), 'scheduler-worker')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deploy-sha-scheduler-worker
+          path: deploy-sha-out/deploy-sha-scheduler-worker.txt
+          retention-days: 1
 
       - name: Push scheduler-worker routing telemetry to Loki
         if: always()

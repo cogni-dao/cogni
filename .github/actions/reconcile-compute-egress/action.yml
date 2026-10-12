@@ -12,6 +12,12 @@ inputs:
   vm_host: { required: true, description: "Environment substrate VM host" }
   ssh_deploy_key:
     { required: true, description: "Existing environment SSH deployment key" }
+  port_scope:
+    {
+      required: false,
+      default: "all",
+      description: "runtime for a lane VM; database for a foreign control VM",
+    }
 
 runs:
   using: composite
@@ -21,12 +27,13 @@ runs:
       env:
         APP_SOURCE_ROOT: ${{ inputs.app_source_root }}
         DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+        PORT_SCOPE: ${{ inputs.port_scope }}
         ALLOWLIST: ${{ runner.temp }}/compute-egress-allowlist
       run: |
         set -euo pipefail
         COGNI_CATALOG_ROOT="${APP_SOURCE_ROOT}/infra/catalog" \
           bash "${APP_SOURCE_ROOT}/scripts/ci/render-compute-egress-allowlist.sh" \
-            "$DEPLOYMENT_ENVIRONMENT" > "$ALLOWLIST"
+            "$DEPLOYMENT_ENVIRONMENT" "$PORT_SCOPE" > "$ALLOWLIST"
 
     - name: Reconcile environment substrate firewall
       shell: bash

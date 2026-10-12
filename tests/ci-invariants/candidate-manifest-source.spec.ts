@@ -57,10 +57,16 @@ interface WorkflowJob {
   if?: string;
   needs?: string[];
   outputs?: Record<string, unknown>;
+  concurrency?: { group?: unknown; "cancel-in-progress"?: boolean };
   steps: WorkflowStep[];
 }
 
 const parsed = yaml.parse(WORKFLOW) as {
+  on?: {
+    workflow_dispatch?: {
+      inputs?: Record<string, { required?: boolean; type?: string }>;
+    };
+  };
   jobs: Record<string, WorkflowJob>;
 };
 
@@ -73,6 +79,19 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
+  it("fails before side effects unless the executed workflow SHA is exact", () => {
+    expect(
+      parsed.on?.workflow_dispatch?.inputs?.workflow_source_sha
+    ).toMatchObject({ required: true, type: "string" });
+
+    const steps = parsed.jobs.decide.steps;
+    expect(steps[0]?.name).toBe("Assert exact workflow source");
+    expect(steps[0]?.run).toContain(
+      '[[ "${ACTUAL_WORKFLOW_SOURCE_SHA,,}" == "${EXPECTED_WORKFLOW_SOURCE_SHA,,}" ]]'
+    );
+    expect(steps[1]?.name).toBe("Checkout workflow source");
+  });
+
   it("keeps the k3s control domain separate from an isolated Akash workload zone", () => {
     const targetDomain =
       "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}";
@@ -252,23 +271,79 @@ describe("candidate-a manifest source", () => {
       "reconcile-scheduler-worker-routing",
       "Reconcile scheduler-worker routing (propagate to per-env deploy branch)"
     );
+    const workspace = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Prepare scheduler-worker deploy branch workspace"
+    );
+    const promote = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Promote scheduler-worker in the same branch transaction"
+    );
+    const push = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Commit and push atomic scheduler-worker desired state"
+    );
+    const genericPrepare = namedStep(
+      "flight",
+      "Prepare per-node deploy branch workspace"
+    );
+    const genericSync = namedStep(
+      "flight",
+      "Sync base + per-node overlay + per-node catalog to deploy branch"
+    );
+    const genericPush = namedStep(
+      "flight",
+      "Commit and push to per-node deploy branch"
+    );
 
     expect(resolve.env?.DEPLOYMENT_PROVIDER).toBe("k3s");
     expect(resolve.run).toBe(
       "bash scripts/ci/resolve-candidate-deploy-repository.sh"
     );
-    expect(reconcile.env?.SWR_DEPLOY_REPOSITORY).toBe(
+    expect(workspace.env?.DEPLOY_REPOSITORY).toBe(
       "${{ steps.deploy-repo.outputs.repository }}"
+    );
+    expect(workspace.run).toContain(
+      'git clone "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" deploy-branch'
+    );
+    expect(reconcile.env?.DEPLOY_BRANCH_DIR).toBe(
+      "${{ github.workspace }}/deploy-branch"
     );
     expect(reconcile.env?.GH_TOKEN).toBe(
       "${{ steps.deploy-app.outputs.token || github.token }}"
     );
+    expect(promote.if).toContain("scheduler-worker");
+    expect(promote.run).toContain("NODES=scheduler-worker");
+    expect(push.run?.match(/git push /g)).toHaveLength(1);
+    expect(genericPrepare.if).toBe("matrix.node != 'scheduler-worker'");
+    expect(genericSync.if).toBe("matrix.node != 'scheduler-worker'");
+    expect(genericPush.if).toBe("matrix.node != 'scheduler-worker'");
+    expect(
+      parsed.jobs["reconcile-scheduler-worker-routing"].concurrency?.group
+    ).toBe("reconcile-scheduler-worker-routing-candidate-a");
     expect(parsed.jobs.flight.needs).toContain(
       "reconcile-scheduler-worker-routing"
     );
     expect(parsed.jobs.flight.if).toContain(
       "needs.reconcile-scheduler-worker-routing.result == 'success'"
     );
+  });
+
+  it("keeps candidate runtime and foreign-control database firewall grants separate", () => {
+    expect(
+      namedStep(
+        "reconcile-compute-egress",
+        "Reconcile catalog-derived external compute egress"
+      ).with?.port_scope
+    ).toBe(
+      "${{ (vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a' && 'all' || 'runtime' }}"
+    );
+    expect(
+      namedStep(
+        "reconcile-compute-egress-control",
+        "Reconcile lane egress on the control-env substrate VM"
+      ).with?.port_scope
+    ).toBe("database");
   });
 
   it("fails candidate verification unless worker /version matches SHA and digest", () => {
