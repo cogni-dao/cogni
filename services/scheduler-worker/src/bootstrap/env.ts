@@ -28,17 +28,16 @@ const EnvSchema = z.object({
   /** Temporal server address (required) */
   TEMPORAL_ADDRESS: z.string().min(1, "TEMPORAL_ADDRESS is required"),
 
-  /** Temporal namespace (required) - format: cogni-{APP_ENV} */
-  TEMPORAL_NAMESPACE: z.string().min(1, "TEMPORAL_NAMESPACE is required"),
   /**
-   * Namespaces this worker serves IN ADDITION to its own (bug.5212). A foreign-custodied lane
-   * — an akash node's non-production lane, reconciled and paid for by the production cluster —
-   * submits its workflows to the CONTROL cluster's Temporal under `cogni-<lane>`. That is the
-   * server this worker is already connected to, and the SCHEDULER_API_TOKEN the lane inherits
-   * is already this env's, so serving the lane needs one more Worker per namespace and nothing
-   * else. Empty (the default) means byte-identical behaviour to before.
+   * Temporal namespace (required) - format: cogni-{APP_ENV}. The ONLY namespace this
+   * worker serves (bug.5447): runtime substrate strictly follows the deployment lane, so
+   * every node of a lane — k3s or akash, foreign-control or not — submits to the LANE's
+   * Temporal under this one namespace, and the lane's own worker polls it. The bug.5212
+   * TEMPORAL_CUSTODIED_NAMESPACES cross-polling (a production worker serving candidate
+   * namespaces) existed only because the substrate host was wrongly derived from the
+   * control env; it is retired with that derivation.
    */
-  TEMPORAL_CUSTODIED_NAMESPACES: z.string().optional().default(""),
+  TEMPORAL_NAMESPACE: z.string().min(1, "TEMPORAL_NAMESPACE is required"),
 
   /** Temporal task queue (required) */
   TEMPORAL_TASK_QUEUE: z.string().min(1, "TEMPORAL_TASK_QUEUE is required"),

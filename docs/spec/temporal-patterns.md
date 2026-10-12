@@ -524,10 +524,12 @@ the private Worker's catalog/Build ID and the app's schedule-reconciliation stat
 alive, a successful connection, or an old poller entry is insufficient.
 
 > **As-built divergence:** the centralized `scheduler-worker` currently polls every node queue
-> across one or more environment namespaces, driven by `COGNI_NODE_ENDPOINTS` and
-> `TEMPORAL_CUSTODIED_NAMESPACES`. That static cross-product caused bug.5212 when a namespace was
-> added without a corresponding poller. It remains the compatibility lane only while schedules
-> migrate; it is not the target ownership model.
+> in its own lane's namespace, driven by `COGNI_NODE_ENDPOINTS`. The former
+> `TEMPORAL_CUSTODIED_NAMESPACES` cross-polling (a control cluster's worker serving foreign
+> lanes' namespaces, bug.5212) was removed by bug.5447: runtime substrate strictly follows the
+> deployment lane, so each lane's worker serves exactly one namespace. The per-lane worker
+> remains the compatibility lane only while schedules migrate; it is not the target ownership
+> model.
 
 #### Pareto migration without orphaning schedules
 

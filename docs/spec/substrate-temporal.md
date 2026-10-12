@@ -317,9 +317,10 @@ per node and fail-closed:
 7. Keep operator governance/ledger Workers unchanged.
 8. vNext: propagate the proven package/service contract to existing nodes.
 
-At no point are both old and new schedules enabled. `TEMPORAL_CUSTODIED_NAMESPACES` and
-`COGNI_NODE_ENDPOINTS` remain compatibility inputs only until the last migrated node leaves the
-central worker.
+At no point are both old and new schedules enabled. `COGNI_NODE_ENDPOINTS` remains a
+compatibility input only until the last migrated node leaves the central worker
+(`TEMPORAL_CUSTODIED_NAMESPACES` was removed by bug.5447 — each lane's worker serves exactly
+its own namespace).
 
 ## Acceptance evidence
 
