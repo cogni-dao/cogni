@@ -65,5 +65,5 @@ code, CI, flight, validation, and merge. Subdirectory `AGENTS.md` files extend t
 the closest file wins for code-local rules.
 
 Pointers: [contributor contract](.agents/skills/contribute-to-cogni/SKILL.md) ·
-[cognition design](docs/spec/node-baas-architecture.md#cognition-substrate) ·
+[Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) ·
 [discovery](https://cognidao.org/.well-known/agent.json)

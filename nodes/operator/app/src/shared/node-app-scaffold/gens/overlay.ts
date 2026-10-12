@@ -22,7 +22,7 @@
  *     closed if the node-at-root Postgres migrate command is absent (a wrong path silently
  *     crash-loops the migrate initContainer).
  * Side-effects: none — pure string transform, no IO, no env.
- * Links: scripts/ci/render-node-overlays.sh, scripts/setup/scaffold-node.sh, docs/spec/node-baas-architecture.md
+ * Links: scripts/ci/render-node-overlays.sh, scripts/setup/scaffold-node.sh, https://cognidao.org/knowledge/node-baas-substrate-model
  * @public
  */
 

@@ -11,7 +11,7 @@ created: 2026-07-16
 spec_refs:
   - attribution-pipeline-overview-spec
   - attribution-ledger
-  - spec.node-baas-architecture
+  - node-baas-substrate-model
   - substrate-temporal
   - temporal-patterns
   - multi-node-tenancy
@@ -30,7 +30,7 @@ A node app reads its **own** Postgres. But the shared scheduler-worker holds **n
 
 ## The invariant that resolves it
 
-**The node app is the sole writer of its own ledger.** Only the node holds its DB creds; the shared worker is a **dispatcher**, not a DB writer. Therefore **every write to a node's ledger flows through one seam — the node's internal attribution API** — exactly mirroring the proven graph path (`executeGraphActivity` → `/api/internal/graphs/[id]/runs` → node runs it in-process against its own DB). Nodes DO have Temporal access (client + ESO namespace creds, node-baas-architecture § Node→Temporal seam); what they don't run is their own worker.
+**The node app is the sole writer of its own ledger.** Only the node holds its DB creds; the shared worker is a **dispatcher**, not a DB writer. Therefore **every write to a node's ledger flows through one seam — the node's internal attribution API** — exactly mirroring the proven graph path (`executeGraphActivity` → `/api/internal/graphs/[id]/runs` → node runs it in-process against its own DB). Nodes DO have Temporal access (client + ESO namespace creds, [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model)); what they don't run is their own worker.
 
 ## The picture
 
@@ -91,5 +91,5 @@ There is one important first-event edge. A spawn can merge while an app instance
 
 ## Related
 
-- [Attribution Pipeline Overview](../spec/attribution-pipeline-overview.md) · [Attribution Ledger](../spec/attribution-ledger.md) · [Node BaaS Architecture](../spec/node-baas-architecture.md) · [Substrate Temporal](../spec/substrate-temporal.md) · [Temporal Patterns](../spec/temporal-patterns.md) · [Multi-Node Tenancy](../spec/multi-node-tenancy.md)
+- [Attribution Pipeline Overview](../spec/attribution-pipeline-overview.md) · [Attribution Ledger](../spec/attribution-ledger.md) · [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) · [Substrate Temporal](../spec/substrate-temporal.md) · [Temporal Patterns](../spec/temporal-patterns.md) · [Multi-Node Tenancy](../spec/multi-node-tenancy.md)
 - Graph precedent: `services/scheduler-worker/src/adapters/run-http.ts` + `nodes/operator/app/src/app/api/internal/graph-runs/route.ts`

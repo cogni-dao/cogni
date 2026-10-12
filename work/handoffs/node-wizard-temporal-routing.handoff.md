@@ -37,7 +37,7 @@ Argo sync: `curl -s https://oss-test.cognidao.org/version` returns the flighted
 ## Start By Reading
 
 - `docs/design/node-wizard-formation-wiring.md` — this PR's design (as-built + endgame)
-- `docs/spec/node-baas-architecture.md` §BaaS Substrate Map — Graphs = routing substrate
+- [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) — Graphs = routing substrate
 - `scripts/ci/lib/image-tags.sh` — `node_internal_service_endpoint_csv` / `node_billing_endpoint_csv` (is_built_by_this_repo lifted), node_id cache (catalog projection fallback)
 - `scripts/ci/render-scheduler-worker-endpoints.sh` — `verify_projection` hard gate + `--check`
 - `nodes/operator/app/src/adapters/server/vcs/github-repo-write.ts` — mint splices the endpoint (resolved the `:1184` skip)

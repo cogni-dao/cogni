@@ -21,7 +21,7 @@
  *     floor, so the git skeleton stays minimal and the Dolt orientation carries
  *     the node-specific substance.
  * Side-effects: none
- * Links: docs/spec/node-baas-architecture.md
+ * Links: https://cognidao.org/knowledge/node-baas-substrate-model
  * @internal
  */
 
@@ -41,7 +41,7 @@ import type {
  * universal hook-injection path or serve-side ceiling is assumed. The former
  * 16 KB cap (bug.5284) capped
  * the SSoT itself and blocked realistic growth; the bundle is human-curated in
- * Dolt, not user-generated. See docs/spec/node-baas-architecture.md §Cognition
+ * Dolt, not user-generated. See https://cognidao.org/knowledge/node-baas-substrate-model
  * Substrate and the `cognition-expert` skill.
  */
 

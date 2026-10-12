@@ -26,7 +26,7 @@
  *     proves the live end state.
  *   - Names are unique; validateRegistry() runs at module load and fails loud.
  * Side-effects: none (validateRegistry throws on a malformed registry at import).
- * Links: docs/spec/node-baas-architecture.md, scripts/ci/reconcile-node-substrate.sh,
+ * Links: https://cognidao.org/knowledge/node-baas-substrate-model, scripts/ci/reconcile-node-substrate.sh,
  *   scripts/ci/render-scheduler-worker-endpoints.sh,
  *   scripts/ci/reconcile-scheduler-worker-routing.sh (env-singleton deploy-branch propagation),
  *   infra/k8s/base/scheduler-worker/deployment.yaml (reloader annotation),

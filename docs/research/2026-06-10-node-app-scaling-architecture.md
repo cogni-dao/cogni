@@ -185,7 +185,7 @@ not headroom. Cherry-only, OSS-only.
 - [ ] SHARED*INFRA_NOT_PER_NODE: node-apps share one `postgres`/`doltgres`/
       `temporal`/`litellm`/`redis` **server**; never per-node infra \_instances* —
       that is the thing that fundamentally does not scale. This is **compatible
-      with per-node databases/credentials**: [`node-baas-architecture`](../spec/node-baas-architecture.md)
+      with per-node databases/credentials**: [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model)
       and the live #1584 per-node-DB-cred cutover provision a per-node `DATABASE` + role + ESO secret _inside_ the one shared server (DBs/schemas scale with
       load, not node count). Shared **server**, per-node **database** — not a
       contradiction; the anti-pattern is a per-node postgres _process_.
