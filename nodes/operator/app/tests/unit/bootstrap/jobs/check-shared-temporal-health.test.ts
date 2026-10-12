@@ -21,11 +21,18 @@ const mocks = vi.hoisted(() => ({
   durationObserve: vi.fn(),
   lastSuccessSet: vi.fn(),
   pollerSet: vi.fn(),
+  nodeDeclarations: [] as Array<Record<string, unknown>>,
+  governanceDeclarations: [] as Array<Record<string, unknown>>,
+  jobDeclarations: [] as Array<Record<string, unknown>>,
   rows: [
     {
       dbScheduleId: "00000000-0000-4000-8000-000000000001",
       temporalScheduleId: "probe-schedule",
+      ownerUserId: "user-1",
+      executionGrantId: "grant-1",
+      graphId: "langgraph:probe",
       enabled: true,
+      cron: "* * * * *",
       timezone: "UTC",
       input: { message: "probe" },
     },
@@ -53,7 +60,17 @@ vi.mock("@/bootstrap/container", () => ({
   }),
 }));
 
-vi.mock("@/shared/config", () => ({ getNodeId: () => "node-123" }));
+vi.mock("@/shared/config", () => ({
+  getGovernanceConfig: () => ({ schedules: mocks.governanceDeclarations }),
+  getNodeId: () => "node-123",
+  getNodeName: () => "operator",
+  getNodeSchedules: () => mocks.nodeDeclarations,
+}));
+
+vi.mock("@/shared/node-app-scaffold/scheduled-jobs", () => ({
+  defineScheduledJob: (definition: unknown) => definition,
+  listScheduledJobs: () => mocks.jobDeclarations,
+}));
 
 vi.mock("@/shared/env/server-env", () => ({
   serverEnv: () => ({
@@ -86,6 +103,9 @@ import { checkSharedTemporalHealth } from "@/bootstrap/jobs/checkSharedTemporalH
 describe("checkSharedTemporalHealth job", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.nodeDeclarations.length = 0;
+    mocks.governanceDeclarations.length = 0;
+    mocks.jobDeclarations.length = 0;
     vi.stubEnv("npm_package_version", "unknown");
     vi.stubEnv("BUILD_TIME", "2026-10-11T11:00:00.000Z");
     mocks.inspect.mockResolvedValue({
@@ -105,6 +125,9 @@ describe("checkSharedTemporalHealth job", () => {
       driftReasons: [],
       dueCount: 1,
       terminalCount: 1,
+      failedCount: 0,
+      staleCount: 0,
+      missedCount: 0,
       latestDueExecution: null,
     });
   });
@@ -132,8 +155,16 @@ describe("checkSharedTemporalHealth job", () => {
             dbScheduleId: "00000000-0000-4000-8000-000000000001",
             temporalScheduleId: "probe-schedule",
             enabled: true,
+            cron: "* * * * *",
             timezone: "UTC",
             input: { message: "probe" },
+            graphId: "langgraph:probe",
+            executionGrantId: "grant-1",
+            ownerUserId: "user-1",
+            workflowType: "GraphRunWorkflow",
+            taskQueue: "scheduler-tasks-node-123",
+            overlapPolicy: "buffer_one",
+            catchupWindowMs: 60_000,
           },
         ],
         expectedTaskQueue: "scheduler-tasks-node-123",
@@ -162,6 +193,9 @@ describe("checkSharedTemporalHealth job", () => {
       driftReasons: [],
       dueCount: 1,
       terminalCount: 0,
+      failedCount: 0,
+      staleCount: 1,
+      missedCount: 0,
       latestDueExecution: null,
     });
 
@@ -173,5 +207,48 @@ describe("checkSharedTemporalHealth job", () => {
       schedules: { dueCount: 1, terminalCount: 0 },
     });
     expect(mocks.lastSuccessSet).not.toHaveBeenCalled();
+  });
+
+  it("adds missing repo-spec and defineScheduledJob declarations to the proof", async () => {
+    mocks.rows.length = 0;
+    mocks.nodeDeclarations.push({
+      id: "repo-probe",
+      nodeId: "node-123",
+      cron: "*/5 * * * *",
+      timezone: "UTC",
+      kind: "graph",
+      graph: "langgraph:probe",
+      payload: { prompt: "probe" },
+    });
+    mocks.governanceDeclarations.push({
+      charter: "COMMUNITY",
+      cron: "0 * * * *",
+      timezone: "UTC",
+      entrypoint: "COMMUNITY",
+    });
+    mocks.jobDeclarations.push({
+      id: "metrics-ingest",
+      cron: "*/15 * * * *",
+    });
+
+    await checkSharedTemporalHealth();
+
+    const call = mocks.inspectSchedules.mock.calls.at(-1)?.[0];
+    expect(call.expectedSchedules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          temporalScheduleId: "node-task:node-123:repo-probe",
+          cron: "*/5 * * * *",
+        }),
+        expect.objectContaining({
+          temporalScheduleId: "governance:community",
+          cron: "0 * * * *",
+        }),
+        expect.objectContaining({
+          temporalScheduleId: "missing:scheduled-job:metrics-ingest",
+          cron: "*/15 * * * *",
+        }),
+      ])
+    );
   });
 });

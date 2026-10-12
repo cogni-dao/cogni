@@ -28,6 +28,7 @@ import {
   type ScheduleOverlapPolicyHint,
 } from "@cogni/scheduler-core";
 import {
+  type CalendarSpecDescription,
   Client,
   Connection,
   type ConnectionOptions,
@@ -52,6 +53,88 @@ export interface TemporalScheduleControlConfig {
 const GRAPH_RUN_WORKFLOW_TYPE = "GraphRunWorkflow";
 /** Workflow type name for the generic non-graph node-task dispatch (task.5029). */
 const NODE_TASK_WORKFLOW_TYPE = "NodeTaskWorkflow";
+const MAX_HEALTH_RECENT_ACTIONS = 10;
+const MONTH_NAMES = [
+  "JANUARY",
+  "FEBRUARY",
+  "MARCH",
+  "APRIL",
+  "MAY",
+  "JUNE",
+  "JULY",
+  "AUGUST",
+  "SEPTEMBER",
+  "OCTOBER",
+  "NOVEMBER",
+  "DECEMBER",
+] as const;
+const DAY_NAMES = [
+  "SUNDAY",
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+  "SATURDAY",
+] as const;
+
+function expandNumericRanges(
+  ranges: readonly { start: number; end: number; step: number }[]
+): number[] {
+  return ranges.flatMap((range) => {
+    const step = Math.max(1, range.step);
+    const end = Math.max(range.start, range.end);
+    const values: number[] = [];
+    for (let value = range.start; value <= end; value += step) {
+      values.push(value);
+    }
+    return values;
+  });
+}
+
+function expandNamedRanges<T extends string>(
+  ranges: readonly { start: T; end: T; step: number }[],
+  names: readonly T[],
+  offset = 0
+): number[] {
+  return ranges.flatMap((range) => {
+    const start = names.indexOf(range.start);
+    const rawEnd = names.indexOf(range.end);
+    const end = Math.max(start, rawEnd);
+    const step = Math.max(1, range.step);
+    const values: number[] = [];
+    for (let value = start; value <= end; value += step) {
+      values.push(value + offset);
+    }
+    return values;
+  });
+}
+
+function calendarDescription(calendar: CalendarSpecDescription) {
+  return {
+    second: expandNumericRanges(calendar.second),
+    minute: expandNumericRanges(calendar.minute),
+    hour: expandNumericRanges(calendar.hour),
+    dayOfMonth: expandNumericRanges(calendar.dayOfMonth),
+    month: expandNamedRanges(calendar.month, MONTH_NAMES, 1),
+    dayOfWeek: expandNamedRanges(calendar.dayOfWeek, DAY_NAMES),
+  };
+}
+
+function overlapPolicyName(
+  policy: (typeof ScheduleOverlapPolicy)[keyof typeof ScheduleOverlapPolicy]
+): "skip" | "buffer_one" | "allow_all" | "unknown" {
+  switch (policy) {
+    case ScheduleOverlapPolicy.SKIP:
+      return "skip";
+    case ScheduleOverlapPolicy.BUFFER_ONE:
+      return "buffer_one";
+    case ScheduleOverlapPolicy.ALLOW_ALL:
+      return "allow_all";
+    default:
+      return "unknown";
+  }
+}
 
 /**
  * Build the workflow `args[0]` envelope for a schedule.
@@ -143,7 +226,10 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
         address: this.config.address,
       };
 
-      this.connection = await Connection.connect(connectionOptions);
+      this.connection = await Connection.connect({
+        ...connectionOptions,
+        connectTimeout: 1_200,
+      });
       this.client = new Client({
         connection: this.connection,
         namespace: this.config.namespace,
@@ -306,13 +392,18 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
   }
 
   async describeSchedule(
-    scheduleId: string
+    scheduleId: string,
+    deadlineAtMs?: number
   ): Promise<ScheduleDescription | null> {
     const client = await this.getClient();
 
     try {
       const handle = client.schedule.getHandle(scheduleId);
-      const description = await handle.describe();
+      const description = deadlineAtMs
+        ? await client.schedule.withDeadline(deadlineAtMs, () =>
+            handle.describe()
+          )
+        : await handle.describe();
 
       const nextActionTimes = description.info.nextActionTimes;
       const recentActions = description.info.recentActions;
@@ -350,27 +441,66 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
           (actionArgs.scheduleId as string | null) ??
           null)
         : null;
+      const actionGraphId: string | null = actionArgs
+        ? typeof actionArgs.graphId === "string"
+          ? actionArgs.graphId
+          : typeof actionArgs.route === "string"
+            ? `task:${actionArgs.route}`
+            : null
+        : null;
       // bug.5023: expose the action's task queue so a queue migration (e.g. shared
       // `ledger-tasks` → per-node `ledger-tasks-<nodeId>`) is detected as drift.
       const actionTaskQueue: string | null =
         action.type === "startWorkflow" && typeof action.taskQueue === "string"
           ? action.taskQueue
           : null;
-      const lastWorkflow =
-        lastAction?.action.type === "startWorkflow"
-          ? lastAction.action.workflow
-          : null;
-      const lastWorkflowDescription = lastWorkflow
-        ? await client.workflow
-            .getHandle(lastWorkflow.workflowId, undefined, {
-              firstExecutionRunId: lastWorkflow.firstExecutionRunId,
-            })
-            .describe()
-            // A retained Schedule action can outlive Workflow visibility. Keep
-            // the action identity and report UNKNOWN so health classifies a
-            // due action without terminal proof as stale_execution.
-            .catch(() => null)
-        : null;
+      const boundedRecentActions = recentActions.slice(
+        -MAX_HEALTH_RECENT_ACTIONS
+      );
+      const recentWorkflowIds = new Set(
+        boundedRecentActions.map((item) => item.action.workflow.workflowId)
+      );
+      const actionRefs = [
+        ...boundedRecentActions.map((item) => ({
+          scheduledAt: item.scheduledAt,
+          workflow: item.action.workflow,
+        })),
+        ...description.info.runningActions
+          .filter((item) => !recentWorkflowIds.has(item.workflow.workflowId))
+          .map((item) => ({ scheduledAt: null, workflow: item.workflow })),
+      ];
+      const recentWorkflowDescriptions = (
+        await Promise.all(
+          actionRefs.map(async (item) => {
+            const workflowHandle = client.workflow.getHandle(
+              item.workflow.workflowId,
+              undefined,
+              { firstExecutionRunId: item.workflow.firstExecutionRunId }
+            );
+            const workflowDescription = await (deadlineAtMs
+              ? client.workflow.withDeadline(deadlineAtMs, () =>
+                  workflowHandle.describe()
+                )
+              : workflowHandle.describe()
+            ).catch(() => null);
+            return {
+              scheduledAtIso:
+                item.scheduledAt?.toISOString() ??
+                workflowDescription?.startTime.toISOString() ??
+                description.info.createdAt.toISOString(),
+              workflowId: item.workflow.workflowId,
+              firstExecutionRunId: item.workflow.firstExecutionRunId,
+              status:
+                workflowDescription?.status.name === "UNSPECIFIED"
+                  ? ("UNKNOWN" as const)
+                  : (workflowDescription?.status.name ?? ("UNKNOWN" as const)),
+            };
+          })
+        )
+      ).sort((left, right) =>
+        left.scheduledAtIso.localeCompare(right.scheduledAtIso)
+      );
+      const lastWorkflowDescription = recentWorkflowDescriptions.at(-1) ?? null;
 
       return {
         scheduleId,
@@ -379,19 +509,38 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
             ? actionArgs.nodeId
             : null,
         nextRunAtIso: nextTime ? nextTime.toISOString() : null,
+        nextRunTimesIso: nextActionTimes.map((time) => time.toISOString()),
+        calendarSpecs: (description.spec.calendars ?? []).map(
+          calendarDescription
+        ),
         lastRunAtIso: lastAction ? lastAction.scheduledAt.toISOString() : null,
         isPaused: description.state.paused,
         cron: null, // Temporal compiles crons to calendars; can't read back
         timezone: tz,
         input: actionInput,
         dbScheduleId: actionDbScheduleId,
-        lastWorkflowId: lastWorkflow?.workflowId ?? null,
-        lastWorkflowRunId: lastWorkflow?.firstExecutionRunId ?? null,
-        lastWorkflowStatus:
-          lastWorkflowDescription?.status.name === "UNSPECIFIED"
-            ? "UNKNOWN"
-            : (lastWorkflowDescription?.status.name ??
-              (lastWorkflow ? "UNKNOWN" : null)),
+        graphId: actionGraphId,
+        executionGrantId:
+          actionArgs && typeof actionArgs.executionGrantId === "string"
+            ? actionArgs.executionGrantId
+            : null,
+        ownerUserId:
+          actionArgs && typeof actionArgs.requestedBy === "string"
+            ? actionArgs.requestedBy
+            : null,
+        workflowType:
+          action.type === "startWorkflow" ? action.workflowType : null,
+        overlapPolicy: overlapPolicyName(description.policies.overlap),
+        catchupWindowMs: description.policies.catchupWindow,
+        createdAtIso: description.info.createdAt.toISOString(),
+        numActionsTaken: description.info.numActionsTaken,
+        numActionsMissedCatchupWindow:
+          description.info.numActionsMissedCatchupWindow,
+        numActionsSkippedOverlap: description.info.numActionsSkippedOverlap,
+        lastWorkflowId: lastWorkflowDescription?.workflowId ?? null,
+        lastWorkflowRunId: lastWorkflowDescription?.firstExecutionRunId ?? null,
+        lastWorkflowStatus: lastWorkflowDescription?.status ?? null,
+        recentActions: recentWorkflowDescriptions,
         taskQueue: actionTaskQueue,
       };
     } catch (error) {
@@ -422,18 +571,27 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
     }
   }
 
-  async listScheduleIds(prefix: string, limit?: number): Promise<string[]> {
+  async listScheduleIds(
+    prefix: string,
+    limit?: number,
+    deadlineAtMs?: number
+  ): Promise<string[]> {
     const client = await this.getClient();
 
     try {
-      const ids: string[] = [];
-      for await (const schedule of client.schedule.list()) {
-        if (schedule.scheduleId.startsWith(prefix)) {
-          ids.push(schedule.scheduleId);
-          if (limit !== undefined && ids.length >= limit) break;
+      const read = async () => {
+        const ids: string[] = [];
+        for await (const schedule of client.schedule.list()) {
+          if (schedule.scheduleId.startsWith(prefix)) {
+            ids.push(schedule.scheduleId);
+            if (limit !== undefined && ids.length >= limit) break;
+          }
         }
-      }
-      return ids;
+        return ids;
+      };
+      return deadlineAtMs
+        ? await client.schedule.withDeadline(deadlineAtMs, read)
+        : await read();
     } catch (error) {
       throw new ScheduleControlUnavailableError(
         "listScheduleIds",

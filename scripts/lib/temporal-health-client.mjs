@@ -23,6 +23,7 @@ export const TEMPORAL_HEALTH_CLI_REASON = Object.freeze({
   REQUEST_TIMEOUT: "request_timeout",
   REQUEST_FAILED: "request_failed",
   RESPONSE_MALFORMED: "response_malformed",
+  APP_IDENTITY_UNAVAILABLE: "app_identity_unavailable",
   APP_IDENTITY_DRIFT: "app_identity_drift",
   WORKER_IDENTITY_DRIFT: "worker_identity_drift",
 });
@@ -89,7 +90,13 @@ function isHealthyProof(body) {
     Number.isInteger(body.schedules?.driftCount) &&
     Number.isInteger(body.schedules?.dueCount) &&
     Number.isInteger(body.schedules?.terminalCount) &&
+    Number.isInteger(body.schedules?.failedCount) &&
+    Number.isInteger(body.schedules?.staleCount) &&
+    Number.isInteger(body.schedules?.missedCount) &&
     body.schedules.driftCount === 0 &&
+    body.schedules.failedCount === 0 &&
+    body.schedules.staleCount === 0 &&
+    body.schedules.missedCount === 0 &&
     body.schedules.observedCount === body.schedules.declaredCount &&
     body.schedules.reconciledCount === body.schedules.declaredCount &&
     body.schedules.terminalCount === body.schedules.dueCount
@@ -106,11 +113,16 @@ export async function readTemporalHealth({
   timeoutMs = 4_500,
 }) {
   try {
-    const response = await fetchImpl(`${baseUrl}/api/v1/temporal/health`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    const signal = AbortSignal.timeout(timeoutMs);
+    const [response, versionResponse] = await Promise.all([
+      fetchImpl(`${baseUrl}/api/v1/temporal/health`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal,
+      }),
+      fetchImpl(`${baseUrl}/version`, { signal }),
+    ]);
     const body = await response.json().catch(() => null);
+    const versionBody = await versionResponse.json().catch(() => null);
     if (!body || typeof body !== "object") {
       return {
         exitCode: 1,
@@ -144,6 +156,32 @@ export async function readTemporalHealth({
           body: {
             status: "error",
             reason: TEMPORAL_HEALTH_CLI_REASON.RESPONSE_MALFORMED,
+          },
+        };
+      }
+      if (
+        !versionResponse.ok ||
+        typeof versionBody?.buildSha !== "string" ||
+        !/^[0-9a-f]{40}$/i.test(versionBody.buildSha)
+      ) {
+        return {
+          exitCode: 1,
+          body: {
+            status: "error",
+            reason: TEMPORAL_HEALTH_CLI_REASON.APP_IDENTITY_UNAVAILABLE,
+          },
+        };
+      }
+      if (
+        body.app.buildSha.toLowerCase() !== versionBody.buildSha.toLowerCase()
+      ) {
+        return {
+          exitCode: 1,
+          body: {
+            status: "unhealthy",
+            reason: TEMPORAL_HEALTH_CLI_REASON.APP_IDENTITY_DRIFT,
+            expected: versionBody.buildSha,
+            observed: body.app.buildSha,
           },
         };
       }

@@ -28,8 +28,8 @@ Job modules that wire business logic or bounded substrate diagnostics to the app
 
 ## Public Surface
 
-- **Exports:** `runGovernanceSchedulesSyncJob()`, `runCatalogNodeRegistryReconcileJob()`, `checkSharedTemporalHealth()` (pollers + schedule drift + due terminal execution)
-- **CLI (if any):** `pnpm governance:schedules:sync`; `pnpm temporal:health` calls the authenticated API route
+- **Exports:** `runGovernanceSchedulesSyncJob()`, `runCatalogNodeRegistryReconcileJob()`, `checkSharedTemporalHealth()` (pollers + authoritative declarations/full schedule spec + cadence-aware successful execution)
+- **CLI (if any):** `pnpm governance:schedules:sync`; `pnpm temporal:health` calls the authenticated API route and independently binds the app SHA to public `/version`
 - **Files considered API:** job modules in this directory
 
 ## Ports (optional)

@@ -20,13 +20,23 @@ import {
 
 const NOW_MS = Date.parse("2026-10-12T12:00:00.000Z");
 const TASK_QUEUE = "scheduler-tasks-node-123";
+const range = (start: number, end: number) =>
+  Array.from({ length: end - start + 1 }, (_, index) => start + index);
 
 const expected = {
   dbScheduleId: "00000000-0000-4000-8000-000000000001",
   temporalScheduleId: "schedule-1",
   enabled: true,
+  cron: "* * * * *",
   timezone: "UTC",
   input: { message: "probe", model: "gpt-oss-120b" },
+  graphId: "langgraph:probe",
+  executionGrantId: "grant-1",
+  ownerUserId: "user-1",
+  workflowType: "GraphRunWorkflow",
+  taskQueue: TASK_QUEUE,
+  overlapPolicy: "skip",
+  catchupWindowMs: 0,
 } as const;
 
 function observed(
@@ -36,16 +46,39 @@ function observed(
     scheduleId: expected.temporalScheduleId,
     nodeId: "node-123",
     nextRunAtIso: "2026-10-12T12:01:00.000Z",
-    lastRunAtIso: "2026-10-12T11:55:00.000Z",
+    nextRunTimesIso: [
+      "2026-10-12T12:01:00.000Z",
+      "2026-10-12T12:02:00.000Z",
+      "2026-10-12T12:03:00.000Z",
+    ],
+    lastRunAtIso: "2026-10-12T11:45:00.000Z",
     isPaused: false,
     cron: null,
     timezone: "UTC",
     input: expected.input,
     dbScheduleId: expected.dbScheduleId,
+    graphId: expected.graphId,
+    executionGrantId: expected.executionGrantId,
+    ownerUserId: expected.ownerUserId,
+    workflowType: expected.workflowType,
+    overlapPolicy: expected.overlapPolicy,
+    catchupWindowMs: expected.catchupWindowMs,
+    createdAtIso: "2026-10-12T10:00:00.000Z",
+    numActionsTaken: 1,
+    numActionsMissedCatchupWindow: 0,
+    numActionsSkippedOverlap: 0,
     taskQueue: TASK_QUEUE,
-    lastWorkflowId: "schedule-1-2026-10-12T11:55:00Z",
+    lastWorkflowId: "schedule-1-2026-10-12T11:45:00Z",
     lastWorkflowRunId: "run-1",
     lastWorkflowStatus: "COMPLETED",
+    recentActions: [
+      {
+        scheduledAtIso: "2026-10-12T11:45:00.000Z",
+        workflowId: "schedule-1-2026-10-12T11:45:00Z",
+        firstExecutionRunId: "run-1",
+        status: "COMPLETED",
+      },
+    ],
     ...patch,
   };
 }
@@ -77,7 +110,7 @@ describe("shared Temporal schedule health", () => {
       dueCount: 1,
       terminalCount: 1,
       latestDueExecution: {
-        workflowId: "schedule-1-2026-10-12T11:55:00Z",
+        workflowId: "schedule-1-2026-10-12T11:45:00Z",
         firstExecutionRunId: "run-1",
         status: "COMPLETED",
       },
@@ -114,6 +147,86 @@ describe("shared Temporal schedule health", () => {
     });
   });
 
+  it("compares compiled cron, action identity, ownership, grant, and policies", async () => {
+    const result = await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [expected],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds: vi
+          .fn()
+          .mockResolvedValue([expected.temporalScheduleId]),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            nextRunTimesIso: ["2026-10-12T12:05:00.000Z"],
+            graphId: "wrong-graph",
+            workflowType: "NodeTaskWorkflow",
+            executionGrantId: "wrong-grant",
+            ownerUserId: "wrong-owner",
+            overlapPolicy: "allow_all",
+            catchupWindowMs: 60_000,
+          })
+        ),
+      }
+    );
+
+    expect(result.reason).toBe("schedule_drift");
+    expect(result.driftReasons).toEqual(
+      expect.arrayContaining([
+        "cron",
+        "graph_id",
+        "workflow_type",
+        "execution_grant",
+        "owner",
+        "overlap_policy",
+        "catchup_window",
+      ])
+    );
+  });
+
+  it("detects compiled cron drift even while the schedule is paused", async () => {
+    const disabled = { ...expected, enabled: false };
+    const result = await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [disabled],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds: vi
+          .fn()
+          .mockResolvedValue([expected.temporalScheduleId]),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            isPaused: true,
+            nextRunAtIso: null,
+            nextRunTimesIso: [],
+            calendarSpecs: [
+              {
+                second: [0],
+                minute: [0],
+                hour: range(0, 23),
+                dayOfMonth: range(1, 31),
+                month: range(1, 12),
+                dayOfWeek: range(0, 6),
+              },
+            ],
+          })
+        ),
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: "schedule_drift",
+      driftReasons: ["cron"],
+    });
+  });
+
   it("reports stale_execution when a due Workflow is not terminal", async () => {
     const result = await inspectSharedTemporalScheduleHealth(
       {
@@ -126,9 +239,19 @@ describe("shared Temporal schedule health", () => {
         listScheduleIds: vi
           .fn()
           .mockResolvedValue([expected.temporalScheduleId]),
-        describeSchedule: vi
-          .fn()
-          .mockResolvedValue(observed({ lastWorkflowStatus: "RUNNING" })),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            lastWorkflowStatus: "RUNNING",
+            recentActions: [
+              {
+                scheduledAtIso: "2026-10-12T11:45:00.000Z",
+                workflowId: "workflow-running",
+                firstExecutionRunId: "run-running",
+                status: "RUNNING",
+              },
+            ],
+          })
+        ),
       }
     );
 
@@ -141,6 +264,7 @@ describe("shared Temporal schedule health", () => {
   });
 
   it("allows a just-started Workflow the bounded terminal grace period", async () => {
+    expect(TEMPORAL_DUE_EXECUTION_GRACE_MS).toBe(15 * 60_000);
     const result = await inspectSharedTemporalScheduleHealth(
       {
         nodeId: "node-123",
@@ -158,6 +282,16 @@ describe("shared Temporal schedule health", () => {
               NOW_MS - TEMPORAL_DUE_EXECUTION_GRACE_MS + 1
             ).toISOString(),
             lastWorkflowStatus: "RUNNING",
+            recentActions: [
+              {
+                scheduledAtIso: new Date(
+                  NOW_MS - TEMPORAL_DUE_EXECUTION_GRACE_MS + 1
+                ).toISOString(),
+                workflowId: "workflow-running",
+                firstExecutionRunId: "run-running",
+                status: "RUNNING",
+              },
+            ],
           })
         ),
       }
@@ -169,6 +303,174 @@ describe("shared Temporal schedule health", () => {
       dueCount: 0,
       terminalCount: 0,
     });
+  });
+
+  it("inspects older recent actions even when the newest action completed", async () => {
+    const result = await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [expected],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds: vi
+          .fn()
+          .mockResolvedValue([expected.temporalScheduleId]),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            recentActions: [
+              {
+                scheduledAtIso: "2026-10-12T11:40:00.000Z",
+                workflowId: "older-stuck",
+                firstExecutionRunId: "older-run",
+                status: "RUNNING",
+              },
+              {
+                scheduledAtIso: "2026-10-12T11:59:00.000Z",
+                workflowId: "newer-complete",
+                firstExecutionRunId: "newer-run",
+                status: "COMPLETED",
+              },
+            ],
+          })
+        ),
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: "stale_execution",
+      staleCount: 1,
+    });
+  });
+
+  it.each([
+    "FAILED",
+    "CANCELLED",
+    "TERMINATED",
+    "TIMED_OUT",
+  ] as const)("treats %s as failed execution, never terminal success", async (status) => {
+    const result = await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [expected],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds: vi
+          .fn()
+          .mockResolvedValue([expected.temporalScheduleId]),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            recentActions: [
+              {
+                scheduledAtIso: "2026-10-12T11:59:00.000Z",
+                workflowId: "failed-workflow",
+                firstExecutionRunId: "failed-run",
+                status,
+              },
+            ],
+          })
+        ),
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: "failed_execution",
+      failedCount: 1,
+      terminalCount: 0,
+    });
+  });
+
+  it("fails an enabled schedule that never fired after a due cadence slot", async () => {
+    const result = await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [expected],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds: vi
+          .fn()
+          .mockResolvedValue([expected.temporalScheduleId]),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            lastRunAtIso: null,
+            recentActions: [],
+            numActionsTaken: 0,
+          })
+        ),
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: "missed_execution",
+      missedCount: 1,
+    });
+  });
+
+  it("fails when the last success is older than the latest cadence slot due", async () => {
+    const result = await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [expected],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds: vi
+          .fn()
+          .mockResolvedValue([expected.temporalScheduleId]),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            recentActions: [
+              {
+                scheduledAtIso: "2026-10-12T11:30:00.000Z",
+                workflowId: "old-success",
+                firstExecutionRunId: "old-run",
+                status: "COMPLETED",
+              },
+            ],
+          })
+        ),
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: "missed_execution",
+      missedCount: 1,
+    });
+  });
+
+  it("passes one absolute deadline into every backend describe", async () => {
+    const describeSchedule = vi.fn().mockResolvedValue(observed());
+    const listScheduleIds = vi
+      .fn()
+      .mockResolvedValue([expected.temporalScheduleId]);
+    await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [expected],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds,
+        describeSchedule,
+      }
+    );
+
+    expect(listScheduleIds).toHaveBeenCalledWith("", 251, expect.any(Number));
+    expect(describeSchedule).toHaveBeenCalledWith(
+      expected.temporalScheduleId,
+      expect.any(Number)
+    );
   });
 
   it("fails closed when schedule inspection is unavailable", async () => {

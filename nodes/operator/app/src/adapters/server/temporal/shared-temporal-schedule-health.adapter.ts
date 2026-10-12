@@ -18,11 +18,14 @@
 import type {
   ScheduleControlPort,
   ScheduleDescription,
+  ScheduleExecutionDescription,
 } from "@cogni/scheduler-core";
+import cronParser from "cron-parser";
 
 export const TEMPORAL_HEALTH_MAX_SCHEDULES = 50;
 export const TEMPORAL_HEALTH_MAX_NAMESPACE_SCHEDULES = 250;
-export const TEMPORAL_DUE_EXECUTION_GRACE_MS = 120_000;
+/** GraphRunWorkflow/NodeTaskWorkflow both permit a 15-minute graph Activity. */
+export const TEMPORAL_DUE_EXECUTION_GRACE_MS = 15 * 60_000;
 export const TEMPORAL_SCHEDULE_INSPECTION_TIMEOUT_MS = 2_500;
 
 export type SharedTemporalScheduleHealthReason =
@@ -30,6 +33,8 @@ export type SharedTemporalScheduleHealthReason =
   | "schedule_inspection_unavailable"
   | "schedule_inventory_truncated"
   | "schedule_drift"
+  | "failed_execution"
+  | "missed_execution"
   | "stale_execution";
 
 export type SharedTemporalScheduleDriftReason =
@@ -37,10 +42,17 @@ export type SharedTemporalScheduleDriftReason =
   | "undeclared"
   | "node_id"
   | "pause_state"
+  | "cron"
   | "task_queue"
   | "timezone"
   | "input"
   | "db_schedule_id"
+  | "graph_id"
+  | "workflow_type"
+  | "execution_grant"
+  | "owner"
+  | "overlap_policy"
+  | "catchup_window"
   | "next_action_missing";
 
 export type SharedTemporalWorkflowStatus =
@@ -57,8 +69,16 @@ export interface ExpectedTemporalSchedule {
   readonly dbScheduleId: string;
   readonly temporalScheduleId: string;
   readonly enabled: boolean;
+  readonly cron: string;
   readonly timezone: string;
   readonly input: unknown;
+  readonly graphId: string;
+  readonly executionGrantId: string;
+  readonly ownerUserId: string;
+  readonly workflowType: string;
+  readonly taskQueue: string;
+  readonly overlapPolicy: "skip" | "buffer_one" | "allow_all";
+  readonly catchupWindowMs: number;
 }
 
 export interface LatestDueExecutionHealth {
@@ -79,6 +99,9 @@ export interface SharedTemporalScheduleHealth {
   readonly driftReasons: readonly SharedTemporalScheduleDriftReason[];
   readonly dueCount: number;
   readonly terminalCount: number;
+  readonly failedCount: number;
+  readonly staleCount: number;
+  readonly missedCount: number;
   readonly latestDueExecution: LatestDueExecutionHealth | null;
 }
 
@@ -95,13 +118,23 @@ export interface SharedTemporalScheduleHealthDeps {
   readonly timeoutMs?: number;
 }
 
-const TERMINAL_WORKFLOW_STATUSES = new Set<SharedTemporalWorkflowStatus>([
-  "COMPLETED",
+const FAILED_WORKFLOW_STATUSES = new Set<SharedTemporalWorkflowStatus>([
   "FAILED",
   "CANCELLED",
   "TERMINATED",
   "TIMED_OUT",
 ]);
+
+function executionHealth(
+  execution: ScheduleExecutionDescription,
+  dueCutoffMs: number
+): "success" | "failed" | "stale" | "pending" {
+  if (FAILED_WORKFLOW_STATUSES.has(execution.status)) return "failed";
+  const scheduledAtMs = Date.parse(execution.scheduledAtIso);
+  if (!Number.isFinite(scheduledAtMs)) return "stale";
+  if (scheduledAtMs > dueCutoffMs) return "pending";
+  return execution.status === "COMPLETED" ? "success" : "stale";
+}
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) {
@@ -118,24 +151,137 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value) ?? "undefined";
 }
 
+function cronTimes(
+  cron: string,
+  timezone: string,
+  currentDateMs: number,
+  direction: "next" | "prev",
+  count: number
+): number[] {
+  const interval = cronParser.parseExpression(cron, {
+    currentDate: new Date(currentDateMs),
+    tz: timezone,
+  });
+  return Array.from({ length: count }, () =>
+    interval[direction]().toDate().getTime()
+  );
+}
+
+function cronSpecMatches(
+  expected: ExpectedTemporalSchedule,
+  observed: ScheduleDescription,
+  nowMs: number
+): boolean {
+  if (observed.calendarSpecs !== undefined) {
+    try {
+      const interval = cronParser.parseExpression(expected.cron, {
+        currentDate: new Date(nowMs),
+        tz: expected.timezone,
+      });
+      const fields = interval.fields as Record<string, readonly number[]>;
+      const expectedCalendar = {
+        second: [...(fields.second ?? [])],
+        minute: [...(fields.minute ?? [])],
+        hour: [...(fields.hour ?? [])],
+        dayOfMonth: [...(fields.dayOfMonth ?? [])],
+        month: [...(fields.month ?? [])],
+        dayOfWeek: [
+          ...new Set((fields.dayOfWeek ?? []).map((value) => value % 7)),
+        ].sort((left, right) => left - right),
+      };
+      return (
+        stableJson(observed.calendarSpecs) === stableJson([expectedCalendar])
+      );
+    } catch {
+      return false;
+    }
+  }
+  const observedTimes = (observed.nextRunTimesIso ?? []).slice(0, 3);
+  if (!expected.enabled) return false;
+  if (observedTimes.length === 0) return false;
+  try {
+    const expectedTimes = cronTimes(
+      expected.cron,
+      expected.timezone,
+      nowMs,
+      "next",
+      observedTimes.length
+    );
+    return observedTimes.every((iso, index) => {
+      const actualMs = Date.parse(iso);
+      return (
+        Number.isFinite(actualMs) &&
+        Math.abs(actualMs - (expectedTimes[index] ?? Number.NaN)) <= 1_000
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+function latestExpectedDueAt(
+  expected: ExpectedTemporalSchedule,
+  observed: ScheduleDescription,
+  nowMs: number
+): number | null {
+  if (!expected.enabled) return null;
+  const cutoffMs = nowMs - TEMPORAL_DUE_EXECUTION_GRACE_MS;
+  const createdAtMs = observed.createdAtIso
+    ? Date.parse(observed.createdAtIso)
+    : Number.NaN;
+  try {
+    const [expectedAtMs] = cronTimes(
+      expected.cron,
+      expected.timezone,
+      cutoffMs + 1,
+      "prev",
+      1
+    );
+    if (
+      expectedAtMs === undefined ||
+      (Number.isFinite(createdAtMs) && expectedAtMs < createdAtMs)
+    ) {
+      return null;
+    }
+    return expectedAtMs;
+  } catch {
+    return cutoffMs;
+  }
+}
+
 function scheduleDriftReasons(
   expected: ExpectedTemporalSchedule,
   observed: ScheduleDescription | null,
-  expectedTaskQueue: string,
-  expectedNodeId: string
+  expectedNodeId: string,
+  nowMs: number
 ): SharedTemporalScheduleDriftReason[] {
   if (!observed) return ["missing"];
 
   const reasons: SharedTemporalScheduleDriftReason[] = [];
   if (observed.nodeId !== expectedNodeId) reasons.push("node_id");
   if (observed.isPaused !== !expected.enabled) reasons.push("pause_state");
-  if (observed.taskQueue !== expectedTaskQueue) reasons.push("task_queue");
+  if (!cronSpecMatches(expected, observed, nowMs)) reasons.push("cron");
+  if (observed.taskQueue !== expected.taskQueue) reasons.push("task_queue");
   if (observed.timezone !== expected.timezone) reasons.push("timezone");
   if (stableJson(observed.input) !== stableJson(expected.input)) {
     reasons.push("input");
   }
   if (observed.dbScheduleId !== expected.dbScheduleId) {
     reasons.push("db_schedule_id");
+  }
+  if (observed.graphId !== expected.graphId) reasons.push("graph_id");
+  if (observed.workflowType !== expected.workflowType) {
+    reasons.push("workflow_type");
+  }
+  if (observed.executionGrantId !== expected.executionGrantId) {
+    reasons.push("execution_grant");
+  }
+  if (observed.ownerUserId !== expected.ownerUserId) reasons.push("owner");
+  if (observed.overlapPolicy !== expected.overlapPolicy) {
+    reasons.push("overlap_policy");
+  }
+  if (observed.catchupWindowMs !== expected.catchupWindowMs) {
+    reasons.push("catchup_window");
   }
   if (expected.enabled && observed.nextRunAtIso === null) {
     reasons.push("next_action_missing");
@@ -158,6 +304,9 @@ function emptyHealth(
     driftReasons: [],
     dueCount: 0,
     terminalCount: 0,
+    failedCount: 0,
+    staleCount: 0,
+    missedCount: 0,
     latestDueExecution: null,
   };
 }
@@ -184,10 +333,11 @@ async function withTimeout<T>(
 
 async function describeSchedules(
   scheduleIds: readonly string[],
-  describeSchedule: ScheduleControlPort["describeSchedule"]
+  describeSchedule: ScheduleControlPort["describeSchedule"],
+  deadlineAtMs: number
 ): Promise<readonly (ScheduleDescription | null)[]> {
   return Promise.all(
-    scheduleIds.map((scheduleId) => describeSchedule(scheduleId))
+    scheduleIds.map((scheduleId) => describeSchedule(scheduleId, deadlineAtMs))
   );
 }
 
@@ -205,11 +355,14 @@ export async function inspectSharedTemporalScheduleHealth(
   let scheduleIds: readonly string[];
   let descriptions: readonly (ScheduleDescription | null)[];
   try {
+    const timeoutMs = deps.timeoutMs ?? TEMPORAL_SCHEDULE_INSPECTION_TIMEOUT_MS;
+    const deadlineAtMs = Date.now() + timeoutMs;
     const snapshot = await withTimeout(
       (async () => {
         const listedIds = await deps.listScheduleIds(
           "",
-          TEMPORAL_HEALTH_MAX_NAMESPACE_SCHEDULES + 1
+          TEMPORAL_HEALTH_MAX_NAMESPACE_SCHEDULES + 1,
+          deadlineAtMs
         );
         if (listedIds.length > TEMPORAL_HEALTH_MAX_NAMESPACE_SCHEDULES) {
           return { scheduleIds: listedIds, descriptions: [] };
@@ -222,10 +375,14 @@ export async function inspectSharedTemporalScheduleHealth(
         ];
         return {
           scheduleIds: ids,
-          descriptions: await describeSchedules(ids, deps.describeSchedule),
+          descriptions: await describeSchedules(
+            ids,
+            deps.describeSchedule,
+            deadlineAtMs
+          ),
         };
       })(),
-      deps.timeoutMs ?? TEMPORAL_SCHEDULE_INSPECTION_TIMEOUT_MS
+      timeoutMs
     );
     scheduleIds = snapshot.scheduleIds;
     descriptions = snapshot.descriptions;
@@ -262,7 +419,11 @@ export async function inspectSharedTemporalScheduleHealth(
   let driftCount = 0;
   let dueCount = 0;
   let terminalCount = 0;
+  let failedCount = 0;
+  let staleCount = 0;
+  let missedCount = 0;
   let latestDueExecution: LatestDueExecutionHealth | null = null;
+  const dueCutoffMs = nowMs - TEMPORAL_DUE_EXECUTION_GRACE_MS;
 
   const undeclaredCount = observedForNode.filter(
     (description) => !expectedIds.has(description.scheduleId)
@@ -278,49 +439,62 @@ export async function inspectSharedTemporalScheduleHealth(
     const rowDrift = scheduleDriftReasons(
       expected,
       observed,
-      input.expectedTaskQueue,
-      input.nodeId
+      input.nodeId,
+      nowMs
     );
     if (rowDrift.length === 0) reconciledCount += 1;
     else {
       driftCount += 1;
       for (const reason of rowDrift) driftReasons.add(reason);
     }
-    if (!expected.enabled || !observed?.lastRunAtIso) continue;
-    const scheduledAtMs = Date.parse(observed.lastRunAtIso);
-    if (
-      !Number.isFinite(scheduledAtMs) ||
-      nowMs - scheduledAtMs < TEMPORAL_DUE_EXECUTION_GRACE_MS
-    ) {
-      continue;
+    if (!expected.enabled || !observed) continue;
+
+    const actions = observed.recentActions ?? [];
+    for (const action of actions) {
+      const health = executionHealth(action, dueCutoffMs);
+      if (health === "pending") continue;
+      const execution: LatestDueExecutionHealth = {
+        scheduledAt: action.scheduledAtIso,
+        workflowId: action.workflowId,
+        firstExecutionRunId: action.firstExecutionRunId,
+        status: action.status,
+      };
+      if (
+        !latestDueExecution ||
+        execution.scheduledAt > latestDueExecution.scheduledAt
+      ) {
+        latestDueExecution = execution;
+      }
+      if (health === "failed") failedCount += 1;
+      if (health === "stale") staleCount += 1;
+      dueCount += 1;
+      if (health === "success") terminalCount += 1;
     }
 
-    dueCount += 1;
-    const execution: LatestDueExecutionHealth = {
-      scheduledAt: observed.lastRunAtIso,
-      workflowId: observed.lastWorkflowId ?? null,
-      firstExecutionRunId: observed.lastWorkflowRunId ?? null,
-      status:
-        (observed.lastWorkflowStatus as SharedTemporalWorkflowStatus | null) ??
-        null,
-    };
-    if (execution.status && TERMINAL_WORKFLOW_STATUSES.has(execution.status)) {
-      terminalCount += 1;
-    }
+    const expectedDueAt = latestExpectedDueAt(expected, observed, nowMs);
+    const latestActionAt = actions.reduce(
+      (latest, action) => Math.max(latest, Date.parse(action.scheduledAtIso)),
+      Number.NEGATIVE_INFINITY
+    );
     if (
-      !latestDueExecution ||
-      execution.scheduledAt > latestDueExecution.scheduledAt
+      expectedDueAt !== null &&
+      (!Number.isFinite(latestActionAt) ||
+        latestActionAt < expectedDueAt - 1_000)
     ) {
-      latestDueExecution = execution;
+      missedCount += 1;
     }
   }
 
   const reason: SharedTemporalScheduleHealthReason =
     driftCount > 0
       ? "schedule_drift"
-      : terminalCount < dueCount
-        ? "stale_execution"
-        : "ok";
+      : failedCount > 0
+        ? "failed_execution"
+        : staleCount > 0
+          ? "stale_execution"
+          : missedCount > 0
+            ? "missed_execution"
+            : "ok";
   return {
     status: reason === "ok" ? "healthy" : "unhealthy",
     reason,
@@ -332,6 +506,9 @@ export async function inspectSharedTemporalScheduleHealth(
     driftReasons: [...driftReasons].sort(),
     dueCount,
     terminalCount,
+    failedCount,
+    staleCount,
+    missedCount,
     latestDueExecution,
   };
 }

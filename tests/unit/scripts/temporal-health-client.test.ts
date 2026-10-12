@@ -44,8 +44,31 @@ describe("Temporal health CLI client", () => {
       driftCount: 0,
       dueCount: 1,
       terminalCount: 1,
+      failedCount: 0,
+      staleCount: 0,
+      missedCount: 0,
     },
   };
+
+  function fetchFor(
+    healthBody: unknown,
+    healthStatus = 200,
+    versionSha = appSha
+  ) {
+    return vi.fn().mockImplementation((url: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            url.endsWith("/version") ? { buildSha: versionSha } : healthBody
+          ),
+          {
+            status: url.endsWith("/version") ? 200 : healthStatus,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      )
+    );
+  }
 
   it("resolves canonical operator and node deployment hosts", () => {
     expect(defaultBaseUrl("operator", "candidate-a")).toBe(
@@ -60,11 +83,7 @@ describe("Temporal health CLI client", () => {
   });
 
   it("passes only a successful healthy response", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(healthyBody), {
-        status: 200,
-      })
-    );
+    const fetchImpl = fetchFor(healthyBody);
 
     const result = await readTemporalHealth({
       baseUrl: "https://test.cognidao.org",
@@ -92,12 +111,7 @@ describe("Temporal health CLI client", () => {
     const result = await readTemporalHealth({
       baseUrl: "https://node.example",
       apiKey: "secret",
-      fetchImpl: vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(body), {
-          status,
-          headers: { "Content-Type": "application/json" },
-        })
-      ),
+      fetchImpl: fetchFor(body, status),
     });
 
     expect(result).toEqual({ exitCode: 1, body });
@@ -117,17 +131,12 @@ describe("Temporal health CLI client", () => {
       expectedAppSha: appSha,
       expectedWorkerSha: workerSha,
       expectedWorkerDigest: workerDigest,
-      fetchImpl: vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            status: "healthy",
-            reason: "ok",
-            app: healthyBody.app,
-            worker: healthyBody.worker,
-          }),
-          { status: 200 }
-        )
-      ),
+      fetchImpl: fetchFor({
+        status: "healthy",
+        reason: "ok",
+        app: healthyBody.app,
+        worker: healthyBody.worker,
+      }),
     });
 
     expect(result).toMatchObject({
@@ -143,16 +152,29 @@ describe("Temporal health CLI client", () => {
       expectedAppSha: "d".repeat(40),
       expectedWorkerSha: workerSha,
       expectedWorkerDigest: workerDigest,
-      fetchImpl: vi
-        .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify(healthyBody), { status: 200 })
-        ),
+      fetchImpl: fetchFor(healthyBody),
     });
 
     expect(result).toMatchObject({
       exitCode: 1,
       body: { reason: "app_identity_drift" },
+    });
+  });
+
+  it("fails by default when health app identity differs from public /version", async () => {
+    const result = await readTemporalHealth({
+      baseUrl: "https://node.example",
+      apiKey: "secret",
+      fetchImpl: fetchFor(healthyBody, 200, "d".repeat(40)),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      body: {
+        reason: "app_identity_drift",
+        expected: "d".repeat(40),
+        observed: appSha,
+      },
     });
   });
 });

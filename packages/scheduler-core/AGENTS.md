@@ -51,7 +51,7 @@ Pure TypeScript types, port interfaces, and orchestration services for the sched
   - `GraphRunRepository` (canonical, `ScheduleRunRepository` deprecated alias) - Graph run persistence (single canonical run ledger)
   - `ScheduleSpec`, `GraphRun` (canonical, `ScheduleRun` deprecated alias), `ExecutionGrant`, `ExecutionRequest` - Domain types
   - `GRAPH_RUN_STATUSES`, `GRAPH_RUN_KINDS`, `GraphRunStatus`, `GraphRunKind` - Run status and kind enums
-  - `ScheduleDescription` (includes config drift fields plus latest Schedule-started Workflow identity/status), `CreateScheduleParams` - Schedule control types
+  - `ScheduleDescription` (compiled calendars, action/policy identity, bounded recent Workflow chains, optional absolute deadline), `CreateScheduleParams` - Schedule control types
   - `IdempotencyCheckResult`, `ExecutionOutcome` - Execution request types
   - Error classes: `ScheduleControlUnavailableError`, `ScheduleControlConflictError`, `ScheduleControlNotFoundError`, grant errors, validation errors
   - Type guards: `isScheduleControl*Error`, `isGrant*Error`, `isSchedule*Error`

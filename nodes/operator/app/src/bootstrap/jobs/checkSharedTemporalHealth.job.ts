@@ -13,6 +13,11 @@
 
 import { schedules } from "@cogni/db-schema/scheduling";
 import {
+  governanceScheduleId,
+  legacyGovernanceScheduleId,
+  nodeScheduleId,
+} from "@cogni/scheduler-core";
+import {
   type ExpectedTemporalSchedule,
   inspectSharedTemporalHealth,
   inspectSharedTemporalScheduleHealth,
@@ -22,8 +27,15 @@ import {
   TEMPORAL_HEALTH_MAX_SCHEDULES,
 } from "@/adapters/server";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
-import { getNodeId } from "@/shared/config";
+import "@/bootstrap/jobs/scheduled-jobs.registry";
+import {
+  getGovernanceConfig,
+  getNodeId,
+  getNodeName,
+  getNodeSchedules,
+} from "@/shared/config";
 import { serverEnv } from "@/shared/env/server-env";
+import { listScheduledJobs } from "@/shared/node-app-scaffold/scheduled-jobs";
 import {
   temporalScheduleDrift,
   temporalSubstrateCheckDurationMs,
@@ -43,25 +55,268 @@ export interface SharedTemporalNodeHealth
   readonly schedules: SharedTemporalScheduleHealth;
 }
 
-async function listExpectedSchedules(): Promise<ExpectedTemporalSchedule[]> {
+interface ScheduleRow {
+  readonly dbScheduleId: string;
+  readonly temporalScheduleId: string | null;
+  readonly ownerUserId: string;
+  readonly executionGrantId: string;
+  readonly graphId: string;
+  readonly enabled: boolean;
+  readonly cron: string;
+  readonly timezone: string;
+  readonly input: unknown;
+}
+
+function belongsToCurrentNode(
+  temporalScheduleId: string,
+  nodeId: string
+): boolean {
+  if (temporalScheduleId.startsWith("node-task:")) {
+    return temporalScheduleId.startsWith(`node-task:${nodeId}:`);
+  }
+  if (temporalScheduleId.startsWith("governance:")) {
+    const parts = temporalScheduleId.split(":");
+    return parts.length === 2 || parts[1] === nodeId;
+  }
+  return true;
+}
+
+function actionInput(row: ScheduleRow, workflowType: string): unknown {
+  if (workflowType !== "NodeTaskWorkflow") return row.input;
+  const record =
+    row.input && typeof row.input === "object"
+      ? (row.input as Record<string, unknown>)
+      : {};
+  const route =
+    typeof record.route === "string"
+      ? record.route
+      : row.graphId.startsWith("task:")
+        ? row.graphId.slice("task:".length)
+        : row.graphId;
+  return {
+    route,
+    payload:
+      record.payload && typeof record.payload === "object"
+        ? record.payload
+        : {},
+  };
+}
+
+function rowToExpected(
+  row: ScheduleRow,
+  nodeId: string,
+  defaultTaskQueue: string
+): ExpectedTemporalSchedule {
+  const temporalScheduleId = row.temporalScheduleId ?? row.dbScheduleId;
+  const isGovernanceOrNodeDeclaration =
+    temporalScheduleId.startsWith("governance:") ||
+    temporalScheduleId.startsWith("node-task:");
+  const isLedgerCollect = temporalScheduleId === "governance:ledger_ingest";
+  const workflowType = isLedgerCollect
+    ? "CollectEpochWorkflow"
+    : row.graphId.startsWith("task:")
+      ? "NodeTaskWorkflow"
+      : "GraphRunWorkflow";
+  return {
+    dbScheduleId: row.dbScheduleId,
+    temporalScheduleId,
+    enabled: row.enabled,
+    cron: row.cron,
+    timezone: row.timezone,
+    input: actionInput(row, workflowType),
+    graphId: row.graphId,
+    executionGrantId: row.executionGrantId,
+    ownerUserId: row.ownerUserId,
+    workflowType,
+    taskQueue: isLedgerCollect ? `ledger-tasks-${nodeId}` : defaultTaskQueue,
+    overlapPolicy: isGovernanceOrNodeDeclaration ? "skip" : "buffer_one",
+    catchupWindowMs: isGovernanceOrNodeDeclaration ? 0 : 60_000,
+  };
+}
+
+function missingDeclaration(
+  temporalScheduleId: string,
+  cron: string,
+  timezone: string,
+  taskQueue: string
+): ExpectedTemporalSchedule {
+  return {
+    dbScheduleId: `missing:${temporalScheduleId}`,
+    temporalScheduleId,
+    enabled: true,
+    cron,
+    timezone,
+    input: null,
+    graphId: "missing",
+    executionGrantId: "missing",
+    ownerUserId: "missing",
+    workflowType: "missing",
+    taskQueue,
+    overlapPolicy: "skip",
+    catchupWindowMs: 0,
+  };
+}
+
+async function listExpectedSchedules(
+  nodeId: string,
+  defaultTaskQueue: string
+): Promise<ExpectedTemporalSchedule[]> {
   const rows = await resolveServiceDb()
     .select({
       dbScheduleId: schedules.id,
       temporalScheduleId: schedules.temporalScheduleId,
+      ownerUserId: schedules.ownerUserId,
+      executionGrantId: schedules.executionGrantId,
+      graphId: schedules.graphId,
       enabled: schedules.enabled,
+      cron: schedules.cron,
       timezone: schedules.timezone,
       input: schedules.input,
     })
     .from(schedules)
     .limit(TEMPORAL_HEALTH_MAX_SCHEDULES + 1);
 
-  return rows.map((row) => ({
-    dbScheduleId: row.dbScheduleId,
-    temporalScheduleId: row.temporalScheduleId ?? row.dbScheduleId,
-    enabled: row.enabled,
-    timezone: row.timezone,
-    input: row.input,
-  }));
+  const currentRows = rows.filter((row) =>
+    belongsToCurrentNode(row.temporalScheduleId ?? row.dbScheduleId, nodeId)
+  );
+  const expected = currentRows.map((row) =>
+    rowToExpected(row, nodeId, defaultTaskQueue)
+  );
+  const byTemporalId = new Map(
+    expected.map((item) => [item.temporalScheduleId, item])
+  );
+
+  for (const declaration of getNodeSchedules()) {
+    const id = nodeScheduleId(nodeId, declaration.id);
+    const existing = byTemporalId.get(id);
+    if (!existing) {
+      const missing = missingDeclaration(
+        id,
+        declaration.cron,
+        declaration.timezone,
+        defaultTaskQueue
+      );
+      expected.push(missing);
+      byTemporalId.set(id, missing);
+      continue;
+    }
+    const workflowType =
+      declaration.kind === "http-dispatch"
+        ? "NodeTaskWorkflow"
+        : declaration.kind === "workflow"
+          ? (declaration.workflow ?? "missing")
+          : "GraphRunWorkflow";
+    const graphId =
+      declaration.kind === "http-dispatch"
+        ? `task:${declaration.route}`
+        : declaration.kind === "graph"
+          ? (declaration.graph ?? "missing")
+          : existing.graphId;
+    Object.assign(existing, {
+      enabled: true,
+      cron: declaration.cron,
+      timezone: declaration.timezone,
+      workflowType,
+      graphId,
+      input:
+        declaration.kind === "http-dispatch"
+          ? { route: declaration.route, payload: declaration.payload }
+          : declaration.payload,
+      overlapPolicy: "skip",
+      catchupWindowMs: 0,
+    });
+  }
+
+  const isOperator = getNodeName() === "operator";
+  const governance = getGovernanceConfig();
+  for (const declaration of governance.schedules) {
+    const id = isOperator
+      ? legacyGovernanceScheduleId(declaration.charter)
+      : governanceScheduleId(nodeId, declaration.charter);
+    let target = byTemporalId.get(id);
+    if (!target) {
+      const missing = missingDeclaration(
+        id,
+        declaration.cron,
+        declaration.timezone,
+        defaultTaskQueue
+      );
+      expected.push(missing);
+      byTemporalId.set(id, missing);
+      target = missing;
+    }
+    const isLedgerIngest =
+      declaration.charter.toUpperCase() === "LEDGER_INGEST";
+    const operatorLedger = isLedgerIngest && isOperator && governance.ledger;
+    const nodeLedger = isLedgerIngest && !isOperator;
+    Object.assign(target, {
+      enabled: true,
+      cron: declaration.cron,
+      timezone: declaration.timezone,
+      graphId: operatorLedger
+        ? "ledger:ingest"
+        : nodeLedger
+          ? "task:/api/internal/attribution/collect"
+          : "sandbox:openclaw",
+      workflowType: operatorLedger
+        ? "CollectEpochWorkflow"
+        : nodeLedger
+          ? "NodeTaskWorkflow"
+          : "GraphRunWorkflow",
+      taskQueue: operatorLedger ? `ledger-tasks-${nodeId}` : defaultTaskQueue,
+      input: operatorLedger
+        ? {
+            version: 1,
+            scopeId: governance.ledger?.scopeId,
+            scopeKey: governance.ledger?.scopeKey,
+            epochLengthDays: governance.ledger?.epochLengthDays,
+            activitySources: governance.ledger?.activitySources,
+            ...(governance.ledger?.baseIssuanceCredits && {
+              baseIssuanceCredits:
+                governance.ledger.baseIssuanceCredits.toString(),
+            }),
+            ...(governance.ledger?.approvers &&
+              governance.ledger.approvers.length > 0 && {
+                approvers: governance.ledger.approvers,
+              }),
+          }
+        : nodeLedger
+          ? {
+              route: "/api/internal/attribution/collect",
+              payload: { nodeId },
+            }
+          : { message: declaration.entrypoint, model: "kimi-k2.5" },
+      overlapPolicy: "skip",
+      catchupWindowMs: 0,
+    });
+  }
+
+  for (const declaration of listScheduledJobs()) {
+    const route = `/api/internal/jobs/${declaration.id}`;
+    const graphId = `task:${route}`;
+    const existing = expected.find((item) => item.graphId === graphId);
+    if (!existing) {
+      expected.push(
+        missingDeclaration(
+          `missing:scheduled-job:${declaration.id}`,
+          declaration.cron,
+          declaration.timezone ?? "UTC",
+          defaultTaskQueue
+        )
+      );
+    } else {
+      Object.assign(existing, {
+        enabled: true,
+        cron: declaration.cron,
+        timezone: declaration.timezone ?? "UTC",
+        workflowType: "NodeTaskWorkflow",
+        graphId,
+        input: { route, payload: {} },
+      });
+    }
+  }
+
+  return expected;
 }
 
 async function withDeadline<T>(
@@ -99,6 +354,9 @@ function unavailableScheduleHealth(
     driftReasons: [],
     dueCount: 0,
     terminalCount: 0,
+    failedCount: 0,
+    staleCount: 0,
+    missedCount: 0,
     latestDueExecution: null,
   };
 }
@@ -127,7 +385,7 @@ export async function checkSharedTemporalHealth(): Promise<SharedTemporalNodeHea
     let expectedSchedules: ExpectedTemporalSchedule[] = [];
     try {
       expectedSchedules = await withDeadline(
-        listExpectedSchedules(),
+        listExpectedSchedules(nodeId, taskQueue),
         SCHEDULE_DECLARATION_READ_TIMEOUT_MS
       );
       const scheduleControl = getContainer().scheduleControl;

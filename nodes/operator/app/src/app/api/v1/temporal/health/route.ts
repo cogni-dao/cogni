@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/temporal/health`
  * Purpose: Authenticated read-only proof of the node's shared Temporal substrate.
  * Scope: Runs one bounded diagnostic and returns its artifact/poller evidence. No workflow or schedule mutations.
- * Invariants: Emits exactly one route-specific terminal health event per completed diagnostic.
+ * Invariants: Emits exactly one terminal event with correlation IDs; redacts those IDs from the auth-only HTTP response.
  * Side-effects: IO (Temporal, scheduler-worker HTTP, logs, metrics)
  * Links: task.5238, docs/spec/temporal-patterns.md
  * @public
@@ -50,6 +50,9 @@ export const GET = wrapRouteHandlerWithLogging(
       scheduleDriftReasons: result.schedules.driftReasons,
       dueExecutionCount: result.schedules.dueCount,
       terminalExecutionCount: result.schedules.terminalCount,
+      failedExecutionCount: result.schedules.failedCount,
+      staleExecutionCount: result.schedules.staleCount,
+      missedExecutionCount: result.schedules.missedCount,
       latestDueWorkflowId:
         result.schedules.latestDueExecution?.workflowId ?? null,
       latestDueWorkflowRunId:
@@ -65,7 +68,22 @@ export const GET = wrapRouteHandlerWithLogging(
       ctx.log.error(event, "shared Temporal substrate health check failed");
     }
 
-    return NextResponse.json(result, {
+    const latestDueExecution = result.schedules.latestDueExecution;
+    const publicResult = {
+      ...result,
+      schedules: {
+        ...result.schedules,
+        latestDueExecution: latestDueExecution
+          ? {
+              ...latestDueExecution,
+              workflowId: null,
+              firstExecutionRunId: null,
+            }
+          : null,
+      },
+    };
+
+    return NextResponse.json(publicResult, {
       status: result.status === "healthy" ? 200 : 503,
       headers: { "Cache-Control": "no-store" },
     });

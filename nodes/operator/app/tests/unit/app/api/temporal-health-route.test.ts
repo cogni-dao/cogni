@@ -5,7 +5,7 @@
  * Module: `@tests/unit/app/api/temporal-health-route`
  * Purpose: Prove authenticated HTTP status and one terminal health event semantics.
  * Scope: Route orchestration with the diagnostic job mocked; no network IO.
- * Invariants: Healthy=200, unhealthy=503, no-store, exactly one route-specific terminal event.
+ * Invariants: Healthy=200, unhealthy=503, no-store, HTTP IDs redacted, one correlated terminal event.
  * Side-effects: none
  * Links: task.5238
  * @internal
@@ -39,12 +39,15 @@ vi.mock("@/bootstrap/http", () => ({
           info: ReturnType<typeof vi.fn>;
         };
       },
-      request: NextRequest
+      request: NextRequest,
+      sessionUser: { id: string }
     ) => Promise<Response>
   ) => {
     mocks.options = options;
     return (request: NextRequest) =>
-      handler({ log: { error: mocks.error, info: mocks.info } }, request);
+      handler({ log: { error: mocks.error, info: mocks.info } }, request, {
+        id: "developer-1",
+      });
   },
 }));
 
@@ -93,6 +96,9 @@ const healthy = {
     driftReasons: [],
     dueCount: 1,
     terminalCount: 1,
+    failedCount: 0,
+    staleCount: 0,
+    missedCount: 0,
     latestDueExecution: {
       scheduledAt: "2026-10-11T11:55:00.000Z",
       workflowId: "workflow-1",
@@ -109,7 +115,7 @@ describe("GET /api/v1/temporal/health", () => {
     vi.clearAllMocks();
   });
 
-  it("is auth-required and returns healthy proof with one terminal event", async () => {
+  it("returns redacted healthy proof while the terminal event keeps correlation", async () => {
     mocks.check.mockResolvedValue(healthy);
 
     const response = await GET(
@@ -122,7 +128,17 @@ describe("GET /api/v1/temporal/health", () => {
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.json()).toEqual(healthy);
+    expect(await response.json()).toEqual({
+      ...healthy,
+      schedules: {
+        ...healthy.schedules,
+        latestDueExecution: {
+          ...healthy.schedules.latestDueExecution,
+          workflowId: null,
+          firstExecutionRunId: null,
+        },
+      },
+    });
     expect(mocks.info).toHaveBeenCalledOnce();
     expect(mocks.info).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -135,6 +151,9 @@ describe("GET /api/v1/temporal/health", () => {
         scheduleDriftCount: 0,
         dueExecutionCount: 1,
         terminalExecutionCount: 1,
+        failedExecutionCount: 0,
+        staleExecutionCount: 0,
+        missedExecutionCount: 0,
         latestDueWorkflowId: "workflow-1",
         latestDueWorkflowRunId: "run-1",
         latestDueWorkflowStatus: "COMPLETED",

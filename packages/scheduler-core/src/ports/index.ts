@@ -37,11 +37,13 @@ export {
   isScheduleControlConflictError,
   isScheduleControlNotFoundError,
   isScheduleControlUnavailableError,
+  type ScheduleCalendarDescription,
   ScheduleControlConflictError,
   ScheduleControlNotFoundError,
   type ScheduleControlPort,
   ScheduleControlUnavailableError,
   type ScheduleDescription,
+  type ScheduleExecutionDescription,
   type ScheduleOverlapPolicyHint,
 } from "./schedule-control.port";
 export {
