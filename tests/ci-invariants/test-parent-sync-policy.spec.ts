@@ -108,6 +108,7 @@ describe("test-parent divergence policy", () => {
     "infra/k8s/argocd/control-plane/candidate-a/candidate-a-appsets-application.yaml",
     "infra/k8s/base/scheduler-worker/configmap.yaml",
     "infra/compose/edge/configs/Caddyfile.tmpl",
+    "nodes/operator/app/src/adapters/server/node-registry/network-nodes.data.ts",
     "infra/catalog/operator.yaml",
     ".cogni/repo-spec.yaml",
   ])("requires the generated control-plane path, frees only its content — %s", (p) => {
