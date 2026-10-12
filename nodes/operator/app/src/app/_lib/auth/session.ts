@@ -18,3 +18,4 @@
  * @public
  */
 export { resolveRequestIdentity as getSessionUser } from "@/app/_lib/auth/request-identity";
+export { peekAgentKeyExpiry } from "@/app/_lib/auth/request-identity";
