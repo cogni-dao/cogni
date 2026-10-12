@@ -124,9 +124,8 @@ export async function readTemporalHealth({
           },
         };
       }
-      const observedDigest = body.worker.imageDigest.match(
-        /sha256:[0-9a-f]{64}$/i
-      )?.[0];
+      const observedDigest =
+        body.worker.imageDigest.match(/sha256:[0-9a-f]{64}$/i)?.[0];
       if (
         (expectedWorkerSha &&
           body.worker.sha.toLowerCase() !== expectedWorkerSha.toLowerCase()) ||

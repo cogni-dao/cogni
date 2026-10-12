@@ -99,9 +99,11 @@ describe("Temporal health CLI client", () => {
       expectedAppSha: "d".repeat(40),
       expectedWorkerSha: workerSha,
       expectedWorkerDigest: workerDigest,
-      fetchImpl: vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(healthyBody), { status: 200 })
-      ),
+      fetchImpl: vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify(healthyBody), { status: 200 })
+        ),
     });
 
     expect(result).toMatchObject({

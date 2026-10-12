@@ -23,9 +23,7 @@ describe("schedulerWorkerPollerIdentity", () => {
         buildTs: "2026-10-11T00:00:00Z",
         imageDigest: `ghcr.io/cogni-dao/cogni@sha256:${"b".repeat(64)}`,
       })
-    ).toBe(
-      `cogni:scheduler-worker:${"a".repeat(40)}:sha256:${"b".repeat(64)}`
-    );
+    ).toBe(`cogni:scheduler-worker:${"a".repeat(40)}:sha256:${"b".repeat(64)}`);
   });
 
   it("uses a fail-closed sentinel for invalid artifact metadata", () => {

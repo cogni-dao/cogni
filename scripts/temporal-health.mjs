@@ -50,10 +50,7 @@ function parseArgs(argv) {
   if (!result.help && !/^[0-9a-f]{40}$/i.test(result.expectedAppSha ?? "")) {
     throw new Error("--expected-app-sha must be an exact 40-character SHA");
   }
-  if (
-    !result.help &&
-    !/^[0-9a-f]{40}$/i.test(result.expectedWorkerSha ?? "")
-  ) {
+  if (!result.help && !/^[0-9a-f]{40}$/i.test(result.expectedWorkerSha ?? "")) {
     throw new Error("--expected-worker-sha must be an exact 40-character SHA");
   }
   if (
