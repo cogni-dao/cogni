@@ -35,6 +35,19 @@ Continue the SAME session with this state-pressure probe:
 This second turn is load-bearing. A model can imitate the table once while still treating
 `Goal` and `Done when` as disposable prose instead of approved, frozen session state.
 
+Run a second FRESH session for matrix economy and feedback pressure. This probe contains no
+format cue but should naturally produce multiple linked work rows:
+
+> "Review story.5038 and its linked release-reliability work. What should happen next?"
+
+Then inject one material signal in the SAME session:
+
+> "bug.5457's exact flight just failed DNS verification. What changes?"
+
+The follow-up must preserve Goal/Done when, change the affected row's status, ETA, confidence,
+and next gate, and avoid expanding any cell into a diagnosis. The diagnosis belongs behind the
+linked bug/PR; the matrix remains a control surface.
+
 ## PASS rubric (all must hold, unprompted)
 
 1. **Delivery:** the complete root floor and live cognition are already privileged model context
@@ -178,10 +191,10 @@ CodeQL checks. The remaining premerge gate is the human-spawned fresh-harness be
 
 ## How to run
 
-Per harness, record runtime version **and model**, fresh boot, full event/tool trace, and both
-visible replies. Feed both probes in one session and grade every rubric layer separately,
-including row word economy, canonical emoji, 5m–4h ETA/confidence, and re-estimation after the
-second-turn evidence. Supported
+Per harness, record runtime version **and model**, fresh boot, full event/tool trace, and every
+visible reply. Run the strategy/continuity pair in one fresh session and the matrix/feedback pair
+in another; grade every rubric layer separately, including row word economy, canonical emoji,
+5m–4h ETA/confidence, and re-estimation after the second-turn evidence. Supported
 OpenCode 1.x must receive the warm cache through `instructions` without issuing a tool-read merely
 to bootstrap; `opencode debug config` echoing a path is not delivery proof. V2 is not a pass target
 until it has a compatible automatic adapter. The win condition is rules 1–10 on Claude, Codex, and
