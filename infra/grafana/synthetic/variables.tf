@@ -14,9 +14,3 @@ variable "public_probe_names" {
     error_message = "At least two independent public probes are required."
   }
 }
-
-variable "folder_uid" {
-  description = "Optional Grafana folder shared by the checks and status dashboard."
-  type        = string
-  default     = ""
-}
