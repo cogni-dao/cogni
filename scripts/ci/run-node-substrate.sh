@@ -123,26 +123,6 @@ while IFS= read -r lane; do
 done < <(lanes_reconciled_by "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")
 echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} custodies lanes of ${TARGET_NODE}: [${custodied_lanes[*]}]"
 
-# A candidate flight may ask the higher-trust control environment to converge
-# exactly the candidate sibling it custodies. This prevents a PR flight from
-# mutating the control environment's own application substrate while still
-# repairing the candidate secret bank and DB it legitimately owns.
-ONLY_CUSTODIED_LANE="${RUN_NODE_SUBSTRATE_ONLY_LANE:-}"
-lane_selected() {
-  [ -z "$ONLY_CUSTODIED_LANE" ] || [ "$1" = "$ONLY_CUSTODIED_LANE" ]
-}
-if [ -n "$ONLY_CUSTODIED_LANE" ]; then
-  found=false
-  for lane in "${custodied_lanes[@]}"; do
-    [ "$lane" = "$ONLY_CUSTODIED_LANE" ] && found=true
-  done
-  "$found" || {
-    echo "::error::run-node-substrate: ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} does not custody requested lane '${ONLY_CUSTODIED_LANE}'" >&2
-    exit 1
-  }
-  echo "[run-node-substrate] scoped custodian replay: only ${ONLY_CUSTODIED_LANE}/${TARGET_NODE}"
-fi
-
 # ── SIBLING_NEVER_FAILS_THE_TARGET (bug.5278/bug.5269) ──────────────────────────
 # Production custodies candidate-a/preview substrate for akash nodes (bug.5206/
 # task.5132), so sibling lanes MUST keep being reconciled from this run — but a
@@ -155,24 +135,17 @@ fi
 degraded_lanes=()
 lane_degraded() {
   # lane_degraded <lane> <phase> <rc>
-  if [ -n "$ONLY_CUSTODIED_LANE" ]; then
-    echo "::error::run-node-substrate: scoped custodian replay ${1}/${TARGET_NODE} ${2} failed (rc=${3})" >&2
-    exit "$3"
-  fi
   degraded_lanes+=("$1 ($2, rc=$3)")
   echo "::warning::run-node-substrate: SIBLING lane ${1}/${TARGET_NODE} ${2} failed (rc=${3}) — lane left DEGRADED; the ${DEPLOY_ENVIRONMENT} target lane is unaffected (bug.5278)" >&2
   echo "[substrate-degraded] lane=${1} node=${TARGET_NODE} phase=${2} rc=${3} run=${GITHUB_RUN_ID:-local}"
 }
 
 if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
-  if [ -z "$ONLY_CUSTODIED_LANE" ]; then
-    bash "$MATERIALIZE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
-  fi
+  bash "$MATERIALIZE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
   # Then every OTHER lane of this node that THIS cluster reconciles. Catalog-derived, so a
   # lane added by a catalog edit is materialized with no code change, and a node with no
   # such lane (every k3s row, every production-only node) enumerates nothing.
   for lane in "${custodied_lanes[@]}"; do
-    lane_selected "$lane" || continue
     # DOMAIN builds the derive-env FQDN keys (APP_BASE_URL, NEXTAUTH_URL). It arrives scoped
     # to THIS env, so materializing another lane with it would silently stamp
     # `poly.cognidao.org` into the candidate-a bank — a wrong value written confidently,
@@ -221,10 +194,8 @@ else
   exit 0
 fi
 
-if [ -z "$ONLY_CUSTODIED_LANE" ]; then
-  DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
-    bash "$RECONCILE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
-fi
+DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
+  bash "$RECONCILE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
 
 # ...then the SUBSTRATE of every lane this cluster custodies. Materializing the lane's secrets
 # without provisioning its database produces a lease that boots with a valid DSN pointing at a
@@ -239,7 +210,6 @@ fi
 # under stays the cluster's. Empty for every row today, so nothing new runs.
 if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   for lane in "${custodied_lanes[@]}"; do
-    lane_selected "$lane" || continue
     lane_domain=""
     case "$lane" in
       production)  lane_domain="$DOMAIN_ROOT" ;;
@@ -256,7 +226,7 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
       || lane_degraded "$lane" reconcile $?
   done
 fi
-if [ -z "$ONLY_CUSTODIED_LANE" ] && [ "$DEPLOYMENT_PROVIDER" = "akash" ] && [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
+if [ "$DEPLOYMENT_PROVIDER" = "akash" ] && [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
   TARGET="$TARGET_NODE" DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" \
     bash "$ASSERT_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
 fi
@@ -277,8 +247,4 @@ if [ "${#degraded_lanes[@]}" -gt 0 ]; then
   fi
 fi
 
-if [ -n "$ONLY_CUSTODIED_LANE" ]; then
-  echo "[run-node-substrate] ${ONLY_CUSTODIED_LANE}/${TARGET_NODE}: custodian replay complete"
-else
-  echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}: provider preflight ready"
-fi
+echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}: provider preflight ready"

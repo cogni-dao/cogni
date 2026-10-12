@@ -50,10 +50,6 @@
 #   GITHUB_REPOSITORY  owner/repo to clone (required unless DEPLOY_BRANCH_DIR set).
 #   SWR_DEPLOY_REPOSITORY owner/repo actually watched by Argo for this k3s cell.
 #                      Defaults to GITHUB_REPOSITORY for non-mirrored fleets.
-#   SWR_SECONDARY_APP_SOURCE_DIR optional second fleet checkout whose committed,
-#                      independently validated route map is unioned with the
-#                      primary map. UUID aliases are authoritative; conflicting
-#                      UUIDs fail. Human slug collisions prefer the primary map.
 #   DEPLOY_BRANCH_DIR  reuse an existing deploy-branch checkout instead of cloning
 #                      (tests / local). When set, no clone and no push.
 #   DRY_RUN=1          render + diff only; never push (commits locally for the diff).
@@ -82,13 +78,6 @@ SRC_DIR="${APP_SOURCE_DIR}/${SUBPATH}"
 # kustomization.yaml (promotion state) is never rewritten from main.
 ENDPOINTS_SUBPATH="infra/k8s/overlays/${DEPLOY_ENV}/scheduler-worker/node-endpoints.patch.yaml"
 ENDPOINTS_SRC="${APP_SOURCE_DIR}/${ENDPOINTS_SUBPATH}"
-SECONDARY_APP_SOURCE_DIR="${SWR_SECONDARY_APP_SOURCE_DIR:-}"
-SECONDARY_SRC_DIR=""
-SECONDARY_ENDPOINTS_SRC=""
-if [ -n "$SECONDARY_APP_SOURCE_DIR" ]; then
-  SECONDARY_SRC_DIR="${SECONDARY_APP_SOURCE_DIR}/${SUBPATH}"
-  SECONDARY_ENDPOINTS_SRC="${SECONDARY_APP_SOURCE_DIR}/${ENDPOINTS_SUBPATH}"
-fi
 
 ENDPOINTS_COUNT=0
 NODE_COUNT=0
@@ -185,53 +174,6 @@ else
   echo "::warning::render-scheduler-worker-endpoints.sh absent at this ref — propagating committed configmap without re-validation"
 fi
 
-if [ -n "$SECONDARY_APP_SOURCE_DIR" ]; then
-  [ -f "$SECONDARY_SRC_DIR/configmap.yaml" ] || {
-    echo "[ERROR] secondary fleet route map absent: $SECONDARY_SRC_DIR/configmap.yaml" >&2
-    exit 1
-  }
-  [ -f "$SECONDARY_ENDPOINTS_SRC" ] || {
-    echo "[ERROR] secondary fleet env route map absent: $SECONDARY_ENDPOINTS_SRC" >&2
-    exit 1
-  }
-  if [ -f "$SECONDARY_APP_SOURCE_DIR/scripts/ci/render-scheduler-worker-endpoints.sh" ]; then
-    if ! ( cd "$SECONDARY_APP_SOURCE_DIR" && bash scripts/ci/render-scheduler-worker-endpoints.sh --check ); then
-      echo "[ERROR] secondary fleet scheduler-worker routes are stale vs its own catalog" >&2
-      exit 1
-    fi
-  else
-    echo "[ERROR] secondary fleet lacks render-scheduler-worker-endpoints.sh; refusing an unvalidated composite" >&2
-    exit 1
-  fi
-fi
-
-merge_endpoint_csv() {
-  PRIMARY_ENDPOINTS="$1" SECONDARY_ENDPOINTS="$2" python3 - <<'PY'
-import os
-import re
-
-uuid = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
-merged = {}
-for authority, raw in (("primary", os.environ.get("PRIMARY_ENDPOINTS", "")),
-                       ("secondary", os.environ.get("SECONDARY_ENDPOINTS", ""))):
-    for item in filter(None, raw.split(",")):
-        alias, sep, endpoint = item.partition("=")
-        if not sep or not alias or not endpoint:
-            raise SystemExit(f"invalid {authority} scheduler endpoint entry: {item!r}")
-        prior = merged.get(alias)
-        if prior is not None and prior != endpoint:
-            if uuid.fullmatch(alias):
-                raise SystemExit(
-                    f"conflicting canonical nodeId {alias}: {prior!r} vs {endpoint!r}"
-                )
-            # Human slugs are compatibility aliases, never queue identities.
-            # The reviewed primary fleet wins; both UUID aliases remain present.
-            continue
-        merged.setdefault(alias, endpoint)
-print(",".join(f"{alias}={merged[alias]}" for alias in sorted(merged)))
-PY
-}
-
 # Counts are telemetry only — the propagation itself is rsync + git, so a missing
 # yq must never block the reconcile.
 ENDPOINTS_CSV=""
@@ -285,34 +227,12 @@ mkdir -p "$DST_DIR"
 # pre-#1609 deploy branch also gains the Reloader annotation.
 rsync -a --delete "$SRC_DIR/" "$DST_DIR/"
 
-# A canonical self-flight may write the branch watched by the isolated test
-# parent. Its roster is an independent authority, not disposable state. Build a
-# deterministic union from both CURRENT catalogs: canonical reviewed-head routes
-# plus the watched fleet's default-branch routes. Never use the old deploy branch
-# as input, so deleted nodes converge away instead of accumulating forever.
-if [ -n "$SECONDARY_APP_SOURCE_DIR" ]; then
-  primary_base="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$SRC_DIR/configmap.yaml")"
-  secondary_base="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$SECONDARY_SRC_DIR/configmap.yaml")"
-  merged_base="$(merge_endpoint_csv "$primary_base" "$secondary_base")"
-  MERGED_ENDPOINTS="$merged_base" yq -i \
-    '.data.COGNI_NODE_ENDPOINTS = strenv(MERGED_ENDPOINTS)' \
-    "$DST_DIR/configmap.yaml"
-fi
-
 # Propagate this env's GENERATED provider-resolved endpoints patch. Absent at an
 # older ref → warn + skip (mirrors the renderer-absent path above) rather than
 # hard-fail a flight on a file the PR head predates.
 if [ -f "$ENDPOINTS_SRC" ]; then
   mkdir -p "$(dirname "${WORKDIR}/${ENDPOINTS_SUBPATH}")"
   cp "$ENDPOINTS_SRC" "${WORKDIR}/${ENDPOINTS_SUBPATH}"
-  if [ -n "$SECONDARY_APP_SOURCE_DIR" ]; then
-    primary_env="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$ENDPOINTS_SRC")"
-    secondary_env="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$SECONDARY_ENDPOINTS_SRC")"
-    merged_env="$(merge_endpoint_csv "$primary_env" "$secondary_env")"
-    MERGED_ENDPOINTS="$merged_env" yq -i \
-      '.data.COGNI_NODE_ENDPOINTS = strenv(MERGED_ENDPOINTS)' \
-      "${WORKDIR}/${ENDPOINTS_SUBPATH}"
-  fi
   git -C "$WORKDIR" add -A "$ENDPOINTS_SUBPATH"
 else
   echo "::warning::${ENDPOINTS_SUBPATH} absent at this ref — propagating base routing only"

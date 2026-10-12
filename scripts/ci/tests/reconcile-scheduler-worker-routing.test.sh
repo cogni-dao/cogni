@@ -51,45 +51,6 @@ metadata:
   annotations:
     reloader.stakater.com/auto: "true"
 YAML
-mkdir -p "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker"
-cat >"$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml" <<'YAML'
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: scheduler-worker-config
-data:
-  COGNI_NODE_ENDPOINTS: "operator=https://operator-primary.example,4ff8eac1-0000-4000-8000-000000000001=https://operator-primary.example,throwaway=https://throwaway-primary.example,abcd1234-0000-4000-8000-000000000002=https://throwaway-primary.example"
-YAML
-
-# Independent watched-fleet authority. Its canonical UUID route must survive a
-# canonical PR reconcile; its colliding human `operator` slug is compatibility
-# only and therefore yields to the reviewed primary map.
-SECONDARY_SRC="$TMPROOT/fleet-src"
-mkdir -p "$SECONDARY_SRC/$SUBPATH" \
-  "$SECONDARY_SRC/infra/k8s/overlays/candidate-a/scheduler-worker" \
-  "$SECONDARY_SRC/scripts/ci"
-cat >"$SECONDARY_SRC/$SUBPATH/configmap.yaml" <<'YAML'
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: scheduler-worker-config
-data:
-  COGNI_NODE_ENDPOINTS: "operator=http://other-operator:3000,test-only=http://test-only:3000,abcd1234-0000-4000-8000-000000000003=http://test-only:3000"
-YAML
-cat >"$SECONDARY_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml" <<'YAML'
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: scheduler-worker-config
-data:
-  COGNI_NODE_ENDPOINTS: "operator=https://operator-secondary.example,test-only=https://test-only.example,abcd1234-0000-4000-8000-000000000003=https://test-only.example"
-YAML
-cat >"$SECONDARY_SRC/scripts/ci/render-scheduler-worker-endpoints.sh" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-[ "${1:-}" = "--check" ]
-SH
-chmod +x "$SECONDARY_SRC/scripts/ci/render-scheduler-worker-endpoints.sh"
 
 # ── Fixture: a deploy/<env>-scheduler-worker checkout with the OLD configmap +
 #    a digest-pinned overlay that MUST survive the reconcile ────────────────────
@@ -123,7 +84,6 @@ git -C "$DEPLOY_DIR" commit -q -m "seed deploy branch (old routing)"
 
 run() {
   APP_SOURCE_DIR="$APP_SRC" \
-    SWR_SECONDARY_APP_SOURCE_DIR="$SECONDARY_SRC" \
     DEPLOY_BRANCH_DIR="$DEPLOY_DIR" \
     SWR_RECONCILE_SUMMARY_FILE="$TMPROOT/summary.json" \
     bash "$RECONCILE" candidate-a
@@ -134,15 +94,6 @@ out1="$(run)" || fail "first reconcile exited non-zero: $out1"
 echo "$out1" | grep -q "updated locally" || fail "expected 'updated locally', got: $out1"
 grep -q "throwaway=http://throwaway-node-app:3000" "$DEPLOY_DIR/$SUBPATH/configmap.yaml" \
   || fail "new node endpoint not propagated to deploy-branch configmap"
-grep -q "abcd1234-0000-4000-8000-000000000003=http://test-only:3000" "$DEPLOY_DIR/$SUBPATH/configmap.yaml" \
-  || fail "watched fleet's canonical UUID route was clobbered"
-grep -q "operator=http://operator-node-app:3000" "$DEPLOY_DIR/$SUBPATH/configmap.yaml" \
-  || fail "primary compatibility slug did not win the cross-fleet collision"
-[ -f "$DEPLOY_DIR/infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml" ] \
-  || fail "composite env route patch was not propagated"
-grep -q "abcd1234-0000-4000-8000-000000000003=https://test-only.example" \
-  "$DEPLOY_DIR/infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml" \
-  || fail "watched fleet's env-resolved UUID route was clobbered"
 [ -f "$DEPLOY_DIR/$SUBPATH/deployment.yaml" ] \
   || fail "Reloader-annotated deployment.yaml not propagated to deploy branch"
 grep -q "reloader.stakater.com/auto" "$DEPLOY_DIR/$SUBPATH/deployment.yaml" \

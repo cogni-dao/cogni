@@ -57,7 +57,6 @@ interface WorkflowJob {
   if?: string;
   needs?: string[];
   outputs?: Record<string, unknown>;
-  concurrency?: { group?: unknown; "cancel-in-progress"?: boolean };
   steps: WorkflowStep[];
 }
 
@@ -253,14 +252,6 @@ describe("candidate-a manifest source", () => {
       "reconcile-scheduler-worker-routing",
       "Reconcile scheduler-worker routing (propagate to per-env deploy branch)"
     );
-    const fleetRoster = namedStep(
-      "reconcile-scheduler-worker-routing",
-      "Checkout watched fleet roster authority"
-    );
-    const flightSync = namedStep(
-      "flight",
-      "Sync base + per-node overlay + per-node catalog to deploy branch"
-    );
 
     expect(resolve.env?.DEPLOYMENT_PROVIDER).toBe("k3s");
     expect(resolve.run).toBe(
@@ -272,61 +263,12 @@ describe("candidate-a manifest source", () => {
     expect(reconcile.env?.GH_TOKEN).toBe(
       "${{ steps.deploy-app.outputs.token || github.token }}"
     );
-    expect(fleetRoster.with?.repository).toBe(
-      "${{ steps.deploy-repo.outputs.repository }}"
-    );
-    expect(fleetRoster.with?.ref).toBe("main");
-    expect(reconcile.env?.SWR_SECONDARY_APP_SOURCE_DIR).toContain("fleet-src");
-    expect(flightSync.run).toContain('scheduler_base_endpoints="$(yq');
-    expect(flightSync.run).toContain(
-      "'.data.COGNI_NODE_ENDPOINTS = strenv(SCHEDULER_ENDPOINTS)'"
-    );
     expect(parsed.jobs.flight.needs).toContain(
       "reconcile-scheduler-worker-routing"
     );
     expect(parsed.jobs.flight.if).toContain(
       "needs.reconcile-scheduler-worker-routing.result == 'success'"
     );
-    expect(
-      parsed.jobs["reconcile-scheduler-worker-routing"].concurrency?.group
-    ).toBe("candidate-flight-scheduler-worker-candidate-a");
-    expect(String(parsed.jobs.flight.concurrency?.group)).toContain(
-      "candidate-flight-scheduler-worker-{0}"
-    );
-  });
-
-  it("keeps candidate and control firewall grants role-scoped", () => {
-    expect(
-      namedStep(
-        "reconcile-compute-egress",
-        "Reconcile catalog-derived external compute egress"
-      ).with?.substrate_ports
-    ).toBe("6379,4000,7233");
-    expect(
-      namedStep(
-        "reconcile-compute-egress-control",
-        "Reconcile lane egress on the control-env substrate VM"
-      ).with?.substrate_ports
-    ).toBe("5432,5435");
-  });
-
-  it("authorizes only the control public key downward and scopes the replay", () => {
-    const authorize = namedStep(
-      "reconcile-compute-egress",
-      "Authorize control deploy key on candidate VM"
-    );
-    const replay = namedStep(
-      "reconcile-compute-egress-control",
-      "Reconcile candidate secrets from their control vault"
-    );
-
-    expect(authorize.env?.CONTROL_PUBLIC_KEY).toBe(
-      "${{ needs.control-deploy-public-key.outputs.public_key }}"
-    );
-    expect(authorize.run).toContain("authorized_keys");
-    expect(authorize.run).not.toContain("SSH_DEPLOY_KEY");
-    expect(replay.env?.RUN_NODE_SUBSTRATE_ONLY_LANE).toBe("candidate-a");
-    expect(replay.run).toContain('run-node-substrate.sh "$FLEET_CONTROL_ENV"');
   });
 
   it("fails candidate verification unless worker /version matches SHA and digest", () => {

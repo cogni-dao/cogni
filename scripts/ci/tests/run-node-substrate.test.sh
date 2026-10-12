@@ -301,45 +301,4 @@ if grep -q '^assert' "$ORDER"; then
   echo "the provider assert must NOT run after a fatal target reconcile" >&2; exit 1
 fi
 
-# ── Case 12: candidate custodian replay mutates ONLY that sibling lane. The
-# control env's own substrate, preview sibling, and provider assert are untouched.
-mk_stub "$TMPROOT/mat.sh" materialize 0
-mk_stub "$TMPROOT/rec.sh" reconcile 0
-mk_stub "$TMPROOT/assert.sh" assert 0
-: > "$ORDER"
-RUN_NODE_SUBSTRATE_ONLY_LANE=candidate-a \
-DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
-RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
-RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
-RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
-  bash "$RUNNER" production polyfix >/dev/null
-got="$(paste -sd'|' - < "$ORDER")"
-want="materialize candidate-a polyfix|reconcile candidate-a polyfix"
-[ "$got" = "$want" ] || { echo "scoped custodian replay exceeded the requested lane:
-  got:  $got
-  want: $want" >&2; exit 1; }
-
-cat > "$TMPROOT/mat.sh" <<EOF
-#!/usr/bin/env bash
-exit 9
-EOF
-chmod +x "$TMPROOT/mat.sh"
-if RUN_NODE_SUBSTRATE_ONLY_LANE=candidate-a \
-   DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
-   RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
-   RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
-     bash "$RUNNER" production polyfix >/dev/null 2>&1; then
-  echo "a scoped custodian replay failure must fail the candidate gate" >&2
-  exit 1
-fi
-
-if RUN_NODE_SUBSTRATE_ONLY_LANE=staging \
-   DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
-   RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
-   RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
-     bash "$RUNNER" production polyfix >/dev/null 2>&1; then
-  echo "scoped custodian replay must reject a lane outside the catalog-derived custody set" >&2
-  exit 1
-fi
-
 echo "PASS: run-node-substrate.test.sh"

@@ -5,10 +5,6 @@ name: Candidate Flight
 on:
   workflow_dispatch:
     inputs:
-      workflow_source_sha:
-        description: "Exact reviewed commit that owns this workflow execution"
-        required: true
-        type: string
       pr_number:
         description: "PR number to flight"
         required: false
@@ -77,24 +73,6 @@ jobs:
       source_repository_by_target_json: ${{ steps.substrate-targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.substrate-targets.outputs.source_sha_by_target_json }}
     steps:
-      # The VCS capability dispatches the reviewed workflow ref explicitly. Fail
-      # before checkout, API reads, artifact resolution, or any deploy write if
-      # GitHub executed a different revision (bug.5455).
-      - name: Assert exact workflow source
-        env:
-          EXPECTED_WORKFLOW_SOURCE_SHA: ${{ inputs.workflow_source_sha }}
-          ACTUAL_WORKFLOW_SOURCE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          [[ "$EXPECTED_WORKFLOW_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
-            echo "::error::workflow_source_sha must be an exact 40-character commit SHA"
-            exit 1
-          }
-          [[ "${ACTUAL_WORKFLOW_SOURCE_SHA,,}" == "${EXPECTED_WORKFLOW_SOURCE_SHA,,}" ]] || {
-            echo "::error::workflow source mismatch: executed ${ACTUAL_WORKFLOW_SOURCE_SHA}, expected ${EXPECTED_WORKFLOW_SOURCE_SHA}"
-            exit 1
-          }
-
       - name: Checkout workflow source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
@@ -363,39 +341,9 @@ jobs:
           path: ${{ runner.temp }}/resolved-pr-images.json
           retention-days: 1
 
-  control-deploy-public-key:
-    needs: decide
-    if: needs.decide.result == 'success' && needs.decide.outputs.has_external_compute_node_targets == 'true'
-    runs-on: ubuntu-latest
-    environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-    outputs:
-      public_key: ${{ steps.key.outputs.public_key }}
-    steps:
-      - name: Derive control deploy public key
-        id: key
-        env:
-          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
-        run: |
-          set -euo pipefail
-          key_file="${RUNNER_TEMP}/control-deploy-key"
-          printf '%s\n' "$SSH_DEPLOY_KEY" | tr -d '\r' > "$key_file"
-          chmod 600 "$key_file"
-          public_key="$(ssh-keygen -y -f "$key_file")"
-          [[ "$public_key" =~ ^ssh-ed25519\ [A-Za-z0-9+/=]+$ ]] || {
-            echo "::error::unexpected control deploy public-key shape"
-            exit 1
-          }
-          echo "public_key=$public_key" >> "$GITHUB_OUTPUT"
-
   reconcile-compute-egress:
-    needs: [decide, control-deploy-public-key]
-    if: |
-      always() &&
-      needs.decide.result == 'success' &&
-      (
-        needs.decide.outputs.has_external_compute_node_targets != 'true' ||
-        needs.control-deploy-public-key.result == 'success'
-      )
+    needs: decide
+    if: needs.decide.result == 'success'
     runs-on: ubuntu-latest
     environment: candidate-a
     steps:
@@ -413,38 +361,18 @@ jobs:
           environment: candidate-a
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
-          substrate_ports: "6379,4000,7233"
 
-      # Higher trust may enter lower trust; lower trust never receives a
-      # production credential. Only the control environment's PUBLIC deploy key
-      # is installed here. This lets the control-owned secret reconciler read the
-      # candidate runtime credentials without ever copying a candidate private
-      # key into the production job (bug.5447).
-      - name: Authorize control deploy key on candidate VM
-        if: needs.decide.outputs.has_external_compute_node_targets == 'true'
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          CONTROL_PUBLIC_KEY: ${{ needs.control-deploy-public-key.outputs.public_key }}
-        run: |
-          set -euo pipefail
-          [[ "$CONTROL_PUBLIC_KEY" =~ ^ssh-ed25519\ [A-Za-z0-9+/=]+$ ]] || {
-            echo "::error::missing or invalid control deploy public key"
-            exit 1
-          }
-          key_b64="$(printf '%s' "$CONTROL_PUBLIC_KEY" | base64 -w0)"
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=30 \
-            "root@${VM_HOST}" \
-            "set -euo pipefail; key=\$(printf '%s' '${key_b64}' | base64 -d); mkdir -p /root/.ssh; chmod 700 /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys; grep -qF \"\$key\" /root/.ssh/authorized_keys || printf 'restrict %s cogni-control-to-candidate\\n' \"\$key\" >> /root/.ssh/authorized_keys"
-
-  # A foreign-custodied lane keeps its databases on the CONTROL env's VM while
-  # Temporal/Redis/LiteLLM live on the lane VM (bug.5447). The job above opens
-  # runtime ports on candidate; this twin opens only DB ports on the control VM,
-  # then performs the scoped control-vault replay that writes candidate secrets.
+  # A foreign-custodied lane's substrate (Postgres/Temporal/LiteLLM) lives on the
+  # CONTROL env's VM (production for cogni-dao nodes), not the candidate VM. The
+  # job above hardens the candidate VM only, so the Akash provider NAT hole for
+  # such lanes never reaches the machine their substrate answers from: the leased
+  # app boots but readyz?deep=1 dies on unreachable Postgres/Temporal. Same
+  # lane-vs-control conflation as bug.5216. This twin binds environment:
+  # production for its VM secrets while rendering the candidate-a lane allowlist —
+  # the action already separates those two concerns.
   reconcile-compute-egress-control:
-    needs: [decide, reconcile-compute-egress]
-    if: always() && needs.decide.result == 'success' && needs.reconcile-compute-egress.result == 'success'
+    needs: decide
+    if: needs.decide.result == 'success'
     runs-on: ubuntu-latest
     # The control env owns the akash lane's substrate VM. Default 'production' (cogni-dao);
     # an isolated fleet (cogni-test-org) binds its own control env via FLEET_CONTROL_ENV so
@@ -465,57 +393,6 @@ jobs:
           environment: candidate-a
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
-          substrate_ports: "5432,5435"
-
-      - name: Materialize external node sources for custodian replay
-        if: env.FLEET_CONTROL_ENV != 'candidate-a' && needs.decide.outputs.has_external_compute_node_targets == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
-          TARGETS_JSON: ${{ needs.decide.outputs.external_compute_node_targets_json }}
-          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-          REQUESTED_NODE: ${{ needs.decide.outputs.node_slug }}
-        run: |
-          set -euo pipefail
-          while IFS= read -r node; do
-            [ -n "$node" ] || continue
-            catalog="app-src/infra/catalog/${node}.yaml"
-            source_repo="$(yq -N '.source_repo // ""' "$catalog")"
-            [ -n "$source_repo" ] || continue
-            source_sha="$(yq -N '.source_sha // ""' "$catalog")"
-            if [ "$node" = "$REQUESTED_NODE" ] && [ -n "$NODE_SOURCE_SHA" ]; then
-              source_sha="$NODE_SOURCE_SHA"
-            fi
-            [ -n "$source_sha" ] || { echo "::error::no source_sha for $node"; exit 1; }
-            repo_path="${source_repo#https://github.com/}"; repo_path="${repo_path%.git}"
-            rm -rf "app-src/nodes/${node}"
-            git init -q "app-src/nodes/${node}"
-            git -C "app-src/nodes/${node}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
-            git -C "app-src/nodes/${node}" fetch -q --depth 1 origin "$source_sha"
-            git -C "app-src/nodes/${node}" checkout -q --detach FETCH_HEAD
-          done < <(jq -r '.[]' <<<"$TARGETS_JSON")
-
-      - name: Reconcile candidate secrets from their control vault
-        if: env.FLEET_CONTROL_ENV != 'candidate-a' && needs.decide.outputs.has_external_compute_node_targets == 'true'
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
-          DEPLOY_ENVIRONMENT: ${{ env.FLEET_CONTROL_ENV }}
-          DOMAIN: ${{ vars.DOMAIN }}
-          FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
-          APP_SOURCE_DIR: app-src
-          COGNI_CATALOG_ROOT: app-src/infra/catalog
-          TARGETS_JSON: ${{ needs.decide.outputs.external_compute_node_targets_json }}
-          RUN_NODE_SUBSTRATE_ONLY_LANE: candidate-a
-          GRAFANA_CLOUD_LOKI_URL: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
-          GRAFANA_CLOUD_LOKI_USER: ${{ secrets.GRAFANA_CLOUD_LOKI_USER }}
-          GRAFANA_CLOUD_LOKI_API_KEY: ${{ secrets.GRAFANA_CLOUD_LOKI_API_KEY }}
-        run: |
-          set -euo pipefail
-          while IFS= read -r node; do
-            [ -n "$node" ] || continue
-            DEPLOYMENT_PROVIDER=akash \
-              bash app-src/scripts/ci/run-node-substrate.sh "$FLEET_CONTROL_ENV" "$node"
-          done < <(jq -r '.[]' <<<"$TARGETS_JSON")
 
   prepare-substrate-deploy-branch:
     needs:
@@ -1342,10 +1219,7 @@ jobs:
         env: [candidate-a]
         node: ${{ fromJson(needs.decide.outputs.flight_targets_json) }}
     concurrency:
-      # The scheduler-worker flight and the env-singleton routing reconcile both
-      # write deploy/<env>-scheduler-worker. One shared lock covers every writer;
-      # per-node branches retain their existing independent pipeline locks.
-      group: ${{ matrix.node == 'scheduler-worker' && format('candidate-flight-scheduler-worker-{0}', matrix.env) || format('candidate-flight-pipeline-{0}-{1}', matrix.env, matrix.node) }}
+      group: candidate-flight-pipeline-${{ matrix.env }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: candidate-a
@@ -1475,21 +1349,6 @@ jobs:
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: |
           set -euo pipefail
-          # The env-singleton reconcile immediately before this job may have
-          # composed scheduler routes from two fleet authorities. Preserve that
-          # reviewed union while refreshing every other base/overlay file from
-          # the PR. A raw rsync here used to replace it with the canonical-only
-          # roster and silently delete every test-only poller.
-          scheduler_base_endpoints=""
-          scheduler_env_endpoints=""
-          if [ "$NODE" = "scheduler-worker" ]; then
-            scheduler_base_endpoints="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' deploy-branch/infra/k8s/base/scheduler-worker/configmap.yaml)"
-            scheduler_env_endpoints="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' deploy-branch/infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml)"
-            [ -n "$scheduler_base_endpoints" ] && [ -n "$scheduler_env_endpoints" ] || {
-              echo "::error::scheduler route union missing from watched deploy branch"
-              exit 1
-            }
-          fi
           # Node source already materialized at app-src/nodes/${NODE} by the
           # "Materialize node source at its catalog pin" step (same job).
           rsync -a --delete app-src/infra/k8s/base/ deploy-branch/infra/k8s/base/
@@ -1498,14 +1357,6 @@ jobs:
             rsync -a --delete \
               "app-src/infra/k8s/overlays/candidate-a/${NODE}/" \
               "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/"
-            if [ "$NODE" = "scheduler-worker" ]; then
-              SCHEDULER_ENDPOINTS="$scheduler_base_endpoints" yq -i \
-                '.data.COGNI_NODE_ENDPOINTS = strenv(SCHEDULER_ENDPOINTS)' \
-                deploy-branch/infra/k8s/base/scheduler-worker/configmap.yaml
-              SCHEDULER_ENDPOINTS="$scheduler_env_endpoints" yq -i \
-                '.data.COGNI_NODE_ENDPOINTS = strenv(SCHEDULER_ENDPOINTS)' \
-                deploy-branch/infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml
-            fi
           else
             # bug.5148 — WHICH file the materializer rendered is a catalog fact, not a
             # constant: ONE_AUTHORITY_PER_WORKLOAD means a crossplane cell emits
@@ -1763,7 +1614,7 @@ jobs:
     if: needs.decide.result == 'success'
     # Serialize per-env so concurrent node flights never race on the shared branch.
     concurrency:
-      group: candidate-flight-scheduler-worker-candidate-a
+      group: reconcile-scheduler-worker-routing-candidate-a
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: candidate-a
@@ -1831,21 +1682,11 @@ jobs:
             exit 1
           }
 
-      - name: Checkout watched fleet roster authority
-        if: steps.deploy-repo.outputs.requires_app_token == 'true'
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          repository: ${{ steps.deploy-repo.outputs.repository }}
-          ref: main
-          token: ${{ steps.deploy-app.outputs.token }}
-          path: fleet-src
-
       - name: Reconcile scheduler-worker routing (propagate to per-env deploy branch)
         working-directory: app-src
         env:
           GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
           APP_SOURCE_DIR: "."
-          SWR_SECONDARY_APP_SOURCE_DIR: ${{ steps.deploy-repo.outputs.requires_app_token == 'true' && format('{0}/fleet-src', github.workspace) || '' }}
           SWR_DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
           SWR_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/swr-reconcile-summary.json
           SWR_RECONCILE_HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
@@ -1902,7 +1743,7 @@ jobs:
         env: [candidate-a]
         node: ${{ fromJson(needs.decide.outputs.flight_targets_json) }}
     concurrency:
-      group: ${{ matrix.node == 'scheduler-worker' && format('candidate-flight-scheduler-worker-{0}', matrix.env) || format('candidate-flight-pipeline-{0}-{1}', matrix.env, matrix.node) }}
+      group: candidate-flight-pipeline-${{ matrix.env }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: candidate-a
