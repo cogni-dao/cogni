@@ -93,6 +93,7 @@ if [[ "$APP" == "scheduler-worker" ]]; then
     exit 1
   fi
   sed -i.bak '\|path: /data/IMAGE_DIGEST|{n;s|\( *value: *\).*|\1"'"${IMAGE_DIGEST}"'"|;}' "$OVERLAY_FILE"
+  rm -f "${OVERLAY_FILE}.bak"
   if ! grep -q "value: \"${IMAGE_DIGEST}\"" "$OVERLAY_FILE"; then
     log_error "failed to synchronize scheduler-worker IMAGE_DIGEST"
     exit 1
