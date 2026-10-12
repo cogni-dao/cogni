@@ -17,5 +17,7 @@
  * Links: docs/spec/security-auth.md, request-identity.ts
  * @public
  */
-export { resolveRequestIdentity as getSessionUser } from "@/app/_lib/auth/request-identity";
-export { peekAgentKeyExpiry } from "@/app/_lib/auth/request-identity";
+export {
+  peekAgentKeyExpiry,
+  resolveRequestIdentity as getSessionUser,
+} from "@/app/_lib/auth/request-identity";

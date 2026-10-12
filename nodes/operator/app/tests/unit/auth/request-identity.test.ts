@@ -112,7 +112,10 @@ describe("peekAgentKeyExpiry — agent-key liveness for /agent/me", () => {
   });
 
   it("returns the key's future expiry for a valid agent bearer", async () => {
-    const token = issueAgentApiKey({ userId: "user-7", displayName: "Agent 7" });
+    const token = issueAgentApiKey({
+      userId: "user-7",
+      displayName: "Agent 7",
+    });
     mockHeaders.mockResolvedValue(
       headersFromRecord({ authorization: `Bearer ${token}` })
     );

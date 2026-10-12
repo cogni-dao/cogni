@@ -22,10 +22,7 @@
 
 import { agentMeOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
-import {
-  getSessionUser,
-  peekAgentKeyExpiry,
-} from "@/app/_lib/auth/session";
+import { getSessionUser, peekAgentKeyExpiry } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
 export const GET = wrapRouteHandlerWithLogging(
