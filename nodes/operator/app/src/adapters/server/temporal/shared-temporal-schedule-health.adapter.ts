@@ -23,9 +23,16 @@ import type {
 import cronParser from "cron-parser";
 
 export const TEMPORAL_HEALTH_MAX_SCHEDULES = 50;
-export const TEMPORAL_HEALTH_MAX_NAMESPACE_SCHEDULES = 250;
-/** GraphRunWorkflow/NodeTaskWorkflow both permit a 15-minute graph Activity. */
-export const TEMPORAL_DUE_EXECUTION_GRACE_MS = 15 * 60_000;
+export const TEMPORAL_HEALTH_MAX_NAMESPACE_SCHEDULES = 50;
+export const TEMPORAL_HEALTH_DESCRIBE_CONCURRENCY = 4;
+export const TEMPORAL_HEALTH_RECENT_CADENCE_SLOTS = 5;
+export const TEMPORAL_ACTION_START_GRACE_MS = 60_000;
+/** Four retryable metadata steps (7m each) plus the 15m graph Activity. */
+export const TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS = 43 * 60_000;
+/** One retryable metadata step (7m) plus the 15m dispatch Activity. */
+export const TEMPORAL_NODE_TASK_EXECUTION_BUDGET_MS = 22 * 60_000;
+/** Conservative SLO for the multi-stage ledger workflow and its child Workflows. */
+export const TEMPORAL_COLLECT_EPOCH_EXECUTION_BUDGET_MS = 2 * 60 * 60_000;
 export const TEMPORAL_SCHEDULE_INSPECTION_TIMEOUT_MS = 2_500;
 
 export type SharedTemporalScheduleHealthReason =
@@ -79,6 +86,8 @@ export interface ExpectedTemporalSchedule {
   readonly taskQueue: string;
   readonly overlapPolicy: "skip" | "buffer_one" | "allow_all";
   readonly catchupWindowMs: number;
+  /** Workflow-type-specific maximum valid runtime, including Activity retry budgets. */
+  readonly executionBudgetMs: number;
 }
 
 export interface LatestDueExecutionHealth {
@@ -127,13 +136,16 @@ const FAILED_WORKFLOW_STATUSES = new Set<SharedTemporalWorkflowStatus>([
 
 function executionHealth(
   execution: ScheduleExecutionDescription,
-  dueCutoffMs: number
+  executionBudgetMs: number,
+  nowMs: number
 ): "success" | "failed" | "stale" | "pending" {
   if (FAILED_WORKFLOW_STATUSES.has(execution.status)) return "failed";
-  const scheduledAtMs = Date.parse(execution.scheduledAtIso);
-  if (!Number.isFinite(scheduledAtMs)) return "stale";
-  if (scheduledAtMs > dueCutoffMs) return "pending";
-  return execution.status === "COMPLETED" ? "success" : "stale";
+  if (execution.status === "COMPLETED") {
+    return execution.resultOutcome === "succeeded" ? "success" : "failed";
+  }
+  const startedAtMs = Date.parse(execution.startedAtIso);
+  if (!Number.isFinite(startedAtMs)) return "stale";
+  return nowMs <= startedAtMs + executionBudgetMs ? "pending" : "stale";
 }
 
 function stableJson(value: unknown): string {
@@ -219,34 +231,67 @@ function cronSpecMatches(
   }
 }
 
-function latestExpectedDueAt(
+function recentExpectedCadenceSlots(
   expected: ExpectedTemporalSchedule,
   observed: ScheduleDescription,
   nowMs: number
-): number | null {
-  if (!expected.enabled) return null;
-  const cutoffMs = nowMs - TEMPORAL_DUE_EXECUTION_GRACE_MS;
+): number[] {
+  if (!expected.enabled) return [];
+  const cutoffMs =
+    nowMs - Math.max(TEMPORAL_ACTION_START_GRACE_MS, expected.catchupWindowMs);
   const createdAtMs = observed.createdAtIso
     ? Date.parse(observed.createdAtIso)
     : Number.NaN;
+  const actions = observed.recentActions ?? [];
+  const earliestActionMs = actions.reduce(
+    (earliest, action) => Math.min(earliest, Date.parse(action.scheduledAtIso)),
+    Number.POSITIVE_INFINITY
+  );
   try {
-    const [expectedAtMs] = cronTimes(
+    return cronTimes(
       expected.cron,
       expected.timezone,
       cutoffMs + 1,
       "prev",
-      1
-    );
-    if (
-      expectedAtMs === undefined ||
-      (Number.isFinite(createdAtMs) && expectedAtMs < createdAtMs)
-    ) {
-      return null;
-    }
-    return expectedAtMs;
+      TEMPORAL_HEALTH_RECENT_CADENCE_SLOTS
+    )
+      .filter(
+        (slot) =>
+          (!Number.isFinite(createdAtMs) || slot >= createdAtMs) &&
+          (!Number.isFinite(earliestActionMs) ||
+            slot >= earliestActionMs - 1_000)
+      )
+      .sort((left, right) => left - right);
   } catch {
-    return cutoffMs;
+    return [];
   }
+}
+
+function missedCadenceCount(
+  expected: ExpectedTemporalSchedule,
+  observed: ScheduleDescription,
+  nowMs: number
+): number {
+  const actions = observed.recentActions ?? [];
+  const unmatchedSlots = recentExpectedCadenceSlots(
+    expected,
+    observed,
+    nowMs
+  ).filter(
+    (slot) =>
+      !actions.some((action) => {
+        const actionAt = Date.parse(action.scheduledAtIso);
+        return Number.isFinite(actionAt) && Math.abs(actionAt - slot) <= 1_000;
+      })
+  ).length;
+  const unexplainedSlots = Math.max(
+    0,
+    unmatchedSlots - (observed.numActionsSkippedOverlap ?? 0)
+  );
+  return Math.max(
+    unexplainedSlots,
+    observed.numActionsMissedCatchupWindow ?? 0
+  );
 }
 
 function scheduleDriftReasons(
@@ -336,9 +381,23 @@ async function describeSchedules(
   describeSchedule: ScheduleControlPort["describeSchedule"],
   deadlineAtMs: number
 ): Promise<readonly (ScheduleDescription | null)[]> {
-  return Promise.all(
-    scheduleIds.map((scheduleId) => describeSchedule(scheduleId, deadlineAtMs))
-  );
+  const descriptions: (ScheduleDescription | null)[] = [];
+  for (
+    let offset = 0;
+    offset < scheduleIds.length;
+    offset += TEMPORAL_HEALTH_DESCRIBE_CONCURRENCY
+  ) {
+    const batch = scheduleIds.slice(
+      offset,
+      offset + TEMPORAL_HEALTH_DESCRIBE_CONCURRENCY
+    );
+    descriptions.push(
+      ...(await Promise.all(
+        batch.map((scheduleId) => describeSchedule(scheduleId, deadlineAtMs))
+      ))
+    );
+  }
+  return descriptions;
 }
 
 export async function inspectSharedTemporalScheduleHealth(
@@ -423,7 +482,6 @@ export async function inspectSharedTemporalScheduleHealth(
   let staleCount = 0;
   let missedCount = 0;
   let latestDueExecution: LatestDueExecutionHealth | null = null;
-  const dueCutoffMs = nowMs - TEMPORAL_DUE_EXECUTION_GRACE_MS;
 
   const undeclaredCount = observedForNode.filter(
     (description) => !expectedIds.has(description.scheduleId)
@@ -451,7 +509,7 @@ export async function inspectSharedTemporalScheduleHealth(
 
     const actions = observed.recentActions ?? [];
     for (const action of actions) {
-      const health = executionHealth(action, dueCutoffMs);
+      const health = executionHealth(action, expected.executionBudgetMs, nowMs);
       if (health === "pending") continue;
       const execution: LatestDueExecutionHealth = {
         scheduledAt: action.scheduledAtIso,
@@ -471,18 +529,7 @@ export async function inspectSharedTemporalScheduleHealth(
       if (health === "success") terminalCount += 1;
     }
 
-    const expectedDueAt = latestExpectedDueAt(expected, observed, nowMs);
-    const latestActionAt = actions.reduce(
-      (latest, action) => Math.max(latest, Date.parse(action.scheduledAtIso)),
-      Number.NEGATIVE_INFINITY
-    );
-    if (
-      expectedDueAt !== null &&
-      (!Number.isFinite(latestActionAt) ||
-        latestActionAt < expectedDueAt - 1_000)
-    ) {
-      missedCount += 1;
-    }
+    missedCount += missedCadenceCount(expected, observed, nowMs);
   }
 
   const reason: SharedTemporalScheduleHealthReason =

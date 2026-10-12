@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   durationObserve: vi.fn(),
   lastSuccessSet: vi.fn(),
   pollerSet: vi.fn(),
+  nodeName: "operator",
   nodeDeclarations: [] as Array<Record<string, unknown>>,
   governanceDeclarations: [] as Array<Record<string, unknown>>,
   jobDeclarations: [] as Array<Record<string, unknown>>,
@@ -43,7 +44,10 @@ vi.mock("@/adapters/server", () => ({
   inspectSharedTemporalHealth: (...args: unknown[]) => mocks.inspect(...args),
   inspectSharedTemporalScheduleHealth: (...args: unknown[]) =>
     mocks.inspectSchedules(...args),
+  TEMPORAL_COLLECT_EPOCH_EXECUTION_BUDGET_MS: 7_200_000,
+  TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS: 2_580_000,
   TEMPORAL_HEALTH_MAX_SCHEDULES: 50,
+  TEMPORAL_NODE_TASK_EXECUTION_BUDGET_MS: 1_320_000,
 }));
 
 vi.mock("@/bootstrap/container", () => ({
@@ -63,7 +67,7 @@ vi.mock("@/bootstrap/container", () => ({
 vi.mock("@/shared/config", () => ({
   getGovernanceConfig: () => ({ schedules: mocks.governanceDeclarations }),
   getNodeId: () => "node-123",
-  getNodeName: () => "operator",
+  getNodeName: () => mocks.nodeName,
   getNodeSchedules: () => mocks.nodeDeclarations,
 }));
 
@@ -98,7 +102,10 @@ vi.mock("@/shared/observability/server/metrics", () => ({
   },
 }));
 
-import { checkSharedTemporalHealth } from "@/bootstrap/jobs/checkSharedTemporalHealth.job";
+import {
+  checkSharedTemporalHealth,
+  resetSharedTemporalHealthCacheForTest,
+} from "@/bootstrap/jobs/checkSharedTemporalHealth.job";
 
 describe("checkSharedTemporalHealth job", () => {
   beforeEach(() => {
@@ -106,6 +113,19 @@ describe("checkSharedTemporalHealth job", () => {
     mocks.nodeDeclarations.length = 0;
     mocks.governanceDeclarations.length = 0;
     mocks.jobDeclarations.length = 0;
+    mocks.nodeName = "operator";
+    mocks.rows.splice(0, mocks.rows.length, {
+      dbScheduleId: "00000000-0000-4000-8000-000000000001",
+      temporalScheduleId: "probe-schedule",
+      ownerUserId: "user-1",
+      executionGrantId: "grant-1",
+      graphId: "langgraph:probe",
+      enabled: true,
+      cron: "* * * * *",
+      timezone: "UTC",
+      input: { message: "probe" },
+    });
+    resetSharedTemporalHealthCacheForTest();
     vi.stubEnv("npm_package_version", "unknown");
     vi.stubEnv("BUILD_TIME", "2026-10-11T11:00:00.000Z");
     mocks.inspect.mockResolvedValue({
@@ -165,6 +185,7 @@ describe("checkSharedTemporalHealth job", () => {
             taskQueue: "scheduler-tasks-node-123",
             overlapPolicy: "buffer_one",
             catchupWindowMs: 60_000,
+            executionBudgetMs: 2_580_000,
           },
         ],
         expectedTaskQueue: "scheduler-tasks-node-123",
@@ -209,7 +230,7 @@ describe("checkSharedTemporalHealth job", () => {
     expect(mocks.lastSuccessSet).not.toHaveBeenCalled();
   });
 
-  it("adds missing repo-spec and defineScheduledJob declarations to the proof", async () => {
+  it("inspects reconciled governance but excludes inactive code-only registries", async () => {
     mocks.rows.length = 0;
     mocks.nodeDeclarations.push({
       id: "repo-probe",
@@ -234,21 +255,46 @@ describe("checkSharedTemporalHealth job", () => {
     await checkSharedTemporalHealth();
 
     const call = mocks.inspectSchedules.mock.calls.at(-1)?.[0];
-    expect(call.expectedSchedules).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          temporalScheduleId: "node-task:node-123:repo-probe",
-          cron: "*/5 * * * *",
-        }),
-        expect.objectContaining({
-          temporalScheduleId: "governance:community",
-          cron: "0 * * * *",
-        }),
-        expect.objectContaining({
-          temporalScheduleId: "missing:scheduled-job:metrics-ingest",
-          cron: "*/15 * * * *",
-        }),
-      ])
-    );
+    expect(call.expectedSchedules).toEqual([
+      expect.objectContaining({
+        temporalScheduleId: "governance:community",
+        cron: "0 * * * *",
+      }),
+    ]);
+  });
+
+  it("coalesces concurrent checks and caches the completed proof", async () => {
+    const [first, second] = await Promise.all([
+      checkSharedTemporalHealth(),
+      checkSharedTemporalHealth(),
+    ]);
+    const third = await checkSharedTemporalHealth();
+
+    expect(first).toBe(second);
+    expect(third).toBe(first);
+    expect(mocks.inspect).toHaveBeenCalledOnce();
+    expect(mocks.inspectSchedules).toHaveBeenCalledOnce();
+  });
+
+  it("does not claim the operator's flat governance schedule on another node", async () => {
+    mocks.nodeName = "poly";
+    mocks.rows.splice(0, mocks.rows.length, {
+      dbScheduleId: "db-foreign-flat",
+      temporalScheduleId: "governance:community",
+      ownerUserId: "system",
+      executionGrantId: "grant-1",
+      graphId: "sandbox:openclaw",
+      enabled: true,
+      cron: "0 * * * *",
+      timezone: "UTC",
+      input: {},
+    });
+
+    await checkSharedTemporalHealth();
+
+    expect(mocks.inspectSchedules.mock.calls.at(-1)?.[0]).toMatchObject({
+      nodeId: "node-123",
+      expectedSchedules: [],
+    });
   });
 });

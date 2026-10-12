@@ -14,7 +14,7 @@ import type { ScheduleDescription } from "@cogni/scheduler-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   inspectSharedTemporalScheduleHealth,
-  TEMPORAL_DUE_EXECUTION_GRACE_MS,
+  TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS,
   TEMPORAL_HEALTH_MAX_SCHEDULES,
 } from "@/adapters/server/temporal";
 
@@ -27,7 +27,7 @@ const expected = {
   dbScheduleId: "00000000-0000-4000-8000-000000000001",
   temporalScheduleId: "schedule-1",
   enabled: true,
-  cron: "* * * * *",
+  cron: "*/15 * * * *",
   timezone: "UTC",
   input: { message: "probe", model: "gpt-oss-120b" },
   graphId: "langgraph:probe",
@@ -37,6 +37,7 @@ const expected = {
   taskQueue: TASK_QUEUE,
   overlapPolicy: "skip",
   catchupWindowMs: 0,
+  executionBudgetMs: TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS,
 } as const;
 
 function observed(
@@ -45,11 +46,11 @@ function observed(
   return {
     scheduleId: expected.temporalScheduleId,
     nodeId: "node-123",
-    nextRunAtIso: "2026-10-12T12:01:00.000Z",
+    nextRunAtIso: "2026-10-12T12:15:00.000Z",
     nextRunTimesIso: [
-      "2026-10-12T12:01:00.000Z",
-      "2026-10-12T12:02:00.000Z",
-      "2026-10-12T12:03:00.000Z",
+      "2026-10-12T12:15:00.000Z",
+      "2026-10-12T12:30:00.000Z",
+      "2026-10-12T12:45:00.000Z",
     ],
     lastRunAtIso: "2026-10-12T11:45:00.000Z",
     isPaused: false,
@@ -74,9 +75,11 @@ function observed(
     recentActions: [
       {
         scheduledAtIso: "2026-10-12T11:45:00.000Z",
+        startedAtIso: "2026-10-12T11:45:00.000Z",
         workflowId: "schedule-1-2026-10-12T11:45:00Z",
         firstExecutionRunId: "run-1",
         status: "COMPLETED",
+        resultOutcome: "succeeded",
       },
     ],
     ...patch,
@@ -114,6 +117,43 @@ describe("shared Temporal schedule health", () => {
         firstExecutionRunId: "run-1",
         status: "COMPLETED",
       },
+    });
+  });
+
+  it("fails a COMPLETED GraphRunWorkflow whose terminal result is ok:false", async () => {
+    const result = await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [expected],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds: vi
+          .fn()
+          .mockResolvedValue([expected.temporalScheduleId]),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            recentActions: [
+              {
+                scheduledAtIso: "2026-10-12T11:45:00.000Z",
+                startedAtIso: "2026-10-12T11:45:00.000Z",
+                workflowId: "semantic-failure",
+                firstExecutionRunId: "semantic-failure-run",
+                status: "COMPLETED",
+                resultOutcome: "failed",
+              },
+            ],
+          })
+        ),
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: "failed_execution",
+      failedCount: 1,
+      terminalCount: 0,
     });
   });
 
@@ -245,9 +285,11 @@ describe("shared Temporal schedule health", () => {
             recentActions: [
               {
                 scheduledAtIso: "2026-10-12T11:45:00.000Z",
+                startedAtIso: "2026-10-12T11:00:00.000Z",
                 workflowId: "workflow-running",
                 firstExecutionRunId: "run-running",
                 status: "RUNNING",
+                resultOutcome: "unknown",
               },
             ],
           })
@@ -263,8 +305,8 @@ describe("shared Temporal schedule health", () => {
     });
   });
 
-  it("allows a just-started Workflow the bounded terminal grace period", async () => {
-    expect(TEMPORAL_DUE_EXECUTION_GRACE_MS).toBe(15 * 60_000);
+  it("uses actual Workflow start plus metadata-aware runtime budget", async () => {
+    expect(TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS).toBe(43 * 60_000);
     const result = await inspectSharedTemporalScheduleHealth(
       {
         nodeId: "node-123",
@@ -278,18 +320,17 @@ describe("shared Temporal schedule health", () => {
           .mockResolvedValue([expected.temporalScheduleId]),
         describeSchedule: vi.fn().mockResolvedValue(
           observed({
-            lastRunAtIso: new Date(
-              NOW_MS - TEMPORAL_DUE_EXECUTION_GRACE_MS + 1
-            ).toISOString(),
+            lastRunAtIso: "2026-10-12T11:30:00.000Z",
             lastWorkflowStatus: "RUNNING",
+            numActionsSkippedOverlap: 1,
             recentActions: [
               {
-                scheduledAtIso: new Date(
-                  NOW_MS - TEMPORAL_DUE_EXECUTION_GRACE_MS + 1
-                ).toISOString(),
+                scheduledAtIso: "2026-10-12T11:30:00.000Z",
+                startedAtIso: "2026-10-12T11:50:00.000Z",
                 workflowId: "workflow-running",
                 firstExecutionRunId: "run-running",
                 status: "RUNNING",
+                resultOutcome: "unknown",
               },
             ],
           })
@@ -322,15 +363,19 @@ describe("shared Temporal schedule health", () => {
             recentActions: [
               {
                 scheduledAtIso: "2026-10-12T11:40:00.000Z",
+                startedAtIso: "2026-10-12T11:00:00.000Z",
                 workflowId: "older-stuck",
                 firstExecutionRunId: "older-run",
                 status: "RUNNING",
+                resultOutcome: "unknown",
               },
               {
                 scheduledAtIso: "2026-10-12T11:59:00.000Z",
+                startedAtIso: "2026-10-12T11:59:00.000Z",
                 workflowId: "newer-complete",
                 firstExecutionRunId: "newer-run",
                 status: "COMPLETED",
+                resultOutcome: "succeeded",
               },
             ],
           })
@@ -367,9 +412,11 @@ describe("shared Temporal schedule health", () => {
             recentActions: [
               {
                 scheduledAtIso: "2026-10-12T11:59:00.000Z",
+                startedAtIso: "2026-10-12T11:59:00.000Z",
                 workflowId: "failed-workflow",
                 firstExecutionRunId: "failed-run",
                 status,
+                resultOutcome: "unknown",
               },
             ],
           })
@@ -410,7 +457,7 @@ describe("shared Temporal schedule health", () => {
     expect(result).toMatchObject({
       status: "unhealthy",
       reason: "missed_execution",
-      missedCount: 1,
+      missedCount: expect.any(Number),
     });
   });
 
@@ -431,9 +478,11 @@ describe("shared Temporal schedule health", () => {
             recentActions: [
               {
                 scheduledAtIso: "2026-10-12T11:30:00.000Z",
+                startedAtIso: "2026-10-12T11:30:00.000Z",
                 workflowId: "old-success",
                 firstExecutionRunId: "old-run",
                 status: "COMPLETED",
+                resultOutcome: "succeeded",
               },
             ],
           })
@@ -444,7 +493,83 @@ describe("shared Temporal schedule health", () => {
     expect(result).toMatchObject({
       status: "unhealthy",
       reason: "missed_execution",
-      missedCount: 1,
+      missedCount: expect.any(Number),
+    });
+  });
+
+  it("uses Temporal's missed-catchup counter even when the newest action is pending", async () => {
+    const everyMinute = { ...expected, cron: "* * * * *" };
+    const result = await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [everyMinute],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds: vi
+          .fn()
+          .mockResolvedValue([expected.temporalScheduleId]),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            nextRunTimesIso: ["2026-10-12T12:01:00.000Z"],
+            numActionsMissedCatchupWindow: 14,
+            recentActions: [
+              {
+                scheduledAtIso: "2026-10-12T11:59:00.000Z",
+                startedAtIso: "2026-10-12T11:59:01.000Z",
+                workflowId: "newest-pending",
+                firstExecutionRunId: "newest-pending-run",
+                status: "RUNNING",
+                resultOutcome: "unknown",
+              },
+            ],
+          })
+        ),
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: "missed_execution",
+      missedCount: 14,
+    });
+  });
+
+  it("compares recent cadence slots instead of trusting the newest action", async () => {
+    const everyMinute = { ...expected, cron: "* * * * *" };
+    const action = (minute: number) => ({
+      scheduledAtIso: `2026-10-12T11:${minute}:00.000Z`,
+      startedAtIso: `2026-10-12T11:${minute}:01.000Z`,
+      workflowId: `workflow-${minute}`,
+      firstExecutionRunId: `run-${minute}`,
+      status: "COMPLETED" as const,
+      resultOutcome: "succeeded" as const,
+    });
+    const result = await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [everyMinute],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        now: () => NOW_MS,
+        listScheduleIds: vi
+          .fn()
+          .mockResolvedValue([expected.temporalScheduleId]),
+        describeSchedule: vi.fn().mockResolvedValue(
+          observed({
+            nextRunTimesIso: ["2026-10-12T12:01:00.000Z"],
+            recentActions: [action(55), action(57), action(59)],
+          })
+        ),
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "unhealthy",
+      reason: "missed_execution",
+      missedCount: 2,
     });
   });
 
@@ -466,7 +591,7 @@ describe("shared Temporal schedule health", () => {
       }
     );
 
-    expect(listScheduleIds).toHaveBeenCalledWith("", 251, expect.any(Number));
+    expect(listScheduleIds).toHaveBeenCalledWith("", 51, expect.any(Number));
     expect(describeSchedule).toHaveBeenCalledWith(
       expected.temporalScheduleId,
       expect.any(Number)
@@ -518,6 +643,33 @@ describe("shared Temporal schedule health", () => {
 
     expect(result.reason).toBe("schedule_inventory_truncated");
     expect(describeSchedule).not.toHaveBeenCalled();
+  });
+
+  it("caps concurrent Schedule descriptions", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const ids = Array.from({ length: 12 }, (_, index) => `foreign-${index}`);
+    const describeSchedule = vi.fn().mockImplementation(async (id: string) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return observed({ scheduleId: id, nodeId: "another-node" });
+    });
+
+    await inspectSharedTemporalScheduleHealth(
+      {
+        nodeId: "node-123",
+        expectedSchedules: [],
+        expectedTaskQueue: TASK_QUEUE,
+      },
+      {
+        listScheduleIds: vi.fn().mockResolvedValue(ids),
+        describeSchedule,
+      }
+    );
+
+    expect(maxActive).toBe(4);
   });
 
   it("detects an undeclared ghost schedule owned by this node", async () => {

@@ -79,7 +79,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
-  - `/api/v1/temporal/health` [GET] - authenticated shared-worker, poller, full schedule-spec/cadence proof; HTTP redacts Workflow/run IDs while the terminal event retains correlation
+  - `/api/v1/temporal/health` [GET] - authenticated + `node.flight`-gated shared-worker, poller, full schedule-spec/cadence proof; per-actor rate gate and process single-flight/cache bound load; HTTP redacts Workflow/run IDs while the terminal event retains correlation
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 

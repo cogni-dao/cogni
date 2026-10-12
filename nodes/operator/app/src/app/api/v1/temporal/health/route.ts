@@ -3,9 +3,9 @@
 
 /**
  * Module: `@app/api/v1/temporal/health`
- * Purpose: Authenticated read-only proof of the node's shared Temporal substrate.
+ * Purpose: Developer-gated read-only proof of the node's shared Temporal substrate.
  * Scope: Runs one bounded diagnostic and returns its artifact/poller evidence. No workflow or schedule mutations.
- * Invariants: Emits exactly one terminal event with correlation IDs; redacts those IDs from the auth-only HTTP response.
+ * Invariants: Requires node.flight; rate limits callers; emits one terminal event; redacts Workflow IDs.
  * Side-effects: IO (Temporal, scheduler-worker HTTP, logs, metrics)
  * Links: task.5238, docs/spec/temporal-patterns.md
  * @public
@@ -13,19 +13,60 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { checkSharedTemporalHealth } from "@/bootstrap/jobs/checkSharedTemporalHealth.job";
+import { getNodeId } from "@/shared/config";
 import { EVENT_NAMES } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+const HEALTH_RATE_WINDOW_MS = 5_000;
+const lastRequestByActor = new Map<string, number>();
 
 export const GET = wrapRouteHandlerWithLogging(
   {
     routeId: "temporal.health",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx) => {
+  async (ctx, _request, sessionUser) => {
+    const nodeId = getNodeId();
+    const authorization = getContainer().authorization;
+    if (!authorization) {
+      return NextResponse.json(
+        { error: "authorization unavailable", code: "authz_unavailable" },
+        { status: 503 }
+      );
+    }
+    const decision = await authorization.check({
+      actorId: `user:${sessionUser.id}`,
+      action: "node.flight",
+      resource: `node:${nodeId}`,
+      context: { tenantId: nodeId, nodeId },
+    });
+    if (decision.decision !== "allow") {
+      const unavailable = decision.code === "authz_unavailable";
+      return NextResponse.json(
+        {
+          error: unavailable ? "authorization unavailable" : "forbidden",
+          code: unavailable ? "authz_unavailable" : "authz_denied",
+        },
+        { status: unavailable ? 503 : 403 }
+      );
+    }
+    const nowMs = Date.now();
+    const previousRequestMs = lastRequestByActor.get(sessionUser.id);
+    if (
+      previousRequestMs !== undefined &&
+      nowMs - previousRequestMs < HEALTH_RATE_WINDOW_MS
+    ) {
+      return NextResponse.json(
+        { error: "rate limit exceeded", code: "rate_limited" },
+        { status: 429, headers: { "Retry-After": "5" } }
+      );
+    }
+    lastRequestByActor.set(sessionUser.id, nowMs);
     const result = await checkSharedTemporalHealth();
     const event = {
       event: EVENT_NAMES.SUBSTRATE_TEMPORAL_HEALTH_CHECKED,
@@ -89,3 +130,8 @@ export const GET = wrapRouteHandlerWithLogging(
     });
   }
 );
+
+/** @internal Test-only reset for the per-process actor rate gate. */
+export function resetTemporalHealthRateGateForTest(): void {
+  lastRequestByActor.clear();
+}

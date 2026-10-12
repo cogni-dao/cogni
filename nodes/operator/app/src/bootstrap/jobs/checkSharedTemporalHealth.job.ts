@@ -15,7 +15,6 @@ import { schedules } from "@cogni/db-schema/scheduling";
 import {
   governanceScheduleId,
   legacyGovernanceScheduleId,
-  nodeScheduleId,
 } from "@cogni/scheduler-core";
 import {
   type ExpectedTemporalSchedule,
@@ -24,18 +23,14 @@ import {
   type SharedTemporalHealth,
   type SharedTemporalScheduleHealth,
   type SharedTemporalScheduleHealthReason,
+  TEMPORAL_COLLECT_EPOCH_EXECUTION_BUDGET_MS,
+  TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS,
   TEMPORAL_HEALTH_MAX_SCHEDULES,
+  TEMPORAL_NODE_TASK_EXECUTION_BUDGET_MS,
 } from "@/adapters/server";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
-import "@/bootstrap/jobs/scheduled-jobs.registry";
-import {
-  getGovernanceConfig,
-  getNodeId,
-  getNodeName,
-  getNodeSchedules,
-} from "@/shared/config";
+import { getGovernanceConfig, getNodeId, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env/server-env";
-import { listScheduledJobs } from "@/shared/node-app-scaffold/scheduled-jobs";
 import {
   temporalScheduleDrift,
   temporalSubstrateCheckDurationMs,
@@ -45,6 +40,11 @@ import {
 } from "@/shared/observability/server/metrics";
 
 const SCHEDULE_DECLARATION_READ_TIMEOUT_MS = 1_000;
+const HEALTH_CACHE_TTL_MS = 5_000;
+let cachedHealth:
+  | { readonly expiresAtMs: number; readonly value: SharedTemporalNodeHealth }
+  | undefined;
+let healthInFlight: Promise<SharedTemporalNodeHealth> | undefined;
 
 export interface SharedTemporalNodeHealth
   extends Omit<SharedTemporalHealth, "status" | "reason"> {
@@ -69,14 +69,15 @@ interface ScheduleRow {
 
 function belongsToCurrentNode(
   temporalScheduleId: string,
-  nodeId: string
+  nodeId: string,
+  isOperator: boolean
 ): boolean {
   if (temporalScheduleId.startsWith("node-task:")) {
     return temporalScheduleId.startsWith(`node-task:${nodeId}:`);
   }
   if (temporalScheduleId.startsWith("governance:")) {
     const parts = temporalScheduleId.split(":");
-    return parts.length === 2 || parts[1] === nodeId;
+    return (isOperator && parts.length === 2) || parts[1] === nodeId;
   }
   return true;
 }
@@ -117,6 +118,12 @@ function rowToExpected(
     : row.graphId.startsWith("task:")
       ? "NodeTaskWorkflow"
       : "GraphRunWorkflow";
+  const executionBudgetMs =
+    workflowType === "CollectEpochWorkflow"
+      ? TEMPORAL_COLLECT_EPOCH_EXECUTION_BUDGET_MS
+      : workflowType === "NodeTaskWorkflow"
+        ? TEMPORAL_NODE_TASK_EXECUTION_BUDGET_MS
+        : TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS;
   return {
     dbScheduleId: row.dbScheduleId,
     temporalScheduleId,
@@ -131,6 +138,7 @@ function rowToExpected(
     taskQueue: isLedgerCollect ? `ledger-tasks-${nodeId}` : defaultTaskQueue,
     overlapPolicy: isGovernanceOrNodeDeclaration ? "skip" : "buffer_one",
     catchupWindowMs: isGovernanceOrNodeDeclaration ? 0 : 60_000,
+    executionBudgetMs,
   };
 }
 
@@ -154,6 +162,7 @@ function missingDeclaration(
     taskQueue,
     overlapPolicy: "skip",
     catchupWindowMs: 0,
+    executionBudgetMs: TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS,
   };
 }
 
@@ -176,8 +185,13 @@ async function listExpectedSchedules(
     .from(schedules)
     .limit(TEMPORAL_HEALTH_MAX_SCHEDULES + 1);
 
+  const isOperator = getNodeName() === "operator";
   const currentRows = rows.filter((row) =>
-    belongsToCurrentNode(row.temporalScheduleId ?? row.dbScheduleId, nodeId)
+    belongsToCurrentNode(
+      row.temporalScheduleId ?? row.dbScheduleId,
+      nodeId,
+      isOperator
+    )
   );
   const expected = currentRows.map((row) =>
     rowToExpected(row, nodeId, defaultTaskQueue)
@@ -186,48 +200,6 @@ async function listExpectedSchedules(
     expected.map((item) => [item.temporalScheduleId, item])
   );
 
-  for (const declaration of getNodeSchedules()) {
-    const id = nodeScheduleId(nodeId, declaration.id);
-    const existing = byTemporalId.get(id);
-    if (!existing) {
-      const missing = missingDeclaration(
-        id,
-        declaration.cron,
-        declaration.timezone,
-        defaultTaskQueue
-      );
-      expected.push(missing);
-      byTemporalId.set(id, missing);
-      continue;
-    }
-    const workflowType =
-      declaration.kind === "http-dispatch"
-        ? "NodeTaskWorkflow"
-        : declaration.kind === "workflow"
-          ? (declaration.workflow ?? "missing")
-          : "GraphRunWorkflow";
-    const graphId =
-      declaration.kind === "http-dispatch"
-        ? `task:${declaration.route}`
-        : declaration.kind === "graph"
-          ? (declaration.graph ?? "missing")
-          : existing.graphId;
-    Object.assign(existing, {
-      enabled: true,
-      cron: declaration.cron,
-      timezone: declaration.timezone,
-      workflowType,
-      graphId,
-      input:
-        declaration.kind === "http-dispatch"
-          ? { route: declaration.route, payload: declaration.payload }
-          : declaration.payload,
-      overlapPolicy: "skip",
-      catchupWindowMs: 0,
-    });
-  }
-
-  const isOperator = getNodeName() === "operator";
   const governance = getGovernanceConfig();
   for (const declaration of governance.schedules) {
     const id = isOperator
@@ -288,32 +260,12 @@ async function listExpectedSchedules(
           : { message: declaration.entrypoint, model: "kimi-k2.5" },
       overlapPolicy: "skip",
       catchupWindowMs: 0,
+      executionBudgetMs: operatorLedger
+        ? TEMPORAL_COLLECT_EPOCH_EXECUTION_BUDGET_MS
+        : nodeLedger
+          ? TEMPORAL_NODE_TASK_EXECUTION_BUDGET_MS
+          : TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS,
     });
-  }
-
-  for (const declaration of listScheduledJobs()) {
-    const route = `/api/internal/jobs/${declaration.id}`;
-    const graphId = `task:${route}`;
-    const existing = expected.find((item) => item.graphId === graphId);
-    if (!existing) {
-      expected.push(
-        missingDeclaration(
-          `missing:scheduled-job:${declaration.id}`,
-          declaration.cron,
-          declaration.timezone ?? "UTC",
-          defaultTaskQueue
-        )
-      );
-    } else {
-      Object.assign(existing, {
-        enabled: true,
-        cron: declaration.cron,
-        timezone: declaration.timezone ?? "UTC",
-        workflowType: "NodeTaskWorkflow",
-        graphId,
-        input: { route, payload: {} },
-      });
-    }
   }
 
   return expected;
@@ -361,7 +313,7 @@ function unavailableScheduleHealth(
   };
 }
 
-export async function checkSharedTemporalHealth(): Promise<SharedTemporalNodeHealth> {
+async function runSharedTemporalHealthCheck(): Promise<SharedTemporalNodeHealth> {
   const startedAt = performance.now();
   const env = serverEnv();
   const nodeId = getNodeId();
@@ -434,4 +386,31 @@ export async function checkSharedTemporalHealth(): Promise<SharedTemporalNodeHea
   }
 
   return result;
+}
+
+/**
+ * One process-wide bounded probe at a time. A short cache absorbs duplicate CLI/route
+ * reads without multiplying Temporal RPCs; unhealthy results are cached too so load
+ * cannot amplify an outage.
+ */
+export async function checkSharedTemporalHealth(): Promise<SharedTemporalNodeHealth> {
+  const nowMs = Date.now();
+  if (cachedHealth && cachedHealth.expiresAtMs > nowMs) {
+    return cachedHealth.value;
+  }
+  if (healthInFlight) return healthInFlight;
+  healthInFlight = runSharedTemporalHealthCheck();
+  try {
+    const value = await healthInFlight;
+    cachedHealth = { value, expiresAtMs: Date.now() + HEALTH_CACHE_TTL_MS };
+    return value;
+  } finally {
+    healthInFlight = undefined;
+  }
+}
+
+/** @internal Test-only reset for the module-level single-flight/cache. */
+export function resetSharedTemporalHealthCacheForTest(): void {
+  cachedHealth = undefined;
+  healthInFlight = undefined;
 }

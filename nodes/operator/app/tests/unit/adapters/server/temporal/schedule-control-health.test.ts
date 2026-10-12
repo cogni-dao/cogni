@@ -79,6 +79,10 @@ describe("TemporalScheduleControlAdapter health description", () => {
       startTime: new Date("2026-10-12T12:00:00.000Z"),
       status: { name: "COMPLETED" },
     });
+    const workflowResult = vi.fn().mockResolvedValue({
+      ok: false,
+      runId: "graph-run-1",
+    });
     const scheduleWithDeadline = vi.fn((_deadline, fn) => fn());
     const workflowWithDeadline = vi.fn((_deadline, fn) => fn());
     const client = {
@@ -87,7 +91,10 @@ describe("TemporalScheduleControlAdapter health description", () => {
         withDeadline: scheduleWithDeadline,
       },
       workflow: {
-        getHandle: () => ({ describe: workflowDescribe }),
+        getHandle: () => ({
+          describe: workflowDescribe,
+          result: workflowResult,
+        }),
         withDeadline: workflowWithDeadline,
       },
     };
@@ -127,8 +134,11 @@ describe("TemporalScheduleControlAdapter health description", () => {
           workflowId: "workflow-1",
           firstExecutionRunId: "run-1",
           status: "COMPLETED",
+          startedAtIso: "2026-10-12T12:00:00.000Z",
+          resultOutcome: "failed",
         },
       ],
     });
+    expect(workflowResult).toHaveBeenCalledOnce();
   });
 });

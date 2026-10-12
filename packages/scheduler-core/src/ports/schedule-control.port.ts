@@ -68,6 +68,8 @@ export interface CreateScheduleParams {
  */
 export interface ScheduleExecutionDescription {
   readonly scheduledAtIso: string;
+  /** Actual Workflow execution start, not the Schedule slot time. */
+  readonly startedAtIso: string;
   readonly workflowId: string;
   readonly firstExecutionRunId: string;
   readonly status:
@@ -79,6 +81,8 @@ export interface ScheduleExecutionDescription {
     | "CONTINUED_AS_NEW"
     | "TIMED_OUT"
     | "UNKNOWN";
+  /** Semantic terminal result for workflows whose success envelope contains `ok`. */
+  readonly resultOutcome: "succeeded" | "failed" | "unknown";
 }
 
 export interface ScheduleCalendarDescription {

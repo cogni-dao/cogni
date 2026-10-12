@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   check: vi.fn(),
   error: vi.fn(),
   info: vi.fn(),
+  authorizationCheck: vi.fn(),
   options: null as unknown,
 }));
 
@@ -28,6 +29,14 @@ vi.mock("@/app/_lib/auth/session", () => ({
 vi.mock("@/bootstrap/jobs/checkSharedTemporalHealth.job", () => ({
   checkSharedTemporalHealth: (...args: unknown[]) => mocks.check(...args),
 }));
+
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({
+    authorization: { check: mocks.authorizationCheck },
+  }),
+}));
+
+vi.mock("@/shared/config", () => ({ getNodeId: () => "node-123" }));
 
 vi.mock("@/bootstrap/http", () => ({
   wrapRouteHandlerWithLogging: (
@@ -51,7 +60,10 @@ vi.mock("@/bootstrap/http", () => ({
   },
 }));
 
-import { GET } from "@/app/api/v1/temporal/health/route";
+import {
+  GET,
+  resetTemporalHealthRateGateForTest,
+} from "@/app/api/v1/temporal/health/route";
 
 const healthy = {
   status: "healthy",
@@ -113,6 +125,43 @@ const healthy = {
 describe("GET /api/v1/temporal/health", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetTemporalHealthRateGateForTest();
+    mocks.authorizationCheck.mockResolvedValue({ decision: "allow" });
+  });
+
+  it("requires node.flight before starting the expensive check", async () => {
+    mocks.authorizationCheck.mockResolvedValue({
+      decision: "deny",
+      code: "authz_denied",
+    });
+
+    const response = await GET(
+      new NextRequest("http://localhost/api/v1/temporal/health")
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.check).not.toHaveBeenCalled();
+    expect(mocks.authorizationCheck).toHaveBeenCalledWith({
+      actorId: "user:developer-1",
+      action: "node.flight",
+      resource: "node:node-123",
+      context: { tenantId: "node-123", nodeId: "node-123" },
+    });
+  });
+
+  it("rate limits repeat checks from the same actor", async () => {
+    mocks.check.mockResolvedValue(healthy);
+
+    const first = await GET(
+      new NextRequest("http://localhost/api/v1/temporal/health")
+    );
+    const second = await GET(
+      new NextRequest("http://localhost/api/v1/temporal/health")
+    );
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(429);
+    expect(mocks.check).toHaveBeenCalledOnce();
   });
 
   it("returns redacted healthy proof while the terminal event keeps correlation", async () => {

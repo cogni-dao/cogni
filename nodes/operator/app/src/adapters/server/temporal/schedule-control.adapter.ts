@@ -53,7 +53,11 @@ export interface TemporalScheduleControlConfig {
 const GRAPH_RUN_WORKFLOW_TYPE = "GraphRunWorkflow";
 /** Workflow type name for the generic non-graph node-task dispatch (task.5029). */
 const NODE_TASK_WORKFLOW_TYPE = "NodeTaskWorkflow";
-const MAX_HEALTH_RECENT_ACTIONS = 10;
+const MAX_HEALTH_RECENT_ACTIONS = 5;
+const SEMANTIC_RESULT_WORKFLOW_TYPES = new Set([
+  GRAPH_RUN_WORKFLOW_TYPE,
+  NODE_TASK_WORKFLOW_TYPE,
+]);
 const MONTH_NAMES = [
   "JANUARY",
   "FEBRUARY",
@@ -213,6 +217,7 @@ function toTemporalOverlapPolicy(
 export class TemporalScheduleControlAdapter implements ScheduleControlPort {
   private client: Client | null = null;
   private connection: Connection | null = null;
+  private clientPromise: Promise<Client> | null = null;
 
   constructor(private readonly config: TemporalScheduleControlConfig) {}
 
@@ -220,8 +225,9 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
     if (this.client) {
       return this.client;
     }
+    if (this.clientPromise) return this.clientPromise;
 
-    try {
+    this.clientPromise = (async () => {
       const connectionOptions: ConnectionOptions = {
         address: this.config.address,
       };
@@ -236,7 +242,11 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
       });
 
       return this.client;
+    })();
+    try {
+      return await this.clientPromise;
     } catch (error) {
+      this.clientPromise = null;
       throw new ScheduleControlUnavailableError(
         "connect",
         error instanceof Error ? error : undefined
@@ -469,6 +479,9 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
           .filter((item) => !recentWorkflowIds.has(item.workflow.workflowId))
           .map((item) => ({ scheduledAt: null, workflow: item.workflow })),
       ];
+      const semanticResultRequired =
+        action.type === "startWorkflow" &&
+        SEMANTIC_RESULT_WORKFLOW_TYPES.has(action.workflowType);
       const recentWorkflowDescriptions = (
         await Promise.all(
           actionRefs.map(async (item) => {
@@ -483,10 +496,36 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
                 )
               : workflowHandle.describe()
             ).catch(() => null);
+            let resultOutcome: "succeeded" | "failed" | "unknown" =
+              workflowDescription?.status.name === "COMPLETED" &&
+              !semanticResultRequired
+                ? "succeeded"
+                : "unknown";
+            if (
+              workflowDescription?.status.name === "COMPLETED" &&
+              semanticResultRequired
+            ) {
+              const result = await (deadlineAtMs
+                ? client.workflow.withDeadline(deadlineAtMs, () =>
+                    workflowHandle.result()
+                  )
+                : workflowHandle.result()
+              ).catch(() => null);
+              resultOutcome =
+                result && typeof result === "object" && "ok" in result
+                  ? (result as { ok?: unknown }).ok === true
+                    ? "succeeded"
+                    : "failed"
+                  : "unknown";
+            }
             return {
               scheduledAtIso:
                 item.scheduledAt?.toISOString() ??
                 workflowDescription?.startTime.toISOString() ??
+                description.info.createdAt.toISOString(),
+              startedAtIso:
+                workflowDescription?.startTime.toISOString() ??
+                item.scheduledAt?.toISOString() ??
                 description.info.createdAt.toISOString(),
               workflowId: item.workflow.workflowId,
               firstExecutionRunId: item.workflow.firstExecutionRunId,
@@ -494,6 +533,7 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
                 workflowDescription?.status.name === "UNSPECIFIED"
                   ? ("UNKNOWN" as const)
                   : (workflowDescription?.status.name ?? ("UNKNOWN" as const)),
+              resultOutcome,
             };
           })
         )
@@ -609,6 +649,7 @@ export class TemporalScheduleControlAdapter implements ScheduleControlPort {
       await this.connection.close();
       this.connection = null;
       this.client = null;
+      this.clientPromise = null;
     }
   }
 }

@@ -32,7 +32,7 @@ Temporal schedule control plus read-only, server-observed shared-worker health d
 
 ## Public Surface
 
-- **Exports:** schedule control types plus shared Temporal poller, compiled full-spec drift, and bounded cadence-aware execution health inspection/types
+- **Exports:** schedule control types plus shared Temporal poller, compiled full-spec drift, semantic Workflow-result proof, retry-budget-aware runtime, and bounded cadence execution health inspection/types
 - **Env/Config keys:** `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `SCHEDULER_WORKER_HEALTH_URL`
 - **Files considered API:** `index.ts`
 
