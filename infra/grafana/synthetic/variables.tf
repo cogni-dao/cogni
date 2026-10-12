@@ -1,5 +1,5 @@
 variable "apex_domain" {
-  description = "Production domain used by the catalog host convention."
+  description = "Fleet apex used to derive candidate-a, preview, and production hosts."
   type        = string
   default     = "cognidao.org"
 }
@@ -11,7 +11,7 @@ variable "grafana_url" {
 }
 
 variable "public_probe_names" {
-  description = "Independent Grafana public probes used for every production node."
+  description = "Independent Grafana public probes used for every node in every environment."
   type        = list(string)
   default     = ["Frankfurt", "Ohio"]
 

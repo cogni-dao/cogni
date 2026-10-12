@@ -1,4 +1,4 @@
-# Grafana unified-alerting provisioning — production fleet Serve + Run proof.
+# Grafana unified-alerting template — equal Serve + Run proof for every environment.
 #
 # This file contains only deterministic, low-cardinality Prometheus/Loki rules.
 # Missing evidence is critical: an absent collector must never render green.
@@ -11,7 +11,7 @@ groups:
     interval: 1m
     rules:
       - uid: fleet-telemetry-deadman
-        title: Production telemetry collector missing
+        title: __ENVIRONMENT__ telemetry collector missing
         condition: THRESHOLD
         for: 5m
         data:
@@ -20,7 +20,7 @@ groups:
             relativeTimeRange: { from: 300, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'min by (job) (up{env="production",job=~"integrations/(unix|cadvisor|postgres)|prometheus.scrape.(app_metrics|worker_metrics)"})'
+              expr: 'min by (job) (up{env="__ENVIRONMENT__",job=~"integrations/(unix|cadvisor|postgres)|prometheus.scrape.(app_metrics|worker_metrics)"})'
               instant: true
               refId: SIGNAL
           - refId: THRESHOLD
@@ -33,12 +33,12 @@ groups:
               refId: THRESHOLD
         labels: { severity: critical, proof_class: observe }
         annotations:
-          summary: "Production telemetry source {{ $labels.job }} is down."
+          summary: "__ENVIRONMENT__ telemetry source {{ $labels.job }} is down."
         noDataState: Alerting
         execErrState: Alerting
 
       - uid: fleet-memory-headroom
-        title: Production memory headroom below 15%
+        title: __ENVIRONMENT__ memory headroom below 15%
         condition: THRESHOLD
         for: 10m
         data:
@@ -47,7 +47,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'min(node_memory_MemAvailable_bytes{env="production"} / node_memory_MemTotal_bytes{env="production"})'
+              expr: 'min(node_memory_MemAvailable_bytes{env="__ENVIRONMENT__"} / node_memory_MemTotal_bytes{env="__ENVIRONMENT__"})'
               instant: true
               refId: RATIO
           - refId: THRESHOLD
@@ -60,12 +60,12 @@ groups:
               refId: THRESHOLD
         labels: { severity: critical, proof_class: run }
         annotations:
-          summary: "Production host has less than 15% available memory."
+          summary: "__ENVIRONMENT__ host has less than 15% available memory."
         noDataState: Alerting
         execErrState: Alerting
 
       - uid: fleet-disk-headroom
-        title: Production root disk headroom below 15%
+        title: __ENVIRONMENT__ root disk headroom below 15%
         condition: THRESHOLD
         for: 10m
         data:
@@ -74,7 +74,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'min(node_filesystem_avail_bytes{env="production",mountpoint="/"} / node_filesystem_size_bytes{env="production",mountpoint="/"})'
+              expr: 'min(node_filesystem_avail_bytes{env="__ENVIRONMENT__",mountpoint="/"} / node_filesystem_size_bytes{env="__ENVIRONMENT__",mountpoint="/"})'
               instant: true
               refId: RATIO
           - refId: THRESHOLD
@@ -87,12 +87,12 @@ groups:
               refId: THRESHOLD
         labels: { severity: critical, proof_class: run }
         annotations:
-          summary: "Production root filesystem has less than 15% free space."
+          summary: "__ENVIRONMENT__ root filesystem has less than 15% free space."
         noDataState: Alerting
         execErrState: Alerting
 
       - uid: fleet-inode-headroom
-        title: Production root inode headroom below 10%
+        title: __ENVIRONMENT__ root inode headroom below 10%
         condition: THRESHOLD
         for: 10m
         data:
@@ -101,7 +101,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'min(node_filesystem_files_free{env="production",mountpoint="/"} / node_filesystem_files{env="production",mountpoint="/"})'
+              expr: 'min(node_filesystem_files_free{env="__ENVIRONMENT__",mountpoint="/"} / node_filesystem_files{env="__ENVIRONMENT__",mountpoint="/"})'
               instant: true
               refId: RATIO
           - refId: THRESHOLD
@@ -114,12 +114,12 @@ groups:
               refId: THRESHOLD
         labels: { severity: critical, proof_class: run }
         annotations:
-          summary: "Production root filesystem has less than 10% free inodes."
+          summary: "__ENVIRONMENT__ root filesystem has less than 10% free inodes."
         noDataState: Alerting
         execErrState: Alerting
 
       - uid: fleet-io-pressure
-        title: Production host I/O pressure sustained above 20%
+        title: __ENVIRONMENT__ host I/O pressure sustained above 20%
         condition: THRESHOLD
         for: 10m
         data:
@@ -128,7 +128,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'max(rate(node_pressure_io_waiting_seconds_total{env="production"}[5m]))'
+              expr: 'max(rate(node_pressure_io_waiting_seconds_total{env="__ENVIRONMENT__"}[5m]))'
               instant: true
               refId: RATIO
           - refId: THRESHOLD
@@ -141,12 +141,12 @@ groups:
               refId: THRESHOLD
         labels: { severity: critical, proof_class: run }
         annotations:
-          summary: "Production I/O pressure has exceeded 20% for ten minutes."
+          summary: "__ENVIRONMENT__ I/O pressure has exceeded 20% for ten minutes."
         noDataState: Alerting
         execErrState: Alerting
 
       - uid: fleet-container-oom
-        title: Production container OOM detected
+        title: __ENVIRONMENT__ container OOM detected
         condition: THRESHOLD
         for: 0s
         data:
@@ -155,7 +155,7 @@ groups:
             relativeTimeRange: { from: 600, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'sum(increase(container_oom_events_total{env="production"}[10m]))'
+              expr: 'sum(increase(container_oom_events_total{env="__ENVIRONMENT__"}[10m]))'
               instant: true
               refId: EVENTS
           - refId: THRESHOLD
@@ -168,12 +168,12 @@ groups:
               refId: THRESHOLD
         labels: { severity: critical, proof_class: run }
         annotations:
-          summary: "At least one production container OOM occurred in the last ten minutes."
+          summary: "At least one __ENVIRONMENT__ container OOM occurred in the last ten minutes."
         noDataState: Alerting
         execErrState: Alerting
 
       - uid: fleet-postgres-down
-        title: Production PostgreSQL exporter reports down
+        title: __ENVIRONMENT__ PostgreSQL exporter reports down
         condition: THRESHOLD
         for: 2m
         data:
@@ -182,7 +182,7 @@ groups:
             relativeTimeRange: { from: 300, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'min(pg_up{env="production"})'
+              expr: 'min(pg_up{env="__ENVIRONMENT__"})'
               instant: true
               refId: UP
           - refId: THRESHOLD
@@ -195,12 +195,12 @@ groups:
               refId: THRESHOLD
         labels: { severity: critical, proof_class: run }
         annotations:
-          summary: "Production PostgreSQL is unreachable from its exporter."
+          summary: "__ENVIRONMENT__ PostgreSQL is unreachable from its exporter."
         noDataState: Alerting
         execErrState: Alerting
 
       - uid: fleet-postgres-connections
-        title: Production PostgreSQL connections above 75%
+        title: __ENVIRONMENT__ PostgreSQL connections above 75%
         condition: THRESHOLD
         for: 10m
         data:
@@ -209,7 +209,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'sum(pg_stat_database_numbackends{env="production"}) / max(pg_settings_max_connections{env="production"})'
+              expr: 'sum(pg_stat_database_numbackends{env="__ENVIRONMENT__"}) / max(pg_settings_max_connections{env="__ENVIRONMENT__"})'
               instant: true
               refId: RATIO
           - refId: THRESHOLD
@@ -222,12 +222,12 @@ groups:
               refId: THRESHOLD
         labels: { severity: critical, proof_class: run }
         annotations:
-          summary: "Production PostgreSQL connection usage exceeds 75%."
+          summary: "__ENVIRONMENT__ PostgreSQL connection usage exceeds 75%."
         noDataState: Alerting
         execErrState: Alerting
 
       - uid: fleet-postgres-temp-io
-        title: Production database temp I/O above 5 MiB/s
+        title: __ENVIRONMENT__ database temp I/O above 5 MiB/s
         condition: THRESHOLD
         for: 10m
         data:
@@ -236,7 +236,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             model:
               datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'max by (datname) (rate(pg_stat_database_temp_bytes{env="production",datname!~"template.*"}[5m]))'
+              expr: 'max by (datname) (rate(pg_stat_database_temp_bytes{env="__ENVIRONMENT__",datname!~"template.*"}[5m]))'
               instant: true
               refId: BYTES
           - refId: THRESHOLD
@@ -254,7 +254,7 @@ groups:
         execErrState: Alerting
 
       - uid: fleet-backup-freshness
-        title: Production database backup evidence stale
+        title: __ENVIRONMENT__ database backup evidence stale
         condition: THRESHOLD
         for: 15m
         data:
@@ -263,7 +263,7 @@ groups:
             relativeTimeRange: { from: 93600, to: 0 }
             model:
               datasource: { type: loki, uid: grafanacloud-logs }
-              expr: 'sum(count_over_time({env="production",service="db-backup"} | json | event="db_backup.completed" [26h]))'
+              expr: 'sum(count_over_time({env="__ENVIRONMENT__",service="db-backup"} | json | event="db_backup.completed" [26h]))'
               queryType: instant
               refId: COUNT
           - refId: THRESHOLD
@@ -276,6 +276,6 @@ groups:
               refId: THRESHOLD
         labels: { severity: critical, proof_class: run }
         annotations:
-          summary: "No successful production database backup evidence arrived in 26 hours."
+          summary: "No successful __ENVIRONMENT__ database backup evidence arrived in 26 hours."
         noDataState: Alerting
         execErrState: Alerting
