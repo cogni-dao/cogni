@@ -4,7 +4,8 @@
 /**
  * Module: `@app/api/v1/agent/me`
  * Purpose: Agent self-identity + key-liveness endpoint.
- * Scope: Returns the CALLING principal's own userId, displayName, and — for
+ * Scope: Returns the CALLING principal's own identity only; does not enumerate
+ *   RBAC grants or perform authz I/O. Carries userId, displayName, and — for
  *   agent API keys — the key's expiry. The agent-first counterpart to
  *   `/api/v1/users/me`, which is wired to the session-cookie-only resolver
  *   (`getServerSessionUser`) and therefore 401s for a valid agent key — the

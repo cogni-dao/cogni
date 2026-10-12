@@ -4,9 +4,9 @@
 /**
  * Module: `@contracts/agent.me.v1.contract`
  * Purpose: Contract for the agent self-identity endpoint (`GET /api/v1/agent/me`).
- * Scope: Defines the response schema an authenticated caller gets back about
- *   ITSELF — principal id, display name, and (for agent API keys) the key's
- *   expiry. Does not enumerate RBAC grants and performs no authorization I/O.
+ * Scope: Response schema a caller gets about ITSELF; does not enumerate RBAC
+ *   grants and performs no authorization I/O. Carries principal id, display
+ *   name, and (for agent API keys) the key's expiry.
  * Invariants: Returns only the CALLER's own principal (never another user's).
  *   A `200` proves the credential is live; a `401` proves it is expired/invalid
  *   — the unambiguous liveness signal that `/users/me` (session-cookie only)
