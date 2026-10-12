@@ -36,9 +36,9 @@ Build-time scripts for migrations, seeds, type generation, development utilities
 ## Public Surface
 
 - **Exports:** none
-- **CLI (if any):** Migration, seed, database drop, validation, worktree readiness, and workspace-check/package-build orchestration commands
-- **Env/Config keys:** Database connection, development flags, `TURBO_SCM_BASE`/`TURBO_SCM_HEAD` scope overrides, CI-style test env fallbacks for `run-turbo-checks.sh`
-- **Files considered API:** setup/bootstrap.sh and setup/provision-env-vm.sh (bootstrap/provisioning), conductor-worktree-setup.sh (Conductor workspace bootstrap), validate-agents-md.mjs (validation script), db/drop-test-db.ts (test database utility), grafana-pdc-token-preflight.sh / grafana-postgres-datasource.sh / grafana-postgres-query.sh (Grafana Cloud Postgres support helpers), worktree-check.sh (fresh-worktree readiness check), run-turbo-checks.sh (workspace-scoped local check helper), run-scoped-package-build.mjs (affected package declaration helper)
+- **CLI (if any):** Migration, seed, database drop, validation, worktree readiness, workspace-check/package-build orchestration, and `temporal:schedule-proof` live schedule validation
+- **Env/Config keys:** Database connection, development flags, `TURBO_SCM_BASE`/`TURBO_SCM_HEAD` scope overrides, CI-style test env fallbacks for `run-turbo-checks.sh`, and Grafana URL/service-account token for Temporal schedule evidence
+- **Files considered API:** setup/bootstrap.sh and setup/provision-env-vm.sh (bootstrap/provisioning), conductor-worktree-setup.sh (Conductor workspace bootstrap), validate-agents-md.mjs (validation script), db/drop-test-db.ts (test database utility), grafana-pdc-token-preflight.sh / grafana-postgres-datasource.sh / grafana-postgres-query.sh (Grafana Cloud Postgres support helpers), temporal-schedule-proof.mjs (live schedule lifecycle proof), worktree-check.sh (fresh-worktree readiness check), run-turbo-checks.sh (workspace-scoped local check helper), run-scoped-package-build.mjs (affected package declaration helper)
 
 ## Ports (optional)
 

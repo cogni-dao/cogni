@@ -27,6 +27,7 @@
     "check:root-layout": "pnpm tsx scripts/check-root-layout.ts",
     "check:node-port-unique": "bash scripts/ci/next-free-node-port.sh --check",
     "node-port:next": "bash scripts/ci/next-free-node-port.sh",
+    "temporal:schedule-proof": "node --env-file-if-exists=.env.cogni scripts/temporal-schedule-proof.mjs",
     "gen:caddyfile": "bash scripts/ci/render-caddyfile.sh > infra/compose/edge/configs/Caddyfile.tmpl",
     "gen:scheduler-worker-endpoints": "bash scripts/ci/render-scheduler-worker-endpoints.sh --write",
     "gen:scope-filters": "bash scripts/ci/render-scope-filters.sh",
