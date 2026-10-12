@@ -20,7 +20,7 @@
  *     when the hub is unconfigured or empty.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
- * Links: docs/spec/node-baas-architecture.md, docs/spec/knowledge-syntropy.md
+ * Links: https://cognidao.org/knowledge/node-baas-substrate-model, docs/spec/knowledge-syntropy.md
  * @public
  */
 

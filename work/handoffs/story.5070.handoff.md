@@ -68,7 +68,7 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
 
 - `.claude/skills/cognition-expert/SKILL.md` — the domain mental model + cross-harness delivery matrix (READ FIRST).
 - `.claude/skills/cognition-expert/references/agent-contract-adherence.eval.md` — the frozen acceptance test + gold/fail examples.
-- `docs/spec/node-baas-architecture.md` §Cognition Substrate — the two-tier design (code-owned skeleton floor + hub-refined rich contract; delivery via the file channel).
+- [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) — the canonical product model, including cognition.
 - `scripts/agent/session-cognition.sh` — the loader (fetch→write cache; per-runtime emit).
 - `nodes/operator/app/src/app/api/v1/cognition/_bundle.ts` — `SESSION_BOOTSTRAP_INVARIANTS` + the (now-removed) ONE_VOICE suppression.
 - `.context/story5070-resume.md` — the full 8-step drive log + findings.
@@ -110,7 +110,7 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
   skills/designs because they were not already verified URLs. Fix: local paths become GitHub blob
   URLs at HEAD; `Followed` is exhaustive and its URL count reconciles with `ETA · Conf`.
 - **Distribution requirement is now explicit:** no shared cognition change is fleet-complete if
-  each node or developer must hand-edit harness configuration. `docs/spec/node-baas-architecture.md`
+  each node or developer must hand-edit harness configuration. The [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model)
   now separates (a) write-once Dolt cognition, (b) versioned `@cogni/*` runtime behavior, and
   (c) a narrow versioned/precondition-hashed materializer for root harness files. New nodes inherit
   from node-template; existing nodes use reviewed upgrade PRs only as interim migration debt until
@@ -176,12 +176,12 @@ the result without temporary overrides. Do not mistake delivery or one-shot form
 
 ## Pointers
 
-| File / Resource                                                               | Why it matters                                          |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `.claude/skills/cognition-expert/references/agent-contract-adherence.eval.md` | The frozen acceptance test (gold=Codex, fail=Claude).   |
-| `.claude/skills/cognition-expert/SKILL.md`                                    | Mental model + cross-harness delivery matrix + gotchas. |
-| `docs/spec/node-baas-architecture.md` §Cognition Substrate                    | The two-tier design of record.                          |
-| `scripts/agent/session-cognition.sh` · `scripts/conductor-worktree-setup.sh`  | Loader + the warm-at-setup step.                        |
-| `nodes/operator/app/src/app/api/v1/cognition/_bundle.ts`                      | `SESSION_BOOTSTRAP_INVARIANTS`, render logic.           |
-| PRs #2626 (merged) · #2650 (merged) · #2633 (open)                            | Delivery, unconditional invariants, design.             |
-| `.context/story5070-resume.md`                                                | Full drive log + findings.                              |
+| File / Resource                                                                     | Why it matters                                          |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `.claude/skills/cognition-expert/references/agent-contract-adherence.eval.md`       | The frozen acceptance test (gold=Codex, fail=Claude).   |
+| `.claude/skills/cognition-expert/SKILL.md`                                          | Mental model + cross-harness delivery matrix + gotchas. |
+| [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) | The hub-native design of record.                        |
+| `scripts/agent/session-cognition.sh` · `scripts/conductor-worktree-setup.sh`        | Loader + the warm-at-setup step.                        |
+| `nodes/operator/app/src/app/api/v1/cognition/_bundle.ts`                            | `SESSION_BOOTSTRAP_INVARIANTS`, render logic.           |
+| PRs #2626 (merged) · #2650 (merged) · #2633 (open)                                  | Delivery, unconditional invariants, design.             |
+| `.context/story5070-resume.md`                                                      | Full drive log + findings.                              |

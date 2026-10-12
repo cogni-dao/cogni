@@ -26,7 +26,7 @@ You are adding a new independently deployable service to the `services/` directo
 > in **that node's** `services/` and are built by **that node's** image, not by editing
 > the operator's `scripts/ci/`, `infra/catalog/`, or `infra/k8s/`. Per the
 > `node → services → deployments` model in
-> [`node-baas-architecture.md`](../spec/node-baas-architecture.md): the node
+> [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model): the node
 > **declares** its deployable units; the **operator wires** them per env. The §9 "Repo
 > Integration" steps below all mutate operator-monorepo files —
 > doing that for a node's service is the exact node-as-monorepo-fragment anti-pattern.

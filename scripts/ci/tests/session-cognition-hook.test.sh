@@ -58,7 +58,7 @@ VALID_MESSAGE='| 🎯 **Goal** | Keep contract state |
 | **Done when** | Two turns preserve exact fields. |
 | **Status** | 🔵 testing |
 | **ETA · Conf** | 1 minute · 90% + reviewed 3/3 sources |
-| **Followed** | https://cognidao.org/knowledge/cognition-substrate-bootstrap · https://github.com/cogni-dao/cogni/blob/main/docs/spec/node-baas-architecture.md · https://cognidao.org/work/items/story.5070 |
+| **Followed** | https://cognidao.org/knowledge/cognition-substrate-bootstrap · https://cognidao.org/knowledge/node-baas-substrate-model · https://cognidao.org/work/items/story.5070 |
 
 ---
 

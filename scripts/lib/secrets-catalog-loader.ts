@@ -128,7 +128,7 @@ export type SyncTarget = z.infer<typeof SyncTargetSchema>;
 /**
  * Non-node PLATFORM SERVICES that own their own OpenBao bucket + ExternalSecret.
  *
- * A "node" is a bundle of services (node-baas-architecture.md), and Invariant 1 makes
+ * A "node" is a bundle of services (https://cognidao.org/knowledge/node-baas-substrate-model), and Invariant 1 makes
  * `<service>` the catalog name in `cogni/<env>/<service>/<KEY>` — so a service whose blast
  * radius must NOT be the owning node's gets its own `<service>` rather than borrowing the
  * node's. That is the whole point: the operator app consumes the ENTIRE `cogni/<env>/operator`

@@ -9,7 +9,7 @@ skills:
   - ../../.claude/skills/rbac-expert/SKILL.md
   - ../../.claude/skills/cicd-secrets-expert/SKILL.md
 spec_refs:
-  - ../spec/node-baas-architecture.md
+  - node-baas-substrate-model
   - ../spec/secrets-management.md
   - ../spec/secrets-classification.md
   - ../spec/node-ci-cd-contract.md
@@ -47,7 +47,7 @@ over: `secrets_manager → can_manage_secrets` → operator-held OpenBao writer 
 ### North-star alignment
 
 This is a direct fill-in of the BaaS substrate model
-([`node-baas-architecture.md`](../spec/node-baas-architecture.md)), invariant
+([Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model)), invariant
 **"node declares shape; operator wires environment."** Three rows of its Substrate
 Map are exactly this feature:
 
@@ -333,7 +333,7 @@ caller (API key) → POST /api/v1/nodes/[id]/secrets
 ```
 
 Parallel to flight's `developer→can_flight` proof. **The proof returns through the
-product plane, not a shell** — `node-baas-architecture.md` (Supabase analogy:
+product plane, not a shell** — the [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) (Supabase analogy:
 "tools integrate through APIs and webhooks"). A caller who holds only an API key
 must be able to confirm their own write **with that same API key**; requiring
 `kubectl exec` would re-introduce the cluster custody the write step just removed.
@@ -375,7 +375,7 @@ don't assume complete Loki rotation history until it closes).
 
 **The requirement, not a workaround.** A node spawns into **all three envs**
 (candidate-a, preview, production) — that is the BaaS contract
-([`node-baas-architecture.md`](../spec/node-baas-architecture.md): _"node declares
+([Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model): _"node declares
 shape; operator wires environment"_, where _environment_ = every env). A node
 developer holding **only an API key** must be able to set/rotate a `source: human`
 secret value for their node on **any** of those envs, with zero kube. **Production

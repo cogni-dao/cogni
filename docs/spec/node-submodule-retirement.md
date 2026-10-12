@@ -150,7 +150,7 @@ barrel export), `GitHubRepoWriter.ensureNodeSubmodulePin` + `treePinsNodeSubmodu
 (drop `.gitmodules` from allowed root), `launch-pack.ts` wording, scheduler-routing test fixtures.
 
 **Docs to update:** `node-ci-cd-contract.md` (rewrite the submodule sections to this model),
-`node-baas-architecture.md`, `repo-sync-contract.md`, `ci-cd.md`, `multi-node-dev.md`,
+the [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model), `repo-sync-contract.md`, `ci-cd.md`, `multi-node-dev.md`,
 `github-app-webhook-setup.md`, `legacy-cicd-to-remove.md`.
 
 ## Acceptance Checks

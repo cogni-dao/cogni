@@ -331,7 +331,7 @@ key_is_agent_generated() {
     && "$(_cat_field "$k" '.generate.kind')" =~ ^(base64|hex|sk-cogni)$ ]]
 }
 
-# Node-owned secrets only (node-baas-architecture.md: each node owns its own DB
+# Node-owned secrets only (https://cognidao.org/knowledge/node-baas-substrate-model: each node owns its own DB
 # + secrets). All three DSNs are now composed + written here — the bug.5002
 # sole-source cutover, complete for both planes:
 #   DATABASE_URL / DATABASE_SERVICE_URL  from per-node app_<node>/service_<node>

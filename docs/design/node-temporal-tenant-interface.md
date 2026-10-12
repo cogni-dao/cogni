@@ -268,14 +268,14 @@ deferring** until a real user validates the campaign flow (MVP-stage discipline)
 
 The node-baas-aligned end state is **F2: the node consumes an operator-provisioned Temporal
 substrate directly, under its own identity** — exactly the pattern every other substrate
-already follows in [node-baas-architecture.md § BaaS Substrate Map](../spec/node-baas-architecture.md#baas-substrate-map):
+already follows in the [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model):
 the operator **provisions + hands credentials** (Postgres → DSN, Storage → object-store
 creds, Streams → Redis); the node's app then **consumes directly**, it does not call an
 operator API per write. Applied here: the operator provisions Temporal (namespace +
 per-node queue + worker + access via ESO); **beacon's app creates schedules itself with
 `nodeId = beacon`** (it _is_ the node — `getNodeId()` returns beacon), and a node's _fixed_
 jobs are declared in its repo-spec `schedules:` block ("node declares shape; operator wires
-environment", [§ Core Model](../spec/node-baas-architecture.md#core-model) / Decision Rule 8).
+environment", [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model)).
 This also realizes the sovereignty story below (`TEMPORAL_IS_SWAPPABLE_SUBSTRATE`): a node
 that wants its own Temporal swaps the backend behind the same contract.
 
@@ -283,7 +283,7 @@ that wants its own Temporal swaps the backend behind the same contract.
 — real work for zero proven demand. The MVP's node-authed create path is the throwaway-light
 bridge; when a node genuinely needs to own its scheduler, migrate the _create seam_ (operator
 API → direct consume), not the workflow/dispatch primitives, which are unchanged. See
-[node-baas-architecture.md](../spec/node-baas-architecture.md) (add a **Scheduling/Recurring**
+[Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) (add a **Scheduling/Recurring**
 row to the BaaS Substrate Map when F2 lands) and _Sovereignty & Scale_ above.
 
 ## What this is NOT

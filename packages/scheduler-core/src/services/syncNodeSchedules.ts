@@ -11,7 +11,7 @@
  *   - WORKFLOWTYPE_FROM_KIND: route to NodeTaskWorkflow, graph to GraphRunWorkflow, no operator target vocab.
  *   - REAL_CRON_DRIFT: cron compared to STORED cron not the Temporal calendar; prune pauses, teardown revokes grants.
  * Side-effects: IO (Temporal RPC via ScheduleControlPort; DB upsert + grant mint/revoke via injected callbacks)
- * Links: docs/spec/temporal-patterns.md (node-as-tenant), docs/spec/node-baas-architecture.md (node→Temporal seam), packages/repo-spec/src/accessors.ts (extractNodeSchedules), docs/design/node-temporal-tenant-interface.md
+ * Links: docs/spec/temporal-patterns.md (node-as-tenant), https://cognidao.org/knowledge/node-baas-substrate-model (node→Temporal seam), packages/repo-spec/src/accessors.ts (extractNodeSchedules), docs/design/node-temporal-tenant-interface.md
  * @public
  */
 
