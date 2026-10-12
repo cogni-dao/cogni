@@ -143,6 +143,44 @@ if [[ "$SECRETS_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]]; then
   echo "[secret-materialize] writing the '${DEPLOY_ENVIRONMENT}' lane into ${SECRETS_CONTROL_ENV}'s vault as ${SECRETS_CONTROL_ENV}-writer (bug.5206)"
 fi
 
+# LANE-RUNTIME CREDENTIALS COME FROM THE LANE (bug.5447).
+#
+# Runtime substrate strictly follows DEPLOYMENT_ENVIRONMENT: a foreign-control lane's
+# workload dials the LANE's Temporal/Redis/LiteLLM (its ComputeWorkload substrateHost is
+# the lane VM), so the credentials that must byte-match that runtime plane are the LANE's,
+# never the control env's. Concretely:
+#   - SCHEDULER_API_TOKEN must equal the token the LANE's scheduler-worker SENDS
+#     (cogni/<lane>/operator in the LANE's vault). Inheriting the control env's copy hands
+#     a PRODUCTION token to a candidate workload — wrong on both axes: the candidate worker
+#     401s against the node, and a production credential leaks down-trust.
+#   - the LiteLLM virtual key must be registered with the LANE's LiteLLM under the LANE's
+#     master key, because the lane's workload dials the lane VM's :4000.
+# DB custody is the OPPOSITE axis and stays with the control env (the __owner__ prefetch
+# below): the lane's database lives on the control VM (bug.5207), so DSN composition keeps
+# reading the control env's operator bucket.
+LANE_RUNTIME_KEYS=" SCHEDULER_API_TOKEN "
+LANE_VM_HOST="${LANE_VM_HOST:-$VM_HOST}"
+if [[ "$SECRETS_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" && "$LANE_VM_HOST" == "$VM_HOST" ]]; then
+  fail "foreign-control lane '${DEPLOY_ENVIRONMENT}' requires LANE_VM_HOST (the lane's own substrate VM): its runtime credentials live in the LANE's vault, and falling back to ${SECRETS_CONTROL_ENV}'s would hand a ${SECRETS_CONTROL_ENV} token to a ${DEPLOY_ENVIRONMENT} workload (bug.5447)"
+fi
+lane_remote() {
+  cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@${LANE_VM_HOST}" "$@"
+}
+
+# Read-only token against the LANE's own vault, minted via the lane's own writer role
+# (one writer identity per account still holds: this is the LANE's existing role in the
+# LANE's vault, not a second identity in the control env's).
+LANE_BAO_TOKEN="$BAO_TOKEN"
+if [[ "$SECRETS_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]]; then
+  LANE_BAO_TOKEN="$(
+    cogni_openbao_kubernetes_login_retry lane_remote "set -euo pipefail
+      jwt=\$(kubectl create token openbao-operator -n default)
+      kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+        bao write -field=token auth/kubernetes/login role='${DEPLOY_ENVIRONMENT}-writer' jwt=\"\$jwt\""
+  )"
+  [[ -n "$LANE_BAO_TOKEN" ]] || fail "could not mint ${DEPLOY_ENVIRONMENT}-writer token on the lane VM (${LANE_VM_HOST}) for lane-runtime credentials (bug.5447)"
+fi
+
 export REPO_ROOT APP_SOURCE_DIR
 export DEPLOY_ENV="$DEPLOY_ENVIRONMENT"
 export VM_IP="${VM_IP:-$(remote "hostname -I | awk '{print \$1}'" | tr -d '[:space:]')}"
@@ -216,6 +254,11 @@ bao_exec() {
   remote "kubectl exec ${1} -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao ${2}"
 }
 
+# Same shape against the LANE's own vault (lane-runtime credentials, bug.5447).
+lane_bao_exec() {
+  lane_remote "kubectl exec ${1} -n openbao openbao-0 -- env BAO_TOKEN='${LANE_BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 bao ${2}"
+}
+
 # Prefetch one path's full key/value map into the cache (one ssh). Runner-side jq
 # extracts; the remote only runs the proven `bao kv get -format=json` shape.
 #
@@ -225,10 +268,10 @@ bao_exec() {
 # explicit "No value found" answer (a genuinely unborn path) maps to {}; anything else
 # is retried and then fatal, naming the transport.
 prefetch_path() {
-  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" json raw attempt
+  local svc="$1" env="${2:-$DEPLOY_ENVIRONMENT}" ns="${3:-$1}" exec_fn="${4:-bao_exec}" json raw attempt
   raw=""
   for attempt in 1 2 3; do
-    if raw="$(bao_exec "" "kv get -format=json 'cogni/${env}/${svc}'" 2>&1)"; then
+    if raw="$("$exec_fn" "" "kv get -format=json 'cogni/${env}/${svc}'" 2>&1)"; then
       break
     fi
     case "$raw" in
@@ -252,11 +295,13 @@ prefetch_path() {
 bao_get_field() {
   local f="${CACHE_DIR}/$1/$2"
   [[ -f "$f" ]] && { cat "$f"; return 0; }
-  # SHARED-SUBSTRATE OWNERS LIVE WHERE THE SUBSTRATE DOES (bug.5206). A foreign-custodied
-  # lane runs on the CONTROL env's substrate, so its LiteLLM master key, Doltgres superuser
-  # and _shared values are that cluster's, not the lane's — `cogni/candidate-a/operator`
-  # does not exist in production's vault and never should. This dir is populated ONLY when
-  # the control env differs from the lane, so for every row today the lookup ends above.
+  # DB-CUSTODY OWNERS LIVE WHERE THE DATABASE DOES (bug.5206, narrowed by bug.5447). A
+  # foreign-custodied lane's DATABASE lives on the CONTROL env's VM, so its Doltgres
+  # superuser and _shared values fall back to that cluster's buckets. Lane-RUNTIME
+  # credentials (SCHEDULER_API_TOKEN, LITELLM_MASTER_KEY for registration) never use this
+  # fallback — they resolve from the explicit `__lane__/` prefetch of the LANE's own vault.
+  # This dir is populated ONLY when the control env differs from the lane, so for every
+  # same-control row the lookup ends above.
   f="${CACHE_DIR}/__owner__/$1/$2"
   [[ -f "$f" ]] && cat "$f" || true
 }
@@ -389,13 +434,18 @@ inherit_shared_value() {
 for svc in "$TARGET_NODE" node-template operator _shared; do
   prefetch_path "$svc"
 done
-# Ancestors, re-read from the cluster that HOSTS this lane's substrate. Additive: the
-# lane's own buckets are still prefetched above and still win; this only supplies what a
-# foreign lane structurally cannot have locally. No-op when control env == lane.
+# Ancestors, re-read from the cluster that CUSTODIES this lane's DB (bug.5206/bug.5207).
+# Additive: the lane's own buckets are still prefetched above and still win; this only
+# supplies what a foreign lane structurally cannot have locally — the control env's
+# Doltgres superuser and _shared human values. No-op when control env == lane.
 if [[ "${SECRETS_CONTROL_ENV}" != "$DEPLOY_ENVIRONMENT" ]]; then
   for svc in node-template operator _shared; do
     prefetch_path "$svc" "$SECRETS_CONTROL_ENV" "__owner__/$svc"
   done
+  # The LANE's runtime-credential SSOT, read from the LANE's own vault (bug.5447). Only
+  # the operator bucket: it is the inheritFrom owner of SCHEDULER_API_TOKEN and holds the
+  # LITELLM_MASTER_KEY the lane's LiteLLM registration below must authenticate with.
+  prefetch_path operator "$DEPLOY_ENVIRONMENT" "__lane__/operator" lane_bao_exec
 fi
 
 log "materializing node-owned OpenBao values for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (key names only)"
@@ -428,7 +478,15 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
   # worker→node 401 (bug.5021). No-op when already equal (no pod churn).
   inherit_from="$(_cat_field "$k" '.inheritFrom')"
   if [[ -n "$inherit_from" && "$inherit_from" != "null" ]]; then
-    v="$(bao_get_field "$inherit_from" "$k")"
+    if [[ "$SECRETS_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" && "$LANE_RUNTIME_KEYS" == *" $k "* ]]; then
+      # Lane-runtime credential (bug.5447): must byte-match the LANE's owner copy. The
+      # control env's copy is a DIFFERENT trust plane — a production token inside a
+      # candidate workload — so an absent lane value fails loud, never falls back.
+      v="$(bao_get_field "__lane__/${inherit_from}" "$k")"
+      [[ -n "$v" ]] || fail "lane-runtime key ${k} is absent from the ${DEPLOY_ENVIRONMENT} vault's ${inherit_from} bucket — refusing the ${SECRETS_CONTROL_ENV} fallback (bug.5447)"
+    else
+      v="$(bao_get_field "$inherit_from" "$k")"
+    fi
     [[ -z "$v" ]] && continue
     if [[ "$(bao_get_field "$TARGET_NODE" "$k")" == "$v" ]]; then
       unchanged=$((unchanged + 1))
@@ -684,19 +742,28 @@ REMOTE_SCRIPT
 
 register_litellm_virtual_key() {
   local key_name="$1" value master node_id alias result rc
+  # THE KEY REGISTERS WITH THE LANE'S LiteLLM (bug.5447): the workload's
+  # LITELLM_BASE_URL is the LANE VM's :4000 (runtime substrate follows the lane),
+  # so registration must land there, authenticated by the LANE's master key —
+  # registering with the control env's proxy mints a key the workload never dials.
+  local register_remote=remote master_src=operator
+  if [[ "$SECRETS_CONTROL_ENV" != "$DEPLOY_ENVIRONMENT" ]]; then
+    register_remote=lane_remote
+    master_src="__lane__/operator"
+  fi
   value="$(bao_get_field "$TARGET_NODE" "$key_name")"
   [[ -n "$value" ]] || fail "catalog sync target ${key_name} was not materialized for ${TARGET_NODE}"
   [[ "$value" =~ ^sk-cogni-[0-9a-f]{48}$ ]] \
     || fail "catalog sync target ${key_name} has invalid format (expected sk-cogni-<48 lowercase hex>)"
-  master="$(bao_get_field operator LITELLM_MASTER_KEY)"
+  master="$(bao_get_field "$master_src" LITELLM_MASTER_KEY)"
   [[ -n "$master" ]] \
-    || fail "cannot register ${key_name}: operator LITELLM_MASTER_KEY is absent"
+    || fail "cannot register ${key_name}: ${DEPLOY_ENVIRONMENT} operator LITELLM_MASTER_KEY is absent"
   node_id="$(node_id_for_target "$TARGET_NODE")" \
     || fail "cannot register ${key_name}: node_id is unresolved for ${TARGET_NODE}"
   alias="cogni:${DEPLOY_ENVIRONMENT}:${node_id}:app:v1"
 
   set +e
-  result="$(printf '%s\n%s\n%s\n' "$master" "$value" "$alias" | remote "$LITELLM_REGISTER_REMOTE")"
+  result="$(printf '%s\n%s\n%s\n' "$master" "$value" "$alias" | "$register_remote" "$LITELLM_REGISTER_REMOTE")"
   rc=$?
   set -e
   unset value master

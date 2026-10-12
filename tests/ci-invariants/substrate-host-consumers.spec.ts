@@ -3,15 +3,21 @@
 
 /**
  * Module: `@tests/ci-invariants/substrate-host-consumers`
- * Purpose: Enforces SUBSTRATE_HOST_IS_CONTROL_ENV_SCOPED (bug.5206) — the shared substrate a
- *   workload dials belongs to the cluster that RECONCILES the lane, not the lane it is named
- *   after, so no consumer may derive it from the workload env alone.
+ * Purpose: Enforces RUNTIME_SUBSTRATE_FOLLOWS_THE_LANE (bug.5447) — compute control and
+ *   runtime substrate are INDEPENDENT axes. `control_env_for` answers who pays/reconciles a
+ *   workload and custodies its DB; the runtime substrate a workload dials (Temporal, Redis,
+ *   LiteLLM, namespace, shared worker) derives from DEPLOYMENT_ENVIRONMENT only.
  * Scope: Static grep over the deploy actions/workflows/scripts that build a substrate host; does not execute them, resolve YAML, hit the network, or verify the host resolves.
  * Invariants:
- *   VM_HOST_FOR_ENV_TAKES_A_RESOLVED_ENV: `vm_host_for_env` is never called with a raw
- *     workload-env variable; its first argument must be a control-env-resolved value.
+ *   VM_HOST_FOR_ENV_NEVER_TAKES_A_CONTROL_ENV: `vm_host_for_env` is never called with a
+ *     control-env-resolved value (CONTROL_ENV / SUBSTRATE_ENV / SECRETS_CONTROL_ENV /
+ *     control_env_for output). Doing so (#2317 c98fd10a, #2324 64193509) routed candidate
+ *     Akash lanes onto PRODUCTION Temporal/Redis/LiteLLM and forced the production worker
+ *     to cross-poll candidate namespaces (bug.5212).
+ *   MATERIALIZER_SUBSTRATE_IS_THE_LANE: the compute-workload materializer derives
+ *     `substrateHost` from DEPLOYMENT_ENVIRONMENT itself.
  * Side-effects: IO (reads .github/, scripts/)
- * Links: scripts/ci/lib/appset-paths.sh (control_env_for), bug.5206, task.5132
+ * Links: scripts/ci/lib/appset-paths.sh (control_env_for), bug.5447, bug.5206, bug.5212
  * @public
  */
 
@@ -21,20 +27,19 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 
-/** The one place allowed to spell the rule. */
-const RESOLVER = "scripts/ci/lib/appset-paths.sh";
-
 const SEARCH_ROOTS = [".github/actions", ".github/workflows", "scripts/ci"];
 const EXTS = new Set([".sh", ".yml", ".yaml"]);
 
 /**
- * A raw workload-env variable. `substrateHost` derived from one of these names the LANE's VM;
- * for an akash node's non-production lane the substrate lives on the CONTROL env's VM, and
- * mixing them gives the workload production's Postgres and the lane's Temporal — half a
- * substrate, which is worse than none because it boots.
+ * A control-env-resolved variable. `substrateHost` derived from one of these names the
+ * CONTROLLING cluster's VM; the control env only pays/reconciles the workload and (where
+ * applicable) custodies its DB — the DSNs already reach the workload as value-free
+ * secretRefs resolved in the control cluster's vault. The runtime substrate the workload
+ * dials is the LANE's: naming the control VM here submits a candidate lane's chat
+ * workflows to production Temporal (25-29s chat on poly vs 4.7s on operator, bug.5447).
  */
-const RAW_ENV_ARG =
-  /vm_host_for_env\s+"?\$\{?(DEPLOYMENT_ENVIRONMENT|DEPLOY_ENVIRONMENT|DEPLOY_ENV|ENVIRONMENT)\b/;
+const CONTROL_ENV_ARG =
+  /vm_host_for_env\s+"?\$[({]?(SUBSTRATE_ENV|CONTROL_ENV|SECRETS_CONTROL_ENV|FLEET_CONTROL_ENV)\b|vm_host_for_env\s+"?\$\(\s*[^)]*control_env_for/;
 
 function walk(dir: string): string[] {
   const abs = path.join(REPO_ROOT, dir);
@@ -55,16 +60,15 @@ function walk(dir: string): string[] {
   });
 }
 
-describe("substrate host consumers (bug.5206)", () => {
-  it("VM_HOST_FOR_ENV_TAKES_A_RESOLVED_ENV: never the raw workload env", () => {
+describe("substrate host consumers (bug.5447)", () => {
+  it("VM_HOST_FOR_ENV_NEVER_TAKES_A_CONTROL_ENV: runtime substrate derives from the lane", () => {
     const offences: string[] = [];
     for (const file of SEARCH_ROOTS.flatMap(walk)) {
-      if (file === RESOLVER) continue;
       readFileSync(path.join(REPO_ROOT, file), "utf8")
         .split("\n")
         .forEach((text, i) => {
           const code = text.replace(/^\s*#\s?.*$/, "");
-          if (RAW_ENV_ARG.test(code)) {
+          if (CONTROL_ENV_ARG.test(code)) {
             offences.push(
               `  ${file}:${i + 1}\n    ${text.trim().slice(0, 140)}`
             );
@@ -73,12 +77,23 @@ describe("substrate host consumers (bug.5206)", () => {
     }
     expect(
       offences,
-      `${offences.length} consumer(s) build the substrate host from the WORKLOAD env. An akash ` +
-        `node's non-production lane is reconciled by the PRODUCTION cluster (task.5132) and its ` +
-        `DSNs are composed against that cluster's VM, so naming the lane's VM here gives the ` +
-        `workload production's Postgres and the lane's Temporal/Redis/LiteLLM — half a ` +
-        `substrate, which boots and then fails. Resolve it the way ${RESOLVER}'s ` +
-        `control_env_for does.\n${offences.join("\n")}`
+      `${offences.length} consumer(s) build the runtime substrate host from a CONTROL env. ` +
+        `Compute control (pay/reconcile/DB custody, control_env_for) and runtime substrate ` +
+        `(Temporal/Redis/LiteLLM/namespace/worker) are independent axes; the runtime substrate ` +
+        `derives from DEPLOYMENT_ENVIRONMENT only (bug.5447).\n${offences.join("\n")}`
     ).toEqual([]);
+  });
+
+  it("MATERIALIZER_SUBSTRATE_IS_THE_LANE: the compute-workload materializer derives substrateHost from DEPLOYMENT_ENVIRONMENT", () => {
+    const action = readFileSync(
+      path.join(
+        REPO_ROOT,
+        ".github/actions/materialize-compute-workload/action.yml"
+      ),
+      "utf8"
+    );
+    expect(action).toMatch(
+      /SUBSTRATE_HOST="\$\(cogni_vm_host_for_env "\$DEPLOYMENT_ENVIRONMENT"/
+    );
   });
 });
