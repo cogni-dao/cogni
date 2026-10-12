@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: compute-workload-controller
+rules:
+  - apiGroups: [compute.cogni.io]
+    resources: [computeworkloads]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [compute.cogni.io]
+    resources: [computeworkloads/status, computeworkloads/finalizers]
+    verbs: [get, patch, update]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  # bug.5116 — per-bundle-digest DB migration Jobs for externally placed workloads.
+  # A completed Job is the durable skip marker; delete is for superseded-digest GC.
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create, delete]
+  # bug.5118 — classifying a Failed migration Job as script-failure vs never-ran
+  # requires reading its pods (list by job-name label) to find a terminated
+  # migrate container with a non-zero exitCode.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [compute-workload-allocation-ledger]
+    verbs: [get, update, patch]
+  # Kubernetes cannot resourceName-scope CREATE. The controller creates exactly one
+  # runtime ledger; keeping it out of Git prevents Argo self-heal from erasing receipts.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: compute-workload-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: compute-workload-controller
+subjects:
+  - kind: ServiceAccount
+    name: compute-workload-controller

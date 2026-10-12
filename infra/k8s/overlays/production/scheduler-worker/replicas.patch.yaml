@@ -2,24 +2,19 @@
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 #
 # PRODUCTION ONLY: one worker, because this env has no users and no headroom.
+# Mirrors main (#2455). Applied directly to this deploy branch because the change is pure
+# k8s config and needs no image: the promote path refused at promote-k8s (no scheduler-worker
+# image exists at main HEAD, affected-only CI did not rebuild it), while Argo selfHeal reads
+# THIS branch and reverted a kubectl scale within 25s.
 #
-# The base declares replicas: 2 to kill the single-pod SPOF, and that rationale is
-# correct for an env with traffic — it stays the default everywhere else. In production
-# it is currently self-defeating: the two pods consume ~940Mi (502Mi + 437Mi measured)
-# on a 5.9Gi control VM that also carries k3s, Argo, Crossplane, Temporal, Postgres and
-# the operator app. Measured 2026-09-28: memory 121% of allocatable with 142Mi free,
-# load average 32.84, coredns restarted 26x/24h, and the k3s apiserver intermittently
-# answering `connection refused` — during which a routine operator pod replacement took
-# cognidao.org to 502.
+# Measured 2026-09-28 on the control VM: memory 121% of allocatable, 124Mi free, load 10-32,
+# coredns restarted 26x/24h, k3s apiserver intermittently `connection refused`, operator
+# flapping 502, allocation ledger returning ledger_unavailable, merge endpoint 500s. The two
+# scheduler-worker pods measured 502Mi + 437Mi. Production has ZERO users, so that redundancy
+# was buying nothing while starving the control plane that every node depends on.
 #
-# A node with no memory headroom is a LARGER availability risk than a single-pod SPOF:
-# the SPOF costs one restart, starvation degrades every workload on the box including
-# the control plane that would reschedule that pod. Production also has zero users, so
-# the redundancy is currently buying nothing.
-#
-# Temporal workers polling one task queue scale horizontally with no leader election, so
-# dropping to one poller changes no semantics — only redundancy. REVERT THIS FILE (and its
-# patches entry) the moment production carries real traffic or the VM is resized.
+# The base's replicas: 2 anti-SPOF rationale stays correct for any env with traffic and is
+# unchanged. REVERT when production carries real traffic or the VM is resized.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
