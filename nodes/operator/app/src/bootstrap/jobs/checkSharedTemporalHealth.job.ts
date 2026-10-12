@@ -14,7 +14,7 @@
 import {
   inspectSharedTemporalHealth,
   type SharedTemporalHealth,
-} from "@/adapters/server/temporal";
+} from "@/adapters/server";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env/server-env";
 import {
