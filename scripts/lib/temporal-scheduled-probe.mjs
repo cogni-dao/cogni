@@ -413,12 +413,7 @@ export async function proveScheduledLangGraph(targetInput, options = {}) {
         ? [scheduleId]
         : await findProbeScheduleIds(deps, target, probeId);
       for (const cleanupId of cleanupIds) {
-        const cleaned = await cleanupSchedule(
-          deps,
-          target,
-          cleanupId,
-          probeId
-        );
+        const cleaned = await cleanupSchedule(deps, target, cleanupId, probeId);
         if (cleanupId === scheduleId) cleanup = cleaned;
       }
     } catch (error) {
