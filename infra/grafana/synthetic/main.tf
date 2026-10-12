@@ -156,7 +156,7 @@ output "production_checks" {
   }
 }
 
-output "public_status_uid" {
-  description = "Public dashboard UID used to construct the redacted fleet status URL."
-  value       = grafana_dashboard_public.fleet_status.uid
+output "public_status_url" {
+  description = "Anonymous URL for the redacted fleet status dashboard."
+  value       = "${trimsuffix(var.grafana_url, "/")}/public-dashboards/${grafana_dashboard_public.fleet_status.access_token}"
 }
