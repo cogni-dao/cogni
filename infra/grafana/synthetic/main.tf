@@ -1,16 +1,6 @@
 terraform {
   required_version = ">= 1.8.0"
 
-  # The fleet monitor must not depend on a laptop or any database it observes.
-  # Bucket, endpoint, and prefix-scoped credentials are supplied at init time;
-  # no backend credential belongs in git or a saved plan. The S3 protocol keeps
-  # this portable across AWS S3 and versioned MinIO/Ceph-compatible stores.
-  backend "s3" {
-    key          = "grafana/fleet-reliability/terraform.tfstate"
-    use_lockfile = true
-    encrypt      = true
-  }
-
   required_providers {
     grafana = {
       source  = "grafana/grafana"
@@ -19,15 +9,23 @@ terraform {
   }
 }
 
-# Both clients come from the supported Grafana provider. Authentication is
-# injected at runtime: GRAFANA_URL + GRAFANA_AUTH for the stack API and
-# GRAFANA_SM_URL + GRAFANA_SM_ACCESS_TOKEN for Synthetic Monitoring.
-provider "grafana" {
-  alias = "stack"
+data "terraform_remote_state" "grafana_bootstrap" {
+  backend = "local"
+  config = {
+    path = "${path.module}/../cloud-bootstrap/terraform.tfstate"
+  }
 }
 
 provider "grafana" {
-  alias = "sm"
+  alias = "stack"
+  url   = data.terraform_remote_state.grafana_bootstrap.outputs.grafana_url
+  auth  = data.terraform_remote_state.grafana_bootstrap.outputs.grafana_auth
+}
+
+provider "grafana" {
+  alias           = "sm"
+  sm_access_token = data.terraform_remote_state.grafana_bootstrap.outputs.sm_access_token
+  sm_url          = data.terraform_remote_state.grafana_bootstrap.outputs.sm_url
 }
 
 data "grafana_synthetic_monitoring_probes" "public" {
@@ -95,18 +93,9 @@ locals {
   ).groups[0]
 }
 
-resource "grafana_folder" "reliability" {
+data "grafana_folder" "reliability" {
   provider = grafana.stack
-  title    = "Cogni Reliability"
-
-  lifecycle {
-    precondition {
-      condition = alltrue([
-        for count in values(local.environment_target_counts) : count > 0
-      ])
-      error_message = "Candidate-a, preview, and production must each have at least one catalog-derived monitoring target."
-    }
-  }
+  uid      = "cogni-reliability"
 }
 
 resource "grafana_synthetic_monitoring_check" "environment_readyz" {
@@ -119,9 +108,8 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
   probes             = local.public_probe_ids
   frequency          = 60000
   timeout            = 5000
-  alert_sensitivity  = "high"
   basic_metrics_only = true
-  folder_uid         = grafana_folder.reliability.uid
+  folder_uid         = data.grafana_folder.reliability.uid
 
   labels = {
     environment = each.value.environment
@@ -148,9 +136,17 @@ resource "grafana_rule_group" "fleet_capacity" {
   provider         = grafana.stack
   for_each         = local.environment_configs
   name             = "${local.fleet_alert_group.name}-${each.key}"
-  folder_uid       = grafana_folder.reliability.uid
+  folder_uid       = data.grafana_folder.reliability.uid
   interval_seconds = 60
-  org_id           = local.fleet_alert_group.orgId
+
+  lifecycle {
+    precondition {
+      condition = alltrue([
+        for count in values(local.environment_target_counts) : count > 0
+      ])
+      error_message = "Candidate-a, preview, and production must each have at least one catalog-derived monitoring target."
+    }
+  }
 
   dynamic "rule" {
     for_each = local.fleet_alert_group.rules
@@ -177,7 +173,7 @@ resource "grafana_rule_group" "fleet_capacity" {
         content {
           ref_id         = data.value.refId
           datasource_uid = data.value.datasourceUid
-          query_type     = try(data.value.queryType, "")
+          query_type     = try(data.value.queryType, data.value.model.queryType, "")
           model = replace(
             jsonencode(data.value.model),
             "__ENVIRONMENT__",
@@ -185,8 +181,8 @@ resource "grafana_rule_group" "fleet_capacity" {
           )
 
           relative_time_range {
-            from = data.value.relativeTimeRange.from
-            to   = data.value.relativeTimeRange.to
+            from = try(data.value.relativeTimeRange.from, 0)
+            to   = try(data.value.relativeTimeRange.to, 0)
           }
         }
       }
@@ -218,5 +214,5 @@ output "environment_target_counts" {
 
 output "public_status_url" {
   description = "Anonymous URL for the redacted fleet status dashboard."
-  value       = "${trimsuffix(var.grafana_url, "/")}/public-dashboards/${grafana_dashboard_public.fleet_status.access_token}"
+  value       = "${trimsuffix(data.terraform_remote_state.grafana_bootstrap.outputs.grafana_url, "/")}/public-dashboards/${grafana_dashboard_public.fleet_status.access_token}"
 }
