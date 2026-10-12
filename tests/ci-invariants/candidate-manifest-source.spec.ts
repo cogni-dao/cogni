@@ -54,6 +54,8 @@ interface WorkflowStep {
 }
 
 interface WorkflowJob {
+  if?: string;
+  needs?: string[];
   outputs?: Record<string, unknown>;
   steps: WorkflowStep[];
 }
@@ -212,6 +214,83 @@ describe("candidate-a manifest source", () => {
     expect(meta).toContain('CATALOG="infra/catalog/${NODE_SLUG}.yaml"');
     expect(meta).toMatch(
       /SOURCE_REPO=\$\(yq -N '\.source_repo \/\/ ""' "\$CATALOG"\)\s+if \[ -z "\$SOURCE_REPO" \]; then[\s\S]*?HEAD_SHA="\$NODE_SOURCE_SHA"/
+    );
+  });
+
+  it("preserves the full PR target set for a same-repo node-ref", () => {
+    const meta = namedStep("decide", "Resolve PR metadata").run;
+    const files = namedStep("decide", "Fetch PR changed-paths from GitHub API");
+    const combine = namedStep("decide", "Combine flight targets");
+    const images = namedStep("decide", "Resolve PR image digests");
+
+    expect(meta).toContain(
+      '"repos/${{ github.repository }}/commits/${NODE_SOURCE_SHA}/pulls"'
+    );
+    expect(meta).toContain('RESOLVED_PR_NUMBER="${MATCHING_PRS[0]}"');
+    expect(files.env?.RESOLVED_PR_NUMBER).toBe(
+      "${{ steps.meta.outputs.resolved_pr_number }}"
+    );
+    expect(files.run).toContain(
+      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    );
+    expect(combine.run).toContain(
+      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    );
+    expect(combine.run).toContain("items = ([node] if node else []) + items");
+    expect(images.run).toContain(
+      'if [ -n "$NODE" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    );
+    expect(images.run).toContain("resolve-pr-build-images.sh");
+  });
+
+  it("writes scheduler routing to the deploy repository Argo actually watches", () => {
+    const resolve = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Resolve watched deploy repository"
+    );
+    const reconcile = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Reconcile scheduler-worker routing (propagate to per-env deploy branch)"
+    );
+
+    expect(resolve.env?.DEPLOYMENT_PROVIDER).toBe("k3s");
+    expect(resolve.run).toBe(
+      "bash scripts/ci/resolve-candidate-deploy-repository.sh"
+    );
+    expect(reconcile.env?.SWR_DEPLOY_REPOSITORY).toBe(
+      "${{ steps.deploy-repo.outputs.repository }}"
+    );
+    expect(reconcile.env?.GH_TOKEN).toBe(
+      "${{ steps.deploy-app.outputs.token || github.token }}"
+    );
+    expect(parsed.jobs.flight.needs).toContain(
+      "reconcile-scheduler-worker-routing"
+    );
+    expect(parsed.jobs.flight.if).toContain(
+      "needs.reconcile-scheduler-worker-routing.result == 'success'"
+    );
+  });
+
+  it("fails candidate verification unless worker /version matches SHA and digest", () => {
+    const resolve = namedStep(
+      "verify-candidate",
+      "Resolve promoted scheduler-worker identity"
+    );
+    const wait = namedStep(
+      "verify-candidate",
+      "Wait for in-cluster services (per-node)"
+    );
+
+    expect(resolve.if).toContain("matrix.node == 'scheduler-worker'");
+    expect(resolve.run).toContain(
+      'json.load(handle).get("scheduler-worker", "")'
+    );
+    expect(resolve.run).toContain(".images[]");
+    expect(wait.env?.SCHEDULER_EXPECTED_SHA).toBe(
+      "${{ steps.scheduler-identity.outputs.sha }}"
+    );
+    expect(wait.env?.SCHEDULER_EXPECTED_DIGEST).toBe(
+      "${{ steps.scheduler-identity.outputs.digest }}"
     );
   });
 

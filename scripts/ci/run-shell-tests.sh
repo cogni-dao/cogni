@@ -65,6 +65,8 @@ PARALLEL=(
   classify-env-manager-fast-path.test.sh
   resolve-candidate-deploy-repository.test.sh
   reconcile-scheduler-worker-routing.test.sh
+  promote-k8s-image.test.sh
+  wait-for-in-cluster-services.test.sh
   render-node-appset.test.sh
   operator-rollout-strategy.test.sh
   scheduler-runtime-routing.test.sh

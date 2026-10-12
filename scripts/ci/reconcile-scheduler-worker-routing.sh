@@ -48,6 +48,8 @@
 #                      catalog-rendered base/scheduler-worker + the renderer.
 #   GH_TOKEN           push auth (required unless DRY_RUN=1 or DEPLOY_BRANCH_DIR set).
 #   GITHUB_REPOSITORY  owner/repo to clone (required unless DEPLOY_BRANCH_DIR set).
+#   SWR_DEPLOY_REPOSITORY owner/repo actually watched by Argo for this k3s cell.
+#                      Defaults to GITHUB_REPOSITORY for non-mirrored fleets.
 #   DEPLOY_BRANCH_DIR  reuse an existing deploy-branch checkout instead of cloning
 #                      (tests / local). When set, no clone and no push.
 #   DRY_RUN=1          render + diff only; never push (commits locally for the diff).
@@ -197,11 +199,12 @@ CLONED_DIR=""
 if [ -n "${DEPLOY_BRANCH_DIR:-}" ]; then
   WORKDIR="$DEPLOY_BRANCH_DIR"
 else
-  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY required to clone (or set DEPLOY_BRANCH_DIR)}"
+  DEPLOY_REPOSITORY="${SWR_DEPLOY_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+  : "${DEPLOY_REPOSITORY:?SWR_DEPLOY_REPOSITORY or GITHUB_REPOSITORY required to clone (or set DEPLOY_BRANCH_DIR)}"
   : "${GH_TOKEN:?GH_TOKEN required to clone/push (or set DRY_RUN=1 + DEPLOY_BRANCH_DIR)}"
   CLONED_DIR="$(mktemp -d -t swr-deploy-branch.XXXXXX)"
   WORKDIR="$CLONED_DIR/repo"
-  git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$WORKDIR"
+  git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" "$WORKDIR"
   (
     cd "$WORKDIR"
     git fetch --quiet origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"

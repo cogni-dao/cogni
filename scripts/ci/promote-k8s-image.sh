@@ -4,10 +4,13 @@
 
 # Script: scripts/ci/promote-k8s-image.sh
 # Purpose: Update k8s overlay with new image digest for any app/node.
-# Note: sed uses GNU extensions (0, address). Runs in CI (ubuntu). Local use: review diff only.
+# Image mutation uses portable awk so CI and BSD developer hosts produce the
+# same overlay.
 # Invariants:
 #   - IMAGE_IMMUTABILITY: Uses @sha256: digest, never mutable tags
 #   - MANIFEST_DRIVEN_DEPLOY: Promotion = overlay change → Argo CD syncs
+#   - WORKER_IDENTITY_MATCHES_IMAGE: scheduler-worker /version reports the
+#     promoted digest, not a static per-environment placeholder.
 # Usage:
 #   scripts/ci/promote-k8s-image.sh --env candidate-a --app operator --digest ghcr.io/cogni-dao/cogni-template@sha256:abc...
 #   scripts/ci/promote-k8s-image.sh --env candidate-a --app operator --digest ...
@@ -69,18 +72,67 @@ log_info "Promoting $APP image in $ENV overlay"
 log_info "  Image: $IMAGE_NAME"
 log_info "  Digest: $IMAGE_DIGEST"
 
-# Update the kustomization.yaml images section
-# Replace newName with image name
-sed -i.bak "0,/newName: .*/s|newName: .*|newName: ${IMAGE_NAME}|" "$OVERLAY_FILE"
+# Update the first image entry only. awk keeps this portable across GNU CI and
+# BSD developer hosts while preserving the hand-authored overlay formatting.
+IMAGE_TMP="${OVERLAY_FILE}.image.tmp"
+awk -v image="$IMAGE_NAME" -v digest="$IMAGE_DIGEST" '
+  !name_done && /newName:[[:space:]]*/ {
+    match($0, /^[[:space:]]*/)
+    print substr($0, RSTART, RLENGTH) "newName: " image
+    name_done = 1
+    next
+  }
+  !digest_done && /newTag:[[:space:]]*/ {
+    match($0, /^[[:space:]]*/)
+    print substr($0, RSTART, RLENGTH) "digest: \"" digest "\""
+    digest_done = 1
+    next
+  }
+  !digest_done && /^[[:space:]]*digest:[[:space:]]*/ {
+    match($0, /^[[:space:]]*/)
+    print substr($0, RSTART, RLENGTH) "digest: \"" digest "\""
+    digest_done = 1
+    next
+  }
+  { print }
+  END { if (!name_done || !digest_done) exit 42 }
+' "$OVERLAY_FILE" > "$IMAGE_TMP" || {
+  rm -f "$IMAGE_TMP"
+  log_error "overlay must contain an image newName plus newTag/digest"
+  exit 1
+}
+mv "$IMAGE_TMP" "$OVERLAY_FILE"
 
-# Replace newTag with digest (first run) or update existing digest
-if grep -q 'newTag:' "$OVERLAY_FILE"; then
-  sed -i.bak "0,/newTag: .*/s|.*newTag:.*|    digest: \"${IMAGE_DIGEST}\"|" "$OVERLAY_FILE"
-elif grep -q 'digest:' "$OVERLAY_FILE"; then
-  sed -i.bak "0,/digest: .*/s|digest: .*|digest: \"${IMAGE_DIGEST}\"|" "$OVERLAY_FILE"
+# scheduler-worker exposes IMAGE_DIGEST from this ConfigMap on /version. Keep
+# that observable identity in the same atomic overlay commit as the image pin;
+# otherwise a rollout can be Ready while /version still reports a placeholder.
+if [[ "$APP" == "scheduler-worker" ]]; then
+  IDENTITY_TMP="${OVERLAY_FILE}.identity.tmp"
+  awk -v digest="$IMAGE_DIGEST" '
+    /path: \/data\/IMAGE_DIGEST/ {
+      found_path = 1
+      awaiting_value = 1
+      print
+      next
+    }
+    awaiting_value && /^[[:space:]]*value:/ {
+      match($0, /^[[:space:]]*/)
+      print substr($0, RSTART, RLENGTH) "value: \"" digest "\""
+      awaiting_value = 0
+      found_value = 1
+      next
+    }
+    { print }
+    END {
+      if (!found_path || !found_value) exit 42
+    }
+  ' "$OVERLAY_FILE" > "$IDENTITY_TMP" || {
+    rm -f "$IDENTITY_TMP"
+    log_error "scheduler-worker overlay must patch ConfigMap IMAGE_DIGEST for /version identity"
+    exit 1
+  }
+  mv "$IDENTITY_TMP" "$OVERLAY_FILE"
 fi
-
-rm -f "${OVERLAY_FILE}.bak"
 
 log_info "Updated $OVERLAY_FILE"
 
