@@ -94,7 +94,8 @@ describe("createTemporalLokiEvidenceReader", () => {
       event: "worker.activity.graph_completed",
       temporalScheduleId: SCHEDULE_ID,
       runId: GRAPH_RUN_ID,
-      workflowId: SCHEDULE_ID,
+      // Real worker shape (scheduler.md inv. 12): scheduleId + scheduled-start suffix.
+      workflowId: `${SCHEDULE_ID}-2026-10-12T05:29:00Z`,
       temporalRunId: "temporal-run-exact",
     });
     const fetchImpl = vi.fn(async () =>

@@ -123,7 +123,8 @@ describe("proveScheduledLangGraph", () => {
         event: "worker.activity.graph_completed",
         scheduleId,
         graphRunId,
-        workflowId: scheduleId,
+        // Real worker shape (scheduler.md inv. 12): scheduleId + scheduled-start suffix.
+        workflowId: `${scheduleId}-2026-10-12T05:29:00Z`,
         temporalRunId: "temporal-run-id",
       },
       sourceUrl: "https://cognidao.org/observability/logs",

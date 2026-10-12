@@ -192,7 +192,9 @@ function requireCorrelatedLokiEvidence(result, scheduleId, graphRunId) {
     completion.event !== "worker.activity.graph_completed" ||
     completion.scheduleId !== scheduleId ||
     completion.graphRunId !== graphRunId ||
-    completion.workflowId !== scheduleId ||
+    typeof completion.workflowId !== "string" ||
+    // workflowId = `${scheduleId}-${scheduledStartTime}` (scheduler.md inv. 12)
+    !completion.workflowId.startsWith(scheduleId) ||
     typeof completion.temporalRunId !== "string" ||
     completion.temporalRunId.length === 0
   ) {
@@ -321,6 +323,8 @@ export async function proveScheduledLangGraph(targetInput, options = {}) {
     requestTimeoutMs: options.requestTimeoutMs ?? 15_000,
     cleanupAttempts: options.cleanupAttempts ?? 3,
     cleanupRetryMs: options.cleanupRetryMs ?? 1_000,
+    lokiAttempts: options.lokiAttempts ?? 8,
+    lokiRetryMs: options.lokiRetryMs ?? 10_000,
     graphId: options.graphId ?? "langgraph:poet",
   };
   if (typeof deps.fetchImpl !== "function") {
@@ -381,18 +385,34 @@ export async function proveScheduledLangGraph(targetInput, options = {}) {
       target,
       baselineRunIds
     );
-    const lokiRaw = await deps.readLokiEvidence({
-      target,
-      scheduleId,
-      graphRunId: terminalRun.runId,
-      scheduledAt: scheduledAt.toISOString(),
-      timeoutMs: deps.timeoutMs,
-    });
-    const loki = requireCorrelatedLokiEvidence(
-      lokiRaw,
-      scheduleId,
-      terminalRun.runId
-    );
+    // Grafana Cloud ingestion lags the live event by up to ~1 minute, so a
+    // single read races the pipeline and fails loki_no_hit on a healthy run.
+    // Bounded retry: only the no-hit outcome retries; real errors rethrow.
+    let loki = null;
+    let lokiError = null;
+    for (let attempt = 1; attempt <= deps.lokiAttempts; attempt++) {
+      try {
+        const lokiRaw = await deps.readLokiEvidence({
+          target,
+          scheduleId,
+          graphRunId: terminalRun.runId,
+          scheduledAt: scheduledAt.toISOString(),
+          timeoutMs: deps.timeoutMs,
+        });
+        loki = requireCorrelatedLokiEvidence(
+          lokiRaw,
+          scheduleId,
+          terminalRun.runId
+        );
+        lokiError = null;
+        break;
+      } catch (error) {
+        if (error?.phase !== "loki_no_hit") throw error;
+        lokiError = error;
+        if (attempt < deps.lokiAttempts) await deps.sleep(deps.lokiRetryMs);
+      }
+    }
+    if (lokiError) throw lokiError;
 
     result = {
       target: target.name ?? target.baseUrl,

@@ -348,7 +348,11 @@ export function createTemporalLokiEvidenceReader(options = {}) {
         ({ completion }) =>
           completion?.temporalScheduleId === scheduleId &&
           completion.runId === graphRunId &&
-          completion.workflowId === scheduleId
+          // WORKFLOW_ID_INCLUDES_TIMESTAMP (docs/spec/scheduler.md inv. 12):
+          // workflowId = `${temporalScheduleId}-${TemporalScheduledStartTime}`,
+          // so match on the schedule-id prefix, never strict equality.
+          typeof completion.workflowId === "string" &&
+          completion.workflowId.startsWith(scheduleId)
       );
     if (matches.length !== 1) {
       throw new TemporalLokiEvidenceError(
