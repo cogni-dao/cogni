@@ -76,6 +76,41 @@ export interface SchedulerWorkerRoute {
   readonly isPrimary: boolean;
 }
 
+export interface TemporalPollerDiagnostic {
+  readonly status: "healthy" | "unhealthy";
+  readonly reason:
+    | "ok"
+    | "poller_missing"
+    | "poller_stale"
+    | "temporal_unavailable";
+  readonly checkedAt: string;
+  readonly maxAgeMs: number;
+  readonly checks: readonly {
+    namespace: string;
+    taskQueue: string;
+    taskType: "workflow" | "activity";
+    pollerCount: number;
+    freshestLastAccessAt: string | null;
+    freshestAgeMs: number | null;
+    status: "fresh" | "missing" | "stale";
+  }[];
+}
+
+export function expectedTemporalPollerTargets(
+  routes: readonly SchedulerWorkerRoute[]
+): readonly {
+  namespace: string;
+  taskQueue: string;
+  taskType: "workflow" | "activity";
+}[] {
+  return routes.flatMap(({ namespace, taskQueues }) =>
+    taskQueues.flatMap((taskQueue) => [
+      { namespace, taskQueue, taskType: "workflow" as const },
+      { namespace, taskQueue, taskType: "activity" as const },
+    ])
+  );
+}
+
 /**
  * Build the exact namespace/queue/routing matrix this process may serve.
  *
@@ -264,7 +299,10 @@ export async function connectWithRetry(
  */
 export async function startSchedulerWorker(
   config: SchedulerWorkerConfig
-): Promise<{ shutdown: () => Promise<void> }> {
+): Promise<{
+  shutdown: () => Promise<void>;
+  inspectTemporalPollers: () => Promise<TemporalPollerDiagnostic>;
+}> {
   const { env, logger } = config;
 
   logWorkerEvent(logger, WORKER_EVENT_NAMES.LIFECYCLE_STARTING, {
@@ -398,6 +436,7 @@ export async function startSchedulerWorker(
       }),
     };
   });
+  const expectedPollers = expectedTemporalPollerTargets(routes);
 
   type StartedWorker = {
     taskQueue: string;
@@ -465,6 +504,78 @@ export async function startSchedulerWorker(
   });
 
   return {
+    inspectTemporalPollers: async () => {
+      const checkedAtMs = Date.now();
+      const maxAgeMs = 120_000;
+      try {
+        const checks = await Promise.all(
+          expectedPollers.map(async ({ namespace, taskQueue, taskType }) => {
+            const taskQueueType = taskType === "workflow" ? 1 : 2;
+            const response = await connection.withDeadline(
+              Date.now() + 3_000,
+              () =>
+                connection.workflowService.describeTaskQueue({
+                  namespace,
+                  taskQueue: { name: taskQueue },
+                  taskQueueType,
+                })
+            );
+            const timestamps = (response.pollers ?? [])
+              .map((poller) => {
+                const value = poller.lastAccessTime;
+                if (value?.seconds == null) return null;
+                const seconds = Number(value.seconds.toString());
+                const nanos = Number(value.nanos ?? 0);
+                return Number.isFinite(seconds) && Number.isFinite(nanos)
+                  ? seconds * 1_000 + Math.floor(nanos / 1_000_000)
+                  : null;
+              })
+              .filter((value): value is number => value !== null);
+            const freshest =
+              timestamps.length > 0 ? Math.max(...timestamps) : null;
+            const freshestAgeMs =
+              freshest === null ? null : checkedAtMs - freshest;
+            const status: TemporalPollerDiagnostic["checks"][number]["status"] =
+              freshestAgeMs === null
+                ? "missing"
+                : freshestAgeMs >= -5_000 && freshestAgeMs <= maxAgeMs
+                  ? "fresh"
+                  : "stale";
+            return {
+              namespace,
+              taskQueue,
+              taskType,
+              pollerCount: response.pollers?.length ?? 0,
+              freshestLastAccessAt:
+                freshest === null ? null : new Date(freshest).toISOString(),
+              freshestAgeMs,
+              status,
+            };
+          })
+        );
+        const firstBad = checks.find((check) => check.status !== "fresh");
+        return {
+          status: firstBad ? "unhealthy" : "healthy",
+          reason:
+            firstBad?.status === "missing"
+              ? "poller_missing"
+              : firstBad?.status === "stale"
+                ? "poller_stale"
+                : "ok",
+          checkedAt: new Date(checkedAtMs).toISOString(),
+          maxAgeMs,
+          checks,
+        };
+      } catch {
+        return {
+          status: "unhealthy",
+          reason: "temporal_unavailable",
+          checkedAt: new Date(checkedAtMs).toISOString(),
+          maxAgeMs,
+          checks: [],
+        };
+      }
+    },
     shutdown: async () => {
       logWorkerEvent(logger, WORKER_EVENT_NAMES.LIFECYCLE_SHUTDOWN, {
         phase: "temporal_worker",

@@ -24,6 +24,7 @@ import { parse as parseYaml } from "yaml";
 import { runTemporalChatProbe } from "./temporal-chat-probe.mjs";
 import {
   defaultBaseUrl,
+  defaultWorkerHealthUrl,
   readTemporalHealth,
   TEMPORAL_HEALTH_CLI_REASON,
 } from "./temporal-health-client.mjs";
@@ -112,6 +113,11 @@ export function resolveTemporalProofTargets({
         { phase: "configuration", target: name }
       );
     }
+    const workerEnvironment =
+      row?.deployment_provider?.[targetEnvironment] === "akash" &&
+      targetEnvironment !== "production"
+        ? "production"
+        : targetEnvironment;
     return {
       name,
       nodeId: row.node_id,
@@ -120,11 +126,10 @@ export function resolveTemporalProofTargets({
       // Akash non-production lanes are reconciled by the production control
       // plane, so their shared-worker logs carry env=production. Keep workload
       // and worker environments distinct for exact Loki correlation.
-      workerEnvironment:
-        row?.deployment_provider?.[targetEnvironment] === "akash" &&
-        targetEnvironment !== "production"
-          ? "production"
-          : targetEnvironment,
+      workerEnvironment,
+      workerBaseUrl: defaultWorkerHealthUrl(workerEnvironment),
+      namespace: `cogni-${targetEnvironment}`,
+      taskQueue: `scheduler-tasks-${row.node_id}`,
       baseUrl: normalizeUrl(
         urls[name] ?? defaultBaseUrl(name, targetEnvironment),
         name
@@ -304,6 +309,10 @@ export async function runTemporalHealthProof(options = {}, dependencies = {}) {
       result = await readHealth({
         baseUrl: target.baseUrl,
         apiKey: target.apiKey,
+        workerBaseUrl: target.workerBaseUrl,
+        nodeId: target.nodeId,
+        namespace: target.namespace,
+        taskQueue: target.taskQueue,
         timeoutMs: options.healthTimeoutMs,
       });
     } catch {

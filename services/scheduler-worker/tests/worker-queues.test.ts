@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  expectedTemporalPollerTargets,
   isCanonicalNodeId,
   nodeTaskQueueName,
   workerRoutes,
@@ -79,14 +80,13 @@ describe("workerRoutes", () => {
     "poly=https://poly-test.example,4b06359a-a859-4399-888e-a8c7a6696f7e=https://poly-test.example";
 
   it("bounds foreign lanes to their own node queues and omits legacy drain", () => {
-    expect(
-      workerRoutes(
-        "cogni-production",
-        primary,
-        JSON.stringify({ "cogni-candidate-a": candidate }),
-        "scheduler-tasks"
-      )
-    ).toEqual([
+    const routes = workerRoutes(
+      "cogni-production",
+      primary,
+      JSON.stringify({ "cogni-candidate-a": candidate }),
+      "scheduler-tasks"
+    );
+    expect(routes).toEqual([
       {
         namespace: "cogni-production",
         endpointsRaw: primary,
@@ -102,6 +102,48 @@ describe("workerRoutes", () => {
         endpointsRaw: candidate,
         taskQueues: ["scheduler-tasks-4b06359a-a859-4399-888e-a8c7a6696f7e"],
         isPrimary: false,
+      },
+    ]);
+    expect(expectedTemporalPollerTargets(routes)).toEqual([
+      {
+        namespace: "cogni-production",
+        taskQueue: "scheduler-tasks-4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+        taskType: "workflow",
+      },
+      {
+        namespace: "cogni-production",
+        taskQueue: "scheduler-tasks-4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+        taskType: "activity",
+      },
+      {
+        namespace: "cogni-production",
+        taskQueue: "scheduler-tasks-4b06359a-a859-4399-888e-a8c7a6696f7e",
+        taskType: "workflow",
+      },
+      {
+        namespace: "cogni-production",
+        taskQueue: "scheduler-tasks-4b06359a-a859-4399-888e-a8c7a6696f7e",
+        taskType: "activity",
+      },
+      {
+        namespace: "cogni-production",
+        taskQueue: "scheduler-tasks",
+        taskType: "workflow",
+      },
+      {
+        namespace: "cogni-production",
+        taskQueue: "scheduler-tasks",
+        taskType: "activity",
+      },
+      {
+        namespace: "cogni-candidate-a",
+        taskQueue: "scheduler-tasks-4b06359a-a859-4399-888e-a8c7a6696f7e",
+        taskType: "workflow",
+      },
+      {
+        namespace: "cogni-candidate-a",
+        taskQueue: "scheduler-tasks-4b06359a-a859-4399-888e-a8c7a6696f7e",
+        taskType: "activity",
       },
     ]);
   });

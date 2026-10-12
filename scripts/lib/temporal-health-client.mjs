@@ -68,6 +68,11 @@ export function defaultBaseUrl(slug, env) {
   return `https://${slug}-test.cognidao.org`;
 }
 
+export function defaultWorkerHealthUrl(env) {
+  if (env === "production") return "http://cogni.vm.cognidao.org:30900";
+  return `http://cogni-${env}.vm.cognidao.org:30900`;
+}
+
 export function resolveTemporalHealthTarget({ repoRoot, env, url }) {
   const baseUrl = url ?? defaultBaseUrl(readNodeSlug(repoRoot), env);
   const parsed = new URL(baseUrl);
@@ -80,10 +85,76 @@ export function resolveTemporalHealthTarget({ repoRoot, env, url }) {
 export async function readTemporalHealth({
   baseUrl,
   apiKey,
+  workerBaseUrl,
+  nodeId,
+  namespace,
+  taskQueue,
   fetchImpl = globalThis.fetch,
   timeoutMs = 4_500,
 }) {
   try {
+    if (workerBaseUrl) {
+      const [appResponse, workerResponse] = await Promise.all([
+        fetchImpl(`${baseUrl}/version`, {
+          signal: AbortSignal.timeout(timeoutMs),
+        }),
+        fetchImpl(`${workerBaseUrl}/readyz?deep=1`, {
+          signal: AbortSignal.timeout(timeoutMs),
+        }),
+      ]);
+      const [app, workerHealth] = await Promise.all([
+        appResponse.json().catch(() => null),
+        workerResponse.json().catch(() => null),
+      ]);
+      if (
+        !appResponse.ok ||
+        !workerResponse.ok ||
+        !app ||
+        !workerHealth ||
+        workerHealth.status !== "healthy" ||
+        !Array.isArray(workerHealth.checks)
+      ) {
+        return {
+          exitCode: 1,
+          body: {
+            status: "unhealthy",
+            reason: workerHealth?.reason ?? "response_malformed",
+          },
+        };
+      }
+      const workflow = workerHealth.checks.find(
+        (check) =>
+          check.namespace === namespace &&
+          check.taskQueue === taskQueue &&
+          check.taskType === "workflow"
+      );
+      const activity = workerHealth.checks.find(
+        (check) =>
+          check.namespace === namespace &&
+          check.taskQueue === taskQueue &&
+          check.taskType === "activity"
+      );
+      if (workflow?.status !== "fresh" || activity?.status !== "fresh") {
+        return {
+          exitCode: 1,
+          body: { status: "unhealthy", reason: "poller_missing" },
+        };
+      }
+      return {
+        exitCode: 0,
+        body: {
+          status: "healthy",
+          reason: "ok",
+          nodeId,
+          namespace,
+          taskQueue,
+          app,
+          worker: workerHealth.worker,
+          pollers: { workflow, activity },
+          checkedAt: workerHealth.checkedAt,
+        },
+      };
+    }
     const response = await fetchImpl(`${baseUrl}/api/v1/temporal/health`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(timeoutMs),

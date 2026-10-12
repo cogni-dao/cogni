@@ -18,9 +18,11 @@
 import { createServer, type Server } from "node:http";
 
 import { metricsRegistry } from "./observability/index.js";
+import type { TemporalPollerDiagnostic } from "./worker.js";
 
 export interface HealthState {
   ready: boolean;
+  inspectTemporalPollers?: () => Promise<TemporalPollerDiagnostic>;
 }
 
 /** Build metadata from env vars (set at build time or runtime) */
@@ -36,6 +38,24 @@ export function startHealthServer(state: HealthState, port: number): Server {
     if (req.url === "/livez") {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("ok");
+    } else if (req.url === "/readyz?deep=1") {
+      if (!state.inspectTemporalPollers) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            status: "unhealthy",
+            reason: "diagnostic_not_ready",
+            worker: versionInfo,
+            checks: [],
+          })
+        );
+        return;
+      }
+      const diagnostic = await state.inspectTemporalPollers();
+      res.writeHead(diagnostic.status === "healthy" ? 200 : 503, {
+        "Content-Type": "application/json",
+      });
+      res.end(JSON.stringify({ ...diagnostic, worker: versionInfo }));
     } else if (req.url === "/readyz") {
       if (state.ready) {
         res.writeHead(200, { "Content-Type": "text/plain" });

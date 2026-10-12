@@ -32,6 +32,9 @@ const TARGETS = [
     sourceSha: "242266ad474aee590e2fbafcad08a0431d350b45",
     environment: "production",
     workerEnvironment: "production",
+    workerBaseUrl: "http://cogni.vm.cognidao.org:30900",
+    namespace: "cogni-production",
+    taskQueue: "scheduler-tasks-4b06359a-a859-4399-888e-a8c7a6696f7e",
     baseUrl: "https://poly.cognidao.org",
   },
   {
@@ -40,6 +43,9 @@ const TARGETS = [
     sourceSha: "654e5f2132cdc774a329f24c69340170e4721d2a",
     environment: "production",
     workerEnvironment: "production",
+    workerBaseUrl: "http://cogni.vm.cognidao.org:30900",
+    namespace: "cogni-production",
+    taskQueue: "scheduler-tasks-b927a9dd-6132-4fc9-a51e-e3cee2568e3c",
     baseUrl: "https://node-template.cognidao.org",
   },
 ];

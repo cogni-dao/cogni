@@ -101,6 +101,7 @@ async function main(): Promise<void> {
   // Start scheduler worker (always)
   const schedulerWorker = await startSchedulerWorker({ env: config, logger });
   shutdownHandles.push(schedulerWorker);
+  healthState.inspectTemporalPollers = schedulerWorker.inspectTemporalPollers;
 
   // Start ledger worker (optional — requires NODE_ID + SCOPE_ID)
   const ledgerContainer = createAttributionContainer(config, logger);
