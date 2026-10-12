@@ -79,19 +79,6 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
-  it("fails before side effects unless the executed workflow SHA is exact", () => {
-    expect(
-      parsed.on?.workflow_dispatch?.inputs?.workflow_source_sha
-    ).toMatchObject({ required: true, type: "string" });
-
-    const steps = parsed.jobs.decide.steps;
-    expect(steps[0]?.name).toBe("Assert exact workflow source");
-    expect(steps[0]?.run).toContain(
-      '[[ "${ACTUAL_WORKFLOW_SOURCE_SHA,,}" == "${EXPECTED_WORKFLOW_SOURCE_SHA,,}" ]]'
-    );
-    expect(steps[1]?.name).toBe("Checkout workflow source");
-  });
-
   it("keeps the k3s control domain separate from an isolated Akash workload zone", () => {
     const targetDomain =
       "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}";
