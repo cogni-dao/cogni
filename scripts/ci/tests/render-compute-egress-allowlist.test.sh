@@ -156,6 +156,25 @@ diff -u "$EXPECTED_P" "$TMPROOT/preview.rules" \
   || fail "preview rules differ from expected (akash-placed rows only)"
 ok "preview renders exactly its akash-placed rows' CIDRs"
 
+SUBSTRATE_PORTS="6379,4000,7233" bash "$RENDERER" candidate-a > "$TMPROOT/candidate-runtime.list"
+grep -q '^80.200.246.35/32:6379,4000,7233$' "$TMPROOT/candidate-runtime.list" \
+  || fail "lane-runtime render did not narrow to Redis/LiteLLM/Temporal"
+grep -q ':5432' "$TMPROOT/candidate-runtime.list" \
+  && fail "lane-runtime render must not open control-custodied database ports"
+ok "lane-runtime role opens only Redis/LiteLLM/Temporal"
+
+SUBSTRATE_PORTS="5432,5435" bash "$RENDERER" candidate-a > "$TMPROOT/candidate-db.list"
+grep -q '^80.200.246.35/32:5432,5435$' "$TMPROOT/candidate-db.list" \
+  || fail "control-DB render did not narrow to Postgres/Doltgres"
+grep -q ':6379' "$TMPROOT/candidate-db.list" \
+  && fail "control-DB render must not open lane-runtime ports"
+ok "control-DB role opens only Postgres/Doltgres"
+
+if SUBSTRATE_PORTS="22,5432" bash "$RENDERER" candidate-a >/dev/null 2>&1; then
+  fail "renderer must reject arbitrary port overrides"
+fi
+ok "renderer rejects unknown port-role sets"
+
 # The SAME tokssplit row that was excluded from candidate-a IS included here —
 # proof the filter is placement, not a blanket suppression of the row.
 grep -q "^192.0.2.99/32:$PORTS$" "$OUT_P" \

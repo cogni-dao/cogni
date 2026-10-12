@@ -39,7 +39,18 @@ CATALOG_ROOT="${COGNI_CATALOG_ROOT:-$REPO_ROOT/infra/catalog}"
 # Substrate ports external-compute workloads dial (task.5052). Deliberately
 # NARROWER than the harden script's INTERNAL_PORTS: no 8080 (OpenFGA) — authz
 # stays unreachable from provider NATs until a workload proves the need.
-SUBSTRATE_PORTS="5432,5435,6379,4000,7233"
+#
+# bug.5447: callers may narrow this to the role a VM actually serves. A lane VM
+# exposes runtime services (Redis/LiteLLM/Temporal); a foreign control VM exposes
+# only the databases it custodies. The default preserves existing callers.
+SUBSTRATE_PORTS="${SUBSTRATE_PORTS:-5432,5435,6379,4000,7233}"
+case "$SUBSTRATE_PORTS" in
+  5432,5435|6379,4000,7233|5432,5435,6379,4000,7233) ;;
+  *)
+    echo "[render-compute-egress] ERROR: unsupported SUBSTRATE_PORTS role set '$SUBSTRATE_PORTS'" >&2
+    exit 1
+    ;;
+esac
 
 command -v yq >/dev/null 2>&1 || { echo "[render-compute-egress] ERROR: yq is required" >&2; exit 1; }
 [ -d "$CATALOG_ROOT" ] || { echo "[render-compute-egress] ERROR: catalog root not found: $CATALOG_ROOT" >&2; exit 1; }

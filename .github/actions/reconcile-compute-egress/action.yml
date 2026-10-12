@@ -12,6 +12,12 @@ inputs:
   vm_host: { required: true, description: "Environment substrate VM host" }
   ssh_deploy_key:
     { required: true, description: "Existing environment SSH deployment key" }
+  substrate_ports:
+    {
+      required: false,
+      default: "5432,5435,6379,4000,7233",
+      description: "Role-scoped substrate ports opened for catalog provider CIDRs",
+    }
 
 runs:
   using: composite
@@ -21,6 +27,7 @@ runs:
       env:
         APP_SOURCE_ROOT: ${{ inputs.app_source_root }}
         DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+        SUBSTRATE_PORTS: ${{ inputs.substrate_ports }}
         ALLOWLIST: ${{ runner.temp }}/compute-egress-allowlist
       run: |
         set -euo pipefail
