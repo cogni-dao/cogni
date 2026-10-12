@@ -37,9 +37,14 @@ vi.mock("@/features/nodes/components/NodeTile", () => ({
   NodeTile: ({
     node,
   }: {
-    node: { title: string; href: string; status?: { label: string } };
+    node: {
+      title: string;
+      href: string;
+      prefetch?: boolean;
+      status?: { label: string };
+    };
   }) => (
-    <a href={node.href}>
+    <a href={node.href} data-prefetch={String(node.prefetch)}>
       {node.title} {node.status?.label}
     </a>
   ),
@@ -68,8 +73,8 @@ describe("nodes page", () => {
       />
     );
 
-    expect(
-      screen.getByRole("link", { name: "Alpha Node Payments ready" })
-    ).toHaveAttribute("href", "/nodes/11111111-1111-4111-8111-111111111111");
+    expect(screen.getByRole("link", { name: "Alpha Node Payments ready" }))
+      .toHaveAttribute("href", "/nodes/11111111-1111-4111-8111-111111111111")
+      .toHaveAttribute("data-prefetch", "false");
   });
 });

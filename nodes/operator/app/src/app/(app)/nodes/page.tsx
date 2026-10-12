@@ -91,6 +91,9 @@ export function OwnedNodesContent({
                   },
                   {
                     href: `/nodes/${n.id}`,
+                    // The dynamic detail route performs uncached operational reads.
+                    // Prefetching every tile caused duplicate 20s RSC work before click.
+                    prefetch: false,
                     status: {
                       label: display.label,
                       intent: display.intent,
