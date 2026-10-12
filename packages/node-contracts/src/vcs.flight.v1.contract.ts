@@ -14,12 +14,22 @@
 
 import { z } from "zod";
 
+const workflowRefSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(
+    /^(?![0-9a-f]{40}$)(?!.*(?:\.\.|\/\/|@\{|\.lock(?:\/|$)))(?![./])(?!.*[./]$)[A-Za-z0-9][A-Za-z0-9._/-]*$/i,
+    "workflowRef must be a same-repository branch or tag name"
+  );
+
 export const flightOperation = {
   input: z.object({
     nodeRef: z.object({
       nodeId: z.string().uuid(),
       sourceSha: z.string().regex(/^[0-9a-fA-F]{40}$/),
     }),
+    workflowRef: workflowRefSchema.optional(),
   }),
 
   output: z.object({

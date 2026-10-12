@@ -313,6 +313,99 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
+  it("passes a validated workflowRef to the operator deploy plane", async () => {
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef({
+        slug: "operator",
+        sourceRepo: "https://github.com/cogni-test-org/cogni-monorepo",
+      })
+    );
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue(
+      makeDispatchResult("Reviewed workflow flight dispatched.")
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            workflowRef: "bug.5455-safe-workflow-ref",
+          }),
+        });
+
+        expect(res.status).toBe(202);
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).toHaveBeenCalledWith({
+          owner: "cogni-test-org",
+          repo: "cogni-monorepo",
+          slug: "operator",
+          sourceSha: SOURCE_SHA,
+          workflowRef: "bug.5455-safe-workflow-ref",
+        });
+      },
+    });
+  });
+
+  it("rejects malformed and cross-repository workflowRef syntax", async () => {
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            workflowRef: "attacker:cogni@branch",
+          }),
+        });
+
+        expect(res.status).toBe(400);
+        expect(
+          mockDeployPlane.prepareNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+        expect(
+          mockDeployPlane.dispatchNodeRefCandidateFlight
+        ).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("returns a typed workflow-ref refusal from the deploy plane", async () => {
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef({ slug: "operator" })
+    );
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockRejectedValue(
+      statusError(
+        422,
+        "workflow_ref_source_mismatch",
+        "workflowRef must resolve exactly to sourceSha"
+      )
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+            workflowRef: "bug.5455-safe-workflow-ref",
+          }),
+        });
+
+        expect(res.status).toBe(422);
+        await expect(res.json()).resolves.toMatchObject({
+          errorCode: "workflow_ref_source_mismatch",
+        });
+      },
+    });
+  });
+
   it("allows a non-owner caller when OpenFGA grants node flight", async () => {
     authzState.decision = "authz_allowed";
     dbState.current = {

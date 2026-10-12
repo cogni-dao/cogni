@@ -13,8 +13,8 @@
  *   - INSTALLATION_CACHED: Installation ID resolved once per owner/repo and cached
  *   - TOKEN_AUTO_REFRESH: Octokit auth-app handles token caching and refresh automatically
  *   - ADAPTER_SWAPPABLE: Implements VcsCapability — can be swapped for gh CLI adapter later
- *   - FLIGHT_WORKFLOW_REF: `candidate-flight.yml` is dispatched against `workflowRef ?? "main"`.
- *     Defaults to main; pass workflowRef to test workflow changes on a feature branch.
+ *   - REVIEWED_FLIGHT_WORKFLOW_REF: `candidate-flight.yml` defaults to main. An explicit workflowRef
+ *     is accepted only when it resolves to sourceSha at an open same-repo PR head.
  * Side-effects: IO (GitHub REST API)
  * Links: task.0242, task.0297, services/scheduler-worker/src/adapters/ingestion/github-auth.ts
  * @internal
@@ -32,6 +32,8 @@ import type {
 } from "@cogni/ai-tools";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
+
+import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -460,11 +462,29 @@ export class GitHubVcsAdapter implements VcsCapability {
     workflowRef?: string;
   }): Promise<DispatchCandidateFlightResult> {
     const octokit = await this.getOctokit(params.owner, params.repo);
+    const reviewedWorkflow = params.workflowRef
+      ? await resolveReviewedWorkflowRef({
+          octokit,
+          owner: params.owner,
+          repo: params.repo,
+          workflowRef: params.workflowRef,
+          sourceSha: params.sourceSha,
+        })
+      : null;
+    const workflowRef = reviewedWorkflow?.dispatchRef ?? "main";
 
-    const inputs: Record<string, string> = {
-      node_slug: params.nodeSlug,
-      source_sha: params.sourceSha,
-    };
+    const inputs: Record<string, string> = reviewedWorkflow
+      ? {
+          // A self-flight is a parent-repository PR, so use the workflow's existing PR lane.
+          // That lane derives the complete affected target set (operator, scheduler-worker, …)
+          // instead of pretending the parent SHA is a single child-node image.
+          pr_number: String(reviewedWorkflow.prNumber),
+          head_sha: reviewedWorkflow.resolvedSha,
+        }
+      : {
+          node_slug: params.nodeSlug,
+          source_sha: params.sourceSha,
+        };
 
     await octokit.request(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
@@ -472,7 +492,9 @@ export class GitHubVcsAdapter implements VcsCapability {
         owner: params.owner,
         repo: params.repo,
         workflow_id: "candidate-flight.yml",
-        ref: params.workflowRef ?? "main",
+        // GitHub accepts a branch/tag, not a raw commit SHA. Explicit refs dispatch through an
+        // operator-created content-addressed branch whose target was verified above.
+        ref: workflowRef,
         inputs,
       }
     );

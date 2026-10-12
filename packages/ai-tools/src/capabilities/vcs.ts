@@ -181,6 +181,10 @@ export interface VcsCapability {
     repo: string;
     nodeSlug: string;
     sourceSha: string;
+    /**
+     * Same-repository branch or tag containing candidate-flight.yml. When present, the adapter
+     * must resolve it and prove it equals sourceSha at an open same-repo PR head before dispatch.
+     */
     workflowRef?: string;
   }): Promise<DispatchCandidateFlightResult>;
 
