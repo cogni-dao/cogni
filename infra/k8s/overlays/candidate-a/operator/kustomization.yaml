@@ -2,9 +2,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
 namespace: cogni-candidate-a
-
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
@@ -35,29 +33,24 @@ resources:
   - ../../../base/lease-log-pump
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
-
 namePrefix: operator-
-
 # Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
 # name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
 transformers:
   - ../../../base/akash-tx-actuator-service-name
-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:0c4345dafa9b42dd31db239d499e48fa7405adc9ce998bff8da5ee95d8656379"
-
+    digest: "sha256:9846d6a529531912028539a319f3ce8beab48e0142411edb1f5467068de78b26"
 replacements:
   - source:
       kind: Application
       name: compute-workload-platform
       fieldPath: spec.destination.namespace
     targets:
-      - select: { kind: Application, name: compute-workload-platform }
+      - select: {kind: Application, name: compute-workload-platform}
         fieldPaths: [metadata.namespace]
-
 patches:
   # story.5016 Gate 0b: actuator env values are set BY NAME via strategic
   # merge (env lists merge on `name`), never by positional JSON-pointer index.
@@ -90,7 +83,13 @@ patches:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
                   - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm
+                    # bug.5356 — candidate's previous single-provider pin was zencloud
+                    # (BE), while toks4's required placement excludes BE. That made the
+                    # intersection empty and every fresh candidate auction unwinnable.
+                    # Keep candidate pinned to the audited, custom-domain-capable
+                    # providers whose permitted countries and egress CIDRs are already
+                    # declared on toks4; do not widen the geo-placement requirement.
+                    value: akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x
                   # HUMAN GATE (story.5016 secret-boundary amendment 3). The PUBLIC Akash
                   # account/wallet address the actuator is authorized to spend from — pinned
                   # here as plain config because it is not a secret and must be reviewable in
@@ -253,7 +252,6 @@ patches:
       - op: add
         path: /spec/template/metadata/labels/app.kubernetes.io~1instance
         value: "operator"
-
   # design.node-self-serve-secrets §1.B: the operator pod's OWN OpenBao identity.
   # serviceAccountName resolves to operator-secrets-writer (namePrefix), bound by
   # the <env>-node-secrets-writer k8s-auth role. The projected token carries the
@@ -281,7 +279,6 @@ patches:
           - name: openbao-token
             mountPath: /var/run/secrets/openbao
             readOnly: true
-
   # task.0423: Doltgres knowledge-plane migrator runs as a second initContainer
   # on the operator Deployment. DATABASE_URL maps to DOLTGRES_URL (separate from
   # the Postgres DATABASE_URL the main container + first initContainer use).
@@ -316,7 +313,7 @@ patches:
               cpu: "1000m"
   # bug.0295: VM discovery via DNS (cogni-candidate-a.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
-  - target: { kind: Service, name: postgres-external }
+  - target: {kind: Service, name: postgres-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -326,7 +323,7 @@ patches:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: temporal-external }
+  - target: {kind: Service, name: temporal-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -336,7 +333,7 @@ patches:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: litellm-external }
+  - target: {kind: Service, name: litellm-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -346,7 +343,7 @@ patches:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: openfga-external }
+  - target: {kind: Service, name: openfga-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -356,7 +353,7 @@ patches:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: redis-external }
+  - target: {kind: Service, name: redis-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -366,7 +363,7 @@ patches:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: doltgres-external }
+  - target: {kind: Service, name: doltgres-external}
     patch: |
       apiVersion: v1
       kind: Service
@@ -376,35 +373,35 @@ patches:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org
         clusterIP: null
-  - target: { kind: EndpointSlice, name: postgres-external-1 }
+  - target: {kind: EndpointSlice, name: postgres-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: postgres-external-1
-  - target: { kind: EndpointSlice, name: temporal-external-1 }
+  - target: {kind: EndpointSlice, name: temporal-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: temporal-external-1
-  - target: { kind: EndpointSlice, name: litellm-external-1 }
+  - target: {kind: EndpointSlice, name: litellm-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: litellm-external-1
-  - target: { kind: EndpointSlice, name: redis-external-1 }
+  - target: {kind: EndpointSlice, name: redis-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: redis-external-1
-  - target: { kind: EndpointSlice, name: doltgres-external-1 }
+  - target: {kind: EndpointSlice, name: doltgres-external-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
