@@ -782,7 +782,13 @@ async function applyEdit(input: {
 // ---------------------------------------------------------------------------
 
 export interface DoltgresKnowledgeContributionAdapterConfig {
-  /** Pooled client for ordinary reads. Never used for branch work. */
+  /**
+   * Dedicated single-connection client for contribution reads. Never used for
+   * branch work. Doltgres sessions retain the main working root they first
+   * observed, so this client is refreshed with `dolt_checkout('main')` before
+   * every read. Keep it at `max: 1` so refresh + query cannot land on different
+   * pooled sessions.
+   */
   sql: Sql;
   /**
    * Dedicated client for session-pinned branch work, ideally `max: 1`.
@@ -826,6 +832,20 @@ export class DoltgresKnowledgeContributionAdapter
     fn: (conn: ReservedSql) => Promise<T>
   ): Promise<T> {
     return await this.session.run(operation, fn);
+  }
+
+  /**
+   * Refresh the reader's session-local view of main before observing metadata.
+   *
+   * A long-lived Doltgres connection can keep serving the main root it saw
+   * when the session opened after another connection commits a contribution.
+   * With a wider pool this presented as alternating 200/404 responses for the
+   * same durable row. Production wiring deliberately gives this adapter a
+   * dedicated `max: 1` client, making checkout + following query one ordered
+   * stream while keeping graph/list traffic on its separate read pool.
+   */
+  private async refreshMainForRead(): Promise<void> {
+    await this.sql.unsafe("SELECT dolt_checkout('main')");
   }
 
   /**
@@ -898,6 +918,7 @@ export class DoltgresKnowledgeContributionAdapter
     edits?: KnowledgeContributionEdit[];
     idempotencyKey?: string;
   }): Promise<ContributionRecord> {
+    await this.refreshMainForRead();
     const slug = principalSlug(input.principal);
     const sid = shortId();
     const contributionId = `contrib-${slug}-${sid}`;
@@ -1242,6 +1263,7 @@ export class DoltgresKnowledgeContributionAdapter
   async findOpenForPrincipal(
     principalId: string
   ): Promise<ContributionRecord | null> {
+    await this.refreshMainForRead();
     const rows = await this.sql.unsafe(
       `SELECT * FROM knowledge_contributions WHERE state = 'open' AND principal_id = ${escapeValue(principalId)} ORDER BY created_at ASC LIMIT 1`
     );
@@ -1457,6 +1479,7 @@ export class DoltgresKnowledgeContributionAdapter
     principalId?: string;
     limit: number;
   }): Promise<ContributionRecord[]> {
+    await this.refreshMainForRead();
     const conditions: string[] = [];
     if (query.state !== "all") {
       conditions.push(`state = ${escapeValue(query.state)}`);
@@ -1473,6 +1496,7 @@ export class DoltgresKnowledgeContributionAdapter
   }
 
   async getById(contributionId: string): Promise<ContributionRecord | null> {
+    await this.refreshMainForRead();
     const rows = await this.sql.unsafe(
       `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(contributionId)} LIMIT 1`
     );
@@ -1484,6 +1508,7 @@ export class DoltgresKnowledgeContributionAdapter
   async listCommits(
     contributionId: string
   ): Promise<ContributionCommitRecord[]> {
+    await this.refreshMainForRead();
     const rows = await this.sql.unsafe(
       `SELECT * FROM knowledge_contribution_commits WHERE contribution_id = ${escapeValue(contributionId)} ORDER BY seq ASC`
     );
