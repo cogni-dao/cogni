@@ -5,7 +5,7 @@
 /**
  * Module: `@scripts/temporal-schedule-proof`
  * Purpose: Prove create -> terminal graph run -> delete for Poly and node-template.
- * Scope: Uses public node APIs and read-only Loki queries only.
+ * Scope: Uses public node APIs and read-only Loki queries only. Does not mutate schedules outside its own ephemeral probe or touch Temporal directly.
  * Invariants: Fixed two-target order, ephemeral actors, free-model probe, no secrets in output.
  * Side-effects: IO (actor registration, temporary schedules, Grafana reads)
  * Links: task.5239, scripts/lib/temporal-scheduled-probe.mjs

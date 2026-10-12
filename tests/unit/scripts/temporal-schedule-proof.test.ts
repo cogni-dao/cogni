@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/scripts/temporal-schedule-proof`
  * Purpose: Prove the two-target CLI is fixed-order, secret-safe, and fail closed.
- * Scope: Injected dependencies only; no network, filesystem, Temporal, or Loki.
+ * Scope: Injected dependencies only; no network, filesystem, Temporal, or Loki. Does not perform network IO or touch a real Temporal/Loki.
  * Invariants: Actor keys never appear in output; both targets reach the lifecycle harness.
  * Side-effects: none
  * Links: scripts/temporal-schedule-proof.mjs, task.5239
