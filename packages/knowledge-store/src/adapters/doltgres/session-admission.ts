@@ -30,17 +30,32 @@ import { KnowledgeBusyError } from "../../port/knowledge-store.port.js";
  */
 export const KNOWLEDGE_BRANCH_LOCK_KEY = 5_001_002;
 
-/** How long a queued operation waits for its turn before giving up. */
-export const QUEUE_WAIT_MS = 30_000;
+/**
+ * How long a queued operation waits for its turn before giving up.
+ *
+ * Production Dolt branch operations have reached 75s during host I/O pressure.
+ * A 30s deadline therefore rejected an ordinary second writer while the first
+ * writer was still making progress (bug.5437). Keep the synchronous
+ * compatibility lane inside the common 100s edge-request ceiling while the
+ * durable command/result plane replaces request-held admission.
+ */
+export const QUEUE_WAIT_MS = 90_000;
 /**
  * How long to wait for a session-pinned connection once admitted.
  *
  * Covers the priming query AND the reserve: on an exhausted pool the prime is
  * what hangs, so bounding only the reserve bounds nothing.
  */
-export const ACQUIRE_TIMEOUT_MS = 5_000;
-/** How long to spin for the cross-replica advisory lock. */
-export const LOCK_WAIT_MS = 2_000;
+export const ACQUIRE_TIMEOUT_MS = 15_000;
+/**
+ * How long to spin for the cross-replica advisory lock.
+ *
+ * This must cover the same observed operation envelope as the in-process
+ * queue. A shorter lock deadline makes horizontal replicas reject traffic
+ * that a single replica would queue, which is both misleading and
+ * scale-negative.
+ */
+export const LOCK_WAIT_MS = 90_000;
 /** Gap between advisory-lock attempts. */
 export const LOCK_RETRY_MS = 50;
 
@@ -123,7 +138,8 @@ function doltBoolean(rows: unknown, field: string): boolean {
  * latency-prone substrate. The fix is to bound concurrency ABOVE the pool:
  *
  *   1. FIFO queue — admit ONE operation before it reserves, so a burst queues
- *      instead of racing. Bounded by `queueWaitMs` so a caller fails fast.
+ *      instead of racing. `queueWaitMs` covers the measured production
+ *      operation envelope; it must not be shorter than a healthy predecessor.
  *   2. Prime, then reserve, under ONE deadline covering both. The deadline must
  *      span the prime: on an already-exhausted pool the priming query is itself
  *      parked on the unbounded backlog, so bounding only the reserve still
@@ -131,7 +147,9 @@ function doltBoolean(rows: unknown, field: string): boolean {
  *      client and rebuild it, rather than hand the next caller a pool with one
  *      fewer slot.
  *   3. `pg_try_advisory_lock` — the same one-at-a-time guarantee across
- *      replicas, which an in-process queue cannot give.
+ *      replicas, which an in-process queue cannot give. Its wait envelope
+ *      matches local admission so adding a replica cannot turn queued work
+ *      into an immediate false-busy response.
  *
  * The pool behind this runner is then deliberately `max: 1`, and it is NOT the
  * pool that serves reads.
