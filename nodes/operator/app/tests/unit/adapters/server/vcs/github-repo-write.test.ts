@@ -40,7 +40,10 @@ vi.mock("@octokit/core", () => ({
   },
 }));
 
-import { renderDeploymentActivationSpec } from "@cogni/repo-spec";
+import {
+  parseRepoSpec,
+  renderDeploymentActivationSpec,
+} from "@cogni/repo-spec";
 import {
   diffMergeQueueRuleset,
   diffRulesetAgainstPolicy,
@@ -82,6 +85,66 @@ const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
 });
 const TEST_NODE_REPO_POLICY = parseNodeRepoPolicy(TEST_NODE_REPO_POLICY_JSON);
 const NODE_MAIN_POLICY_RULESET_NAME = TEST_NODE_REPO_POLICY.ruleset.name;
+const TEST_NODE_TEMPLATE_REPO_SPEC = `# Inherited node-template capability contract.
+schema_version: "0.1.4"
+node_id: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c"
+scope_id: "b44d4394-3147-5787-acab-51546be6a3da"
+scope_key: default
+intent:
+  name: node-template
+  mission: "Template mission"
+governance:
+  chain_id: "8453"
+activity_ledger:
+  epoch_length_days: 7
+  approvers: ["0x070075F1389Ae1182aBac722B36CA12285d0c949"]
+  activity_sources:
+    github:
+      attribution_pipeline: cogni-v0.0
+      source_refs: ["Cogni-DAO/standalone-node"]
+payments:
+  status: pending_activation
+gates:
+  - type: review-limits
+    id: review_limits
+    with:
+      max_changed_files: 50
+      max_total_diff_kb: 1500
+schedules:
+  - id: node-template-daily-poem
+    cron: "0 0 * * *"
+    workflow: ScheduledGraphWorkflow
+    payload:
+      graphId: "langgraph:poet"
+deployment:
+  services:
+    - name: app
+      artifact:
+        name: app
+        context: .
+        dockerfile: Dockerfile
+        target: runner
+      port: 3200
+      visibility: public
+      runtime_profile: cogni-node-app-v1
+      bindings: {}
+      bind_host: 0.0.0.0
+      resources: { cpu_units: 2, memory_mi: 2048, storage_mi: 4096 }
+    - name: workflow-worker
+      artifact:
+        name: workflow-worker
+        context: .
+        dockerfile: Dockerfile
+        target: workflow-worker
+      port: 9100
+      visibility: private
+      envs: [candidate-a]
+      runtime_profile: cogni-workflow-worker-v1
+      bindings: {}
+      secret_refs: [{ key: SCHEDULER_API_TOKEN }]
+      bind_host: 0.0.0.0
+      resources: { cpu_units: 1, memory_mi: 1024, storage_mi: 1024 }
+`;
 
 describe("envManagerCommitMessage", () => {
   it("signs the reserved change type and canonical changed-path hash into trailers", () => {
@@ -184,6 +247,19 @@ function setHappyForkHandlers(): void {
   routeHandlers = {
     "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
       expect(String(params.owner).toLowerCase()).toBe("cogni-dao");
+      if (params.path === ".cogni/repo-spec.yaml") {
+        // Identity specialization reads the exact spec inherited by the fork, never
+        // floating template main and never an operator-owned app-only reconstruction.
+        expect(params).toMatchObject({
+          repo: "atlas",
+          ref: "template-main",
+        });
+        return {
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from(TEST_NODE_TEMPLATE_REPO_SPEC).toString("base64"),
+        };
+      }
       expect(params).toMatchObject({ path: ".cogni/repo-policy.json" });
       // The policy is read TWICE by design: once as a pre-flight at floating template
       // main (fail before minting an unprotectable repo), then again from the FORK at
@@ -285,7 +361,12 @@ function setHappyForkHandlers(): void {
       const content = Buffer.from(String(params.content), "base64").toString(
         "utf-8"
       );
-      if (content.includes('node_id: "11111111-1111-4111-8111-111111111111"')) {
+      if (content.includes("11111111-1111-4111-8111-111111111111")) {
+        expect(parseRepoSpec(content).node_id).toBe(
+          "11111111-1111-4111-8111-111111111111"
+        );
+        expect(content).toContain("workflow: ScheduledGraphWorkflow");
+        expect(content).toContain("runtime_profile: cogni-workflow-worker-v1");
         return { sha: "repo-spec-blob" };
       }
       if (
@@ -1372,6 +1453,9 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       // Policy re-read from the FORK at its base commit — the revision whose
       // workflows must satisfy the contexts we are about to require.
       "GET /repos/{owner}/{repo}/contents/{path}",
+      // Repo-spec read from that SAME fork commit — capabilities such as schedules and
+      // private Workers are preserved while identity values are specialized.
+      "GET /repos/{owner}/{repo}/contents/{path}",
       // One repo-spec blob + one external-secret pair per BIRTH env (story.5025), so this
       // sequence tracks the birth set instead of pinning a count that silently goes stale.
       ...Array.from(
@@ -1687,6 +1771,8 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       "GET /repos/{owner}/{repo}/actions/workflows",
       // Policy re-read from the FORK at its base commit — the revision whose
       // workflows must satisfy the contexts we are about to require.
+      "GET /repos/{owner}/{repo}/contents/{path}",
+      // Exact inherited repo-spec read for identity-only specialization.
       "GET /repos/{owner}/{repo}/contents/{path}",
       // One repo-spec blob + one external-secret pair per BIRTH env (story.5025), so this
       // sequence tracks the birth set instead of pinning a count that silently goes stale.
@@ -4495,9 +4581,11 @@ describe("forkFromTemplate — policy is bound to the inherited tree", () => {
       type: "file",
       encoding: "base64",
       content: Buffer.from(
-        params.repo === "node-template"
-          ? movedOnTemplateMain // template main advanced after the pre-flight read
-          : TEST_NODE_REPO_POLICY_JSON // what the fork actually inherited
+        params.path === ".cogni/repo-spec.yaml"
+          ? TEST_NODE_TEMPLATE_REPO_SPEC
+          : params.repo === "node-template"
+            ? movedOnTemplateMain // template main advanced after the pre-flight read
+            : TEST_NODE_REPO_POLICY_JSON // what the fork actually inherited
       ).toString("base64"),
     });
 
@@ -4552,6 +4640,32 @@ describe("forkFromTemplate — policy is bound to the inherited tree", () => {
         chainId: 8453,
       })
     ).rejects.toMatchObject({ code: "template_repo_policy_missing" });
+  });
+
+  it("fails before the identity write when the inherited base has no repo-spec", async () => {
+    setHappyForkHandlers();
+    const happyContents =
+      routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"];
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = (params) => {
+      if (params.path === ".cogni/repo-spec.yaml") {
+        return Promise.reject(statusError(404, "Not Found"));
+      }
+      if (!happyContents) throw new Error("happy contents handler missing");
+      return happyContents(params);
+    };
+
+    await expect(
+      makeWriter().forkFromTemplate({
+        templateOwner: "Cogni-DAO",
+        owner: "Cogni-DAO",
+        slug: "atlas",
+        nodeId: "11111111-1111-4111-8111-111111111111",
+        chainId: 8453,
+      })
+    ).rejects.toMatchObject({ code: "template_repo_spec_missing" });
+    expect(requests.map((request) => request.route)).not.toContain(
+      "POST /repos/{owner}/{repo}/git/blobs"
+    );
   });
 });
 

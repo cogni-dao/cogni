@@ -19,6 +19,7 @@ import {
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
   extractNodeServices,
   parseRepoSpec,
+  renderNodeDeploymentYaml,
   resolveNodeArtifactBundle,
   resolveRuntimeProfileSecretRefs,
 } from "@cogni/repo-spec";
@@ -41,8 +42,28 @@ const SOURCE_SHA = "a".repeat(40);
 const IMAGE_DIGEST = "b".repeat(64);
 const BUNDLE_DIGEST = "c".repeat(64);
 const NODE_ID = "11111111-2222-4333-8444-555555555555";
+const TEMPLATE_REPO_SPEC = `schema_version: "0.1.4"
+node_id: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c"
+scope_id: "b44d4394-3147-5787-acab-51546be6a3da"
+scope_key: default
+intent:
+  name: node-template
+  mission: "Template mission"
+governance:
+  chain_id: "8453"
+activity_ledger:
+  epoch_length_days: 7
+  approvers: ["0x070075F1389Ae1182aBac722B36CA12285d0c949"]
+  activity_sources:
+    github:
+      attribution_pipeline: cogni-v0.0
+      source_refs: ["Cogni-DAO/standalone-node"]
+payments:
+  status: pending_activation
+${renderNodeDeploymentYaml()}`;
 
 const scaffoldedYaml = renderRepoSpec({
+  templateRepoSpec: TEMPLATE_REPO_SPEC,
   slug: SLUG,
   repoOwner: OWNER,
   nodeId: NODE_ID,

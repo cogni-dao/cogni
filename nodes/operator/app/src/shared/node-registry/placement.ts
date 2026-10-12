@@ -97,9 +97,9 @@ export function providerForEnv(
  * `scripts/ci/lib/appset-paths.sh` `control_env_for` (bug.5204). The AppSet path encodes TWO
  * different questions that used to be one value: WHICH ENV THE WORKLOAD IS (the filename
  * `<env>-<node>-applicationset.yaml`) and WHICH CLUSTER RECONCILES IT (the directory
- * `appsets/<control-env>/`). For an akash node's non-production lane those differ: the node app
- * runs on AKASH, not in any cluster, so its XR is pure desired state and the PRODUCTION cluster
- * reconciles it. k3s rows genuinely run IN their env's cluster and stay there — and because an
+ * `appsets/<control-env>/`). For every Akash lane those may differ: the node app runs on AKASH,
+ * not in any cluster, so its XR is pure desired state and the fleet control cluster reconciles it.
+ * k3s rows genuinely run IN their env's cluster and stay there — and because an
  * absent `deployment_provider.<env>` is the k3s default (K3S_IS_DEFAULT), an un-placed row is
  * NEVER relocated; placement must be stated to move.
  *
@@ -118,7 +118,6 @@ export function controlEnvFor<E extends string>(
   provider: NodeDeploymentProvider,
   fleetControlEnv?: string
 ): E | string {
-  if (environment === "production") return environment;
   if (provider !== "akash") return environment;
   return fleetControlEnv?.trim() || "production";
 }

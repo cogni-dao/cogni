@@ -57,6 +57,7 @@ interface WorkflowJob {
 }
 
 const parsed = yaml.parse(WORKFLOW) as {
+  env?: Record<string, unknown>;
   jobs: Record<string, WorkflowJob>;
 };
 
@@ -102,6 +103,12 @@ describe("candidate-a manifest source", () => {
       "path: /data/FORK_DOMAIN_ROOT"
     );
     expect(CANDIDATE_OPERATOR_OVERLAY).toContain('value: "cogni-testing.org"');
+  });
+
+  it("passes the configured workload domain to fleet-derived routing", () => {
+    expect(parsed.env?.DOMAIN).toBe(
+      "${{ vars.DOMAIN || vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}"
+    );
   });
 
   it("renders the live AppSet for the repository that owns the deploy branch", () => {
@@ -211,6 +218,12 @@ describe("candidate-a manifest source", () => {
     expect(namedStep("flight", "Checkout app source").with?.ref).toBe(
       "${{ needs.decide.outputs.head_sha }}"
     );
+    expect(
+      namedStep(
+        "reconcile-scheduler-worker-routing",
+        "Checkout app source (PR catalog + base manifests)"
+      ).with?.ref
+    ).toBe("${{ needs.decide.outputs.head_sha }}");
     expect(WORKFLOW).toContain(
       "rsync -a --delete app-src/infra/k8s/base/ deploy-branch/infra/k8s/base/"
     );
