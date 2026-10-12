@@ -15,6 +15,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { checkSharedTemporalHealth } from "@/bootstrap/jobs/checkSharedTemporalHealth.job";
+import { EVENT_NAMES } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,7 +28,7 @@ export const GET = wrapRouteHandlerWithLogging(
   async (ctx) => {
     const result = await checkSharedTemporalHealth();
     const event = {
-      event: "substrate.temporal.health_checked",
+      event: EVENT_NAMES.SUBSTRATE_TEMPORAL_HEALTH_CHECKED,
       outcome: result.status === "healthy" ? "success" : "error",
       reasonCode: result.reason,
       nodeId: result.nodeId,
