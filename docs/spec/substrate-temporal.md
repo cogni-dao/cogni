@@ -174,7 +174,7 @@ presence.
 ### One-call substrate health
 
 Temporal wiring must never be inferred from process uptime or the absence of errors. Every node
-ships an authenticated `GET /api/v1/temporal/health` diagnostic and a thin
+ships an authenticated, `node.flight`-gated `GET /api/v1/temporal/health` diagnostic and a thin
 `pnpm temporal:health -- --env <env>` command that calls the deployed node endpoint with the
 node-agent credential. The endpoint returns one bounded snapshot (five-second total budget):
 
@@ -185,13 +185,18 @@ node-agent credential. The endpoint returns one bounded snapshot (five-second to
 - private Worker readiness, registered Workflow catalog, deployment name, and Build ID;
 - current Worker Deployment Version and whether it exactly matches the app source SHA;
 - declared/reconciled/paused schedule counts plus stable drift reason codes; and
-- the most recent due schedule action and Workflow result, when one is expected.
+- the most recent due schedule action and semantic Workflow result, when one is expected.
 
 The response is `healthy`, `degraded`, or `unhealthy`; it is never green merely because the app
 can open a Temporal connection. A sovereign lane is healthy only when both poller types are fresh,
 the private Worker identity/catalog match the node declaration, the current Build ID equals the
 app SHA, and schedule drift is zero. A compatibility lane is named as such rather than masquerading
-as sovereign. Raw Workflow input, results, tokens, secrets, and prompts are never returned.
+as sovereign. Raw Workflow input, results, tokens, secrets, and prompts are never returned. The
+endpoint is per-actor rate limited, shares one process-wide in-flight/cached inspection, and caps
+Schedule and Workflow-result reads. Staleness uses actual Workflow start plus workflow-specific
+Activity retry budgets. A Temporal `COMPLETED` GraphRun/NodeTask is successful only when its typed
+result says `ok:true`; missed-catchup counters and recent expected cadence slots fail closed
+independently of the newest action.
 
 The CLI renders the failed checks and exits non-zero for `degraded`, `unhealthy`, authentication,
 timeout, or malformed responses. It is the first operator/node-agent diagnostic and the

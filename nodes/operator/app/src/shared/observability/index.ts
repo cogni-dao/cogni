@@ -15,6 +15,7 @@ import { EVENT_NAMES as NODE_SHARED_EVENT_NAMES } from "@cogni/node-shared";
 export const EVENT_NAMES = {
   ...NODE_SHARED_EVENT_NAMES,
   ADAPTER_GITHUB_REPO_WRITE_ERROR: "adapter.github_repo_write.error",
+  SUBSTRATE_TEMPORAL_HEALTH_CHECKED: "substrate.temporal.health_checked",
   NODE_PUBLISH_SECRET_SHAPE_GENERATED:
     "feature.node_publish.secret_shape_generated",
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",

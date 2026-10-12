@@ -47,6 +47,7 @@ Server-side logging and metrics utilities. Pino logging with sync mode; Promethe
   - `aiChatStreamDurationMs`, `aiLlmCallDurationMs`, `aiLlmTokensTotal`, `aiLlmCostUsdTotal`, `aiLlmErrorsTotal` - AI metrics
   - `appBuildInfo` - Build info Gauge (`version`, `commit_sha` labels)
   - `setBuildInfo(version, commitSha)` - Set build info at runtime (call from readyz route)
+  - `temporalSubstrate*`, `temporalScheduleDrift` - low-cardinality shared Temporal health metrics
   - `statusBucket(status)`, `classifyLlmError(error)` - Metric helpers
   - `LlmErrorCode` - Error code type
 - **Env/Config keys:** `PINO_LOG_LEVEL`, `NODE_ENV`, `SERVICE_NAME`, `VITEST`, `APP_BUILD_SHA`

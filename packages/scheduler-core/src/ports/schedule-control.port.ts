@@ -66,11 +66,45 @@ export interface CreateScheduleParams {
  * Schedule description returned by describeSchedule.
  * Dates are ISO strings for serialization safety.
  */
+export interface ScheduleExecutionDescription {
+  readonly scheduledAtIso: string;
+  /** Actual Workflow execution start, not the Schedule slot time. */
+  readonly startedAtIso: string;
+  readonly workflowId: string;
+  readonly firstExecutionRunId: string;
+  readonly status:
+    | "RUNNING"
+    | "COMPLETED"
+    | "FAILED"
+    | "CANCELLED"
+    | "TERMINATED"
+    | "CONTINUED_AS_NEW"
+    | "TIMED_OUT"
+    | "UNKNOWN";
+  /** Semantic terminal result for workflows whose success envelope contains `ok`. */
+  readonly resultOutcome: "succeeded" | "failed" | "unknown";
+}
+
+export interface ScheduleCalendarDescription {
+  readonly second: readonly number[];
+  readonly minute: readonly number[];
+  readonly hour: readonly number[];
+  readonly dayOfMonth: readonly number[];
+  readonly month: readonly number[];
+  readonly dayOfWeek: readonly number[];
+}
+
 export interface ScheduleDescription {
   /** Schedule ID */
   readonly scheduleId: string;
+  /** Originating node ID from the Schedule action args, when declared. */
+  readonly nodeId?: string | null;
   /** Next scheduled run time (ISO string), null if paused/none */
   readonly nextRunAtIso: string | null;
+  /** Bounded upcoming action times used to compare the compiled Temporal spec to declared cron. */
+  readonly nextRunTimesIso?: readonly string[];
+  /** Expanded server-compiled calendar fields; supports exact cron drift while paused. */
+  readonly calendarSpecs?: readonly ScheduleCalendarDescription[];
   /** Last run time (ISO string), null if never run */
   readonly lastRunAtIso: string | null;
   /** Whether schedule is paused */
@@ -83,6 +117,41 @@ export interface ScheduleDescription {
   readonly input: JsonValue | null;
   /** DB schedule UUID from workflow args, null if Temporal-only (legacy) */
   readonly dbScheduleId: string | null;
+  /** Graph/work-dispatch identity from the Schedule action args. */
+  readonly graphId?: string | null;
+  /** Durable execution grant from the Schedule action args. */
+  readonly executionGrantId?: string | null;
+  /** Principal that owns/requested the Schedule action. */
+  readonly ownerUserId?: string | null;
+  /** Workflow type started by the Schedule action. */
+  readonly workflowType?: string | null;
+  /** Overlap policy applied by Temporal. */
+  readonly overlapPolicy?: "skip" | "buffer_one" | "allow_all" | "unknown";
+  /** Catch-up window applied by Temporal, in milliseconds. */
+  readonly catchupWindowMs?: number | null;
+  /** Temporal's creation time for cadence/missed-fire evaluation. */
+  readonly createdAtIso?: string | null;
+  /** Server counters that reveal missed/skipped Schedule actions. */
+  readonly numActionsTaken?: number;
+  readonly numActionsMissedCatchupWindow?: number;
+  readonly numActionsSkippedOverlap?: number;
+  /** Workflow ID started by the most recent Schedule action, when one exists. */
+  readonly lastWorkflowId?: string | null;
+  /** First execution Run ID started by the most recent Schedule action. */
+  readonly lastWorkflowRunId?: string | null;
+  /** Current terminal/running state of the most recent Schedule action's Workflow chain. */
+  readonly lastWorkflowStatus?:
+    | "RUNNING"
+    | "COMPLETED"
+    | "FAILED"
+    | "CANCELLED"
+    | "TERMINATED"
+    | "CONTINUED_AS_NEW"
+    | "TIMED_OUT"
+    | "UNKNOWN"
+    | null;
+  /** Bounded recent Schedule actions, oldest to newest, each joined to its Workflow chain. */
+  readonly recentActions?: readonly ScheduleExecutionDescription[];
   /**
    * Current task queue of the schedule's startWorkflow action, null/absent when the
    * adapter can't read it. Enables queue-migration drift detection (bug.5023): moving
@@ -232,7 +301,11 @@ export interface ScheduleControlPort {
    * @returns Schedule description or null if not found
    * @throws ScheduleControlUnavailableError if backend unavailable
    */
-  describeSchedule(scheduleId: string): Promise<ScheduleDescription | null>;
+  describeSchedule(
+    scheduleId: string,
+    /** Absolute epoch-millisecond deadline; adapters must cancel backend RPCs at this boundary. */
+    deadlineAtMs?: number
+  ): Promise<ScheduleDescription | null>;
 
   /**
    * Triggers an immediate run of a schedule.
@@ -249,8 +322,14 @@ export interface ScheduleControlPort {
    * Used by governance sync to discover existing governance: schedules.
    *
    * @param prefix - Prefix to filter by (e.g., "governance:")
+   * @param limit - Optional fail-safe maximum; stops listing once reached
    * @returns Array of matching schedule IDs
    * @throws ScheduleControlUnavailableError if backend unavailable
    */
-  listScheduleIds(prefix: string): Promise<string[]>;
+  listScheduleIds(
+    prefix: string,
+    limit?: number,
+    /** Absolute epoch-millisecond deadline for bounded health inventory reads. */
+    deadlineAtMs?: number
+  ): Promise<string[]>;
 }

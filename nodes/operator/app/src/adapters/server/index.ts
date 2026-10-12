@@ -192,6 +192,16 @@ export {
 //   const { SandboxGraphProvider, ... } = await import("@/adapters/server/sandbox")
 // Temporal adapters - schedule control
 export {
+  type ExpectedTemporalSchedule,
+  inspectSharedTemporalHealth,
+  inspectSharedTemporalScheduleHealth,
+  type SharedTemporalHealth,
+  type SharedTemporalScheduleHealth,
+  type SharedTemporalScheduleHealthReason,
+  TEMPORAL_COLLECT_EPOCH_EXECUTION_BUDGET_MS,
+  TEMPORAL_GRAPH_RUN_EXECUTION_BUDGET_MS,
+  TEMPORAL_HEALTH_MAX_SCHEDULES,
+  TEMPORAL_NODE_TASK_EXECUTION_BUDGET_MS,
   TemporalScheduleControlAdapter,
   type TemporalScheduleControlConfig,
 } from "./temporal";

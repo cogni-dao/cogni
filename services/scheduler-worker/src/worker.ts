@@ -31,6 +31,7 @@ import { createReviewActivities } from "./activities/review.js";
 import { createSweepActivities } from "./activities/sweep.js";
 import { createContainer } from "./bootstrap/container.js";
 import type { Env } from "./bootstrap/env.js";
+import { schedulerWorkerPollerIdentity } from "./health.js";
 import { logWorkerEvent, WORKER_EVENT_NAMES } from "./observability/index.js";
 import type { Logger } from "./observability/logger.js";
 
@@ -333,6 +334,7 @@ export async function startSchedulerWorker(
           connection,
           namespace,
           taskQueue,
+          identity: schedulerWorkerPollerIdentity(),
           // Reuse the single pre-built bundle instead of re-bundling per queue.
           workflowBundle,
           activities: allActivities,

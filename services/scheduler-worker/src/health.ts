@@ -24,12 +24,29 @@ export interface HealthState {
 }
 
 /** Build metadata from env vars (set at build time or runtime) */
-const versionInfo = {
+export const versionInfo = {
   sha: process.env.GIT_SHA ?? "unknown",
   service: "scheduler-worker",
   buildTs: process.env.BUILD_TS ?? "unknown",
   imageDigest: process.env.IMAGE_DIGEST ?? "unknown",
-};
+} as const;
+
+/**
+ * Identity recorded by Temporal Server for every Workflow and Activity poller.
+ * It binds the server-observed poller to the same immutable artifact exposed by
+ * /version. Invalid build metadata remains visible but can never pass health.
+ */
+export function schedulerWorkerPollerIdentity(
+  identity: typeof versionInfo = versionInfo
+): string {
+  const sha = /^[0-9a-f]{40}$/i.test(identity.sha)
+    ? identity.sha.toLowerCase()
+    : null;
+  const digest = identity.imageDigest.match(/sha256:[0-9a-f]{64}$/i)?.[0];
+  return sha && digest
+    ? `cogni:scheduler-worker:${sha}:${digest.toLowerCase()}`
+    : "cogni:scheduler-worker:invalid";
+}
 
 export function startHealthServer(state: HealthState, port: number): Server {
   const server = createServer(async (req, res) => {
