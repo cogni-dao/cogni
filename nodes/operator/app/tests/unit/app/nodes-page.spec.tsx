@@ -9,20 +9,7 @@ import "@testing-library/jest-dom/vitest";
 
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-  getServerSessionUser: vi.fn(),
-  listOwnedNodes: vi.fn(),
-}));
-
-vi.mock("@/lib/auth/server", () => ({
-  getServerSessionUser: mocks.getServerSessionUser,
-}));
-
-vi.mock("@/app/_facades/nodes/owned.server", () => ({
-  listOwnedNodes: mocks.listOwnedNodes,
-}));
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/app/(app)/nodes/NewNodeForm.client", () => ({
   NewNodeForm: () => <div>New node form</div>,
@@ -58,34 +45,28 @@ vi.mock("@/features/nodes/components/NodeTile", () => ({
   ),
 }));
 
-import SetupNodesPage from "@/app/(app)/nodes/page";
+import { OwnedNodesContent } from "@/app/(app)/nodes/page";
 
 describe("nodes page", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.getServerSessionUser.mockResolvedValue({ id: "user-1" });
-  });
-
-  it("renders the empty owner state", async () => {
-    mocks.listOwnedNodes.mockResolvedValue([]);
-
-    render(await SetupNodesPage());
+  it("renders the empty owner state", () => {
+    render(<OwnedNodesContent rows={[]} />);
 
     expect(screen.getByRole("heading", { name: "Your nodes" })).toBeVisible();
     expect(screen.getByText(/No nodes yet/)).toBeVisible();
-    expect(mocks.listOwnedNodes).toHaveBeenCalledWith("user-1");
   });
 
-  it("renders local identity and status for owned nodes", async () => {
-    mocks.listOwnedNodes.mockResolvedValue([
-      {
-        id: "11111111-1111-4111-8111-111111111111",
-        slug: "alpha-node",
-        status: "active",
-      },
-    ]);
-
-    render(await SetupNodesPage());
+  it("renders local identity and status for owned nodes", () => {
+    render(
+      <OwnedNodesContent
+        rows={[
+          {
+            id: "11111111-1111-4111-8111-111111111111",
+            slug: "alpha-node",
+            status: "active",
+          },
+        ]}
+      />
+    );
 
     expect(
       screen.getByRole("link", { name: "Alpha Node Payments ready" })
