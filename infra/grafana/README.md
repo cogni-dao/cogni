@@ -6,10 +6,12 @@ Grafana-owned observability resources live here because they are infrastructure/
 
 ```text
 infra/grafana/
+├── cloud-bootstrap/  # OpenTofu derives scoped Grafana + Synthetic Monitoring credentials
 ├── dashboards/
 │   ├── operator/       # cross-node, deployment, platform, and agent-loop dashboards
 │   └── nodes/<node>/   # node-specific dashboards such as poly or resy
-└── alerts/             # Grafana-managed alerting resources, provisioned outside Git Sync
+├── alerts/             # Grafana-managed alerting resources, provisioned outside Git Sync
+└── synthetic/          # catalog-derived checks, alert groups, and public status share
 ```
 
 ## Git Sync
@@ -21,6 +23,10 @@ infra/grafana/dashboards/
 ```
 
 Grafana Git Sync currently synchronizes dashboards and folders only. Alerts, data sources, and other resources are not supported by Git Sync, so alerting definitions belong in `infra/grafana/alerts/` and should be applied with Terraform/OpenTofu or Grafana's alerting provisioning API.
+
+## Fleet reliability reconcile
+
+The reviewed [fleet reliability guide](https://cognidao.org/knowledge/fleet-reliability-reconcile-guide) is canonical. Reconcile `cloud-bootstrap/` before `synthetic/`; both use mode-0600, gitignored local state. Grafana remains the durable runtime authority, so state loss cannot interrupt live checks or alerts and must be recovered by adopting stable resource identities before planning.
 
 ## Ownership
 
