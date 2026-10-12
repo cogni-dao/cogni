@@ -126,10 +126,12 @@ promote_target() {
   digest=$(extract_digest "$target")
   [ -z "$digest" ] && return 0
 
-  bash "$PROMOTE_SCRIPT" --no-commit --env "$OVERLAY_ENV" --app "$target" --digest "$digest"
+  item_source_sha="$(extract_source_sha "$target")"
+  promote_args=(--no-commit --env "$OVERLAY_ENV" --app "$target" --digest "$digest")
+  [ -n "$item_source_sha" ] && promote_args+=(--source-sha "$item_source_sha")
+  bash "$PROMOTE_SCRIPT" "${promote_args[@]}"
 
   PROMOTED+=("$target")
-  item_source_sha="$(extract_source_sha "$target")"
   PROMOTED_SOURCE_SHA["$target"]="$item_source_sha"
   # Re-emit after every success so a later abort still leaves an accurate
   # promoted_apps in $GITHUB_OUTPUT (last-write-wins).
