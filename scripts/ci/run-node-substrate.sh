@@ -99,8 +99,6 @@ export CATALOG_DIR
 }
 # shellcheck source=scripts/ci/lib/appset-paths.sh
 . "$SCRIPT_DIR/lib/appset-paths.sh"
-# shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
-. "$SCRIPT_DIR/../setup/lib/cogni-deployment-identity.sh"
 CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")"
 
 # The bare zone every lane's public host hangs off (`cognidao.org`), used only to build
@@ -164,15 +162,7 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
       continue
     }
     echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT} reconciles ${lane}/${TARGET_NODE} — materializing that lane's secrets into THIS vault (bug.5206), domain ${lane_domain}"
-    # The LANE's own substrate VM (bug.5447): the workload dials the LANE's
-    # Temporal/Redis/LiteLLM, so materialize reads the lane-runtime credentials
-    # (SCHEDULER_API_TOKEN, LiteLLM master key) from the LANE's vault and registers
-    # the virtual key with the LANE's LiteLLM — same primitive provisioning used to
-    # publish that VM's A record, never a second copy of the convention.
-    # FORK_DOMAIN_ROOT is the VM/substrate DNS root and may diverge from the public
-    # apex on an isolated test fleet (bug.5330); fall back to the stripped DOMAIN root.
-    lane_vm_host="$(cogni_vm_host_for_env "$lane" "${FORK_DOMAIN_ROOT:-$DOMAIN_ROOT}" "$(cogni_deployment_slug)")"
-    SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" DOMAIN="$lane_domain" LANE_VM_HOST="$lane_vm_host" \
+    SECRETS_CONTROL_ENV="$DEPLOY_ENVIRONMENT" DOMAIN="$lane_domain" \
       bash "$MATERIALIZE_BIN" "$lane" "$TARGET_NODE" \
       || lane_degraded "$lane" materialize $?
   done

@@ -317,10 +317,9 @@ per node and fail-closed:
 7. Keep operator governance/ledger Workers unchanged.
 8. vNext: propagate the proven package/service contract to existing nodes.
 
-At no point are both old and new schedules enabled. `COGNI_NODE_ENDPOINTS` remains a
-compatibility input only until the last migrated node leaves the central worker
-(`TEMPORAL_CUSTODIED_NAMESPACES` was removed by bug.5447 — each lane's worker serves exactly
-its own namespace).
+At no point are both old and new schedules enabled. `TEMPORAL_CUSTODIED_NAMESPACES` and
+`COGNI_NODE_ENDPOINTS` remain compatibility inputs only until the last migrated node leaves the
+central worker.
 
 ## Acceptance evidence
 
@@ -350,7 +349,7 @@ For node-template and Poly independently, capture:
 
 - [Temporal Patterns](./temporal-patterns.md) — determinism, schedule semantics, Worker versioning, and migration.
 - [LangGraph Patterns](./langgraph-patterns.md) — graph runtime, persistence, and the Temporal boundary.
-- [Node BaaS Architecture](./node-baas-architecture.md) — node-declares/operator-wires ownership model.
+- [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) — node-declares/operator-wires ownership model.
 - [Substrate Access-Grant Plane](./substrate-access-grant.md) — why namespace, not Task Queue, is the Temporal auth boundary.
 - [Temporal TypeScript durable-agent samples](https://github.com/temporalio/samples-typescript/tree/main/openai-agents) — agent orchestration in Workflows with model/tool I/O in Activities.
 - [node-template package publication #144](https://github.com/cogni-dao/node-template/pull/144) and [#152](https://github.com/cogni-dao/node-template/pull/152) — immutable GitHub Release package precedent.

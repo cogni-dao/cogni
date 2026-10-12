@@ -69,19 +69,8 @@ while [ "$#" -gt 0 ] && [[ "$1" == -* ]]; do
     *) shift ;;
   esac
 done
-host=""
-if [ "$#" -gt 0 ]; then host="${1#root@}"; shift; fi
+[ "$#" -gt 0 ] && shift # root@host
 cmd="$*"
-# Host-aware vault/LiteLLM selection (bug.5447): a foreign-control materialize
-# talks to TWO VMs — the control env's (writes, DB custody) and the LANE's
-# (runtime credentials + LiteLLM registration). Unset in every other case, so
-# single-host runs are byte-identical.
-if [ -n "${FAKE_LANE_HOST:-}" ] && [ "$host" = "$FAKE_LANE_HOST" ]; then
-  export FAKE_BAO_ROOT="${FAKE_LANE_BAO_ROOT:?}"
-  export FAKE_LITELLM_STORE="${FAKE_LANE_LITELLM_STORE:?}"
-  export FAKE_LITELLM_LOG="${FAKE_LANE_LITELLM_LOG:?}"
-  export FAKE_LITELLM_MASTER_KEY="${FAKE_LANE_LITELLM_MASTER_KEY:?}"
-fi
 PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$cmd"
 EOF
 chmod +x "$FAKEBIN/ssh"
@@ -583,100 +572,5 @@ if grep -qF "$VK" "$TMPROOT/out-invalid-alias-list.txt" || grep -qF "$COLLIDING_
   echo "LiteLLM key leaked in malformed alias-list failure" >&2
   exit 1
 fi
-
-# ── Foreign-control lane: lane-runtime credentials come from the LANE (bug.5447) ──
-# Runtime substrate follows DEPLOYMENT_ENVIRONMENT, so a candidate lane custodied by
-# production must receive the CANDIDATE scheduler-worker's SCHEDULER_API_TOKEN and
-# register its LiteLLM virtual key with the CANDIDATE LiteLLM under the candidate
-# master key. DB custody stays with the control env (Doltgres superuser from the
-# production operator bucket). A production token must never reach a candidate
-# workload, and an absent LANE_VM_HOST must fail loud rather than fall back.
-CTRL_BAO_ROOT="$TMPROOT/ctrl-openbao"
-LANE_BAO_ROOT="$TMPROOT/lane-openbao"
-mkdir -p \
-  "$CTRL_BAO_ROOT/cogni/production/operator" \
-  "$CTRL_BAO_ROOT/cogni/production/node-template" \
-  "$LANE_BAO_ROOT/cogni/candidate-a/operator"
-# Control vault (production VM): DB custody + ancestors. The production
-# SCHEDULER_API_TOKEN deliberately exists here — the test proves it is NOT used.
-printf '%s' prod-operator-token-never-leaks > "$CTRL_BAO_ROOT/cogni/production/operator/SCHEDULER_API_TOKEN"
-printf '%s' sk-cogni-prod-master > "$CTRL_BAO_ROOT/cogni/production/operator/LITELLM_MASTER_KEY"
-printf '%s' prod-doltgres-superuser-pw > "$CTRL_BAO_ROOT/cogni/production/operator/DOLTGRES_PASSWORD"
-printf '%s' sk-or-prod-canonical > "$CTRL_BAO_ROOT/cogni/production/operator/OPENROUTER_API_KEY"
-printf '%s' https://base-mainnet.example/v2/prod-key > "$CTRL_BAO_ROOT/cogni/production/operator/EVM_RPC_URL"
-printf '%s' phc_prod > "$CTRL_BAO_ROOT/cogni/production/node-template/POSTHOG_API_KEY"
-printf '%s' https://us.i.posthog.com > "$CTRL_BAO_ROOT/cogni/production/node-template/POSTHOG_HOST"
-# A STALE production token already projected into the lane's node bucket must be
-# drift-corrected to the lane value, not preserved.
-mkdir -p "$CTRL_BAO_ROOT/cogni/candidate-a/node-template"
-printf '%s' prod-operator-token-never-leaks > "$CTRL_BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
-# Lane vault (candidate VM): the lane-runtime credential SSOT.
-printf '%s' cand-operator-token > "$LANE_BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN"
-printf '%s' sk-cogni-cand-master > "$LANE_BAO_ROOT/cogni/candidate-a/operator/LITELLM_MASTER_KEY"
-
-CTRL_LITELLM_STORE="$REMOTE_ROOT/ctrl-litellm-keys"
-CTRL_LITELLM_LOG="$REMOTE_ROOT/ctrl-litellm-calls.log"
-LANE_LITELLM_STORE="$REMOTE_ROOT/lane-litellm-keys"
-LANE_LITELLM_LOG="$REMOTE_ROOT/lane-litellm-calls.log"
-: > "$CTRL_LITELLM_STORE"; : > "$CTRL_LITELLM_LOG"
-: > "$LANE_LITELLM_STORE"; : > "$LANE_LITELLM_LOG"
-
-env \
-  VM_HOST=ctrl-fake \
-  LANE_VM_HOST=lane-fake \
-  SECRETS_CONTROL_ENV=production \
-  DOMAIN=test.cognidao.org \
-  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
-  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
-  FAKE_REMOTE_PATH="$FAKEBIN" \
-  FAKE_BAO_ROOT="$CTRL_BAO_ROOT" \
-  FAKE_LITELLM_STORE="$CTRL_LITELLM_STORE" \
-  FAKE_LITELLM_LOG="$CTRL_LITELLM_LOG" \
-  FAKE_LITELLM_MASTER_KEY=sk-cogni-prod-master \
-  FAKE_LANE_HOST=lane-fake \
-  FAKE_LANE_BAO_ROOT="$LANE_BAO_ROOT" \
-  FAKE_LANE_LITELLM_STORE="$LANE_LITELLM_STORE" \
-  FAKE_LANE_LITELLM_LOG="$LANE_LITELLM_LOG" \
-  FAKE_LANE_LITELLM_MASTER_KEY=sk-cogni-cand-master \
-  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-foreign.txt"
-
-# The lane's node bucket (in the CONTROL vault — custody unchanged) holds the
-# LANE's token: drift-corrected away from the stale production value.
-test "$(cat "$CTRL_BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN")" = cand-operator-token \
-  || { echo "foreign-control lane must receive the LANE's SCHEDULER_API_TOKEN (candidate worker's), not production's" >&2; exit 1; }
-grep -rqF prod-operator-token-never-leaks "$CTRL_BAO_ROOT/cogni/candidate-a/" \
-  && { echo "a production token leaked into the candidate lane's node bucket" >&2; exit 1; }
-# LiteLLM registration landed on the LANE's proxy under the lane master key —
-# and NOT on the control env's.
-test -s "$LANE_LITELLM_STORE" \
-  || { echo "virtual key was not registered with the LANE's LiteLLM" >&2; exit 1; }
-test ! -s "$CTRL_LITELLM_STORE" \
-  || { echo "virtual key must not register with the CONTROL env's LiteLLM" >&2; exit 1; }
-# DB custody unchanged: the Doltgres superuser still comes from the CONTROL env's
-# operator bucket (the database lives on the control VM, bug.5207).
-test "$(cat "$CTRL_BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_PASSWORD")" = prod-doltgres-superuser-pw \
-  || { echo "DB custody must stay with the control env (Doltgres superuser from production's operator bucket)" >&2; exit 1; }
-
-# Refusal: a foreign-control run without the lane's VM must fail loud, never
-# fall back to the control env's token.
-set +e
-env \
-  VM_HOST=ctrl-fake \
-  SECRETS_CONTROL_ENV=production \
-  DOMAIN=test.cognidao.org \
-  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
-  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
-  FAKE_REMOTE_PATH="$FAKEBIN" \
-  FAKE_BAO_ROOT="$CTRL_BAO_ROOT" \
-  FAKE_LITELLM_STORE="$CTRL_LITELLM_STORE" \
-  FAKE_LITELLM_LOG="$CTRL_LITELLM_LOG" \
-  FAKE_LITELLM_MASTER_KEY=sk-cogni-prod-master \
-  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-foreign-no-lane.txt" 2>&1
-NO_LANE_RC=$?
-set -e
-test "$NO_LANE_RC" -ne 0 \
-  || { echo "foreign-control materialize without LANE_VM_HOST must fail (no production-token fallback)" >&2; exit 1; }
-grep -q 'LANE_VM_HOST' "$TMPROOT/out-foreign-no-lane.txt" \
-  || { echo "the LANE_VM_HOST refusal must name the missing input" >&2; exit 1; }
 
 echo "PASS: secret-materialize.test.sh"
