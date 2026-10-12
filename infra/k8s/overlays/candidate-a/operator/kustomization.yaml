@@ -42,7 +42,7 @@ transformers:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:9846d6a529531912028539a319f3ce8beab48e0142411edb1f5467068de78b26"
+    digest: "sha256:e59faf92d456058f15a985030e8126bc02ff06308960542f089559be74be6072"
 replacements:
   - source:
       kind: Application
