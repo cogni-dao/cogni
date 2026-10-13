@@ -29,6 +29,16 @@ Two invariants agents get wrong (the reason this section exists — stable, won'
 - **`skills` is an `entry_type` (skill = executed, guide = read, playbook), NOT a domain.**
 - **There is no `strategy` entry_type** — a strategy is a `hypothesis → decision → outcome` chain, promoted to `rule`/`conclusion` once validated. A hub that doesn't predict → decide → resolve is a filing cabinet.
 
+## North star: `.md` → hub (this skill is the steward)
+
+Durable knowledge is migrating out of git `.md` and into the hub, where agents recall it and humans scan it. The end state:
+
+- **Skills are thin triggers** that recall from the hub — pattern: [`observability`](../observability/SKILL.md) ("the contract lives in the hub, not here. This file is only the trigger").
+- **Design, rationale, guides, and references are hub entries** — authored via [`contribute-knowledge-to-cogni`](../contribute-knowledge-to-cogni/SKILL.md), human-visual ones via [`dolt-human-visuals`](../dolt-human-visuals/SKILL.md).
+- **The only full-content `.md` that remain are break-glass** — they must render with the hub down: the code-owned session constitution (`AGENTS.md` + the cognition cache, see [`cognition-expert`](../cognition-expert/SKILL.md)), [`dolthub-local-clone`](../dolthub-local-clone/SKILL.md) (recover the hub itself), `docs/runbooks/*`, and these skill trigger stubs. `spec` files keep contracts + invariants + acceptance checks; their design narrative moves to the hub.
+
+This skill is the **steward** of that transition. When you touch a `.md` that holds durable knowledge, RECALL/REFINE it into the hub and leave a pointer, rather than extending the `.md`. The constitution is the one thing that must **not** move into the hub — moving it makes the contract hub-dependent (see `cognition-expert`). **Live progress — what has moved, what's next, the break-glass exception list — is tracked in [`work/charters/KNOWLEDGE.md`](../../../work/charters/KNOWLEDGE.md), not here**: this skill holds the rule; the charter holds the scoreboard.
+
 ## What makes knowledge valuable
 
 - **Discoverable.** Every entry has a "use when X" framing — same shape as a skill description. If an agent can't decide whether to load it from title + first line, it might as well not exist.

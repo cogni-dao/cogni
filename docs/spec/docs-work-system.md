@@ -30,29 +30,31 @@ tags: [docs, work, meta]
 
 ### Types
 
-| Type      | Directory             | ID Format      | Owns                                                  |
-| --------- | --------------------- | -------------- | ----------------------------------------------------- |
-| `spec`    | `docs/spec/`          | `kebab-case`   | Contracts, invariants, design, acceptance checks      |
-| `guide`   | `docs/guides/`        | `kebab-case`   | Procedures, howtos, runbooks                          |
-| `adr`     | `docs/decisions/adr/` | `kebab-case`   | Architecture decision records                         |
-| `charter` | `work/charters/`      | `chr.<slug>`   | Strategic themes, project groupings                   |
-| `project` | `work/projects/`      | `proj.<slug>`  | Roadmaps, phases, deliverables, constraints           |
-| `item`    | `work/items/`         | `<type>.<num>` | PR-sized execution (task, bug, story, spike, subtask) |
+| Type      | Directory             | ID Format      | Owns                                                    |
+| --------- | --------------------- | -------------- | ------------------------------------------------------- |
+| `spec`    | `docs/spec/`          | `kebab-case`   | Contracts, invariants, acceptance checks (design → hub) |
+| `guide`   | `docs/guides/`        | `kebab-case`   | Procedures, howtos, runbooks                            |
+| `adr`     | `docs/decisions/adr/` | `kebab-case`   | Architecture decision records                           |
+| `charter` | `work/charters/`      | `chr.<slug>`   | Strategic themes, project groupings                     |
+| `project` | `work/projects/`      | `proj.<slug>`  | Roadmaps, phases, deliverables, constraints             |
+| `item`    | `work/items/`         | `<type>.<num>` | PR-sized execution (task, bug, story, spike, subtask)   |
 
 ### Content Boundaries
 
-| Content                           | Spec     | Project      | Item     |
-| --------------------------------- | -------- | ------------ | -------- |
-| SCREAMING_SNAKE invariants        | **owns** | link to spec | —        |
-| Design diagrams / file pointers   | **owns** | —            | —        |
-| Acceptance checks / test commands | **owns** | —            | —        |
-| Crawl/Walk/Run phases             | —        | **owns**     | —        |
-| Deliverable tables with status    | —        | **owns**     | —        |
-| Work item ID references           | —        | **owns**     | —        |
-| Plain-language constraints        | —        | **owns**     | —        |
-| Execution plan (checkboxes)       | —        | —            | **owns** |
-| PR link, reviewer, attribution    | —        | —            | **owns** |
-| Validation commands               | —        | —            | **owns** |
+| Content                                 | Spec     | Project      | Item     |
+| --------------------------------------- | -------- | ------------ | -------- |
+| SCREAMING_SNAKE invariants              | **owns** | link to spec | —        |
+| Design narrative / rationale / diagrams | → hub\*  | —            | —        |
+| Acceptance checks / test commands       | **owns** | —            | —        |
+| Crawl/Walk/Run phases                   | —        | **owns**     | —        |
+| Deliverable tables with status          | —        | **owns**     | —        |
+| Work item ID references                 | —        | **owns**     | —        |
+| Plain-language constraints              | —        | **owns**     | —        |
+| Execution plan (checkboxes)             | —        | —            | **owns** |
+| PR link, reviewer, attribution          | —        | —            | **owns** |
+| Validation commands                     | —        | —            | **owns** |
+
+> \* **Durable design & knowledge live in the node knowledge hub, not a `.md`.** A `spec` owns only contracts, invariants, and acceptance checks; the design narrative, rationale, and diagrams that justify them are **hub entries** — an agent-facing text entry plus a human-facing `entryType: html` visual. A work `item` holds only its execution contract — a **story** = the end-to-end behavior supported; a **task/bug** = a todo + clear pointers + a measurable done-when — and _cites_ the design entries rather than restating them. See [`knowledge-syntropy`](./knowledge-syntropy.md).
 
 ### Linkages
 
@@ -91,15 +93,17 @@ One authoritative reference for: what types exist, what content each owns, and h
 
 ## Invariants
 
-| Rule                   | Constraint                                                                               |
-| ---------------------- | ---------------------------------------------------------------------------------------- |
-| TYPE_MATCHES_DIRECTORY | A file's `type` field must match its directory. `type: spec` → `docs/spec/`              |
-| ID_IMMUTABLE           | Once assigned, no ID changes. Ever.                                                      |
-| CONTENT_OWNERSHIP      | Each type owns specific concerns. No bleeding across boundaries (see Content Boundaries) |
-| SPECS_OWN_CONTRACTS    | Invariants (SCREAMING_SNAKE), acceptance checks, and design diagrams live in specs only  |
-| PROJECTS_OWN_ROADMAPS  | Phases, deliverable tables, timelines, and work item lists live in projects only         |
-| ITEMS_OWN_EXECUTION    | Checklists, validation commands, PR links, and attribution live in items only            |
-| LINK_DONT_DUPLICATE    | If content exists in its owning type, link to it. Never restate.                         |
+| Rule                   | Constraint                                                                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| TYPE_MATCHES_DIRECTORY | A file's `type` field must match its directory. `type: spec` → `docs/spec/`                                                                                        |
+| ID_IMMUTABLE           | Once assigned, no ID changes. Ever.                                                                                                                                |
+| CONTENT_OWNERSHIP      | Each type owns specific concerns. No bleeding across boundaries (see Content Boundaries)                                                                           |
+| SPECS_OWN_CONTRACTS    | Invariants (SCREAMING_SNAKE) and acceptance checks live in specs only; design narrative/diagrams are hub entries                                                   |
+| PROJECTS_OWN_ROADMAPS  | Phases, deliverable tables, timelines, and work item lists live in projects only                                                                                   |
+| ITEMS_OWN_EXECUTION    | Checklists, validation commands, PR links, and attribution live in items only                                                                                      |
+| DESIGN_LIVES_IN_HUB    | Design narrative, rationale, and diagrams are knowledge-hub entries (agent-facing text + human-facing visual), never a `## Design` block in an item or a new `.md` |
+| ITEMS_HOLD_CONTRACT    | A story holds the e2e behavior supported; a task/bug holds a todo + pointers + done-when. Items cite the design, never restate it                                  |
+| LINK_DONT_DUPLICATE    | If content exists in its owning type, link to it. Never restate.                                                                                                   |
 
 ### Schema
 
