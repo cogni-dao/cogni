@@ -31,7 +31,7 @@ End-to-end Playwright tests for API routes and UI workflows.
 - **Exports:** none
 - **Routes (if any):** Tests all routes externally
 - **CLI (if any):** pnpm e2e, pnpm e2e:smoke, pnpm e2e:prod, pnpm e2e:all, pnpm e2e:debug, pnpm e2e:report
-- **Env/Config keys:** TEST_BASE_URL
+- **Env/Config keys:** TEST_BASE_URL, PLAYWRIGHT_AUTH_STATE
 
 ## Responsibilities
 
