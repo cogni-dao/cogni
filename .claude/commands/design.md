@@ -87,11 +87,11 @@ See [Packages Architecture](docs/spec/packages-architecture.md) for the full spe
 
 ## Phase 4 — Persist the Design (to the hub, as two entries)
 
-Design output is **durable knowledge**, so it lives in the node knowledge hub — recall-able by every future agent and scannable by every human — **not** in the work item and **not** in a new `.md`. Write it via [`contribute-knowledge-to-cogni`](../../.claude/skills/contribute-knowledge-to-cogni/SKILL.md), which routes by audience. RECALL first and REFINE an existing entry over writing a new one (see [`knowledge-syntropy-expert`](../../.claude/skills/knowledge-syntropy-expert/SKILL.md)).
+Design output is **durable knowledge**, so it lives in the node knowledge hub — recall-able by every future agent and scannable by every human — **not** in the work item and **not** in a new `.md`. Write it via [`contribute-knowledge-to-cogni`](.claude/skills/contribute-knowledge-to-cogni/SKILL.md), which routes by audience. RECALL first and REFINE an existing entry over writing a new one (see [`knowledge-syntropy-expert`](.claude/skills/knowledge-syntropy-expert/SKILL.md)).
 
 **Output 1 — agent-facing design** (text entry; `entry_type` ∈ `finding` / `conclusion` / `rule`). The approach, the reuse/OSS chosen, the rejected alternatives, the invariants that become code-review criteria, and the file-scope pointers. Atomic, cited, "use when" framed.
 
-**Output 2 — human-facing visual design** (`entryType: html` via [`dolt-human-visuals`](../../.claude/skills/dolt-human-visuals/SKILL.md)). The same decision as a scannable visual — an SVG diagram, a `.cogni-card` per claim, a decision table — for the human who approves. Concise; bare-minimum prose.
+**Output 2 — human-facing visual design** (`entryType: html` via [`dolt-human-visuals`](.claude/skills/dolt-human-visuals/SKILL.md)). The same decision as a scannable visual — an SVG diagram, a `.cogni-card` per claim, a decision table — for the human who approves. Concise; bare-minimum prose.
 
 Then link them to the item and move it forward:
 
