@@ -98,6 +98,18 @@ data "grafana_folder" "reliability" {
   uid      = "cogni-reliability"
 }
 
+# The public fleet dashboard is an OpenTofu-owned resource. Git Sync cannot
+# update the current dashboard because it was created as an unmanaged Grafana
+# resource; keeping its JSON in Git without declaring ownership creates false
+# desired state. `overwrite` adopts the stable UID without changing its public
+# share identity.
+resource "grafana_dashboard" "fleet_status" {
+  provider    = grafana.stack
+  folder      = data.grafana_folder.reliability.uid
+  config_json = file("${path.module}/../dashboards/operator/fleet-status.json")
+  overwrite   = true
+}
+
 # Fleet alerting is query-only. Rules continue evaluating and retain current
 # state/history in Grafana, but no notification integration may push alerts.
 # The provider requires a structurally valid receiver even for a muted route;
@@ -241,7 +253,7 @@ resource "grafana_rule_group" "fleet_capacity" {
 
 resource "grafana_dashboard_public" "fleet_status" {
   provider               = grafana.stack
-  dashboard_uid          = "cogni-fleet-status"
+  dashboard_uid          = grafana_dashboard.fleet_status.uid
   is_enabled             = true
   share                  = "public"
   time_selection_enabled = false
