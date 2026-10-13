@@ -160,16 +160,17 @@ export default function () {
 
 Load detailed guidance based on context:
 
-| Topic               | Reference                             | Load When                               |
-| ------------------- | ------------------------------------- | --------------------------------------- |
-| Logging             | `references/structured-logging.md`    | Pino, JSON logging                      |
-| Metrics             | `references/prometheus-metrics.md`    | Counter, Histogram, Gauge               |
-| Tracing             | `references/opentelemetry.md`         | OpenTelemetry, spans                    |
-| Alerting            | `references/alerting-rules.md`        | Prometheus alerts                       |
-| Dashboards          | `references/dashboards.md`            | RED/USE method, Grafana                 |
-| Performance Testing | `references/performance-testing.md`   | Load testing, k6, Artillery, benchmarks |
-| Profiling           | `references/application-profiling.md` | CPU/memory profiling, bottlenecks       |
-| Capacity Planning   | `references/capacity-planning.md`     | Scaling, forecasting, budgets           |
+| Topic                 | Reference                                                                | Load When                                                |
+| --------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
+| Logging               | `references/structured-logging.md`                                       | Pino, JSON logging                                       |
+| Metrics               | `references/prometheus-metrics.md`                                       | Counter, Histogram, Gauge                                |
+| Tracing               | `references/opentelemetry.md`                                            | OpenTelemetry, spans                                     |
+| Alerting              | `references/alerting-rules.md`                                           | Prometheus alerts                                        |
+| Dashboards            | `references/dashboards.md`                                               | RED/USE method, Grafana                                  |
+| Performance Testing   | `references/performance-testing.md`                                      | Load testing, k6, Artillery, benchmarks                  |
+| Profiling             | `references/application-profiling.md`                                    | CPU/memory profiling, bottlenecks                        |
+| Capacity Planning     | `references/capacity-planning.md`                                        | Scaling, forecasting, budgets                            |
+| Cogni Fleet Diagnosis | [hub guide](https://cognidao.org/knowledge/fleet-health-diagnosis-guide) | Red fleet status, node 52x, shared-substrate attribution |
 
 ## Constraints
 
