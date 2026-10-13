@@ -10,9 +10,8 @@ Read these before starting:
 - [Packages Architecture](docs/spec/packages-architecture.md) — package boundaries and capability package shape
 - [Style & Lint Rules](docs/spec/style.md) — coding standards
 - [Feature Development Guide](docs/guides/feature-development.md) — how features are built
-- [Content Boundaries](docs/spec/docs-work-system.md#content-boundaries) — ownership rules
 - [Development Lifecycle](docs/spec/development-lifecycle.md) — workflow and invariants
-- [knowledge-syntropy-expert](.claude/skills/knowledge-syntropy-expert/SKILL.md) — the design belongs in the hub; where knowledge lives
+- [knowledge-syntropy-expert](.claude/skills/knowledge-syntropy-expert/SKILL.md) — where knowledge lives: design belongs in the hub, the item keeps only its story/task contract
 - [dolt-human-visuals](.claude/skills/dolt-human-visuals/SKILL.md) — the human-facing visual design entry
 
 Then find every AGENTS.md in the file path tree of the files being changed (start at root, descend into subdirs).
@@ -23,7 +22,7 @@ Then find every AGENTS.md in the file path tree of the files being changed (star
 
 1. Read the work item to understand the stated goal and scope.
 2. Read linked specs (`spec_refs`) and the parent project if one exists.
-3. Run `git diff --name-status origin/staging...HEAD` to see all changed files.
+3. Run `git diff --name-status origin/main...HEAD` to see all changed files.
 4. Read the changed files to understand the design.
 
 ---
@@ -98,7 +97,7 @@ Output a structured review:
 | OSS-First              | CONCERN | ...                        |
 | Architecture Alignment | PASS    | ...                        |
 | Boundary Placement     | PASS    | ...                        |
-| Knowledge Home         | FAIL    | design-in-item → blocking  |
+| Knowledge Home         | PASS    | ...                        |
 | Scope Discipline       | PASS    | ...                        |
 | Risk Surface           | FAIL    | ...                        |
 

@@ -87,16 +87,16 @@ See [Packages Architecture](docs/spec/packages-architecture.md) for the full spe
 
 ## Phase 4 — Persist the Design (to the hub, as two entries)
 
-Design output is **durable knowledge**, so it lives in the node knowledge hub — recall-able by every future agent and scannable by every human — **not** in the work item and **not** in a new `.md`. Write it via [`contribute-knowledge-to-cogni`](.claude/skills/contribute-knowledge-to-cogni/SKILL.md), which routes by audience. RECALL first and REFINE an existing entry over writing a new one (see [`knowledge-syntropy-expert`](.claude/skills/knowledge-syntropy-expert/SKILL.md)).
+Design output is **durable knowledge**, so it lives in the node knowledge hub — recall-able by every future agent and scannable by every human — **not** in the work item and **not** in a new `.md`. Write it via [`contribute-knowledge-to-cogni`](.claude/skills/contribute-knowledge-to-cogni/SKILL.md), which routes by content shape. A design is a hub entry, **not** a `docs/spec/*.md` (that routing is for as-built contracts/invariants). RECALL first and REFINE an existing entry over writing a new one (see [`knowledge-syntropy-expert`](.claude/skills/knowledge-syntropy-expert/SKILL.md)).
 
-**Output 1 — agent-facing design** (text entry; `entry_type` ∈ `finding` / `conclusion` / `rule`). The approach, the reuse/OSS chosen, the rejected alternatives, the invariants that become code-review criteria, and the file-scope pointers. Atomic, cited, "use when" framed.
+**Output 1 — agent-facing design** (text entry; `entryType` ∈ `finding` / `conclusion` / `rule`). The approach, the reuse/OSS chosen, the rejected alternatives, the invariants that become code-review criteria, and the file-scope pointers. Atomic, cited, "use when" framed.
 
 **Output 2 — human-facing visual design** (`entryType: html` via [`dolt-human-visuals`](.claude/skills/dolt-human-visuals/SKILL.md)). The same decision as a scannable visual — an SVG diagram, a `.cogni-card` per claim, a decision table — for the human who approves. Concise; bare-minimum prose.
 
 Then link them to the item and move it forward:
 
-- `PATCH /api/v1/work/items/<id>` → `status: needs_implement` (+ `updated`, `branch` if known).
-- `cite` the two design entries from the item (work-item↔knowledge edge) so the design is one click from the lifecycle carrier.
+- `PATCH /api/v1/work/items/<id>` with `{"set":{"status":"needs_implement"}}` (the API `set` wrapper takes `status`/`summary`/`labels`/`specRefs` only).
+- `cite` the two design entries from the item with `citationType: "tracks"` (the work-item↔knowledge edge) so the design is one click from the lifecycle carrier.
 
 **The work item keeps only its own contract — never the design body:**
 
