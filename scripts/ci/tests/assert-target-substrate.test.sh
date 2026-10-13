@@ -366,17 +366,12 @@ grep -q "CLOUDFLARE_API_TOKEN required" "$TMPROOT/missing-dns.out"
 EXTERNAL_SRC="$TMPROOT/external-src"
 EXTERNAL_BIN="$TMPROOT/external-bin"
 mkdir -p "$EXTERNAL_SRC/infra/catalog" "$EXTERNAL_SRC/nodes/toks4/.cogni" "$EXTERNAL_BIN"
-cat > "$EXTERNAL_SRC/infra/catalog/toks4.yaml" <<'YAML'
-name: toks4
-type: node
-node_id: 72aa130b-f0ad-495a-a061-9ee1f9c9525d
-path_prefix: nodes/toks4/
-compute_api:
-  candidate-a: crossplane
-compute_egress_cidrs:
-  - cidr: 80.200.246.35/32
-    comment: test provider
-YAML
+# Exercise the real wizard birth generator here rather than a hand-authored happy
+# fixture. This is the end-to-end regression for bug.5382: a fresh Akash row must
+# reach the external substrate assertion without a post-birth catalog repair.
+pnpm --filter operator exec -- tsx -e \
+  'import { renderCatalog } from "./src/shared/node-app-scaffold/gens/catalog.ts"; process.stdout.write(renderCatalog("toks4", 3200, 30400, { sourceRepo: "https://github.com/cogni-test-org/toks4", sourceSha: "1111111111111111111111111111111111111111", nodeId: "72aa130b-f0ad-495a-a061-9ee1f9c9525d", ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949" }));' \
+  > "$EXTERNAL_SRC/infra/catalog/toks4.yaml"
 cat > "$EXTERNAL_SRC/nodes/toks4/.cogni/repo-spec.yaml" <<'YAML'
 deployment:
   services:

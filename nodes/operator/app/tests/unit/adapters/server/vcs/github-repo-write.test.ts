@@ -2204,6 +2204,9 @@ node_port: 30200
           "compute_api:\n  candidate-a: crossplane\n  production: crossplane\n"
         );
         expect(catalog).toContain(
+          "compute_egress_cidrs:\n  - cidr: 80.200.246.35/32\n    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)\n"
+        );
+        expect(catalog).toContain(
           'owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"'
         );
 
