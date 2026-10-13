@@ -71,13 +71,13 @@ New mission: own the engineering design—not implementation—for Cogni's susta
 
 ## Pointers
 
-| File / Resource | Why it matters |
-| --------------- | -------------- |
-| `infra/catalog/poly.yaml` | Candidate lease generation and placement source of truth; do not edit during design. |
-| `infra/grafana/alerts/fleet-capacity.alerts.yaml` | Current fleet alert contract and evidence of what monitoring can/cannot guarantee. |
-| `tests/ci-invariants/grafana-fleet-alerts.spec.ts` | Current alert invariant coverage. |
-| `nodes/operator/app/src/app/api/v1/vcs/merge/route.ts` | Example of operator-enforced policy and auditable privileged action. |
-| [PR #2719](https://github.com/cogni-dao/cogni/pull/2719) | Fleet serve alert plus complete manual incident comments. |
-| [PR #2723](https://github.com/cogni-dao/cogni/pull/2723) | Minimal candidate lease recovery; not the reliability architecture. |
-| [Poly PR #230](https://github.com/cogni-dao/poly/pull/230) | Workload-side bounded-query mitigation; defense in depth only. |
-| <https://cognidao.org/knowledge/shared-postgres-isolation> | Intended durable recovery guide if/when the open contribution is reviewed. |
+| File / Resource                                            | Why it matters                                                                       |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `infra/catalog/poly.yaml`                                  | Candidate lease generation and placement source of truth; do not edit during design. |
+| `infra/grafana/alerts/fleet-capacity.alerts.yaml`          | Current fleet alert contract and evidence of what monitoring can/cannot guarantee.   |
+| `tests/ci-invariants/grafana-fleet-alerts.spec.ts`         | Current alert invariant coverage.                                                    |
+| `nodes/operator/app/src/app/api/v1/vcs/merge/route.ts`     | Example of operator-enforced policy and auditable privileged action.                 |
+| [PR #2719](https://github.com/cogni-dao/cogni/pull/2719)   | Fleet serve alert plus complete manual incident comments.                            |
+| [PR #2723](https://github.com/cogni-dao/cogni/pull/2723)   | Minimal candidate lease recovery; not the reliability architecture.                  |
+| [Poly PR #230](https://github.com/cogni-dao/poly/pull/230) | Workload-side bounded-query mitigation; defense in depth only.                       |
+| <https://cognidao.org/knowledge/shared-postgres-isolation> | Intended durable recovery guide if/when the open contribution is reviewed.           |
