@@ -35,6 +35,7 @@ import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
 import { NodeOperationsDetail } from "@/features/nodes/operations/NodeOperationsTable.client";
 import { ResetDaoDangerZone } from "@/features/nodes/ResetDaoDangerZone.client";
+import { ReliabilityStatusCard } from "@/features/nodes/reliability/ReliabilityStatusCard.client";
 import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
 import type { WizardNode } from "@/features/nodes/wizard/types";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -265,6 +266,8 @@ export default async function NodeDashboardPage({
 
       {hasManagement ? (
         <div className="mt-6 w-full space-y-4">
+          {showDevelopers ? <ReliabilityStatusCard nodeId={node.id} /> : null}
+
           {showDevelopers ? (
             <NodeAccess nodeId={node.id} requests={accessRequests} />
           ) : null}

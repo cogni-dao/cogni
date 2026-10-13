@@ -22,6 +22,8 @@ import type {
   PrometheusInstantResult,
   PrometheusRangeResult,
   RangeQueryParams,
+  ReliabilityMetricsSnapshot,
+  ReliabilityQueryParams,
   TemplateDataPoint,
   TemplateQueryParams,
   TemplateQueryResult,
@@ -157,6 +159,53 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
 
     const result = await this.fetch<PrometheusInstantResult>(url);
     return result;
+  }
+
+  async queryReliabilitySnapshot(
+    params: ReliabilityQueryParams
+  ): Promise<ReliabilityMetricsSnapshot> {
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(params.nodeSlug)) {
+      throw new Error("invalid reliability node slug");
+    }
+
+    const env = params.environment;
+    const node = params.nodeSlug;
+    const queries = {
+      readiness: `min_over_time(probe_success{environment="${env}",node_slug="${node}",proof_class="serve"}[5m])`,
+      io: `100 * max(rate(node_pressure_io_waiting_seconds_total{env="${env}"}[5m]))`,
+      connections: `100 * sum(pg_stat_database_numbackends{env="${env}"}) / max(pg_settings_max_connections{env="${env}"})`,
+      memory: `100 * min(node_memory_MemAvailable_bytes{env="${env}"} / node_memory_MemTotal_bytes{env="${env}"})`,
+      disk: `100 * min(node_filesystem_avail_bytes{env="${env}",mountpoint="/"} / node_filesystem_size_bytes{env="${env}",mountpoint="/"})`,
+    } as const;
+
+    const [readiness, io, connections, memory, disk] = await Promise.all([
+      this.queryInstant({ query: queries.readiness }),
+      this.queryInstant({ query: queries.io }),
+      this.queryInstant({ query: queries.connections }),
+      this.queryInstant({ query: queries.memory }),
+      this.queryInstant({ query: queries.disk }),
+    ]);
+
+    return {
+      regionalReadiness: readiness.result
+        .map((sample) => ({
+          region:
+            sample.metric.probe ??
+            sample.metric.region ??
+            sample.metric.instance ??
+            "unknown",
+          healthy: Number(sample.value[1]) >= 1,
+          observedAt: new Date(sample.value[0] * 1000).toISOString(),
+        }))
+        .sort((a, b) => a.region.localeCompare(b.region)),
+      ioPressurePct: singleValue(io),
+      connectionPct: singleValue(connections),
+      memoryHeadroomPct: singleValue(memory),
+      diskHeadroomPct: singleValue(disk),
+      evidenceQueryRefs: Object.keys(queries).map(
+        (signal) => `reliability.v1:${env}:${node}:${signal}`
+      ),
+    };
   }
 
   /**
@@ -386,6 +435,12 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       clearTimeout(timeoutId);
     }
   }
+}
+
+function singleValue(result: PrometheusInstantResult): number | null {
+  if (result.result.length !== 1) return null;
+  const value = Number(result.result[0]?.value[1]);
+  return Number.isFinite(value) ? value : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

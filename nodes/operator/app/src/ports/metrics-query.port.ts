@@ -102,6 +102,37 @@ export interface MetricsQueryPort {
    * @throws If service/environment not in allowlist or query fails
    */
   queryTemplate?(params: TemplateQueryParams): Promise<TemplateQueryResult>;
+
+  /**
+   * Execute the closed reliability query set for one node/environment.
+   * Callers cannot supply PromQL. Missing or ambiguous series are returned as
+   * null so policy evaluation can fail closed instead of manufacturing green.
+   */
+  queryReliabilitySnapshot(
+    params: ReliabilityQueryParams
+  ): Promise<ReliabilityMetricsSnapshot>;
+}
+
+export type ReliabilityEnvironment = "candidate-a" | "preview" | "production";
+
+export interface ReliabilityQueryParams {
+  readonly nodeSlug: string;
+  readonly environment: ReliabilityEnvironment;
+}
+
+export interface RegionalReadinessMetric {
+  readonly region: string;
+  readonly healthy: boolean;
+  readonly observedAt: string;
+}
+
+export interface ReliabilityMetricsSnapshot {
+  readonly regionalReadiness: readonly RegionalReadinessMetric[];
+  readonly ioPressurePct: number | null;
+  readonly connectionPct: number | null;
+  readonly memoryHeadroomPct: number | null;
+  readonly diskHeadroomPct: number | null;
+  readonly evidenceQueryRefs: readonly string[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

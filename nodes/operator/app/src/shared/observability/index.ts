@@ -27,6 +27,8 @@ export const EVENT_NAMES = {
   LANE_ONBOARD_COMPLETE: "feature.lane_onboard.complete",
   DEPLOY_INFRA_RECONCILE_COMPLETE: "deploy.infra_reconcile.complete",
   NODE_SCHEDULES_SYNC_COMPLETE: "feature.node_schedules_sync.complete",
+  NODE_RELIABILITY_STATUS_COMPLETE: "feature.node_reliability_status.complete",
+  NODE_RELIABILITY_TRANSITION: "feature.node_reliability.transition",
   NODE_DISTRIBUTION_ACTIVATION_COMPLETE:
     "feature.node_distribution_activation.complete",
   NODE_DAO_RESET_COMPLETE: "feature.node_dao_reset.complete",

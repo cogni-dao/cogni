@@ -580,6 +580,9 @@ function createContainer(): Container {
             queryTemplate: async () => {
               throw notConfiguredError;
             },
+            queryReliabilitySnapshot: async () => {
+              throw notConfiguredError;
+            },
           } satisfies MetricsQueryPort;
         }
 

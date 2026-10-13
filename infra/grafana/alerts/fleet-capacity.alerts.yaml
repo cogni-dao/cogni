@@ -312,3 +312,134 @@ groups:
           summary: "{{ $labels.node_slug }} is unreachable from every independent probe region."
         noDataState: Alerting
         execErrState: Alerting
+
+      # task.5247 — warning thresholds are append-only so existing Grafana rule
+      # identities and history remain stable. The operator read model evaluates
+      # these exact v1 thresholds and treats missing series as unknown.
+      - uid: reliability-io-warning
+        title: __ENVIRONMENT__ host I/O pressure sustained above 10%
+        condition: THRESHOLD
+        for: 5m
+        data:
+          - refId: RATIO
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              expr: 'max(rate(node_pressure_io_waiting_seconds_total{env="__ENVIRONMENT__"}[5m]))'
+              instant: true
+              refId: RATIO
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: RATIO
+              conditions:
+                - evaluator: { type: gt, params: [0.10] }
+              refId: THRESHOLD
+        labels:
+          {
+            severity: warning,
+            proof_class: run,
+            policy_version: reliability-status-v1,
+          }
+        annotations:
+          summary: "__ENVIRONMENT__ I/O pressure has exceeded the v1 warning threshold for five minutes."
+        noDataState: Alerting
+        execErrState: Alerting
+
+      - uid: reliability-connections-warning
+        title: __ENVIRONMENT__ PostgreSQL connections sustained above 60%
+        condition: THRESHOLD
+        for: 5m
+        data:
+          - refId: RATIO
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              expr: 'sum(pg_stat_database_numbackends{env="__ENVIRONMENT__"}) / max(pg_settings_max_connections{env="__ENVIRONMENT__"})'
+              instant: true
+              refId: RATIO
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: RATIO
+              conditions:
+                - evaluator: { type: gt, params: [0.60] }
+              refId: THRESHOLD
+        labels:
+          {
+            severity: warning,
+            proof_class: run,
+            policy_version: reliability-status-v1,
+          }
+        annotations:
+          summary: "__ENVIRONMENT__ PostgreSQL connections exceed the v1 warning threshold."
+        noDataState: Alerting
+        execErrState: Alerting
+
+      - uid: reliability-memory-warning
+        title: __ENVIRONMENT__ memory headroom sustained below 25%
+        condition: THRESHOLD
+        for: 10m
+        data:
+          - refId: RATIO
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              expr: 'min(node_memory_MemAvailable_bytes{env="__ENVIRONMENT__"} / node_memory_MemTotal_bytes{env="__ENVIRONMENT__"})'
+              instant: true
+              refId: RATIO
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: RATIO
+              conditions:
+                - evaluator: { type: lt, params: [0.25] }
+              refId: THRESHOLD
+        labels:
+          {
+            severity: warning,
+            proof_class: run,
+            policy_version: reliability-status-v1,
+          }
+        annotations:
+          summary: "__ENVIRONMENT__ memory headroom is below the v1 warning threshold."
+        noDataState: Alerting
+        execErrState: Alerting
+
+      - uid: reliability-disk-warning
+        title: __ENVIRONMENT__ root disk headroom sustained below 25%
+        condition: THRESHOLD
+        for: 10m
+        data:
+          - refId: RATIO
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              expr: 'min(node_filesystem_avail_bytes{env="__ENVIRONMENT__",mountpoint="/"} / node_filesystem_size_bytes{env="__ENVIRONMENT__",mountpoint="/"})'
+              instant: true
+              refId: RATIO
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: RATIO
+              conditions:
+                - evaluator: { type: lt, params: [0.25] }
+              refId: THRESHOLD
+        labels:
+          {
+            severity: warning,
+            proof_class: run,
+            policy_version: reliability-status-v1,
+          }
+        annotations:
+          summary: "__ENVIRONMENT__ root disk headroom is below the v1 warning threshold."
+        noDataState: Alerting
+        execErrState: Alerting
