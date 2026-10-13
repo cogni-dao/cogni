@@ -59,4 +59,20 @@ describe("promote provenance wiring (bug.5195 defect #2)", () => {
     expect(body).toContain('SHA="${RAW_SOURCE_SHA:-${{ github.sha }}}"');
     expect(body).toContain("head_sha=$SHA");
   });
+
+  it("passes the resolved source identity into the k3s manifest promoter", () => {
+    const start = body.indexOf("- name: Promote digest + record source-sha");
+    const end = body.indexOf(
+      "- name: Record external workload source-sha",
+      start
+    );
+    const step = body.slice(start, end);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(step).toContain(
+      "SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}"
+    );
+    expect(step).toContain('--source-sha "$SOURCE_SHA"');
+  });
 });
