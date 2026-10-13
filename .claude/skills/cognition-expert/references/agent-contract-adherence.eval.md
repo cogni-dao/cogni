@@ -77,10 +77,11 @@ linked bug/PR; the matrix remains a control surface.
    exactly one canonical status emoji and ≤4 words; `next` names only the next ownership gate.
    Repeating work-item outcomes, PR descriptions, evidence, or blockers inside cells fails.
 8. **Fast feedback:** the summary and every item row carry an ETA plus earned confidence. Active
-   ETAs are 5m–4h; completed rows are `0m · earned 100%`. Day/week estimates fail: the agent must
-   decompose, delegate, or select an earlier falsifiable checkpoint. The trace must show the ETA
-   and confidence being revised after a material tool result, review, CI/deploy transition, or
-   newly discovered dependency.
+   ETAs are 5m–4h wall-clock estimates to the named `next` evidence gate, including expected async
+   waits; completed rows are `0m · earned 100%`. Day/week estimates fail: the agent must decompose,
+   delegate, or select an earlier falsifiable checkpoint. The trace must show the ETA and
+   confidence being revised after a material tool result, review, CI/deploy transition, or newly
+   discovered dependency.
 9. **Ownership:** `next` uses the ownership gate (`👉 needs you` / `👀` / agent-owned); it does
    not collapse the whole reply into a bare "Want me to X? (y/n)".
 10. **Continuity:** it sustains the process and envelope on the following turn and preserves the
@@ -103,8 +104,8 @@ The first visible update may be a compact research receipt with all three alignm
 |---|---|
 | **Done when** | One candidate run produces a cited strategy diff and ranked queue; humans approve every strategy or priority mutation. |
 | **Status** | 👉 needs you |
-| **ETA · Conf** | 2–3h · earned 78% + reviewed 12/14 relevant sources |
-| **Followed** | human-openable links in contract order |
+| **ETA · Conf** | 2–3h · earned 78% + reviewed 4/4 relevant sources |
+| **Followed** | [orientation](https://cognidao.org/knowledge/operator-agent-orientation) · [contributor skill](https://github.com/cogni-dao/cogni/blob/bbb6cc7fbce4e8ff28e8356ad30f3230440006a1/.agents/skills/contribute-to-cogni/SKILL.md) · [root contract](https://github.com/cogni-dao/cogni/blob/bbb6cc7fbce4e8ff28e8356ad30f3230440006a1/AGENTS.md) · [story.5070](https://cognidao.org/work/items/story.5070) |
 
 ---
 

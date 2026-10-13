@@ -29,7 +29,8 @@ blob URLs at the current SHA. Never omit a skill or design because it began as a
 cite only work items, and never report more reviewed sources than distinct URLs shown.
 
 Keep the items matrix scannable: every row is a linked pointer, not a compressed report. Use a
-≤4-word purpose, artifact links, one canonical status emoji, a 5m–4h remaining-work ETA with
-earned confidence, and the shortest next feedback loop. Re-estimate after every material signal.
-If any active estimate reaches days, decompose immediately; completed rows use
+≤4-word purpose, artifact links, one canonical status emoji, a 5m–4h wall-clock ETA to the next
+evidence gate with earned confidence, and the shortest next feedback loop. Include expected async
+waits and re-estimate after every material signal. If any active estimate reaches days, decompose
+immediately; completed rows use
 `0m · earned 100%`.

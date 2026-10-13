@@ -111,15 +111,34 @@ if [[ "$ETA_CONF" != —* ]]; then
 fi
 
 row_error="$(printf '%s\n' "$MESSAGE" | awk -F'|' '
-  BEGIN { in_items=0 }
+  BEGIN { in_items=0; row_count=0 }
   $2 ~ /^[[:space:]]*item[[:space:]]*$/ { in_items=1; next }
   in_items && $0 ~ /^\|[[:space:]-]+\|/ { next }
   in_items && $0 !~ /^\|/ { in_items=0 }
-  in_items && NF >= 8 {
-    item=$2; status=$5; eta=$6
+  in_items && /^\|/ {
+    row_count++
+    if (NF != 8) { print "table:malformed"; next }
+
+    item=$2; owner=$3; deliverable=$4; status=$5; eta=$6; next_cell=$7
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", item)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", owner)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", deliverable)
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", status)
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", eta)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", next_cell)
+
+    linked_item=item ~ /^\[(story|task|bug|spike|subtask)[.][0-9]+[[:space:]]+—[[:space:]].+\]\(https:\/\/([a-z0-9-]+[.])?cognidao[.]org\/work\/items\/(story|task|bug|spike|subtask)[.][0-9]+\)$/
+    proposed_item=item ~ /^proposed story[[:space:]]+—[[:space:]].+$/
+    if (linked_item) {
+      label_id=item
+      sub(/^\[/, "", label_id)
+      sub(/[[:space:]]+—.*/, "", label_id)
+      url_id=item
+      sub(/^.*\/work\/items\//, "", url_id)
+      sub(/\).*$/, "", url_id)
+      if (label_id != url_id) linked_item=0
+    }
+    if (!linked_item && !proposed_item) { print "item:unlinked"; next }
 
     visible_item=item
     sub(/\]\([^)]*\)[[:space:]]*$/, "]", visible_item)
@@ -128,6 +147,14 @@ row_error="$(printf '%s\n' "$MESSAGE" | awk -F'|' '
     if (purpose_count < 2) { print "item:missing-purpose"; exit }
     word_count=split(item_parts[purpose_count], purpose_words, /[[:space:]]+/)
     if (word_count > 4) { print "item:verbose"; exit }
+
+    if (owner != "dev-manager, me" && owner !~ /^subagent [a-zA-Z0-9_.-]+$/) {
+      print "owner:invalid"; next
+    }
+    if (deliverable != "-" && deliverable !~ /\[[^]]+\]\(https:\/\/[^)]+\)/) {
+      print "deliverable:invalid"; next
+    }
+    if (next_cell == "") { print "next:missing"; next }
 
     status_without_emoji=status
     emoji_count=gsub(/🔵|👀|👉|🟡|🔴|🟢/, "", status_without_emoji)
@@ -138,12 +165,20 @@ row_error="$(printf '%s\n' "$MESSAGE" | awk -F'|' '
     if (eta == "") { print "eta:missing"; exit }
     print "row:" status "\t" eta
   }
+  END {
+    if (row_count == 0) print "table:empty"
+    if (row_count > 4) print "table:too-many"
+  }
 ')"
 
 while IFS=$'\t' read -r marker row_eta; do
   [[ -n "$marker" ]] || continue
   case "$marker" in
+    table:*) block "Contract breach: the items table must contain 1–4 complete six-cell rows. Rewrite the complete block." ;;
     item:*) block "Contract breach: each item must be a linked id or proposed story plus a purpose of at most four words. Move detail behind links and rewrite the complete block." ;;
+    owner:*) block "Contract breach: each owner must be exactly dev-manager, me or subagent <name>. Rewrite the complete block." ;;
+    deliverable:*) block "Contract breach: deliverable links must be verified HTTPS artifact links or -. Rewrite the complete block." ;;
+    next:*) block "Contract breach: every item row needs a next ownership gate or -. Rewrite the complete block." ;;
     status:*) block "Contract breach: each item status must start with exactly one canonical status emoji. Rewrite the complete block." ;;
     eta:*) block "Feedback-loop breach: every item row needs ETA · Conf. Rewrite the complete block." ;;
     row:*)

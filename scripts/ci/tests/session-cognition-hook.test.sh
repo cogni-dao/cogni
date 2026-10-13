@@ -31,7 +31,7 @@ grep -Fq 'reproduce `Goal` and `Done when` byte-for-byte' "$REPO_ROOT/AGENTS.md"
   fail "root AGENTS.md omitted immutable session state"
 grep -Eq '\| status[[:space:]]+\| ETA · Conf[[:space:]]+\| next' "$REPO_ROOT/AGENTS.md" ||
   fail "root AGENTS.md omitted per-row ETA and confidence"
-grep -Fq 'Active estimates are 5 minutes–4 hours' "$REPO_ROOT/AGENTS.md" ||
+grep -Fq 'estimates are 5 minutes–4 hours' "$REPO_ROOT/AGENTS.md" ||
   fail "root AGENTS.md permits day-scale feedback loops"
 ! grep -Fq '@.cogni/.cognition-cache.md' "$REPO_ROOT/AGENTS.md" ||
   fail "universal AGENTS.md exposes a Claude-only import directive"
@@ -51,7 +51,7 @@ grep -Fq 'This response protocol has no task-type exceptions' "$OUTPUT_STYLE" ||
   fail "Claude Code output style permits task-type formatting exceptions"
 grep -Fq 'preserve Goal and Done when byte-for-byte' "$OUTPUT_STYLE" ||
   fail "Claude Code output style omitted immutable session state"
-grep -Fq '5m–4h remaining-work ETA' "$OUTPUT_STYLE" ||
+grep -Fq '5m–4h wall-clock ETA' "$OUTPUT_STYLE" ||
   fail "Claude Code output style omitted short-horizon row estimates"
 STOP_VALIDATOR="$REPO_ROOT/scripts/agent/validate-status-contract.sh"
 [[ -x "$STOP_VALIDATOR" ]] || fail "Claude Code status-contract Stop hook is not executable"
@@ -129,6 +129,44 @@ duplicate_status_output="$(jq -cn --arg message "$DUPLICATE_STATUS_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
 [[ "$(printf '%s' "$duplicate_status_output" | jq -r '.decision')" == "block" ]] ||
   fail "status-contract Stop hook accepted multiple item status emojis"
+
+MALFORMED_ROW_MESSAGE="$(printf '%s\n' "$VALID_MESSAGE" | sed \
+  's/| 10m · earned 90% | Test next turn |/| Test next turn |/')"
+malformed_row_output="$(jq -cn --arg message "$MALFORMED_ROW_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$malformed_row_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted a row without six cells"
+
+UNLINKED_ITEM_MESSAGE="${VALID_MESSAGE/proposed story — contract/task.123 — contract}"
+unlinked_item_output="$(jq -cn --arg message "$UNLINKED_ITEM_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$unlinked_item_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted an unlinked work item"
+
+EMPTY_TABLE_MESSAGE="$(printf '%s\n' "$VALID_MESSAGE" | sed \
+  '/^| proposed story — contract |/d')"
+empty_table_output="$(jq -cn --arg message "$EMPTY_TABLE_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$empty_table_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted an empty items table"
+
+INVALID_OWNER_MESSAGE="${VALID_MESSAGE/dev-manager, me/human reviewer}"
+invalid_owner_output="$(jq -cn --arg message "$INVALID_OWNER_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$invalid_owner_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted an invalid owner"
+
+MISMATCHED_ITEM_MESSAGE="${VALID_MESSAGE/proposed story — contract/[task.123 — contract](https:\/\/cognidao.org\/work\/items\/bug.456)}"
+mismatched_item_output="$(jq -cn --arg message "$MISMATCHED_ITEM_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$mismatched_item_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted a mismatched work-item link"
+
+EMPTY_NEXT_MESSAGE="${VALID_MESSAGE/Test next turn/}"
+empty_next_output="$(jq -cn --arg message "$EMPTY_NEXT_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$empty_next_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted an empty next gate"
 
 MUTATED_MESSAGE="${VALID_MESSAGE/Keep contract state/Change contract state}"
 mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" \
