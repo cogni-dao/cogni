@@ -47,16 +47,91 @@ pnpm dev:stack                # Same as above, but hits real LiteLLM/OpenRouter
 
 **Postgres vs Doltgres:** This spec covers the Postgres (awareness plane) side. The knowledge plane runs on a separate Doltgres server with per-node `knowledge_<node>` databases and git-like versioning — see [Knowledge Data Plane](knowledge-data-plane.md).
 
-| Environment | Databases                                                         | Configured via                   |
-| ----------- | ----------------------------------------------------------------- | -------------------------------- |
-| Development | `cogni_operator`, `cogni_poly`, `cogni_resy`                      | `COGNI_NODE_DBS` in `.env.local` |
-| Test        | `cogni_template_stack_test`, `cogni_poly_test`, `cogni_resy_test` | `COGNI_NODE_DBS` in `.env.test`  |
-| CI          | `cogni_template_test`                                             | `COGNI_NODE_DBS` in `ci.yaml`    |
-| Production  | `cogni_operator` (single-node for now)                            | `COGNI_NODE_DBS` in deploy env   |
+| Environment | Databases                                                                                                          | Configured via                   |
+| ----------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------- |
+| Development | `cogni_operator`, `cogni_poly`, `cogni_resy`                                                                       | `COGNI_NODE_DBS` in `.env.local` |
+| Test        | `cogni_template_stack_test`, `cogni_poly_test`, `cogni_resy_test`                                                  | `COGNI_NODE_DBS` in `.env.test`  |
+| CI          | `cogni_template_test`                                                                                              | `COGNI_NODE_DBS` in `ci.yaml`    |
+| Production  | every node in the catalog, **plus every Akash node's non-production lane** — see Environment failure domains below | `COGNI_NODE_DBS` in deploy env   |
+
+The production row said `cogni_operator` (single-node for now) until 2026-10-13.
+It was wrong by twelve databases. A spec that under-describes the production box
+is how the failure domain below grew unnoticed.
 
 `COGNI_NODE_DBS` is required — `provision.sh` fails fast if not set. No defaults, no fallback chain.
 
 All stack deployment modes use the same migration tooling but connect to appropriate database instances. Test environments always use the test database and reset it between test runs.
+
+## Environment failure domains
+
+**ENV_IS_A_FAILURE_DOMAIN_NOT_A_NAME. A non-production lane's relational data
+plane must not share a PostgreSQL instance with production.** DB-per-node is an
+identity, schema and migration boundary; it is not a CPU, memory, I/O,
+connection or crash boundary. One postmaster is one crash domain.
+
+Measured 2026-10-13, peak concurrent backends per database over 7 days
+(`max by(env,datname)(pg_stat_database_numbackends)`), production instance:
+
+| database                 | peak backends | lane            |
+| ------------------------ | ------------: | --------------- |
+| `cogni_poly`             |            21 | production      |
+| `cogni_operator`         |            17 | production      |
+| `cogni_poly_candidate_a` |            15 | **candidate-a** |
+| `cogni_poly_preview`     |            12 | **preview**     |
+| `cogni_red_candidate_a`  |             2 | **candidate-a** |
+| `cogni_toks5_preview`    |             2 | **preview**     |
+
+**31 of ~78 peak backends on the production PostgreSQL are non-production
+lanes — roughly 40%, and `poly` alone is 27 of the 31.** This is not drift: it
+is what [the lane/control contract](node-ci-cd-contract.md) currently
+specifies, and the hub entry `lane-db-two-derivations` records it as the
+intended, live-proven outcome of #2318/#2319.
+
+The cost has already been paid once. On 2026-09-24 the shared postmaster
+emitted three `57P02 crash_shutdown` windows: one abnormal backend death made
+it terminate peer backends to protect shared memory, **simultaneously removing
+operator readiness, OpenFGA and LiteLLM persistence, and every node database**
+(hub: `control-plane-self-starvation`). The plane used to recover the fleet
+died with the thing being recovered.
+
+### The three-line north star
+
+1. **The control plane centralizes.** One production control plane reconciles
+   and pays for every lane, including non-production ones. This is correct and
+   stays — it is what `control_env_for` already does, and it matches how Neon,
+   Supabase and Vercel each run a single production control plane that manages
+   every customer environment.
+2. **Data planes isolate per environment.** A lane's PostgreSQL and Doltgres
+   server follow the **lane**, not the control env. Nothing in the control
+   contract's own rationale argues otherwise: that rationale is about secrets —
+   "whoever renders the lease must be able to read that lane's secrets" — and a
+   node app dials its database over the network from Akash at runtime, never
+   from the reconciling cluster. One column bundled two unlike concerns.
+3. **The control plane's own substrate is never co-tenanted with a node data
+   plane.** This is the hardest line and the one whose breach caused the
+   2026-09-24 outage.
+
+This is the split every comparable platform draws: a
+[Supabase](https://supabase.com/docs/guides/deployment/branching) preview branch
+is its own project with its own PostgreSQL;
+[Neon](https://neon.com/docs/introduction/branching) branches share storage
+copy-on-write but each gets its own compute endpoint, so branch load cannot
+starve the primary; [Vercel](https://vercel.com/docs/deployments/environments)
+resolves environment-scoped resource bindings and treats pointing preview at
+the production datastore as the documented mistake. Our own BaaS north star
+already names Supabase as the model.
+
+### Until separation lands, co-location must be bounded
+
+Co-location is acceptable only while quotas and observed behaviour prove the
+separation — today there are none, which is what makes it unbounded. Shared
+tenants need role `CONNECTION LIMIT`, `statement_timeout`,
+`idle_in_transaction_session_timeout`, `lock_timeout` and bounded `work_mem`
+before any further nodes or lanes are added to a shared instance. Bounds are
+the cheap immediate move, not the destination; a larger VM is capacity, not
+isolation.
+
+Tracked in `bug.5299`.
 
 ## Database Provisioning (Infrastructure-as-Code)
 
