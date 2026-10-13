@@ -31,3 +31,4 @@ data:
   HEALTH_PORT: "9000"
   # Image digest — set by overlay on promotion
   IMAGE_DIGEST: "placeholder"
+  TEMPORAL_CUSTODIED_NODE_ENDPOINTS: "{}"
