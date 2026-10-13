@@ -51,9 +51,8 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
 - **Delivery does not guarantee adherence.** `/context` can show the complete floor and
   cache while the model still invents a task-type exception. Claude's project-scoped
   `Cogni Contract` output style moves the no-exceptions response rule into the system-prompt
-  layer on every request. The `validate-status-contract.sh` Stop hook rejects malformed final
-  responses, zero-evidence substantive proposals, and frozen-state mutations. Both adapters
-  point back to the file floor; neither owns a second copy of the rich contract.
+  layer on every request. Both adapters point back to the file floor; neither owns a second
+  copy of the rich contract.
 - **Envelope compliance does not guarantee process adherence.** A correctly shaped response
   that proposes with `Followed = —`, reports zero sources, or has no retrieval actions in the
   turn trace is still a hard FAIL. Grade delivery → envelope → research trace → substantive
@@ -116,6 +115,6 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
 | Cognition Substrate design (two axes, ownership split, thin-AGENTS.md boundary) | `docs/spec/node-baas-architecture.md` §Cognition Substrate (`:282-311`)                                                                                                               |
 | The delivery loader (fetch → cache → emit per runtime)                          | `scripts/agent/session-cognition.sh`                                                                                                                                                  |
 | The bundle producer + `SESSION_BOOTSTRAP_INVARIANTS`                            | `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`                                                                                                                      |
-| Harness wiring                                                                  | `CLAUDE.md`, `.claude/settings.json`, `.claude/output-styles/Cogni Contract.md`, `scripts/agent/validate-status-contract.sh`, `.codex/config.toml`, `opencode.json`, root `AGENTS.md` |
+| Harness wiring                                                                  | `CLAUDE.md`, `.claude/settings.json`, `.claude/output-styles/Cogni Contract.md`, `.codex/config.toml`, `opencode.json`, root `AGENTS.md` |
 | Harness docs                                                                    | Claude Code memory/hooks (code.claude.com/docs/en/{memory,hooks}), Codex prompting/config (developers.openai.com), OpenCode V2 instructions (dev.opencode.ai/v2/docs/instructions)    |
 | What becomes a skill vs hub entry vs spec                                       | [`knowledge-syntropy-expert`](../knowledge-syntropy-expert/SKILL.md)                                                                                                                  |
