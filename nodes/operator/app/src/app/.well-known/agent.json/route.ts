@@ -4,9 +4,9 @@
 /**
  * Module: `@app/.well-known/agent.json`
  * Purpose: Discovery document for machine agents — publishes register,
- *   work-item, coordination, completions, run, validation, flight, and
- *   promote URLs plus the auth scheme so external clients can bootstrap
- *   without hard-coding paths or reading docs.
+ *   self-identity, work-item, coordination, completions, run, validation,
+ *   flight, and promote URLs plus the auth scheme so external clients can
+ *   bootstrap without hard-coding paths or reading docs.
  * Scope: Single GET handler. Honors `x-forwarded-host`/`x-forwarded-proto`
  *   from Caddy / k8s ingress so the published URLs are externally reachable
  *   (falling back to the raw Host header then request.url for local dev).
@@ -20,6 +20,7 @@
  */
 
 import {
+  agentMeOperation,
   flightOperation,
   workItemsCreateOperation,
   workItemsPatchOperation,
@@ -94,6 +95,11 @@ export async function GET(request: Request) {
       workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
       runs: `${origin}/api/v1/agent/runs`,
       runStream: `${origin}/api/v1/agent/runs/{runId}/stream`,
+      // Agent self-identity: one authed read for "am I live, who am I, when does
+      // my key expire, what can I do". A 200 proves the key is live; a 401 proves
+      // it is expired/invalid — unlike `users/me`, which is session-cookie-only
+      // and 401s every agent key regardless of liveness. See `actions.agentMe`.
+      agentIdentity: `${origin}/api/v1/agent/me`,
       // CI/CD plane (see docs/spec/node-ci-cd-contract.md § Env-promotion).
       // flight → candidate-a (node.flight/can_flight); promote → production
       // (node.promote_production/can_promote_production). Both dispatch via the
@@ -113,6 +119,17 @@ export async function GET(request: Request) {
       cognition: `${origin}/api/v1/cognition`,
     },
     actions: {
+      // IDENTITY_SEAM_IS_DISCOVERABLE: `endpoints.agentIdentity` is only a URL.
+      // This action tells an agent the method, that a bearer key is required, and
+      // the exact response shape (principal, key expiry, per-node grants) — so a
+      // fresh agent can verify its own liveness and capabilities from one read
+      // instead of guessing from a 401 or firing a gated write to probe RBAC.
+      agentMe: {
+        method: "GET",
+        endpoint: `${origin}/api/v1/agent/me`,
+        auth: { type: "bearer" },
+        outputSchema: z.toJSONSchema(agentMeOperation.output),
+      },
       flightCandidate: {
         method: "POST",
         endpoint: `${origin}/api/v1/vcs/flight`,
