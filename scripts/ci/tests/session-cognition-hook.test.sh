@@ -62,7 +62,7 @@ jq -e '.hooks.Stop[0].hooks[0].command | contains("validate-status-contract.sh")
 VALID_MESSAGE='| 🎯 **Goal** | Keep contract state |
 |---|---|
 | **Done when** | Two turns preserve exact fields. |
-| **Status** | 🔵 testing |
+| **Status** | 👀 watching test gate |
 | **ETA · Conf** | 15m · earned 90% + reviewed 3/3 sources |
 | **Followed** | https://cognidao.org/knowledge/cognition-substrate-bootstrap · https://github.com/cogni-dao/cogni/blob/main/AGENTS.md · https://cognidao.org/knowledge/node-baas-substrate-model · https://cognidao.org/work/items/story.5070 |
 
@@ -70,7 +70,7 @@ VALID_MESSAGE='| 🎯 **Goal** | Keep contract state |
 
 | item | owner | deliverable links | status | ETA · Conf | next |
 |---|---|---|---|---|---|
-| proposed story — contract | dev-manager, me | - | 🔵 in progress | 10m · earned 90% | Test next turn |
+| proposed story — contract | dev-manager, me | - | 🔵 in progress | 10m · earned 90% | 👀 [test gate](https://cognidao.org/work/items/story.5070) |
 
 > 🔵 **Bottom line —** Contract-shaped response.'
 VALIDATOR_SCRATCH="$FIXTURE_ROOT/validator-scratch"
@@ -79,14 +79,21 @@ valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_
   '{last_assistant_message:$message,scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
 [[ -z "$valid_output" ]] || fail "status-contract Stop hook rejected a valid response"
 
-DONE_MESSAGE="${VALID_MESSAGE/🔵 testing/🟢 full E2E Done}"
+DONE_MESSAGE="${VALID_MESSAGE/👀 watching test gate/🟢 full E2E Done}"
 DONE_MESSAGE="${DONE_MESSAGE/15m · earned 90%/0m · earned 100%}"
 DONE_MESSAGE="${DONE_MESSAGE/🔵 in progress/🟢 full E2E Done}"
 DONE_MESSAGE="${DONE_MESSAGE/10m · earned 90%/0m · earned 100%}"
-DONE_MESSAGE="${DONE_MESSAGE/Test next turn/-}"
+DONE_MESSAGE="$(printf '%s\n' "$DONE_MESSAGE" | sed \
+  's#👀 \[test gate\](https://cognidao.org/work/items/story.5070)#-#')"
 done_output="$(jq -cn --arg message "$DONE_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
 [[ -z "$done_output" ]] || fail "status-contract Stop hook rejected a completed 0m response"
+
+FALSE_GREEN_MESSAGE="${DONE_MESSAGE/0m · earned 100%/15m · earned 90%}"
+false_green_output="$(jq -cn --arg message "$FALSE_GREEN_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$false_green_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted green completion with remaining ETA"
 
 invalid_output="$(jq -cn --arg message 'This is a design question, so the contract does not apply.' \
   --arg scratch "$VALIDATOR_SCRATCH" '{last_assistant_message:$message,scratchpad_dir:$scratch}' | \
@@ -124,14 +131,14 @@ verbose_item_output="$(jq -cn --arg message "$VERBOSE_ITEM_MESSAGE" \
 [[ "$(printf '%s' "$verbose_item_output" | jq -r '.decision')" == "block" ]] ||
   fail "status-contract Stop hook accepted a verbose item purpose"
 
-DUPLICATE_STATUS_MESSAGE="${VALID_MESSAGE/🔵 in progress/🔵 🔴 in progress}"
+DUPLICATE_STATUS_MESSAGE="${VALID_MESSAGE/🔵 in progress/🔵 🔴 fixing}"
 duplicate_status_output="$(jq -cn --arg message "$DUPLICATE_STATUS_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
 [[ "$(printf '%s' "$duplicate_status_output" | jq -r '.decision')" == "block" ]] ||
   fail "status-contract Stop hook accepted multiple item status emojis"
 
 MALFORMED_ROW_MESSAGE="$(printf '%s\n' "$VALID_MESSAGE" | sed \
-  's/| 10m · earned 90% | Test next turn |/| Test next turn |/')"
+  's/| 🔵 in progress | 10m · earned 90% |/| 🔵 in progress |/')"
 malformed_row_output="$(jq -cn --arg message "$MALFORMED_ROW_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
 [[ "$(printf '%s' "$malformed_row_output" | jq -r '.decision')" == "block" ]] ||
@@ -162,11 +169,34 @@ mismatched_item_output="$(jq -cn --arg message "$MISMATCHED_ITEM_MESSAGE" \
 [[ "$(printf '%s' "$mismatched_item_output" | jq -r '.decision')" == "block" ]] ||
   fail "status-contract Stop hook accepted a mismatched work-item link"
 
-EMPTY_NEXT_MESSAGE="${VALID_MESSAGE/Test next turn/}"
+EMPTY_NEXT_MESSAGE="$(printf '%s\n' "$VALID_MESSAGE" | sed \
+  's#👀 \[test gate\](https://cognidao.org/work/items/story.5070)##')"
 empty_next_output="$(jq -cn --arg message "$EMPTY_NEXT_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
 [[ "$(printf '%s' "$empty_next_output" | jq -r '.decision')" == "block" ]] ||
   fail "status-contract Stop hook accepted an empty next gate"
+
+DECORATIVE_STATUS_MESSAGE="${VALID_MESSAGE/🔵 in progress/🔴 needs_implement}"
+decorative_status_output="$(jq -cn --arg message "$DECORATIVE_STATUS_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$decorative_status_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted work-item state as decorative status"
+
+HUMAN_TECH_GATE_MESSAGE="${VALID_MESSAGE/🔵 in progress/🟡 warning campaign pending}"
+HUMAN_TECH_GATE_MESSAGE="$(printf '%s\n' "$HUMAN_TECH_GATE_MESSAGE" | sed \
+  's#👀 \[test gate\](https://cognidao.org/work/items/story.5070)#👉 needs you: [approve proof](https://cognidao.org/work/items/story.5070)#')"
+human_tech_gate_output="$(jq -cn --arg message "$HUMAN_TECH_GATE_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$human_tech_gate_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook accepted technical work disguised as human gate"
+
+AGENT_OWNED_STOP_MESSAGE="${VALID_MESSAGE/👀 watching test gate/🔵 in progress}"
+AGENT_OWNED_STOP_MESSAGE="$(printf '%s\n' "$AGENT_OWNED_STOP_MESSAGE" | sed \
+  's#👀 \[test gate\](https://cognidao.org/work/items/story.5070)#Continue implementation#')"
+agent_owned_stop_output="$(jq -cn --arg message "$AGENT_OWNED_STOP_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ "$(printf '%s' "$agent_owned_stop_output" | jq -r '.decision')" == "block" ]] ||
+  fail "status-contract Stop hook allowed an agent-owned next action to stop"
 
 MUTATED_MESSAGE="${VALID_MESSAGE/Keep contract state/Change contract state}"
 mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" \
@@ -177,15 +207,15 @@ mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDA
 ZERO_RESEARCH_MESSAGE='| 🎯 **Goal** | Design a strategy agent |
 |---|---|
 | **Done when** | Design is approved. |
-| **Status** | 🟡 proposed |
-| **ETA · Conf** | 2 hours · 40% + reviewed 0/5 sources |
+| **Status** | 👉 needs you |
+| **ETA · Conf** | 2h · earned 40% + reviewed 0/5 sources |
 | **Followed** | — |
 
 ---
 
 | item | owner | deliverable links | status | ETA · Conf | next |
 |---|---|---|---|---|---|
-| proposed story — strategy | dev-manager, me | - | 👉 needs you | 15m · earned 40% | 👉 needs you: approve scope |
+| proposed story — strategy | dev-manager, me | - | 👉 needs you | 15m · earned 40% | 👉 needs you: [approve scope](https://cognidao.org/work/items/story.5070) |
 
 > 👉 **Bottom line —** Approve the proposal.'
 zero_research_output="$(jq -cn --arg message "$ZERO_RESEARCH_MESSAGE" \
@@ -211,6 +241,13 @@ preliminary_stop_output="$(jq -cn --arg message "$PRELIMINARY_STOP_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
 [[ "$(printf '%s' "$preliminary_stop_output" | jq -r '.decision')" == "block" ]] ||
   fail "status-contract Stop hook allowed an agent-owned preliminary state to become a final reply"
+
+PRELIMINARY_HUMAN_MESSAGE="${PRELIMINARY_STOP_MESSAGE/🔵 in progress/👉 needs you}"
+PRELIMINARY_HUMAN_MESSAGE="${PRELIMINARY_HUMAN_MESSAGE/Research relevant sources/👉 needs you: [choose scope](https:\/\/cognidao.org\/work\/items\/story.5070)}"
+preliminary_human_output="$(jq -cn --arg message "$PRELIMINARY_HUMAN_MESSAGE" \
+  '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
+[[ -z "$preliminary_human_output" ]] ||
+  fail "status-contract Stop hook rejected a legal preliminary human gate"
 
 grep -Fq "if [[ \"\${CONDUCTOR_IS_LOCAL:-1}\" == \"1\" ]]; then" "$CONDUCTOR_SETUP" ||
   fail "Conductor setup does not guard user-hook installation to local workspaces"

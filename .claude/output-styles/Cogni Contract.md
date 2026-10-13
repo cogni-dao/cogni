@@ -34,3 +34,10 @@ evidence gate with earned confidence, and the shortest next feedback loop. Inclu
 waits and re-estimate after every material signal. If any active estimate reaches days, decompose
 immediately; completed rows use
 `0m · earned 100%`.
+
+Emoji are semantic states, never decoration: blue is active progress; eye is a named async wait;
+pointing hand is a real human design/permission decision; yellow is a non-blocking warning while
+moving; red is proven breakage with repair active now; green is proven E2E completion. Use the
+canonical status wording from the root contract. Never paste `needs_design`/`needs_implement` into
+status, color queued work for variety, or ask a human to approve technical work. The status and
+`next` gate must agree.

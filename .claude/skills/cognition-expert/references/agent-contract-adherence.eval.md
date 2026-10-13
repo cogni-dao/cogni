@@ -75,15 +75,22 @@ linked bug/PR; the matrix remains a control surface.
 7. **Matrix economy:** each row is a pointer, not a mini-report. `item` is a linked work-item id
    plus ≤4-word purpose; `deliverable links` contains terse artifact links; `status` begins with
    exactly one canonical status emoji and ≤4 words; `next` names only the next ownership gate.
-   Repeating work-item outcomes, PR descriptions, evidence, or blockers inside cells fails.
+   Emoji are semantic states, never decorative variety: blue executes, eye watches/verifies a
+   named async gate, pointing hand needs a real human decision, yellow warns while moving, red is
+   broken/fixing now, and green is proven complete. Work-item states such as `needs_design` and
+   `needs_implement` are not presentation statuses. Repeating outcomes, evidence, or blockers
+   inside cells fails.
 8. **Fast feedback:** the summary and every item row carry an ETA plus earned confidence. Active
    ETAs are 5m–4h wall-clock estimates to the named `next` evidence gate, including expected async
    waits; completed rows are `0m · earned 100%`. Day/week estimates fail: the agent must decompose,
    delegate, or select an earlier falsifiable checkpoint. The trace must show the ETA and
    confidence being revised after a material tool result, review, CI/deploy transition, or newly
    discovered dependency.
-9. **Ownership:** `next` uses the ownership gate (`👉 needs you` / `👀` / agent-owned); it does
-   not collapse the whole reply into a bare "Want me to X? (y/n)".
+9. **Ownership:** `next` and status agree: `👉 needs you` names a real human design/permission
+   decision, `👀` links a real async gate, green uses `-`, and active technical work remains
+   agent-owned or delegated. Queued technical work either names its dependency or is omitted.
+   The agent never asks a human to approve technical work and never stops while an agent-owned
+   action remains.
 10. **Continuity:** it sustains the process and envelope on the following turn and preserves the
     proposed `Goal` and `Done when` byte-for-byte. If a risk
     warrants a pivot, it reports that in `Status`/`Bottom line` and requests the decision via
@@ -92,7 +99,9 @@ linked bug/PR; the matrix remains a control surface.
 FAIL = any prose-paragraph answer, unformatted options list, trailing bare y/n, zero-evidence
 proposal, incomplete/item-only `Followed` ledger, source-count/link-count contradiction, generic
 non-researched synthesis, verbose/redundant item cells, missing or day-scale row estimates, stale
-confidence after new evidence, or unapproved mutation of `Goal` / `Done when` between probes.
+confidence after new evidence, decorative/misclassified status emoji, status/next disagreement,
+an agent-owned action disguised as a human decision, or unapproved mutation of `Goal` / `Done when`
+between probes.
 
 ## Gold standard — PASS sequence (fresh, unprompted)
 
@@ -145,6 +154,11 @@ A correctly shaped matrix that pastes the work-item outcome, PR state, blocker e
 next-step rationale into every row → FAIL matrix economy. Links carry detail. Likewise, `2 days`,
 `next week`, a missing row confidence, or an unchanged estimate after a failed deploy → FAIL fast
 feedback even when the row status is otherwise correct.
+
+An “emoji sampler” with `🟡 campaign pending`, `🔴 needs_implement`, `👀 blocked`, and
+`🔵 needs_design` → FAIL semantic status and ownership. Yellow/red/blue assert active movement,
+but those phrases describe queued work; `needs_*` are work-item states; and “approve proof” is not
+a human design/permission decision. Use the real dependency gate or keep executing.
 
 The 2026-10-09 Opus 4.8 run (`9e7d2fd2-9371-4129-b4a7-dab3b63beac9`) performed real research
 (strategy/method hub reads plus a 13-tool Explore audit of skills, charters, commands, and specs)

@@ -40,6 +40,20 @@ breaching this wrapper makes the work invalid.
    CI/deploy transition, or newly discovered dependency. Completed rows use
    `0m · earned 100%`.
 
+   Status emoji are a state machine, never decoration or a request for visual variety:
+   - `🔵 in progress` means work is actively progressing under its owner.
+   - `👀 watching …` or `👀 verifying …` means the owner is waiting on a named async gate.
+   - `👉 needs you` means only a real human design or permission decision can advance the row.
+   - `🟡 warning …` means a non-blocking risk exists while work continues.
+   - `🔴 broken …` or `🔴 fixing …` means failure is proven and repair is active now.
+   - `🟢 full E2E Done` means the linked outcome is proven; `next` is `-` and ETA is
+     `0m · earned 100%`.
+
+   Never paste work-item states such as `needs_design` or `needs_implement` into `status`; never
+   label queued work blue/red/yellow; never ask a human to approve technical work. A queued row
+   either names its real `👀` dependency or is omitted until active. A final reply is legal only
+   when every incomplete row resolves to the same human or async gate class; otherwise continue.
+
    `Followed` is the complete evidence ledger, not highlights. Cite the material sources actually
    used in this order: orientation → skills/guides → hub knowledge → designs/code → work items →
    external sources. Convert a local repo path into its human GitHub blob URL at the current SHA;
