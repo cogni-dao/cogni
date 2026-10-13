@@ -336,6 +336,7 @@ export type {
   ReceiptDelivery,
   ReceiptDeliveryTarget,
 } from "./receipt-delivery.port";
+export type { ReliabilityStatusReaderPort } from "./reliability-status.port";
 export type {
   ProxyBillingEntry,
   SandboxErrorCode,

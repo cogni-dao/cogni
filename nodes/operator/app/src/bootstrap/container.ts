@@ -107,6 +107,7 @@ import {
   GitHubNodeDeploymentTopologyAdapter,
   GitHubWebhookNormalizer,
   getAppDb,
+  HttpReliabilityStatusAdapter,
   LangfuseAdapter,
   LiteLlmAdapter,
   type MimirAdapterConfig,
@@ -198,7 +199,6 @@ import type {
   ComputeCostReport,
   ComputeCostStorePort,
   ConnectionBrokerPort,
-  DatabaseContainmentPort,
   DatabasePlacementResolverPort,
   DataSourceRegistration,
   EpochsRead,
@@ -217,6 +217,7 @@ import type {
   PaymentAttemptUserRepository,
   PaymentRailGuardPort,
   ReceiptDelivery,
+  ReliabilityStatusReaderPort,
   RunStreamPort,
   ServiceAccountService,
   ThreadPersistencePort,
@@ -282,8 +283,8 @@ export interface Container {
   /** Fail-closed guard for live payment rail activation before issuing payment intents. */
   paymentRailGuard: PaymentRailGuardPort;
   metricsQuery: MetricsQueryPort;
-  /** Private reliability-actuator client; absent means containment evidence fails closed. */
-  databaseContainment?: DatabaseContainmentPort;
+  /** Authenticated read-only projection from the private actuator. */
+  reliabilityStatusReader?: ReliabilityStatusReaderPort;
   treasuryReadPort: TreasuryReadPort;
   /** AI telemetry DB writer - always wired */
   aiTelemetry: AiTelemetryPort;
@@ -597,6 +598,15 @@ function createContainer(): Container {
         };
         return new MimirMetricsAdapter(mimirConfig);
       })();
+
+  const reliabilityStatusReader =
+    env.DATABASE_RELIABILITY_ACTUATOR_URL &&
+    env.DATABASE_RELIABILITY_STATUS_TOKEN
+      ? new HttpReliabilityStatusAdapter({
+          baseUrl: env.DATABASE_RELIABILITY_ACTUATOR_URL,
+          bearerToken: env.DATABASE_RELIABILITY_STATUS_TOKEN,
+        })
+      : undefined;
 
   // FinancialLedger: optional — only when TIGERBEETLE_ADDRESS is configured
   // @cogni/financial-ledger/adapters is in serverExternalPackages (N-API addon, not bundleable)
@@ -1135,6 +1145,7 @@ function createContainer(): Container {
     paymentRailsActive: !!getPaymentConfig(),
     paymentRailGuard,
     metricsQuery,
+    reliabilityStatusReader,
     treasuryReadPort,
     aiTelemetry,
     langfuse,

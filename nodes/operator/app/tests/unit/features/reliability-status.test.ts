@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   evaluateReliabilityPolicy,
   reconcileReliabilityContainment,
+  runReliabilitySweep,
 } from "@/features/nodes/reliability-status";
 import type { DatabaseContainmentPort, MetricsQueryPort } from "@/ports";
 
@@ -151,6 +152,69 @@ describe("ReliabilityStatusV1 policy", () => {
         reason: "critical_io_pressure",
         actorId: "system:reliability-controller.v1",
         incidentId: "replay-1",
+      }),
+    ]);
+  });
+
+  it("continues a bounded sweep when one target fails", async () => {
+    const targets = [
+      {
+        nodeId: "11111111-1111-4111-8111-111111111111",
+        slug: "broken",
+        environment: "candidate-a" as const,
+        desiredTier: "shared" as const,
+        budgetProfile: "shared-small",
+      },
+      {
+        nodeId: healthy.database.nodeId,
+        slug: healthy.database.nodeSlug,
+        environment: "candidate-a" as const,
+        desiredTier: "shared" as const,
+        budgetProfile: "shared-small",
+      },
+    ];
+    const containment: DatabaseContainmentPort = {
+      status: async (input) => {
+        if (input.nodeSlug === "broken") throw new Error("admin unavailable");
+        return healthy.database;
+      },
+      contain: async () => healthy.database,
+      readmit: async () => healthy.database,
+    };
+    const metrics = {
+      queryReliabilitySnapshot: async () => ({
+        regionalReadiness: [
+          {
+            region: "us",
+            healthy: true,
+            observedAt: healthy.database.observedAt,
+          },
+          {
+            region: "eu",
+            healthy: true,
+            observedAt: healthy.database.observedAt,
+          },
+        ],
+        ioPressurePct: 2,
+        connectionPct: 20,
+        memoryHeadroomPct: 70,
+        diskHeadroomPct: 70,
+        evidenceQueryRefs: ["reliability.v1:test"],
+      }),
+    } as MetricsQueryPort;
+
+    const results = await runReliabilitySweep(targets, {
+      containment,
+      metrics,
+      buildShaFor: async () => healthy.buildSha,
+      incidentIdFor: (target) => `minute:${target.slug}`,
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({ status: null, error: "admin unavailable" }),
+      expect.objectContaining({
+        error: null,
+        status: expect.objectContaining({ state: "healthy" }),
       }),
     ]);
   });

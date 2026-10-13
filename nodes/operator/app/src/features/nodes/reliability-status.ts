@@ -34,6 +34,21 @@ export interface ReliabilityStatusInput {
   readonly database: DatabaseContainmentStatus | null;
 }
 
+export interface ReliabilityTarget {
+  readonly nodeId: string;
+  readonly slug: string;
+  readonly environment: ReliabilityEnvironment;
+  readonly desiredTier: "shared" | "dedicated";
+  readonly budgetProfile: string;
+  readonly cellId?: string;
+}
+
+export interface ReliabilitySweepResult {
+  readonly target: ReliabilityTarget;
+  readonly status: ReliabilityStatusV1 | null;
+  readonly error: string | null;
+}
+
 const UNKNOWN_REASON = "required reliability evidence is missing";
 
 export async function readReliabilityStatus(
@@ -129,6 +144,39 @@ export async function reconcileReliabilityContainment(
     incidentReason: status.incidentReason ?? "critical policy triggered",
     lastTransitionAt: contained.lastTransitionAt,
   };
+}
+
+/** One bounded actuator sweep. A failed target cannot suppress its neighbors. */
+export async function runReliabilitySweep(
+  targets: readonly ReliabilityTarget[],
+  deps: {
+    readonly metrics: MetricsQueryPort;
+    readonly containment: DatabaseContainmentPort;
+    readonly buildShaFor: (target: ReliabilityTarget) => Promise<string | null>;
+    readonly incidentIdFor: (target: ReliabilityTarget) => string;
+  }
+): Promise<readonly ReliabilitySweepResult[]> {
+  const results: ReliabilitySweepResult[] = [];
+  for (const target of targets) {
+    try {
+      const status = await reconcileReliabilityContainment(
+        {
+          ...target,
+          buildSha: await deps.buildShaFor(target),
+          incidentId: deps.incidentIdFor(target),
+        },
+        deps
+      );
+      results.push({ target, status, error: null });
+    } catch (error) {
+      results.push({
+        target,
+        status: null,
+        error: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  }
+  return results;
 }
 
 function containmentReason(

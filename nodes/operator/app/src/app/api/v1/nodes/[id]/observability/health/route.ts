@@ -54,6 +54,19 @@ export async function GET(
   }
 
   const container = getContainer();
+  const actuatorStatus = container.reliabilityStatusReader
+    ? await container.reliabilityStatusReader
+        .read({
+          nodeId: gate.node.nodeId,
+          nodeSlug: gate.node.slug,
+          environment,
+        })
+        .catch(() => null)
+    : null;
+  if (actuatorStatus) {
+    return NextResponse.json(reliabilityStatusV1Schema.parse(actuatorStatus));
+  }
+
   const placement = await resolveDatabasePlacementResolver()
     .resolve({ nodeSlug: gate.node.slug, environment })
     .catch(() => null);
@@ -63,18 +76,7 @@ export async function GET(
         .then((state) => state.buildSha)
         .catch(() => null)
     : null;
-  const database: DatabaseContainmentStatus | null =
-    placement && container.databaseContainment
-      ? await container.databaseContainment
-          .status({
-            nodeId: placement.nodeId,
-            nodeSlug: gate.node.slug,
-            environment,
-            desiredTier: placement.desiredTier,
-            budgetProfile: placement.budgetProfile,
-          })
-          .catch(() => null)
-      : null;
+  const database: DatabaseContainmentStatus | null = null;
 
   const status = await readReliabilityStatus(
     {
