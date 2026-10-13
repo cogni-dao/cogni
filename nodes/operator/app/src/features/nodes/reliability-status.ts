@@ -68,7 +68,7 @@ export async function readReliabilityStatus(
     regionalReadiness: [...snapshot.regionalReadiness],
     utilization,
     incidentReason: verdict.reason,
-    lastTransitionAt: input.database?.observedAt ?? null,
+    lastTransitionAt: input.database?.lastTransitionAt ?? null,
     evidenceQueryRefs: [...snapshot.evidenceQueryRefs],
   };
 }
@@ -98,7 +98,7 @@ export async function reconcileReliabilityContainment(
     deps.metrics
   );
   const reason = containmentReason(status.incidentReason);
-  if (!reason || database.contained) return status;
+  if (!reason || database.phase === "contained") return status;
 
   const contained = await deps.containment.contain({
     nodeId: input.nodeId,
@@ -117,7 +117,7 @@ export async function reconcileReliabilityContainment(
     databaseTier: contained.desiredTier,
     budgetProfile: contained.budgetProfile,
     incidentReason: status.incidentReason ?? "critical policy triggered",
-    lastTransitionAt: contained.observedAt,
+    lastTransitionAt: contained.lastTransitionAt,
   };
 }
 
@@ -149,10 +149,16 @@ export function evaluateReliabilityPolicy(input: {
   };
 }): { state: ReliabilityState; reason: string | null } {
   const database = input.database;
-  if (database?.contained) {
+  if (database?.phase === "contained") {
     return {
       state: "contained",
-      reason: "database access contained",
+      reason: database.reason ?? "database access contained",
+    };
+  }
+  if (database?.phase === "recovering") {
+    return {
+      state: "recovering",
+      reason: database.reason ?? "database access recovering",
     };
   }
 

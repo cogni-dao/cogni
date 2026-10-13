@@ -17,11 +17,15 @@ const healthy = {
     desiredTier: "shared" as const,
     budgetProfile: "shared-small",
     contained: false,
+    phase: "open" as const,
     activeSessions: 0,
     rolesCanLogin: true,
     firewallFenced: false,
     cell: null,
     observedAt: "2026-10-13T20:00:00.000Z",
+    lastTransitionAt: null,
+    incidentId: null,
+    reason: null,
   },
   regionalReadiness: [{ healthy: true }, { healthy: true }],
   utilization: {
@@ -71,11 +75,13 @@ describe("ReliabilityStatusV1 policy", () => {
         database: {
           ...healthy.database,
           contained: true,
+          phase: "contained" as const,
           rolesCanLogin: false,
           firewallFenced: true,
+          reason: "operator_action" as const,
         },
       })
-    ).toEqual({ state: "contained", reason: "database access contained" });
+    ).toEqual({ state: "contained", reason: "operator_action" });
   });
 
   it("returns healthy only with two healthy regions and full headroom", () => {
@@ -94,8 +100,12 @@ describe("ReliabilityStatusV1 policy", () => {
         return {
           ...healthy.database,
           contained: true,
+          phase: "contained",
           rolesCanLogin: false,
           firewallFenced: true,
+          lastTransitionAt: "2026-10-13T20:00:00.000Z",
+          incidentId: action.incidentId,
+          reason: action.reason,
         };
       },
       readmit: async () => healthy.database,
