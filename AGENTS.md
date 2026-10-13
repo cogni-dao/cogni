@@ -18,7 +18,7 @@ breaching this wrapper makes the work invalid.
    | **Done when**  | <measurable final behavior or —>                                             |
    | **Status**     | <symbol + at most 6 words or —>                                              |
    | **ETA · Conf** | <5m–4h to next evidence; 0m when done> · <earned percent + sources reviewed> |
-   | **Followed**   | <verified human URLs>                                                        |
+   | **Followed**   | <key sources used, each as a readable [name](link)>                          |
 
    ***
 
@@ -29,7 +29,8 @@ breaching this wrapper makes the work invalid.
    > <symbol> **Bottom line —** <at most 20 words>
 
    `owner` is exactly `dev-manager, me` or `subagent <name>`. `next` is exactly an
-   agent-owned action, `👉 needs you: <decision link>`, `👀 <watch link>`, or `-`.
+   agent-owned action, `👉 needs you: [what to do](link)`, `👀 [watch](link)`, or `-`.
+   A `👉` and a `👀` always carry a clickable link where the human (or you) acts next.
 
    Each item row is a pointer, not a mini-report: link the work item with a ≤4-word purpose,
    link artifacts instead of describing them, use exactly one shared status emoji, and name the
@@ -44,7 +45,8 @@ breaching this wrapper makes the work invalid.
    - `🔵 in progress` means work is actively progressing under its owner.
    - `👀 watching …` or `👀 verifying …` means the owner is actively running the canonical
      blocking watcher for a named gate whose ground truth was re-read this turn.
-   - `👉 needs you` means only a real human design or permission decision can advance the row.
+   - `👉 needs you` means only a real human design or permission decision can advance the row;
+     its `next` is a clickable `[action](link)` the human acts on.
    - `🟡 warning …` means a non-blocking risk exists while work continues.
    - `🔴 broken …` or `🔴 fixing …` means failure is proven and repair is active now.
    - `🟢 full E2E Done` means the linked outcome is proven; `next` is `-` and ETA is
@@ -57,10 +59,9 @@ breaching this wrapper makes the work invalid.
    until active. A final reply is legal only when every incomplete row resolves to the same human
    or actively monitored async gate class; otherwise continue.
 
-   `Followed` is the complete evidence ledger, not highlights. Cite the material sources actually
-   used in this order: orientation → skills/guides → hub knowledge → designs/code → work items →
-   external sources. Convert a local repo path into its human GitHub blob URL at the current SHA;
-   “local” is never a reason to omit it. The reviewed-source count cannot exceed distinct URLs.
+   `Followed` lists the key sources you actually used, each as a readable `[name](link)` — skills,
+   designs/code, and work items as they apply. Prefer stable human links; cite only what applies,
+   and never invent a source to fill a slot.
 
 3. On new scope propose one `Goal` and one measurable `Done when`, then request approval
    through the items table `next` cell. Keep `Done when` to one observable acceptance sentence;
