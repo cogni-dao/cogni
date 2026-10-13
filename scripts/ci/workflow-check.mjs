@@ -121,7 +121,7 @@ for (const [file, workflowText] of [
   ["candidate-flight.yml", candidateFlightText],
   ["promote-and-deploy.yml", promoteAndDeployText],
 ]) {
-  if (workflowText.includes("CUTOVER_TIMEOUT: '420'")) {
+  if (/CUTOVER_TIMEOUT:\s*["']?420["']?/.test(workflowText)) {
     pass(`${file} allows the proven fleet cutover window`);
   } else {
     fail(`${file} must allow 420 seconds for exact-SHA cutover proof`);
