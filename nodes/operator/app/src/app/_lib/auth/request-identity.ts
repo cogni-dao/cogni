@@ -102,6 +102,26 @@ export function issueAgentApiKey(input: {
   return `${TOKEN_PREFIX}${payloadB64}.${signPayload(payloadB64)}`;
 }
 
+/**
+ * Returns the agent API key's expiry (unix seconds) for the current request,
+ * or null when the caller is not authenticated by an agent key (e.g. a cookie
+ * session). Verifies the token signature (reuses parseAgentToken), so callers
+ * get an authentic expiry, not an unverified claim. Used by `GET /api/v1/agent/me`
+ * to surface key liveness without re-decoding the bearer by hand.
+ */
+export async function peekAgentKeyExpiry(): Promise<number | null> {
+  let h: Awaited<ReturnType<typeof headers>>;
+  try {
+    h = await headers();
+  } catch {
+    return null;
+  }
+  const bearer = extractBearerToken(h.get("authorization"));
+  if (!bearer) return null;
+  const payload = parseAgentToken(bearer);
+  return payload?.exp ?? null;
+}
+
 function isSameOrigin(origin: string | null, host: string | null): boolean {
   if (!origin || !host) return true;
   try {
