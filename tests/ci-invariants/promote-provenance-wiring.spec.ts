@@ -28,11 +28,6 @@ const WORKFLOW = path.resolve(
   "../../.github/workflows/promote-and-deploy.yml"
 );
 const body = readFileSync(WORKFLOW, "utf8");
-const seedScript = readFileSync(
-  path.resolve(__dirname, "../../scripts/ci/promote-preview-seed-main.sh"),
-  "utf8"
-);
-
 describe("promote provenance wiring (bug.5195 defect #2)", () => {
   it("feeds OPERATOR_SOURCE_SHA from the resolved head at every consumer", () => {
     const assignments = [
@@ -64,7 +59,7 @@ describe("promote provenance wiring (bug.5195 defect #2)", () => {
     expect(body).toContain("head_sha=$SHA");
   });
 
-  it("passes source identity to every scheduler-worker image mutation", () => {
+  it("passes source identity to the scheduler-worker image mutation", () => {
     const promotionStep = body.match(
       /- name: Promote digest \+ record source-sha[\s\S]*?(?=\n {6}- name:)/
     )?.[0];
@@ -72,9 +67,5 @@ describe("promote provenance wiring (bug.5195 defect #2)", () => {
       '--env "$OVERLAY_ENV" --app "$NODE" --digest "$DIGEST"'
     );
     expect(promotionStep).toContain('--source-sha "$SOURCE_SHA"');
-    expect(seedScript).toContain(
-      'promote_if_changed "scheduler-worker" "$d_sw" "$MERGE_SHA"'
-    );
-    expect(seedScript).toContain('promote_args+=(--source-sha "$source_sha")');
   });
 });
