@@ -26,7 +26,7 @@ import type { AiExecutionErrorCode } from "@cogni/ai-core";
 export interface ExecutionRequest {
   /** Idempotency key (e.g., `scheduleId:TemporalScheduledStartTime`) */
   readonly idempotencyKey: string;
-  /** SHA256 hash of normalized request payload */
+  /** SHA256 hash of graph identity plus exact request bytes */
   readonly requestHash: string;
   /** GraphExecutorPort runId */
   readonly runId: string;
@@ -36,19 +36,19 @@ export interface ExecutionRequest {
   readonly ok: boolean | null;
   /** AiExecutionErrorCode if ok=false, null if ok=true or pending */
   readonly errorCode: AiExecutionErrorCode | null;
-  /** When request was first received */
-  readonly createdAt: Date;
 }
 
 /**
  * Result of checking idempotency.
  * - new: No record exists, caller should create pending and proceed
- * - pending: Record exists with ok=null, execution in progress (retry should wait or fail)
+ * - stale: Record exists with ok=null and an expired lease; caller may attempt re-claim
+ * - pending: Record exists with ok=null and a live lease; retry should wait
  * - cached: Record exists with ok!=null, return cached result
  * - mismatch: Record exists but requestHash differs, reject with 422
  */
 export type IdempotencyCheckResult =
   | { status: "new" }
+  | { status: "stale"; request: ExecutionRequest }
   | { status: "pending"; request: ExecutionRequest }
   | { status: "cached"; request: ExecutionRequest }
   | { status: "mismatch"; existingHash: string; providedHash: string };
@@ -69,19 +69,21 @@ export interface ExecutionOutcome {
  * Lifecycle: pending (ok=null) → finalized (ok=true/false)
  * - On request start: create pending row via createPendingRequest()
  * - On completion: update outcome via finalizeRequest()
- * - On retry: checkIdempotency returns pending/cached/mismatch
+ * - During execution: heartbeatRequest extends the pending lease
+ * - On retry: checkIdempotency returns stale/pending/cached/mismatch
  */
 export interface ExecutionRequestPort {
   /**
    * Check if an execution request already exists.
    *
    * - If idempotencyKey doesn't exist: returns { status: 'new' }
-   * - If idempotencyKey exists, requestHash matches, ok=null: returns { status: 'pending', request }
+   * - If idempotencyKey exists, requestHash matches, ok=null, lease expired: returns { status: 'stale', request }
+   * - If idempotencyKey exists, requestHash matches, ok=null, lease live: returns { status: 'pending', request }
    * - If idempotencyKey exists, requestHash matches, ok!=null: returns { status: 'cached', request }
    * - If idempotencyKey exists but requestHash differs: returns { status: 'mismatch' }
    *
    * @param idempotencyKey - Unique key for deduplication (e.g., `scheduleId:scheduledFor`)
-   * @param requestHash - SHA256 hash of normalized request payload
+   * @param requestHash - SHA256 hash of graph identity plus exact request bytes
    */
   checkIdempotency(
     idempotencyKey: string,
@@ -91,10 +93,11 @@ export interface ExecutionRequestPort {
   /**
    * Create a pending execution request at the start of processing.
    * Called before graph execution begins to claim the idempotency slot.
-   * Row created with ok=null (pending state).
+   * Graph callers provide a lease so concurrent insert and stale re-claim
+   * races converge on one claimant. Omission preserves non-leased generic jobs.
    *
    * @param idempotencyKey - Unique key for deduplication
-   * @param requestHash - SHA256 hash of normalized request payload
+   * @param requestHash - SHA256 hash of graph identity plus exact request bytes
    * @param runId - GraphExecutorPort runId (canonical, shared with graph_runs)
    * @param traceId - Langfuse trace ID (null if not configured)
    */
@@ -102,7 +105,16 @@ export interface ExecutionRequestPort {
     idempotencyKey: string,
     requestHash: string,
     runId: string,
-    traceId: string | null
+    traceId: string | null,
+    leaseExpiresAt?: string
+  ): Promise<
+    IdempotencyCheckResult | { status: "claimed"; request: ExecutionRequest }
+  >;
+
+  /** Extend a pending request lease while the execution node pumps the graph. */
+  heartbeatRequest(
+    idempotencyKey: string,
+    leaseExpiresAt: string
   ): Promise<void>;
 
   /**

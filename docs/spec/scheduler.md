@@ -39,7 +39,7 @@ tags: [scheduler]
 
 4. **GRANT_VALIDATED_TWICE**: Worker validates grant before calling API (fail-fast). Execution service re-validates grant validity + scope (defense-in-depth). Scope format: `graph:execute:{graphId}` or `graph:execute:*`.
 
-5. **RUN_LEDGER_FOR_DB_SCHEDULES**: DB-backed schedules create `graph_runs` records with status progression (pending→running→success/error). Temporal-only schedules (e.g., governance `governance:*`) do not write `graph_runs`.
+5. **RUN_LEDGER_FOR_DB_SCHEDULES**: DB-backed schedules create `graph_runs` records with status progression (pending→running→success/error/timeout). `timeout` means the transport recovery budget ended without a definitive execution outcome and may be upgraded by a later node-owned success/error; definitive outcomes never regress. Temporal-only schedules (e.g., governance `governance:*`) do not write `graph_runs`.
 
 6. **EXECUTION_VIA_SERVICE_API**: Worker triggers runs via HTTP to `POST /api/internal/graphs/{graphId}/runs`. Worker NEVER imports graph execution code.
 
@@ -62,6 +62,8 @@ tags: [scheduler]
 13. **SLOT_IDEMPOTENCY_VIA_EXECUTION_REQUESTS**: Slot deduplication handled by `execution_requests` table with key = `temporalScheduleId:TemporalScheduledStartTime`. The internal API idempotency layer (request_hash check) is the correctness guarantee—not workflowId uniqueness.
 
 13b. **ACTIVITY_IDEMPOTENCY**: All Activities must be idempotent or rely on downstream idempotency. `executeGraphActivity` relies on `execution_requests` table. `updateScheduleRunActivity` must use monotonic status updates (pending→running→success/error, never backwards).
+
+13c. **TRANSPORT_UNCERTAINTY_IS_INCOMPLETE**: `executeGraphActivity` retries transient HTTP/network failures through Temporal with the same idempotency key and canonical run ID. `409` means the claimed execution is still pending; a cached `200` is definitive. Retry-budget exhaustion records `graph_runs=timeout`, never `error`; a later node-owned definitive result may reconcile timeout to success/error.
 
 14. **SCHEDULED_TIMESTAMP_FROM_TEMPORAL**: Activities derive `scheduledFor` from `TemporalScheduledStartTime` search attribute (authoritative source), never from workflow input or wall clock.
 
@@ -223,24 +225,24 @@ tags: [scheduler]
 
 ### `graph_runs`
 
-| Column              | Type        | Constraints                 | Notes                                                                 |
-| ------------------- | ----------- | --------------------------- | --------------------------------------------------------------------- |
-| `id`                | uuid        | PK                          |                                                                       |
-| `schedule_id`       | uuid        | NULL, FK schedules          | Null for non-scheduled runs; set for DB-backed schedules              |
-| `run_id`            | text        | NOT NULL                    | Canonical GraphExecutorPort `runId`                                   |
-| `graph_id`          | text        | NULL                        | Namespaced graph ID                                                   |
-| `run_kind`          | text        | NULL                        | `user_immediate` \| `system_scheduled` \| `system_webhook`            |
-| `trigger_source`    | text        | NULL                        | `api` \| `temporal_schedule` \| `webhook:{type}`                      |
-| `trigger_ref`       | text        | NULL                        | Upstream schedule or delivery ID                                      |
-| `requested_by`      | text        | NULL                        | User ID or `cogni_system`                                             |
-| `scheduled_for`     | timestamptz | NULL                        | Set for scheduled runs from `TemporalScheduledStartTime`              |
-| `started_at`        | timestamptz | NULL                        |                                                                       |
-| `completed_at`      | timestamptz | NULL                        |                                                                       |
-| `status`            | text        | NOT NULL, default 'pending' | `pending` / `running` / `success` / `error` / `skipped` / `cancelled` |
-| `attempt_count`     | integer     | NOT NULL, default 0         | Retry/attempt semantics                                               |
-| `langfuse_trace_id` | text        | NULL                        |                                                                       |
-| `error_code`        | text        | NULL                        |                                                                       |
-| `error_message`     | text        | NULL                        |                                                                       |
+| Column              | Type        | Constraints                 | Notes                                                                             |
+| ------------------- | ----------- | --------------------------- | --------------------------------------------------------------------------------- |
+| `id`                | uuid        | PK                          |                                                                                   |
+| `schedule_id`       | uuid        | NULL, FK schedules          | Null for non-scheduled runs; set for DB-backed schedules                          |
+| `run_id`            | text        | NOT NULL                    | Canonical GraphExecutorPort `runId`                                               |
+| `graph_id`          | text        | NULL                        | Namespaced graph ID                                                               |
+| `run_kind`          | text        | NULL                        | `user_immediate` \| `system_scheduled` \| `system_webhook`                        |
+| `trigger_source`    | text        | NULL                        | `api` \| `temporal_schedule` \| `webhook:{type}`                                  |
+| `trigger_ref`       | text        | NULL                        | Upstream schedule or delivery ID                                                  |
+| `requested_by`      | text        | NULL                        | User ID or `cogni_system`                                                         |
+| `scheduled_for`     | timestamptz | NULL                        | Set for scheduled runs from `TemporalScheduledStartTime`                          |
+| `started_at`        | timestamptz | NULL                        |                                                                                   |
+| `completed_at`      | timestamptz | NULL                        |                                                                                   |
+| `status`            | text        | NOT NULL, default 'pending' | `pending` / `running` / `success` / `error` / `timeout` / `skipped` / `cancelled` |
+| `attempt_count`     | integer     | NOT NULL, default 0         | Retry/attempt semantics                                                           |
+| `langfuse_trace_id` | text        | NULL                        |                                                                                   |
+| `error_code`        | text        | NULL                        |                                                                                   |
+| `error_message`     | text        | NULL                        |                                                                                   |
 
 **Indexes:** `graph_runs_schedule_idx`, `graph_runs_scheduled_for_idx`, `graph_runs_run_id_idx`, `graph_runs_run_kind_idx`
 **Unique:** `(schedule_id, scheduled_for) WHERE schedule_id IS NOT NULL` — one scheduled run per slot
@@ -250,21 +252,26 @@ tags: [scheduler]
 
 ### `execution_requests`
 
-| Column            | Type        | Constraints | Notes                                           |
-| ----------------- | ----------- | ----------- | ----------------------------------------------- |
-| `idempotency_key` | text        | PK          | `temporalScheduleId:TemporalScheduledStartTime` |
-| `request_hash`    | text        | NOT NULL    | SHA256 of normalized request payload            |
-| `run_id`          | text        | NOT NULL    |                                                 |
-| `trace_id`        | text        | NULL        |                                                 |
-| `ok`              | boolean     | NOT NULL    | Execution outcome                               |
-| `error_code`      | text        | NULL        | `AiExecutionErrorCode` if `ok=false`            |
-| `created_at`      | timestamptz | NOT NULL    |                                                 |
+| Column             | Type        | Constraints | Notes                                                                      |
+| ------------------ | ----------- | ----------- | -------------------------------------------------------------------------- |
+| `idempotency_key`  | text        | PK          | `temporalScheduleId:TemporalScheduledStartTime`                            |
+| `request_hash`     | text        | NOT NULL    | SHA256 of graph ID plus exact request bytes                                |
+| `run_id`           | text        | NOT NULL    |                                                                            |
+| `trace_id`         | text        | NULL        |                                                                            |
+| `ok`               | boolean     | NULL        | Null while execution is pending                                            |
+| `error_code`       | text        | NULL        | `AiExecutionErrorCode` if `ok=false`                                       |
+| `created_at`       | timestamptz | NOT NULL    |                                                                            |
+| `updated_at`       | timestamptz | NOT NULL    | Last lease heartbeat or terminal update                                    |
+| `lease_expires_at` | timestamptz | NULL        | Graph claim expiry; null after finalization or for non-leased generic jobs |
 
 **Purpose:** Persists idempotency as the correctness layer for slot deduplication.
 **Invariants:**
 
 - If `idempotency_key` exists but `request_hash` differs, reject with 422 (payload mismatch)
-- If `idempotency_key` exists and `request_hash` matches, return cached `{ok, runId, traceId, errorCode}` without re-executing
+- A leased graph claimant heartbeats `lease_expires_at`; an unexpired matching claim returns 409
+- An expired matching claim is re-acquired by one contender through a conditional update before execution resumes
+- Claim creation uses conflict-ignore plus re-read so concurrent first deliveries converge instead of raising a primary-key error
+- If `idempotency_key` exists and `request_hash` matches with a terminal outcome, return cached `{ok, runId, traceId, errorCode}` without re-executing
 - Stores **both success and error outcomes** — retries return the cached outcome
 
 ---

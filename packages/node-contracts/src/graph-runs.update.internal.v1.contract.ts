@@ -7,7 +7,7 @@
  * Scope: Wire format for PATCH /api/internal/graph-runs/{runId}. Does not implement the route or business logic.
  * Invariants:
  *   - Bearer SCHEDULER_API_TOKEN required
- *   - Status transitions are monotonic at the adapter layer: pending → running → (success|error|skipped|cancelled)
+ *   - Status transitions are monotonic at the adapter layer: pending → running → (success|error|timeout|skipped|cancelled)
  *   - All consumers use z.infer types
  * Side-effects: none
  * Links: /api/internal/graph-runs/[runId] route, docs/spec/scheduler.md, task.0280
@@ -20,6 +20,7 @@ export const GraphRunUpdateStatusSchema = z.enum([
   "running",
   "success",
   "error",
+  "timeout",
   "skipped",
   "cancelled",
 ]);

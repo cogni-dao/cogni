@@ -9,7 +9,7 @@
  * @internal
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock @temporalio/activity before importing activities
 vi.mock("@temporalio/activity", () => ({
@@ -18,10 +18,19 @@ vi.mock("@temporalio/activity", () => ({
       const error = new Error(message);
       (error as { type?: string }).type = type;
       (error as { details?: unknown }).details = details;
+      (error as { nonRetryable?: boolean }).nonRetryable = true;
+      return error;
+    },
+    retryable: (message: string, type?: string, details?: unknown) => {
+      const error = new Error(message);
+      (error as { type?: string }).type = type;
+      (error as { details?: unknown }).details = details;
+      (error as { nonRetryable?: boolean }).nonRetryable = false;
       return error;
     },
   },
   activityInfo: () => ({
+    attempt: 1,
     workflowExecution: {
       workflowId: "test-workflow-id",
       runId: "test-temporal-run-id",
@@ -33,17 +42,23 @@ import { SYSTEM_ACTOR } from "@cogni/ids/system";
 
 import { createActivities } from "../src/activities/index.js";
 import {
+  createMockApiErrorResponse,
   createMockApiSuccessResponse,
   createMockGrant,
   FIXED_IDS,
 } from "./fixtures.js";
 
+const loggerInfo = vi.fn();
+const loggerWarn = vi.fn();
+const loggerError = vi.fn();
+const loggerDebug = vi.fn();
+
 // Mock logger
 const mockLogger = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  debug: vi.fn(),
+  info: loggerInfo,
+  warn: loggerWarn,
+  error: loggerError,
+  debug: loggerDebug,
   child: () => mockLogger,
 } as unknown as Parameters<typeof createActivities>[0]["logger"];
 
@@ -52,6 +67,10 @@ const mockLogger = {
 const mockNodePrincipalResolver = {
   resolve: vi.fn(),
 } as unknown as Parameters<typeof createActivities>[0]["nodePrincipalResolver"];
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("createActivities", () => {
   it("returns all expected activity functions", () => {
@@ -452,13 +471,17 @@ describe("executeGraphActivity", () => {
     vi.unstubAllGlobals();
   });
 
-  it("throws on HTTP error", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 401,
-      text: () => Promise.resolve("Unauthorized"),
-    });
-    vi.stubGlobal("fetch", mockFetch);
+  it.each([
+    404, 408, 409, 429, 520,
+  ])("classifies HTTP %i as retryable transport uncertainty", async (status) => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response("proxy body must not be logged", { status })
+        )
+    );
 
     const activities = createActivities({
       grantAdapter: {} as Parameters<
@@ -483,7 +506,196 @@ describe("executeGraphActivity", () => {
         scheduledFor: "2025-01-15T10:00:00.000Z",
         runId: FIXED_IDS.runId,
       })
-    ).rejects.toThrow(/Internal API client error: 401/);
+    ).rejects.toMatchObject({
+      type: status === 409 ? "GRAPH_EXECUTION_PENDING" : "GRAPH_TRANSPORT_HTTP",
+      nonRetryable: false,
+    });
+
+    const expectedLogger = status === 409 ? loggerInfo : loggerWarn;
+    expect(expectedLogger).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activityAttempt: 1,
+        httpStatus: status,
+        retryable: true,
+      }),
+      status === 409
+        ? "worker.activity.graph_pending"
+        : "worker.activity.graph_error"
+    );
+    expect(JSON.stringify(expectedLogger.mock.calls)).not.toContain(
+      "proxy body must not be logged"
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    400, 401, 403, 422,
+  ])("classifies HTTP %i as a permanent rejection", async (status) => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(new Response("sensitive rejection body", { status }))
+    );
+
+    const activities = createActivities({
+      grantAdapter: {} as Parameters<
+        typeof createActivities
+      >[0]["grantAdapter"],
+      runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
+      config: {
+        nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
+        schedulerApiToken: "test-token-min-32-characters-long",
+      },
+      logger: mockLogger,
+    });
+
+    await expect(
+      activities.executeGraphActivity({
+        nodeId: "operator",
+        temporalScheduleId: FIXED_IDS.scheduleId,
+        graphId: FIXED_IDS.graphId,
+        executionGrantId: FIXED_IDS.grantId,
+        input: {},
+        scheduledFor: "2025-01-15T10:00:00.000Z",
+        runId: FIXED_IDS.runId,
+      })
+    ).rejects.toMatchObject({
+      type: "GRAPH_REQUEST_REJECTED",
+      nonRetryable: true,
+    });
+
+    expect(loggerError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpStatus: status,
+        retryable: false,
+      }),
+      "worker.activity.graph_error"
+    );
+    expect(JSON.stringify(loggerError.mock.calls)).not.toContain(
+      "sensitive rejection body"
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it("classifies a fetch rejection as retryable transport uncertainty", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("socket reset"))
+    );
+
+    const activities = createActivities({
+      grantAdapter: {} as Parameters<
+        typeof createActivities
+      >[0]["grantAdapter"],
+      runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
+      config: {
+        nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
+        schedulerApiToken: "test-token-min-32-characters-long",
+      },
+      logger: mockLogger,
+    });
+
+    await expect(
+      activities.executeGraphActivity({
+        nodeId: "operator",
+        temporalScheduleId: FIXED_IDS.scheduleId,
+        graphId: FIXED_IDS.graphId,
+        executionGrantId: FIXED_IDS.grantId,
+        input: {},
+        scheduledFor: "2025-01-15T10:00:00.000Z",
+        runId: FIXED_IDS.runId,
+      })
+    ).rejects.toMatchObject({
+      type: "GRAPH_TRANSPORT_NETWORK",
+      nonRetryable: false,
+    });
+    expect(JSON.stringify(loggerWarn.mock.calls)).not.toContain("socket reset");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("retries a malformed HTTP 200 instead of accepting a false terminal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ok: true, runId: FIXED_IDS.runId }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    );
+
+    const activities = createActivities({
+      grantAdapter: {} as Parameters<
+        typeof createActivities
+      >[0]["grantAdapter"],
+      runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
+      config: {
+        nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
+        schedulerApiToken: "test-token-min-32-characters-long",
+      },
+      logger: mockLogger,
+    });
+
+    await expect(
+      activities.executeGraphActivity({
+        nodeId: "operator",
+        temporalScheduleId: FIXED_IDS.scheduleId,
+        graphId: FIXED_IDS.graphId,
+        executionGrantId: FIXED_IDS.grantId,
+        input: {},
+        scheduledFor: "2025-01-15T10:00:00.000Z",
+        runId: FIXED_IDS.runId,
+      })
+    ).rejects.toMatchObject({
+      type: "GRAPH_RESPONSE_INVALID",
+      nonRetryable: false,
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizes a definitive graph error from the wire contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(createMockApiErrorResponse()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    );
+
+    const activities = createActivities({
+      grantAdapter: {} as Parameters<
+        typeof createActivities
+      >[0]["grantAdapter"],
+      runAdapter: {} as Parameters<typeof createActivities>[0]["runAdapter"],
+      nodePrincipalResolver: mockNodePrincipalResolver,
+      config: {
+        nodeEndpoints: new Map([["operator", "http://localhost:3000"]]),
+        schedulerApiToken: "test-token-min-32-characters-long",
+      },
+      logger: mockLogger,
+    });
+
+    await expect(
+      activities.executeGraphActivity({
+        nodeId: "operator",
+        temporalScheduleId: FIXED_IDS.scheduleId,
+        graphId: FIXED_IDS.graphId,
+        executionGrantId: FIXED_IDS.grantId,
+        input: {},
+        scheduledFor: "2025-01-15T10:00:00.000Z",
+        runId: FIXED_IDS.runId,
+      })
+    ).resolves.toMatchObject({ ok: false, errorCode: "internal" });
 
     vi.unstubAllGlobals();
   });

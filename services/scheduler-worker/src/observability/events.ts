@@ -24,6 +24,7 @@ export const WORKER_EVENT_NAMES = {
   ACTIVITY_RUN_CREATED: "worker.activity.run_created",
   ACTIVITY_GRAPH_EXECUTING: "worker.activity.graph_executing",
   ACTIVITY_GRAPH_COMPLETED: "worker.activity.graph_completed",
+  ACTIVITY_GRAPH_PENDING: "worker.activity.graph_pending",
   ACTIVITY_GRAPH_ERROR: "worker.activity.graph_error",
   ACTIVITY_RUN_UPDATED: "worker.activity.run_updated",
   ACTIVITY_SWEEP_RESULT: "worker.activity.sweep_result",
