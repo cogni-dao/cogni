@@ -52,15 +52,26 @@ if docker exec "$CONTAINER" tctl --ns "$NAMESPACE" namespace describe >/dev/null
 fi
 
 # ── Step 3: Create namespace ────────────────────────────────────────────────
-log_info "Creating Temporal namespace '$NAMESPACE'..."
-if docker exec "$CONTAINER" tctl --ns "$NAMESPACE" namespace register 2>&1; then
-  log_info "Temporal namespace '$NAMESPACE' created successfully"
-else
-  # Race condition: another process may have created it between check and create
+# Registration can return a transient DeadlineExceeded while the healthy server
+# is briefly unable to commit the namespace. Re-check after every failed call to
+# cover the create race, then retry the same idempotent operation before failing.
+for attempt in 1 2 3; do
+  log_info "Creating Temporal namespace '$NAMESPACE' (attempt ${attempt}/3)..."
+  if docker exec "$CONTAINER" tctl --ns "$NAMESPACE" namespace register 2>&1; then
+    log_info "Temporal namespace '$NAMESPACE' created successfully"
+    exit 0
+  fi
+
   if docker exec "$CONTAINER" tctl --ns "$NAMESPACE" namespace describe >/dev/null 2>&1; then
     log_warn "Namespace '$NAMESPACE' was created by another process — OK"
-  else
-    log_error "Failed to create Temporal namespace '$NAMESPACE'"
-    exit 1
+    exit 0
   fi
-fi
+
+  if [ "$attempt" -lt 3 ]; then
+    log_warn "Namespace '$NAMESPACE' registration failed transiently; retrying in 5s"
+    sleep 5
+  fi
+done
+
+log_error "Failed to create Temporal namespace '$NAMESPACE' after 3 attempts"
+exit 1

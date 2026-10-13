@@ -224,11 +224,49 @@ if printf '%s\n' "$*" | grep -q '^inspect '; then
   echo healthy
   exit 0
 fi
+# A dedicated namespace proves that a transient registration DeadlineExceeded
+# is retried. The first register fails, describe still reports absent, and the
+# second register succeeds. All other namespaces retain the idempotent no-op.
+if printf '%s\n' "$*" | grep -q -- '--ns retry-proof'; then
+  count_file="${FAKE_REMOTE_ROOT}/temporal-register-count"
+  count="$(cat "$count_file" 2>/dev/null || echo 0)"
+  if printf '%s\n' "$*" | grep -q 'namespace describe'; then
+    [ "$count" -ge 2 ]
+    exit $?
+  fi
+  if printf '%s\n' "$*" | grep -q 'namespace register'; then
+    count=$((count + 1))
+    printf '%s' "$count" > "$count_file"
+    if [ "$count" -eq 1 ]; then
+      echo 'rpc error: code = DeadlineExceeded desc = context deadline exceeded' >&2
+      exit 1
+    fi
+    exit 0
+  fi
+fi
 # `tctl namespace describe` succeeding means "already registered", which is the
 # idempotent no-op path — the assertion below is that the ensure was ATTEMPTED.
 exit 0
 EOF
 chmod +x "$FAKEBIN/docker"
+
+RETRYBIN="$TMPROOT/retry-bin"
+mkdir -p "$RETRYBIN"
+cat > "$RETRYBIN/sleep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$RETRYBIN/sleep"
+
+env \
+  PATH="$RETRYBIN:$FAKEBIN:$PATH" \
+  FAKE_REMOTE_ROOT="$REMOTE_ROOT" \
+  TEMPORAL_NAMESPACE=retry-proof \
+  TEMPORAL_CONTAINER=cogni-runtime-temporal-1 \
+  bash scripts/ci/ensure-temporal-namespace.sh > "$TMPROOT/temporal-retry.out" 2>&1
+[ "$(cat "$REMOTE_ROOT/temporal-register-count")" = "2" ]
+grep -q "registration failed transiently; retrying" "$TMPROOT/temporal-retry.out"
+grep -q "created successfully" "$TMPROOT/temporal-retry.out"
 
 cat > "$FAKEBIN/hostname" <<'EOF'
 #!/usr/bin/env bash
