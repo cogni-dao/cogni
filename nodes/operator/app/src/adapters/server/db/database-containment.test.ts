@@ -74,31 +74,61 @@ describe("PostgresDatabaseContainmentAdapter", () => {
     });
   });
 
-  it("fences only the resolved Cherry IP route", async () => {
-    const requests: Array<{ url: string; body: string | undefined }> = [];
+  it("fences node A's source-CIDR rule while preserving node B access", async () => {
+    const rules = new Map([
+      [
+        "rule-a",
+        { ruleId: "rule-a", sourceCidr: "203.0.113.10/32", enabled: true },
+      ],
+      [
+        "rule-b",
+        { ruleId: "rule-b", sourceCidr: "203.0.113.11/32", enabled: true },
+      ],
+    ]);
+    const mutations: string[] = [];
     const adapter = new CherryDatabaseSourceFenceAdapter({
-      authToken: "secret",
-      timeoutMs: 1_000,
-      resolveBinding: async () => ({ ipId: "ip-poly", serverId: 77 }),
-      fetchImpl: async (input, init) => {
-        requests.push({
-          url: String(input),
-          body: init?.body as string | undefined,
-        });
-        return new Response(JSON.stringify({ targeted_to: null }), {
-          status: 200,
-        });
+      resolveBindings: async ({ nodeSlug }) => [
+        nodeSlug === "poly"
+          ? { ruleId: "rule-a", sourceCidr: "203.0.113.10/32" }
+          : { ruleId: "rule-b", sourceCidr: "203.0.113.11/32" },
+      ],
+      firewallRules: {
+        getRule: async ({ ruleId }) => rules.get(ruleId) ?? null,
+        setRuleEnabled: async ({ ruleId, expectedSourceCidr, enabled }) => {
+          const current = rules.get(ruleId);
+          if (!current || current.sourceCidr !== expectedSourceCidr)
+            throw new Error("identity mismatch");
+          mutations.push(ruleId);
+          rules.set(ruleId, { ...current, enabled });
+        },
       },
     });
-    await expect(adapter.isFenced(ACTION)).resolves.toBe(true);
     await adapter.setFenced({ ...ACTION, fenced: true });
-    expect(requests[1]).toMatchObject({
-      url: "https://api.cherryservers.com/v1/ips/ip-poly",
+    expect(mutations).toEqual(["rule-a"]);
+    expect(rules.get("rule-a")?.enabled).toBe(false);
+    expect(rules.get("rule-b")?.enabled).toBe(true);
+    await expect(adapter.isFenced(ACTION)).resolves.toBe(true);
+    await expect(
+      adapter.isFenced({ ...ACTION, nodeSlug: "beacon" })
+    ).resolves.toBe(false);
+  });
+
+  it("fails closed without a unique source-CIDR binding", async () => {
+    const setRuleEnabled = vi.fn();
+    const adapter = new CherryDatabaseSourceFenceAdapter({
+      resolveBindings: async () => [
+        { ruleId: "rule-a", sourceCidr: "203.0.113.10/32" },
+        { ruleId: "rule-b", sourceCidr: "203.0.113.11/32" },
+      ],
+      firewallRules: {
+        getRule: vi.fn(),
+        setRuleEnabled,
+      },
     });
-    expect(JSON.parse(requests[1]?.body ?? "{}")).toEqual({
-      targeted_to: null,
-      configure: "true",
-    });
+    await expect(
+      adapter.setFenced({ ...ACTION, fenced: true })
+    ).rejects.toThrow("cherry_database_fence_binding_not_unique");
+    expect(setRuleEnabled).not.toHaveBeenCalled();
   });
 
   it("fails closed when a privileged production capability is absent", () => {

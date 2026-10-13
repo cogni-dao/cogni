@@ -102,75 +102,88 @@ export class PinoLokiDatabaseContainmentAuditAdapter {
 }
 
 export interface CherryFenceBinding {
-  readonly ipId: string;
-  readonly serverId: number;
+  readonly ruleId: string;
+  readonly sourceCidr: string;
 }
 
-/** Detaches only the node/cell IP route; it never changes another VM or global rule. */
-export class CherryDatabaseSourceFenceAdapter implements DatabaseSourceFence {
-  private readonly baseUrl: string;
+export interface CherryHostFirewallRuleClient {
+  getRule(input: { readonly ruleId: string }): Promise<{
+    readonly ruleId: string;
+    readonly sourceCidr: string;
+    readonly enabled: boolean;
+  } | null>;
+  setRuleEnabled(input: {
+    readonly ruleId: string;
+    readonly expectedSourceCidr: string;
+    readonly enabled: boolean;
+  }): Promise<void>;
+}
 
+/** Mutates only one catalog-declared source-CIDR rule on a Cherry host. */
+export class CherryDatabaseSourceFenceAdapter implements DatabaseSourceFence {
   constructor(
     private readonly config: {
-      readonly authToken: string;
-      readonly timeoutMs: number;
-      readonly resolveBinding: (input: {
+      readonly firewallRules: CherryHostFirewallRuleClient;
+      readonly resolveBindings: (input: {
         nodeSlug: string;
         environment: DatabaseContainmentAuditEvent["environment"];
-      }) => Promise<CherryFenceBinding>;
-      readonly baseUrl?: string;
-      readonly fetchImpl?: typeof fetch;
+      }) => Promise<readonly CherryFenceBinding[]>;
     }
   ) {
-    if (!config.authToken || !config.resolveBinding) {
+    if (!config.firewallRules || !config.resolveBindings) {
       throw new Error("cherry_database_fence_config_invalid");
     }
-    this.baseUrl = (
-      config.baseUrl ?? "https://api.cherryservers.com/v1"
-    ).replace(/\/$/, "");
   }
 
   async isFenced(
     input: Parameters<DatabaseSourceFence["isFenced"]>[0]
   ): Promise<boolean> {
-    const binding = await this.config.resolveBinding(input);
-    const ip = await this.request<{
-      targeted_to?: number | null;
-      server?: { id?: number };
-    }>(`/ips/${encodeURIComponent(binding.ipId)}`);
-    return (ip.targeted_to ?? ip.server?.id ?? null) !== binding.serverId;
+    const binding = await this.binding(input);
+    const rule = await this.config.firewallRules.getRule({
+      ruleId: binding.ruleId,
+    });
+    if (!rule || rule.sourceCidr !== binding.sourceCidr) {
+      throw new Error("cherry_database_fence_rule_identity_mismatch");
+    }
+    return !rule.enabled;
   }
 
   async setFenced(
     input: Parameters<DatabaseSourceFence["setFenced"]>[0]
   ): Promise<void> {
-    const binding = await this.config.resolveBinding(input);
-    await this.request(`/ips/${encodeURIComponent(binding.ipId)}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        targeted_to: input.fenced ? null : binding.serverId,
-        configure: "true",
-      }),
+    const binding = await this.binding(input);
+    const rule = await this.config.firewallRules.getRule({
+      ruleId: binding.ruleId,
+    });
+    if (!rule || rule.sourceCidr !== binding.sourceCidr) {
+      throw new Error("cherry_database_fence_rule_identity_mismatch");
+    }
+    await this.config.firewallRules.setRuleEnabled({
+      ruleId: binding.ruleId,
+      expectedSourceCidr: binding.sourceCidr,
+      enabled: !input.fenced,
     });
   }
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await (this.config.fetchImpl ?? fetch)(
-      `${this.baseUrl}${path}`,
-      {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${this.config.authToken}`,
-          Accept: "application/json",
-          ...(init.body ? { "content-type": "application/json" } : {}),
-        },
-        signal: AbortSignal.timeout(this.config.timeoutMs),
-      }
-    );
-    if (!response.ok)
-      throw new Error(`cherry_database_fence_http_${response.status}`);
-    return (await response.json()) as T;
+  private async binding(input: {
+    readonly nodeSlug: string;
+    readonly environment: DatabaseContainmentAuditEvent["environment"];
+  }): Promise<CherryFenceBinding> {
+    const bindings = await this.config.resolveBindings(input);
+    if (bindings.length !== 1) {
+      throw new Error("cherry_database_fence_binding_not_unique");
+    }
+    const binding = bindings[0];
+    if (!binding || !binding.ruleId || !isIpv4Cidr(binding.sourceCidr)) {
+      throw new Error("cherry_database_fence_binding_invalid");
+    }
+    return binding;
   }
+}
+
+function isIpv4Cidr(value: string): boolean {
+  const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d|[12]\d|3[0-2])$/.exec(value);
+  return Boolean(match?.[1]?.split(".").every((octet) => Number(octet) <= 255));
 }
 
 function escapeLogQl(value: string): string {

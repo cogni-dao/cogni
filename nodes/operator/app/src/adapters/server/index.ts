@@ -123,6 +123,7 @@ export { type Database, getAppDb } from "./db/client";
 export {
   CherryDatabaseSourceFenceAdapter,
   type CherryFenceBinding,
+  type CherryHostFirewallRuleClient,
   createProductionDatabaseContainmentAdapter,
   PinoLokiDatabaseContainmentAuditAdapter,
   PostgresAdminSqlAdapter,
