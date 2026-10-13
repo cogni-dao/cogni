@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /** Authenticated, node-scoped ReliabilityStatusV1 read. Missing evidence returns unknown. */
 
@@ -106,7 +106,7 @@ export async function GET(
       diskHeadroomPct: null,
     },
     incidentReason: "required reliability evidence is missing",
-    lastTransitionAt: database?.lastTransitionAt ?? null,
+    lastTransitionAt: null,
     evidenceQueryRefs: [],
   }));
 

@@ -1145,7 +1145,7 @@ function createContainer(): Container {
     paymentRailsActive: !!getPaymentConfig(),
     paymentRailGuard,
     metricsQuery,
-    reliabilityStatusReader,
+    ...(reliabilityStatusReader ? { reliabilityStatusReader } : {}),
     treasuryReadPort,
     aiTelemetry,
     langfuse,

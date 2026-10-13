@@ -30,6 +30,14 @@ export class HttpReliabilityStatusAdapter
     if (!response.ok) {
       throw new Error(`reliability actuator status failed: ${response.status}`);
     }
-    return reliabilityStatusV1Schema.parse(await response.json());
+    const status = reliabilityStatusV1Schema.parse(await response.json());
+    if (
+      status.nodeId !== input.nodeId ||
+      status.slug !== input.nodeSlug ||
+      status.environment !== input.environment
+    ) {
+      throw new Error("reliability actuator returned a cross-node status");
+    }
+    return status;
   }
 }
