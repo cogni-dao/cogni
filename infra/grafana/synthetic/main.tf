@@ -98,6 +98,47 @@ data "grafana_folder" "reliability" {
   uid      = "cogni-reliability"
 }
 
+# Fleet alerting is query-only. Rules continue evaluating and retain current
+# state/history in Grafana, but no notification integration may push alerts.
+# The provider requires a structurally valid receiver even for a muted route;
+# the null receiver below exists only behind an all-time mute.
+resource "grafana_mute_timing" "query_only" {
+  provider = grafana.stack
+  name     = "cogni-query-only"
+
+  # Grafana defines an empty interval as muted for all time.
+  intervals {}
+}
+
+# Grafana requires every policy to name a contact point. This deliberately
+# unreachable receiver is structural only and is always protected by the
+# all-time mute below; it contains no human address or secret.
+resource "grafana_contact_point" "query_only" {
+  provider = grafana.stack
+  name     = "cogni-query-only-null"
+
+  webhook {
+    url                     = "https://query-only.invalid/cogni"
+    disable_resolve_message = true
+  }
+}
+
+resource "grafana_notification_policy" "query_only" {
+  provider        = grafana.stack
+  contact_point   = grafana_contact_point.query_only.name
+  group_by        = ["grafana_folder", "alertname"]
+  group_wait      = "30s"
+  group_interval  = "5m"
+  repeat_interval = "12h"
+
+  # A matcher-free child consumes every alert and mutes notification delivery.
+  policy {
+    contact_point = grafana_contact_point.query_only.name
+    mute_timings  = [grafana_mute_timing.query_only.name]
+    continue      = false
+  }
+}
+
 resource "grafana_synthetic_monitoring_check" "environment_readyz" {
   provider = grafana.sm
   for_each = local.environment_targets
@@ -167,6 +208,14 @@ resource "grafana_rule_group" "fleet_capacity" {
       })
       is_paused = false
 
+      # Keep evaluation/query surfaces live while suppressing every push.
+      # Explicit rule routing prevents a mutable root policy from re-enabling
+      # fleet notifications later.
+      notification_settings {
+        contact_point = grafana_contact_point.query_only.name
+        mute_timings  = [grafana_mute_timing.query_only.name]
+      }
+
       dynamic "data" {
         for_each = rule.value.data
 
@@ -215,4 +264,5 @@ output "environment_target_counts" {
 output "public_status_url" {
   description = "Anonymous URL for the redacted fleet status dashboard."
   value       = "${trimsuffix(data.terraform_remote_state.grafana_bootstrap.outputs.grafana_url, "/")}/public-dashboards/${grafana_dashboard_public.fleet_status.access_token}"
+  sensitive   = true
 }
