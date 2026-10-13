@@ -63,6 +63,8 @@ tags: [scheduler]
 
 13b. **ACTIVITY_IDEMPOTENCY**: All Activities must be idempotent or rely on downstream idempotency. `executeGraphActivity` relies on `execution_requests` table. `updateScheduleRunActivity` must use monotonic status updates (pending→running→success/error, never backwards).
 
+13c. **TRANSPORT_UNCERTAINTY_IS_NOT_TERMINAL**: `executeGraphActivity` retries transient HTTP/network failures through Temporal with the same idempotency key and canonical run ID. `409` means the claimed execution is still pending; a cached `200` is definitive. Retry-budget exhaustion leaves the run non-terminal rather than racing a later node success with a false error.
+
 14. **SCHEDULED_TIMESTAMP_FROM_TEMPORAL**: Activities derive `scheduledFor` from `TemporalScheduledStartTime` search attribute (authoritative source), never from workflow input or wall clock.
 
 15. **CRUD_IS_TEMPORAL_AUTHORITY**: Schedule CRUD endpoints (create/update/enable/disable/delete) are the single authority for Temporal schedule lifecycle. Worker never modifies schedules.

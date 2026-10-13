@@ -17,6 +17,7 @@
 export {
   EXTERNAL_API_ACTIVITY_OPTIONS,
   GRAPH_EXECUTION_ACTIVITY_OPTIONS,
+  NODE_TASK_DISPATCH_ACTIVITY_OPTIONS,
   STANDARD_ACTIVITY_OPTIONS,
 } from "./activity-profiles.js";
 // Activity type interfaces

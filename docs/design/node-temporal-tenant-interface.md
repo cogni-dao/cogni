@@ -75,7 +75,7 @@ NodeTaskWorkflow(input: NodeTaskInput)              // .strict() zod, packages/t
   → validateGrantActivity(actor, nodeId, grantId, "task:dispatch:<route>")   // NET-NEW: must assert grant↔node (M1) + scope-generalized (M2)
   → dispatchNodeTaskActivity(nodeId, route, payload, scheduledFor)            // POST {nodeUrl}{route}, principal = per-node token (G1, fail-closed)
         Idempotency-Key: `${nodeId}/${scheduleId}/${scheduledFor}`           // header; the NODE ROUTE must dedup on it (hard contract)
-        retry profile: maximumAttempts:1 (MVP — mirrors executeGraphActivity GRAPH_EXECUTION_ACTIVITY_OPTIONS; no retry until the dedup contract is proven)
+        retry profile: maximumAttempts:1 (MVP — NODE_TASK_DISPATCH_ACTIVITY_OPTIONS; no retry until the node-task receiver dedup contract is proven)
   → (no graph child — the node's route IS the work)
 ```
 
@@ -87,8 +87,9 @@ requirements the build MUST honor (review M-fixes):**
 - **Idempotency is a two-sided contract (M3).** The operator forwards
   `Idempotency-Key: ${nodeId}/${scheduleId}/${scheduledFor}`; the node route **MUST**
   dedup on it. A key the receiver ignores does not make a POST idempotent. MVP retry
-  profile = `maximumAttempts:1` (the cited graph clone uses exactly this, precisely for
-  idempotency-collision risk); a retry profile is gated on the documented dedup contract.
+  profile = `maximumAttempts:1` because generic node-task receivers do not yet share
+  the graph route's durable `execution_requests` contract; retries are gated on a
+  documented receiver-side dedup contract.
 - **`scheduledFor` derives from the `TemporalScheduledStartTime` search attribute**
   inside the workflow (M-fix), never from input or wall clock (SCHEDULED_TIME_FROM_TEMPORAL).
 - **Route allow-listing (M3/security):** `route` is validated to the node's OWN host —
