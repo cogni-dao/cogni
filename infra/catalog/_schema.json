@@ -20,7 +20,7 @@
         "properties": { "type": { "const": "node" } },
         "required": ["type"]
       },
-      "then": { "required": ["node_port"] }
+      "then": { "required": ["node_port", "database"] }
     },
     {
       "$comment": "task.5025 — every node carries the stable wallet binding used to project an env-local users row, plus exactly one activity_env. activity_env is the singleton environment allowed to ingest Git receipts and run epoch schedules.",
@@ -251,6 +251,17 @@
       "minItems": 1,
       "uniqueItems": true
     },
+    "database": {
+      "type": "object",
+      "description": "Provider-neutral per-environment Postgres placement. Shared means a bounded database on the environment pool; dedicated means an operator-managed provider VM, process, and fixed block volume. This is state placement, never Akash app placement.",
+      "additionalProperties": false,
+      "properties": {
+        "candidate-a": { "$ref": "#/$defs/databasePlacement" },
+        "preview": { "$ref": "#/$defs/databasePlacement" },
+        "production": { "$ref": "#/$defs/databasePlacement" }
+      },
+      "minProperties": 1
+    },
     "deployment_provider": {
       "type": "object",
       "description": "Operator-owned per-environment app placement. Omitted environments preserve the k3s default; akash routes only the node app workload through the off-cluster ComputeWorkload reconciler.",
@@ -360,6 +371,19 @@
     "is_primary_host": {
       "type": "boolean",
       "description": "When true, this node serves the bare base domain (e.g. operator → https://${DOMAIN}). Defaults to false: every other node uses the ${name}-${DOMAIN} (multi-level domains) or ${name}.${DOMAIN} (TLD-style) convention. Consumed by host_for_node() in scripts/ci/lib/image-tags.sh. Exactly one catalog entry per repo should set this true."
+    }
+  },
+  "$defs": {
+    "databasePlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "budget_profile"],
+      "properties": {
+        "tier": { "enum": ["shared", "dedicated"] },
+        "budget_profile": {
+          "enum": ["shared-default-v1", "poly-dedicated-v1"]
+        }
+      }
     }
   }
 }

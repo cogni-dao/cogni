@@ -139,6 +139,18 @@ export type {
   ResolvedConnection,
 } from "./connection-broker.port";
 export type {
+  DatabaseCellPhase,
+  DatabaseCellStatus,
+  DatabaseContainmentAction,
+  DatabaseContainmentPort,
+  DatabaseContainmentReason,
+  DatabaseContainmentStatus,
+  DatabaseEnvironment,
+  DatabaseStateCellPort,
+  DatabaseTier,
+  ProvisionDatabaseCellInput,
+} from "./database-containment.port";
+export type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
   ClassifyEnvManagerPrInput,

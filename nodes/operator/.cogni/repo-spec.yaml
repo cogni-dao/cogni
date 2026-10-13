@@ -47,6 +47,13 @@ intent:
     icon: "/TransparentBrainOnly.png"
     color: "#6366f1"
 
+state:
+  database:
+    environments:
+      candidate-a: { tier: shared, budget_profile: shared-default-v1 }
+      preview: { tier: shared, budget_profile: shared-default-v1 }
+      production: { tier: shared, budget_profile: shared-default-v1 }
+
 # Privy-managed operator wallet — the runtime container reads THIS file as
 # /app/.cogni/repo-spec.yaml (Dockerfile copies nodes/operator/.cogni, not root),
 # so operator_wallet must live here too or post-credit outbound funding silently

@@ -43,7 +43,7 @@ pnpm dev:stack                # Same as above, but hits real LiteLLM/OpenRouter
 
 **Database Security Model**: Two-user PostgreSQL architecture separating administrative and application access.
 
-**Per-Node Databases (DB_PER_NODE):** Each node gets its own database on a shared Postgres server. The database IS the node boundary — no tenancy columns. See [Multi-Node Tenancy](multi-node-tenancy.md).
+**Per-Node Databases (DB_PER_NODE):** Each node gets its own database. Small nodes use the bounded shared Postgres tier; a measured outlier uses an operator-managed dedicated state cell with its own provider VM, Postgres process, and fixed block volume. Placement changes the failure domain, never schema ownership: the database remains the node boundary and no tenancy columns are introduced. See [Multi-Node Tenancy](multi-node-tenancy.md).
 
 **Postgres vs Doltgres:** This spec covers the Postgres (awareness plane) side. The knowledge plane runs on a separate Doltgres server with per-node `knowledge_<node>` databases and git-like versioning — see [Knowledge Data Plane](knowledge-data-plane.md).
 
@@ -57,6 +57,23 @@ pnpm dev:stack                # Same as above, but hits real LiteLLM/OpenRouter
 `COGNI_NODE_DBS` is required — `provision.sh` fails fast if not set. No defaults, no fallback chain.
 
 All stack deployment modes use the same migration tooling but connect to appropriate database instances. Test environments always use the test database and reset it between test runs.
+
+### Database placement and budgets
+
+Database state is distinct from app compute. A dedicated cell is provisioned on a provider VM and fixed block volume; it is never placed in an Akash app lease. The node repo-spec declares `state.database.environments.<env>.{tier,budget_profile}`. The operator catalog projects the same desired placement for every deployed slot under `database.<env>`. The catalog is the environment reconciliation authority; validation must reject an absent deployed environment or a tier/profile drift from the node declaration.
+
+Budget profile values live in `infra/database-budget-profiles.yaml`. Shared nodes are bounded with native role controls before admission: per-role `CONNECTION LIMIT` and `statement_timeout`, plus `lock_timeout`, `idle_in_transaction_session_timeout`, `temp_file_limit`, and `work_mem`. Client pools may be lower, never higher. Admission replays twice the measured seven-day p95 rate; without history it uses twice the declared profile design rate. These controls reject local excess but do not make a shared host an isolation boundary.
+
+Graduation to `dedicated` is sticky. Provisioning is handled through the typed database state-cell port, outside `deploy-infra.sh`; provider credentials stay in the operator boundary. The status contract exposes desired tier/profile, cell lifecycle, login/session state, and source-fence state without exposing an admin DSN.
+
+Cutover order is fixed and fail-closed:
+
+1. Provision the dedicated cell, apply its role budget, and prove an off-host backup restores.
+2. Fence writes to the shared source; take and restore a final dump; compare schema version and table counts/checksums.
+3. Atomically rotate the node's `DATABASE_URL` and `DATABASE_SERVICE_URL` in its OpenBao bucket, force ESO sync, and prove the restarted consumer uses the new endpoint.
+4. Keep the source read-only for the rollback window; never dual-write. Rollback rotates both DSNs back and fences only the node.
+
+Containment is one audited action: revoke the node roles' login, terminate their sessions, and apply the node's source-specific network fence. Re-admission requires explicit audit evidence and restores role login before removing that fence. No action restarts or mutates the shared control-plane databases.
 
 ## Database Provisioning (Infrastructure-as-Code)
 

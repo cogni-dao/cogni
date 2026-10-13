@@ -42,6 +42,13 @@ intent:
   # this is the monorepo identity for tooling that resolves the repo root.
   mission: "The Cogni node platform monorepo — the operator control plane plus the node template every Cogni DAO node is forged from."
 
+state:
+  database:
+    environments:
+      candidate-a: { tier: shared, budget_profile: shared-default-v1 }
+      preview: { tier: shared, budget_profile: shared-default-v1 }
+      production: { tier: shared, budget_profile: shared-default-v1 }
+
 # Node registry — operator declares child nodes in the monorepo.
 # Each entry points to a node dir with its own .cogni/repo-spec.yaml.
 # Per REPO_SPEC_AUTHORITY: this is the node discovery source.

@@ -29,6 +29,10 @@ preview_branch: deploy/preview-operator
 production_branch: deploy/production-operator
 # task.5017 — per-env node-set (deploy ⊆ provisioned). Must include candidate-a (candidate-flightable); preview/production are opt-in once proven.
 envs: [candidate-a, preview, production]
+database:
+  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
+  preview: { tier: shared, budget_profile: shared-default-v1 }
+  production: { tier: shared, budget_profile: shared-default-v1 }
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/operator/

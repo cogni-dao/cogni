@@ -18,6 +18,8 @@ production_branch: deploy/production-beacon
 # story.5016 production cutover: preview slot retired (preview has no funded Akash
 # account and gets no actuator; its lease on the shared account was closed).
 envs: [production]
+database:
+  production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction

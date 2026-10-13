@@ -22,7 +22,10 @@
  * @public
  */
 
-import { renderNodeDeploymentYaml } from "@cogni/repo-spec";
+import {
+  renderNodeDeploymentYaml,
+  renderNodeStateYaml,
+} from "@cogni/repo-spec";
 import { v5 as uuidv5 } from "uuid";
 
 import type { NodeKnowledgeRemote } from "../knowledge-remote";
@@ -121,6 +124,11 @@ ${input.knowledgeRemote ? renderKnowledgeBlock(input.knowledgeRemote) : ""}
 # add \`secret_refs\` here for a secret BEYOND the profile.
 # Add sibling services here (private by default) as this node grows.
 ${renderNodeDeploymentYaml().trimEnd()}
+
+# State substrate is declared separately from app compute. New nodes start on
+# bounded shared Postgres and graduate to a dedicated provider-VM cell only
+# through the operator's measured isolation policy.
+${renderNodeStateYaml().trimEnd()}
 
 # Activity ledger ingestion + approver allowlist.
 # \`approvers\` gates the \`(admin)/\` route group and write routes under

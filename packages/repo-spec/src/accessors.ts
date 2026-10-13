@@ -17,6 +17,7 @@ import type {
   KnowledgeSpec,
   NodeRegistryEntry,
   NodeServiceRuntimeProfileSpec,
+  NodeStateSpec,
   OperatorWalletSpec,
   RepoSpec,
   StewardWalletSpec,
@@ -132,6 +133,11 @@ export interface NodeServiceConfig {
     readonly memoryMi: number;
     readonly storageMi: number;
   };
+}
+
+/** Resolve the node-authored state-substrate declaration, when present. */
+export function extractNodeState(spec: RepoSpec): NodeStateSpec | null {
+  return spec.state ?? null;
 }
 
 // ---------------------------------------------------------------------------

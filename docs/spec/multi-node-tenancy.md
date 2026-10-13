@@ -124,7 +124,7 @@ All invariants are detailed in their respective sections below. Summary:
 
 | Invariant                         | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| DB_PER_NODE                       | 1 Postgres server, 1 database per node. Each node has its own database, its own migrations, its own schema version.                                                                                                                                                                                                                                                                                                                        |
+| DB_PER_NODE                       | 1 logical database per node. Bounded small nodes may share a Postgres server; measured outliers use an operator-managed dedicated state cell. Placement never changes database ownership, migrations, or schema version.                                                                                                                                                                                                                   |
 | DB_IS_BOUNDARY                    | The database itself is the node boundary. No `node_id` columns needed in node-local tables — the DB already scopes to this node. User/account-scoped RLS within the node is still legitimate and expected.                                                                                                                                                                                                                                 |
 | NODE_LOCAL_METERING_PRIMARY       | Each node's local billing/metering data is authoritative. Operator aggregation is derived, never the source of truth. If operator aggregate diverges from node-local, **node-local wins**.                                                                                                                                                                                                                                                 |
 | MISSING_NODE_ID_DEFAULTS_OPERATOR | If `node_id` is absent from callback metadata (e.g., direct LiteLLM call, legacy client), the custom callback defaults to the operator node and logs a warning. This prevents silent data loss while making misrouted callbacks detectable.                                                                                                                                                                                                |
@@ -138,23 +138,21 @@ All invariants are detailed in their respective sections below. Summary:
 ### Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Shared Postgres Server (1 instance, cost-efficient) │
-│                                                       │
-│  ┌──────────────┐  ┌────────────┐  ┌──────────────┐ │
-│  │ operator_db  │  │  poly_db   │  │  resy_db     │ │
-│  │              │  │            │  │              │ │
-│  │ - users      │  │ - users    │  │ - users      │ │
-│  │ - billing    │  │ - billing  │  │ - billing    │ │
-│  │ - ai_threads │  │ - ai_...   │  │ - ai_...     │ │
-│  │ - aggregation│  │            │  │              │ │
-│  │   (derived)  │  │            │  │              │ │
-│  └──────────────┘  └────────────┘  └──────────────┘ │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────┐  ┌────────────────────────────┐
+│ Bounded shared Postgres              │  │ Dedicated state cell       │
+│ ┌──────────────┐  ┌───────────────┐ │  │ provider VM + process      │
+│ │ operator_db  │  │ small_node_db │ │  │ + fixed block volume       │
+│ └──────────────┘  └───────────────┘ │  │ ┌────────────────────────┐ │
+│ native per-role budgets + admission  │  │ │ measured_outlier_db    │ │
+└──────────────────────────────────────┘  │ └────────────────────────┘ │
+                                          └────────────────────────────┘
 ```
 
 - **Node-scoped DB, user/account-scoped RLS within that DB.** Multiple users and billing accounts exist per node. RLS (per [Database RLS spec](./database-rls.md)) isolates them from each other within the node's database.
 - **Operator DB** contains operator-specific tables (node registry, derived aggregation views, system tenant account). It does not contain copies of node data.
+- **Placement is catalog state, not app placement.** `state.database` in the node repo-spec declares intent; `database.<env>` in the operator catalog is the reconciled projection. A dedicated Postgres cell runs on a provider VM, never inside an Akash application lease.
+- **Structural isolation beats cooperative throttling.** Role limits and request throttles remain defense in depth, but only a distinct VM, Postgres process, and volume prevent an outlier from consuming a neighbor's database failure domain.
+- **Control-plane scope is explicit.** A graduated node never shares its state cell with operator or Temporal persistence. The shared pool and control-plane services may still share an environment VM and remain eligible for later graduation under the same measured policy.
 
 ### As-built gap analysis
 

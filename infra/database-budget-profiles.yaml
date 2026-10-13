@@ -1,0 +1,44 @@
+# Versioned Postgres budgets referenced by infra/catalog/* database declarations.
+# Values are native Postgres/role limits. Admission rate is an input to the
+# candidate replay; it is not a claim about future query shape.
+shared-default-v1:
+  design_rate_per_minute: 60
+  roles:
+    app:
+      connection_limit: 2
+      statement_timeout_ms: 5000
+    service:
+      connection_limit: 4
+      statement_timeout_ms: 2000
+    migration:
+      connection_limit: 1
+      statement_timeout_ms: 900000
+    readonly:
+      connection_limit: 2
+      statement_timeout_ms: 5000
+  common:
+    lock_timeout_ms: 2000
+    idle_in_transaction_session_timeout_ms: 30000
+    temp_file_limit_mib: 128
+    work_mem_mib: 16
+
+poly-dedicated-v1:
+  design_rate_per_minute: 240
+  roles:
+    app:
+      connection_limit: 2
+      statement_timeout_ms: 5000
+    service:
+      connection_limit: 8
+      statement_timeout_ms: 2000
+    migration:
+      connection_limit: 1
+      statement_timeout_ms: 900000
+    readonly:
+      connection_limit: 2
+      statement_timeout_ms: 5000
+  common:
+    lock_timeout_ms: 2000
+    idle_in_transaction_session_timeout_ms: 30000
+    temp_file_limit_mib: 128
+    work_mem_mib: 16

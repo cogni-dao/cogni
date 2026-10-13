@@ -128,6 +128,22 @@ export const LEGACY_DEFAULT_NODE_DEPLOYMENT: NodeDeploymentSpec = {
   services: [{ ...COGNI_NODE_APP_V1_SERVICE, secret_refs: [] }],
 };
 
+/** Stock nodes enter the bounded shared tier; promotion never infers a tier. */
+export const COGNI_NODE_DEFAULT_STATE = {
+  database: {
+    environments: {
+      "candidate-a": { tier: "shared", budget_profile: "shared-default-v1" },
+      preview: { tier: "shared", budget_profile: "shared-default-v1" },
+      production: { tier: "shared", budget_profile: "shared-default-v1" },
+    },
+  },
+} as const;
+
+/** Render the stock provider-neutral state declaration for a new node. */
+export function renderNodeStateYaml(): string {
+  return stringify({ state: COGNI_NODE_DEFAULT_STATE }, { lineWidth: 0 });
+}
+
 /** Required keys a runtime-profiled service has not explicitly declared, in contract order. */
 export function missingRuntimeProfileSecretKeys(input: {
   readonly runtimeProfile?: NodeServiceRuntimeProfileSpec | undefined;

@@ -89,6 +89,7 @@ export {
   CherryComputeError,
   type CherryComputeErrorCode,
 } from "./compute/cherry-compute.adapter";
+export { CherryDatabaseCellAdapter } from "./compute/cherry-database-cell.adapter";
 export { DrizzleComputeCostStore } from "./compute/compute-cost-store.adapter";
 export {
   DormantComputeWorkloadMigrationAdapter,
@@ -117,6 +118,13 @@ export {
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";
+export {
+  type DatabaseContainmentAuditEvent,
+  type DatabaseControlSql,
+  type DatabaseSourceFence,
+  PostgresDatabaseContainmentAdapter,
+  type PostgresDatabaseContainmentDeps,
+} from "./db/postgres-database-containment.adapter";
 export {
   ProbeDeployAdapter,
   type ProbeDeployConfig,
