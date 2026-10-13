@@ -79,6 +79,14 @@ export interface AuthorizationPort {
   check(params: AuthzCheckParams): Promise<AuthzDecision>;
   writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
   deleteRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
+  /**
+   * Lists the stored relation tuples a subject holds (the directly-assigned
+   * ROLE grants, e.g. `developer`/`production_promoter`, not computed
+   * capabilities). Read plane — fail-closed-WITH-DISTINCTION: an infra failure
+   * returns `authz_list_unavailable` (never a silent empty list that would read
+   * as "no grants"). `user` is a resource string (`user:<id>`).
+   */
+  listRelations(user: string): Promise<AuthzListDecision>;
 }
 
 export interface AuthzRelationTuple {
@@ -95,6 +103,18 @@ export type AuthzWriteDecision =
   | {
       readonly decision: "failure";
       readonly code: "authz_write_unavailable";
+      readonly reason?: string;
+    };
+
+export type AuthzListDecision =
+  | {
+      readonly decision: "success";
+      readonly code: "authz_list_success";
+      readonly tuples: readonly AuthzRelationTuple[];
+    }
+  | {
+      readonly decision: "failure";
+      readonly code: "authz_list_unavailable";
       readonly reason?: string;
     };
 
@@ -143,6 +163,9 @@ export {
   OpenFgaAuthorizationAdapter,
   type OpenFgaAuthorizationAdapterConfig,
   type OpenFgaCheckClient,
+  type OpenFgaReadClient,
+  type OpenFgaReadRequest,
+  type OpenFgaReadResponse,
   type OpenFgaStoreClient,
   type OpenFgaWriteClient,
 } from "./adapters/openfga-authorization.adapter";

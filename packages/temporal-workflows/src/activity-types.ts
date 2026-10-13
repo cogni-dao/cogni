@@ -59,7 +59,13 @@ export interface SchedulerActivities {
   updateGraphRunActivity(input: {
     nodeId: string;
     runId: string;
-    status: "running" | "success" | "error" | "skipped" | "cancelled";
+    status:
+      | "running"
+      | "success"
+      | "error"
+      | "timeout"
+      | "skipped"
+      | "cancelled";
     traceId?: string | null;
     errorMessage?: string;
     errorCode?: string;

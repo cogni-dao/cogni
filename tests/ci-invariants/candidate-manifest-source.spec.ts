@@ -237,6 +237,18 @@ describe("candidate-a manifest source", () => {
     expect(images.run).toContain("resolve-pr-build-images.sh");
   });
 
+  it("fails a node-ref before mutation when its exact image is absent", () => {
+    const guard = namedStep("decide", "Require requested node image");
+
+    expect(guard.if).toBe("steps.meta.outputs.node_slug != ''");
+    expect(guard.env?.NODE).toBe("${{ steps.meta.outputs.node_slug }}");
+    expect(guard.env?.PAYLOAD_FILE).toBe(
+      "${{ runner.temp }}/resolved-pr-images.json"
+    );
+    expect(guard.run).toContain("if sys.argv[2] not in targets:");
+    expect(guard.run).toContain("Requested node image is not available yet");
+  });
+
   it("writes scheduler routing to the deploy repository Argo actually watches", () => {
     const resolve = namedStep(
       "reconcile-scheduler-worker-routing",

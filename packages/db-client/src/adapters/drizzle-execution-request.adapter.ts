@@ -24,7 +24,7 @@ import type {
   ExecutionRequestPort,
   IdempotencyCheckResult,
 } from "@cogni/scheduler-core";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, lte, or } from "drizzle-orm";
 import type { Database, LoggerLike } from "../client";
 
 export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
@@ -80,6 +80,19 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
 
     // Hash matches - check if pending (ok=null) or finalized (ok!=null)
     if (record.ok === null) {
+      if (
+        record.leaseExpiresAt !== null &&
+        record.leaseExpiresAt.getTime() <= Date.now()
+      ) {
+        this.logger.info(
+          { idempotencyKey, runId: record.runId },
+          "Idempotency key hit, execution lease is stale"
+        );
+        return {
+          status: "stale",
+          request: this.toExecutionRequest(record),
+        };
+      }
       this.logger.info(
         { idempotencyKey, runId: record.runId },
         "Idempotency key hit, execution still pending"
@@ -105,21 +118,112 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
     idempotencyKey: string,
     requestHash: string,
     runId: string,
-    traceId: string | null
-  ): Promise<void> {
-    await this.db.insert(executionRequests).values({
-      idempotencyKey,
-      requestHash,
-      runId,
-      traceId,
-      ok: null, // Pending state
-      errorCode: null,
-    });
+    traceId: string | null,
+    leaseExpiresAt?: string
+  ): Promise<
+    IdempotencyCheckResult | { status: "claimed"; request: ExecutionRequest }
+  > {
+    const now = new Date();
+    if (leaseExpiresAt === undefined) {
+      const [inserted] = await this.db
+        .insert(executionRequests)
+        .values({
+          idempotencyKey,
+          requestHash,
+          runId,
+          traceId,
+          ok: null,
+          errorCode: null,
+        })
+        .returning();
+      if (!inserted) {
+        throw new Error("Pending execution request insert returned no row");
+      }
+      return {
+        status: "claimed",
+        request: this.toExecutionRequest(inserted),
+      };
+    }
 
-    this.logger.info(
-      { idempotencyKey, runId, traceId },
-      "Created pending execution request"
-    );
+    const inserted = await this.db
+      .insert(executionRequests)
+      .values({
+        idempotencyKey,
+        requestHash,
+        runId,
+        traceId,
+        ok: null,
+        errorCode: null,
+        updatedAt: now,
+        leaseExpiresAt: new Date(leaseExpiresAt),
+      })
+      .onConflictDoNothing({ target: executionRequests.idempotencyKey })
+      .returning();
+
+    const insertedRecord = inserted[0];
+    if (insertedRecord) {
+      this.logger.info(
+        { idempotencyKey, runId, traceId },
+        "Created pending execution request"
+      );
+      return {
+        status: "claimed",
+        request: this.toExecutionRequest(insertedRecord),
+      };
+    }
+
+    // A stale pending lease is re-claimable by exactly one contender. The
+    // request hash guard prevents a different payload from taking the slot.
+    const reclaimed = await this.db
+      .update(executionRequests)
+      .set({
+        traceId,
+        updatedAt: now,
+        leaseExpiresAt: new Date(leaseExpiresAt),
+      })
+      .where(
+        and(
+          eq(executionRequests.idempotencyKey, idempotencyKey),
+          eq(executionRequests.requestHash, requestHash),
+          isNull(executionRequests.ok),
+          or(
+            isNull(executionRequests.leaseExpiresAt),
+            lte(executionRequests.leaseExpiresAt, now)
+          )
+        )
+      )
+      .returning();
+
+    const reclaimedRecord = reclaimed[0];
+    if (reclaimedRecord) {
+      this.logger.info(
+        { idempotencyKey, runId },
+        "Reclaimed stale execution request lease"
+      );
+      return {
+        status: "claimed",
+        request: this.toExecutionRequest(reclaimedRecord),
+      };
+    }
+
+    // A concurrent claimant won or the existing request is already terminal.
+    // Re-read after ON CONFLICT so the caller gets the canonical result.
+    return this.checkIdempotency(idempotencyKey, requestHash);
+  }
+
+  async heartbeatRequest(
+    idempotencyKey: string,
+    leaseExpiresAt: string
+  ): Promise<void> {
+    await this.db
+      .update(executionRequests)
+      .set({ updatedAt: new Date(), leaseExpiresAt: new Date(leaseExpiresAt) })
+      .where(
+        and(
+          eq(executionRequests.idempotencyKey, idempotencyKey),
+          isNull(executionRequests.ok)
+        )
+      );
   }
 
   async finalizeRequest(
@@ -131,8 +235,15 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
       .set({
         ok: outcome.ok,
         errorCode: outcome.errorCode,
+        updatedAt: new Date(),
+        leaseExpiresAt: null,
       })
-      .where(eq(executionRequests.idempotencyKey, idempotencyKey));
+      .where(
+        and(
+          eq(executionRequests.idempotencyKey, idempotencyKey),
+          isNull(executionRequests.ok)
+        )
+      );
 
     this.logger.info(
       { idempotencyKey, ok: outcome.ok, errorCode: outcome.errorCode },
@@ -181,7 +292,6 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
       traceId: row.traceId,
       ok: row.ok,
       errorCode,
-      createdAt: row.createdAt,
     };
   }
 }

@@ -18,6 +18,7 @@ const GRAPH_RUN_STATUSES = [
   "running",
   "success",
   "error",
+  "timeout",
   "skipped",
   "cancelled",
 ] as const;

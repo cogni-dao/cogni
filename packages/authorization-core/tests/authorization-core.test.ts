@@ -23,6 +23,7 @@ import {
   OpenFgaAuthorizationAdapter,
   type OpenFgaCheckClient,
   type OpenFgaCheckRequest,
+  type OpenFgaReadClient,
   type OpenFgaStoreClient,
   type OpenFgaWriteClient,
   relationForAuthzAction,
@@ -571,5 +572,124 @@ describe("OpenFGA write deadline", () => {
     const decision = await adapter.writeRelation(tuple);
     expect(decision.code).toBe("authz_write_unavailable");
     expect(decision.reason).toContain("timed out after 50ms");
+  });
+});
+
+describe("listRelations", () => {
+  it("FakeAuthorizationAdapter lists written tuples for a user", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    await authz.writeRelation({
+      user: "user:agent-1",
+      relation: "developer",
+      object: "node:node-1",
+    });
+    await authz.writeRelation({
+      user: "user:agent-1",
+      relation: "production_promoter",
+      object: "node:node-2",
+    });
+    await authz.writeRelation({
+      user: "user:someone-else",
+      relation: "developer",
+      object: "node:node-3",
+    });
+
+    const listed = await authz.listRelations("user:agent-1");
+    expect(listed.decision).toBe("success");
+    if (listed.decision !== "success") throw new Error("expected success");
+    expect(listed.tuples).toHaveLength(2);
+    expect(listed.tuples.map((t) => t.object).sort()).toEqual([
+      "node:node-1",
+      "node:node-2",
+    ]);
+  });
+
+  it("FakeAuthorizationAdapter can fail-close distinctly", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    authz.failNextList();
+    await expect(authz.listRelations("user:agent-1")).resolves.toMatchObject({
+      decision: "failure",
+      code: "authz_list_unavailable",
+    });
+  });
+
+  it("OpenFgaAuthorizationAdapter maps a Read response to tuples", async () => {
+    const seen: unknown[] = [];
+    const client = {
+      async check(): Promise<{ allowed: boolean }> {
+        return { allowed: false };
+      },
+      async read(body: unknown) {
+        seen.push(body);
+        return {
+          tuples: [
+            {
+              key: {
+                user: "user:a",
+                relation: "developer",
+                object: "node:n1",
+              },
+            },
+            // malformed entry (no key) must be dropped, not crash
+            {},
+          ],
+        };
+      },
+    } satisfies OpenFgaReadClient;
+
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+    });
+
+    const listed = await authz.listRelations("user:a");
+    expect(listed.decision).toBe("success");
+    if (listed.decision !== "success") throw new Error("expected success");
+    expect(listed.tuples).toEqual([
+      { user: "user:a", relation: "developer", object: "node:n1" },
+    ]);
+    expect(seen).toEqual([{ user: "user:a", object: "node:" }]);
+  });
+
+  it("OpenFgaAuthorizationAdapter fails closed when Read throws", async () => {
+    const client = {
+      async check(): Promise<{ allowed: boolean }> {
+        return { allowed: false };
+      },
+      async read(): Promise<never> {
+        throw new Error("network down");
+      },
+    } satisfies OpenFgaReadClient;
+
+    await expect(
+      new OpenFgaAuthorizationAdapter({
+        apiUrl: "http://openfga.test",
+        storeId: "store",
+        client,
+      }).listRelations("user:a")
+    ).resolves.toMatchObject({
+      decision: "failure",
+      code: "authz_list_unavailable",
+    });
+  });
+
+  it("OpenFgaAuthorizationAdapter fails closed when the client cannot read", async () => {
+    const client = {
+      async check(): Promise<{ allowed: boolean }> {
+        return { allowed: false };
+      },
+    } satisfies OpenFgaCheckClient;
+
+    await expect(
+      new OpenFgaAuthorizationAdapter({
+        apiUrl: "http://openfga.test",
+        storeId: "store",
+        client,
+      }).listRelations("user:a")
+    ).resolves.toMatchObject({
+      decision: "failure",
+      code: "authz_list_unavailable",
+    });
   });
 });

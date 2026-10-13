@@ -335,6 +335,30 @@ jobs:
           echo "::error::No deployable artifact images found for ${{ steps.meta.outputs.image_tag }}"
           exit 1
 
+      # A same-repo node-ref may resolve the PR's full affected set. Content-hash
+      # infra images can already exist even while the requested node image is still
+      # building, so "at least one image" is not sufficient: proceeding would sync
+      # the source overlay's advisory digest and mutate candidate-a without ever
+      # promoting the requested artifact. Fail before any deploy-state mutation.
+      - name: Require requested node image
+        if: steps.meta.outputs.node_slug != ''
+        env:
+          NODE: ${{ steps.meta.outputs.node_slug }}
+          PAYLOAD_FILE: ${{ runner.temp }}/resolved-pr-images.json
+        run: |
+          python3 - "$PAYLOAD_FILE" "$NODE" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          targets = {item.get("target") for item in payload.get("targets", [])}
+          if sys.argv[2] not in targets:
+              raise SystemExit(
+                  f"::error::Requested node image is not available yet: {sys.argv[2]}"
+              )
+          PY
+
       - name: Upload resolved-pr-images artifact
         if: steps.flight-targets.outputs.has_image_inputs == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -1962,7 +1986,7 @@ jobs:
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.node_source_sha || needs.decide.outputs.head_sha }}
           NODES: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
-          CUTOVER_TIMEOUT: ${{ env.DEPLOYMENT_PROVIDER == 'akash' && '420' || '90' }}
+          CUTOVER_TIMEOUT: "420"
           # bug.5183: candidate-flight always flights a fresh single-SHA build of
           # this image, so every probed app carries the SHA-addressed static
           # marker. Assert the served bundle — not just the dynamic /version

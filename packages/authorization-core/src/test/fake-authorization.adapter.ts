@@ -16,6 +16,7 @@ import type {
   AuthzCheckParams,
   AuthzDecision,
   AuthzDecisionCode,
+  AuthzListDecision,
   AuthzRelationTuple,
   AuthzSubcheck,
   AuthzWriteDecision,
@@ -115,6 +116,25 @@ export class FakeAuthorizationAdapter implements AuthorizationPort {
 
   hasRelation(tuple: AuthzRelationTuple): boolean {
     return this.relations.has(relationKey(tuple));
+  }
+
+  /** Set the next listRelations() to fail-closed (authz_list_unavailable). */
+  failNextList(reason = "Fake authz list unavailable"): void {
+    this.listUnavailableReason = reason;
+  }
+
+  private listUnavailableReason: string | undefined;
+
+  async listRelations(user: string): Promise<AuthzListDecision> {
+    if (this.listUnavailableReason !== undefined) {
+      const reason = this.listUnavailableReason;
+      this.listUnavailableReason = undefined;
+      return { decision: "failure", code: "authz_list_unavailable", reason };
+    }
+    const tuples = [...this.relations]
+      .map((key) => JSON.parse(key) as AuthzRelationTuple)
+      .filter((tuple) => tuple.user === user);
+    return { decision: "success", code: "authz_list_success", tuples };
   }
 }
 

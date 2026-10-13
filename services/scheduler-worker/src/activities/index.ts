@@ -11,7 +11,7 @@
  *   - Per SHARED_COMPUTE_HOLDS_NO_DB_CREDS (task.0280): createGraphRun / updateGraphRun / validateGrant are HTTP-delegated to the owning node (POST/PATCH /api/internal/graph-runs, POST /api/internal/grants/:id/validate). Worker holds no DB credentials on this path.
  *   - Per GRANT_VALIDATED_TWICE: Worker validates grant before calling API (fail-fast, scheduled runs only)
  *   - Per SINGLE_RUN_LEDGER: all run records written to graph_runs table (owned by each node's DB)
- *   - 4xx retry semantics: permanent 4xx (400/401/403/422) → ApplicationFailure.nonRetryable; transient 4xx (404/408/409/429) + 5xx → bubble for Temporal retry. Grant errors (expired / revoked / scope mismatch / not found) always nonRetryable.
+ *   - 4xx retry semantics: permanent 4xx (400/401/403/422) → ApplicationFailure.nonRetryable; transient 4xx (404/408/409/429) + 5xx/network → retryable ApplicationFailure. Grant errors (expired / revoked / scope mismatch / not found) always nonRetryable.
  *   - SCHEDULER_API_TOKEN treated as secret (never logged)
  * Side-effects: IO (HTTP to node internal API via GraphRunHttpWriter / ExecutionGrantHttpValidator)
  * Links: docs/spec/scheduler.md, docs/spec/temporal-patterns.md, docs/spec/unified-graph-launch.md
@@ -19,6 +19,7 @@
  */
 
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
+import { InternalGraphRunOutputSchema } from "@cogni/node-contracts";
 import { type GraphRunKind, nodeTaskScope } from "@cogni/scheduler-core";
 import { ApplicationFailure, activityInfo } from "@temporalio/activity";
 import {
@@ -146,7 +147,7 @@ export interface ExecuteGraphOutput {
 export interface UpdateGraphRunInput {
   nodeId: string;
   runId: string;
-  status: "running" | "success" | "error" | "skipped" | "cancelled";
+  status: "running" | "success" | "error" | "timeout" | "skipped" | "cancelled";
   traceId?: string | null;
   errorMessage?: string;
   errorCode?: string;
@@ -159,12 +160,20 @@ export interface UpdateGraphRunInput {
 function getWorkflowCorrelation(): {
   workflowId: string;
   temporalRunId: string;
+  activityAttempt: number;
 } {
   const info = activityInfo();
   return {
     workflowId: info.workflowExecution.workflowId,
     temporalRunId: info.workflowExecution.runId,
+    activityAttempt: info.attempt,
   };
+}
+
+const RETRYABLE_GRAPH_HTTP_STATUSES = new Set([404, 408, 409, 429]);
+
+function isRetryableGraphHttpStatus(status: number): boolean {
+  return status >= 500 || RETRYABLE_GRAPH_HTTP_STATUSES.has(status);
 }
 
 /**
@@ -344,67 +353,177 @@ export function createActivities(deps: ActivityDeps) {
       idempotencyKey,
     });
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.schedulerApiToken}`,
-        "Idempotency-Key": idempotencyKey,
-      },
-      body: JSON.stringify({
-        executionGrantId,
-        input: graphInput,
-        runId, // Pass canonical runId to internal API
-      }),
-    });
-
-    if (!response.ok) {
-      // Handle HTTP errors
-      const errorText = await response.text();
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.schedulerApiToken}`,
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({
+          executionGrantId,
+          input: graphInput,
+          runId, // Pass canonical runId to internal API
+        }),
+      });
+    } catch {
       const durationMs = performance.now() - start;
-      const errorType =
-        response.status >= 400 && response.status < 500
-          ? "non_retryable"
-          : "retryable";
-
       activityDurationMs
         .labels({ activity: "executeGraph", status: "error" })
         .observe(durationMs);
       activityErrorsTotal
-        .labels({ activity: "executeGraph", error_type: errorType })
+        .labels({ activity: "executeGraph", error_type: "retryable" })
         .inc();
 
-      logger.error(
+      logger.warn(
         {
           event: WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR,
           ...correlation,
-          status: response.status,
+          reasonCode: "graph_transport_network",
+          retryable: true,
           temporalScheduleId,
           graphId,
           runId,
-          errorText,
+          idempotencyKey,
           durationMs,
         },
         WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR
       );
 
-      // 4xx errors are non-retryable (auth, validation, business logic failures)
-      // 5xx errors and network errors should be retried
-      if (response.status >= 400 && response.status < 500) {
-        throw ApplicationFailure.nonRetryable(
-          `Internal API client error: ${response.status} - ${errorText}`,
-          "InternalApiClientError",
-          { status: response.status, temporalScheduleId, graphId, runId }
-        );
-      }
-
-      // 5xx errors - let Temporal retry
-      throw new Error(
-        `Internal API server error: ${response.status} - ${errorText}`
+      throw ApplicationFailure.retryable(
+        "Graph execution transport failed before a response was received",
+        "GRAPH_TRANSPORT_NETWORK",
+        { temporalScheduleId, graphId, runId, idempotencyKey }
       );
     }
 
-    const result = (await response.json()) as ExecuteGraphOutput;
+    if (!response.ok) {
+      const durationMs = performance.now() - start;
+      const retryable = isRetryableGraphHttpStatus(response.status);
+      const reasonCode =
+        response.status === 409
+          ? "graph_execution_pending"
+          : retryable
+            ? "graph_transport_http"
+            : "graph_request_rejected";
+
+      // A 409 is the receiver's healthy join/reconciliation state after an
+      // uncertain transport result, not a graph or activity error. Keep it out
+      // of fleet error counters while Temporal applies the bounded backoff.
+      activityDurationMs
+        .labels({
+          activity: "executeGraph",
+          status: response.status === 409 ? "pending" : "error",
+        })
+        .observe(durationMs);
+      if (response.status !== 409) {
+        activityErrorsTotal
+          .labels({
+            activity: "executeGraph",
+            error_type: retryable ? "retryable" : "non_retryable",
+          })
+          .inc();
+      }
+
+      const eventName =
+        response.status === 409
+          ? WORKER_EVENT_NAMES.ACTIVITY_GRAPH_PENDING
+          : WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR;
+      const logFields = {
+        event: eventName,
+        ...correlation,
+        reasonCode,
+        retryable,
+        httpStatus: response.status,
+        temporalScheduleId,
+        graphId,
+        runId,
+        idempotencyKey,
+        durationMs,
+      };
+      if (response.status === 409) {
+        logger.info(logFields, eventName);
+      } else if (retryable) {
+        logger.warn(logFields, eventName);
+      } else {
+        logger.error(logFields, eventName);
+      }
+
+      if (retryable) {
+        throw ApplicationFailure.retryable(
+          response.status === 409
+            ? "Graph execution is still pending"
+            : `Graph execution transport returned HTTP ${response.status}`,
+          response.status === 409
+            ? "GRAPH_EXECUTION_PENDING"
+            : "GRAPH_TRANSPORT_HTTP",
+          {
+            status: response.status,
+            temporalScheduleId,
+            graphId,
+            runId,
+            idempotencyKey,
+          }
+        );
+      }
+
+      throw ApplicationFailure.nonRetryable(
+        `Graph execution request was rejected with HTTP ${response.status}`,
+        "GRAPH_REQUEST_REJECTED",
+        {
+          status: response.status,
+          temporalScheduleId,
+          graphId,
+          runId,
+          idempotencyKey,
+        }
+      );
+    }
+
+    let result: ExecuteGraphOutput;
+    try {
+      const wireResult = InternalGraphRunOutputSchema.parse(
+        await response.json()
+      );
+      result = wireResult.ok
+        ? wireResult
+        : {
+            ok: false,
+            runId: wireResult.runId,
+            traceId: wireResult.traceId,
+            errorCode: wireResult.error,
+          };
+    } catch {
+      const durationMs = performance.now() - start;
+      activityDurationMs
+        .labels({ activity: "executeGraph", status: "error" })
+        .observe(durationMs);
+      activityErrorsTotal
+        .labels({ activity: "executeGraph", error_type: "retryable" })
+        .inc();
+      logger.warn(
+        {
+          event: WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR,
+          ...correlation,
+          reasonCode: "graph_response_invalid",
+          retryable: true,
+          httpStatus: response.status,
+          temporalScheduleId,
+          graphId,
+          runId,
+          idempotencyKey,
+          durationMs,
+        },
+        WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR
+      );
+      throw ApplicationFailure.retryable(
+        "Graph execution returned an invalid terminal response",
+        "GRAPH_RESPONSE_INVALID",
+        { temporalScheduleId, graphId, runId, idempotencyKey }
+      );
+    }
     const durationMs = performance.now() - start;
 
     if (result.ok) {
