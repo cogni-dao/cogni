@@ -20,6 +20,26 @@ labels: [deployment, infra, ci-cd]
 
 Get the trunk-based pipeline fully green: `pr-build.yml` builds once, `candidate-flight.yml` flies selected PRs into the `candidate-a` slot pre-merge, merged PRs auto-flight to preview via `flight-preview.yml` with a three-value review lease, and `release.yml` policy-gates promotion to production. Task.0293 (PR #870) landed the merge-to-preview lane. Remaining blockers below, plus the critical `candidate-flight` → `deploy-infra` gap tracked in bug.0312.
 
+## Cutover State (2026-04-25)
+
+Live snapshot for cold-reload during the task.0372 cutover. Update on merge events.
+
+| Item                                                              | State                                                                                                                                                          |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **task.0372** (candidate-a per-node matrix + AppSet substrate)    | 🟡 PR #1060 — conditional approve; bug.0378 commit applied; merge-ready                                                                                        |
+| **task.0376** (preview + production matrix cutover + AppSet flip) | 🟢 Filed; absorbs preview/prod AppSet refactor reverted out of #1060 + the SKILL rewrite previously listed under 0372                                          |
+| **task.0375** (catalog Argo destination + retire SSH+kubectl)     | 🟢 Filed `needs_design`; hard-blocked on task.0376                                                                                                             |
+| **bug.0377** (release-pin gate over-broad matcher)                | 🟢 Filed; orthogonal — ship anytime                                                                                                                            |
+| **bug.0378** (reconcile-appset shared-write race)                 | ✅ Filed + fixed in PR #1060 commit `85299e796`                                                                                                                |
+| **bug.0379** (flight↔verify cross-PR race)                       | 🟢 Filed `needs_design`; trail for task.0376 to absorb                                                                                                         |
+| **PR #1056** (bug.0371 wait-for-argocd skip non-HTTP)             | 🟡 Frozen behind #1060 — unfreeze after merge                                                                                                                  |
+| **12 dormant per-node deploy branches**                           | Pushed via `scripts/ops/bootstrap-per-node-deploy-branches.sh`; harmless until task.0376 wires preview/prod writers                                            |
+| **Dogfood evidence for #1060**                                    | Three consecutive clean flights on `feat/task.0372-matrix-cutover` ref: PR #1033 (run 24937132752), PR #1057 (24937541899), PR #1021 post-revert (24937905395) |
+
+**Freeze list** while #1060 is unmerged: `scripts/ci/wait-for-argocd*`, `scripts/ci/promote-*`, AppSet templates, `.github/workflows/{candidate-flight,flight-preview,promote-and-deploy}.yml`. Non-CICD PRs proceed normally.
+
+**Reload-from-cold:** read this section + `gh pr view 1060` + `gh run view 24937905395` to recover full context.
+
 ## Pipeline Health
 
 ```
