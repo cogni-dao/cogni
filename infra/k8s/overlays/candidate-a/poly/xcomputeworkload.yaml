@@ -11,15 +11,15 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:247bbcda0ff273d87567a618e0ebfb6565bde97089dbedab2e6d47327865f590
+    ref: ghcr.io/cogni-dao/poly@sha256:21270b4aa62af4735e76316ac1cc0319a2b7a5568007975d0ece7aa9f071a203
     source:
       repository: cogni-dao/poly
-      sha: 23e1aea29ae8d3e6f7780aad57fd7cdd7eb0c71f
+      sha: 327a4fed395275e977422894f37df3127718077a
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:0158b2dac4d30443757c110f8e329774ee81fe51134f6468c140211f13678584
+        image: ghcr.io/cogni-dao/poly@sha256:2afa1de1891eb42ac6a21a1984dfb59ab52873e251ebd8f96e81a022e4281005
       - name: paper-trader
-        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:9755ec765c6f66f096f200d4b053d7419fc1e27e112d029de54590b2c9e8d5fd
+        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:55ddf7ba32054738e6f7c28eb11123f3f6a47652a4f3025b4663ad2a71f93d38
   workload:
     name: poly
     publicHost: poly-test.cognidao.org
@@ -66,7 +66,7 @@ spec:
   bootPolicy:
     onDeadline: Close
     onGiveUp: Replace
-  leaseGeneration: 41
+  leaseGeneration: 42
   placement:
     requiredCountries:
       - BE
