@@ -164,6 +164,45 @@ run_case "empty-payload" "$UPDATE_MAP" "$EMPTY_TARGETS" "" "no" 0
 # mixed parent/child flight writes per-artifact provenance.
 run_case "mixed-source-sha" "$UPDATE_MAP" "$MIXED_SOURCE_TARGETS" "node-template,operator" "yes" 0
 
+# Case 5 — default helpers stay version-locked to the driver. Candidate flight
+# runs the driver from the reviewed workflow checkout while cwd is the deploy
+# branch and app-src may be an older SHA. Before bug.5458, the defaults reached
+# into ../app-src and a new --source-sha flag failed against the old helper.
+default_case_dir="$WORKDIR/default-helpers"
+mkdir -p \
+  "$default_case_dir/catalog" \
+  "$default_case_dir/infra/k8s/overlays/candidate-a/operator"
+cat >"$default_case_dir/catalog/operator.yaml" <<'YAML'
+name: operator
+type: service
+envs: [candidate-a]
+is_primary_host: true
+YAML
+cat >"$default_case_dir/infra/k8s/overlays/candidate-a/operator/kustomization.yaml" <<'YAML'
+images:
+  - name: ghcr.io/cogni-dao/cogni-template
+    newName: ghcr.io/cogni-dao/cogni-template
+    newTag: candidate-a-old
+YAML
+make_payload \
+  "$default_case_dir/payload.json" \
+  "abcdef1234567890abcdef1234567890abcdef12" \
+  '[{"target":"operator","digest":"ghcr.io/cogni-dao/cogni-template@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
+: >"$default_case_dir/github_output.txt"
+(
+  cd "$default_case_dir"
+  COGNI_CATALOG_ROOT="$default_case_dir/catalog" \
+    PAYLOAD_FILE="$default_case_dir/payload.json" \
+    OVERLAY_ENV=candidate-a \
+    GITHUB_OUTPUT="$default_case_dir/github_output.txt" \
+    bash "$PROMOTE_BUILD_PAYLOAD"
+)
+grep -q 'digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+  "$default_case_dir/infra/k8s/overlays/candidate-a/operator/kustomization.yaml"
+grep -q '"operator": "abcdef1234567890abcdef1234567890abcdef12"' \
+  "$default_case_dir/.promote-state/source-sha-by-app.json"
+echo "[PASS] case=default-helpers workflow source owns driver and helpers"
+
 cd "$REPO_ROOT"
 if [ "$FAILED" -gt 0 ]; then
   echo ""
