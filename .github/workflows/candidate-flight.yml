@@ -1962,7 +1962,7 @@ jobs:
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.node_source_sha || needs.decide.outputs.head_sha }}
           NODES: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
-          CUTOVER_TIMEOUT: ${{ env.DEPLOYMENT_PROVIDER == 'akash' && '420' || '90' }}
+          CUTOVER_TIMEOUT: "420"
           # bug.5183: candidate-flight always flights a fresh single-SHA build of
           # this image, so every probed app carries the SHA-addressed static
           # marker. Assert the served bundle — not just the dynamic /version
