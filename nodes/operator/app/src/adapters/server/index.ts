@@ -117,6 +117,11 @@ export {
   type TokenRefreshFn,
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
+export {
+  DatabaseDsnRotationAdapter,
+  type DatabaseDsnRotationDeps,
+  DatabaseDsnRotationError,
+} from "./db/database-dsn-rotation.adapter";
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";
 export {
   type DatabaseContainmentAuditEvent,

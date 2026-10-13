@@ -181,6 +181,18 @@ export interface CatalogNodeDefinition {
   readonly deployEnvs: readonly ("candidate-a" | "preview" | "production")[];
   readonly activityEnv: "candidate-a" | "preview" | "production";
   readonly ownerWallet: string;
+  /** Catalog-owned database placement and budget for each deployed environment. */
+  readonly databasePlacements: Readonly<
+    Partial<
+      Record<
+        "candidate-a" | "preview" | "production",
+        {
+          readonly tier: "shared" | "dedicated";
+          readonly budgetProfile: string;
+        }
+      >
+    >
+  >;
   /**
    * The row's `deployment_provider` — WHERE this node's app runs, per environment. Projected into
    * the registry so the operator can resolve a node's address from declared placement instead of

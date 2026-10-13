@@ -28,6 +28,12 @@ const DEFINITION: CatalogNodeDefinition = {
   activityEnv: "candidate-a",
   ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
   deploymentProviders: { "candidate-a": "akash" },
+  databasePlacements: {
+    "candidate-a": {
+      tier: "dedicated",
+      budgetProfile: "atlas-dedicated-v1",
+    },
+  },
 };
 
 function makeSelectChain(rows: readonly { id: string }[]) {

@@ -645,6 +645,31 @@ const CatalogRegistryRowSchema = z
     envs: z.array(z.enum(["candidate-a", "preview", "production"])),
     activity_env: z.enum(["candidate-a", "preview", "production"]),
     owner_wallet: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+    database: z
+      .object({
+        "candidate-a": z
+          .object({
+            tier: z.enum(["shared", "dedicated"]),
+            budget_profile: z.string().min(1),
+          })
+          .strict()
+          .optional(),
+        preview: z
+          .object({
+            tier: z.enum(["shared", "dedicated"]),
+            budget_profile: z.string().min(1),
+          })
+          .strict()
+          .optional(),
+        production: z
+          .object({
+            tier: z.enum(["shared", "dedicated"]),
+            budget_profile: z.string().min(1),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict(),
     // bug.5106 — WHERE this node's app runs, per env. Mirrors `deployment_provider` in
     // infra/catalog/_schema.json (`additionalProperties: false`, enum k3s|akash), so a row this
     // parser accepts is exactly a row CI accepts. Absent = every env on k3s (K3S_IS_DEFAULT).
@@ -664,6 +689,15 @@ const CatalogRegistryRowSchema = z
         path: ["activity_env"],
         message: "activity_env must be present in envs",
       });
+    }
+    for (const env of row.envs) {
+      if (!row.database[env]) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["database", env],
+          message: "every deployed environment requires database placement",
+        });
+      }
     }
   });
 
@@ -2600,6 +2634,17 @@ export class GitHubRepoWriter implements DeployPlanePort {
         deployEnvs: row.data.envs,
         activityEnv: row.data.activity_env,
         ownerWallet: row.data.owner_wallet,
+        databasePlacements: Object.fromEntries(
+          Object.entries(row.data.database).map(([env, placement]) => [
+            env,
+            placement
+              ? {
+                  tier: placement.tier,
+                  budgetProfile: placement.budget_profile,
+                }
+              : undefined,
+          ])
+        ),
         deploymentProviders: row.data.deployment_provider ?? {},
       });
     }

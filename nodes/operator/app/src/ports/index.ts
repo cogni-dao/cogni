@@ -145,7 +145,13 @@ export type {
   DatabaseContainmentPort,
   DatabaseContainmentReason,
   DatabaseContainmentStatus,
+  DatabaseDsnPair,
+  DatabaseDsnRotationInput,
+  DatabaseDsnRotationPort,
+  DatabaseDsnRotationResult,
   DatabaseEnvironment,
+  DatabasePlacementResolverPort,
+  DatabaseRuntimeSecretSyncPort,
   DatabaseStateCellPort,
   DatabaseTier,
   ProvisionDatabaseCellInput,
@@ -284,6 +290,8 @@ export type {
   SecretWriteOp,
   WriteNodeSecretInput,
   WriteNodeSecretResult,
+  WriteNodeSecretsInput,
+  WriteNodeSecretsResult,
 } from "./operator-secrets-plane.port";
 export type { OperatorWalletPort } from "./operator-wallet.port";
 export {

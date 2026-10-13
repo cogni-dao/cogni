@@ -25,6 +25,8 @@ import type {
   OperatorSecretsPlanePort,
   WriteNodeSecretInput,
   WriteNodeSecretResult,
+  WriteNodeSecretsInput,
+  WriteNodeSecretsResult,
 } from "@/ports";
 
 export interface OpenBaoSecretsAdapterDeps {
@@ -58,10 +60,27 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
   async writeSecret(
     input: WriteNodeSecretInput
   ): Promise<WriteNodeSecretResult> {
+    const result = await this.writeSecrets({
+      nodeSlug: input.nodeSlug,
+      service: input.service,
+      env: input.env,
+      values: { [input.key]: input.value },
+      op: input.op,
+    });
+    return {
+      written: result.written,
+      version: result.version,
+      path: `${result.path}/${input.key}`,
+    };
+  }
+
+  async writeSecrets(
+    input: WriteNodeSecretsInput
+  ): Promise<WriteNodeSecretsResult> {
     // The bucket is the node's own namespace unless the route resolved (and authorized)
     // a platform-service bucket. Absent `service` → the pre-existing path, unchanged.
     const bucket = input.service ?? input.nodeSlug;
-    const path = `cogni/${input.env}/${bucket}/${input.key}`;
+    const path = `cogni/${input.env}/${bucket}`;
     const token = await this.login();
     // KV v2 data endpoint requires the `data/` infix: <mount>/data/<path>.
     // (metadata uses <mount>/metadata/<path>; the put/patch policy grants
@@ -69,9 +88,14 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
     const dataPath = `cogni/data/${input.env}/${bucket}`;
     const exists = await this.bucketExists(token, input.env, bucket);
     const version = exists
-      ? await this.patch(token, dataPath, input.key, input.value)
-      : await this.put(token, dataPath, input.key, input.value);
-    return { written: true, version, path };
+      ? await this.patch(token, dataPath, input.values)
+      : await this.put(token, dataPath, input.values);
+    return {
+      written: true,
+      version,
+      path,
+      keys: Object.keys(input.values).sort(),
+    };
   }
 
   /** Kubernetes-auth self-login → short-lived client token. */
@@ -111,13 +135,12 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
   private async put(
     token: string,
     dataPath: string,
-    key: string,
-    value: string
+    values: Readonly<Record<string, string>>
   ): Promise<number> {
     const res = await this.fetchImpl(`${this.addr}/v1/${dataPath}`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-vault-token": token },
-      body: JSON.stringify({ data: { [key]: value } }),
+      body: JSON.stringify({ data: values }),
     });
     return readVersion(res, "openbao_put_failed");
   }
@@ -125,8 +148,7 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
   private async patch(
     token: string,
     dataPath: string,
-    key: string,
-    value: string
+    values: Readonly<Record<string, string>>
   ): Promise<number> {
     const res = await this.fetchImpl(`${this.addr}/v1/${dataPath}`, {
       method: "PATCH",
@@ -134,7 +156,7 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
         "content-type": "application/merge-patch+json",
         "x-vault-token": token,
       },
-      body: JSON.stringify({ data: { [key]: value } }),
+      body: JSON.stringify({ data: values }),
     });
     return readVersion(res, "openbao_patch_failed");
   }

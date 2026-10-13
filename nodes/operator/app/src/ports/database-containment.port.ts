@@ -68,11 +68,26 @@ export interface DatabaseContainmentStatus {
   readonly desiredTier: DatabaseTier;
   readonly budgetProfile: string;
   readonly contained: boolean;
+  readonly phase: "open" | "contained" | "recovering";
   readonly activeSessions: number;
   readonly rolesCanLogin: boolean;
   readonly firewallFenced: boolean;
   readonly cell: DatabaseCellStatus | null;
   readonly observedAt: string;
+  readonly lastTransitionAt: string | null;
+  readonly incidentId: string | null;
+  readonly reason: DatabaseContainmentReason | null;
+}
+
+export interface DatabasePlacementResolverPort {
+  resolve(input: {
+    readonly nodeSlug: string;
+    readonly environment: DatabaseEnvironment;
+  }): Promise<{
+    readonly nodeId: string;
+    readonly desiredTier: DatabaseTier;
+    readonly budgetProfile: string;
+  }>;
 }
 
 export interface DatabaseContainmentAction {
@@ -102,4 +117,40 @@ export interface DatabaseContainmentPort {
   }): Promise<DatabaseContainmentStatus>;
   contain(input: DatabaseContainmentAction): Promise<DatabaseContainmentStatus>;
   readmit(input: DatabaseContainmentAction): Promise<DatabaseContainmentStatus>;
+}
+
+export interface DatabaseDsnPair {
+  readonly app: string;
+  readonly service: string;
+}
+
+export interface DatabaseRuntimeSecretSyncPort {
+  forceAndWait(input: {
+    readonly nodeSlug: string;
+    readonly environment: DatabaseEnvironment;
+    readonly openBaoVersion: number;
+  }): Promise<{ readonly receiptId: string }>;
+}
+
+export interface DatabaseDsnRotationInput {
+  readonly nodeId: string;
+  readonly nodeSlug: string;
+  readonly environment: DatabaseEnvironment;
+  readonly incidentId: string;
+  readonly actorId: string;
+  readonly targetCellId: string;
+  readonly target: DatabaseDsnPair;
+  /** Preserved-source pair used automatically if consumer verification fails. */
+  readonly rollback: DatabaseDsnPair;
+}
+
+export interface DatabaseDsnRotationResult {
+  readonly openBaoVersion: number;
+  readonly syncReceiptId: string;
+  readonly targetCellId: string;
+  readonly endpointFingerprint: string;
+}
+
+export interface DatabaseDsnRotationPort {
+  rotate(input: DatabaseDsnRotationInput): Promise<DatabaseDsnRotationResult>;
 }

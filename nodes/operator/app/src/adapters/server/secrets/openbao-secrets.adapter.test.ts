@@ -84,6 +84,39 @@ describe("OpenBaoSecretsAdapter", () => {
     expect(result.version).toBe(7);
   });
 
+  it("PATCHes the app and service DSNs in one KV version", async () => {
+    let body: unknown;
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      const u = String(url);
+      if (u.endsWith("/auth/kubernetes/login")) {
+        return jsonResponse({ auth: { client_token: "s.client" } });
+      }
+      if (u.includes("/cogni/metadata/")) return jsonResponse({}, 200);
+      body = JSON.parse(String(init?.body));
+      return jsonResponse({ data: { version: 9 } });
+    });
+    const result = await makeAdapter(fetchImpl).writeSecrets({
+      nodeSlug: "poly",
+      env: "candidate-a",
+      op: "rotate",
+      values: {
+        DATABASE_URL: "postgresql://app_poly:a@db/cogni_poly",
+        DATABASE_SERVICE_URL: "postgresql://service_poly:b@db/cogni_poly",
+      },
+    });
+    expect(body).toEqual({
+      data: {
+        DATABASE_URL: "postgresql://app_poly:a@db/cogni_poly",
+        DATABASE_SERVICE_URL: "postgresql://service_poly:b@db/cogni_poly",
+      },
+    });
+    expect(result).toMatchObject({
+      version: 9,
+      path: "cogni/candidate-a/poly",
+      keys: ["DATABASE_SERVICE_URL", "DATABASE_URL"],
+    });
+  });
+
   it("never puts the secret value in the URL (only the JSON body)", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (url) => {
       const u = String(url);

@@ -195,6 +195,7 @@ import type {
   ComputeCostReport,
   ComputeCostStorePort,
   ConnectionBrokerPort,
+  DatabasePlacementResolverPort,
   DataSourceRegistration,
   EpochsRead,
   GovernanceStatusPort,
@@ -1382,6 +1383,36 @@ async function listRoutableNodes(): Promise<{ id: string; slug: string }[]> {
  * this environment's authority before each selected node's own repo-spec supplies source_refs.
  */
 let cachedAttributionProfileResolver: AttributionProfileResolver | undefined;
+
+let cachedDatabasePlacementResolver: DatabasePlacementResolverPort | undefined;
+
+/** Catalog-derived state placement; callers never accept tier/profile inputs. */
+export function resolveDatabasePlacementResolver(): DatabasePlacementResolverPort {
+  if (cachedDatabasePlacementResolver) return cachedDatabasePlacementResolver;
+  const env = serverEnv();
+  const plane = createOperatorDeployPlane(env);
+  const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER ?? "";
+  const parentRepo = env.NODE_SUBMODULE_PARENT_REPO ?? "";
+  cachedDatabasePlacementResolver = {
+    resolve: async ({ nodeSlug, environment }) => {
+      const nodes = await plane.listCatalogNodes({
+        parentOwner,
+        parentRepo,
+        sourceRef: "main",
+      });
+      const node = nodes.find((candidate) => candidate.slug === nodeSlug);
+      if (!node) throw new Error("database_placement_node_not_found");
+      const placement = node.databasePlacements[environment];
+      if (!placement) throw new Error("database_placement_env_not_declared");
+      return {
+        nodeId: node.nodeId,
+        desiredTier: placement.tier,
+        budgetProfile: placement.budgetProfile,
+      };
+    },
+  };
+  return cachedDatabasePlacementResolver;
+}
 
 export function resolveAttributionProfileResolver(): AttributionProfileResolver {
   if (cachedAttributionProfileResolver) return cachedAttributionProfileResolver;

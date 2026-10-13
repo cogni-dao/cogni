@@ -43,7 +43,13 @@ export interface DatabaseContainmentAuditEvent {
 export interface PostgresDatabaseContainmentDeps {
   readonly sql: DatabaseControlSql;
   readonly fence: DatabaseSourceFence;
-  readonly appendAudit: (event: DatabaseContainmentAuditEvent) => Promise<void>;
+  readonly audit: {
+    append(event: DatabaseContainmentAuditEvent): Promise<void>;
+    latest(input: {
+      readonly nodeId: string;
+      readonly environment: DatabaseEnvironment;
+    }): Promise<DatabaseContainmentAuditEvent | null>;
+  };
   readonly cells?: DatabaseStateCellPort;
   readonly now?: () => Date;
 }
@@ -106,40 +112,55 @@ export class PostgresDatabaseContainmentAdapter
     readonly cellId?: string;
   }): Promise<DatabaseContainmentStatus> {
     const roles = rolesFor(input.nodeSlug);
-    const [roleRows, sessionRows, firewallFenced, cell] = await Promise.all([
-      this.deps.sql.query<{ rolname: string; rolcanlogin: boolean }>(
-        "SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname = ANY($1::text[])",
-        [roles]
-      ),
-      this.deps.sql.query<{ count: string | number }>(
-        "SELECT count(*) AS count FROM pg_stat_activity WHERE usename = ANY($1::text[])",
-        [roles]
-      ),
-      this.deps.fence.isFenced({
-        nodeSlug: input.nodeSlug,
-        environment: input.environment,
-      }),
-      input.cellId && this.deps.cells
-        ? this.deps.cells.status({ cellId: input.cellId })
-        : Promise.resolve(null),
-    ]);
+    const [roleRows, sessionRows, firewallFenced, cell, latest] =
+      await Promise.all([
+        this.deps.sql.query<{ rolname: string; rolcanlogin: boolean }>(
+          "SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname = ANY($1::text[])",
+          [roles]
+        ),
+        this.deps.sql.query<{ count: string | number }>(
+          "SELECT count(*) AS count FROM pg_stat_activity WHERE usename = ANY($1::text[])",
+          [roles]
+        ),
+        this.deps.fence.isFenced({
+          nodeSlug: input.nodeSlug,
+          environment: input.environment,
+        }),
+        input.cellId && this.deps.cells
+          ? this.deps.cells.status({ cellId: input.cellId })
+          : Promise.resolve(null),
+        this.deps.audit.latest({
+          nodeId: input.nodeId,
+          environment: input.environment,
+        }),
+      ]);
     const activeSessions = Number(sessionRows[0]?.count ?? 0);
     // Missing roles fail closed: absence is not evidence that access is enabled.
     const rolesCanLogin =
       roleRows.length === roles.length &&
       roleRows.every((role) => role.rolcanlogin);
+    const contained = !rolesCanLogin && activeSessions === 0 && firewallFenced;
+    const phase = contained
+      ? "contained"
+      : firewallFenced || !rolesCanLogin || activeSessions > 0
+        ? "recovering"
+        : "open";
     return {
       nodeId: input.nodeId,
       nodeSlug: input.nodeSlug,
       environment: input.environment,
       desiredTier: input.desiredTier,
       budgetProfile: input.budgetProfile,
-      contained: !rolesCanLogin && activeSessions === 0 && firewallFenced,
+      contained,
+      phase,
       activeSessions,
       rolesCanLogin,
       firewallFenced,
       cell,
       observedAt: this.now().toISOString(),
+      lastTransitionAt: latest?.occurredAt ?? null,
+      incidentId: latest?.incidentId ?? null,
+      reason: latest?.reason ?? null,
     };
   }
 
@@ -147,7 +168,7 @@ export class PostgresDatabaseContainmentAdapter
     action: DatabaseContainmentAuditEvent["action"],
     input: DatabaseContainmentAction
   ): Promise<void> {
-    await this.deps.appendAudit({
+    await this.deps.audit.append({
       action,
       incidentId: input.incidentId,
       actorId: input.actorId,

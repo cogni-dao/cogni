@@ -52,6 +52,23 @@ export interface WriteNodeSecretResult {
   readonly path: string;
 }
 
+export interface WriteNodeSecretsInput {
+  readonly nodeSlug: string;
+  readonly service?: string | undefined;
+  readonly env: string;
+  /** One atomic KV-v2 bucket update. Values are never logged or returned. */
+  readonly values: Readonly<Record<string, string>>;
+  readonly op: SecretWriteOp;
+}
+
+export interface WriteNodeSecretsResult {
+  readonly written: boolean;
+  readonly version: number;
+  readonly path: string;
+  readonly keys: readonly string[];
+}
+
 export interface OperatorSecretsPlanePort {
   writeSecret(input: WriteNodeSecretInput): Promise<WriteNodeSecretResult>;
+  writeSecrets(input: WriteNodeSecretsInput): Promise<WriteNodeSecretsResult>;
 }
