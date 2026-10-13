@@ -38,6 +38,8 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
     content:
       "**Use when:** any agent starts a session on this node (coding, launch, research, governance, validation, or ops). This is the node's agent operating map: recall it first, then refine it for THIS node and keep it current as the node grows.\n\n" +
       "This is the starter orientation every Cogni node inherits from the base seed set. Replace the placeholders below with this node's specifics, and write the node's own living map as a sibling `<slug>-agent-orientation` entry (a re-seed may overwrite this starter, so node-owned context belongs in the slug-specific entry).\n\n" +
+      "## Start here: the required CICD flow\n" +
+      "Before shipping any code, follow the operator's canonical end-to-end CICD sequence: recall `cicd-e2e-required-sequence` from the operator hub (`GET https://cognidao.org/api/v1/knowledge/cicd-e2e-required-sequence`). It is the required, ordered path — fork+PR, run-checks, CI green, flight + validate, merge, promote. You are read-only on GitHub; the operator bridges every privileged step via your Bearer key.\n\n" +
       "## Where to edit\n" +
       "- App code, node-owned packages, and `.cogni/repo-spec.yaml` (the running app reads its OWN node spec, not the monorepo root). Fill in the real paths for this node.\n\n" +
       "## What NOT to run\n" +
