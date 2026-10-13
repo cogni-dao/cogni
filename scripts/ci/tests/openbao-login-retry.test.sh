@@ -34,6 +34,10 @@ fake_login() {
       echo 'Error writing data to auth/kubernetes/login: context deadline exceeded' >&2
       return 2
       ;;
+    kubectl_timeout:1)
+      echo 'error: Internal error occurred: Timeout occurred' >&2
+      return 1
+      ;;
     permission_then_success:1|permission_stable:1|permission_stable:2)
       echo 'Error writing data to auth/kubernetes/login: Code: 403. permission denied' >&2
       return 2
@@ -59,6 +63,14 @@ if grep -q 'token-sentinel' "$TMPROOT/deadline.log"; then
   echo 'successful OpenBao token leaked to retry logs' >&2
   exit 1
 fi
+
+# kubectl's API-server timeout spelling is the same transient login seam.
+attempts="$TMPROOT/kubectl-timeout-attempts"
+token="$(cogni_openbao_kubernetes_login_retry fake_login kubectl_timeout "$attempts" \
+  2>"$TMPROOT/kubectl-timeout.log")"
+[ "$token" = 'token-sentinel' ]
+[ "$(cat "$attempts")" = 2 ]
+grep -q 'server_transient (attempt 1/3)' "$TMPROOT/kubectl-timeout.log"
 
 # Remote assertion scripts arrive on stdin; the same bytes must replay on retry.
 attempts="$TMPROOT/stdin-attempts"
