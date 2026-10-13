@@ -3,7 +3,10 @@
 
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { renderCatalog } from "@/shared/node-app-scaffold/gens/catalog";
+import {
+  renderCatalog,
+  WIZARD_AKASH_COMPUTE_EGRESS_CIDRS,
+} from "@/shared/node-app-scaffold/gens/catalog";
 import {
   CROSSPLANE_ACTUATOR_WALLET_ENVS,
   CROSSPLANE_CONTROL_PLANE_ENVS,
@@ -26,6 +29,7 @@ describe("renderCatalog", () => {
     // the schema rejects, so this arm stays on the pre-existing default.
     expect(out).not.toContain("deployment_provider:");
     expect(out).not.toContain("compute_api:");
+    expect(out).not.toContain("compute_egress_cidrs:");
   });
 
   it("renders submodule source metadata for child image resolution", () => {
@@ -83,6 +87,7 @@ describe("renderCatalog", () => {
       "candidate-a": "crossplane",
       production: "crossplane",
     });
+    expect(row.compute_egress_cidrs).toEqual(WIZARD_AKASH_COMPUTE_EGRESS_CIDRS);
     // Both facts hold for production: installed control plane AND pinned dedicated wallet.
     expect(CROSSPLANE_CONTROL_PLANE_ENVS).toContain("production");
     expect(CROSSPLANE_ACTUATOR_WALLET_ENVS).toContain("production");
