@@ -33,12 +33,12 @@ You have a node app under `nodes/<node>/app` (a Next.js node) and you want it to
 - the PR build matrix (`detect-affected.sh`, `build-and-push-images.sh`,
   `resolve-pr-build-images.sh`),
 - the Argo `ApplicationSet` generators (one per node per env),
-- `promote-preview-seed-main.sh`, which `sha256sum`s `infra/k8s/overlays/preview/<node>/kustomization.yaml` **for every `NODE_TARGET`**,
+- the per-cell preview and production promotion matrices,
 - the per-node database inventory, k8s secret, and rollout loops in `deploy-infra.sh` (bug.5086 / task.5078 follow-up),
 - the scheduler-worker `COGNI_NODE_ENDPOINTS` map and LiteLLM node-local metering callback map (slug + `node_id` aliases for every catalog node),
 - the **edge Caddy reverse-proxy roster** — `scripts/ci/render-caddyfile.sh` generates the Caddyfile and `deploy-infra.sh` / `provision-env-vm.sh` write each node's per-env host, all from `node_port` + `is_primary_host` (task.5078). A new `type: node` auto-routes; no Caddyfile or deploy-script edit.
 
-> ⚠️ **The candidate-a-only trap (learned from #1369 / node-template).** Declaring a node in the catalog but only authoring the **candidate-a** overlay leaves the preview + production machinery expecting overlays that don't exist. Result: `Promote Preview Digest Seed` fails on `main` (`sha256sum: …/overlays/preview/<node>/kustomization.yaml: No such file or directory`) for _everyone_, and the node never reaches preview/prod.
+> ⚠️ **The candidate-a-only trap (learned from #1369 / node-template).** Declaring a node in the catalog but only authoring the **candidate-a** overlay leaves the preview + production promotion matrices without the reviewed shape they require, so the node cannot advance beyond candidate-a.
 >
 > **A node is `type: node` in all three envs or none.** Enable the full matrix in one PR. The provisioning (secrets/DB/DNS, Step 6) can land after — but the overlays + AppSet entries must be complete and consistent.
 
@@ -120,7 +120,7 @@ Each overlay must include:
 - **Deployment `node-app` patch:** `<node>-env-secrets` secret refs + instance labels on `matchLabels` and pod template.
 - **`migrate-doltgres` initContainer** appended to the Deployment (knowledge-plane migrator; `DATABASE_URL` ← `DOLTGRES_URL` secret).
 - **bug.0295 VM-DNS:** convert base headless `*-external` Services → `ExternalName` (`<env>.vm.cognidao.org`) and `$patch: delete` the matching `EndpointSlice`s.
-- **`images:` digest** — a placeholder (`sha256:000…0`) is fine: candidate-a is overwritten by candidate-flight on acquisition, preview is auto-seeded (`promote-preview-digest-seed.yml`, task.0349), production is human-gated (`promote-and-deploy.yml`).
+- **`images:` digest** — a placeholder (`sha256:000…0`) is fine: candidate-a and preview replace it in their per-cell deploy branches, while production remains human-gated through preview-forward promotion.
 
 **Verify:** `kustomize build infra/k8s/overlays/<env>/<node>` for **all three** envs.
 

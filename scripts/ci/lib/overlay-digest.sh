@@ -17,9 +17,7 @@
 #   - returns 0 on success; non-zero with stderr message if the file is
 #     missing or no app image block / digest / tag is found.
 #
-# Sourced by:
-#   - scripts/ci/promote-preview-seed-main.sh   (task.0349 preview seed)
-#   - candidate-flight.yml's per-node substrate-shape preservation
+# Sourced by candidate-flight.yml's per-node substrate-shape preservation.
 
 extract_overlay_image_ref() {
   local env="$1" app="$2"

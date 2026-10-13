@@ -468,7 +468,7 @@ volumes:
 
 **Verify locally:** Touch a file under `services/<name>/` and run `scripts/ci/detect-affected.sh` with `TURBO_SCM_BASE=origin/main TURBO_SCM_HEAD=HEAD`. Your service should appear in the `targets` CSV and `targets_json` array.
 
-> **Preview-overlay digest seeding is automated (task.0349).** After merge to `main`, Flight Preview and related workflows run `promote-k8s-image.sh` against `deploy/preview`, and [`promote-preview-digest-seed.yml`](../../.github/workflows/promote-preview-digest-seed.yml) can emit a `chore(preview):` commit refreshing `main:infra/k8s/overlays/preview/<name>/kustomization.yaml` digest pins. New services are picked up once they are in the preview AppSet catalog and the build/promote path knows their image — **no hand-edited digest bump for preview**. Candidate-a and production overlays on `main` are not auto-seeded the same way; candidate-flight overwrites `deploy/candidate-a` digests on acquisition, and production stays human-gated via direct `promote-and-deploy.yml` dispatch (bug.0361). App + migrator images still use the split GHCR packages (`cogni-template` and `cogni-template-migrate`); wire both in the overlay `images:` blocks per existing nodes.
+> **Preview digests are per-cell deploy state.** After merge, Flight Preview promotes the selected digest into `deploy/preview-<target>` after syncing that target's reviewed overlay shape. The digest on `main` is bootstrap-only; do not hand-edit it for a release. Production remains human-gated via `promote-and-deploy.yml`. App + migrator images still use the split GHCR packages (`cogni-template` and `cogni-template-migrate`); wire both in the overlay `images:` blocks per existing nodes.
 
 #### 9b. Wire into the Argo catalog
 
