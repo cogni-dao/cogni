@@ -25,7 +25,7 @@ The matrix below separates them because their tradeoffs, speeds, and fix pattern
 | **Docs**        | `pnpm check:docs`        | AGENTS.md headers, metadata, work-item index             | Fix the frontmatter                         |
 | **Root layout** | `pnpm check:root-layout` | Project root structure invariants                        | Move the misplaced file                     |
 
-All of the above run in `ci.yaml`. Local bundle: `pnpm check:fast:fix` (iterate with auto-fix) → `pnpm check:fast` (strict, verify-only — what pre-push runs) → `pnpm check` (once, pre-commit).
+All of the above run in `ci.yaml`. **`pnpm check` / `check:fast` / `check:fast:fix` are resource-heavy and consent-gated** — on a shared human device many parallel agents running them crash the machine (AGENTS.md §6). Default to the single enforcement command for your touched surface (`pnpm lint` / `biome check <path>`, `pnpm typecheck`) and let CI run the full bundle. Only run the aggregate `check:fast:fix` → `check:fast` → `check` sequence when the human explicitly asks you to verify locally this session.
 
 ## Test layer matrix (vitest + Playwright)
 
@@ -66,10 +66,14 @@ The full token-distribution loop has a **proven, product-code e2e** most agents 
 
 For ~90% of agent sessions, infra-gated lanes are out of reach. Use this split:
 
-**Always available (no infra):**
+**Always available, lightweight (no infra — run freely):**
 
-- `pnpm test`, `test:meta`, `test:contract`, `test:arch`, `test:ci` (coverage)
-- `pnpm typecheck`, `pnpm lint`, `pnpm arch:check`, `pnpm check:docs`, `pnpm check:fast`, `pnpm check`
+- `pnpm typecheck`, `pnpm lint` / `biome check <path>`, `pnpm arch:check`, `pnpm check:docs`
+- 1–2 specific test files: `pnpm test <path/to/file.test.ts>`, `test:meta`, `test:contract`, `test:arch`
+
+**Available but resource-heavy — consent-gated (AGENTS.md §6; ask the human first):**
+
+- `pnpm check:fast`, `pnpm check` (full enforcement bundle), the unfiltered `pnpm test` / `test:ci` suite, `pnpm dev` — many parallel agents running these crash the shared device; default to CI for the full sweep.
 
 **Needs Docker running:**
 
@@ -187,7 +191,7 @@ The parity table above says _what_ must match; this says _how the code gets ther
 
 6. **Sequence non-parallelism for stateful lanes.** Component + external configs use `sequence: { concurrent: false }` + `pool: forks`, `singleFork: true`. Stateful tests (shared GitHub test repo, single testcontainer DB epoch) race catastrophically in parallel. Don't remove this in a new config.
 
-7. **Check discipline.** `pnpm check:fast:fix` during iteration (auto-fixes format/lint, runs unit tests). `pnpm check:fast` (strict, verify-only) is what `.husky/pre-push` runs — if it fails with drift, run the `:fix` variant, commit, retry. `pnpm check` once as the pre-commit gate; never run `pnpm check` more than once per session — it's the heavyweight pipeline.
+7. **Check discipline (consent-gated — AGENTS.md §6).** Default: run `pnpm lint` / `biome check <path>` + `pnpm typecheck` on your touched surface and push; CI runs the full bundle. The aggregate commands are resource-heavy and crash a shared device when sibling agents run them in parallel — so run them **only when the human explicitly asks to verify locally this session**: `pnpm check:fast:fix` during iteration (auto-fixes format/lint, runs unit tests), `pnpm check:fast` (strict, verify-only — what `.husky/pre-push` runs), and `pnpm check` at most once as the pre-commit gate. `.husky` hooks still fire on the human's own `git push`/`commit`; that is their consent.
 
 8. **Time budgets.** Unit test files <1s. Component 5–30s. Stack 30–90s. External up to 3min (`testTimeout: 30_000` per-test; totals add up). If a test is exceeding these, first suspect missing env (see #2), not genuine slowness.
 
@@ -223,7 +227,7 @@ Triage in this order:
 3. Run the layer's specific command first (`pnpm test:component`, `pnpm test:contract`, etc.), not `pnpm check`. Fastest feedback.
 4. If the test needs env or infra, read the relevant config's header TSDoc — every config documents its invariants at the top.
 5. If the layer is stack/e2e/money and you're an agent without infra access, open the PR and let CI run it rather than burning a session on local setup.
-6. Once the new test passes in isolation, run `pnpm check:fast:fix` (auto-fix) then `pnpm check:fast` (strict). Only run `pnpm check` when ready to commit.
+6. Once the new test passes in isolation (`pnpm test <that-file>`), lint/typecheck the touched surface and push — CI runs the full bundle. The aggregate `check:fast:fix` → `check:fast` → `check` sequence is resource-heavy and consent-gated (AGENTS.md §6): run it only when the human asks you to verify locally this session.
 
 ## Driving the TEST operator as an agent (RBAC + credentials)
 

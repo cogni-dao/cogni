@@ -1,5 +1,14 @@
 {
   "outputStyle": "Cogni Contract",
+  "permissions": {
+    "ask": [
+      "Bash(pnpm check)",
+      "Bash(pnpm check:fast)",
+      "Bash(pnpm check:fast:fix)",
+      "Bash(pnpm dev)",
+      "Bash(pnpm test)"
+    ]
+  },
   "enabledPlugins": {
     "typescript-lsp@claude-plugins-official": true
   },
