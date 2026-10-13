@@ -22,7 +22,11 @@ Configure the Grafana Git Sync repository resource to this repo, target branch `
 infra/grafana/dashboards/
 ```
 
-Grafana Git Sync currently synchronizes dashboards and folders only. Alerts, data sources, and other resources are not supported by Git Sync, so alerting definitions belong in `infra/grafana/alerts/` and should be applied with Terraform/OpenTofu or Grafana's alerting provisioning API.
+Grafana Git Sync currently synchronizes dashboards and folders only. Alerts,
+data sources, and other resources are not supported by Git Sync. The public
+fleet dashboard is also explicitly OpenTofu-owned because its stable live UID
+predates Git Sync and remains unmanaged by it; the dashboard JSON is that
+resource's checked-in input, not evidence that Git Sync owns the live object.
 
 ## Fleet reliability reconcile
 
@@ -33,6 +37,14 @@ workflow and not part of environment provisioning. It runs only when an
 operator explicitly invokes OpenTofu with operator-only bootstrap inputs.
 Tenant URLs, stack identifiers, and credentials belong in private operator
 configuration; never add them to this directory or node-facing guidance.
+
+The fleet dashboard ownership migration is deterministic: after the owning
+change reaches `main`, import `cogni-fleet-status` into
+`grafana_dashboard.fleet_status`, save a plan, require the plan to show only
+the reviewed dashboard update plus already-declared resources, apply that saved
+plan, then read the live dashboard back and verify the Candidate-a, Preview,
+and Production cards. Never update the dashboard directly through the UI or
+Dashboard API.
 
 Fleet alert delivery is query-only. OpenTofu owns an all-time mute timing,
 applies it both to the global notification tree and directly to every fleet
