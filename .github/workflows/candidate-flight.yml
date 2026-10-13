@@ -1285,18 +1285,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Snapshot deploy-branch overlay digests (pre-rsync)
-        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
-        id: snapshot
-        working-directory: deploy-branch
-        env:
-          OVERLAY_ENV: candidate-a
-          SNAPSHOT_FILE: ${{ runner.temp }}/candidate-a-overlay-snapshot.tsv
-        run: |
-          bash ../ci-src/scripts/ci/snapshot-overlay-digests.sh > "$SNAPSHOT_FILE"
-          echo "ℹ️  Pre-rsync overlay snapshot ($(wc -l < "$SNAPSHOT_FILE" | tr -d ' ') rows):"
-          sed 's/^/  /' "$SNAPSHOT_FILE"
-
       - name: Sync base + per-node overlay + per-node catalog to deploy branch
         if: matrix.node != 'scheduler-worker'
         env:
@@ -1353,36 +1341,6 @@ jobs:
           APP: ${{ matrix.node }}
           SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
         run: bash ../ci-src/scripts/ci/update-source-sha-map.sh
-
-      - name: Restore non-promoted overlay digests (post-rsync self-heal)
-        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
-        working-directory: deploy-branch
-        env:
-          PROMOTED_APPS: ${{ steps.promote.outputs.promoted_apps }}
-          SNAPSHOT_FILE: ${{ runner.temp }}/candidate-a-overlay-snapshot.tsv
-        run: |
-          set -euo pipefail
-          if [ ! -s "$SNAPSHOT_FILE" ]; then
-            echo "ℹ️  No snapshot rows (cold-start) — nothing to restore"
-            exit 0
-          fi
-          # shellcheck source=../ci-src/scripts/ci/lib/image-tags.sh
-          . ../ci-src/scripts/ci/lib/image-tags.sh
-          declare -A snap=()
-          while IFS=$'\t' read -r app ref; do
-            [ -n "$app" ] && snap["$app"]="$ref"
-          done < "$SNAPSHOT_FILE"
-          promoted_padded=" $(echo "$PROMOTED_APPS" | tr ',' ' ' | tr -s ' ') "
-          for target in "${ALL_TARGETS[@]}"; do
-            if [[ "$promoted_padded" == *" $target "* ]]; then
-              continue
-            fi
-            ref="${snap[$target]:-}"
-            [ -z "$ref" ] && continue
-            [[ "$ref" != *"@sha256:"* ]] && continue
-            bash ../ci-src/scripts/ci/promote-k8s-image.sh --no-commit \
-              --env candidate-a --app "$target" --digest "$ref"
-          done
 
       - name: Commit and push to per-node deploy branch
         if: matrix.node != 'scheduler-worker'
