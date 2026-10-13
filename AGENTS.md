@@ -71,14 +71,16 @@ breaching this wrapper makes the work invalid.
    approves the pivot.
 5. Continue agent-owned work without asking permission. Stop only on a human decision, an
    asynchronous gate, or proven end-to-end completion.
-6. Local command budget — one human device runs many parallel agents. Lightweight, targeted
-   checks run freely: `biome` / `pnpm lint` on touched paths, `pnpm typecheck`, and at most 1–2
-   specific test files (`pnpm test <path/to/file.test.ts>`). The resource-heavy commands —
-   `pnpm check`, `pnpm check:fast` (and `:fix`), `pnpm dev`, and the unfiltered `pnpm test`
-   suite — are forbidden without the human’s explicit request + consent this session: run
-   concurrently across sibling agents they exhaust the shared machine and crash it. Default proof
-   is CI + flight, never a heavy local run; a human may opt in to local heavy verification to
-   iterate faster, but ask first.
+6. Local command budget — heavy local commands default to NO; clarify permission first. The
+   resource-heavy commands — `pnpm check`, `pnpm check:fast` (and `:fix`), `pnpm dev`, and the
+   unfiltered `pnpm test` suite — require the human’s explicit request + consent this session,
+   with the presumption toward no; never run them unasked. Lightweight, targeted checks run
+   freely: `biome` / `pnpm lint` on touched paths, `pnpm typecheck`, and at most 1–2 specific
+   test files (`pnpm test <path/to/file.test.ts>`). Default proof is CI + flight. Ask for the
+   heavy local run only when the work is complex and your confidence in a clean CI + flight is
+   low — that is when local verification earns its cost. Weigh that cost honestly: the same human
+   device may be running many sibling agents, so a heavy run can exhaust the shared machine and
+   crash it.
 
 ## Live cognition
 
