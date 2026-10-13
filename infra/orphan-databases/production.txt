@@ -1,0 +1,21 @@
+# Orphan databases on the PRODUCTION Postgres, approved for DROP by Derek 2026-10-13.
+# Every line is checked against four fail-closed guards in
+# scripts/ci/prune-orphan-databases.sh. Being listed here authorizes nothing on its own.
+#
+# Nominated by: max by(env,datname)(pg_stat_database_numbackends) over 7 days = 0,
+# and no catalog row can derive the name in either derivation (bug.5299).
+
+cogni_poly_empty_20260812
+cogni_toks4_candidate_a
+cogni_toks4_preview
+cogni_toks5_candidate_a
+
+# NOT listed, and why — each would be blocked by guard 3 anyway:
+#
+# cogni_toks4            1-2 peak backends. toks4 has NO catalog row, so the database is
+#                        an orphan, but something still connects to it. The likely
+#                        connector is its own Grafana Postgres datasource
+#                        (cogni-production-toks4-postgres), which the bug.5117 prune
+#                        should have removed. Prune the datasource, re-measure, then
+#                        nominate. Dropping a database someone is dialing is how a
+#                        "cleanup" becomes an outage.
