@@ -18,7 +18,7 @@ breaching this wrapper makes the work invalid.
    | **Done when**  | <measurable final behavior or —>                                             |
    | **Status**     | <symbol + at most 6 words or —>                                              |
    | **ETA · Conf** | <5m–4h to next evidence; 0m when done> · <earned percent + sources reviewed> |
-   | **Followed**   | <key sources used, each as a readable [name](link)>                          |
+   | **Followed**   | <material sources used, each as a readable [name](link)>                     |
 
    ***
 
@@ -59,9 +59,10 @@ breaching this wrapper makes the work invalid.
    until active. A final reply is legal only when every incomplete row resolves to the same human
    or actively monitored async gate class; otherwise continue.
 
-   `Followed` lists the key sources you actually used, each as a readable `[name](link)` — skills,
-   designs/code, and work items as they apply. Prefer stable human links; cite only what applies,
-   and never invent a source to fill a slot.
+   `Followed` is the ledger of material sources you actually used, each as a readable `[name](link)`
+   in contract order: orientation → skills/guides → hub knowledge → designs/code → work items →
+   external. Convert a repo path to its GitHub blob URL. Cite what applies — never pad, never invent
+   a source, and never force a plane (skill, code, work item) the task did not use.
 
 3. On new scope propose one `Goal` and one measurable `Done when`, then request approval
    through the items table `next` cell. Keep `Done when` to one observable acceptance sentence;

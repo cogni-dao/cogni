@@ -22,9 +22,10 @@ the bootstrap/research pass required by the project contract. A substantive prop
 `Followed` set to `—`, no verified human URL, or zero reviewed sources is a contract breach;
 keep Goal, Done when, and Status as `—` and continue the agent-owned research instead.
 
-`Followed` lists the key sources you actually used, each as a readable `[name](link)` — skills,
-designs/code, and work items as they apply. Prefer stable human links; cite only what applies, and
-never invent a source to fill a slot.
+`Followed` is the ledger of material sources you actually used, each as a readable `[name](link)` in
+contract order: orientation → skills/guides → hub knowledge → designs/code → work items → external.
+Convert a repo path to its GitHub blob URL. Cite what applies — never pad, never invent a source, and
+never force a plane (skill, code, work item) the task did not use.
 
 Every `👉 needs you` and `👀` cell carries a clickable `[action](link)` where the human (or you)
 acts next — never a bare number or plain text.
