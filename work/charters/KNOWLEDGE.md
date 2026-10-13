@@ -37,18 +37,6 @@ Each node gets its own Doltgres database (`knowledge_operator`, `knowledge_poly`
 
 > Living view of where the knowledge plane stands vs. the syntropy spec. Updated on every meaningful PR. 🟢 = shipped + exercised on candidate-a · 🟡 = shipped or in-flight, partial · 🔴 = not started or known-broken.
 
-### `.md` → hub migration (steward scoreboard)
-
-> The north star: durable knowledge lives in the hub (agents recall, humans scan); `.md` holds only break-glass + the code-owned constitution. [`knowledge-syntropy-expert`](../../.claude/skills/knowledge-syntropy-expert/SKILL.md) is the steward; this is its scoreboard. Baseline inventory 2026-10-13.
-
-| Surface                                 | Status | Notes                                                                                                                    |
-| --------------------------------------- | :----: | ------------------------------------------------------------------------------------------------------------------------ |
-| Dev-process commands route design → hub |   🟡   | `/design` + `/review-design` rewritten to emit two hub entries; other commands still item/spec-centric                   |
-| Skills are thin hub-triggers            |   🔴   | Only 2 / 53 are true pointers (`observability`, `contribute-knowledge-to-cogni`); 45 embed full reference inline         |
-| `docs/spec/` → hub                      |   🔴   | ~125 full-knowledge specs; contracts stay, design narrative moves. Not started                                           |
-| `docs/guides/` + `docs/research/` → hub |   🔴   | ~40 guides + 66 research docs are migration candidates. Not started                                                      |
-| Break-glass `.md` (must stay local)     |   🟢   | `AGENTS.md` + cognition cache (constitution), `dolthub-local-clone`, `docs/runbooks/*`, skill trigger stubs — keep as-is |
-
 ### Infrastructure
 
 | Component                              | Status | Notes                                                                                                              |
