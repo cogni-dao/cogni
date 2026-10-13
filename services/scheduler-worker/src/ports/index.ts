@@ -70,7 +70,7 @@ export interface GraphRunHttpWriter {
     actorId: ActorId,
     nodeId: string,
     runId: string,
-    status: "success" | "error" | "skipped" | "cancelled",
+    status: "success" | "error" | "timeout" | "skipped" | "cancelled",
     errorMessage?: string,
     errorCode?: string
   ) => Promise<void>;

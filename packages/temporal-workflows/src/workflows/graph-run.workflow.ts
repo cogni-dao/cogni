@@ -13,7 +13,7 @@
  *   - CALLER_PROVIDED_RUN_ID: accepts optional runId from caller for cross-system correlation (falls back to uuid4)
  *   - CONDITIONAL_GRANT_VALIDATION: skips validateGrantActivity when executionGrantId is null (API-triggered runs)
  *   - CONVERGED_FINALIZE: all terminal paths go through updateGraphRunActivity
- *   - TRANSPORT_UNCERTAINTY_NOT_TERMINAL: exhausted retryable transport failures never overwrite a node execution that may still finish
+ *   - TRANSPORT_UNCERTAINTY_IS_INCOMPLETE: exhausted retryable transport failures become timeout, never false execution errors
  *   - TYPED_TERMINAL_ARTIFACT: returns small typed result {ok, runId, structuredOutput} for parent workflow composition
  * Side-effects: none (deterministic orchestration only)
  * Links: docs/spec/unified-graph-launch.md, docs/spec/temporal-patterns.md
@@ -79,10 +79,20 @@ const { executeGraphActivity: executeGraphActivityLegacy } =
 
 const GRAPH_TRANSPORT_RECOVERY_PATCH = "bug.5447-graph-transport-recovery-v1";
 
-/** @internal Transport exhaustion is not a graph outcome and must not write a terminal. */
+/** @internal Distinguishes definitive execution rejection from transport uncertainty. */
 export function isDefinitiveGraphActivityFailure(error: unknown): boolean {
   const cause = error instanceof ActivityFailure ? error.cause : error;
   return cause instanceof ApplicationFailure && cause.nonRetryable === true;
+}
+
+/** @internal Maps a failed Activity to the user-visible run ledger status. */
+export function graphActivityFailureStatus(
+  transportRecoveryEnabled: boolean,
+  error: unknown
+): "error" | "timeout" {
+  return !transportRecoveryEnabled || isDefinitiveGraphActivityFailure(error)
+    ? "error"
+    : "timeout";
 }
 
 /**
@@ -267,20 +277,16 @@ export async function GraphRunWorkflow(
   } catch (error) {
     // A non-retryable Activity failure is a definitive pre-execution rejection
     // (auth, validation, idempotency mismatch, or unknown node). A retryable
-    // failure exhausted by scheduleToClose is transport-unknown: the node may
-    // still finish, so writing graph_runs=error would recreate the split brain.
-    if (!transportRecoveryEnabled || isDefinitiveGraphActivityFailure(error)) {
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : "Unknown error during execution";
-      await updateGraphRunActivity({
-        nodeId,
-        runId,
-        status: "error",
-        errorMessage,
-      });
-    }
+    // failure exhausted by scheduleToClose is transport-unknown: record the
+    // non-committal timeout status rather than manufacturing execution error.
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error during execution";
+    await updateGraphRunActivity({
+      nodeId,
+      runId,
+      status: graphActivityFailureStatus(transportRecoveryEnabled, error),
+      errorMessage,
+    });
     throw error; // Re-throw so Temporal marks workflow as failed
   }
 }

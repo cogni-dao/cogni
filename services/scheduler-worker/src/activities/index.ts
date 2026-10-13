@@ -147,7 +147,7 @@ export interface ExecuteGraphOutput {
 export interface UpdateGraphRunInput {
   nodeId: string;
   runId: string;
-  status: "running" | "success" | "error" | "skipped" | "cancelled";
+  status: "running" | "success" | "error" | "timeout" | "skipped" | "cancelled";
   traceId?: string | null;
   errorMessage?: string;
   errorCode?: string;
@@ -427,8 +427,12 @@ export function createActivities(deps: ActivityDeps) {
           .inc();
       }
 
+      const eventName =
+        response.status === 409
+          ? WORKER_EVENT_NAMES.ACTIVITY_GRAPH_PENDING
+          : WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR;
       const logFields = {
-        event: WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR,
+        event: eventName,
         ...correlation,
         reasonCode,
         retryable,
@@ -440,11 +444,11 @@ export function createActivities(deps: ActivityDeps) {
         durationMs,
       };
       if (response.status === 409) {
-        logger.info(logFields, WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR);
+        logger.info(logFields, eventName);
       } else if (retryable) {
-        logger.warn(logFields, WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR);
+        logger.warn(logFields, eventName);
       } else {
-        logger.error(logFields, WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR);
+        logger.error(logFields, eventName);
       }
 
       if (retryable) {

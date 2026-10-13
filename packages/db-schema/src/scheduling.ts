@@ -37,6 +37,7 @@ import { billingAccounts, users } from "./refs";
  * - running: Execution in progress
  * - success: Completed successfully
  * - error: Failed with error
+ * - timeout: Transport outcome remained unknown after the recovery budget
  * - skipped: Skipped (disabled schedule or revoked grant)
  * - cancelled: Cancelled by user or system
  */
@@ -45,6 +46,7 @@ export const GRAPH_RUN_STATUSES = [
   "running",
   "success",
   "error",
+  "timeout",
   "skipped",
   "cancelled",
 ] as const;
@@ -182,7 +184,7 @@ export const graphRuns = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     /** Completion time */
     completedAt: timestamp("completed_at", { withTimezone: true }),
-    /** Run status: pending, running, success, error, skipped, cancelled */
+    /** Run status: pending, running, success, error, timeout, skipped, cancelled */
     status: text("status", { enum: GRAPH_RUN_STATUSES })
       .notNull()
       .default("pending"),
@@ -235,7 +237,7 @@ export const graphRuns = pgTable(
 export const executionRequests = pgTable("execution_requests", {
   /** Primary key: idempotency key (e.g., `scheduleId:TemporalScheduledStartTime`) */
   idempotencyKey: text("idempotency_key").primaryKey(),
-  /** SHA256 hash of normalized request payload for mismatch detection */
+  /** SHA256 hash of graph identity plus exact request bytes */
   requestHash: text("request_hash").notNull(),
   /** GraphExecutorPort runId for correlation */
   runId: text("run_id").notNull(),
@@ -252,4 +254,10 @@ export const executionRequests = pgTable("execution_requests", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  /** Last lease heartbeat or terminal update */
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  /** Graph claim lease; null after finalization or for non-leased generic jobs */
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
 });

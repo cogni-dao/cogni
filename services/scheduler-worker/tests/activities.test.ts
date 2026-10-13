@@ -518,7 +518,9 @@ describe("executeGraphActivity", () => {
         httpStatus: status,
         retryable: true,
       }),
-      "worker.activity.graph_error"
+      status === 409
+        ? "worker.activity.graph_pending"
+        : "worker.activity.graph_error"
     );
     expect(JSON.stringify(expectedLogger.mock.calls)).not.toContain(
       "proxy body must not be logged"

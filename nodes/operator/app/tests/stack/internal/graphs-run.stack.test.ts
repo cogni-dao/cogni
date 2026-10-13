@@ -15,7 +15,7 @@
  * @public
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
 import { TEST_MODEL_ID } from "@tests/_fakes/ai/test-constants";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
@@ -37,6 +37,14 @@ const SCHEDULER_TOKEN = process.env.SCHEDULER_API_TOKEN ?? "";
 
 /** Test graph ID */
 const TEST_GRAPH_ID = "langgraph:poet";
+
+function requestHash(graphId: string, body: unknown): string {
+  return createHash("sha256")
+    .update(graphId, "utf8")
+    .update("\n", "utf8")
+    .update(JSON.stringify(body), "utf8")
+    .digest("hex");
+}
 
 describe("[internal] POST /api/internal/graphs/{graphId}/runs", () => {
   let testActor: TestActor;
@@ -161,7 +169,6 @@ describe("[internal] POST /api/internal/graphs/{graphId}/runs", () => {
         requestedBy: testActor.user.id,
       });
       await container.graphRunRepository.markRunStarted(SYSTEM_ACTOR, runId);
-
       const request = createRequest(
         TEST_GRAPH_ID,
         { executionGrantId: grantId, input, runId },
@@ -278,6 +285,101 @@ describe("[internal] POST /api/internal/graphs/{graphId}/runs", () => {
       expect(response2.status).toBe(422);
       const body = await response2.json();
       expect(body.error).toContain("Idempotency conflict");
+    });
+
+    it("reclaims one expired pending lease with the canonical run ID", async () => {
+      const idempotencyKey = `${randomUUID()}:2025-01-21T09:00:00Z`;
+      const runId = randomUUID();
+      const body = {
+        executionGrantId: grantId,
+        input: {
+          messages: [{ role: "user", content: "Resume" }],
+          modelRef: { providerKey: "platform", modelId: TEST_MODEL_ID },
+        },
+        runId,
+      };
+      const db = getSeedDb();
+      const container = getContainer();
+      await container.graphRunRepository.createRun(SYSTEM_ACTOR, {
+        runId,
+        graphId: TEST_GRAPH_ID,
+        runKind: "system_scheduled",
+        triggerSource: "temporal_schedule",
+        requestedBy: testActor.user.id,
+      });
+      await container.graphRunRepository.markRunStarted(SYSTEM_ACTOR, runId);
+      await container.graphRunRepository.markRunCompleted(
+        SYSTEM_ACTOR,
+        runId,
+        "timeout",
+        "Transport recovery exhausted"
+      );
+      await db.insert(executionRequests).values({
+        idempotencyKey,
+        requestHash: requestHash(TEST_GRAPH_ID, body),
+        runId,
+        traceId: "expired-trace",
+        ok: null,
+        leaseExpiresAt: new Date(Date.now() - 1_000),
+      });
+
+      const response = await POST(
+        createRequest(TEST_GRAPH_ID, body, {
+          token: SCHEDULER_TOKEN,
+          idempotencyKey,
+        }),
+        { params: Promise.resolve({ graphId: TEST_GRAPH_ID }) }
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ ok: true, runId });
+      const [receipt] = await db
+        .select()
+        .from(executionRequests)
+        .where(eq(executionRequests.idempotencyKey, idempotencyKey));
+      expect(receipt).toMatchObject({ runId, ok: true, leaseExpiresAt: null });
+      const [run] = await db
+        .select({ status: graphRuns.status })
+        .from(graphRuns)
+        .where(eq(graphRuns.runId, runId));
+      expect(run?.status).toBe("success");
+    });
+
+    it("atomically selects one claimant for concurrent first delivery", async () => {
+      const idempotencyKey = randomUUID();
+      const requestHashValue = randomUUID();
+      const leaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+      const port = getContainer().executionRequestPort;
+
+      const results = await Promise.all([
+        port.createPendingRequest(
+          idempotencyKey,
+          requestHashValue,
+          randomUUID(),
+          "trace-a",
+          leaseExpiresAt
+        ),
+        port.createPendingRequest(
+          idempotencyKey,
+          requestHashValue,
+          randomUUID(),
+          "trace-b",
+          leaseExpiresAt
+        ),
+      ]);
+
+      expect(results.map((result) => result.status).sort()).toEqual([
+        "claimed",
+        "pending",
+      ]);
+      const canonicalRunIds = results.flatMap((result) =>
+        "request" in result ? [result.request.runId] : []
+      );
+      expect(new Set(canonicalRunIds).size).toBe(1);
+
+      await getSeedDb()
+        .delete(executionRequests)
+        .where(eq(executionRequests.idempotencyKey, idempotencyKey));
     });
   });
 

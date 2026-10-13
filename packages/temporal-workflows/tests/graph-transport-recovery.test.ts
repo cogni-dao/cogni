@@ -5,7 +5,7 @@
  * Module: `@cogni/temporal-workflows/graph-transport-recovery.test`
  * Purpose: Verifies bounded graph retries, isolated node-task policy, and definitive terminal failure classification.
  * Scope: Covers pure Temporal configuration and failure policy; does not start a Worker or server.
- * Invariants: TRANSPORT_UNCERTAINTY_IS_NOT_TERMINAL, ACTIVITY_IDEMPOTENCY.
+ * Invariants: TRANSPORT_UNCERTAINTY_IS_INCOMPLETE, ACTIVITY_IDEMPOTENCY.
  * Side-effects: none
  * Links: docs/spec/scheduler.md, docs/spec/temporal-patterns.md, bug.5447.
  * @internal
@@ -18,7 +18,10 @@ import {
   GRAPH_EXECUTION_ACTIVITY_OPTIONS,
   NODE_TASK_DISPATCH_ACTIVITY_OPTIONS,
 } from "../src/activity-profiles.js";
-import { isDefinitiveGraphActivityFailure } from "../src/workflows/graph-run.workflow.js";
+import {
+  graphActivityFailureStatus,
+  isDefinitiveGraphActivityFailure,
+} from "../src/workflows/graph-run.workflow.js";
 
 type ActivityRetryState = ConstructorParameters<typeof ActivityFailure>[3];
 
@@ -66,9 +69,10 @@ describe("graph execution transport policy", () => {
     );
 
     expect(isDefinitiveGraphActivityFailure(failure)).toBe(true);
+    expect(graphActivityFailureStatus(true, failure)).toBe("error");
   });
 
-  it("keeps exhausted transport failure non-terminal", () => {
+  it("classifies exhausted transport failure as non-definitive", () => {
     const failure = activityFailure(
       ApplicationFailure.retryable(
         "Origin disconnected",
@@ -78,14 +82,22 @@ describe("graph execution transport policy", () => {
     );
 
     expect(isDefinitiveGraphActivityFailure(failure)).toBe(false);
+    expect(graphActivityFailureStatus(true, failure)).toBe("timeout");
   });
 
-  it("keeps schedule-to-close timeout non-terminal", () => {
+  it("classifies schedule-to-close timeout as non-definitive", () => {
     const failure = activityFailure(
       new Error("Activity schedule-to-close timeout"),
       "TIMEOUT"
     );
 
     expect(isDefinitiveGraphActivityFailure(failure)).toBe(false);
+    expect(graphActivityFailureStatus(true, failure)).toBe("timeout");
+  });
+
+  it("preserves legacy workflow failure behavior for replay", () => {
+    expect(graphActivityFailureStatus(false, new Error("network"))).toBe(
+      "error"
+    );
   });
 });
