@@ -121,6 +121,14 @@ export {
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
 export {
+  CherryDatabaseSourceFenceAdapter,
+  type CherryFenceBinding,
+  createProductionDatabaseContainmentAdapter,
+  PinoLokiDatabaseContainmentAuditAdapter,
+  PostgresAdminSqlAdapter,
+  type ProductionDatabaseContainmentConfig,
+} from "./db/database-containment-production.adapter";
+export {
   DatabaseDsnRotationAdapter,
   type DatabaseDsnRotationDeps,
   DatabaseDsnRotationError,

@@ -8,6 +8,11 @@ import type {
 } from "@/ports";
 import { CherryDatabaseCellAdapter } from "../compute/cherry-database-cell.adapter";
 import {
+  CherryDatabaseSourceFenceAdapter,
+  PinoLokiDatabaseContainmentAuditAdapter,
+  PostgresAdminSqlAdapter,
+} from "./database-containment-production.adapter";
+import {
   DatabaseDsnRotationAdapter,
   DatabaseDsnRotationError,
 } from "./database-dsn-rotation.adapter";
@@ -30,6 +35,72 @@ const ACTION: DatabaseContainmentAction = {
 };
 
 describe("PostgresDatabaseContainmentAdapter", () => {
+  it("rejects a non-Postgres privileged DSN", () => {
+    expect(() => new PostgresAdminSqlAdapter("https://db.example")).toThrow(
+      "database_control_dsn_invalid"
+    );
+  });
+
+  it("writes structured audit and reads the latest transition from Loki", async () => {
+    const info = vi.fn();
+    const adapter = new PinoLokiDatabaseContainmentAuditAdapter(
+      { info } as never,
+      {
+        queryRange: async () => [
+          {
+            ts: "1",
+            line: JSON.stringify({
+              ...ACTION,
+              action: "contained",
+              occurredAt: "2026-10-13T23:30:00.000Z",
+            }),
+          },
+        ],
+      },
+      "candidate-a"
+    );
+    await adapter.append({
+      ...ACTION,
+      action: "contained",
+      occurredAt: "2026-10-13T23:30:00.000Z",
+    });
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "database_containment_transition" }),
+      "database_containment_transition"
+    );
+    await expect(adapter.latest(ACTION)).resolves.toMatchObject({
+      incidentId: "incident-1",
+      action: "contained",
+    });
+  });
+
+  it("fences only the resolved Cherry IP route", async () => {
+    const requests: Array<{ url: string; body: string | undefined }> = [];
+    const adapter = new CherryDatabaseSourceFenceAdapter({
+      authToken: "secret",
+      timeoutMs: 1_000,
+      resolveBinding: async () => ({ ipId: "ip-poly", serverId: 77 }),
+      fetchImpl: async (input, init) => {
+        requests.push({
+          url: String(input),
+          body: init?.body as string | undefined,
+        });
+        return new Response(JSON.stringify({ targeted_to: null }), {
+          status: 200,
+        });
+      },
+    });
+    await expect(adapter.isFenced(ACTION)).resolves.toBe(true);
+    await adapter.setFenced({ ...ACTION, fenced: true });
+    expect(requests[1]).toMatchObject({
+      url: "https://api.cherryservers.com/v1/ips/ip-poly",
+    });
+    expect(JSON.parse(requests[1]?.body ?? "{}")).toEqual({
+      targeted_to: null,
+      configure: "true",
+    });
+  });
+
   it("fails closed when a privileged production capability is absent", () => {
     expect(() =>
       createPostgresDatabaseContainmentAdapter({
