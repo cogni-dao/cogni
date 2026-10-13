@@ -29,6 +29,41 @@ export interface DatabaseCellStatus {
   readonly reason?: string;
 }
 
+/**
+ * The complete, bounded Prometheus identity for one database failure domain.
+ * Provider IDs, endpoints, incident IDs, and replay IDs are intentionally not
+ * labels: `nodeSlug` distinguishes Poly's dedicated cell from the shared host.
+ */
+export interface DatabaseCellMetricIdentity {
+  readonly environment: DatabaseEnvironment;
+  readonly nodeSlug: string;
+  readonly databaseTier: DatabaseTier;
+  readonly budgetProfile: string;
+  readonly state: "provisioning" | "ready" | "failed" | "released" | "unknown";
+}
+
+export const DATABASE_CELL_METRIC_LABEL_KEYS = [
+  "environment",
+  "node_slug",
+  "database_tier",
+  "budget_profile",
+  "state",
+] as const;
+
+export interface DatabaseCellMetricsTarget {
+  /** Control-plane selector only; exporters MUST NOT emit it as a metric label. */
+  readonly cellId: string;
+  /** Private scrape endpoint; never returned by a public status route. */
+  readonly scrapeUrl: string;
+  readonly identity: DatabaseCellMetricIdentity;
+}
+
+/** Reconciles dedicated-cell scrape discovery without owning alert policy. */
+export interface DatabaseCellMetricsExporterPort {
+  reconcileTarget(target: DatabaseCellMetricsTarget): Promise<void>;
+  removeTarget(input: { readonly cellId: string }): Promise<void>;
+}
+
 export interface ProvisionDatabaseCellInput {
   readonly nodeId: string;
   readonly nodeSlug: string;

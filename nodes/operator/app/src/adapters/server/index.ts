@@ -127,7 +127,9 @@ export {
 } from "./db/database-dsn-rotation.adapter";
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";
 export {
+  createPostgresDatabaseContainmentAdapter,
   type DatabaseContainmentAuditEvent,
+  DatabaseContainmentConfigurationError,
   type DatabaseControlSql,
   type DatabaseSourceFence,
   PostgresDatabaseContainmentAdapter,

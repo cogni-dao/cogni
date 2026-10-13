@@ -12,7 +12,9 @@ import {
   DatabaseDsnRotationError,
 } from "./database-dsn-rotation.adapter";
 import {
+  createPostgresDatabaseContainmentAdapter,
   type DatabaseContainmentAuditEvent,
+  DatabaseContainmentConfigurationError,
   PostgresDatabaseContainmentAdapter,
 } from "./postgres-database-containment.adapter";
 
@@ -28,6 +30,16 @@ const ACTION: DatabaseContainmentAction = {
 };
 
 describe("PostgresDatabaseContainmentAdapter", () => {
+  it("fails closed when a privileged production capability is absent", () => {
+    expect(() =>
+      createPostgresDatabaseContainmentAdapter({
+        sql: undefined,
+        fence: undefined,
+        audit: undefined,
+      } as never)
+    ).toThrowError(DatabaseContainmentConfigurationError);
+  });
+
   it("contains and readmits only the node roles with audited phase state", async () => {
     let canLogin = true;
     let sessions = 8;

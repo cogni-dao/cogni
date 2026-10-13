@@ -54,6 +54,45 @@ export interface PostgresDatabaseContainmentDeps {
   readonly now?: () => Date;
 }
 
+export class DatabaseContainmentConfigurationError extends Error {
+  readonly code = "DATABASE_CONTAINMENT_CONFIGURATION_INVALID";
+
+  constructor(readonly missingCapabilities: readonly string[]) {
+    super(
+      `database containment requires privileged capabilities: ${missingCapabilities.join(", ")}`
+    );
+    this.name = "DatabaseContainmentConfigurationError";
+  }
+}
+
+/**
+ * Production construction boundary. The public app must not synthesize these
+ * capabilities: its composition root may wire this only when an admin SQL
+ * executor, durable audit sink, and real source-firewall actuator are present.
+ */
+export function createPostgresDatabaseContainmentAdapter(
+  deps: PostgresDatabaseContainmentDeps
+): DatabaseContainmentPort {
+  const missing: string[] = [];
+  if (typeof deps.sql?.query !== "function") missing.push("admin_sql_executor");
+  if (
+    typeof deps.audit?.append !== "function" ||
+    typeof deps.audit?.latest !== "function"
+  ) {
+    missing.push("durable_audit_sink");
+  }
+  if (
+    typeof deps.fence?.isFenced !== "function" ||
+    typeof deps.fence?.setFenced !== "function"
+  ) {
+    missing.push("source_firewall_actuator");
+  }
+  if (missing.length > 0) {
+    throw new DatabaseContainmentConfigurationError(missing);
+  }
+  return new PostgresDatabaseContainmentAdapter(deps);
+}
+
 /**
  * Audited v1 containment action: revoke node logins, terminate its sessions,
  * and apply its source-specific network fence. No global database restart.

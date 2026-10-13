@@ -139,6 +139,9 @@ export type {
   ResolvedConnection,
 } from "./connection-broker.port";
 export type {
+  DatabaseCellMetricIdentity,
+  DatabaseCellMetricsExporterPort,
+  DatabaseCellMetricsTarget,
   DatabaseCellPhase,
   DatabaseCellStatus,
   DatabaseContainmentAction,
@@ -156,6 +159,7 @@ export type {
   DatabaseTier,
   ProvisionDatabaseCellInput,
 } from "./database-containment.port";
+export { DATABASE_CELL_METRIC_LABEL_KEYS } from "./database-containment.port";
 export type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
