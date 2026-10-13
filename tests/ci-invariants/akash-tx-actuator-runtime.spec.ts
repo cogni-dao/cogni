@@ -357,6 +357,31 @@ describe("akash-tx-actuator runtime", () => {
     expect(podSpec.terminationGracePeriodSeconds).toBe(210);
   });
 
+  it("does not arm liveness before the fail-closed boot proofs finish", () => {
+    const probes = container() as {
+      startupProbe?: {
+        httpGet?: { path?: string; port?: string };
+        periodSeconds?: number;
+        timeoutSeconds?: number;
+        failureThreshold?: number;
+      };
+      livenessProbe?: { initialDelaySeconds?: number };
+      readinessProbe?: { initialDelaySeconds?: number };
+    };
+
+    // Boot may spend 135s in the bounded ledger retry alone, before the Console wallet proof.
+    // Kubernetes suppresses liveness/readiness until startup succeeds, so an overloaded DB can
+    // delay a safe writer but cannot trap it in a kubelet-induced restart loop.
+    expect(probes.startupProbe).toEqual({
+      httpGet: { path: "/healthz", port: "http" },
+      periodSeconds: 5,
+      timeoutSeconds: 2,
+      failureThreshold: 60,
+    });
+    expect(probes.livenessProbe).not.toHaveProperty("initialDelaySeconds");
+    expect(probes.readinessProbe).not.toHaveProperty("initialDelaySeconds");
+  });
+
   it("receives only the three credentials it needs, as files, from two blast radii", () => {
     // envFrom over operator-env-secrets would hand a wallet writer the whole operator
     // bucket; an explicit item list is the blast radius we actually want.

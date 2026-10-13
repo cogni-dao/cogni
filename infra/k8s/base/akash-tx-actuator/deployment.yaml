@@ -112,14 +112,26 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             readOnlyRootFilesystem: true
+          # Boot deliberately proves the spend ledger and Console wallet before opening the
+          # socket. The ledger's bounded transient retry can take >2 minutes under shared-DB
+          # pressure, so liveness must not kill a healthy boot after its former 10s grace.
+          # 60 × 5s = 300s covers that fail-closed proof; steady-state liveness arms only
+          # after /healthz first succeeds.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
           livenessProbe:
             httpGet: { path: /healthz, port: http }
-            initialDelaySeconds: 10
             periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 3
           readinessProbe:
             httpGet: { path: /readyz, port: http }
-            initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
       volumes:
         - name: akash-tx-credentials
           projected:
