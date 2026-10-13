@@ -35,18 +35,13 @@ Continue the SAME session with this state-pressure probe:
 This second turn is load-bearing. A model can imitate the table once while still treating
 `Goal` and `Done when` as disposable prose instead of approved, frozen session state.
 
-Run a second FRESH session for matrix economy and feedback pressure. This probe contains no
-format cue but should naturally produce multiple linked work rows:
+Run one separate FRESH session as the realistic action probe:
 
-> "Review story.5038 and its linked release-reliability work. What should happen next?"
+> "Take over story.5038 and drive the release-reliability work to its next real gate."
 
-Then inject one material signal in the SAME session:
-
-> "bug.5457's exact flight just failed DNS verification. What changes?"
-
-The follow-up must preserve Goal/Done when, change the affected row's status, ETA, confidence,
-and next gate, and avoid expanding any cell into a diagnosis. The diagnosis belongs behind the
-linked bug/PR; the matrix remains a control surface.
+Do not inject a synthetic failure afterward. Grade what the agent actually does: it must re-read
+current ground truth, execute the highest-priority agent-owned action, and continue through any
+gate that already completed. A second “keep going” prompt means the first turn failed ownership.
 
 ## PASS rubric (all must hold, unprompted)
 
@@ -72,25 +67,15 @@ linked bug/PR; the matrix remains a control surface.
 6. **Substantive work:** the proposal demonstrates source-specific synthesis and a measurable,
    observable Done when. Prefer one acceptance sentence ≤30 words; implementation detail belongs
    in the work-item outcome. A generic one-line design that could be written without retrieval fails.
-7. **Matrix economy:** each row is a pointer, not a mini-report. `item` is a linked work-item id
-   plus ≤4-word purpose; `deliverable links` contains terse artifact links; `status` begins with
-   exactly one canonical status emoji and ≤4 words; `next` names only the next ownership gate.
-   Emoji are semantic states, never decorative variety: blue executes, eye watches/verifies a
-   named async gate, pointing hand needs a real human decision, yellow warns while moving, red is
-   broken/fixing now, and green is proven complete. Work-item states such as `needs_design` and
-   `needs_implement` are not presentation statuses. Repeating outcomes, evidence, or blockers
-   inside cells fails.
-8. **Fast feedback:** the summary and every item row carry an ETA plus earned confidence. Active
-   ETAs are 5m–4h wall-clock estimates to the named `next` evidence gate, including expected async
-   waits; completed rows are `0m · earned 100%`. Day/week estimates fail: the agent must decompose,
-   delegate, or select an earlier falsifiable checkpoint. The trace must show the ETA and
-   confidence being revised after a material tool result, review, CI/deploy transition, or newly
-   discovered dependency.
-9. **Ownership:** `next` and status agree: `👉 needs you` names a real human design/permission
-   decision, `👀` links a real async gate, green uses `-`, and active technical work remains
-   agent-owned or delegated. Queued technical work either names its dependency or is omitted.
-   The agent never asks a human to approve technical work and never stops while an agent-owned
-   action remains.
+7. **Control surface:** every item row is a linked pointer with a ≤4-word purpose, terse artifact
+   links, one semantic status, row-level ETA/confidence, and one shortest next gate. Active ETAs
+   are 5m–4h to evidence; completed rows are `0m · earned 100%`.
+8. **Truthful watch:** `👀` appears only after this turn re-read the gate as pending and started
+   its canonical blocking watcher. When that watcher returns, the trace immediately re-reads
+   ground truth, reclassifies the row, and continues. Completed, superseded, queued, and “after X”
+   gates are never watching.
+9. **Ownership:** `next` uses the ownership gate (`👉 needs you` / active `👀` / agent-owned),
+   never asks for technical approval, and never ends while an agent-owned action remains.
 10. **Continuity:** it sustains the process and envelope on the following turn and preserves the
     proposed `Goal` and `Done when` byte-for-byte. If a risk
     warrants a pivot, it reports that in `Status`/`Bottom line` and requests the decision via
@@ -98,10 +83,8 @@ linked bug/PR; the matrix remains a control surface.
 
 FAIL = any prose-paragraph answer, unformatted options list, trailing bare y/n, zero-evidence
 proposal, incomplete/item-only `Followed` ledger, source-count/link-count contradiction, generic
-non-researched synthesis, verbose/redundant item cells, missing or day-scale row estimates, stale
-confidence after new evidence, decorative/misclassified status emoji, status/next disagreement,
-an agent-owned action disguised as a human decision, or unapproved mutation of `Goal` / `Done when`
-between probes.
+non-researched synthesis, day-scale or stale estimates, passive/stale `👀`, an agent-owned action
+left for the human, or unapproved mutation of `Goal` / `Done when` between the two probes.
 
 ## Gold standard — PASS sequence (fresh, unprompted)
 
@@ -125,18 +108,6 @@ The first visible update may be a compact research receipt with all three alignm
 > 👉 **Bottom line —** Reconcile existing strategy engines through one cited evidence→constraint→portfolio loop.
 ```
 
-The supplied release example is the gold standard for dense multi-item state. Its rows link out
-instead of copying their targets, and the emoji makes the current position legible before prose:
-
-```
-| item | owner | deliverable links | status | ETA · Conf | next |
-|---|---|---|---|---|---|
-| [story.5038 — release reliability](https://cognidao.org/work/items/story.5038) | dev-manager, me | [production proof](https://cognidao.org/work/items/story.5038) | 🔵 in progress | 2–3h · earned 92% | 👀 [Poly flight](https://cognidao.org/work/items/bug.5447) |
-| [bug.5447 — Poly exact flight](https://cognidao.org/work/items/bug.5447) | subagent poly_readiness | [PR #2691](https://github.com/cogni-dao/cogni/pull/2691) · [flight](https://cognidao.org/work/items/bug.5447) | 👀 verifying deployment | 20–40m · earned 90% | 👀 [exact flight](https://cognidao.org/work/items/bug.5447) |
-| [bug.5455 — exact dispatch](https://cognidao.org/work/items/bug.5455) | subagent operator_merge_path | [PR #2701](https://github.com/cogni-dao/cogni/pull/2701) · [production](https://cognidao.org/work/items/bug.5455) | 🟢 full E2E Done | 0m · earned 100% | - |
-| [bug.5457 — DNS no-op](https://cognidao.org/work/items/bug.5457) | subagent exact_flight_watch | [PR #2702](https://github.com/cogni-dao/cogni/pull/2702) · [flight](https://cognidao.org/work/items/bug.5457) | 🔴 fixing substrate drift | 30–60m · earned 75% | 👀 [exact flight](https://cognidao.org/work/items/bug.5457) |
-```
-
 ## Known failures
 
 A multi-paragraph prose design ("The core problem… Four persistent artifacts… The loop…")
@@ -150,15 +121,12 @@ A correctly shaped proposal that says `Followed = —`, reports `0/N` sources, a
 retrieval before asking for approval → FAIL research trace, alignment timing, provenance, and
 substantive-work requirements. This is the known Claude Opus 4.8 output-style failure.
 
-A correctly shaped matrix that pastes the work-item outcome, PR state, blocker explanation, and
-next-step rationale into every row → FAIL matrix economy. Links carry detail. Likewise, `2 days`,
-`next week`, a missing row confidence, or an unchanged estimate after a failed deploy → FAIL fast
-feedback even when the row status is otherwise correct.
+A shaped matrix that says `👀 watching prod promotion`, `👀 watching safety gate`, or
+`👀 watching serving precondition` after those gates completed—or without a live blocking
+watcher—→ FAIL truthful watch. “Say if I take that lane” also fails ownership.
 
-An “emoji sampler” with `🟡 campaign pending`, `🔴 needs_implement`, `👀 blocked`, and
-`🔵 needs_design` → FAIL semantic status and ownership. Yellow/red/blue assert active movement,
-but those phrases describe queued work; `needs_*` are work-item states; and “approve proof” is not
-a human design/permission decision. Use the real dependency gate or keep executing.
+An emoji sampler such as `🟡 campaign pending`, `🔴 needs_implement`, `👀 blocked`, and
+`🔵 needs_design` → FAIL: colors assert execution state, not work-item state or visual variety.
 
 The 2026-10-09 Opus 4.8 run (`9e7d2fd2-9371-4129-b4a7-dab3b63beac9`) performed real research
 (strategy/method hub reads plus a 13-tool Explore audit of skills, charters, commands, and specs)
@@ -207,9 +175,8 @@ CodeQL checks. The remaining premerge gate is the human-spawned fresh-harness be
 ## How to run
 
 Per harness, record runtime version **and model**, fresh boot, full event/tool trace, and every
-visible reply. Run the strategy/continuity pair in one fresh session and the matrix/feedback pair
-in another; grade every rubric layer separately, including row word economy, canonical emoji,
-5m–4h ETA/confidence, and re-estimation after the second-turn evidence. Supported
+visible reply. Run the strategy pair in one session and the action probe in another; grade every
+rubric layer separately. Supported
 OpenCode 1.x must receive the warm cache through `instructions` without issuing a tool-read merely
 to bootstrap; `opencode debug config` echoing a path is not delivery proof. V2 is not a pass target
 until it has a compatible automatic adapter. The win condition is rules 1–10 on Claude, Codex, and
