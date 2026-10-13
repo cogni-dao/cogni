@@ -409,15 +409,23 @@ export function createActivities(deps: ActivityDeps) {
             ? "graph_transport_http"
             : "graph_request_rejected";
 
+      // A 409 is the receiver's healthy join/reconciliation state after an
+      // uncertain transport result, not a graph or activity error. Keep it out
+      // of fleet error counters while Temporal applies the bounded backoff.
       activityDurationMs
-        .labels({ activity: "executeGraph", status: "error" })
-        .observe(durationMs);
-      activityErrorsTotal
         .labels({
           activity: "executeGraph",
-          error_type: retryable ? "retryable" : "non_retryable",
+          status: response.status === 409 ? "pending" : "error",
         })
-        .inc();
+        .observe(durationMs);
+      if (response.status !== 409) {
+        activityErrorsTotal
+          .labels({
+            activity: "executeGraph",
+            error_type: retryable ? "retryable" : "non_retryable",
+          })
+          .inc();
+      }
 
       const logFields = {
         event: WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR,
@@ -431,7 +439,9 @@ export function createActivities(deps: ActivityDeps) {
         idempotencyKey,
         durationMs,
       };
-      if (retryable) {
+      if (response.status === 409) {
+        logger.info(logFields, WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR);
+      } else if (retryable) {
         logger.warn(logFields, WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR);
       } else {
         logger.error(logFields, WORKER_EVENT_NAMES.ACTIVITY_GRAPH_ERROR);

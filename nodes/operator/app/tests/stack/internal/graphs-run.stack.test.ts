@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { SYSTEM_ACTOR } from "@cogni/ids/system";
 import { TEST_MODEL_ID } from "@tests/_fakes/ai/test-constants";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { seedTestActor, type TestActor } from "@tests/_fixtures/stack/seed";
@@ -24,7 +25,12 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { POST } from "@/app/api/internal/graphs/[graphId]/runs/route";
 import { getContainer } from "@/bootstrap/container";
-import { executionGrants, executionRequests, users } from "@/shared/db/schema";
+import {
+  executionGrants,
+  executionRequests,
+  graphRuns,
+  users,
+} from "@/shared/db/schema";
 
 // Token from env (matches METRICS_TOKEN pattern in metrics-endpoint.stack.test.ts)
 const SCHEDULER_TOKEN = process.env.SCHEDULER_API_TOKEN ?? "";
@@ -57,6 +63,9 @@ describe("[internal] POST /api/internal/graphs/{graphId}/runs", () => {
 
   afterEach(async () => {
     const db = getSeedDb();
+    await db
+      .delete(graphRuns)
+      .where(eq(graphRuns.requestedBy, testActor.user.id));
     // Cleanup: delete user (cascades to billing_accounts, grants via FK)
     await db.delete(users).where(eq(users.id, testActor.user.id));
     // Don't resetContainer() - reuse connections across tests
@@ -137,14 +146,25 @@ describe("[internal] POST /api/internal/graphs/{graphId}/runs", () => {
 
     it("first request succeeds and stores execution_request", async () => {
       const idempotencyKey = `${randomUUID()}:2025-01-21T09:00:00Z`;
+      const runId = randomUUID();
       const input = {
         messages: [{ role: "user", content: "Hello" }],
         modelRef: { providerKey: "platform", modelId: TEST_MODEL_ID },
       };
 
+      const container = getContainer();
+      await container.graphRunRepository.createRun(SYSTEM_ACTOR, {
+        runId,
+        graphId: TEST_GRAPH_ID,
+        runKind: "system_scheduled",
+        triggerSource: "temporal_schedule",
+        requestedBy: testActor.user.id,
+      });
+      await container.graphRunRepository.markRunStarted(SYSTEM_ACTOR, runId);
+
       const request = createRequest(
         TEST_GRAPH_ID,
-        { executionGrantId: grantId, input },
+        { executionGrantId: grantId, input, runId },
         { token: SCHEDULER_TOKEN, idempotencyKey }
       );
 
@@ -166,6 +186,14 @@ describe("[internal] POST /api/internal/graphs/{graphId}/runs", () => {
 
       expect(records.length).toBe(1);
       expect(records[0]?.runId).toBe(body.runId);
+
+      // The execution node is the terminal truth-holder. It updates the run
+      // ledger before returning, independent of worker response delivery.
+      const [run] = await db
+        .select({ status: graphRuns.status })
+        .from(graphRuns)
+        .where(eq(graphRuns.runId, runId));
+      expect(run?.status).toBe("success");
     });
 
     it("replay with same Idempotency-Key returns cached result", async () => {

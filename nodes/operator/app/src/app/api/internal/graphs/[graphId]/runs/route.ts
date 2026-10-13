@@ -225,6 +225,16 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     if (idempotencyResult.status === "cached") {
       // Already processed - return cached result with original outcome
       const cached = idempotencyResult.request;
+      // The node execution path is the outcome truth-holder. Reconcile the run
+      // ledger before returning so a lost worker response cannot leave a
+      // successfully finalized execution_request paired with graph_runs=running.
+      await container.graphRunRepository.markRunCompleted(
+        SYSTEM_ACTOR,
+        cached.runId,
+        cached.ok ? "success" : "error",
+        cached.ok ? undefined : (cached.errorCode ?? "internal"),
+        cached.ok ? undefined : (cached.errorCode ?? "internal")
+      );
       log.info(
         { idempotencyKey, runId: cached.runId, ok: cached.ok },
         "Returning cached result"
@@ -750,6 +760,13 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         ok: false,
         errorCode,
       });
+      await container.graphRunRepository.markRunCompleted(
+        SYSTEM_ACTOR,
+        runId,
+        "error",
+        errorCode,
+        errorCode
+      );
 
       const errorResponse: InternalGraphRunOutput = {
         ok: false,
@@ -765,6 +782,13 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       ok: final.ok,
       errorCode: final.error ?? null,
     });
+    await container.graphRunRepository.markRunCompleted(
+      SYSTEM_ACTOR,
+      runId,
+      final.ok ? "success" : "error",
+      final.ok ? undefined : (final.error ?? "internal"),
+      final.ok ? undefined : (final.error ?? "internal")
+    );
 
     // --- 11. Return result ---
     if (final.ok) {

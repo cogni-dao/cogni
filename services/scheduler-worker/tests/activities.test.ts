@@ -511,7 +511,8 @@ describe("executeGraphActivity", () => {
       nonRetryable: false,
     });
 
-    expect(loggerWarn).toHaveBeenCalledWith(
+    const expectedLogger = status === 409 ? loggerInfo : loggerWarn;
+    expect(expectedLogger).toHaveBeenCalledWith(
       expect.objectContaining({
         activityAttempt: 1,
         httpStatus: status,
@@ -519,7 +520,7 @@ describe("executeGraphActivity", () => {
       }),
       "worker.activity.graph_error"
     );
-    expect(JSON.stringify(loggerWarn.mock.calls)).not.toContain(
+    expect(JSON.stringify(expectedLogger.mock.calls)).not.toContain(
       "proxy body must not be logged"
     );
 

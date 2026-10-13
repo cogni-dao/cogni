@@ -40,7 +40,7 @@ describe("graph execution transport policy", () => {
   it("bounds graph transport attempts inside one durable retry budget", () => {
     expect(GRAPH_EXECUTION_ACTIVITY_OPTIONS).toMatchObject({
       startToCloseTimeout: "2 minutes",
-      scheduleToCloseTimeout: "15 minutes",
+      scheduleToCloseTimeout: "20 minutes",
       retry: {
         initialInterval: "2 seconds",
         maximumInterval: "30 seconds",

@@ -44,7 +44,9 @@ export const EXTERNAL_API_ACTIVITY_OPTIONS = {
  */
 export const GRAPH_EXECUTION_ACTIVITY_OPTIONS = {
   startToCloseTimeout: "2 minutes",
-  scheduleToCloseTimeout: "15 minutes",
+  // Preserve the existing 15-minute graph budget and reserve five minutes for
+  // transport reconciliation/backoff after an ingress disconnect.
+  scheduleToCloseTimeout: "20 minutes",
   retry: {
     initialInterval: "2 seconds",
     maximumInterval: "30 seconds",
