@@ -40,6 +40,10 @@
 #                             matrix.node value. Empty/unset is rejected —
 #                             callers with no promotions must skip the step,
 #                             not silent-pass it (Axiom 11).
+#   SCHEDULER_EXPECTED_SHA    required when scheduler-worker is promoted in a
+#                             candidate flight; exact 40-char image build SHA.
+#   SCHEDULER_EXPECTED_DIGEST required with SCHEDULER_EXPECTED_SHA; sha256:...
+#                             from the promoted overlay/payload.
 #
 # Adds: extend the case statement below when a new in-cluster deployment
 # needs gating. Promotion to a `k8s_deployment` field on infra/catalog/*.yaml
@@ -184,6 +188,65 @@ wait_for_new_rs_available() {
   return 1
 }
 
+verify_scheduler_identity() {
+  local expected_sha="${SCHEDULER_EXPECTED_SHA:-}"
+  local expected_digest="${SCHEDULER_EXPECTED_DIGEST:-}"
+  if [ -z "$expected_sha" ] && [ -z "$expected_digest" ]; then
+    echo "  ℹ scheduler-worker: exact /version identity not requested by this caller"
+    return 0
+  fi
+  if ! [[ "$expected_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "  ✗ scheduler-worker: SCHEDULER_EXPECTED_SHA must be 40 hex characters"
+    return 1
+  fi
+  if ! [[ "$expected_digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]]; then
+    echo "  ✗ scheduler-worker: SCHEDULER_EXPECTED_DIGEST must be sha256:<64 hex>"
+    return 1
+  fi
+
+  local deadline=$((SECONDS + ROLLOUT_TIMEOUT))
+  local attempts=0 identities="" actual_sha="" actual_digest="" pod_ip="" body=""
+  local ready_count=0 mismatches=0
+  expected_sha="$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')"
+  expected_digest="$(printf '%s' "$expected_digest" | tr '[:upper:]' '[:lower:]')"
+  while :; do
+    attempts=$((attempts + 1))
+    # Probe every scheduler-worker pod with an assigned IP directly. A NodePort
+    # request can randomly hit one new replica while an old worker is still
+    # polling Temporal; that is not an exact fleet identity proof.
+    identities="$(ssh "${SSH_OPTS[@]}" "root@${VM_HOST}" \
+      "for ip in \$(kubectl -n ${NS} get pods -l app.kubernetes.io/name=scheduler-worker -o jsonpath='{range .items[*]}{.status.podIP}{\"\\n\"}{end}'); do printf '%s\\t' \"\$ip\"; curl -fsS --max-time 5 \"http://\$ip:9000/version\" || printf '{}'; printf '\\n'; done" \
+      2>/dev/null || true)"
+    ready_count=0
+    mismatches=0
+    while IFS=$'\t' read -r pod_ip body; do
+      [ -n "$pod_ip" ] || continue
+      ready_count=$((ready_count + 1))
+      read -r actual_sha actual_digest < <(
+        printf '%s' "$body" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(str(d.get("sha", "")).lower(), str(d.get("imageDigest", "")).lower())
+except Exception:
+    print("", "")'
+      )
+      if [ "$actual_sha" != "$expected_sha" ] || [ "$actual_digest" != "$expected_digest" ]; then
+        mismatches=$((mismatches + 1))
+      fi
+    done <<<"$identities"
+    if [ "$ready_count" -gt 0 ] && [ "$mismatches" -eq 0 ]; then
+      echo "  ✓ scheduler-worker: all ${ready_count} pod(s) /version sha=${expected_sha:0:12} digest=${expected_digest:0:19} match promoted artifact (attempt ${attempts})"
+      return 0
+    fi
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "  ✗ scheduler-worker: /version fleet identity mismatch after ${ROLLOUT_TIMEOUT}s — pods=${ready_count}, mismatches=${mismatches}; expected sha=${expected_sha} digest=${expected_digest}"
+      printf '%s\n' "$identities" | sed 's/^/    /'
+      return 1
+    fi
+    sleep 2
+  done
+}
+
 FAILED=0
 for svc in "${SERVICES[@]}"; do
   echo "⏳ wait for deployment/${svc} new ReplicaSet availability -n ${NS} (timeout ${ROLLOUT_TIMEOUT}s)"
@@ -192,7 +255,11 @@ for svc in "${SERVICES[@]}"; do
     continue
   fi
   if [ "$svc" = "scheduler-worker" ]; then
-    echo "  ✓ ${svc}: skipping endpoint cutover wait (health-only worker Service)"
+    if ! verify_scheduler_identity; then
+      FAILED=1
+      continue
+    fi
+    echo "  ✓ ${svc}: skipping endpoint cutover wait (health-only worker Service; exact identity verified)"
     continue
   fi
   if ! wait_for_endpoint_cutover "$svc"; then

@@ -32,9 +32,10 @@
 # on akash has no in-cluster Service, and its public host is per-env). Both must
 # reach the deploy branch or a node-add would only half-arrive.
 #
-# The overlay's kustomization.yaml — which pins the image digest + patches
-# TEMPORAL_NAMESPACE — is NEVER touched, so promotion state is preserved. Only
-# base/scheduler-worker/ and the GENERATED node-endpoints patch travel.
+# The overlay topology comes from the watched repository's environment bootstrap
+# branch (deploy/<env>), which owns the lane's substrate hostname. The current
+# scheduler image digest is restored after that refresh, so a foreign app-source
+# flight cannot replace the shared worker's VM target or roll back its image.
 #
 # Idempotent: re-running with an unchanged catalog produces no diff → no commit
 # (status "noop"). The single per-env CI concurrency group serializes flights so
@@ -48,11 +49,21 @@
 #                      catalog-rendered base/scheduler-worker + the renderer.
 #   GH_TOKEN           push auth (required unless DRY_RUN=1 or DEPLOY_BRANCH_DIR set).
 #   GITHUB_REPOSITORY  owner/repo to clone (required unless DEPLOY_BRANCH_DIR set).
+#   SWR_DEPLOY_REPOSITORY owner/repo actually watched by Argo for this k3s cell.
+#                      Defaults to GITHUB_REPOSITORY for non-mirrored fleets.
+#   SWR_ROUTE_AUTHORITY_DIR checkout of the watched repository's protected-main
+#                      routing authority (tests/local only). Production clones
+#                      read origin/main from SWR_DEPLOY_REPOSITORY.
+#   SWR_SUBSTRATE_AUTHORITY_DIR checkout containing deploy/<env>'s scheduler
+#                      overlay topology (tests/local only). Production reads
+#                      the watched repository's deploy/<env> branch.
 #   DEPLOY_BRANCH_DIR  reuse an existing deploy-branch checkout instead of cloning
 #                      (tests / local). When set, no clone and no push.
 #   DRY_RUN=1          render + diff only; never push (commits locally for the diff).
 #   SWR_RECONCILE_SUMMARY_FILE  optional path to receive one structured JSON summary.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 rc=0 # assigned by the EXIT traps below ($? at fire time); declared for shellcheck.
 DEPLOY_ENV=""
@@ -72,10 +83,13 @@ BRANCH="deploy/${DEPLOY_ENV}-scheduler-worker"
 BOOTSTRAP_BRANCH="deploy/${DEPLOY_ENV}"
 SUBPATH="infra/k8s/base/scheduler-worker"
 SRC_DIR="${APP_SOURCE_DIR}/${SUBPATH}"
-# GENERATED, non-promotion file. Copied on its own so the overlay's
-# kustomization.yaml (promotion state) is never rewritten from main.
+# GENERATED routing data comes from the reviewed app source. The sibling
+# kustomization topology is reconciled separately from the lane bootstrap ref.
 ENDPOINTS_SUBPATH="infra/k8s/overlays/${DEPLOY_ENV}/scheduler-worker/node-endpoints.patch.yaml"
 ENDPOINTS_SRC="${APP_SOURCE_DIR}/${ENDPOINTS_SUBPATH}"
+OVERLAY_SUBPATH="infra/k8s/overlays/${DEPLOY_ENV}/scheduler-worker/kustomization.yaml"
+AUTHORITY_BASE_PATH="$SUBPATH/configmap.yaml"
+AUTHORITY_ENDPOINTS_PATH="$ENDPOINTS_SUBPATH"
 
 ENDPOINTS_COUNT=0
 NODE_COUNT=0
@@ -184,26 +198,25 @@ if command -v yq >/dev/null 2>&1; then
     ENDPOINTS_CSV="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$SRC_DIR/configmap.yaml" 2>/dev/null || true)"
   fi
 fi
-if [ -n "$ENDPOINTS_CSV" ]; then
-  ENDPOINTS_COUNT="$(awk -F',' '{print NF}' <<<"$ENDPOINTS_CSV")"
-  # slug aliases only (skip uuid=... aliases): one per node.
-  NODE_COUNT="$(tr ',' '\n' <<<"$ENDPOINTS_CSV" | grep -cvE '^[0-9a-f]{8}-' || true)"
-fi
-echo "Reconciling scheduler-worker routing for env '${DEPLOY_ENV}' → ${BRANCH}"
-echo "  ${NODE_COUNT} node(s), ${ENDPOINTS_COUNT} endpoint alias(es)"
+command -v yq >/dev/null 2>&1 || {
+  echo "[ERROR] yq is required to compose scheduler-worker route authorities" >&2
+  exit 1
+}
 
 # ── Resolve the deploy-branch checkout ────────────────────────────────────────
 CLONED_DIR=""
 if [ -n "${DEPLOY_BRANCH_DIR:-}" ]; then
   WORKDIR="$DEPLOY_BRANCH_DIR"
 else
-  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY required to clone (or set DEPLOY_BRANCH_DIR)}"
+  DEPLOY_REPOSITORY="${SWR_DEPLOY_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+  : "${DEPLOY_REPOSITORY:?SWR_DEPLOY_REPOSITORY or GITHUB_REPOSITORY required to clone (or set DEPLOY_BRANCH_DIR)}"
   : "${GH_TOKEN:?GH_TOKEN required to clone/push (or set DRY_RUN=1 + DEPLOY_BRANCH_DIR)}"
   CLONED_DIR="$(mktemp -d -t swr-deploy-branch.XXXXXX)"
   WORKDIR="$CLONED_DIR/repo"
-  git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$WORKDIR"
+  git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" "$WORKDIR"
   (
     cd "$WORKDIR"
+    git fetch --quiet origin main
     git fetch --quiet origin "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
     if git rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" >/dev/null; then
       git checkout -B "$BRANCH" "origin/${BRANCH}" >/dev/null 2>&1
@@ -216,6 +229,129 @@ else
 fi
 trap 'rc=$?; [ -n "$CLONED_DIR" ] && rm -rf "$CLONED_DIR"; if [ "$rc" -ne 0 ] && [ "$SUMMARY_WRITTEN" != "true" ]; then write_summary "failure"; fi' EXIT
 
+OVERLAY_DST="${WORKDIR}/${OVERLAY_SUBPATH}"
+[ -f "$OVERLAY_DST" ] || {
+  echo "[ERROR] deployed scheduler-worker overlay missing: $OVERLAY_DST" >&2
+  exit 1
+}
+CURRENT_IMAGE_NAME="$(yq -N '.images[0].newName // .images[0].name // ""' "$OVERLAY_DST")"
+CURRENT_IMAGE_DIGEST="$(yq -N '.images[0].digest // ""' "$OVERLAY_DST")"
+CURRENT_SOURCE_SHA="$(python3 - "$WORKDIR/.promote-state/source-sha-by-app.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        print(json.load(handle).get("scheduler-worker", ""))
+except (FileNotFoundError, json.JSONDecodeError):
+    print("")
+PY
+)"
+[[ "$CURRENT_IMAGE_NAME" == ghcr.io/* && "$CURRENT_IMAGE_DIGEST" =~ ^sha256:[0-9a-fA-F]{64}$ ]] || {
+  echo "[ERROR] deployed scheduler-worker overlay has no immutable image identity" >&2
+  exit 1
+}
+[[ "$CURRENT_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+  echo "[ERROR] deployed scheduler-worker source identity missing from source-sha map" >&2
+  exit 1
+}
+
+substrate_overlay_yaml() {
+  if [ -n "${SWR_SUBSTRATE_AUTHORITY_DIR:-}" ]; then
+    [ -f "${SWR_SUBSTRATE_AUTHORITY_DIR}/${OVERLAY_SUBPATH}" ] || {
+      echo "[ERROR] substrate overlay authority missing: ${SWR_SUBSTRATE_AUTHORITY_DIR}/${OVERLAY_SUBPATH}" >&2
+      return 1
+    }
+    cat "${SWR_SUBSTRATE_AUTHORITY_DIR}/${OVERLAY_SUBPATH}"
+  else
+    git -C "$WORKDIR" show "origin/${BOOTSTRAP_BRANCH}:${OVERLAY_SUBPATH}" || {
+      echo "[ERROR] substrate overlay authority missing at origin/${BOOTSTRAP_BRANCH}:${OVERLAY_SUBPATH}" >&2
+      return 1
+    }
+  fi
+}
+
+# Lane topology follows the watched deployment repository, never whichever app
+# repository happened to flight last. Restore the already-deployed immutable
+# image identity before the optional same-transaction promotion replaces it.
+substrate_overlay_yaml > "${OVERLAY_DST}.tmp"
+mv "${OVERLAY_DST}.tmp" "$OVERLAY_DST"
+(
+  cd "$WORKDIR"
+  bash "$SCRIPT_DIR/promote-k8s-image.sh" --no-commit \
+    --env "$DEPLOY_ENV" --app scheduler-worker \
+    --digest "${CURRENT_IMAGE_NAME}@${CURRENT_IMAGE_DIGEST}" \
+    --source-sha "$CURRENT_SOURCE_SHA"
+)
+git -C "$WORKDIR" add -A "$OVERLAY_SUBPATH"
+
+# The watched repository owns an independent active candidate roster. Compose
+# that protected-main authority with the reviewed app-source authority; never
+# replace one fleet's pollers with another fleet's configmap. Equal duplicate
+# aliases are harmless (operator/node-template); a different destination for the
+# same alias is ambiguous authority and fails closed.
+authority_yaml() {
+  local rel="$1"
+  if [ -n "${SWR_ROUTE_AUTHORITY_DIR:-}" ]; then
+    [ -f "${SWR_ROUTE_AUTHORITY_DIR}/${rel}" ] || {
+      echo "[ERROR] watched-repository route authority missing: ${SWR_ROUTE_AUTHORITY_DIR}/${rel}" >&2
+      return 1
+    }
+    cat "${SWR_ROUTE_AUTHORITY_DIR}/${rel}"
+  else
+    git -C "$WORKDIR" show "origin/main:${rel}" || {
+      echo "[ERROR] watched-repository route authority missing at origin/main:${rel}" >&2
+      return 1
+    }
+  fi
+}
+
+yaml_endpoints() {
+  yq -N '.data.COGNI_NODE_ENDPOINTS // ""' 2>/dev/null
+}
+
+merge_endpoint_authorities() {
+  local watched_csv="$1" reviewed_csv="$2"
+  WATCHED_ENDPOINTS="$watched_csv" REVIEWED_ENDPOINTS="$reviewed_csv" python3 - <<'PY'
+import os
+
+routes = {}
+origins = {}
+for origin, raw in (
+    ("watched protected main", os.environ["WATCHED_ENDPOINTS"]),
+    ("reviewed application source", os.environ["REVIEWED_ENDPOINTS"]),
+):
+    for entry in filter(None, raw.split(",")):
+        alias, sep, endpoint = entry.partition("=")
+        if not sep or not alias or not endpoint:
+            raise SystemExit(f"invalid scheduler endpoint entry from {origin}: {entry!r}")
+        if alias in routes and routes[alias] != endpoint:
+            raise SystemExit(
+                f"scheduler endpoint collision for {alias!r}: "
+                f"{origins[alias]}={routes[alias]!r}, {origin}={endpoint!r}"
+            )
+        routes[alias] = endpoint
+        origins.setdefault(alias, origin)
+
+if not routes:
+    raise SystemExit("scheduler endpoint authorities composed to an empty map")
+print(",".join(f"{alias}={routes[alias]}" for alias in sorted(routes)))
+PY
+}
+
+WATCHED_BASE_CSV="$(authority_yaml "$AUTHORITY_BASE_PATH" | yaml_endpoints)"
+WATCHED_ENV_CSV="$(authority_yaml "$AUTHORITY_ENDPOINTS_PATH" | yaml_endpoints)"
+REVIEWED_BASE_CSV="$(yaml_endpoints < "$SRC_DIR/configmap.yaml")"
+REVIEWED_ENV_CSV="$ENDPOINTS_CSV"
+[ -n "$REVIEWED_ENV_CSV" ] || REVIEWED_ENV_CSV="$REVIEWED_BASE_CSV"
+[ -n "$WATCHED_ENV_CSV" ] || WATCHED_ENV_CSV="$WATCHED_BASE_CSV"
+
+COMPOSITE_BASE_CSV="$(merge_endpoint_authorities "$WATCHED_BASE_CSV" "$REVIEWED_BASE_CSV")"
+COMPOSITE_ENV_CSV="$(merge_endpoint_authorities "$WATCHED_ENV_CSV" "$REVIEWED_ENV_CSV")"
+ENDPOINTS_COUNT="$(awk -F',' '{print NF}' <<<"$COMPOSITE_ENV_CSV")"
+NODE_COUNT="$(tr ',' '\n' <<<"$COMPOSITE_ENV_CSV" | grep -cvE '^[0-9a-f]{8}-' || true)"
+
+echo "Reconciling scheduler-worker routing for env '${DEPLOY_ENV}' → ${BRANCH}"
+echo "  composed ${NODE_COUNT} node(s), ${ENDPOINTS_COUNT} endpoint alias(es) from watched + reviewed authorities"
+
 DST_DIR="${WORKDIR}/${SUBPATH}"
 mkdir -p "$DST_DIR"
 
@@ -223,6 +359,9 @@ mkdir -p "$DST_DIR"
 # annotated deployment + services). --delete keeps it byte-identical to main so a
 # pre-#1609 deploy branch also gains the Reloader annotation.
 rsync -a --delete "$SRC_DIR/" "$DST_DIR/"
+COMPOSITE_ENDPOINTS="$COMPOSITE_BASE_CSV" yq -i \
+  '.data.COGNI_NODE_ENDPOINTS = strenv(COMPOSITE_ENDPOINTS)' \
+  "$DST_DIR/configmap.yaml"
 
 # Propagate this env's GENERATED provider-resolved endpoints patch. Absent at an
 # older ref → warn + skip (mirrors the renderer-absent path above) rather than
@@ -230,6 +369,9 @@ rsync -a --delete "$SRC_DIR/" "$DST_DIR/"
 if [ -f "$ENDPOINTS_SRC" ]; then
   mkdir -p "$(dirname "${WORKDIR}/${ENDPOINTS_SUBPATH}")"
   cp "$ENDPOINTS_SRC" "${WORKDIR}/${ENDPOINTS_SUBPATH}"
+  COMPOSITE_ENDPOINTS="$COMPOSITE_ENV_CSV" yq -i \
+    '.data.COGNI_NODE_ENDPOINTS = strenv(COMPOSITE_ENDPOINTS)' \
+    "${WORKDIR}/${ENDPOINTS_SUBPATH}"
   git -C "$WORKDIR" add -A "$ENDPOINTS_SUBPATH"
 else
   echo "::warning::${ENDPOINTS_SUBPATH} absent at this ref — propagating base routing only"

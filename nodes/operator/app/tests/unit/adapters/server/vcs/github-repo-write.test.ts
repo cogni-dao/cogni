@@ -4043,6 +4043,76 @@ describe("GitHubRepoWriter.packageImageTagExists", () => {
 const DISPATCH_ROUTE =
   "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
 
+describe("GitHubRepoWriter.dispatchNodeRefCandidateFlight", () => {
+  const sourceSha = "c1ff7ca73d0012b1b441f846657c090a9e4476c6";
+
+  it("preserves default-main node flights", async () => {
+    routeHandlers = { [DISPATCH_ROUTE]: () => ({}) };
+
+    await makeWriter().dispatchNodeRefCandidateFlight({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      slug: "operator",
+      sourceSha,
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.params).toMatchObject({
+      workflow_id: "candidate-flight.yml",
+      ref: "main",
+      inputs: { node_slug: "operator", source_sha: sourceSha },
+    });
+  });
+
+  it("dispatches reviewed workflow code through an exact content-addressed ref", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/commits/{ref}": () => ({ sha: sourceSha }),
+      "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls": () => [
+        {
+          number: 2691,
+          html_url: "https://github.com/Cogni-DAO/cogni/pull/2691",
+          state: "open",
+          base: { ref: "main" },
+          head: {
+            sha: sourceSha,
+            repo: { full_name: "Cogni-DAO/cogni" },
+          },
+        },
+      ],
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () =>
+        Promise.reject(statusError(404, "Not Found")),
+      "POST /repos/{owner}/{repo}/git/refs": () => ({}),
+      [DISPATCH_ROUTE]: () => ({}),
+    };
+
+    await makeWriter().dispatchNodeRefCandidateFlight({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      slug: "operator",
+      sourceSha,
+      workflowRef: "bug.5447-lane-local-substrate",
+    });
+
+    expect(
+      requests.find(
+        ({ route }) => route === "POST /repos/{owner}/{repo}/git/refs"
+      )?.params
+    ).toMatchObject({
+      ref: `refs/heads/cogni-flight/${sourceSha}`,
+      sha: sourceSha,
+    });
+    expect(
+      requests.find(({ route }) => route === DISPATCH_ROUTE)?.params
+    ).toMatchObject({
+      ref: `cogni-flight/${sourceSha}`,
+      inputs: {
+        pr_number: "2691",
+        head_sha: sourceSha,
+      },
+    });
+  });
+});
+
 describe("GitHubRepoWriter.dispatchNodePromote", () => {
   it("dispatches promote-and-deploy with skip_infra=true (APP_PROMOTE_IS_NO_INFRA)", async () => {
     routeHandlers = {

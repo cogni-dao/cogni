@@ -4,10 +4,13 @@
 
 # Script: scripts/ci/promote-k8s-image.sh
 # Purpose: Update k8s overlay with new image digest for any app/node.
-# Note: sed uses GNU extensions (0, address). Runs in CI (ubuntu). Local use: review diff only.
+# Image mutation uses portable awk so CI and BSD developer hosts produce the
+# same overlay.
 # Invariants:
 #   - IMAGE_IMMUTABILITY: Uses @sha256: digest, never mutable tags
 #   - MANIFEST_DRIVEN_DEPLOY: Promotion = overlay change → Argo CD syncs
+#   - WORKER_IDENTITY_MATCHES_IMAGE: scheduler-worker /version reports the
+#     promoted source SHA + digest, not static per-environment placeholders.
 # Usage:
 #   scripts/ci/promote-k8s-image.sh --env candidate-a --app operator --digest ghcr.io/cogni-dao/cogni-template@sha256:abc...
 #   scripts/ci/promote-k8s-image.sh --env candidate-a --app operator --digest ...
@@ -32,6 +35,7 @@ DIGEST=""
 ENV=""
 DEPLOY_BRANCH=""
 NO_COMMIT=false
+SOURCE_SHA=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -39,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --digest) DIGEST="$2"; shift 2 ;;
     --env) ENV="$2"; shift 2 ;;
     --deploy-branch) DEPLOY_BRANCH="$2"; shift 2 ;;
+    --source-sha) SOURCE_SHA="$2"; shift 2 ;;
     --no-commit) NO_COMMIT=true; shift ;;
     *) log_error "Unknown arg: $1"; exit 1 ;;
   esac
@@ -52,6 +57,11 @@ fi
 # Validate digest format
 if [[ "$DIGEST" != *"@sha256:"* ]]; then
   log_error "DIGEST must be a digest ref (contain @sha256:), got: $DIGEST"
+  exit 1
+fi
+
+if [[ -n "$SOURCE_SHA" && ! "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  log_error "--source-sha must be 40 hex characters, got: $SOURCE_SHA"
   exit 1
 fi
 
@@ -69,18 +79,90 @@ log_info "Promoting $APP image in $ENV overlay"
 log_info "  Image: $IMAGE_NAME"
 log_info "  Digest: $IMAGE_DIGEST"
 
-# Update the kustomization.yaml images section
-# Replace newName with image name
-sed -i.bak "0,/newName: .*/s|newName: .*|newName: ${IMAGE_NAME}|" "$OVERLAY_FILE"
+# Update the first image entry only. awk keeps this portable across GNU CI and
+# BSD developer hosts while preserving the hand-authored overlay formatting.
+IMAGE_TMP="${OVERLAY_FILE}.image.tmp"
+awk -v image="$IMAGE_NAME" -v digest="$IMAGE_DIGEST" '
+  !name_done && /newName:[[:space:]]*/ {
+    match($0, /^[[:space:]]*/)
+    print substr($0, RSTART, RLENGTH) "newName: " image
+    name_done = 1
+    next
+  }
+  !digest_done && /newTag:[[:space:]]*/ {
+    match($0, /^[[:space:]]*/)
+    print substr($0, RSTART, RLENGTH) "digest: \"" digest "\""
+    digest_done = 1
+    next
+  }
+  !digest_done && /^[[:space:]]*digest:[[:space:]]*/ {
+    match($0, /^[[:space:]]*/)
+    print substr($0, RSTART, RLENGTH) "digest: \"" digest "\""
+    digest_done = 1
+    next
+  }
+  { print }
+  END { if (!name_done || !digest_done) exit 42 }
+' "$OVERLAY_FILE" > "$IMAGE_TMP" || {
+  rm -f "$IMAGE_TMP"
+  log_error "overlay must contain an image newName plus newTag/digest"
+  exit 1
+}
+mv "$IMAGE_TMP" "$OVERLAY_FILE"
 
-# Replace newTag with digest (first run) or update existing digest
-if grep -q 'newTag:' "$OVERLAY_FILE"; then
-  sed -i.bak "0,/newTag: .*/s|.*newTag:.*|    digest: \"${IMAGE_DIGEST}\"|" "$OVERLAY_FILE"
-elif grep -q 'digest:' "$OVERLAY_FILE"; then
-  sed -i.bak "0,/digest: .*/s|digest: .*|digest: \"${IMAGE_DIGEST}\"|" "$OVERLAY_FILE"
+# scheduler-worker exposes IMAGE_DIGEST from this ConfigMap on /version. Keep
+# that observable identity in the same atomic overlay commit as the image pin;
+# otherwise a rollout can be Ready while /version still reports a placeholder.
+if [[ "$APP" == "scheduler-worker" ]]; then
+  if [[ -z "$SOURCE_SHA" ]]; then
+    log_error "scheduler-worker promotion requires --source-sha for /version identity"
+    exit 1
+  fi
+  HAS_SOURCE_SHA_PATCH=false
+  grep -q 'path: /data/GIT_SHA' "$OVERLAY_FILE" && HAS_SOURCE_SHA_PATCH=true
+  IDENTITY_TMP="${OVERLAY_FILE}.identity.tmp"
+  awk -v digest="$IMAGE_DIGEST" -v source_sha="$SOURCE_SHA" -v has_source_sha_patch="$HAS_SOURCE_SHA_PATCH" '
+    /path: \/data\/IMAGE_DIGEST/ {
+      found_path = 1
+      awaiting_value = 1
+      print
+      next
+    }
+    awaiting_value && /^[[:space:]]*value:/ {
+      match($0, /^[[:space:]]*/)
+      print substr($0, RSTART, RLENGTH) "value: \"" digest "\""
+      if (has_source_sha_patch == "false") {
+        print "      - op: add"
+        print "        path: /data/GIT_SHA"
+        print "        value: \"" source_sha "\""
+      }
+      awaiting_value = 0
+      found_value = 1
+      next
+    }
+    /path: \/data\/GIT_SHA/ {
+      awaiting_source_value = 1
+      print
+      next
+    }
+    awaiting_source_value && /^[[:space:]]*value:/ {
+      match($0, /^[[:space:]]*/)
+      print substr($0, RSTART, RLENGTH) "value: \"" source_sha "\""
+      awaiting_source_value = 0
+      found_source_value = 1
+      next
+    }
+    { print }
+    END {
+      if (!found_path || !found_value || (has_source_sha_patch == "true" && !found_source_value)) exit 42
+    }
+  ' "$OVERLAY_FILE" > "$IDENTITY_TMP" || {
+    rm -f "$IDENTITY_TMP"
+    log_error "scheduler-worker overlay must patch ConfigMap IMAGE_DIGEST and GIT_SHA for /version identity"
+    exit 1
+  }
+  mv "$IDENTITY_TMP" "$OVERLAY_FILE"
 fi
-
-rm -f "${OVERLAY_FILE}.bak"
 
 log_info "Updated $OVERLAY_FILE"
 

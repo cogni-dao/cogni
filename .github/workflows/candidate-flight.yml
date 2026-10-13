@@ -29,8 +29,10 @@ permissions:
   statuses: write
 
 concurrency:
-  group: candidate-flight-${{ inputs.pr_number || format('{0}-{1}', inputs.node_slug, inputs.source_sha) }}
-  cancel-in-progress: true
+  # One stable queue per PR or node. In particular, a newer node-ref request
+  # must wait instead of racing or canceling the active deployment transaction.
+  group: candidate-flight-${{ inputs.pr_number || inputs.node_slug }}
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/cogni-template
@@ -52,6 +54,7 @@ jobs:
       commit_status_sha: ${{ steps.meta.outputs.commit_status_sha }}
       node_slug: ${{ steps.meta.outputs.node_slug }}
       node_source_sha: ${{ steps.meta.outputs.node_source_sha }}
+      resolved_pr_number: ${{ steps.meta.outputs.resolved_pr_number }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       status_url: ${{ steps.meta.outputs.status_url }}
       digests_json: ${{ steps.images.outputs.digests_json }}
@@ -87,6 +90,7 @@ jobs:
           NODE_SLUG="${{ inputs.node_slug }}"
           NODE_SOURCE_SHA="${{ inputs.source_sha }}"
           COMMIT_STATUS_SHA=""
+          RESOLVED_PR_NUMBER="${{ inputs.pr_number }}"
           if [ -n "$NODE_SLUG" ] || [ -n "$NODE_SOURCE_SHA" ]; then
             if [ -n "$PR_NUMBER" ]; then
               echo "::error::candidate-flight accepts either pr_number or node_slug/source_sha, not both"
@@ -112,6 +116,27 @@ jobs:
               # infra/k8s manifest tree candidate-a must prove pre-merge.
               HEAD_SHA="$NODE_SOURCE_SHA"
               COMMIT_STATUS_SHA="$NODE_SOURCE_SHA"
+              # The operator API deliberately dispatches the uniform node-ref
+              # contract. For an in-repo SHA, recover its open PR so the flight
+              # keeps the PR's complete build/deploy scope (for example the
+              # scheduler-worker image changed by the same commit). Remote node
+              # SHAs belong to another repository and must stay single-target.
+              mapfile -t MATCHING_PRS < <(
+                gh api --paginate \
+                  -H 'Accept: application/vnd.github+json' \
+                  "repos/${{ github.repository }}/commits/${NODE_SOURCE_SHA}/pulls" \
+                  --jq '.[] | select(.state == "open") | .number'
+              )
+              if [ "${#MATCHING_PRS[@]}" -gt 1 ]; then
+                echo "::error::in-repo node-ref ${NODE_SOURCE_SHA} belongs to multiple open PRs: ${MATCHING_PRS[*]}"
+                exit 1
+              fi
+              if [ "${#MATCHING_PRS[@]}" -eq 1 ]; then
+                RESOLVED_PR_NUMBER="${MATCHING_PRS[0]}"
+                echo "Resolved in-repo node-ref ${NODE_SOURCE_SHA} to PR #${RESOLVED_PR_NUMBER}"
+              else
+                echo "::notice::in-repo node-ref ${NODE_SOURCE_SHA} has no open PR; preserving single-target node-ref behavior"
+              fi
             else
               # Remote node: source_sha belongs to the child repo; parent
               # manifests stay on the trusted workflow revision.
@@ -143,6 +168,7 @@ jobs:
           echo "commit_status_sha=$COMMIT_STATUS_SHA" >> "$GITHUB_OUTPUT"
           echo "node_slug=$NODE_SLUG" >> "$GITHUB_OUTPUT"
           echo "node_source_sha=$NODE_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "resolved_pr_number=$RESOLVED_PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
           echo "status_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_OUTPUT"
 
@@ -175,11 +201,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          RESOLVED_PR_NUMBER: ${{ steps.meta.outputs.resolved_pr_number }}
           OUT: ${{ runner.temp }}/pr-changed-paths.txt
           NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
         run: |
           set -euo pipefail
-          if [ -n "$NODE_SLUG" ]; then
+          if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then
             : > "$OUT"
             : > "${OUT%.txt}-added.txt"
             echo "ℹ️  Node-ref flight for ${NODE_SLUG}; PR changed-paths are not used"
@@ -190,6 +217,7 @@ jobs:
           # Emit both filename and previous_filename so cross-directory
           # renames trigger rebuilds for the source side too (otherwise
           # renaming nodes/A/x.ts → nodes/B/x.ts only rebuilds B).
+          PR_NUMBER="$RESOLVED_PR_NUMBER"
           gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
             --jq '.[] | (.filename, .previous_filename) | select(. != null)' > "$OUT"
           gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
@@ -223,12 +251,13 @@ jobs:
           HAS_PARENT_TARGETS: ${{ steps.detect.outputs.has_targets }}
           HAS_REMOTE_SOURCE_ARTIFACT_TARGETS: ${{ steps.remote-source-artifact-targets.outputs.has_remote_source_artifact_targets }}
           NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
+          RESOLVED_PR_NUMBER: ${{ steps.meta.outputs.resolved_pr_number }}
         run: |
           set -euo pipefail
-          if [ -n "$NODE_SLUG" ]; then
+          if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then
             combined=$(python3 -c 'import json, os; print(json.dumps([os.environ["NODE_SLUG"]]))')
           else
-            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]"); node = os.environ.get("NODE_SLUG", ""); items = ([node] if node else []) + items; out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
           fi
           csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
           has_flight_targets=false
@@ -287,13 +316,14 @@ jobs:
           IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
           NODE: ${{ steps.meta.outputs.node_slug }}
+          RESOLVED_PR_NUMBER: ${{ steps.meta.outputs.resolved_pr_number }}
           NODE_SOURCE_SHA: ${{ steps.meta.outputs.node_source_sha }}
           COGNI_CATALOG_ROOT: infra/catalog
           REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: |
           set -euo pipefail
-          if [ -n "$NODE" ]; then
+          if [ -n "$NODE" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then
             SOURCE_SHA="$NODE_SOURCE_SHA" bash ../scripts/ci/resolve-node-ref-image.sh
           else
             bash ../scripts/ci/resolve-pr-build-images.sh
@@ -1117,7 +1147,14 @@ jobs:
           labels: workflow=candidate-flight kind=target_substrate_reconcile slot=candidate-a
 
   flight:
-    needs: [decide, reconcile-appset, node-substrate, assert-substrate]
+    needs:
+      [
+        decide,
+        reconcile-appset,
+        reconcile-scheduler-worker-routing,
+        node-substrate,
+        assert-substrate,
+      ]
     # Per-cell isolation (Axiom 18): this job runs whenever there are flight
     # targets. It does NOT gate on the matrix-aggregate node-substrate /
     # assert-substrate result — that rollup goes failure if ANY node's substrate
@@ -1127,7 +1164,8 @@ jobs:
     if: |
       always() &&
       needs.decide.outputs.has_flight_targets == 'true' &&
-      needs.reconcile-appset.result == 'success'
+      needs.reconcile-appset.result == 'success' &&
+      needs.reconcile-scheduler-worker-routing.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -1220,13 +1258,14 @@ jobs:
         run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 
       - name: Download resolved-pr-images
-        if: env.DEPLOYMENT_PROVIDER == 'k3s'
+        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
         with:
           name: resolved-pr-images
           path: ${{ runner.temp }}/
 
       - name: Prepare per-node deploy branch workspace
+        if: matrix.node != 'scheduler-worker'
         env:
           GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
           DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
@@ -1247,7 +1286,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Snapshot deploy-branch overlay digests (pre-rsync)
-        if: env.DEPLOYMENT_PROVIDER == 'k3s'
+        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
         id: snapshot
         working-directory: deploy-branch
         env:
@@ -1259,6 +1298,7 @@ jobs:
           sed 's/^/  /' "$SNAPSHOT_FILE"
 
       - name: Sync base + per-node overlay + per-node catalog to deploy branch
+        if: matrix.node != 'scheduler-worker'
         env:
           NODE: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
@@ -1296,7 +1336,7 @@ jobs:
 
       - name: Promote this node's digest
         id: promote
-        if: env.DEPLOYMENT_PROVIDER == 'k3s'
+        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
         working-directory: deploy-branch
         env:
           PAYLOAD_FILE: ${{ runner.temp }}/resolved-pr-images.json
@@ -1307,7 +1347,7 @@ jobs:
         run: NODES="$NODE" bash ../ci-src/scripts/ci/promote-build-payload.sh
 
       - name: Record external workload source identity
-        if: env.DEPLOYMENT_PROVIDER == 'akash'
+        if: env.DEPLOYMENT_PROVIDER == 'akash' && matrix.node != 'scheduler-worker'
         working-directory: deploy-branch
         env:
           APP: ${{ matrix.node }}
@@ -1315,7 +1355,7 @@ jobs:
         run: bash ../ci-src/scripts/ci/update-source-sha-map.sh
 
       - name: Restore non-promoted overlay digests (post-rsync self-heal)
-        if: env.DEPLOYMENT_PROVIDER == 'k3s'
+        if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
         working-directory: deploy-branch
         env:
           PROMOTED_APPS: ${{ steps.promote.outputs.promoted_apps }}
@@ -1345,6 +1385,7 @@ jobs:
           done
 
       - name: Commit and push to per-node deploy branch
+        if: matrix.node != 'scheduler-worker'
         id: push-deploy
         working-directory: deploy-branch
         env:
@@ -1372,7 +1413,7 @@ jobs:
       # GHA matrix-job outputs collapse to the last cell's value; per-node
       # artifact is the per-cell contract verify-candidate reads.
       - name: Upload per-cell deploy_branch_sha artifact
-        if: always()
+        if: always() && matrix.node != 'scheduler-worker'
         env:
           NODE: ${{ matrix.node }}
           DEPLOY_SHA: ${{ steps.push-deploy.outputs.deploy_branch_sha }}
@@ -1380,7 +1421,7 @@ jobs:
           mkdir -p deploy-sha-out
           printf '%s' "${DEPLOY_SHA:-}" > "deploy-sha-out/deploy-sha-${NODE}.txt"
       - name: Upload artifact
-        if: always()
+        if: always() && matrix.node != 'scheduler-worker'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deploy-sha-${{ matrix.node }}
@@ -1527,7 +1568,9 @@ jobs:
   reconcile-scheduler-worker-routing:
     needs: [decide]
     if: needs.decide.result == 'success'
-    # Serialize per-env so concurrent node flights never race on the shared branch.
+    # This is the ONLY writer of deploy/candidate-a-scheduler-worker. Routing and
+    # an optional scheduler image promotion are committed locally and pushed
+    # together, so concurrent flights cannot interleave two clone→push writers.
     concurrency:
       group: reconcile-scheduler-worker-routing-candidate-a
       cancel-in-progress: false
@@ -1546,18 +1589,92 @@ jobs:
           # PR flights reconcile the PR's catalog/manifests. Node-ref flights reconcile the
           # target fleet's workflow source; an in-repo operator SHA can come from canonical and
           # must not replace an isolated fork's catalog/domain state.
-          ref: ${{ inputs.pr_number != '' && needs.decide.outputs.head_sha || github.sha }}
+          ref: ${{ needs.decide.outputs.resolved_pr_number != '' && needs.decide.outputs.head_sha || github.sha }}
           path: app-src
+
+      # Candidate k3s cells are watched from the manifest-declared test parent,
+      # not necessarily GITHUB_REPOSITORY. Routing must mutate the same branch
+      # Argo watches; run 38303476089 proved that writing the canonical repo can
+      # green/no-op while the live worker remains unchanged.
+      - name: Resolve watched deploy repository
+        id: deploy-repo
+        env:
+          DEPLOYMENT_PROVIDER: k3s
+          SYNC_MANIFEST_PATH: .cogni/sync-manifest.yaml
+        run: bash scripts/ci/resolve-candidate-deploy-repository.sh
+
+      - name: Decode deploy-repository App private key
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        id: deploy-app-pem
+        env:
+          KEY_B64: ${{ secrets.GH_REVIEW_APP_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          private_key_escaped="$(printf '%s' "$KEY_B64" | base64 -d | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+          [[ "$private_key_escaped" != *$'\n'* ]] || {
+            echo "::error::Decoded App key unexpectedly contains a literal newline"
+            exit 1
+          }
+          echo "::add-mask::$private_key_escaped"
+          echo "key=$private_key_escaped" >> "$GITHUB_OUTPUT"
+
+      - name: Mint deploy-repository App token
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        id: deploy-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ steps.deploy-repo.outputs.app_id }}
+          private-key: ${{ steps.deploy-app-pem.outputs.key }}
+          owner: ${{ steps.deploy-repo.outputs.owner }}
+          repositories: ${{ steps.deploy-repo.outputs.repo }}
+
+      - name: Assert deploy-repository App boundary
+        if: steps.deploy-repo.outputs.requires_app_token == 'true'
+        env:
+          EXPECTED_APP_SLUG: ${{ steps.deploy-repo.outputs.app_slug }}
+          ACTUAL_APP_SLUG: ${{ steps.deploy-app.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          [[ "$ACTUAL_APP_SLUG" == "$EXPECTED_APP_SLUG" ]] || {
+            echo "::error::Refusing scheduler routing write: expected App '$EXPECTED_APP_SLUG', minted '$ACTUAL_APP_SLUG'"
+            exit 1
+          }
+
+      - name: Prepare scheduler-worker deploy branch workspace
+        env:
+          GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
+          DEPLOY_REPOSITORY: ${{ steps.deploy-repo.outputs.repository }}
+          PER_NODE_BRANCH: deploy/candidate-a-scheduler-worker
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" deploy-branch
+          git -C deploy-branch fetch origin main "+refs/heads/deploy/*:refs/remotes/origin/deploy/*"
+          if git -C deploy-branch rev-parse --verify --quiet "refs/remotes/origin/${PER_NODE_BRANCH}" >/dev/null; then
+            git -C deploy-branch checkout -B "$PER_NODE_BRANCH" "origin/$PER_NODE_BRANCH"
+          else
+            echo "::error::${PER_NODE_BRANCH} is missing; refusing to invent the shared worker authority"
+            exit 1
+          fi
+          git -C deploy-branch config user.name "github-actions[bot]"
+          git -C deploy-branch config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Download scheduler-worker build payload
+        if: contains(fromJSON(needs.decide.outputs.flight_targets_json), 'scheduler-worker')
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: resolved-pr-images
+          path: ${{ runner.temp }}/
 
       - name: Reconcile scheduler-worker routing (propagate to per-env deploy branch)
         working-directory: app-src
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
           APP_SOURCE_DIR: "."
+          DEPLOY_BRANCH_DIR: ${{ github.workspace }}/deploy-branch
           SWR_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/swr-reconcile-summary.json
           SWR_RECONCILE_HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           SWR_RECONCILE_NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-          SWR_RECONCILE_PR_NUMBER: ${{ inputs.pr_number }}
+          SWR_RECONCILE_PR_NUMBER: ${{ needs.decide.outputs.resolved_pr_number }}
           SWR_RECONCILE_NODE_SLUG: ${{ needs.decide.outputs.node_slug }}
           SWR_RECONCILE_STATUS_URL: ${{ needs.decide.outputs.status_url }}
         run: |
@@ -1569,6 +1686,47 @@ jobs:
             exit 0
           fi
           bash scripts/ci/reconcile-scheduler-worker-routing.sh candidate-a
+
+      - name: Promote scheduler-worker in the same branch transaction
+        id: promote-scheduler
+        if: contains(fromJSON(needs.decide.outputs.flight_targets_json), 'scheduler-worker')
+        working-directory: deploy-branch
+        env:
+          PAYLOAD_FILE: ${{ runner.temp }}/resolved-pr-images.json
+          OVERLAY_ENV: candidate-a
+          COGNI_CATALOG_ROOT: ../app-src/infra/catalog
+        run: NODES=scheduler-worker bash ../app-src/scripts/ci/promote-build-payload.sh
+
+      - name: Commit and push atomic scheduler-worker desired state
+        id: push-scheduler
+        working-directory: deploy-branch
+        env:
+          PER_NODE_BRANCH: deploy/candidate-a-scheduler-worker
+          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "candidate-flight scheduler-worker: sha-${HEAD_SHA}"
+          fi
+          git push origin "HEAD:${PER_NODE_BRANCH}"
+          echo "deploy_branch_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Write scheduler-worker deploy SHA marker
+        if: contains(fromJSON(needs.decide.outputs.flight_targets_json), 'scheduler-worker')
+        env:
+          DEPLOY_SHA: ${{ steps.push-scheduler.outputs.deploy_branch_sha }}
+        run: |
+          mkdir -p deploy-sha-out
+          printf '%s' "$DEPLOY_SHA" > deploy-sha-out/deploy-sha-scheduler-worker.txt
+
+      - name: Upload scheduler-worker deploy SHA artifact
+        if: contains(fromJSON(needs.decide.outputs.flight_targets_json), 'scheduler-worker')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deploy-sha-scheduler-worker
+          path: deploy-sha-out/deploy-sha-scheduler-worker.txt
+          retention-days: 1
 
       - name: Push scheduler-worker routing telemetry to Loki
         if: always()
@@ -1801,6 +1959,32 @@ jobs:
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-candidate-ready.sh
 
+      - name: Resolve promoted scheduler-worker identity
+        id: scheduler-identity
+        if: steps.ssh-setup.outputs.has_vm == 'true' && matrix.node == 'scheduler-worker'
+        env:
+          SOURCE_SHA_MAP: deploy-branch/.promote-state/source-sha-by-app.json
+          OVERLAY: deploy-branch/infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml
+        run: |
+          set -euo pipefail
+          expected_sha="$(python3 - "$SOURCE_SHA_MAP" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              print(json.load(handle).get("scheduler-worker", ""))
+          PY
+          )"
+          expected_digest="$(yq -N '.images[] | select(.name == "ghcr.io/cogni-dao/cogni-template") | .digest' "$OVERLAY")"
+          [[ "$expected_sha" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "::error::scheduler-worker source-sha map entry missing or invalid: '$expected_sha'"
+            exit 1
+          }
+          [[ "$expected_digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]] || {
+            echo "::error::scheduler-worker promoted digest missing or invalid: '$expected_digest'"
+            exit 1
+          }
+          echo "sha=$expected_sha" >> "$GITHUB_OUTPUT"
+          echo "digest=$expected_digest" >> "$GITHUB_OUTPUT"
+
       - name: Wait for in-cluster services (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
         env:
@@ -1808,6 +1992,8 @@ jobs:
           DEPLOY_ENVIRONMENT: candidate-a
           PROMOTED_APPS: ${{ matrix.node }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
+          SCHEDULER_EXPECTED_SHA: ${{ steps.scheduler-identity.outputs.sha }}
+          SCHEDULER_EXPECTED_DIGEST: ${{ steps.scheduler-identity.outputs.digest }}
         run: bash ci-src/scripts/ci/wait-for-in-cluster-services.sh
 
       - name: Verify buildSha on endpoint (per-node)
