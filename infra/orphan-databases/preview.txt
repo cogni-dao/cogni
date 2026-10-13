@@ -1,7 +1,0 @@
-# Orphan databases on the PREVIEW Postgres. None approved yet.
-#
-# cogni_toks4  0 peak backends over 7 days on THIS instance and no catalog row, so it
-#              qualifies on the evidence. Held back only because the same name on
-#              candidate-a and production still shows connections, and dropping one copy
-#              while investigating the others invites a half-finished cleanup. Nominate
-#              all three together once the connector is identified.
