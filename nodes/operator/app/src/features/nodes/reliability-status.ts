@@ -29,6 +29,8 @@ export interface ReliabilityStatusInput {
   readonly slug: string;
   readonly environment: ReliabilityEnvironment;
   readonly buildSha: string | null;
+  readonly desiredTier: "shared" | "dedicated" | null;
+  readonly budgetProfile: string | null;
   readonly database: DatabaseContainmentStatus | null;
 }
 
@@ -62,8 +64,8 @@ export async function readReliabilityStatus(
     slug: input.slug,
     environment: input.environment,
     buildSha: input.buildSha,
-    databaseTier: input.database?.desiredTier ?? "unknown",
-    budgetProfile: input.database?.budgetProfile ?? null,
+    databaseTier: input.database?.desiredTier ?? input.desiredTier ?? "unknown",
+    budgetProfile: input.database?.budgetProfile ?? input.budgetProfile ?? null,
     state: verdict.state,
     regionalReadiness: [...snapshot.regionalReadiness],
     utilization,
@@ -74,7 +76,10 @@ export async function readReliabilityStatus(
 }
 
 export async function reconcileReliabilityContainment(
-  input: Omit<ReliabilityStatusInput, "database"> & {
+  input: Omit<
+    ReliabilityStatusInput,
+    "database" | "desiredTier" | "budgetProfile"
+  > & {
     readonly desiredTier: "shared" | "dedicated";
     readonly budgetProfile: string;
     readonly cellId?: string;
@@ -94,7 +99,12 @@ export async function reconcileReliabilityContainment(
     ...(input.cellId ? { cellId: input.cellId } : {}),
   });
   const status = await readReliabilityStatus(
-    { ...input, database },
+    {
+      ...input,
+      desiredTier: input.desiredTier,
+      budgetProfile: input.budgetProfile,
+      database,
+    },
     deps.metrics
   );
   const reason = containmentReason(status.incidentReason);

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@contracts/nodes.reliability-status.v1`
  * Purpose: Versioned wire contract for one node/environment reliability verdict.
- * Scope: Zod wire shapes only; policy evaluation and metric queries live in the operator.
+ * Scope: Zod wire shapes only; does not evaluate policy or query metrics.
  * Invariants: FAIL_CLOSED, LOW_CARDINALITY, ONE_HEALTH_CONTRACT.
  * Side-effects: none
  * Links: /api/v1/nodes/{id}/observability/health, task.5247
