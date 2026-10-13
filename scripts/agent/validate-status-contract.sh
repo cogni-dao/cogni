@@ -35,7 +35,7 @@ printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*\*\*Followed\*\*[[:space:]]*
   block "Contract breach: the status block is missing its Followed row. Rewrite the whole response in the required shape."
 printf '%s\n' "$MESSAGE" | grep -Eq '^([*][*][*]|---)$' ||
   block "Contract breach: the status block is missing the divider before its items table. Rewrite the whole response in the required shape."
-printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*item[[:space:]]*\|[[:space:]]*owner[[:space:]]*\|[[:space:]]*deliverable links[[:space:]]*\|[[:space:]]*status[[:space:]]*\|[[:space:]]*next[[:space:]]*\|' ||
+printf '%s\n' "$MESSAGE" | grep -Eq '^\|[[:space:]]*item[[:space:]]*\|[[:space:]]*owner[[:space:]]*\|[[:space:]]*deliverable links[[:space:]]*\|[[:space:]]*status[[:space:]]*\|[[:space:]]*ETA · Conf[[:space:]]*\|[[:space:]]*next[[:space:]]*\|' ||
   block "Contract breach: the status block is missing its items table. Rewrite the whole response in the required shape."
 
 case "$last_nonempty" in
@@ -83,7 +83,7 @@ if [[ "$GOAL" == "—" || "$DONE_WHEN" == "—" ]]; then
   [[ "$STATUS" == "—" ]] ||
     block "Process-contract breach: before the evidence pass supports a proposal, Goal, Done when, and Status must all remain —. Continue research silently and rewrite the complete block."
   if ! printf '%s\n' "$MESSAGE" | awk -F'|' '
-    $6 ~ /👉 needs you:|👀/ { found=1 }
+    $7 ~ /👉 needs you:|👀/ { found=1 }
     END { exit found ? 0 : 1 }
   '; then
     block "Process-contract breach: Goal and Done when are still —, and no human or asynchronous gate exists. A preliminary status is not a legal stop; continue the agent-owned research now, then return with an evidence-backed proposal."

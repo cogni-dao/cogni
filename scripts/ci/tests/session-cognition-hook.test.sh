@@ -29,6 +29,8 @@ grep -Fq 'Every human-facing reply, including answers and follow-ups, is exactly
   "$REPO_ROOT/AGENTS.md" || fail "root AGENTS.md omitted the universal response floor"
 grep -Fq 'reproduce `Goal` and `Done when` byte-for-byte' "$REPO_ROOT/AGENTS.md" ||
   fail "root AGENTS.md omitted immutable session state"
+grep -Eq '\| status[[:space:]]+\| ETA · Conf[[:space:]]+\| next' "$REPO_ROOT/AGENTS.md" ||
+  fail "root AGENTS.md omitted per-row ETA and confidence"
 ! grep -Fq '@.cogni/.cognition-cache.md' "$REPO_ROOT/AGENTS.md" ||
   fail "universal AGENTS.md exposes a Claude-only import directive"
 [[ ! -L "$REPO_ROOT/CLAUDE.md" ]] ||
@@ -47,6 +49,8 @@ grep -Fq 'This response protocol has no task-type exceptions' "$OUTPUT_STYLE" ||
   fail "Claude Code output style permits task-type formatting exceptions"
 grep -Fq 'preserve Goal and Done when byte-for-byte' "$OUTPUT_STYLE" ||
   fail "Claude Code output style omitted immutable session state"
+grep -Fq '5m–4h wall-clock ETA' "$OUTPUT_STYLE" ||
+  fail "Claude Code output style omitted short-horizon row estimates"
 STOP_VALIDATOR="$REPO_ROOT/scripts/agent/validate-status-contract.sh"
 [[ -x "$STOP_VALIDATOR" ]] || fail "Claude Code status-contract Stop hook is not executable"
 jq -e '.hooks.Stop[0].hooks[0].command | contains("validate-status-contract.sh")' \
@@ -56,15 +60,15 @@ jq -e '.hooks.Stop[0].hooks[0].command | contains("validate-status-contract.sh")
 VALID_MESSAGE='| 🎯 **Goal** | Keep contract state |
 |---|---|
 | **Done when** | Two turns preserve exact fields. |
-| **Status** | 🔵 testing |
-| **ETA · Conf** | 1 minute · 90% + reviewed 3/3 sources |
+| **Status** | 🔵 in progress |
+| **ETA · Conf** | 10m · earned 90% + reviewed 3/3 sources |
 | **Followed** | https://cognidao.org/knowledge/cognition-substrate-bootstrap · https://github.com/cogni-dao/cogni/blob/main/AGENTS.md · https://cognidao.org/knowledge/node-baas-substrate-model · https://cognidao.org/work/items/story.5070 |
 
 ---
 
-| item | owner | deliverable links | status | next |
-|---|---|---|---|---|
-| proposed story — contract | dev-manager, me | - | 🔵 in progress | Test next turn |
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — contract | dev-manager, me | - | 🔵 in progress | 10m · earned 90% | Test next turn |
 
 > 🔵 **Bottom line —** Contract-shaped response.'
 VALIDATOR_SCRATCH="$FIXTURE_ROOT/validator-scratch"
@@ -88,15 +92,15 @@ mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDA
 ZERO_RESEARCH_MESSAGE='| 🎯 **Goal** | Design a strategy agent |
 |---|---|
 | **Done when** | Design is approved. |
-| **Status** | 🟡 proposed |
-| **ETA · Conf** | 2 hours · 40% + reviewed 0/5 sources |
+| **Status** | 👉 needs you |
+| **ETA · Conf** | 2h · earned 40% + reviewed 0/5 sources |
 | **Followed** | — |
 
 ---
 
-| item | owner | deliverable links | status | next |
-|---|---|---|---|---|
-| proposed story — strategy | dev-manager, me | - | 👉 needs you | 👉 needs you: approve scope |
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — strategy | dev-manager, me | - | 👉 needs you | 15m · earned 40% | 👉 needs you: [approve scope](https://cognidao.org/work/items/story.5070) |
 
 > 👉 **Bottom line —** Approve the proposal.'
 zero_research_output="$(jq -cn --arg message "$ZERO_RESEARCH_MESSAGE" \
@@ -113,9 +117,9 @@ PRELIMINARY_STOP_MESSAGE='| 🎯 **Goal** | — |
 
 ---
 
-| item | owner | deliverable links | status | next |
-|---|---|---|---|---|
-| proposed story — strategy | dev-manager, me | - | 🔵 in progress | Research relevant sources |
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — strategy | dev-manager, me | - | 🔵 in progress | 15m · earned 20% | Research relevant sources |
 
 > 🔵 **Bottom line —** Researching the existing substrate.'
 preliminary_stop_output="$(jq -cn --arg message "$PRELIMINARY_STOP_MESSAGE" \

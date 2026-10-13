@@ -27,3 +27,19 @@ that shaped the proposal in contract order: orientation → skills/guides → hu
 designs/code → work items → external sources. Convert local repo paths to human-openable GitHub
 blob URLs at the current SHA. Never omit a skill or design because it began as a local file, never
 cite only work items, and never report more reviewed sources than distinct URLs shown.
+
+Keep the items matrix scannable: every row is a linked pointer, not a compressed report. Use a
+≤4-word purpose, artifact links, one canonical status emoji, a 5m–4h wall-clock ETA to the next
+evidence gate with earned confidence, and the shortest next feedback loop. Include expected async
+waits and re-estimate after every material signal. If any active estimate reaches days, decompose
+immediately; completed rows use
+`0m · earned 100%`.
+
+Emoji are semantic states, never decoration: blue is active progress; eye means the canonical
+blocking watcher is running for a named gate re-read this turn; pointing hand is a real human
+design/permission decision; yellow is a non-blocking warning while
+moving; red is proven breakage with repair active now; green is proven E2E completion. Use the
+canonical status wording from the root contract. Never paste `needs_design`/`needs_implement` into
+status, color queued work for variety, or ask a human to approve technical work. Pending, queued,
+completed, superseded, and “after X” are never eye states. When a watcher exits, re-read ground
+truth, reclassify, and continue. The status and `next` gate must agree.
