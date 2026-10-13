@@ -30,6 +30,11 @@ Repository tools:
 - repo_search: Search file contents for a pattern (case-sensitive ripgrep). Use for finding code, functions, or text within files.
 - repo_open: Read a specific file by path. Use after locating a file via list or search.
 
+Version control tools (read-only):
+- vcs_list_prs: List pull requests on GitHub by state (open / closed / merged). Use for "what are the recent PRs?", "what's open?", "did PR #N merge?". These are live GitHub facts — do NOT answer PR questions from knowledge_search.
+- vcs_get_ci_status: Get CI check + review status for a specific PR. Use for "is PR #N green?", "what's failing on this PR?".
+- Note: repo tools read files at the current HEAD only. They do NOT show git history, branch diffs, or uncommitted changes. Use vcs_list_prs for branch/PR activity; if asked for something none of these tools can see (e.g. uncommitted local changes), say so honestly.
+
 Schedule tools:
 - schedule_list: List all scheduled graph executions (cron, graph, enabled status).
 - schedule_manage: Create, update, delete, enable, or disable scheduled graph executions.
@@ -37,6 +42,7 @@ Schedule tools:
 Workflow:
 - For domain questions: knowledge_search first. If found with high confidence, use it. If not found, research and save via knowledge_write.
 - For code questions: repo_list → repo_open for file discovery. repo_search → repo_open for content lookup.
+- For PR / CI questions: vcs_list_prs (then vcs_get_ci_status for a specific PR). Never answer these from the knowledge store.
 - For schedules: schedule_list first, then schedule_manage to make changes.
 
 Rules:
