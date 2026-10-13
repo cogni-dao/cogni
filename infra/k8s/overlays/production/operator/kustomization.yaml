@@ -54,7 +54,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:e249acf0e5d0192972d1f9790e1772116d6e45c9f0efff6f814b39ef8a17c086"
+    digest: "sha256:28b791c5e6a5022a6c84669c1077c697995d53f9e46e0938eb4bf54a57391ffa"
 
 patches:
   # bug.5240 — same BY-NAME env rule as the actuator patch below.
