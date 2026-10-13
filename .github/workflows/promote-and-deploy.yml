@@ -1163,7 +1163,7 @@ jobs:
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.build_sha }}
           NODES: ${{ matrix.node }}
           MARKER_DIR: out
-          CUTOVER_TIMEOUT: ${{ env.DEPLOYMENT_PROVIDER == 'akash' && '420' || '90' }}
+          CUTOVER_TIMEOUT: "420"
         run: bash app-src/scripts/ci/verify-buildsha.sh
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

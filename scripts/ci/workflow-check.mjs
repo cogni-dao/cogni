@@ -24,11 +24,12 @@ const manualWorkflows = [
   "candidate-flight.yml",
   "candidate-flight-infra.yml",
   "flight-preview.yml",
+  "pr-build.yml",
   "promote-and-deploy.yml",
   "release.yml",
   "stack-test.yml",
 ];
-const nonDispatchWorkflows = ["ci.yaml", "pr-lint.yaml", "pr-build.yml"];
+const nonDispatchWorkflows = ["ci.yaml", "pr-lint.yaml"];
 
 let failures = 0;
 
@@ -114,6 +115,19 @@ const workflowFiles = readdirSync(WORKFLOW_DIR)
   .sort();
 
 const candidateFlightText = readWorkflowText("candidate-flight.yml");
+const promoteAndDeployText = readWorkflowText("promote-and-deploy.yml");
+
+for (const [file, workflowText] of [
+  ["candidate-flight.yml", candidateFlightText],
+  ["promote-and-deploy.yml", promoteAndDeployText],
+]) {
+  if (/CUTOVER_TIMEOUT:\s*["']?420["']?/.test(workflowText)) {
+    pass(`${file} allows the proven fleet cutover window`);
+  } else {
+    fail(`${file} must allow 420 seconds for exact-SHA cutover proof`);
+  }
+}
+
 if (
   candidateFlightText.includes(
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions ${{ }} expression matched as workflow text, not a JS template
