@@ -89,7 +89,10 @@ export {
   CherryComputeError,
   type CherryComputeErrorCode,
 } from "./compute/cherry-compute.adapter";
-export { CherryDatabaseCellAdapter } from "./compute/cherry-database-cell.adapter";
+export {
+  CherryDatabaseCellAdapter,
+  type CherryDatabaseCellConfig,
+} from "./compute/cherry-database-cell.adapter";
 export { DrizzleComputeCostStore } from "./compute/compute-cost-store.adapter";
 export {
   DormantComputeWorkloadMigrationAdapter,

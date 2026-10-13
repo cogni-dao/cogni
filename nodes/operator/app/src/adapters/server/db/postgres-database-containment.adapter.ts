@@ -186,7 +186,9 @@ function rolesFor(nodeSlug: string): readonly string[] {
     throw new Error("invalid_node_slug");
   }
   const suffix = nodeSlug.replaceAll("-", "_");
-  return [`app_${suffix}`, `service_${suffix}`, `readonly_${suffix}`];
+  // The as-built per-node roles are app + service. `app_readonly` remains an
+  // environment-shared v0 support role, so revoking it would contain every node.
+  return [`app_${suffix}`, `service_${suffix}`];
 }
 
 function quoteIdentifier(value: string): string {

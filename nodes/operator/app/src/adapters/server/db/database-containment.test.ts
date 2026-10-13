@@ -46,12 +46,10 @@ describe("PostgresDatabaseContainmentAdapter", () => {
           return [];
         }
         if (statement.includes("FROM pg_roles")) {
-          return ["app_poly", "service_poly", "readonly_poly"].map(
-            (rolname) => ({
-              rolname,
-              rolcanlogin: canLogin,
-            })
-          ) as unknown as readonly T[];
+          return ["app_poly", "service_poly"].map((rolname) => ({
+            rolname,
+            rolcanlogin: canLogin,
+          })) as unknown as readonly T[];
         }
         if (statement.includes("count(*)")) {
           return [{ count: sessions }] as unknown as readonly T[];
@@ -239,6 +237,12 @@ describe("CherryDatabaseCellAdapter", () => {
       authToken: "token",
       projectId: "99",
       timeoutMs: 1000,
+      region: "LT-Siauliai",
+      plan: "B1-1-1gb-20s-shared",
+      image: "ubuntu-24-04",
+      storagePlanId: 500,
+      sshKeyIds: [4],
+      renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
       fetchImpl,
       now: () => new Date("2026-10-13T23:30:00.000Z"),
     });
@@ -248,12 +252,7 @@ describe("CherryDatabaseCellAdapter", () => {
       environment: "candidate-a",
       budgetProfile: "poly-dedicated-v1",
       idempotencyKey: "poly-candidate-a-v1",
-      region: "LT-Siauliai",
-      plan: "B1-1-1gb-20s-shared",
-      image: "ubuntu-24-04",
       storageGiB: 50,
-      sshKeyIds: [4],
-      userData: "I2Nsb3VkLWNvbmZpZw==",
     });
     expect(requests[1]).toContain("/storages");
     expect(requests[2]).toContain("/servers");

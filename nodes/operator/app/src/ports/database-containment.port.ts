@@ -35,13 +35,7 @@ export interface ProvisionDatabaseCellInput {
   readonly environment: DatabaseEnvironment;
   readonly budgetProfile: string;
   readonly idempotencyKey: string;
-  readonly region: string;
-  readonly plan: string;
-  readonly image: string;
   readonly storageGiB: number;
-  readonly sshKeyIds: readonly number[];
-  /** Base64 cloud-config. Secret values are resolved at the provider boundary. */
-  readonly userData: string;
 }
 
 /** Provider lifecycle for state cells. State cells are not app workloads. */

@@ -8,10 +8,19 @@ import type {
   ProvisionDatabaseCellInput,
 } from "@/ports";
 
-interface CherryDatabaseCellConfig {
+export interface CherryDatabaseCellConfig {
   readonly authToken: string;
   readonly projectId: string;
   readonly timeoutMs: number;
+  readonly region: string;
+  readonly plan: string;
+  readonly image: string;
+  readonly storagePlanId: number;
+  readonly sshKeyIds: readonly number[];
+  /** Provider-boundary renderer; may resolve bootstrap secrets without exposing them to callers. */
+  readonly renderUserData: (
+    input: ProvisionDatabaseCellInput
+  ) => Promise<string>;
   readonly baseUrl?: string;
   readonly fetchImpl?: typeof fetch;
   readonly now?: () => Date;
@@ -55,15 +64,16 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
     const existing = await this.findByIdempotencyKey(input.idempotencyKey);
     if (existing) return this.mapServer(existing, input);
 
+    const userData = await this.config.renderUserData(input);
     const storage = await this.request<{ id?: number | string }>(
       `/projects/${this.config.projectId}/storages`,
       {
         method: "POST",
         body: JSON.stringify({
-          plan_id: 500,
+          plan_id: this.config.storagePlanId,
           description: `cogni-db-${input.environment}-${input.nodeSlug}`,
           size: input.storageGiB,
-          region: input.region,
+          region: this.config.region,
         }),
       }
     );
@@ -74,13 +84,13 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
       {
         method: "POST",
         body: JSON.stringify({
-          plan: input.plan,
-          image: input.image,
-          region: input.region,
+          plan: this.config.plan,
+          image: this.config.image,
+          region: this.config.region,
           hostname: `cogni-${input.environment}-${input.nodeSlug}-db`,
-          ssh_keys: input.sshKeyIds,
+          ssh_keys: this.config.sshKeyIds,
           storage_id: Number(storage.id),
-          user_data: input.userData,
+          user_data: userData,
           cycle: "hourly",
           tags: JSON.stringify({
             "cogni.io/kind": "database-cell",
@@ -113,12 +123,7 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
       ) as ProvisionDatabaseCellInput["environment"],
       budgetProfile: requiredTag(tags, "cogni.io/budget-profile"),
       idempotencyKey: requiredTag(tags, "cogni.io/idempotency-key"),
-      region: "",
-      plan: "",
-      image: "",
       storageGiB: Number(tags["cogni.io/storage-gib"] ?? 0),
-      sshKeyIds: [],
-      userData: "",
     });
   }
 
