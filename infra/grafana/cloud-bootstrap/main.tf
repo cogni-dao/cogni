@@ -60,7 +60,6 @@ resource "grafana_synthetic_monitoring_installation" "fleet" {
 variable "grafana_stack_slug" {
   description = "Existing Grafana Cloud stack that receives fleet metrics and logs."
   type        = string
-  default     = "derekg1729"
 }
 
 output "grafana_url" {
