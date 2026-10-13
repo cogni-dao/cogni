@@ -19,7 +19,7 @@
 #
 # Sourced by:
 #   - scripts/ci/promote-preview-seed-main.sh   (task.0349 preview seed)
-#   - scripts/ci/snapshot-overlay-digests.sh    (task.0373 candidate-a self-heal)
+#   - candidate-flight.yml's per-node substrate-shape preservation
 
 extract_overlay_image_ref() {
   local env="$1" app="$2"
