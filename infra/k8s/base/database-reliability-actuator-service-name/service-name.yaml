@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+# Keep the in-cluster readback address stable despite the operator overlay namePrefix.
+apiVersion: builtin
+kind: PatchTransformer
+metadata:
+  name: database-reliability-actuator-service-name
+patch: '[{"op": "replace", "path": "/metadata/name", "value": "database-reliability-actuator"}]'
+target:
+  kind: Service
+  labelSelector: app.kubernetes.io/name=database-reliability-actuator

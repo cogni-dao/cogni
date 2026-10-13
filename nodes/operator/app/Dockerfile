@@ -68,6 +68,11 @@ RUN pnpm --filter operator build:akash-tx-actuator \
 RUN pnpm --filter operator build:lease-log-pump \
     && pnpm --filter operator smoke:lease-log-pump-artifact
 
+# task.5247 — isolated database reliability actuator. The private autonomous process
+# rides in the operator image but has its own Deployment, ServiceAccount, and secret bucket.
+RUN pnpm --filter operator build:database-reliability-actuator \
+    && pnpm --filter operator smoke:database-reliability-actuator-artifact
+
 # Runner – lean production image
 FROM node:22-alpine AS runner
 WORKDIR /app
@@ -91,6 +96,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/static .
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/public ./nodes/operator/app/public
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-akash-tx-actuator/akash-tx-actuator.mjs ./nodes/operator/app/akash-tx-actuator.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-lease-log-pump/lease-log-pump.mjs ./nodes/operator/app/lease-log-pump.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-database-reliability-actuator/database-reliability-actuator.mjs ./nodes/operator/app/database-reliability-actuator.mjs
 
 # Repo-spec: node-specific DAO config (node_id, chain, governance).
 # Each node MUST copy its own .cogni — NOT root (which is operator's identity).

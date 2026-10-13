@@ -34,6 +34,9 @@ resources:
   # bug.5240 — the keyless lease-log pump rides wherever an actuator runs: it enumerates the
   # actuator's ledger (read-only op) and ships every live lease's logs to Loki.
   - ../../../base/lease-log-pump
+  # task.5247 — private autonomous database containment/status controller.
+  - ../../../base/database-reliability-actuator
+  - ./database-reliability-actuator-external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 
@@ -44,6 +47,7 @@ namePrefix: operator-
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
 transformers:
   - ../../../base/akash-tx-actuator-service-name
+  - ../../../base/database-reliability-actuator-service-name
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
@@ -67,6 +71,24 @@ patches:
       - op: replace
         path: /spec/data/0/remoteRef/key
         value: candidate-a/operator-database-migration
+  - target:
+      kind: Deployment
+      name: database-reliability-actuator
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: database-reliability-actuator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: actuator
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: candidate-a
+                  - name: FORK_DOMAIN_ROOT
+                    value: cogni-testing.org
   - target:
       kind: Deployment
       name: node-app

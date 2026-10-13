@@ -138,7 +138,8 @@ export type SyncTarget = z.infer<typeof SyncTargetSchema>;
  *   operator sponsor wallet's Console credential and the bearer token that unlocks it; an
  *   operator-app compromise must not reach either (story.5016 secret-boundary amendments).
  * - `database-reliability-actuator`: a private control process whose dedicated OpenBao
- *   bucket contains the generated, least-privilege Postgres control DSN (task.5246).
+ *   bucket contains the generated, least-privilege Postgres control DSN and status-read
+ *   bearer (tasks 5246/5247). The public operator receives only the latter.
  *
  * These are NOT nodes: they receive no node DNS, no node DB, and no NODE_BASELINE_KEYS
  * fan-out. `_node_gets_key` already drops a `service:`-pinned key from every node whose name

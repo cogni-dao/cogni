@@ -1,0 +1,136 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5247 — autonomous database reliability controller. It is private by structure:
+# its ClusterIP supports authenticated operator readback, with no Ingress, NodePort, or RBAC
+# binding. Its privileged control-plane DSN and bearer are isolated from the public operator.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: database-reliability-actuator
+  annotations:
+    reloader.stakater.com/auto: "true"
+  labels:
+    app.kubernetes.io/name: database-reliability-actuator
+    app.kubernetes.io/part-of: cogni
+spec:
+  replicas: 1
+  # One autonomous writer records each containment transition. Recreate prevents a rollout
+  # overlap from producing duplicate decisions while durable database state preserves recovery.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: database-reliability-actuator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: database-reliability-actuator
+        app.kubernetes.io/part-of: cogni
+    spec:
+      serviceAccountName: database-reliability-actuator
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: actuator
+          image: ghcr.io/cogni-dao/cogni-template:placeholder
+          imagePullPolicy: IfNotPresent
+          command:
+            [node, /app/nodes/operator/app/database-reliability-actuator.mjs]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+            - name: DEPLOY_ENVIRONMENT
+              value: replace-in-overlay
+            - name: NODE_SUBMODULE_PARENT_OWNER
+              valueFrom:
+                configMapKeyRef:
+                  name: node-app-config
+                  key: NODE_SUBMODULE_PARENT_OWNER
+            - name: NODE_SUBMODULE_PARENT_REPO
+              valueFrom:
+                configMapKeyRef:
+                  name: node-app-config
+                  key: NODE_SUBMODULE_PARENT_REPO
+            - name: FORK_DOMAIN_ROOT
+              value: replace-in-overlay
+            - name: GH_REVIEW_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: operator-env-secrets
+                  key: GH_REVIEW_APP_ID
+                  optional: true
+            - name: PROMETHEUS_QUERY_URL
+              valueFrom:
+                secretKeyRef:
+                  name: operator-env-secrets
+                  key: PROMETHEUS_QUERY_URL
+                  optional: true
+            - name: GRAFANA_URL
+              valueFrom:
+                secretKeyRef:
+                  name: operator-env-secrets
+                  key: GRAFANA_URL
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: credentials
+              mountPath: /var/run/secrets/database-reliability
+              readOnly: true
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 192Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 24
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+      volumes:
+        - name: credentials
+          projected:
+            sources:
+              # Privileged database control material belongs to this process alone. Optional
+              # lets the process emit a named fail-closed boot reason instead of stalling in
+              # ContainerCreating where first-party logs cannot exist.
+              - secret:
+                  name: database-reliability-actuator-env-secrets
+                  optional: true
+                  items:
+                    - key: DATABASE_RELIABILITY_ADMIN_URL
+                      path: DATABASE_RELIABILITY_ADMIN_URL
+                    - key: DATABASE_RELIABILITY_STATUS_TOKEN
+                      path: DATABASE_RELIABILITY_STATUS_TOKEN
+                    - key: DATABASE_RELIABILITY_CHERRY_BINDINGS_JSON
+                      path: DATABASE_RELIABILITY_CHERRY_BINDINGS_JSON
+                    - key: GH_REVIEW_APP_PRIVATE_KEY_BASE64
+                      path: GH_REVIEW_APP_PRIVATE_KEY_BASE64
+                    - key: CHERRY_AUTH_TOKEN
+                      path: CHERRY_AUTH_TOKEN
+                    - key: PROMETHEUS_READ_USERNAME
+                      path: PROMETHEUS_READ_USERNAME
+                    - key: PROMETHEUS_READ_PASSWORD
+                      path: PROMETHEUS_READ_PASSWORD
+                    - key: GRAFANA_SERVICE_ACCOUNT_TOKEN
+                      path: GRAFANA_SERVICE_ACCOUNT_TOKEN

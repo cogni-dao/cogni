@@ -16,6 +16,9 @@ resources:
   # validated on candidate-a. See story.5016 / akash-actuator-wallet-cutover.
   - external-secret.yaml
   - ../../../base/operator-migration-external-secret
+  # task.5247 — private autonomous database containment/status controller.
+  - ../../../base/database-reliability-actuator
+  - ./database-reliability-actuator-external-secret.yaml
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 
@@ -23,6 +26,8 @@ namePrefix: operator-
 
 # No akash-tx-actuator-service-name transformer here: with the actuator base
 # removed (see resources note above), there is no actuator Service to un-prefix.
+transformers:
+  - ../../../base/database-reliability-actuator-service-name
 
 replacements:
   - source:
@@ -46,6 +51,24 @@ patches:
       - op: replace
         path: /spec/data/0/remoteRef/key
         value: preview/operator-database-migration
+  - target:
+      kind: Deployment
+      name: database-reliability-actuator
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: database-reliability-actuator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: actuator
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: preview
+                  - name: FORK_DOMAIN_ROOT
+                    value: cogni-testing.org
   - target:
       kind: Deployment
       name: node-app

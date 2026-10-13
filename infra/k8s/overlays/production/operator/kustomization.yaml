@@ -34,6 +34,9 @@ resources:
   # LOKI_LEASE_PUSH_* (CI-derived bootstrap, #2393) before the mount, and kubelet retries
   # converge any race.
   - ../../../base/lease-log-pump
+  # task.5247 — private autonomous database containment/status controller.
+  - ../../../base/database-reliability-actuator
+  - ./database-reliability-actuator-external-secret.yaml
 
 namePrefix: operator-
 
@@ -42,6 +45,7 @@ namePrefix: operator-
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
 transformers:
   - ../../../base/akash-tx-actuator-service-name
+  - ../../../base/database-reliability-actuator-service-name
 
 replacements:
   - source:
@@ -65,6 +69,24 @@ patches:
       - op: replace
         path: /spec/data/0/remoteRef/key
         value: production/operator-database-migration
+  - target:
+      kind: Deployment
+      name: database-reliability-actuator
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: database-reliability-actuator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: actuator
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: production
+                  - name: FORK_DOMAIN_ROOT
+                    value: cognidao.org
   - target:
       kind: Deployment
       name: node-app

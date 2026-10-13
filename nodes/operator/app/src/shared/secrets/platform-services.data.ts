@@ -95,6 +95,7 @@ export const PLATFORM_SERVICE_OWNED_KEYS: ReadonlyMap<string, string> = new Map<
   ["DATABASE_RELIABILITY_ADMIN_URL", "database-reliability-actuator"],
   ["DATABASE_RELIABILITY_READMIT_PASSWORD", "database-reliability-readmitter"],
   ["DATABASE_RELIABILITY_READMIT_URL", "database-reliability-readmitter"],
+  ["DATABASE_RELIABILITY_STATUS_TOKEN", "database-reliability-actuator"],
 ]);
 
 /**
