@@ -433,16 +433,12 @@ else
 fi
 
 if [ -f "$caddyfile" ]; then
-  # The primary node (edge_key=*_UPSTREAM) renders as the bare {$DOMAIN} block with a
-  # {$<SLUG>_UPSTREAM:app:3000} default — host.docker.internal:<port> is the per-env
-  # edge .env override, NOT the rendered-template default. Only non-primary nodes bake
-  # it into the template, so assert it only for them; the live-config check below
-  # covers the primary's real route. (Same fix as reconcile-node-substrate.sh / #1598.)
+  # Candidate substrate writes the fully materialized runtime file before atomically
+  # loading it into Caddy. Assert that durable file, not the retired env-placeholder
+  # template shape; the live-config check below independently proves Caddy loaded it.
   caddy_route_ok=true
-  grep -Fq "{\$${edge_key}:" "$caddyfile" || caddy_route_ok=false
-  if [[ "$edge_key" != *_UPSTREAM ]]; then
-    grep -Fq "host.docker.internal:${node_port}" "$caddyfile" || caddy_route_ok=false
-  fi
+  grep -Fq "${node_host} {" "$caddyfile" || caddy_route_ok=false
+  grep -Fq "host.docker.internal:${node_port}" "$caddyfile" || caddy_route_ok=false
   if "$caddy_route_ok"; then
     mark_ok "Caddyfile declares route for $node_host (edge_key=$edge_key)"
   else

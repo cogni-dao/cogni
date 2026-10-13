@@ -19,8 +19,8 @@ cat > "$REMOTE_ROOT/opt/cogni-template-edge/.env" <<'EOF'
 NODE_TEMPLATE_DOMAIN=node-template-test.cognidao.org
 EOF
 cat > "$REMOTE_ROOT/opt/cogni-template-edge/configs/Caddyfile.tmpl" <<'EOF'
-{$NODE_TEMPLATE_DOMAIN:node-template.localhost} {
-  reverse_proxy {$NODE_TEMPLATE_UPSTREAM:host.docker.internal:30200}
+node-template-test.cognidao.org {
+  reverse_proxy host.docker.internal:30200
 }
 EOF
 cat > "$REMOTE_ROOT/opt/cogni-template-runtime/.env" <<'EOF'
