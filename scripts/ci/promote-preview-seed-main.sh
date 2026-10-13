@@ -81,12 +81,24 @@ desired_digest_for_target() {
 }
 
 promote_if_changed() {
-  local app="$1" digest="$2"
+  local app="$1" digest="$2" source_sha="${3:-}"
   local file="infra/k8s/overlays/preview/${app}/kustomization.yaml"
-  local before after
+  local before after current
+  local -a promote_args
+  current=$(extract_overlay_image_ref preview "$app") || return 1
+  if [ "$current" = "$digest" ]; then
+    echo "  unchanged: $app"
+    return 0
+  fi
   before=$(sha256sum "$file" | awk '{print $1}')
-  bash "$SCRIPT_DIR/promote-k8s-image.sh" --no-commit \
-    --env preview --app "$app" --digest "$digest"
+  promote_args=(
+    --no-commit
+    --env preview
+    --app "$app"
+    --digest "$digest"
+  )
+  [ -n "$source_sha" ] && promote_args+=(--source-sha "$source_sha")
+  bash "$SCRIPT_DIR/promote-k8s-image.sh" "${promote_args[@]}"
   after=$(sha256sum "$file" | awk '{print $1}')
   if [ "$before" != "$after" ]; then
     echo "  updated overlay: $app"
@@ -113,7 +125,7 @@ for node in "${NODE_TARGETS[@]}"; do
 done
 
 d_sw=$(desired_digest_for_target "scheduler-worker") || exit 1
-promote_if_changed "scheduler-worker" "$d_sw" ""
+promote_if_changed "scheduler-worker" "$d_sw" "$MERGE_SHA"
 
 if git diff --quiet infra/k8s/overlays/preview/; then
   echo "ℹ️  No overlay diff — seed already matches GHCR / retain pins."

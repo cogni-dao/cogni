@@ -648,7 +648,8 @@ jobs:
         run: |
           set -euo pipefail
           ../app-src/scripts/ci/promote-k8s-image.sh --no-commit \
-            --env "$OVERLAY_ENV" --app "$NODE" --digest "$DIGEST"
+            --env "$OVERLAY_ENV" --app "$NODE" --digest "$DIGEST" \
+            --source-sha "$SOURCE_SHA"
           APP="$NODE" SOURCE_SHA="$SOURCE_SHA" \
             bash ../app-src/scripts/ci/update-source-sha-map.sh
 
