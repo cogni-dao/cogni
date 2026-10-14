@@ -545,6 +545,47 @@ describe("akash-tx-actuator runtime", () => {
     expect(tsNames).toContain(OPENBAO_SERVICE);
   });
 
+  it("keeps remote artifact resolution broad but candidate deployment environment-scoped", () => {
+    const workflow = read(".github/workflows/candidate-flight.yml");
+    const combineStart = workflow.indexOf("- name: Combine flight targets");
+    const combine = workflow.slice(
+      combineStart,
+      workflow.indexOf("- uses: pnpm/action-setup", combineStart)
+    );
+    expect(combine).toContain(
+      "done < <(jq -r '.[]' <<< \"$REMOTE_SOURCE_ARTIFACT_TARGETS_JSON\")"
+    );
+    expect(combine).toContain("yq -e '.envs | contains([\"candidate-a\"])'");
+    expect(combine).toContain(
+      'REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets"'
+    );
+    expect(combine).toContain(
+      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    );
+    expect(combine).not.toContain(
+      'json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]") +'
+    );
+
+    const remoteArtifactTargets = [
+      "beacon",
+      "levelup",
+      "node-template",
+      "poly",
+      "red",
+      "toks5",
+    ];
+    const candidateRemoteTargets = remoteArtifactTargets.filter((target) => {
+      const row = yaml.parse(read(`infra/catalog/${target}.yaml`)) as {
+        envs?: string[];
+      };
+      return row.envs?.includes("candidate-a") === true;
+    });
+    expect(candidateRemoteTargets).toEqual(["poly", "red"]);
+    expect(["operator", "scheduler-worker", ...candidateRemoteTargets]).toEqual(
+      ["operator", "scheduler-worker", "poly", "red"]
+    );
+  });
+
   it("projects the bearer token under the name the provider-http placeholder dereferences", () => {
     const external = parse<{
       spec: {

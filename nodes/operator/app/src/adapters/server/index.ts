@@ -89,13 +89,6 @@ export {
   CherryComputeError,
   type CherryComputeErrorCode,
 } from "./compute/cherry-compute.adapter";
-export {
-  CherryDatabaseCellAdapter,
-  type CherryDatabaseCellConfig,
-  type CherryDatabaseCellProvisionLease,
-  type CherryDatabaseCellVerifier,
-  PostgresCherryDatabaseCellProvisionLease,
-} from "./compute/cherry-database-cell.adapter";
 export { DrizzleComputeCostStore } from "./compute/compute-cost-store.adapter";
 export {
   DormantComputeWorkloadMigrationAdapter,
@@ -123,47 +116,7 @@ export {
   type TokenRefreshFn,
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
-export {
-  CherryDatabaseSourceFenceAdapter,
-  type CherryFenceBinding,
-  type CherryHostFirewallRuleClient,
-  createProductionCherryDatabaseCellAdapter,
-  createProductionDatabaseContainmentAdapter,
-  createProductionDatabaseReadmissionAdapter,
-  type DatabaseCellLifecycleCommand,
-  type DatabaseCellLifecycleReceiptSink,
-  type DatabaseCellLifecycleResult,
-  executeDatabaseCellLifecycleCommand,
-  PinoDatabaseContainmentAuditWriter,
-  PinoLokiDatabaseContainmentAuditAdapter,
-  PostgresAdminSqlAdapter,
-  type PostgresDatabaseCellVerificationCredential,
-  PostgresDatabaseCellVerifier,
-  PostgresReadmitSqlAdapter,
-  type ProductionCherryDatabaseCellConfig,
-  type ProductionDatabaseContainmentConfig,
-  type ProductionDatabaseReadmissionConfig,
-  runDatabaseCellLifecycleCli,
-} from "./db/database-containment-production.adapter";
-export {
-  DatabaseDsnRotationAdapter,
-  type DatabaseDsnRotationDeps,
-  DatabaseDsnRotationError,
-} from "./db/database-dsn-rotation.adapter";
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";
-export {
-  createPostgresDatabaseContainmentAdapter,
-  createPostgresDatabaseReadmissionAdapter,
-  type DatabaseContainmentAuditEvent,
-  type DatabaseContainmentAuditWriter,
-  DatabaseContainmentConfigurationError,
-  type DatabaseControlSql,
-  type DatabaseSourceFence,
-  PostgresDatabaseContainmentAdapter,
-  type PostgresDatabaseContainmentDeps,
-  PostgresDatabaseReadmissionAdapter,
-  type PostgresDatabaseReadmissionDeps,
-} from "./db/postgres-database-containment.adapter";
 export {
   ProbeDeployAdapter,
   type ProbeDeployConfig,

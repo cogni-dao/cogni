@@ -257,7 +257,24 @@ jobs:
           if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then
             combined=$(python3 -c 'import json, os; print(json.dumps([os.environ["NODE_SLUG"]]))')
           else
-            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]"); node = os.environ.get("NODE_SLUG", ""); items = ([node] if node else []) + items; out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+            # Remote artifact detection is intentionally environment-agnostic so
+            # every changed child pin is still resolved and verified. Only the
+            # deployment projection is candidate-a scoped: production-only rows
+            # must not enter the strict candidate planner.
+            remote_deployment_targets='[]'
+            while IFS= read -r target; do
+              catalog="infra/catalog/${target}.yaml"
+              if [ ! -f "$catalog" ]; then
+                echo "::error::remote artifact target ${target} has no catalog row"
+                exit 1
+              fi
+              if yq -e '.envs | contains(["candidate-a"])' "$catalog" >/dev/null; then
+                remote_deployment_targets=$(jq -c --arg target "$target" '. + [$target]' <<< "$remote_deployment_targets")
+              else
+                echo "::notice::Resolved artifact for ${target}; excluding it from candidate-a deployment"
+              fi
+            done < <(jq -r '.[]' <<< "$REMOTE_SOURCE_ARTIFACT_TARGETS_JSON")
+            combined=$(REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets" python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_DEPLOYMENT_TARGETS_JSON"] or "[]"); node = os.environ.get("NODE_SLUG", ""); items = ([node] if node else []) + items; out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
           fi
           csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
           has_flight_targets=false
