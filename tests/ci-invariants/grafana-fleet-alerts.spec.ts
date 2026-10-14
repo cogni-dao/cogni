@@ -32,6 +32,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
+import {
+  loadSecretsCatalog,
+  openBaoPathFor,
+} from "../../scripts/lib/secrets-catalog-loader";
 
 const ALERTS_FILE = path.resolve(
   __dirname,
@@ -118,6 +122,50 @@ const HISTORICAL_UID_PREFIX = [
 ] as const;
 
 describe("fleet Serve alert contract (bug.5459)", () => {
+  it("resolves private telemetry credentials from their canonical shared bank", () => {
+    const repoRoot = path.resolve(__dirname, "../..");
+    const catalog = loadSecretsCatalog({ repoRoot });
+    for (const environment of ["candidate-a", "preview", "production"]) {
+      const resources = yaml
+        .parseAllDocuments(
+          readFileSync(
+            path.join(
+              repoRoot,
+              "infra/k8s/overlays",
+              environment,
+              "operator/database-reliability-actuator-external-secret.yaml"
+            ),
+            "utf8"
+          )
+        )
+        .map((document) => document.toJSON());
+      for (const resource of resources) {
+        for (const key of [
+          "PROMETHEUS_READ_USERNAME",
+          "PROMETHEUS_READ_PASSWORD",
+        ]) {
+          const routing = catalog.routing[key];
+          if (!routing) throw new Error("canonical telemetry routing missing");
+          const expected = openBaoPathFor(routing, key, "operator", environment)
+            ?.replace(/^cogni\//, "")
+            .slice(0, -key.length - 1);
+          expect(expected).toBe(`${environment}/_shared`);
+          expect(
+            resource.spec.data.find(
+              (entry: { secretKey: string }) => entry.secretKey === key
+            ).remoteRef
+          ).toEqual({ key: expected, property: key });
+        }
+        const grafana = resource.spec.data.find(
+          (entry: { secretKey: string }) =>
+            entry.secretKey === "GRAFANA_SERVICE_ACCOUNT_TOKEN"
+        );
+        if (grafana)
+          expect(grafana.remoteRef.key).toBe(`${environment}/operator`);
+      }
+    }
+  });
+
   it("keeps the recovery watchdog independent and validates regional response identity", () => {
     const watchdogResources = yaml
       .parseAllDocuments(
