@@ -12,6 +12,10 @@
  */
 
 import { z } from "zod";
+import policy from "./reliability-policy.v1.json";
+
+/** Single versioned threshold/region contract consumed by runtime and Grafana. */
+export const RELIABILITY_POLICY_V1 = policy;
 
 export const reliabilityEnvironmentSchema = z.enum([
   "candidate-a",
@@ -34,7 +38,10 @@ export const reliabilityStatusV1Schema = z.object({
   nodeId: z.string().uuid(),
   slug: z.string().min(1).max(63),
   environment: reliabilityEnvironmentSchema,
-  buildSha: z.string().min(7).nullable(),
+  buildSha: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .nullable(),
   databaseTier: databaseTierSchema,
   budgetProfile: z.string().min(1).max(63).nullable(),
   state: reliabilityStateSchema,
@@ -58,6 +65,7 @@ export const reliabilityStatusV1Schema = z.object({
     }),
   }),
   incidentReason: z.string().min(1).max(128).nullable(),
+  observedAt: z.string().datetime(),
   lastTransitionAt: z.string().datetime().nullable(),
   evidenceQueryRefs: z.array(z.string().min(1).max(128)).max(16),
 });

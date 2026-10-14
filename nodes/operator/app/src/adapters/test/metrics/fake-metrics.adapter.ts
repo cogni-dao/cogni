@@ -59,8 +59,8 @@ export class FakeMetricsAdapter implements MetricsQueryPort {
     const observedAt = new Date().toISOString();
     return {
       regionalReadiness: [
-        { region: "fake-us", healthy: true, observedAt },
-        { region: "fake-eu", healthy: true, observedAt },
+        { region: "Frankfurt", healthy: true, observedAt },
+        { region: "Ohio", healthy: true, observedAt },
       ],
       evidenceScope: "node",
       ioPressurePct: 1,

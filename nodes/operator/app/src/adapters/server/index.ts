@@ -117,7 +117,6 @@ export {
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";
-export { HttpReliabilityStatusAdapter } from "./db/http-reliability-status.adapter";
 export {
   ProbeDeployAdapter,
   type ProbeDeployConfig,

@@ -47,7 +47,6 @@ namePrefix: operator-
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
 transformers:
   - ../../../base/akash-tx-actuator-service-name
-  - ../../../base/database-reliability-actuator-service-name
 
 images:
   - name: ghcr.io/cogni-dao/cogni-template
@@ -91,6 +90,26 @@ patches:
                     value: cogni-testing.org
   - target:
       kind: Deployment
+      name: database-reliability-readmitter
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: database-reliability-readmitter
+      spec:
+        template:
+          spec:
+            containers:
+              - name: readmitter
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: candidate-a
+                  - name: FORK_DOMAIN_ROOT
+                    value: cogni-testing.org
+                  - name: DATABASE_RELIABILITY_ACTUATOR_URL
+                    value: http://operator-database-reliability-actuator:8080
+  - target:
+      kind: Deployment
       name: node-app
     patch: |
       - op: replace
@@ -100,7 +119,12 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value:
           name: DATABASE_RELIABILITY_ACTUATOR_URL
-          value: http://database-reliability-actuator:8080
+          value: http://operator-database-reliability-actuator:8080
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_READMITTER_URL
+          value: http://operator-database-reliability-readmitter:8081
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
@@ -109,6 +133,15 @@ patches:
             secretKeyRef:
               name: operator-env-secrets
               key: DATABASE_RELIABILITY_STATUS_TOKEN
+              optional: true
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_READMIT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: operator-env-secrets
+              key: DATABASE_RELIABILITY_READMIT_TOKEN
               optional: true
   # story.5016 Gate 0b: actuator env values are set BY NAME via strategic
   # merge (env lists merge on `name`), never by positional JSON-pointer index.

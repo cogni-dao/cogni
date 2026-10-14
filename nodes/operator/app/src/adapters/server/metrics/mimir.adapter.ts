@@ -13,6 +13,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { RELIABILITY_POLICY_V1 } from "@cogni/node-contracts";
 
 import type {
   InstantQueryParams,
@@ -170,17 +171,16 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
 
     const env = params.environment;
     const node = params.nodeSlug;
-    const database = `cogni_${node.replaceAll("-", "_")}`;
-    const databases = `env="${env}",datname!~"template.*|postgres"`;
+    const identity = `environment="${env}",node_slug="${node}",database_tier="${params.databaseTier ?? "unknown"}",budget_profile="${params.budgetProfile ?? "unknown"}",policy_version="reliability-status-v1"`;
     const queries = {
       readiness: `min_over_time(probe_success{environment="${env}",node_slug="${node}",proof_class="serve"}[5m])`,
-      io: `100 * max(rate(node_pressure_io_waiting_seconds_total{env="${env}"}[5m]))`,
-      connections: `100 * sum(pg_stat_database_numbackends{env="${env}"}) / max(pg_settings_max_connections{env="${env}"})`,
-      memory: `100 * min(node_memory_MemAvailable_bytes{env="${env}"} / node_memory_MemTotal_bytes{env="${env}"})`,
-      disk: `100 * min(node_filesystem_avail_bytes{env="${env}",mountpoint="/"} / node_filesystem_size_bytes{env="${env}",mountpoint="/"})`,
-      backendShare: `100 * sum(avg_over_time(pg_stat_database_numbackends{env="${env}",datname="${database}"}[5m])) / clamp_min(sum(avg_over_time(pg_stat_database_numbackends{${databases}}[5m])), 1)`,
-      physicalReadShare: `100 * sum(increase(pg_stat_database_blks_read{env="${env}",datname="${database}"}[5m])) / clamp_min(sum(increase(pg_stat_database_blks_read{${databases}}[5m])), 1)`,
-      tempBytesShare: `100 * sum(increase(pg_stat_database_temp_bytes{env="${env}",datname="${database}"}[5m])) / clamp_min(sum(increase(pg_stat_database_temp_bytes{${databases}}[5m])), 1)`,
+      io: `cogni_reliability_v1_io_pressure_percent{${identity}}`,
+      connections: `cogni_reliability_v1_connections_percent{${identity}}`,
+      memory: `cogni_reliability_v1_memory_headroom_percent{${identity}}`,
+      disk: `cogni_reliability_v1_disk_headroom_percent{${identity}}`,
+      backendShare: `cogni_reliability_v1_database_backends_share_percent{${identity}}`,
+      physicalReadShare: `cogni_reliability_v1_database_physical_reads_share_percent{${identity}}`,
+      tempBytesShare: `cogni_reliability_v1_database_temp_bytes_share_percent{${identity}}`,
     } as const;
 
     const [
@@ -203,10 +203,39 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       this.queryInstant({ query: queries.tempBytesShare }),
     ]);
 
+    const expectedLabels = {
+      environment: env,
+      node_slug: node,
+      database_tier: params.databaseTier,
+      budget_profile: params.budgetProfile,
+      policy_version: "reliability-status-v1",
+    };
+    const observedAtSeconds = Date.now() / 1000;
+    const attributed = (result: PrometheusInstantResult) =>
+      singleAttributedSample(result, expectedLabels, observedAtSeconds);
+    const ioSample = attributed(io);
+    const connectionSample = attributed(connections);
+    const backendShareSample = attributed(backendShare);
+    const physicalReadShareSample = attributed(physicalReadShare);
+    const tempBytesShareSample = attributed(tempBytesShare);
+    const coTemporal = (
+      signal: AttributedSample | null,
+      share: AttributedSample | null
+    ) =>
+      signal !== null &&
+      share !== null &&
+      Math.abs(signal.observedAtSeconds - share.observedAtSeconds) * 1000 <=
+        RELIABILITY_POLICY_V1.maxSignalAttributionSkewMs;
     const databaseShare5m = {
-      backendsPct: singleValue(backendShare),
-      physicalReadsPct: singleValue(physicalReadShare),
-      tempBytesPct: singleValue(tempBytesShare),
+      backendsPct: coTemporal(connectionSample, backendShareSample)
+        ? (backendShareSample?.value ?? null)
+        : null,
+      physicalReadsPct: coTemporal(ioSample, physicalReadShareSample)
+        ? (physicalReadShareSample?.value ?? null)
+        : null,
+      tempBytesPct: coTemporal(ioSample, tempBytesShareSample)
+        ? (tempBytesShareSample?.value ?? null)
+        : null,
     };
     const hasCompleteDatabaseAttribution = Object.values(databaseShare5m).every(
       (value) => value !== null && Number.isFinite(value)
@@ -227,10 +256,16 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       evidenceScope: hasCompleteDatabaseAttribution
         ? "node"
         : "environment-shared",
-      ioPressurePct: singleValue(io),
-      connectionPct: singleValue(connections),
-      memoryHeadroomPct: singleValue(memory),
-      diskHeadroomPct: singleValue(disk),
+      ioPressurePct:
+        coTemporal(ioSample, physicalReadShareSample) &&
+        coTemporal(ioSample, tempBytesShareSample)
+          ? (ioSample?.value ?? null)
+          : null,
+      connectionPct: coTemporal(connectionSample, backendShareSample)
+        ? (connectionSample?.value ?? null)
+        : null,
+      memoryHeadroomPct: attributed(memory)?.value ?? null,
+      diskHeadroomPct: attributed(disk)?.value ?? null,
       databaseShare5m: hasCompleteDatabaseAttribution
         ? databaseShare5m
         : { backendsPct: null, physicalReadsPct: null, tempBytesPct: null },
@@ -469,10 +504,33 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
   }
 }
 
-function singleValue(result: PrometheusInstantResult): number | null {
-  if (result.result.length !== 1) return null;
-  const value = Number(result.result[0]?.value[1]);
-  return Number.isFinite(value) ? value : null;
+interface AttributedSample {
+  readonly value: number;
+  readonly observedAtSeconds: number;
+}
+
+function singleAttributedSample(
+  result: PrometheusInstantResult,
+  expectedLabels: Readonly<Record<string, string | null>>,
+  observedAtSeconds: number
+): AttributedSample | null {
+  const sample = result.result[0];
+  if (
+    result.result.length !== 1 ||
+    !sample ||
+    Object.entries(expectedLabels).some(
+      ([key, expected]) => expected === null || sample.metric[key] !== expected
+    ) ||
+    sample.value[0] > observedAtSeconds + 15 ||
+    observedAtSeconds - sample.value[0] >
+      RELIABILITY_POLICY_V1.evidenceTtlMs / 1000
+  ) {
+    return null;
+  }
+  const value = Number(sample.value[1]);
+  return Number.isFinite(value)
+    ? { value, observedAtSeconds: sample.value[0] }
+    : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

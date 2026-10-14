@@ -243,7 +243,9 @@ export const serverSchema = z.object({
   PROMETHEUS_READ_USERNAME: optionalString,
   PROMETHEUS_READ_PASSWORD: optionalString,
   DATABASE_RELIABILITY_ACTUATOR_URL: optionalUrl,
+  DATABASE_RELIABILITY_READMITTER_URL: optionalUrl,
   DATABASE_RELIABILITY_STATUS_TOKEN: optionalString,
+  DATABASE_RELIABILITY_READMIT_TOKEN: optionalString,
 
   // Grafana/Loki READ credential for the node-pinned log-read PROXY (task.5025). The operator
   // holds this read-only Viewer token to run a dev's LogQL server-side, forced to {node="<id>"};

@@ -168,6 +168,8 @@ export type {
   DatabaseStateCellPort,
   DatabaseTier,
   ProvisionDatabaseCellInput,
+  ReliabilityReadmitPort,
+  ReliabilityStatusReaderPort,
 } from "./database-containment.port";
 export { DATABASE_CELL_METRIC_LABEL_KEYS } from "./database-containment.port";
 export type {
@@ -336,7 +338,6 @@ export type {
   ReceiptDelivery,
   ReceiptDeliveryTarget,
 } from "./receipt-delivery.port";
-export type { ReliabilityStatusReaderPort } from "./reliability-status.port";
 export type {
   ProxyBillingEntry,
   SandboxErrorCode,

@@ -29,6 +29,14 @@ export const EVENT_NAMES = {
   NODE_SCHEDULES_SYNC_COMPLETE: "feature.node_schedules_sync.complete",
   NODE_RELIABILITY_STATUS_COMPLETE: "feature.node_reliability_status.complete",
   NODE_RELIABILITY_TRANSITION: "feature.node_reliability.transition",
+  NODE_RELIABILITY_SWEEP_STARTED: "feature.node_reliability.sweep_started",
+  NODE_RELIABILITY_SWEEP_COMPLETE: "feature.node_reliability.sweep_complete",
+  NODE_RELIABILITY_SWEEP_FAILED: "feature.node_reliability.sweep_failed",
+  NODE_RELIABILITY_ACTUATOR_STARTED:
+    "feature.node_reliability.actuator_started",
+  NODE_RELIABILITY_ACTUATOR_STOPPING:
+    "feature.node_reliability.actuator_stopping",
+  NODE_RELIABILITY_HTTP_FAILED: "feature.node_reliability.http_failed",
   NODE_DISTRIBUTION_ACTIVATION_COMPLETE:
     "feature.node_distribution_activation.complete",
   NODE_DAO_RESET_COMPLETE: "feature.node_dao_reset.complete",

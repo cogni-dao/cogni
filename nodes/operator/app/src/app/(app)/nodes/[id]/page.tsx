@@ -85,6 +85,9 @@ export default async function NodeDashboardPage({
   const status = node.status as NodeStatus;
   const display = NODE_STATUS_DISPLAY[status];
   const env = serverEnv();
+  const reliabilityEnvironment = FLIGHT_ENVS.find(
+    (candidate) => candidate === env.DEPLOY_ENVIRONMENT
+  );
   const nodeRepoUrl = nodeRepoUrlForSlug({
     slug: node.slug,
     mintOwner: env.NODE_MINT_OWNER,
@@ -266,7 +269,12 @@ export default async function NodeDashboardPage({
 
       {hasManagement ? (
         <div className="mt-6 w-full space-y-4">
-          {showDevelopers ? <ReliabilityStatusCard nodeId={node.id} /> : null}
+          {showDevelopers && reliabilityEnvironment ? (
+            <ReliabilityStatusCard
+              nodeId={node.id}
+              environment={reliabilityEnvironment}
+            />
+          ) : null}
 
           {showDevelopers ? (
             <NodeAccess nodeId={node.id} requests={accessRequests} />

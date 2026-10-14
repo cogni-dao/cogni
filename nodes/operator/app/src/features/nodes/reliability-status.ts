@@ -16,6 +16,7 @@ import type {
   ReliabilityState,
   ReliabilityStatusV1,
 } from "@cogni/node-contracts";
+import { RELIABILITY_POLICY_V1 } from "@cogni/node-contracts";
 
 import type {
   DatabaseContainmentPort,
@@ -40,6 +41,7 @@ export interface ReliabilityTarget {
   readonly environment: ReliabilityEnvironment;
   readonly desiredTier: "shared" | "dedicated";
   readonly budgetProfile: string;
+  readonly sourceSha: string;
   readonly cellId?: string;
 }
 
@@ -50,14 +52,39 @@ export interface ReliabilitySweepResult {
 }
 
 const UNKNOWN_REASON = "required reliability evidence is missing";
+export const EXPECTED_RELIABILITY_REGIONS =
+  RELIABILITY_POLICY_V1.expectedRegions;
+export const RELIABILITY_EVIDENCE_TTL_MS = RELIABILITY_POLICY_V1.evidenceTtlMs;
+
+export function isReliabilitySweepReady(input: {
+  readonly nowMs: number;
+  readonly lastCompleteSweepAt: number | null;
+  readonly targetKeys: ReadonlySet<string>;
+  readonly statusKeys: ReadonlySet<string>;
+}): boolean {
+  return (
+    input.lastCompleteSweepAt !== null &&
+    input.nowMs - input.lastCompleteSweepAt <= RELIABILITY_EVIDENCE_TTL_MS &&
+    input.targetKeys.size > 0 &&
+    input.targetKeys.size === input.statusKeys.size &&
+    [...input.targetKeys].every((key) => input.statusKeys.has(key))
+  );
+}
 
 export async function readReliabilityStatus(
   input: ReliabilityStatusInput,
   metrics: MetricsQueryPort
 ): Promise<ReliabilityStatusV1> {
+  const observedAt = new Date().toISOString();
+  const buildSha =
+    input.buildSha && /^[0-9a-f]{40}$/.test(input.buildSha)
+      ? input.buildSha
+      : null;
   const snapshot = await metrics.queryReliabilitySnapshot({
     nodeSlug: input.slug,
     environment: input.environment,
+    databaseTier: input.desiredTier,
+    budgetProfile: input.budgetProfile,
   });
 
   const utilization = {
@@ -69,10 +96,11 @@ export async function readReliabilityStatus(
     databaseShare5m: snapshot.databaseShare5m,
   };
   const verdict = evaluateReliabilityPolicy({
-    buildSha: input.buildSha,
+    buildSha,
     database: input.database,
     regionalReadiness: snapshot.regionalReadiness,
     utilization,
+    observedAt,
   });
 
   return {
@@ -80,13 +108,14 @@ export async function readReliabilityStatus(
     nodeId: input.nodeId,
     slug: input.slug,
     environment: input.environment,
-    buildSha: input.buildSha,
+    buildSha,
     databaseTier: input.database?.desiredTier ?? input.desiredTier ?? "unknown",
     budgetProfile: input.database?.budgetProfile ?? input.budgetProfile ?? null,
     state: verdict.state,
     regionalReadiness: [...snapshot.regionalReadiness],
     utilization,
     incidentReason: verdict.reason,
+    observedAt,
     lastTransitionAt: input.database?.lastTransitionAt ?? null,
     evidenceQueryRefs: [...snapshot.evidenceQueryRefs],
   };
@@ -99,6 +128,7 @@ export async function reconcileReliabilityContainment(
   > & {
     readonly desiredTier: "shared" | "dedicated";
     readonly budgetProfile: string;
+    readonly sourceSha: string;
     readonly cellId?: string;
     readonly incidentId: string;
   },
@@ -124,6 +154,21 @@ export async function reconcileReliabilityContainment(
     },
     deps.metrics
   );
+  if (status.buildSha !== input.sourceSha) {
+    return {
+      ...status,
+      state: "unknown",
+      incidentReason: "deployed build does not match immutable catalog target",
+    };
+  }
+  if (input.desiredTier === "dedicated") {
+    return {
+      ...status,
+      state: "unknown",
+      incidentReason:
+        "dedicated database cell telemetry is not node-attributed",
+    };
+  }
   const reason = containmentReason(status);
   if (!reason || database.phase === "contained") return status;
 
@@ -181,36 +226,47 @@ export async function runReliabilitySweep(
   return results;
 }
 
-const NOISY_NEIGHBOR_SHARE_PCT = 40;
+const NOISY_NEIGHBOR_SHARE_PCT =
+  RELIABILITY_POLICY_V1.noisyNeighborSharePercent;
 
 function containmentReason(
   status: ReliabilityStatusV1
 ): DatabaseContainmentReason | null {
   const reason = status.incidentReason;
-  const shares = Object.values(status.utilization.databaseShare5m);
+  const shares = status.utilization.databaseShare5m;
+  const shareValues = Object.values(shares);
   const hasNodeAttribution =
     status.utilization.evidenceScope === "node" &&
-    shares.every((value) => value !== null && Number.isFinite(value)) &&
-    shares.some((value) => (value ?? 0) >= NOISY_NEIGHBOR_SHARE_PCT);
+    shareValues.every((value) => value !== null && Number.isFinite(value));
   if (!hasNodeAttribution) return null;
 
-  if (reason?.includes("I/O pressure critical")) return "critical_io_pressure";
-  if (reason?.includes("database connections critical"))
-    return "critical_connections";
   if (
-    reason?.includes("memory headroom critical") ||
-    reason?.includes("disk headroom critical")
-  )
-    return "critical_headroom";
-  if (reason?.includes("all readiness regions failed"))
-    return "regional_readiness_failure";
+    reason?.includes("I/O pressure critical") &&
+    ((shares.physicalReadsPct ?? 0) >= NOISY_NEIGHBOR_SHARE_PCT ||
+      (shares.tempBytesPct ?? 0) >= NOISY_NEIGHBOR_SHARE_PCT)
+  ) {
+    return "critical_io_pressure";
+  }
+  if (
+    reason?.includes("database connections critical") &&
+    (shares.backendsPct ?? 0) >= NOISY_NEIGHBOR_SHARE_PCT
+  ) {
+    return "critical_connections";
+  }
+  // Host memory/disk and regional availability have no causal per-database
+  // series in v1. They page a human but must never mutate a node role.
   return null;
 }
 
 export function evaluateReliabilityPolicy(input: {
   readonly buildSha: string | null;
   readonly database: DatabaseContainmentStatus | null;
-  readonly regionalReadiness: readonly { healthy: boolean }[];
+  readonly regionalReadiness: readonly {
+    readonly region: string;
+    readonly healthy: boolean;
+    readonly observedAt: string;
+  }[];
+  readonly observedAt?: string;
   readonly utilization: {
     readonly evidenceScope: "environment-shared" | "node";
     readonly ioPressurePct: number | null;
@@ -244,6 +300,23 @@ export function evaluateReliabilityPolicy(input: {
     input.utilization.memoryHeadroomPct,
     input.utilization.diskHeadroomPct,
   ];
+  const observedAtMs = Date.parse(input.observedAt ?? new Date().toISOString());
+  const expectedRegions = new Set<string>(EXPECTED_RELIABILITY_REGIONS);
+  const readinessRegions = new Set(
+    input.regionalReadiness.map((sample) => sample.region)
+  );
+  const hasExactFreshReadiness =
+    input.regionalReadiness.length === EXPECTED_RELIABILITY_REGIONS.length &&
+    readinessRegions.size === EXPECTED_RELIABILITY_REGIONS.length &&
+    [...readinessRegions].every((region) => expectedRegions.has(region)) &&
+    input.regionalReadiness.every((sample) => {
+      const sampledAtMs = Date.parse(sample.observedAt);
+      return (
+        Number.isFinite(sampledAtMs) &&
+        sampledAtMs <= observedAtMs + 15_000 &&
+        observedAtMs - sampledAtMs <= RELIABILITY_EVIDENCE_TTL_MS
+      );
+    });
   const databaseShares = Object.values(input.utilization.databaseShare5m);
   const hasValidAttributionEvidence =
     input.utilization.evidenceScope === "environment-shared"
@@ -256,7 +329,7 @@ export function evaluateReliabilityPolicy(input: {
     database !== null &&
     database.desiredTier !== undefined &&
     database.budgetProfile.length > 0 &&
-    input.regionalReadiness.length >= 2 &&
+    hasExactFreshReadiness &&
     utilizationValues.every(
       (value) => value !== null && Number.isFinite(value)
     ) &&
@@ -266,13 +339,25 @@ export function evaluateReliabilityPolicy(input: {
   }
 
   const criticalReasons: string[] = [];
-  if ((input.utilization.ioPressurePct ?? 0) >= 20)
+  if (
+    (input.utilization.ioPressurePct ?? 0) >=
+    RELIABILITY_POLICY_V1.signals.ioPressurePercent.critical
+  )
     criticalReasons.push("I/O pressure critical");
-  if ((input.utilization.connectionPct ?? 0) >= 75)
+  if (
+    (input.utilization.connectionPct ?? 0) >=
+    RELIABILITY_POLICY_V1.signals.connectionsPercent.critical
+  )
     criticalReasons.push("database connections critical");
-  if ((input.utilization.memoryHeadroomPct ?? 100) <= 15)
+  if (
+    (input.utilization.memoryHeadroomPct ?? 100) <=
+    RELIABILITY_POLICY_V1.signals.memoryHeadroomPercent.critical
+  )
     criticalReasons.push("memory headroom critical");
-  if ((input.utilization.diskHeadroomPct ?? 100) <= 15)
+  if (
+    (input.utilization.diskHeadroomPct ?? 100) <=
+    RELIABILITY_POLICY_V1.signals.diskHeadroomPercent.critical
+  )
     criticalReasons.push("disk headroom critical");
   if (input.regionalReadiness.every((sample) => !sample.healthy))
     criticalReasons.push("all readiness regions failed");
@@ -281,13 +366,25 @@ export function evaluateReliabilityPolicy(input: {
   }
 
   const warningReasons: string[] = [];
-  if ((input.utilization.ioPressurePct ?? 0) >= 10)
+  if (
+    (input.utilization.ioPressurePct ?? 0) >=
+    RELIABILITY_POLICY_V1.signals.ioPressurePercent.warning
+  )
     warningReasons.push("I/O pressure warning");
-  if ((input.utilization.connectionPct ?? 0) >= 60)
+  if (
+    (input.utilization.connectionPct ?? 0) >=
+    RELIABILITY_POLICY_V1.signals.connectionsPercent.warning
+  )
     warningReasons.push("database connections warning");
-  if ((input.utilization.memoryHeadroomPct ?? 100) <= 25)
+  if (
+    (input.utilization.memoryHeadroomPct ?? 100) <=
+    RELIABILITY_POLICY_V1.signals.memoryHeadroomPercent.warning
+  )
     warningReasons.push("memory headroom warning");
-  if ((input.utilization.diskHeadroomPct ?? 100) <= 25)
+  if (
+    (input.utilization.diskHeadroomPct ?? 100) <=
+    RELIABILITY_POLICY_V1.signals.diskHeadroomPercent.warning
+  )
     warningReasons.push("disk headroom warning");
   if (input.regionalReadiness.some((sample) => !sample.healthy))
     warningReasons.push("regional readiness degraded");

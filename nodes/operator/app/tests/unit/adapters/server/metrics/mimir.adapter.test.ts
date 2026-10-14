@@ -18,6 +18,8 @@ import {
   type MimirAdapterConfig,
   MimirMetricsAdapter,
 } from "@/adapters/server/metrics/mimir.adapter";
+import { reconcileReliabilityContainment } from "@/features/nodes/reliability-status";
+import type { DatabaseContainmentPort } from "@/ports";
 
 describe("MimirMetricsAdapter", () => {
   let adapter: MimirMetricsAdapter;
@@ -96,6 +98,165 @@ describe("MimirMetricsAdapter", () => {
       const fetchCall = mockFetch.mock.calls[0];
       const headers = fetchCall?.[1]?.headers;
       expect(headers?.Accept).toBe("application/json");
+    });
+  });
+
+  it("accepts one exact database series as node-attributed evidence", async () => {
+    const vector = (result: unknown[]) => ({
+      ok: true,
+      json: async () => ({
+        status: "success",
+        data: { resultType: "vector", result },
+      }),
+    });
+    const now = Date.now() / 1000;
+    const labels = {
+      environment: "candidate-a",
+      node_slug: "red",
+      database_tier: "shared",
+      budget_profile: "shared-default-v1",
+      policy_version: "reliability-status-v1",
+    };
+    mockFetch
+      .mockResolvedValueOnce(
+        vector([
+          { metric: { probe: "Frankfurt" }, value: [now, "1"] },
+          { metric: { probe: "Ohio" }, value: [now, "1"] },
+        ])
+      )
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "20"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "70"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "80"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "75"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "41"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "42"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "43"] }]));
+
+    const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
+    const containment: DatabaseContainmentPort = {
+      status: async () => ({
+        nodeId: "921b1d1d-4ded-4a6d-b3f1-f7d6affa406a",
+        nodeSlug: "red",
+        environment: "candidate-a",
+        desiredTier: "shared",
+        budgetProfile: "shared-default-v1",
+        contained: false,
+        phase: "open",
+        activeSessions: 0,
+        rolesCanLogin: true,
+        firewallFenced: false,
+        cell: null,
+        observedAt: new Date().toISOString(),
+        lastTransitionAt: null,
+        incidentId: null,
+        reason: null,
+      }),
+      contain: async (action) => {
+        actions.push(action);
+        return {
+          nodeId: action.nodeId,
+          nodeSlug: action.nodeSlug,
+          environment: action.environment,
+          desiredTier: action.desiredTier,
+          budgetProfile: action.budgetProfile,
+          contained: true,
+          phase: "contained",
+          activeSessions: 0,
+          rolesCanLogin: false,
+          firewallFenced: false,
+          cell: null,
+          observedAt: new Date().toISOString(),
+          lastTransitionAt: new Date().toISOString(),
+          incidentId: action.incidentId,
+          reason: action.reason,
+        };
+      },
+      readmit: async () => {
+        throw new Error("not used");
+      },
+    };
+    const buildSha = "0123456789abcdef0123456789abcdef01234567";
+    const status = await reconcileReliabilityContainment(
+      {
+        nodeId: "921b1d1d-4ded-4a6d-b3f1-f7d6affa406a",
+        slug: "red",
+        environment: "candidate-a",
+        buildSha,
+        sourceSha: buildSha,
+        desiredTier: "shared",
+        budgetProfile: "shared-default-v1",
+        incidentId: "realistic-mimir-fixture",
+      },
+      { metrics: adapter, containment }
+    );
+
+    expect(status).toMatchObject({
+      state: "contained",
+      utilization: {
+        evidenceScope: "node",
+        databaseShare5m: {
+          backendsPct: 41,
+          physicalReadsPct: 42,
+          tempBytesPct: 43,
+        },
+      },
+    });
+    expect(actions).toEqual([
+      expect.objectContaining({ reason: "critical_io_pressure" }),
+    ]);
+    expect(mockFetch.mock.calls.slice(5).map(([url]) => String(url))).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("cogni_reliability_v1_database"),
+        expect.stringContaining("node_slug%3D%22red%22"),
+      ])
+    );
+  });
+
+  it("refuses containment when a critical signal and its attribution are skewed", async () => {
+    const vector = (result: unknown[]) => ({
+      ok: true,
+      json: async () => ({
+        status: "success",
+        data: { resultType: "vector", result },
+      }),
+    });
+    const now = Date.now() / 1000;
+    const staleButTtlFresh = now - 90;
+    const labels = {
+      environment: "candidate-a",
+      node_slug: "red",
+      database_tier: "shared",
+      budget_profile: "shared-default-v1",
+      policy_version: "reliability-status-v1",
+    };
+    mockFetch
+      .mockResolvedValueOnce(vector([]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "25"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "20"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "80"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "75"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "10"] }]))
+      .mockResolvedValueOnce(
+        vector([{ metric: labels, value: [staleButTtlFresh, "60"] }])
+      )
+      .mockResolvedValueOnce(
+        vector([{ metric: labels, value: [staleButTtlFresh, "60"] }])
+      );
+
+    const snapshot = await adapter.queryReliabilitySnapshot({
+      environment: "candidate-a",
+      nodeSlug: "red",
+      databaseTier: "shared",
+      budgetProfile: "shared-default-v1",
+    });
+
+    expect(snapshot).toMatchObject({
+      evidenceScope: "environment-shared",
+      ioPressurePct: null,
+      databaseShare5m: {
+        physicalReadsPct: null,
+        tempBytesPct: null,
+      },
     });
   });
 

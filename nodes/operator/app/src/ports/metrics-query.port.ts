@@ -118,6 +118,8 @@ export type ReliabilityEnvironment = "candidate-a" | "preview" | "production";
 export interface ReliabilityQueryParams {
   readonly nodeSlug: string;
   readonly environment: ReliabilityEnvironment;
+  readonly databaseTier: "shared" | "dedicated" | null;
+  readonly budgetProfile: string | null;
 }
 
 export interface RegionalReadinessMetric {

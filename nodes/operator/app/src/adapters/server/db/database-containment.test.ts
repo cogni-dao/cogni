@@ -210,8 +210,8 @@ describe("PostgresDatabaseContainmentAdapter", () => {
       occurredAt: "2026-10-13T23:30:00.000Z",
     });
     expect(info).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "database_containment_transition" }),
-      "database_containment_transition"
+      expect.objectContaining({ event: "feature.node_reliability.transition" }),
+      "feature.node_reliability.transition"
     );
     await expect(adapter.latest(ACTION)).resolves.toMatchObject({
       incidentId: "incident-1",

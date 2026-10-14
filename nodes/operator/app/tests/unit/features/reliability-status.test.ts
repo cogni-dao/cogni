@@ -1,16 +1,59 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-import { describe, expect, it } from "vitest";
+import { reliabilityStatusV1Schema } from "@cogni/node-contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   evaluateReliabilityPolicy,
+  isReliabilitySweepReady,
   reconcileReliabilityContainment,
   runReliabilitySweep,
 } from "@/features/nodes/reliability-status";
 import type { DatabaseContainmentPort, MetricsQueryPort } from "@/ports";
 
+const routeMocks = vi.hoisted(() => ({
+  queryReliabilitySnapshot: vi.fn(),
+  resolvePlacement: vi.fn(),
+  readmit: vi.fn(),
+  getDeployState: vi.fn(),
+}));
+const ROUTE_NODE_ID = "123e4567-e89b-12d3-a456-426614174001";
+const ROUTE_BUILD_SHA = "0123456789abcdef0123456789abcdef01234567";
+const ROUTE_CATALOG_SHA = "89abcdef0123456789abcdef0123456789abcdef";
+
+vi.mock("@/app/_lib/auth/session", () => ({
+  getSessionUser: vi.fn(async () => ({ id: "user-1" })),
+}));
+vi.mock("@/app/_lib/node-rbac", () => ({
+  resolveNodeAndAuthorize: vi.fn(async () => ({
+    ok: true,
+    node: {
+      nodeId: "123e4567-e89b-12d3-a456-426614174001",
+      slug: "poly",
+    },
+  })),
+}));
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({
+    reliabilityStatusReader: undefined,
+    deployCapability: { getDeployState: routeMocks.getDeployState },
+    metricsQuery: {
+      queryReliabilitySnapshot: routeMocks.queryReliabilitySnapshot,
+    },
+    reliabilityReadmit: { readmit: routeMocks.readmit },
+  }),
+  resolveDatabasePlacementResolver: () => ({
+    resolve: routeMocks.resolvePlacement,
+  }),
+}));
+
+import {
+  GET as GET_HEALTH,
+  POST as POST_READMIT,
+} from "@/app/api/v1/nodes/[id]/observability/health/route";
+
 const healthy = {
-  buildSha: "0123456789abcdef",
+  buildSha: "0123456789abcdef0123456789abcdef01234567",
   database: {
     nodeId: "11111111-1111-4111-8111-111111111111",
     nodeSlug: "operator",
@@ -28,7 +71,18 @@ const healthy = {
     incidentId: null,
     reason: null,
   },
-  regionalReadiness: [{ healthy: true }, { healthy: true }],
+  regionalReadiness: [
+    {
+      region: "Frankfurt",
+      healthy: true,
+      observedAt: new Date().toISOString(),
+    },
+    {
+      region: "Ohio",
+      healthy: true,
+      observedAt: new Date().toISOString(),
+    },
+  ],
   utilization: {
     evidenceScope: "environment-shared" as const,
     ioPressurePct: 2,
@@ -44,6 +98,44 @@ const healthy = {
 };
 
 describe("ReliabilityStatusV1 policy", () => {
+  it("keeps readiness false through partial, failed, and stale sweeps", () => {
+    const targets = new Set(["candidate-a/operator", "candidate-a/red"]);
+    const complete = new Set(targets);
+    const partial = new Set(["candidate-a/operator"]);
+    const nowMs = Date.now();
+    expect(
+      isReliabilitySweepReady({
+        nowMs,
+        lastCompleteSweepAt: null,
+        targetKeys: targets,
+        statusKeys: partial,
+      })
+    ).toBe(false);
+    expect(
+      isReliabilitySweepReady({
+        nowMs,
+        lastCompleteSweepAt: nowMs,
+        targetKeys: targets,
+        statusKeys: complete,
+      })
+    ).toBe(true);
+    expect(
+      isReliabilitySweepReady({
+        nowMs,
+        lastCompleteSweepAt: null,
+        targetKeys: targets,
+        statusKeys: complete,
+      })
+    ).toBe(false);
+    expect(
+      isReliabilitySweepReady({
+        nowMs,
+        lastCompleteSweepAt: nowMs - 120_001,
+        targetKeys: targets,
+        statusKeys: complete,
+      })
+    ).toBe(false);
+  });
   it("fails closed when any required signal is missing", () => {
     expect(
       evaluateReliabilityPolicy({
@@ -98,6 +190,46 @@ describe("ReliabilityStatusV1 policy", () => {
     });
   });
 
+  it("rejects short SHAs and duplicate, unknown, or stale readiness regions", () => {
+    expect(
+      reliabilityStatusV1Schema.safeParse({
+        version: "reliability-status.v1",
+        nodeId: healthy.database.nodeId,
+        slug: healthy.database.nodeSlug,
+        environment: healthy.database.environment,
+        buildSha: "1234567",
+        databaseTier: "shared",
+        budgetProfile: "shared-small",
+        state: "unknown",
+        regionalReadiness: [],
+        utilization: healthy.utilization,
+        incidentReason: "missing",
+        observedAt: new Date().toISOString(),
+        lastTransitionAt: null,
+        evidenceQueryRefs: [],
+      }).success
+    ).toBe(false);
+
+    for (const regionalReadiness of [
+      [healthy.regionalReadiness[0], healthy.regionalReadiness[0]],
+      [
+        healthy.regionalReadiness[0],
+        { ...healthy.regionalReadiness[1], region: "unknown" },
+      ],
+      healthy.regionalReadiness.map((sample) => ({
+        ...sample,
+        observedAt: "2026-01-01T00:00:00.000Z",
+      })),
+    ]) {
+      expect(
+        evaluateReliabilityPolicy({ ...healthy, regionalReadiness })
+      ).toEqual({
+        state: "unknown",
+        reason: "required reliability evidence is missing",
+      });
+    }
+  });
+
   it("contains only a critical node with >=40% five-minute database attribution", async () => {
     const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
     const containment: DatabaseContainmentPort = {
@@ -121,14 +253,14 @@ describe("ReliabilityStatusV1 policy", () => {
       queryReliabilitySnapshot: async () => ({
         regionalReadiness: [
           {
-            region: "us",
+            region: "Frankfurt",
             healthy: true,
-            observedAt: "2026-10-13T20:00:00.000Z",
+            observedAt: new Date().toISOString(),
           },
           {
-            region: "eu",
+            region: "Ohio",
             healthy: true,
-            observedAt: "2026-10-13T20:00:00.000Z",
+            observedAt: new Date().toISOString(),
           },
         ],
         evidenceScope: "node",
@@ -151,6 +283,7 @@ describe("ReliabilityStatusV1 policy", () => {
         slug: healthy.database.nodeSlug,
         environment: healthy.database.environment,
         buildSha: healthy.buildSha,
+        sourceSha: healthy.buildSha,
         desiredTier: healthy.database.desiredTier,
         budgetProfile: healthy.database.budgetProfile,
         incidentId: "replay-1",
@@ -182,14 +315,14 @@ describe("ReliabilityStatusV1 policy", () => {
       queryReliabilitySnapshot: async () => ({
         regionalReadiness: [
           {
-            region: "us",
+            region: "Frankfurt",
             healthy: true,
-            observedAt: healthy.database.observedAt,
+            observedAt: new Date().toISOString(),
           },
           {
-            region: "eu",
+            region: "Ohio",
             healthy: true,
-            observedAt: healthy.database.observedAt,
+            observedAt: new Date().toISOString(),
           },
         ],
         evidenceScope: "environment-shared",
@@ -212,6 +345,7 @@ describe("ReliabilityStatusV1 policy", () => {
         slug: healthy.database.nodeSlug,
         environment: healthy.database.environment,
         buildSha: healthy.buildSha,
+        sourceSha: healthy.buildSha,
         desiredTier: healthy.database.desiredTier,
         budgetProfile: healthy.database.budgetProfile,
         incidentId: "replay-env-critical",
@@ -241,14 +375,14 @@ describe("ReliabilityStatusV1 policy", () => {
       queryReliabilitySnapshot: async () => ({
         regionalReadiness: [
           {
-            region: "us",
+            region: "Frankfurt",
             healthy: true,
-            observedAt: healthy.database.observedAt,
+            observedAt: new Date().toISOString(),
           },
           {
-            region: "eu",
+            region: "Ohio",
             healthy: true,
-            observedAt: healthy.database.observedAt,
+            observedAt: new Date().toISOString(),
           },
         ],
         evidenceScope: "node",
@@ -271,6 +405,7 @@ describe("ReliabilityStatusV1 policy", () => {
         slug: healthy.database.nodeSlug,
         environment: healthy.database.environment,
         buildSha: healthy.buildSha,
+        sourceSha: healthy.buildSha,
         desiredTier: healthy.database.desiredTier,
         budgetProfile: healthy.database.budgetProfile,
         incidentId: "replay-below-threshold",
@@ -282,6 +417,115 @@ describe("ReliabilityStatusV1 policy", () => {
     expect(actions).toEqual([]);
   });
 
+  it("does not cross-attribute backend share to I/O pressure", async () => {
+    const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
+    const containment: DatabaseContainmentPort = {
+      status: async () => healthy.database,
+      contain: async (action) => {
+        actions.push(action);
+        return healthy.database;
+      },
+      readmit: async () => healthy.database,
+    };
+    const metrics = {
+      queryReliabilitySnapshot: async () => ({
+        regionalReadiness: healthy.regionalReadiness,
+        evidenceScope: "node",
+        ioPressurePct: 20,
+        connectionPct: 20,
+        memoryHeadroomPct: 70,
+        diskHeadroomPct: 70,
+        databaseShare5m: {
+          backendsPct: 90,
+          physicalReadsPct: 10,
+          tempBytesPct: 10,
+        },
+        evidenceQueryRefs: ["reliability.v1:test"],
+      }),
+    } as MetricsQueryPort;
+
+    const status = await reconcileReliabilityContainment(
+      {
+        nodeId: healthy.database.nodeId,
+        slug: healthy.database.nodeSlug,
+        environment: healthy.database.environment,
+        buildSha: healthy.buildSha,
+        sourceSha: healthy.buildSha,
+        desiredTier: "shared",
+        budgetProfile: healthy.database.budgetProfile,
+        incidentId: "crossed-signal",
+      },
+      { metrics, containment }
+    );
+
+    expect(status.state).toBe("warning");
+    expect(actions).toEqual([]);
+  });
+
+  it("fails dedicated targets closed without dedicated cell telemetry", async () => {
+    const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
+    const containment: DatabaseContainmentPort = {
+      status: async () => ({
+        ...healthy.database,
+        desiredTier: "dedicated",
+        budgetProfile: "poly-dedicated-v1",
+      }),
+      contain: async (action) => {
+        actions.push(action);
+        return healthy.database;
+      },
+      readmit: async () => healthy.database,
+    };
+    const metrics = {
+      queryReliabilitySnapshot: async () => ({
+        regionalReadiness: [
+          {
+            region: "Frankfurt",
+            healthy: true,
+            observedAt: new Date().toISOString(),
+          },
+          {
+            region: "Ohio",
+            healthy: true,
+            observedAt: new Date().toISOString(),
+          },
+        ],
+        evidenceScope: "node",
+        ioPressurePct: 20,
+        connectionPct: 20,
+        memoryHeadroomPct: 70,
+        diskHeadroomPct: 70,
+        databaseShare5m: {
+          backendsPct: 80,
+          physicalReadsPct: 80,
+          tempBytesPct: 80,
+        },
+        evidenceQueryRefs: ["reliability.v1:test"],
+      }),
+    } as MetricsQueryPort;
+
+    const status = await reconcileReliabilityContainment(
+      {
+        nodeId: healthy.database.nodeId,
+        slug: "poly",
+        environment: healthy.database.environment,
+        buildSha: healthy.buildSha,
+        sourceSha: healthy.buildSha,
+        desiredTier: "dedicated",
+        budgetProfile: "poly-dedicated-v1",
+        incidentId: "replay-dedicated",
+      },
+      { metrics, containment }
+    );
+
+    expect(status).toMatchObject({
+      state: "unknown",
+      incidentReason:
+        "dedicated database cell telemetry is not node-attributed",
+    });
+    expect(actions).toEqual([]);
+  });
+
   it("continues a bounded sweep when one target fails", async () => {
     const targets = [
       {
@@ -290,6 +534,7 @@ describe("ReliabilityStatusV1 policy", () => {
         environment: "candidate-a" as const,
         desiredTier: "shared" as const,
         budgetProfile: "shared-small",
+        sourceSha: healthy.buildSha,
       },
       {
         nodeId: healthy.database.nodeId,
@@ -297,6 +542,7 @@ describe("ReliabilityStatusV1 policy", () => {
         environment: "candidate-a" as const,
         desiredTier: "shared" as const,
         budgetProfile: "shared-small",
+        sourceSha: healthy.buildSha,
       },
     ];
     const containment: DatabaseContainmentPort = {
@@ -311,14 +557,14 @@ describe("ReliabilityStatusV1 policy", () => {
       queryReliabilitySnapshot: async () => ({
         regionalReadiness: [
           {
-            region: "us",
+            region: "Frankfurt",
             healthy: true,
-            observedAt: healthy.database.observedAt,
+            observedAt: new Date().toISOString(),
           },
           {
-            region: "eu",
+            region: "Ohio",
             healthy: true,
-            observedAt: healthy.database.observedAt,
+            observedAt: new Date().toISOString(),
           },
         ],
         evidenceScope: "environment-shared",
@@ -349,5 +595,83 @@ describe("ReliabilityStatusV1 policy", () => {
         status: expect.objectContaining({ state: "healthy" }),
       }),
     ]);
+  });
+});
+
+describe("reliability HTTP boundaries", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.APP_BUILD_SHA = ROUTE_CATALOG_SHA;
+    process.env.DEPLOY_ENVIRONMENT = "candidate-a";
+    routeMocks.resolvePlacement.mockResolvedValue({
+      nodeId: ROUTE_NODE_ID,
+      desiredTier: "dedicated",
+      budgetProfile: "poly-dedicated-v1",
+    });
+    routeMocks.queryReliabilitySnapshot.mockRejectedValue(
+      new Error("mimir unavailable")
+    );
+    routeMocks.getDeployState.mockResolvedValue({ buildSha: ROUTE_BUILD_SHA });
+    routeMocks.readmit.mockResolvedValue({
+      phase: "open",
+      incidentId: "audit-incident",
+      lastTransitionAt: new Date().toISOString(),
+    });
+  });
+
+  it("returns 200 unknown and resolves catalog at parent SHA on metrics failure", async () => {
+    const response = await GET_HEALTH(
+      new Request(
+        "https://operator.example/api/v1/nodes/poly/observability/health?env=candidate-a"
+      ),
+      { params: Promise.resolve({ id: ROUTE_NODE_ID }) }
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      state: "unknown",
+      buildSha: ROUTE_BUILD_SHA,
+      utilization: {
+        evidenceScope: "environment-shared",
+        databaseShare5m: {
+          backendsPct: null,
+          physicalReadsPct: null,
+          tempBytesPct: null,
+        },
+      },
+    });
+    expect(routeMocks.resolvePlacement).toHaveBeenCalledWith({
+      nodeSlug: "poly",
+      environment: "candidate-a",
+      sourceRef: ROUTE_CATALOG_SHA,
+    });
+  });
+
+  it("binds readmission actor to session and rejects cross-environment reads", async () => {
+    const rejected = await GET_HEALTH(
+      new Request(
+        "https://operator.example/api/v1/nodes/poly/observability/health?env=production"
+      ),
+      { params: Promise.resolve({ id: ROUTE_NODE_ID }) }
+    );
+    expect(rejected.status).toBe(400);
+
+    const response = await POST_READMIT(
+      new Request(
+        "https://operator.example/api/v1/nodes/poly/observability/health",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ env: "candidate-a", actorId: "system:spoof" }),
+        }
+      ),
+      { params: Promise.resolve({ id: ROUTE_NODE_ID }) }
+    );
+    expect(response.status).toBe(200);
+    expect(routeMocks.readmit).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: "user-1" })
+    );
+    expect(routeMocks.readmit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: "system:spoof" })
+    );
   });
 });

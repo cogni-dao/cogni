@@ -97,6 +97,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/public ./nodes
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-akash-tx-actuator/akash-tx-actuator.mjs ./nodes/operator/app/akash-tx-actuator.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-lease-log-pump/lease-log-pump.mjs ./nodes/operator/app/lease-log-pump.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-database-reliability-actuator/database-reliability-actuator.mjs ./nodes/operator/app/database-reliability-actuator.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/infra/catalog ./infra/catalog
+COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/.cogni/repo-spec.yaml ./nodes/operator/.cogni/repo-spec.yaml
 
 # Repo-spec: node-specific DAO config (node_id, chain, governance).
 # Each node MUST copy its own .cogni — NOT root (which is operator's identity).

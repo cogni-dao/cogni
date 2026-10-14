@@ -140,6 +140,8 @@ export type SyncTarget = z.infer<typeof SyncTargetSchema>;
  * - `database-reliability-actuator`: a private control process whose dedicated OpenBao
  *   bucket contains the generated, least-privilege Postgres control DSN and status-read
  *   bearer (tasks 5246/5247). The public operator receives only the latter.
+ * - `database-reliability-readmitter`: a separate human-command process whose bucket
+ *   contains the readmit-only Postgres DSN and narrow command bearer.
  *
  * These are NOT nodes: they receive no node DNS, no node DB, and no NODE_BASELINE_KEYS
  * fan-out. `_node_gets_key` already drops a `service:`-pinned key from every node whose name

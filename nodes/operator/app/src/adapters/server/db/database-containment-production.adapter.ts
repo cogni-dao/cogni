@@ -6,9 +6,11 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { reliabilityStatusV1Schema } from "@cogni/node-contracts";
 import type { Logger } from "pino";
 import postgres, { type Sql } from "postgres";
 import { parse as parseYaml } from "yaml";
+import { RELIABILITY_EVIDENCE_TTL_MS } from "@/features/nodes/reliability-status";
 import type {
   DatabaseCellActionReceipt,
   DatabaseCellCapacity,
@@ -30,7 +32,10 @@ import type {
   DatabaseTier,
   LokiReaderPort,
   ProvisionDatabaseCellInput,
+  ReliabilityReadmitPort,
+  ReliabilityStatusReaderPort,
 } from "@/ports";
+import { EVENT_NAMES } from "@/shared/observability";
 import {
   CherryDatabaseCellAdapter,
   type CherryDatabaseCellConfig,
@@ -370,6 +375,96 @@ function rolesFor(nodeSlug: string): readonly string[] {
   // The as-built per-node roles are app + service. `app_readonly` remains an
   // environment-shared v0 support role, so revoking it would contain every node.
   return [`app_${suffix}`, `service_${suffix}`];
+}
+
+export class HttpReliabilityStatusAdapter
+  implements ReliabilityStatusReaderPort
+{
+  constructor(
+    private readonly config: {
+      readonly baseUrl: string;
+      readonly bearerToken: string;
+      readonly timeoutMs?: number;
+    }
+  ) {}
+
+  async read(
+    input: Parameters<ReliabilityStatusReaderPort["read"]>[0]
+  ): Promise<Awaited<ReturnType<ReliabilityStatusReaderPort["read"]>>> {
+    const url = new URL("/v1/status", this.config.baseUrl);
+    url.searchParams.set("node_id", input.nodeId);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${this.config.bearerToken}` },
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 5_000),
+    });
+    if (!response.ok) {
+      throw new Error(`reliability actuator status failed: ${response.status}`);
+    }
+    const status = reliabilityStatusV1Schema.parse(await response.json());
+    if (
+      status.nodeId !== input.nodeId ||
+      status.slug !== input.nodeSlug ||
+      status.environment !== input.environment
+    ) {
+      throw new Error("reliability actuator returned a cross-node status");
+    }
+    const ageMs = Date.now() - Date.parse(status.observedAt);
+    if (ageMs < -15_000 || ageMs > RELIABILITY_EVIDENCE_TTL_MS) {
+      throw new Error("reliability actuator returned stale status");
+    }
+    return status;
+  }
+}
+
+export class HttpReliabilityReadmitAdapter implements ReliabilityReadmitPort {
+  constructor(
+    private readonly config: {
+      readonly baseUrl: string;
+      readonly bearerToken: string;
+      readonly timeoutMs?: number;
+    }
+  ) {}
+
+  async readmit(
+    input: Parameters<ReliabilityReadmitPort["readmit"]>[0]
+  ): Promise<Awaited<ReturnType<ReliabilityReadmitPort["readmit"]>>> {
+    const url = new URL("/v1/readmit", this.config.baseUrl);
+    url.searchParams.set("node_id", input.nodeId);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.config.bearerToken}`,
+        "x-cogni-actor-id": `human:${input.actorId}`,
+        "x-cogni-incident-id": input.incidentId,
+      },
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 15_000),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `reliability actuator readmit failed: ${response.status}`
+      );
+    }
+    const body = (await response.json()) as {
+      phase?: unknown;
+      incidentId?: unknown;
+      lastTransitionAt?: unknown;
+    };
+    if (body.phase !== "open") {
+      throw new Error("reliability actuator readmit did not open database");
+    }
+    return {
+      phase: body.phase,
+      incidentId: typeof body.incidentId === "string" ? body.incidentId : null,
+      lastTransitionAt:
+        typeof body.lastTransitionAt === "string"
+          ? body.lastTransitionAt
+          : null,
+    };
+  }
 }
 
 export interface ProductionDatabaseContainmentConfig {
@@ -993,8 +1088,8 @@ export class PinoDatabaseContainmentAuditWriter
 
   async append(event: DatabaseContainmentAuditEvent): Promise<void> {
     this.log.info(
-      { event: "database_containment_transition", ...event },
-      "database_containment_transition"
+      { event: EVENT_NAMES.NODE_RELIABILITY_TRANSITION, ...event },
+      EVENT_NAMES.NODE_RELIABILITY_TRANSITION
     );
   }
 }
@@ -1023,7 +1118,7 @@ export class PinoLokiDatabaseContainmentAuditAdapter extends PinoDatabaseContain
     const serviceSelector =
       DATABASE_CONTAINMENT_AUDIT_SERVICES.map(escapeLogQl).join("|");
     const rows = await this.loki.queryRange({
-      query: `{env="${escapeLogQl(this.lokiEnvironment)}",service=~"${serviceSelector}"} | json | event="database_containment_transition" | nodeId="${escapeLogQl(input.nodeId)}" | environment="${escapeLogQl(input.environment)}"`,
+      query: `{env="${escapeLogQl(this.lokiEnvironment)}",service=~"${serviceSelector}"} | json | event="${EVENT_NAMES.NODE_RELIABILITY_TRANSITION}" | nodeId="${escapeLogQl(input.nodeId)}" | environment="${escapeLogQl(input.environment)}"`,
       startNs: String(nowNs - 30n * 24n * 60n * 60n * 1_000_000_000n),
       endNs: String(nowNs),
       limit: 1,

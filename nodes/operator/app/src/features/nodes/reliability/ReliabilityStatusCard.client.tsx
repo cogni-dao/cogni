@@ -13,13 +13,7 @@ import { AlertTriangle, CheckCircle2, ShieldAlert } from "lucide-react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
-import { Button, Card, CardContent, CardHeader, CardTitle } from "@/components";
-
-const ENVIRONMENTS: readonly ReliabilityEnvironment[] = [
-  "candidate-a",
-  "preview",
-  "production",
-];
+import { Card, CardContent, CardHeader, CardTitle } from "@/components";
 
 const STATE_STYLE = {
   healthy: { label: "Healthy", icon: CheckCircle2, className: "text-success" },
@@ -47,11 +41,11 @@ const STATE_STYLE = {
 
 export function ReliabilityStatusCard({
   nodeId,
+  environment,
 }: {
   readonly nodeId: string;
+  readonly environment: ReliabilityEnvironment;
 }): ReactElement {
-  const [environment, setEnvironment] =
-    useState<ReliabilityEnvironment>("production");
   const [status, setStatus] = useState<ReliabilityStatusV1 | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -89,20 +83,7 @@ export function ReliabilityStatusCard({
             {loading ? "Checking" : display.label}
           </span>
         </div>
-        <fieldset className="flex flex-wrap gap-2">
-          <legend className="sr-only">Reliability environment</legend>
-          {ENVIRONMENTS.map((env) => (
-            <Button
-              key={env}
-              type="button"
-              size="sm"
-              variant={environment === env ? "default" : "outline"}
-              onClick={() => setEnvironment(env)}
-            >
-              {env}
-            </Button>
-          ))}
-        </fieldset>
+        <p className="text-muted-foreground text-xs">{environment}</p>
       </CardHeader>
       <CardContent className="space-y-4">
         {!status ? (

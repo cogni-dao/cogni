@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+import type { ReliabilityStatusV1 } from "@cogni/node-contracts";
+
 /** Environments whose database placement is governed by the platform. */
 export type DatabaseEnvironment = "candidate-a" | "preview" | "production";
 export type DatabaseTier = "shared" | "dedicated";
@@ -196,6 +198,8 @@ export interface DatabasePlacementResolverPort {
   resolve(input: {
     readonly nodeSlug: string;
     readonly environment: DatabaseEnvironment;
+    /** Immutable deployed source. Reliability callers must never read mutable main. */
+    readonly sourceRef: string;
   }): Promise<{
     readonly nodeId: string;
     readonly desiredTier: DatabaseTier;
@@ -308,4 +312,28 @@ export interface DatabaseDsnRotationResult {
 
 export interface DatabaseDsnRotationPort {
   rotate(input: DatabaseDsnRotationInput): Promise<DatabaseDsnRotationResult>;
+}
+
+/** Read-only public-app seam to the private reliability controller. */
+export interface ReliabilityStatusReaderPort {
+  read(input: {
+    readonly nodeId: string;
+    readonly nodeSlug: string;
+    readonly environment: DatabaseEnvironment;
+  }): Promise<ReliabilityStatusV1>;
+}
+
+/** Narrow human command seam; actor identity is supplied by authenticated app code. */
+export interface ReliabilityReadmitPort {
+  readmit(input: {
+    readonly nodeId: string;
+    readonly nodeSlug: string;
+    readonly environment: DatabaseEnvironment;
+    readonly actorId: string;
+    readonly incidentId: string;
+  }): Promise<{
+    readonly phase: "open";
+    readonly incidentId: string | null;
+    readonly lastTransitionAt: string | null;
+  }>;
 }

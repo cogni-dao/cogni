@@ -67,6 +67,7 @@ export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   "AKASH_TX_ACTUATOR_TOKEN",
   "DATABASE_RELIABILITY_PASSWORD", // private actuator database role material
   "DATABASE_RELIABILITY_STATUS_TOKEN", // private actuator status/readback auth
+  "DATABASE_RELIABILITY_READMIT_TOKEN", // human-only private actuator command auth
   "CONNECTIONS_ENCRYPTION_KEY", // AES key for BYO-AI connections at rest
   "INTERNAL_OPS_TOKEN", // deploy → governance schedule sync auth
   "METRICS_TOKEN", // Prometheus scrape → /api/metrics auth
