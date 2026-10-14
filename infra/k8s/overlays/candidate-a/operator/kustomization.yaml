@@ -96,6 +96,20 @@ patches:
       - op: replace
         path: /spec/template/spec/initContainers/0/env/0/valueFrom/secretKeyRef/name
         value: operator-migration-secrets
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_ACTUATOR_URL
+          value: http://database-reliability-actuator:8080
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_STATUS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: operator-env-secrets
+              key: DATABASE_RELIABILITY_STATUS_TOKEN
+              optional: true
   # story.5016 Gate 0b: actuator env values are set BY NAME via strategic
   # merge (env lists merge on `name`), never by positional JSON-pointer index.
   # A positional `/env/N/value` patch silently repoints when the base list

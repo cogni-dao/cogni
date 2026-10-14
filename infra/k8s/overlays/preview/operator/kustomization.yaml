@@ -76,6 +76,20 @@ patches:
       - op: replace
         path: /spec/template/spec/initContainers/0/env/0/valueFrom/secretKeyRef/name
         value: operator-migration-secrets
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_ACTUATOR_URL
+          value: http://database-reliability-actuator:8080
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_RELIABILITY_STATUS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: operator-env-secrets
+              key: DATABASE_RELIABILITY_STATUS_TOKEN
+              optional: true
   # No akash-tx-actuator Deployment patch here: preview runs no akash writer
   # (see resources note above — one active writer per shared test wallet).
   # Node-specific ConfigMap values.
