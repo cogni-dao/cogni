@@ -180,11 +180,7 @@
       "compositePrimaryKeys": {
         "database_recoveries_node_id_environment_incident_id_pk": {
           "name": "database_recoveries_node_id_environment_incident_id_pk",
-          "columns": [
-            "node_id",
-            "environment",
-            "incident_id"
-          ]
+          "columns": ["node_id", "environment", "incident_id"]
         }
       },
       "uniqueConstraints": {},
