@@ -1613,17 +1613,57 @@ classify_openbao_writer_login_failure() {
   fi
 }
 
+classify_kubectl_resource_lookup_failure() {
+  local rc="$1" output="$2"
+  if [[ $rc -eq 124 ]] || grep -qiE 'context deadline exceeded|Internal error occurred: Timeout occurred|i/o timeout|TLS handshake timeout|connection (refused|reset)|unable to connect to the server|the server is currently unable to handle the request|Code: (429|500|502|503|504)' <<<"$output"; then
+    printf '%s\n' server_transient
+  elif grep -qiE '\(NotFound\)|not found' <<<"$output"; then
+    printf '%s\n' absent
+  else
+    printf '%s\n' permanent
+  fi
+}
+
 patch_operator_openfga_config() {
   if ! command -v kubectl >/dev/null 2>&1; then
     log_warn "kubectl not found — cannot patch OpenBao operator OpenFGA config"
     return 1
   fi
-  if ! timeout 10 kubectl get sa openbao-operator -n default >/dev/null 2>&1; then
-    log_warn "openbao-operator SA absent — cannot patch OpenBao operator OpenFGA config"
-    return 1
-  fi
 
   local jwt tok path patch_out patch_rc login_out login_rc login_reason max_attempts attempt sleep_seconds
+  local sa_out sa_rc sa_reason
+  for attempt in 1 2 3; do
+    set +e
+    sa_out=$(timeout 10 kubectl get sa openbao-operator -n default -o name 2>&1)
+    sa_rc=$?
+    set -e
+    if [[ $sa_rc -eq 0 ]]; then
+      break
+    fi
+
+    sa_reason="$(classify_kubectl_resource_lookup_failure "$sa_rc" "$sa_out")"
+    case "$sa_reason" in
+      absent)
+        log_warn "openbao-operator SA is absent — cannot patch OpenBao operator OpenFGA config"
+        return 1
+        ;;
+      server_transient)
+        if [[ $attempt -lt 3 ]]; then
+          sleep_seconds=$((attempt * 5))
+          log_warn "OpenBao writer SA lookup hit a control-plane timeout/transient (attempt ${attempt}/3); retrying in ${sleep_seconds}s"
+          sleep "$sleep_seconds"
+          continue
+        fi
+        log_warn "OpenBao writer SA lookup remained unavailable after 3 attempts"
+        return 1
+        ;;
+      *)
+        log_warn "OpenBao writer SA lookup failed permanently; refusing to claim the SA is absent"
+        return 1
+        ;;
+    esac
+  done
+
   tok=""
   max_attempts=1
   for attempt in 1 2 3; do

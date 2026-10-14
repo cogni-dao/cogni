@@ -41,6 +41,20 @@ eval "$classifier"
 [[ "$(classify_openbao_writer_login_failure 2 'Code: 403. permission denied')" == permission_denied_recheck ]]
 [[ "$(classify_openbao_writer_login_failure 7 'malformed role')" == permanent ]]
 
+# A timed-out Kubernetes API lookup is not proof that the service account is
+# absent. Only an explicit NotFound may produce that diagnosis; unknown failures
+# remain fail-closed without inventing state.
+lookup_classifier="$(awk '
+  /^classify_kubectl_resource_lookup_failure\(\) \{/ { capture=1 }
+  capture { print }
+  capture && /^}$/ { exit }
+' scripts/ci/deploy-infra.sh)"
+[[ -n "$lookup_classifier" ]] || { echo "kubectl resource lookup classifier not found" >&2; exit 1; }
+eval "$lookup_classifier"
+[[ "$(classify_kubectl_resource_lookup_failure 124 '')" == server_transient ]]
+[[ "$(classify_kubectl_resource_lookup_failure 1 'Error from server (NotFound): serviceaccounts \"openbao-operator\" not found')" == absent ]]
+[[ "$(classify_kubectl_resource_lookup_failure 1 'forbidden')" == permanent ]]
+
 printf 'services: {}\n' > "$RUNTIME_DIR/docker-compose.yml"
 printf 'LITELLM_MASTER_KEY=test-only\n' > "$RUNTIME_DIR/.env"
 printf 'model_list: []\n' > "$RUNTIME_DIR/configs/litellm.config.yaml"
