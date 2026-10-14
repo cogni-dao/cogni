@@ -177,7 +177,7 @@ while (( SECONDS < deadline )); do
     }
   done
 
-  status=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$RELIABILITY_STATUS_URL")
+  status=$(curl -fsS --max-time 10 -H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER" "$RELIABILITY_STATUS_URL")
   state=$(jq -er '.state' <<<"$status")
   if [[ "$state" == contained ]]; then
     jq -e --argjson share "$noisy_neighbor_share" '

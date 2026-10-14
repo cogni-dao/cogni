@@ -319,6 +319,15 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     expect(replay).toContain(".[0] <= $end + 15");
     expect(replay).toContain("($end - .values[-1][0]) <= 90");
     expect(replay).toContain("queryRef reliability-status-v1.readiness-1m");
+    expect(replay).toContain(
+      'status=$(curl -fsS --max-time 10 -H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER" "$RELIABILITY_STATUS_URL")'
+    );
+    expect(replay).toContain(
+      'target_before=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$target_containment_status_url")'
+    );
+    expect(replay).not.toContain(
+      '-H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$RELIABILITY_STATUS_URL"'
+    );
     expect(replay).toContain('-H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER"');
     expect(replay).not.toContain("RELIABILITY_READMIT_AUTH_HEADER");
     expect(replay).toContain('.phase == "open" and .incidentId == $incidentId');
