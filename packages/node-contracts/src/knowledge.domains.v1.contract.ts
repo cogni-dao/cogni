@@ -6,7 +6,8 @@
  * Purpose: HTTP contract for the knowledge domain registry — GET list with entry counts and POST register (cookie-session only).
  * Scope: Zod schemas for the wire format. Does not contain business logic, I/O, or auth policy.
  * Invariants:
- *   - DOMAIN_HTTP_COOKIE_ONLY (route enforces; contract does not).
+ *   - DOMAIN_HTTP_AUTH_SPLIT (route enforces; contract does not): GET requires
+ *     a session cookie, while POST accepts a session or node bearer.
  *   - DOMAIN_REGISTRATION_IS_STICKY: no DELETE/PUT in v0.
  *   - id is short, slug-shaped (alnum, dash, underscore).
  * Side-effects: none

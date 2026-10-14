@@ -35,8 +35,10 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
     domain: "meta",
     title: "Agent orientation starter for this node",
     entryType: "guide",
+    useWhen:
+      "any agent starts a session on this node for coding, launch, research, governance, validation, or operations",
     content:
-      "**Use when:** any agent starts a session on this node (coding, launch, research, governance, validation, or ops). This is the node's agent operating map: recall it first, then refine it for THIS node and keep it current as the node grows.\n\n" +
+      "This is the node's agent operating map: recall it first, then refine it for THIS node and keep it current as the node grows.\n\n" +
       "This is the starter orientation every Cogni node inherits from the base seed set. Replace the placeholders below with this node's specifics, and write the node's own living map as a sibling `<slug>-agent-orientation` entry (a re-seed may overwrite this starter, so node-owned context belongs in the slug-specific entry).\n\n" +
       "## Where to edit\n" +
       "- App code, node-owned packages, and `.cogni/repo-spec.yaml` (the running app reads its OWN node spec, not the monorepo root). Fill in the real paths for this node.\n\n" +
