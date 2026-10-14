@@ -80,14 +80,17 @@ valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_
 invalid_output="$(jq -cn --arg message 'This is a design question, so the contract does not apply.' \
   --arg scratch "$VALIDATOR_SCRATCH" '{last_assistant_message:$message,scratchpad_dir:$scratch}' | \
   bash "$STOP_VALIDATOR")"
-[[ "$(printf '%s' "$invalid_output" | jq -r '.decision')" == "block" ]] ||
-  fail "status-contract Stop hook accepted prose outside the contract block"
+# Warn-only contract: a breach surfaces as a non-blocking advisory (systemMessage), never decision:block.
+[[ -n "$(printf '%s' "$invalid_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$invalid_output" | jq -r '.decision // empty')" ]] ||
+  fail "status-contract Stop hook did not warn (non-blocking) on prose outside the contract block"
 
 MUTATED_MESSAGE="${VALID_MESSAGE/Keep contract state/Change contract state}"
 mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" \
   '{last_assistant_message:$message,scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
-[[ "$(printf '%s' "$mutated_output" | jq -r '.decision')" == "block" ]] ||
-  fail "status-contract Stop hook accepted mutated Goal state"
+[[ -n "$(printf '%s' "$mutated_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$mutated_output" | jq -r '.decision // empty')" ]] ||
+  fail "status-contract Stop hook did not warn (non-blocking) on mutated Goal state"
 
 ZERO_RESEARCH_MESSAGE='| 🎯 **Goal** | Design a strategy agent |
 |---|---|
@@ -105,8 +108,9 @@ ZERO_RESEARCH_MESSAGE='| 🎯 **Goal** | Design a strategy agent |
 > 👉 **Bottom line —** Approve the proposal.'
 zero_research_output="$(jq -cn --arg message "$ZERO_RESEARCH_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
-[[ "$(printf '%s' "$zero_research_output" | jq -r '.decision')" == "block" ]] ||
-  fail "status-contract Stop hook accepted a substantive zero-research proposal"
+[[ -n "$(printf '%s' "$zero_research_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$zero_research_output" | jq -r '.decision // empty')" ]] ||
+  fail "status-contract Stop hook did not warn (non-blocking) on a substantive zero-research proposal"
 
 PRELIMINARY_STOP_MESSAGE='| 🎯 **Goal** | — |
 |---|---|
@@ -124,8 +128,9 @@ PRELIMINARY_STOP_MESSAGE='| 🎯 **Goal** | — |
 > 🔵 **Bottom line —** Researching the existing substrate.'
 preliminary_stop_output="$(jq -cn --arg message "$PRELIMINARY_STOP_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
-[[ "$(printf '%s' "$preliminary_stop_output" | jq -r '.decision')" == "block" ]] ||
-  fail "status-contract Stop hook allowed an agent-owned preliminary state to become a final reply"
+[[ -n "$(printf '%s' "$preliminary_stop_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$preliminary_stop_output" | jq -r '.decision // empty')" ]] ||
+  fail "status-contract Stop hook did not warn (non-blocking) on an agent-owned preliminary state as a final reply"
 
 grep -Fq "if [[ \"\${CONDUCTOR_IS_LOCAL:-1}\" == \"1\" ]]; then" "$CONDUCTOR_SETUP" ||
   fail "Conductor setup does not guard user-hook installation to local workspaces"
