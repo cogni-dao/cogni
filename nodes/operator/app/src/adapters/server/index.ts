@@ -117,10 +117,15 @@ export {
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
 export {
+  HttpReliabilityRecoveryAdapter,
   PinoDatabaseContainmentAuditWriter,
   PostgresAdminSqlAdapter,
   PostgresDatabaseContainmentControlAdapter,
+  PostgresDatabaseRecoveryBeginAdapter,
   PostgresDatabaseRecoveryProbeAdapter,
+  PostgresDatabaseRecoveryVerificationAdapter,
+  PostgresDatabaseRecoveryWatchdogAdapter,
+  PostgresReadmitSqlAdapter,
   RecoveryLedgerDatabaseContainmentAdapter,
 } from "./db/database-containment-production.adapter";
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";

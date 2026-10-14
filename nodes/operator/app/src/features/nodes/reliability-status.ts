@@ -23,6 +23,9 @@ import type {
   DatabaseContainmentReason,
   DatabaseContainmentStatus,
   DatabaseContainmentStatusPort,
+  DatabaseRecoveryContainmentReceipt,
+  DatabaseRecoveryIncident,
+  DatabaseRecoveryVerificationPort,
   MetricsQueryPort,
 } from "@/ports";
 
@@ -58,6 +61,64 @@ const UNKNOWN_REASON = "required reliability evidence is missing";
 export const EXPECTED_RELIABILITY_REGIONS =
   RELIABILITY_POLICY_V1.expectedRegions;
 export const RELIABILITY_EVIDENCE_TTL_MS = RELIABILITY_POLICY_V1.evidenceTtlMs;
+
+/** Failed current behavior fences immediately; an incomplete window waits only while behavior is healthy. */
+export async function verifyCurrentDatabaseRecovery(input: {
+  readonly incident: DatabaseRecoveryIncident;
+  readonly ledger: DatabaseRecoveryVerificationPort;
+  readonly proveCurrentProduct: () => Promise<boolean>;
+  readonly proveWindow: () => Promise<boolean>;
+}): Promise<DatabaseRecoveryContainmentReceipt | null> {
+  const identity = {
+    nodeId: input.incident.nodeId,
+    environment: input.incident.environment,
+    incidentId: input.incident.incidentId,
+    targetBuildSha: input.incident.targetBuildSha,
+    databaseSystemIdentifier: input.incident.databaseSystemIdentifier,
+  };
+  if (!(await input.proveCurrentProduct().catch(() => false))) {
+    return input.ledger.recontain({
+      ...identity,
+      reason: "recovery_product_evidence_unavailable",
+    });
+  }
+  if (!(await input.proveWindow().catch(() => false))) return null;
+  return input.ledger.complete(identity);
+}
+/** Every regional sample must identify the same deployed artifact and native database. */
+export function hasHealthyScopedRecoveryWindow(input: {
+  readonly nowMs: number;
+  readonly since: string;
+  readonly targetBuildSha: string;
+  readonly databaseSystemIdentifier: string;
+  readonly proofClass: "recovery" | "recovery-product";
+  readonly series: readonly {
+    readonly metric: Readonly<Record<string, string>>;
+    readonly values: readonly [number, string][];
+  }[];
+}): boolean {
+  const sinceMs = Date.parse(input.since);
+  return (
+    /^[0-9a-f]{40}$/.test(input.targetBuildSha) &&
+    /^[1-9][0-9]*$/.test(input.databaseSystemIdentifier) &&
+    Number.isFinite(sinceMs) &&
+    hasHealthyReadmissionWindow(input) &&
+    input.series.every(
+      (series) =>
+        series.metric.proof_class === input.proofClass &&
+        series.metric.target_build_sha === input.targetBuildSha &&
+        series.metric.database_system_identifier ===
+          input.databaseSystemIdentifier &&
+        series.values
+          .slice(-5)
+          .every(
+            ([timestamp, value]) =>
+              timestamp * 1000 >= sinceMs + 60_000 && Number(value) === 1
+          )
+    )
+  );
+}
+
 export function hasHealthyReadmissionWindow(input: {
   readonly nowMs: number;
   readonly series: readonly {

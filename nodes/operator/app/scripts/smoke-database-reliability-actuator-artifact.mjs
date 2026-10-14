@@ -70,6 +70,30 @@ const artifact = readFileSync(
   "dist-database-reliability-actuator/database-reliability-actuator.mjs",
   "utf8"
 );
+const watchdogGuard = spawnSync(
+  process.execPath,
+  ["dist-database-reliability-actuator/database-reliability-actuator.mjs"],
+  {
+    encoding: "utf8",
+    env: {
+      PATH: path,
+      NODE_ENV: "production",
+      DEPLOY_ENVIRONMENT: "candidate-a",
+      APP_BUILD_SHA: "a".repeat(40),
+      DATABASE_RELIABILITY_MODE: "watchdog",
+    },
+  }
+);
+const watchdogOutput = `${watchdogGuard.stdout ?? ""}\n${watchdogGuard.stderr ?? ""}`;
+if (
+  watchdogGuard.status === 0 ||
+  !watchdogOutput.includes("database_reliability_missing_env:POD_UID") ||
+  watchdogOutput.includes("reliability_catalog_controller")
+) {
+  throw new Error(
+    "watchdog packaged entry did not reach its independent identity guard before catalog IO"
+  );
+}
 if (artifact.includes('sourceRef: "main"')) {
   throw new Error("packaged actuator contains a mutable main catalog fallback");
 }

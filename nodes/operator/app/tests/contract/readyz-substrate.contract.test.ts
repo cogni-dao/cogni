@@ -27,16 +27,20 @@ const mocks = vi.hoisted(() => ({
   setBuildInfo: vi.fn(),
   verifySystemTenant: vi.fn(),
   warn: vi.fn(),
+  getContainer: vi.fn(),
+  localRecovery: vi.fn(),
 }));
 
 vi.mock("@/bootstrap/container", () => ({
-  getContainer: () => ({
-    evmOnchainClient: {},
-    knowledgeStorePort: { domainExists: async () => false },
-    paymentRailsActive: false,
-    scheduleControl: {},
-    serviceAccountService: {},
-  }),
+  resolveLocalReliabilityControl: () => mocks.localRecovery(),
+  getContainer: () =>
+    mocks.getContainer() ?? {
+      evmOnchainClient: {},
+      knowledgeStorePort: { domainExists: async () => false },
+      paymentRailsActive: false,
+      scheduleControl: {},
+      serviceAccountService: {},
+    },
 }));
 
 vi.mock("@/bootstrap/healthchecks", () => ({
@@ -128,6 +132,48 @@ describe("GET /readyz async substrate contract", () => {
     mocks.assertKnowledgeStoreConnectivity.mockResolvedValue(undefined);
     mocks.checkEvmRpcConnectivity.mockResolvedValue({ ok: true });
     mocks.verifySystemTenant.mockResolvedValue(undefined);
+  });
+
+  it("serves scoped recovery through the cold private seam while runtime DB construction is fenced", async () => {
+    const sha = "a".repeat(40);
+    const evidence = {
+      status: "healthy",
+      buildSha: sha,
+      databaseSystemIdentifier: "123456",
+      incidentId: "reliability.v1:incident",
+      proofClass: "recovery",
+    };
+    const read = vi.fn().mockResolvedValue(evidence);
+    mocks.getContainer.mockImplementation(() => {
+      throw new Error("runtime role NOLOGIN");
+    });
+    mocks.localRecovery.mockReturnValue({
+      nodeId: "12345678-1234-4234-8234-123456789abc",
+      slug: "operator",
+      buildSha: sha,
+      recoveryReader: { read },
+    });
+    mocks.serverEnv.mockReturnValue({
+      APP_BUILD_SHA: sha,
+      DEPLOY_ENVIRONMENT: "candidate-a",
+    });
+    const response = await GET(request("/readyz?proof=recovery"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(evidence);
+    expect(read).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedBuildSha: sha, proofClass: "recovery" })
+    );
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
+    mocks.getContainer.mockReset();
+  });
+
+  it("rejects unavailable scoped recovery instead of falling back to shallow readiness", async () => {
+    mocks.localRecovery.mockReturnValue({ buildSha: "a".repeat(40) });
+    const response = await GET(request("/readyz?proof=recovery"));
+    expect(response.status).toBe(503);
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
   });
 
   it("keeps the kubelet probe local-only even when every remote probe would stall", async () => {

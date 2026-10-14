@@ -30,18 +30,22 @@ import type {
   DatabaseDsnSecretsWriteResult,
   DatabaseEnvironment,
   DatabaseReadmissionPort,
+  DatabaseRecoveryBeginPort,
   DatabaseRecoveryContainmentReceipt,
   DatabaseRecoveryContainPort,
   DatabaseRecoveryIncident,
   DatabaseRecoveryLedgerReaderPort,
   DatabaseRecoveryProbeObservation,
   DatabaseRecoveryProbePort,
+  DatabaseRecoveryVerificationPort,
+  DatabaseRecoveryWatchdogPort,
   DatabaseRuntimeSecretSyncPort,
   DatabaseStateCellPort,
   DatabaseTier,
   LokiReaderPort,
   ProvisionDatabaseCellInput,
   ReliabilityReadmitPort,
+  ReliabilityRecoveryReaderPort,
   ReliabilityStatusReaderPort,
 } from "@/ports";
 import { EVENT_NAMES } from "@/shared/observability";
@@ -332,6 +336,108 @@ export class PostgresDatabaseContainmentControlAdapter
         input.databaseName,
       ]
     );
+  }
+}
+
+/** LOGIN requires the native independently renewed watchdog capability. */
+export class PostgresDatabaseRecoveryBeginAdapter
+  extends PostgresDatabaseRecoveryReader
+  implements DatabaseRecoveryBeginPort
+{
+  begin(
+    input: Parameters<DatabaseRecoveryBeginPort["begin"]>[0]
+  ): Promise<DatabaseRecoveryContainmentReceipt> {
+    if (!/^human:[a-zA-Z0-9._@:-]{1,120}$/.test(input.actorId)) {
+      throw new Error("database_readmission_requires_human_actor");
+    }
+    return this.result(
+      "SELECT public.begin_database_recovery($1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text) AS incident",
+      [
+        input.nodeId,
+        input.nodeSlug,
+        input.environment,
+        input.incidentId,
+        input.actorId,
+        input.targetBuildSha,
+        input.databaseSystemIdentifier,
+      ]
+    );
+  }
+}
+
+/** Completion never grants LOGIN; the guarded mutation checks the current incident again. */
+export class PostgresDatabaseRecoveryVerificationAdapter
+  extends PostgresDatabaseContainmentControlAdapter
+  implements DatabaseRecoveryVerificationPort
+{
+  complete(
+    input: Parameters<DatabaseRecoveryVerificationPort["complete"]>[0]
+  ): Promise<DatabaseRecoveryContainmentReceipt> {
+    return this.result(
+      "SELECT public.complete_database_recovery($1::uuid,$2::text,$3::text,$4::text,$5::text) AS incident",
+      [
+        input.nodeId,
+        input.environment,
+        input.incidentId,
+        input.targetBuildSha,
+        input.databaseSystemIdentifier,
+      ]
+    );
+  }
+
+  recontain(
+    input: Parameters<DatabaseRecoveryVerificationPort["recontain"]>[0]
+  ): Promise<DatabaseRecoveryContainmentReceipt> {
+    return this.result(
+      "SELECT public.recontain_database_recovery($1::uuid,$2::text,$3::text,$4::text) AS incident",
+      [input.nodeId, input.environment, input.incidentId, input.reason]
+    );
+  }
+}
+
+export class PostgresDatabaseRecoveryWatchdogAdapter
+  implements DatabaseRecoveryWatchdogPort
+{
+  constructor(private readonly sql: DatabaseControlSql) {}
+
+  async tick(
+    input: Parameters<DatabaseRecoveryWatchdogPort["tick"]>[0]
+  ): Promise<Awaited<ReturnType<DatabaseRecoveryWatchdogPort["tick"]>>> {
+    const rows = await this.sql.query<{ receipt: unknown }>(
+      "SELECT public.database_recovery_watchdog_tick($1::text,$2::text) AS receipt",
+      [input.environment, input.ownerId]
+    );
+    if (rows.length !== 1)
+      throw new Error("database_recovery_watchdog_receipt_missing");
+    const receipt = z
+      .object({
+        observedAt: z
+          .string()
+          .datetime({ offset: true })
+          .transform((value) => new Date(value).toISOString()),
+        heartbeatExpiresAt: z
+          .string()
+          .datetime({ offset: true })
+          .transform((value) => new Date(value).toISOString()),
+        transitions: z.array(
+          DatabaseRecoveryIncidentSchema.and(
+            z.object({ transitionApplied: z.literal(true) })
+          )
+        ),
+      })
+      .parse(rows[0]?.receipt);
+    if (
+      Date.parse(receipt.heartbeatExpiresAt) -
+        Date.parse(receipt.observedAt) !==
+        15_000 ||
+      receipt.transitions.some(
+        (row) =>
+          row.environment !== input.environment || row.state !== "recontained"
+      )
+    ) {
+      throw new Error("database_recovery_watchdog_receipt_invalid");
+    }
+    return receipt;
   }
 }
 
@@ -824,6 +930,65 @@ export class HttpReliabilityStatusAdapter
   }
 }
 
+export class HttpReliabilityRecoveryAdapter
+  implements ReliabilityRecoveryReaderPort
+{
+  constructor(
+    private readonly config: {
+      readonly baseUrl: string;
+      readonly bearerToken: string;
+      readonly timeoutMs?: number;
+    }
+  ) {}
+
+  async verify(input: {
+    readonly nodeId: string;
+    readonly nodeSlug: string;
+    readonly environment: DatabaseEnvironment;
+  }): Promise<void> {
+    const url = new URL("/v1/internal/recovery-verify", this.config.baseUrl);
+    url.searchParams.set("node_id", input.nodeId);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.config.bearerToken}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 15_000),
+    });
+    if (!response.ok)
+      throw new Error("database_recovery_verification_unavailable");
+  }
+
+  async read(
+    input: Parameters<ReliabilityRecoveryReaderPort["read"]>[0]
+  ): Promise<Awaited<ReturnType<ReliabilityRecoveryReaderPort["read"]>>> {
+    const url = new URL("/v1/internal/recovery", this.config.baseUrl);
+    url.searchParams.set("node_id", input.nodeId);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    url.searchParams.set("proof_class", input.proofClass);
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${this.config.bearerToken}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 15_000),
+    });
+    if (!response.ok) throw new Error("database_recovery_evidence_unavailable");
+    return z
+      .object({
+        status: z.literal("healthy"),
+        buildSha: z.literal(input.expectedBuildSha),
+        databaseSystemIdentifier: z.string().regex(/^[1-9][0-9]*$/),
+        incidentId: z
+          .string()
+          .regex(/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/),
+        proofClass: z.literal(input.proofClass),
+      })
+      .strict()
+      .parse(await response.json());
+  }
+}
+
 export class HttpReliabilityReadmitAdapter implements ReliabilityReadmitPort {
   constructor(
     private readonly config: {
@@ -850,6 +1015,16 @@ export class HttpReliabilityReadmitAdapter implements ReliabilityReadmitPort {
       signal: AbortSignal.timeout(this.config.timeoutMs ?? 15_000),
     });
     if (!response.ok) {
+      if (
+        response.status === 409 &&
+        z
+          .object({
+            error: z.literal("database_recovery_new_incident_required"),
+          })
+          .safeParse(await response.json().catch(() => null)).success
+      ) {
+        throw new Error("database_recovery_new_incident_required");
+      }
       throw new Error(
         `reliability actuator readmit failed: ${response.status}`
       );
@@ -1451,7 +1626,12 @@ export class PostgresAdminSqlAdapter implements DatabaseControlSql {
     ) {
       throw new Error("database_control_dsn_not_least_privilege");
     }
-    this.client = postgres(adminDsn, { max: 1, prepare: false });
+    this.client = postgres(adminDsn, {
+      max: 1,
+      prepare: false,
+      connect_timeout: 5,
+      connection: { statement_timeout: 5000, lock_timeout: 2000 },
+    });
   }
 
   async query<T extends Record<string, unknown>>(
@@ -1459,6 +1639,10 @@ export class PostgresAdminSqlAdapter implements DatabaseControlSql {
     params: readonly unknown[] = []
   ): Promise<readonly T[]> {
     return this.client.unsafe<T[]>(statement, [...params] as never[]);
+  }
+
+  async close(): Promise<void> {
+    await this.client.end({ timeout: 5 });
   }
 }
 
@@ -1477,7 +1661,12 @@ export class PostgresReadmitSqlAdapter implements DatabaseControlSql {
     ) {
       throw new Error("database_readmit_dsn_not_least_privilege");
     }
-    this.client = postgres(readmitDsn, { max: 1, prepare: false });
+    this.client = postgres(readmitDsn, {
+      max: 1,
+      prepare: false,
+      connect_timeout: 5,
+      connection: { statement_timeout: 5000, lock_timeout: 2000 },
+    });
   }
 
   async query<T extends Record<string, unknown>>(

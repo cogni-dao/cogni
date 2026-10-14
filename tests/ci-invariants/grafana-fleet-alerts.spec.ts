@@ -118,6 +118,60 @@ const HISTORICAL_UID_PREFIX = [
 ] as const;
 
 describe("fleet Serve alert contract (bug.5459)", () => {
+  it("keeps the recovery watchdog independent and validates regional response identity", () => {
+    const watchdogResources = yaml
+      .parseAllDocuments(
+        readFileSync(
+          path.resolve(
+            __dirname,
+            "../../infra/k8s/base/database-reliability-actuator/watchdog.yaml"
+          ),
+          "utf8"
+        )
+      )
+      .map((document) => document.toJSON());
+    const watchdog = watchdogResources.find(
+      (resource) => resource.kind === "Deployment"
+    );
+    const container = watchdog.spec.template.spec.containers[0];
+    expect(watchdog.spec.replicas).toBe(2);
+    expect(container.env).toContainEqual({
+      name: "DATABASE_RELIABILITY_MODE",
+      value: "watchdog",
+    });
+    expect(
+      container.env.map((row: { name: string }) => row.name)
+    ).not.toContain("PROMETHEUS_QUERY_URL");
+    expect(
+      watchdog.spec.template.spec.volumes[0].projected.sources[0].secret.items
+    ).toEqual([
+      {
+        key: "DATABASE_RELIABILITY_ADMIN_URL",
+        path: "DATABASE_RELIABILITY_ADMIN_URL",
+      },
+    ]);
+    const source = readFileSync(RELIABILITY_ACTUATOR_FILE, "utf8");
+    expect(source.indexOf('if (mode === "watchdog")')).toBeLessThan(
+      source.indexOf("await resolveReliabilityController()")
+    );
+    const recoveryChecks = syntheticMain.slice(
+      syntheticMain.indexOf(
+        'resource "grafana_synthetic_monitoring_check" "database_recovery"'
+      )
+    );
+    expect(recoveryChecks).toContain(
+      "local.reliability_policy.expectedRegions"
+    );
+    expect(recoveryChecks).toContain("fail_if_body_not_matches_regexp");
+    for (const identity of [
+      "buildSha",
+      "databaseSystemIdentifier",
+      "proofClass",
+      "incidentId",
+    ])
+      expect(recoveryChecks).toContain(identity);
+  });
+
   it("bounds new Grafana UIDs without changing valid existing identities", () => {
     const warningBlock = syntheticMain.slice(
       syntheticMain.indexOf("for_each = local.reliability_warning_rules")

@@ -304,7 +304,16 @@ export async function POST(
       { ...result, incidentId },
       { status: result.phase === "recovering" ? 202 : 200 }
     );
-  } catch {
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "database_recovery_new_incident_required"
+    ) {
+      return NextResponse.json(
+        { error: error.message, incidentId },
+        { status: 409 }
+      );
+    }
     return NextResponse.json(
       {
         error: "reliability_recovery_unavailable",

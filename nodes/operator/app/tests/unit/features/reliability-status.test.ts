@@ -6,10 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   evaluateReliabilityPolicy,
   hasHealthyReadmissionWindow,
+  hasHealthyScopedRecoveryWindow,
   isReadmissionRuntimeReady,
   isReliabilitySweepReady,
   reconcileReliabilityContainment,
   runReliabilitySweep,
+  verifyCurrentDatabaseRecovery,
 } from "@/features/nodes/reliability-status";
 import type { DatabaseContainmentPort, MetricsQueryPort } from "@/ports";
 
@@ -188,6 +190,61 @@ describe("ReliabilityStatusV1 policy", () => {
     ).toBe(false);
   });
 
+  it("requires five complete minutes in exactly two regions at the same SHA and database", () => {
+    const nowMs = Date.now();
+    const nowSeconds = Math.floor(nowMs / 1000);
+    const input = {
+      nowMs,
+      since: new Date((nowSeconds - 300) * 1000).toISOString(),
+      targetBuildSha: "a".repeat(40),
+      databaseSystemIdentifier: "123456",
+      proofClass: "recovery" as const,
+      series: ["Frankfurt", "Ohio"].map((probe) => ({
+        metric: {
+          probe,
+          target_build_sha: "a".repeat(40),
+          database_system_identifier: "123456",
+          proof_class: "recovery",
+        },
+        values: Array.from(
+          { length: 5 },
+          (_, i) => [nowSeconds - (4 - i) * 60, "1"] as [number, string]
+        ),
+      })),
+    };
+    expect(hasHealthyScopedRecoveryWindow(input)).toBe(true);
+    expect(
+      hasHealthyScopedRecoveryWindow({
+        ...input,
+        since: new Date((nowSeconds - 299) * 1000).toISOString(),
+      })
+    ).toBe(false);
+    expect(
+      hasHealthyScopedRecoveryWindow({
+        ...input,
+        targetBuildSha: "b".repeat(40),
+      })
+    ).toBe(false);
+    expect(
+      hasHealthyScopedRecoveryWindow({
+        ...input,
+        databaseSystemIdentifier: "999",
+      })
+    ).toBe(false);
+    expect(
+      hasHealthyScopedRecoveryWindow({
+        ...input,
+        proofClass: "recovery-product",
+      })
+    ).toBe(false);
+    expect(
+      hasHealthyScopedRecoveryWindow({
+        ...input,
+        series: [...input.series, ...input.series],
+      })
+    ).toBe(false);
+  });
+
   it("keeps the readmitter unready when sweep status is unreachable", async () => {
     const target = {
       nodeId: ROUTE_NODE_ID,
@@ -213,6 +270,69 @@ describe("ReliabilityStatusV1 policy", () => {
         status,
       })
     ).resolves.toBe(false);
+  });
+
+  it("fences failed product behavior before considering its five-minute window", async () => {
+    const incident = {
+      nodeId: ROUTE_NODE_ID,
+      environment: "candidate-a",
+      incidentId: "reliability.v1:test",
+      targetBuildSha: ROUTE_BUILD_SHA,
+      databaseSystemIdentifier: "12345",
+    } as import("@/ports").DatabaseRecoveryIncident;
+    const recontain = vi
+      .fn()
+      .mockResolvedValue({ transitionApplied: true, state: "recontained" });
+    const complete = vi.fn();
+    const window = vi.fn();
+    const ledger = {
+      recontain,
+      complete,
+      current: vi.fn(),
+      listPending: vi.fn(),
+    };
+    await expect(
+      verifyCurrentDatabaseRecovery({
+        incident,
+        ledger,
+        proveCurrentProduct: async () => false,
+        proveWindow: window,
+      })
+    ).resolves.toMatchObject({ state: "recontained" });
+    expect(recontain).toHaveBeenCalledWith(
+      expect.objectContaining({
+        incidentId: incident.incidentId,
+        reason: "recovery_product_evidence_unavailable",
+      })
+    );
+    expect(window).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("waits on an incomplete window while current product behavior remains healthy", async () => {
+    const incident = {
+      nodeId: ROUTE_NODE_ID,
+      environment: "candidate-a",
+      incidentId: "reliability.v1:test",
+      targetBuildSha: ROUTE_BUILD_SHA,
+      databaseSystemIdentifier: "12345",
+    } as import("@/ports").DatabaseRecoveryIncident;
+    const ledger = {
+      recontain: vi.fn(),
+      complete: vi.fn(),
+      current: vi.fn(),
+      listPending: vi.fn(),
+    };
+    await expect(
+      verifyCurrentDatabaseRecovery({
+        incident,
+        ledger,
+        proveCurrentProduct: async () => true,
+        proveWindow: async () => false,
+      })
+    ).resolves.toBeNull();
+    expect(ledger.recontain).not.toHaveBeenCalled();
+    expect(ledger.complete).not.toHaveBeenCalled();
   });
 
   it("fails closed when any required signal is missing", () => {

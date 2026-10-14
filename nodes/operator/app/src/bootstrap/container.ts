@@ -134,6 +134,7 @@ import {
 } from "@/adapters/server/ai/providers";
 import {
   HttpReliabilityReadmitAdapter,
+  HttpReliabilityRecoveryAdapter,
   HttpReliabilityStatusAdapter,
 } from "@/adapters/server/db/database-containment-production.adapter";
 import {
@@ -221,6 +222,7 @@ import type {
   PaymentRailGuardPort,
   ReceiptDelivery,
   ReliabilityReadmitPort,
+  ReliabilityRecoveryReaderPort,
   ReliabilityStatusReaderPort,
   RunStreamPort,
   ServiceAccountService,
@@ -445,6 +447,7 @@ export function resolveLocalReliabilityControl(): {
   readonly buildSha: string | null;
   readonly authorization: AuthorizationPort | undefined;
   readonly statusReader: ReliabilityStatusReaderPort | undefined;
+  readonly recoveryReader: ReliabilityRecoveryReaderPort | undefined;
   readonly readmit: ReliabilityReadmitPort | undefined;
 } {
   const env = serverEnv();
@@ -474,6 +477,14 @@ export function resolveLocalReliabilityControl(): {
       env.DATABASE_RELIABILITY_ACTUATOR_URL &&
       env.DATABASE_RELIABILITY_STATUS_TOKEN
         ? new HttpReliabilityStatusAdapter({
+            baseUrl: env.DATABASE_RELIABILITY_ACTUATOR_URL,
+            bearerToken: env.DATABASE_RELIABILITY_STATUS_TOKEN,
+          })
+        : undefined,
+    recoveryReader:
+      env.DATABASE_RELIABILITY_ACTUATOR_URL &&
+      env.DATABASE_RELIABILITY_STATUS_TOKEN
+        ? new HttpReliabilityRecoveryAdapter({
             baseUrl: env.DATABASE_RELIABILITY_ACTUATOR_URL,
             bearerToken: env.DATABASE_RELIABILITY_STATUS_TOKEN,
           })

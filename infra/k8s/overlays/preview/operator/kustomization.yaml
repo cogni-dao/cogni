@@ -43,6 +43,22 @@ images:
 
 patches:
   - target:
+      kind: Deployment
+      name: database-reliability-watchdog
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: database-reliability-watchdog
+      spec:
+        template:
+          spec:
+            containers:
+              - name: watchdog
+                env:
+                  - name: DEPLOY_ENVIRONMENT
+                    value: preview
+  - target:
       kind: ExternalSecret
       name: migration-secrets
     patch: |

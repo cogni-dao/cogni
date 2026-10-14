@@ -20,22 +20,31 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import {
+  HttpReliabilityRecoveryAdapter,
   MimirMetricsAdapter,
   PinoDatabaseContainmentAuditWriter,
   PostgresAdminSqlAdapter,
-  PostgresDatabaseContainmentControlAdapter,
+  PostgresDatabaseRecoveryBeginAdapter,
   PostgresDatabaseRecoveryProbeAdapter,
+  PostgresDatabaseRecoveryVerificationAdapter,
+  PostgresReadmitSqlAdapter,
   RecoveryLedgerDatabaseContainmentAdapter,
 } from "@/adapters/server";
 import {
+  hasHealthyScopedRecoveryWindow,
   isReliabilitySweepReady,
   RELIABILITY_EVIDENCE_TTL_MS,
   type ReliabilityTarget,
   runReliabilitySweep,
+  verifyCurrentDatabaseRecovery,
 } from "@/features/nodes/reliability-status";
-import type {} from "@/ports";
+import type {
+  DatabaseRecoveryIncident,
+  ReliabilityRecoveryCheck,
+} from "@/ports";
 import { hostForEnv } from "@/shared/node-registry/deploy-hosts";
 import { EVENT_NAMES } from "@/shared/observability";
+import { runDatabaseRecoveryWatchdog } from "./database-recovery-watchdog";
 
 const SWEEP_INTERVAL_MS = 60_000;
 const CREDENTIAL_DIR = "/var/run/secrets/database-reliability";
@@ -43,7 +52,7 @@ const CATALOG_DIR = "/app/infra/catalog";
 // biome-ignore lint/style/noProcessEnv: standalone composition root validates its minimal env
 const runtimeEnv = process.env;
 type Environment = "candidate-a" | "preview" | "production";
-type RuntimeMode = "sweep" | "readmit";
+type RuntimeMode = "sweep" | "readmit" | "watchdog";
 
 const ReliabilityControllerCatalogSchema = z.object({
   type: z.literal("node"),
@@ -120,7 +129,8 @@ function parseBuildSha(value: string): string {
 }
 
 function parseRuntimeMode(value: string): RuntimeMode {
-  if (value === "sweep" || value === "readmit") return value;
+  if (value === "sweep" || value === "readmit" || value === "watchdog")
+    return value;
   throw new Error("database_reliability_mode_invalid");
 }
 
@@ -136,6 +146,15 @@ function authorized(header: string | undefined, token: string): boolean {
 const environment = parseEnvironment(requiredEnv("DEPLOY_ENVIRONMENT"));
 const buildSha = parseBuildSha(requiredEnv("APP_BUILD_SHA"));
 const mode = parseRuntimeMode(requiredEnv("DATABASE_RELIABILITY_MODE"));
+if (mode === "watchdog") {
+  await runDatabaseRecoveryWatchdog({
+    environment,
+    buildSha,
+    ownerId: requiredEnv("POD_UID"),
+    adminDsn: await credential("DATABASE_RELIABILITY_ADMIN_URL"),
+  });
+  throw new Error("database_recovery_watchdog_exited");
+}
 const reliabilityController = await resolveReliabilityController();
 const port = mode === "sweep" ? 8080 : 8081;
 const log = pino({ level: runtimeEnv.LOG_LEVEL ?? "info" }).child({
@@ -176,9 +195,24 @@ const recoveryProbes =
     : null;
 const recoveryVerifier =
   mode === "sweep" && adminDsn
-    ? new PostgresDatabaseContainmentControlAdapter(
+    ? new PostgresDatabaseRecoveryVerificationAdapter(
         new PostgresAdminSqlAdapter(adminDsn)
       )
+    : null;
+const recoveryBegin =
+  mode === "readmit"
+    ? new PostgresDatabaseRecoveryBeginAdapter(
+        new PostgresReadmitSqlAdapter(
+          await credential("DATABASE_RELIABILITY_READMIT_URL")
+        )
+      )
+    : null;
+const recoveryReader =
+  mode === "readmit"
+    ? new HttpReliabilityRecoveryAdapter({
+        baseUrl: requiredEnv("DATABASE_RELIABILITY_ACTUATOR_URL"),
+        bearerToken: statusToken,
+      })
     : null;
 const containment =
   recoveryProbes && recoveryVerifier
@@ -210,6 +244,184 @@ const statusKey = (target: Pick<ReliabilityTarget, "environment" | "slug">) =>
 
 function targetOrigin(target: ReliabilityTarget): string {
   return `https://${hostForEnv(target.slug, target.slug === reliabilityController.slug, target.environment, rootDomain)}`;
+}
+
+async function recoveryCheck(
+  target: ReliabilityTarget,
+  proofClass: ReliabilityRecoveryCheck["proofClass"]
+): Promise<ReliabilityRecoveryCheck> {
+  if (!recoveryProbes || !recoveryVerifier)
+    throw new Error("database_recovery_probe_unavailable");
+  const binding = recoveryProbes.bindingFor({
+    nodeId: target.nodeId,
+    nodeSlug: target.slug,
+    environment: target.environment,
+  });
+  const product =
+    proofClass === "recovery-product"
+      ? fetch(new URL("/readyz?deep=1", targetOrigin(target)), {
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
+        }).then(async (response) => {
+          if (
+            !response.ok ||
+            !z
+              .object({
+                status: z.literal("healthy"),
+                buildSha: z.literal(target.sourceSha),
+              })
+              .safeParse(await response.json()).success
+          ) {
+            throw new Error("database_recovery_product_unproved");
+          }
+        })
+      : Promise.resolve();
+  const [observation, incident, actualSha, substrate] = await Promise.all([
+    recoveryProbes.observe({
+      nodeId: target.nodeId,
+      nodeSlug: target.slug,
+      environment: target.environment,
+    }),
+    recoveryVerifier.current(target),
+    readTargetBuildSha(target),
+    metrics.queryReliabilitySnapshot({
+      nodeSlug: target.slug,
+      environment: target.environment,
+      databaseTier: target.desiredTier,
+      budgetProfile: target.budgetProfile,
+      substrateHost: binding.substrateHost,
+    }),
+    product,
+  ]);
+  if (
+    !incident ||
+    incident.targetBuildSha !== target.sourceSha ||
+    actualSha !== incident.targetBuildSha ||
+    incident.databaseSystemIdentifier !== observation.systemIdentifier ||
+    !observation.systemTenantExists
+  ) {
+    throw new Error("database_recovery_identity_unproved");
+  }
+  const age = Date.now() - Date.parse(observation.observedAt);
+  if (
+    age < -15_000 ||
+    age > RELIABILITY_EVIDENCE_TTL_MS ||
+    substrate.evidenceScope !== "node" ||
+    substrate.ioPressurePct === null ||
+    substrate.ioPressurePct >= 10 ||
+    substrate.connectionPct === null ||
+    substrate.connectionPct >= 60 ||
+    substrate.memoryHeadroomPct === null ||
+    substrate.memoryHeadroomPct <= 25 ||
+    substrate.diskHeadroomPct === null ||
+    substrate.diskHeadroomPct <= 25
+  ) {
+    throw new Error("database_recovery_substrate_unproved");
+  }
+  if (proofClass === "recovery") {
+    if (
+      incident.state !== "contained" ||
+      !observation.runtimeRolesNoLogin ||
+      observation.activeRuntimeSessions !== 0
+    ) {
+      throw new Error("database_recovery_runtime_not_fenced");
+    }
+  } else {
+    if (
+      !["recovering", "readmitted"].includes(incident.state) ||
+      !observation.appRolesCanLogin
+    ) {
+      throw new Error("database_recovery_runtime_not_open");
+    }
+  }
+  return {
+    status: "healthy",
+    buildSha: incident.targetBuildSha,
+    databaseSystemIdentifier: observation.systemIdentifier,
+    incidentId: incident.incidentId,
+    proofClass,
+  };
+}
+
+async function assertRecoveryWindow(
+  target: ReliabilityTarget,
+  incident: DatabaseRecoveryIncident,
+  proofClass: ReliabilityRecoveryCheck["proofClass"]
+): Promise<void> {
+  const end = new Date();
+  const result = await metrics.queryRange({
+    query: `min_over_time(probe_success{environment="${target.environment}",node_slug="${target.slug}",proof_class="${proofClass}",target_build_sha="${incident.targetBuildSha}",database_system_identifier="${incident.databaseSystemIdentifier}"}[1m])`,
+    start: new Date(end.getTime() - 5 * 60_000),
+    end,
+    step: "60s",
+  });
+  if (
+    !hasHealthyScopedRecoveryWindow({
+      nowMs: end.getTime(),
+      since:
+        proofClass === "recovery"
+          ? incident.containedAt
+          : (incident.startedAt ?? ""),
+      targetBuildSha: incident.targetBuildSha,
+      databaseSystemIdentifier: incident.databaseSystemIdentifier,
+      proofClass,
+      series: result.result,
+    })
+  ) {
+    throw new Error("database_readmission_evidence_incomplete");
+  }
+}
+
+let verificationRunning = false;
+async function verifyPendingRecoveries(onlyNodeId?: string): Promise<void> {
+  if (!recoveryVerifier || verificationRunning) return;
+  verificationRunning = true;
+  try {
+    for (const incident of await recoveryVerifier.listPending({
+      environment,
+    })) {
+      if (onlyNodeId && incident.nodeId !== onlyNodeId) continue;
+      const target = currentTargets.get(
+        `${incident.environment}/${incident.nodeSlug}`
+      );
+      try {
+        const result = await verifyCurrentDatabaseRecovery({
+          incident,
+          ledger: recoveryVerifier,
+          proveCurrentProduct: async () => {
+            if (!target || target.sourceSha !== incident.targetBuildSha)
+              return false;
+            await recoveryCheck(target, "recovery-product");
+            return true;
+          },
+          proveWindow: async () => {
+            if (!target) return false;
+            await assertRecoveryWindow(target, incident, "recovery-product");
+            return true;
+          },
+        });
+        if (result?.transitionApplied)
+          log.info(
+            {
+              event: EVENT_NAMES.NODE_RELIABILITY_TRANSITION,
+              action:
+                result.state === "readmitted" ? "readmitted" : "recontained",
+              ...result,
+              occurredAt: result.verifiedAt ?? new Date().toISOString(),
+            },
+            EVENT_NAMES.NODE_RELIABILITY_TRANSITION
+          );
+      } catch (error) {
+        log.warn({
+          event: "feature.node_reliability.recovery.unproved",
+          incidentId: incident.incidentId,
+          error,
+        });
+      }
+    }
+  } finally {
+    verificationRunning = false;
+  }
 }
 
 async function readTargetBuildSha(
@@ -342,6 +554,7 @@ async function sweep(): Promise<void> {
       catalogTargets.map((target) => [statusKey(target), target] as const)
     );
     currentTargets = nextTargets;
+    await verifyPendingRecoveries();
     for (const key of statuses.keys()) {
       if (!nextTargets.has(key)) statuses.delete(key);
     }
@@ -437,11 +650,20 @@ const server = createServer(async (request, response) => {
       request.method === "GET" && url.pathname === "/v1/internal/status";
     const isSubstrate =
       request.method === "GET" && url.pathname === "/v1/internal/substrate";
+    const isRecovery =
+      request.method === "GET" && url.pathname === "/v1/internal/recovery";
+    const isRecoveryVerify =
+      request.method === "POST" &&
+      url.pathname === "/v1/internal/recovery-verify";
     const isReadmit =
       request.method === "POST" && url.pathname === "/v1/readmit";
     const routeAllowed =
       (mode === "sweep" &&
-        (isPublicStatus || isInternalStatus || isSubstrate)) ||
+        (isPublicStatus ||
+          isInternalStatus ||
+          isSubstrate ||
+          isRecovery ||
+          isRecoveryVerify)) ||
       (mode === "readmit" && isReadmit);
     if (!routeAllowed) {
       response.writeHead(404).end("not found");
@@ -470,6 +692,23 @@ const server = createServer(async (request, response) => {
     if (!target || target.nodeId !== nodeId) {
       response.writeHead(503, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "reliability_status_unavailable" }));
+      return;
+    }
+    if (isRecovery) {
+      const proof = url.searchParams.get("proof_class");
+      if (proof !== "recovery" && proof !== "recovery-product") {
+        response.writeHead(400).end("invalid recovery proof class");
+        return;
+      }
+      const evidence = await recoveryCheck(target, proof);
+      response
+        .writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify(evidence));
+      return;
+    }
+    if (isRecoveryVerify) {
+      await verifyPendingRecoveries(target.nodeId);
+      response.writeHead(202).end("verification requested");
       return;
     }
     if (isSubstrate) {
@@ -552,13 +791,95 @@ const server = createServer(async (request, response) => {
       response.writeHead(400).end("invalid readmission attribution");
       return;
     }
-    // The first shared proof leaves the incident fenced. LOGIN remains unavailable
-    // until independent deadline enforcement and the scoped regional protocol are proven.
-    response.writeHead(503, { "content-type": "application/json" });
-    response.end(
+    if (!recoveryBegin || !recoveryReader)
+      throw new Error("database_recovery_unavailable");
+    const current = await recoveryBegin.current(target);
+    if (
+      !current ||
+      current.incidentId !== incidentId ||
+      current.state === "recontained"
+    ) {
+      response
+        .writeHead(409, { "content-type": "application/json" })
+        .end(
+          JSON.stringify({ error: "database_recovery_new_incident_required" })
+        );
+      return;
+    }
+    if (current.state === "recovering" || current.state === "readmitted") {
+      response
+        .writeHead(current.state === "recovering" ? 202 : 200, {
+          "content-type": "application/json",
+        })
+        .end(
+          JSON.stringify({
+            phase: current.state === "recovering" ? "recovering" : "open",
+            incidentId,
+            deadlineAt: current.deadlineAt,
+            lastTransitionAt: current.verifiedAt ?? current.startedAt,
+          })
+        );
+      return;
+    }
+    await assertRecoveryWindow(target, current, "recovery");
+    const evidence = await recoveryReader.read({
+      nodeId: target.nodeId,
+      nodeSlug: target.slug,
+      environment,
+      expectedBuildSha: current.targetBuildSha,
+      proofClass: "recovery",
+    });
+    if (
+      target.sourceSha !== current.targetBuildSha ||
+      evidence.incidentId !== current.incidentId ||
+      evidence.databaseSystemIdentifier !== current.databaseSystemIdentifier
+    )
+      throw new Error("database_recovery_identity_unproved");
+    const result = await recoveryBegin.begin({
+      nodeId: target.nodeId,
+      nodeSlug: target.slug,
+      environment,
+      incidentId,
+      actorId,
+      targetBuildSha: current.targetBuildSha,
+      databaseSystemIdentifier: current.databaseSystemIdentifier,
+    });
+    if (result.transitionApplied)
+      log.info(
+        {
+          event: EVENT_NAMES.NODE_RELIABILITY_TRANSITION,
+          action: "recovering",
+          ...result,
+          occurredAt: result.startedAt,
+        },
+        EVENT_NAMES.NODE_RELIABILITY_TRANSITION
+      );
+    // The readmitter requests observation only; the actuator owns every fence/completion decision.
+    await recoveryReader.verify({
+      nodeId: target.nodeId,
+      nodeSlug: target.slug,
+      environment,
+    });
+    const observed = await recoveryBegin.current(target);
+    if (
+      !observed ||
+      observed.incidentId !== result.incidentId ||
+      observed.state === "recontained"
+    ) {
+      response.writeHead(503, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          error: "database_recovery_product_unproved",
+          incidentId,
+        })
+      );
+      return;
+    }
+    response.writeHead(202, { "content-type": "application/json" }).end(
       JSON.stringify({
-        error: "database_recovery_deadline_owner_unproven",
+        phase: "recovering",
         incidentId,
+        deadlineAt: result.deadlineAt,
+        lastTransitionAt: result.startedAt,
       })
     );
   } catch (error) {
@@ -588,11 +909,25 @@ server.listen(port, "0.0.0.0", () => {
 });
 const interval =
   mode === "sweep" ? setInterval(() => void sweep(), SWEEP_INTERVAL_MS) : null;
+const verificationInterval =
+  mode === "sweep"
+    ? setInterval(
+        () =>
+          void verifyPendingRecoveries().catch((error) =>
+            log.error({
+              event: "feature.node_reliability.recovery.verification_failed",
+              error,
+            })
+          ),
+        5_000
+      )
+    : null;
 
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
   if (interval) clearInterval(interval);
+  if (verificationInterval) clearInterval(verificationInterval);
   log.info(
     { event: EVENT_NAMES.NODE_RELIABILITY_ACTUATOR_STOPPING, signal },
     EVENT_NAMES.NODE_RELIABILITY_ACTUATOR_STOPPING

@@ -324,6 +324,50 @@ export interface DatabaseRecoveryContainPort {
   ): Promise<DatabaseRecoveryContainmentReceipt>;
 }
 
+/** Human-command capability; PostgreSQL persists the immutable intent before LOGIN. */
+export interface DatabaseRecoveryBeginPort
+  extends DatabaseRecoveryLedgerReaderPort {
+  begin(
+    input: DatabaseRecoveryIdentity & {
+      readonly nodeSlug: string;
+      readonly actorId: string;
+    }
+  ): Promise<DatabaseRecoveryContainmentReceipt>;
+}
+
+/** Product proof can complete an existing recovery; failure can only recontain it. */
+export interface DatabaseRecoveryVerificationPort
+  extends DatabaseRecoveryLedgerReaderPort {
+  complete(
+    input: DatabaseRecoveryIdentity
+  ): Promise<DatabaseRecoveryContainmentReceipt>;
+  recontain(
+    input: DatabaseRecoveryIdentity & {
+      readonly reason: string;
+    }
+  ): Promise<DatabaseRecoveryContainmentReceipt>;
+}
+
+export interface ReliabilityRecoveryCheck {
+  readonly status: "healthy";
+  readonly buildSha: string;
+  readonly databaseSystemIdentifier: string;
+  readonly incidentId: string;
+  readonly proofClass: "recovery" | "recovery-product";
+}
+
+/** Native enumeration/fencing and heartbeat commit together; no self-asserted liveness. */
+export interface DatabaseRecoveryWatchdogPort {
+  tick(input: {
+    readonly environment: DatabaseEnvironment;
+    readonly ownerId: string;
+  }): Promise<{
+    readonly observedAt: string;
+    readonly heartbeatExpiresAt: string;
+    readonly transitions: readonly DatabaseRecoveryContainmentReceipt[];
+  }>;
+}
+
 export interface DatabaseDsnPair {
   readonly app: string;
   readonly service: string;
@@ -401,6 +445,16 @@ export interface ReliabilityStatusReaderPort {
     readonly nodeSlug: string;
     readonly environment: DatabaseEnvironment;
   }): Promise<ReliabilityStatusV1>;
+}
+
+export interface ReliabilityRecoveryReaderPort {
+  read(input: {
+    readonly nodeId: string;
+    readonly nodeSlug: string;
+    readonly environment: DatabaseEnvironment;
+    readonly expectedBuildSha: string;
+    readonly proofClass: ReliabilityRecoveryCheck["proofClass"];
+  }): Promise<ReliabilityRecoveryCheck>;
 }
 
 export interface ReliabilityReadmitPort {

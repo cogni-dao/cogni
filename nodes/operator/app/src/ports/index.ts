@@ -164,6 +164,7 @@ export type {
   DatabaseEnvironment,
   DatabasePlacementResolverPort,
   DatabaseReadmissionPort,
+  DatabaseRecoveryBeginPort,
   DatabaseRecoveryContainmentReceipt,
   DatabaseRecoveryContainPort,
   DatabaseRecoveryIdentity,
@@ -171,11 +172,15 @@ export type {
   DatabaseRecoveryLedgerReaderPort,
   DatabaseRecoveryProbeObservation,
   DatabaseRecoveryProbePort,
+  DatabaseRecoveryVerificationPort,
+  DatabaseRecoveryWatchdogPort,
   DatabaseRuntimeSecretSyncPort,
   DatabaseStateCellPort,
   DatabaseTier,
   ProvisionDatabaseCellInput,
   ReliabilityReadmitPort,
+  ReliabilityRecoveryCheck,
+  ReliabilityRecoveryReaderPort,
   ReliabilityStatusReaderPort,
 } from "./database-containment.port";
 export { DATABASE_CELL_METRIC_LABEL_KEYS } from "./database-containment.port";

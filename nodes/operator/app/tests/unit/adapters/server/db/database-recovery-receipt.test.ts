@@ -3,9 +3,11 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  HttpReliabilityRecoveryAdapter,
   PostgresDatabaseContainmentControlAdapter,
   PostgresDatabaseRecoveryProbeAdapter,
   PostgresDatabaseRecoveryReader,
+  PostgresDatabaseRecoveryWatchdogAdapter,
   RecoveryLedgerDatabaseContainmentAdapter,
 } from "@/adapters/server/db/database-containment-production.adapter";
 import type {
@@ -44,6 +46,98 @@ const readerFor = (receipt: unknown) =>
   });
 
 describe("native durable incident receipts", () => {
+  it("requires a completed native watchdog enforcement transaction and bounded heartbeat", async () => {
+    const transition = {
+      ...containedReceipt,
+      state: "recontained",
+      transitionApplied: true,
+    };
+    const receipt = {
+      observedAt: containedReceipt.containedAt,
+      heartbeatExpiresAt: "2026-10-14T21:00:15+00:00",
+      transitions: [transition],
+    };
+    const query = vi.fn().mockResolvedValue([{ receipt }]);
+    const watchdog = new PostgresDatabaseRecoveryWatchdogAdapter({ query });
+    await expect(
+      watchdog.tick({
+        environment: "candidate-a",
+        ownerId: containedReceipt.nodeId,
+      })
+    ).resolves.toMatchObject({
+      transitions: [
+        expect.objectContaining({
+          state: "recontained",
+          transitionApplied: true,
+        }),
+      ],
+    });
+    expect(query).toHaveBeenCalledWith(
+      "SELECT public.database_recovery_watchdog_tick($1::text,$2::text) AS receipt",
+      ["candidate-a", containedReceipt.nodeId]
+    );
+    query.mockResolvedValue([
+      {
+        receipt: {
+          ...receipt,
+          heartbeatExpiresAt: "2026-10-14T21:01:00+00:00",
+        },
+      },
+    ]);
+    await expect(
+      watchdog.tick({
+        environment: "candidate-a",
+        ownerId: containedReceipt.nodeId,
+      })
+    ).rejects.toThrow("database_recovery_watchdog_receipt_invalid");
+    query.mockResolvedValue([
+      {
+        receipt: {
+          ...receipt,
+          transitions: [{ ...transition, environment: "production" }],
+        },
+      },
+    ]);
+    await expect(
+      watchdog.tick({
+        environment: "candidate-a",
+        ownerId: containedReceipt.nodeId,
+      })
+    ).rejects.toThrow("database_recovery_watchdog_receipt_invalid");
+  });
+
+  it("rejects recovery bodies at another SHA even when HTTP and labels claim success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "healthy",
+          buildSha: "b".repeat(40),
+          databaseSystemIdentifier: "123456",
+          incidentId: containedReceipt.incidentId,
+          proofClass: "recovery",
+        }),
+        { status: 200 }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const reader = new HttpReliabilityRecoveryAdapter({
+        baseUrl: "http://private.invalid",
+        bearerToken: "private-test-token",
+      });
+      await expect(
+        reader.read({
+          nodeId: containedReceipt.nodeId,
+          nodeSlug: "operator",
+          environment: "candidate-a",
+          expectedBuildSha: "a".repeat(40),
+          proofClass: "recovery",
+        })
+      ).rejects.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("reads initial NOLOGIN containment with nullable LOGIN timestamps", async () => {
     const reader = readerFor(containedReceipt);
     await expect(reader.current(containedReceipt)).resolves.toMatchObject({

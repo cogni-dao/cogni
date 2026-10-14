@@ -89,6 +89,14 @@ locals {
     if target.database_tier == "shared" && target.budget_profile != null
   }
 
+  recovery_targets = merge([
+    for slot, receipt in var.recovery_receipts : {
+      for proof_class in ["recovery", "recovery-product"] : "${slot}/${proof_class}" => merge(
+        local.environment_targets[slot], receipt, { proof_class = proof_class }
+      )
+    }
+  ]...)
+
   public_probe_ids = [
     for probe_name in var.public_probe_names :
     data.grafana_synthetic_monitoring_probes.public.probes[probe_name]
@@ -229,6 +237,43 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
       valid_status_codes  = [200]
       fail_if_body_not_matches_regexp = [
         "\\\"status\\\"[[:space:]]*:[[:space:]]*\\\"healthy\\\"",
+      ]
+    }
+  }
+}
+
+resource "grafana_synthetic_monitoring_check" "database_recovery" {
+  provider           = grafana.sm
+  for_each           = local.recovery_targets
+  job                = "cogni-${each.value.environment}-${each.value.node_slug}-${each.value.proof_class}"
+  target             = "https://${each.value.host}/readyz?proof=${each.value.proof_class}"
+  enabled            = true
+  probes             = [for region in local.reliability_policy.expectedRegions : data.grafana_synthetic_monitoring_probes.public.probes[region]]
+  frequency          = 60000
+  timeout            = 10000
+  basic_metrics_only = true
+  folder_uid         = data.grafana_folder.reliability.uid
+  labels = {
+    environment                = each.value.environment
+    node_slug                  = each.value.node_slug
+    proof_class                = each.value.proof_class
+    target_build_sha           = each.value.build_sha
+    database_system_identifier = each.value.database_system_identifier
+    managed_by                 = "opentofu"
+  }
+  settings {
+    http {
+      method              = "GET"
+      ip_version          = "V4"
+      fail_if_not_ssl     = true
+      no_follow_redirects = true
+      valid_status_codes  = [200]
+      fail_if_body_not_matches_regexp = [
+        "\\\"status\\\"[[:space:]]*:[[:space:]]*\\\"healthy\\\"",
+        "\\\"buildSha\\\"[[:space:]]*:[[:space:]]*\\\"${each.value.build_sha}\\\"",
+        "\\\"databaseSystemIdentifier\\\"[[:space:]]*:[[:space:]]*\\\"${each.value.database_system_identifier}\\\"",
+        "\\\"proofClass\\\"[[:space:]]*:[[:space:]]*\\\"${each.value.proof_class}\\\"",
+        "\\\"incidentId\\\"[[:space:]]*:[[:space:]]*\\\"${replace(each.value.incident_id, ".", "\\.")}\\\"",
       ]
     }
   }
