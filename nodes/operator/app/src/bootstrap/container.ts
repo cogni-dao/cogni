@@ -107,8 +107,6 @@ import {
   GitHubNodeDeploymentTopologyAdapter,
   GitHubWebhookNormalizer,
   getAppDb,
-  HttpReliabilityReadmitAdapter,
-  HttpReliabilityStatusAdapter,
   LangfuseAdapter,
   LiteLlmAdapter,
   type MimirAdapterConfig,
@@ -134,6 +132,10 @@ import {
   OpenAiCompatibleModelProvider,
   PlatformModelProvider,
 } from "@/adapters/server/ai/providers";
+import {
+  HttpReliabilityReadmitAdapter,
+  HttpReliabilityStatusAdapter,
+} from "@/adapters/server/db/database-containment-production.adapter";
 import {
   DoltgresNotConfiguredError,
   getDoltgresWorkItemsAdapter,

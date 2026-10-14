@@ -25,6 +25,11 @@ command -v yq >/dev/null 2>&1 || fail "yq is required to read catalog targets"
 catalog_file="${COGNI_CATALOG_ROOT}/${TARGET}.yaml"
 [ -f "$catalog_file" ] || fail "missing catalog file: $catalog_file"
 target_type="$(yq -N '.type // ""' "$catalog_file")"
+reliability_controller="$(yq -N '.reliability.controller // false' "$catalog_file")"
+case "$reliability_controller" in
+  true|false) ;;
+  *) fail "reliability.controller must be a boolean for '$TARGET'" ;;
+esac
 deployment_provider="${DEPLOYMENT_PROVIDER:-k3s}"
 case "$deployment_provider" in
   k3s|akash) ;;
@@ -238,8 +243,8 @@ local remote_root="${ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT:-}"
 local app_wait_attempts="${ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS:-12}"
 local app_wait_sleep_seconds="${ASSERT_TARGET_SUBSTRATE_APP_WAIT_SLEEP_SECONDS:-5}"
 local assert_database_reliability_runtime="${ASSERT_DATABASE_RELIABILITY_RUNTIME:-true}"
-local expected_build_sha="__not_operator__"
-local expected_node_id="__not_operator__"
+local expected_build_sha="__not_controller__"
+local expected_node_id="__not_controller__"
 
 [ -n "$vm_host" ] || fail "VM_HOST is required for type=node target '$node'"
 [ -n "$domain" ] || fail "DOMAIN is required for type=node target '$node'"
@@ -247,7 +252,7 @@ case "$assert_database_reliability_runtime" in
   true|false) ;;
   *) fail "ASSERT_DATABASE_RELIABILITY_RUNTIME must be true or false" ;;
 esac
-if [ "$node" = operator ]; then
+if [ "$reliability_controller" = true ]; then
   expected_build_sha="$(git -C "$APP_SOURCE_DIR" rev-parse HEAD)"
   [[ "$expected_build_sha" =~ ^[0-9a-f]{40}$ ]] \
     || fail "app source does not resolve an exact 40-hex build SHA"
@@ -349,6 +354,7 @@ remote_root="${9:-}"
 expected_build_sha="${10}"
 expected_node_id="${11}"
 assert_database_reliability_runtime="${12}"
+reliability_controller="${13}"
 
 namespace="cogni-${env_name}"
 app_name="${env_name}-${node}"
@@ -387,10 +393,10 @@ else
   mark_fail "namespace missing: $namespace"
 fi
 
-if [ "$node" = operator ]; then
-  actuator_deployment="operator-database-reliability-actuator"
-  readmitter_deployment="operator-database-reliability-readmitter"
-  operator_deployment="operator-node-app"
+if [ "$reliability_controller" = true ]; then
+  actuator_deployment="${node}-database-reliability-actuator"
+  readmitter_deployment="${node}-database-reliability-readmitter"
+  app_deployment="${node}-node-app"
 
   if [ "$assert_database_reliability_runtime" = true ]; then
     for controller in "$actuator_deployment" "$readmitter_deployment"; do
@@ -401,13 +407,13 @@ if [ "$node" = operator ]; then
         mark_fail "database reliability Deployment unavailable: $controller (availableReplicas='${available:-0}')"
       fi
     done
-    operator_image="$(kubectl -n "$namespace" get deployment "$operator_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].image}' 2>/dev/null || true)"
+    app_image="$(kubectl -n "$namespace" get deployment "$app_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].image}' 2>/dev/null || true)"
     actuator_image="$(kubectl -n "$namespace" get deployment "$actuator_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="actuator")].image}' 2>/dev/null || true)"
     readmitter_image="$(kubectl -n "$namespace" get deployment "$readmitter_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="readmitter")].image}' 2>/dev/null || true)"
-    if [ -n "$operator_image" ] && [ "$actuator_image" = "$operator_image" ] && [ "$readmitter_image" = "$operator_image" ]; then
-      mark_ok "database reliability processes use the exact operator image"
+    if [ -n "$app_image" ] && [ "$actuator_image" = "$app_image" ] && [ "$readmitter_image" = "$app_image" ]; then
+      mark_ok "database reliability processes use the exact controller image"
     else
-      mark_fail "database reliability image mismatch (operator='${operator_image:-absent}', actuator='${actuator_image:-absent}', readmitter='${readmitter_image:-absent}')"
+      mark_fail "database reliability image mismatch (app='${app_image:-absent}', actuator='${actuator_image:-absent}', readmitter='${readmitter_image:-absent}')"
     fi
   fi
 
@@ -433,9 +439,9 @@ if [ "$node" = operator ]; then
   if [ "$assert_database_reliability_runtime" = true ]; then
     # The public app owns only bearer clients. Run the roundtrip from that exact
     # network/secret boundary so the assertion never prints or exports a token.
-    if kubectl -n "$namespace" exec deployment/"$operator_deployment" -c app -- \
+    if kubectl -n "$namespace" exec deployment/"$app_deployment" -c app -- \
     node --input-type=module -e '
-      const [expectedSha, nodeId, environment] = process.argv.slice(1);
+      const [expectedSha, nodeId, environment, nodeSlug] = process.argv.slice(1);
       const actuator = process.env.DATABASE_RELIABILITY_ACTUATOR_URL;
       const readmitter = process.env.DATABASE_RELIABILITY_READMITTER_URL;
       const statusToken = process.env.DATABASE_RELIABILITY_STATUS_TOKEN;
@@ -444,7 +450,7 @@ if [ "$node" = operator ]; then
       const auth = { authorization: `Bearer ${statusToken}` };
       const statusUrl = new URL("/v1/status", actuator);
       statusUrl.searchParams.set("node_id", nodeId);
-      statusUrl.searchParams.set("node_slug", "operator");
+      statusUrl.searchParams.set("node_slug", nodeSlug);
       statusUrl.searchParams.set("environment", environment);
       const checkVersion = async (base) => {
         const response = await fetch(new URL("/version", base));
@@ -456,7 +462,7 @@ if [ "$node" = operator ]; then
       const status = await fetch(statusUrl, { headers: auth });
       if (!status.ok) process.exit(22);
       const body = await status.json();
-      if (body.nodeId !== nodeId || body.slug !== "operator" || body.environment !== environment) process.exit(23);
+      if (body.nodeId !== nodeId || body.slug !== nodeSlug || body.environment !== environment) process.exit(23);
       const ready = await fetch(new URL("/readyz", readmitter));
       if (!ready.ok) process.exit(24);
       // Exercise authentication and routing without permitting a state change:
@@ -464,7 +470,7 @@ if [ "$node" = operator ]; then
       // the evidence gate or readmission adapter is reached.
       const readmitUrl = new URL("/v1/readmit", readmitter);
       readmitUrl.searchParams.set("node_id", nodeId);
-      readmitUrl.searchParams.set("node_slug", "operator");
+      readmitUrl.searchParams.set("node_slug", nodeSlug);
       readmitUrl.searchParams.set("environment", environment);
       const mismatchCandidate = `reliability.v1:flight-mismatch-${expectedSha}`;
       const mismatchIncident = body.incidentId === mismatchCandidate
@@ -479,7 +485,7 @@ if [ "$node" = operator ]; then
         },
       });
       if (rejectedReadmit.status !== 409) process.exit(25);
-    ' "$expected_build_sha" "$expected_node_id" "$env_name"; then
+    ' "$expected_build_sha" "$expected_node_id" "$env_name" "$node"; then
       mark_ok "database reliability exact-SHA, authenticated status, readiness, and harmless readmit-rejection roundtrips passed"
     else
       mark_fail "database reliability exact-SHA/authenticated/readiness roundtrip failed"
@@ -714,6 +720,7 @@ set +e
   "$DEPLOY_ENVIRONMENT" "$node" "$node_db" "$node_host" "$edge_key" "$node_port" \
   "$app_wait_attempts" "$app_wait_sleep_seconds" "$remote_root" \
   "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" \
+  "$reliability_controller" \
   < "$remote_script" 2>&1 | tee "$probe_log"
 ssh_rc=${PIPESTATUS[0]}
 set -e

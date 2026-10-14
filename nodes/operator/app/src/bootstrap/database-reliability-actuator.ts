@@ -50,6 +50,54 @@ const runtimeEnv = process.env;
 type Environment = "candidate-a" | "preview" | "production";
 type RuntimeMode = "sweep" | "readmit";
 
+const ReliabilityControllerCatalogSchema = z.object({
+  type: z.literal("node"),
+  name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
+  path_prefix: z.string().regex(/^[a-z0-9._/-]+\/$/),
+  source_repo: z.never().optional(),
+  is_primary_host: z.literal(true),
+  reliability: z.object({ controller: z.literal(true) }),
+});
+
+const CatalogIdentitySchema = z
+  .object({
+    nodeId: z.string().uuid(),
+  })
+  .or(
+    z
+      .object({ node_id: z.string().uuid() })
+      .transform((value) => ({ nodeId: value.node_id }))
+  );
+
+async function resolveReliabilityController(): Promise<{
+  slug: string;
+  nodeId: string;
+}> {
+  const files = (await readdir(CATALOG_DIR)).filter((name) =>
+    name.endsWith(".yaml")
+  );
+  const matches: Array<{ slug: string; pathPrefix: string }> = [];
+  for (const name of files) {
+    const raw = parseYaml(await readFile(`${CATALOG_DIR}/${name}`, "utf8"));
+    if (raw?.reliability?.controller !== true) continue;
+    const row = ReliabilityControllerCatalogSchema.parse(raw);
+    matches.push({ slug: row.name, pathPrefix: row.path_prefix });
+  }
+  if (matches.length !== 1)
+    throw new Error("reliability_catalog_controller_not_unique");
+  const controller = matches[0];
+  if (!controller) throw new Error("reliability_catalog_controller_missing");
+  const identity = CatalogIdentitySchema.parse(
+    parseYaml(
+      await readFile(
+        `/app/${controller.pathPrefix}.cogni/repo-spec.yaml`,
+        "utf8"
+      )
+    )
+  );
+  return { slug: controller.slug, nodeId: identity.nodeId };
+}
+
 function requiredEnv(name: string): string {
   const value = runtimeEnv[name]?.trim();
   if (!value) throw new Error(`database_reliability_missing_env:${name}`);
@@ -93,6 +141,7 @@ function authorized(header: string | undefined, token: string): boolean {
 const environment = parseEnvironment(requiredEnv("DEPLOY_ENVIRONMENT"));
 const buildSha = parseBuildSha(requiredEnv("APP_BUILD_SHA"));
 const mode = parseRuntimeMode(requiredEnv("DATABASE_RELIABILITY_MODE"));
+const reliabilityController = await resolveReliabilityController();
 const port = mode === "sweep" ? 8080 : 8081;
 const log = pino({ level: runtimeEnv.LOG_LEVEL ?? "info" }).child({
   buildSha,
@@ -130,7 +179,7 @@ const metrics = new MimirMetricsAdapter({
 });
 const deploy = new ProbeDeployAdapter(new HttpNodeProber(), {
   baseDomain: rootDomain,
-  primarySlug: "operator",
+  primarySlug: reliabilityController.slug,
 });
 const containment =
   mode === "sweep" && adminDsn
@@ -266,11 +315,6 @@ async function listTargets(): Promise<readonly ReliabilityTarget[]> {
   const files = (await readdir(CATALOG_DIR)).filter((name) =>
     name.endsWith(".yaml")
   );
-  const operatorSpec = CatalogIdentitySchema.parse(
-    parseYaml(
-      await readFile("/app/nodes/operator/.cogni/repo-spec.yaml", "utf8")
-    )
-  );
   const nodes = await Promise.all(
     files.map(async (name) =>
       CatalogEntrySchema.parse(
@@ -284,11 +328,11 @@ async function listTargets(): Promise<readonly ReliabilityTarget[]> {
     if (!placement || !node.deployEnvs.includes(environment)) return [];
     const nodeId =
       node.nodeId ??
-      (node.slug === "operator" ? operatorSpec.nodeId : undefined);
+      (node.isReliabilityController ? reliabilityController.nodeId : undefined);
     if (!nodeId)
       throw new Error(`reliability_catalog_node_id_missing:${node.slug}`);
     const sourceSha =
-      node.sourceSha ?? (node.slug === "operator" ? buildSha : undefined);
+      node.sourceSha ?? (node.isReliabilityController ? buildSha : undefined);
     if (!sourceSha)
       throw new Error(`reliability_catalog_source_sha_missing:${node.slug}`);
     return [
@@ -304,16 +348,6 @@ async function listTargets(): Promise<readonly ReliabilityTarget[]> {
   });
 }
 
-const CatalogIdentitySchema = z
-  .object({
-    nodeId: z.string().uuid(),
-  })
-  .or(
-    z
-      .object({ node_id: z.string().uuid() })
-      .transform((value) => ({ nodeId: value.node_id }))
-  );
-
 const CatalogEntrySchema = z
   .object({
     type: z.string(),
@@ -323,6 +357,7 @@ const CatalogEntrySchema = z
       .string()
       .regex(/^[0-9a-f]{40}$/)
       .optional(),
+    reliability: z.object({ controller: z.boolean().optional() }).optional(),
     envs: z.array(z.enum(["candidate-a", "preview", "production"])).default([]),
     database: z
       .record(
@@ -339,6 +374,7 @@ const CatalogEntrySchema = z
     slug: value.name,
     nodeId: value.node_id,
     sourceSha: value.source_sha,
+    isReliabilityController: value.reliability?.controller === true,
     deployEnvs: value.envs,
     databasePlacements: Object.fromEntries(
       Object.entries(value.database).map(([key, placement]) => [

@@ -116,6 +116,10 @@ export {
   type TokenRefreshFn,
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
+export {
+  createProductionDatabaseContainmentAdapter,
+  createProductionDatabaseReadmissionAdapter,
+} from "./db/database-containment-production.adapter";
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";
 export {
   ProbeDeployAdapter,

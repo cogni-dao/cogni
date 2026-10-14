@@ -1168,15 +1168,15 @@ jobs:
         run: |
           set -euo pipefail
           substrate_runner="ci-src/scripts/ci/run-node-substrate.sh"
-          # The default node-ref lane executes substrate automation from the trusted workflow
-          # ref, never from an arbitrary node source. An in-repository node self-flight is the
-          # narrow exception: when its catalog row has no remote source repository and the
-          # dispatched workflow commit equals the reviewed app commit, use that exact tree so
-          # substrate-script changes can earn pre-merge proof. The catalog topology decides;
-          # no node slug receives bespoke execution privilege.
+          # The default remote-source lane executes substrate automation from the trusted
+          # workflow ref, never from an arbitrary node source. The catalog-declared in-repo
+          # reliability controller is the narrow exception: when the dispatched workflow
+          # commit equals the reviewed app commit, use that exact tree so substrate-script
+          # changes can earn pre-merge proof. The catalog capability decides; no node slug
+          # receives bespoke execution privilege.
           catalog="app-src/infra/catalog/${{ matrix.node }}.yaml"
           source_repo="$(yq -N '.source_repo // ""' "$catalog")"
-          reliability_controller="$(yq -r '.reliability.controller // false' "$catalog")"
+          reliability_controller="$(yq -N '.reliability.controller // false' "$catalog")"
           if [ "$reliability_controller" = true ] && [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then
             app_sha="$(git -C app-src rev-parse HEAD)"
             [ "$app_sha" = "$GITHUB_SHA" ] || {
@@ -1184,7 +1184,7 @@ jobs:
               exit 1
             }
             substrate_runner="app-src/scripts/ci/run-node-substrate.sh"
-            echo "[candidate-proof] exact in-repository self-flight uses reviewed substrate runner at $GITHUB_SHA"
+            echo "[candidate-proof] exact catalog controller self-flight uses reviewed substrate runner at $GITHUB_SHA"
           fi
           bash "$substrate_runner" candidate-a "${{ matrix.node }}"
 
@@ -2042,9 +2042,9 @@ jobs:
         run: bash ci-src/scripts/ci/verify-buildsha.sh
 
       - name: Assert promoted database reliability runtime
-        if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node == 'operator'
+        if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
         env:
-          TARGET: operator
+          TARGET: ${{ matrix.node }}
           VM_HOST: ${{ secrets.VM_HOST }}
           SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
           DEPLOY_ENVIRONMENT: candidate-a
@@ -2056,7 +2056,11 @@ jobs:
           ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS: 60
           ASSERT_TARGET_SUBSTRATE_APP_WAIT_SLEEP_SECONDS: 5
           ASSERT_DATABASE_RELIABILITY_RUNTIME: "true"
-        run: bash ci-src/scripts/ci/assert-target-substrate.sh
+        run: |
+          set -euo pipefail
+          catalog="app-src/infra/catalog/${{ matrix.node }}.yaml"
+          [ "$(yq -N '.reliability.controller // false' "$catalog")" = true ] || exit 0
+          bash ci-src/scripts/ci/assert-target-substrate.sh
 
       - name: Run candidate smoke checks (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true'

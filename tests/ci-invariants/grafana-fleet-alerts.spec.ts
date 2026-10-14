@@ -17,7 +17,16 @@
  * @public
  */
 
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
@@ -49,6 +58,18 @@ const CANDIDATE_FLIGHT_FILE = path.resolve(
 const SHARED_CONTAINMENT_REPLAY_FILE = path.resolve(
   __dirname,
   "../../scripts/ops/replay-shared-database-containment.sh"
+);
+const RELIABILITY_ACTUATOR_FILE = path.resolve(
+  __dirname,
+  "../../nodes/operator/app/src/bootstrap/database-reliability-actuator.ts"
+);
+const TARGET_SUBSTRATE_ASSERT_FILE = path.resolve(
+  __dirname,
+  "../../scripts/ci/assert-target-substrate.sh"
+);
+const IMAGE_TAGS_LIB_FILE = path.resolve(
+  __dirname,
+  "../../scripts/ci/lib/image-tags.sh"
 );
 
 interface AlertData {
@@ -288,31 +309,70 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     expect(workflow.slice(runtime, smoke)).toContain(
       'ASSERT_DATABASE_RELIABILITY_RUNTIME: "true"'
     );
+    expect(workflow.slice(runtime, smoke)).toContain(
+      ".reliability.controller // false"
+    );
+    expect(workflow).not.toContain("matrix.node == 'operator'");
   });
 
-  it("pins the shared replay to Red, operator control, and policy Mimir evidence", () => {
+  it("derives reliability controller and replay roles without node-name behavior", () => {
     const replay = readFileSync(SHARED_CONTAINMENT_REPLAY_FILE, "utf8");
-    expect(replay).toContain("TARGET_NODE_SLUG=red");
-    expect(replay).toContain("CONTROL_NODE_SLUG=operator");
+    const actuator = readFileSync(RELIABILITY_ACTUATOR_FILE, "utf8");
+    const substrateAssert = readFileSync(TARGET_SUBSTRATE_ASSERT_FILE, "utf8");
+    const workflow = readFileSync(CANDIDATE_FLIGHT_FILE, "utf8");
+    const productionSources = [replay, actuator, substrateAssert, workflow];
+
+    for (const source of productionSources) {
+      expect(source).not.toMatch(
+        /node\.slug === ["'](?:operator|red|poly)["']/
+      );
+      expect(source).not.toMatch(
+        /matrix\.node == ["'](?:operator|red|poly)["']/
+      );
+      expect(source).not.toMatch(
+        /\[\s*["']\$node["']\s*=\s*["']?(?:operator|red|poly)["']?\s*\]/
+      );
+      expect(source).not.toMatch(
+        /primarySlug:\s*["'](?:operator|red|poly)["']/
+      );
+      expect(source).not.toMatch(
+        /node_slug["'],\s*["'](?:operator|red|poly)["']/
+      );
+      expect(source).not.toMatch(/infra\/catalog\/(?:operator|red|poly)\.yaml/);
+      expect(source).not.toMatch(
+        /https:\/\/(?:red|poly)?-?test\.cognidao\.org/
+      );
+    }
+
+    expect(actuator).toContain("ReliabilityControllerCatalogSchema");
+    expect(actuator).toContain("reliability_catalog_controller_not_unique");
+    expect(actuator).toContain(
+      "`/app/${controller.pathPrefix}.cogni/repo-spec.yaml`"
+    );
+    expect(substrateAssert).toContain(
+      "reliability_controller=\"$(yq -N '.reliability.controller // false'"
+    );
+    expect(replay).toContain("catalog_for_role shared-target");
+    expect(replay).toContain("catalog_for_role shared-control");
+    expect(replay).toContain("catalog_for_role dedicated-neighbor");
+    expect(replay).toContain("catalog_for_controller");
     expect(replay).toContain(
-      'target_catalog="$root_dir/infra/catalog/red.yaml"'
+      'git -C "$root_dir" archive "$PLATFORM_BUILD_SHA"'
     );
     expect(replay).toContain(
-      'control_catalog="$root_dir/infra/catalog/operator.yaml"'
+      'git -C "$root_dir" show "${PLATFORM_BUILD_SHA}:${spec_path}"'
     );
-    expect(replay).toContain(
-      "TARGET_NODE_SLUG TARGET_NODE_ID TARGET_NODE_BUILD_SHA CONTROL_NODE_SLUG CONTROL_NODE_ID"
-    );
+    expect(replay).toContain("CONTROLLER_NODE_SLUG CONTROLLER_NODE_ID");
     expect(replay).not.toContain("TARGET_DATABASE_DSN");
     expect(replay).not.toContain("REGIONAL_BASE_URLS");
     expect(replay).not.toContain("NEIGHBOR_READYZ_URLS");
     expect(replay).toContain("role=candidate-a-db-reader");
-    expect(replay).toContain("cogni/candidate-a/red");
-    expect(replay).toContain("export PGDATABASE=");
-    expect(replay).toContain(".expectedRegions[]");
     expect(replay).toContain(
-      'min_over_time(probe_success{environment="candidate-a",node_slug="red",proof_class="serve"}[1m])'
+      '"cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE_SLUG}"'
     );
+    expect(replay).toContain("export PGDATABASE");
+    expect(replay).toContain(".expectedRegions[]");
+    expect(replay).toContain('node_slug="%s",proof_class="serve"');
     expect(replay).toContain("(.data.result | length == 2)");
     expect(replay).toContain("(.values | length == 5)");
     expect(replay).toContain("(.values[-1][0] - .values[-2][0]) == 60");
@@ -320,14 +380,16 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     expect(replay).toContain("($end - .values[-1][0]) <= 90");
     expect(replay).toContain("queryRef reliability-status-v1.readiness-1m");
     expect(replay).toContain(
-      'status=$(curl -fsS --max-time 10 -H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER" "$RELIABILITY_STATUS_URL")'
+      'status=$(curl -fsS --max-time 10 -H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER" "$reliability_status_url")'
     );
     expect(replay).toContain(
-      'target_before=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$target_containment_status_url")'
+      'target_before=$(actuator_get "$target_containment_status_path")'
     );
-    expect(replay).not.toContain(
-      '-H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$RELIABILITY_STATUS_URL"'
-    );
+    expect(replay).toContain("configuredOrigin !== expectedOrigin || !token");
+    expect(replay).not.toContain(': "${RELIABILITY_STATUS_URL:');
+    expect(replay).not.toContain(': "${ACTUATOR_STATUS_BASE_URL:');
+    expect(replay).not.toContain(': "${ACTUATOR_VERSION_URL:');
+    expect(replay).not.toContain(': "${RELIABILITY_READMIT_URL:');
     expect(replay).toContain('-H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER"');
     expect(replay).not.toContain("RELIABILITY_READMIT_AUTH_HEADER");
     expect(replay).toContain('.phase == "open" and .incidentId == $incidentId');
@@ -337,5 +399,238 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     expect(replay).toContain(
       'action=\\"readmitted\\" | nodeId=\\"$TARGET_NODE_ID\\" | environment=\\"candidate-a\\" | incidentId=\\"$incident_id\\"'
     );
+
+    const runProductionPlanner = (names: {
+      readonly target: string;
+      readonly controller: string;
+      readonly dedicated: string;
+    }) => {
+      const fixtureRoot = mkdtempSync(
+        path.join(tmpdir(), "reliability-replay-plan-")
+      );
+      try {
+        mkdirSync(path.join(fixtureRoot, "infra/catalog"), {
+          recursive: true,
+        });
+        mkdirSync(path.join(fixtureRoot, "packages/node-contracts/src"), {
+          recursive: true,
+        });
+        mkdirSync(path.join(fixtureRoot, "scripts/ci/lib"), {
+          recursive: true,
+        });
+        mkdirSync(path.join(fixtureRoot, "scripts/ops"), { recursive: true });
+        copyFileSync(
+          SHARED_CONTAINMENT_REPLAY_FILE,
+          path.join(
+            fixtureRoot,
+            "scripts/ops/replay-shared-database-containment.sh"
+          )
+        );
+        copyFileSync(
+          IMAGE_TAGS_LIB_FILE,
+          path.join(fixtureRoot, "scripts/ci/lib/image-tags.sh")
+        );
+        writeFileSync(
+          path.join(
+            fixtureRoot,
+            "packages/node-contracts/src/reliability-policy.v1.json"
+          ),
+          JSON.stringify({
+            expectedRegions: ["Frankfurt", "Ohio"],
+            noisyNeighborSharePercent: 40,
+          })
+        );
+        const rows = [
+          {
+            name: names.target,
+            type: "node",
+            node_id: "10000000-0000-4000-8000-000000000001",
+            envs: ["candidate-a"],
+            database: {
+              "candidate-a": {
+                tier: "shared",
+                budget_profile: "shared-default-v1",
+              },
+            },
+            reliability_validation: {
+              "candidate-a": { role: "shared-target" },
+            },
+          },
+          {
+            name: names.controller,
+            type: "node",
+            node_id: "20000000-0000-4000-8000-000000000002",
+            envs: ["candidate-a"],
+            is_primary_host: true,
+            database: {
+              "candidate-a": {
+                tier: "shared",
+                budget_profile: "shared-default-v1",
+              },
+            },
+            reliability: { controller: true },
+            reliability_validation: {
+              "candidate-a": { role: "shared-control" },
+            },
+          },
+          {
+            name: names.dedicated,
+            type: "node",
+            node_id: "30000000-0000-4000-8000-000000000003",
+            envs: ["candidate-a"],
+            database: {
+              "candidate-a": {
+                tier: "dedicated",
+                budget_profile: "dedicated-high-throughput-v1",
+              },
+            },
+            reliability_validation: {
+              "candidate-a": { role: "dedicated-neighbor" },
+            },
+          },
+        ];
+        for (const row of rows) {
+          writeFileSync(
+            path.join(fixtureRoot, `infra/catalog/${row.name}.yaml`),
+            yaml.stringify(row)
+          );
+        }
+        execFileSync("git", ["init", "-q"], { cwd: fixtureRoot });
+        execFileSync("git", ["config", "user.email", "fixture@example.test"], {
+          cwd: fixtureRoot,
+        });
+        execFileSync("git", ["config", "user.name", "Fixture"], {
+          cwd: fixtureRoot,
+        });
+        execFileSync("git", ["add", "."], { cwd: fixtureRoot });
+        execFileSync("git", ["commit", "-qm", "fixture"], {
+          cwd: fixtureRoot,
+        });
+        const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: fixtureRoot,
+          encoding: "utf8",
+        }).trim();
+        // Poison mutable worktree inputs after the commit. The production
+        // planner must still read catalog + policy from PLATFORM_BUILD_SHA.
+        writeFileSync(
+          path.join(fixtureRoot, `infra/catalog/${names.target}.yaml`),
+          yaml.stringify({ name: "worktree-poison", type: "infra" })
+        );
+        writeFileSync(
+          path.join(
+            fixtureRoot,
+            "packages/node-contracts/src/reliability-policy.v1.json"
+          ),
+          JSON.stringify({
+            expectedRegions: ["mutable"],
+            noisyNeighborSharePercent: 99,
+          })
+        );
+        const result = spawnSync(
+          "bash",
+          ["scripts/ops/replay-shared-database-containment.sh"],
+          {
+            cwd: fixtureRoot,
+            encoding: "utf8",
+            env: {
+              PATH: process.env.PATH,
+              ALLOW_CANDIDATE_DATABASE_REPLAY: "1",
+              DEPLOY_ENVIRONMENT: "candidate-a",
+              PLATFORM_BUILD_SHA: sha,
+              CANDIDATE_DOMAIN: "test.example.invalid",
+              REPLAY_PLAN_ONLY: "1",
+            },
+          }
+        );
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+        return JSON.parse(result.stdout) as {
+          platformBuildSha: string;
+          controller: {
+            slug: string;
+            buildSha: string;
+            publicBase: string;
+            versionUrl: string;
+            actuator: {
+              origin: string;
+              statusPath: string;
+              versionUrl: string;
+            };
+            readmitter: { origin: string };
+          };
+          validation: {
+            sharedTarget: { slug: string; nodeId: string; baseUrl: string };
+            sharedControl: { slug: string; baseUrl: string };
+            dedicatedNeighbor: { slug: string; baseUrl: string };
+          };
+          public: { statusUrl: string; readmitUrl: string };
+          openbaoPath: string;
+          readinessQuery: string;
+          containmentTarget: string;
+          readmissionTarget: string;
+        };
+      } finally {
+        rmSync(fixtureRoot, { recursive: true, force: true });
+      }
+    };
+
+    const first = runProductionPlanner({
+      target: "ember",
+      controller: "harbor",
+      dedicated: "quartz",
+    });
+    expect(first.controller).toMatchObject({
+      slug: "harbor",
+      buildSha: first.platformBuildSha,
+      publicBase: "https://test.example.invalid",
+      versionUrl: "https://test.example.invalid/version",
+      actuator: {
+        origin: "http://harbor-database-reliability-actuator:8080",
+        versionUrl: "http://harbor-database-reliability-actuator:8080/version",
+      },
+      readmitter: {
+        origin: "http://harbor-database-reliability-readmitter:8081",
+      },
+    });
+    expect(first.validation).toMatchObject({
+      sharedTarget: {
+        slug: "ember",
+        baseUrl: "https://ember-test.example.invalid",
+      },
+      sharedControl: {
+        slug: "harbor",
+        baseUrl: "https://test.example.invalid",
+      },
+      dedicatedNeighbor: {
+        slug: "quartz",
+        baseUrl: "https://quartz-test.example.invalid",
+      },
+    });
+    expect(first.controller.actuator.statusPath).toContain("node_slug=ember");
+    expect(first.public.statusUrl).toBe(
+      `https://test.example.invalid/api/v1/nodes/${first.validation.sharedTarget.nodeId}/observability/health?env=candidate-a`
+    );
+    expect(first.public.readmitUrl).toBe(
+      `https://test.example.invalid/api/v1/nodes/${first.validation.sharedTarget.nodeId}/observability/health`
+    );
+    expect(first.openbaoPath).toBe("cogni/candidate-a/ember");
+    expect(first.readinessQuery).toContain('node_slug="ember"');
+    expect(first.containmentTarget).toBe(first.validation.sharedTarget.nodeId);
+    expect(first.readmissionTarget).toBe(first.validation.sharedTarget.nodeId);
+
+    const renamed = runProductionPlanner({
+      target: "cinder",
+      controller: "lighthouse",
+      dedicated: "granite",
+    });
+    expect(renamed.controller.slug).toBe("lighthouse");
+    expect(renamed.validation.sharedTarget.slug).toBe("cinder");
+    expect(renamed.validation.dedicatedNeighbor.slug).toBe("granite");
+    expect(renamed.public.statusUrl).toContain(
+      renamed.validation.sharedTarget.nodeId
+    );
+    expect(renamed.openbaoPath).toBe("cogni/candidate-a/cinder");
+    expect(renamed.readinessQuery).toContain('node_slug="cinder"');
+    expect(renamed).not.toEqual(first);
   });
 });
