@@ -4,7 +4,7 @@
 /**
  * Module: `@contracts/agent.register.v1`
  * Purpose: Zod contract for POST /api/v1/agent/register.
- * Scope: Input (agent display name) and output (issued machine credentials + actor identity). Does not contain business logic.
+ * Scope: Input (agent display name) and output for the legacy v1 user-backed machine credential; `userId` is compatibility identity, not durable AI actor identity. Does not contain business logic.
  * Invariants: CONTRACTS_ARE_TRUTH — single source for registration wire shape.
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/human-ai-identity-standard, docs/spec/node-operator-contract.md
