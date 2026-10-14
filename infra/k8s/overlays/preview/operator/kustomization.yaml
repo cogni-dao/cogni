@@ -15,7 +15,6 @@ resources:
   # ledgers. Preview lands no ComputeWorkload CRs; operator akash e2e is
   # validated on candidate-a. See story.5016 / akash-actuator-wallet-cutover.
   - external-secret.yaml
-  - ../../../base/operator-migration-external-secret
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 

@@ -363,7 +363,7 @@ describe("candidate-a manifest source", () => {
     );
   });
 
-  it("uses reviewed substrate scripts only for an exact operator self-flight", () => {
+  it("uses reviewed substrate scripts only for an exact in-repository self-flight", () => {
     const substrate = namedStep(
       "node-substrate",
       "Run node substrate (materialize -> reconcile)"
@@ -374,8 +374,15 @@ describe("candidate-a manifest source", () => {
       'substrate_runner="ci-src/scripts/ci/run-node-substrate.sh"'
     );
     expect(substrate).toContain(
-      'if [ "${{ matrix.node }}" = "operator" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+      'catalog="app-src/infra/catalog/${{ matrix.node }}.yaml"'
     );
+    expect(substrate).toContain(
+      'source_repo="$(yq -N \'.source_repo // ""\' "$catalog")"'
+    );
+    expect(substrate).toContain(
+      'if [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+    );
+    expect(substrate).not.toMatch(/matrix\.node.*operator/);
     expect(substrate).toContain('app_sha="$(git -C app-src rev-parse HEAD)"');
     expect(substrate).toContain('[ "$app_sha" = "$GITHUB_SHA" ]');
     expect(substrate).toContain(
