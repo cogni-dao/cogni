@@ -365,7 +365,9 @@ env \
 grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/out.txt"
 remote_provisioner="$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/provision.sh"
 cmp infra/compose/runtime/postgres-init/provision.sh "$remote_provisioner"
-provisioner_mode="$(stat -f '%Lp' "$remote_provisioner" 2>/dev/null || stat -c '%a' "$remote_provisioner")"
+# GNU stat accepts -f as "filesystem" mode and can emit output before rejecting
+# the BSD format operand. Prefer GNU's file-format form, then fall back to BSD.
+provisioner_mode="$(stat -c '%a' "$remote_provisioner" 2>/dev/null || stat -f '%Lp' "$remote_provisioner")"
 [ "$provisioner_mode" = 444 ]
 grep -q 'cogni-reconcile.postgres-provisioner\.' "$REMOTE_ROOT/scp.log"
 install_line="$(grep -n 'exact runtime compose and provisioners installed ok' "$TMPROOT/out.txt" | cut -d: -f1)"
