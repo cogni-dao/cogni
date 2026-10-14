@@ -263,7 +263,7 @@ jobs:
             # must not enter the strict candidate planner.
             remote_deployment_targets='[]'
             while IFS= read -r target; do
-              catalog="infra/catalog/${target}.yaml"
+              catalog="app-src/infra/catalog/${target}.yaml"
               if [ ! -f "$catalog" ]; then
                 echo "::error::remote artifact target ${target} has no catalog row"
                 exit 1

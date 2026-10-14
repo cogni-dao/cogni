@@ -555,6 +555,8 @@ describe("akash-tx-actuator runtime", () => {
     expect(combine).toContain(
       "done < <(jq -r '.[]' <<< \"$REMOTE_SOURCE_ARTIFACT_TARGETS_JSON\")"
     );
+    expect(combine).toContain('catalog="app-src/infra/catalog/${target}.yaml"');
+    expect(combine).not.toContain('catalog="infra/catalog/${target}.yaml"');
     expect(combine).toContain("yq -e '.envs | contains([\"candidate-a\"])'");
     expect(combine).toContain(
       'REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets"'
