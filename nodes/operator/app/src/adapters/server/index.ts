@@ -104,8 +104,11 @@ export { ProviderProxyLogsClient } from "./compute/provider-proxy-logs.adapter";
 // which must prove "serving at the expected SHA" without importing an adapter internal.
 export {
   safeHostRoutedVersionProbe,
+  safeHostRoutedVersionProbeResult,
   safeReadyzProbe,
+  safeReadyzProbeResult,
   safeVersionProbe,
+  safeVersionProbeResult,
 } from "./compute/safe-version-probe";
 // Connection broker adapter
 export {
