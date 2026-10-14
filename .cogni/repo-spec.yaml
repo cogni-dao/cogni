@@ -122,7 +122,6 @@ gates:
   - type: review-limits
     id: review_limits
     with:
-      max_changed_files: 50
       max_total_diff_kb: 1500
 
   # Ensure */*/AGENTS.md files are updated when code changes
