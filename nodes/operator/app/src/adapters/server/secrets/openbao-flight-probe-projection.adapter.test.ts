@@ -159,9 +159,7 @@ describe("OpenBaoFlightProbeProjectionAdapter", () => {
   ])("rejects a %s OpenBao client token", async (_case, clientToken) => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(
-        jsonResponse({ auth: { client_token: clientToken } })
-      );
+      .mockResolvedValue(jsonResponse({ auth: { client_token: clientToken } }));
 
     await expect(readRing(adapter(fetchImpl))).rejects.toMatchObject({
       code: "oidc_rejected",
@@ -169,51 +167,51 @@ describe("OpenBaoFlightProbeProjectionAdapter", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["login", "kv"])(
-    "requires a JSON content type on the %s response",
-    async (stage) => {
-      const nonJson = new Response("not-json", {
-        status: 200,
-        headers: { "content-type": "text/plain" },
-      });
-      const fetchImpl =
-        stage === "login"
-          ? vi.fn<typeof fetch>().mockResolvedValue(nonJson)
-          : vi
-              .fn<typeof fetch>()
-              .mockResolvedValueOnce(
-                jsonResponse({ auth: { client_token: BAO_TOKEN } })
-              )
-              .mockResolvedValueOnce(nonJson);
+  it.each([
+    "login",
+    "kv",
+  ])("requires a JSON content type on the %s response", async (stage) => {
+    const nonJson = new Response("not-json", {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
+    const fetchImpl =
+      stage === "login"
+        ? vi.fn<typeof fetch>().mockResolvedValue(nonJson)
+        : vi
+            .fn<typeof fetch>()
+            .mockResolvedValueOnce(
+              jsonResponse({ auth: { client_token: BAO_TOKEN } })
+            )
+            .mockResolvedValueOnce(nonJson);
 
-      await expect(readRing(adapter(fetchImpl))).rejects.toMatchObject({
-        code: stage === "login" ? "oidc_rejected" : "projection_denied",
-      });
-    }
-  );
+    await expect(readRing(adapter(fetchImpl))).rejects.toMatchObject({
+      code: stage === "login" ? "oidc_rejected" : "projection_denied",
+    });
+  });
 
-  it.each(["login", "kv"])(
-    "rejects malformed JSON from the %s response",
-    async (stage) => {
-      const malformed = new Response("{", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-      const fetchImpl =
-        stage === "login"
-          ? vi.fn<typeof fetch>().mockResolvedValue(malformed)
-          : vi
-              .fn<typeof fetch>()
-              .mockResolvedValueOnce(
-                jsonResponse({ auth: { client_token: BAO_TOKEN } })
-              )
-              .mockResolvedValueOnce(malformed);
+  it.each([
+    "login",
+    "kv",
+  ])("rejects malformed JSON from the %s response", async (stage) => {
+    const malformed = new Response("{", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const fetchImpl =
+      stage === "login"
+        ? vi.fn<typeof fetch>().mockResolvedValue(malformed)
+        : vi
+            .fn<typeof fetch>()
+            .mockResolvedValueOnce(
+              jsonResponse({ auth: { client_token: BAO_TOKEN } })
+            )
+            .mockResolvedValueOnce(malformed);
 
-      await expect(readRing(adapter(fetchImpl))).rejects.toMatchObject({
-        code: stage === "login" ? "oidc_rejected" : "projection_denied",
-      });
-    }
-  );
+    await expect(readRing(adapter(fetchImpl))).rejects.toMatchObject({
+      code: stage === "login" ? "oidc_rejected" : "projection_denied",
+    });
+  });
 
   it("cancels an oversized login response before JSON parsing", async () => {
     const oversized = oversizedJsonResponse(16_385);
