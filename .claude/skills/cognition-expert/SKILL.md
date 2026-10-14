@@ -36,11 +36,11 @@ Codex injects the cache through uncapped hook stdout. OpenCode does not expand `
 references; the supported 1.x runtime combines the cache through
 `opencode.json.instructions`.
 
-| harness          | instruction files                                                                                               | SessionStart hook                                                             | truncation override                                                    | proven delivery path                                  |
-| ---------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------- |
-| **Claude Code**  | project output style + `CLAUDE.md`/`AGENTS.md` + `@import`s, injected every request                             | write cache only; `Stop` validates each final response                        | **NONE** (docs: no setting/env raises it)                              | style + file/cache + deterministic response validator |
-| **Codex**        | `AGENTS.md`/`AGENTS.override.md`, whole under **`project_doc_max_bytes` = 32 KiB** (silently truncates past it) | stdout as developer context, `additionalContextLimit` defaults to 2500 tokens | **`additionalContextLimit = 0`** in `.codex/config.toml` → full inject | committed floor + hook-delivered live cache           |
-| **OpenCode 1.x** | root `AGENTS.md` + `opencode.json.instructions`                                                                 | no SessionStart injection                                                     | n/a                                                                    | committed floor + instruction-loaded warm cache       |
+| harness          | instruction files                                                                                               | SessionStart hook                                                               | truncation override                                                    | proven delivery path                                                 |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| **Claude Code**  | project output style + `CLAUDE.md`/`AGENTS.md` + `@import`s, injected every request                             | write cache only; `Stop` **warns** on a malformed final response (never blocks) | **NONE** (docs: no setting/env raises it)                              | style (primary driver) + file/cache + non-blocking response detector |
+| **Codex**        | `AGENTS.md`/`AGENTS.override.md`, whole under **`project_doc_max_bytes` = 32 KiB** (silently truncates past it) | stdout as developer context, `additionalContextLimit` defaults to 2500 tokens   | **`additionalContextLimit = 0`** in `.codex/config.toml` → full inject | committed floor + hook-delivered live cache                          |
+| **OpenCode 1.x** | root `AGENTS.md` + `opencode.json.instructions`                                                                 | no SessionStart injection                                                       | n/a                                                                    | committed floor + instruction-loaded warm cache                      |
 
 Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its cold-boot floor.
 
@@ -48,12 +48,25 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
 
 - **"Output too large (14.8KB) … Preview (first 2KB)" is the Claude Code hook spill**, not a display quirk. The agent only has the first ~2KB; the rest is in a `tool-results/hook-*.txt` file it will not read. This hits `additionalContext` identically to raw stdout — the structured channel does NOT escape the cap. Keep the Claude hook write-only.
 - **No Claude Code knob exists** to raise the hook cap (verified: `--help`, env, settings). Do not look for one; use the file channel.
-- **Delivery does not guarantee adherence.** `/context` can show the complete floor and
-  cache while the model still invents a task-type exception. Claude's project-scoped
-  `Cogni Contract` output style moves the no-exceptions response rule into the system-prompt
-  layer on every request. The `validate-status-contract.sh` Stop hook rejects malformed final
-  responses, zero-evidence substantive proposals, and frozen-state mutations. Both adapters
-  point back to the file floor; neither owns a second copy of the rich contract.
+- **Delivery does not guarantee adherence — but enforcement is a detector, never a gate.**
+  `/context` can show the complete floor and cache while the model still invents a task-type
+  exception, so you want _a_ backstop. The primary driver is Claude's project-scoped
+  `Cogni Contract` output style, which moves the no-exceptions response rule into the
+  system-prompt layer on every request (zero blast radius — it shapes generation, it cannot
+  wedge a session). The `validate-status-contract.sh` Stop hook is the secondary, **warn-only**
+  check: it surfaces a malformed final response, zero-evidence substantive proposal, or
+  frozen-state mutation, and the agent self-corrects on the _next_ turn — it must never
+  re-prompt or hard-block. Both adapters point back to the file floor; neither owns a second
+  copy of the rich contract.
+- **A hard Stop-block on every response is an anti-pattern (the lesson of the #2722 loop).**
+  Two failure modes make it poor form: (1) **blast radius** — the hook runs on every agent on
+  the node, so one over-strict check wedges the whole fleet (the pre-#2722 per-reply
+  `/work/items/` check looped every Q&A into an infinite re-prompt); (2) **wrong target** — a
+  Stop hook can only grade _format_, so a hollow well-shaped reply passes while a substantive
+  one with a stray lead-in line is blocked, taxing real answers with re-emit round-trips.
+  Enforce format where generation happens (the output style) and let the Stop hook _warn_, not
+  gate. If a future check genuinely must hard-block, it needs a bounded escape so it can never
+  loop.
 - **Envelope compliance does not guarantee process adherence.** A correctly shaped response
   that proposes with `Followed = —`, reports zero sources, or has no retrieval actions in the
   turn trace is still a hard FAIL. Grade delivery → envelope → research trace → substantive
@@ -93,8 +106,8 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
 
 1. **Separate the axes.** Is the problem ownership (what's in the bundle) or delivery (how it arrives)? Fix the right one.
 2. **Constitution stays code-owned.** Never move the agent-contract/invariants into a hub entry that only renders on a healthy hub. If you find it there, that's the drift — pull it back to `SESSION_BOOTSTRAP_INVARIANTS`.
-3. **Deliver through the proven harness path.** Claude = project output style + `CLAUDE.md`
-   imports + deterministic Stop validation; Codex = committed floor + uncapped hook; supported
+3. **Deliver through the proven harness path.** Claude = project output style (primary driver) +
+   `CLAUDE.md` imports + a warn-only Stop detector (never a hard block); Codex = committed floor + uncapped hook; supported
    OpenCode 1.x = `instructions`. None requires an agent tool-read.
 4. **AGENTS.md carries only the universal floor + bootstrap pointers**
    (`node-baas-architecture.md:311`) — the terse response/state skeleton, bundle pointer,

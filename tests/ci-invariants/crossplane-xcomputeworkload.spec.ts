@@ -359,6 +359,20 @@ describe("XComputeWorkload Composition (task.5096)", () => {
     // The serving probe is the exact desired SHA, never a tag or a "latest".
     expect(template).toContain("expectedSourceSha:");
     expect(template).toContain("$desiredSha := $spec.bundle.source.sha");
+    // A transient kube-apiserver failure must not permanently strand the provider-http child.
+    // Crossplane Runtime v2.3.3 handles this official annotation once per changed token and
+    // records it in status; the token is stable across ordinary reconcile ticks and does not
+    // participate in the paid cogniKey.
+    expect(templateCode).toContain(
+      'crossplane.io/reconcile-requested-at: {{ printf "%s:%d" $desiredSha $generation | quote }}'
+    );
+    expect(templateCode).toContain(
+      "$needsLeaseRequeue := and (ne $prevSha $desiredSha) (ne $lastRequestedSha $desiredSha)"
+    );
+    expect(templateCode).toContain("{{- if $needsLeaseRequeue }}");
+    expect(
+      templateCode.match(/crossplane\.io\/reconcile-requested-at:/g)
+    ).toHaveLength(1);
   });
 
   it("keeps the base idempotence key stable and bounds terminal recovery", () => {
@@ -2006,6 +2020,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
             !t.startsWith(
               "gotemplating.fn.crossplane.io/composition-resource-name:"
             ) &&
+            !t.startsWith("crossplane.io/reconcile-requested-at:") &&
             !t.startsWith("gotemplating.fn.crossplane.io/ready:")
           );
         })

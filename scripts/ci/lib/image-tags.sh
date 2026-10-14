@@ -397,6 +397,20 @@ default_node_id() {
 # name is the bug.5207 defect, so both call `lane_db_suffix`. `provision.sh` then derives
 # app_/service_ roles FROM this name, so it needs no lane logic of its own.
 # Optional $2 is the LANE; omitted (every caller today) yields the historic name exactly.
+#
+# RE-KEYED ONTO THE RESIDENCY RESOLVER (bug.5299). The suffix exists because a lane whose
+# database sits on ANOTHER env's instance would otherwise collide with that env's own
+# `cogni_<node>` (bug.5207). So the question the suffix is really asking is "whose instance",
+# and `lane_db_vm_env` — not `control_env_for` — is the one cell that answers it: identical
+# to `control_env_for` for every pair pinned in the residency ledger, and the lane itself for
+# every other pair. Today every misresident pair IS pinned (asserted both directions in
+# scripts/ci/tests/lane-db-residency.test.sh), so this is byte-identical for all 13
+# (node, lane) pairs the catalog can produce — INERT, verified by test, not by assertion.
+# Why source it here: this function is THE lane-aware name derivation, so it owns pulling in
+# the cell rather than leaving the answer to depend on which libs a caller happened to load.
+if [ -z "${_image_tags_residency_lib:-}" ]; then
+  _image_tags_residency_lib="${_image_tags_lib_dir}/lane-db-residency.sh"
+fi
 node_database_for_target() {
   local node="$1" lane="${2:-}" sfx=""
   if [ -z "${_image_tags_primary_cache[$node]+x}" ]; then
@@ -404,7 +418,17 @@ node_database_for_target() {
     return 1
   fi
   if [ -n "$lane" ] && command -v control_env_for >/dev/null 2>&1; then
-    sfx="$(lane_db_suffix "$lane" "$(control_env_for "$lane" "$node")")"
+    # The resolver needs control_env_for + lane_db_suffix, which the guard above proves are
+    # loaded; without them this stays exactly as it was before the resolver existed.
+    if ! command -v lane_db_vm_env >/dev/null 2>&1 && [ -f "$_image_tags_residency_lib" ]; then
+      # shellcheck source=scripts/ci/lib/lane-db-residency.sh
+      . "$_image_tags_residency_lib"
+    fi
+    if command -v lane_db_vm_env >/dev/null 2>&1; then
+      sfx="$(lane_db_suffix "$lane" "$(lane_db_vm_env "$node" "$lane")")"
+    else
+      sfx="$(lane_db_suffix "$lane" "$(control_env_for "$lane" "$node")")"
+    fi
   fi
   printf 'cogni_%s%s' "${node//-/_}" "$sfx"
 }

@@ -256,12 +256,46 @@ overlay_dir="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/${node}"
 # Asserting the env-only path here would fail a perfectly healthy lane.
 # shellcheck source=scripts/ci/lib/appset-paths.sh
 CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}" . "$(dirname "${BASH_SOURCE[0]}")/lib/appset-paths.sh"
-appset_file="${APP_SOURCE_DIR}/$(CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}" appset_rel_path "$DEPLOY_ENVIRONMENT" "$node")"
+# WHICH CATALOG. Bash does NOT keep an assignment that prefixes `.` outside POSIX mode, so
+# appset-paths' own `: "${CATALOG_DIR:=infra/catalog}"` wins and every later control_env_for
+# would silently read the REPO-RELATIVE catalog instead of APP_SOURCE_DIR's. Name it once and
+# pass it to every catalog reader below.
+local catalog_dir="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}"
+appset_file="${APP_SOURCE_DIR}/$(CATALOG_DIR="$catalog_dir" appset_rel_path "$DEPLOY_ENVIRONMENT" "$node")"
 
 [ -d "$overlay_dir" ] || fail "missing overlay dir: $overlay_dir"
 [ -f "$appset_file" ] || fail "missing per-target AppSet file: $appset_file"
 
-node_db="$(node_database_for_target "$node")" || exit 1
+# THE LANE IS PART OF THE QUESTION (bug.5299). This call passed NO lane, so for a
+# foreign-custodied lane it named the LANELESS husk (`cogni_<node>`) and then asserted that
+# husk against the VM this preflight happens to have SSH'd into. Both assertions below
+# therefore passed for the wrong reason: they proved an unused database exists somewhere,
+# never that THIS lane's database exists. `node_database_for_target <node> <lane>` is the one
+# lane-aware derivation (`lane-db-two-derivations`) that reconcile-node-substrate.sh:230 —
+# the writer — already calls, so this makes the reader agree with the writer.
+#
+# ZERO BEHAVIOUR CHANGE TODAY, BY CONSTRUCTION: every lane that reaches this function is a
+# k3s lane (the akash branch is assert_external_compute_preconditions), and a k3s lane's
+# control env IS its own env, so `lane_db_suffix` is empty and the name is byte-identical to
+# the laneless one. What changes is that an akash row arriving here — e.g. a caller that
+# forgot DEPLOYMENT_PROVIDER — can no longer be green on the husk.
+node_db="$(CATALOG_DIR="$catalog_dir" node_database_for_target "$node" "$DEPLOY_ENVIRONMENT")" || exit 1
+# WHOSE INSTANCE, not what name. A unique name on production's Postgres is still production's
+# failure domain, which is the whole of bug.5299. Catalog-derived, no live DB; warns for the
+# four ledgered violations and fails closed for anything new. The authoritative, always-run
+# form of this gate is the static scripts/ci/tests/lane-db-residency.test.sh — this call is
+# the per-flight echo of it.
+#
+# NOT CALLED FROM assert_external_compute_preconditions, deliberately: that branch asserts no
+# database at all (OpenBao secret bank, Crossplane control plane, egress allowlist), so there
+# is nothing there to make lane-aware, and every wizard birth renders
+# `deployment_provider.candidate-a: akash` — so arming it there would fail every newborn
+# node's first flight on a violation created at birth. That population is bug.5299's next
+# decision, not this preflight's to unilaterally block.
+# shellcheck source=scripts/ci/lib/lane-db-residency.sh
+. "${SCRIPT_DIR}/lib/lane-db-residency.sh"
+CATALOG_DIR="$catalog_dir" lane_db_residency_check "$node" "$DEPLOY_ENVIRONMENT" \
+  || fail "lane database residency check failed for ${node}/${DEPLOY_ENVIRONMENT}"
 node_host="$(host_for_node "$node" "$domain")"
 node_port="$(node_port_for_target "$node")" || exit 1
 edge_key="$(printf '%s' "$node" | tr '[:lower:]-' '[:upper:]_')"
@@ -465,6 +499,26 @@ if [ -f "$runtime_env" ]; then
   # shellcheck disable=SC1090
   if source "$runtime_env"; then
     set +a
+    # WHICH NAME DOES THIS COMPARE AGAINST (bug.5299, deliberate decision)?
+    # THE LANE-AWARE ONE — i.e. the same $node_db as the pg_database probe below, not a
+    # second laneless re-derivation and not a check scoped away to control==lane lanes.
+    #
+    # WHY, in writer terms. COGNI_NODE_DBS has two writers and only one of them is per-lane:
+    #   deploy-infra.sh:484  `COGNI_NODE_DBS="$(node_database_csv)"` — laneless, env-blind,
+    #     writes the initial fleet roster of `cogni_<node>` names at env provision time.
+    #   reconcile-node-substrate.sh:230+578 — `node_database_for_target <node> <lane>`,
+    #     already lane-aware, and APPENDS that exact name to this file for the (node, lane)
+    #     it reconciled, on the control env's VM.
+    # The reconciler is the writer that runs per lane, so the lane-aware name is precisely
+    # what this inventory is guaranteed to contain after the lane has been reconciled.
+    # Comparing against the laneless name would assert something no per-lane writer promises.
+    #
+    # WHY IT CANNOT REGRESS ANYTHING: this function only ever runs for a k3s lane, whose
+    # control env is its own env, so lane_db_suffix is empty and the lane-aware name is
+    # byte-identical to the laneless one. Splitting the assertion or scoping it to
+    # control==lane lanes would therefore add a branch that no input can distinguish today,
+    # while hiding the one case that matters — a foreign lane whose database was never
+    # reconciled onto this host at all.
     case ",${COGNI_NODE_DBS:-}," in
       *",${node_db},"*) mark_ok "runtime env includes DB inventory: $node_db" ;;
       *) mark_fail "runtime env COGNI_NODE_DBS missing $node_db" ;;

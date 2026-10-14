@@ -150,12 +150,20 @@ grep -Fq 'loki.source.journal "kernel"' "$ALLOY_CONFIG" \
   || fail "kernel OOM/SIGKILL evidence is not shipped to Loki"
 grep -Eq 'regex[[:space:]]*= .*postgres.*temporal-postgres' "$ALLOY_CONFIG" \
   || fail "PostgreSQL stderr is not shipped to Loki"
-grep -Fq 'login_reason="server_transient"' "$DEPLOY_INFRA" \
+grep -Fq 'server_transient) max_attempts=3' "$DEPLOY_INFRA" \
   || fail "OpenBao writer login has no bounded transient retry"
-grep -Fq 'login_reason="permission_denied_recheck"' "$DEPLOY_INFRA" \
+grep -Fq '[[ $rc -eq 124 ]]' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer login does not classify a silent GNU timeout as transient"
+grep -Fq 'permission_denied_recheck) max_attempts=2' "$DEPLOY_INFRA" \
   || fail "OpenBao writer login does not recheck a 403 with one fresh JWT"
 grep -Fq 'OpenBao writer login failed permanently' "$DEPLOY_INFRA" \
   || fail "unknown OpenBao login failures do not fail closed"
-pass "backup execution is candidate-gated + serialized; OpenBao login retries are bounded and fail-closed"
+grep -Fq 'classify_kubectl_resource_lookup_failure' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer SA lookup does not distinguish timeout from absence"
+grep -Fq 'OpenBao writer SA lookup remained unavailable after 3 attempts' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer SA lookup has no bounded transient retry"
+grep -Fq 'refusing to claim the SA is absent' "$DEPLOY_INFRA" \
+  || fail "unknown OpenBao writer SA lookup failures invent absence"
+pass "backup execution is candidate-gated + serialized; OpenBao login and SA lookup retries are bounded and fail-closed"
 
 echo "PASS: render-caddyfile.test.sh"
