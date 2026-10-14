@@ -1,0 +1,230 @@
+{
+  "id": "f8ea6c6e-b079-4140-bd8a-affc1133a364",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "cogni_control.database_recoveries": {
+      "name": "database_recoveries",
+      "schema": "cogni_control",
+      "columns": {
+        "node_id": {
+          "name": "node_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "node_slug": {
+          "name": "node_slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "incident_id": {
+          "name": "incident_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_build_sha": {
+          "name": "target_build_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "database_system_identifier": {
+          "name": "database_system_identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "database_name": {
+          "name": "database_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "app_role": {
+          "name": "app_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_role": {
+          "name": "service_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'contained'"
+        },
+        "is_current": {
+          "name": "is_current",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contained_at": {
+          "name": "contained_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deadline_at": {
+          "name": "deadline_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_at": {
+          "name": "verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "database_recoveries_current_node_env": {
+          "name": "database_recoveries_current_node_env",
+          "columns": [
+            {
+              "expression": "node_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "environment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"cogni_control\".\"database_recoveries\".\"is_current\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "database_recoveries_current_role_pair": {
+          "name": "database_recoveries_current_role_pair",
+          "columns": [
+            {
+              "expression": "app_role",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_role",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"cogni_control\".\"database_recoveries\".\"is_current\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "database_recoveries_pending_deadline": {
+          "name": "database_recoveries_pending_deadline",
+          "columns": [
+            {
+              "expression": "deadline_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"cogni_control\".\"database_recoveries\".\"is_current\" AND \"cogni_control\".\"database_recoveries\".\"state\" = 'recovering'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "database_recoveries_node_id_environment_incident_id_pk": {
+          "name": "database_recoveries_node_id_environment_incident_id_pk",
+          "columns": [
+            "node_id",
+            "environment",
+            "incident_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "database_recoveries_environment": {
+          "name": "database_recoveries_environment",
+          "value": "\"cogni_control\".\"database_recoveries\".\"environment\" IN ('candidate-a', 'preview', 'production')"
+        },
+        "database_recoveries_state": {
+          "name": "database_recoveries_state",
+          "value": "\"cogni_control\".\"database_recoveries\".\"state\" IN ('contained', 'recovering', 'readmitted', 'recontained')"
+        },
+        "database_recoveries_build_sha": {
+          "name": "database_recoveries_build_sha",
+          "value": "\"cogni_control\".\"database_recoveries\".\"target_build_sha\" ~ '^[0-9a-f]{40}$'"
+        },
+        "database_recoveries_fixed_deadline": {
+          "name": "database_recoveries_fixed_deadline",
+          "value": "(\"cogni_control\".\"database_recoveries\".\"started_at\" IS NULL AND \"cogni_control\".\"database_recoveries\".\"deadline_at\" IS NULL) OR \"cogni_control\".\"database_recoveries\".\"deadline_at\" = \"cogni_control\".\"database_recoveries\".\"started_at\" + interval '10 minutes'"
+        },
+        "database_recoveries_recovering_intent": {
+          "name": "database_recoveries_recovering_intent",
+          "value": "\"cogni_control\".\"database_recoveries\".\"state\" <> 'recovering' OR (\"cogni_control\".\"database_recoveries\".\"started_at\" IS NOT NULL AND \"cogni_control\".\"database_recoveries\".\"deadline_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {
+    "cogni_control": "cogni_control"
+  },
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

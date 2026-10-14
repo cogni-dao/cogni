@@ -316,6 +316,9 @@ _compose_node_value() {
     DATABASE_SERVICE_URL)
       printf 'postgresql://service_%s%s:%s@%s:5432/%s?sslmode=disable' \
         "${node//-/_}" "${sfx}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
+    DATABASE_RECOVERY_PROBE_URL)
+      printf 'postgresql://probe_%s%s:%s@%s:5432/%s?sslmode=disable' \
+        "${node//-/_}" "${sfx}" "$(bao_get_field "${node}-database-recovery-probe" DATABASE_RECOVERY_PROBE_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
     DATABASE_MIGRATION_URL)
       printf 'postgresql://migration_%s%s:%s@%s:5432/%s?sslmode=disable' \
         "${node//-/_}" "${sfx}" "$(bao_get_field "${node}-database-migration" APP_DB_MIGRATION_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;

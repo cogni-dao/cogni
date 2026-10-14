@@ -91,3 +91,5 @@ pnpm --filter @cogni/db-schema build
 - Schedule tables support Temporal migration (execution_requests for idempotency)
 - `billing.ts` includes `llmChargeDetails` (1:1 with charge_receipts, PK/FK cascade) for model/tokens/provider/latency/graphId
 - `charge_receipts.receipt_kind` distinguishes receipt types (e.g. "llm")
+
+- `infra-control.ts` is the root-owned administrative `cogni_control` recovery ledger. It stays outside `src/**` and all app exports/configs, uses `infra/drizzle.control.config.ts`, and has no cross-database application/user FK.

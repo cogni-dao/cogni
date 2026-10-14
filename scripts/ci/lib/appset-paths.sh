@@ -113,3 +113,15 @@ lanes_reconciled_by() {
     printf '%s\n' "$env"
   done
 }
+
+# Unique catalog authority for reliability private-service ownership in one environment.
+# Never infer an operator node name; renamed forks retain the same declaration.
+reliability_controller_for_env() {
+  local env="$1" controllers
+  controllers="$(yq -N "select(.type == \"node\" and .reliability.controller == true and (.envs | contains([\"${env}\"]))) | .name" "${CATALOG_DIR}"/*.yaml)" || return 1
+  [[ "$controllers" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || {
+    echo '[ERROR] reliability requires exactly one catalog controller in this environment' >&2
+    return 1
+  }
+  printf '%s' "$controllers"
+}

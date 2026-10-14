@@ -21,8 +21,13 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readdirSync, readFileSync, rmSync } from "node:fs";
 
-const CONFIG = "nodes/operator/drizzle.config.ts";
-const MIG = "nodes/operator/app/src/adapters/server/db/migrations";
+const control = process.argv.includes("--control");
+const CONFIG = control
+  ? "infra/drizzle.control.config.ts"
+  : "nodes/operator/drizzle.config.ts";
+const MIG = control
+  ? "infra/compose/runtime/postgres-init/control-migrations"
+  : "nodes/operator/app/src/adapters/server/db/migrations";
 
 function snapshotDir() {
   return {
