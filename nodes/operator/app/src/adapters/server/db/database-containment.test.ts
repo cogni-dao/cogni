@@ -12,25 +12,23 @@ import {
 } from "../compute/cherry-database-cell.adapter";
 import {
   CherryDatabaseSourceFenceAdapter,
+  createPostgresDatabaseContainmentAdapter,
+  createPostgresDatabaseReadmissionAdapter,
   createProductionCherryDatabaseCellAdapter,
   createProductionDatabaseContainmentAdapter,
   createProductionDatabaseReadmissionAdapter,
+  type DatabaseContainmentAuditEvent,
+  DatabaseContainmentConfigurationError,
   DatabaseDsnRotationAdapter,
   DatabaseDsnRotationError,
   executeDatabaseCellLifecycleCommand,
   PinoLokiDatabaseContainmentAuditAdapter,
   PostgresAdminSqlAdapter,
   PostgresDatabaseCellVerifier,
-  PostgresReadmitSqlAdapter,
-} from "./database-containment-production.adapter";
-import {
-  createPostgresDatabaseContainmentAdapter,
-  createPostgresDatabaseReadmissionAdapter,
-  type DatabaseContainmentAuditEvent,
-  DatabaseContainmentConfigurationError,
   PostgresDatabaseContainmentAdapter,
   PostgresDatabaseReadmissionAdapter,
-} from "./postgres-database-containment.adapter";
+  PostgresReadmitSqlAdapter,
+} from "./database-containment-production.adapter";
 
 const ACTION: DatabaseContainmentAction = {
   nodeId: "00000000-0000-4000-8000-000000000011",
