@@ -4,12 +4,12 @@ type: guide
 title: Agent-First API Validation (Candidate-A + Local)
 status: draft
 trust: draft
-summary: API proof recipe for machine-agent discovery, auth, work-item coordination, route exercise, and graph run validation.
-read_when: Validating an HTTP/API surface locally or against candidate-a, especially inside /validate-candidate.
+summary: API proof recipe for machine-agent discovery, auth, work-item coordination, direct and scheduled graph runs, and route validation.
+read_when: Validating an HTTP/API surface locally or against candidate-a, especially inside /validate-candidate or when proving scheduled Temporal graph execution.
 owner: derekg1729
 created: 2026-04-08
-verified: 2026-10-03
-tags: [agent-api, validation, candidate-a, billing]
+verified: 2026-10-12
+tags: [agent-api, validation, candidate-a, billing, temporal, schedules]
 ---
 
 # Agent-First API Validation (Candidate-A + Local)
@@ -338,6 +338,131 @@ Do not use this to bypass missing gates. If PR Manager cannot prove eligibility,
    - `insert`s must precede the `cite`s that reference them (both resolve on the
      branch). Agents may equivalently use `core__knowledge_write` with a
      `citations` array to write an atom + its outgoing edges in one call.
+
+## Scheduled Temporal graph proof
+
+This is the schedule lifecycle row inside `/validate-candidate`; it is not a
+standalone harness. Run it against one target at a time. Repeat it for each
+acceptance canary. Keep every value in shell memory, write no validation
+artifact, and use a fresh registered actor so its scheduled-run ledger is
+unambiguous.
+
+### 1. Bind exact deployed identities before mutating
+
+The expected values come from the exact flight or promotion artifact, not from
+the target being inspected. The health command from `task.5238` fails closed
+unless the app SHA, shared-worker SHA and digest match and Temporal reports
+fresh Workflow and Activity pollers for the node queue.
+
+```bash
+BASE=https://<node>-test.cognidao.org
+EXPECTED_APP_SHA=<40-character deployed node SHA>
+EXPECTED_WORKER_SHA=<40-character shared-worker SHA>
+EXPECTED_WORKER_DIGEST=sha256:<64-hex-digest>
+
+HEALTH=$(pnpm -s temporal:health -- \
+  --url "$BASE" \
+  --expected-app-sha "$EXPECTED_APP_SHA" \
+  --expected-worker-sha "$EXPECTED_WORKER_SHA" \
+  --expected-worker-digest "$EXPECTED_WORKER_DIGEST")
+jq '{status,reason,nodeId,namespace,taskQueue,app,worker,pollers,checkedAt}' \
+  <<<"$HEALTH"
+test "$(jq -r .status <<<"$HEALTH")" = healthy
+```
+
+Stop on any nonzero exit or non-healthy response. `/readyz` alone is not
+Temporal evidence.
+
+### 2. Register, mark, and create one future run
+
+Schedule the next safe UTC minute with the bare free model. Preserve both the
+API key and marker until deletion is proven; never print the key.
+
+```bash
+CREDS=$(curl -fsS --max-time 30 -X POST \
+  "$BASE/api/v1/agent/register" \
+  -H 'content-type: application/json' \
+  -d "$(jq -nc --arg name "temporal-validation-$(date -u +%s)" '{name:$name}')")
+API_KEY=$(jq -er .apiKey <<<"$CREDS")
+MARKER=$(uuidgen | tr '[:upper:]' '[:lower:]')
+SLOT=$(node -e 'const d=new Date(Math.ceil(Date.now()/60000)*60000+60000); console.log(JSON.stringify({scheduledAt:d.toISOString(),cron:`${d.getUTCMinutes()} ${d.getUTCHours()} ${d.getUTCDate()} ${d.getUTCMonth()+1} *`}))')
+
+CREATED=$(curl -fsS --max-time 60 -X POST "$BASE/api/v1/schedules" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H 'content-type: application/json' \
+  -d "$(jq -nc --arg marker "$MARKER" --arg cron "$(jq -r .cron <<<"$SLOT")" \
+    '{graphId:"langgraph:poet",input:{messages:[{role:"user",content:("Reply exactly TEMPORAL_PROBE_OK "+$marker)}],modelRef:{providerKey:"platform",modelId:"gpt-oss-120b"}},cron:$cron,timezone:"UTC"}')")
+SCHEDULE_ID=$(jq -er .id <<<"$CREATED")
+jq '{id,graphId,cron,timezone,nextRunAt}' <<<"$CREATED"
+```
+
+If the create response is lost or times out, do not register another actor.
+Recover with `GET /api/v1/schedules` using the same key, find the unique
+schedule whose input contains `MARKER`, and delete it before continuing.
+
+### 3. Observe one exact terminal run
+
+Poll this fresh actor's ledger sequentially for at most ten minutes:
+
+```bash
+curl -fsS --max-time 30 \
+  "$BASE/api/v1/agent/runs?runKind=system_scheduled&limit=100" \
+  -H "Authorization: Bearer $API_KEY" | \
+  jq '{runs:[.runs[]|select(.graphId=="langgraph:poet")|{runId,graphId,runKind,status,startedAt,completedAt,errorCode,errorMessage}]}'
+```
+
+Exactly one new `langgraph:poet` row must appear. Save its `runId` as
+`GRAPH_RUN_ID`; pass only when it reaches `status=success`. `error`, `skipped`,
+`cancelled`, ambiguity, or timeout fails the row. The API omits `scheduleId`, so
+the fresh-actor invariant plus the Loki join below are both required.
+
+### 4. Join the run to Temporal and the node executor
+
+Grafana ingestion can lag the live event by about one minute. Retry the
+read-only query for a bounded two minutes. The exact worker completion row must
+contain `temporalScheduleId=SCHEDULE_ID`, `runId=GRAPH_RUN_ID`, a `workflowId`
+prefixed by `SCHEDULE_ID`, and a nonempty `temporalRunId`.
+
+```bash
+WORKER_EVIDENCE=$(scripts/loki-query.sh \
+  "{service=\"scheduler-worker\"} |= \"worker.activity.graph_completed\" |= \"$SCHEDULE_ID\" |= \"$GRAPH_RUN_ID\"" \
+  15 100)
+jq -r '.data.result[]?.values[]?[1] | fromjson? |
+  select(.event=="worker.activity.graph_completed") |
+  {event,temporalScheduleId,workflowId,temporalRunId,graphId,runId}' \
+  <<<"$WORKER_EVIDENCE"
+
+scripts/loki-query.sh \
+  "{service=\"app\"} |= \"Scheduled graph execution completed\" |= \"$GRAPH_RUN_ID\"" \
+  15 100 | jq -r '.data.result[]?.values[]?[1]'
+```
+
+The two rows prove `Temporal Schedule → GraphRunWorkflow → shared-worker
+Activity → node GraphExecutorPort`; neither ambient worker traffic nor the run
+API alone proves that join. On failure, query the same identities for
+`worker.activity.graph_error` before cleanup.
+
+### 5. Delete and prove absence
+
+Deletion runs even after a failed terminal result. Keep the same actor key and
+schedule identity; a fresh registration cannot clean up another actor's probe.
+
+```bash
+curl -fsS --max-time 30 -o /dev/null -w '%{http_code}\n' -X DELETE \
+  "$BASE/api/v1/schedules/$SCHEDULE_ID" \
+  -H "Authorization: Bearer $API_KEY" | grep -qx 204
+
+REMAINING=$(curl -fsS --max-time 30 "$BASE/api/v1/schedules" \
+  -H "Authorization: Bearer $API_KEY")
+test "$(jq --arg id "$SCHEDULE_ID" --arg marker "$MARKER" \
+  '[.schedules[]|select(.id==$id or ((.input|tostring)|contains($marker)))]|length' \
+  <<<"$REMAINING")" -eq 0
+```
+
+The validation row records: target and environment, exact app SHA, exact
+shared-worker SHA/digest, both fresh poller timestamps, `SCHEDULE_ID`,
+`workflowId`, `temporalRunId`, `GRAPH_RUN_ID`, terminal result, the two Loki
+rows, DELETE 204, and zero residual schedules. Redact the API key and prompt.
 
 ## Verification stage — what "success" IS (Derek ruling, 2026-09-11)
 
