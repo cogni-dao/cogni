@@ -24,6 +24,8 @@ import {
   resolveRuntimeProfileSecretRefs,
 } from "@cogni/repo-spec";
 
+import { databaseConsumerCommand } from "@/shared/secrets/database-ca-command";
+
 export interface NodeServicesWorkloadInput {
   /** Node slug used as the provider-neutral workload label. */
   readonly slug: string;
@@ -136,8 +138,14 @@ export function buildNodeServicesWorkloadSpec(
           HOSTNAME: service.bindHost,
           PORT: String(service.port),
         },
-        ...(service.command ? { command: service.command } : {}),
-        ...(service.args ? { args: service.args } : {}),
+        ...databaseConsumerCommand({
+          ...(service.runtimeProfile
+            ? { runtimeProfile: service.runtimeProfile }
+            : {}),
+          ...(service.command ? { command: service.command } : {}),
+          ...(service.args ? { args: service.args } : {}),
+          secretRefs,
+        }),
         ...service.resources,
         expose: [
           {

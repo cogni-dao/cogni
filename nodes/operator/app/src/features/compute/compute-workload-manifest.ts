@@ -37,6 +37,7 @@ import type {
 } from "@/ports";
 
 import { writerFor } from "@/shared/node-registry/crossplane-control-plane";
+import { databaseConsumerCommand } from "@/shared/secrets/database-ca-command";
 
 import type { NodeComputeApi } from "./node-compute-api";
 import type { DeploymentEnvironment } from "./node-deployment-provider";
@@ -374,8 +375,14 @@ export function buildComputeWorkloadManifest(
           ? { runtimeProfile: service.runtimeProfile }
           : {}),
         ...(secretRefs.length > 0 ? { secretRefs } : {}),
-        ...(service.command ? { command: service.command } : {}),
-        ...(service.args ? { args: service.args } : {}),
+        ...databaseConsumerCommand({
+          ...(service.runtimeProfile
+            ? { runtimeProfile: service.runtimeProfile }
+            : {}),
+          ...(service.command ? { command: service.command } : {}),
+          ...(service.args ? { args: service.args } : {}),
+          secretRefs,
+        }),
         port: service.port,
         visibility: service.visibility,
         bindings: service.bindings,

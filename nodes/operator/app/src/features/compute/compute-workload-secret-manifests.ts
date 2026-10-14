@@ -124,6 +124,13 @@ export function buildComputeSecretResources(input: {
                 property: "DATABASE_MIGRATION_URL",
               },
             },
+            {
+              secretKey: "DATABASE_SSL_CA_CERT",
+              remoteRef: {
+                key: `${input.environment}/${input.slug}-database-migration`,
+                property: "DATABASE_SSL_CA_CERT",
+              },
+            },
           ],
         },
       },

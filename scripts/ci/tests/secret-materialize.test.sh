@@ -114,8 +114,8 @@ if [ "${1:-}" = "exec" ]; then
       # batched form: a JSON object of key/value pairs arrives on stdin
       while IFS=$'\t' read -r k v; do
         [ -z "$k" ] && continue
-        printf '%s' "$v" > "${FAKE_BAO_ROOT}/${path}/${k}"
-      done < <(jq -r 'to_entries[] | [.key, .value] | @tsv')
+        printf '%s' "$v" | base64 --decode > "${FAKE_BAO_ROOT}/${path}/${k}"
+      done < <(jq -r 'to_entries[] | [.key, (.value | tostring | @base64)] | @tsv')
       exit 0
     fi
     key="${key_arg%%=*}"
@@ -286,6 +286,9 @@ for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
 done
 # Postgres DSNs composed sole-source here, embedding the per-node app_<node> role
 # (regression guard: a shared app_user DSN is the bug.5002 split-brain we killed)
+# Real multiline public CA bytes survive Bao JSON and the materializer prefetch cache.
+openssl x509 -in "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_SSL_CA_CERT" -noout >/dev/null
+cmp "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_SSL_CA_CERT" "$BAO_ROOT/cogni/candidate-a/node-template-database-migration/DATABASE_SSL_CA_CERT"
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_URL" \
   || { echo "materialize did not compose DATABASE_URL" >&2; exit 1; }
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_SERVICE_URL" \

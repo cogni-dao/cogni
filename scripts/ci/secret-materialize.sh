@@ -281,8 +281,8 @@ prefetch_path() {
   mkdir -p "${CACHE_DIR}/${ns}"
   while IFS=$'\t' read -r key val; do
     [[ -z "$key" ]] && continue
-    printf '%s' "$val" > "${CACHE_DIR}/${ns}/${key}"
-  done < <(printf '%s' "$json" | jq -r 'to_entries[] | [.key, .value] | @tsv')
+    printf '%s' "$val" | base64 --decode > "${CACHE_DIR}/${ns}/${key}"
+  done < <(printf '%s' "$json" | jq -r 'to_entries[] | [.key, (.value | tostring | @base64)] | @tsv')
 }
 
 # Reads serve from the cache the single prefetch populated — no per-key ssh.
@@ -393,7 +393,7 @@ DSN_DEFER_KEYS=" "
 # zero churn while a half-migrated node self-heals. This includes stale per-node
 # DOLTGRES_URL copies: node-substrate provisions with the operator SSOT, so the pod
 # must receive a URL derived from that same SSOT or the migrator 28P01s.
-COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL "
+COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL DATABASE_SSL_CA_CERT "
 
 # Transitional shared/human inheritance — the blind ancestor scan the north star
 # replaces with explicit catalog `inheritFrom` (catalog-custody lane). Now serves
@@ -591,6 +591,12 @@ if [[ "$(bao_get_field "$migration_service" DATABASE_MIGRATION_URL)" == "$migrat
 else
   rm -f "${CACHE_DIR}/${migration_service}/DATABASE_MIGRATION_URL"
   seed_kv "$migration_service" DATABASE_MIGRATION_URL "$migration_dsn"
+  created=$((created + 1))
+fi
+migration_ca="$(_compose_node_value "$TARGET_NODE" DATABASE_SSL_CA_CERT)"
+if [[ "$(bao_get_field "$migration_service" DATABASE_SSL_CA_CERT)" != "$migration_ca" ]]; then
+  rm -f "${CACHE_DIR}/${migration_service}/DATABASE_SSL_CA_CERT"
+  seed_kv "$migration_service" DATABASE_SSL_CA_CERT "$migration_ca"
   created=$((created + 1))
 fi
 flush_batch "$migration_service"

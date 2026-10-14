@@ -48,7 +48,7 @@ declare -ga NODE_BASELINE_KEYS=(
   CONNECTIONS_ENCRYPTION_KEY POLY_WALLET_AEAD_KEY_HEX
   POLY_WALLET_AEAD_KEY_ID
   APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD
-  DATABASE_URL DATABASE_SERVICE_URL
+  DATABASE_URL DATABASE_SERVICE_URL DATABASE_SSL_CA_CERT
   DOLTGRES_PASSWORD DOLTGRES_URL
   POSTHOG_API_KEY POSTHOG_HOST OPENROUTER_API_KEY
   EVM_RPC_URL POLYGON_RPC_URL
@@ -299,6 +299,13 @@ _compose_node_value() {
   pg_host="${COGNI_LANE_DB_HOST:-${VM_IP}}"
   db="cogni_${node//-/_}${sfx}"
   case "$k" in
+    DATABASE_SSL_CA_CERT)
+      if command -v node >/dev/null 2>&1; then
+        node -e 'process.stdout.write(require("node:tls").rootCertificates[0])'
+      else
+        openssl x509 -in /etc/ssl/certs/ca-certificates.crt -outform PEM
+      fi
+      return 0 ;;
     DATABASE_RELIABILITY_ADMIN_URL)
       # Private platform-service DSN. The component password is generated into
       # this same isolated bucket first; hexadecimal encoding is URL-safe.
