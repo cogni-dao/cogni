@@ -119,6 +119,12 @@ const HISTORICAL_UID_PREFIX = [
 
 describe("fleet Serve alert contract (bug.5459)", () => {
   it("bounds new Grafana UIDs without changing valid existing identities", () => {
+    const warningBlock = syntheticMain.slice(
+      syntheticMain.indexOf("for_each = local.reliability_warning_rules")
+    );
+    expect(warningBlock).toContain(
+      'uid = length("${rule.value.uid}-${each.value.uid_suffix}") <= 40'
+    );
     expect(syntheticMain).toContain(
       'length("${rule.value.uid}-${each.value.uid_suffix}") <= 40'
     );

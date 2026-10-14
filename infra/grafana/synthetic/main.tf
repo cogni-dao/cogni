@@ -332,11 +332,7 @@ resource "grafana_rule_group" "fleet_capacity" {
     for_each = local.fleet_alert_group.rules
 
     content {
-      uid = length("${rule.value.uid}-${each.value.uid_suffix}") <= 40 ? "${rule.value.uid}-${each.value.uid_suffix}" : format(
-        "%s-%s",
-        substr("${rule.value.uid}-${each.value.uid_suffix}", 0, 26),
-        substr(sha256("${rule.value.uid}-${each.value.uid_suffix}"), 0, 12)
-      )
+      uid            = "${rule.value.uid}-${each.value.uid_suffix}"
       name           = replace(rule.value.title, "__ENVIRONMENT__", each.key)
       condition      = rule.value.condition
       for            = rule.value.for
@@ -387,7 +383,11 @@ resource "grafana_rule_group" "fleet_capacity" {
     for_each = local.reliability_warning_rules
 
     content {
-      uid            = "${rule.value.uid}-${each.value.uid_suffix}"
+      uid = length("${rule.value.uid}-${each.value.uid_suffix}") <= 40 ? "${rule.value.uid}-${each.value.uid_suffix}" : format(
+        "%s-%s",
+        substr("${rule.value.uid}-${each.value.uid_suffix}", 0, 26),
+        substr(sha256("${rule.value.uid}-${each.value.uid_suffix}"), 0, 12)
+      )
       name           = "${each.key} ${rule.value.title}"
       condition      = "THRESHOLD"
       for            = contains(["io", "connections"], rule.key) ? "5m" : "10m"
