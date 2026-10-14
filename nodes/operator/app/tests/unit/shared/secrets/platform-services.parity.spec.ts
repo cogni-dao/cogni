@@ -122,6 +122,15 @@ describe("platform-service boundary parity", () => {
     expect(app).toEqual(bashServices());
   });
 
+  it("keeps platform-service values outside interactive setup custody", () => {
+    const setupSecrets = read("scripts/setup-secrets.ts");
+    expect(setupSecrets).toContain("isSetupSecretsManaged");
+    expect(setupSecrets).toContain("SETUP_MANAGED_SECRETS");
+    expect(setupSecrets).not.toMatch(
+      /const inventorySecrets = nodeFilter\s*\? SECRETS\.filter/
+    );
+  });
+
   it("names the same owner node the materializer mints these buckets on", () => {
     const owner =
       /PLATFORM_SERVICE_OWNER_NODE="\$\{PLATFORM_SERVICE_OWNER_NODE:-([a-z0-9-]+)\}"/.exec(

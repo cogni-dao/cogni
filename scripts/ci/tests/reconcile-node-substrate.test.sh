@@ -345,6 +345,7 @@ grep -q -- "annotate externalsecret operator-database-reliability-actuator-env-s
 grep -q -- "annotate externalsecret operator-database-reliability-readmitter-env-secrets force-sync=" "$REMOTE_ROOT/kubectl.log"
 grep -q -- "get secret database-reliability-actuator-env-secrets -o jsonpath={.data.DATABASE_RELIABILITY_ADMIN_URL}" "$REMOTE_ROOT/kubectl.log"
 grep -q -- "get secret database-reliability-readmitter-env-secrets -o jsonpath={.data.DATABASE_RELIABILITY_READMIT_URL}" "$REMOTE_ROOT/kubectl.log"
+grep -q 'metadata.name == "env-secrets"' scripts/ci/reconcile-node-substrate.sh
 operator_node_id="$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)"
 grep -q -- "--ns cogni-candidate-a" "$REMOTE_ROOT/docker.log"
 grep -q -- "--ns cogni-candidate-a-${operator_node_id}" "$REMOTE_ROOT/docker.log"

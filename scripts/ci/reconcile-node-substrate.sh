@@ -512,7 +512,7 @@ if [[ "$TARGET_NODE" == operator && -f "$database_reliability_es_file" ]]; then
   [[ -f "$operator_es_file" ]] || fail "missing operator ExternalSecret leaf: $operator_es_file"
   database_reliability_es_tmp="$(mktemp)"
   RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" \
-    yq 'select(.kind == "ExternalSecret") | .metadata.name = "operator-env-secrets" | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
+    yq 'select(.kind == "ExternalSecret" and .metadata.name == "env-secrets") | .metadata.name = "operator-env-secrets" | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
       "$operator_es_file" > "$database_reliability_es_tmp"
   printf '\n---\n' >> "$database_reliability_es_tmp"
   RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" \

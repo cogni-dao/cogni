@@ -373,40 +373,68 @@ else
   mark_fail "Service missing: $workload_name"
 fi
 
-consumed_secret_names="$(
+runtime_secret_names="$(
   kubectl -n "$namespace" get deployment "$workload_name" \
-    -o jsonpath='{.spec.template.spec.containers[*].envFrom[*].secretRef.name}{" "}{.spec.template.spec.initContainers[*].envFrom[*].secretRef.name}{" "}{.spec.template.spec.containers[*].env[*].valueFrom.secretKeyRef.name}{" "}{.spec.template.spec.initContainers[*].env[*].valueFrom.secretKeyRef.name}' \
-    2>/dev/null | tr ' ' '\n' | sed '/^$/d' | sort -u
+    -o jsonpath='{.spec.template.spec.containers[*].envFrom[*].secretRef.name}{" "}{.spec.template.spec.containers[*].env[*].valueFrom.secretKeyRef.name}' \
+  2>/dev/null | tr ' ' '\n' | sed '/^$/d' | sort -u
 )"
-if [ -z "$consumed_secret_names" ]; then
-  mark_fail "Deployment has no consumed Secret refs: $workload_name"
+init_secret_names="$(
+  kubectl -n "$namespace" get deployment "$workload_name" \
+    -o jsonpath='{.spec.template.spec.initContainers[*].envFrom[*].secretRef.name}{" "}{.spec.template.spec.initContainers[*].env[*].valueFrom.secretKeyRef.name}' \
+  2>/dev/null | tr ' ' '\n' | sed '/^$/d' | sort -u
+)"
+migration_secret_name="${node}-migration-secrets"
+
+if [ -z "$runtime_secret_names" ]; then
+  mark_fail "Deployment app runtime has no consumed Secret refs: $workload_name"
 else
   while IFS= read -r consumed_secret; do
     [ -n "$consumed_secret" ] || continue
     if [ "$consumed_secret" = "${node}-node-app-secrets" ]; then
-      mark_fail "Deployment consumes legacy plain Secret ${consumed_secret}; expected ${expected_secret_name}"
+      mark_fail "Deployment app runtime consumes legacy plain Secret ${consumed_secret}; expected ${expected_secret_name}"
     elif [ "$consumed_secret" != "$expected_secret_name" ]; then
-      mark_fail "Deployment consumes unexpected Secret ${consumed_secret}; expected ${expected_secret_name}"
+      mark_fail "Deployment app runtime consumes unexpected Secret ${consumed_secret}; expected only ${expected_secret_name}"
     fi
-
-    if kubectl -n "$namespace" get secret "$consumed_secret" >/dev/null 2>&1; then
-      mark_ok "Deployment-consumed Secret exists: $consumed_secret"
-    else
-      mark_fail "ESO-synced Secret missing: $consumed_secret"
-    fi
-
-    if kubectl -n "$namespace" get externalsecret "$consumed_secret" >/dev/null 2>&1; then
-      ready_status="$(kubectl -n "$namespace" get externalsecret "$consumed_secret" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
-      if [ "$ready_status" = "True" ]; then
-        mark_ok "Deployment-consumed ExternalSecret Ready=True: $consumed_secret"
-      else
-        mark_fail "Deployment-consumed ExternalSecret not Ready=True: $consumed_secret"
-      fi
-    else
-      mark_fail "ExternalSecret missing for Deployment-consumed Secret: $consumed_secret"
-    fi
-  done <<< "$consumed_secret_names"
+  done <<< "$runtime_secret_names"
 fi
+
+if ! grep -Fxq "$migration_secret_name" <<< "$init_secret_names"; then
+  mark_fail "Deployment migration initContainer does not consume ${migration_secret_name}"
+fi
+while IFS= read -r consumed_secret; do
+  [ -n "$consumed_secret" ] || continue
+  case "$consumed_secret" in
+    "$expected_secret_name"|"$migration_secret_name") ;;
+    "${node}-node-app-secrets")
+      mark_fail "Deployment initContainer consumes legacy plain Secret ${consumed_secret}"
+      ;;
+    *)
+      mark_fail "Deployment initContainer consumes unexpected Secret ${consumed_secret}; expected ${expected_secret_name} and ${migration_secret_name}"
+      ;;
+  esac
+done <<< "$init_secret_names"
+
+consumed_secret_names="$(printf '%s\n%s\n' "$runtime_secret_names" "$init_secret_names" | sed '/^$/d' | sort -u)"
+while IFS= read -r consumed_secret; do
+  [ -n "$consumed_secret" ] || continue
+
+  # Argo can apply the Deployment and ExternalSecret in the same sync wave. Wait
+  # for ESO's Ready condition before reading the owned Secret; a one-shot status
+  # read races the controller and made a healthy cold-start flight fail.
+  if kubectl -n "$namespace" wait --for=condition=Ready "externalsecret/${consumed_secret}" --timeout=120s >/dev/null 2>&1; then
+    mark_ok "Deployment-consumed ExternalSecret Ready=True: $consumed_secret"
+  elif kubectl -n "$namespace" get externalsecret "$consumed_secret" >/dev/null 2>&1; then
+    mark_fail "Deployment-consumed ExternalSecret not Ready=True: $consumed_secret"
+  else
+    mark_fail "ExternalSecret missing for Deployment-consumed Secret: $consumed_secret"
+  fi
+
+  if kubectl -n "$namespace" get secret "$consumed_secret" >/dev/null 2>&1; then
+    mark_ok "Deployment-consumed Secret exists: $consumed_secret"
+  else
+    mark_fail "ESO-synced Secret missing: $consumed_secret"
+  fi
+done <<< "$consumed_secret_names"
 
 # DSN keys must be materialized into the node Secret (reconcile seeds all three
 # today; secret-materialize owns them once per-node DB creds land). Fail loud if
@@ -420,6 +448,13 @@ if kubectl -n "$namespace" get secret "$expected_secret_name" >/dev/null 2>&1; t
       mark_fail "node Secret ${expected_secret_name} missing DSN key ${dsn_key}; materialize/reconcile did not write it"
     fi
   done
+fi
+if kubectl -n "$namespace" get secret "$migration_secret_name" >/dev/null 2>&1; then
+  if [ -n "$(kubectl -n "$namespace" get secret "$migration_secret_name" -o jsonpath='{.data.DATABASE_MIGRATION_URL}' 2>/dev/null)" ]; then
+    mark_ok "migration Secret carries DATABASE_MIGRATION_URL"
+  else
+    mark_fail "migration Secret ${migration_secret_name} missing DATABASE_MIGRATION_URL"
+  fi
 fi
 
 if [ -f "$edge_env" ]; then

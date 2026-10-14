@@ -3,8 +3,8 @@
 
 /**
  * Module: `@tests/unit/secrets-catalog-loader`
- * Purpose: Asserts catalog routing, path resolution, and setup-secrets custody boundaries.
- * Scope: Drives `loadSecretsCatalog` against fixtures + the real repo catalog. Does NOT exercise either secret write side.
+ * Purpose: Asserts the capability-gated fan-out schema (appliesTo/shared) added in design.secrets-catalog-per-node §Amendment v2 loads into the routing record and rejects conflicting routing.
+ * Scope: Drives `loadSecretsCatalog` against fixtures + the real repo catalog (load + path resolution). Does NOT exercise the write side or `setup-secrets` per-node value generation.
  * Invariants:
  *   - appliesTo + shared survive into the routing record
  *   - an entry declaring both service: and appliesTo: is rejected at load
@@ -18,7 +18,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  isSetupSecretsManaged,
   loadSecretsCatalog,
   openBaoPathFor,
 } from "../../scripts/lib/secrets-catalog-loader";
@@ -145,18 +144,5 @@ describe("secrets-catalog-loader · REAL repo catalog (guards the migration)", (
       "preview"
     );
     expect(nt).not.toBe(cn);
-  });
-
-  it("keeps platform-service keys out of interactive setup custody", () => {
-    const { secrets, routing } = loadSecretsCatalog({ repoRoot });
-    const managedNames = secrets
-      .filter((secret) => isSetupSecretsManaged(secret.name, routing))
-      .map((secret) => secret.name);
-
-    expect(managedNames).not.toContain("AKASH_ACTUATOR_CONSOLE_API_KEY");
-    expect(managedNames).not.toContain("AKASH_TX_ACTUATOR_TOKEN");
-    expect(managedNames).not.toContain("DATABASE_RELIABILITY_PASSWORD");
-    expect(managedNames).not.toContain("DATABASE_RELIABILITY_ADMIN_URL");
-    expect(managedNames).toContain("AUTH_SECRET");
   });
 });

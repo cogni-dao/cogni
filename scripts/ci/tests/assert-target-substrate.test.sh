@@ -80,10 +80,14 @@ if [ "${1:-}" = "get" ]; then
     "cogni-candidate-a:deployment:node-template-node-app")
       [ "${FAKE_MISSING_DEPLOYMENT:-}" = "1" ] && exit 1
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
-        if [ "${FAKE_LEGACY_SECRET_CONSUMER:-}" = "1" ]; then
+        if printf '%s\n' "$*" | grep -Fq 'initContainers'; then
+          echo "node-template-env-secrets node-template-migration-secrets"
+        elif [ "${FAKE_LEGACY_SECRET_CONSUMER:-}" = "1" ]; then
           echo "node-template-node-app-secrets"
         elif [ "${FAKE_WRONG_SECRET_CONSUMER:-}" = "1" ]; then
           echo "other-secret"
+        elif [ "${FAKE_RUNTIME_MIGRATION_SECRET_CONSUMER:-}" = "1" ]; then
+          echo "node-template-env-secrets node-template-migration-secrets"
         else
           echo "node-template-env-secrets"
         fi
@@ -108,11 +112,37 @@ if [ "${1:-}" = "get" ]; then
       fi
       exit 0
       ;;
+    "cogni-candidate-a:secret:node-template-migration-secrets")
+      [ "${FAKE_MISSING_MIGRATION_SECRET:-}" = "1" ] && exit 1
+      if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
+        [ "${FAKE_MISSING_MIGRATION_DSN:-}" = "1" ] || echo "cG9zdGdyZXM6Ly8="
+      fi
+      exit 0
+      ;;
     "cogni-candidate-a:externalsecret:node-template-env-secrets")
       [ "${FAKE_MISSING_EXTERNAL_SECRET:-}" = "1" ] && exit 1
       if printf '%s\n' "$*" | grep -Fq 'jsonpath='; then
         [ "${FAKE_EXTERNAL_SECRET_NOT_READY:-}" = "1" ] || echo True
       fi
+      exit 0
+      ;;
+    "cogni-candidate-a:externalsecret:node-template-migration-secrets")
+      [ "${FAKE_MISSING_MIGRATION_EXTERNAL_SECRET:-}" = "1" ] && exit 1
+      exit 0
+      ;;
+  esac
+fi
+if [ "${1:-}" = "wait" ]; then
+  resource="${*: -2:1}"
+  case "${ns}:${resource}" in
+    "cogni-candidate-a:externalsecret/node-template-env-secrets")
+      [ "${FAKE_MISSING_EXTERNAL_SECRET:-}" = "1" ] && exit 1
+      [ "${FAKE_EXTERNAL_SECRET_NOT_READY:-}" = "1" ] && exit 1
+      exit 0
+      ;;
+    "cogni-candidate-a:externalsecret/node-template-migration-secrets")
+      [ "${FAKE_MISSING_MIGRATION_EXTERNAL_SECRET:-}" = "1" ] && exit 1
+      [ "${FAKE_MIGRATION_EXTERNAL_SECRET_NOT_READY:-}" = "1" ] && exit 1
       exit 0
       ;;
   esac
@@ -283,13 +313,19 @@ if env "${BASE_ENV[@]}" FAKE_LEGACY_SECRET_CONSUMER=1 bash scripts/ci/assert-tar
   echo "expected legacy Secret consumer to fail" >&2
   exit 1
 fi
-grep -q "Deployment consumes legacy plain Secret node-template-node-app-secrets" "$TMPROOT/legacy-secret-consumer.out"
+grep -q "Deployment app runtime consumes legacy plain Secret node-template-node-app-secrets" "$TMPROOT/legacy-secret-consumer.out"
 
 if env "${BASE_ENV[@]}" FAKE_WRONG_SECRET_CONSUMER=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/wrong-secret-consumer.out" 2>&1; then
   echo "expected wrong Secret consumer to fail" >&2
   exit 1
 fi
-grep -q "Deployment consumes unexpected Secret other-secret" "$TMPROOT/wrong-secret-consumer.out"
+grep -q "Deployment app runtime consumes unexpected Secret other-secret" "$TMPROOT/wrong-secret-consumer.out"
+
+if env "${BASE_ENV[@]}" FAKE_RUNTIME_MIGRATION_SECRET_CONSUMER=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/runtime-migration-secret-consumer.out" 2>&1; then
+  echo "expected app runtime migration Secret consumer to fail" >&2
+  exit 1
+fi
+grep -q "app runtime consumes unexpected Secret node-template-migration-secrets" "$TMPROOT/runtime-migration-secret-consumer.out"
 
 if env "${BASE_ENV[@]}" FAKE_MISSING_SECRET=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-secret.out" 2>&1; then
   echo "expected missing secret to fail" >&2
@@ -303,6 +339,12 @@ if env "${BASE_ENV[@]}" FAKE_MISSING_EXTERNAL_SECRET=1 bash scripts/ci/assert-ta
 fi
 grep -q "ExternalSecret missing" "$TMPROOT/missing-external-secret.out"
 
+if env "${BASE_ENV[@]}" FAKE_MISSING_MIGRATION_EXTERNAL_SECRET=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-migration-external-secret.out" 2>&1; then
+  echo "expected missing migration ExternalSecret to fail" >&2
+  exit 1
+fi
+grep -q "ExternalSecret missing for Deployment-consumed Secret: node-template-migration-secrets" "$TMPROOT/missing-migration-external-secret.out"
+
 if env "${BASE_ENV[@]}" FAKE_EXTERNAL_SECRET_NOT_READY=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/external-secret-not-ready.out" 2>&1; then
   echo "expected not-Ready ExternalSecret to fail" >&2
   exit 1
@@ -314,6 +356,12 @@ if env "${BASE_ENV[@]}" FAKE_MISSING_DSN=1 bash scripts/ci/assert-target-substra
   exit 1
 fi
 grep -q "missing DSN key DATABASE_URL" "$TMPROOT/missing-dsn.out"
+
+if env "${BASE_ENV[@]}" FAKE_MISSING_MIGRATION_DSN=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-migration-dsn.out" 2>&1; then
+  echo "expected missing migration DSN key to fail" >&2
+  exit 1
+fi
+grep -q "migration Secret node-template-migration-secrets missing DATABASE_MIGRATION_URL" "$TMPROOT/missing-migration-dsn.out"
 
 if env "${BASE_ENV[@]}" FAKE_MISSING_DB=1 bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/missing-db.out" 2>&1; then
   echo "expected missing DB to fail" >&2
