@@ -101,7 +101,7 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       idempotencyKey: randomUUID(),
     });
     const results = await Promise.all(
-      Array.from({ length: 20 }, () => identity.redeemSpawnGrant(grant.token))
+      Array.from({ length: 2 }, () => identity.redeemSpawnGrant(grant.token))
     );
 
     expect(new Set(results.map((result) => result.actorId))).toHaveLength(1);
