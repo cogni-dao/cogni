@@ -73,6 +73,7 @@ PARALLEL=(
   scheduler-runtime-routing.test.sh
   session-cognition-hook.test.sh
   no-automatic-fork-source-sync.test.sh
+  lane-db-residency.test.sh
 )
 
 MAX_JOBS="${SHELL_TESTS_JOBS:-$(nproc 2>/dev/null || echo 4)}"
