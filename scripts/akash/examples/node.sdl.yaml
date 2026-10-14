@@ -1,0 +1,39 @@
+# Template SDL for the crypto-deploy rail — proves the human-signed lifecycle
+# end-to-end with a minimal, publicly-pullable web service.
+#
+# This is intentionally a SINGLE service so the crypto payment path can be proven
+# independently of the full node workload. Once PR 2077 merges buildAkashSdl +
+# buildNodeWorkloadSpec on main, render-sdl.sh should emit the real 7-service node
+# SDL (app + db + redis + doltgres + temporal + init + migrate) so both rails
+# deploy byte-identical workloads. Placeholders: ${NODE_IMAGE}, ${NODE_PORT}.
+---
+version: "2.0"
+services:
+  web:
+    image: "${NODE_IMAGE}"
+    expose:
+      - port: ${NODE_PORT}
+        as: 80
+        to:
+          - global: true
+profiles:
+  compute:
+    web:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 1Gi
+        storage:
+          size: 1Gi
+  placement:
+    dcloud:
+      pricing:
+        web:
+          denom: uakt
+          amount: 10000
+deployment:
+  web:
+    dcloud:
+      profile: web
+      count: 1
