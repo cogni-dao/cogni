@@ -27,7 +27,7 @@ on node X and must be able to **debug node X** — read its logs, analytics, and
 Derek handholding** and **without seeing node Y**. Today the grant writes only an OpenFGA tuple; it
 provisions **no substrate credential**, so every dev's observability access bottoms out in Derek pasting a
 shared token. This spec defines the plane that closes that gap, aligned with the BaaS invariant from
-[`node-baas-architecture.md`](./node-baas-architecture.md): **node declares shape; operator wires environment.**
+[Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model): **node declares shape; operator wires environment.**
 
 ## The two access axes (do not conflate them)
 
@@ -100,7 +100,7 @@ such gap: the per-node check gates **who**, and the server pin gates **reach**. 
   a token issuer. (A `GrafanaTokenBroker`-style "mint and hand over" port is the rejected shape — each
   returned token's reach escapes the per-node check.)
 
-This is a new row in the [BaaS Substrate Map](./node-baas-architecture.md#baas-substrate-map):
+This is a new row in the [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model):
 **Observability Access** — _node declares which substrates it emits to; operator serves per-node-scoped
 reads on `developer` grant (proxy / scoped DSN), the dev holding no env-wide credential._
 
@@ -132,7 +132,7 @@ held credential whose reach the per-node check cannot govern; the proxy makes th
 ## See also
 
 - [`grafana-observability-access.md`](./grafana-observability-access.md) — Grafana proxy-not-issuer + the Loki-label blocker
-- [`node-baas-architecture.md`](./node-baas-architecture.md) — BaaS substrate map + "node declares shape; operator wires environment"
+- [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) — BaaS substrate map + "node declares shape; operator wires environment"
 - [`rbac.md`](./rbac.md) — OpenFGA `node.developer`/`can_flight`, the grant→approve loop
 - [`.claude/skills/cicd-secrets-expert/SKILL.md`](../../.claude/skills/cicd-secrets-expert/SKILL.md) — runtime-substrate secrets plane (the other axis)
 - `nodes/operator/app/src/app/api/v1/nodes/[id]/observability/logs/route.ts` — the guarded gate (proxy, never a token)

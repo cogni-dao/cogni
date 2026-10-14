@@ -3,38 +3,23 @@
 
 /**
  * Module: `@tests/ci-invariants/single-node-scope-meta`
- * Purpose: Pins the `single-node-scope` job in `.github/workflows/ci.yaml` to the `nodes/*`
- *          directory listing, and asserts `dorny/paths-filter` is SHA-pinned.
- * Scope: Static structural test that reads two files. Does NOT shell out to git or invoke the action.
+ * Purpose: Pins runtime-generated single-node-scope filters and the SHA-pinned dorny action.
+ * Scope: Static structural test that reads the workflow. Does NOT shell out or invoke the action.
  * Invariants: DIRECTORY_IS_SOURCE_OF_TRUTH, NO_INFRA_ENUMERATION, ACTION_PINNED_BY_SHA (see work/items/task.0381.* §Invariants).
- * Side-effects: IO (reads .github/workflows/ci.yaml and nodes/ listing)
- * Notes: Adding `nodes/<X>/` and forgetting to update the workflow filters
- *        causes this test to fail with an actionable message.
+ * Side-effects: IO (reads .github/workflows/ci.yaml)
+ * Notes: The workflow is fleet-neutral; each checkout generates its own filters at runtime.
  * Links: .github/workflows/ci.yaml, docs/spec/node-ci-cd-contract.md
  * @public
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const WORKFLOW_PATH = path.join(REPO_ROOT, ".github/workflows/ci.yaml");
-const NODES_DIR = path.join(REPO_ROOT, "nodes");
-const OPERATOR_NODE = "operator";
 const SHA40 = /^[0-9a-f]{40}$/;
-
-// Remote-source nodes live in their own repos and are absent under nodes/ (no
-// gitlink, no .gitmodules). The single-node-scope domains are exactly the
-// in-tree nodes/* directories minus operator. Stays in lockstep with
-// render-scope-filters.sh's non_operator_nodes().
-function listNonOperatorNodes(): string[] {
-  return readdirSync(NODES_DIR, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && d.name !== OPERATOR_NODE)
-    .map((d) => d.name)
-    .sort();
-}
 
 function loadJob() {
   const doc = yaml.parse(readFileSync(WORKFLOW_PATH, "utf8")) as {
@@ -55,83 +40,23 @@ function findStep<T extends Record<string, unknown>>(
 }
 
 describe("single-node-scope workflow gate · structural pins", () => {
-  it("filter list matches `nodes/*` directory listing minus operator", () => {
+  it("derives filters at runtime from this checkout instead of committed roster state", () => {
     const job = loadJob();
+    const renderStep = findStep<{ id: string; run: string }>(
+      job,
+      (s) => s.id === "scope_filters"
+    );
     const filterStep = findStep<{ with: { filters: string } }>(
       job,
       (s) =>
         typeof s.uses === "string" && s.uses.startsWith("dorny/paths-filter@")
     );
-    const filters = yaml.parse(filterStep.with.filters) as Record<
-      string,
-      unknown
-    >;
-
-    const nonOperatorFilters = Object.keys(filters)
-      .filter((k) => k !== OPERATOR_NODE)
-      .sort();
-    const expected = listNonOperatorNodes();
-
-    expect(
-      nonOperatorFilters,
-      `Workflow filter list must equal nodes/* minus operator. ` +
-        `Got [${nonOperatorFilters.join(", ")}], expected [${expected.join(", ")}]. ` +
-        `Add or remove the matching filter (and update the operator negation list) ` +
-        `in .github/workflows/ci.yaml.`
-    ).toEqual(expected);
-  });
-
-  it("filter block is wrapped in render-scope-filters.sh GENERATED sentinels (CATALOG_IS_SSOT)", () => {
-    const raw = readFileSync(WORKFLOW_PATH, "utf8");
-    expect(
-      raw,
-      "filter block must be wrapped in the render-scope-filters.sh BEGIN sentinel " +
-        "so the dorny filters stay catalog-derived (no hand-listed `<slug>:` filters). " +
-        "Run `pnpm gen:scope-filters`."
-    ).toContain(
-      "# >>> GENERATED scope-filters (scripts/ci/render-scope-filters.sh) — DO NOT EDIT BY HAND"
+    expect(renderStep.run).toBe(
+      "bash scripts/ci/render-scope-filters.sh --github-output"
     );
-    expect(
-      raw,
-      "filter block must close with the GENERATED end sentinel"
-    ).toContain("# <<< GENERATED scope-filters");
-  });
-
-  it("operator filter is `**` plus negations of every other filter (no positive infra paths)", () => {
-    const job = loadJob();
-    const filterStep = findStep<{ with: { filters: string } }>(
-      job,
-      (s) =>
-        typeof s.uses === "string" && s.uses.startsWith("dorny/paths-filter@")
+    expect(filterStep.with.filters).toBe(
+      "${{ steps.scope_filters.outputs.filters }}"
     );
-    const filters = yaml.parse(filterStep.with.filters) as Record<
-      string,
-      string[]
-    >;
-    const operator = filters[OPERATOR_NODE];
-
-    expect(operator, "operator filter must exist").toBeDefined();
-    expect(operator[0], "operator filter must start with '**'").toBe("**");
-
-    const negations = operator.slice(1);
-    for (const pattern of negations) {
-      expect(
-        pattern.startsWith("!"),
-        `operator filter entry "${pattern}" must be a negation. ` +
-          `Adding positive infra paths to operator is forbidden ` +
-          `(NO_INFRA_ENUMERATION) — operator owns "everything not under another node".`
-      ).toBe(true);
-    }
-
-    const negatedNodes = negations
-      .map((p) => p.replace(/^!nodes\//, "").replace(/\/\*\*$/, ""))
-      .sort();
-    const expected = listNonOperatorNodes();
-    expect(
-      negatedNodes,
-      `operator filter negations must exactly cover every other-node filter. ` +
-        `Got [${negatedNodes.join(", ")}], expected [${expected.join(", ")}].`
-    ).toEqual(expected);
   });
 
   it("`dorny/paths-filter` uses `predicate-quantifier: every` so operator negations subtract", () => {

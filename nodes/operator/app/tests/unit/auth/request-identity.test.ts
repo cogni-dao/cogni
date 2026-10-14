@@ -37,7 +37,11 @@ vi.mock("@/shared/env/server", () => ({
   serverEnv: () => ({ AUTH_SECRET: "test-secret-for-unit-tests-only" }),
 }));
 
-import { resolveRequestIdentity } from "@/app/_lib/auth/request-identity";
+import {
+  issueAgentApiKey,
+  peekAgentKeyExpiry,
+  resolveRequestIdentity,
+} from "@/app/_lib/auth/request-identity";
 
 function headersFromRecord(record: Record<string, string>) {
   const normalized = new Map(
@@ -99,5 +103,44 @@ describe("resolveRequestIdentity — circular-recursion regression", () => {
     expect(mockGetServerSessionUser).toHaveBeenCalledTimes(ITERATIONS);
     // Loose upper bound — a healthy resolver finishes 1000 mocked calls in well under 1s.
     expect(elapsedMs).toBeLessThan(1000);
+  });
+});
+
+describe("peekAgentKeyExpiry — agent-key liveness for /agent/me", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the key's future expiry for a valid agent bearer", async () => {
+    const token = issueAgentApiKey({
+      userId: "user-7",
+      displayName: "Agent 7",
+    });
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({ authorization: `Bearer ${token}` })
+    );
+
+    const exp = await peekAgentKeyExpiry();
+
+    expect(exp).not.toBeNull();
+    expect(exp).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    // Never consults the cookie session on the bearer path.
+    expect(mockGetServerSessionUser).not.toHaveBeenCalled();
+  });
+
+  it("returns null for a cookie-only request (no bearer)", async () => {
+    mockHeaders.mockResolvedValue(headersFromRecord({}));
+
+    expect(await peekAgentKeyExpiry()).toBeNull();
+  });
+
+  it("returns null for an invalid/forged bearer", async () => {
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({
+        authorization: "Bearer cogni_ag_sk_v1_not-a-real-token",
+      })
+    );
+
+    expect(await peekAgentKeyExpiry()).toBeNull();
   });
 });

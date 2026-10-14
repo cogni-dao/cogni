@@ -37,10 +37,10 @@ Static structural tests that pin CI/CD-side policy invariants (workflow shape, a
 
 ## Responsibilities
 
-- This directory **does**: pin workflow filter lists to `nodes/*` listing, assert action SHA-pinning, replay shared fixtures through a reference classifier, forbid GitOps ownership of Argo's own `argocd-*` config (bug.5095).
+- This directory **does**: pin runtime workflow filter generation from `nodes/*`, assert action SHA-pinning, replay shared fixtures through a reference classifier, forbid GitOps ownership of Argo's own `argocd-*` config (bug.5095).
 - This directory **does not**: invoke GitHub Actions, shell out to `git`, or run network I/O.
 
 ## Notes
 
-- Adding a new node directory under `nodes/` requires updating `.github/workflows/ci.yaml` (single-node-scope filters) — the meta-test fails until both sides match.
+- Adding or removing a node directory under `nodes/` needs no workflow edit; `render-scope-filters.sh` supplies that checkout's roster at runtime.
 - When task.0382 lands, replace the `it.todo` cases in `single-node-scope-parity.spec.ts` with real assertions using the runtime resolver against the same fixtures.

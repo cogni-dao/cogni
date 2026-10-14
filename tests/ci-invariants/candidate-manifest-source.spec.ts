@@ -17,8 +17,6 @@
  *   DEPLOY_REPO_OWNS_APPSET: AppSet reconciliation renders repoURL for the
  *     repository that owns the deploy branch instead of the canonical default;
  *     writer, AppSet, verification checkout, and ancestry check share one resolver.
- *   ISOLATED_FLEET_ROOT_IS_LOCAL: a non-canonical candidate reconciles the
- *     apply-once control-plane root to its own protected main before AppSets.
  *   EXACT_SELF_FLIGHT_PROVES_SUBSTRATE_SCRIPTS: the operator may execute the
  *     reviewed app-source substrate runner only when workflow and app are the
  *     same commit; all remote or mismatched source flights stay on ci-src.
@@ -54,11 +52,20 @@ interface WorkflowStep {
 }
 
 interface WorkflowJob {
+  if?: string;
+  needs?: string[];
   outputs?: Record<string, unknown>;
+  concurrency?: { group?: unknown; "cancel-in-progress"?: boolean };
   steps: WorkflowStep[];
 }
 
 const parsed = yaml.parse(WORKFLOW) as {
+  concurrency?: { group?: unknown; "cancel-in-progress"?: boolean };
+  on?: {
+    workflow_dispatch?: {
+      inputs?: Record<string, { required?: boolean; type?: string }>;
+    };
+  };
   jobs: Record<string, WorkflowJob>;
 };
 
@@ -71,6 +78,13 @@ function namedStep(jobName: string, stepName: string): WorkflowStep {
 }
 
 describe("candidate-a manifest source", () => {
+  it("queues duplicate same-node flights without cancellation", () => {
+    expect(parsed.concurrency?.group).toBe(
+      "candidate-flight-${{ inputs.pr_number || inputs.node_slug }}"
+    );
+    expect(parsed.concurrency?.["cancel-in-progress"]).toBe(false);
+  });
+
   it("keeps the k3s control domain separate from an isolated Akash workload zone", () => {
     const targetDomain =
       "${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'k3s' && (vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org')) || vars.DOMAIN }}";
@@ -187,24 +201,6 @@ describe("candidate-a manifest source", () => {
     );
   });
 
-  it("reconciles an isolated fleet root before applying its AppSet", () => {
-    const root = namedStep(
-      "reconcile-appset",
-      "Reconcile isolated fleet control-plane root"
-    );
-
-    expect(root.if).toBe("steps.ssh-setup.outputs.has_vm == 'true'");
-    expect(root.run).toContain('== "cogni-dao/cogni"');
-    expect(root.run).toContain(
-      'desired_repo="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"'
-    );
-    expect(root.run).toContain(
-      "targetRevision: deploy/candidate-a-control-plane#targetRevision: main"
-    );
-    expect(root.run).toContain(".status.operationState.phase");
-    expect(root.run).toContain("|Healthy|Succeeded");
-  });
-
   it("selects the flighted source SHA for an in-repo node-ref", () => {
     const meta = namedStep("decide", "Resolve PR metadata").run;
 
@@ -212,6 +208,134 @@ describe("candidate-a manifest source", () => {
     expect(meta).toContain('CATALOG="infra/catalog/${NODE_SLUG}.yaml"');
     expect(meta).toMatch(
       /SOURCE_REPO=\$\(yq -N '\.source_repo \/\/ ""' "\$CATALOG"\)\s+if \[ -z "\$SOURCE_REPO" \]; then[\s\S]*?HEAD_SHA="\$NODE_SOURCE_SHA"/
+    );
+  });
+
+  it("preserves the full PR target set for a same-repo node-ref", () => {
+    const meta = namedStep("decide", "Resolve PR metadata").run;
+    const files = namedStep("decide", "Fetch PR changed-paths from GitHub API");
+    const combine = namedStep("decide", "Combine flight targets");
+    const images = namedStep("decide", "Resolve PR image digests");
+
+    expect(meta).toContain(
+      '"repos/${{ github.repository }}/commits/${NODE_SOURCE_SHA}/pulls"'
+    );
+    expect(meta).toContain('RESOLVED_PR_NUMBER="${MATCHING_PRS[0]}"');
+    expect(files.env?.RESOLVED_PR_NUMBER).toBe(
+      "${{ steps.meta.outputs.resolved_pr_number }}"
+    );
+    expect(files.run).toContain(
+      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    );
+    expect(combine.run).toContain(
+      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    );
+    expect(combine.run).toContain("items = ([node] if node else []) + items");
+    expect(images.run).toContain(
+      'if [ -n "$NODE" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    );
+    expect(images.run).toContain("resolve-pr-build-images.sh");
+  });
+
+  it("fails a node-ref before mutation when its exact image is absent", () => {
+    const guard = namedStep("decide", "Require requested node image");
+
+    expect(guard.if).toBe("steps.meta.outputs.node_slug != ''");
+    expect(guard.env?.NODE).toBe("${{ steps.meta.outputs.node_slug }}");
+    expect(guard.env?.PAYLOAD_FILE).toBe(
+      "${{ runner.temp }}/resolved-pr-images.json"
+    );
+    expect(guard.run).toContain("if sys.argv[2] not in targets:");
+    expect(guard.run).toContain("Requested node image is not available yet");
+  });
+
+  it("writes scheduler routing to the deploy repository Argo actually watches", () => {
+    const resolve = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Resolve watched deploy repository"
+    );
+    const reconcile = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Reconcile scheduler-worker routing (propagate to per-env deploy branch)"
+    );
+    const workspace = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Prepare scheduler-worker deploy branch workspace"
+    );
+    const promote = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Promote scheduler-worker in the same branch transaction"
+    );
+    const push = namedStep(
+      "reconcile-scheduler-worker-routing",
+      "Commit and push atomic scheduler-worker desired state"
+    );
+    const genericPrepare = namedStep(
+      "flight",
+      "Prepare per-node deploy branch workspace"
+    );
+    const genericSync = namedStep(
+      "flight",
+      "Sync base + per-node overlay + per-node catalog to deploy branch"
+    );
+    const genericPush = namedStep(
+      "flight",
+      "Commit and push to per-node deploy branch"
+    );
+
+    expect(resolve.env?.DEPLOYMENT_PROVIDER).toBe("k3s");
+    expect(resolve.run).toBe(
+      "bash scripts/ci/resolve-candidate-deploy-repository.sh"
+    );
+    expect(workspace.env?.DEPLOY_REPOSITORY).toBe(
+      "${{ steps.deploy-repo.outputs.repository }}"
+    );
+    expect(workspace.run).toContain(
+      'git clone "https://x-access-token:${GH_TOKEN}@github.com/${DEPLOY_REPOSITORY}.git" deploy-branch'
+    );
+    expect(reconcile.env?.DEPLOY_BRANCH_DIR).toBe(
+      "${{ github.workspace }}/deploy-branch"
+    );
+    expect(reconcile.env?.GH_TOKEN).toBe(
+      "${{ steps.deploy-app.outputs.token || github.token }}"
+    );
+    expect(promote.if).toContain("scheduler-worker");
+    expect(promote.run).toContain("NODES=scheduler-worker");
+    expect(push.run?.match(/git push /g)).toHaveLength(1);
+    expect(genericPrepare.if).toBe("matrix.node != 'scheduler-worker'");
+    expect(genericSync.if).toBe("matrix.node != 'scheduler-worker'");
+    expect(genericPush.if).toBe("matrix.node != 'scheduler-worker'");
+    expect(
+      parsed.jobs["reconcile-scheduler-worker-routing"].concurrency?.group
+    ).toBe("reconcile-scheduler-worker-routing-candidate-a");
+    expect(parsed.jobs.flight.needs).toContain(
+      "reconcile-scheduler-worker-routing"
+    );
+    expect(parsed.jobs.flight.if).toContain(
+      "needs.reconcile-scheduler-worker-routing.result == 'success'"
+    );
+  });
+
+  it("fails candidate verification unless worker /version matches SHA and digest", () => {
+    const resolve = namedStep(
+      "verify-candidate",
+      "Resolve promoted scheduler-worker identity"
+    );
+    const wait = namedStep(
+      "verify-candidate",
+      "Wait for in-cluster services (per-node)"
+    );
+
+    expect(resolve.if).toContain("matrix.node == 'scheduler-worker'");
+    expect(resolve.run).toContain(
+      'json.load(handle).get("scheduler-worker", "")'
+    );
+    expect(resolve.run).toContain(".images[]");
+    expect(wait.env?.SCHEDULER_EXPECTED_SHA).toBe(
+      "${{ steps.scheduler-identity.outputs.sha }}"
+    );
+    expect(wait.env?.SCHEDULER_EXPECTED_DIGEST).toBe(
+      "${{ steps.scheduler-identity.outputs.digest }}"
     );
   });
 

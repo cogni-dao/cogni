@@ -86,7 +86,7 @@ Code carries _what_ via names + types. The **knowledge hub** carries the _why_ +
    The operator uses `coordination.nextAction` to push back when your work doesn't match scorecard requirements (e.g., demanding `/validate-candidate` before `/review-implementation` when `deployVerified` is false). Treat that text as authoritative — re-read it after each phase.
 
 5. Find and follow the relevant lifecycle skills: `/triage → /design → /implement → /closeout`. PATCH the work item with `branch` + `pr` + `status` as you progress so `dolt_log` reflects state.
-6. Run the smallest checks that cover your edited surface; normally `pnpm check:fast` must pass unless a human explicitly narrows verification. Push branch. `gh pr create` with a conventional commit title.
+6. Run the smallest checks that cover your edited surface — `pnpm lint` / `biome check <path>` + `pnpm typecheck` on touched paths, plus the 1–2 relevant test files. `pnpm check:fast` / `pnpm check` are resource-heavy and default to NO (AGENTS.md §6): default to CI for the full sweep, and ask to run them locally only when the change is complex and your confidence in a clean CI + flight is low. Push branch. `gh pr create` with a conventional commit title.
 
 ## Phase 2 — Flight Request
 

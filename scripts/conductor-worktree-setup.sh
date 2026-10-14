@@ -178,6 +178,6 @@ fi
 # blocks setup (the hook retries each session).
 bash scripts/agent/session-cognition.sh >/dev/null 2>&1 || true
 
-pnpm install --offline --frozen-lockfile
+pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile
 pnpm packages:build
 pnpm worktree:check

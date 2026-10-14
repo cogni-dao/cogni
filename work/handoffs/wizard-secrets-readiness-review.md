@@ -35,7 +35,7 @@ seams are honest (not silent debt). This is the runtime half; the env-genesis ha
   table + falsifying gate (the decision record).
 - `docs/spec/secrets-management.md` Invariants 15 (`DB_ROLE_CREDS_ARE_OPENBAO_OWNED`)
   - 16 (`NODE_SECRET_MATERIALIZATION_PRECEDES_SUBSTRATE_RECONCILE`).
-- `docs/spec/node-baas-architecture.md` — why DB creds are node-owned, not shared.
+- [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) — why DB creds are node-owned, not shared.
 - `scripts/ci/secret-materialize.sh` (new) and `scripts/ci/reconcile-node-substrate.sh` (diff).
 - `docs/guides/vm-secrets-repair.md` — the paired env-repair lane (NOT this PR).
 

@@ -50,6 +50,18 @@ compute_api:
 # Explicit replacement counter for a terminally closed lease — the only
 # redeploy-after-close path (actuator refuses a settled idempotence key).
 lease_generation:
+  # 41 -> 42. Generation 41 correctly used the supported recovery path, but its only
+  # placement-valid BE bid was rejected by a false provider strike recorded while
+  # generation 40 was intentionally database-fenced. The exact false outcome was
+  # corrected through the schema-defined operator action before this fresh attempt.
+  # 40 -> 41. Generation 40 closed during the 2026-10-13 shared-Postgres incident;
+  # its only placement-valid BE provider is excluded as already tried. A fresh
+  # generation is therefore required to restore candidate-a without widening policy.
+  # 39 -> 40. The reviewed recovery commit 5f093cd602 on deploy/candidate-a-poly replaced
+  # terminal generation 39 and minted live dseq 1791761178490. That emergency recovery changed
+  # only the rendered deploy branch, leaving this catalog SSOT at 39; the next ordinary flight
+  # faithfully re-rendered 39 and demoted the proven gen-40 lease to observe-only retention.
+  # Keep the catalog on the live generation so every later flight adopts and updates that lease.
   # 38 -> 39. Operator error, recorded so it is not repeated: while unwedging a
   # Crossplane Request that was stuck on crossplane.io/external-create-pending with
   # 503 ledger_unavailable, I cleared the annotation and applied the documented
@@ -59,7 +71,7 @@ lease_generation:
   # poly-test went 200 -> 404 and receipt 1790779522819 closed at 2026-10-02T01:25:09Z.
   # The hub's precondition is to verify the wedged receipt is settled with no live lease;
   # I verified the LEDGER was clean and never checked that Request's verb. Check the verb.
-  candidate-a: 39
+  candidate-a: 42
   # 2 -> 3. Gen-2's lease (dseq 1790283509086, zencloud) was closed by the protocol with
   # escrow state insufficient_funds (settled overdrawn -1667 uact) on 2026-09-30; Console
   # per-dseq read 2026-10-06 shows deployment=closed, no live lease, so the hub

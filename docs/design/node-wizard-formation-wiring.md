@@ -8,7 +8,7 @@ skills:
   - ../../.claude/skills/node-wizard-expert/SKILL.md
   - ../../.claude/skills/devops-expert/SKILL.md
 spec_refs:
-  - ../spec/node-baas-architecture.md
+  - node-baas-substrate-model
   - ../spec/node-formation.md
 related:
   - ./openfga-substrate-unification.md

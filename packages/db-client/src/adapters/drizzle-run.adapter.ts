@@ -162,18 +162,19 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
   }
 
   /**
-   * Marks a run as completed. Monotonic: only transitions from 'pending' or 'running'.
-   * Idempotent on retry - no-op if already in terminal state.
+   * Marks a run as completed. Definitive outcomes may upgrade transport timeout;
+   * success/error remain terminal and cannot be overwritten by later workers.
    */
   async markRunCompleted(
     actorId: ActorId,
     runId: string,
-    status: "success" | "error" | "skipped" | "cancelled",
+    status: "success" | "error" | "timeout" | "skipped" | "cancelled",
     errorMessage?: string,
     errorCode?: string
   ): Promise<void> {
     await withTenantScope(this.db, actorId, async (tx) => {
-      // Monotonic guard: only update if status is pending/running (prevents regression)
+      // Timeout is transport-incomplete, so a later node-owned outcome may
+      // reconcile it. Definitive success/error remain monotonic terminals.
       await tx
         .update(graphRuns)
         .set({
@@ -185,7 +186,7 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
         .where(
           and(
             eq(graphRuns.runId, runId),
-            inArray(graphRuns.status, ["pending", "running"])
+            inArray(graphRuns.status, ["pending", "running", "timeout"])
           )
         );
     });

@@ -17,6 +17,7 @@ import {
   type AuthorizationPort,
   type AuthzCheckParams,
   type AuthzDecision,
+  type AuthzListDecision,
   type AuthzRelationTuple,
   type AuthzSubcheck,
   type AuthzWriteDecision,
@@ -55,6 +56,31 @@ export interface OpenFgaWriteClient extends OpenFgaCheckClient {
       };
     }
   ): Promise<unknown>;
+}
+
+/** Filter for a Read — any subset of a tuple key (`object` may be a type prefix like `node:`). */
+export interface OpenFgaReadRequest {
+  readonly user?: string;
+  readonly relation?: string;
+  readonly object?: string;
+}
+
+/** Structural subset of the SDK's `ReadResponse` (`tuples[].key`). */
+export interface OpenFgaReadResponse {
+  readonly tuples?: ReadonlyArray<{
+    readonly key?: {
+      readonly user?: string;
+      readonly relation?: string;
+      readonly object?: string;
+    };
+  }>;
+}
+
+export interface OpenFgaReadClient extends OpenFgaCheckClient {
+  read(
+    body: OpenFgaReadRequest,
+    options?: unknown
+  ): Promise<OpenFgaReadResponse>;
 }
 
 export interface OpenFgaStore {
@@ -156,7 +182,9 @@ function openFgaClientConfig(
   };
 }
 
-class StoreNameResolvingOpenFgaClient implements OpenFgaWriteClient {
+class StoreNameResolvingOpenFgaClient
+  implements OpenFgaWriteClient, OpenFgaReadClient
+{
   private resolvedClient: Promise<OpenFgaCheckClient> | undefined;
 
   constructor(
@@ -197,6 +225,17 @@ class StoreNameResolvingOpenFgaClient implements OpenFgaWriteClient {
       throw new Error("OpenFGA write client unavailable");
     }
     return client.deleteTuples(tuples, options);
+  }
+
+  async read(
+    body: OpenFgaReadRequest,
+    options?: unknown
+  ): Promise<OpenFgaReadResponse> {
+    const client = await this.resolveClient();
+    if (!isOpenFgaReadClient(client)) {
+      throw new Error("OpenFGA read client unavailable");
+    }
+    return client.read(body, options);
   }
 
   private resolveClient(): Promise<OpenFgaCheckClient> {
@@ -498,6 +537,51 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     }
   }
 
+  async listRelations(user: string): Promise<AuthzListDecision> {
+    const client = this.client;
+    if (!isOpenFgaReadClient(client)) {
+      return {
+        decision: "failure",
+        code: "authz_list_unavailable",
+        reason: "OpenFGA read client unavailable",
+      };
+    }
+
+    try {
+      // Read all node-scoped role tuples for this subject. `object: "node:"` is a
+      // type-only filter → every `node:<id>` the user holds a stored relation on.
+      // Reads fail-closed-fast like check(): one bounded attempt, no retry.
+      const response = await withTimeout(
+        client.read({ user, object: "node:" }),
+        this.timeoutMs,
+        "read"
+      );
+
+      const tuples: AuthzRelationTuple[] = (response.tuples ?? [])
+        .map((entry) => entry.key)
+        .filter(
+          (key): key is { user: string; relation: string; object: string } =>
+            key !== undefined &&
+            typeof key.user === "string" &&
+            typeof key.relation === "string" &&
+            typeof key.object === "string"
+        )
+        .map((key) => ({
+          user: key.user,
+          relation: key.relation,
+          object: key.object,
+        }));
+
+      return { decision: "success", code: "authz_list_success", tuples };
+    } catch (error) {
+      return {
+        decision: "failure",
+        code: "authz_list_unavailable",
+        reason: `OpenFGA read unavailable: ${errorMessage(error)}`,
+      };
+    }
+  }
+
   private planChecks(params: AuthzCheckParams): readonly PlannedSubcheck[] {
     const permission = {
       name: "permission" as const,
@@ -546,4 +630,10 @@ function isOpenFgaWriteClient(
   client: OpenFgaCheckClient
 ): client is OpenFgaWriteClient {
   return "writeTuples" in client && "deleteTuples" in client;
+}
+
+function isOpenFgaReadClient(
+  client: OpenFgaCheckClient
+): client is OpenFgaReadClient {
+  return "read" in client;
 }

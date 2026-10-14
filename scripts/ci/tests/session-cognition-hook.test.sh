@@ -4,9 +4,10 @@
 
 # Hermetic regressions for bug.5284, bug.5359, and story.5070: Codex receives the
 # COMPLETE bundle through hook stdout with spill disabled; Claude Code's hook is
-# write-only because AGENTS.md owns presentation through the file channel. Tracked
-# snapshots must never be presented as live cognition, and the stable user hook
-# must stay reconciled.
+# write-only because CLAUDE.md owns presentation through the file channel. Supported
+# OpenCode 1.x uses its native automatic instruction adapter and never asks the agent
+# to read the cache. Tracked snapshots must never be presented as live cognition, and the stable
+# user hook must stay reconciled.
 
 set -euo pipefail
 
@@ -28,8 +29,18 @@ grep -Fq 'Every human-facing reply, including answers and follow-ups, is exactly
   "$REPO_ROOT/AGENTS.md" || fail "root AGENTS.md omitted the universal response floor"
 grep -Fq 'reproduce `Goal` and `Done when` byte-for-byte' "$REPO_ROOT/AGENTS.md" ||
   fail "root AGENTS.md omitted immutable session state"
+grep -Eq '\| status[[:space:]]+\| ETA · Conf[[:space:]]+\| next' "$REPO_ROOT/AGENTS.md" ||
+  fail "root AGENTS.md omitted per-row ETA and confidence"
+! grep -Fq '@.cogni/.cognition-cache.md' "$REPO_ROOT/AGENTS.md" ||
+  fail "universal AGENTS.md exposes a Claude-only import directive"
+[[ ! -L "$REPO_ROOT/CLAUDE.md" ]] ||
+  fail "CLAUDE.md must own its harness-specific imports, not symlink AGENTS.md"
+grep -Fxq '@AGENTS.md' "$REPO_ROOT/CLAUDE.md" ||
+  fail "CLAUDE.md omitted the universal root floor import"
+grep -Fxq '@.cogni/.cognition-cache.md' "$REPO_ROOT/CLAUDE.md" ||
+  fail "CLAUDE.md omitted the automatic rich-cognition import"
 [[ "$(jq -r '.instructions[0]' "$REPO_ROOT/opencode.json")" == ".cogni/.cognition-cache.md" ]] ||
-  fail "OpenCode project config omitted automatic cognition instructions"
+  fail "OpenCode 1.x config omitted automatic cognition instructions"
 [[ "$(jq -r '.outputStyle' "$REPO_ROOT/.claude/settings.json")" == "Cogni Contract" ]] ||
   fail "Claude Code project settings omitted the Cogni Contract output style"
 OUTPUT_STYLE="$REPO_ROOT/.claude/output-styles/Cogni Contract.md"
@@ -38,6 +49,8 @@ grep -Fq 'This response protocol has no task-type exceptions' "$OUTPUT_STYLE" ||
   fail "Claude Code output style permits task-type formatting exceptions"
 grep -Fq 'preserve Goal and Done when byte-for-byte' "$OUTPUT_STYLE" ||
   fail "Claude Code output style omitted immutable session state"
+grep -Fq '5m–4h wall-clock ETA' "$OUTPUT_STYLE" ||
+  fail "Claude Code output style omitted short-horizon row estimates"
 STOP_VALIDATOR="$REPO_ROOT/scripts/agent/validate-status-contract.sh"
 [[ -x "$STOP_VALIDATOR" ]] || fail "Claude Code status-contract Stop hook is not executable"
 jq -e '.hooks.Stop[0].hooks[0].command | contains("validate-status-contract.sh")' \
@@ -47,15 +60,15 @@ jq -e '.hooks.Stop[0].hooks[0].command | contains("validate-status-contract.sh")
 VALID_MESSAGE='| 🎯 **Goal** | Keep contract state |
 |---|---|
 | **Done when** | Two turns preserve exact fields. |
-| **Status** | 🔵 testing |
-| **ETA · Conf** | 1 minute · 90% + reviewed 3/3 sources |
-| **Followed** | https://cognidao.org/knowledge/cognition-substrate-bootstrap · https://github.com/cogni-dao/cogni/blob/main/docs/spec/node-baas-architecture.md · https://cognidao.org/work/items/story.5070 |
+| **Status** | 🔵 in progress |
+| **ETA · Conf** | 10m · earned 90% + reviewed 3/3 sources |
+| **Followed** | https://cognidao.org/knowledge/cognition-substrate-bootstrap · https://github.com/cogni-dao/cogni/blob/main/AGENTS.md · https://cognidao.org/knowledge/node-baas-substrate-model · https://cognidao.org/work/items/story.5070 |
 
 ---
 
-| item | owner | deliverable links | status | next |
-|---|---|---|---|---|
-| proposed story — contract | dev-manager, me | - | 🔵 in progress | Test next turn |
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — contract | dev-manager, me | - | 🔵 in progress | 10m · earned 90% | Test next turn |
 
 > 🔵 **Bottom line —** Contract-shaped response.'
 VALIDATOR_SCRATCH="$FIXTURE_ROOT/validator-scratch"
@@ -67,33 +80,37 @@ valid_output="$(jq -cn --arg message "$VALID_MESSAGE" --arg scratch "$VALIDATOR_
 invalid_output="$(jq -cn --arg message 'This is a design question, so the contract does not apply.' \
   --arg scratch "$VALIDATOR_SCRATCH" '{last_assistant_message:$message,scratchpad_dir:$scratch}' | \
   bash "$STOP_VALIDATOR")"
-[[ "$(printf '%s' "$invalid_output" | jq -r '.decision')" == "block" ]] ||
-  fail "status-contract Stop hook accepted prose outside the contract block"
+# Warn-only contract: a breach surfaces as a non-blocking advisory (systemMessage), never decision:block.
+[[ -n "$(printf '%s' "$invalid_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$invalid_output" | jq -r '.decision // empty')" ]] ||
+  fail "status-contract Stop hook did not warn (non-blocking) on prose outside the contract block"
 
 MUTATED_MESSAGE="${VALID_MESSAGE/Keep contract state/Change contract state}"
 mutated_output="$(jq -cn --arg message "$MUTATED_MESSAGE" --arg scratch "$VALIDATOR_SCRATCH" \
   '{last_assistant_message:$message,scratchpad_dir:$scratch}' | bash "$STOP_VALIDATOR")"
-[[ "$(printf '%s' "$mutated_output" | jq -r '.decision')" == "block" ]] ||
-  fail "status-contract Stop hook accepted mutated Goal state"
+[[ -n "$(printf '%s' "$mutated_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$mutated_output" | jq -r '.decision // empty')" ]] ||
+  fail "status-contract Stop hook did not warn (non-blocking) on mutated Goal state"
 
 ZERO_RESEARCH_MESSAGE='| 🎯 **Goal** | Design a strategy agent |
 |---|---|
 | **Done when** | Design is approved. |
-| **Status** | 🟡 proposed |
-| **ETA · Conf** | 2 hours · 40% + reviewed 0/5 sources |
+| **Status** | 👉 needs you |
+| **ETA · Conf** | 2h · earned 40% + reviewed 0/5 sources |
 | **Followed** | — |
 
 ---
 
-| item | owner | deliverable links | status | next |
-|---|---|---|---|---|
-| proposed story — strategy | dev-manager, me | - | 👉 needs you | 👉 needs you: approve scope |
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — strategy | dev-manager, me | - | 👉 needs you | 15m · earned 40% | 👉 needs you: [approve scope](https://cognidao.org/work/items/story.5070) |
 
 > 👉 **Bottom line —** Approve the proposal.'
 zero_research_output="$(jq -cn --arg message "$ZERO_RESEARCH_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
-[[ "$(printf '%s' "$zero_research_output" | jq -r '.decision')" == "block" ]] ||
-  fail "status-contract Stop hook accepted a substantive zero-research proposal"
+[[ -n "$(printf '%s' "$zero_research_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$zero_research_output" | jq -r '.decision // empty')" ]] ||
+  fail "status-contract Stop hook did not warn (non-blocking) on a substantive zero-research proposal"
 
 PRELIMINARY_STOP_MESSAGE='| 🎯 **Goal** | — |
 |---|---|
@@ -104,20 +121,21 @@ PRELIMINARY_STOP_MESSAGE='| 🎯 **Goal** | — |
 
 ---
 
-| item | owner | deliverable links | status | next |
-|---|---|---|---|---|
-| proposed story — strategy | dev-manager, me | - | 🔵 in progress | Research relevant sources |
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — strategy | dev-manager, me | - | 🔵 in progress | 15m · earned 20% | Research relevant sources |
 
 > 🔵 **Bottom line —** Researching the existing substrate.'
 preliminary_stop_output="$(jq -cn --arg message "$PRELIMINARY_STOP_MESSAGE" \
   '{last_assistant_message:$message}' | bash "$STOP_VALIDATOR")"
-[[ "$(printf '%s' "$preliminary_stop_output" | jq -r '.decision')" == "block" ]] ||
-  fail "status-contract Stop hook allowed an agent-owned preliminary state to become a final reply"
+[[ -n "$(printf '%s' "$preliminary_stop_output" | jq -r '.systemMessage // empty')" &&
+   -z "$(printf '%s' "$preliminary_stop_output" | jq -r '.decision // empty')" ]] ||
+  fail "status-contract Stop hook did not warn (non-blocking) on an agent-owned preliminary state as a final reply"
 
 grep -Fq "if [[ \"\${CONDUCTOR_IS_LOCAL:-1}\" == \"1\" ]]; then" "$CONDUCTOR_SETUP" ||
   fail "Conductor setup does not guard user-hook installation to local workspaces"
 installer_line="$(grep -nF 'bash scripts/agent/install-codex-cognition-hook.sh' "$CONDUCTOR_SETUP" | cut -d: -f1)"
-dependency_line="$(grep -nF 'pnpm install --offline --frozen-lockfile' "$CONDUCTOR_SETUP" | cut -d: -f1)"
+dependency_line="$(grep -nF 'pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile' "$CONDUCTOR_SETUP" | cut -d: -f1)"
 [[ -n "$installer_line" && -n "$dependency_line" && "$installer_line" -lt "$dependency_line" ]] ||
   fail "Conductor setup does not reconcile the user hook before dependency install"
 
@@ -174,7 +192,7 @@ locked_output="$({
   fail "second concurrent presenter did not honor the per-thread lock"
 
 # story.5070 regression: a large cached bundle remains intact while Claude Code's
-# hook stays write-only. AGENTS.md owns presentation through its file import.
+# hook stays write-only. CLAUDE.md owns presentation through its file import.
 mkdir -p "$FIXTURE_ROOT/large/.cogni"
 head -c 17000 /dev/zero | tr '\0' x >"$FIXTURE_ROOT/large/.cogni/.cognition-cache.md"
 large_output="$({

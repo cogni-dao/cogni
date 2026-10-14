@@ -41,11 +41,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PAYLOAD_FILE=${PAYLOAD_FILE:-}
 OVERLAY_ENV=${OVERLAY_ENV:-}
-PROMOTE_SCRIPT=${PROMOTE_SCRIPT:-../app-src/scripts/ci/promote-k8s-image.sh}
-# Per-app source-SHA map writer (bug.0321 Fix 4). Same relative path
-# convention as PROMOTE_SCRIPT: callers run from the deploy-branch
-# checkout, scripts live under ../app-src/.
-MAP_SCRIPT=${MAP_SCRIPT:-../app-src/scripts/ci/update-source-sha-map.sh}
+# The driver and its helpers are one versioned CI unit. Candidate flights may
+# intentionally deploy an older application SHA, so resolving helpers from the
+# app checkout creates a workflow/app-source skew (new driver flags against an
+# old helper). Keep all promotion mechanics on the workflow source instead.
+PROMOTE_SCRIPT=${PROMOTE_SCRIPT:-"$SCRIPT_DIR/promote-k8s-image.sh"}
+MAP_SCRIPT=${MAP_SCRIPT:-"$SCRIPT_DIR/update-source-sha-map.sh"}
 MAP_FILE=${MAP_FILE:-.promote-state/source-sha-by-app.json}
 
 if [ -z "$PAYLOAD_FILE" ] || [ ! -f "$PAYLOAD_FILE" ]; then
@@ -126,10 +127,12 @@ promote_target() {
   digest=$(extract_digest "$target")
   [ -z "$digest" ] && return 0
 
-  bash "$PROMOTE_SCRIPT" --no-commit --env "$OVERLAY_ENV" --app "$target" --digest "$digest"
+  item_source_sha="$(extract_source_sha "$target")"
+  promote_args=(--no-commit --env "$OVERLAY_ENV" --app "$target" --digest "$digest")
+  [ -n "$item_source_sha" ] && promote_args+=(--source-sha "$item_source_sha")
+  bash "$PROMOTE_SCRIPT" "${promote_args[@]}"
 
   PROMOTED+=("$target")
-  item_source_sha="$(extract_source_sha "$target")"
   PROMOTED_SOURCE_SHA["$target"]="$item_source_sha"
   # Re-emit after every success so a later abort still leaves an accurate
   # promoted_apps in $GITHUB_OUTPUT (last-write-wins).

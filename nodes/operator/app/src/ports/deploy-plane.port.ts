@@ -317,6 +317,11 @@ export interface DeployPlanePort {
     repo: string;
     slug: string;
     sourceSha: string;
+    /**
+     * Optional same-repository branch or tag containing candidate-flight.yml. The adapter resolves
+     * and accepts it only when it is the exact open same-repo PR head named by sourceSha.
+     */
+    workflowRef?: string;
   }): Promise<CandidateFlightDispatchResult>;
 
   /**

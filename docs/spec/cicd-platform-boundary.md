@@ -32,7 +32,7 @@ This refines, it does not duplicate:
 - [`ci-cd.md`](./ci-cd.md) — the 22 Core Axioms + branch/deploy-state model. Line 29 already states the contract: _"workflows, scripts, and agent skills that diverge from it are bugs, not allowed drift."_ This doc operationalizes that for **new** work.
 - [`legacy-cicd-to-remove.md`](./legacy-cicd-to-remove.md) — the artifact-identity legacy list ("One artifact contract. One promotion primitive."). This doc adds the missing sixth category (deploy-brain-in-shell) and the per-surface freeze.
 - [`node-ci-cd-contract.md`](./node-ci-cd-contract.md) — node sovereignty invariants (the standalone-node carve-out below leans on these).
-- [`node-baas-architecture.md`](./node-baas-architecture.md) — node declares shape; operator wires environment.
+- [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) — node declares shape; operator wires environment.
 
 ## Scope: two planes, one freeze
 

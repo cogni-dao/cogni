@@ -72,7 +72,7 @@ src/
 - **Schemas:** `PrReviewWorkflowInputSchema` (Zod, `.strict()`) — single source of truth for `PrReviewWorkflow`'s input. Producers parse with this before `workflowClient.start(...)` per SINGLE_INPUT_CONTRACT (task.0419).
 - **Activity interfaces:** `SchedulerActivities`, `ReviewActivities`, `LedgerActivities`, `EnrichmentActivities`. Per task.0280, `validateGrantActivity` / `createGraphRunActivity` / `updateGraphRunActivity` inputs include `nodeId: string` so the worker can route each HTTP call to the owning node's internal API. Per task.0410, `fetchPrContextActivity` returns `{ changedFiles, owningNode }` and `postRoutingDiagnosticActivity` handles cross-domain refusal + miss-neutral outcomes.
 - **Domain exports:** `evaluateCriteria`, `aggregateGateStatuses`, `formatCheckRunSummary`, `formatPrComment`, `formatCrossDomainRefusal`, `formatNoScopeNeutral`, `buildReviewUserMessage`, `findRequirement`, `formatThreshold`
-- **Config:** `STANDARD_ACTIVITY_OPTIONS`, `EXTERNAL_API_ACTIVITY_OPTIONS`, `GRAPH_EXECUTION_ACTIVITY_OPTIONS`. Metadata activities (grant + run CRUD) use `maximumAttempts: 6` (~2 min budget) to absorb parallel-rollout race windows.
+- **Config:** `STANDARD_ACTIVITY_OPTIONS`, `EXTERNAL_API_ACTIVITY_OPTIONS`, `GRAPH_EXECUTION_ACTIVITY_OPTIONS`, `NODE_TASK_DISPATCH_ACTIVITY_OPTIONS`. Graph execution retries against the proven `execution_requests` dedup contract; generic node-task dispatch stays single-attempt. Metadata activities (grant + run CRUD) use `maximumAttempts: 6` (~2 min budget) to absorb parallel-rollout race windows.
 
 ## Responsibilities
 

@@ -787,8 +787,19 @@ function createContainer(): Container {
         applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
         max: 1,
       });
+    // CONTRIBUTION_READS_FOLLOW_MAIN: Doltgres connections retain the main
+    // root they first observed. A shared max:5 pool therefore returned
+    // alternating 200/404 responses immediately after a contribution commit.
+    // The adapter refreshes main before each metadata read; max:1 makes that
+    // checkout + query an ordered stream without serializing the hub's general
+    // knowledge reads, which continue on `doltClient` above.
+    const contributionReadClient = buildDoltgresClient({
+      connectionString: env.DOLTGRES_URL,
+      applicationName: `cogni_knowledge_contribution_read_${env.SERVICE_NAME ?? "app"}`,
+      max: 1,
+    });
     const contributionPort = new DoltgresKnowledgeContributionAdapter({
-      sql: doltClient,
+      sql: contributionReadClient,
       branchSql: createKnowledgeBranchClient(),
       recreateBranchClient: createKnowledgeBranchClient,
       logger: log,

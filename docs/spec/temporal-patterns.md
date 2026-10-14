@@ -391,6 +391,13 @@ A key the receiver ignores does not make a POST idempotent. Retries are enabled 
 receiver contract is proven. `execution_requests` and billing receipts remain the correctness
 layers for graph execution.
 
+For the graph route, that receiver contract is proven: `execution_requests` claims the key before
+execution, returns `409` while the same command is pending, and returns the cached terminal result
+after completion. Temporal may therefore retry transient transport loss with the same key and
+canonical run ID. A lost response is not a graph failure and must not write a terminal run state.
+Generic node-task routes retain a separate single-attempt profile until they prove equivalent
+receiver-side deduplication.
+
 #### Package and service ownership
 
 | Surface                                            | Owner                   | Contract                                                                                                                          |

@@ -70,7 +70,7 @@ export interface GraphRunRepository {
   markRunCompleted: (
     actorId: ActorId,
     runId: string,
-    status: "success" | "error" | "skipped" | "cancelled",
+    status: "success" | "error" | "timeout" | "skipped" | "cancelled",
     errorMessage?: string,
     errorCode?: string
   ) => Promise<void>;

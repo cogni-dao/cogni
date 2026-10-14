@@ -23,6 +23,8 @@ cd "$REPO_ROOT"
 
 # shellcheck source=scripts/ci/lib/image-tags.sh
 source "$REPO_ROOT/scripts/ci/lib/image-tags.sh"
+# shellcheck source=scripts/ci/lib/appset-paths.sh
+source "$REPO_ROOT/scripts/ci/lib/appset-paths.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok - $*"; }
@@ -94,6 +96,41 @@ for env in "${DEPLOY_ENVS[@]}"; do
       *",$node_id=$want,"*) pass "$env/$node UUID alias ($provider)" ;;
       *) fail "$env COGNI_NODE_ENDPOINTS: UUID $node_id ($node, $provider) should route to $want" ;;
     esac
+  done
+done
+
+# Foreign-custody routes are a strict catalog-derived subset. A control worker
+# must never poll a foreign namespace with its whole primary endpoint map.
+for control_env in "${DEPLOY_ENVS[@]}"; do
+  patch_file="infra/k8s/overlays/$control_env/scheduler-worker/node-endpoints.patch.yaml"
+  custody_json="$(yq -r '.data.TEMPORAL_CUSTODIED_NODE_ENDPOINTS // "{}"' "$patch_file")"
+  for lane in "${DEPLOY_ENVS[@]}"; do
+    lane_csv="$(jq -r --arg namespace "cogni-$lane" '.[$namespace] // ""' <<<"$custody_json")"
+    domain="$(domain_for_env "$lane" "$FORK_ROOT")" || fail "no domain for env $lane"
+    for node in "${NODE_TARGETS[@]}"; do
+      node_id="$(node_id_for_target "$node")"
+      should_route=false
+      if [ "$lane" != "$control_env" ] && target_in_env "$node" "$lane" \
+        && [ "$(control_env_for "$lane" "$node")" = "$control_env" ]; then
+        should_route=true
+      fi
+      if [ "$should_route" = true ]; then
+        want="$(node_app_url_for_target "$node" "$lane" "$domain")"
+        case ",$lane_csv," in
+          *",$node=$want,"*) : ;;
+          *) fail "$control_env custody route missing $lane/$node slug at $want: $lane_csv" ;;
+        esac
+        case ",$lane_csv," in
+          *",$node_id=$want,"*) pass "$control_env custodies $lane/$node only at lane URL" ;;
+          *) fail "$control_env custody route missing $lane/$node UUID at $want: $lane_csv" ;;
+        esac
+      else
+        case ",$lane_csv," in
+          *",$node="*|*",$node_id="*) fail "$control_env custody route unexpectedly includes $lane/$node: $lane_csv" ;;
+          *) : ;;
+        esac
+      fi
+    done
   done
 done
 

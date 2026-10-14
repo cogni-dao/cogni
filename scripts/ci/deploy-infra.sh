@@ -8,7 +8,7 @@
 #          containers are managed by k8s/Argo CD; this script only handles
 #          infra services.
 # Usage:
-#   deploy-infra.sh [--ref <git-ref>] [--dry-run]
+#   deploy-infra.sh [--ref <git-ref>] [--dry-run] [--recover-installed-runtime]
 #     --ref <git-ref>  Source ref for infra/compose/** (default: main). Rsync
 #                      source is a detached `git worktree add` of this ref,
 #                      NOT the caller workflow's checkout. An app PR branched
@@ -19,6 +19,10 @@
 #     --k8s-secrets-only
 #                      Update k8s app secrets + roll pods without touching
 #                      Compose infra. Bridge mode until pods consume ESO.
+#     --recover-installed-runtime
+#                      Validate the installed last-good receipt, then start only
+#                      postgres, LiteLLM, and autoheal without reading custody,
+#                      pulling images, or changing installed files.
 # Invariants:
 #   - DEPLOY_ENVIRONMENT must be set to 'candidate-a', 'preview', or 'production'
 #     (legacy 'canary' value is still accepted for backward compatibility during
@@ -51,8 +55,9 @@ set -euo pipefail
 REF="main"
 DRY_RUN=false
 K8S_SECRETS_ONLY=false
+RECOVER_INSTALLED_RUNTIME=false
 usage() {
-  echo "Usage: $0 [--ref <git-ref>] [--dry-run] [--k8s-secrets-only]" >&2
+  echo "Usage: $0 [--ref <git-ref>] [--dry-run] [--k8s-secrets-only] [--recover-installed-runtime]" >&2
   exit 2
 }
 while [[ $# -gt 0 ]]; do
@@ -79,6 +84,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --k8s-secrets-only)
       K8S_SECRETS_ONLY=true
+      shift
+      ;;
+    --recover-installed-runtime)
+      RECOVER_INSTALLED_RUNTIME=true
       shift
       ;;
     *)
@@ -247,6 +256,121 @@ case "$ENVIRONMENT" in
         exit 1
         ;;
 esac
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Receipt-validated installed-runtime recovery (bug.5462)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# This mode intentionally exits before required secret validation, git fetch,
+# rsync, image pulls, or the full remote reconciler. It trusts neither file
+# presence nor Docker restart policy: every installed input and local image must
+# byte-match the receipt written LAST by a successful full deploy.
+if [[ "$RECOVER_INSTALLED_RUNTIME" == "true" || "$ENVIRONMENT" == candidate-* ]]; then
+  [[ -n "${VM_HOST:-}" ]] || log_fatal "VM_HOST is required for installed-runtime recovery"
+  recovery_output="$(ssh $SSH_OPTS root@"$VM_HOST" 'bash -s' <<'RECOVER_REMOTE'
+set -euo pipefail
+
+RUNTIME_DIR="${COGNI_RUNTIME_DIR:-/opt/cogni-template-runtime}"
+COMPOSE_FILE="$RUNTIME_DIR/docker-compose.yml"
+ENV_FILE="$RUNTIME_DIR/.env"
+LITELLM_CONFIG="$RUNTIME_DIR/configs/litellm.config.yaml"
+RECEIPT="${COGNI_RECOVERY_RECEIPT:-/var/lib/cogni/runtime-recovery-receipt.json}"
+RUNTIME_COMPOSE=(docker compose --project-name cogni-runtime --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+
+custody_required() {
+  printf 'recovery_state=custody_required\n'
+  printf 'recovery_reason=%s\n' "$1"
+  exit 0
+}
+
+command -v jq >/dev/null 2>&1 || custody_required jq_missing
+[[ -s "$RECEIPT" ]] || custody_required receipt_missing
+jq -e '.version == 2 and (.declarationDigest | type == "string")' "$RECEIPT" >/dev/null 2>&1 \
+  || custody_required receipt_invalid
+for file in "$COMPOSE_FILE" "$ENV_FILE" "$LITELLM_CONFIG"; do
+  [[ -s "$file" ]] || custody_required installed_file_missing
+done
+
+compose_sha="$(sha256sum "$COMPOSE_FILE" | awk '{print $1}')"
+litellm_config_sha="$(sha256sum "$LITELLM_CONFIG" | awk '{print $1}')"
+[[ "$compose_sha" == "$(jq -r '.composeSha256' "$RECEIPT")" ]] || custody_required compose_mismatch
+[[ "$litellm_config_sha" == "$(jq -r '.litellmConfigSha256' "$RECEIPT")" ]] || custody_required litellm_config_mismatch
+
+receipt_core="$(jq -cS 'del(.declarationDigest)' "$RECEIPT")"
+receipt_digest="$(printf '%s' "$receipt_core" | sha256sum | awk '{print $1}')"
+[[ "$receipt_digest" == "$(jq -r '.declarationDigest' "$RECEIPT")" ]] \
+  || custody_required receipt_digest_mismatch
+
+resolved_config="$("${RUNTIME_COMPOSE[@]}" config --format json 2>/dev/null)" \
+  || custody_required compose_config_invalid
+recovery_service_config="$(jq -cS \
+  '{services: {postgres: .services.postgres, litellm: .services.litellm, autoheal: .services.autoheal}}' \
+  <<<"$resolved_config")" || custody_required compose_config_invalid
+jq -e '.services | [.postgres, .litellm, .autoheal] | all(. != null)' \
+  <<<"$recovery_service_config" >/dev/null 2>&1 || custody_required recovery_service_missing
+recovery_service_config_sha="$(printf '%s' "$recovery_service_config" | sha256sum | awk '{print $1}')"
+[[ "$recovery_service_config_sha" == "$(jq -r '.recoveryServiceConfigSha256' "$RECEIPT")" ]] \
+  || custody_required recovery_service_config_mismatch
+for service in postgres litellm autoheal; do
+  expected_ref="$(jq -r --arg service "$service" '.images[$service].ref // empty' "$RECEIPT")"
+  expected_id="$(jq -r --arg service "$service" '.images[$service].id // empty' "$RECEIPT")"
+  resolved_ref="$(jq -r --arg service "$service" '.services[$service].image // empty' <<<"$resolved_config")"
+  [[ -n "$expected_ref" && -n "$expected_id" ]] || custody_required image_receipt_incomplete
+  [[ "$resolved_ref" == "$expected_ref" ]] || custody_required image_ref_mismatch
+  current_id="$(docker image inspect --format '{{.Id}}' "$expected_ref" 2>/dev/null)" \
+    || custody_required image_missing
+  [[ "$current_id" == "$expected_id" ]] || custody_required image_id_mismatch
+done
+
+wait_healthy() {
+  local service="$1" timeout_seconds="$2" elapsed=0 cid status
+  while (( elapsed < timeout_seconds )); do
+    cid="$("${RUNTIME_COMPOSE[@]}" ps -q "$service" 2>/dev/null || true)"
+    status=""
+    [[ -n "$cid" ]] && status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+    # Services with a healthcheck return healthy; autoheal intentionally has no
+    # healthcheck and therefore proves only the Docker running state.
+    [[ "$status" == "healthy" || "$status" == "running" ]] && return 0
+    [[ "$status" == "exited" || "$status" == "dead" ]] && return 1
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  return 1
+}
+
+"${RUNTIME_COMPOSE[@]}" up -d --no-deps --pull never postgres
+wait_healthy postgres 120 || { echo 'recovery_error=postgres_not_healthy' >&2; exit 1; }
+"${RUNTIME_COMPOSE[@]}" up -d --no-deps --pull never litellm
+wait_healthy litellm 180 || { echo 'recovery_error=litellm_not_healthy' >&2; exit 1; }
+"${RUNTIME_COMPOSE[@]}" up -d --no-deps --pull never autoheal
+wait_healthy autoheal 60 || { echo 'recovery_error=autoheal_not_healthy' >&2; exit 1; }
+
+state=recovered
+if ! timeout 20 kubectl exec -n openbao openbao-0 -- \
+    env BAO_ADDR=http://127.0.0.1:8200 bao status -format=json 2>/dev/null \
+    | jq -e '.sealed == false' >/dev/null 2>&1; then
+  state=recovered_degraded
+fi
+printf 'recovery_state=%s\n' "$state"
+printf 'recovery_receipt=%s\n' "$(jq -r '.declarationDigest' "$RECEIPT")"
+RECOVER_REMOTE
+)"
+  printf '%s\n' "$recovery_output"
+  recovery_state="$(printf '%s\n' "$recovery_output" | sed -n 's/^recovery_state=//p' | tail -1)"
+  [[ -n "$recovery_state" ]] || log_fatal "installed-runtime recovery returned no state"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf 'recovery_state=%s\n' "$recovery_state" >> "$GITHUB_OUTPUT"
+  fi
+  case "$recovery_state" in
+    recovered) log_info "Installed runtime recovered from the last-good receipt" ;;
+    recovered_degraded) log_warn "Installed runtime recovered, but OpenBao is sealed or unreachable" ;;
+    custody_required) log_warn "Installed runtime not mutated: full custody reconcile is required" ;;
+    *) log_fatal "Unknown installed-runtime recovery state: $recovery_state" ;;
+  esac
+  if [[ "$RECOVER_INSTALLED_RUNTIME" == "true" ]]; then
+    exit 0
+  fi
+  log_info "Candidate full reconcile continuing after installed-runtime recovery preflight"
+fi
 
 # Validate required secrets
 REQUIRED_SECRETS=(
@@ -554,7 +678,7 @@ set -euo pipefail
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Error capture: Show exactly what failed (line number + command)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-trap 'echo -e "\033[0;31m[FATAL]\033[0m Script failed at line $LINENO: $BASH_COMMAND" >&2' ERR
+trap 'rm -f "${RUNTIME_ENV_NEXT:-}" 2>/dev/null || true; echo -e "\033[0;31m[FATAL]\033[0m Script failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Docker prerequisite gate (fail fast if VM not bootstrapped)
@@ -778,15 +902,20 @@ unset _edge_kv
 # image-tags.sh:infra_image_tag and passes it in; no manual docker build, no pin.
 LITELLM_IMAGE=${LITELLM_IMAGE:?LITELLM_IMAGE required (resolved on the runner from infra/catalog/litellm.yaml content-hash)}
 
-# Runtime env (full config — compose validates all vars even for services we don't start)
-RUNTIME_ENV=/opt/cogni-template-runtime/.env
+# Runtime env (full config — compose validates all vars even for services we don't start).
+# Render to a root-only sibling, then atomically rename only after every required
+# and optional field has been written. Recovery never trusts a partial file.
+INSTALLED_RUNTIME_ENV=/opt/cogni-template-runtime/.env
+RUNTIME_ENV_NEXT="${INSTALLED_RUNTIME_ENV}.next.$$"
+rm -f "$RUNTIME_ENV_NEXT"
+RUNTIME_ENV="$RUNTIME_ENV_NEXT"
 previous_runtime_env_value() {
   local key="$1"
-  [[ -f "$RUNTIME_ENV" ]] || return 0
+  [[ -f "$INSTALLED_RUNTIME_ENV" ]] || return 0
   awk -v key="$key" '
     index($0, key "=") == 1 { value = substr($0, length(key) + 2) }
     END { print value }
-  ' "$RUNTIME_ENV"
+  ' "$INSTALLED_RUNTIME_ENV"
 }
 
 PREVIOUS_OPENFGA_AUTHORIZATION_MODEL_ID="$(previous_runtime_env_value OPENFGA_AUTHORIZATION_MODEL_ID)"
@@ -1006,7 +1135,7 @@ if ! test -s "$RUNTIME_ENV"; then
   log_error ".env write failed: $RUNTIME_ENV is empty or missing"
   exit 1
 fi
-log_info ".env written: $(wc -c < "$RUNTIME_ENV") bytes, $(wc -l < "$RUNTIME_ENV") lines"
+log_info ".env base staged: $(wc -c < "$RUNTIME_ENV") bytes, $(wc -l < "$RUNTIME_ENV") lines"
 
 # Optional observability vars — only written if set (empty string breaks Zod validation)
 append_env_if_set "$RUNTIME_ENV" LOKI_WRITE_URL "${GRAFANA_CLOUD_LOKI_URL-}"
@@ -1130,6 +1259,15 @@ printf '%s=%s\n' DOLTGRES_PASSWORD "$DOLTGRES_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_READER_PASSWORD "$DOLTGRES_READER_PASSWORD" >> "$RUNTIME_ENV"
 printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTIME_ENV"
 
+# Publish the complete projection atomically. A failed render leaves the prior
+# installed generation untouched; the last-good receipt therefore continues to
+# describe either the exact installed bytes or a detectable mismatch.
+chmod 600 "$RUNTIME_ENV"
+mv -f "$RUNTIME_ENV" "$INSTALLED_RUNTIME_ENV"
+RUNTIME_ENV="$INSTALLED_RUNTIME_ENV"
+RUNTIME_ENV_NEXT=""
+log_info ".env atomically installed: $(wc -c < "$RUNTIME_ENV") bytes, $(wc -l < "$RUNTIME_ENV") lines"
+
 if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1203,13 +1341,10 @@ log_info "Profile guardrail passed"
 log_info "Bringing up postgres..."
 if ! output="$($RUNTIME_COMPOSE up -d postgres 2>&1)"; then
   printf '%s\n' "$output" >&2
-  if grep -qiE 'has active endpoints|error while removing network' <<<"$output"; then
-    log_warn "Incremental reconcile failed due to network recreation; forcing full runtime teardown..."
-    $RUNTIME_COMPOSE down --remove-orphans --timeout 30
-    $RUNTIME_COMPOSE up -d postgres
-  else
-    exit 1
-  fi
+  # bug.5133 — NEVER auto-teardown the shared runtime as "recovery": healthy
+  # services may still be serving users. Fail red; a human/operator decides.
+  log_error "Incremental postgres reconcile failed; refusing automatic runtime teardown."
+  exit 1
 else
   printf '%s\n' "$output"
 fi
@@ -1467,17 +1602,68 @@ eval "$OPENFGA_BOOTSTRAP_ENV"
 printf '%s\n' "$OPENFGA_BOOTSTRAP_ENV" >> "$RUNTIME_ENV"
 log_info "OpenFGA RBAC config resolved: store=${OPENFGA_STORE_ID} model=${OPENFGA_AUTHORIZATION_MODEL_ID}"
 
+classify_openbao_writer_login_failure() {
+  local rc="$1" output="$2"
+  if [[ $rc -eq 124 ]] || grep -qiE 'context deadline exceeded|Internal error occurred: Timeout occurred|i/o timeout|TLS handshake timeout|connection (refused|reset)|Code: (429|500|502|503|504)' <<<"$output"; then
+    printf '%s\n' server_transient
+  elif grep -qiE 'Code: 403|permission denied' <<<"$output"; then
+    printf '%s\n' permission_denied_recheck
+  else
+    printf '%s\n' permanent
+  fi
+}
+
+classify_kubectl_resource_lookup_failure() {
+  local rc="$1" output="$2"
+  if [[ $rc -eq 124 ]] || grep -qiE 'context deadline exceeded|Internal error occurred: Timeout occurred|i/o timeout|TLS handshake timeout|connection (refused|reset)|unable to connect to the server|the server is currently unable to handle the request|Code: (429|500|502|503|504)' <<<"$output"; then
+    printf '%s\n' server_transient
+  elif grep -qiE '\(NotFound\)|not found' <<<"$output"; then
+    printf '%s\n' absent
+  else
+    printf '%s\n' permanent
+  fi
+}
+
 patch_operator_openfga_config() {
   if ! command -v kubectl >/dev/null 2>&1; then
     log_warn "kubectl not found — cannot patch OpenBao operator OpenFGA config"
     return 1
   fi
-  if ! timeout 10 kubectl get sa openbao-operator -n default >/dev/null 2>&1; then
-    log_warn "openbao-operator SA absent — cannot patch OpenBao operator OpenFGA config"
-    return 1
-  fi
 
   local jwt tok path patch_out patch_rc login_out login_rc login_reason max_attempts attempt sleep_seconds
+  local sa_out sa_rc sa_reason
+  for attempt in 1 2 3; do
+    set +e
+    sa_out=$(timeout 10 kubectl get sa openbao-operator -n default -o name 2>&1)
+    sa_rc=$?
+    set -e
+    if [[ $sa_rc -eq 0 ]]; then
+      break
+    fi
+
+    sa_reason="$(classify_kubectl_resource_lookup_failure "$sa_rc" "$sa_out")"
+    case "$sa_reason" in
+      absent)
+        log_warn "openbao-operator SA is absent — cannot patch OpenBao operator OpenFGA config"
+        return 1
+        ;;
+      server_transient)
+        if [[ $attempt -lt 3 ]]; then
+          sleep_seconds=$((attempt * 5))
+          log_warn "OpenBao writer SA lookup hit a control-plane timeout/transient (attempt ${attempt}/3); retrying in ${sleep_seconds}s"
+          sleep "$sleep_seconds"
+          continue
+        fi
+        log_warn "OpenBao writer SA lookup remained unavailable after 3 attempts"
+        return 1
+        ;;
+      *)
+        log_warn "OpenBao writer SA lookup failed permanently; refusing to claim the SA is absent"
+        return 1
+        ;;
+    esac
+  done
+
   tok=""
   max_attempts=1
   for attempt in 1 2 3; do
@@ -1499,16 +1685,21 @@ patch_operator_openfga_config() {
       # Match the bounded policy used by every node-substrate login: server/control-plane
       # transients get three attempts; a 403 gets exactly one fresh-JWT recheck. Unknown
       # failures remain permanent. Never print login_out: a successful response is a token.
-      if grep -qiE 'context deadline exceeded|i/o timeout|TLS handshake timeout|connection (refused|reset)|Code: (429|500|502|503|504)' <<<"$login_out"; then
-        login_reason="server_transient"
-        max_attempts=3
-      elif grep -qiE 'Code: 403|permission denied' <<<"$login_out"; then
-        login_reason="permission_denied_recheck"
-        max_attempts=2
-      else
-        log_warn "OpenBao writer login failed permanently for ${DEPLOY_ENVIRONMENT}-writer"
-        return 1
-      fi
+      # GNU timeout exits 124 and may emit no text at all. The live candidate
+      # proof for bug.5462 hit exactly that shape: the 10-second kubectl/bao
+      # login deadline was misclassified as a permanent auth failure because
+      # there was no stderr for the regex to inspect. Exit status is the
+      # authoritative timeout signal; retry it like the textual server
+      # transient spellings, still bounded to three fresh-JWT attempts.
+      login_reason="$(classify_openbao_writer_login_failure "$login_rc" "$login_out")"
+      case "$login_reason" in
+        server_transient) max_attempts=3 ;;
+        permission_denied_recheck) max_attempts=2 ;;
+        *)
+          log_warn "OpenBao writer login failed permanently for ${DEPLOY_ENVIRONMENT}-writer"
+          return 1
+          ;;
+      esac
     fi
 
     if [[ $attempt -ge $max_attempts ]]; then
@@ -1628,23 +1819,51 @@ else
   exit 1
 fi
 
-ALLOY_CONFIG="/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy"
-ALLOY_HASH_FILE="/var/lib/cogni/alloy-config.sha256"
-if [[ -f "$ALLOY_CONFIG" ]]; then
-  mkdir -p /var/lib/cogni
-  NEW_ALLOY_HASH=$(hash_file "$ALLOY_CONFIG")
-  OLD_ALLOY_HASH=$(cat "$ALLOY_HASH_FILE" 2>/dev/null || echo "none")
-  if [[ "$NEW_ALLOY_HASH" != "$OLD_ALLOY_HASH" && "$NEW_ALLOY_HASH" != "no-hash-tool" ]]; then
-    log_info "Alloy config changed (hash: ${NEW_ALLOY_HASH:0:12}...), restarting container..."
-    $RUNTIME_COMPOSE restart alloy
-    echo "$NEW_ALLOY_HASH" > "$ALLOY_HASH_FILE"
-    log_info "Alloy restarted with new config"
-  else
-    log_info "Alloy config unchanged (hash: ${NEW_ALLOY_HASH:0:12}...), no restart needed"
+# RESTART_WHAT_ACTUALLY_CHANGED: `up -d` does NOT recreate a container when only the
+# CONTENT of a bind-mounted config changes — compose compares the service SPEC, so an
+# unchanged spec means no recreate. Every Alloy service therefore needs its own content
+# hash and its own restart.
+#
+# This gate used to hash one file (alloy-config.metrics.alloy) and restart one service
+# (alloy), while the runtime compose defines TWO: `alloy` consumes the metrics config and
+# `alloy-k8s-events` consumes alloy-config.k8s-events.alloy. An edit to the k8s-events
+# config was never hashed and its container never restarted, so the change shipped,
+# deployed green, and stayed inert — #2648's namespace allowlist sat on the VM unloaded
+# while {service="kubernetes-events",namespace="default"} read a flat zero, which looks
+# exactly like "no events occurred" (bug.5420).
+#
+# alloy-config.alloy is deliberately absent: it is logs-only for local dev and is mounted
+# by no runtime service (see infra/compose/runtime/configs/AGENTS.md).
+restart_alloy_service_if_config_changed() {
+  local config="$1" service="$2" hash_path="$3"
+  if [[ ! -f "$config" ]]; then
+    log_warn "Alloy config missing at $config, skipping restart check for $service"
+    return 0
   fi
-else
-  log_warn "Alloy config missing at $ALLOY_CONFIG, skipping restart check"
-fi
+  mkdir -p "$(dirname "$hash_path")"
+  local new_hash old_hash
+  new_hash="$(hash_file "$config")"
+  old_hash="$(cat "$hash_path" 2>/dev/null || echo "none")"
+  if [[ "$new_hash" != "$old_hash" && "$new_hash" != "no-hash-tool" ]]; then
+    log_info "Alloy config $(basename "$config") changed (hash: ${new_hash:0:12}...), restarting ${service}..."
+    $RUNTIME_COMPOSE restart "$service"
+    echo "$new_hash" > "$hash_path"
+    log_info "${service} restarted with new config"
+  else
+    log_info "Alloy config $(basename "$config") unchanged (hash: ${new_hash:0:12}...), ${service} not restarted"
+  fi
+}
+
+# The metrics config keeps its original hash path, so this change does not manufacture a
+# restart of a healthy collector on first run.
+restart_alloy_service_if_config_changed \
+  /opt/cogni-template-runtime/configs/alloy-config.metrics.alloy \
+  alloy \
+  /var/lib/cogni/alloy-config.sha256
+restart_alloy_service_if_config_changed \
+  /opt/cogni-template-runtime/configs/alloy-config.k8s-events.alloy \
+  alloy-k8s-events \
+  /var/lib/cogni/alloy-config.k8s-events.sha256
 
 log_info "[$(date -u +%H:%M:%S)] Installing db-backup systemd timer..."
 # Pause future triggers while replacing the unit, but never kill an in-progress
@@ -2266,6 +2485,72 @@ echo "=== Edge stack ==="
 $EDGE_COMPOSE ps
 echo "=== Runtime stack (infra) ==="
 $RUNTIME_COMPOSE ps
+
+# Write the non-secret recovery receipt LAST. It binds every installed input and
+# local image that the custody-free recovery mode is allowed to use. A later
+# partial deploy, hand edit, or image replacement invalidates the receipt before
+# any Compose mutation can occur.
+write_runtime_recovery_receipt() {
+  local receipt=/var/lib/cogni/runtime-recovery-receipt.json
+  local receipt_tmp="${receipt}.tmp.$$"
+  local compose_sha litellm_config_sha recovery_service_config recovery_service_config_sha
+  local service ref image_id core digest
+  local images='{}'
+  local resolved_config
+
+  wait_receipt_service() {
+    local service="$1" timeout_seconds="$2" elapsed=0 cid status
+    while (( elapsed < timeout_seconds )); do
+      cid="$($RUNTIME_COMPOSE ps -q "$service" 2>/dev/null || true)"
+      status=""
+      [[ -n "$cid" ]] && status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+      [[ "$status" == "healthy" || "$status" == "running" ]] && return 0
+      [[ "$status" == "exited" || "$status" == "dead" ]] && return 1
+      sleep 2
+      elapsed=$((elapsed + 2))
+    done
+    return 1
+  }
+
+  wait_receipt_service postgres 120 || log_fatal "recovery receipt: postgres is not healthy"
+  wait_receipt_service litellm 180 || log_fatal "recovery receipt: LiteLLM is not healthy"
+  wait_receipt_service autoheal 60 || log_fatal "recovery receipt: autoheal is not running"
+
+  resolved_config="$($RUNTIME_COMPOSE config --format json)"
+  compose_sha="$(sha256sum /opt/cogni-template-runtime/docker-compose.yml | awk '{print $1}')"
+  litellm_config_sha="$(sha256sum /opt/cogni-template-runtime/configs/litellm.config.yaml | awk '{print $1}')"
+  recovery_service_config="$(jq -cS \
+    '{services: {postgres: .services.postgres, litellm: .services.litellm, autoheal: .services.autoheal}}' \
+    <<<"$resolved_config")"
+  jq -e '.services | [.postgres, .litellm, .autoheal] | all(. != null)' \
+    <<<"$recovery_service_config" >/dev/null \
+    || log_fatal "recovery receipt: recovery service declaration is incomplete"
+  recovery_service_config_sha="$(printf '%s' "$recovery_service_config" | sha256sum | awk '{print $1}')"
+  for service in postgres litellm autoheal; do
+    ref="$(jq -r --arg service "$service" '.services[$service].image // empty' <<<"$resolved_config")"
+    [[ -n "$ref" ]] || log_fatal "recovery receipt: ${service} image is unresolved"
+    image_id="$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null)" \
+      || log_fatal "recovery receipt: ${service} image is not present locally"
+    images="$(jq -c --arg service "$service" --arg ref "$ref" --arg id "$image_id" \
+      '. + {($service): {ref: $ref, id: $id}}' <<<"$images")"
+  done
+  core="$(jq -cnS \
+    --arg compose "$compose_sha" \
+    --arg config "$litellm_config_sha" \
+    --arg recoveryServiceConfig "$recovery_service_config_sha" \
+    --arg sourceRef "${COGNI_REPO_REF:-${COMMIT_SHA:-unknown}}" \
+    --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson images "$images" \
+    '{version: 2, composeSha256: $compose, litellmConfigSha256: $config, recoveryServiceConfigSha256: $recoveryServiceConfig, images: $images, sourceRef: $sourceRef, completedAt: $completedAt}')"
+  digest="$(printf '%s' "$core" | sha256sum | awk '{print $1}')"
+  mkdir -p /var/lib/cogni
+  jq -cS --arg digest "$digest" '. + {declarationDigest: $digest}' <<<"$core" > "$receipt_tmp"
+  chmod 600 "$receipt_tmp"
+  mv -f "$receipt_tmp" "$receipt"
+  log_info "Runtime recovery receipt installed: ${digest}"
+}
+
+write_runtime_recovery_receipt
 emit_deployment_event "infra_deployment.complete" "success" "Infrastructure deployment completed successfully"
 log_info "Infrastructure deployment complete!"
 EOF
@@ -2283,6 +2568,9 @@ log_info "deploy-infra-remote.sh ready: ${LOCAL_SIZE} bytes, sha256=${LOCAL_SHA}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Materialize catalog routes before rsync so running Caddy needs no fresh env.
+bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" --domain "$DOMAIN" > "$REPO_ROOT/infra/compose/edge/configs/Caddyfile.tmpl"
+
 # Dry-run exit (no SSH, no rsync, no compose up)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 if [[ "$DRY_RUN" == "true" ]]; then

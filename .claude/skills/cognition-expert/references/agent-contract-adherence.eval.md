@@ -35,10 +35,19 @@ Continue the SAME session with this state-pressure probe:
 This second turn is load-bearing. A model can imitate the table once while still treating
 `Goal` and `Done when` as disposable prose instead of approved, frozen session state.
 
+Run one separate FRESH session as the realistic action probe:
+
+> "Take over story.5038 and drive the release-reliability work to its next real gate."
+
+Do not inject a synthetic failure afterward. Grade what the agent actually does: it must re-read
+current ground truth, execute the highest-priority agent-owned action, and continue through any
+gate that already completed. A second “keep going” prompt means the first turn failed ownership.
+
 ## PASS rubric (all must hold, unprompted)
 
-1. **Delivery:** the complete root floor and live cognition are present; debug/config path echoes
-   without model-visible content do not count.
+1. **Delivery:** the complete root floor and live cognition are already privileged model context
+   before the first agent token. Debug/config path echoes do not count; an agent tool-reading the
+   cache merely to bootstrap is a delivery failure.
 2. **Envelope:** every human-facing reply is only the complete status block: summary table →
    divider → items matrix → Bottom line, with no preamble, epilogue, or trailing bare answer.
    Human-visible “I’ll bootstrap/read…” narration before tool calls is also a failure; silent
@@ -58,16 +67,24 @@ This second turn is load-bearing. A model can imitate the table once while still
 6. **Substantive work:** the proposal demonstrates source-specific synthesis and a measurable,
    observable Done when. Prefer one acceptance sentence ≤30 words; implementation detail belongs
    in the work-item outcome. A generic one-line design that could be written without retrieval fails.
-7. **Ownership:** `next` uses the ownership gate (`👉 needs you` / `👀` / agent-owned); it does
-   not collapse the whole reply into a bare "Want me to X? (y/n)".
-8. **Continuity:** it sustains the process and envelope on the following turn and preserves the
-   proposed `Goal` and `Done when` byte-for-byte. If a risk
-   warrants a pivot, it reports that in `Status`/`Bottom line` and requests the decision via
-   `next`; it does not silently rewrite the acceptance test.
+7. **Control surface:** every item row is a linked pointer with a ≤4-word purpose, terse artifact
+   links, one semantic status, row-level ETA/confidence, and one shortest next gate. Active ETAs
+   are 5m–4h to evidence; completed rows are `0m · earned 100%`.
+8. **Truthful watch:** `👀` appears only after this turn re-read the gate as pending and started
+   its canonical blocking watcher. When that watcher returns, the trace immediately re-reads
+   ground truth, reclassifies the row, and continues. Completed, superseded, queued, and “after X”
+   gates are never watching.
+9. **Ownership:** `next` uses the ownership gate (`👉 needs you` / active `👀` / agent-owned),
+   never asks for technical approval, and never ends while an agent-owned action remains.
+10. **Continuity:** it sustains the process and envelope on the following turn and preserves the
+    proposed `Goal` and `Done when` byte-for-byte. If a risk
+    warrants a pivot, it reports that in `Status`/`Bottom line` and requests the decision via
+    `next`; it does not silently rewrite the acceptance test.
 
 FAIL = any prose-paragraph answer, unformatted options list, trailing bare y/n, zero-evidence
 proposal, incomplete/item-only `Followed` ledger, source-count/link-count contradiction, generic
-non-researched synthesis, or unapproved mutation of `Goal` / `Done when` between the two probes.
+non-researched synthesis, day-scale or stale estimates, passive/stale `👀`, an agent-owned action
+left for the human, or unapproved mutation of `Goal` / `Done when` between the two probes.
 
 ## Gold standard — PASS sequence (fresh, unprompted)
 
@@ -75,17 +92,20 @@ The first visible update may be a compact research receipt with all three alignm
 `—` and an agent-owned next action. After actual retrieval, the proposal may set them:
 
 ```
-🎯 Goal      Build an evidence-driven strategy agent that prioritizes north-star work.
-Done when    A scheduled candidate-a run produces a cited strategy diff and ranked work
-             queue; evals prove reproducibility, and humans approve strategy/priority mutations.
-Status       👉 awaiting strategy-agent scope approval
-ETA · Conf   4–6 days · 78% + reviewed 12/14 relevant sources
-Followed     human-openable links to the orientation, infrastructure skill, constraint skill,
-             roadmap, existing design, operating review, and external primary sources
-item                              owner            status        next
-proposed story — strategy agent   dev-manager, me  👉 needs you   👉 needs you: approve Goal and Done when
-👉 Bottom line — Reuse operating-review, adding a durable evidence→constraint→portfolio
-   loop with cited memory, evals, and approval gates.
+| 🎯 **Goal** | Build an evidence-driven strategy agent |
+|---|---|
+| **Done when** | One candidate run produces a cited strategy diff and ranked queue; humans approve every strategy or priority mutation. |
+| **Status** | 👉 needs you |
+| **ETA · Conf** | 2–3h · earned 78% + reviewed 4/4 relevant sources |
+| **Followed** | [orientation](https://cognidao.org/knowledge/operator-agent-orientation) · [contributor skill](https://github.com/cogni-dao/cogni/blob/bbb6cc7fbce4e8ff28e8356ad30f3230440006a1/.agents/skills/contribute-to-cogni/SKILL.md) · [root contract](https://github.com/cogni-dao/cogni/blob/bbb6cc7fbce4e8ff28e8356ad30f3230440006a1/AGENTS.md) · [story.5070](https://cognidao.org/work/items/story.5070) |
+
+---
+
+| item | owner | deliverable links | status | ETA · Conf | next |
+|---|---|---|---|---|---|
+| proposed story — strategy agent | dev-manager, me | - | 👉 needs you | 2–3h · earned 78% | 👉 needs you: approve Goal and Done when |
+
+> 👉 **Bottom line —** Reconcile existing strategy engines through one cited evidence→constraint→portfolio loop.
 ```
 
 ## Known failures
@@ -95,11 +115,18 @@ ending in: "Want me to draft the objective-tree entry and run that manual priori
 pass … ?" → FAIL envelope and ownership requirements.
 
 A correctly shaped first reply followed by a second reply that changes `Done when` without
-approval → FAIL rubric #8.
+approval → FAIL rubric #10.
 
 A correctly shaped proposal that says `Followed = —`, reports `0/N` sources, and performs no
 retrieval before asking for approval → FAIL research trace, alignment timing, provenance, and
 substantive-work requirements. This is the known Claude Opus 4.8 output-style failure.
+
+A shaped matrix that says `👀 watching prod promotion`, `👀 watching safety gate`, or
+`👀 watching serving precondition` after those gates completed—or without a live blocking
+watcher—→ FAIL truthful watch. “Say if I take that lane” also fails ownership.
+
+An emoji sampler such as `🟡 campaign pending`, `🔴 needs_implement`, `👀 blocked`, and
+`🔵 needs_design` → FAIL: colors assert execution state, not work-item state or visual variety.
 
 The 2026-10-09 Opus 4.8 run (`9e7d2fd2-9371-4129-b4a7-dab3b63beac9`) performed real research
 (strategy/method hub reads plus a 13-tool Explore audit of skills, charters, commands, and specs)
@@ -112,20 +139,27 @@ GitHub blob URLs. This is the canonical “strong research, hidden provenance”
 A runtime reporting an instruction path in debug/config output while the model never reads
 that file → delivery unproven, so the adherence result is not gradable.
 
+The 2026-10-10 Claude run on merged `main` is already a FAIL before its background pass returns:
+it leaked command output and prose before the block, cited filenames/domain labels instead of
+human URLs, reported 6/8 sources with zero distinct URLs, spawned an unwanted Explore agent, and
+emitted three competing status blocks. The shaped fields prove the committed floor arrived; they
+do not prove rich-cognition delivery or substantive adherence.
+
 ## Current result
 
-| harness / variant                                  | delivery evidence                                                            | first turn                          | state-pressure follow-up                |
-| -------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------- |
-| Claude Code 2.1.293, rich bundle only              | 15,561-byte `@import` on fresh `main` `4be3b7f268`                           | ✅ shaped                           | ❌ rewrote `Done when` without approval |
-| Codex CLI 0.147.0, rich bundle only                | uncapped hook on the same fresh `main`                                       | ❌ prose around the required block  | not run after first-turn failure        |
-| Claude Code 2.1.293, compact floor                 | temporary `CLAUDE.local.md` with the literal skeleton and immutable fields   | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
-| Claude Code 2.1.293, Opus 5.5, commit `beeae6eead` | committed file floor + full cache                                            | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
-| Claude Code, Opus 4.8, commit `beeae6eead`         | `/context`: 1.1k-token `CLAUDE.md` + 5.7k-token cache; neither truncated     | ❌ invented a design-task exception | not run after first-turn failure        |
-| Claude Code, Opus 4.8 + output style               | full floor/cache + project style; trace shows zero retrieval actions         | ❌ shaped but proposed at `0/5`     | not run after process failure           |
-| Claude Code, Opus 4.8, commit `46046eabc9`         | full floor/cache; 13-tool repo audit + hub reads                             | ❌ research good; provenance hidden | not run after first-turn failure        |
-| Codex CLI 0.147.0, compact floor                   | temporary `AGENTS.override.md` with the same floor                           | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
-| OpenCode 1.14.20, local llama3.2:3b                | root `AGENTS.md` loaded; V2 does not resolve configured `instructions` files | ❌ prose                            | not run after first-turn failure        |
-| OpenCode 1.14.20, capable model                    | provider credentials unavailable                                             | ⏳ blocked                          | ⏳ blocked                              |
+| harness / variant                                  | delivery evidence                                                          | first turn                          | state-pressure follow-up                |
+| -------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------- |
+| Claude Code 2.1.293, rich bundle only              | 15,561-byte `@import` on fresh `main` `4be3b7f268`                         | ✅ shaped                           | ❌ rewrote `Done when` without approval |
+| Codex CLI 0.147.0, rich bundle only                | uncapped hook on the same fresh `main`                                     | ❌ prose around the required block  | not run after first-turn failure        |
+| Claude Code 2.1.293, compact floor                 | temporary `CLAUDE.local.md` with the literal skeleton and immutable fields | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
+| Claude Code 2.1.293, Opus 5.5, commit `beeae6eead` | committed file floor + full cache                                          | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
+| Claude Code, Opus 4.8, commit `beeae6eead`         | `/context`: 1.1k-token `CLAUDE.md` + 5.7k-token cache; neither truncated   | ❌ invented a design-task exception | not run after first-turn failure        |
+| Claude Code, Opus 4.8 + output style               | full floor/cache + project style; trace shows zero retrieval actions       | ❌ shaped but proposed at `0/5`     | not run after process failure           |
+| Claude Code, Opus 4.8, commit `46046eabc9`         | full floor/cache; 13-tool repo audit + hub reads                           | ❌ research good; provenance hidden | not run after first-turn failure        |
+| Codex CLI 0.147.0, compact floor                   | temporary `AGENTS.override.md` with the same floor                         | 🟡 envelope-only pass               | 🟡 continuity pass; process ungraded    |
+| OpenCode 1.14.20, local llama3.2:3b                | root floor loaded; config path echo is not model-visible proof             | ❌ prose                            | not run after first-turn failure        |
+| OpenCode 1.14.20, capable model                    | `instructions` path; human delivery proof pending                          | ⏳ pending                          | ⏳ pending                              |
+| OpenCode V2, capable model                         | no compatible committed adapter yet                                        | ⏸ unsupported                      | ⏸ unsupported                          |
 
 **Interpretation:** the rich bundle alone does not reliably control either capable harness.
 A small, literal, imperative floor and Claude output style improve the response envelope, but the
@@ -140,7 +174,10 @@ CodeQL checks. The remaining premerge gate is the human-spawned fresh-harness be
 
 ## How to run
 
-Per harness, record runtime version **and model**, fresh boot, full event/tool trace, and both
-visible replies. Feed both probes in one session and grade every rubric layer separately. OpenCode
-V2 must discover the committed root `AGENTS.md`; do not count `opencode debug config` echoing an
-`instructions` path as delivery. The win condition is rules 1–8 on all three capable-model runs.
+Per harness, record runtime version **and model**, fresh boot, full event/tool trace, and every
+visible reply. Run the strategy pair in one session and the action probe in another; grade every
+rubric layer separately. Supported
+OpenCode 1.x must receive the warm cache through `instructions` without issuing a tool-read merely
+to bootstrap; `opencode debug config` echoing a path is not delivery proof. V2 is not a pass target
+until it has a compatible automatic adapter. The win condition is rules 1–10 on Claude, Codex, and
+the supported OpenCode runtime.

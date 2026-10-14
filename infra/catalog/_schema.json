@@ -106,6 +106,31 @@
       }
     },
     {
+      "$comment": "bug.5382 — every Akash-placed workload must declare the provider egress CIDRs admitted to shared substrate ports. Missing is a deterministic boot failure, not an optional hardening choice. Explicit k3s-only placement opens no off-cluster firewall hole and owes no declaration.",
+      "if": {
+        "required": ["deployment_provider"],
+        "properties": {
+          "deployment_provider": {
+            "anyOf": [
+              {
+                "required": ["candidate-a"],
+                "properties": { "candidate-a": { "const": "akash" } }
+              },
+              {
+                "required": ["preview"],
+                "properties": { "preview": { "const": "akash" } }
+              },
+              {
+                "required": ["production"],
+                "properties": { "production": { "const": "akash" } }
+              }
+            ]
+          }
+        }
+      },
+      "then": { "required": ["compute_egress_cidrs"] }
+    },
+    {
       "$comment": "task.5097 — the compute API is a property of an off-cluster workload, so it is only meaningful where deployment_provider already routes the row off-cluster. Declaring it without placement would be an authority with nothing to reconcile.",
       "if": { "required": ["compute_api"] },
       "then": { "required": ["deployment_provider"] }
@@ -275,9 +300,27 @@
       "description": "story.5050 — per-environment HARD placement requirement: the ISO 3166-1 alpha-2 country codes this row's workload MAY be placed in. Distinct from the fleet-wide latency PREFERENCE (AkashComputeAdapter's substrate co-location list, which only RANKS): this cell FILTERS bids, so a provider outside the set never wins. It exists because a workload can have an outbound dependency that geo-fences by IP while the latency preference pulls toward the substrate's own neighbourhood — for the Baltics substrate those two axes point in opposite directions (BE/DE/PL/SK/FR are all co-located AND all Polymarket-restricted). REQUIRED_FAILS_CLOSED: a bid whose provider country is unknown, or whose provider metadata is unavailable, is REFUSED — the opposite of the preference path's FAIL_OPEN_ON_MISSING_METADATA rule, because a requirement that cannot be evaluated is not satisfied. NOT_A_GUARANTEE: provider country describes ADVERTISED/INGRESS identity, which is measurably not the egress identity the workload presents to a third party (two Akash providers in different advertised countries have shared one egress NAT), so this narrows the candidate pool and only the workload's own outbound probe proves reachability. An omitted environment is unconstrained; an empty array is rejected rather than read as 'anywhere', because fail-closed semantics would make it refuse every bid. Binds only on a fresh CREATE — the XR renders from the catalog at promote time and Akash refuses in-place placement change, so a change here needs a lease_generation bump. Coupled to compute_egress_cidrs: every provider this admits must already be allowlisted there, or the workload boots and then cannot reach the env VM's substrate ports.",
       "additionalProperties": false,
       "properties": {
-        "candidate-a": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } },
-        "preview": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } },
-        "production": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{2}$" } }
+        "candidate-a": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z]{2}$" }
+        },
+        "preview": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z]{2}$" }
+        },
+        "production": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z]{2}$" }
+        }
       },
       "minProperties": 1
     },

@@ -146,6 +146,43 @@ fi
 export REPO_ROOT APP_SOURCE_DIR
 export DEPLOY_ENV="$DEPLOY_ENVIRONMENT"
 export VM_IP="${VM_IP:-$(remote "hostname -I | awk '{print \$1}'" | tr -d '[:space:]')}"
+
+# ── WHOSE POSTGRES HOLDS THIS LANE'S DATABASE (bug.5299 B1, call site 1) ──────────────
+#
+# `VM_IP` above answers ONE question — "what is the address of the VM I am SSHed into" —
+# and it is the vault/SSH target for everything below (bao_get_field, seed_kv, the
+# Compose-tier writes). It keeps that meaning, unchanged.
+#
+# It was ALSO being substituted as the host of the two Postgres DSNs, which asks a
+# DIFFERENT question: whose Postgres instance holds this (node, lane)'s database. For a
+# foreign-custodied lane those answers differ, and using the first as the second is the
+# residency bug: candidate-a's and preview's load, connections and crash blast radius land
+# in PRODUCTION's failure domain (31 of ~78 peak backends, measured 2026-10-13).
+#
+# `lane_db_dsn_host` answers the second question from the one cell `lane_db_vm_env`, and
+# today it returns `$VM_IP` for every (node, lane) the catalog can produce — a pinned pair
+# resolves to its control env, which is exactly what `SECRETS_CONTROL_ENV` is on this path
+# (run-node-substrate.sh:142/:165), and an unpinned pair resolves to its own lane, which for
+# a non-misresident pair IS its control env. So NO DSN value changes here, no lane moves and
+# no DNS lookup happens; `scripts/ci/tests/lane-db-dsn-host.test.sh` proves that by
+# enumerating every catalog pair rather than spot-checking. Deleting a pin is what makes a
+# lane's DSN move, per lane, after that lane's census + password carrier + Job reachability.
+#
+# SOURCING THE RESOLVER HERE ALSO ACTIVATES THE NAME RE-KEY in reconcile-secrets.sh's
+# `_lane_db_suffix`, and that pairing is REQUIRED, not incidental: a DSN whose host moved
+# without its name collapsing (or the reverse) would dial the wrong object on the wrong
+# instance. One cell drives both.
+CATALOG_DIR="${CATALOG_DIR:-${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}}"
+export CATALOG_DIR
+# shellcheck source=lib/appset-paths.sh
+. "$SCRIPT_DIR/lib/appset-paths.sh"
+# shellcheck source=lib/lane-db-residency.sh
+. "$SCRIPT_DIR/lib/lane-db-residency.sh"
+COGNI_LANE_DB_HOST="$(lane_db_dsn_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV" "$VM_IP")" \
+  || fail "could not resolve which Postgres host ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'s database lives on (bug.5299) — refusing to compose a DSN against a guessed host"
+export COGNI_LANE_DB_HOST
+log "lane database residency: ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} -> env=$(lane_db_vm_env "$TARGET_NODE" "$DEPLOY_ENVIRONMENT") host=${COGNI_LANE_DB_HOST} (this run is on ${SECRETS_CONTROL_ENV}'s VM, ${VM_IP})"
+
 export CATALOG_FILE="${APP_SOURCE_DIR}/infra/secrets-catalog.yaml"
 export PAYMENT_NODES="${PAYMENT_NODES:-poly}"
 # DOMAIN is required: derive-env keys (APP_BASE_URL, NEXTAUTH_URL) build the
@@ -331,7 +368,7 @@ key_is_agent_generated() {
     && "$(_cat_field "$k" '.generate.kind')" =~ ^(base64|hex|sk-cogni)$ ]]
 }
 
-# Node-owned secrets only (node-baas-architecture.md: each node owns its own DB
+# Node-owned secrets only (https://cognidao.org/knowledge/node-baas-substrate-model: each node owns its own DB
 # + secrets). All three DSNs are now composed + written here — the bug.5002
 # sole-source cutover, complete for both planes:
 #   DATABASE_URL / DATABASE_SERVICE_URL  from per-node app_<node>/service_<node>

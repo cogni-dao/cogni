@@ -13,13 +13,21 @@
  *   - CALLER_PROVIDED_RUN_ID: accepts optional runId from caller for cross-system correlation (falls back to uuid4)
  *   - CONDITIONAL_GRANT_VALIDATION: skips validateGrantActivity when executionGrantId is null (API-triggered runs)
  *   - CONVERGED_FINALIZE: all terminal paths go through updateGraphRunActivity
+ *   - TRANSPORT_UNCERTAINTY_IS_INCOMPLETE: exhausted retryable transport failures become timeout, never false execution errors
  *   - TYPED_TERMINAL_ARTIFACT: returns small typed result {ok, runId, structuredOutput} for parent workflow composition
  * Side-effects: none (deterministic orchestration only)
  * Links: docs/spec/unified-graph-launch.md, docs/spec/temporal-patterns.md
  * @public
  */
 
-import { proxyActivities, uuid4, workflowInfo } from "@temporalio/workflow";
+import {
+  ActivityFailure,
+  ApplicationFailure,
+  patched,
+  proxyActivities,
+  uuid4,
+  workflowInfo,
+} from "@temporalio/workflow";
 import { GRAPH_EXECUTION_ACTIVITY_OPTIONS } from "../activity-profiles.js";
 import type { SchedulerActivities } from "../activity-types.js";
 
@@ -55,10 +63,37 @@ const {
   },
 });
 
-// Graph execution: 15-min timeout, no retry (idempotency collision risk).
-const { executeGraphActivity } = proxyActivities<SchedulerActivities>(
-  GRAPH_EXECUTION_ACTIVITY_OPTIONS
-);
+// New executions use durable transport recovery. The receiver has a proven
+// execution_requests dedup contract, so every attempt carries the same command
+// identity and only reconciles the existing execution.
+const { executeGraphActivity: executeGraphActivityWithRecovery } =
+  proxyActivities<SchedulerActivities>(GRAPH_EXECUTION_ACTIVITY_OPTIONS);
+
+// Replay compatibility for histories created before bug.5447. The patch gate
+// below keeps their already-scheduled Activity command byte-for-byte stable.
+const { executeGraphActivity: executeGraphActivityLegacy } =
+  proxyActivities<SchedulerActivities>({
+    startToCloseTimeout: "15 minutes",
+    retry: { maximumAttempts: 1 },
+  });
+
+const GRAPH_TRANSPORT_RECOVERY_PATCH = "bug.5447-graph-transport-recovery-v1";
+
+/** @internal Distinguishes definitive execution rejection from transport uncertainty. */
+export function isDefinitiveGraphActivityFailure(error: unknown): boolean {
+  const cause = error instanceof ActivityFailure ? error.cause : error;
+  return cause instanceof ApplicationFailure && cause.nonRetryable === true;
+}
+
+/** @internal Maps a failed Activity to the user-visible run ledger status. */
+export function graphActivityFailureStatus(
+  transportRecoveryEnabled: boolean,
+  error: unknown
+): "error" | "timeout" {
+  return !transportRecoveryEnabled || isDefinitiveGraphActivityFailure(error)
+    ? "error"
+    : "timeout";
+}
 
 /**
  * Input for GraphRunWorkflow.
@@ -196,7 +231,12 @@ export async function GraphRunWorkflow(
   // 3. Mark run as started
   await updateGraphRunActivity({ nodeId, runId, status: "running" });
 
-  // 4. Execute graph via internal API
+  // 4. Execute graph via internal API. patched() preserves replay for runs
+  // whose Activity command was created before transport recovery shipped.
+  const transportRecoveryEnabled = patched(GRAPH_TRANSPORT_RECOVERY_PATCH);
+  const executeGraphActivity = transportRecoveryEnabled
+    ? executeGraphActivityWithRecovery
+    : executeGraphActivityLegacy;
   try {
     const result = await executeGraphActivity({
       nodeId,
@@ -235,13 +275,16 @@ export async function GraphRunWorkflow(
       return { ok: false, runId };
     }
   } catch (error) {
-    // Activity threw — CONVERGED_FINALIZE: mark as error
+    // A non-retryable Activity failure is a definitive pre-execution rejection
+    // (auth, validation, idempotency mismatch, or unknown node). A retryable
+    // failure exhausted by scheduleToClose is transport-unknown: record the
+    // non-committal timeout status rather than manufacturing execution error.
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error during execution";
     await updateGraphRunActivity({
       nodeId,
       runId,
-      status: "error",
+      status: graphActivityFailureStatus(transportRecoveryEnabled, error),
       errorMessage,
     });
     throw error; // Re-throw so Temporal marks workflow as failed

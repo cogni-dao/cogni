@@ -12,6 +12,10 @@
  *     Application instead of fighting it.
  *   CONTROL_PLANE_TRACKS_ITS_FLEET_REF: the canonical root tracks the reviewed
  *     deploy ref, while an isolated fleet tracks its own protected main.
+ *   CHILD_APPSETS_SHARE_FLEET_AUTHORITY: the child app-of-apps resolves from the
+ *     same repository as its owning root, so self-heal cannot restore another fleet.
+ *   DECLARATIVE_RECONCILIATION_ONLY: candidate flights never mutate the root with
+ *     kubectl; Argo continuously reconciles the Git-owned self-managing copy.
  *   CONTROL_PLANE_OWNS_ONLY_ITS_ENV_DIR: the root's source path is scoped to
  *     infra/k8s/argocd/control-plane/candidate-a, preventing a foreign-env fan-out.
  * Side-effects: IO (reads the two candidate-a control-plane Application manifests)
@@ -31,6 +35,8 @@ const CONTROL_PLANE_PATH = "infra/k8s/argocd/control-plane/candidate-a";
 const SELF_PATH = `${CONTROL_PLANE_PATH}/candidate-a-control-plane-application.yaml`;
 const SEED_PATH =
   "infra/k8s/argocd/control-plane/roots/candidate-a-control-plane-application.yaml";
+const APPSETS_PATH = `${CONTROL_PLANE_PATH}/candidate-a-appsets-application.yaml`;
+const CANDIDATE_FLIGHT_PATH = ".github/workflows/candidate-flight.yml";
 
 interface ControlPlaneApplication {
   apiVersion?: unknown;
@@ -66,6 +72,7 @@ function identityOf(app: ControlPlaneApplication) {
 
 const self = loadApplication(SELF_PATH);
 const seed = loadApplication(SEED_PATH);
+const appsets = loadApplication(APPSETS_PATH);
 
 describe("candidate-a control-plane self-management", () => {
   it("seeds and self-manages the same Application identity", () => {
@@ -94,6 +101,26 @@ describe("candidate-a control-plane self-management", () => {
 
     expect(self.spec?.source?.targetRevision).toBe(expectedRevision);
     expect(seed.spec?.source?.targetRevision).toBe(expectedRevision);
+  });
+
+  it("keeps the child AppSet reconciler on the owning fleet", () => {
+    expect(appsets.spec?.source?.repoURL).toBe(self.spec?.source?.repoURL);
+    expect(appsets.spec?.source?.targetRevision).toBe("main");
+    expect(appsets.spec?.source?.path).toBe(
+      "infra/k8s/argocd/appsets/candidate-a"
+    );
+  });
+
+  it("leaves root reconciliation to Argo instead of each candidate flight", () => {
+    const workflow = readFileSync(
+      path.join(REPO_ROOT, CANDIDATE_FLIGHT_PATH),
+      "utf8"
+    );
+
+    expect(workflow).not.toContain(
+      "Reconcile isolated fleet control-plane root"
+    );
+    expect(workflow).not.toContain("candidate-a-control-plane-root.yaml");
   });
 
   it("owns only the candidate-a control-plane directory", () => {

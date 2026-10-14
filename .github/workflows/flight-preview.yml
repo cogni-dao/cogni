@@ -51,14 +51,11 @@ env:
 jobs:
   flight:
     runs-on: ubuntu-latest
-    # Skip flights for maintenance commits on main that carry no merged PR
-    # (PR-resolution below would fail loudly). Prefix-keyed, not author-keyed:
-    # - chore(deps): argocd-image-updater — bug.0344 Image Updater write-back
-    # - chore(preview): — task.0349 digest-seed on main after Flight Preview
+    # Skip Image Updater maintenance commits on main that carry no merged PR
+    # (PR-resolution below would fail loudly). Prefix-keyed, not author-keyed.
     if: |
       github.event_name != 'push' ||
-      (!startsWith(github.event.head_commit.message, 'chore(deps): argocd-image-updater') &&
-       !startsWith(github.event.head_commit.message, 'chore(preview):'))
+      !startsWith(github.event.head_commit.message, 'chore(deps): argocd-image-updater')
     outputs:
       # Emitted by scripts/ci/flight-preview.sh into $GITHUB_OUTPUT.
       # Values: dispatched | (empty when the flight step was gated off,
@@ -272,19 +269,6 @@ jobs:
         run: |
           echo "::error::flight-preview.sh exited non-zero without emitting a status — check the Flight step log."
           exit 1
-
-      # Consumed by promote-preview-digest-seed.yml (workflow_run). Only
-      # `dispatched` may trigger a chore(preview): commit on main.
-      - name: Record preview flight outcome artifact
-        if: always() && steps.pr.outputs.skip != 'true'
-        run: |
-          status="${{ steps.flight.outputs.status }}"
-          printf '%s\n' "${status:-unknown}" > preview-flight-outcome.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always() && steps.pr.outputs.skip != 'true'
-        with:
-          name: preview-flight-outcome
-          path: preview-flight-outcome.txt
 
   # Visible check: green when promote-and-deploy was dispatched for this merge.
   # Skipped (grey) only when the flight was gated off (a non-PR dispatch SHA).

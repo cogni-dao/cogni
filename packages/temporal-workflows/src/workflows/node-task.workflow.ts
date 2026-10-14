@@ -18,7 +18,7 @@
  */
 
 import { proxyActivities, workflowInfo } from "@temporalio/workflow";
-import { GRAPH_EXECUTION_ACTIVITY_OPTIONS } from "../activity-profiles.js";
+import { NODE_TASK_DISPATCH_ACTIVITY_OPTIONS } from "../activity-profiles.js";
 import type { SchedulerActivities } from "../activity-types.js";
 import type { NodeTaskInput } from "./node-task.schema.js";
 
@@ -42,11 +42,10 @@ const { validateNodeGrantActivity } = proxyActivities<SchedulerActivities>({
   },
 });
 
-// Dispatch: mirror executeGraphActivity — 15-min timeout, maximumAttempts:1
-// (MVP, idempotency-collision risk; a retry profile is gated on the node route's
-// proven dedup contract per the design).
+// Dispatch stays single-attempt in MVP. Unlike the graph route, generic node
+// task receivers have not all proven a durable dedup contract.
 const { dispatchNodeTaskActivity } = proxyActivities<SchedulerActivities>(
-  GRAPH_EXECUTION_ACTIVITY_OPTIONS
+  NODE_TASK_DISPATCH_ACTIVITY_OPTIONS
 );
 
 /**

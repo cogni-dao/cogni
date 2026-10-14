@@ -55,6 +55,32 @@ for node in "${NODE_TARGETS[@]}"; do
   fi
 done
 
+echo "[materialized] runtime Caddyfile contains current values, not env placeholders"
+DOMAIN_UNDER_TEST="test.cognidao.org"
+MATERIALIZED="$(bash scripts/ci/render-caddyfile.sh --domain "$DOMAIN_UNDER_TEST")"
+if grep -Fq '{$' <<<"$MATERIALIZED"; then
+  fail "materialized Caddyfile still depends on the running container's stale env"
+fi
+for node in "${NODE_TARGETS[@]}"; do
+  grep -Fq "$(host_for_node "$node" "$DOMAIN_UNDER_TEST") {" <<<"$MATERIALIZED" \
+    || fail "materialized Caddyfile missing current host for '$node'"
+  grep -Fq "reverse_proxy host.docker.internal:$(node_port_for_target "$node")" <<<"$MATERIALIZED" \
+    || fail "materialized Caddyfile missing current upstream for '$node'"
+done
+pass "all catalog routes are materialized for $DOMAIN_UNDER_TEST"
+
+echo "[materialized] base domain validation is label-aware"
+for valid_domain in localhost a.b foo-bar.example.com; do
+  bash scripts/ci/render-caddyfile.sh --domain "$valid_domain" >/dev/null \
+    || fail "valid base domain was rejected: $valid_domain"
+done
+for invalid_domain in foo.-bar.com foo-.bar.com -foo.example.com foo.example.com- foo..example.com; do
+  if bash scripts/ci/render-caddyfile.sh --domain "$invalid_domain" >/dev/null 2>&1; then
+    fail "invalid base domain was accepted: $invalid_domain"
+  fi
+done
+pass "localhost remains supported; labels with boundary hyphens are rejected"
+
 echo "[3/7] catalog node_port == overlay Service nodePort (no split-brain)"
 for node in "${NODE_TARGETS[@]}"; do
   cat_port="$(node_port_for_target "$node")"
@@ -124,12 +150,20 @@ grep -Fq 'loki.source.journal "kernel"' "$ALLOY_CONFIG" \
   || fail "kernel OOM/SIGKILL evidence is not shipped to Loki"
 grep -Eq 'regex[[:space:]]*= .*postgres.*temporal-postgres' "$ALLOY_CONFIG" \
   || fail "PostgreSQL stderr is not shipped to Loki"
-grep -Fq 'login_reason="server_transient"' "$DEPLOY_INFRA" \
+grep -Fq 'server_transient) max_attempts=3' "$DEPLOY_INFRA" \
   || fail "OpenBao writer login has no bounded transient retry"
-grep -Fq 'login_reason="permission_denied_recheck"' "$DEPLOY_INFRA" \
+grep -Fq '[[ $rc -eq 124 ]]' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer login does not classify a silent GNU timeout as transient"
+grep -Fq 'permission_denied_recheck) max_attempts=2' "$DEPLOY_INFRA" \
   || fail "OpenBao writer login does not recheck a 403 with one fresh JWT"
 grep -Fq 'OpenBao writer login failed permanently' "$DEPLOY_INFRA" \
   || fail "unknown OpenBao login failures do not fail closed"
-pass "backup execution is candidate-gated + serialized; OpenBao login retries are bounded and fail-closed"
+grep -Fq 'classify_kubectl_resource_lookup_failure' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer SA lookup does not distinguish timeout from absence"
+grep -Fq 'OpenBao writer SA lookup remained unavailable after 3 attempts' "$DEPLOY_INFRA" \
+  || fail "OpenBao writer SA lookup has no bounded transient retry"
+grep -Fq 'refusing to claim the SA is absent' "$DEPLOY_INFRA" \
+  || fail "unknown OpenBao writer SA lookup failures invent absence"
+pass "backup execution is candidate-gated + serialized; OpenBao login and SA lookup retries are bounded and fail-closed"
 
 echo "PASS: render-caddyfile.test.sh"

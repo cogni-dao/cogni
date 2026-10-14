@@ -10,6 +10,8 @@
  * Scope: Auth → artifact gate → dispatch. No lease table. No polling hacks.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session. No open access.
+ *   - EXPLICIT_CALLER_AUTHORITY: This direct API is the authenticated, explicitly requested flight
+ *     path. AI tool callers separately require getCiStatus.allGreen before invoking it.
  *   - ARTIFACT_GATE: Rejects before dispatch if the requested image tag is absent.
  *   - OPERATOR_DEPLOY_PLANE: Hosted flight dispatch goes through an operator-local port.
  *   - NODE_REF_CANDIDATE_ONLY: nodeRef dispatch targets candidate-a only; preview/prod promotion carries the resolved digest.
@@ -252,7 +254,7 @@ export const POST = wrapRouteHandlerWithLogging(
         return NextResponse.json({ error: "Invalid request" }, { status: 400 });
       }
 
-      const { nodeRef } = parsed.data;
+      const { nodeRef, workflowRef } = parsed.data;
       if (!nodeRef) {
         logTerminal({
           mode: "unknown",
@@ -402,6 +404,7 @@ export const POST = wrapRouteHandlerWithLogging(
           repo: parentRepo.repo,
           slug: prepared.slug,
           sourceSha: prepared.sourceSha,
+          ...(workflowRef ? { workflowRef } : {}),
         });
 
         logTerminal({
@@ -431,8 +434,12 @@ export const POST = wrapRouteHandlerWithLogging(
         );
       } catch (error) {
         const dispatchError = dispatchErrorResponse(error);
+        const deployPlaneError = handleDeployPlaneError(error);
         const errorCode =
-          dispatchError?.errorCode ?? "node_ref_dispatch_failed";
+          dispatchError?.errorCode ??
+          (error && typeof error === "object" && "code" in error
+            ? String((error as { code: unknown }).code)
+            : "node_ref_dispatch_failed");
         logGithubAdapterError(ctx, startedAt, {
           operation: "dispatch_node_ref_candidate_flight",
           reasonCode: errorCode,
@@ -443,7 +450,8 @@ export const POST = wrapRouteHandlerWithLogging(
         logTerminal({
           mode: "node_ref",
           outcome: "error",
-          status: dispatchError?.response.status ?? 500,
+          status:
+            dispatchError?.response.status ?? deployPlaneError?.status ?? 500,
           errorCode,
           githubStatus: githubStatus(error),
           nodeId: prepared.nodeId,
@@ -451,6 +459,7 @@ export const POST = wrapRouteHandlerWithLogging(
           sourceSha8: prepared.sourceSha.slice(0, 8),
         });
         if (dispatchError) return dispatchError.response;
+        if (deployPlaneError) return deployPlaneError;
         throw error;
       }
     } catch (error) {

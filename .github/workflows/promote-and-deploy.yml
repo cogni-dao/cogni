@@ -648,7 +648,8 @@ jobs:
         run: |
           set -euo pipefail
           ../app-src/scripts/ci/promote-k8s-image.sh --no-commit \
-            --env "$OVERLAY_ENV" --app "$NODE" --digest "$DIGEST"
+            --env "$OVERLAY_ENV" --app "$NODE" --digest "$DIGEST" \
+            --source-sha "$SOURCE_SHA"
           APP="$NODE" SOURCE_SHA="$SOURCE_SHA" \
             bash ../app-src/scripts/ci/update-source-sha-map.sh
 
@@ -711,34 +712,17 @@ jobs:
           path: out/
           retention-days: 1
 
-  flight-probe-project:
-    needs: decide
-    if: needs.decide.outputs.has_node_targets == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ${{ fromJson(needs.decide.outputs.node_targets_json) }}
-    uses: ./.github/workflows/flight-probe-project.yml
-    permissions:
-      contents: read
-      id-token: write
-    with:
-      lane: ${{ needs.decide.outputs.environment }}
-      node: ${{ matrix.node }}
-      operation: materialize
-
   # Per-node provider preflight on EVERY env (Invariants 16-17). All nodes
   # materialize source:agent secrets and reconcile placement-neutral state (DB,
   # ExternalSecret, shared runtime inventory). Only placement-specific steps branch:
   # k3s owns Caddy/NodePort edge mutation; Akash adds read-only controller/credential/
   # secret/egress assertions before promote-k8s writes a ComputeWorkload generation.
   node-substrate:
-    needs: [decide, reconcile-appset, reconcile-dns, flight-probe-project]
+    needs: [decide, reconcile-appset, reconcile-dns]
     if: |
       always() &&
       needs.decide.outputs.has_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
-      (needs.flight-probe-project.result == 'success' || needs.flight-probe-project.result == 'skipped') &&
       (
         needs.reconcile-dns.result == 'success' ||
         (needs.decide.outputs.has_k3s_node_targets != 'true' && needs.reconcile-dns.result == 'skipped')
@@ -759,6 +743,15 @@ jobs:
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
+      # Deployment tooling follows the workflow ref, not the application image
+      # being promoted. Otherwise a forward promotion of an older, already-built
+      # app SHA executes stale substrate logic and cannot be repaired by a
+      # workflow-only fix on main.
+      - name: Checkout workflow tooling
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          path: ci-src
+
       - name: Checkout app source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
@@ -852,7 +845,7 @@ jobs:
           DOMAIN: ${{ vars.DOMAIN }}
           APP_SOURCE_DIR: app-src
           COGNI_CATALOG_ROOT: app-src/infra/catalog
-        run: bash app-src/scripts/ci/run-node-substrate.sh "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
+        run: bash ci-src/scripts/ci/run-node-substrate.sh "${{ needs.decide.outputs.environment }}" "${{ matrix.node }}"
 
   deploy-infra:
     if: |
@@ -1171,7 +1164,7 @@ jobs:
           EXPECTED_BUILDSHA: ${{ needs.decide.outputs.build_sha }}
           NODES: ${{ matrix.node }}
           MARKER_DIR: out
-          CUTOVER_TIMEOUT: ${{ env.DEPLOYMENT_PROVIDER == 'akash' && '420' || '90' }}
+          CUTOVER_TIMEOUT: "420"
         run: bash app-src/scripts/ci/verify-buildsha.sh
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

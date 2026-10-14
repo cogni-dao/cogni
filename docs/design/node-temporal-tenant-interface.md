@@ -75,7 +75,7 @@ NodeTaskWorkflow(input: NodeTaskInput)              // .strict() zod, packages/t
   → validateGrantActivity(actor, nodeId, grantId, "task:dispatch:<route>")   // NET-NEW: must assert grant↔node (M1) + scope-generalized (M2)
   → dispatchNodeTaskActivity(nodeId, route, payload, scheduledFor)            // POST {nodeUrl}{route}, principal = per-node token (G1, fail-closed)
         Idempotency-Key: `${nodeId}/${scheduleId}/${scheduledFor}`           // header; the NODE ROUTE must dedup on it (hard contract)
-        retry profile: maximumAttempts:1 (MVP — mirrors executeGraphActivity GRAPH_EXECUTION_ACTIVITY_OPTIONS; no retry until the dedup contract is proven)
+        retry profile: maximumAttempts:1 (MVP — NODE_TASK_DISPATCH_ACTIVITY_OPTIONS; no retry until the node-task receiver dedup contract is proven)
   → (no graph child — the node's route IS the work)
 ```
 
@@ -87,8 +87,9 @@ requirements the build MUST honor (review M-fixes):**
 - **Idempotency is a two-sided contract (M3).** The operator forwards
   `Idempotency-Key: ${nodeId}/${scheduleId}/${scheduledFor}`; the node route **MUST**
   dedup on it. A key the receiver ignores does not make a POST idempotent. MVP retry
-  profile = `maximumAttempts:1` (the cited graph clone uses exactly this, precisely for
-  idempotency-collision risk); a retry profile is gated on the documented dedup contract.
+  profile = `maximumAttempts:1` because generic node-task receivers do not yet share
+  the graph route's durable `execution_requests` contract; retries are gated on a
+  documented receiver-side dedup contract.
 - **`scheduledFor` derives from the `TemporalScheduledStartTime` search attribute**
   inside the workflow (M-fix), never from input or wall clock (SCHEDULED_TIME_FROM_TEMPORAL).
 - **Route allow-listing (M3/security):** `route` is validated to the node's OWN host —
@@ -268,14 +269,14 @@ deferring** until a real user validates the campaign flow (MVP-stage discipline)
 
 The node-baas-aligned end state is **F2: the node consumes an operator-provisioned Temporal
 substrate directly, under its own identity** — exactly the pattern every other substrate
-already follows in [node-baas-architecture.md § BaaS Substrate Map](../spec/node-baas-architecture.md#baas-substrate-map):
+already follows in the [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model):
 the operator **provisions + hands credentials** (Postgres → DSN, Storage → object-store
 creds, Streams → Redis); the node's app then **consumes directly**, it does not call an
 operator API per write. Applied here: the operator provisions Temporal (namespace +
 per-node queue + worker + access via ESO); **beacon's app creates schedules itself with
 `nodeId = beacon`** (it _is_ the node — `getNodeId()` returns beacon), and a node's _fixed_
 jobs are declared in its repo-spec `schedules:` block ("node declares shape; operator wires
-environment", [§ Core Model](../spec/node-baas-architecture.md#core-model) / Decision Rule 8).
+environment", [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model)).
 This also realizes the sovereignty story below (`TEMPORAL_IS_SWAPPABLE_SUBSTRATE`): a node
 that wants its own Temporal swaps the backend behind the same contract.
 
@@ -283,7 +284,7 @@ that wants its own Temporal swaps the backend behind the same contract.
 — real work for zero proven demand. The MVP's node-authed create path is the throwaway-light
 bridge; when a node genuinely needs to own its scheduler, migrate the _create seam_ (operator
 API → direct consume), not the workflow/dispatch primitives, which are unchanged. See
-[node-baas-architecture.md](../spec/node-baas-architecture.md) (add a **Scheduling/Recurring**
+[Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) (add a **Scheduling/Recurring**
 row to the BaaS Substrate Map when F2 lands) and _Sovereignty & Scale_ above.
 
 ## What this is NOT
