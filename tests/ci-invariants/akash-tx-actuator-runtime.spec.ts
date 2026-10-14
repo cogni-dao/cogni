@@ -580,7 +580,7 @@ describe("akash-tx-actuator runtime", () => {
       `source_repo="$(yq -N '.source_repo // ""' "$catalog")"`
     );
     expect(workflow).toContain(
-      'if [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+      'if [ "$reliability_controller" = true ] && [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
     );
     expect(workflow).not.toMatch(/matrix\.node.*operator/);
 

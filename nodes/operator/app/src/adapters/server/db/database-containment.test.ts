@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import type {
   DatabaseContainmentAction,
@@ -28,7 +33,10 @@ import {
   PostgresDatabaseContainmentAdapter,
   PostgresDatabaseReadmissionAdapter,
   PostgresReadmitSqlAdapter,
+  readImmutableAppSourceFile,
 } from "./database-containment-production.adapter";
+
+const execFileAsync = promisify(execFile);
 
 const ACTION: DatabaseContainmentAction = {
   nodeId: "00000000-0000-4000-8000-000000000011",
@@ -39,6 +47,86 @@ const ACTION: DatabaseContainmentAction = {
   actorId: "human:test",
   desiredTier: "dedicated",
   budgetProfile: "dedicated-high-throughput-v1",
+};
+
+const CELL_BUDGET_PROFILES = {
+  "synthetic-small-v1": {
+    vcpus: 2,
+    memoryGiB: 4,
+    storageGiB: 50,
+    computeClass: "shared" as const,
+  },
+  "dedicated-high-throughput-v1": {
+    vcpus: 4,
+    memoryGiB: 16,
+    storageGiB: 100,
+    computeClass: "dedicated" as const,
+  },
+};
+
+const CHERRY_ALLOCATION_CONFIG = {
+  budgetProfiles: CELL_BUDGET_PROFILES,
+  storagePlanIds: { shared: 500, dedicated: 500 },
+  billingCurrency: "USD" as const,
+  pricingFetchImpl: async () =>
+    new Response(
+      '<h3>Elastic Block Storage</h3><span>From <b data-currency-USD="0.077" data-currency-EUR="0.066">0.077</b> / GB / mo</span>'
+    ),
+  reviewedBuildSha: "a".repeat(40),
+};
+
+const CHERRY_PLANS = [
+  {
+    slug: "B1-4-4gb-80s-shared",
+    type: "vps",
+    specs: {
+      cpus: { threads: 4 },
+      memory: { total: 4, unit: "GB" },
+    },
+    pricing: [
+      { unit: "Hourly", price: 0.0585, currency: "USD" },
+      { unit: "Monthly", price: 35, currency: "USD" },
+    ],
+  },
+  {
+    slug: "G1-4-16gb-100nv-ded",
+    type: "vds",
+    specs: {
+      cpus: { threads: 4 },
+      memory: { total: 16, unit: "GB" },
+    },
+    pricing: [
+      { unit: "Hourly", price: 0.0983, currency: "USD" },
+      { unit: "Monthly", price: 70, currency: "USD" },
+    ],
+  },
+];
+
+const DEDICATED_ALLOCATION_TAGS = {
+  "cogni.io/storage-gib": "100",
+  "cogni.io/cell-vcpus": "4",
+  "cogni.io/cell-memory-gib": "16",
+  "cogni.io/compute-class": "dedicated",
+  "cogni.io/provider-project-id": "99",
+  "cogni.io/provider-region": "LT-Siauliai",
+  "cogni.io/image-ref": "ubuntu-24-04",
+  "cogni.io/reviewed-build-sha": "a".repeat(40),
+  "cogni.io/compute-sku": "G1-4-16gb-100nv-ded",
+  "cogni.io/storage-sku": "500",
+  "cogni.io/cost-rate": "0.0983",
+  "cogni.io/cost-monthly": "71.759",
+  "cogni.io/cost-provider-monthly-cycle": "70",
+  "cogni.io/cost-scope": "compute",
+  "cogni.io/cost-complete": "false",
+  "cogni.io/cost-unquoted": "exact-storage",
+  "cogni.io/cost-currency": "USD",
+  "cogni.io/cost-unit": "hour",
+  "cogni.io/cost-captured-at": "2026-10-13T23:30:00.000Z",
+  "cogni.io/cost-storage-per-gib-monthly": "0.077",
+  "cogni.io/cost-storage-monthly": "7.7",
+  "cogni.io/cost-storage-source": "https://www.cherryservers.com/pricing",
+  "cogni.io/cost-storage-quoted-at": "2026-10-13T23:30:00.000Z",
+  "cogni.io/cost-storage-kind": "provider-published-floor",
 };
 
 function createPostgresProvisionLeaseHarness() {
@@ -724,6 +812,52 @@ describe("DatabaseDsnRotationAdapter", () => {
 });
 
 describe("CherryDatabaseCellAdapter", () => {
+  it("binds lifecycle source reads to one exact committed build", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "cogni-cell-source-"));
+    try {
+      await execFileAsync("git", ["init"], { cwd: repo });
+      await execFileAsync("git", ["config", "user.email", "test@cogni.local"], {
+        cwd: repo,
+      });
+      await execFileAsync("git", ["config", "user.name", "Cogni Test"], {
+        cwd: repo,
+      });
+      await mkdir(join(repo, "infra"), { recursive: true });
+      const path = join(repo, "infra", "database-budget-profiles.yaml");
+      await writeFile(path, "committed: true\n", "utf8");
+      await execFileAsync("git", ["add", "."], { cwd: repo });
+      await execFileAsync("git", ["commit", "-m", "fixture"], { cwd: repo });
+      const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+        cwd: repo,
+      });
+      const sha = stdout.trim();
+      await expect(
+        readImmutableAppSourceFile(
+          repo,
+          sha.slice(0, 7),
+          "infra/database-budget-profiles.yaml"
+        )
+      ).rejects.toThrow("database_cell_build_sha_invalid");
+      await expect(
+        readImmutableAppSourceFile(
+          repo,
+          "0".repeat(40),
+          "infra/database-budget-profiles.yaml"
+        )
+      ).rejects.toThrow("database_cell_build_sha_mismatch");
+      await writeFile(path, "poisoned: true\n", "utf8");
+      await expect(
+        readImmutableAppSourceFile(
+          repo,
+          sha,
+          "infra/database-budget-profiles.yaml"
+        )
+      ).resolves.toBe("committed: true\n");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it("verifies a target cell with its exact node identity and deterministic DB proof", async () => {
     const unsafe = vi
       .fn()
@@ -776,9 +910,11 @@ describe("CherryDatabaseCellAdapter", () => {
       projectId: "99",
       timeoutMs: 1000,
       region: "LT-Siauliai",
-      plan: "B1-1-1gb-20s-shared",
       image: "ubuntu-24-04",
-      storagePlanId: 500,
+      ...CHERRY_ALLOCATION_CONFIG,
+      pricingFetchImpl: async () => {
+        throw new Error("pricing_unavailable");
+      },
       sshKeyIds: [4],
       renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
       lockDsn:
@@ -792,6 +928,446 @@ describe("CherryDatabaseCellAdapter", () => {
     expect(cells.provision).toEqual(expect.any(Function));
   });
 
+  it.each([
+    "existing",
+    "created",
+  ] as const)("never returns an %s provider-active cell as ready without DB liveness", async (scenario) => {
+    const input = {
+      nodeId: ACTION.nodeId,
+      nodeSlug: "alpha",
+      environment: "candidate-a" as const,
+      databaseTier: "dedicated" as const,
+      budgetProfile: "dedicated-high-throughput-v1",
+      idempotencyKey: "alpha-candidate-a-v1",
+    };
+    const tags = {
+      "cogni.io/node-id": input.nodeId,
+      "cogni.io/node-slug": input.nodeSlug,
+      "cogni.io/environment": input.environment,
+      "cogni.io/database-tier": input.databaseTier,
+      "cogni.io/budget-profile": input.budgetProfile,
+      "cogni.io/idempotency-key": input.idempotencyKey,
+      "cogni.io/storage-id": "55",
+      ...DEDICATED_ALLOCATION_TAGS,
+    };
+    const active = {
+      id: 77,
+      state: "active",
+      ip_addresses: [{ address: "10.0.0.2", type: "primary-ip" }],
+      storage: [{ id: 55, size: 100 }],
+      tags,
+    };
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      const path = String(url);
+      const method = init?.method ?? "GET";
+      if (path.endsWith("/projects/99/servers") && method === "GET") {
+        return Response.json(scenario === "existing" ? [active] : []);
+      }
+      if (path.includes("/plans?") && method === "GET") {
+        return Response.json(CHERRY_PLANS);
+      }
+      if (path.endsWith("/projects/99/storages") && method === "GET") {
+        return Response.json([]);
+      }
+      if (path.endsWith("/projects/99/storages") && method === "POST") {
+        return Response.json(
+          { id: 55, size: 100, region: "LT-Siauliai" },
+          { status: 201 }
+        );
+      }
+      if (path.endsWith("/projects/99/servers") && method === "POST") {
+        return Response.json(active, { status: 201 });
+      }
+      throw new Error(`unexpected_request:${method}:${path}`);
+    });
+    const verifyLiveness = vi.fn(async () => {
+      throw new Error("database_liveness_failed");
+    });
+    const adapter = new CherryDatabaseCellAdapter({
+      authToken: "token",
+      projectId: "99",
+      timeoutMs: 1000,
+      region: "LT-Siauliai",
+      image: "ubuntu-24-04",
+      ...CHERRY_ALLOCATION_CONFIG,
+      sshKeyIds: [4],
+      renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
+      provisionLease: createPostgresProvisionLeaseHarness().lease,
+      databaseVerifier: {
+        verify: vi.fn(),
+        verifyLiveness,
+      },
+      fetchImpl,
+    });
+    await expect(adapter.provision(input)).rejects.toThrow(
+      "database_liveness_failed"
+    );
+    expect(verifyLiveness).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["absent", "<html>no storage quote</html>"],
+    [
+      "ambiguous",
+      '<h3>Elastic Block Storage</h3>From <i data-currency-USD="0.077">0.077</i> / GB / mo From <i data-currency-USD="0.088">0.088</i> / GB / mo',
+    ],
+    [
+      "wrong currency",
+      '<h3>Elastic Block Storage</h3>From <i data-currency-EUR="0.066">0.066</i> / GB / mo',
+    ],
+  ])("rejects an %s storage floor before provider mutation", async (_, html) => {
+    const requests: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      requests.push(`${init?.method ?? "GET"} ${String(url)}`);
+      if (String(url).endsWith("/projects/99/servers")) {
+        return Response.json([]);
+      }
+      throw new Error("unexpected_provider_request");
+    });
+    const adapter = new CherryDatabaseCellAdapter({
+      authToken: "token",
+      projectId: "99",
+      timeoutMs: 1000,
+      region: "LT-Siauliai",
+      image: "ubuntu-24-04",
+      ...CHERRY_ALLOCATION_CONFIG,
+      pricingFetchImpl: async () => new Response(html),
+      sshKeyIds: [4],
+      renderUserData: async () => "unused",
+      provisionLease: createPostgresProvisionLeaseHarness().lease,
+      fetchImpl,
+    });
+    await expect(
+      adapter.provision({
+        nodeId: ACTION.nodeId,
+        nodeSlug: "alpha",
+        environment: "candidate-a",
+        databaseTier: "dedicated",
+        budgetProfile: "dedicated-high-throughput-v1",
+        idempotencyKey: "alpha-candidate-a-v1",
+      })
+    ).rejects.toThrow(/cherry_database_cell_storage_quote_/);
+    expect(requests.some((request) => request.startsWith("POST"))).toBe(false);
+  });
+
+  it("releases an exact provider identity even when DB liveness is down", async () => {
+    const tags = {
+      "cogni.io/node-id": ACTION.nodeId,
+      "cogni.io/node-slug": "alpha",
+      "cogni.io/environment": "candidate-a",
+      "cogni.io/database-tier": "dedicated",
+      "cogni.io/budget-profile": "dedicated-high-throughput-v1",
+      "cogni.io/idempotency-key": "alpha-candidate-a-v1",
+      "cogni.io/storage-id": "55",
+      ...DEDICATED_ALLOCATION_TAGS,
+    };
+    let deletes = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      if (init?.method === "DELETE") {
+        deletes += 1;
+        return new Response(null, { status: 204 });
+      }
+      if (String(url).endsWith("/servers/77")) {
+        return Response.json({
+          id: 77,
+          state: "active",
+          ip_addresses: [{ address: "10.0.0.2", type: "primary-ip" }],
+          tags,
+        });
+      }
+      throw new Error(`unexpected_request:${String(url)}`);
+    });
+    const verifyLiveness = vi.fn(async () => {
+      throw new Error("database_liveness_failed");
+    });
+    const adapter = new CherryDatabaseCellAdapter({
+      authToken: "token",
+      projectId: "99",
+      timeoutMs: 1000,
+      region: "LT-Siauliai",
+      image: "ubuntu-24-04",
+      ...CHERRY_ALLOCATION_CONFIG,
+      sshKeyIds: [4],
+      renderUserData: async () => "unused",
+      provisionLease: createPostgresProvisionLeaseHarness().lease,
+      databaseVerifier: { verify: vi.fn(), verifyLiveness },
+      fetchImpl,
+    });
+    await expect(
+      adapter.release({ cellId: "77", expectedNodeId: ACTION.nodeId })
+    ).resolves.toBeUndefined();
+    expect(deletes).toBe(1);
+    expect(verifyLiveness).not.toHaveBeenCalled();
+
+    deletes = 0;
+    await expect(
+      adapter.release({ cellId: "77", expectedNodeId: "different-node-id" })
+    ).rejects.toThrow("database_cell_identity_mismatch");
+    expect(deletes).toBe(0);
+  });
+
+  it("reuses a sufficient cell across builds and cheaper plan changes", async () => {
+    const tags = {
+      "cogni.io/node-id": ACTION.nodeId,
+      "cogni.io/node-slug": "alpha",
+      "cogni.io/environment": "candidate-a",
+      "cogni.io/database-tier": "dedicated",
+      "cogni.io/budget-profile": "dedicated-high-throughput-v1",
+      "cogni.io/idempotency-key": "alpha-candidate-a-v1",
+      "cogni.io/storage-id": "55",
+      ...DEDICATED_ALLOCATION_TAGS,
+      "cogni.io/reviewed-build-sha": "b".repeat(40),
+      "cogni.io/compute-sku": "historic-sufficient-plan",
+    };
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/projects/99/servers")) {
+        return Response.json([{ id: 77, state: "pending", tags }]);
+      }
+      if (path.includes("/plans?")) return Response.json(CHERRY_PLANS);
+      throw new Error(`unexpected_request:${path}`);
+    });
+    const adapter = new CherryDatabaseCellAdapter({
+      authToken: "token",
+      projectId: "99",
+      timeoutMs: 1000,
+      region: "LT-Siauliai",
+      image: "ubuntu-24-04",
+      ...CHERRY_ALLOCATION_CONFIG,
+      pricingFetchImpl: async () => {
+        throw new Error("pricing_unavailable");
+      },
+      sshKeyIds: [4],
+      renderUserData: async () => "unused",
+      provisionLease: createPostgresProvisionLeaseHarness().lease,
+      fetchImpl,
+    });
+    await expect(
+      adapter.provision({
+        nodeId: ACTION.nodeId,
+        nodeSlug: "alpha",
+        environment: "candidate-a",
+        databaseTier: "dedicated",
+        budgetProfile: "dedicated-high-throughput-v1",
+        idempotencyKey: "alpha-candidate-a-v1",
+      })
+    ).resolves.toMatchObject({
+      phase: "provisioning",
+      allocation: {
+        reviewedBuildSha: "b".repeat(40),
+        computeSku: "historic-sufficient-plan",
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["undersized", { "cogni.io/cell-memory-gib": "8" }],
+    ["region", { "cogni.io/provider-region": "US-Chicago" }],
+    ["image", { "cogni.io/image-ref": "ubuntu-22-04" }],
+  ])("rejects reused cell %s intent drift", async (_, drift) => {
+    const tags = {
+      "cogni.io/node-id": ACTION.nodeId,
+      "cogni.io/node-slug": "alpha",
+      "cogni.io/environment": "candidate-a",
+      "cogni.io/database-tier": "dedicated",
+      "cogni.io/budget-profile": "dedicated-high-throughput-v1",
+      "cogni.io/idempotency-key": "alpha-candidate-a-v1",
+      "cogni.io/storage-id": "55",
+      ...DEDICATED_ALLOCATION_TAGS,
+      ...drift,
+    };
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/projects/99/servers")) {
+        return Response.json([{ id: 77, state: "pending", tags }]);
+      }
+      if (path.includes("/plans?")) return Response.json(CHERRY_PLANS);
+      throw new Error(`unexpected_request:${path}`);
+    });
+    const adapter = new CherryDatabaseCellAdapter({
+      authToken: "token",
+      projectId: "99",
+      timeoutMs: 1000,
+      region: "LT-Siauliai",
+      image: "ubuntu-24-04",
+      ...CHERRY_ALLOCATION_CONFIG,
+      sshKeyIds: [4],
+      renderUserData: async () => "unused",
+      provisionLease: createPostgresProvisionLeaseHarness().lease,
+      fetchImpl,
+    });
+    await expect(
+      adapter.provision({
+        nodeId: ACTION.nodeId,
+        nodeSlug: "alpha",
+        environment: "candidate-a",
+        databaseTier: "dedicated",
+        budgetProfile: "dedicated-high-throughput-v1",
+        idempotencyKey: "alpha-candidate-a-v1",
+      })
+    ).rejects.toThrow("database_cell_allocation_intent_mismatch");
+  });
+
+  it("sizes two profiles differently and reads back the provision cost rate", async () => {
+    const storageBodies: Array<Record<string, unknown>> = [];
+    const serverBodies: Array<Record<string, unknown>> = [];
+    const servers = new Map<string, Record<string, unknown>>();
+    let storageId = 50;
+    let serverId = 70;
+    const databaseProof = {
+      schemaFingerprint: `sha256:${"1".repeat(64)}`,
+      rowCount: 2,
+      checksum: `sha256:${"2".repeat(64)}`,
+    };
+    const verifyLiveness = vi.fn(async () => databaseProof);
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      const path = String(url);
+      const method = init?.method ?? "GET";
+      if (path.includes("/plans?") && method === "GET") {
+        return Response.json(CHERRY_PLANS);
+      }
+      if (path.endsWith("/projects/99/servers") && method === "GET") {
+        return Response.json([]);
+      }
+      if (path.endsWith("/projects/99/storages") && method === "GET") {
+        return Response.json([]);
+      }
+      if (path.endsWith("/projects/99/storages") && method === "POST") {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        storageBodies.push(body);
+        storageId += 1;
+        return Response.json(
+          { id: storageId, size: body.size, region: body.region },
+          { status: 201 }
+        );
+      }
+      if (path.endsWith("/projects/99/servers") && method === "POST") {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        serverBodies.push(body);
+        serverId += 1;
+        const server = {
+          id: serverId,
+          state: "pending",
+          tags: body.tags,
+          storage: [{ id: body.storage_id }],
+        };
+        servers.set(String(serverId), server);
+        return Response.json(server, { status: 201 });
+      }
+      const match = path.match(/\/servers\/(\d+)$/);
+      if (match && method === "GET") {
+        return Response.json(servers.get(match[1] ?? ""));
+      }
+      throw new Error(`unexpected_request:${method}:${path}`);
+    });
+    const adapter = new CherryDatabaseCellAdapter({
+      authToken: "token",
+      projectId: "99",
+      timeoutMs: 1000,
+      region: "LT-Siauliai",
+      image: "ubuntu-24-04",
+      ...CHERRY_ALLOCATION_CONFIG,
+      sshKeyIds: [4],
+      renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
+      provisionLease: createPostgresProvisionLeaseHarness().lease,
+      databaseVerifier: {
+        verify: vi.fn(async () => databaseProof),
+        verifyLiveness,
+      },
+      fetchImpl,
+      now: () => new Date("2026-10-13T23:30:00.000Z"),
+    });
+    const base = {
+      nodeId: ACTION.nodeId,
+      nodeSlug: "alpha",
+      environment: "candidate-a" as const,
+      databaseTier: "dedicated" as const,
+    };
+    const small = await adapter.provision({
+      ...base,
+      budgetProfile: "synthetic-small-v1",
+      idempotencyKey: "alpha-small-v1",
+    });
+    const large = await adapter.provision({
+      ...base,
+      nodeId: "00000000-0000-4000-8000-000000000012",
+      nodeSlug: "bravo",
+      budgetProfile: "dedicated-high-throughput-v1",
+      idempotencyKey: "bravo-large-v1",
+    });
+
+    expect(storageBodies.map(({ size }) => size)).toEqual([50, 100]);
+    expect(serverBodies.map(({ plan }) => plan)).toEqual([
+      "B1-4-4gb-80s-shared",
+      "G1-4-16gb-100nv-ded",
+    ]);
+    expect(small.allocation).toMatchObject({
+      budgetProfile: "synthetic-small-v1",
+      capacity: { vcpus: 4, memoryGiB: 4, storageGiB: 50 },
+      providerProjectId: "99",
+      providerRegion: "LT-Siauliai",
+      imageRef: "ubuntu-24-04",
+      reviewedBuildSha: "a".repeat(40),
+      costRate: {
+        scope: "compute",
+        complete: false,
+        unquotedComponents: ["exact-storage"],
+        amount: 0.0585,
+        monthlyAmount: 42.705,
+        providerMonthlyCycleAmount: 35,
+        currency: "USD",
+        unit: "hour",
+        storageMinimumEstimate: {
+          kind: "provider-published-floor",
+          perGiBMonthlyAmount: 0.077,
+          monthlyMinimumAmount: 3.85,
+          sourceUrl: "https://www.cherryservers.com/pricing",
+        },
+      },
+    });
+    expect(large.allocation).toMatchObject({
+      budgetProfile: "dedicated-high-throughput-v1",
+      capacity: { vcpus: 4, memoryGiB: 16, storageGiB: 100 },
+      costRate: {
+        scope: "compute",
+        complete: false,
+        unquotedComponents: ["exact-storage"],
+        amount: 0.0983,
+        monthlyAmount: 71.759,
+        providerMonthlyCycleAmount: 70,
+        currency: "USD",
+        unit: "hour",
+        storageMinimumEstimate: {
+          kind: "provider-published-floor",
+          perGiBMonthlyAmount: 0.077,
+          monthlyMinimumAmount: 7.7,
+          sourceUrl: "https://www.cherryservers.com/pricing",
+        },
+      },
+    });
+    servers.set(large.cellId, {
+      ...servers.get(large.cellId),
+      state: "active",
+      ip_addresses: [{ address: "10.0.0.2", type: "primary-ip" }],
+    });
+    await expect(
+      adapter.status({ cellId: large.cellId })
+    ).resolves.toMatchObject({
+      phase: "ready",
+      endpoint: "10.0.0.2",
+      allocation: large.allocation,
+      verification: databaseProof,
+    });
+    expect(verifyLiveness).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cellId: large.cellId,
+        nodeSlug: "bravo",
+        endpoint: "10.0.0.2",
+      })
+    );
+  });
+
   it("persists the terminal result from the bounded lifecycle caller", async () => {
     const result = {
       provider: "cherry",
@@ -802,6 +1378,34 @@ describe("CherryDatabaseCellAdapter", () => {
       phase: "ready" as const,
       endpoint: "10.0.0.2",
       storage: { volumeId: "55", sizeGiB: 50 },
+      allocation: {
+        budgetProfile: "synthetic-small-v1",
+        capacity: CELL_BUDGET_PROFILES["synthetic-small-v1"],
+        providerProjectId: "99",
+        providerRegion: "LT-Siauliai",
+        imageRef: "ubuntu-24-04",
+        reviewedBuildSha: "a".repeat(40),
+        computeSku: "B1-4-4gb-80s-shared",
+        storageSku: "500",
+        costRate: {
+          scope: "compute" as const,
+          complete: false as const,
+          unquotedComponents: ["exact-storage"] as const,
+          amount: 0.0585,
+          monthlyAmount: 42.705,
+          providerMonthlyCycleAmount: 35,
+          currency: "USD" as const,
+          unit: "hour" as const,
+          capturedAt: "2026-10-13T23:30:00.000Z",
+          storageMinimumEstimate: {
+            kind: "provider-published-floor" as const,
+            perGiBMonthlyAmount: 0.077,
+            monthlyMinimumAmount: 3.85,
+            sourceUrl: "https://www.cherryservers.com/pricing",
+            fetchedAt: "2026-10-13T23:30:00.000Z",
+          },
+        },
+      },
       observedAt: "2026-10-13T23:30:00.000Z",
     };
     const append = vi.fn();
@@ -831,8 +1435,8 @@ describe("CherryDatabaseCellAdapter", () => {
       "cogni.io/database-tier": "dedicated",
       "cogni.io/budget-profile": "dedicated-high-throughput-v1",
       "cogni.io/idempotency-key": "alpha-candidate-a-v1",
-      "cogni.io/storage-gib": "50",
       "cogni.io/storage-id": "55",
+      ...DEDICATED_ALLOCATION_TAGS,
     };
     const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
       const path = String(url);
@@ -845,6 +1449,9 @@ describe("CherryDatabaseCellAdapter", () => {
             : []
         );
       }
+      if (path.includes("/plans?") && method === "GET") {
+        return Response.json(CHERRY_PLANS);
+      }
       if (path.endsWith("/projects/99/storages") && method === "GET") {
         return Response.json(
           storageCreated
@@ -852,7 +1459,7 @@ describe("CherryDatabaseCellAdapter", () => {
                 {
                   id: 55,
                   description: "cogni-db-cell-alpha-candidate-a-v1",
-                  size: 50,
+                  size: 100,
                   region: "LT-Siauliai",
                 },
               ]
@@ -865,7 +1472,7 @@ describe("CherryDatabaseCellAdapter", () => {
           {
             id: 55,
             description: "cogni-db-cell-alpha-candidate-a-v1",
-            size: 50,
+            size: 100,
             region: "LT-Siauliai",
           },
           { status: 201 }
@@ -883,9 +1490,8 @@ describe("CherryDatabaseCellAdapter", () => {
         projectId: "99",
         timeoutMs: 1000,
         region: "LT-Siauliai",
-        plan: "B1-1-1gb-20s-shared",
         image: "ubuntu-24-04",
-        storagePlanId: 500,
+        ...CHERRY_ALLOCATION_CONFIG,
         sshKeyIds: [4],
         renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
         provisionLease: leaseHarness.lease,
@@ -899,7 +1505,6 @@ describe("CherryDatabaseCellAdapter", () => {
       databaseTier: "dedicated" as const,
       budgetProfile: "dedicated-high-throughput-v1",
       idempotencyKey: "alpha-candidate-a-v1",
-      storageGiB: 50,
     };
     const [cellResult, retryResult, collisionResult] = await Promise.allSettled(
       [
@@ -929,12 +1534,15 @@ describe("CherryDatabaseCellAdapter", () => {
     const cell = cellResult.value;
     const retry = retryResult.value;
     expect(requests[1]).toContain(
-      "GET https://api.cherryservers.com/v1/projects/99/storages"
+      "GET https://api.cherryservers.com/v1/plans?"
     );
     expect(requests[2]).toContain(
+      "GET https://api.cherryservers.com/v1/projects/99/storages"
+    );
+    expect(requests[3]).toContain(
       "POST https://api.cherryservers.com/v1/projects/99/storages"
     );
-    expect(requests[3]).toContain("/servers");
+    expect(requests[4]).toContain("/servers");
     expect(
       requests.filter((request) => request.startsWith("POST"))
     ).toHaveLength(2);
@@ -947,7 +1555,28 @@ describe("CherryDatabaseCellAdapter", () => {
       cellId: "77",
       phase: "provisioning",
       endpoint: null,
-      storage: { volumeId: "55", sizeGiB: 50 },
+      storage: { volumeId: "55", sizeGiB: 100 },
+      allocation: {
+        budgetProfile: "dedicated-high-throughput-v1",
+        computeSku: "G1-4-16gb-100nv-ded",
+        storageSku: "500",
+        costRate: {
+          scope: "compute",
+          complete: false,
+          unquotedComponents: ["exact-storage"],
+          amount: 0.0983,
+          monthlyAmount: 71.759,
+          providerMonthlyCycleAmount: 70,
+          currency: "USD",
+          unit: "hour",
+          storageMinimumEstimate: {
+            kind: "provider-published-floor",
+            perGiBMonthlyAmount: 0.077,
+            monthlyMinimumAmount: 7.7,
+            sourceUrl: "https://www.cherryservers.com/pricing",
+          },
+        },
+      },
     });
     expect(retry.cellId).toBe("77");
     expect(cell).not.toHaveProperty("authToken");
@@ -960,9 +1589,8 @@ describe("CherryDatabaseCellAdapter", () => {
       projectId: "99",
       timeoutMs: 1000,
       region: "LT-Siauliai",
-      plan: "B1-1-1gb-20s-shared",
       image: "ubuntu-24-04",
-      storagePlanId: 500,
+      ...CHERRY_ALLOCATION_CONFIG,
       sshKeyIds: [4],
       renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
       fetchImpl,
@@ -975,7 +1603,6 @@ describe("CherryDatabaseCellAdapter", () => {
         databaseTier: "dedicated",
         budgetProfile: "dedicated-high-throughput-v1",
         idempotencyKey: "alpha-candidate-a-v1",
-        storageGiB: 50,
       })
     ).rejects.toThrow("cherry_database_cell_provision_lease_required");
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -986,7 +1613,7 @@ describe("CherryDatabaseCellAdapter", () => {
     const storage = {
       id: 55,
       description: "cogni-db-cell-alpha-candidate-a-v1",
-      size: 50,
+      size: 100,
       region: "LT-Siauliai",
     };
     let storageCreated = false;
@@ -997,6 +1624,9 @@ describe("CherryDatabaseCellAdapter", () => {
       requests.push(`${method} ${path}`);
       if (path.endsWith("/projects/99/servers") && method === "GET") {
         return Response.json([]);
+      }
+      if (path.includes("/plans?") && method === "GET") {
+        return Response.json(CHERRY_PLANS);
       }
       if (path.endsWith("/projects/99/storages") && method === "GET") {
         return Response.json(storageCreated ? [storage] : []);
@@ -1018,9 +1648,8 @@ describe("CherryDatabaseCellAdapter", () => {
       projectId: "99",
       timeoutMs: 1000,
       region: "LT-Siauliai",
-      plan: "B1-1-1gb-20s-shared",
       image: "ubuntu-24-04",
-      storagePlanId: 500,
+      ...CHERRY_ALLOCATION_CONFIG,
       sshKeyIds: [4],
       renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
       provisionLease: createPostgresProvisionLeaseHarness().lease,
@@ -1033,14 +1662,13 @@ describe("CherryDatabaseCellAdapter", () => {
       databaseTier: "dedicated" as const,
       budgetProfile: "dedicated-high-throughput-v1",
       idempotencyKey: "alpha-candidate-a-v1",
-      storageGiB: 50,
     };
     await expect(adapter.provision(input)).rejects.toThrow(
       "unknown_server_create_outcome"
     );
     await expect(adapter.provision(input)).resolves.toMatchObject({
       cellId: "77",
-      storage: { volumeId: "55", sizeGiB: 50 },
+      storage: { volumeId: "55", sizeGiB: 100 },
     });
     expect(
       requests.filter(
@@ -1065,8 +1693,8 @@ describe("CherryDatabaseCellAdapter", () => {
               "cogni.io/database-tier": "dedicated",
               "cogni.io/budget-profile": "dedicated-high-throughput-v1",
               "cogni.io/idempotency-key": "alpha-candidate-a-v1",
-              "cogni.io/storage-gib": "50",
               "cogni.io/storage-id": "55",
+              ...DEDICATED_ALLOCATION_TAGS,
             },
           },
         ]);
@@ -1078,9 +1706,8 @@ describe("CherryDatabaseCellAdapter", () => {
       projectId: "99",
       timeoutMs: 1000,
       region: "LT-Siauliai",
-      plan: "B1-1-1gb-20s-shared",
       image: "ubuntu-24-04",
-      storagePlanId: 500,
+      ...CHERRY_ALLOCATION_CONFIG,
       sshKeyIds: [4],
       renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
       provisionLease: createPostgresProvisionLeaseHarness().lease,
@@ -1094,7 +1721,6 @@ describe("CherryDatabaseCellAdapter", () => {
         databaseTier: "dedicated",
         budgetProfile: "dedicated-high-throughput-v1",
         idempotencyKey: "alpha-candidate-a-v1",
-        storageGiB: 50,
       })
     ).rejects.toThrow("database_cell_identity_mismatch:cogni.io/node-id");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -1116,8 +1742,8 @@ describe("CherryDatabaseCellAdapter", () => {
       "cogni.io/database-tier": "dedicated",
       "cogni.io/budget-profile": "dedicated-high-throughput-v1",
       "cogni.io/idempotency-key": "alpha-candidate-a-v1",
-      "cogni.io/storage-gib": "50",
       "cogni.io/storage-id": "55",
+      ...DEDICATED_ALLOCATION_TAGS,
     };
     const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
       const path = String(url);
@@ -1165,12 +1791,11 @@ describe("CherryDatabaseCellAdapter", () => {
       projectId: "99",
       timeoutMs: 1000,
       region: "LT-Siauliai",
-      plan: "B1-1-1gb-20s-shared",
       image: "ubuntu-24-04",
-      storagePlanId: 500,
+      ...CHERRY_ALLOCATION_CONFIG,
       sshKeyIds: [4],
       renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
-      databaseVerifier: { verify },
+      databaseVerifier: { verify, verifyLiveness: verify },
       actionPollAttempts: 2,
       actionPollIntervalMs: 0,
       sleep: async () => {},
@@ -1180,11 +1805,14 @@ describe("CherryDatabaseCellAdapter", () => {
     const backupReceipt = await adapter.backup({
       cellId: "77",
       expectedNodeId: ACTION.nodeId,
+      actorId: "human:proof-operator",
       backupLabel: "alpha-candidate-a-pre-cutover-v1",
     });
     expect(backupReceipt).toMatchObject({
       action: "backup",
       cellId: "77",
+      actorId: "human:proof-operator",
+      reviewedBuildSha: "a".repeat(40),
       providerActionId: "501",
       restorePointId: "restore-point-44",
       completedAt: "2026-10-14T02:29:59.000Z",
@@ -1193,11 +1821,14 @@ describe("CherryDatabaseCellAdapter", () => {
     const restoreReceipt = await adapter.restore({
       cellId: "77",
       expectedNodeId: ACTION.nodeId,
+      actorId: "human:proof-operator",
       backupLabel: "alpha-candidate-a-pre-cutover-v1",
     });
     expect(restoreReceipt).toMatchObject({
       action: "restore",
       cellId: "77",
+      actorId: "human:proof-operator",
+      reviewedBuildSha: "a".repeat(40),
       providerActionId: "502",
       restorePointId: "restore-point-44",
       verification,
@@ -1245,8 +1876,8 @@ describe("CherryDatabaseCellAdapter", () => {
       "cogni.io/database-tier": "dedicated",
       "cogni.io/budget-profile": "dedicated-high-throughput-v1",
       "cogni.io/idempotency-key": "alpha-candidate-a-v1",
-      "cogni.io/storage-gib": "50",
       "cogni.io/storage-id": "55",
+      ...DEDICATED_ALLOCATION_TAGS,
     };
     let actionPosted = false;
     const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
@@ -1287,12 +1918,11 @@ describe("CherryDatabaseCellAdapter", () => {
       projectId: "99",
       timeoutMs: 1000,
       region: "LT-Siauliai",
-      plan: "B1-1-1gb-20s-shared",
       image: "ubuntu-24-04",
-      storagePlanId: 500,
+      ...CHERRY_ALLOCATION_CONFIG,
       sshKeyIds: [4],
       renderUserData: async () => "I2Nsb3VkLWNvbmZpZw==",
-      databaseVerifier: { verify },
+      databaseVerifier: { verify, verifyLiveness: verify },
       actionPollAttempts: 2,
       actionPollIntervalMs: 0,
       sleep: async () => {},
@@ -1302,6 +1932,7 @@ describe("CherryDatabaseCellAdapter", () => {
       adapter.backup({
         cellId: "77",
         expectedNodeId: ACTION.nodeId,
+        actorId: "human:proof-operator",
         backupLabel: "alpha-candidate-a-pre-cutover-v1",
       })
     ).rejects.toThrow("cherry_database_cell_backup_timeout");

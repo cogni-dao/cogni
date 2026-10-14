@@ -2,8 +2,11 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 import type { Sql } from "postgres";
+import { z } from "zod";
 import type {
   DatabaseCellActionReceipt,
+  DatabaseCellAllocation,
+  DatabaseCellCapacity,
   DatabaseCellPhase,
   DatabaseCellStatus,
   DatabaseStateCellPort,
@@ -15,9 +18,15 @@ export interface CherryDatabaseCellConfig {
   readonly projectId: string;
   readonly timeoutMs: number;
   readonly region: string;
-  readonly plan: string;
   readonly image: string;
-  readonly storagePlanId: number;
+  readonly reviewedBuildSha: string;
+  /** Provider-neutral requirements keyed by the catalog budget profile. */
+  readonly budgetProfiles: Readonly<Record<string, DatabaseCellCapacity>>;
+  /** Cherry storage SKU selected from the profile's compute class. */
+  readonly storagePlanIds: Readonly<
+    Record<DatabaseCellCapacity["computeClass"], number>
+  >;
+  readonly billingCurrency: "EUR" | "USD";
   readonly sshKeyIds: readonly number[];
   /** Provider-boundary renderer; may resolve bootstrap secrets without exposing them to callers. */
   readonly renderUserData: (
@@ -32,6 +41,8 @@ export interface CherryDatabaseCellConfig {
   readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly baseUrl?: string;
   readonly fetchImpl?: typeof fetch;
+  /** Separate read-only fetch boundary for Cherry's official pricing page. */
+  readonly pricingFetchImpl?: typeof fetch;
   readonly now?: () => Date;
 }
 
@@ -101,6 +112,12 @@ export class PostgresCherryDatabaseCellProvisionLease
 }
 
 export interface CherryDatabaseCellVerifier {
+  verifyLiveness(input: {
+    readonly cellId: string;
+    readonly nodeId: string;
+    readonly nodeSlug: string;
+    readonly endpoint: string;
+  }): Promise<DatabaseCellActionReceipt["verification"]>;
   verify(input: {
     readonly cellId: string;
     readonly nodeId: string;
@@ -131,6 +148,32 @@ interface CherryServer {
   };
 }
 
+const cherryPlanSchema = z.object({
+  slug: z.string().min(1),
+  type: z.string().min(1),
+  specs: z.object({
+    cpus: z.object({ threads: z.number().int().positive() }),
+    memory: z.object({
+      total: z.number().positive(),
+      unit: z.string().min(1),
+    }),
+  }),
+  pricing: z.array(
+    z.object({
+      unit: z.string().min(1),
+      price: z.number().positive(),
+      currency: z.string().min(1),
+    })
+  ),
+});
+
+type CherryPlan = z.infer<typeof cherryPlanSchema>;
+
+interface ResolvedCherryAllocation {
+  readonly receipt: DatabaseCellAllocation;
+  readonly storagePlanId: number;
+}
+
 interface CherryStorage {
   readonly id?: number | string;
   readonly description?: string;
@@ -158,6 +201,9 @@ interface CherryRestorePoint {
 }
 
 const PROVIDER = "cherry";
+const NORMALIZED_MONTH_HOURS = 730;
+export const CHERRY_STORAGE_PRICING_SOURCE =
+  "https://www.cherryservers.com/pricing";
 const SUCCESS_STATES = new Set([
   "complete",
   "completed",
@@ -176,6 +222,7 @@ const RESTORE_POINT_SUCCESS_STATES = new Set([
 export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly pricingFetchImpl: typeof fetch;
   private readonly now: () => Date;
 
   constructor(private readonly config: CherryDatabaseCellConfig) {
@@ -183,6 +230,7 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
       config.baseUrl ?? "https://api.cherryservers.com/v1"
     ).replace(/\/$/, "");
     this.fetchImpl = config.fetchImpl ?? fetch;
+    this.pricingFetchImpl = config.pricingFetchImpl ?? fetch;
     this.now = config.now ?? (() => new Date());
   }
 
@@ -207,10 +255,29 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
     input: ProvisionDatabaseCellInput
   ): Promise<DatabaseCellStatus> {
     const existing = await this.findByIdempotencyKey(input.idempotencyKey);
-    if (existing) return this.mapServer(existing, input);
+    if (existing) {
+      const status = this.mapServer(existing, input);
+      const requested = this.config.budgetProfiles[input.budgetProfile];
+      if (!requested) throw new Error("database_cell_budget_profile_unknown");
+      assertCapacity(requested);
+      const storagePlanId = this.config.storagePlanIds[requested.computeClass];
+      if (!Number.isSafeInteger(storagePlanId) || storagePlanId <= 0) {
+        throw new Error("cherry_database_cell_storage_plan_missing");
+      }
+      assertAllocationIntent(status.allocation, {
+        budgetProfile: input.budgetProfile,
+        capacity: requested,
+        providerProjectId: this.config.projectId,
+        providerRegion: this.config.region,
+        imageRef: this.config.image,
+        storageSku: String(storagePlanId),
+      });
+      return this.verifyReady(status);
+    }
 
+    const allocation = await this.resolveAllocation(input.budgetProfile);
     const userData = await this.config.renderUserData(input);
-    const storage = await this.findOrCreateStorage(input);
+    const storage = await this.findOrCreateStorage(input, allocation);
     if (storage.id === undefined) throw new Error("cherry_storage_missing_id");
 
     const server = await this.request<CherryServer>(
@@ -218,7 +285,7 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
       {
         method: "POST",
         body: JSON.stringify({
-          plan: this.config.plan,
+          plan: allocation.receipt.computeSku,
           image: this.config.image,
           region: this.config.region,
           hostname: `cogni-${input.environment}-${input.nodeSlug}-db`,
@@ -235,19 +302,25 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
             "cogni.io/budget-profile": input.budgetProfile,
             "cogni.io/idempotency-key": input.idempotencyKey,
             "cogni.io/storage-id": String(storage.id),
-            "cogni.io/storage-gib": String(input.storageGiB),
+            ...allocationTags(allocation.receipt),
           }),
         }),
       }
     );
     if (server.id === undefined) throw new Error("cherry_server_missing_id");
-    return this.mapServer(server, input, String(storage.id));
+    return this.verifyReady(
+      this.mapServer(server, input, String(storage.id), allocation.receipt)
+    );
   }
 
   async status(input: {
     readonly cellId: string;
   }): Promise<DatabaseCellStatus> {
     const server = await this.request<CherryServer>(`/servers/${input.cellId}`);
+    return this.verifyReady(this.mapObservedServer(server));
+  }
+
+  private mapObservedServer(server: CherryServer): DatabaseCellStatus {
     const tags = parseTags(server.tags);
     return this.mapServer(server, {
       nodeId: requiredTag(tags, "cogni.io/node-id"),
@@ -262,15 +335,35 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
       ) as ProvisionDatabaseCellInput["databaseTier"],
       budgetProfile: requiredTag(tags, "cogni.io/budget-profile"),
       idempotencyKey: requiredTag(tags, "cogni.io/idempotency-key"),
-      storageGiB: Number(tags["cogni.io/storage-gib"] ?? 0),
     });
+  }
+
+  private async verifyReady(
+    status: DatabaseCellStatus
+  ): Promise<DatabaseCellStatus> {
+    if (status.phase !== "ready") return status;
+    if (!status.endpoint)
+      throw new Error("database_cell_ready_endpoint_missing");
+    const verifier = this.config.databaseVerifier;
+    if (!verifier) throw new Error("cherry_database_cell_verifier_required");
+    const verification = await verifier.verifyLiveness({
+      cellId: status.cellId,
+      nodeId: status.nodeId,
+      nodeSlug: status.nodeSlug,
+      endpoint: status.endpoint,
+    });
+    return { ...status, verification };
   }
 
   async release(input: {
     readonly cellId: string;
     readonly expectedNodeId: string;
   }): Promise<void> {
-    const current = await this.status({ cellId: input.cellId });
+    const server = await this.request<CherryServer>(`/servers/${input.cellId}`);
+    // Cleanup must remain possible when the database is unavailable. Identity
+    // comes from the durable provider tags; DB liveness is deliberately not a
+    // release precondition.
+    const current = this.mapObservedServer(server);
     if (current.nodeId !== input.expectedNodeId) {
       throw new Error("database_cell_identity_mismatch");
     }
@@ -286,6 +379,7 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
   async backup(input: {
     readonly cellId: string;
     readonly expectedNodeId: string;
+    readonly actorId: string;
     readonly backupLabel: string;
   }): Promise<DatabaseCellActionReceipt> {
     return this.serverAction("backup", input);
@@ -294,6 +388,7 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
   async restore(input: {
     readonly cellId: string;
     readonly expectedNodeId: string;
+    readonly actorId: string;
     readonly backupLabel: string;
   }): Promise<DatabaseCellActionReceipt> {
     return this.serverAction("restore", input);
@@ -304,6 +399,7 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
     input: {
       readonly cellId: string;
       readonly expectedNodeId: string;
+      readonly actorId: string;
       readonly backupLabel: string;
     }
   ): Promise<DatabaseCellActionReceipt> {
@@ -313,6 +409,9 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
     }
     if (!/^[a-z0-9][a-z0-9._-]{0,126}$/.test(input.backupLabel)) {
       throw new Error("database_cell_backup_label_invalid");
+    }
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,126}$/.test(input.actorId)) {
+      throw new Error("database_cell_actor_id_invalid");
     }
     const server = await this.request<CherryServer>(`/servers/${input.cellId}`);
     const tags = parseTags(server.tags);
@@ -385,6 +484,8 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
       provider: PROVIDER,
       cellId: input.cellId,
       nodeId: input.expectedNodeId,
+      actorId: input.actorId,
+      reviewedBuildSha: requiredTag(tags, "cogni.io/reviewed-build-sha"),
       action,
       backupLabel: input.backupLabel,
       acceptedAt,
@@ -463,6 +564,153 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
     return matches[0];
   }
 
+  private async resolveAllocation(
+    budgetProfile: string
+  ): Promise<ResolvedCherryAllocation> {
+    const requested = this.config.budgetProfiles[budgetProfile];
+    if (!requested) {
+      throw new Error("database_cell_budget_profile_unknown");
+    }
+    assertCapacity(requested);
+    const storageQuote = await this.resolveStoragePriceQuote();
+    const storagePlanId = this.config.storagePlanIds[requested.computeClass];
+    if (
+      typeof storagePlanId !== "number" ||
+      !Number.isSafeInteger(storagePlanId) ||
+      storagePlanId <= 0
+    ) {
+      throw new Error("cherry_database_cell_storage_plan_missing");
+    }
+    const query = new URLSearchParams({
+      region: this.config.region,
+      currency: this.config.billingCurrency,
+      fields: "plan,specs,pricing,region",
+    });
+    query.append("type[]", "virtual");
+    const rawPlans = await this.request<unknown>(`/plans?${query.toString()}`);
+    const parsed = z.array(cherryPlanSchema).safeParse(rawPlans);
+    if (!parsed.success) {
+      throw new Error("cherry_database_cell_plans_invalid");
+    }
+    const providerType = requested.computeClass === "dedicated" ? "vds" : "vps";
+    const candidates = parsed.data.flatMap((plan) => {
+      const memoryGiB = normalizeMemoryGiB(plan);
+      const hourly = plan.pricing.find(
+        (price) =>
+          price.unit.toLowerCase() === "hourly" &&
+          price.currency === this.config.billingCurrency
+      );
+      const monthly = plan.pricing.find(
+        (price) =>
+          price.unit.toLowerCase() === "monthly" &&
+          price.currency === this.config.billingCurrency
+      );
+      return plan.type === providerType &&
+        plan.specs.cpus.threads >= requested.vcpus &&
+        memoryGiB >= requested.memoryGiB &&
+        hourly &&
+        monthly
+        ? [{ plan, memoryGiB, hourly, monthly }]
+        : [];
+    });
+    candidates.sort(
+      (left, right) =>
+        left.hourly.price - right.hourly.price ||
+        left.plan.slug.localeCompare(right.plan.slug)
+    );
+    const selected = candidates[0];
+    if (!selected) {
+      throw new Error("cherry_database_cell_plan_unavailable");
+    }
+    const capturedAt = this.now().toISOString();
+    const storageMonthly = Number(
+      (storageQuote.perGiBMonthlyAmount * requested.storageGiB).toFixed(8)
+    );
+    return {
+      storagePlanId,
+      receipt: {
+        budgetProfile,
+        capacity: {
+          vcpus: selected.plan.specs.cpus.threads,
+          memoryGiB: selected.memoryGiB,
+          storageGiB: requested.storageGiB,
+          computeClass: requested.computeClass,
+        },
+        providerProjectId: this.config.projectId,
+        providerRegion: this.config.region,
+        imageRef: this.config.image,
+        reviewedBuildSha: this.config.reviewedBuildSha,
+        computeSku: selected.plan.slug,
+        storageSku: String(storagePlanId),
+        costRate: {
+          scope: "compute",
+          complete: false,
+          unquotedComponents: ["exact-storage"],
+          amount: selected.hourly.price,
+          monthlyAmount: Number(
+            (selected.hourly.price * NORMALIZED_MONTH_HOURS).toFixed(8)
+          ),
+          providerMonthlyCycleAmount: selected.monthly.price,
+          currency: this.config.billingCurrency,
+          unit: "hour",
+          capturedAt,
+          storageMinimumEstimate: {
+            kind: "provider-published-floor",
+            perGiBMonthlyAmount: storageQuote.perGiBMonthlyAmount,
+            monthlyMinimumAmount: storageMonthly,
+            sourceUrl: CHERRY_STORAGE_PRICING_SOURCE,
+            fetchedAt: storageQuote.fetchedAt,
+          },
+        },
+      },
+    };
+  }
+
+  private async resolveStoragePriceQuote(): Promise<{
+    readonly perGiBMonthlyAmount: number;
+    readonly fetchedAt: string;
+  }> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    let response: Response;
+    try {
+      response = await this.pricingFetchImpl(CHERRY_STORAGE_PRICING_SOURCE, {
+        headers: { Accept: "text/html" },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!response.ok) {
+      throw new Error(
+        `cherry_database_cell_storage_quote_http_${response.status}`
+      );
+    }
+    const html = await response.text();
+    const heading = html.indexOf(">Elastic Block Storage</h3>");
+    if (heading < 0) {
+      throw new Error("cherry_database_cell_storage_quote_missing");
+    }
+    const section = html.slice(heading, heading + 2_500);
+    const attribute = `data-currency-${this.config.billingCurrency}`;
+    const matches = [
+      ...section.matchAll(
+        new RegExp(
+          `\\bFrom\\b[\\s\\S]{0,500}?${attribute}="([0-9]+(?:\\.[0-9]+)?)"[\\s\\S]{0,500}?/\\s*GB\\s*/\\s*mo\\b`,
+          "gi"
+        )
+      ),
+    ].map((match) => Number(match[1]));
+    const unique = [...new Set(matches.filter((value) => value > 0))];
+    if (unique.length !== 1) {
+      throw new Error("cherry_database_cell_storage_quote_ambiguous");
+    }
+    return {
+      perGiBMonthlyAmount: unique[0] as number,
+      fetchedAt: this.now().toISOString(),
+    };
+  }
+
   private async findByIdempotencyKey(
     key: string
   ): Promise<CherryServer | null> {
@@ -479,7 +727,8 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
   }
 
   private async findOrCreateStorage(
-    input: ProvisionDatabaseCellInput
+    input: ProvisionDatabaseCellInput,
+    allocation: ResolvedCherryAllocation
   ): Promise<CherryStorage> {
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(input.idempotencyKey)) {
       throw new Error("database_cell_idempotency_key_invalid");
@@ -496,7 +745,10 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
     }
     const existing = matches[0];
     if (existing) {
-      if (existing.size !== undefined && existing.size !== input.storageGiB) {
+      if (
+        existing.size !== undefined &&
+        existing.size !== allocation.receipt.capacity.storageGiB
+      ) {
         throw new Error("cherry_database_cell_storage_size_mismatch");
       }
       if (
@@ -512,9 +764,9 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
       {
         method: "POST",
         body: JSON.stringify({
-          plan_id: this.config.storagePlanId,
+          plan_id: allocation.storagePlanId,
           description,
-          size: input.storageGiB,
+          size: allocation.receipt.capacity.storageGiB,
           region: this.config.region,
         }),
       }
@@ -524,7 +776,8 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
   private mapServer(
     server: CherryServer,
     input: ProvisionDatabaseCellInput,
-    createdStorageId?: string
+    createdStorageId?: string,
+    createdAllocation?: DatabaseCellAllocation
   ): DatabaseCellStatus {
     if (server.id === undefined) throw new Error("cherry_server_missing_id");
     const tags = parseTags(server.tags);
@@ -539,7 +792,6 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
         "cogni.io/database-tier": input.databaseTier,
         "cogni.io/budget-profile": input.budgetProfile,
         "cogni.io/idempotency-key": input.idempotencyKey,
-        "cogni.io/storage-gib": String(input.storageGiB),
       } as const;
       for (const [name, value] of Object.entries(expected)) {
         if (tags[name] !== value) {
@@ -547,6 +799,8 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
         }
       }
     }
+    const allocation =
+      createdAllocation ?? allocationFromTags(tags, input.budgetProfile);
     const address = server.ip_addresses?.find(
       (ip) => ip.type === "primary-ip" || ip.type === undefined
     )?.address;
@@ -560,7 +814,7 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
     const sizeGiB = Number(
       tags["cogni.io/storage-gib"] ??
         server.storage?.[0]?.size ??
-        input.storageGiB
+        allocation.capacity.storageGiB
     );
     return {
       provider: PROVIDER,
@@ -571,6 +825,8 @@ export class CherryDatabaseCellAdapter implements DatabaseStateCellPort {
       phase,
       endpoint: address ?? null,
       storage: volumeId ? { volumeId, sizeGiB } : null,
+      allocation,
+      verification: null,
       observedAt: this.now().toISOString(),
     };
   }
@@ -621,6 +877,199 @@ function requiredTag(tags: Record<string, string>, name: string): string {
   const value = tags[name];
   if (!value) throw new Error(`database_cell_missing_tag:${name}`);
   return value;
+}
+
+function allocationTags(
+  allocation: DatabaseCellAllocation
+): Readonly<Record<string, string>> {
+  return {
+    "cogni.io/storage-gib": String(allocation.capacity.storageGiB),
+    "cogni.io/cell-vcpus": String(allocation.capacity.vcpus),
+    "cogni.io/cell-memory-gib": String(allocation.capacity.memoryGiB),
+    "cogni.io/compute-class": allocation.capacity.computeClass,
+    "cogni.io/provider-project-id": allocation.providerProjectId,
+    "cogni.io/provider-region": allocation.providerRegion,
+    "cogni.io/image-ref": allocation.imageRef,
+    "cogni.io/reviewed-build-sha": allocation.reviewedBuildSha,
+    "cogni.io/compute-sku": allocation.computeSku,
+    "cogni.io/storage-sku": allocation.storageSku,
+    "cogni.io/cost-rate": String(allocation.costRate.amount),
+    "cogni.io/cost-monthly": String(allocation.costRate.monthlyAmount),
+    "cogni.io/cost-provider-monthly-cycle": String(
+      allocation.costRate.providerMonthlyCycleAmount
+    ),
+    "cogni.io/cost-scope": allocation.costRate.scope,
+    "cogni.io/cost-complete": String(allocation.costRate.complete),
+    "cogni.io/cost-unquoted": allocation.costRate.unquotedComponents.join(","),
+    "cogni.io/cost-currency": allocation.costRate.currency,
+    "cogni.io/cost-unit": allocation.costRate.unit,
+    "cogni.io/cost-captured-at": allocation.costRate.capturedAt,
+    "cogni.io/cost-storage-per-gib-monthly": String(
+      allocation.costRate.storageMinimumEstimate.perGiBMonthlyAmount
+    ),
+    "cogni.io/cost-storage-monthly": String(
+      allocation.costRate.storageMinimumEstimate.monthlyMinimumAmount
+    ),
+    "cogni.io/cost-storage-source":
+      allocation.costRate.storageMinimumEstimate.sourceUrl,
+    "cogni.io/cost-storage-quoted-at":
+      allocation.costRate.storageMinimumEstimate.fetchedAt,
+    "cogni.io/cost-storage-kind":
+      allocation.costRate.storageMinimumEstimate.kind,
+  };
+}
+
+function allocationFromTags(
+  tags: Record<string, string>,
+  budgetProfile: string
+): DatabaseCellAllocation {
+  const taggedProfile = requiredTag(tags, "cogni.io/budget-profile");
+  if (taggedProfile !== budgetProfile) {
+    throw new Error("database_cell_identity_mismatch:cogni.io/budget-profile");
+  }
+  const computeClass = requiredTag(tags, "cogni.io/compute-class");
+  if (computeClass !== "shared" && computeClass !== "dedicated") {
+    throw new Error("database_cell_allocation_invalid:compute-class");
+  }
+  const currency = requiredTag(tags, "cogni.io/cost-currency");
+  if (currency !== "EUR" && currency !== "USD") {
+    throw new Error("database_cell_allocation_invalid:cost-currency");
+  }
+  if (requiredTag(tags, "cogni.io/cost-unit") !== "hour") {
+    throw new Error("database_cell_allocation_invalid:cost-unit");
+  }
+  const allocation: DatabaseCellAllocation = {
+    budgetProfile,
+    capacity: {
+      vcpus: positiveTagNumber(tags, "cogni.io/cell-vcpus"),
+      memoryGiB: positiveTagNumber(tags, "cogni.io/cell-memory-gib"),
+      storageGiB: positiveTagNumber(tags, "cogni.io/storage-gib"),
+      computeClass,
+    },
+    providerProjectId: requiredTag(tags, "cogni.io/provider-project-id"),
+    providerRegion: requiredTag(tags, "cogni.io/provider-region"),
+    imageRef: requiredTag(tags, "cogni.io/image-ref"),
+    reviewedBuildSha: requiredTag(tags, "cogni.io/reviewed-build-sha"),
+    computeSku: requiredTag(tags, "cogni.io/compute-sku"),
+    storageSku: requiredTag(tags, "cogni.io/storage-sku"),
+    costRate: {
+      scope: "compute",
+      complete: false,
+      unquotedComponents: ["exact-storage"],
+      amount: positiveTagNumber(tags, "cogni.io/cost-rate"),
+      monthlyAmount: positiveTagNumber(tags, "cogni.io/cost-monthly"),
+      providerMonthlyCycleAmount: positiveTagNumber(
+        tags,
+        "cogni.io/cost-provider-monthly-cycle"
+      ),
+      currency,
+      unit: "hour",
+      capturedAt: requiredTag(tags, "cogni.io/cost-captured-at"),
+      storageMinimumEstimate: {
+        kind: "provider-published-floor",
+        perGiBMonthlyAmount: positiveTagNumber(
+          tags,
+          "cogni.io/cost-storage-per-gib-monthly"
+        ),
+        monthlyMinimumAmount: positiveTagNumber(
+          tags,
+          "cogni.io/cost-storage-monthly"
+        ),
+        sourceUrl: requiredTag(tags, "cogni.io/cost-storage-source"),
+        fetchedAt: requiredTag(tags, "cogni.io/cost-storage-quoted-at"),
+      },
+    },
+  };
+  if (requiredTag(tags, "cogni.io/cost-scope") !== "compute") {
+    throw new Error("database_cell_allocation_invalid:cost-scope");
+  }
+  if (
+    requiredTag(tags, "cogni.io/cost-complete") !== "false" ||
+    requiredTag(tags, "cogni.io/cost-unquoted") !== "exact-storage" ||
+    requiredTag(tags, "cogni.io/cost-storage-kind") !==
+      "provider-published-floor"
+  ) {
+    throw new Error("database_cell_allocation_invalid:cost-completeness");
+  }
+  if (
+    !Number.isFinite(Date.parse(allocation.costRate.capturedAt)) ||
+    !Number.isFinite(
+      Date.parse(allocation.costRate.storageMinimumEstimate.fetchedAt)
+    ) ||
+    allocation.costRate.storageMinimumEstimate.sourceUrl !==
+      CHERRY_STORAGE_PRICING_SOURCE
+  ) {
+    throw new Error("database_cell_allocation_invalid:cost-captured-at");
+  }
+  if (
+    Math.abs(
+      allocation.costRate.monthlyAmount -
+        allocation.costRate.amount * NORMALIZED_MONTH_HOURS
+    ) > 1e-6 ||
+    Math.abs(
+      allocation.costRate.storageMinimumEstimate.monthlyMinimumAmount -
+        allocation.costRate.storageMinimumEstimate.perGiBMonthlyAmount *
+          allocation.capacity.storageGiB
+    ) > 1e-6
+  ) {
+    throw new Error("database_cell_allocation_invalid:cost-arithmetic");
+  }
+  return allocation;
+}
+
+function positiveTagNumber(tags: Record<string, string>, name: string): number {
+  const value = Number(requiredTag(tags, name));
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`database_cell_allocation_invalid:${name}`);
+  }
+  return value;
+}
+
+function assertCapacity(capacity: DatabaseCellCapacity): void {
+  for (const value of [
+    capacity.vcpus,
+    capacity.memoryGiB,
+    capacity.storageGiB,
+  ]) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error("database_cell_budget_profile_invalid");
+    }
+  }
+}
+
+function assertAllocationIntent(
+  actual: DatabaseCellAllocation,
+  desired: Pick<
+    DatabaseCellAllocation,
+    | "budgetProfile"
+    | "capacity"
+    | "providerProjectId"
+    | "providerRegion"
+    | "imageRef"
+    | "storageSku"
+  >
+): void {
+  if (
+    actual.budgetProfile !== desired.budgetProfile ||
+    actual.providerProjectId !== desired.providerProjectId ||
+    actual.providerRegion !== desired.providerRegion ||
+    actual.imageRef !== desired.imageRef ||
+    actual.storageSku !== desired.storageSku ||
+    actual.capacity.computeClass !== desired.capacity.computeClass ||
+    actual.capacity.vcpus < desired.capacity.vcpus ||
+    actual.capacity.memoryGiB < desired.capacity.memoryGiB ||
+    actual.capacity.storageGiB !== desired.capacity.storageGiB
+  ) {
+    throw new Error("database_cell_allocation_intent_mismatch");
+  }
+}
+
+function normalizeMemoryGiB(plan: CherryPlan): number {
+  const unit = plan.specs.memory.unit.toUpperCase();
+  if (unit !== "GB" && unit !== "GIB") {
+    throw new Error("cherry_database_cell_plan_memory_unit_unsupported");
+  }
+  return plan.specs.memory.total;
 }
 
 function mapPhase(value: string | undefined): DatabaseCellPhase {

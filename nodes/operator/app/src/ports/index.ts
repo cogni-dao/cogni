@@ -140,6 +140,9 @@ export type {
 } from "./connection-broker.port";
 export type {
   DatabaseCellActionReceipt,
+  DatabaseCellAllocation,
+  DatabaseCellCapacity,
+  DatabaseCellCostRate,
   DatabaseCellMetricIdentity,
   DatabaseCellMetricsExporterPort,
   DatabaseCellMetricsTarget,

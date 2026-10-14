@@ -228,6 +228,9 @@ grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
   || fail "'$TARGET_NODE' is not in the '$DEPLOY_ENVIRONMENT' node-set (envs: $(yq -r '.envs | join(",")' "$node_catalog_file")) — add the env to infra/catalog/${TARGET_NODE}.yaml to deploy it here"
 
 node_db="$(node_database_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")"
+node_role_suffix="${node_db#cogni_}"
+migration_role="migration_${node_role_suffix}"
+app_role="app_${node_role_suffix}"
 node_id="$(node_id_for_target "$TARGET_NODE")" \
   || fail "node_id missing for '$TARGET_NODE' (REPO_SPEC_IS_IDENTITY_SSOT)"
 node_temporal_namespace="cogni-${DEPLOY_ENVIRONMENT}-${node_id}"
@@ -277,6 +280,32 @@ remote() {
 }
 copy_to_remote() {
   cogni_ssh_transport_retry "$SCP_BIN" "${SSH_OPTS_ARR[@]}" "$1" "root@${VM_HOST}:$2"
+}
+
+# Every executable, manifest, config, and compose definition used by this lane
+# must come from the exact reviewed source tree. A plain scp is not provenance:
+# fixed /tmp names can be overwritten by another reconcile and a stale VM
+# compose file can redirect a verified provisioner mount. Give each artifact an
+# invocation-unique path, verify its source hash on the VM immediately, and only
+# then expose that path to the apply/execute/install step.
+STAGE_NONCE="${GITHUB_RUN_ID:-local}.${GITHUB_RUN_ATTEMPT:-0}.$$.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}"
+STAGED_EXACT_PATH=""
+STAGED_EXACT_SHA256=""
+stage_exact() {
+  local source="$1" label="$2" safe_label
+  [[ -f "$source" ]] || fail "exact-source artifact missing: $source"
+  [[ "$label" =~ ^[a-z0-9-]+$ ]] || fail "invalid exact-source label: $label"
+  safe_label="${label}.${STAGE_NONCE}"
+  STAGED_EXACT_SHA256="$(shasum -a 256 "$source" | awk '{print $1}')"
+  STAGED_EXACT_PATH="/tmp/cogni-reconcile.${safe_label}.${STAGED_EXACT_SHA256}"
+  copy_to_remote "$source" "$STAGED_EXACT_PATH"
+  remote "set -euo pipefail
+    [ \"\$(sha256sum '${STAGED_EXACT_PATH}' | awk '{print \$1}')\" = '${STAGED_EXACT_SHA256}' ] || {
+      rm -f '${STAGED_EXACT_PATH}'
+      echo '::error::exact-source hash mismatch for ${label}' >&2
+      exit 1
+    }
+    chmod 0400 '${STAGED_EXACT_PATH}'"
 }
 
 init_summary
@@ -335,6 +364,21 @@ bao_get_field() {
   fail "OpenBao TRANSPORT failure reading cogni/${DEPLOY_ENVIRONMENT}/${svc} after 3 attempts — not an absent key (bug.5159)"
 }
 
+bao_get_version() {
+  local svc="$1" raw attempt bao_env
+  bao_env="$(_bao_env_for_svc "$svc")"
+  for attempt in 1 2 3; do
+    if raw="$(remote "kubectl exec -n openbao openbao-0 -- env BAO_TOKEN='${BAO_TOKEN}' BAO_ADDR=http://127.0.0.1:8200 \
+      bao kv get -format=json 'cogni/${bao_env}/${svc}'" 2>&1)"; then
+      printf '%s' "$raw" | jq -r '.data.metadata.version // empty' 2>/dev/null || true
+      return 0
+    fi
+    case "$raw" in *"No value found"*) return 0 ;; esac
+    sleep $((attempt * 5))
+  done
+  fail "OpenBao TRANSPORT failure reading version for cogni/${bao_env}/${svc}"
+}
+
 # Read THIS node's app + service DB passwords from OpenBao (materialize wrote them
 # as source:agent). Fail loud if absent — materialize runs before this phase
 # (Invariant 16). Key names only in logs; values never echoed.
@@ -342,8 +386,11 @@ CURRENT_ROW="db_creds"
 app_db_password="$(bao_get_field "$TARGET_NODE" APP_DB_PASSWORD)"
 app_db_service_password="$(bao_get_field "$TARGET_NODE" APP_DB_SERVICE_PASSWORD)"
 app_db_migration_password="$(bao_get_field "${TARGET_NODE}-database-migration" APP_DB_MIGRATION_PASSWORD)"
-[[ -n "$app_db_password" && -n "$app_db_service_password" && -n "$app_db_migration_password" ]] \
+migration_dsn="$(bao_get_field "${TARGET_NODE}-database-migration" DATABASE_MIGRATION_URL)"
+migration_secret_version="$(bao_get_version "${TARGET_NODE}-database-migration")"
+[[ -n "$app_db_password" && -n "$app_db_service_password" && -n "$app_db_migration_password" && -n "$migration_dsn" && -n "$migration_secret_version" ]] \
   || fail "per-node DB creds absent at node/runtime or isolated migration OpenBao paths — run secret-materialize first"
+migration_dsn_sha256="$(printf '%s' "$migration_dsn" | shasum -a 256 | awk '{print $1}')"
 mark_row db_creds read "read per-node DB creds from OpenBao (key names only)"
 
 # Private containment actuator credential. secret-materialize mints this into a
@@ -445,8 +492,9 @@ if [[ -f "$external_secret_file" ]]; then
     log "leaving legacy ExternalSecret env-secrets in place; target is ${legacy_target}, expected ${expected_secret_name}"
   fi
   remote "kubectl create namespace 'cogni-${DEPLOY_ENVIRONMENT}' --dry-run=client -o yaml | kubectl apply -f - >/dev/null"
-  copy_to_remote "$external_secret_file" "/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml"
-  remote "kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' apply -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml' >/dev/null && rm -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-external-secret.yaml'"
+  stage_exact "$external_secret_file" node-external-secret
+  node_external_secret_stage="$STAGED_EXACT_PATH"
+  remote "kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' apply -f '${node_external_secret_stage}' >/dev/null && rm -f '${node_external_secret_stage}'"
   log "applied ExternalSecret ${TARGET_NODE}-env-secrets"
   mark_row externalsecret updated "applied ExternalSecret ${TARGET_NODE}-env-secrets"
   remote "set -euo pipefail
@@ -491,12 +539,13 @@ spec:
         key: ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}-database-migration
         property: DATABASE_MIGRATION_URL
 YAML
-copy_to_remote "$migration_es_tmp" "/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-migration-external-secret.yaml"
+stage_exact "$migration_es_tmp" migration-external-secret
+migration_external_secret_stage="$STAGED_EXACT_PATH"
 remote "set -euo pipefail
   ns='cogni-${DEPLOY_ENVIRONMENT}'
   es='${TARGET_NODE}-migration-secrets'
-  kubectl -n \"\$ns\" apply -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-migration-external-secret.yaml' >/dev/null
-  rm -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-migration-external-secret.yaml'
+  kubectl -n \"\$ns\" apply -f '${migration_external_secret_stage}' >/dev/null
+  rm -f '${migration_external_secret_stage}'
   marker=\$(date +%s)
   kubectl -n \"\$ns\" annotate externalsecret \"\$es\" force-sync=\"\$marker\" --overwrite >/dev/null
   kubectl -n \"\$ns\" wait --for=condition=Ready \"externalsecret/\$es\" --timeout=120s >/dev/null
@@ -523,10 +572,11 @@ if [[ "$reliability_controller" == true && -f "$database_reliability_es_file" ]]
       "$database_reliability_es_file" >> "$database_reliability_es_tmp"
   [[ "$(yq ea '.kind' "$database_reliability_es_tmp" | grep -cx ExternalSecret)" == 3 ]] \
     || fail "database reliability substrate must render exactly three ExternalSecrets"
-  copy_to_remote "$database_reliability_es_tmp" "/tmp/${DEPLOY_ENVIRONMENT}-database-reliability-external-secrets.yaml"
+  stage_exact "$database_reliability_es_tmp" database-reliability-external-secrets
+  database_reliability_external_secrets_stage="$STAGED_EXACT_PATH"
   remote "set -euo pipefail
     ns='cogni-${DEPLOY_ENVIRONMENT}'
-    manifest='/tmp/${DEPLOY_ENVIRONMENT}-database-reliability-external-secrets.yaml'
+    manifest='${database_reliability_external_secrets_stage}'
     kubectl apply -f \"\$manifest\" >/dev/null
     rm -f \"\$manifest\"
     marker=\$(date +%s)
@@ -578,17 +628,32 @@ if [[ "$DEPLOYMENT_PROVIDER" == "k3s" ]]; then
   if ! "$caddy_route_ok"; then
     fail "rendered Caddyfile missing route for ${node_host} (edge_key=${edge_key})"
   fi
-  copy_to_remote "$caddy_tmp" "/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl"
+  stage_exact "$caddy_tmp" caddyfile
+  caddyfile_stage="$STAGED_EXACT_PATH"
   mark_row caddyfile updated "rendered + staged Caddyfile route for ${node_host}"
 
   # Shared VM-side edge-Caddy reconcile helper (same logic deploy-infra runs):
   # start-if-down + hash-gated atomic reload. Staged here, invoked below.
-  copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" "/tmp/reconcile-edge-caddy.remote.sh"
+  stage_exact "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" edge-caddy-helper
+  edge_caddy_helper_stage="$STAGED_EXACT_PATH"
+  stage_exact "$REPO_ROOT/infra/compose/edge/docker-compose.yml" edge-compose
+  edge_compose_stage="$STAGED_EXACT_PATH"
+  edge_compose_sha256="$STAGED_EXACT_SHA256"
   edge_reconcile_snippet="
   edge_env=/opt/cogni-template-edge/.env
   caddyfile=/opt/cogni-template-edge/configs/Caddyfile.tmpl
   mkdir -p /opt/cogni-template-edge/configs
-  mv '/tmp/Caddyfile.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.tmpl' \"\$caddyfile\"
+ install_exact '${caddyfile_stage}' \"\$caddyfile\" '$(shasum -a 256 "$caddy_tmp" | awk '{print $1}')' 0444 caddyfile
+ install_exact '${edge_compose_stage}' /opt/cogni-template-edge/docker-compose.yml '${edge_compose_sha256}' 0444 edge-compose
+  edge_config_json=\$(docker compose --project-name cogni-edge --env-file \"\$edge_env\" -f /opt/cogni-template-edge/docker-compose.yml config --format json)
+  printf '%s' \"\$edge_config_json\" | jq -e '
+    any(.services.caddy.volumes[];
+      .source == \"/opt/cogni-template-edge/configs/Caddyfile.tmpl\" and
+      .target == \"/etc/caddy/Caddyfile\" and .read_only == true)
+  ' >/dev/null || {
+    echo '::error::exact edge compose mount provenance check failed' >&2
+    exit 1
+  }
 
   touch \"\$edge_env\"
   if grep -qE '^DOMAIN=' \"\$edge_env\"; then
@@ -607,7 +672,7 @@ if [[ "$DEPLOYMENT_PROVIDER" == "k3s" ]]; then
   CADDYFILE=\"\$caddyfile\" \\
   EDGE_ENV_FILE=\"\$edge_env\" \\
   HASH_DIR=/var/lib/cogni \\
-    bash /tmp/reconcile-edge-caddy.remote.sh >/dev/null
+    bash '${edge_caddy_helper_stage}' >/dev/null
 "
 else
   mark_row caddyfile skipped "external placement: Caddy/NodePort edge mutation not applicable"
@@ -622,8 +687,27 @@ fi
 # (Axiom 22) closes that gap with no new workflow / bespoke script (bug.5041).
 # Idempotent: the hash-gate makes an unchanged config a no-op, and N per-node
 # invocations of one env-global config collapse to one push + restart.
-copy_to_remote "$REPO_ROOT/infra/compose/runtime/configs/alloy-config.metrics.alloy" "/tmp/alloy-config.metrics.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.alloy"
-copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-alloy-config.remote.sh" "/tmp/reconcile-alloy-config.remote.sh"
+stage_exact "$REPO_ROOT/infra/compose/runtime/configs/alloy-config.metrics.alloy" alloy-config
+alloy_config_stage="$STAGED_EXACT_PATH"
+alloy_config_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/scripts/ci/reconcile-alloy-config.remote.sh" alloy-helper
+alloy_helper_stage="$STAGED_EXACT_PATH"
+
+# Compose definitions decide which host files containers execute, so stage the
+# definition and every mounted executable from the same reviewed tree. Verifying
+# provision.sh alone is insufficient when a stale compose file can redirect it.
+stage_exact "$REPO_ROOT/infra/compose/runtime/docker-compose.yml" runtime-compose
+runtime_compose_stage="$STAGED_EXACT_PATH"
+runtime_compose_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/provision.sh" postgres-provisioner
+postgres_provisioner_stage="$STAGED_EXACT_PATH"
+postgres_provisioner_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/infra/compose/runtime/doltgres-init/install-creds.sh" doltgres-install-creds
+doltgres_install_creds_stage="$STAGED_EXACT_PATH"
+doltgres_install_creds_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/infra/compose/runtime/doltgres-init/provision.sh" doltgres-provisioner
+doltgres_provisioner_stage="$STAGED_EXACT_PATH"
+doltgres_provisioner_sha256="$STAGED_EXACT_SHA256"
 
 # DoltHub mirror creds → VM runtime .env + hash-gated doltgres recreate (Option B).
 # Staged only when the creds are present in OpenBao; absent ⇒ mirror stays disabled.
@@ -635,15 +719,17 @@ if "$dolt_mirror_purge"; then
   # recreate so a prod-capable cred can never linger on a test VM (bug.5003). No
   # values transit — MODE=purge only removes keys. Byte-identical no-op when the
   # .env already lacks them.
-  copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-dolt-mirror-creds.remote.sh" "/tmp/reconcile-dolt-mirror-creds.remote.sh"
+  stage_exact "$REPO_ROOT/scripts/ci/reconcile-dolt-mirror-creds.remote.sh" dolt-mirror-helper
+  dolt_mirror_helper_stage="$STAGED_EXACT_PATH"
   dolt_mirror_reconcile_snippet="    RUNTIME_ENV=\"\$runtime_env\" \\
     RUNTIME_COMPOSE_BIN=\"docker compose --project-name cogni-runtime --env-file \$runtime_env -f /opt/cogni-template-runtime/docker-compose.yml\" \\
     HASH_DIR=/var/lib/cogni \\
     MODE=purge \\
-      bash /tmp/reconcile-dolt-mirror-creds.remote.sh
+      bash '${dolt_mirror_helper_stage}'
 "
 elif "$dolt_mirror_enabled"; then
-  copy_to_remote "$REPO_ROOT/scripts/ci/reconcile-dolt-mirror-creds.remote.sh" "/tmp/reconcile-dolt-mirror-creds.remote.sh"
+  stage_exact "$REPO_ROOT/scripts/ci/reconcile-dolt-mirror-creds.remote.sh" dolt-mirror-helper
+  dolt_mirror_helper_stage="$STAGED_EXACT_PATH"
   # base64 the values CI-side so the single-line-JSON JWK never touches a sed/shell
   # interpolation path (no injection; never echoed). Decoded VM-side by the helper.
   dolt_creds_jwk_b64="$(printf '%s' "$dolt_creds_jwk" | base64 | tr -d '\n')"
@@ -660,7 +746,7 @@ elif "$dolt_mirror_enabled"; then
     DOLT_CREDS_KEYID_B64='${dolt_creds_keyid_b64}' \\
     DOLTHUB_OWNER_B64='${dolthub_owner_b64}' \\
     DOLTHUB_API_TOKEN_B64='${dolthub_api_token_b64}' \\
-      bash /tmp/reconcile-dolt-mirror-creds.remote.sh
+      bash '${dolt_mirror_helper_stage}'
 "
 fi
 
@@ -679,11 +765,12 @@ fi
 # a no-op. This is the Temporal half of "provision the lane's substrate on the control
 # cluster", which #2319 did for Postgres and Doltgres.
 CURRENT_ROW="temporal_namespace"
-copy_to_remote "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" "/tmp/ensure-temporal-namespace.sh"
+stage_exact "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" temporal-namespace-helper
+temporal_namespace_helper_stage="$STAGED_EXACT_PATH"
 remote "TEMPORAL_NAMESPACE='cogni-${DEPLOY_ENVIRONMENT}' \
   TEMPORAL_CONTAINER=cogni-runtime-temporal-1 \
   TEMPORAL_TIMEOUT=60 \
-  bash /tmp/ensure-temporal-namespace.sh" \
+  bash '${temporal_namespace_helper_stage}'" \
   || fail "temporal namespace ensure failed (rc=$?) for cogni-${DEPLOY_ENVIRONMENT} on ${SUBSTRATE_CONTROL_ENV}'s Temporal"
 mark_row temporal_namespace ensured "cogni-${DEPLOY_ENVIRONMENT} registered on ${SUBSTRATE_CONTROL_ENV}'s Temporal (idempotent)"
 
@@ -697,7 +784,7 @@ CURRENT_ROW="node_temporal_namespace"
 remote "TEMPORAL_NAMESPACE='${node_temporal_namespace}' \
   TEMPORAL_CONTAINER=cogni-runtime-temporal-1 \
   TEMPORAL_TIMEOUT=60 \
-  bash /tmp/ensure-temporal-namespace.sh" \
+  bash '${temporal_namespace_helper_stage}'" \
   || fail "node Temporal namespace ensure failed (rc=$?) for ${node_temporal_namespace} on ${SUBSTRATE_CONTROL_ENV}'s Temporal"
 mark_row node_temporal_namespace ensured "${node_temporal_namespace} registered on ${SUBSTRATE_CONTROL_ENV}'s Temporal (idempotent)"
 
@@ -709,6 +796,30 @@ remote "set -euo pipefail
   runtime_env=/opt/cogni-template-runtime/.env
   runtime_compose=(docker compose --project-name cogni-runtime --env-file \"\$runtime_env\" -f /opt/cogni-template-runtime/docker-compose.yml)
   echo '[remote] reconcile begin (${DEPLOY_ENVIRONMENT}/${TARGET_NODE})'
+
+  install_exact() {
+    local source=\"\$1\" destination=\"\$2\" expected_sha=\"\$3\" mode=\"\$4\" label=\"\$5\" staged
+    staged=\"\${destination}.reconcile.\$\$\"
+    mkdir -p \"\$(dirname \"\$destination\")\"
+    install -o root -g root -m \"\$mode\" \"\$source\" \"\$staged\"
+    [ \"\$(sha256sum \"\$staged\" | awk '{print \$1}')\" = \"\$expected_sha\" ] || {
+      rm -f \"\$staged\"
+      echo \"::error::installed \$label differs from exact reviewed source\" >&2
+      exit 1
+    }
+    mv -f \"\$staged\" \"\$destination\"
+    rm -f \"\$source\"
+    [ \"\$(sha256sum \"\$destination\" | awk '{print \$1}')\" = \"\$expected_sha\" ] || {
+      echo \"::error::published \$label differs from exact reviewed source\" >&2
+      exit 1
+    }
+  }
+
+  install_exact '${runtime_compose_stage}' /opt/cogni-template-runtime/docker-compose.yml '${runtime_compose_sha256}' 0444 runtime-compose
+  install_exact '${postgres_provisioner_stage}' /opt/cogni-template-runtime/postgres-init/provision.sh '${postgres_provisioner_sha256}' 0444 postgres-provisioner
+  install_exact '${doltgres_install_creds_stage}' /opt/cogni-template-runtime/doltgres-init/install-creds.sh '${doltgres_install_creds_sha256}' 0555 doltgres-install-creds
+  install_exact '${doltgres_provisioner_stage}' /opt/cogni-template-runtime/doltgres-init/provision.sh '${doltgres_provisioner_sha256}' 0444 doltgres-provisioner
+  echo '[remote] exact runtime compose and provisioners installed ok'
 
 ${edge_reconcile_snippet}
 
@@ -752,12 +863,32 @@ ${edge_reconcile_snippet}
   # half) then the SAME hash-gated restart deploy-infra runs. Born-observable on
   # the normal flow even when deploy-infra is skipped (bug.5041). Idempotent.
   mkdir -p /opt/cogni-template-runtime/configs
-  mv '/tmp/alloy-config.metrics.${DEPLOY_ENVIRONMENT}.${TARGET_NODE}.alloy' /opt/cogni-template-runtime/configs/alloy-config.metrics.alloy
+  install_exact '${alloy_config_stage}' /opt/cogni-template-runtime/configs/alloy-config.metrics.alloy '${alloy_config_sha256}' 0444 alloy-config
   RUNTIME_COMPOSE_BIN=\"docker compose --project-name cogni-runtime --env-file \$runtime_env -f /opt/cogni-template-runtime/docker-compose.yml\" \\
   ALLOY_CONFIG=/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy \\
   HASH_DIR=/var/lib/cogni \\
-    bash /tmp/reconcile-alloy-config.remote.sh >/dev/null
+    bash '${alloy_helper_stage}' >/dev/null
   echo '[remote] alloy config reconciled ok'
+
+  runtime_config_json=\$(\"\${runtime_compose[@]}\" config --format json)
+  printf '%s' \"\$runtime_config_json\" | jq -e '
+    any(.services[\"db-provision\"].volumes[];
+      .source == \"/opt/cogni-template-runtime/postgres-init/provision.sh\" and
+      .target == \"/app/provision.sh\" and .read_only == true) and
+    any(.services.doltgres.volumes[];
+      .source == \"/opt/cogni-template-runtime/doltgres-init/install-creds.sh\" and
+      .target == \"/usr/local/bin/install-creds.sh\" and .read_only == true) and
+    any(.services[\"doltgres-provision\"].volumes[];
+      .source == \"/opt/cogni-template-runtime/doltgres-init/provision.sh\" and
+      .target == \"/app/provision.sh\" and .read_only == true) and
+    any(.services.alloy.volumes[];
+      .source == \"/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy\" and
+      .target == \"/etc/alloy/config.alloy\" and .read_only == true)
+  ' >/dev/null || {
+    echo '::error::exact runtime compose mount provenance check failed' >&2
+    exit 1
+  }
+  echo '[remote] exact runtime compose mounts verified ok'
 
   \"\${runtime_compose[@]}\" up -d postgres >/dev/null
   echo '[remote] postgres up ok'
@@ -784,6 +915,35 @@ ${edge_reconcile_snippet}
     -e DB_WORK_MEM_MIB='${db_work_mem_mib}' \
     db-provision >/dev/null
   echo '[remote] db-provision ok'
+
+  projected_migration_dsn=\$(kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' get secret '${TARGET_NODE}-migration-secrets' -o jsonpath='{.data.DATABASE_MIGRATION_URL}' | base64 --decode)
+  [ \"\$(printf '%s' \"\$projected_migration_dsn\" | sha256sum | awk '{print \$1}')\" = '${migration_dsn_sha256}' ] || {
+    echo '::error::OpenBao and projected migration DSN digests differ' >&2
+    exit 1
+  }
+  docker run --rm --network host -e DATABASE_MIGRATION_URL=\"\$projected_migration_dsn\" postgres:15 sh -ceu '
+    result=\$(psql \"\$DATABASE_MIGRATION_URL\" -XAtv ON_ERROR_STOP=1 -c \"
+      SELECT session_user = \047${migration_role}\047
+         AND current_user = \047${app_role}\047
+         AND current_database() = \047${node_db}\047
+         AND NOT role_state.rolsuper
+         AND NOT role_state.rolcreaterole
+         AND NOT role_state.rolcreatedb
+         AND NOT role_state.rolreplication
+         AND NOT role_state.rolbypassrls
+         AND role_state.rolconnlimit = 1
+         AND current_setting(\047statement_timeout\047) IN (\04715min\047, \047900s\047)
+         AND current_setting(\047temp_file_limit\047) = \047${db_temp_file_limit_mib}MB\047
+         AND (SELECT count(*) FROM pg_auth_members membership
+                JOIN pg_roles parent ON parent.oid = membership.roleid
+               WHERE membership.member = role_state.oid
+                 AND parent.rolname ~ \047^(app|service|migration)_\047) = 1
+         AND pg_has_role(session_user, \047${app_role}\047, \047MEMBER\047)
+        FROM pg_roles role_state
+       WHERE role_state.rolname = session_user\")
+    [ \"\$result\" = t ]
+  '
+  echo '[remote] projected migration DSN digest and live identity verified ok'
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then
     \"\${runtime_compose[@]}\" up -d doltgres >/dev/null
     echo '[remote] doltgres up ok'
@@ -799,6 +959,10 @@ ${edge_reconcile_snippet}
 ${dolt_mirror_reconcile_snippet}  fi" \
   || fail "remote reconcile block failed (rc=$?) — the last '[remote] … ok' breadcrumb above names the last completed step"
 
+migration_secret_version_after="$(bao_get_version "${TARGET_NODE}-database-migration")"
+[[ "$migration_secret_version_after" == "$migration_secret_version" ]] \
+  || fail "migration OpenBao version changed during ESO/DB proof — refusing a mixed-version receipt"
+mark_row migration_dsn_proven ready "stable OpenBao version, projected digest, and live migration identity verified"
 mark_row remote_reconcile updated "${DEPLOYMENT_PROVIDER} placement steps, DB inventory, and DB provisioners reconciled on VM"
 log "substrate ready inputs reconciled for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT})"
 write_summary success

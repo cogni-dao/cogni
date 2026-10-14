@@ -1173,7 +1173,8 @@ jobs:
           # no node slug receives bespoke execution privilege.
           catalog="app-src/infra/catalog/${{ matrix.node }}.yaml"
           source_repo="$(yq -N '.source_repo // ""' "$catalog")"
-          if [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then
+          reliability_controller="$(yq -r '.reliability.controller // false' "$catalog")"
+          if [ "$reliability_controller" = true ] && [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then
             app_sha="$(git -C app-src rev-parse HEAD)"
             [ "$app_sha" = "$GITHUB_SHA" ] || {
               echo "::error::exact self-flight source mismatch: workflow=$GITHUB_SHA app=$app_sha"

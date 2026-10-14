@@ -380,7 +380,7 @@ describe("candidate-a manifest source", () => {
       'source_repo="$(yq -N \'.source_repo // ""\' "$catalog")"'
     );
     expect(substrate).toContain(
-      'if [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+      'if [ "$reliability_controller" = true ] && [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
     );
     expect(substrate).not.toMatch(/matrix\.node.*operator/);
     expect(substrate).toContain('app_sha="$(git -C app-src rev-parse HEAD)"');

@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import type { Logger } from "pino";
 import postgres, { type Sql } from "postgres";
+import { parse as parseYaml } from "yaml";
 import type {
   DatabaseCellActionReceipt,
+  DatabaseCellCapacity,
   DatabaseCellStatus,
   DatabaseContainmentAction,
   DatabaseContainmentPort,
@@ -33,6 +37,8 @@ import {
   type CherryDatabaseCellVerifier,
   PostgresCherryDatabaseCellProvisionLease,
 } from "../compute/cherry-database-cell.adapter";
+
+const execFileAsync = promisify(execFile);
 
 export interface DatabaseControlSql {
   query<T extends Record<string, unknown>>(
@@ -455,6 +461,19 @@ export class PostgresDatabaseCellVerifier
   async verify(
     input: Parameters<CherryDatabaseCellVerifier["verify"]>[0]
   ): Promise<DatabaseCellActionReceipt["verification"]> {
+    return this.verifyEndpoint(input);
+  }
+
+  async verifyLiveness(
+    input: Parameters<CherryDatabaseCellVerifier["verifyLiveness"]>[0]
+  ): Promise<DatabaseCellActionReceipt["verification"]> {
+    return this.verifyEndpoint(input);
+  }
+
+  private async verifyEndpoint(input: {
+    readonly nodeSlug: string;
+    readonly endpoint: string;
+  }): Promise<DatabaseCellActionReceipt["verification"]> {
     const suffix = input.nodeSlug.replaceAll("-", "_");
     if (
       this.credential.username !== `app_${suffix}` ||
@@ -552,6 +571,7 @@ export type DatabaseCellLifecycleCommand =
       readonly input: {
         readonly cellId: string;
         readonly expectedNodeId: string;
+        readonly actorId: string;
         readonly backupLabel: string;
       };
     }
@@ -645,15 +665,38 @@ export async function runDatabaseCellLifecycleCli(
   const command = parseLifecycleCommand(
     JSON.parse(await readFile(commandFile, "utf8"))
   );
+  const appSourceDir = requireEnvironment(environment, "APP_SOURCE_DIR");
+  const reviewedBuildSha = requireEnvironment(environment, "APP_BUILD_SHA");
+  const budgetProfilesYaml = await readImmutableAppSourceFile(
+    appSourceDir,
+    reviewedBuildSha,
+    "infra/database-budget-profiles.yaml"
+  );
+  if (command.action === "provision") {
+    await assertCatalogCellPlacement(
+      appSourceDir,
+      reviewedBuildSha,
+      command.input
+    );
+  }
   const adapter = createProductionCherryDatabaseCellAdapter({
     authToken: requireEnvironment(environment, "CHERRY_AUTH_TOKEN"),
     projectId: requireEnvironment(environment, "CHERRY_PROJECT_ID"),
     timeoutMs: positiveInteger(environment.CHERRY_TIMEOUT_MS ?? "30000"),
     region: requireEnvironment(environment, "CHERRY_DATABASE_REGION"),
-    plan: requireEnvironment(environment, "CHERRY_DATABASE_PLAN"),
     image: requireEnvironment(environment, "CHERRY_DATABASE_IMAGE"),
-    storagePlanId: positiveInteger(
-      requireEnvironment(environment, "CHERRY_DATABASE_STORAGE_PLAN_ID")
+    reviewedBuildSha,
+    budgetProfiles: loadDatabaseCellBudgetProfiles(budgetProfilesYaml),
+    storagePlanIds: {
+      shared: positiveInteger(
+        requireEnvironment(environment, "CHERRY_DATABASE_STORAGE_PLAN_ID")
+      ),
+      dedicated: positiveInteger(
+        requireEnvironment(environment, "CHERRY_DATABASE_STORAGE_PLAN_ID")
+      ),
+    },
+    billingCurrency: parseBillingCurrency(
+      environment.CHERRY_BILLING_CURRENCY ?? "USD"
     ),
     sshKeyIds: requireEnvironment(environment, "CHERRY_DATABASE_SSH_KEY_IDS")
       .split(",")
@@ -695,6 +738,37 @@ export async function runDatabaseCellLifecycleCli(
   process.stdout.write(`${receiptFile}\n`);
 }
 
+async function assertCatalogCellPlacement(
+  appSourceDir: string,
+  reviewedBuildSha: string,
+  input: ProvisionDatabaseCellInput
+): Promise<void> {
+  const parsed = parseYaml(
+    await readImmutableAppSourceFile(
+      appSourceDir,
+      reviewedBuildSha,
+      `infra/catalog/${input.nodeSlug}.yaml`
+    )
+  );
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("database_cell_catalog_invalid");
+  }
+  const catalog = parsed as Record<string, unknown>;
+  const database = catalog.database as Record<string, unknown> | undefined;
+  const placement = database?.[input.environment] as
+    | Record<string, unknown>
+    | undefined;
+  if (
+    catalog.node_id !== input.nodeId ||
+    !Array.isArray(catalog.envs) ||
+    !catalog.envs.includes(input.environment) ||
+    placement?.tier !== input.databaseTier ||
+    placement?.budget_profile !== input.budgetProfile
+  ) {
+    throw new Error("database_cell_catalog_placement_mismatch");
+  }
+}
+
 function parseLifecycleCommand(value: unknown): DatabaseCellLifecycleCommand {
   if (typeof value !== "object" || value === null) {
     throw new Error("database_cell_command_invalid");
@@ -727,6 +801,77 @@ function positiveInteger(value: string): number {
     throw new Error("database_cell_ops_positive_integer_required");
   }
   return parsed;
+}
+
+function loadDatabaseCellBudgetProfiles(
+  yaml: string
+): Readonly<Record<string, DatabaseCellCapacity>> {
+  const parsed = parseYaml(yaml) as unknown;
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("database_cell_budget_profiles_invalid");
+  }
+  const profiles: Record<string, DatabaseCellCapacity> = {};
+  for (const [name, rawProfile] of Object.entries(parsed)) {
+    if (typeof rawProfile !== "object" || rawProfile === null) continue;
+    const capacity = (rawProfile as Record<string, unknown>).cell_capacity;
+    if (typeof capacity !== "object" || capacity === null) continue;
+    const value = capacity as Record<string, unknown>;
+    const computeClass = value.compute_class;
+    if (
+      (computeClass !== "shared" && computeClass !== "dedicated") ||
+      !Number.isSafeInteger(value.vcpus) ||
+      !Number.isSafeInteger(value.memory_gib) ||
+      !Number.isSafeInteger(value.storage_gib) ||
+      Number(value.vcpus) <= 0 ||
+      Number(value.memory_gib) <= 0 ||
+      Number(value.storage_gib) <= 0
+    ) {
+      throw new Error(`database_cell_budget_profile_invalid:${name}`);
+    }
+    profiles[name] = {
+      vcpus: Number(value.vcpus),
+      memoryGiB: Number(value.memory_gib),
+      storageGiB: Number(value.storage_gib),
+      computeClass,
+    };
+  }
+  if (Object.keys(profiles).length === 0) {
+    throw new Error("database_cell_budget_profiles_empty");
+  }
+  return profiles;
+}
+
+export async function readImmutableAppSourceFile(
+  appSourceDir: string,
+  reviewedBuildSha: string,
+  repoRelativePath: string
+): Promise<string> {
+  if (!/^[0-9a-f]{40}$/.test(reviewedBuildSha)) {
+    throw new Error("database_cell_build_sha_invalid");
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9/._-]*$/.test(repoRelativePath)) {
+    throw new Error("database_cell_source_path_invalid");
+  }
+  const { stdout: head } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+    cwd: appSourceDir,
+    encoding: "utf8",
+  });
+  if (head.trim() !== reviewedBuildSha) {
+    throw new Error("database_cell_build_sha_mismatch");
+  }
+  const { stdout } = await execFileAsync(
+    "git",
+    ["show", `${reviewedBuildSha}:${repoRelativePath}`],
+    { cwd: appSourceDir, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }
+  );
+  return stdout;
+}
+
+function parseBillingCurrency(value: string): "EUR" | "USD" {
+  if (value !== "EUR" && value !== "USD") {
+    throw new Error("database_cell_billing_currency_invalid");
+  }
+  return value;
 }
 
 const invokedPath = process.argv[1];

@@ -12,6 +12,50 @@ export type DatabaseCellPhase =
   | "released"
   | "unknown";
 
+/** Provider-neutral resources selected from the immutable budget profile. */
+export interface DatabaseCellCapacity {
+  readonly vcpus: number;
+  readonly memoryGiB: number;
+  readonly storageGiB: number;
+  readonly computeClass: "shared" | "dedicated";
+}
+
+/** Normalized provider rate captured when the cell was provisioned. */
+export interface DatabaseCellCostRate {
+  /** Exact compute rate for the provisioned hourly billing cycle. */
+  readonly scope: "compute";
+  /** Cherry publishes only a floor, not an exact SKU/region storage quote. */
+  readonly complete: false;
+  readonly unquotedComponents: readonly ["exact-storage"];
+  readonly amount: number;
+  /** Hourly compute normalized to 730 hours; not Cherry's alternate monthly cycle. */
+  readonly monthlyAmount: number;
+  readonly providerMonthlyCycleAmount: number;
+  readonly currency: "EUR" | "USD";
+  readonly unit: "hour";
+  readonly capturedAt: string;
+  readonly storageMinimumEstimate: {
+    readonly kind: "provider-published-floor";
+    readonly perGiBMonthlyAmount: number;
+    readonly monthlyMinimumAmount: number;
+    readonly sourceUrl: string;
+    readonly fetchedAt: string;
+  };
+}
+
+/** Durable allocation receipt. Provider SKU values are opaque identifiers. */
+export interface DatabaseCellAllocation {
+  readonly budgetProfile: string;
+  readonly capacity: DatabaseCellCapacity;
+  readonly providerProjectId: string;
+  readonly providerRegion: string;
+  readonly imageRef: string;
+  readonly reviewedBuildSha: string;
+  readonly computeSku: string;
+  readonly storageSku: string;
+  readonly costRate: DatabaseCellCostRate;
+}
+
 export interface DatabaseCellStatus {
   readonly provider: string;
   readonly cellId: string;
@@ -25,6 +69,9 @@ export interface DatabaseCellStatus {
     readonly volumeId: string;
     readonly sizeGiB: number;
   } | null;
+  readonly allocation: DatabaseCellAllocation;
+  /** Non-null only after endpoint reachability and deterministic DB verification. */
+  readonly verification: DatabaseCellActionReceipt["verification"] | null;
   readonly observedAt: string;
   readonly reason?: string;
 }
@@ -33,6 +80,8 @@ export interface DatabaseCellActionReceipt {
   readonly provider: string;
   readonly cellId: string;
   readonly nodeId: string;
+  readonly actorId: string;
+  readonly reviewedBuildSha: string;
   readonly action: "backup" | "restore";
   /** Caller-generated immutable backup label; contains no credentials. */
   readonly backupLabel: string;
@@ -92,7 +141,6 @@ export interface ProvisionDatabaseCellInput {
   readonly databaseTier: "dedicated";
   readonly budgetProfile: string;
   readonly idempotencyKey: string;
-  readonly storageGiB: number;
 }
 
 /** Provider lifecycle for state cells. State cells are not app workloads. */
@@ -106,11 +154,13 @@ export interface DatabaseStateCellPort {
   backup(input: {
     readonly cellId: string;
     readonly expectedNodeId: string;
+    readonly actorId: string;
     readonly backupLabel: string;
   }): Promise<DatabaseCellActionReceipt>;
   restore(input: {
     readonly cellId: string;
     readonly expectedNodeId: string;
+    readonly actorId: string;
     readonly backupLabel: string;
   }): Promise<DatabaseCellActionReceipt>;
 }

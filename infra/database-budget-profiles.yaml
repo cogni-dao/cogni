@@ -3,6 +3,11 @@
 # candidate replay; it is not a claim about future query shape.
 shared-default-v1:
   design_rate_per_minute: 60
+  cell_capacity:
+    vcpus: 2
+    memory_gib: 4
+    storage_gib: 50
+    compute_class: shared
   roles:
     app:
       connection_limit: 2
@@ -18,6 +23,11 @@ shared-default-v1:
 
 dedicated-high-throughput-v1:
   design_rate_per_minute: 240
+  cell_capacity:
+    vcpus: 4
+    memory_gib: 16
+    storage_gib: 100
+    compute_class: dedicated
   roles:
     app:
       connection_limit: 2

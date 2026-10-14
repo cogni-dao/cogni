@@ -74,6 +74,7 @@ put_secret node-template BILLING_INGEST_TOKEN existing-billing
 put_secret operator APP_DB_PASSWORD pernode-app-pw-sentinel
 put_secret operator APP_DB_SERVICE_PASSWORD pernode-svc-pw-sentinel
 put_secret operator-database-migration APP_DB_MIGRATION_PASSWORD pernode-migration-pw-sentinel
+put_secret operator-database-migration DATABASE_MIGRATION_URL 'postgresql://migration_operator:pernode-migration-pw-sentinel@127.0.0.1:5432/cogni_operator'
 put_secret database-reliability-actuator DATABASE_RELIABILITY_PASSWORD reliability-pw-sentinel
 put_secret database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD readmit-pw-sentinel
 # Doltgres superuser SSOT is operator-canonical (cogni/<env>/operator/DOLTGRES_PASSWORD),
@@ -127,6 +128,22 @@ cp "$src" "$path"
 EOF
 chmod +x "$FAKEBIN/scp"
 
+# Production SSH runs as root and install(1) stamps root ownership explicitly.
+# The local fake remote runs as the developer, so preserve mode/copy semantics
+# while ignoring only the impossible local chown flags.
+cat > "$FAKEBIN/install" <<'EOF'
+#!/usr/bin/env bash
+args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o|-g) shift 2 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+exec /usr/bin/install "${args[@]}"
+EOF
+chmod +x "$FAKEBIN/install"
+
 cat > "$FAKEBIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = "create" ] && [ "${2:-}" = "token" ]; then
@@ -175,7 +192,11 @@ if [ "${1:-}" = "-n" ] && [ "${3:-}" = "wait" ]; then
 fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "get" ] && [ "${4:-}" = "secret" ]; then
   printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
-  if printf '%s\n' "$*" | grep -q 'jsonpath='; then printf '%s' 'cHJlc2VudA=='; fi
+  if printf '%s\n' "$*" | grep -q 'operator-migration-secrets.*DATABASE_MIGRATION_URL'; then
+    printf '%s' 'cG9zdGdyZXNxbDovL21pZ3JhdGlvbl9vcGVyYXRvcjpwZXJub2RlLW1pZ3JhdGlvbi1wdy1zZW50aW5lbEAxMjcuMC4wLjE6NTQzMi9jb2duaV9vcGVyYXRvcg=='
+  elif printf '%s\n' "$*" | grep -q 'jsonpath='; then
+    printf '%s' 'cHJlc2VudA=='
+  fi
   exit 0
 fi
 if [ "${1:-}" = "exec" ]; then
@@ -196,7 +217,7 @@ if [ "${1:-}" = "exec" ]; then
       [ -f "$f" ] || continue
       data="$(printf '%s' "$data" | jq --arg k "$(basename "$f")" --arg v "$(cat "$f")" '.[$k]=$v')"
     done
-    printf '{"data":{"data":%s}}\n' "$data"
+    printf '{"data":{"data":%s,"metadata":{"version":7}}}\n' "$data"
     exit 0
   fi
   if printf '%s\n' "$*" | grep -q 'bao kv metadata get'; then
@@ -220,6 +241,12 @@ chmod +x "$FAKEBIN/kubectl"
 cat > "$FAKEBIN/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/docker.log"
+if printf '%s\n' "$*" | grep -q ' config --format json'; then
+  cat <<JSON
+{"services":{"db-provision":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/postgres-init/provision.sh","target":"/app/provision.sh","read_only":true}]},"doltgres":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/doltgres-init/install-creds.sh","target":"/usr/local/bin/install-creds.sh","read_only":true}]},"doltgres-provision":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/doltgres-init/provision.sh","target":"/app/provision.sh","read_only":true}]},"alloy":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy","target":"/etc/alloy/config.alloy","read_only":true}]},"caddy":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-edge/configs/Caddyfile.tmpl","target":"/etc/caddy/Caddyfile","read_only":true}]}}}
+JSON
+  exit 0
+fi
 if printf '%s\n' "$*" | grep -q ' ps -q caddy'; then
   echo caddy123
   exit 0
@@ -336,6 +363,20 @@ env \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/out.txt"
 
 grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/out.txt"
+remote_provisioner="$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/provision.sh"
+cmp infra/compose/runtime/postgres-init/provision.sh "$remote_provisioner"
+provisioner_mode="$(stat -f '%Lp' "$remote_provisioner" 2>/dev/null || stat -c '%a' "$remote_provisioner")"
+[ "$provisioner_mode" = 444 ]
+grep -q 'cogni-reconcile.postgres-provisioner\.' "$REMOTE_ROOT/scp.log"
+install_line="$(grep -n 'exact runtime compose and provisioners installed ok' "$TMPROOT/out.txt" | cut -d: -f1)"
+provision_line="$(grep -n '\[remote\] db-provision ok' "$TMPROOT/out.txt" | cut -d: -f1)"
+[ "$install_line" -lt "$provision_line" ]
+grep -q 'migration role identity/budget readback failed' "$remote_provisioner"
+cmp infra/compose/runtime/docker-compose.yml "$REMOTE_ROOT/opt/cogni-template-runtime/docker-compose.yml"
+cmp infra/compose/runtime/doltgres-init/install-creds.sh "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/install-creds.sh"
+cmp infra/compose/runtime/doltgres-init/provision.sh "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/provision.sh"
+cmp infra/compose/edge/docker-compose.yml "$REMOTE_ROOT/opt/cogni-template-edge/docker-compose.yml"
+grep -q '\[remote\] exact runtime compose mounts verified ok' "$TMPROOT/out.txt"
 grep -q "deleted legacy ExternalSecret env-secrets targeting operator-env-secrets" "$TMPROOT/out.txt"
 grep -q -- "-n cogni-candidate-a delete externalsecret env-secrets" "$REMOTE_ROOT/kubectl.log"
 grep -q -- "-n cogni-candidate-a annotate externalsecret operator-env-secrets force-sync=" "$REMOTE_ROOT/kubectl.log"
@@ -528,7 +569,7 @@ grep -q -- "-n cogni-candidate-a annotate externalsecret operator-env-secrets fo
 grep -q -- "-e COGNI_NODE_DBS=cogni_operator" "$TMPROOT/akash-docker.log"
 grep -qE -- "--profile bootstrap run --rm .* db-provision" "$TMPROOT/akash-docker.log"
 grep -qE -- "--profile bootstrap run --rm -e COGNI_NODE_DBS=cogni_operator -e DOLTGRES_PASSWORD=.* doltgres-provision" "$TMPROOT/akash-docker.log"
-grep -q "alloy-config.metrics.candidate-a.operator.alloy" "$TMPROOT/akash-scp.log"
+grep -q "cogni-reconcile.alloy-config\." "$TMPROOT/akash-scp.log"
 if grep -qE "Caddyfile|reconcile-edge-caddy" "$TMPROOT/akash-scp.log"; then
   echo "Akash reconcile staged k3s Caddy/NodePort edge inputs" >&2
   exit 1
