@@ -715,6 +715,9 @@ postgres_control_apply_sha256="$STAGED_EXACT_SHA256"
 stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0000_database_recovery_control.sql" postgres-control-migration
 postgres_control_migration_stage="$STAGED_EXACT_PATH"
 postgres_control_migration_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql" postgres-watchdog-migration
+postgres_watchdog_migration_stage="$STAGED_EXACT_PATH"
+postgres_watchdog_migration_sha256="$STAGED_EXACT_SHA256"
 stage_exact "$REPO_ROOT/infra/compose/runtime/doltgres-init/install-creds.sh" doltgres-install-creds
 doltgres_install_creds_stage="$STAGED_EXACT_PATH"
 doltgres_install_creds_sha256="$STAGED_EXACT_SHA256"
@@ -855,6 +858,7 @@ remote "set -euo pipefail
   install_exact '${postgres_provisioner_stage}' /opt/cogni-template-runtime/postgres-init/provision.sh '${postgres_provisioner_sha256}' 0444 postgres-provisioner
   install_exact '${postgres_control_apply_stage}' /opt/cogni-template-runtime/postgres-init/apply-control.sql '${postgres_control_apply_sha256}' 0444 postgres-control-apply
   install_exact '${postgres_control_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0000_database_recovery_control.sql '${postgres_control_migration_sha256}' 0444 postgres-control-migration
+  install_exact '${postgres_watchdog_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql '${postgres_watchdog_migration_sha256}' 0444 postgres-watchdog-migration
   install_exact '${doltgres_install_creds_stage}' /opt/cogni-template-runtime/doltgres-init/install-creds.sh '${doltgres_install_creds_sha256}' 0555 doltgres-install-creds
   install_exact '${doltgres_provisioner_stage}' /opt/cogni-template-runtime/doltgres-init/provision.sh '${doltgres_provisioner_sha256}' 0444 doltgres-provisioner
   echo '[remote] exact runtime compose and provisioners installed ok'
@@ -922,6 +926,9 @@ ${edge_reconcile_snippet}
     any(.services[\"db-provision\"].volumes[];
       .source == \"/opt/cogni-template-runtime/postgres-init/control-migrations/0000_database_recovery_control.sql\" and
       .target == \"/app/control-migrations/0000_database_recovery_control.sql\" and .read_only == true) and
+    any(.services[\"db-provision\"].volumes[];
+      .source == \"/opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql\" and
+      .target == \"/app/control-migrations/0001_database_recovery_watchdog.sql\" and .read_only == true) and
     any(.services.doltgres.volumes[];
       .source == \"/opt/cogni-template-runtime/doltgres-init/install-creds.sh\" and
       .target == \"/usr/local/bin/install-creds.sh\" and .read_only == true) and

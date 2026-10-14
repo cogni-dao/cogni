@@ -15,6 +15,7 @@ import {
   boolean,
   check,
   index,
+  integer,
   pgSchema,
   primaryKey,
   text,
@@ -24,6 +25,25 @@ import {
 } from "drizzle-orm/pg-core";
 
 export const control = pgSchema("cogni_control");
+export const databaseRecoveryWatchdogTicks = control.table(
+  "database_recovery_watchdog_ticks",
+  {
+    environment: text("environment").primaryKey(),
+    ownerId: text("owner_id").notNull(),
+    protocolVersion: integer("protocol_version").notNull(),
+    enforcedAt: timestamp("enforced_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    check(
+      "database_recovery_watchdog_environment",
+      sql`${table.environment} IN ('candidate-a', 'preview', 'production')`
+    ),
+    check(
+      "database_recovery_watchdog_protocol",
+      sql`${table.protocolVersion} = 1`
+    ),
+  ]
+);
 export const databaseRecoveries = control.table(
   "database_recoveries",
   {

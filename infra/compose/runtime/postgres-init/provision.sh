@@ -363,9 +363,14 @@ if [ "$INFRA_ONLY" != 1 ] && [ -n "$RELIABILITY_PASS" ] && [ -n "$READMITTER_PAS
   [ -n "$RELIABILITY_PASS" ] && [ -n "$READMITTER_PASS" ] || {
     echo "❌ ERROR: administrative recovery schema requires both isolated control identities"; exit 1;
   }
-  control_schema_sha="$(sha256sum /app/control-migrations/0000_database_recovery_control.sql | cut -d' ' -f1)"
+  [ -f /app/control-migrations/0001_database_recovery_watchdog.sql ] || {
+    echo "❌ ERROR: versioned administrative watchdog migration is missing"; exit 1;
+  }
+  previous_control_schema_sha="$(sha256sum /app/control-migrations/0000_database_recovery_control.sql | cut -d' ' -f1)"
+  control_schema_sha="$(cat /app/control-migrations/0000_database_recovery_control.sql /app/control-migrations/0001_database_recovery_watchdog.sql | sha256sum | cut -d' ' -f1)"
   PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d postgres \
-    -Xv ON_ERROR_STOP=1 -v expected_control_schema_sha="$control_schema_sha" -f /app/apply-control.sql
+    -Xv ON_ERROR_STOP=1 -v previous_control_schema_sha="$previous_control_schema_sha" -v expected_control_schema_sha="$control_schema_sha" -f /app/apply-control.sql
+  run_sql_as_root postgres 'GRANT EXECUTE ON FUNCTION public.begin_database_recovery(uuid,text,text,text,text,text,text) TO database_reliability_readmitter;'
 fi
 
 # Shared read-only role (env-level; superuser-derived password; BYPASSRLS support
