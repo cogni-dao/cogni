@@ -4,7 +4,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   DatabaseContainmentAction,
-  OperatorSecretsPlanePort,
+  DatabaseDsnSecretsPlanePort,
 } from "@/ports";
 import {
   CherryDatabaseCellAdapter,
@@ -459,9 +459,7 @@ describe("DatabaseDsnRotationAdapter", () => {
   it("snapshots the live pair and CAS-writes both DSNs before verification", async () => {
     const calls: string[] = [];
     const writes: Readonly<Record<string, string>>[] = [];
-    const secrets: OperatorSecretsPlanePort = {
-      writeSecret: vi.fn(),
-      writeSecrets: vi.fn(),
+    const secrets: DatabaseDsnSecretsPlanePort = {
       readSecrets: async () => {
         calls.push("read");
         return {
@@ -529,8 +527,6 @@ describe("DatabaseDsnRotationAdapter", () => {
     let version = 8;
     const adapter = new DatabaseDsnRotationAdapter({
       secrets: {
-        writeSecret: vi.fn(),
-        writeSecrets: vi.fn(),
         readSecrets: async () => ({
           version,
           path: "cogni/candidate-a/poly",
@@ -587,8 +583,6 @@ describe("DatabaseDsnRotationAdapter", () => {
     const sync = vi.fn(async () => ({ receiptId: "eso-9" }));
     const adapter = new DatabaseDsnRotationAdapter({
       secrets: {
-        writeSecret: vi.fn(),
-        writeSecrets: vi.fn(),
         readSecrets: async () => {
           reads += 1;
           if (reads === 2) throw new TypeError("first readback unavailable");
@@ -631,8 +625,6 @@ describe("DatabaseDsnRotationAdapter", () => {
     let casCalls = 0;
     const adapter = new DatabaseDsnRotationAdapter({
       secrets: {
-        writeSecret: vi.fn(),
-        writeSecrets: vi.fn(),
         readSecrets: async () => ({
           version: 8,
           path: "cogni/candidate-a/poly",
@@ -706,8 +698,6 @@ describe("DatabaseDsnRotationAdapter", () => {
     const readSecrets = vi.fn();
     const adapter = new DatabaseDsnRotationAdapter({
       secrets: {
-        writeSecret: vi.fn(),
-        writeSecrets: vi.fn(),
         readSecrets,
         compareAndSwapSecrets: vi.fn(),
       },

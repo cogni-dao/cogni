@@ -12,6 +12,8 @@
  * @public
  */
 
+import { readFile } from "node:fs/promises";
+import { resolve as resolvePath } from "node:path";
 import type { ToolSourcePort } from "@cogni/ai-core";
 import type {
   ComputeResourcePort,
@@ -85,6 +87,7 @@ import {
 import { eq, inArray } from "drizzle-orm";
 import Redis from "ioredis";
 import type { Logger } from "pino";
+import { parse as parseYaml } from "yaml";
 import {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
@@ -1389,29 +1392,70 @@ let cachedDatabasePlacementResolver: DatabasePlacementResolverPort | undefined;
 /** Catalog-derived state placement; callers never accept tier/profile inputs. */
 export function resolveDatabasePlacementResolver(): DatabasePlacementResolverPort {
   if (cachedDatabasePlacementResolver) return cachedDatabasePlacementResolver;
-  const env = serverEnv();
-  const plane = createOperatorDeployPlane(env);
-  const parentOwner = env.NODE_SUBMODULE_PARENT_OWNER ?? "";
-  const parentRepo = env.NODE_SUBMODULE_PARENT_REPO ?? "";
   cachedDatabasePlacementResolver = {
     resolve: async ({ nodeSlug, environment }) => {
-      const nodes = await plane.listCatalogNodes({
-        parentOwner,
-        parentRepo,
-        sourceRef: "main",
-      });
-      const node = nodes.find((candidate) => candidate.slug === nodeSlug);
-      if (!node) throw new Error("database_placement_node_not_found");
-      const placement = node.databasePlacements?.[environment];
+      const row = await readImageCatalogRow(nodeSlug);
+      const placement = row.database?.[environment];
       if (!placement) throw new Error("database_placement_env_not_declared");
+      if (
+        (placement.tier !== "shared" && placement.tier !== "dedicated") ||
+        typeof placement.budget_profile !== "string" ||
+        placement.budget_profile.length === 0
+      ) {
+        throw new Error("database_placement_invalid");
+      }
       return {
-        nodeId: node.nodeId,
+        nodeId: row.node_id,
         desiredTier: placement.tier,
-        budgetProfile: placement.budgetProfile,
+        budgetProfile: placement.budget_profile,
       };
     },
   };
   return cachedDatabasePlacementResolver;
+}
+
+interface ImageCatalogRow {
+  readonly node_id: string;
+  readonly database?: Partial<
+    Record<
+      "candidate-a" | "preview" | "production",
+      { readonly tier?: string; readonly budget_profile?: string }
+    >
+  >;
+}
+
+/** Resolve placement from the catalog bundled at APP_BUILD_SHA, never mutable main. */
+async function readImageCatalogRow(nodeSlug: string): Promise<ImageCatalogRow> {
+  if (!/^[a-z][a-z0-9-]{0,62}$/.test(nodeSlug)) {
+    throw new Error("database_placement_invalid_node_slug");
+  }
+  const candidates = [
+    resolvePath(process.cwd(), "infra/catalog", `${nodeSlug}.yaml`),
+    resolvePath(process.cwd(), "../../../infra/catalog", `${nodeSlug}.yaml`),
+    `/app/infra/catalog/${nodeSlug}.yaml`,
+  ];
+  let source: string | undefined;
+  for (const candidate of candidates) {
+    try {
+      source = await readFile(candidate, "utf8");
+      break;
+    } catch (error) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      ) {
+        throw error;
+      }
+    }
+  }
+  if (!source) throw new Error("database_placement_node_not_found");
+  const row = parseYaml(source) as Partial<ImageCatalogRow> | null;
+  if (!row || typeof row.node_id !== "string" || row.node_id.length === 0) {
+    throw new Error("database_placement_invalid_catalog_row");
+  }
+  return row as ImageCatalogRow;
 }
 
 export function resolveAttributionProfileResolver(): AttributionProfileResolver {

@@ -17,6 +17,8 @@ production_branch: deploy/production-levelup
 # its lease released (#2233, dseq 1789435347755) — so the stale candidate-a cells
 # are dropped with it. Production is this node's only slot.
 envs: [production]
+database:
+  production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   production: akash
 # story.5016 production cutover — levelup is the FIRST fleet row on the production

@@ -22,15 +22,23 @@
  */
 
 import type {
-  CompareAndSwapNodeSecretsInput,
+  DatabaseDsnSecretsPlanePort,
+  DatabaseDsnSecretsReadInput,
+  DatabaseDsnSecretsReadResult,
+  DatabaseDsnSecretsWriteResult,
   OperatorSecretsPlanePort,
-  ReadNodeSecretsInput,
-  ReadNodeSecretsResult,
+  SecretWriteOp,
   WriteNodeSecretInput,
   WriteNodeSecretResult,
-  WriteNodeSecretsInput,
-  WriteNodeSecretsResult,
 } from "@/ports";
+
+interface WriteNodeSecretsInput {
+  readonly nodeSlug: string;
+  readonly service?: string | undefined;
+  readonly env: string;
+  readonly values: Readonly<Record<string, string>>;
+  readonly op: SecretWriteOp;
+}
 
 export interface OpenBaoSecretsAdapterDeps {
   /** OpenBao ClusterIP base, e.g. `http://openbao.openbao.svc:8200`. */
@@ -54,7 +62,9 @@ interface KvReadResponse {
   };
 }
 
-export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
+export class OpenBaoSecretsAdapter
+  implements OperatorSecretsPlanePort, DatabaseDsnSecretsPlanePort
+{
   private readonly addr: string;
   private readonly role: string;
   private readonly readServiceAccountToken: () => Promise<string>;
@@ -86,7 +96,7 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
 
   async writeSecrets(
     input: WriteNodeSecretsInput
-  ): Promise<WriteNodeSecretsResult> {
+  ): Promise<DatabaseDsnSecretsWriteResult> {
     // The bucket is the node's own namespace unless the route resolved (and authorized)
     // a platform-service bucket. Absent `service` → the pre-existing path, unchanged.
     const bucket = input.service ?? input.nodeSlug;
@@ -109,8 +119,8 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
   }
 
   async readSecrets(
-    input: ReadNodeSecretsInput
-  ): Promise<ReadNodeSecretsResult> {
+    input: DatabaseDsnSecretsReadInput
+  ): Promise<DatabaseDsnSecretsReadResult> {
     const bucket = input.service ?? input.nodeSlug;
     const path = `cogni/${input.env}/${bucket}`;
     const token = await this.login();
@@ -137,8 +147,8 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
   }
 
   async compareAndSwapSecrets(
-    input: CompareAndSwapNodeSecretsInput
-  ): Promise<WriteNodeSecretsResult> {
+    input: Parameters<DatabaseDsnSecretsPlanePort["compareAndSwapSecrets"]>[0]
+  ): Promise<DatabaseDsnSecretsWriteResult> {
     if (
       !Number.isSafeInteger(input.expectedVersion) ||
       input.expectedVersion < 1

@@ -52,50 +52,6 @@ export interface WriteNodeSecretResult {
   readonly path: string;
 }
 
-export interface WriteNodeSecretsInput {
-  readonly nodeSlug: string;
-  readonly service?: string | undefined;
-  readonly env: string;
-  /** One atomic KV-v2 bucket update. Values are never logged or returned. */
-  readonly values: Readonly<Record<string, string>>;
-  readonly op: SecretWriteOp;
-}
-
-export interface WriteNodeSecretsResult {
-  readonly written: boolean;
-  readonly version: number;
-  readonly path: string;
-  readonly keys: readonly string[];
-}
-
-export interface ReadNodeSecretsInput {
-  readonly nodeSlug: string;
-  readonly service?: string | undefined;
-  readonly env: string;
-  /** Keys read from one KV-v2 bucket version. Values must never be logged. */
-  readonly keys: readonly string[];
-}
-
-export interface ReadNodeSecretsResult {
-  /** KV-v2 version containing every returned value. */
-  readonly version: number;
-  readonly path: string;
-  readonly values: Readonly<Record<string, string>>;
-}
-
-export interface CompareAndSwapNodeSecretsInput
-  extends Omit<WriteNodeSecretsInput, "op"> {
-  /** The bucket version that must still be current when the atomic patch commits. */
-  readonly expectedVersion: number;
-}
-
 export interface OperatorSecretsPlanePort {
   writeSecret(input: WriteNodeSecretInput): Promise<WriteNodeSecretResult>;
-  writeSecrets(input: WriteNodeSecretsInput): Promise<WriteNodeSecretsResult>;
-  /** Read selected sibling keys and their shared KV-v2 version atomically. */
-  readSecrets(input: ReadNodeSecretsInput): Promise<ReadNodeSecretsResult>;
-  /** Patch sibling keys only if the bucket still has `expectedVersion`. */
-  compareAndSwapSecrets(
-    input: CompareAndSwapNodeSecretsInput
-  ): Promise<WriteNodeSecretsResult>;
 }

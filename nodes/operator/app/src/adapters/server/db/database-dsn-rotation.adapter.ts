@@ -6,9 +6,9 @@ import type {
   DatabaseDsnRotationInput,
   DatabaseDsnRotationPort,
   DatabaseDsnRotationResult,
+  DatabaseDsnSecretsPlanePort,
+  DatabaseDsnSecretsWriteResult,
   DatabaseRuntimeSecretSyncPort,
-  OperatorSecretsPlanePort,
-  WriteNodeSecretsResult,
 } from "@/ports";
 
 const DATABASE_DSN_KEYS = ["DATABASE_URL", "DATABASE_SERVICE_URL"] as const;
@@ -37,7 +37,7 @@ interface DatabaseDsnRotationAudit {
 }
 
 export interface DatabaseDsnRotationDeps {
-  readonly secrets: OperatorSecretsPlanePort;
+  readonly secrets: DatabaseDsnSecretsPlanePort;
   readonly sync: DatabaseRuntimeSecretSyncPort;
   readonly verifier: DatabaseConsumerVerifier;
   readonly audit: DatabaseDsnRotationAudit;
@@ -95,7 +95,7 @@ export class DatabaseDsnRotationAdapter implements DatabaseDsnRotationPort {
         endpointFingerprint: verified.endpointFingerprint,
       };
     } catch (cause) {
-      let rollbackWrite: WriteNodeSecretsResult;
+      let rollbackWrite: DatabaseDsnSecretsWriteResult;
       try {
         rollbackWrite = await this.casWritePair(
           input,
@@ -153,7 +153,7 @@ export class DatabaseDsnRotationAdapter implements DatabaseDsnRotationPort {
     pair: DatabaseDsnPair,
     expectedVersion: number,
     phase: "rotation" | "rollback"
-  ): Promise<WriteNodeSecretsResult> {
+  ): Promise<DatabaseDsnSecretsWriteResult> {
     try {
       return await this.deps.secrets.compareAndSwapSecrets({
         nodeSlug: input.nodeSlug,

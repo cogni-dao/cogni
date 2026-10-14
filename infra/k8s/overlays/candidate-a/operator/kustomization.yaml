@@ -24,6 +24,7 @@ resources:
   # writer` is injective, `writer -> envs` deliberately is not (bug.5187).
   - ../../../base/akash-tx-actuator
   - external-secret.yaml
+  - ../../../base/operator-migration-external-secret
   # story.5016 secret-boundary amendment 2 — the actuator's OWN secret plane
   # (cogni/candidate-a/akash-tx-actuator -> akash-tx-actuator-env-secrets). Deliberately a
   # SECOND ExternalSecret rather than more keys in external-secret.yaml above: that one is
@@ -59,6 +60,13 @@ replacements:
         fieldPaths: [metadata.namespace]
 
 patches:
+  - target:
+      kind: ExternalSecret
+      name: migration-secrets
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: candidate-a/operator-database-migration
   - target:
       kind: Deployment
       name: node-app

@@ -154,6 +154,10 @@ export type {
   DatabaseDsnRotationInput,
   DatabaseDsnRotationPort,
   DatabaseDsnRotationResult,
+  DatabaseDsnSecretsPlanePort,
+  DatabaseDsnSecretsReadInput,
+  DatabaseDsnSecretsReadResult,
+  DatabaseDsnSecretsWriteResult,
   DatabaseEnvironment,
   DatabasePlacementResolverPort,
   DatabaseReadmissionPort,
@@ -293,15 +297,10 @@ export type {
   VerificationStatus,
 } from "./onchain-verifier.port";
 export type {
-  CompareAndSwapNodeSecretsInput,
   OperatorSecretsPlanePort,
-  ReadNodeSecretsInput,
-  ReadNodeSecretsResult,
   SecretWriteOp,
   WriteNodeSecretInput,
   WriteNodeSecretResult,
-  WriteNodeSecretsInput,
-  WriteNodeSecretsResult,
 } from "./operator-secrets-plane.port";
 export type { OperatorWalletPort } from "./operator-wallet.port";
 export {

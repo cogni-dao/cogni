@@ -203,6 +203,40 @@ export interface DatabaseRuntimeSecretSyncPort {
   }): Promise<{ readonly receiptId: string }>;
 }
 
+export interface DatabaseDsnSecretsReadInput {
+  readonly nodeSlug: string;
+  readonly service?: string | undefined;
+  readonly env: string;
+  readonly keys: readonly string[];
+}
+
+export interface DatabaseDsnSecretsReadResult {
+  readonly version: number;
+  readonly path: string;
+  readonly values: Readonly<Record<string, string>>;
+}
+
+export interface DatabaseDsnSecretsWriteResult {
+  readonly written: boolean;
+  readonly version: number;
+  readonly path: string;
+  readonly keys: readonly string[];
+}
+
+/** Atomic KV-v2 capability required only by database DSN rotation. */
+export interface DatabaseDsnSecretsPlanePort {
+  readSecrets(
+    input: DatabaseDsnSecretsReadInput
+  ): Promise<DatabaseDsnSecretsReadResult>;
+  compareAndSwapSecrets(input: {
+    readonly nodeSlug: string;
+    readonly service?: string | undefined;
+    readonly env: string;
+    readonly expectedVersion: number;
+    readonly values: Readonly<Record<string, string>>;
+  }): Promise<DatabaseDsnSecretsWriteResult>;
+}
+
 export interface DatabaseDsnRotationInput {
   readonly nodeId: string;
   readonly nodeSlug: string;
