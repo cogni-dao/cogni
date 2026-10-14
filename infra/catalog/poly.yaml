@@ -37,6 +37,10 @@ production_branch: deploy/production-poly
 # XR's own namespace — so these leases can never collide with each other or with production.
 # That is the property that would cost real money.
 envs: [candidate-a, preview, production]
+database:
+  candidate-a: { tier: dedicated, budget_profile: poly-dedicated-v1 }
+  preview: { tier: dedicated, budget_profile: poly-dedicated-v1 }
+  production: { tier: dedicated, budget_profile: poly-dedicated-v1 }
 deployment_provider:
   candidate-a: akash
   preview: akash
