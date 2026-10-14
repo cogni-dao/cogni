@@ -43,11 +43,12 @@ one PR** — like a branch.
 
 ## Routing by shape
 
-| shape                                               | go to                                                  |
-| --------------------------------------------------- | ------------------------------------------------------ |
-| falsifiable prediction resolving in a later session | [`edo-loop`](../edo-loop/SKILL.md)                     |
-| genuinely visual artifact (diagram, chart)          | [`dolt-human-visuals`](../dolt-human-visuals/SKILL.md) |
-| as-built architecture, contract, invariant          | `docs/spec/*` in the repo, not the hub                 |
-| atomic factual claim with provenance                | the contract above                                     |
+| shape                                               | go to                                                                         |
+| --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| falsifiable prediction resolving in a later session | [`edo-loop`](../edo-loop/SKILL.md)                                            |
+| genuinely visual artifact (diagram, chart)          | [`dolt-human-visuals`](../dolt-human-visuals/SKILL.md)                        |
+| design narrative / rationale / approach (`/design`) | a hub entry (`finding`/`conclusion`/`rule`) + a human visual — **not** a spec |
+| as-built architecture, contract, invariant          | today `docs/spec/*`; migrating to the hub (`story.5087`)                      |
+| atomic factual claim with provenance                | the contract above                                                            |
 
 **A human reviews and merges.** Never merge your own contribution.

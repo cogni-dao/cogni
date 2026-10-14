@@ -265,4 +265,10 @@ if grep -Eq '\$RUNTIME_COMPOSE[[:space:]]+down|docker[[:space:]]+compose[^#]*[[:
   exit 1
 fi
 
+# Keep the deploy-infra recovery contract inside the existing CI-wired infra
+# harness. Candidate infra review deliberately rejects changes to the global
+# shell-test orchestrator, while every file under scripts/ci/tests is approved
+# collateral for the Compose lane.
+bash "$SCRIPT_DIR/recover-installed-runtime.test.sh"
+
 echo "PASS: reconcile-edge-caddy.test.sh"

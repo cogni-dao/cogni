@@ -126,6 +126,40 @@ edge_caddy_output=$(
 echo "$edge_caddy_output" | grep -q 'Selection reason: substrate-machinery:scripts/ci/reconcile-edge-caddy.remote.sh'
 echo "$edge_caddy_output" | grep -q "Targets: ${expected_substrate_targets}"
 
+# bug.5299 — the substrate PREFLIGHT ASSERTER and the libs it sources are substrate
+# machinery too. A change to them that selects no target ships with the gate never having
+# executed once on a flight, which is precisely how a broken or inverted assertion stays
+# invisible. Both the asserter and lane-db-residency.sh must select the node set.
+for asserter_path in \
+  scripts/ci/assert-target-substrate.sh \
+  scripts/ci/lib/lane-db-residency.sh; do
+  printf '%s\n' "$asserter_path" > "$tmpdir/asserter-paths.txt"
+  asserter_output=$(
+    TURBO_SCM_BASE=origin/main \
+    TURBO_SCM_HEAD=HEAD \
+    CHANGED_PATHS_FILE="$tmpdir/asserter-paths.txt" \
+    bash scripts/ci/detect-affected.sh
+  )
+  echo "$asserter_output" | grep -q "Selection reason: substrate-machinery:${asserter_path}"
+  echo "$asserter_output" | grep -q "Targets: ${expected_substrate_targets}"
+done
+
+# NEGATIVE CONTROL — the rule is an explicit list, not a scripts/ci/** prefix. An unrelated
+# CI script must stay out, or "substrate machinery" would mean "any script" and the node set
+# would be rebuilt on every CI edit.
+printf '%s\n' 'scripts/ci/verify-buildsha.sh' > "$tmpdir/unrelated-paths.txt"
+unrelated_output=$(
+  TURBO_SCM_BASE=origin/main \
+  TURBO_SCM_HEAD=HEAD \
+  CHANGED_PATHS_FILE="$tmpdir/unrelated-paths.txt" \
+  bash scripts/ci/detect-affected.sh
+)
+if echo "$unrelated_output" | grep -q 'Selection reason: substrate-machinery:'; then
+  echo "[FAIL] unrelated CI script classified as substrate machinery" >&2
+  echo "$unrelated_output" >&2
+  exit 1
+fi
+
 # The compute-workload controller is deployed by the operator image. A
 # controller-manifest-only change must therefore build exactly operator at the
 # same source SHA; otherwise candidate flight would pair new manifests with an

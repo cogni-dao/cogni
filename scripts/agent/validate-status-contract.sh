@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Claude Code Stop hook: reject a final response that breaches Cogni's status contract.
-# Prompt instructions remain the canonical contract; this hook enforces the two properties
-# that are deterministic to verify at the response boundary: exact block shape and frozen
-# Goal/Done-when state within one session.
+# Claude Code Stop hook: WARN (non-blocking) on a final response that breaches Cogni's status
+# contract. The `Cogni Contract` output style is the primary driver — it shapes generation in
+# the system-prompt layer. This hook is the secondary detector: it surfaces the breach so the
+# agent self-corrects on the NEXT turn, but it NEVER re-prompts or hard-blocks. A hard Stop-block
+# runs on every agent on the node, so one over-strict check wedges the whole fleet (the pre-#2722
+# per-reply /work/items/ loop) and can only grade format, taxing substantive replies with re-emit
+# round-trips. See .claude/skills/cognition-expert/SKILL.md (warn-only is canon).
 
 set -euo pipefail
 
@@ -10,8 +13,9 @@ INPUT="$(cat)"
 MESSAGE="$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""')"
 SCRATCHPAD_DIR="$(printf '%s' "$INPUT" | jq -r '.scratchpad_dir // ""')"
 
+# Emit a non-blocking advisory (systemMessage, no `decision:block`) and allow the stop to proceed.
 block() {
-  jq -cn --arg reason "$1" '{decision:"block",reason:$reason}'
+  jq -cn --arg reason "contract advisory (non-blocking): $1" '{systemMessage:$reason}'
   exit 0
 }
 

@@ -10,8 +10,8 @@ Read these before starting:
 - [Packages Architecture](docs/spec/packages-architecture.md) — package boundaries and capability package shape
 - [Style & Lint Rules](docs/spec/style.md) — coding standards
 - [Feature Development Guide](docs/guides/feature-development.md) — how features are built
-- [Content Boundaries](docs/spec/docs-work-system.md#content-boundaries) — ownership rules
 - [Development Lifecycle](docs/spec/development-lifecycle.md) — workflow and invariants
+- [knowledge-syntropy-expert](.claude/skills/knowledge-syntropy-expert/SKILL.md) + [dolt-human-visuals](.claude/skills/dolt-human-visuals/SKILL.md) — design → hub (two entries); item keeps only its story/task contract
 
 Then find every AGENTS.md in the file path tree of the files being changed (start at root, descend into subdirs).
 
@@ -21,7 +21,7 @@ Then find every AGENTS.md in the file path tree of the files being changed (star
 
 1. Read the work item to understand the stated goal and scope.
 2. Read linked specs (`spec_refs`) and the parent project if one exists.
-3. Run `git diff --name-status origin/staging...HEAD` to see all changed files.
+3. Run `git diff --name-status origin/main...HEAD` to see all changed files.
 4. Read the changed files to understand the design.
 
 ---
@@ -56,12 +56,12 @@ Score each dimension (PASS / CONCERN / FAIL) with a one-line rationale:
 - Is runtime wiring (client creation, env/credential loading, lifecycle) kept out of packages?
 - If >1 runtime (app, scheduler-worker, Temporal activities) will use this capability, is it in a shared package?
 
-### Content Boundaries
+### Knowledge Home (where the design lives)
 
-- Do specs contain only contracts, invariants, and design?
-- Do projects contain only roadmaps and planning?
-- Do items contain only execution details?
-- Is anything duplicated across boundaries instead of linked?
+- **Is the design two hub entries** — agent-facing (text) + human-facing (`entryType: html` via dolt-human-visuals)? Design as a `## Design` block in the item, or a new `docs/spec/*.md`, is a **blocking FAIL**.
+- Do the entries recall/refine existing hub knowledge, not duplicate it?
+- Does the item hold **only its contract** — story = e2e behavior; task/bug = todo + pointers + done-when — and merely _cite_ the design?
+- Specs hold only contracts/invariants/acceptance; projects only roadmaps/planning; nothing duplicated instead of linked?
 
 ### Scope Discipline
 
@@ -94,7 +94,7 @@ Output a structured review:
 | OSS-First              | CONCERN | ...                        |
 | Architecture Alignment | PASS    | ...                        |
 | Boundary Placement     | PASS    | ...                        |
-| Content Boundaries     | PASS    | ...                        |
+| Knowledge Home         | PASS    | ...                        |
 | Scope Discipline       | PASS    | ...                        |
 | Risk Surface           | FAIL    | ...                        |
 
@@ -111,6 +111,8 @@ Output a structured review:
 
 ## Rules
 
+- **DESIGN_LIVES_IN_HUB** — design in the item or a fresh `.md` (not two hub entries) is a blocking FAIL
+- **WORK_ITEM_CONTRACT** — story = e2e behavior; task/bug = todo + pointers + done-when. Flag any item carrying the design body
 - **FIND_PROBLEMS** — your job is to catch issues before they ship, not to praise good work
 - **BE_SPECIFIC** — cite file paths, line numbers, function names. Never say "this could be better" without saying how
 - **OSS_OVER_BESPOKE** — always flag custom implementations where a well-maintained OSS tool exists
