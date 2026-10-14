@@ -46,6 +46,10 @@ const CANDIDATE_FLIGHT_FILE = path.resolve(
   __dirname,
   "../../.github/workflows/candidate-flight.yml"
 );
+const SHARED_CONTAINMENT_REPLAY_FILE = path.resolve(
+  __dirname,
+  "../../scripts/ops/replay-shared-database-containment.sh"
+);
 
 interface AlertData {
   readonly refId: string;
@@ -283,6 +287,46 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     );
     expect(workflow.slice(runtime, smoke)).toContain(
       'ASSERT_DATABASE_RELIABILITY_RUNTIME: "true"'
+    );
+  });
+
+  it("pins the shared replay to Red, operator control, and policy Mimir evidence", () => {
+    const replay = readFileSync(SHARED_CONTAINMENT_REPLAY_FILE, "utf8");
+    expect(replay).toContain("TARGET_NODE_SLUG=red");
+    expect(replay).toContain("CONTROL_NODE_SLUG=operator");
+    expect(replay).toContain(
+      'target_catalog="$root_dir/infra/catalog/red.yaml"'
+    );
+    expect(replay).toContain(
+      'control_catalog="$root_dir/infra/catalog/operator.yaml"'
+    );
+    expect(replay).toContain(
+      "TARGET_NODE_SLUG TARGET_NODE_ID TARGET_NODE_BUILD_SHA CONTROL_NODE_SLUG CONTROL_NODE_ID"
+    );
+    expect(replay).not.toContain("TARGET_DATABASE_DSN");
+    expect(replay).not.toContain("REGIONAL_BASE_URLS");
+    expect(replay).not.toContain("NEIGHBOR_READYZ_URLS");
+    expect(replay).toContain("role=candidate-a-db-reader");
+    expect(replay).toContain("cogni/candidate-a/red");
+    expect(replay).toContain("export PGDATABASE=");
+    expect(replay).toContain(".expectedRegions[]");
+    expect(replay).toContain(
+      'min_over_time(probe_success{environment="candidate-a",node_slug="red",proof_class="serve"}[1m])'
+    );
+    expect(replay).toContain("(.data.result | length == 2)");
+    expect(replay).toContain("(.values | length == 5)");
+    expect(replay).toContain("(.values[-1][0] - .values[-2][0]) == 60");
+    expect(replay).toContain(".[0] <= $end + 15");
+    expect(replay).toContain("($end - .values[-1][0]) <= 90");
+    expect(replay).toContain("queryRef reliability-status-v1.readiness-1m");
+    expect(replay).toContain('-H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER"');
+    expect(replay).not.toContain("RELIABILITY_READMIT_AUTH_HEADER");
+    expect(replay).toContain('.phase == "open" and .incidentId == $incidentId');
+    expect(replay).toContain(
+      'action=\\"contained\\" | nodeId=\\"$TARGET_NODE_ID\\" | environment=\\"candidate-a\\" | incidentId=\\"$incident_id\\"'
+    );
+    expect(replay).toContain(
+      'action=\\"readmitted\\" | nodeId=\\"$TARGET_NODE_ID\\" | environment=\\"candidate-a\\" | incidentId=\\"$incident_id\\"'
     );
   });
 });

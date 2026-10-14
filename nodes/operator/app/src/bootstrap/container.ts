@@ -1425,10 +1425,7 @@ export function resolveDatabasePlacementResolver(): DatabasePlacementResolverPor
   cachedDatabasePlacementResolver = {
     resolve: async ({ nodeSlug, environment, sourceRef }) => {
       const imageBuildSha = serverEnv().APP_BUILD_SHA;
-      if (
-        !/^[0-9a-f]{40}$/.test(sourceRef) ||
-        sourceRef !== imageBuildSha
-      ) {
+      if (!/^[0-9a-f]{40}$/.test(sourceRef) || sourceRef !== imageBuildSha) {
         throw new Error("database_placement_source_ref_invalid");
       }
       const row = await readImageCatalogRow(nodeSlug);

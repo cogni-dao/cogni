@@ -3,21 +3,16 @@
 set -euo pipefail
 
 : "${ALLOW_CANDIDATE_DATABASE_REPLAY:?must equal 1}"
-: "${TARGET_DATABASE_DSN:?shared target application-role DSN required}"
-: "${TARGET_NODE_SLUG:?shared target node slug required}"
-: "${TARGET_NODE_ID:?shared target node id required}"
 : "${OPERATOR_BUILD_SHA:?exact deployed operator/actuator SHA required}"
-: "${TARGET_NODE_BUILD_SHA:?exact deployed target-node SHA required}"
-: "${REGIONAL_BASE_URLS:?exactly two regional base URLs required}"
-: "${NEIGHBOR_READYZ_URLS:?exactly two neighbor readyz URLs required}"
 : "${RELIABILITY_STATUS_URL:?authenticated reliability status URL required}"
 : "${RELIABILITY_STATUS_AUTH_HEADER:?status Authorization header required}"
-: "${TARGET_CONTAINMENT_STATUS_URL:?target internal containment status URL required}"
-: "${CONTROL_CONTAINMENT_STATUS_URL:?unrelated control internal status URL required}"
+: "${ACTUATOR_STATUS_BASE_URL:?private actuator base URL required}"
 : "${ACTUATOR_VERSION_URL:?private actuator version URL required}"
 : "${OPERATOR_VERSION_URL:?deployed operator version URL required}"
 : "${RELIABILITY_READMIT_URL:?session-authenticated human readmit URL required}"
-: "${RELIABILITY_READMIT_AUTH_HEADER:?human-session Authorization header required}"
+: "${RELIABILITY_READMIT_COOKIE_HEADER:?captured human-session Cookie header required}"
+: "${MIMIR_QUERY_URL:?Prometheus-compatible query_range endpoint required}"
+: "${METRICS_AUTH_HEADER:?Mimir Authorization header required}"
 : "${LOKI_QUERY_URL:?Loki query_range endpoint required}"
 : "${LOKI_AUTH_HEADER:?Loki Authorization header required}"
 : "${INCIDENT_REQUEST_RATE:?measured incident requests/second required}"
@@ -26,24 +21,67 @@ set -euo pipefail
   echo "candidate-a replay not authorized" >&2; exit 2;
 }
 [[ "$OPERATOR_BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "operator SHA must be 40 lowercase hex" >&2; exit 2; }
-[[ "$TARGET_NODE_BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "target-node SHA must be 40 lowercase hex" >&2; exit 2; }
-command -v pgbench >/dev/null && command -v psql >/dev/null && command -v jq >/dev/null && command -v curl >/dev/null
-
-IFS=',' read -r -a regions <<<"$REGIONAL_BASE_URLS"
-IFS=',' read -r -a neighbors <<<"$NEIGHBOR_READYZ_URLS"
-[[ "${#regions[@]}" == 2 && "${#neighbors[@]}" == 2 ]] || { echo "exactly two regional identities required" >&2; exit 2; }
-[[ "${regions[0]}" != "${regions[1]}" && "${neighbors[0]}" != "${neighbors[1]}" ]] || { echo "regional identities must be distinct" >&2; exit 2; }
+command -v pgbench >/dev/null && command -v psql >/dev/null && command -v jq >/dev/null && command -v curl >/dev/null && command -v yq >/dev/null && command -v kubectl >/dev/null
 
 root_dir=$(git rev-parse --show-toplevel)
-catalog_file="$root_dir/infra/catalog/$TARGET_NODE_SLUG.yaml"
-[[ -f "$catalog_file" ]] || { echo "target catalog entry missing" >&2; exit 2; }
-[[ "$(yq -er '.database."candidate-a".tier' "$catalog_file")" == shared ]] || {
-  echo "automatic containment replay requires a catalog-declared shared target" >&2; exit 2;
+policy_file="$root_dir/packages/node-contracts/src/reliability-policy.v1.json"
+target_catalog="$root_dir/infra/catalog/red.yaml"
+control_catalog="$root_dir/infra/catalog/operator.yaml"
+poly_catalog="$root_dir/infra/catalog/poly.yaml"
+operator_spec="$root_dir/nodes/operator/.cogni/repo-spec.yaml"
+for forbidden_override in TARGET_NODE_SLUG TARGET_NODE_ID TARGET_NODE_BUILD_SHA CONTROL_NODE_SLUG CONTROL_NODE_ID; do
+  if declare -p "$forbidden_override" &>/dev/null; then
+    echo "$forbidden_override is immutable and must not be caller supplied" >&2
+    exit 2
+  fi
+done
+TARGET_NODE_SLUG=red
+CONTROL_NODE_SLUG=operator
+TARGET_NODE_ID=$(yq -er '.node_id' "$target_catalog")
+CONTROL_NODE_ID=$(yq -er '.node_id' "$control_catalog" 2>/dev/null || yq -er '.node_id' "$operator_spec")
+TARGET_NODE_BUILD_SHA=$(yq -er '.source_sha' "$target_catalog")
+POLY_NODE_BUILD_SHA=$(yq -er '.source_sha' "$poly_catalog")
+target_tier=$(yq -er '.database."candidate-a".tier' "$target_catalog")
+control_tier=$(yq -er '.database."candidate-a".tier' "$control_catalog")
+poly_tier=$(yq -er '.database."candidate-a".tier' "$poly_catalog")
+mapfile -t expected_regions < <(jq -er '.expectedRegions[]' "$policy_file")
+noisy_neighbor_share=$(jq -er '.noisyNeighborSharePercent' "$policy_file")
+[[ "$target_tier" == shared && "$control_tier" == shared && "$poly_tier" == dedicated ]] || {
+  echo "Red/operator/Poly tiers differ from the immutable proof topology" >&2; exit 2;
 }
-catalog_target_sha=$(yq -er '.source_sha' "$catalog_file")
-[[ "$catalog_target_sha" == "$TARGET_NODE_BUILD_SHA" ]] || {
-  echo "target-node SHA differs from immutable catalog source_sha" >&2; exit 2;
+[[ "$TARGET_NODE_ID" =~ ^[0-9a-f-]{36}$ && "$CONTROL_NODE_ID" =~ ^[0-9a-f-]{36}$ && "$TARGET_NODE_ID" != "$CONTROL_NODE_ID" ]] || {
+  echo "immutable target/control identities are invalid or collide" >&2; exit 2;
 }
+[[ "$TARGET_NODE_BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "catalog target SHA must be 40 lowercase hex" >&2; exit 2; }
+[[ "$POLY_NODE_BUILD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "catalog Poly SHA must be 40 lowercase hex" >&2; exit 2; }
+[[ "${#expected_regions[@]}" == 2 && "${expected_regions[0]}" != "${expected_regions[1]}" ]] || {
+  echo "policy must declare exactly two distinct reliability regions" >&2; exit 2;
+}
+
+status_url() {
+  local slug=$1 node_id=$2
+  printf '%s/v1/internal/status?environment=candidate-a&node_slug=%s&node_id=%s' \
+    "${ACTUATOR_STATUS_BASE_URL%/}" "$slug" "$node_id"
+}
+target_containment_status_url=$(status_url "$TARGET_NODE_SLUG" "$TARGET_NODE_ID")
+control_containment_status_url=$(status_url "$CONTROL_NODE_SLUG" "$CONTROL_NODE_ID")
+target_base=https://red-test.cognidao.org
+neighbor_names=(operator poly)
+neighbor_bases=(https://test.cognidao.org https://poly-test.cognidao.org)
+neighbor_shas=("$OPERATOR_BUILD_SHA" "$POLY_NODE_BUILD_SHA")
+
+# The only database credential boundary authorized for this replay is the existing
+# candidate-a db-reader Kubernetes role. PGDATABASE may hold a libpq URI, keeping
+# the Red DSN out of argv, logs, and proof artifacts.
+kubectl get serviceaccount db-provisioner -n default >/dev/null
+reader_jwt=$(kubectl create token db-provisioner -n default)
+reader_token=$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
+  bao write -field=token auth/kubernetes/login role=candidate-a-db-reader jwt="$reader_jwt")
+[[ -n "$reader_token" ]] || { echo "candidate-a-db-reader login failed" >&2; exit 2; }
+red_secret=$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$reader_token" \
+  bao kv get -format=json cogni/candidate-a/red)
+export PGDATABASE=$(jq -er '.data.data.DATABASE_URL | select(type == "string" and length > 0)' <<<"$red_secret")
+unset red_secret reader_token reader_jwt
 replay_sql=${REPLAY_SQL_FILE:-$(mktemp)}
 if [[ -z "${REPLAY_SQL_FILE:-}" ]]; then
   cat >"$replay_sql" <<'SQL'
@@ -60,6 +98,9 @@ clients=${REPLAY_CLIENTS:-8}
 rate=${REPLAY_RATE:-$((INCIDENT_REQUEST_RATE * 2))}
 contain_timeout=${CONTAIN_TIMEOUT_SECONDS:-300}
 evidence=${REPLAY_EVIDENCE_FILE:-shared-database-containment-replay.jsonl}
+[[ "$clients" -ge 8 && "$duration" -ge 1800 && "$rate" -ge $((INCIDENT_REQUEST_RATE * 2)) ]] || {
+  echo "requires >=8 clients, >=1800s, and >=2x incident rate" >&2; exit 2;
+}
 replay_id="shared-contain-$(git rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
 replay_started_epoch=$(date +%s)
 jq -cn --arg event start --arg replayId "$replay_id" --arg node "$TARGET_NODE_SLUG" \
@@ -83,15 +124,25 @@ jq -cn --arg event control_plane_versions --arg replayId "$replay_id" \
 cleanup() {
   [[ -n "${load_pid:-}" ]] && kill "$load_pid" 2>/dev/null || true
   [[ -z "${REPLAY_SQL_FILE:-}" ]] && rm -f "$replay_sql"
+  unset PGDATABASE
 }
 trap cleanup EXIT INT TERM
 
-target_before=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$TARGET_CONTAINMENT_STATUS_URL")
-control_before=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$CONTROL_CONTAINMENT_STATUS_URL")
+[[ "$RELIABILITY_STATUS_URL" == *"/nodes/$TARGET_NODE_ID/"* && "$RELIABILITY_READMIT_URL" == *"/nodes/$TARGET_NODE_ID/"* ]] || {
+  echo "public status/readmit routes must address immutable Red node identity" >&2; exit 2;
+}
+target_ready_code=$(curl -sS -o /dev/null --max-time 5 -w '%{http_code}' "$target_base/readyz" || true)
+target_observed_sha=$(curl -fsS --max-time 5 "$target_base/version" | jq -er '.buildSha')
+[[ "$target_ready_code" == 200 && "$target_observed_sha" == "$TARGET_NODE_BUILD_SHA" ]] || {
+  echo "Red target exact-SHA readiness failed" >&2; exit 1;
+}
+
+target_before=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$target_containment_status_url")
+control_before=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$control_containment_status_url")
 jq -e '.phase == "open"' <<<"$target_before" >/dev/null || { echo "target must be open before load" >&2; exit 1; }
 jq -e '.phase == "open"' <<<"$control_before" >/dev/null || { echo "control node must be open before load" >&2; exit 1; }
 
-psql "$TARGET_DATABASE_DSN" -Xv ON_ERROR_STOP=1 <<'SQL'
+psql -Xv ON_ERROR_STOP=1 <<'SQL'
 CREATE TABLE IF NOT EXISTS public.reliability_noisy_neighbor_fixture (
   id bigint PRIMARY KEY,
   payload text NOT NULL
@@ -103,7 +154,7 @@ FROM generate_series(1, 200000) AS value;
 ANALYZE public.reliability_noisy_neighbor_fixture;
 SQL
 
-pgbench "$TARGET_DATABASE_DSN" -n -f "$replay_sql" -c "$clients" -j "$clients" -R "$rate" -T "$duration" \
+pgbench -n -f "$replay_sql" -c "$clients" -j "$clients" -R "$rate" -T "$duration" \
   >"${evidence%.jsonl}.pgbench.txt" 2>&1 &
 load_pid=$!
 deadline=$((SECONDS + contain_timeout))
@@ -112,23 +163,30 @@ incident_id=""
 
 while (( SECONDS < deadline )); do
   sampled_at=$(date -u +%FT%TZ)
-  for url in "${neighbors[@]}"; do
-    code=$(curl -sS -o /dev/null --max-time 5 -w '%{http_code}' "$url" || true)
+  for index in "${!neighbor_bases[@]}"; do
+    url=${neighbor_bases[$index]}
+    expected_sha=${neighbor_shas[$index]}
+    code=$(curl -sS -o /dev/null --max-time 5 -w '%{http_code}' "$url/readyz" || true)
+    observed_sha=$(curl -fsS --max-time 5 "$url/version" | jq -er '.buildSha')
     jq -cn --arg event neighbor_sample --arg replayId "$replay_id" --arg at "$sampled_at" \
-      --arg url "$url" --arg code "$code" '{event:$event,replayId:$replayId,at:$at,url:$url,httpCode:$code}' >>"$evidence"
-    [[ "$code" == 200 ]] || { echo "neighbor missed SLO before containment: $url" >&2; exit 1; }
+      --arg node "${neighbor_names[$index]}" --arg url "$url" --arg code "$code" \
+      --arg expectedSha "$expected_sha" --arg observedSha "$observed_sha" \
+      '{event:$event,replayId:$replayId,at:$at,node:$node,url:$url,httpCode:$code,expectedBuildSha:$expectedSha,observedBuildSha:$observedSha}' >>"$evidence"
+    [[ "$code" == 200 && "$observed_sha" == "$expected_sha" ]] || {
+      echo "neighbor exact-SHA SLO miss before containment: $url" >&2; exit 1;
+    }
   done
 
   status=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$RELIABILITY_STATUS_URL")
   state=$(jq -er '.state' <<<"$status")
   if [[ "$state" == contained ]]; then
-    jq -e '
+    jq -e --argjson share "$noisy_neighbor_share" '
       .utilization.evidenceScope == "node" and
       (if (.incidentReason | contains("I/O pressure critical")) then
-         ((.utilization.databaseShare5m.physicalReadsPct // -1) >= 40 or
-          (.utilization.databaseShare5m.tempBytesPct // -1) >= 40)
+         ((.utilization.databaseShare5m.physicalReadsPct // -1) >= $share or
+          (.utilization.databaseShare5m.tempBytesPct // -1) >= $share)
        elif (.incidentReason | contains("database connections critical")) then
-         (.utilization.databaseShare5m.backendsPct // -1) >= 40
+         (.utilization.databaseShare5m.backendsPct // -1) >= $share
        else false end)
     ' <<<"$status" >/dev/null || {
       echo "contained response lacks matching node-attributed constrained share" >&2; exit 1;
@@ -141,8 +199,8 @@ while (( SECONDS < deadline )); do
 done
 [[ "$contained" == 1 ]] || { echo "automatic containment timed out" >&2; exit 1; }
 
-target_after=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$TARGET_CONTAINMENT_STATUS_URL")
-control_after=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$CONTROL_CONTAINMENT_STATUS_URL")
+target_after=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$target_containment_status_url")
+control_after=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$control_containment_status_url")
 jq -e '.phase == "contained"' <<<"$target_after" >/dev/null || { echo "target containment status not terminal" >&2; exit 1; }
 jq -e '.phase == "open"' <<<"$control_after" >/dev/null || { echo "unrelated control node was mutated" >&2; exit 1; }
 incident_id=$(jq -er '.incidentId' <<<"$target_after")
@@ -165,21 +223,40 @@ jq -e --arg incidentId "$incident_id" --arg sha "$OPERATOR_BUILD_SHA" --arg node
 jq -cn --arg event automatic_containment --arg replayId "$replay_id" --arg at "$(date -u +%FT%TZ)" \
   --arg incidentId "$incident_id" '{event:$event,replayId:$replayId,at:$at,incidentId:$incidentId,result:"pass"}' >>"$evidence"
 
-for sample in 1 2 3 4 5; do
-  sampled_at=$(date -u +%FT%TZ)
-  for base_url in "${regions[@]}"; do
-    base_url=${base_url%/}
-    code=$(curl -sS -o /dev/null --max-time 5 -w '%{http_code}' "$base_url/readyz" || true)
-    observed_sha=$(curl -fsS --max-time 5 "$base_url/version" | jq -er '.buildSha')
-    [[ "$code" == 200 && "$observed_sha" == "$TARGET_NODE_BUILD_SHA" ]] || { echo "readmission evidence failed: $base_url" >&2; exit 1; }
-    jq -cn --arg event readmission_sample --arg replayId "$replay_id" --arg at "$sampled_at" \
-      --arg region "$base_url" --arg sha "$observed_sha" --argjson sample "$sample" \
-      '{event:$event,replayId:$replayId,at:$at,region:$region,buildSha:$sha,sample:$sample,healthy:true}' >>"$evidence"
-  done
-  [[ "$sample" == 5 ]] || sleep 60
-done
+verify_readmission_window() {
+  local end start query response
+  end=$(date +%s)
+  start=$((end - 240))
+  query='min_over_time(probe_success{environment="candidate-a",node_slug="red",proof_class="serve"}[1m])'
+  response=$(curl -fsS --get --max-time 15 -H "Authorization: $METRICS_AUTH_HEADER" \
+    --data-urlencode "query=$query" --data-urlencode "start=$start" \
+    --data-urlencode "end=$end" --data-urlencode 'step=60s' "$MIMIR_QUERY_URL")
+  jq -e --arg first "${expected_regions[0]}" --arg second "${expected_regions[1]}" --argjson end "$end" '
+    .status == "success" and
+    (.data.result | length == 2) and
+    (([.data.result[].metric.probe] | sort) == ([$first, $second] | sort)) and
+    all(.data.result[];
+      (.values | length == 5) and
+      (all(.values[]; ((.[0] | type) == "number") and (.[0] <= $end + 15) and ((.[1] | tonumber) >= 1))) and
+      ((.values[-1][0] - .values[-2][0]) == 60) and
+      ((.values[-2][0] - .values[-3][0]) == 60) and
+      ((.values[-3][0] - .values[-4][0]) == 60) and
+      ((.values[-4][0] - .values[-5][0]) == 60) and
+      (($end - .values[-1][0]) >= -15) and
+      (($end - .values[-1][0]) <= 90)
+    )
+  ' <<<"$response" >/dev/null || {
+    echo "Frankfurt+Ohio five-sample Mimir readmission evidence failed" >&2; exit 1;
+  }
+  jq -cn --arg event readmission_evidence --arg replayId "$replay_id" \
+    --arg queryRef reliability-status-v1.readiness-1m --arg unit boolean \
+    --argjson start "$start" --argjson end "$end" --argjson series "$(jq -c '.data.result' <<<"$response")" \
+    '{event:$event,replayId:$replayId,queryRef:$queryRef,unit:$unit,evaluationInterval:{start:$start,end:$end,stepSeconds:60},series:$series}' >>"$evidence"
+}
 
-readmit=$(curl -fsS --max-time 30 -X POST -H "Authorization: $RELIABILITY_READMIT_AUTH_HEADER" \
+verify_readmission_window
+
+readmit=$(curl -fsS --max-time 30 -X POST -H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER" \
   -H 'content-type: application/json' --data '{"env":"candidate-a"}' "$RELIABILITY_READMIT_URL")
 jq -e --arg incidentId "$incident_id" '.phase == "open" and .incidentId == $incidentId' <<<"$readmit" >/dev/null || {
   echo "human readmission failed or changed incident identity" >&2; exit 1;
@@ -195,7 +272,9 @@ jq -e --arg incidentId "$incident_id" --arg sha "$OPERATOR_BUILD_SHA" --arg node
       .nodeId == $nodeId and .environment == "candidate-a" and
       .buildSha == $sha)] | length == 1
 ' <<<"$readmit_audit" >/dev/null || { echo "exact terminal readmission audit missing or ambiguous" >&2; exit 1; }
-psql "$TARGET_DATABASE_DSN" -Xv ON_ERROR_STOP=1 \
+control_final=$(curl -fsS --max-time 10 -H "Authorization: $RELIABILITY_STATUS_AUTH_HEADER" "$control_containment_status_url")
+jq -e '.phase == "open"' <<<"$control_final" >/dev/null || { echo "operator control changed during readmission" >&2; exit 1; }
+psql -Xv ON_ERROR_STOP=1 \
   -c 'DROP TABLE IF EXISTS public.reliability_noisy_neighbor_fixture'
 jq -cn --arg event complete --arg replayId "$replay_id" --arg at "$(date -u +%FT%TZ)" \
   '{event:$event,replayId:$replayId,at:$at,result:"pass"}' >>"$evidence"
