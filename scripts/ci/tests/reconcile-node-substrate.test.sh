@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 set -euo pipefail
+export FLEET_CONTROL_ENV=production
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -86,6 +87,7 @@ put_secret operator DOLT_CREDS_KEYID dolt-mirror-keyid-sentinel
 
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
+printf 'called\n' >> "${FAKE_REMOTE_ROOT}/ssh-calls.log"
 while [ "$#" -gt 0 ] && [[ "$1" == -* ]]; do
   case "$1" in
     -i|-o) shift 2 ;;
@@ -496,5 +498,82 @@ set -e
 [ "$offset_rc" -ne 0 ] || { echo "expected reconcile to fail for node-template in production (restricted fixture)" >&2; exit 1; }
 grep -q "is not in the 'production' node-set" "$TMPROOT/offset-env.out" \
   || { echo "missing node-set rejection message; got:" >&2; cat "$TMPROOT/offset-env.out" >&2; exit 1; }
+
+# Exercise a real pinned pair and an unpinned foreign pair through the same
+# reconciler. Stubs capture commands; no remote host or database is contacted.
+FOREIGN_SOURCE="$TMPROOT/foreign-source"
+FOREIGN_CATALOG="$FOREIGN_SOURCE/infra/catalog"
+mkdir -p "$FOREIGN_CATALOG" "$BAO_ROOT/cogni/production/operator"
+cp infra/catalog/*.yaml "$FOREIGN_CATALOG/"
+printf '%s' doltgres-super-sentinel > "$BAO_ROOT/cogni/production/operator/DOLTGRES_PASSWORD"
+FOREIGN_NODE=poly-guard-fixture
+cp "$FOREIGN_CATALOG/poly.yaml" "$FOREIGN_CATALOG/$FOREIGN_NODE.yaml"
+yq -i ".name = \"$FOREIGN_NODE\"" "$FOREIGN_CATALOG/$FOREIGN_NODE.yaml"
+
+for foreign_node in poly "$FOREIGN_NODE"; do
+  put_secret "$foreign_node" APP_DB_PASSWORD foreign-app-sentinel
+  put_secret "$foreign_node" APP_DB_SERVICE_PASSWORD foreign-service-sentinel
+  mkdir -p "$FOREIGN_SOURCE/nodes/$foreign_node/k8s/external-secrets/candidate-a"
+  cp nodes/operator/k8s/external-secrets/candidate-a/external-secret.yaml \
+    "$FOREIGN_SOURCE/nodes/$foreign_node/k8s/external-secrets/candidate-a/external-secret.yaml"
+  docker_log_start="$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')"
+  env \
+    VM_HOST=fake DOMAIN=test.cognidao.org DEPLOYMENT_PROVIDER=akash \
+    SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+    APP_SOURCE_DIR="$FOREIGN_SOURCE" COGNI_CATALOG_ROOT="$FOREIGN_CATALOG" \
+    RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
+    RECONCILE_NODE_SUBSTRATE_SCP_BIN="$FAKEBIN/scp" \
+    FAKE_REMOTE_ROOT="$REMOTE_ROOT" FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" \
+    SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/$foreign_node-summary.json" \
+    bash scripts/ci/reconcile-node-substrate.sh candidate-a "$foreign_node" \
+    > "$TMPROOT/$foreign_node.out"
+  tail -n "+$((docker_log_start + 1))" "$REMOTE_ROOT/docker.log" > "$TMPROOT/$foreign_node-docker.log"
+  control_db="cogni_${foreign_node//-/_}_candidate_a"
+  grep -qE -- "--profile bootstrap run --rm -e COGNI_NODE_DBS=$control_db .* doltgres-provision" \
+    "$TMPROOT/$foreign_node-docker.log"
+  grep -q "$control_db" "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
+  if [ "$foreign_node" = poly ]; then
+    grep -qE -- "--profile bootstrap run --rm -e COGNI_NODE_DBS=$control_db .* db-provision" \
+      "$TMPROOT/$foreign_node-docker.log"
+    grep -q "substrate ready inputs reconciled for poly" "$TMPROOT/$foreign_node.out"
+  else
+    if grep -qE ' up -d postgres| db-provision$' "$TMPROOT/$foreign_node-docker.log"; then
+      echo "foreign-resident Postgres mutation reached the control VM" >&2; exit 1
+    fi
+    if grep -q "substrate ready" "$TMPROOT/$foreign_node.out"; then
+      echo "foreign Postgres omission falsely reported readiness" >&2; exit 1
+    fi
+    grep -q '::warning::Postgres provision skipped' "$TMPROOT/$foreign_node.out"
+    jq -e '.rows[] | select(.row == "postgres_provision") | .state == "skipped"' \
+      "$TMPROOT/$foreign_node-summary.json" >/dev/null
+    if grep -q 'foreign-app-sentinel\|foreign-service-sentinel' \
+      "$TMPROOT/$foreign_node.out" "$TMPROOT/$foreign_node-summary.json"; then
+      echo "foreign guard evidence leaked a credential" >&2; exit 1
+    fi
+  fi
+done
+
+# A missing catalog must stop before SSH, including the control-env fast path.
+for lane in candidate-a production; do
+  docker_log_start="$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')"
+  ssh_log_start="$(wc -l < "$REMOTE_ROOT/ssh-calls.log" | tr -d ' ')"
+  scp_log_start="$(wc -l < "$REMOTE_ROOT/scp.log" | tr -d ' ')"
+  if env \
+    VM_HOST=fake DOMAIN=test.cognidao.org \
+    SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+    APP_SOURCE_DIR="$FOREIGN_SOURCE" COGNI_CATALOG_ROOT="$FOREIGN_CATALOG" \
+    RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
+    FAKE_REMOTE_ROOT="$REMOTE_ROOT" FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" \
+    bash scripts/ci/reconcile-node-substrate.sh "$lane" missing-node \
+    > "$TMPROOT/missing-$lane.out" 2>&1; then
+    echo "missing catalog unexpectedly reconciled" >&2; exit 1
+  fi
+  [ "$docker_log_start" = "$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')" ] \
+    || { echo "missing catalog reached remote mutation" >&2; exit 1; }
+  [ "$ssh_log_start" = "$(wc -l < "$REMOTE_ROOT/ssh-calls.log" | tr -d ' ')" ] \
+    || { echo "missing catalog reached SSH" >&2; exit 1; }
+  [ "$scp_log_start" = "$(wc -l < "$REMOTE_ROOT/scp.log" | tr -d ' ')" ] \
+    || { echo "missing catalog reached SCP" >&2; exit 1; }
+done
 
 echo "PASS: reconcile-node-substrate.test.sh"
