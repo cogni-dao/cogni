@@ -8,7 +8,7 @@ import {
 } from "./route";
 
 const NODE_ID = "b927a9dd-6132-4fc9-a51e-e3cee2568e3c";
-const ACTIVE = "a".repeat(32);
+const ACTIVE = `${"a".repeat(43)}=`;
 
 function request(
   body: unknown = { lane: "candidate-a", nodeId: NODE_ID },
@@ -53,6 +53,21 @@ describe("flight-probe credential projection route", () => {
       lane: "candidate-a",
       nodeId: NODE_ID,
     });
+  });
+
+  it("rejects a carriage-return credential from the projection capability", async () => {
+    const res = await handleFlightProbeCredentialProjection(
+      request(),
+      deps({
+        readRing: vi.fn().mockResolvedValue({
+          active: `${"a".repeat(42)}\r=`,
+          previous: null,
+        }),
+      })
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
   });
 
   it.each([

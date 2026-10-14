@@ -8,6 +8,10 @@
  */
 
 import { z } from "zod";
+import {
+  type FlightProbeRing,
+  flightProbeRingSchema,
+} from "@/shared/secrets/flight-probe-credential";
 
 export const flightProbeLaneSchema = z.enum([
   "candidate-a",
@@ -15,16 +19,7 @@ export const flightProbeLaneSchema = z.enum([
   "production",
 ]);
 
-export const flightProbeRingSchema = z
-  .object({
-    active: z.string().min(32).max(256),
-    previous: z.string().min(32).max(256).nullable(),
-  })
-  .strict()
-  .refine((ring) => ring.previous === null || ring.previous !== ring.active);
-
 export type FlightProbeLane = z.infer<typeof flightProbeLaneSchema>;
-export type FlightProbeRing = z.infer<typeof flightProbeRingSchema>;
 
 interface OpenBaoKvResponse {
   readonly data?: { readonly data?: Record<string, unknown> };

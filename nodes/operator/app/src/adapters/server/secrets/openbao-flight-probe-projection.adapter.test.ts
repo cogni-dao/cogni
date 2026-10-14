@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { OpenBaoFlightProbeProjectionAdapter } from "./openbao-flight-probe-projection.adapter";
 
 const NODE_ID = "b927a9dd-6132-4fc9-a51e-e3cee2568e3c";
-const ACTIVE = "a".repeat(32);
+const ACTIVE = `${"a".repeat(43)}=`;
 const BAO_TOKEN = `hvs.${"b".repeat(64)}`;
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -240,14 +240,18 @@ describe("OpenBaoFlightProbeProjectionAdapter", () => {
     expect(oversized.cancel).toHaveBeenCalledOnce();
   });
 
-  it("rejects malformed or oversized stored rings", async () => {
+  it.each([
+    ["too short", "short"],
+    ["wrong alphabet", `${"a".repeat(42)}!=`],
+    ["carriage return", `${"a".repeat(42)}\r=`],
+  ])("rejects a %s stored ring", async (_case, invalidCredential) => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         jsonResponse({ auth: { client_token: BAO_TOKEN } })
       )
       .mockResolvedValueOnce(
-        storedRingResponse({ active: "short", previous: null })
+        storedRingResponse({ active: invalidCredential, previous: null })
       );
 
     await expect(readRing(adapter(fetchImpl))).rejects.toMatchObject({

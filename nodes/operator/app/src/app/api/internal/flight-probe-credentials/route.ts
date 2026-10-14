@@ -15,6 +15,7 @@ import {
   TokenBucketRateLimiter,
   wrapRouteHandlerWithLogging,
 } from "@/bootstrap/http";
+import { flightProbeRingSchema } from "@/shared/secrets/flight-probe-credential";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,14 +28,6 @@ const RequestSchema = z
     nodeId: z.string().uuid(),
   })
   .strict();
-const ResponseSchema = z
-  .object({
-    active: z.string().min(32).max(256),
-    previous: z.string().min(32).max(256).nullable(),
-  })
-  .strict()
-  .refine((ring) => ring.previous === null || ring.previous !== ring.active);
-
 const limiter = new TokenBucketRateLimiter({
   maxTokens: 30,
   refillRate: 30 / 60,
@@ -143,7 +136,7 @@ export async function handleFlightProbeCredentialProjection(
   }
 
   try {
-    const ring = ResponseSchema.parse(
+    const ring = flightProbeRingSchema.parse(
       await deps.readRing({ oidcJwt, ...parsed.data })
     );
     deps.audit({ ...parsed.data, outcome: "allowed" });
