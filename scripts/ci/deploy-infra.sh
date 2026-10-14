@@ -284,17 +284,15 @@ custody_required() {
 
 command -v jq >/dev/null 2>&1 || custody_required jq_missing
 [[ -s "$RECEIPT" ]] || custody_required receipt_missing
-jq -e '.version == 1 and (.declarationDigest | type == "string")' "$RECEIPT" >/dev/null 2>&1 \
+jq -e '.version == 2 and (.declarationDigest | type == "string")' "$RECEIPT" >/dev/null 2>&1 \
   || custody_required receipt_invalid
 for file in "$COMPOSE_FILE" "$ENV_FILE" "$LITELLM_CONFIG"; do
   [[ -s "$file" ]] || custody_required installed_file_missing
 done
 
 compose_sha="$(sha256sum "$COMPOSE_FILE" | awk '{print $1}')"
-env_sha="$(sha256sum "$ENV_FILE" | awk '{print $1}')"
 litellm_config_sha="$(sha256sum "$LITELLM_CONFIG" | awk '{print $1}')"
 [[ "$compose_sha" == "$(jq -r '.composeSha256' "$RECEIPT")" ]] || custody_required compose_mismatch
-[[ "$env_sha" == "$(jq -r '.envSha256' "$RECEIPT")" ]] || custody_required env_mismatch
 [[ "$litellm_config_sha" == "$(jq -r '.litellmConfigSha256' "$RECEIPT")" ]] || custody_required litellm_config_mismatch
 
 receipt_core="$(jq -cS 'del(.declarationDigest)' "$RECEIPT")"
@@ -304,6 +302,14 @@ receipt_digest="$(printf '%s' "$receipt_core" | sha256sum | awk '{print $1}')"
 
 resolved_config="$("${RUNTIME_COMPOSE[@]}" config --format json 2>/dev/null)" \
   || custody_required compose_config_invalid
+recovery_service_config="$(jq -cS \
+  '{services: {postgres: .services.postgres, litellm: .services.litellm, autoheal: .services.autoheal}}' \
+  <<<"$resolved_config")" || custody_required compose_config_invalid
+jq -e '.services | [.postgres, .litellm, .autoheal] | all(. != null)' \
+  <<<"$recovery_service_config" >/dev/null 2>&1 || custody_required recovery_service_missing
+recovery_service_config_sha="$(printf '%s' "$recovery_service_config" | sha256sum | awk '{print $1}')"
+[[ "$recovery_service_config_sha" == "$(jq -r '.recoveryServiceConfigSha256' "$RECEIPT")" ]] \
+  || custody_required recovery_service_config_mismatch
 for service in postgres litellm autoheal; do
   expected_ref="$(jq -r --arg service "$service" '.images[$service].ref // empty' "$RECEIPT")"
   expected_id="$(jq -r --arg service "$service" '.images[$service].id // empty' "$RECEIPT")"
@@ -2431,7 +2437,8 @@ $RUNTIME_COMPOSE ps
 write_runtime_recovery_receipt() {
   local receipt=/var/lib/cogni/runtime-recovery-receipt.json
   local receipt_tmp="${receipt}.tmp.$$"
-  local compose_sha env_sha litellm_config_sha service ref image_id core digest
+  local compose_sha litellm_config_sha recovery_service_config recovery_service_config_sha
+  local service ref image_id core digest
   local images='{}'
   local resolved_config
 
@@ -2455,8 +2462,14 @@ write_runtime_recovery_receipt() {
 
   resolved_config="$($RUNTIME_COMPOSE config --format json)"
   compose_sha="$(sha256sum /opt/cogni-template-runtime/docker-compose.yml | awk '{print $1}')"
-  env_sha="$(sha256sum /opt/cogni-template-runtime/.env | awk '{print $1}')"
   litellm_config_sha="$(sha256sum /opt/cogni-template-runtime/configs/litellm.config.yaml | awk '{print $1}')"
+  recovery_service_config="$(jq -cS \
+    '{services: {postgres: .services.postgres, litellm: .services.litellm, autoheal: .services.autoheal}}' \
+    <<<"$resolved_config")"
+  jq -e '.services | [.postgres, .litellm, .autoheal] | all(. != null)' \
+    <<<"$recovery_service_config" >/dev/null \
+    || log_fatal "recovery receipt: recovery service declaration is incomplete"
+  recovery_service_config_sha="$(printf '%s' "$recovery_service_config" | sha256sum | awk '{print $1}')"
   for service in postgres litellm autoheal; do
     ref="$(jq -r --arg service "$service" '.services[$service].image // empty' <<<"$resolved_config")"
     [[ -n "$ref" ]] || log_fatal "recovery receipt: ${service} image is unresolved"
@@ -2467,12 +2480,12 @@ write_runtime_recovery_receipt() {
   done
   core="$(jq -cnS \
     --arg compose "$compose_sha" \
-    --arg env "$env_sha" \
     --arg config "$litellm_config_sha" \
+    --arg recoveryServiceConfig "$recovery_service_config_sha" \
     --arg sourceRef "${COGNI_REPO_REF:-${COMMIT_SHA:-unknown}}" \
     --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson images "$images" \
-    '{version: 1, composeSha256: $compose, envSha256: $env, litellmConfigSha256: $config, images: $images, sourceRef: $sourceRef, completedAt: $completedAt}')"
+    '{version: 2, composeSha256: $compose, litellmConfigSha256: $config, recoveryServiceConfigSha256: $recoveryServiceConfig, images: $images, sourceRef: $sourceRef, completedAt: $completedAt}')"
   digest="$(printf '%s' "$core" | sha256sum | awk '{print $1}')"
   mkdir -p /var/lib/cogni
   jq -cS --arg digest "$digest" '. + {declarationDigest: $digest}' <<<"$core" > "$receipt_tmp"

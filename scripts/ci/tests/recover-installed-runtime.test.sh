@@ -14,7 +14,6 @@ cd "$REPO_ROOT"
 
 TMPROOT="$(mktemp -d -t recover-installed-runtime.XXXXXX)"
 cleanup() {
-  local cleanup_rc
   cleanup_rc=$?
   rm -rf "$TMPROOT"
   trap - EXIT
@@ -50,7 +49,9 @@ cat > "$FAKEBIN/docker" <<'EOF'
 set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [[ "$*" == *"config --format json"* ]]; then
-  printf '%s\n' '{"services":{"postgres":{"image":"postgres:17"},"litellm":{"image":"litellm:test"},"autoheal":{"image":"autoheal:test"}}}'
+  master_key="$(awk -F= '/^LITELLM_MASTER_KEY=/ {print substr($0, index($0, "=") + 1)}' "$FAKE_RUNTIME_DIR/.env" | tail -1)"
+  jq -cn --arg master_key "$master_key" \
+    '{services:{postgres:{image:"postgres:17"},litellm:{image:"litellm:test",environment:{LITELLM_MASTER_KEY:$master_key}},autoheal:{image:"autoheal:test"}}}'
   exit 0
 fi
 if [[ "${1:-}" == image && "${2:-}" == inspect ]]; then
@@ -97,15 +98,18 @@ EOF
 chmod +x "$FAKEBIN/timeout"
 
 write_receipt() {
-  local compose_sha env_sha config_sha core digest
+  local compose_sha config_sha recovery_service_config recovery_service_config_sha core digest master_key
   compose_sha="$(sha256sum "$RUNTIME_DIR/docker-compose.yml" | awk '{print $1}')"
-  env_sha="$(sha256sum "$RUNTIME_DIR/.env" | awk '{print $1}')"
   config_sha="$(sha256sum "$RUNTIME_DIR/configs/litellm.config.yaml" | awk '{print $1}')"
+  master_key="$(awk -F= '/^LITELLM_MASTER_KEY=/ {print substr($0, index($0, "=") + 1)}' "$RUNTIME_DIR/.env" | tail -1)"
+  recovery_service_config="$(jq -cnS --arg master_key "$master_key" \
+    '{services:{postgres:{image:"postgres:17"},litellm:{image:"litellm:test",environment:{LITELLM_MASTER_KEY:$master_key}},autoheal:{image:"autoheal:test"}}}')"
+  recovery_service_config_sha="$(printf '%s' "$recovery_service_config" | sha256sum | awk '{print $1}')"
   core="$(jq -cnS \
     --arg compose "$compose_sha" \
-    --arg env "$env_sha" \
     --arg config "$config_sha" \
-    '{version:1,composeSha256:$compose,envSha256:$env,litellmConfigSha256:$config,images:{postgres:{ref:"postgres:17",id:"sha256:postgres"},litellm:{ref:"litellm:test",id:"sha256:litellm"},autoheal:{ref:"autoheal:test",id:"sha256:autoheal"}},sourceRef:"test",completedAt:"2026-10-14T00:00:00Z"}')"
+    --arg recoveryServiceConfig "$recovery_service_config_sha" \
+    '{version:2,composeSha256:$compose,litellmConfigSha256:$config,recoveryServiceConfigSha256:$recoveryServiceConfig,images:{postgres:{ref:"postgres:17",id:"sha256:postgres"},litellm:{ref:"litellm:test",id:"sha256:litellm"},autoheal:{ref:"autoheal:test",id:"sha256:autoheal"}},sourceRef:"test",completedAt:"2026-10-14T00:00:00Z"}')"
   digest="$(printf '%s' "$core" | sha256sum | awk '{print $1}')"
   jq -cS --arg digest "$digest" '. + {declarationDigest:$digest}' <<<"$core" > "$RECEIPT"
 }
@@ -118,6 +122,7 @@ run_recovery() {
     COGNI_RUNTIME_DIR="$RUNTIME_DIR" \
     COGNI_RECOVERY_RECEIPT="$RECEIPT" \
     FAKE_DOCKER_LOG="$DOCKER_LOG" \
+    FAKE_RUNTIME_DIR="$RUNTIME_DIR" \
     FAKE_OPENBAO_SEALED="${FAKE_OPENBAO_SEALED:-false}" \
     bash scripts/ci/deploy-infra.sh --recover-installed-runtime
 }
@@ -141,13 +146,21 @@ mapfile -t up_lines < <(grep ' up -d ' "$DOCKER_LOG")
 [[ "${up_lines[2]}" == *"--pull never autoheal" ]]
 ! grep -Eq '(^| )pull( |$)' "$DOCKER_LOG" || { echo "recovery pulled an image" >&2; exit 1; }
 
-# Tampered installed projection: fail before any Compose mutation.
-printf 'CHANGED=true\n' >> "$RUNTIME_DIR/.env"
+# A node-substrate flight legitimately changes unrelated shared-env projection
+# state. That must not invalidate recovery of postgres/LiteLLM/autoheal.
+printf 'COGNI_NODE_DBS=cogni_operator\n' >> "$RUNTIME_DIR/.env"
+: > "$DOCKER_LOG"
+unrelated_out="$(run_recovery)"
+grep -q '^recovery_state=recovered$' <<<"$unrelated_out"
+
+# A value consumed by a recovery service is declaration drift and must fail
+# before any Compose mutation.
+sed -i.bak 's/^LITELLM_MASTER_KEY=.*/LITELLM_MASTER_KEY=changed/' "$RUNTIME_DIR/.env"
 : > "$DOCKER_LOG"
 tampered_out="$(run_recovery)"
 grep -q '^recovery_state=custody_required$' <<<"$tampered_out"
-grep -q '^recovery_reason=env_mismatch$' <<<"$tampered_out"
-[[ ! -s "$DOCKER_LOG" ]] || { echo "tampered receipt mutated Docker" >&2; exit 1; }
+grep -q '^recovery_reason=recovery_service_config_mismatch$' <<<"$tampered_out"
+! grep -q ' up -d ' "$DOCKER_LOG" || { echo "tampered receipt mutated Docker" >&2; exit 1; }
 
 # Matching receipt plus sealed custody: availability is restored but surfaced as
 # degraded; recovery itself never reads or writes a secret.
@@ -171,6 +184,7 @@ candidate_full_out="$({
     COGNI_RUNTIME_DIR="$RUNTIME_DIR" \
     COGNI_RECOVERY_RECEIPT="$RECEIPT" \
     FAKE_DOCKER_LOG="$DOCKER_LOG" \
+    FAKE_RUNTIME_DIR="$RUNTIME_DIR" \
     bash scripts/ci/deploy-infra.sh
 } 2>&1)"
 candidate_full_rc=$?
@@ -178,7 +192,7 @@ set -e
 [[ "$candidate_full_rc" -ne 0 ]] || { echo "candidate full reconcile unexpectedly passed without required secrets" >&2; exit 1; }
 grep -q '^recovery_state=custody_required$' <<<"$candidate_full_out"
 grep -q 'Candidate full reconcile continuing after installed-runtime recovery preflight' <<<"$candidate_full_out"
-grep -q 'Missing required environment variables' <<<"$candidate_full_out"
+grep -q 'Missing required secret environment variables' <<<"$candidate_full_out"
 [[ ! -s "$DOCKER_LOG" ]] || { echo "candidate full preflight mutated Docker without a receipt" >&2; exit 1; }
 
 echo "PASS: recover-installed-runtime.test.sh"
