@@ -202,9 +202,10 @@ The current `user.delegates` relation is global—not scoped to tenant or graph.
 **Delegation relation:** `user.delegates` grants agents the right to act on behalf of user. Dual-check queries `user.act_as` when `subject` is present.
 
 **Node developer relation:** `node.developer` grants an actor operational
-developer authority for one node. Durable agents authenticate and are granted
-as `agent:{node_id}/{actor_id}`. Credential rotation and recovery preserve that
-subject, so no role request or tuple rewrite is needed.
+developer authority for one node. In V0, registered external AI agents
+authenticate as user-backed machine principals (`user:{agent_user_id}`), so
+approval writes them as users. VNext can grant true `agent:{actor_id}`
+principals without changing the `node.flight` route check.
 
 ---
 
@@ -336,23 +337,23 @@ cards; the graph still receives the fail-closed tool result.
 There are two flight paths:
 
 1. **Direct route:** `POST /api/v1/vcs/flight`
-   - Authenticates a browser session as a node-qualified user principal or a
-     durable machine bearer as `agent:{node_id}/{actor_id}`.
+   - Authenticates with browser session or HMAC machine bearer token. Both
+     resolve to `SessionUser.id` and RBAC actor `user:{user_id}`.
    - Resolves the node by `nodeRef.nodeId` through service DB because the
      caller may be an approved external agent, not the RLS owner.
    - If OpenFGA is configured, checks:
 
 ```typescript
 AuthorizationPort.check({
-  actorId: "{exact request principal}",
+  actorId: "user:{session_user_id}",
   action: "node.flight",
   resource: "node:{node_id}",
   context: { tenantId: "{billing_account_id}", nodeId: "{node_id}" },
 });
 ```
 
-- If OpenFGA is not configured, the compatibility owner-only fallback applies
-  only to human or v1-linked user identities, never a fresh durable agent.
+- If OpenFGA is not configured, V0 rollout fallback preserves the legacy
+  owner-only check (`nodes.owner_user_id = SessionUser.id`).
 - Only after RBAC allow does it verify nodeRef source/image preflight through
   the deploy plane and dispatch `candidate-flight.yml`.
 
@@ -370,7 +371,7 @@ AuthorizationPort.check({
 });
 ```
 
-The durable external-agent validation is: redeem a steward-issued spawn grant, have the node
+The v0 external-agent validation is: register an AI agent, have the node
 creator/admin approve `node.developer` for the target `node:{node_id}`, call
 `POST /api/v1/vcs/flight` with the agent bearer token, and observe either an
 allowed candidate-a workflow dispatch or a fail-closed `authz_denied` /
@@ -384,9 +385,7 @@ observes the `core__vcs_flight_candidate` tool authorization path.
 
 New node spawn + external AI agent flow:
 
-1. A human steward issues a bounded one-use spawn grant; the AI redeems it at
-   `POST /api/v1/agent/register` and receives a durable v2 bearer naming
-   `agent:{node_id}/{actor_id}`.
+1. The AI agent calls `POST /api/v1/agent/register` and receives a bearer token.
 2. The agent files an access request for one `node:{node_id}` via
    `POST /api/v1/nodes/{node_id}/access-requests { role? }`. `role` defaults to
    `developer` — V0's only role, which confers `can_flight`. This upserts a
@@ -394,7 +393,7 @@ New node spawn + external AI agent flow:
    re-request reopens it to `pending`) the owner sees in-UI. The row is
    tracking/UX only; it is never the authority.
 3. The node creator/admin approves or rejects in-UI. Approval (a) writes the OpenFGA
-   role tuple `node:{node_id}#developer@agent:{node_id}/{actor_id}`, (b) **provisions
+   role tuple `node:{node_id}#developer@user:{agent_user_id}` (V0), (b) **provisions
    GitHub branch-push** on the node repo for the agent's bound GitHub login (see
    §6a), and (c) transitions the request row to `approved`; rejection removes the
    tuple, **de-provisions the collaborator**, and transitions the row to

@@ -38,19 +38,16 @@ Code carries _what_ via names + types. The **knowledge hub** carries the _why_ +
 ## Phase 1 — Implement
 
 1. Worktree off `main`. Read the root `AGENTS.md` and the `AGENTS.md` files for every dir you'll touch.
-2. Discover the node and obtain a durable Bearer credential if needed:
+2. Discover the operator and register if you need a Bearer token:
    ```bash
    # The hub of the node you are contributing to — each node owns its own
    # work-item + knowledge store, so this choice IS the node assignment.
    # operator: https://cognidao.org · poly: https://poly.cognidao.org · …
    : "${BASE:?set BASE to this repository's node origin; never default writes to operator}"
    curl $BASE/.well-known/agent.json | jq '.endpoints, .actions'
-   # An authorized human creates the one-use grant through the node UI/API.
-   : "${COGNI_AGENT_SPAWN_TOKEN:?ask the steward for a one-use spawn grant}"
    API_KEY=$(curl -s -X POST $BASE/api/v1/agent/register \
      -H "Content-Type: application/json" \
-     -d "$(jq -nc --arg token "$COGNI_AGENT_SPAWN_TOKEN" '{spawnToken:$token}')" \
-     | jq -r .apiKey)
+     -d '{"name": "my-agent"}' | jq -r .apiKey)
    ```
 3. **Tie your work to exactly one work item. 1 work item ≈ 1 PR.** Prefer adopting an existing item over creating a new one (anti-sprawl).
    - Already assigned? Use it.

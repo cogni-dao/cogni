@@ -32,10 +32,11 @@ Server-side:
 ## Run
 
 ```bash
-# 1. Use the durable credential provisioned for the importer actor.
-# If this is a new actor, an authorized human must issue a one-use spawn grant.
-: "${COGNI_NODE_API_KEY:?provision the importer actor first}"
-COGNI_KEY="$COGNI_NODE_API_KEY"
+# 1. Get an apiKey
+curl -X POST https://<env>.cognidao.org/api/v1/agent/register \
+  -H 'content-type: application/json' \
+  -d '{"name":"task.5002-importer"}' | jq -r .apiKey
+# → COGNI_KEY=cogni_ag_sk_v1_...
 
 # 2. Dry-run (no POSTs, just count + filter)
 COGNI_KEY=... pnpm --filter operator import:work-items \

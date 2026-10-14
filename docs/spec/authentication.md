@@ -19,10 +19,9 @@ tags: [auth]
 
 The platform supports multiple authentication methods: SIWE wallet login (via RainbowKit) and OAuth providers (GitHub, Discord, Google). All providers resolve to a canonical `user_id` (UUID) via the `user_bindings` table. Wallet-session coherence is enforced for SIWE users. OAuth-only users have `walletAddress: null` and cannot access wallet-gated operations (payments, ledger approval).
 
-Machine bearer tokens resolve a separate durable agent identity. A valid
-`cogni_ag_sk_v2_*` credential resolves to
-`agent:{node_id}/{actor_id}` plus its billing account; it never becomes the
-human steward's `SessionUser`. The v1 user-linked bearer is compatibility-only.
+Machine bearer tokens use the same canonical user identity. A valid
+`cogni_ag_sk_v1_*` token resolves to `SessionUser.id = user_id` and
+`walletAddress = null`; it does not create an agent principal by itself.
 
 ## Goal
 
@@ -114,18 +113,16 @@ interface SessionUser {
 
 ### Machine Bearer Tokens
 
-Durable agent API keys are opaque stateful bearers with prefix
-`cogni_ag_sk_v2_`. A database lookup resolves the credential to one stable,
-node-qualified `agent:{node_id}/{actor_id}` principal plus its billing account.
-The credential id and secret are not principal identifiers. HMAC-signed v1
-bearers are accepted only for bounded compatibility and additive upgrade.
+Agent API keys are HMAC-signed bearer tokens with prefix `cogni_ag_sk_v1_`.
+`resolveRequestIdentity()` verifies the signature and expiry, then returns a
+`SessionUser` whose `id` is the token payload `sub`.
 
 Bearer-token behavior:
 
-- A valid v2 token authenticates principal-aware routes as an agent actor.
+- A valid token authenticates API routes that use the shared `getSessionUser` alias.
 - An invalid presented token returns `null`; the request does not fall back to a browser session.
-- A freshly spawned agent never becomes a `SessionUser`; upgraded v1 agents may use their real legacy user link on compatibility routes during migration.
-- The token is not an OpenFGA grant. Downstream RBAC receives the exact durable agent principal.
+- The token subject is a `user_id`, so downstream RBAC receives `actorId = user:{user_id}`.
+- The token is not an OpenFGA delegation grant. `agent:{id}` and `subjectId` require server-issued execution grants.
 - For external AI agents, registration authenticates the agent but does not
   authorize node operations. Node developer flight authority is granted by a
   node creator/admin through `POST /api/v1/nodes/{node_id}/developers`, stored
@@ -198,9 +195,9 @@ Providers register conditionally — only when both `CLIENT_ID` and `CLIENT_SECR
 11. Unauthenticated user on `/chat` → redirected to `/` (proxy)
 12. Authenticated user on `/` → redirected to `/chat` (proxy)
 13. SignInDialog shows only configured providers (fetches `/api/auth/providers`)
-14. Valid `cogni_ag_sk_v2_*` bearer on a principal-aware route resolves the stable agent actor, not a `SessionUser`
+14. Valid `cogni_ag_sk_v1_*` bearer token on a `getSessionUser` route returns the token `sub` as `SessionUser.id`
 15. Invalid bearer token returns 401 on required-auth routes even if browser cookies are present
-16. Direct RBAC actor is the node-qualified human or agent principal, never wallet address or token material
+16. Direct RBAC actor for browser and bearer-token requests is `user:{user_id}`, never wallet address or token material
 17. Registered AI agent bearer token cannot flight a node until the node creator/admin grants RBAC developer flight authority for that node
 
 ## Open Questions

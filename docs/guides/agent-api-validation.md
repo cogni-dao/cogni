@@ -32,10 +32,11 @@ BASE=http://localhost:3000
 # 1. Discover
 curl $BASE/.well-known/agent.json | jq .
 
-# 2. Use the durable node credential provisioned for this validation account.
-# New actors require a human-issued one-use spawn grant; probes never mint one.
-: "${COGNI_NODE_API_KEY:?provision a durable node-agent credential first}"
-API_KEY="$COGNI_NODE_API_KEY"
+# 2. Register (no wallet required)
+CREDS=$(curl -s -X POST $BASE/api/v1/agent/register \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-agent"}')
+API_KEY=$(echo $CREDS | jq -r .apiKey)
 
 # 3. Request poem (graph_name is required — routes through platform key)
 curl -s -X POST $BASE/api/v1/chat/completions \
@@ -118,10 +119,11 @@ jq -e '
   .paths["/work/items/{id}"].delete != null
 ' <<<"$OPENAPI"
 
-# Use a provisioned durable validation actor. The disposable resource is the
-# work item below, not the identity or its grants.
-: "${COGNI_NODE_API_KEY:?provision a durable node-agent credential first}"
-API_KEY="$COGNI_NODE_API_KEY"
+# Register one fresh agent on this node. Its key owns every mutation below.
+CREDS=$(curl -fsS -X POST "$BASE/api/v1/agent/register" \
+  -H "content-type: application/json" \
+  -d "$(jq -nc --arg name "$RUN_ID" '{name:$name}')")
+API_KEY=$(jq -er .apiKey <<<"$CREDS")
 
 # Create one disposable row in this node's store and always clean it up.
 ID=""
@@ -278,11 +280,14 @@ Do not use this to bypass missing gates. If PR Manager cannot prove eligibility,
 ## Full validation flow (agent-first, no browser)
 
 1. **Discover API surface:**
-   - `GET /.well-known/agent.json` — confirms spawn-grant redemption, self-introspection, runs, and completions.
+   - `GET /.well-known/agent.json` — confirms `registrationUrl`, `runs`, `runStream`, `completions`.
 
-2. **Verify the provisioned machine actor:**
-   - `GET /api/v1/agent/me` with the durable bearer.
-   - Require the expected `agent:{node_id}/{actor_id}`, credential window, billing account, and node grants. A missing credential is a provisioning failure, never permission to self-register anonymously.
+2. **Register machine actor:**
+   - `POST /api/v1/agent/register` with `{ "name": "validator-agent" }`.
+   - Persist returned `apiKey`, `userId`, `billingAccountId`. (v0 contract does
+     not return `actorId` — the `actors` table does not exist yet and any
+     logical actor identifier can be derived from `userId`; see bug.0297 for
+     the deferred schema work.)
 
 3. **Execute graph:**
    - `POST /api/v1/chat/completions` with `graph_name` + `Authorization: Bearer <apiKey>`.
