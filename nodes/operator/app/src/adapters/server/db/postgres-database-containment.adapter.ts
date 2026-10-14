@@ -30,7 +30,13 @@ export interface DatabaseSourceFence {
 }
 
 export interface DatabaseContainmentAuditEvent {
-  readonly action: "contained" | "readmitted";
+  readonly action:
+    | "containment_requested"
+    | "contained"
+    | "containment_failed"
+    | "readmission_requested"
+    | "readmitted"
+    | "readmission_failed";
   readonly incidentId: string;
   readonly actorId: string;
   readonly nodeId: string;
@@ -38,6 +44,7 @@ export interface DatabaseContainmentAuditEvent {
   readonly environment: DatabaseEnvironment;
   readonly reason: DatabaseContainmentAction["reason"];
   readonly occurredAt: string;
+  readonly errorCode?: string;
 }
 
 export interface PostgresDatabaseContainmentDeps {
@@ -109,37 +116,46 @@ export class PostgresDatabaseContainmentAdapter
   async contain(
     input: DatabaseContainmentAction
   ): Promise<DatabaseContainmentStatus> {
-    const roles = rolesFor(input.nodeSlug);
-    for (const role of roles) {
-      await this.deps.sql.query(`ALTER ROLE ${quoteIdentifier(role)} NOLOGIN`);
+    await this.audit("containment_requested", input);
+    try {
+      const roles = rolesFor(input.nodeSlug);
+      for (const role of roles) {
+        await this.deps.sql.query(
+          `ALTER ROLE ${quoteIdentifier(role)} NOLOGIN`
+        );
+      }
+      await this.deps.sql.query(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = ANY($1::text[]) AND pid <> pg_backend_pid()",
+        [roles]
+      );
+      // v1 automation intentionally stops at the proven per-node role boundary.
+      // The host firewall remains a separately audited, manual secondary control.
+      await this.audit("contained", input);
+      return this.status(input);
+    } catch (error) {
+      await this.audit("containment_failed", input, errorCode(error));
+      throw error;
     }
-    await this.deps.sql.query(
-      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = ANY($1::text[]) AND pid <> pg_backend_pid()",
-      [roles]
-    );
-    await this.deps.fence.setFenced({
-      nodeSlug: input.nodeSlug,
-      environment: input.environment,
-      fenced: true,
-    });
-    await this.audit("contained", input);
-    return this.status(input);
   }
 
   async readmit(
     input: DatabaseContainmentAction
   ): Promise<DatabaseContainmentStatus> {
-    const roles = rolesFor(input.nodeSlug);
-    for (const role of roles) {
-      await this.deps.sql.query(`ALTER ROLE ${quoteIdentifier(role)} LOGIN`);
+    if (input.actorId.startsWith("system:")) {
+      throw new Error("database_readmission_requires_human_actor");
     }
-    await this.deps.fence.setFenced({
-      nodeSlug: input.nodeSlug,
-      environment: input.environment,
-      fenced: false,
-    });
-    await this.audit("readmitted", input);
-    return this.status(input);
+    await this.audit("readmission_requested", input);
+    try {
+      const roles = rolesFor(input.nodeSlug);
+      for (const role of roles) {
+        await this.deps.sql.query(`ALTER ROLE ${quoteIdentifier(role)} LOGIN`);
+      }
+      await this.audit("readmitted", input);
+      return this.status(input);
+    } catch (error) {
+      await this.audit("readmission_failed", input, errorCode(error));
+      throw error;
+    }
   }
 
   async status(input: {
@@ -175,13 +191,13 @@ export class PostgresDatabaseContainmentAdapter
       ]);
     const activeSessions = Number(sessionRows[0]?.count ?? 0);
     // Missing roles fail closed: absence is not evidence that access is enabled.
+    const rolesPresent = roleRows.length === roles.length;
     const rolesCanLogin =
-      roleRows.length === roles.length &&
-      roleRows.every((role) => role.rolcanlogin);
-    const contained = !rolesCanLogin && activeSessions === 0 && firewallFenced;
+      rolesPresent && roleRows.every((role) => role.rolcanlogin);
+    const contained = rolesPresent && !rolesCanLogin && activeSessions === 0;
     const phase = contained
       ? "contained"
-      : firewallFenced || !rolesCanLogin || activeSessions > 0
+      : !rolesPresent || !rolesCanLogin || activeSessions > 0
         ? "recovering"
         : "open";
     return {
@@ -193,6 +209,7 @@ export class PostgresDatabaseContainmentAdapter
       contained,
       phase,
       activeSessions,
+      rolesPresent,
       rolesCanLogin,
       firewallFenced,
       cell,
@@ -205,7 +222,8 @@ export class PostgresDatabaseContainmentAdapter
 
   private async audit(
     action: DatabaseContainmentAuditEvent["action"],
-    input: DatabaseContainmentAction
+    input: DatabaseContainmentAction,
+    error?: string
   ): Promise<void> {
     await this.deps.audit.append({
       action,
@@ -216,8 +234,16 @@ export class PostgresDatabaseContainmentAdapter
       environment: input.environment,
       reason: input.reason,
       occurredAt: this.now().toISOString(),
+      ...(error ? { errorCode: error } : {}),
     });
   }
+}
+
+function errorCode(error: unknown): string {
+  if (error instanceof Error && /^[a-z0-9_:-]{1,80}$/i.test(error.message)) {
+    return error.message;
+  }
+  return "database_containment_operation_failed";
 }
 
 function rolesFor(nodeSlug: string): readonly string[] {

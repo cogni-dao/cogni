@@ -99,6 +99,7 @@ export interface DatabaseContainmentStatus {
   readonly contained: boolean;
   readonly phase: "open" | "contained" | "recovering";
   readonly activeSessions: number;
+  readonly rolesPresent: boolean;
   readonly rolesCanLogin: boolean;
   readonly firewallFenced: boolean;
   readonly cell: DatabaseCellStatus | null;

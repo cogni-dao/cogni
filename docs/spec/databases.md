@@ -64,6 +64,8 @@ Database state is distinct from app compute. A dedicated cell is provisioned on 
 
 Budget profile values live in `infra/database-budget-profiles.yaml`. Shared nodes are bounded with native role controls before admission: per-role `CONNECTION LIMIT` and `statement_timeout`, plus `lock_timeout`, `idle_in_transaction_session_timeout`, `temp_file_limit`, and `work_mem`. Client pools may be lower, never higher. Admission replays twice the measured seven-day p95 rate; without history it uses twice the declared profile design rate. These controls reject local excess but do not make a shared host an isolation boundary.
 
+**`PER_NODE_RUNTIME_ROLE_NAMES` (enforced):** database `cogni_<node>` has runtime roles `app_<node>` and `service_<node>`, where `<node>` is the validated node slug with `-` normalized to `_`. Provisioning, secret materialization, containment, and candidate proof MUST use those exact names and fail closed if either role is absent; there is no fallback to legacy `app_user` or `app_service`. `app_readonly` remains environment-shared for support/metrics and MUST NOT be revoked by per-node containment.
+
 Graduation to `dedicated` is sticky. Provisioning is handled through the typed database state-cell port, outside `deploy-infra.sh`; provider credentials stay in the operator boundary. The status contract exposes desired tier/profile, cell lifecycle, login/session state, and source-fence state without exposing an admin DSN.
 
 Cutover order is fixed and fail-closed:
@@ -73,7 +75,7 @@ Cutover order is fixed and fail-closed:
 3. Atomically rotate the node's `DATABASE_URL` and `DATABASE_SERVICE_URL` in its OpenBao bucket, force ESO sync, and prove the restarted consumer uses the new endpoint.
 4. Keep the source read-only for the rollback window; never dual-write. Rollback rotates both DSNs back and fences only the node.
 
-Containment is one audited action: revoke the node roles' login, terminate their sessions, and apply the node's source-specific network fence. Re-admission requires explicit audit evidence and restores role login before removing that fence. No action restarts or mutates the shared control-plane databases.
+Automated v1 containment is one audited action: record intent, revoke the node roles' login, terminate their sessions, and record success or partial failure. Containment is proven when both per-node roles are `NOLOGIN` and have zero active sessions. A source-specific host-firewall rule is reported state and a manual secondary control, not a prerequisite for the contained phase. Re-admission is human-only, requires the five-by-one-minute regional health gate plus exact build SHA evidence, and restores role login with an audited intent/outcome. No action restarts or mutates the shared control-plane databases.
 
 ## Database Provisioning (Infrastructure-as-Code)
 
@@ -83,9 +85,9 @@ To ensure a repeatable and consistent database state across environments (especi
 
 In `docker-compose.dev.yml`, the `db-provision` service handles:
 
-1. **Per-node database creation**: Iterates over `COGNI_NODE_DBS` (comma-separated), creates each database with `app_user` ownership and RLS role hardening.
+1. **Per-node database creation**: Iterates over `COGNI_NODE_DBS` (comma-separated), creates each database with `app_<node>` ownership and RLS role hardening.
 2. **LiteLLM database creation**: Creates `LITELLM_DB_NAME` (root-owned, shared across nodes).
-3. **Role provisioning**: Creates `app_user` (RLS enforced), `app_service` (BYPASSRLS), and `app_readonly` (SELECT-only, BYPASSRLS for Grafana/agent debugging) roles, shared across all node databases.
+3. **Role provisioning**: Creates per-node `app_<node>` (RLS enforced) and `service_<node>` (BYPASSRLS) roles. `app_readonly` alone is shared across the environment for SELECT-only metrics/support access.
 
 Both `COGNI_NODE_DBS` and `LITELLM_DB_NAME` are required — `provision.sh` fails immediately if either is missing.
 

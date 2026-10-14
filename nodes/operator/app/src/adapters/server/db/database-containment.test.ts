@@ -192,8 +192,9 @@ describe("PostgresDatabaseContainmentAdapter", () => {
       phase: "contained",
       contained: true,
       activeSessions: 0,
+      rolesPresent: true,
       rolesCanLogin: false,
-      firewallFenced: true,
+      firewallFenced: false,
       incidentId: "incident-1",
       reason: "critical_io_pressure",
       lastTransitionAt: "2026-10-13T23:30:00.000Z",
@@ -208,9 +209,69 @@ describe("PostgresDatabaseContainmentAdapter", () => {
       incidentId: "incident-1",
     });
     expect(events.map((event) => event.action)).toEqual([
+      "containment_requested",
       "contained",
+      "readmission_requested",
       "readmitted",
     ]);
+  });
+
+  it("audits intent and partial failure without calling the firewall", async () => {
+    const events: DatabaseContainmentAuditEvent[] = [];
+    const setFenced = vi.fn();
+    const adapter = new PostgresDatabaseContainmentAdapter({
+      sql: {
+        query: async () => {
+          throw new Error("admin_sql_failed");
+        },
+      },
+      fence: { isFenced: async () => false, setFenced },
+      audit: {
+        append: async (event) => {
+          events.push(event);
+        },
+        latest: async () => events.at(-1) ?? null,
+      },
+    });
+    await expect(adapter.contain(ACTION)).rejects.toThrow("admin_sql_failed");
+    expect(events.map((event) => [event.action, event.errorCode])).toEqual([
+      ["containment_requested", undefined],
+      ["containment_failed", "admin_sql_failed"],
+    ]);
+    expect(setFenced).not.toHaveBeenCalled();
+  });
+
+  it("rejects automated readmission before changing roles", async () => {
+    const query = vi.fn();
+    const append = vi.fn();
+    const adapter = new PostgresDatabaseContainmentAdapter({
+      sql: { query },
+      fence: { isFenced: async () => false, setFenced: vi.fn() },
+      audit: { append, latest: async () => null },
+    });
+    await expect(
+      adapter.readmit({ ...ACTION, actorId: "system:reliability-policy" })
+    ).rejects.toThrow("database_readmission_requires_human_actor");
+    expect(query).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when either exact per-node role is absent", async () => {
+    const adapter = new PostgresDatabaseContainmentAdapter({
+      sql: {
+        query: async <T extends Record<string, unknown>>(statement: string) =>
+          (statement.includes("FROM pg_roles")
+            ? []
+            : [{ count: 0 }]) as unknown as readonly T[],
+      },
+      fence: { isFenced: async () => true, setFenced: vi.fn() },
+      audit: { append: vi.fn(), latest: async () => null },
+    });
+    await expect(adapter.status(ACTION)).resolves.toMatchObject({
+      rolesPresent: false,
+      contained: false,
+      phase: "recovering",
+    });
   });
 });
 
