@@ -64,6 +64,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `runGraphWithScope({ executor, req, ctx?, billing, llmService, abortSignal? })` - App-local helper that seeds per-run ALS scope with resolved LlmService
   - `createAgentCatalog()`, `listAgentsForApi()` - Discovery factory (from `agent-discovery.ts`)
   - `resolveIdentityAttestationDependencies(signingKey)` - Identity issuer port composition; policy remains in the feature service
+  - `createFlightProbeProjectionCapability()` - control-vault OpenBao reader composition for the GitHub-OIDC projection route
   - `wrapRouteHandlerWithLogging()` - Route logging wrapper with metrics (from `http/`)
   - `wrapPublicRoute()` - Lazy singleton wrapper for public routes with rate limiting (from `http/`)
   - `makeWrapPublicRoute()` - Pure factory for testing (from `http/wrapPublicRoute`)

@@ -53,6 +53,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/nodes/[id]/observability/db/schema` [GET] - developer-gated (`node.flight`) read of a node's APPLIED migration state per `?env=`, from operator-held deployment metadata reported by the node's own migrator; distinguishes `never_reported` from reported-with-zero. The operator never queries a node database.
   - `/api/v1/deploy/infra-reconcile` [POST] - operator-node-only infra reconcile through the operator GitHub App; preserves the requested lane's deployed app source pin. `preview` is env-manager-gated (`node.manage_envs`), `production`/`candidate-a` production-promoter-gated
   - `/api/internal/billing/ingest` [POST] - LiteLLM generic_api callback receiver (bearer auth, Docker-internal only)
+  - `/api/internal/flight-probe-credentials` [POST] - control-only GitHub-OIDC projection of one catalog node's bounded flight-prober key ring
   - `/api/internal/ops/governance/schedules/sync` [POST] - deploy-time governance sync trigger (bearer auth)
   - `/api/v1/chat/completions` [POST] - OpenAI-compatible chat completions (streaming + non-streaming, `cogni_status` extension); see [completions spec](../../../docs/spec/completions-api.md)
   - `/api/v1/ai/chat` [POST] - streaming chat with server-authoritative thread persistence
