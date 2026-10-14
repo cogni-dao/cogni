@@ -19,6 +19,14 @@ export const EVENT_NAMES = {
     "feature.node_publish.secret_shape_generated",
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
+  // Platform-owned GitHub App credential rotation (subtask.5016). One terminal
+  // event per rotation attempt / health evaluation; payload carries the typed
+  // conclusion + fingerprints only — never key material. The health event is the
+  // recurring loud surface for staged-but-never-converged custody (C3).
+  OPERATOR_APP_CREDENTIAL_ROTATION_COMPLETE:
+    "feature.operator_app_credential_rotation.complete",
+  OPERATOR_APP_CREDENTIAL_HEALTH_COMPLETE:
+    "feature.operator_app_credential_health.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
   // Env-membership merge → lane reconcile (task.5132). One terminal event per merged
   // `cogni-operator/node-env-<slug>-<env>` PR, including the no-dispatch outcomes. Adding a

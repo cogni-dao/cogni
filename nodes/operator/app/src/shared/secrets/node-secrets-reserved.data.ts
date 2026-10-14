@@ -66,6 +66,15 @@ export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   "INTERNAL_OPS_TOKEN", // deploy → governance schedule sync auth
   "METRICS_TOKEN", // Prometheus scrape → /api/metrics auth
   "GH_WEBHOOK_SECRET", // GitHub App webhook HMAC (dual-plane: must byte-match the App)
+  // Platform GitHub App credential pair (subtask.5016 A3/F1, bug.5404). The fleet
+  // App's identity + private key are rotated ONLY through the typed rotation verb
+  // (/api/v1/secrets/github-app/rotation), which validates the pair against live
+  // GitHub and writes both keys atomically with check-and-set. A self-serve write
+  // of either half can tear the pair, bypass identity/webhook-host validation,
+  // and hand the webhook-PATCH actor an unvalidated key — refuse everywhere,
+  // exactly like GH_WEBHOOK_SECRET above.
+  "GH_REVIEW_APP_ID",
+  "GH_REVIEW_APP_PRIVATE_KEY_BASE64",
   "POLY_WALLET_AEAD_KEY_HEX", // poly wallet AEAD key (clobber = wallet decryption loss)
   // Operator-only Ed25519 seed signing every fleet identity attestation. Its
   // public half is published at /.well-known/jwks.json and pinned by every

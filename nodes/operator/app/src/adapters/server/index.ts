@@ -180,6 +180,16 @@ export {
   createGithubReviewAdapter,
   type GithubReviewAdapter,
 } from "./review/github-review.adapter";
+// Platform-owned GitHub App credential rotation (subtask.5016) — read-only
+// GitHub identity probe + atomic OpenBao pair custody.
+export {
+  GithubAppIdentityAdapter,
+  type GithubAppIdentityAdapterDeps,
+} from "./secrets/github-app-identity.adapter";
+export {
+  OpenBaoAppCredentialsAdapter,
+  type OpenBaoAppCredentialsAdapterDeps,
+} from "./secrets/openbao-app-credentials.adapter";
 // Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
 export {
   OpenBaoSecretsAdapter,

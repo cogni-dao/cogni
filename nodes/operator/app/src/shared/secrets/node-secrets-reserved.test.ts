@@ -38,6 +38,21 @@ describe("node-secrets reserved-key guard (gate 2)", () => {
     expect(isNodeOwnedSecretKey("POLY_WALLET_AEAD_KEY_HEX")).toBe(false);
   });
 
+  it("refuses the platform GitHub App credential pair (subtask.5016 A3/F1)", () => {
+    // Regression: these were only in OFF_CLUSTER_WORKLOAD_DENIED_KEYS, so a
+    // can_manage_secrets owner could self-serve-write an App key into their
+    // bucket — tearing the pair and bypassing the typed rotation verb's
+    // GitHub-identity/webhook-host validation and atomic check-and-set write.
+    expect(isNodeOwnedSecretKey("GH_REVIEW_APP_ID")).toBe(false);
+    expect(isNodeOwnedSecretKey("GH_REVIEW_APP_PRIVATE_KEY_BASE64")).toBe(
+      false
+    );
+    expect(SUBSTRATE_RESERVED_KEYS.has("GH_REVIEW_APP_ID")).toBe(true);
+    expect(
+      SUBSTRATE_RESERVED_KEYS.has("GH_REVIEW_APP_PRIVATE_KEY_BASE64")
+    ).toBe(true);
+  });
+
   it("the reserved set is a denylist (small + fixed), not a per-node allowlist", () => {
     // Denylist invariant: a key absent from the set is allowed by default.
     expect(SUBSTRATE_RESERVED_KEYS.has("X_OAUTH_CLIENT_ID")).toBe(false);

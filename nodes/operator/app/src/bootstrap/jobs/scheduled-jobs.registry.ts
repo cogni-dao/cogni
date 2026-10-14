@@ -17,12 +17,16 @@
  */
 
 // --- Job definitions (side-effect: each registers itself) ---
+import "./definitions/app-credential-health.job";
 import "./definitions/metrics-ingest.job";
 
 /**
  * Declared scheduled-job ids. Keep in sync with the imports above; this is what the
  * registration helper iterates to create/reconcile schedules.
  */
-export const SCHEDULED_JOB_IDS = ["metrics-ingest"] as const;
+export const SCHEDULED_JOB_IDS = [
+  "app-credential-health",
+  "metrics-ingest",
+] as const;
 
 export type ScheduledJobId = (typeof SCHEDULED_JOB_IDS)[number];
