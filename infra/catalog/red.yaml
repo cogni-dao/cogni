@@ -18,6 +18,8 @@ envs: [candidate-a, production]
 database:
   candidate-a: { tier: shared, budget_profile: shared-default-v1 }
   production: { tier: shared, budget_profile: shared-default-v1 }
+reliability_validation:
+  candidate-a: { role: shared-target }
 # story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
 # fallback that exists for rows minted before decentralized compute did.
 deployment_provider:

@@ -528,6 +528,12 @@ export class PinoDatabaseContainmentAuditWriter
   }
 }
 
+/** Closed component identities permitted to emit durable containment transitions. */
+export const DATABASE_CONTAINMENT_AUDIT_SERVICES = [
+  "database-reliability-actuator",
+  "database-reliability-readmitter",
+] as const;
+
 /** Sweep/status composition adds Loki readback; readmission never receives it. */
 export class PinoLokiDatabaseContainmentAuditAdapter extends PinoDatabaseContainmentAuditWriter {
   constructor(
@@ -543,8 +549,10 @@ export class PinoLokiDatabaseContainmentAuditAdapter extends PinoDatabaseContain
     readonly environment: DatabaseContainmentAuditEvent["environment"];
   }): Promise<DatabaseContainmentAuditEvent | null> {
     const nowNs = BigInt(Date.now()) * 1_000_000n;
+    const serviceSelector =
+      DATABASE_CONTAINMENT_AUDIT_SERVICES.map(escapeLogQl).join("|");
     const rows = await this.loki.queryRange({
-      query: `{env="${escapeLogQl(this.lokiEnvironment)}",service="operator"} | json | event="database_containment_transition" | nodeId="${escapeLogQl(input.nodeId)}" | environment="${escapeLogQl(input.environment)}"`,
+      query: `{env="${escapeLogQl(this.lokiEnvironment)}",service=~"${serviceSelector}"} | json | event="database_containment_transition" | nodeId="${escapeLogQl(input.nodeId)}" | environment="${escapeLogQl(input.environment)}"`,
       startNs: String(nowNs - 30n * 24n * 60n * 60n * 1_000_000_000n),
       endNs: String(nowNs),
       limit: 1,

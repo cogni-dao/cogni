@@ -371,9 +371,39 @@
     "is_primary_host": {
       "type": "boolean",
       "description": "When true, this node serves the bare base domain (e.g. operator → https://${DOMAIN}). Defaults to false: every other node uses the ${name}-${DOMAIN} (multi-level domains) or ${name}.${DOMAIN} (TLD-style) convention. Consumed by host_for_node() in scripts/ci/lib/image-tags.sh. Exactly one catalog entry per repo should set this true."
+    },
+    "reliability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["controller"],
+      "properties": {
+        "controller": {
+          "type": "boolean",
+          "description": "Catalog capability for the node that hosts fleet reliability control-plane components. Consumers must not infer this capability from the node slug."
+        }
+      }
+    },
+    "reliability_validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "candidate-a": { "$ref": "#/$defs/reliabilityValidationRole" },
+        "preview": { "$ref": "#/$defs/reliabilityValidationRole" },
+        "production": { "$ref": "#/$defs/reliabilityValidationRole" }
+      }
     }
   },
   "$defs": {
+    "reliabilityValidationRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role"],
+      "properties": {
+        "role": {
+          "enum": ["shared-target", "shared-control", "dedicated-neighbor"]
+        }
+      }
+    },
     "databasePlacement": {
       "type": "object",
       "additionalProperties": false,
@@ -381,7 +411,7 @@
       "properties": {
         "tier": { "enum": ["shared", "dedicated"] },
         "budget_profile": {
-          "enum": ["shared-default-v1", "poly-dedicated-v1"]
+          "enum": ["shared-default-v1", "dedicated-high-throughput-v1"]
         }
       }
     }

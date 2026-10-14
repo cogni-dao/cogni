@@ -1166,19 +1166,21 @@ jobs:
           set -euo pipefail
           substrate_runner="ci-src/scripts/ci/run-node-substrate.sh"
           # The default node-ref lane executes substrate automation from the trusted workflow
-          # ref, never from an arbitrary node source. Operator self-flights are the narrow
-          # exception: when the dispatched workflow commit and reviewed app commit are the
-          # SAME SHA, use that exact tree so substrate-script changes can earn pre-merge
-          # candidate proof. A feature workflow ref is already an explicit privileged dispatch;
-          # equality keeps it from becoming a generic remote-source code-execution seam.
-          if [ "${{ matrix.node }}" = "operator" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then
+          # ref, never from an arbitrary node source. An in-repository node self-flight is the
+          # narrow exception: when its catalog row has no remote source repository and the
+          # dispatched workflow commit equals the reviewed app commit, use that exact tree so
+          # substrate-script changes can earn pre-merge proof. The catalog topology decides;
+          # no node slug receives bespoke execution privilege.
+          catalog="app-src/infra/catalog/${{ matrix.node }}.yaml"
+          source_repo="$(yq -N '.source_repo // ""' "$catalog")"
+          if [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then
             app_sha="$(git -C app-src rev-parse HEAD)"
             [ "$app_sha" = "$GITHUB_SHA" ] || {
               echo "::error::exact self-flight source mismatch: workflow=$GITHUB_SHA app=$app_sha"
               exit 1
             }
             substrate_runner="app-src/scripts/ci/run-node-substrate.sh"
-            echo "[candidate-proof] exact operator self-flight uses reviewed substrate runner at $GITHUB_SHA"
+            echo "[candidate-proof] exact in-repository self-flight uses reviewed substrate runner at $GITHUB_SHA"
           fi
           bash "$substrate_runner" candidate-a "${{ matrix.node }}"
 

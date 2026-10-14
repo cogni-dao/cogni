@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Environments whose database placement is governed by the operator. */
+/** Environments whose database placement is governed by the platform. */
 export type DatabaseEnvironment = "candidate-a" | "preview" | "production";
 export type DatabaseTier = "shared" | "dedicated";
 export type DatabaseCellPhase =

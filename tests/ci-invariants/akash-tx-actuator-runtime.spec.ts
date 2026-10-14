@@ -576,33 +576,34 @@ describe("akash-tx-actuator runtime", () => {
     expect(combine).not.toContain(
       'json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]") +'
     );
+    expect(workflow).toContain(
+      `source_repo="$(yq -N '.source_repo // ""' "$catalog")"`
+    );
+    expect(workflow).toContain(
+      'if [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+    );
+    expect(workflow).not.toMatch(/matrix\.node.*operator/);
 
-    const remoteArtifactTargets = [
-      "beacon",
-      "levelup",
-      "node-template",
-      "poly",
-      "red",
-      "toks5",
+    const remoteArtifactRows = [
+      { name: "alpha", envs: ["candidate-a", "production"] },
+      { name: "bravo", envs: ["production"] },
     ];
-    const candidateRemoteTargets = remoteArtifactTargets.filter((target) => {
-      const row = yaml.parse(read(`infra/catalog/${target}.yaml`)) as {
-        envs?: string[];
-      };
-      return row.envs?.includes("candidate-a") === true;
-    });
-    expect(candidateRemoteTargets).toEqual(["poly", "red"]);
+    expect(
+      remoteArtifactRows
+        .filter((row) => row.envs.includes("candidate-a"))
+        .map((row) => row.name)
+    ).toEqual(["alpha"]);
 
     const base = {
-      name: "red",
+      name: "alpha",
       type: "node",
       node_id: "921b1d1d-4ded-4a6d-b3f1-f7d6affa406a",
       port: 3200,
       node_port: 32000,
-      source_repo: "https://github.com/cogni-dao/red.git",
+      source_repo: "https://github.com/example/alpha.git",
       source_sha: "c9e4c685ef78f2437aae8a732b03fe1af1df8b31",
-      image_repository: "ghcr.io/cogni-dao/red",
-      candidate_a_branch: "deploy/candidate-a-red",
+      image_repository: "ghcr.io/example/alpha",
+      candidate_a_branch: "deploy/candidate-a-alpha",
       envs: ["candidate-a", "production"],
       deployment_provider: { "candidate-a": "akash" },
       compute_api: { "candidate-a": "crossplane" },
@@ -617,6 +618,9 @@ describe("akash-tx-actuator runtime", () => {
             tier: "shared",
             budget_profile: "shared-default-v1",
           },
+        },
+        reliability_validation: {
+          "candidate-a": { role: "shared-target" },
         },
       })
     ).toBe(baseFingerprint);
@@ -637,14 +641,14 @@ describe("akash-tx-actuator runtime", () => {
       resolveDeploymentTargets({
         catalogRows: [base],
         environment: "candidate-a",
-        flightTargets: ["red"],
+        flightTargets: ["alpha"],
       }).deployment
-    ).toEqual(["red"]);
+    ).toEqual(["alpha"]);
     expect(() =>
       resolveDeploymentTargets({
-        catalogRows: [{ ...base, name: "beacon", envs: ["production"] }],
+        catalogRows: [{ ...base, name: "bravo", envs: ["production"] }],
         environment: "candidate-a",
-        flightTargets: ["beacon"],
+        flightTargets: ["bravo"],
       })
     ).toThrow(/not configured for candidate-a/);
   });
@@ -786,5 +790,27 @@ describe("akash-tx-actuator runtime", () => {
     const tsup = read(`nodes/operator/app/tsup.${SERVICE_NAME}.config.ts`);
     expect(tsup).toContain(`entry: ["src/bootstrap/${SERVICE_NAME}.ts"]`);
     expect(tsup).toContain(`outDir: "dist-${SERVICE_NAME}"`);
+  });
+
+  it("keeps dedicated database replay catalog-selected and node-generic", () => {
+    const replay = read("scripts/ops/replay-dedicated-database-cell.sh");
+    expect(replay).toContain(
+      "${TARGET_NODE_SLUG:?catalog target node slug required}"
+    );
+    expect(replay).toContain(
+      "${REPLAY_SQL_FILE:?reviewed workload SQL file required}"
+    );
+    expect(replay).toContain(
+      "${CATALOG_ROOT:?immutable catalog directory required}"
+    );
+    expect(replay).toContain('.reliability_validation."candidate-a".role');
+    expect(replay).toContain("dedicated-neighbor");
+    expect(replay).not.toMatch(/POLY_|NODE_SLUG:-poly|poly-cell|poly_trader/);
+
+    const profiles = parse<Record<string, unknown>>(
+      "infra/database-budget-profiles.yaml"
+    );
+    expect(profiles).toHaveProperty("dedicated-high-throughput-v1");
+    expect(profiles).not.toHaveProperty("poly-dedicated-v1");
   });
 });

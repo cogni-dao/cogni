@@ -231,6 +231,9 @@ node_db="$(node_database_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")"
 node_id="$(node_id_for_target "$TARGET_NODE")" \
   || fail "node_id missing for '$TARGET_NODE' (REPO_SPEC_IS_IDENTITY_SSOT)"
 node_temporal_namespace="cogni-${DEPLOY_ENVIRONMENT}-${node_id}"
+reliability_controller="$(yq -r '.reliability.controller // false' "$node_catalog_file")"
+[[ "$reliability_controller" == true || "$reliability_controller" == false ]] \
+  || fail "invalid reliability controller capability for '$TARGET_NODE'"
 
 # Catalog-selected Postgres budget. The declaration becomes enforcement only
 # when this immutable checkout resolves the named profile and passes the exact
@@ -348,11 +351,11 @@ mark_row db_creds read "read per-node DB creds from OpenBao (key names only)"
 # password to the one-shot provisioner and never exposes the root DSN.
 database_reliability_password=""
 database_reliability_readmit_password=""
-if [[ "$TARGET_NODE" == operator ]]; then
+if [[ "$reliability_controller" == true ]]; then
   database_reliability_password="$(bao_get_field database-reliability-actuator DATABASE_RELIABILITY_PASSWORD)"
   database_reliability_readmit_password="$(bao_get_field database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD)"
-  [[ -n "$database_reliability_password" ]] \
-    || fail "DATABASE_RELIABILITY_PASSWORD absent at cogni/${DEPLOY_ENVIRONMENT}/database-reliability-actuator — operator materialization must precede provisioning"
+  [[ -n "$database_reliability_password" && -n "$database_reliability_readmit_password" ]] \
+    || fail "database reliability credentials absent from platform-service buckets — controller materialization must precede provisioning"
   mark_row database_reliability_creds read "read dedicated reliability role password from OpenBao (key name only)"
 fi
 
@@ -462,7 +465,7 @@ fi
 
 # Migration is a separate capability, never a key in the node app's extracted
 # runtime Secret. The base initContainer names this prefixed Secret; off-cluster
-# Jobs use the parallel compute-migration ExternalSecret rendered by the operator.
+# Jobs use the parallel compute-migration ExternalSecret rendered by the platform.
 migration_es_tmp="$(mktemp)"
 cat > "$migration_es_tmp" <<YAML
 apiVersion: external-secrets.io/v1
@@ -500,23 +503,23 @@ remote "set -euo pipefail
   kubectl -n \"\$ns\" get secret \"\$es\" -o jsonpath='{.data.DATABASE_MIGRATION_URL}' | grep -q ."
 mark_row migration_externalsecret ready "migration-only DSN projected outside node runtime Secret"
 
-# The operator reliability controller is a stacked deploy surface (task.5247),
-# but its credential substrate is owned here. When that surface is present in
+# The catalog-declared reliability controller is a stacked deploy surface (task.5247),
+# but its credential substrate is owned here. When that capability is present in
 # the exact app source, install and wait its three control-plane ExternalSecrets
 # now—after materialization and before candidate assert can observe the app.
 # Rendering only these leaves avoids applying workloads from a privileged
-# substrate lane; names match the operator overlay's kustomize namePrefix.
-database_reliability_es_file="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/operator/database-reliability-actuator-external-secret.yaml"
-operator_es_file="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/operator/external-secret.yaml"
-if [[ "$TARGET_NODE" == operator && -f "$database_reliability_es_file" ]]; then
-  [[ -f "$operator_es_file" ]] || fail "missing operator ExternalSecret leaf: $operator_es_file"
+# substrate lane; names derive from the controller row and its overlay prefix.
+database_reliability_es_file="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}/database-reliability-actuator-external-secret.yaml"
+controller_es_file="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}/external-secret.yaml"
+if [[ "$reliability_controller" == true && -f "$database_reliability_es_file" ]]; then
+  [[ -f "$controller_es_file" ]] || fail "missing controller ExternalSecret leaf: $controller_es_file"
   database_reliability_es_tmp="$(mktemp)"
-  RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" \
-    yq 'select(.kind == "ExternalSecret" and .metadata.name == "env-secrets") | .metadata.name = "operator-env-secrets" | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
-      "$operator_es_file" > "$database_reliability_es_tmp"
+  RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" RELIABILITY_CONTROLLER="$TARGET_NODE" \
+    yq 'select(.kind == "ExternalSecret" and .metadata.name == "env-secrets") | .metadata.name = strenv(RELIABILITY_CONTROLLER) + "-env-secrets" | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
+      "$controller_es_file" > "$database_reliability_es_tmp"
   printf '\n---\n' >> "$database_reliability_es_tmp"
-  RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" \
-    yq 'select(.kind == "ExternalSecret" and (.metadata.name == "database-reliability-actuator-env-secrets" or .metadata.name == "database-reliability-readmitter-env-secrets")) | .metadata.name = "operator-" + .metadata.name | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
+  RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" RELIABILITY_CONTROLLER="$TARGET_NODE" \
+    yq 'select(.kind == "ExternalSecret" and (.metadata.name == "database-reliability-actuator-env-secrets" or .metadata.name == "database-reliability-readmitter-env-secrets")) | .metadata.name = strenv(RELIABILITY_CONTROLLER) + "-" + .metadata.name | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
       "$database_reliability_es_file" >> "$database_reliability_es_tmp"
   [[ "$(yq ea '.kind' "$database_reliability_es_tmp" | grep -cx ExternalSecret)" == 3 ]] \
     || fail "database reliability substrate must render exactly three ExternalSecrets"
@@ -527,7 +530,7 @@ if [[ "$TARGET_NODE" == operator && -f "$database_reliability_es_file" ]]; then
     kubectl apply -f \"\$manifest\" >/dev/null
     rm -f \"\$manifest\"
     marker=\$(date +%s)
-    for es in operator-env-secrets operator-database-reliability-actuator-env-secrets operator-database-reliability-readmitter-env-secrets; do
+    for es in ${TARGET_NODE}-env-secrets ${TARGET_NODE}-database-reliability-actuator-env-secrets ${TARGET_NODE}-database-reliability-readmitter-env-secrets; do
       before_refresh=\$(kubectl -n \"\$ns\" get externalsecret \"\$es\" -o jsonpath='{.status.refreshTime}' 2>/dev/null || true)
       kubectl -n \"\$ns\" annotate externalsecret \"\$es\" force-sync=\"\$marker\" --overwrite >/dev/null
       kubectl -n \"\$ns\" wait --for=condition=Ready \"externalsecret/\$es\" --timeout=120s >/dev/null
@@ -540,7 +543,7 @@ if [[ "$TARGET_NODE" == operator && -f "$database_reliability_es_file" ]]; then
       \$refreshed || { echo 'ExternalSecret refresh did not advance:' \"\$es\" >&2; exit 1; }
     done
     for key in DATABASE_RELIABILITY_STATUS_TOKEN DATABASE_RELIABILITY_READMIT_TOKEN; do
-      kubectl -n \"\$ns\" get secret operator-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
+      kubectl -n \"\$ns\" get secret ${TARGET_NODE}-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done
     for key in DATABASE_RELIABILITY_ADMIN_URL DATABASE_RELIABILITY_STATUS_TOKEN PROMETHEUS_READ_USERNAME PROMETHEUS_READ_PASSWORD GRAFANA_SERVICE_ACCOUNT_TOKEN; do
       kubectl -n \"\$ns\" get secret database-reliability-actuator-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
@@ -548,7 +551,9 @@ if [[ "$TARGET_NODE" == operator && -f "$database_reliability_es_file" ]]; then
     for key in DATABASE_RELIABILITY_READMIT_URL DATABASE_RELIABILITY_READMIT_TOKEN DATABASE_RELIABILITY_STATUS_TOKEN PROMETHEUS_READ_USERNAME PROMETHEUS_READ_PASSWORD; do
       kubectl -n \"\$ns\" get secret database-reliability-readmitter-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done"
-  mark_row database_reliability_externalsecrets ready "freshly reconciled operator, actuator, and readmitter ExternalSecrets"
+  mark_row database_reliability_externalsecrets ready "freshly reconciled controller, actuator, and readmitter ExternalSecrets"
+elif [[ "$reliability_controller" == true ]]; then
+  mark_row database_reliability_externalsecrets skipped "reliability workload is absent from the exact source tree"
 fi
 
 edge_reconcile_snippet=""

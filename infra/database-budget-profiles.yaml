@@ -16,7 +16,7 @@ shared-default-v1:
     temp_file_limit_mib: 128
     work_mem_mib: 16
 
-poly-dedicated-v1:
+dedicated-high-throughput-v1:
   design_rate_per_minute: 240
   roles:
     app:

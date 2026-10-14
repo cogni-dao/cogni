@@ -624,4 +624,31 @@ set -e
 grep -q "is not in the 'production' node-set" "$TMPROOT/offset-env.out" \
   || { echo "missing node-set rejection message; got:" >&2; cat "$TMPROOT/offset-env.out" >&2; exit 1; }
 
+# Reliability reconciliation follows an explicit catalog capability, never a
+# privileged slug. Renaming the fixture and moving the bit yields the new owner
+# without changing the production script.
+CAPABILITY_CATALOG="$TMPROOT/reliability-capability-catalog"
+mkdir -p "$CAPABILITY_CATALOG"
+cat > "$CAPABILITY_CATALOG/alpha.yaml" <<'YAML'
+name: alpha
+reliability: { controller: true }
+YAML
+cat > "$CAPABILITY_CATALOG/bravo.yaml" <<'YAML'
+name: bravo
+reliability: { controller: false }
+YAML
+controller_for() {
+  yq ea -N 'select(.reliability.controller == true) | .name' "$CAPABILITY_CATALOG"/*.yaml
+}
+[ "$(controller_for)" = alpha ]
+yq -i '.reliability.controller = false' "$CAPABILITY_CATALOG/alpha.yaml"
+yq -i '.reliability.controller = true' "$CAPABILITY_CATALOG/bravo.yaml"
+[ "$(controller_for)" = bravo ]
+grep -q "reliability_controller=.*reliability.controller" scripts/ci/reconcile-node-substrate.sh
+grep -q 'overlays/${DEPLOY_ENVIRONMENT}/${TARGET_NODE}/database-reliability-actuator-external-secret.yaml' scripts/ci/reconcile-node-substrate.sh
+if grep -q 'TARGET_NODE.*==.*operator' scripts/ci/reconcile-node-substrate.sh; then
+  echo "reliability reconciliation must not branch on a node slug" >&2
+  exit 1
+fi
+
 echo "PASS: reconcile-node-substrate.test.sh"

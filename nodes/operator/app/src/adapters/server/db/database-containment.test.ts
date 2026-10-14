@@ -34,13 +34,13 @@ import {
 
 const ACTION: DatabaseContainmentAction = {
   nodeId: "00000000-0000-4000-8000-000000000011",
-  nodeSlug: "poly",
+  nodeSlug: "alpha",
   environment: "candidate-a",
   incidentId: "incident-1",
   reason: "critical_io_pressure",
-  actorId: "operator:test",
+  actorId: "human:test",
   desiredTier: "dedicated",
-  budgetProfile: "poly-dedicated-v1",
+  budgetProfile: "dedicated-high-throughput-v1",
 };
 
 function createPostgresProvisionLeaseHarness() {
@@ -99,20 +99,23 @@ describe("PostgresDatabaseContainmentAdapter", () => {
 
   it("writes structured audit and reads the latest transition from Loki", async () => {
     const info = vi.fn();
+    let durableQuery = "";
+    const queryRange = async (input: { readonly query: string }) => {
+      durableQuery = input.query;
+      return [
+        {
+          ts: "1",
+          line: JSON.stringify({
+            ...ACTION,
+            action: "contained",
+            occurredAt: "2026-10-13T23:30:00.000Z",
+          }),
+        },
+      ];
+    };
     const adapter = new PinoLokiDatabaseContainmentAuditAdapter(
       { info } as never,
-      {
-        queryRange: async () => [
-          {
-            ts: "1",
-            line: JSON.stringify({
-              ...ACTION,
-              action: "contained",
-              occurredAt: "2026-10-13T23:30:00.000Z",
-            }),
-          },
-        ],
-      },
+      { queryRange },
       "candidate-a"
     );
     await adapter.append({
@@ -128,6 +131,10 @@ describe("PostgresDatabaseContainmentAdapter", () => {
       incidentId: "incident-1",
       action: "contained",
     });
+    expect(durableQuery).toContain(
+      'service=~"database-reliability-actuator|database-reliability-readmitter"'
+    );
+    expect(durableQuery).not.toContain('service="operator"');
   });
 
   it("fences node A's source-CIDR rule while preserving node B access", async () => {
@@ -144,7 +151,7 @@ describe("PostgresDatabaseContainmentAdapter", () => {
     const mutations: string[] = [];
     const adapter = new CherryDatabaseSourceFenceAdapter({
       resolveBindings: async ({ nodeSlug }) => [
-        nodeSlug === "poly"
+        nodeSlug === "alpha"
           ? { ruleId: "rule-a", sourceCidr: "203.0.113.10/32" }
           : { ruleId: "rule-b", sourceCidr: "203.0.113.11/32" },
       ],
@@ -165,7 +172,7 @@ describe("PostgresDatabaseContainmentAdapter", () => {
     expect(rules.get("rule-b")?.enabled).toBe(true);
     await expect(adapter.isFenced(ACTION)).resolves.toBe(true);
     await expect(
-      adapter.isFenced({ ...ACTION, nodeSlug: "beacon" })
+      adapter.isFenced({ ...ACTION, nodeSlug: "bravo" })
     ).resolves.toBe(false);
   });
 
@@ -213,13 +220,13 @@ describe("PostgresDatabaseContainmentAdapter", () => {
           statement.includes("contain_database_role") ||
           statement.includes("readmit_database_role")
         ) {
-          expect(params[0]).toMatch(/^(app|service)_poly$/);
+          expect(params[0]).toMatch(/^(app|service)_alpha$/);
           canLogin = statement.includes("readmit_database_role");
           if (!canLogin) sessions = 0;
           return [];
         }
         if (statement.includes("FROM pg_roles")) {
-          return ["app_poly", "service_poly"].map((rolname) => ({
+          return ["app_alpha", "service_alpha"].map((rolname) => ({
             rolname,
             rolcanlogin: canLogin,
           })) as unknown as readonly T[];
@@ -352,8 +359,8 @@ describe("PostgresDatabaseContainmentAdapter", () => {
     {
       name: "roles remain mixed",
       roleRows: [
-        { rolname: "app_poly", rolcanlogin: false },
-        { rolname: "service_poly", rolcanlogin: true },
+        { rolname: "app_alpha", rolcanlogin: false },
+        { rolname: "service_alpha", rolcanlogin: true },
       ],
       error: "database_containment_not_confirmed",
     },
@@ -426,8 +433,8 @@ describe("PostgresDatabaseContainmentAdapter", () => {
         query: async <T extends Record<string, unknown>>(statement: string) =>
           (statement.includes("FROM pg_roles")
             ? [
-                { rolname: "app_poly", rolcanlogin: false },
-                { rolname: "service_poly", rolcanlogin: true },
+                { rolname: "app_alpha", rolcanlogin: false },
+                { rolname: "service_alpha", rolcanlogin: true },
               ]
             : [{ count: 0 }]) as unknown as readonly T[],
       },
@@ -446,12 +453,12 @@ describe("PostgresDatabaseContainmentAdapter", () => {
 
 describe("DatabaseDsnRotationAdapter", () => {
   const target = {
-    app: "postgresql://app_poly:a@10.0.0.2:5432/cogni_poly",
-    service: "postgresql://service_poly:b@10.0.0.2:5432/cogni_poly",
+    app: "postgresql://app_alpha:a@10.0.0.2:5432/cogni_alpha",
+    service: "postgresql://service_alpha:b@10.0.0.2:5432/cogni_alpha",
   };
   const source = {
-    app: "postgresql://app_poly:c@10.0.0.1:5432/cogni_poly",
-    service: "postgresql://service_poly:d@10.0.0.1:5432/cogni_poly",
+    app: "postgresql://app_alpha:c@10.0.0.1:5432/cogni_alpha",
+    service: "postgresql://service_alpha:d@10.0.0.1:5432/cogni_alpha",
   };
 
   it("snapshots the live pair and CAS-writes both DSNs before verification", async () => {
@@ -462,7 +469,7 @@ describe("DatabaseDsnRotationAdapter", () => {
         calls.push("read");
         return {
           version: 8,
-          path: "cogni/candidate-a/poly",
+          path: "cogni/candidate-a/alpha",
           values: {
             DATABASE_URL: source.app,
             DATABASE_SERVICE_URL: source.service,
@@ -475,7 +482,7 @@ describe("DatabaseDsnRotationAdapter", () => {
         return {
           written: true,
           version: 9,
-          path: "cogni/candidate-a/poly",
+          path: "cogni/candidate-a/alpha",
           keys: Object.keys(values),
         };
       },
@@ -491,7 +498,7 @@ describe("DatabaseDsnRotationAdapter", () => {
       verifier: {
         verify: async () => {
           calls.push("verify");
-          return { endpointFingerprint: "db:dedicated:poly" };
+          return { endpointFingerprint: "db:dedicated:alpha" };
         },
       },
       audit: {
@@ -527,7 +534,7 @@ describe("DatabaseDsnRotationAdapter", () => {
       secrets: {
         readSecrets: async () => ({
           version,
-          path: "cogni/candidate-a/poly",
+          path: "cogni/candidate-a/alpha",
           values: {
             DATABASE_URL: source.app,
             DATABASE_SERVICE_URL: source.service,
@@ -540,7 +547,7 @@ describe("DatabaseDsnRotationAdapter", () => {
           return {
             written: true,
             version,
-            path: "cogni/candidate-a/poly",
+            path: "cogni/candidate-a/alpha",
             keys: Object.keys(values),
           };
         },
@@ -587,7 +594,7 @@ describe("DatabaseDsnRotationAdapter", () => {
           const pair = reads === 1 ? source : target;
           return {
             version: reads === 1 ? 8 : 9,
-            path: "cogni/candidate-a/poly",
+            path: "cogni/candidate-a/alpha",
             values: {
               DATABASE_URL: pair.app,
               DATABASE_SERVICE_URL: pair.service,
@@ -600,7 +607,7 @@ describe("DatabaseDsnRotationAdapter", () => {
       },
       sync: { forceAndWait: sync },
       verifier: {
-        verify: async () => ({ endpointFingerprint: "db:dedicated:poly" }),
+        verify: async () => ({ endpointFingerprint: "db:dedicated:alpha" }),
       },
       audit: { append: vi.fn() },
     });
@@ -625,7 +632,7 @@ describe("DatabaseDsnRotationAdapter", () => {
       secrets: {
         readSecrets: async () => ({
           version: 8,
-          path: "cogni/candidate-a/poly",
+          path: "cogni/candidate-a/alpha",
           values: {
             DATABASE_URL: source.app,
             DATABASE_SERVICE_URL: source.service,
@@ -641,7 +648,7 @@ describe("DatabaseDsnRotationAdapter", () => {
           return {
             written: true,
             version: 9,
-            path: "cogni/candidate-a/poly",
+            path: "cogni/candidate-a/alpha",
             keys: Object.keys(values),
           };
         },
@@ -671,7 +678,7 @@ describe("DatabaseDsnRotationAdapter", () => {
       "app role",
       {
         ...target,
-        app: "postgresql://app_other:a@10.0.0.2:5432/cogni_poly",
+        app: "postgresql://app_other:a@10.0.0.2:5432/cogni_alpha",
       },
       "database_dsn_app_role_mismatch",
     ],
@@ -679,7 +686,7 @@ describe("DatabaseDsnRotationAdapter", () => {
       "service role",
       {
         ...target,
-        service: "postgresql://service_other:b@10.0.0.2:5432/cogni_poly",
+        service: "postgresql://service_other:b@10.0.0.2:5432/cogni_alpha",
       },
       "database_dsn_service_role_mismatch",
     ],
@@ -687,7 +694,7 @@ describe("DatabaseDsnRotationAdapter", () => {
       "database",
       {
         ...target,
-        service: "postgresql://service_poly:b@10.0.0.2:5432/cogni_other",
+        service: "postgresql://service_alpha:b@10.0.0.2:5432/cogni_other",
       },
       "database_dsn_database_mismatch",
     ],
@@ -738,9 +745,9 @@ describe("CherryDatabaseCellAdapter", () => {
     const connect = vi.fn(() => ({ unsafe, end }) as never);
     const verifier = new PostgresDatabaseCellVerifier(
       {
-        username: "app_poly",
+        username: "app_alpha",
         password: "secret",
-        database: "cogni_poly",
+        database: "cogni_alpha",
       },
       connect
     );
@@ -748,7 +755,7 @@ describe("CherryDatabaseCellAdapter", () => {
       verifier.verify({
         cellId: "77",
         nodeId: ACTION.nodeId,
-        nodeSlug: "poly",
+        nodeSlug: "alpha",
         endpoint: "10.0.0.2",
         action: "backup",
         backupLabel: "proof-v1",
@@ -760,7 +767,7 @@ describe("CherryDatabaseCellAdapter", () => {
       checksum: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
     });
     expect(connect).toHaveBeenCalledWith(
-      expect.objectContaining({ host: "10.0.0.2", username: "app_poly" })
+      expect.objectContaining({ host: "10.0.0.2", username: "app_alpha" })
     );
     expect(end).toHaveBeenCalled();
   });
@@ -779,9 +786,9 @@ describe("CherryDatabaseCellAdapter", () => {
       lockDsn:
         "postgresql://database_reliability_actuator:secret@shared.internal:5432/postgres",
       verificationCredential: {
-        username: "app_poly",
+        username: "app_alpha",
         password: "secret",
-        database: "cogni_poly",
+        database: "cogni_alpha",
       },
     });
     expect(cells.provision).toEqual(expect.any(Function));
@@ -792,7 +799,7 @@ describe("CherryDatabaseCellAdapter", () => {
       provider: "cherry",
       cellId: "77",
       nodeId: ACTION.nodeId,
-      nodeSlug: "poly",
+      nodeSlug: "alpha",
       environment: "candidate-a" as const,
       phase: "ready" as const,
       endpoint: "10.0.0.2",
@@ -821,11 +828,11 @@ describe("CherryDatabaseCellAdapter", () => {
     let serverCreated = false;
     const tags = {
       "cogni.io/node-id": ACTION.nodeId,
-      "cogni.io/node-slug": "poly",
+      "cogni.io/node-slug": "alpha",
       "cogni.io/environment": "candidate-a",
       "cogni.io/database-tier": "dedicated",
-      "cogni.io/budget-profile": "poly-dedicated-v1",
-      "cogni.io/idempotency-key": "poly-candidate-a-v1",
+      "cogni.io/budget-profile": "dedicated-high-throughput-v1",
+      "cogni.io/idempotency-key": "alpha-candidate-a-v1",
       "cogni.io/storage-gib": "50",
       "cogni.io/storage-id": "55",
     };
@@ -846,7 +853,7 @@ describe("CherryDatabaseCellAdapter", () => {
             ? [
                 {
                   id: 55,
-                  description: "cogni-db-cell-poly-candidate-a-v1",
+                  description: "cogni-db-cell-alpha-candidate-a-v1",
                   size: 50,
                   region: "LT-Siauliai",
                 },
@@ -859,7 +866,7 @@ describe("CherryDatabaseCellAdapter", () => {
         return Response.json(
           {
             id: 55,
-            description: "cogni-db-cell-poly-candidate-a-v1",
+            description: "cogni-db-cell-alpha-candidate-a-v1",
             size: 50,
             region: "LT-Siauliai",
           },
@@ -889,11 +896,11 @@ describe("CherryDatabaseCellAdapter", () => {
       });
     const input = {
       nodeId: ACTION.nodeId,
-      nodeSlug: "poly",
+      nodeSlug: "alpha",
       environment: "candidate-a" as const,
       databaseTier: "dedicated" as const,
-      budgetProfile: "poly-dedicated-v1",
-      idempotencyKey: "poly-candidate-a-v1",
+      budgetProfile: "dedicated-high-throughput-v1",
+      idempotencyKey: "alpha-candidate-a-v1",
       storageGiB: 50,
     };
     const [cellResult, retryResult, collisionResult] = await Promise.allSettled(
@@ -934,9 +941,9 @@ describe("CherryDatabaseCellAdapter", () => {
       requests.filter((request) => request.startsWith("POST"))
     ).toHaveLength(2);
     expect(leaseHarness.keys).toEqual([
-      "cherry-database-cell:99:poly-candidate-a-v1",
-      "cherry-database-cell:99:poly-candidate-a-v1",
-      "cherry-database-cell:99:poly-candidate-a-v1",
+      "cherry-database-cell:99:alpha-candidate-a-v1",
+      "cherry-database-cell:99:alpha-candidate-a-v1",
+      "cherry-database-cell:99:alpha-candidate-a-v1",
     ]);
     expect(cell).toMatchObject({
       cellId: "77",
@@ -965,11 +972,11 @@ describe("CherryDatabaseCellAdapter", () => {
     await expect(
       adapter.provision({
         nodeId: ACTION.nodeId,
-        nodeSlug: "poly",
+        nodeSlug: "alpha",
         environment: "candidate-a",
         databaseTier: "dedicated",
-        budgetProfile: "poly-dedicated-v1",
-        idempotencyKey: "poly-candidate-a-v1",
+        budgetProfile: "dedicated-high-throughput-v1",
+        idempotencyKey: "alpha-candidate-a-v1",
         storageGiB: 50,
       })
     ).rejects.toThrow("cherry_database_cell_provision_lease_required");
@@ -980,7 +987,7 @@ describe("CherryDatabaseCellAdapter", () => {
     const requests: string[] = [];
     const storage = {
       id: 55,
-      description: "cogni-db-cell-poly-candidate-a-v1",
+      description: "cogni-db-cell-alpha-candidate-a-v1",
       size: 50,
       region: "LT-Siauliai",
     };
@@ -1023,11 +1030,11 @@ describe("CherryDatabaseCellAdapter", () => {
     });
     const input = {
       nodeId: ACTION.nodeId,
-      nodeSlug: "poly",
+      nodeSlug: "alpha",
       environment: "candidate-a" as const,
       databaseTier: "dedicated" as const,
-      budgetProfile: "poly-dedicated-v1",
-      idempotencyKey: "poly-candidate-a-v1",
+      budgetProfile: "dedicated-high-throughput-v1",
+      idempotencyKey: "alpha-candidate-a-v1",
       storageGiB: 50,
     };
     await expect(adapter.provision(input)).rejects.toThrow(
@@ -1058,8 +1065,8 @@ describe("CherryDatabaseCellAdapter", () => {
               "cogni.io/node-slug": "neighbor",
               "cogni.io/environment": "candidate-a",
               "cogni.io/database-tier": "dedicated",
-              "cogni.io/budget-profile": "poly-dedicated-v1",
-              "cogni.io/idempotency-key": "poly-candidate-a-v1",
+              "cogni.io/budget-profile": "dedicated-high-throughput-v1",
+              "cogni.io/idempotency-key": "alpha-candidate-a-v1",
               "cogni.io/storage-gib": "50",
               "cogni.io/storage-id": "55",
             },
@@ -1084,11 +1091,11 @@ describe("CherryDatabaseCellAdapter", () => {
     await expect(
       adapter.provision({
         nodeId: ACTION.nodeId,
-        nodeSlug: "poly",
+        nodeSlug: "alpha",
         environment: "candidate-a",
         databaseTier: "dedicated",
-        budgetProfile: "poly-dedicated-v1",
-        idempotencyKey: "poly-candidate-a-v1",
+        budgetProfile: "dedicated-high-throughput-v1",
+        idempotencyKey: "alpha-candidate-a-v1",
         storageGiB: 50,
       })
     ).rejects.toThrow("database_cell_identity_mismatch:cogni.io/node-id");
@@ -1106,11 +1113,11 @@ describe("CherryDatabaseCellAdapter", () => {
     const verify = vi.fn(async () => verification);
     const tags = {
       "cogni.io/node-id": ACTION.nodeId,
-      "cogni.io/node-slug": "poly",
+      "cogni.io/node-slug": "alpha",
       "cogni.io/environment": "candidate-a",
       "cogni.io/database-tier": "dedicated",
-      "cogni.io/budget-profile": "poly-dedicated-v1",
-      "cogni.io/idempotency-key": "poly-candidate-a-v1",
+      "cogni.io/budget-profile": "dedicated-high-throughput-v1",
+      "cogni.io/idempotency-key": "alpha-candidate-a-v1",
       "cogni.io/storage-gib": "50",
       "cogni.io/storage-id": "55",
     };
@@ -1148,7 +1155,7 @@ describe("CherryDatabaseCellAdapter", () => {
         return Response.json([
           {
             id: "restore-point-44",
-            label: "poly-candidate-a-pre-cutover-v1",
+            label: "alpha-candidate-a-pre-cutover-v1",
             status: "available",
           },
         ]);
@@ -1175,7 +1182,7 @@ describe("CherryDatabaseCellAdapter", () => {
     const backupReceipt = await adapter.backup({
       cellId: "77",
       expectedNodeId: ACTION.nodeId,
-      backupLabel: "poly-candidate-a-pre-cutover-v1",
+      backupLabel: "alpha-candidate-a-pre-cutover-v1",
     });
     expect(backupReceipt).toMatchObject({
       action: "backup",
@@ -1188,7 +1195,7 @@ describe("CherryDatabaseCellAdapter", () => {
     const restoreReceipt = await adapter.restore({
       cellId: "77",
       expectedNodeId: ACTION.nodeId,
-      backupLabel: "poly-candidate-a-pre-cutover-v1",
+      backupLabel: "alpha-candidate-a-pre-cutover-v1",
     });
     expect(restoreReceipt).toMatchObject({
       action: "restore",
@@ -1221,13 +1228,13 @@ describe("CherryDatabaseCellAdapter", () => {
     expect(requests[2]?.body).toBe(
       JSON.stringify({
         type: "backup",
-        label: "poly-candidate-a-pre-cutover-v1",
+        label: "alpha-candidate-a-pre-cutover-v1",
       })
     );
     expect(requests[8]?.body).toBe(
       JSON.stringify({
         type: "restore",
-        label: "poly-candidate-a-pre-cutover-v1",
+        label: "alpha-candidate-a-pre-cutover-v1",
       })
     );
   });
@@ -1235,11 +1242,11 @@ describe("CherryDatabaseCellAdapter", () => {
   it("does not return a receipt while the Cherry action is non-terminal", async () => {
     const tags = {
       "cogni.io/node-id": ACTION.nodeId,
-      "cogni.io/node-slug": "poly",
+      "cogni.io/node-slug": "alpha",
       "cogni.io/environment": "candidate-a",
       "cogni.io/database-tier": "dedicated",
-      "cogni.io/budget-profile": "poly-dedicated-v1",
-      "cogni.io/idempotency-key": "poly-candidate-a-v1",
+      "cogni.io/budget-profile": "dedicated-high-throughput-v1",
+      "cogni.io/idempotency-key": "alpha-candidate-a-v1",
       "cogni.io/storage-gib": "50",
       "cogni.io/storage-id": "55",
     };
@@ -1267,7 +1274,7 @@ describe("CherryDatabaseCellAdapter", () => {
                 {
                   id: 501,
                   type: "backup",
-                  label: "poly-candidate-a-pre-cutover-v1",
+                  label: "alpha-candidate-a-pre-cutover-v1",
                   status: "running",
                 },
               ]
@@ -1297,7 +1304,7 @@ describe("CherryDatabaseCellAdapter", () => {
       adapter.backup({
         cellId: "77",
         expectedNodeId: ACTION.nodeId,
-        backupLabel: "poly-candidate-a-pre-cutover-v1",
+        backupLabel: "alpha-candidate-a-pre-cutover-v1",
       })
     ).rejects.toThrow("cherry_database_cell_backup_timeout");
     expect(verify).not.toHaveBeenCalled();

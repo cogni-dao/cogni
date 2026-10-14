@@ -124,7 +124,7 @@ ${renderNodeDeploymentYaml().trimEnd()}
 
 # State substrate is declared separately from app compute. New nodes start on
 # bounded shared Postgres and graduate to a dedicated provider-VM cell only
-# through the operator's measured isolation policy.
+# through the platform's measured isolation policy.
 state:
   database:
     environments:
