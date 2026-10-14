@@ -53,7 +53,12 @@ docker-entrypoint.sh postgres \
   -c shared_buffers="${DATABASE_CELL_SHARED_BUFFERS:-2GB}" \
   -c "cogni.cell_source_sha=$DATABASE_CELL_SOURCE_SHA" &
 postgres_pid=$!
+health_pid=""
 stop_postgres() {
+  if [[ -n "$health_pid" ]]; then
+    kill -TERM "$health_pid" 2>/dev/null || true
+    wait "$health_pid" 2>/dev/null || true
+  fi
   kill -TERM "$postgres_pid" 2>/dev/null || true
   wait "$postgres_pid" 2>/dev/null || true
 }
@@ -118,5 +123,47 @@ write_hba qualified
 PGPASSWORD="$POSTGRES_ROOT_PASSWORD" psql -h 127.0.0.1 -p 5432 \
   -U "$POSTGRES_USER" -d postgres -Xqv ON_ERROR_STOP=1 \
   -c 'SELECT pg_reload_conf();'
+
+# The sampler belongs to this cell process. It never queries application rows
+# and never substitutes host-wide/shared recordings for a bounded cell resource.
+collect_health() {
+  local observed memory_max memory_current io_full disk_stat connections
+  local memory_pct=null io_pct=null disk_pct=null connection_pct=null temporary
+  observed="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  memory_max="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"
+  memory_current="$(cat /sys/fs/cgroup/memory.current 2>/dev/null || true)"
+  if [[ "$memory_max" =~ ^[1-9][0-9]*$ && "$memory_current" =~ ^[0-9]+$ ]] &&
+      [[ "$memory_current" -le "$memory_max" ]]; then
+    memory_pct="$(awk -v maximum="$memory_max" -v current="$memory_current" 'BEGIN { printf "%.6f", 100*(maximum-current)/maximum }')"
+  fi
+  io_full="$(awk '$1 == "full" { for (i=2;i<=NF;i++) if ($i ~ /^avg60=/) {sub(/^avg60=/,"",$i); print $i} }' /sys/fs/cgroup/io.pressure 2>/dev/null || true)"
+  if [[ "$io_full" =~ ^[0-9]+([.][0-9]+)?$ ]] &&
+      awk -v value="$io_full" 'BEGIN {exit !(value>=0 && value<=100)}'; then
+    io_pct="$io_full"
+  fi
+  disk_stat="$(df -PkT "${PGDATA:-/var/lib/postgresql/data}" 2>/dev/null | awk 'NR==2 && $2 != "overlay" && $2 != "tmpfs" && $3 > 0 && $5 >= 0 && $5 <= $3 {printf "%.6f",100*$5/$3}' || true)"
+  [[ "$disk_stat" =~ ^[0-9]+([.][0-9]+)?$ ]] && disk_pct="$disk_stat"
+  connections="$(PGPASSWORD="$POSTGRES_ROOT_PASSWORD" PGCONNECT_TIMEOUT=2 PGOPTIONS='-c statement_timeout=1500' \
+    timeout 2 psql -h 127.0.0.1 -U "$POSTGRES_USER" -d postgres -XAtv ON_ERROR_STOP=1 \
+      -c "SELECT 100.0 * count(*) FILTER (WHERE backend_type = 'client backend') / current_setting('max_connections')::numeric FROM pg_stat_activity" 2>/dev/null || true)"
+  if [[ "$connections" =~ ^[0-9]+([.][0-9]+)?$ ]] &&
+      awk -v value="$connections" 'BEGIN {exit !(value>=0 && value<=100)}'; then
+    connection_pct="$connections"
+  fi
+  temporary="$(mktemp /run/database-cell/health.XXXXXX)"
+  printf '{"version":1,"scope":"dedicated-cell","sourceSha":"%s","observedAt":"%s","ioPressurePct":%s,"connectionPct":%s,"memoryHeadroomPct":%s,"diskHeadroomPct":%s}\n' \
+    "$DATABASE_CELL_SOURCE_SHA" "$observed" "$io_pct" "$connection_pct" "$memory_pct" "$disk_pct" > "$temporary"
+  chown postgres:postgres "$temporary"
+  chmod 0600 "$temporary"
+  mv "$temporary" /run/database-cell/health.json
+}
+collect_health
+(
+  while kill -0 "$postgres_pid" 2>/dev/null; do
+    collect_health
+    sleep 1
+  done
+) &
+health_pid=$!
 
 wait "$postgres_pid"
