@@ -42,7 +42,7 @@ Every new role/capability is proven on **candidate-a** entirely over HTTP, obser
 **Setup** — one owner session + one fresh requester agent:
 
 - Owner session = captured `.local-auth/candidate-a-operator.storageState.json` (Bearer also works; the gated routes resolve Bearer→session).
-- Requester = `POST /api/v1/agent/register {name}` → `{userId, apiKey}`.
+- Requester = redeem a human-issued one-use spawn grant at `/api/v1/agent/register` → durable `{actorId, principalId, apiKey, billingAccountId}`.
 - **Billing-before-authz gotcha:** the gated routes check a billing account _before_ the authz check (mirrors flight). A fresh principal 403s `billing_account_missing` and never reaches the gate — masking it. Provision one by hitting any BYO-AI status route once with the principal's Bearer: `GET /api/v1/auth/openai-compatible/status` get-or-creates the billing account.
 - Need a node you own → `POST /api/v1/nodes {slug, chainId}` returns its `id`.
 

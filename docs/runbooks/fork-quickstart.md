@@ -249,7 +249,7 @@ Verdict cells: 🟢 pass · 🟡 partial / unverified · 🔴 fail · n/a not ap
 | # | Surface                              | Probe                                                       | Status | Obs (Loki)              | Verdict |
 | - | ------------------------------------ | ----------------------------------------------------------- | ------ | ----------------------- | ------- |
 | 1 | Public DNS /readyz                   | GET https://<DOMAIN>/readyz                                 | <code> | <log-line-or-no-data>   |   🟢    |
-| 2 | Agent registration                   | POST /api/v1/agent/register {"name":"quickstart-bot"}       | <code> | <log-line-or-no-data>   |   🟢    |
+| 2 | Agent credential                     | GET /api/v1/agent/me with provisioned durable probe bearer     | <code> | exact actor + grants    |   🟢    |
 | 3 | Free-graph hello world               | POST /api/v1/chat/completions graph_name=poet               | <code> | graph-run started/done  |   🟢    |
 | 4 | Work item create                     | POST /api/v1/work/items {type:"story", title:"...", ...}    | <code> | work-item-write line    |   🟢    |
 ```

@@ -26,7 +26,7 @@ export interface ServingResult {
 }
 
 /**
- * run-carries: a freshly-registered agent's graph completion actually produces a run.
+ * run-carries: a provisioned durable probe actor's graph completion actually produces a run.
  * `pass` = run created AND a normal completion. `degraded` = run created but the completion errored
  * DOWNSTREAM of creation (e.g. insufficient_quota) — the substrate carried the run, the failure moved
  * past it. `fail` = no run created (hang / no Temporal poller / worker-401).
@@ -87,7 +87,7 @@ export interface NodeIdentity {
 export interface NodeProber {
   /** GET https://<host>/readyz + /version. */
   serving(host: string): Promise<ServingResult>;
-  /** Register a throwaway agent, run the free `poet` graph, read back the run count. */
+  /** Use the provisioned node-local probe actor, run `poet`, read back the run count. */
   runCarries(host: string): Promise<RunCarriesResult>;
   /**
    * GET https://<host>/.well-known/agent.json and return its `identity` block,

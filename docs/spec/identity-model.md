@@ -196,33 +196,27 @@ _agent-earns / user-owns_.
 
 ## AI Agent Node Developer Identity
 
-V0 external AI agents enter through `POST /api/v1/agent/register`. Registration
-mints a canonical `user_id`, a billing account, and an HMAC bearer token. That
-credential authenticates the request; it does not by itself grant authority over
-any node.
+External AI agents enter through a human-issued, one-use spawn grant redeemed at
+`POST /api/v1/agent/register`. Redemption creates a durable `actors.kind=agent`
+row and an opaque, node-local v2 credential. The credential authenticates one
+stable `agent:{node_id}/{actor_id}` principal; it does not create a `user_id` or
+grant authority over any node. Credential rotation and steward recovery replace
+credentials without changing the actor, billing account, bindings, or OpenFGA
+subject. Expiring v1 HMAC bearers remain an upgrade-only compatibility seam.
 
 Node-scoped developer control is a separate OpenFGA relationship:
 
-| Step           | Actor                        | System Fact                                                                                                                                                                                |
-| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Register       | External AI agent            | `users.id = agent_user_id`; bearer token resolves to `SessionUser.id`                                                                                                                      |
-| Request        | `user:{agent_user_id}`       | Agent files an access request (`role=developer`) on one `node:{node_id}`, **declaring its own `githubLogin`** → durable `node_access_requests` row (tracking only; not authority)          |
-| Approve/reject | Node creator/admin           | `POST /api/v1/nodes/{node_id}/developers` writes/removes the OpenFGA tuple AND provisions/de-provisions **GitHub branch-push** for the declared login on the node's own repo (rbac.md §6a) |
-| Flight         | `user:{agent_user_id}` in V0 | `POST /api/v1/vcs/flight` checks `node.flight` on `node:{node_id}`                                                                                                                         |
+| Step           | Actor                                 | System Fact |
+| -------------- | ------------------------------------- | ----------- |
+| Admit          | Human steward                         | Creates a bounded, expiring, one-use spawn grant tied to the steward's billing account. |
+| Redeem         | External AI agent                     | Creates `actor_id` + v2 credential; bearer resolves to `agent:{node_id}/{actor_id}`. |
+| Approve/reject | Node creator/admin                    | Writes/removes the requested OpenFGA role for that exact principal; GitHub branch-push remains a separately bound side-effect. |
+| Flight         | `agent:{node_id}/{actor_id}`          | `POST /api/v1/vcs/flight` checks `node.flight` on `node:{node_id}` using the actor's unchanged `billing_account_id`. |
 
-**Two planes from one grant (`TWO_PLANE_DEVELOPER_GRANT`, rbac.md §6a).** A `developer`
-approval grants the agent TWO things, keyed by TWO identities of the SAME agent: (1) the
-OpenFGA `developer` relation on `node:{node_id}` keyed by `user:{agent_user_id}` (→
-`can_flight`), and (2) GitHub `push` on the node's OWN repo keyed by the agent's **GitHub
-login**. The agent binds its GitHub identity by declaring `githubLogin` on its OWN access
-request (`SELF_REQUEST_ONLY`); the human approving supplies nothing
-(`PUSH_LOGIN_FROM_REQUEST`). The operator App is the privilege bridge — the agent never
-holds standing GitHub admin — and resolves the node's own repo from the catalog
-`source_repo` (NOT `nodes.repoOwner`/`repoName`, which is the submodule-parent monorepo;
-see bug.5054), then adds/removes the collaborator. The OpenFGA tuple is the SOLE authority
-for flight; branch-push is a best-effort side-effect that never reverses it. VNext:
-cryptographically prove the declared login (agent-native GitHub-identity proof →
-`user_bindings`) rather than trusting the owner's attestation at approve-time.
+**Two planes from one approval (`TWO_PLANE_DEVELOPER_GRANT`, rbac.md §6a).** The
+OpenFGA tuple names the durable agent principal and is the sole flight authority.
+GitHub `push` names the agent's separately bound GitHub login and remains a
+best-effort side-effect; credential material is never either identity.
 
 The node creator/admin is the human RLS owner for the node registry row in V0.
 That RLS ownership authorizes the approval act; it must not be confused with
@@ -230,16 +224,12 @@ ongoing flight authority. After approval, the flight route uses RBAC, not
 `nodes.owner_user_id = caller`, so an external agent can flight exactly the node
 it was approved for.
 
-**Principal-agnostic by design (not a migration debt):** the `node` model accepts
-both principal types — `node.developer: [user, agent]` — so V0's user-backed
-machine principals (`actorId = user:{agent_user_id}`) and a later
-`actorId = agent:{actor_id}` form coexist **additively**: introducing
-agent-actor principals writes new `@agent:` tuples without a model change or
-tuple rewrite. V0 registers agents as users (user-bound bearer), which is a
-legitimate principal representation, not a stopgap. Agent-actor principals — with
-`subjectId = user:{approver_user_id}` for explicit on-behalf-of delegation —
-become meaningful once the actors table + execution grants are the registration
-authority; that is a forward capability, not a correction of V0.
+The OpenFGA `node` model remains principal-agnostic (`developer: [user, agent]`).
+Browser humans authorize as node-qualified user principals; durable agents
+authorize as node-qualified agent principals. During the v1 transition only,
+an upgrade copies directly assigned legacy `user:{user_id}` node tuples to the
+new agent principal and keeps the source tuples until the compatibility window
+closes. Rotation and recovery need no tuple rewrite because `actor_id` is stable.
 
 ### Operator node-registry projection (OPERATOR_NODE_ROW_ID_IS_NODE_ID)
 

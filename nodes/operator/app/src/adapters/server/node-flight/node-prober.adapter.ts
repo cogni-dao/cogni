@@ -3,12 +3,13 @@
 
 /**
  * Module: `@adapters/server/node-flight/node-prober`
- * Purpose: Real-fetch implementation of NodeProber — exercises a node's PUBLIC surface exactly as an
- *   external dev would (register an agent, run the free `poet` graph, read back runs) AND reads its
+ * Purpose: Real-fetch implementation of NodeProber — exercises a node with a provisioned durable
+ *   probe actor (run the free `poet` graph, read back runs) AND reads its
  *   self-described identity from `/.well-known/agent.json`. No cluster/GH auth.
  * Scope: HTTP I/O only. Classification rules live in the feature; this adapter just measures + reports.
  * Invariants:
- *   - PUBLIC_SURFACE_ONLY: hits https://<host>/{readyz,version,api/v1/agent/register,chat/completions,agent/runs,.well-known/agent.json}.
+ *   - NO_ANONYMOUS_IDENTITY_MINT: a host without a provisioned durable v2 probe credential fails loudly.
+ *   - PUBLIC_SURFACE_ONLY: hits https://<host>/{readyz,version,chat/completions,agent/runs,.well-known/agent.json}.
  *   - RUN_CARRIES_IS_TRUTH: a created run (runs>=1) + fast return = the substrate carried it, even if the
  *     completion errors downstream (insufficient_quota → degraded, not fail). A 60s hang with runs=0 = fail.
  *   - IDENTITY_IS_ZOD_PARSED: the well-known `identity` block is parsed defensively — a node not yet
@@ -136,6 +137,11 @@ function readBuildSha(body: unknown): string | null {
 }
 
 export class HttpNodeProber implements NodeProber {
+  constructor(
+    private readonly credentialForHost: (host: string) => string | null = () =>
+      null
+  ) {}
+
   async serving(host: string): Promise<ServingResult> {
     let readyzCode = 0;
     try {
@@ -181,34 +187,15 @@ export class HttpNodeProber implements NodeProber {
   }
 
   async runCarries(host: string): Promise<RunCarriesResult> {
-    // 1. Register a throwaway agent on the node (per-node key, free poet graph).
-    let apiKey = "";
-    try {
-      const reg = await fetchWithTimeout(
-        `https://${host}/api/v1/agent/register`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: `flight-gate-${Date.now()}` }),
-        },
-        SERVING_TIMEOUT_MS
-      );
-      if (reg.ok) {
-        const j: unknown = await reg.json();
-        if (j && typeof j === "object" && "apiKey" in j) {
-          const v = (j as { apiKey?: unknown }).apiKey;
-          if (typeof v === "string") apiKey = v;
-        }
-      }
-    } catch {
-      apiKey = "";
-    }
+    // 1. Use the node-local service credential provisioned for this host.
+    // The probe must never create identities as a side effect of observation.
+    const apiKey = this.credentialForHost(host) ?? "";
     if (!apiKey) {
       return {
         status: "fail",
         durationMs: 0,
         runs: 0,
-        detail: "register-failed",
+        detail: "probe-credential-unavailable",
       };
     }
 

@@ -491,8 +491,9 @@ clearer attribution and review policy.
 
 ## Examples
 
-Assume `$URL` is the node base (`https://test.cognidao.org`), `$KEY` is a Bearer
-API key from `/api/v1/agent/register`. Response bodies elided for brevity —
+Assume `$URL` is the node base (`https://test.cognidao.org`), `$KEY` is a durable
+Bearer credential obtained by redeeming a human-issued one-use spawn grant.
+Response bodies elided for brevity —
 see the schema files for shapes.
 
 ### Create + first commit (single insert)
@@ -634,7 +635,7 @@ duplicate.
 
 - **Unit** (`@cogni/knowledge-store`) — service factory: idempotency replay, owner-only append/close, session-only merge, contract Zod parse round-trips.
 - **Component** (testcontainer Doltgres) — adapter `create → appendCommit ×3 → listCommits → diff → merge`; branch-local update target created by an earlier commit; merge conflict maps to `ContributionConflictError`; close drops branch + writes metadata; reserved-conn restores `main` on error.
-- **Stack** (operator app + Doltgres) — `/api/v1/agent/register` bearer creates and appends; bearer merge rejected; session merge accepted; `GET /commits` returns attribution records.
+- **Stack** (operator app + Doltgres) — a provisioned durable agent bearer creates and appends; bearer merge rejected; session merge accepted; `GET /commits` returns attribution records.
 
 ## Risks
 

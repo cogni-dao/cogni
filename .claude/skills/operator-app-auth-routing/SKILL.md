@@ -32,8 +32,8 @@ Keep page placement, chrome state, and auth enforcement separate. `proxy.ts` is 
 ## API Rules
 
 - `/api/v1/public/*` is unauthenticated by namespace.
-- `/api/v1/agent/register` is unauthenticated by explicit exception.
-- Other `/api/v1/*` routes require a NextAuth session unless they carry a `Bearer cogni_ag_sk_v1_...` agent token.
+- `/api/v1/agent/register` is unauthenticated transport for one-use spawn-grant redemption; it is not anonymous admission.
+- Other `/api/v1/*` routes require a NextAuth session or a valid durable `Bearer cogni_ag_sk_v2_...` agent credential (v1 is upgrade-only compatibility).
 - Proxy only provides early rejection. Route handlers must still enforce their own auth and identity rules server-side.
 
 ## Tests To Update

@@ -42,7 +42,7 @@ catalog is the only lever; manual `kubectl` is reverted by the appset's selfHeal
 ```bash
 BASE=https://cognidao.org            # operator that owns the node's registry
 # candidate/test-org nodes live on the CANDIDATE operator: BASE=https://test.cognidao.org
-API_KEY=<your COGNI key>             # or register: POST $BASE/api/v1/agent/register {name}
+API_KEY=<provisioned durable COGNI key> # new actors redeem a human-issued one-use spawn grant
 ID=<node id or slug>                 # e.g. "anotha"
 ```
 

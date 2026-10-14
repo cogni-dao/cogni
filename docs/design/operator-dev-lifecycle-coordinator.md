@@ -294,7 +294,12 @@ Use real FKs only inside operator Postgres:
 - `candidate_validation_targets.validation_request_id -> candidate_validation_requests.id`
 - `candidate_validation_lanes.active_validation_request_id -> candidate_validation_requests.id`
 
-Do **not** mint a new agent identity in PR 1. `POST /api/v1/agent/register` already creates a `users.id`, a billing account, and a signed machine bearer token. Routes using `getSessionUser` already see bearer-authenticated agents and browser users as the same `SessionUser` shape. The coordinator's session owner identity is `SessionUser.id`. This keeps PR 1 operational and avoids overloading `actor_id`, which the identity model reserves for economic attribution.
+Historical PR-1 constraint: the coordinator originally reused user-backed v1
+machine bearers. The durable identity standard supersedes that shortcut:
+spawn-grant redemption creates an `actors.kind=agent` subject and opaque v2
+credential, while browser humans remain `SessionUser`s. Coordinator ownership
+must store the exact principal/actor identity; it must never derive an agent
+owner from credential material or counterfeit the agent as a new user.
 
 Do **not** FK to Doltgres `work_items`. Cross-database FK is not available and would couple hot operational data to the versioned knowledge/work plane. Treat `work_item_id` as a validated external reference: on claim/create, the operator reads Dolt work item through `WorkItemQueryPort`; if missing, reject. Periodic reconciliation finds dangling refs.
 

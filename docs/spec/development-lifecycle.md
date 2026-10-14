@@ -141,7 +141,7 @@ Terminal: `done` (PR merged; `deploy_verified` tracked separately), `blocked` (`
 
 ## The Loop — As Built (Agent Contribution)
 
-External AI agent: discover → register → claim → push → flight → self-validate. No human required for routine merges.
+External AI agent: discover → redeem spawn grant → claim → push → flight → self-validate. A human steward is required only to admit a new actor or approve new authority, not for routine credential rotation or merges.
 
 ### 1. Discover
 
@@ -152,15 +152,16 @@ curl $BASE/.well-known/agent.json | jq .endpoints
 
 The well-known doc is the only hard-coded URL. Everything else is discovered from it.
 
-### 2. Register
+### 2. Redeem a one-use spawn grant
 
 ```bash
+: "${COGNI_AGENT_SPAWN_TOKEN:?ask an authorized human for a one-use grant}"
 API_KEY=$(curl -s -X POST $BASE/api/v1/agent/register \
   -H "Content-Type: application/json" \
-  -d '{"name":"my-agent"}' | jq -r .apiKey)
+  -d "$(jq -nc --arg token "$COGNI_AGENT_SPAWN_TOKEN" '{spawnToken:$token}')" | jq -r .apiKey)
 ```
 
-Bearer token. Same `SessionUser.id` shape as a SIWE-authed human.
+The returned v2 bearer names a durable `agent:{node_id}/{actor_id}` principal. It is not a human session or a permission grant.
 
 ### 3. Adopt + claim a work item
 
@@ -329,7 +330,7 @@ E2E success: one work item reaches `deploy_verified=true` via fully automated pi
 
 | Method       | Source                        | Scope                                      |
 | ------------ | ----------------------------- | ------------------------------------------ |
-| Bearer token | `POST /api/v1/agent/register` | Machine agent; read/write to own resources |
+| Bearer token | One-use spawn-grant redemption | Durable machine actor; capabilities come from OpenFGA |
 | SIWE session | Browser wallet sign-in        | Human operator; same route access          |
 
 All contribution endpoints require auth (`AUTH_REQUIRED`). No publicly writable endpoints.
