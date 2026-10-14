@@ -61,6 +61,47 @@ On Linux, PostgreSQL normally backs parallel-query and parallel-maintenance dyna
 - Set `shm_size` declaratively only after a concurrent-workload test; assert it at runtime and monitor RAM. Raising the ceiling is not a memory or tenant bound.
 - Wire compatibility is not engine equivalence. Doltgres is not PostgreSQL; copy no PostgreSQL resource setting without Doltgres-specific evidence.
 
+#### Detect it before a crash does — two predicates and one instrument
+
+The failure classes above were all found _after_ an outage. Each has a cheap leading indicator that nothing currently watches.
+
+**`last_autovacuum IS NULL` is the highest-value predicate we are missing.** Autovacuum that cannot run is silent: no error surfaces, the table simply grows. On cogni production every large table in one node's DB read `last_autovacuum`/`last_autoanalyze` NULL _and_ `n_live_tup: 0` while actually holding 16.8M rows — so the planner costed a multi-GB table as empty, and 88% of another table was dead tuples. Alert on NULL (or stale beyond a day) for any table over ~100 MB. One predicate would have caught that months earlier than the crash did.
+
+```sql
+-- leading indicators, cheap enough to scrape per database
+select relname, n_live_tup, n_dead_tup, last_autovacuum, last_autoanalyze,
+       pg_total_relation_size(relid) bytes
+from pg_stat_user_tables
+where pg_total_relation_size(relid) > 100*1024*1024
+  and (last_autovacuum is null or last_autoanalyze is null);
+```
+
+Corollary worth internalising: **statistics absence and vacuum absence are the same incident.** Autovacuum thresholds are computed _from_ the counters it maintains, so once they read zero nothing triggers, and a manual per-table `ANALYZE` may be the only way back in. Expect a full-database `ANALYZE` to be interrupted on a crashing instance — go table by table.
+
+**Aggregate counters cannot see a hot retry loop; a sampler can.** Loki, dashboards and `pg_stat_*` totals all showed "slow queries" while the real shape was one node re-issuing a prune `DELETE` every ~2 seconds, each cancelled by `statement_timeout` then retried with **no backoff**, stacking until maintenance could never complete. Sample non-idle backends when attributing pressure:
+
+```bash
+while true; do
+  docker exec <pg-container> psql -U postgres -At -F'|' -c \
+    "select to_char(now(),'HH24:MI:SS'), pid, usename, datname, state,
+            extract(epoch from now()-query_start)::int,
+            left(regexp_replace(query,'[\n\t ]+',' ','g'),90)
+     from pg_stat_activity where state <> 'idle' and pid <> pg_backend_pid()"
+  sleep 2
+done
+```
+
+Read it for _cadence and stacking_, not just duration. A query that is slow once is a query bug; the same query starting every 2s is a client-side retry bug, and the fix belongs in the caller — not in engine tuning.
+
+**Client retry shape is a database reliability property.** A degradable read whose caller retries without backoff converts one slow query into sustained load that blocks vacuum, inflates bloat, and amplifies I/O. Require bounded attempts plus backoff on anything calling a shared tenant, and treat an unbounded retry as a DB-impacting defect even though the code lives in the node.
+
+#### Signatures that are routinely misread
+
+- **`server process (PID n) exited with exit code 2`** is PostgreSQL's `quickdie()`/SIGQUIT path, not an OOM. On a real incident every memory check returned negative — cgroup `memory.events` `oom_kill 0`, `OOMKilled=false`, `RestartCount=0`, clean `dmesg`/`journalctl`, disk 73% with 27 GB free — and the _first_ dying backend logged nothing at all. The cascade that follows (`terminating any other active server processes`, then `57P02` / "terminating connection because of crash of another server process" in every client) is the consequence, so never diagnose from the client's view. Confirm with `prod-oom-misdiagnosis-taxonomy` before proposing memory or VM changes.
+- **A healthy container proves nothing.** `Up 8 days (healthy)` with `RestartCount=0` coexisted with ~110 backend deaths per day; the healthcheck (`pg_isready`) only proves the postmaster answers.
+- **Zero log lines means unobserved, not healthy.** A substrate absent from the host log-shipper allowlist returns empty for every query; check the allowlist before concluding a service is quiet or undeployed.
+- **Statistics reset on container restart.** `n_live_tup`/`n_dead_tup` return to zero, so a bloat measurement taken after a restart is not comparable to one taken before. Use on-disk size for continuity.
+
 ## Layout at a glance
 
 ```
