@@ -140,7 +140,7 @@ PY
 
 cleanup() {
   local rc=$?
-  rm -f "${caddy_tmp:-}"
+  rm -f "${caddy_tmp:-}" "${database_reliability_es_tmp:-}"
   if [ -n "$SUMMARY_FILE" ] && [ "$SUMMARY_WRITTEN" != "true" ]; then
     if [ "$rc" -eq 0 ]; then
       write_summary success
@@ -314,6 +314,17 @@ app_db_service_password="$(bao_get_field "$TARGET_NODE" APP_DB_SERVICE_PASSWORD)
   || fail "per-node DB creds absent at cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE} — run secret-materialize first (it owns per-node APP_DB_PASSWORD/APP_DB_SERVICE_PASSWORD)"
 mark_row db_creds read "read per-node DB creds from OpenBao (key names only)"
 
+# Private containment actuator credential. secret-materialize mints this into a
+# dedicated platform-service bucket; the reader passes only the component
+# password to the one-shot provisioner and never exposes the root DSN.
+database_reliability_password=""
+if [[ "$TARGET_NODE" == operator ]]; then
+  database_reliability_password="$(bao_get_field database-reliability-actuator DATABASE_RELIABILITY_PASSWORD)"
+  [[ -n "$database_reliability_password" ]] \
+    || fail "DATABASE_RELIABILITY_PASSWORD absent at cogni/${DEPLOY_ENVIRONMENT}/database-reliability-actuator — operator materialization must precede provisioning"
+  mark_row database_reliability_creds read "read dedicated reliability role password from OpenBao (key name only)"
+fi
+
 # Doltgres superuser password — the OpenBao-custodied SSOT at the canonical operator
 # path (cogni/<env>/operator/DOLTGRES_PASSWORD). The superuser is shared env-wide
 # (one server, every node's knowledge_<node> DB), so operator holds the single
@@ -416,6 +427,42 @@ if [[ -f "$external_secret_file" ]]; then
   mark_row externalsecret_refresh refreshed "force-refreshed ExternalSecret ${TARGET_NODE}-env-secrets"
 else
   fail "missing node ExternalSecret leaf: $external_secret_file"
+fi
+
+# The operator reliability controller is a stacked deploy surface (task.5247),
+# but its credential substrate is owned here. When that surface is present in
+# the exact app source, install and wait its two control-plane ExternalSecrets
+# now—after materialization and before candidate assert can observe the app.
+# Rendering only these leaves avoids applying workloads from a privileged
+# substrate lane; names match the operator overlay's kustomize namePrefix.
+database_reliability_es_file="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/operator/database-reliability-actuator-external-secret.yaml"
+operator_es_file="${APP_SOURCE_DIR}/infra/k8s/overlays/${DEPLOY_ENVIRONMENT}/operator/external-secret.yaml"
+if [[ "$TARGET_NODE" == operator && -f "$database_reliability_es_file" ]]; then
+  [[ -f "$operator_es_file" ]] || fail "missing operator ExternalSecret leaf: $operator_es_file"
+  database_reliability_es_tmp="$(mktemp)"
+  RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" \
+    yq 'select(.kind == "ExternalSecret") | .metadata.name = "operator-env-secrets" | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
+      "$operator_es_file" > "$database_reliability_es_tmp"
+  printf '\n---\n' >> "$database_reliability_es_tmp"
+  RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" \
+    yq 'select(.kind == "ExternalSecret" and .metadata.name == "database-reliability-actuator-env-secrets") | .metadata.name = "operator-database-reliability-actuator-env-secrets" | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
+      "$database_reliability_es_file" >> "$database_reliability_es_tmp"
+  [[ "$(yq ea '.kind' "$database_reliability_es_tmp" | grep -cx ExternalSecret)" == 2 ]] \
+    || fail "database reliability substrate must render exactly two ExternalSecrets"
+  copy_to_remote "$database_reliability_es_tmp" "/tmp/${DEPLOY_ENVIRONMENT}-database-reliability-external-secrets.yaml"
+  remote "set -euo pipefail
+    ns='cogni-${DEPLOY_ENVIRONMENT}'
+    manifest='/tmp/${DEPLOY_ENVIRONMENT}-database-reliability-external-secrets.yaml'
+    kubectl apply -f \"\$manifest\" >/dev/null
+    rm -f \"\$manifest\"
+    marker=\$(date +%s)
+    for es in operator-env-secrets operator-database-reliability-actuator-env-secrets; do
+      kubectl -n \"\$ns\" annotate externalsecret \"\$es\" force-sync=\"\$marker\" --overwrite >/dev/null
+      kubectl -n \"\$ns\" wait --for=condition=Ready \"externalsecret/\$es\" --timeout=120s >/dev/null
+    done
+    kubectl -n \"\$ns\" get secret operator-env-secrets >/dev/null
+    kubectl -n \"\$ns\" get secret database-reliability-actuator-env-secrets >/dev/null"
+  mark_row database_reliability_externalsecrets ready "applied + waited operator client and private actuator ExternalSecrets"
 fi
 
 edge_reconcile_snippet=""
@@ -632,6 +679,7 @@ ${edge_reconcile_snippet}
     -e COGNI_NODE_DBS='${node_db}' \
     -e APP_DB_PASSWORD='${app_db_password}' \
     -e APP_DB_SERVICE_PASSWORD='${app_db_service_password}' \
+    -e DATABASE_RELIABILITY_PASSWORD='${database_reliability_password}' \
     db-provision >/dev/null
   echo '[remote] db-provision ok'
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then

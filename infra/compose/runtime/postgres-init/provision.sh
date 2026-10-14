@@ -77,6 +77,8 @@ fi
 # single source is OpenBao (Invariant 15); see provision_app_role below.
 APP_PASS="${APP_DB_PASSWORD:-}"
 APP_SERVICE_PASS="${APP_DB_SERVICE_PASSWORD:-}"
+RELIABILITY_ROLE="database_reliability_actuator"
+RELIABILITY_PASS="${DATABASE_RELIABILITY_PASSWORD:-}"
 # Shared read-only role (env-level, NOT per-node): the Grafana datasource consumer.
 # Superuser-derived password; created once outside the per-node loop.
 APP_READONLY_USER="${APP_DB_READONLY_USER:-app_readonly}"
@@ -110,6 +112,10 @@ fi
 # (already validated) node DB name inside provision_node_db.
 if ! [[ "$APP_READONLY_USER" =~ ^[a-zA-Z0-9_]+$ ]]; then
   echo "❌ ERROR: APP_DB_READONLY_USER contains invalid characters (allowed: a-zA-Z0-9_)"
+  exit 1
+fi
+if ! [[ "$RELIABILITY_ROLE" =~ ^[a-zA-Z0-9_]+$ ]]; then
+  echo "❌ ERROR: DATABASE_RELIABILITY_ROLE contains invalid characters"
   exit 1
 fi
 if ! [[ "$LITELLM_DB" =~ ^[a-zA-Z0-9_]+$ ]]; then
@@ -191,6 +197,54 @@ ALTER ROLE "$role" WITH LOGIN PASSWORD :'pw';
 SQL
   fi
 }
+
+# PostgreSQL 15's CREATEROLE can alter every non-superuser role; the
+# ADMIN-OPTION-scoped behavior only exists in PostgreSQL 16+. Keep the actuator
+# NOCREATEROLE and expose one root-owned SECURITY DEFINER function that accepts
+# only exact provisioned app_<slug>/service_<slug> roles and drains only that
+# role's sessions. The login role never receives pg_signal_backend. pg_monitor
+# provides read-only status visibility.
+if [ -n "$RELIABILITY_PASS" ]; then
+  provision_app_role "$RELIABILITY_ROLE" "$RELIABILITY_PASS"
+  run_sql_as_root postgres "ALTER ROLE \"$RELIABILITY_ROLE\" NOCREATEROLE INHERIT NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS;"
+  run_sql_as_root postgres "GRANT pg_monitor TO \"$RELIABILITY_ROLE\";"
+  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d postgres -v ON_ERROR_STOP=1 <<SQL
+CREATE OR REPLACE FUNCTION public.set_database_containment_role_login(target_role text, allow_login boolean)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS \$function\$
+DECLARE
+  role_suffix text;
+BEGIN
+  IF target_role !~ '^(app|service)_[a-z][a-z0-9_]*$' THEN
+    RAISE EXCEPTION 'database containment role is outside the per-node role namespace';
+  END IF;
+  role_suffix := regexp_replace(target_role, '^(app|service)_', '');
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_database database_role_boundary
+      JOIN pg_roles app_owner ON app_owner.oid = database_role_boundary.datdba
+     WHERE database_role_boundary.datname = 'cogni_' || role_suffix
+       AND app_owner.rolname = 'app_' || role_suffix
+  ) OR NOT EXISTS (SELECT 1 FROM pg_roles provisioned_role WHERE provisioned_role.rolname = target_role) THEN
+    RAISE EXCEPTION 'database containment role is not provisioned';
+  END IF;
+  EXECUTE format('ALTER ROLE %I %s', target_role, CASE WHEN allow_login THEN 'LOGIN' ELSE 'NOLOGIN' END);
+  IF NOT allow_login THEN
+    PERFORM pg_terminate_backend(pid)
+      FROM pg_stat_activity
+     WHERE usename = target_role AND pid <> pg_backend_pid();
+  END IF;
+END
+\$function\$;
+REVOKE ALL ON FUNCTION public.set_database_containment_role_login(text, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.set_database_containment_role_login(text, boolean) TO "$RELIABILITY_ROLE";
+SQL
+else
+  echo "ℹ️  DATABASE_RELIABILITY_PASSWORD absent; reliability role not reconciled"
+fi
 
 # Shared read-only role (env-level; superuser-derived password; BYPASSRLS support
 # reads for the Grafana datasource). Created once, outside the per-node loop.

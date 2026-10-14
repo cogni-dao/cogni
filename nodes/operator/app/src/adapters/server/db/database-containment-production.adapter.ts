@@ -58,6 +58,12 @@ export class PostgresAdminSqlAdapter implements DatabaseControlSql {
     if (!["postgres:", "postgresql:"].includes(url.protocol)) {
       throw new Error("database_control_dsn_invalid");
     }
+    if (
+      decodeURIComponent(url.username) !== "database_reliability_actuator" ||
+      url.pathname !== "/postgres"
+    ) {
+      throw new Error("database_control_dsn_not_least_privilege");
+    }
     this.client = postgres(adminDsn, { max: 1, prepare: false });
   }
 

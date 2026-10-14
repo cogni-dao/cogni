@@ -4,7 +4,7 @@ set -euo pipefail
 
 : "${ALLOW_CANDIDATE_DATABASE_REPLAY:?must equal 1}"
 : "${POLY_CELL_DSN:?candidate dedicated-cell read-role DSN required}"
-: "${POLY_CELL_ADMIN_DSN:?candidate dedicated-cell admin DSN required}"
+: "${POLY_CELL_ADMIN_DSN:?candidate dedicated-cell reliability-control DSN required}"
 : "${SHARED_DB_DSN:?candidate shared Postgres DSN required}"
 : "${NEIGHBOR_READYZ_URLS:?comma-separated regional readyz URLs required}"
 : "${SHARED_IO_PSI_QUERY_URL:?Prometheus instant-query URL required}"
@@ -46,7 +46,7 @@ cleanup() {
   [[ -n "${load_pid:-}" ]] && kill "$load_pid" 2>/dev/null || true
   if [[ "$roles_contained" == 1 ]]; then
     psql "$POLY_CELL_ADMIN_DSN" -Xv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" \
-      -c 'ALTER ROLE :"app_role" LOGIN; ALTER ROLE :"service_role" LOGIN' >/dev/null || true
+      -c "SELECT public.set_database_containment_role_login(:'app_role', true); SELECT public.set_database_containment_role_login(:'service_role', true)" >/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -60,17 +60,15 @@ jq -cn --arg event role_assertion --arg replayId "$replay_id" --arg appRole "$ap
 
 roles_contained=1
 psql "$POLY_CELL_ADMIN_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" <<'SQL'
-ALTER ROLE :"app_role" NOLOGIN;
-ALTER ROLE :"service_role" NOLOGIN;
-SELECT pg_terminate_backend(pid) FROM pg_stat_activity
- WHERE usename IN (:'app_role', :'service_role') AND pid <> pg_backend_pid();
+SELECT public.set_database_containment_role_login(:'app_role', false);
+SELECT public.set_database_containment_role_login(:'service_role', false);
 SQL
 contained=$(psql "$POLY_CELL_ADMIN_DSN" -XAtv ON_ERROR_STOP=1 \
   -v app_role="$app_role" -v service_role="$service_role" \
   -c "SELECT count(*) = 2 AND bool_and(NOT rolcanlogin) AND NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE usename IN (:'app_role', :'service_role')) FROM pg_roles WHERE rolname IN (:'app_role', :'service_role')")
 [[ "$contained" == t ]] || { echo "contain status failed" >&2; exit 1; }
 psql "$POLY_CELL_ADMIN_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" \
-  -c 'ALTER ROLE :"app_role" LOGIN; ALTER ROLE :"service_role" LOGIN'
+  -c "SELECT public.set_database_containment_role_login(:'app_role', true); SELECT public.set_database_containment_role_login(:'service_role', true)"
 roles_contained=0
 readmitted=$(psql "$POLY_CELL_ADMIN_DSN" -XAtv ON_ERROR_STOP=1 \
   -v app_role="$app_role" -v service_role="$service_role" \

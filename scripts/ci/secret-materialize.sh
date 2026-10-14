@@ -500,6 +500,9 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
     )
     for k in "${svc_keys[@]}"; do
       [[ -n "$k" ]] || continue
+      # This DSN depends on the generated component password in the same batch,
+      # so compose it after the random-key pass below regardless of sort order.
+      [[ "$k" == "DATABASE_RELIABILITY_ADMIN_URL" ]] && continue
       if [[ -f "${CACHE_DIR}/${svc}/${k}" ]]; then
         unchanged=$((unchanged + 1))
         continue
@@ -512,6 +515,22 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
       log "  created ${k} → cogni/${DEPLOY_ENVIRONMENT}/${svc}"
       created=$((created + 1))
     done
+    if [[ "$svc" == "database-reliability-actuator" ]]; then
+      reliability_password="$(bao_get_field "$svc" DATABASE_RELIABILITY_PASSWORD)"
+      [[ -n "$reliability_password" ]] \
+        || fail "platform-service ${svc} did not materialize DATABASE_RELIABILITY_PASSWORD"
+      reliability_dsn="$(_compose_node_value "$svc" DATABASE_RELIABILITY_ADMIN_URL)"
+      [[ -n "$reliability_dsn" ]] \
+        || fail "platform-service ${svc} produced an empty DATABASE_RELIABILITY_ADMIN_URL"
+      if [[ "$(bao_get_field "$svc" DATABASE_RELIABILITY_ADMIN_URL)" == "$reliability_dsn" ]]; then
+        unchanged=$((unchanged + 1))
+      else
+        rm -f "${CACHE_DIR}/${svc}/DATABASE_RELIABILITY_ADMIN_URL"
+        seed_kv "$svc" DATABASE_RELIABILITY_ADMIN_URL "$reliability_dsn"
+        log "  recomposed DATABASE_RELIABILITY_ADMIN_URL → cogni/${DEPLOY_ENVIRONMENT}/${svc} (drift corrected)"
+        created=$((created + 1))
+      fi
+    fi
     flush_batch "$svc"
   done
 fi

@@ -367,6 +367,25 @@ PLATFORM_TOKEN="$(cat "$PLATFORM_TOKEN_FILE")"
 [[ "$PLATFORM_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
   || { echo "AKASH_TX_ACTUATOR_TOKEN must be the catalog generator's hex/32 output" >&2; exit 1; }
 
+# The database actuator is born from the same owner-only platform pass: a
+# generated component password plus a composed DSN in its private bucket. The
+# public operator bank receives neither.
+RELIABILITY_DIR="$BAO_ROOT/cogni/candidate-a/database-reliability-actuator"
+RELIABILITY_PASSWORD_FILE="$RELIABILITY_DIR/DATABASE_RELIABILITY_PASSWORD"
+RELIABILITY_DSN_FILE="$RELIABILITY_DIR/DATABASE_RELIABILITY_ADMIN_URL"
+test -f "$RELIABILITY_PASSWORD_FILE" && test -f "$RELIABILITY_DSN_FILE" \
+  || { echo "owner leg did not materialize the database reliability credential" >&2; exit 1; }
+RELIABILITY_PASSWORD="$(cat "$RELIABILITY_PASSWORD_FILE")"
+RELIABILITY_DSN="$(cat "$RELIABILITY_DSN_FILE")"
+[[ "$RELIABILITY_PASSWORD" =~ ^[0-9a-f]{48}$ ]] \
+  || { echo "DATABASE_RELIABILITY_PASSWORD must be catalog-generated hex/24" >&2; exit 1; }
+test "$RELIABILITY_DSN" = "postgresql://database_reliability_actuator:${RELIABILITY_PASSWORD}@10.0.0.1:5432/postgres?sslmode=disable" \
+  || { echo "DATABASE_RELIABILITY_ADMIN_URL was not composed from the generated password and substrate host" >&2; exit 1; }
+for leaked in "$BAO_ROOT/cogni/candidate-a/operator/DATABASE_RELIABILITY_PASSWORD" \
+  "$BAO_ROOT/cogni/candidate-a/operator/DATABASE_RELIABILITY_ADMIN_URL"; do
+  test ! -e "$leaked" || { echo "database reliability credential leaked into public operator bucket" >&2; exit 1; }
+done
+
 # 3. source:human keys at a platform path are NEVER generated — a vendor-minted Console
 #    credential must come through the sanctioned write path, not be invented here.
 if [ -e "$BAO_ROOT/cogni/candidate-a/akash-tx-actuator/AKASH_ACTUATOR_CONSOLE_API_KEY" ]; then
@@ -380,7 +399,9 @@ if [ -e "$BAO_ROOT/cogni/candidate-a/node-template/AKASH_TX_ACTUATOR_TOKEN" ]; t
   echo "platform-service key leaked into a node bucket" >&2
   exit 1
 fi
-if grep -qF "$PLATFORM_TOKEN" "$TMPROOT/out-platform.txt"; then
+if grep -qF "$PLATFORM_TOKEN" "$TMPROOT/out-platform.txt" \
+  || grep -qF "$RELIABILITY_PASSWORD" "$TMPROOT/out-platform.txt" \
+  || grep -qF "$RELIABILITY_DSN" "$TMPROOT/out-platform.txt"; then
   echo "platform-service secret value leaked to output" >&2
   exit 1
 fi
@@ -401,6 +422,10 @@ env \
   bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-platform2.txt"
 test "$(cat "$PLATFORM_TOKEN_FILE")" = "$PLATFORM_TOKEN" \
   || { echo "re-run rotated AKASH_TX_ACTUATOR_TOKEN" >&2; exit 1; }
+test "$(cat "$RELIABILITY_PASSWORD_FILE")" = "$RELIABILITY_PASSWORD" \
+  || { echo "re-run rotated DATABASE_RELIABILITY_PASSWORD" >&2; exit 1; }
+test "$(cat "$RELIABILITY_DSN_FILE")" = "$RELIABILITY_DSN" \
+  || { echo "re-run changed DATABASE_RELIABILITY_ADMIN_URL" >&2; exit 1; }
 
 # Drift repair: a stale per-node DOLTGRES_URL must recompose from the operator
 # canonical superuser, matching DATABASE_URL/_SERVICE_URL behavior. This is the

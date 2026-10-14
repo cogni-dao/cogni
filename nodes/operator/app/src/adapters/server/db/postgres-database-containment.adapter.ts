@@ -121,13 +121,10 @@ export class PostgresDatabaseContainmentAdapter
       const roles = rolesFor(input.nodeSlug);
       for (const role of roles) {
         await this.deps.sql.query(
-          `ALTER ROLE ${quoteIdentifier(role)} NOLOGIN`
+          "SELECT public.set_database_containment_role_login($1::text, false)",
+          [role]
         );
       }
-      await this.deps.sql.query(
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = ANY($1::text[]) AND pid <> pg_backend_pid()",
-        [roles]
-      );
       // v1 automation intentionally stops at the proven per-node role boundary.
       // The host firewall remains a separately audited, manual secondary control.
       await this.audit("contained", input);
@@ -148,7 +145,10 @@ export class PostgresDatabaseContainmentAdapter
     try {
       const roles = rolesFor(input.nodeSlug);
       for (const role of roles) {
-        await this.deps.sql.query(`ALTER ROLE ${quoteIdentifier(role)} LOGIN`);
+        await this.deps.sql.query(
+          "SELECT public.set_database_containment_role_login($1::text, true)",
+          [role]
+        );
       }
       await this.audit("readmitted", input);
       return this.status(input);
@@ -254,8 +254,4 @@ function rolesFor(nodeSlug: string): readonly string[] {
   // The as-built per-node roles are app + service. `app_readonly` remains an
   // environment-shared v0 support role, so revoking it would contain every node.
   return [`app_${suffix}`, `service_${suffix}`];
-}
-
-function quoteIdentifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
 }

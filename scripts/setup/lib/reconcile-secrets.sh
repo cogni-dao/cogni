@@ -97,6 +97,7 @@ declare -ga SCHEDULER_WORKER_KEYS=(
 # shellcheck disable=SC2034  # consumed by the sourcing script (scripts/ci/secret-materialize.sh)
 declare -ga PLATFORM_SERVICES=(
   akash-tx-actuator   # private Akash transaction actuator wallet + bearer token (task.5102)
+  database-reliability-actuator # private least-privilege Postgres containment actuator (task.5246)
 )
 
 # Compose-tier secrets — bootstrap postgres/temporal directly via runtime/.env,
@@ -231,6 +232,11 @@ _compose_node_value() {
   sfx="$(_lane_db_suffix)"
   db="cogni_${node//-/_}${sfx}"
   case "$k" in
+    DATABASE_RELIABILITY_ADMIN_URL)
+      # Private platform-service DSN. The component password is generated into
+      # this same isolated bucket first; hexadecimal encoding is URL-safe.
+      printf 'postgresql://database_reliability_actuator:%s@%s:5432/postgres?sslmode=disable' \
+        "$(bao_get_field database-reliability-actuator DATABASE_RELIABILITY_PASSWORD)" "${VM_IP}"; return 0 ;;
     DATABASE_URL)
       # Per-node: app_<node> role + the node's own source:agent password (OpenBao).
       # Role name is computed from the node; the password is read from

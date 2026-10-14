@@ -39,6 +39,9 @@ describe("PostgresDatabaseContainmentAdapter", () => {
     expect(() => new PostgresAdminSqlAdapter("https://db.example")).toThrow(
       "database_control_dsn_invalid"
     );
+    expect(
+      () => new PostgresAdminSqlAdapter("postgresql://postgres:pw@db/postgres")
+    ).toThrow("database_control_dsn_not_least_privilege");
   });
 
   it("writes structured audit and reads the latest transition from Loki", async () => {
@@ -145,17 +148,18 @@ describe("PostgresDatabaseContainmentAdapter", () => {
     let canLogin = true;
     let sessions = 8;
     let fenced = false;
+    const statements: string[] = [];
     const events: DatabaseContainmentAuditEvent[] = [];
     const sql = {
       async query<T extends Record<string, unknown>>(
-        statement: string
+        statement: string,
+        params: readonly unknown[] = []
       ): Promise<readonly T[]> {
-        if (statement.startsWith("ALTER ROLE")) {
-          canLogin = statement.endsWith(" LOGIN");
-          return [];
-        }
-        if (statement.includes("pg_terminate_backend")) {
-          sessions = 0;
+        statements.push(statement);
+        if (statement.includes("set_database_containment_role_login")) {
+          expect(params[0]).toMatch(/^(app|service)_poly$/);
+          canLogin = params[1] === true;
+          if (!canLogin) sessions = 0;
           return [];
         }
         if (statement.includes("FROM pg_roles")) {
@@ -214,6 +218,17 @@ describe("PostgresDatabaseContainmentAdapter", () => {
       "readmission_requested",
       "readmitted",
     ]);
+    expect(
+      statements.filter((statement) =>
+        statement.includes("set_database_containment_role_login")
+      )
+    ).toHaveLength(4);
+    expect(
+      statements.some((statement) => statement.startsWith("ALTER ROLE"))
+    ).toBe(false);
+    expect(
+      statements.some((statement) => statement.includes("pg_terminate_backend"))
+    ).toBe(false);
   });
 
   it("audits intent and partial failure without calling the firewall", async () => {

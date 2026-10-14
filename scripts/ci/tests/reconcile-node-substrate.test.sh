@@ -73,6 +73,7 @@ put_secret node-template BILLING_INGEST_TOKEN existing-billing
 # gitlinks whose files are absent there).
 put_secret operator APP_DB_PASSWORD pernode-app-pw-sentinel
 put_secret operator APP_DB_SERVICE_PASSWORD pernode-svc-pw-sentinel
+put_secret database-reliability-actuator DATABASE_RELIABILITY_PASSWORD reliability-pw-sentinel
 # Doltgres superuser SSOT is operator-canonical (cogni/<env>/operator/DOLTGRES_PASSWORD),
 # shared env-wide; reconcile reads it from operator and injects it into doltgres-provision.
 put_secret operator DOLTGRES_PASSWORD doltgres-super-sentinel
@@ -326,7 +327,29 @@ grep -q 'COGNI_NODE_DBS=cogni_operator$' "$REMOTE_ROOT/opt/cogni-template-runtim
 # Per-node single-node db-provision: COGNI_NODE_DBS overridden to THIS node + the
 # per-node OpenBao passwords injected via -e (provision.sh computes app_<node>).
 grep -q -- '-e COGNI_NODE_DBS=cogni_operator' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DATABASE_RELIABILITY_PASSWORD=reliability-pw-sentinel' "$REMOTE_ROOT/docker.log"
 grep -qE -- '--profile bootstrap run --rm .* db-provision' "$REMOTE_ROOT/docker.log"
+
+# PostgreSQL 15 security boundary: never grant broad CREATEROLE/role membership.
+# The generated control identity receives only the scoped SECURITY DEFINER
+# function plus status/session capabilities, and the function's guards exclude
+# postgres, app_readonly, and a made-up unprovisioned role.
+provisioner=infra/compose/runtime/postgres-init/provision.sh
+grep -q 'ALTER ROLE.*NOCREATEROLE' "$provisioner"
+grep -q 'REVOKE ALL ON FUNCTION public.set_database_containment_role_login' "$provisioner"
+grep -q 'GRANT EXECUTE ON FUNCTION public.set_database_containment_role_login' "$provisioner"
+grep -q "target_role !~ '\^(app|service)_" "$provisioner"
+grep -q "database_role_boundary.datname = 'cogni_'" "$provisioner"
+grep -q "app_owner.rolname = 'app_'" "$provisioner"
+grep -q 'WHERE usename = target_role' "$provisioner"
+if grep -q 'GRANT .*pg_signal_backend.*RELIABILITY_ROLE' "$provisioner"; then
+  echo "reliability identity must not be able to terminate an unscoped neighbor session" >&2
+  exit 1
+fi
+if grep -q 'GRANT .* TO .*RELIABILITY_ROLE.*WITH ADMIN OPTION' "$provisioner"; then
+  echo "PG15 reliability identity must not receive unsafe ADMIN membership" >&2
+  exit 1
+fi
 # doltgres-provision gets the operator-canonical superuser injected via -e (fail-loud
 # if absent; never the poisoned VM .env value) AND is node-scoped via -e COGNI_NODE_DBS
 # (bug.5033 — symmetric with db-provision so knowledge_<node> is created deterministically,

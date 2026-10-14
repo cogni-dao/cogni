@@ -77,6 +77,8 @@ Cutover order is fixed and fail-closed:
 
 Automated v1 containment is one audited action: record intent, revoke the node roles' login, terminate their sessions, and record success or partial failure. Containment is proven when both per-node roles are `NOLOGIN` and have zero active sessions. A source-specific host-firewall rule is reported state and a manual secondary control, not a prerequisite for the contained phase. Re-admission is human-only, requires the five-by-one-minute regional health gate plus exact build SHA evidence, and restores role login with an audited intent/outcome. No action restarts or mutates the shared control-plane databases.
 
+The actuator connects as `database_reliability_actuator`, a generated per-environment role whose DSN exists only at `cogni/<env>/database-reliability-actuator`. Because the runtime is PostgreSQL 15 (where `CREATEROLE` can alter every non-superuser role), this role MUST be `NOCREATEROLE`; login toggles and session termination go through the root-owned `public.set_database_containment_role_login(text, boolean)` function. That function rejects `postgres`, `app_readonly`, missing roles, and every name outside the exact `app_<slug>` / `service_<slug>` namespace backed by a `cogni_<slug>` database owned by its matching `app_<slug>` role. The role receives only function `EXECUTE` and read-only `pg_monitor`; it MUST NOT receive `pg_signal_backend`. A root DSN or manually entered control secret is forbidden.
+
 ## Database Provisioning (Infrastructure-as-Code)
 
 To ensure a repeatable and consistent database state across environments (especially for `docker compose` setups), we use a dedicated provisioning service.
