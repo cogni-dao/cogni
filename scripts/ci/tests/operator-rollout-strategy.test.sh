@@ -21,7 +21,7 @@ PRODUCTION="infra/k8s/overlays/production/operator/kustomization.yaml"
 
 deployment_patch_ops() {
   yq -o=json -I=0 \
-    '[.patches[] | select(.target.kind == "Deployment" and .target.name == "node-app") | .patch | from_yaml | .[]]' \
+    '[.patches[] | select(.target.kind == "Deployment" and .target.name == "node-app") | .patch | from_yaml]' \
     "$1"
 }
 
@@ -37,7 +37,15 @@ pass "base policy is RollingUpdate 0/1"
 echo "[2/2] environment overlays do not weaken zero-downtime rollouts"
 for overlay in "$CANDIDATE" "$PREVIEW" "$PRODUCTION"; do
   OPS="$(deployment_patch_ops "$overlay")"
-  jq -e 'all(.[]; (.path | startswith("/spec/strategy")) | not)' <<<"$OPS" >/dev/null \
+  jq -e '
+    all(.[];
+      if type == "array" then
+        all(.[]; ((.path // "") | startswith("/spec/strategy")) | not)
+      else
+        .spec.strategy? == null
+      end
+    )
+  ' <<<"$OPS" >/dev/null \
     || fail "$overlay must inherit the base zero-downtime rollout strategy"
 done
 pass "candidate-a, preview, and production inherit the base 0/1 policy"
