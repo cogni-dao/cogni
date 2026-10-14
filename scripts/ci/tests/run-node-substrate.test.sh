@@ -28,8 +28,9 @@ CATALOG_FIXTURE="$TMPROOT/catalog"
 mkdir -p "$CATALOG_FIXTURE"
 export COGNI_CATALOG_ROOT="$CATALOG_FIXTURE"
 for n in node-template operator toks4 k3snode; do
-  printf 'name: %s\nenvs: [candidate-a, preview, production]\n' "$n" > "$CATALOG_FIXTURE/$n.yaml"
+  printf 'name: %s\ntype: node\nenvs: [candidate-a, preview, production]\n' "$n" > "$CATALOG_FIXTURE/$n.yaml"
 done
+printf 'reliability: { controller: true }\n' >> "$CATALOG_FIXTURE/operator.yaml"
 # toks4 is akash in PRODUCTION ONLY — control env == env in every lane it holds, which is
 # every existing fleet row. Case 5 must stay byte-identical to its pre-bug.5206 expectation.
 printf 'name: toks4\nenvs: [production]\ndeployment_provider:\n  production: akash\n' > "$CATALOG_FIXTURE/toks4.yaml"
@@ -76,6 +77,32 @@ want="materialize candidate-a node-template|reconcile candidate-a node-template"
 [ "$got" = "$want" ] || { echo "order/args mismatch:
   got:  $got
   want: $want" >&2; exit 1; }
+
+# Cold owner flight: precreate -> read-only reconcile -> same writer seals the native receipt.
+cat > "$TMPROOT/mat-owner.sh" <<EOF
+#!/usr/bin/env bash
+echo "materialize-\${SECRET_MATERIALIZE_PHASE:-pre-reconcile} \$1 \$2" >> "$ORDER"
+EOF
+chmod +x "$TMPROOT/mat-owner.sh"
+: > "$ORDER"
+RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat-owner.sh" \
+RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+  bash "$RUNNER" candidate-a operator >/dev/null
+[ "$(paste -sd'|' - < "$ORDER")" = "materialize-pre-reconcile candidate-a operator|reconcile candidate-a operator|materialize-db-ready candidate-a operator" ] \
+  || { echo "cold owner seal phase did not follow DB reconcile" >&2; exit 1; }
+
+# Renamed controller keeps ownership entirely in catalog; duplicate/missing owner fails.
+sed 's/name: operator/name: neutral-controller/' "$CATALOG_FIXTURE/operator.yaml" > "$CATALOG_FIXTURE/neutral-controller.yaml"
+sed -i.bak '/reliability:/d' "$CATALOG_FIXTURE/operator.yaml"
+rm "$CATALOG_FIXTURE/operator.yaml.bak"
+: > "$ORDER"
+RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat-owner.sh" \
+RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+  bash "$RUNNER" candidate-a neutral-controller >/dev/null
+[ "$(paste -sd'|' - < "$ORDER")" = "materialize-pre-reconcile candidate-a neutral-controller|reconcile candidate-a neutral-controller|materialize-db-ready candidate-a neutral-controller" ] || exit 1
+printf 'reliability: { controller: true }\n' >> "$CATALOG_FIXTURE/operator.yaml"
+if RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat-owner.sh" RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" bash "$RUNNER" candidate-a operator >/dev/null 2>&1; then echo 'duplicate controller accepted' >&2; exit 1; fi
+rm "$CATALOG_FIXTURE/neutral-controller.yaml"
 
 # ── Case 2: materialize fails → reconcile must NOT run; runner exits non-zero ──
 mk_stub "$TMPROOT/mat.sh" materialize 7

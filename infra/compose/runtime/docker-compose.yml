@@ -307,6 +307,8 @@ services:
       OPENFGA_DB_PASSWORD: ${OPENFGA_DB_PASSWORD}
     volumes:
       - ./postgres-init/provision.sh:/app/provision.sh:ro
+      - ./postgres-init/apply-control.sql:/app/apply-control.sql:ro
+      - ./postgres-init/control-migrations/0000_database_recovery_control.sql:/app/control-migrations/0000_database_recovery_control.sql:ro
     entrypoint: ["/bin/bash", "/app/provision.sh"]
     depends_on:
       postgres:
