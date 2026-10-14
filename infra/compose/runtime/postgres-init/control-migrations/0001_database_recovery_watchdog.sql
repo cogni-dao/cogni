@@ -15,7 +15,7 @@ DECLARE incident cogni_control.database_recoveries; started timestamptz;
 BEGIN
   PERFORM cogni_control.require_actor('readmitter');
   PERFORM cogni_control.assert_system(target_system);
-  IF human_actor IS NULL OR length(human_actor) NOT BETWEEN 1 AND 256 OR human_actor LIKE 'system:%' THEN
+  IF human_actor IS NULL OR human_actor !~ '^human:[a-zA-Z0-9._@:-]{1,120}$' THEN
     RAISE EXCEPTION 'recovery requires an attributed human actor' USING ERRCODE = '42501';
   END IF;
   incident := cogni_control.lock_current(target_node, target_env);
