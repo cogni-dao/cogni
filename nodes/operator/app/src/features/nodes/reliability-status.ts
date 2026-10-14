@@ -22,6 +22,7 @@ import type {
   DatabaseContainmentPort,
   DatabaseContainmentReason,
   DatabaseContainmentStatus,
+  DatabaseContainmentStatusPort,
   MetricsQueryPort,
 } from "@/ports";
 
@@ -56,6 +57,47 @@ export const EXPECTED_RELIABILITY_REGIONS =
   RELIABILITY_POLICY_V1.expectedRegions;
 export const RELIABILITY_EVIDENCE_TTL_MS = RELIABILITY_POLICY_V1.evidenceTtlMs;
 
+export function hasHealthyReadmissionWindow(input: {
+  readonly nowMs: number;
+  readonly series: readonly {
+    readonly metric: Readonly<Record<string, string>>;
+    readonly values: readonly [number, string][];
+  }[];
+}): boolean {
+  const expectedRegions = new Set<string>(EXPECTED_RELIABILITY_REGIONS);
+  const observedRegions = new Set(
+    input.series.map(
+      (series) => series.metric.probe ?? series.metric.region ?? ""
+    )
+  );
+  const nowSeconds = input.nowMs / 1000;
+  return (
+    input.series.length === expectedRegions.size &&
+    observedRegions.size === expectedRegions.size &&
+    [...observedRegions].every((region) => expectedRegions.has(region)) &&
+    input.series.every((series) => {
+      const samples = series.values.slice(-5);
+      const lastTimestamp = samples.at(-1)?.[0];
+      return (
+        samples.length === 5 &&
+        samples.every(
+          ([timestamp, value]) =>
+            Number(value) >= 1 &&
+            Number.isFinite(timestamp) &&
+            timestamp <= nowSeconds + 15
+        ) &&
+        samples.every(
+          (sample, index) =>
+            index === 0 || sample[0] - (samples[index - 1]?.[0] ?? 0) === 60
+        ) &&
+        lastTimestamp !== undefined &&
+        nowSeconds - lastTimestamp >= -15 &&
+        nowSeconds - lastTimestamp <= 90
+      );
+    })
+  );
+}
+
 export function isReliabilitySweepReady(input: {
   readonly nowMs: number;
   readonly lastCompleteSweepAt: number | null;
@@ -69,6 +111,28 @@ export function isReliabilitySweepReady(input: {
     input.targetKeys.size === input.statusKeys.size &&
     [...input.targetKeys].every((key) => input.statusKeys.has(key))
   );
+}
+
+export async function isReadmissionRuntimeReady(input: {
+  readonly readmissionConfigured: boolean;
+  readonly targets: readonly ReliabilityTarget[];
+  readonly status: DatabaseContainmentStatusPort | null;
+}): Promise<boolean> {
+  const target = input.targets[0];
+  if (!input.readmissionConfigured || !input.status || !target) return false;
+  try {
+    await input.status.status({
+      nodeId: target.nodeId,
+      nodeSlug: target.slug,
+      environment: target.environment,
+      desiredTier: target.desiredTier,
+      budgetProfile: target.budgetProfile,
+      ...(target.cellId ? { cellId: target.cellId } : {}),
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function readReliabilityStatus(
@@ -114,6 +178,7 @@ export async function readReliabilityStatus(
     state: verdict.state,
     regionalReadiness: [...snapshot.regionalReadiness],
     utilization,
+    incidentId: input.database?.incidentId ?? null,
     incidentReason: verdict.reason,
     observedAt,
     lastTransitionAt: input.database?.lastTransitionAt ?? null,

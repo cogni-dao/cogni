@@ -6,11 +6,10 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { reliabilityStatusV1Schema } from "@cogni/node-contracts";
+import { RELIABILITY_POLICY_V1, reliabilityStatusV1Schema } from "@cogni/node-contracts";
 import type { Logger } from "pino";
 import postgres, { type Sql } from "postgres";
 import { parse as parseYaml } from "yaml";
-import { RELIABILITY_EVIDENCE_TTL_MS } from "@/features/nodes/reliability-status";
 import type {
   DatabaseCellActionReceipt,
   DatabaseCellCapacity,
@@ -411,7 +410,7 @@ export class HttpReliabilityStatusAdapter
       throw new Error("reliability actuator returned a cross-node status");
     }
     const ageMs = Date.now() - Date.parse(status.observedAt);
-    if (ageMs < -15_000 || ageMs > RELIABILITY_EVIDENCE_TTL_MS) {
+    if (ageMs < -15_000 || ageMs > RELIABILITY_POLICY_V1.evidenceTtlMs) {
       throw new Error("reliability actuator returned stale status");
     }
     return status;

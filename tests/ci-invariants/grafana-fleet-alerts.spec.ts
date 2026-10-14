@@ -38,6 +38,10 @@ const RUNTIME_POLICY_FILE = path.resolve(
   __dirname,
   "../../infra/k8s/base/database-reliability-actuator/deployment.yaml"
 );
+const PREVIEW_OVERLAY_FILE = path.resolve(
+  __dirname,
+  "../../infra/k8s/overlays/preview/operator/kustomization.yaml"
+);
 
 interface AlertData {
   readonly refId: string;
@@ -238,5 +242,15 @@ describe("fleet Serve alert contract (bug.5459)", () => {
       );
       expect(externalSecret).not.toContain("GH_REVIEW_APP");
     }
+  });
+
+  it("derives preview probes from the cognidao.org fleet root", () => {
+    const previewOverlay = readFileSync(PREVIEW_OVERLAY_FILE, "utf8");
+    expect(previewOverlay).not.toMatch(
+      /name: FORK_DOMAIN_ROOT\s+value: cogni-testing\.org/
+    );
+    expect(
+      previewOverlay.match(/name: FORK_DOMAIN_ROOT\s+value: cognidao\.org/g)
+    ).toHaveLength(2);
   });
 });

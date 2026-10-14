@@ -3,7 +3,6 @@
 
 /** Authenticated, node-scoped ReliabilityStatusV1 read. Missing evidence returns unknown. */
 
-import { randomUUID } from "node:crypto";
 import { reliabilityStatusV1Schema } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 
@@ -135,6 +134,7 @@ export async function GET(
         tempBytesPct: null,
       },
     },
+    incidentId: null,
     incidentReason: "required reliability evidence is missing",
     observedAt: new Date().toISOString(),
     lastTransitionAt: null,
@@ -181,13 +181,31 @@ export async function POST(
   }
 
   const command = getContainer().reliabilityReadmit;
-  if (!command) {
+  const statusReader = getContainer().reliabilityStatusReader;
+  if (!command || !statusReader) {
     return NextResponse.json(
       { error: "reliability_readmit_unavailable" },
       { status: 503 }
     );
   }
-  const incidentId = `reliability-proof:${randomUUID()}`;
+  const currentStatus = await statusReader
+    .read({
+      nodeId: gate.node.nodeId,
+      nodeSlug: gate.node.slug,
+      environment: environment as Environment,
+    })
+    .catch(() => null);
+  if (
+    currentStatus?.state !== "contained" ||
+    !currentStatus.incidentId ||
+    !/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/.test(currentStatus.incidentId)
+  ) {
+    return NextResponse.json(
+      { error: "reliability_incident_unavailable" },
+      { status: 409 }
+    );
+  }
+  const incidentId = currentStatus.incidentId;
   const result = await command.readmit({
     nodeId: gate.node.nodeId,
     nodeSlug: gate.node.slug,

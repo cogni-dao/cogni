@@ -237,9 +237,18 @@ local check_dns="${CHECK_DNS:-true}"
 local remote_root="${ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT:-}"
 local app_wait_attempts="${ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS:-12}"
 local app_wait_sleep_seconds="${ASSERT_TARGET_SUBSTRATE_APP_WAIT_SLEEP_SECONDS:-5}"
+local expected_build_sha="__not_operator__"
+local expected_node_id="__not_operator__"
 
 [ -n "$vm_host" ] || fail "VM_HOST is required for type=node target '$node'"
 [ -n "$domain" ] || fail "DOMAIN is required for type=node target '$node'"
+if [ "$node" = operator ]; then
+  expected_build_sha="$(git -C "$APP_SOURCE_DIR" rev-parse HEAD)"
+  [[ "$expected_build_sha" =~ ^[0-9a-f]{40}$ ]] \
+    || fail "app source does not resolve an exact 40-hex build SHA"
+  expected_node_id="$(node_id_for_target "$node")" \
+    || fail "node_id missing for '$node'"
+fi
 
 contains_node=false
 for catalog_node in "${NODE_TARGETS[@]}"; do
@@ -332,6 +341,8 @@ node_port="$6"
 app_wait_attempts="$7"
 app_wait_sleep_seconds="$8"
 remote_root="${9:-}"
+expected_build_sha="${10}"
+expected_node_id="${11}"
 
 namespace="cogni-${env_name}"
 app_name="${env_name}-${node}"
@@ -368,6 +379,101 @@ if kubectl get namespace "$namespace" >/dev/null 2>&1; then
   mark_ok "namespace exists: $namespace"
 else
   mark_fail "namespace missing: $namespace"
+fi
+
+if [ "$node" = operator ]; then
+  actuator_deployment="operator-database-reliability-actuator"
+  readmitter_deployment="operator-database-reliability-readmitter"
+  operator_deployment="operator-node-app"
+  for controller in "$actuator_deployment" "$readmitter_deployment"; do
+    available="$(kubectl -n "$namespace" get deployment "$controller" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+    if [ "${available:-0}" -ge 1 ] 2>/dev/null; then
+      mark_ok "database reliability Deployment available: $controller"
+    else
+      mark_fail "database reliability Deployment unavailable: $controller (availableReplicas='${available:-0}')"
+    fi
+  done
+  operator_image="$(kubectl -n "$namespace" get deployment "$operator_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].image}' 2>/dev/null || true)"
+  actuator_image="$(kubectl -n "$namespace" get deployment "$actuator_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="actuator")].image}' 2>/dev/null || true)"
+  readmitter_image="$(kubectl -n "$namespace" get deployment "$readmitter_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="readmitter")].image}' 2>/dev/null || true)"
+  if [ -n "$operator_image" ] && [ "$actuator_image" = "$operator_image" ] && [ "$readmitter_image" = "$operator_image" ]; then
+    mark_ok "database reliability processes use the exact operator image"
+  else
+    mark_fail "database reliability image mismatch (operator='${operator_image:-absent}', actuator='${actuator_image:-absent}', readmitter='${readmitter_image:-absent}')"
+  fi
+
+  for secret_contract in \
+    "database-reliability-actuator-env-secrets:DATABASE_RELIABILITY_ADMIN_URL,DATABASE_RELIABILITY_STATUS_TOKEN" \
+    "database-reliability-readmitter-env-secrets:DATABASE_RELIABILITY_READMIT_URL,DATABASE_RELIABILITY_READMIT_TOKEN,DATABASE_RELIABILITY_STATUS_TOKEN"; do
+    secret_name="${secret_contract%%:*}"
+    key_csv="${secret_contract#*:}"
+    if ! kubectl -n "$namespace" get secret "$secret_name" >/dev/null 2>&1; then
+      mark_fail "database reliability Secret missing: $secret_name"
+      continue
+    fi
+    IFS=',' read -r -a required_control_keys <<<"$key_csv"
+    for required_control_key in "${required_control_keys[@]}"; do
+      if [ -n "$(kubectl -n "$namespace" get secret "$secret_name" -o jsonpath="{.data.${required_control_key}}" 2>/dev/null || true)" ]; then
+        mark_ok "database reliability Secret $secret_name carries $required_control_key"
+      else
+        mark_fail "database reliability Secret $secret_name missing $required_control_key"
+      fi
+    done
+  done
+
+  # The public app owns only bearer clients. Run the roundtrip from that exact
+  # network/secret boundary so the assertion never prints or exports a token.
+  if kubectl -n "$namespace" exec deployment/"$operator_deployment" -c app -- \
+    node --input-type=module -e '
+      const [expectedSha, nodeId, environment] = process.argv.slice(1);
+      const actuator = process.env.DATABASE_RELIABILITY_ACTUATOR_URL;
+      const readmitter = process.env.DATABASE_RELIABILITY_READMITTER_URL;
+      const statusToken = process.env.DATABASE_RELIABILITY_STATUS_TOKEN;
+      const readmitToken = process.env.DATABASE_RELIABILITY_READMIT_TOKEN;
+      if (!actuator || !readmitter || !statusToken || !readmitToken) process.exit(20);
+      const auth = { authorization: `Bearer ${statusToken}` };
+      const statusUrl = new URL("/v1/status", actuator);
+      statusUrl.searchParams.set("node_id", nodeId);
+      statusUrl.searchParams.set("node_slug", "operator");
+      statusUrl.searchParams.set("environment", environment);
+      const checkVersion = async (base) => {
+        const response = await fetch(new URL("/version", base));
+        const body = response.ok ? await response.json() : {};
+        if (!response.ok || body.buildSha !== expectedSha) process.exit(21);
+      };
+      await checkVersion(actuator);
+      await checkVersion(readmitter);
+      const status = await fetch(statusUrl, { headers: auth });
+      if (!status.ok) process.exit(22);
+      const body = await status.json();
+      if (body.nodeId !== nodeId || body.slug !== "operator" || body.environment !== environment) process.exit(23);
+      const ready = await fetch(new URL("/readyz", readmitter));
+      if (!ready.ok) process.exit(24);
+      // Exercise authentication and routing without permitting a state change:
+      // this valid-but-deliberately-noncurrent incident must be rejected before
+      // the evidence gate or readmission adapter is reached.
+      const readmitUrl = new URL("/v1/readmit", readmitter);
+      readmitUrl.searchParams.set("node_id", nodeId);
+      readmitUrl.searchParams.set("node_slug", "operator");
+      readmitUrl.searchParams.set("environment", environment);
+      const mismatchCandidate = `reliability.v1:flight-mismatch-${expectedSha}`;
+      const mismatchIncident = body.incidentId === mismatchCandidate
+        ? `${mismatchCandidate}-other`
+        : mismatchCandidate;
+      const rejectedReadmit = await fetch(readmitUrl, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${readmitToken}`,
+          "x-cogni-actor-id": "human:flight-assert",
+          "x-cogni-incident-id": mismatchIncident,
+        },
+      });
+      if (rejectedReadmit.status !== 409) process.exit(25);
+    ' "$expected_build_sha" "$expected_node_id" "$env_name"; then
+    mark_ok "database reliability exact-SHA, authenticated status, readiness, and harmless readmit-rejection roundtrips passed"
+  else
+    mark_fail "database reliability exact-SHA/authenticated/readiness roundtrip failed"
+  fi
 fi
 
 if kubectl -n argocd get applicationset "$appset_name" >/dev/null 2>&1; then
@@ -593,7 +699,8 @@ probe_log=$(mktemp)
 set +e
 "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
   "$DEPLOY_ENVIRONMENT" "$node" "$node_db" "$node_host" "$edge_key" "$node_port" \
-  "$app_wait_attempts" "$app_wait_sleep_seconds" "$remote_root" < "$remote_script" 2>&1 | tee "$probe_log"
+  "$app_wait_attempts" "$app_wait_sleep_seconds" "$remote_root" \
+  "$expected_build_sha" "$expected_node_id" < "$remote_script" 2>&1 | tee "$probe_log"
 ssh_rc=${PIPESTATUS[0]}
 set -e
 if grep -Eq '(^|\r)(\[FAIL\]|::error::assert-target-substrate:)' "$probe_log"; then

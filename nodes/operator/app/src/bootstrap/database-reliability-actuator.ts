@@ -20,6 +20,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import {
+  buildReliabilityReadinessQuery,
   createProductionDatabaseContainmentAdapter,
   createProductionDatabaseReadmissionAdapter,
   HttpLokiReader,
@@ -28,6 +29,8 @@ import {
   ProbeDeployAdapter,
 } from "@/adapters/server";
 import {
+  hasHealthyReadmissionWindow,
+  isReadmissionRuntimeReady,
   isReliabilitySweepReady,
   RELIABILITY_EVIDENCE_TTL_MS,
   type ReliabilityTarget,
@@ -235,31 +238,19 @@ async function assertReadmissionEvidence(
   const end = new Date();
   const start = new Date(end.getTime() - 5 * 60_000);
   const readiness = await metrics.queryRange({
-    query: `min_over_time(probe_success{environment="${target.environment}",node_slug="${target.slug}",proof_class="serve"}[1m])`,
+    query: buildReliabilityReadinessQuery({
+      environment: target.environment,
+      nodeSlug: target.slug,
+      window: "1m",
+    }),
     start,
     end,
     step: "60s",
   });
-  const expectedRegions = new Set(["Frankfurt", "Ohio"]);
-  const observedRegions = new Set(
-    readiness.result.map((series) => series.metric.probe ?? "")
-  );
-  const healthy =
-    readiness.result.length === expectedRegions.size &&
-    observedRegions.size === expectedRegions.size &&
-    [...observedRegions].every((region) => expectedRegions.has(region)) &&
-    readiness.result.every((series) => {
-      const samples = series.values.slice(-5);
-      return (
-        samples.length === 5 &&
-        samples.every((sample) => Number(sample[1]) >= 1) &&
-        samples.every(
-          (sample, index) =>
-            index === 0 || sample[0] - (samples[index - 1]?.[0] ?? 0) === 60
-        ) &&
-        end.getTime() / 1000 - (samples.at(-1)?.[0] ?? 0) <= 90
-      );
-    });
+  const healthy = hasHealthyReadmissionWindow({
+    nowMs: end.getTime(),
+    series: readiness.result,
+  });
   if (!healthy) throw new Error("database_readmission_evidence_incomplete");
 
   const deployed = await deploy.getDeployState({
@@ -452,7 +443,12 @@ const server = createServer(async (request, response) => {
     }
     if (request.url === "/readyz") {
       if (mode === "readmit") {
-        const ready = readmission !== null && (await listTargets()).length > 0;
+        const targets = await listTargets();
+        const ready = await isReadmissionRuntimeReady({
+          readmissionConfigured: readmission !== null,
+          targets,
+          status: readmissionStatus,
+        });
         response
           .writeHead(ready ? 200 : 503)
           .end(ready ? "ready" : "not ready");
@@ -556,7 +552,7 @@ const server = createServer(async (request, response) => {
       typeof actorId !== "string" ||
       !/^human:[a-zA-Z0-9._@:-]{1,120}$/.test(actorId) ||
       typeof incidentId !== "string" ||
-      !/^reliability-proof:[a-zA-Z0-9._:-]{1,160}$/.test(incidentId)
+      !/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/.test(incidentId)
     ) {
       response.writeHead(400).end("invalid readmission attribution");
       return;
@@ -565,8 +561,8 @@ const server = createServer(async (request, response) => {
       throw new Error("database_reliability_readmission_unavailable");
     }
     const before = await readmissionStatus.status(containmentInput);
-    if (before.phase !== "contained") {
-      response.writeHead(409).end("database is not contained");
+    if (before.phase !== "contained" || before.incidentId !== incidentId) {
+      response.writeHead(409).end("database incident is not current");
       return;
     }
     await assertReadmissionEvidence(target);

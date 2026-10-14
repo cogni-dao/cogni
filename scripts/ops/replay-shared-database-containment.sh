@@ -181,7 +181,20 @@ done
 
 readmit=$(curl -fsS --max-time 30 -X POST -H "Authorization: $RELIABILITY_READMIT_AUTH_HEADER" \
   -H 'content-type: application/json' --data '{"env":"candidate-a"}' "$RELIABILITY_READMIT_URL")
-jq -e '.phase == "open"' <<<"$readmit" >/dev/null || { echo "human readmission failed" >&2; exit 1; }
+jq -e --arg incidentId "$incident_id" '.phase == "open" and .incidentId == $incidentId' <<<"$readmit" >/dev/null || {
+  echo "human readmission failed or changed incident identity" >&2; exit 1;
+}
+now_ns=$(( $(date +%s) * 1000000000 ))
+readmit_log_query="{env=\"candidate-a\",service=\"database-reliability-readmitter\"} | json | event=\"feature.node_reliability.transition\" | action=\"readmitted\" | nodeId=\"$TARGET_NODE_ID\" | environment=\"candidate-a\" | incidentId=\"$incident_id\" | buildSha=\"$OPERATOR_BUILD_SHA\""
+readmit_audit=$(curl -fsS --get --max-time 10 -H "Authorization: $LOKI_AUTH_HEADER" \
+  --data-urlencode "query=$readmit_log_query" --data-urlencode "start=$start_ns" \
+  --data-urlencode "end=$now_ns" --data-urlencode 'limit=20' "$LOKI_QUERY_URL")
+jq -e --arg incidentId "$incident_id" --arg sha "$OPERATOR_BUILD_SHA" --arg nodeId "$TARGET_NODE_ID" '
+  [.data.result[].values[]?[1] | fromjson |
+    select(.action == "readmitted" and .incidentId == $incidentId and
+      .nodeId == $nodeId and .environment == "candidate-a" and
+      .buildSha == $sha)] | length == 1
+' <<<"$readmit_audit" >/dev/null || { echo "exact terminal readmission audit missing or ambiguous" >&2; exit 1; }
 psql "$TARGET_DATABASE_DSN" -Xv ON_ERROR_STOP=1 \
   -c 'DROP TABLE IF EXISTS public.reliability_noisy_neighbor_fixture'
 jq -cn --arg event complete --arg replayId "$replay_id" --arg at "$(date -u +%FT%TZ)" \

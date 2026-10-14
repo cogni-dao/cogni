@@ -64,6 +64,7 @@ export const reliabilityStatusV1Schema = z.object({
       tempBytesPct: z.number().min(0).max(100).nullable(),
     }),
   }),
+  incidentId: z.string().min(1).max(192).nullable(),
   incidentReason: z.string().min(1).max(128).nullable(),
   observedAt: z.string().datetime(),
   lastTransitionAt: z.string().datetime().nullable(),

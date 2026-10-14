@@ -34,6 +34,14 @@ import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 const logger = makeLogger({ component: "MimirMetricsAdapter" });
 
+export function buildReliabilityReadinessQuery(input: {
+  readonly environment: ReliabilityQueryParams["environment"];
+  readonly nodeSlug: string;
+  readonly window: "1m" | "5m";
+}): string {
+  return `min_over_time(probe_success{environment="${input.environment}",node_slug="${input.nodeSlug}",proof_class="serve"}[${input.window}])`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Template Query Configuration (GOVERNED_METRICS)
 // TODO: Extract to shared metrics-catalog.ts to sync with Alloy config + tool description
@@ -173,7 +181,11 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
     const node = params.nodeSlug;
     const identity = `environment="${env}",node_slug="${node}",database_tier="${params.databaseTier ?? "unknown"}",budget_profile="${params.budgetProfile ?? "unknown"}",policy_version="reliability-status-v1"`;
     const queries = {
-      readiness: `min_over_time(probe_success{environment="${env}",node_slug="${node}",proof_class="serve"}[5m])`,
+      readiness: buildReliabilityReadinessQuery({
+        environment: env,
+        nodeSlug: node,
+        window: "5m",
+      }),
       io: `cogni_reliability_v1_io_pressure_percent{${identity}}`,
       connections: `cogni_reliability_v1_connections_percent{${identity}}`,
       memory: `cogni_reliability_v1_memory_headroom_percent{${identity}}`,

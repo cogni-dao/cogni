@@ -5,6 +5,8 @@ import { reliabilityStatusV1Schema } from "@cogni/node-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   evaluateReliabilityPolicy,
+  hasHealthyReadmissionWindow,
+  isReadmissionRuntimeReady,
   isReliabilitySweepReady,
   reconcileReliabilityContainment,
   runReliabilitySweep,
@@ -15,6 +17,7 @@ const routeMocks = vi.hoisted(() => ({
   queryReliabilitySnapshot: vi.fn(),
   resolvePlacement: vi.fn(),
   readmit: vi.fn(),
+  readStatus: vi.fn(),
   getDeployState: vi.fn(),
 }));
 const ROUTE_NODE_ID = "123e4567-e89b-12d3-a456-426614174001";
@@ -35,7 +38,7 @@ vi.mock("@/app/_lib/node-rbac", () => ({
 }));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
-    reliabilityStatusReader: undefined,
+    reliabilityStatusReader: { read: routeMocks.readStatus },
     deployCapability: { getDeployState: routeMocks.getDeployState },
     metricsQuery: {
       queryReliabilitySnapshot: routeMocks.queryReliabilitySnapshot,
@@ -95,6 +98,7 @@ const healthy = {
       tempBytesPct: null,
     },
   },
+  incidentId: null,
 };
 
 describe("ReliabilityStatusV1 policy", () => {
@@ -136,6 +140,74 @@ describe("ReliabilityStatusV1 policy", () => {
       })
     ).toBe(false);
   });
+
+  it("rejects future-dated readmission samples", () => {
+    const nowMs = Date.now();
+    const nowSeconds = Math.floor(nowMs / 1000);
+    const samplesEndingAt = (endSeconds: number) =>
+      Array.from({ length: 5 }, (_, index) => [
+        endSeconds - (4 - index) * 60,
+        "1",
+      ]) as [number, string][];
+    expect(
+      hasHealthyReadmissionWindow({
+        nowMs,
+        series: [
+          {
+            metric: { probe: "Frankfurt" },
+            values: samplesEndingAt(nowSeconds),
+          },
+          {
+            metric: { region: "Ohio" },
+            values: samplesEndingAt(nowSeconds),
+          },
+        ],
+      })
+    ).toBe(true);
+    expect(
+      hasHealthyReadmissionWindow({
+        nowMs,
+        series: [
+          {
+            metric: { probe: "Frankfurt" },
+            values: samplesEndingAt(nowSeconds),
+          },
+          {
+            metric: { region: "Ohio" },
+            values: samplesEndingAt(nowSeconds + 16),
+          },
+        ],
+      })
+    ).toBe(false);
+  });
+
+  it("keeps the readmitter unready when sweep status is unreachable", async () => {
+    const target = {
+      nodeId: ROUTE_NODE_ID,
+      slug: "operator",
+      environment: "candidate-a" as const,
+      desiredTier: "shared" as const,
+      budgetProfile: "shared-default-v1",
+      sourceSha: ROUTE_BUILD_SHA,
+    };
+    const status = { status: vi.fn(async () => undefined as never) };
+    await expect(
+      isReadmissionRuntimeReady({
+        readmissionConfigured: true,
+        targets: [target],
+        status,
+      })
+    ).resolves.toBe(true);
+    status.status.mockRejectedValueOnce(new Error("sweep unavailable"));
+    await expect(
+      isReadmissionRuntimeReady({
+        readmissionConfigured: true,
+        targets: [target],
+        status,
+      })
+    ).resolves.toBe(false);
+  });
+
   it("fails closed when any required signal is missing", () => {
     expect(
       evaluateReliabilityPolicy({
@@ -617,6 +689,7 @@ describe("reliability HTTP boundaries", () => {
       incidentId: "audit-incident",
       lastTransitionAt: new Date().toISOString(),
     });
+    routeMocks.readStatus.mockRejectedValue(new Error("actuator unavailable"));
   });
 
   it("returns 200 unknown and resolves catalog at parent SHA on metrics failure", async () => {
@@ -655,6 +728,15 @@ describe("reliability HTTP boundaries", () => {
     );
     expect(rejected.status).toBe(400);
 
+    routeMocks.readStatus.mockResolvedValue({
+      ...healthy,
+      nodeId: ROUTE_NODE_ID,
+      slug: "poly",
+      environment: "candidate-a",
+      state: "contained",
+      incidentId: "reliability.v1:candidate-a:poly:123",
+    });
+
     const response = await POST_READMIT(
       new Request(
         "https://operator.example/api/v1/nodes/poly/observability/health",
@@ -668,7 +750,10 @@ describe("reliability HTTP boundaries", () => {
     );
     expect(response.status).toBe(200);
     expect(routeMocks.readmit).toHaveBeenCalledWith(
-      expect.objectContaining({ actorId: "user-1" })
+      expect.objectContaining({
+        actorId: "user-1",
+        incidentId: "reliability.v1:candidate-a:poly:123",
+      })
     );
     expect(routeMocks.readmit).not.toHaveBeenCalledWith(
       expect.objectContaining({ actorId: "system:spoof" })
