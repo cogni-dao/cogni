@@ -19,6 +19,7 @@
  */
 
 import {
+  Activity,
   Boxes,
   Brain,
   Crosshair,
@@ -35,6 +36,7 @@ import {
 
 /** Curated brand-icon set — keyed by the PascalCase Lucide name stored in repo-spec. */
 const BRAND_ICONS = {
+  Activity,
   Boxes,
   Brain,
   Crosshair,
