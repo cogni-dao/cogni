@@ -443,13 +443,14 @@ END
 \$membership\$;"
   run_sql_as_root postgres "GRANT \"$app_role\" TO \"$migration_role\";"
 
-  # PG15 grants SET on USERSET parameters to PUBLIC by default. Defaults alone
-  # are bypassable, so revoke the five resource parameters globally and grant
-  # migration's reviewed 15-minute allowance is a root-set role default, not a
-  # SET privilege; the credential cannot raise it (or any other ceiling).
-  for bounded_parameter in statement_timeout lock_timeout idle_in_transaction_session_timeout temp_file_limit work_mem; do
-    run_sql_as_root postgres "REVOKE SET ON PARAMETER $bounded_parameter FROM PUBLIC;"
-  done
+  # PG15 USERSET parameters remain session-overridable by definition: the
+  # statement_timeout, lock_timeout, idle_in_transaction_session_timeout, and
+  # work_mem values below are intentionally fresh-session defaults, not ceilings.
+  # Parameter ACLs cannot change that semantic. temp_file_limit is
+  # SUSET, so explicitly remove any direct drifted SET grant from every node
+  # identity. Connection limits and temp-file limits are hard admission/resource
+  # controls; the remaining values are catalog-selected fresh-session defaults.
+  run_sql_as_root postgres "REVOKE SET ON PARAMETER temp_file_limit FROM PUBLIC, \"$app_role\", \"$svc_role\", \"$migration_role\";"
   run_sql_as_root postgres "ALTER ROLE \"$migration_role\" SET statement_timeout = '900000ms';"
   run_sql_as_root postgres "ALTER ROLE \"$migration_role\" SET lock_timeout = '${DB_LOCK_TIMEOUT_MS}ms';"
   run_sql_as_root postgres "ALTER ROLE \"$migration_role\" SET idle_in_transaction_session_timeout = '${DB_IDLE_IN_TRANSACTION_TIMEOUT_MS}ms';"
@@ -578,25 +579,26 @@ END
     "$svc_role:$APP_SERVICE_PASS"; do
     runtime_role="${runtime_credential%%:*}"
     runtime_password="${runtime_credential#*:}"
-    for bounded_parameter in statement_timeout lock_timeout idle_in_transaction_session_timeout temp_file_limit work_mem; do
-      case "$bounded_parameter" in
-        statement_timeout|lock_timeout|idle_in_transaction_session_timeout) attempted_value="1h" ;;
-        temp_file_limit|work_mem) attempted_value="1GB" ;;
-      esac
-      if PGPASSWORD="$runtime_password" psql -h "$PG_HOST" -p "$PG_PORT" -U "$runtime_role" -d "$db_name" \
-        -v ON_ERROR_STOP=1 -c "SET $bounded_parameter = '$attempted_value'" >/dev/null 2>&1; then
-        echo "❌ ERROR: runtime role '$runtime_role' can override bounded parameter '$bounded_parameter'"
-        exit 1
-      fi
-    done
+    session_budget="$(PGPASSWORD="$runtime_password" psql -h "$PG_HOST" -p "$PG_PORT" -U "$runtime_role" -d "$db_name" \
+      -XAtv ON_ERROR_STOP=1 -c "SELECT string_agg(setting, ':' ORDER BY array_position(ARRAY['statement_timeout','lock_timeout','idle_in_transaction_session_timeout','temp_file_limit','work_mem'], name)) FROM pg_settings WHERE name = ANY (ARRAY['statement_timeout','lock_timeout','idle_in_transaction_session_timeout','temp_file_limit','work_mem'])")"
+    expected_statement_timeout="$DB_APP_STATEMENT_TIMEOUT_MS"
+    [ "$runtime_role" = "$svc_role" ] && expected_statement_timeout="$DB_SERVICE_STATEMENT_TIMEOUT_MS"
+    expected_session_budget="${expected_statement_timeout}:${DB_LOCK_TIMEOUT_MS}:${DB_IDLE_IN_TRANSACTION_TIMEOUT_MS}:$((DB_TEMP_FILE_LIMIT_MIB * 1024)):$((DB_WORK_MEM_MIB * 1024))"
+    [ "$session_budget" = "$expected_session_budget" ] \
+      || { echo "❌ ERROR: runtime role '$runtime_role' fresh-session budget mismatch: '$session_budget'"; exit 1; }
+    if PGPASSWORD="$runtime_password" psql -h "$PG_HOST" -p "$PG_PORT" -U "$runtime_role" -d "$db_name" \
+      -v ON_ERROR_STOP=1 -c "SET temp_file_limit = '1GB'" >/dev/null 2>&1; then
+      echo "❌ ERROR: runtime role '$runtime_role' can override enforced temp_file_limit"
+      exit 1
+    fi
   done
   migration_identity="$(PGPASSWORD="$MIGRATION_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$migration_role" -d "$db_name" -XAtv ON_ERROR_STOP=1 \
     -c "SELECT session_user || ':' || current_user || ':' || current_setting('statement_timeout')")"
   [[ "$migration_identity" == "$migration_role:$app_role:15min" || "$migration_identity" == "$migration_role:$app_role:900s" ]] \
     || { echo "❌ ERROR: migration role identity/budget readback failed: '$migration_identity'"; exit 1; }
   if PGPASSWORD="$MIGRATION_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$migration_role" -d "$db_name" \
-    -v ON_ERROR_STOP=1 -c "SET statement_timeout = '1h'" >/dev/null 2>&1; then
-    echo "❌ ERROR: migration role can override its bounded statement_timeout"
+    -v ON_ERROR_STOP=1 -c "SET temp_file_limit = '1GB'" >/dev/null 2>&1; then
+    echo "❌ ERROR: migration role can override enforced temp_file_limit"
     exit 1
   fi
 

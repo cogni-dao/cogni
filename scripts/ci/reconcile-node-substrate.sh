@@ -502,7 +502,7 @@ mark_row migration_externalsecret ready "migration-only DSN projected outside no
 
 # The operator reliability controller is a stacked deploy surface (task.5247),
 # but its credential substrate is owned here. When that surface is present in
-# the exact app source, install and wait its two control-plane ExternalSecrets
+# the exact app source, install and wait its three control-plane ExternalSecrets
 # now—after materialization and before candidate assert can observe the app.
 # Rendering only these leaves avoids applying workloads from a privileged
 # substrate lane; names match the operator overlay's kustomize namePrefix.
@@ -516,10 +516,10 @@ if [[ "$TARGET_NODE" == operator && -f "$database_reliability_es_file" ]]; then
       "$operator_es_file" > "$database_reliability_es_tmp"
   printf '\n---\n' >> "$database_reliability_es_tmp"
   RELIABILITY_NAMESPACE="cogni-${DEPLOY_ENVIRONMENT}" \
-    yq 'select(.kind == "ExternalSecret" and .metadata.name == "database-reliability-actuator-env-secrets") | .metadata.name = "operator-database-reliability-actuator-env-secrets" | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
+    yq 'select(.kind == "ExternalSecret" and (.metadata.name == "database-reliability-actuator-env-secrets" or .metadata.name == "database-reliability-readmitter-env-secrets")) | .metadata.name = "operator-" + .metadata.name | .metadata.namespace = strenv(RELIABILITY_NAMESPACE)' \
       "$database_reliability_es_file" >> "$database_reliability_es_tmp"
-  [[ "$(yq ea '.kind' "$database_reliability_es_tmp" | grep -cx ExternalSecret)" == 2 ]] \
-    || fail "database reliability substrate must render exactly two ExternalSecrets"
+  [[ "$(yq ea '.kind' "$database_reliability_es_tmp" | grep -cx ExternalSecret)" == 3 ]] \
+    || fail "database reliability substrate must render exactly three ExternalSecrets"
   copy_to_remote "$database_reliability_es_tmp" "/tmp/${DEPLOY_ENVIRONMENT}-database-reliability-external-secrets.yaml"
   remote "set -euo pipefail
     ns='cogni-${DEPLOY_ENVIRONMENT}'
@@ -527,13 +527,28 @@ if [[ "$TARGET_NODE" == operator && -f "$database_reliability_es_file" ]]; then
     kubectl apply -f \"\$manifest\" >/dev/null
     rm -f \"\$manifest\"
     marker=\$(date +%s)
-    for es in operator-env-secrets operator-database-reliability-actuator-env-secrets; do
+    for es in operator-env-secrets operator-database-reliability-actuator-env-secrets operator-database-reliability-readmitter-env-secrets; do
+      before_refresh=\$(kubectl -n \"\$ns\" get externalsecret \"\$es\" -o jsonpath='{.status.refreshTime}' 2>/dev/null || true)
       kubectl -n \"\$ns\" annotate externalsecret \"\$es\" force-sync=\"\$marker\" --overwrite >/dev/null
       kubectl -n \"\$ns\" wait --for=condition=Ready \"externalsecret/\$es\" --timeout=120s >/dev/null
+      refreshed=false
+      for _ in \$(seq 1 60); do
+        after_refresh=\$(kubectl -n \"\$ns\" get externalsecret \"\$es\" -o jsonpath='{.status.refreshTime}' 2>/dev/null || true)
+        if [[ -n \"\$after_refresh\" && \"\$after_refresh\" != \"\$before_refresh\" ]]; then refreshed=true; break; fi
+        sleep 2
+      done
+      \$refreshed || { echo 'ExternalSecret refresh did not advance:' \"\$es\" >&2; exit 1; }
     done
-    kubectl -n \"\$ns\" get secret operator-env-secrets >/dev/null
-    kubectl -n \"\$ns\" get secret database-reliability-actuator-env-secrets >/dev/null"
-  mark_row database_reliability_externalsecrets ready "applied + waited operator client and private actuator ExternalSecrets"
+    for key in DATABASE_RELIABILITY_STATUS_TOKEN DATABASE_RELIABILITY_READMIT_TOKEN; do
+      kubectl -n \"\$ns\" get secret operator-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
+    done
+    for key in DATABASE_RELIABILITY_ADMIN_URL DATABASE_RELIABILITY_STATUS_TOKEN PROMETHEUS_READ_USERNAME PROMETHEUS_READ_PASSWORD GRAFANA_SERVICE_ACCOUNT_TOKEN; do
+      kubectl -n \"\$ns\" get secret database-reliability-actuator-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
+    done
+    for key in DATABASE_RELIABILITY_READMIT_URL DATABASE_RELIABILITY_READMIT_TOKEN DATABASE_RELIABILITY_STATUS_TOKEN PROMETHEUS_READ_USERNAME PROMETHEUS_READ_PASSWORD; do
+      kubectl -n \"\$ns\" get secret database-reliability-readmitter-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
+    done"
+  mark_row database_reliability_externalsecrets ready "freshly reconciled operator, actuator, and readmitter ExternalSecrets"
 fi
 
 edge_reconcile_snippet=""

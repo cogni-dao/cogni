@@ -149,6 +149,11 @@ if [ "${1:-}" = "-n" ] && [ "${3:-}" = "delete" ] && [ "${4:-}" = "externalsecre
   printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
   exit 0
 fi
+if [ "${1:-}" = "-n" ] && [ "${3:-}" = "get" ] && [ "${4:-}" = "externalsecret" ] && printf '%s\n' "$*" | grep -q 'status.refreshTime'; then
+  state="${FAKE_REMOTE_ROOT}/refresh-${5:-unknown}"
+  if [ -f "$state" ]; then cat "$state"; else printf '%s' 'refresh-0'; fi
+  exit 0
+fi
 if [ "${1:-}" = "apply" ]; then
   cat >/dev/null
   exit 0
@@ -158,6 +163,10 @@ if [ "${1:-}" = "-n" ] && [ "${3:-}" = "apply" ]; then
 fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "annotate" ] && [ "${4:-}" = "externalsecret" ]; then
   printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
+  state="${FAKE_REMOTE_ROOT}/refresh-${5:-unknown}"
+  count=0
+  [ ! -f "$state" ] || count="$(sed 's/^refresh-//' "$state")"
+  printf 'refresh-%s' "$((count + 1))" > "$state"
   exit 0
 fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "wait" ]; then
@@ -166,9 +175,7 @@ if [ "${1:-}" = "-n" ] && [ "${3:-}" = "wait" ]; then
 fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "get" ] && [ "${4:-}" = "secret" ]; then
   printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
-  if printf '%s\n' "$*" | grep -q 'DATABASE_MIGRATION_URL'; then
-    printf '%s' 'cG9zdGdyZXNxbDovL21pZ3JhdGlvbg=='
-  fi
+  if printf '%s\n' "$*" | grep -q 'jsonpath='; then printf '%s' 'cHJlc2VudA=='; fi
   exit 0
 fi
 if [ "${1:-}" = "exec" ]; then
@@ -284,6 +291,32 @@ fi
 EOF
 chmod +x "$FAKEBIN/hostname"
 
+# The reliability manifests are stacked in task.5247, so make their exact
+# two-ExternalSecret contract explicit here instead of silently skipping the
+# task.5246 reconciliation branch when this prerequisite PR runs standalone.
+APP_FIXTURE="$TMPROOT/app-src"
+mkdir -p \
+  "$APP_FIXTURE/infra/k8s/overlays/candidate-a/operator" \
+  "$APP_FIXTURE/nodes/operator/k8s/external-secrets/candidate-a"
+ln -s "$REPO_ROOT/nodes/operator/.cogni" "$APP_FIXTURE/nodes/operator/.cogni"
+ln -s "$REPO_ROOT/infra/catalog" "$APP_FIXTURE/infra/catalog"
+ln -s "$REPO_ROOT/infra/database-budget-profiles.yaml" "$APP_FIXTURE/infra/database-budget-profiles.yaml"
+ln -s "$REPO_ROOT/infra/k8s/overlays/candidate-a/operator/external-secret.yaml" \
+  "$APP_FIXTURE/infra/k8s/overlays/candidate-a/operator/external-secret.yaml"
+ln -s "$REPO_ROOT/nodes/operator/k8s/external-secrets/candidate-a/external-secret.yaml" \
+  "$APP_FIXTURE/nodes/operator/k8s/external-secrets/candidate-a/external-secret.yaml"
+cat > "$APP_FIXTURE/infra/k8s/overlays/candidate-a/operator/database-reliability-actuator-external-secret.yaml" <<'EOF'
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: { name: database-reliability-actuator-env-secrets }
+spec: { target: { name: database-reliability-actuator-env-secrets } }
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: { name: database-reliability-readmitter-env-secrets }
+spec: { target: { name: database-reliability-readmitter-env-secrets } }
+EOF
+
 # Read-only reconcile: the superuser (POSTGRES_ROOT) stays in the VM runtime .env
 # that the db-provision compose service reads; per-node app/service passwords come
 # from OpenBao (the put_secret operator ... above), read via the db-reader token —
@@ -298,6 +331,7 @@ env \
   FAKE_REMOTE_PATH="$FAKEBIN" \
   FAKE_BAO_ROOT="$BAO_ROOT" \
   FAKE_LEGACY_EXTERNAL_SECRET_TARGET="operator-env-secrets" \
+  APP_SOURCE_DIR="$APP_FIXTURE" \
   SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/summary.json" \
   bash scripts/ci/reconcile-node-substrate.sh candidate-a operator > "$TMPROOT/out.txt"
 
@@ -307,6 +341,10 @@ grep -q -- "-n cogni-candidate-a delete externalsecret env-secrets" "$REMOTE_ROO
 grep -q -- "-n cogni-candidate-a annotate externalsecret operator-env-secrets force-sync=" "$REMOTE_ROOT/kubectl.log"
 grep -q -- "-n cogni-candidate-a wait --for=condition=Ready externalsecret/operator-env-secrets --timeout=120s" "$REMOTE_ROOT/kubectl.log"
 grep -q -- "-n cogni-candidate-a get secret operator-env-secrets" "$REMOTE_ROOT/kubectl.log"
+grep -q -- "annotate externalsecret operator-database-reliability-actuator-env-secrets force-sync=" "$REMOTE_ROOT/kubectl.log"
+grep -q -- "annotate externalsecret operator-database-reliability-readmitter-env-secrets force-sync=" "$REMOTE_ROOT/kubectl.log"
+grep -q -- "get secret database-reliability-actuator-env-secrets -o jsonpath={.data.DATABASE_RELIABILITY_ADMIN_URL}" "$REMOTE_ROOT/kubectl.log"
+grep -q -- "get secret database-reliability-readmitter-env-secrets -o jsonpath={.data.DATABASE_RELIABILITY_READMIT_URL}" "$REMOTE_ROOT/kubectl.log"
 operator_node_id="$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)"
 grep -q -- "--ns cogni-candidate-a" "$REMOTE_ROOT/docker.log"
 grep -q -- "--ns cogni-candidate-a-${operator_node_id}" "$REMOTE_ROOT/docker.log"
@@ -376,7 +414,9 @@ if grep -q 'DATABASE_MIGRATION_URL\|migration-secrets' <<<"$app_container"; then
   exit 1
 fi
 printf '%s' "$rendered_node" | yq -e 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "migrate") | .env[] | select(.name == "DATABASE_URL") | .valueFrom.secretKeyRef.name == "operator-migration-secrets"' >/dev/null
-grep -q 'runtime role.*can override bounded parameter' "$provisioner"
+grep -q 'runtime role.*fresh-session budget mismatch' "$provisioner"
+grep -q 'runtime role.*can override enforced temp_file_limit' "$provisioner"
+grep -q 'work_mem values below are intentionally fresh-session defaults, not ceilings' "$provisioner"
 grep -q 'migration role identity/budget readback failed' "$provisioner"
 if grep -q 'app_readonly.*DB_.*TIMEOUT\|ALTER ROLE.*APP_READONLY.*CONNECTION LIMIT' "$provisioner"; then
   echo "shared app_readonly must stay outside per-node budget profiles" >&2
@@ -392,8 +432,11 @@ grep -q 'REVOKE ALL ON FUNCTION public.readmit_database_role' "$provisioner"
 grep -q 'GRANT EXECUTE ON FUNCTION public.readmit_database_role.*READMITTER_ROLE' "$provisioner"
 grep -q "session_user <> '\$RELIABILITY_ROLE'" "$provisioner"
 grep -q "session_user <> '\$READMITTER_ROLE'" "$provisioner"
-grep -q 'run_sql_as_root postgres "REVOKE SET ON PARAMETER \$bounded_parameter FROM PUBLIC;"' "$provisioner"
-grep -q 'GRANT SET ON PARAMETER statement_timeout.*migration_role' "$provisioner"
+grep -q 'REVOKE SET ON PARAMETER temp_file_limit FROM PUBLIC' "$provisioner"
+if grep -q 'REVOKE SET ON PARAMETER statement_timeout FROM PUBLIC' "$provisioner"; then
+  echo "PG15 USERSET parameter ACL must not be claimed as a hard ceiling" >&2
+  exit 1
+fi
 grep -q "target_role !~ '\^(app|service)_" "$provisioner"
 grep -q "database_role_boundary.datname = 'cogni_'" "$provisioner"
 grep -q "app_owner.rolname = 'app_'" "$provisioner"

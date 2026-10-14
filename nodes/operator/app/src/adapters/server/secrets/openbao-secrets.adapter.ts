@@ -30,7 +30,7 @@ import type {
   WriteNodeSecretResult,
   WriteNodeSecretsInput,
   WriteNodeSecretsResult,
-} from "@/ports/operator-secrets-plane.port";
+} from "@/ports";
 
 export interface OpenBaoSecretsAdapterDeps {
   /** OpenBao ClusterIP base, e.g. `http://openbao.openbao.svc:8200`. */

@@ -293,7 +293,10 @@ export type {
   VerificationStatus,
 } from "./onchain-verifier.port";
 export type {
+  CompareAndSwapNodeSecretsInput,
   OperatorSecretsPlanePort,
+  ReadNodeSecretsInput,
+  ReadNodeSecretsResult,
   SecretWriteOp,
   WriteNodeSecretInput,
   WriteNodeSecretResult,

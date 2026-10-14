@@ -63,21 +63,9 @@ patches:
       kind: Deployment
       name: node-app
     patch: |
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: node-app
-      spec:
-        template:
-          spec:
-            initContainers:
-              - name: migrate
-                env:
-                  - name: DATABASE_URL
-                    valueFrom:
-                      secretKeyRef:
-                        name: operator-migration-secrets
-                        key: DATABASE_MIGRATION_URL
+      - op: replace
+        path: /spec/template/spec/initContainers/0/env/0/valueFrom/secretKeyRef/name
+        value: operator-migration-secrets
   # story.5016 Gate 0b: actuator env values are set BY NAME via strategic
   # merge (env lists merge on `name`), never by positional JSON-pointer index.
   # A positional `/env/N/value` patch silently repoints when the base list
