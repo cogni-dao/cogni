@@ -42,6 +42,10 @@ const PREVIEW_OVERLAY_FILE = path.resolve(
   __dirname,
   "../../infra/k8s/overlays/preview/operator/kustomization.yaml"
 );
+const CANDIDATE_FLIGHT_FILE = path.resolve(
+  __dirname,
+  "../../.github/workflows/candidate-flight.yml"
+);
 
 interface AlertData {
   readonly refId: string;
@@ -252,5 +256,33 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     expect(
       previewOverlay.match(/name: FORK_DOMAIN_ROOT\s+value: cognidao\.org/g)
     ).toHaveLength(2);
+  });
+
+  it("gates reliability runtime only after promotion and exact-SHA proof", () => {
+    const workflow = readFileSync(CANDIDATE_FLIGHT_FILE, "utf8");
+    const preflight = workflow.indexOf("- name: Assert target substrate");
+    const preflightMarker = workflow.indexOf(
+      "- name: Emit per-node assert marker"
+    );
+    const exactSha = workflow.indexOf(
+      "- name: Verify buildSha on endpoint (per-node)"
+    );
+    const runtime = workflow.indexOf(
+      "- name: Assert promoted database reliability runtime"
+    );
+    const smoke = workflow.indexOf(
+      "- name: Run candidate smoke checks (per-node)"
+    );
+    expect(preflight).toBeGreaterThan(-1);
+    expect(preflightMarker).toBeGreaterThan(preflight);
+    expect(exactSha).toBeGreaterThan(preflightMarker);
+    expect(runtime).toBeGreaterThan(exactSha);
+    expect(smoke).toBeGreaterThan(runtime);
+    expect(workflow.slice(preflight, preflightMarker)).toContain(
+      'ASSERT_DATABASE_RELIABILITY_RUNTIME: "false"'
+    );
+    expect(workflow.slice(runtime, smoke)).toContain(
+      'ASSERT_DATABASE_RELIABILITY_RUNTIME: "true"'
+    );
   });
 });

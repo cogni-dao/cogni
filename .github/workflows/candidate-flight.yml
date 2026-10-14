@@ -943,6 +943,9 @@ jobs:
           COGNI_CATALOG_ROOT: app-src/infra/catalog
           ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS: 60
           ASSERT_TARGET_SUBSTRATE_APP_WAIT_SLEEP_SECONDS: 5
+          # Shape/secret preflight runs before digest promotion. Runtime checks
+          # would deadlock a cold start by requiring the not-yet-promoted image.
+          ASSERT_DATABASE_RELIABILITY_RUNTIME: "false"
         run: bash ci-src/scripts/ci/assert-target-substrate.sh
 
       # Per-cell success marker (Axiom 18): full substrate readiness for THIS
@@ -2037,6 +2040,23 @@ jobs:
           # stale-bundle hole that let two agents "test" pre-fix code.
           VERIFY_BUNDLE_MARKER: "1"
         run: bash ci-src/scripts/ci/verify-buildsha.sh
+
+      - name: Assert promoted database reliability runtime
+        if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node == 'operator'
+        env:
+          TARGET: operator
+          VM_HOST: ${{ secrets.VM_HOST }}
+          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
+          DEPLOY_ENVIRONMENT: candidate-a
+          DOMAIN: ${{ vars.CANDIDATE_OPERATOR_DOMAIN || format('test.{0}', vars.FORK_DOMAIN_ROOT || 'cognidao.org') }}
+          FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
+          CHECK_DNS: "false"
+          APP_SOURCE_DIR: app-src
+          COGNI_CATALOG_ROOT: app-src/infra/catalog
+          ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS: 60
+          ASSERT_TARGET_SUBSTRATE_APP_WAIT_SLEEP_SECONDS: 5
+          ASSERT_DATABASE_RELIABILITY_RUNTIME: "true"
+        run: bash ci-src/scripts/ci/assert-target-substrate.sh
 
       - name: Run candidate smoke checks (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true'
