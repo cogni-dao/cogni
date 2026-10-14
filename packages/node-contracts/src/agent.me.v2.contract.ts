@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@contracts/agent.me.v2.contract`
  * Purpose: Self-introspection for human sessions, legacy agents, and durable agents.
- * Scope: Identity, credential liveness, and directly assigned node roles only.
+ * Scope: Identity, credential liveness, and directly assigned node roles only; does not grant or mutate access.
  * Invariants: SELF_ONLY; CREDENTIAL_NE_PRINCIPAL; HUMAN_AND_AGENT_ARE_DISTINCT.
  * Side-effects: none
  * Links: story.5075, task.5252, docs/spec/identity-model.md
