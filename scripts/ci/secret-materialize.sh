@@ -512,6 +512,34 @@ for k in "${LITELLM_SYNC_KEYS[@]}"; do
 done
 flush_batch
 
+# Migration credentials are deliberately NOT part of the node bucket. Every
+# node app Secret is projected wholesale into the runtime container, whereas
+# this identity can SET ROLE to the object owner and receives a bounded 15m
+# statement timeout. Keep the password + composed DSN in a separate per-node
+# OpenBao bucket consumed only by migration init/Job projections.
+migration_service="${TARGET_NODE}-database-migration"
+prefetch_path "$migration_service"
+migration_password="$(bao_get_field "$migration_service" APP_DB_MIGRATION_PASSWORD)"
+if [[ -z "$migration_password" ]]; then
+  # Preserve an early-development value if it was already minted in the node
+  # bucket; otherwise generate exactly once in the isolated bucket.
+  migration_password="$(bao_get_field "$TARGET_NODE" APP_DB_MIGRATION_PASSWORD)"
+  [[ -n "$migration_password" ]] || migration_password="$(_resolve_node_value "$migration_service" APP_DB_MIGRATION_PASSWORD)"
+  [[ -n "$migration_password" ]] || fail "migration password generation returned empty"
+  seed_kv "$migration_service" APP_DB_MIGRATION_PASSWORD "$migration_password"
+  created=$((created + 1))
+fi
+migration_dsn="$(_compose_node_value "$TARGET_NODE" DATABASE_MIGRATION_URL)"
+[[ -n "$migration_dsn" ]] || fail "migration DSN composition returned empty"
+if [[ "$(bao_get_field "$migration_service" DATABASE_MIGRATION_URL)" == "$migration_dsn" ]]; then
+  unchanged=$((unchanged + 1))
+else
+  rm -f "${CACHE_DIR}/${migration_service}/DATABASE_MIGRATION_URL"
+  seed_kv "$migration_service" DATABASE_MIGRATION_URL "$migration_dsn"
+  created=$((created + 1))
+fi
+flush_batch "$migration_service"
+
 # ── Platform-service agent secrets (non-node OpenBao buckets) ─────────────────
 # PLATFORM_SERVICES (reconcile-secrets.sh) own `cogni/<env>/<service>/*` instead of
 # borrowing a node's bucket, because the operator app consumes the WHOLE operator bucket
@@ -537,6 +565,9 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
     )
     for k in "${svc_keys[@]}"; do
       [[ -n "$k" ]] || continue
+      # This DSN depends on the generated component password in the same batch,
+      # so compose it after the random-key pass below regardless of sort order.
+      [[ "$k" == "DATABASE_RELIABILITY_ADMIN_URL" || "$k" == "DATABASE_RELIABILITY_READMIT_URL" ]] && continue
       if [[ -f "${CACHE_DIR}/${svc}/${k}" ]]; then
         unchanged=$((unchanged + 1))
         continue
@@ -549,6 +580,37 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
       log "  created ${k} → cogni/${DEPLOY_ENVIRONMENT}/${svc}"
       created=$((created + 1))
     done
+    if [[ "$svc" == "database-reliability-actuator" ]]; then
+      reliability_password="$(bao_get_field "$svc" DATABASE_RELIABILITY_PASSWORD)"
+      [[ -n "$reliability_password" ]] \
+        || fail "platform-service ${svc} did not materialize DATABASE_RELIABILITY_PASSWORD"
+      reliability_dsn="$(_compose_node_value "$svc" DATABASE_RELIABILITY_ADMIN_URL)"
+      [[ -n "$reliability_dsn" ]] \
+        || fail "platform-service ${svc} produced an empty DATABASE_RELIABILITY_ADMIN_URL"
+      if [[ "$(bao_get_field "$svc" DATABASE_RELIABILITY_ADMIN_URL)" == "$reliability_dsn" ]]; then
+        unchanged=$((unchanged + 1))
+      else
+        rm -f "${CACHE_DIR}/${svc}/DATABASE_RELIABILITY_ADMIN_URL"
+        seed_kv "$svc" DATABASE_RELIABILITY_ADMIN_URL "$reliability_dsn"
+        log "  recomposed DATABASE_RELIABILITY_ADMIN_URL → cogni/${DEPLOY_ENVIRONMENT}/${svc} (drift corrected)"
+        created=$((created + 1))
+      fi
+    fi
+    if [[ "$svc" == "database-reliability-readmitter" ]]; then
+      readmit_password="$(bao_get_field "$svc" DATABASE_RELIABILITY_READMIT_PASSWORD)"
+      [[ -n "$readmit_password" ]] \
+        || fail "platform-service ${svc} did not materialize DATABASE_RELIABILITY_READMIT_PASSWORD"
+      readmit_dsn="$(_compose_node_value "$svc" DATABASE_RELIABILITY_READMIT_URL)"
+      [[ -n "$readmit_dsn" ]] \
+        || fail "platform-service ${svc} produced an empty DATABASE_RELIABILITY_READMIT_URL"
+      if [[ "$(bao_get_field "$svc" DATABASE_RELIABILITY_READMIT_URL)" == "$readmit_dsn" ]]; then
+        unchanged=$((unchanged + 1))
+      else
+        rm -f "${CACHE_DIR}/${svc}/DATABASE_RELIABILITY_READMIT_URL"
+        seed_kv "$svc" DATABASE_RELIABILITY_READMIT_URL "$readmit_dsn"
+        created=$((created + 1))
+      fi
+    fi
     flush_batch "$svc"
   done
 fi

@@ -43,7 +43,9 @@ pnpm dev:stack                # Same as above, but hits real LiteLLM/OpenRouter
 
 **Database Security Model**: Two-user PostgreSQL architecture separating administrative and application access.
 
-**Per-Node Databases (DB_PER_NODE):** Each node gets its own database on a shared Postgres server. The database IS the node boundary — no tenancy columns. See [Multi-Node Tenancy](multi-node-tenancy.md).
+**Per-Node Databases (DB_PER_NODE):** Each node gets its own database. Small nodes use the bounded shared Postgres tier; a measured outlier uses an operator-managed dedicated state cell with its own provider VM, Postgres process, and fixed block volume. Placement changes the failure domain, never schema ownership: the database remains the node boundary and no tenancy columns are introduced. See [Multi-Node Tenancy](multi-node-tenancy.md).
+
+Dedicated state-cell capacity is selected from the catalog's named database budget profile, not caller-supplied provider sizes. Provisioning resolves the least-cost provider plan meeting that profile and persists a receipt binding node/environment/idempotency identity, provider project/region/resource IDs, compute and storage SKUs, allocated capacity, image, reviewed build SHA, and provider cost metadata captured at provision. Cherry's API plan quote supplies the exact compute rate for the requested hourly billing cycle; its storage API publishes size/SKU but no exact region/SKU price. The receipt therefore remains `complete: false`, scopes its total fields to compute, marks `exact-storage` unquoted, and separately records Cherry's fetched official [Elastic Block Storage](https://www.cherryservers.com/pricing) **“From”** rate as a provider-published minimum estimate with source and timestamp. It never presents that floor as exact storage cost or adds it to a total. The normalized compute month is hourly × 730; Cherry's discounted alternate monthly-cycle quote is retained under an explicitly separate field. Exact billing settlement is deferred to story.5088; purge policy remains outside this lifecycle contract. Provider `active` is not database readiness: provision and status both additionally require endpoint reachability and database identity/schema verification before returning `ready`.
 
 **Postgres vs Doltgres:** This spec covers the Postgres (awareness plane) side. The knowledge plane runs on a separate Doltgres server with per-node `knowledge_<node>` databases and git-like versioning — see [Knowledge Data Plane](knowledge-data-plane.md).
 
@@ -58,6 +60,27 @@ pnpm dev:stack                # Same as above, but hits real LiteLLM/OpenRouter
 
 All stack deployment modes use the same migration tooling but connect to appropriate database instances. Test environments always use the test database and reset it between test runs.
 
+### Database placement and budgets
+
+Database state is distinct from app compute. A dedicated cell is provisioned on a provider VM and fixed block volume; it is never placed in an Akash app lease. The node repo-spec declares `state.database.environments.<env>.{tier,budget_profile}`. The operator catalog projects the same desired placement for every deployed slot under `database.<env>`. The catalog is the environment reconciliation authority; validation must reject an absent deployed environment or a tier/profile drift from the node declaration.
+
+Budget profile values live in `infra/database-budget-profiles.yaml`. Reconciliation resolves the catalog-selected profile and applies it to the actual per-node runtime roles. PostgreSQL 15 enforces per-role `CONNECTION LIMIT` and the privileged `temp_file_limit`; provisioning removes direct `SET` privilege drift and proves both runtime credentials cannot raise the latter. `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`, and `work_mem` are catalog-selected fresh-session defaults, not hard ceilings: PostgreSQL classifies them as `USERSET`, so the authenticated role may override them even when `SET` is revoked from `PUBLIC`. A distinct `migration_<node>` credential has a one-connection limit, a 15-minute statement-timeout default, the same remaining defaults/limit, and membership only in the object-owning app role; migration Jobs receive `DATABASE_MIGRATION_URL`, never the runtime app/service credential. `app_readonly` is an environment-shared support/metrics role with its own environment policy, so it is intentionally absent from per-node profiles. Admission replays twice the measured seven-day p95 rate; without history it uses twice the declared profile design rate. These controls reduce/reject local excess, while exact-role containment and dedicated cells provide the failure boundary; a shared host is not one.
+
+**`PER_NODE_RUNTIME_ROLE_NAMES` (enforced):** database `cogni_<node>` has runtime roles `app_<node>` and `service_<node>`, where `<node>` is the validated node slug with `-` normalized to `_`. Provisioning, secret materialization, containment, and candidate proof MUST use those exact names and fail closed if either role is absent; there is no fallback to legacy `app_user` or `app_service`. `app_readonly` remains environment-shared for support/metrics and MUST NOT be revoked by per-node containment.
+
+Graduation to `dedicated` is sticky. Provisioning is handled through the typed database state-cell port, outside `deploy-infra.sh`; provider credentials stay in the operator boundary. The status contract exposes desired tier/profile, cell lifecycle, login/session state, and source-fence state without exposing an admin DSN.
+
+Cutover order is fixed and fail-closed:
+
+1. Provision the dedicated cell, apply its role budget, and prove an off-host backup restores.
+2. Fence writes to the shared source; take and restore a final dump; compare schema version and table counts/checksums.
+3. Atomically rotate the node's `DATABASE_URL` and `DATABASE_SERVICE_URL` in its OpenBao bucket, force ESO sync, and prove the restarted consumer uses the new endpoint.
+4. Keep the source read-only for the rollback window; never dual-write. Rollback rotates both DSNs back and fences only the node.
+
+Automated v1 containment is one audited action: record intent, revoke the node roles' login, terminate their sessions, and record success or partial failure. Containment is proven when both per-node roles are `NOLOGIN` and have zero active sessions. A source-specific host-firewall rule is reported state and a manual secondary control, not a prerequisite for the contained phase. Re-admission is human-only, requires the five-by-one-minute regional health gate plus exact build SHA evidence, and restores role login with an audited intent/outcome. No action restarts or mutates the shared control-plane databases.
+
+The actuator connects as `database_reliability_actuator`, a generated per-environment role whose DSN exists only at `cogni/<env>/database-reliability-actuator`. Because the runtime is PostgreSQL 15 (where `CREATEROLE` can alter every non-superuser role), this role MUST be `NOCREATEROLE` and MUST receive no membership or `ADMIN OPTION` on node roles; membership would allow `SET ROLE` into node data privileges. Root-owned SECURITY DEFINER functions split the privilege by direction: the actuator can execute only `contain_database_role(text)` (NOLOGIN plus a same-role session drain), while `database_reliability_readmitter` can execute only `readmit_database_role(text)` (LOGIN). Both reject `postgres`, `app_readonly`, missing roles, and every name outside the exact `app_<slug>` / `service_<slug>` namespace backed by a `cogni_<slug>` database owned by its matching `app_<slug>` role. The actuator receives read-only `pg_monitor` but never `pg_signal_backend`; the readmitter receives neither. Their credentials live in separate OpenBao service buckets. A root DSN in the public app or a manually entered control secret is forbidden.
+
 ## Database Provisioning (Infrastructure-as-Code)
 
 To ensure a repeatable and consistent database state across environments (especially for `docker compose` setups), we use a dedicated provisioning service.
@@ -66,9 +89,9 @@ To ensure a repeatable and consistent database state across environments (especi
 
 In `docker-compose.dev.yml`, the `db-provision` service handles:
 
-1. **Per-node database creation**: Iterates over `COGNI_NODE_DBS` (comma-separated), creates each database with `app_user` ownership and RLS role hardening.
+1. **Per-node database creation**: Iterates over `COGNI_NODE_DBS` (comma-separated), creates each database with `app_<node>` ownership and RLS role hardening.
 2. **LiteLLM database creation**: Creates `LITELLM_DB_NAME` (root-owned, shared across nodes).
-3. **Role provisioning**: Creates `app_user` (RLS enforced), `app_service` (BYPASSRLS), and `app_readonly` (SELECT-only, BYPASSRLS for Grafana/agent debugging) roles, shared across all node databases.
+3. **Role provisioning**: Creates per-node `app_<node>` (RLS enforced) and `service_<node>` (BYPASSRLS) roles. `app_readonly` alone is shared across the environment for SELECT-only metrics/support access.
 
 Both `COGNI_NODE_DBS` and `LITELLM_DB_NAME` are required — `provision.sh` fails immediately if either is missing.
 

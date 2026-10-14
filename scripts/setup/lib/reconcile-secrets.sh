@@ -99,6 +99,8 @@ declare -ga SCHEDULER_WORKER_KEYS=(
 # shellcheck disable=SC2034  # consumed by the sourcing script (scripts/ci/secret-materialize.sh)
 declare -ga PLATFORM_SERVICES=(
   akash-tx-actuator   # private Akash transaction actuator wallet + bearer token (task.5102)
+  database-reliability-actuator # private least-privilege Postgres containment actuator (task.5246)
+  database-reliability-readmitter # human-gated Postgres readmission identity (task.5246)
 )
 
 # Compose-tier secrets — bootstrap postgres/temporal directly via runtime/.env,
@@ -297,6 +299,14 @@ _compose_node_value() {
   pg_host="${COGNI_LANE_DB_HOST:-${VM_IP}}"
   db="cogni_${node//-/_}${sfx}"
   case "$k" in
+    DATABASE_RELIABILITY_ADMIN_URL)
+      # Private platform-service DSN. The component password is generated into
+      # this same isolated bucket first; hexadecimal encoding is URL-safe.
+      printf 'postgresql://database_reliability_actuator:%s@%s:5432/postgres?sslmode=disable' \
+        "$(bao_get_field database-reliability-actuator DATABASE_RELIABILITY_PASSWORD)" "${VM_IP}"; return 0 ;;
+    DATABASE_RELIABILITY_READMIT_URL)
+      printf 'postgresql://database_reliability_readmitter:%s@%s:5432/postgres?sslmode=disable' \
+        "$(bao_get_field database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD)" "${VM_IP}"; return 0 ;;
     DATABASE_URL)
       # Per-node: app_<node> role + the node's own source:agent password (OpenBao).
       # Role name is computed from the node; the password is read from
@@ -306,6 +316,9 @@ _compose_node_value() {
     DATABASE_SERVICE_URL)
       printf 'postgresql://service_%s%s:%s@%s:5432/%s?sslmode=disable' \
         "${node//-/_}" "${sfx}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
+    DATABASE_MIGRATION_URL)
+      printf 'postgresql://migration_%s%s:%s@%s:5432/%s?sslmode=disable' \
+        "${node//-/_}" "${sfx}" "$(bao_get_field "${node}-database-migration" APP_DB_MIGRATION_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
     DOLTGRES_PASSWORD)
       # Env-wide Doltgres superuser (one server, every node's knowledge_<node> DB).
       # Operator holds the single canonical SSOT (cogni/<env>/operator/DOLTGRES_PASSWORD)

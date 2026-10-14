@@ -37,6 +37,33 @@ export interface PromoteDeploymentTargetSelection
   readonly previewForward: Readonly<Record<string, boolean>>;
 }
 
+/** Stable identity for catalog cells that can change a candidate-a workload. */
+export function candidateDeploymentFingerprint(
+  row: Readonly<Record<string, unknown>>
+): string {
+  return JSON.stringify({
+    name: catalogScalar(row.name),
+    type: catalogScalar(row.type),
+    nodeId: catalogScalar(row.node_id),
+    primaryHost: catalogScalar(row.is_primary_host),
+    port: catalogScalar(row.port),
+    nodePort: catalogScalar(row.node_port),
+    sourceRepository: catalogScalar(row.source_repo),
+    sourceSha: catalogScalar(row.source_sha),
+    imageRepository: catalogScalar(row.image_repository),
+    candidateMember: isInEnvironment(row, "candidate-a"),
+    candidateBranch: catalogScalar(row.candidate_a_branch),
+    deploymentProvider: candidateCatalogCell(row, "deployment_provider"),
+    computeApi: candidateCatalogCell(row, "compute_api"),
+    leaseGeneration: candidateCatalogCell(row, "lease_generation"),
+    requiredPlacementCountries: candidateCatalogCell(
+      row,
+      "required_placement_countries"
+    ),
+    bootRecovery: candidateCatalogCell(row, "boot_recovery"),
+  });
+}
+
 export function isInfraOnlyPromoteNoop(input: {
   readonly requestedTargets: readonly string[];
   readonly selection: PromoteDeploymentTargetSelection;
@@ -244,6 +271,24 @@ function isInEnvironment(
     row.envs.every((value) => typeof value === "string") &&
     row.envs.includes(environment)
   );
+}
+
+function candidateCatalogCell(
+  row: Readonly<Record<string, unknown>>,
+  key: string
+): unknown {
+  const map = row[key];
+  if (typeof map !== "object" || map === null || Array.isArray(map))
+    return null;
+  return (map as Readonly<Record<string, unknown>>)["candidate-a"] ?? null;
+}
+
+function catalogScalar(value: unknown): string | number | boolean | null {
+  return typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+    ? value
+    : null;
 }
 
 function parseSourceRepository(
