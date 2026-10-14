@@ -206,6 +206,12 @@ catalog_target_from_path() {
 # are not image-build inputs, so absent this rule a change to them selects no
 # target and the provisioning path goes unproven until a preview/prod promote.
 # deploy-infra.sh is excluded — candidate-flight never runs it. See docs/spec/ci-cd.md.
+#
+# THE PREFLIGHT ASSERTER IS ITSELF SUBSTRATE MACHINERY (bug.5299). assert-target-substrate.sh
+# and the libs it sources run inside assert-substrate/node-substrate, so a change to them
+# that selects no target lands with the gate NEVER EXECUTED ONCE — exactly the failure this
+# function exists to prevent, and the one a weakened or inverted assertion would hide. The
+# gate's own correctness has to be read back off a flight, so the change must select a target.
 is_substrate_machinery_input() {
   local path="$1"
 
@@ -214,6 +220,8 @@ is_substrate_machinery_input() {
     scripts/ci/run-node-substrate.sh | \
     scripts/ci/secret-materialize.sh | \
     scripts/ci/reconcile-node-substrate.sh | \
+    scripts/ci/assert-target-substrate.sh | \
+    scripts/ci/lib/lane-db-residency.sh | \
     scripts/setup/lib/reconcile-secrets.sh)
       return 0
       ;;
