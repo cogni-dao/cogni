@@ -142,15 +142,24 @@ describe("buildNodeLaunchPack", () => {
     expect(pack.prompt).toContain("recall the Cogni knowledge block above");
     expect(pack.prompt).toContain("Local Conductor workspace:");
     expect(pack.prompt).toContain(
-      "auto-registers this node's `COGNI_NODE_API_KEY` when absent"
+      "reuses this node's durable `COGNI_NODE_API_KEY`"
+    );
+    expect(pack.prompt).toContain(
+      "human-issued one-use `COGNI_AGENT_SPAWN_TOKEN`"
+    );
+    expect(pack.prompt).toContain(
+      "never anonymously registers another identity"
+    );
+    expect(pack.prompt).not.toContain(
+      "auto-registers this node's `COGNI_NODE_API_KEY`"
     );
     expect(pack.prompt).toContain(
       "saves it in the canonical primary checkout's `.env.cogni`"
     );
     expect(pack.prompt).toContain("symlinks that file into this workspace");
     expect(pack.prompt).toContain("Non-Conductor or manual clone:");
-    // Manual clones must self-register before recalling the auth-gated block;
-    // local Conductor setup owns registration and must not receive that advice.
+    // Manual clones must redeem a steward-issued grant before recalling the
+    // auth-gated block; neither path may mint an anonymous replacement actor.
     expect(pack.prompt.indexOf("Non-Conductor or manual clone:")).toBeLessThan(
       pack.prompt.indexOf("/contribute-to-cogni")
     );
