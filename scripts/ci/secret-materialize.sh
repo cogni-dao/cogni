@@ -15,8 +15,9 @@
 #   - shared/human values are inherited transitionally (see inherit_shared_value);
 #   - it logs key NAMES only, never values.
 #   - catalog `syncTo: litellm-virtual-key` entries are registered with LiteLLM
-#     only after the OpenBao batch is durable; registration is idempotent and
-#     fail-closed.
+#     only after the OpenBao batch is durable; registration is idempotent. A
+#     gateway transport/502/503/504 may defer only an unchanged existing key;
+#     new keys and every integrity/auth error remain fail-closed (bug.5462).
 #   - after the node batch, the OWNER leg (operator) mints the `source: agent` keys of
 #     the non-node PLATFORM_SERVICES into their own `cogni/<env>/<service>/*` buckets.
 #     Those services exist precisely so a credential is NOT reachable from the operator
@@ -459,12 +460,15 @@ mapfile -t LITELLM_SYNC_KEYS < <(
   yq -N '.secrets[] | select(.syncTo == "litellm-virtual-key") | .name' \
     "${CATALOG_FILES[@]}" | LC_ALL=C sort -u
 )
+declare -A LITELLM_KEY_EXISTED=()
 for k in "${LITELLM_SYNC_KEYS[@]}"; do
   _node_gets_key "$TARGET_NODE" "$k" || continue
   if [[ -f "${CACHE_DIR}/${TARGET_NODE}/${k}" ]]; then
+    LITELLM_KEY_EXISTED["$k"]=true
     unchanged=$((unchanged + 1))
     continue
   fi
+  LITELLM_KEY_EXISTED["$k"]=false
   key_is_agent_generated "$k" \
     || fail "catalog sync target ${k} must be a per-node source:agent random key"
   v="$(_resolve_node_value "$TARGET_NODE" "$k")"
@@ -523,8 +527,10 @@ fi
 # LiteLLM build ignores key_aliases on that endpoint, so alias uniqueness uses
 # its exact-filter /key/list contract (the non-secret alias is URL-encoded from
 # a file, and only the matching page is returned). A missing key is created only
-# when the desired alias is also unused. Any transport, auth, collision, or
-# response mismatch aborts the substrate lane.
+# when the desired alias is also unused. A non-secret local receipt records a
+# previously verified key-hash/alias projection. Only that exact receipt can
+# turn a later gateway availability failure into projection_deferred; auth,
+# collision, mutation, and response-integrity errors always abort.
 LITELLM_REGISTER_REMOTE="$(cat <<'REMOTE_SCRIPT'
 set -euo pipefail
 umask 077
@@ -534,6 +540,7 @@ trap 'rm -rf "$work_dir"' EXIT
 IFS= read -r master_key
 IFS= read -r virtual_key
 IFS= read -r key_alias
+IFS= read -r projection_receipt_dir
 printf '%s' "$master_key" > "$work_dir/master"
 printf '%s' "$virtual_key" > "$work_dir/key"
 printf '%s' "$key_alias" > "$work_dir/alias"
@@ -541,7 +548,40 @@ unset master_key virtual_key key_alias
 
 key_hash=$(sha256sum "$work_dir/key" | awk '{print $1}')
 printf '%s' "$key_hash" > "$work_dir/hash"
-unset key_hash
+alias_hash=$(sha256sum "$work_dir/alias" | awk '{print $1}')
+projection_receipt="${projection_receipt_dir}/${alias_hash}.json"
+unset key_hash alias_hash projection_receipt_dir
+projection_receipt_usable=true
+
+projection_receipt_matches() {
+  [[ -s "$projection_receipt" ]] || return 1
+  jq -e --rawfile hash "$work_dir/hash" --rawfile alias "$work_dir/alias" \
+    '.version == 1 and .keyHash == $hash and .keyAlias == $alias' \
+    "$projection_receipt" >/dev/null 2>&1
+}
+
+report_lookup_failure() {
+  local reason="$1"
+  case "$reason" in
+    transport-error|lookup-http-502|lookup-http-503|lookup-http-504)
+      if [[ "$projection_receipt_usable" == true ]] && projection_receipt_matches; then
+        echo "projection-unavailable-confirmed-${reason}"
+        return 1
+      fi
+      ;;
+  esac
+  echo "$reason"
+  return 1
+}
+
+write_projection_receipt() {
+  local receipt_tmp="${projection_receipt}.tmp.$$"
+  mkdir -p "$(dirname "$projection_receipt")"
+  jq -cn --rawfile hash "$work_dir/hash" --rawfile alias "$work_dir/alias" \
+    '{version: 1, keyHash: $hash, keyAlias: $alias}' > "$receipt_tmp"
+  chmod 600 "$receipt_tmp"
+  mv -f "$receipt_tmp" "$projection_receipt"
+}
 
 cat > "$work_dir/request.conf" <<EOF
 url = "http://127.0.0.1:4000/v2/key/info"
@@ -558,12 +598,12 @@ post_json() {
   local body_file="$1" response_file="$2" code
   if ! code=$(curl --config "$work_dir/request.conf" --data-binary "@$body_file" \
       --output "$response_file" --write-out '%{http_code}'); then
-    echo transport-error
-    return 1
+    report_lookup_failure transport-error
+    return $?
   fi
   if [[ "$code" != "200" ]]; then
-    echo "lookup-http-${code}"
-    return 1
+    report_lookup_failure "lookup-http-${code}"
+    return $?
   fi
 }
 
@@ -575,6 +615,13 @@ if [[ "$hash_count" -eq 1 ]] && ! jq -e --rawfile alias "$work_dir/alias" \
     '.info[0].key_alias == $alias' "$work_dir/by-hash-response.json" >/dev/null; then
   echo key-alias-mismatch
   exit 1
+fi
+# A successful lookup that says the desired hash is absent positively
+# invalidates any older projection receipt. A subsequent alias-endpoint outage
+# must therefore fail closed rather than laundering known projection loss into
+# projection_deferred.
+if [[ "$hash_count" -eq 0 ]]; then
+  projection_receipt_usable=false
 fi
 
 cat > "$work_dir/alias-list.conf" <<EOF
@@ -589,12 +636,12 @@ if ! alias_code=$(curl --config "$work_dir/alias-list.conf" --get \
     --data-urlencode "key_alias@$work_dir/alias" --data-urlencode "size=2" \
     --data-urlencode "return_full_object=true" \
     --output "$work_dir/by-alias-response.json" --write-out '%{http_code}'); then
-  echo transport-error
-  exit 1
+  report_lookup_failure transport-error
+  exit $?
 fi
 if [[ "$alias_code" != "200" ]]; then
-  echo "lookup-http-${alias_code}"
-  exit 1
+  report_lookup_failure "lookup-http-${alias_code}"
+  exit $?
 fi
 alias_count=$(jq -er '
   select((.keys | type) == "array") |
@@ -616,6 +663,7 @@ if [[ "$hash_count" -eq 1 ]]; then
   jq -e --rawfile hash "$work_dir/hash" '.keys[0].token == $hash' \
     "$work_dir/by-alias-response.json" >/dev/null \
     || { echo alias-key-mismatch; exit 1; }
+  write_projection_receipt
   echo unchanged
   exit 0
 fi
@@ -678,12 +726,13 @@ if ! jq -e --rawfile key "$work_dir/key" --rawfile alias "$work_dir/alias" \
   echo generate-response-mismatch
   exit 1
 fi
+write_projection_receipt
 echo registered
 REMOTE_SCRIPT
 )"
 
 register_litellm_virtual_key() {
-  local key_name="$1" value master node_id alias result rc
+  local key_name="$1" existed_before="$2" value master node_id alias projection_receipt_dir result rc
   value="$(bao_get_field "$TARGET_NODE" "$key_name")"
   [[ -n "$value" ]] || fail "catalog sync target ${key_name} was not materialized for ${TARGET_NODE}"
   [[ "$value" =~ ^sk-cogni-[0-9a-f]{48}$ ]] \
@@ -694,14 +743,28 @@ register_litellm_virtual_key() {
   node_id="$(node_id_for_target "$TARGET_NODE")" \
     || fail "cannot register ${key_name}: node_id is unresolved for ${TARGET_NODE}"
   alias="cogni:${DEPLOY_ENVIRONMENT}:${node_id}:app:v1"
+  projection_receipt_dir="${LITELLM_PROJECTION_RECEIPT_DIR:-/var/lib/cogni/litellm-key-projections}"
 
   set +e
-  result="$(printf '%s\n%s\n%s\n' "$master" "$value" "$alias" | remote "$LITELLM_REGISTER_REMOTE")"
+  result="$(printf '%s\n%s\n%s\n%s\n' "$master" "$value" "$alias" "$projection_receipt_dir" | remote "$LITELLM_REGISTER_REMOTE")"
   rc=$?
   set -e
   unset value master
-  [[ $rc -eq 0 ]] \
-    || fail "LiteLLM registration failed for ${key_name} (${result:-redacted-error}); alias=${alias}"
+  if [[ $rc -ne 0 ]]; then
+    # An unchanged existing OpenBao key already has durable custody. A gateway
+    # availability failure must not couple an unrelated app-only promote to the
+    # shared runtime. Defer only transport and reverse-proxy unavailable states;
+    # auth, malformed responses, collisions, mismatches, and every NEW key stay
+    # fatal because they are evidence of projection integrity failure or an
+    # unusable node birth/rotation.
+    if [[ "$existed_before" == "true" && "$result" =~ ^projection-unavailable-confirmed-(transport-error|lookup-http-(502|503|504))$ ]]; then
+      projection_deferred=$((projection_deferred + 1))
+      echo "::warning::secret-materialize: projection_deferred for existing ${key_name}; LiteLLM unavailable (${result}); alias=${alias}" >&2
+      log "  projection_deferred ${key_name} (existing custody preserved; alias ${alias})"
+      return 0
+    fi
+    fail "LiteLLM registration failed for ${key_name} (${result:-redacted-error}); alias=${alias}; existed_before=${existed_before}"
+  fi
   case "$result" in
     registered) log "  registered ${key_name} with LiteLLM (alias ${alias})" ;;
     unchanged) log "  ${key_name} already registered with LiteLLM (alias ${alias})" ;;
@@ -709,9 +772,14 @@ register_litellm_virtual_key() {
   esac
 }
 
+projection_deferred=0
 for k in "${LITELLM_SYNC_KEYS[@]}"; do
   _node_gets_key "$TARGET_NODE" "$k" || continue
-  register_litellm_virtual_key "$k"
+  register_litellm_virtual_key "$k" "${LITELLM_KEY_EXISTED[$k]:-false}"
 done
 
-log "materialize complete for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT}): created=${created} unchanged=${unchanged}"
+if [[ "$projection_deferred" -gt 0 && -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  printf '## ⚠️ LiteLLM projection deferred\n\n- environment: `%s`\n- node: `%s`\n- existing keys deferred: `%s`\n- next: run infra reconcile; new keys remain fail-closed\n' \
+    "$DEPLOY_ENVIRONMENT" "$TARGET_NODE" "$projection_deferred" >> "$GITHUB_STEP_SUMMARY"
+fi
+log "materialize complete for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT}): created=${created} unchanged=${unchanged} projection_deferred=${projection_deferred}"
