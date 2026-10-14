@@ -30,6 +30,10 @@ LOCAL_TARGET_VIEW="${FLIGHT_PROBE_LOCAL_TARGET_VIEW:-true}"
 CATALOG_ROOT="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-$REPO_ROOT}/infra/catalog}"
 SSH_BIN="${FLIGHT_PROBE_SSH_BIN:-ssh}"
 SSH_OPTS_RAW="${SSH_OPTS:--i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6}"
+# Canonical flight-prober bearer: exactly 32 random bytes encoded as RFC 4648
+# base64 (44 ASCII characters with one trailing padding byte). This excludes
+# every shell/curl-config metacharacter that could change command structure.
+CREDENTIAL_GRAMMAR='^[A-Za-z0-9+/]{43}=$'
 
 fail() { echo "::error::flight-probe-credentials: $*" >&2; exit 1; }
 log() { printf '[flight-probe-credentials] %s\n' "$*"; }
@@ -139,23 +143,35 @@ write_field_cas() {
 }
 
 valid_ring() {
-  jq -e '
+  jq -e --arg credentialGrammar "$CREDENTIAL_GRAMMAR" '
+    def valid_credential:
+      type == "string" and length == 44 and test($credentialGrammar);
     type == "object" and
     (keys | sort) == ["active", "previous"] and
-    (.active | type == "string" and length >= 32 and length <= 256) and
-    (.previous == null or (.previous | type == "string" and length >= 32 and length <= 256)) and
+    (.active | valid_credential) and
+    (.previous == null or (.previous | valid_credential)) and
     (.previous == null or .previous != .active)
   ' >/dev/null 2>&1 <<<"$1"
 }
 
 valid_map() {
-  jq -e '
+  jq -e --arg credentialGrammar "$CREDENTIAL_GRAMMAR" '
+    def valid_credential:
+      type == "string" and length == 44 and test($credentialGrammar);
     type == "object" and
     all(to_entries[];
       (.key | test("^(candidate-a|preview|production)/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
-      (.value | type == "string" and length >= 32 and length <= 256)
+      (.value | valid_credential)
     )
   ' >/dev/null 2>&1 <<<"$1"
+}
+
+mint_credential() {
+  local secret
+  secret="$(openssl rand -base64 32)" || fail "could not mint flight-prober credential"
+  [[ "${#secret}" -eq 44 && "$secret" =~ $CREDENTIAL_GRAMMAR ]] \
+    || fail "credential generator returned a noncanonical value"
+  printf '%s' "$secret"
 }
 
 AUTHORITY_PATH="cogni/${LANE}/flight-prober"
@@ -234,7 +250,7 @@ store_map_entry() {
 
 mint_ring() {
   local secret
-  secret="$(openssl rand -base64 32)"
+  secret="$(mint_credential)"
   printf '%s' "$secret" | jq -Rsc '{active:.,previous:null}'
 }
 
@@ -257,7 +273,7 @@ case "$OPERATION" in
       exit 0
     fi
     [[ "$MAP_ACTIVE" == "$ACTIVE" ]] || fail "operator map does not point at current active key; refusing to prepare"
-    old="$ACTIVE"; next="$(openssl rand -base64 32)"
+    old="$ACTIVE"; next="$(mint_credential)"
     store_ring "$({ printf '%s\0' "$next"; printf '%s' "$old"; } \
       | jq -Rsc 'split("\u0000") | {active:.[0],previous:.[1]}')"
     sync_local_target_view "$RING"

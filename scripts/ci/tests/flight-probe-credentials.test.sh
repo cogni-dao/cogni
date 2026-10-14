@@ -93,6 +93,26 @@ exit 2
 EOF
 chmod +x "$FAKEBIN/kubectl"
 
+FETCH_STUB="$TMPROOT/fetch-stub.mjs"
+cat > "$FETCH_STUB" <<'EOF'
+globalThis.fetch = async (input) => {
+  const url = new URL(String(input));
+  if (url.hostname === "oidc.test") {
+    return new Response(JSON.stringify({ value: "oidc-jwt" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return new Response(process.env.FAKE_FLIGHT_RING ?? "", {
+    status: 200,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+    },
+  });
+};
+EOF
+
 run_lifecycle() {
   local op="$1" out="$2"
   if ! env \
@@ -114,16 +134,53 @@ run_lifecycle() {
   fi
 }
 
+run_project() {
+  local op="$1" ring="$2" out="$3"
+  if ! printf '%s' "$ring" | env \
+    PATH="$FAKEBIN:$PATH" \
+    VM_HOST=fake \
+    COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" \
+    FLIGHT_PROBE_SSH_BIN="$FAKEBIN/ssh" \
+    FAKE_REMOTE_PATH="$FAKEBIN" \
+    FAKE_BAO_ROOT="$BAO_ROOT" \
+    FAKE_SSH_ARGV_LOG="$SSH_ARGV_LOG" \
+    REAL_JQ="$REAL_JQ" \
+    SSH_OPTS='-i fake' \
+    bash scripts/ci/project-flight-probe-ring.sh candidate-a node-template "$op" >"$out" 2>&1; then
+    grep -Ei 'error|failed|invalid|refus' "$out" >&2 || true
+    return 1
+  fi
+}
+
+run_fetch() {
+  local ring="$1" out="$2"
+  if ! env \
+    FAKE_FLIGHT_RING="$ring" \
+    FLIGHT_PROBE_CONTROL_URL=https://control.test \
+    FLIGHT_PROBE_LANE=candidate-a \
+    FLIGHT_PROBE_NODE_ID="$NODE_ID" \
+    ACTIONS_ID_TOKEN_REQUEST_URL=https://oidc.test/token \
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token \
+    node --import "file://${FETCH_STUB}" scripts/ci/fetch-flight-probe-ring.mjs >"$out" 2>&1; then
+    grep -E 'flight-probe projection fetch failed' "$out" >&2 || true
+    return 1
+  fi
+}
+
 NODE_ID="$(yq -N '.node_id' infra/catalog/node-template.yaml)"
 RING_FILE="$BAO_ROOT/cogni/candidate-a/flight-prober/$NODE_ID"
 TARGET_RING_FILE="$BAO_ROOT/cogni/candidate-a/node-template/FLIGHT_PROBE_API_KEY"
 MAP_FILE="$BAO_ROOT/cogni/production/operator/FLIGHT_PROBE_CREDENTIALS_JSON"
+CREDENTIAL_GRAMMAR='^[A-Za-z0-9+/]{43}=$'
 
 run_lifecycle materialize "$TMPROOT/materialize.out"
 test -f "$RING_FILE" && test -f "$TARGET_RING_FILE" && test -f "$MAP_FILE"
-jq -e '(keys | sort) == ["active","previous"] and (.active|length)>=32 and .previous==null' "$RING_FILE" >/dev/null
+jq -e --arg grammar "$CREDENTIAL_GRAMMAR" \
+  '(keys | sort) == ["active","previous"] and (.active | test($grammar)) and .previous==null' \
+  "$RING_FILE" >/dev/null
 test "$(cat "$TARGET_RING_FILE")" = "$(cat "$RING_FILE")"
 OLD="$(jq -r '.active' "$RING_FILE")"
+[[ "$OLD" =~ $CREDENTIAL_GRAMMAR ]]
 test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key]' "$MAP_FILE")" = "$OLD"
 ! grep -qF "$OLD" "$TMPROOT/materialize.out"
 
@@ -136,6 +193,8 @@ run_lifecycle prepare "$TMPROOT/prepare.out"
 NEW="$(jq -r '.active' "$RING_FILE")"
 test "$NEW" != "$OLD"
 test "$(jq -r '.previous' "$RING_FILE")" = "$OLD"
+[[ "$NEW" =~ $CREDENTIAL_GRAMMAR ]]
+[[ "$OLD" =~ $CREDENTIAL_GRAMMAR ]]
 test "$(cat "$TARGET_RING_FILE")" = "$(cat "$RING_FILE")"
 test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key]' "$MAP_FILE")" = "$OLD"
 run_lifecycle prepare "$TMPROOT/prepare-retry.out"
@@ -163,11 +222,76 @@ run_lifecycle revoke "$TMPROOT/revoke-retry.out"
 test "$(jq -r '.active' "$RING_FILE")" = "$REVOKED_ACTIVE"
 
 for secret in "$OLD" "$NEW" "$REVOKED_ACTIVE"; do
+  [[ "$secret" =~ $CREDENTIAL_GRAMMAR ]]
   ! grep -R -qF "$secret" "$TMPROOT"/*.out
   ! grep -qF "$secret" "$SSH_ARGV_LOG"
   ! grep -qF "$secret" "$JQ_ARGV_LOG"
 done
 ! grep -qF writer-token "$SSH_ARGV_LOG"
+
+# The canonical active/previous ring crosses authority, route-fetch, and target
+# projection boundaries unchanged. Each boundary rejects config metacharacters
+# before a secret-bearing network or curl-config operation can run.
+VALID_RING="$(jq -cn --arg active "$NEW" --arg previous "$OLD" \
+  '{active:$active,previous:$previous}')"
+run_project prepare "$VALID_RING" "$TMPROOT/project-valid.out"
+run_fetch "$VALID_RING" "$TMPROOT/fetch-valid.out"
+jq -e --arg active "$NEW" --arg previous "$OLD" \
+  '.active == $active and .previous == $previous' "$TMPROOT/fetch-valid.out" >/dev/null
+
+NEWLINE_ATTACK="${NEW}"$'\n'
+QUOTE_ATTACK="${NEW:0:20}\"${NEW:21}"
+BACKSLASH_ATTACK="${NEW:0:20}\\${NEW:21}"
+DIRECTIVE_ATTACK="${NEW:0:20}\""$'\n'"url = \"file:///etc/passwd\""$'\n'"${NEW:21}"
+attack_names=(newline quote backslash directive)
+attack_values=("$NEWLINE_ATTACK" "$QUOTE_ATTACK" "$BACKSLASH_ATTACK" "$DIRECTIVE_ATTACK")
+
+for attack_index in "${!attack_values[@]}"; do
+  attack_name="${attack_names[$attack_index]}"
+  attack_value="${attack_values[$attack_index]}"
+  invalid_ring="$(jq -cn --arg active "$attack_value" --arg previous "$OLD" \
+    '{active:$active,previous:$previous}')"
+
+  # Control authority rejects a malformed stored ring without healing it.
+  printf '%s' "$invalid_ring" > "$RING_FILE"
+  set +e
+  run_lifecycle materialize "$TMPROOT/authority-${attack_name}.out"
+  authority_rc=$?
+  set -e
+  test "$authority_rc" -ne 0
+  grep -q 'invalid bounded ring' "$TMPROOT/authority-${attack_name}.out"
+
+  # Projector rejects before the first ssh/curl operation.
+  ssh_bytes_before="$(wc -c < "$SSH_ARGV_LOG" | tr -d ' ')"
+  set +e
+  run_project materialize "$invalid_ring" "$TMPROOT/project-${attack_name}.out"
+  project_rc=$?
+  set -e
+  test "$project_rc" -ne 0
+  grep -q 'invalid bounded ring' "$TMPROOT/project-${attack_name}.out"
+  test "$(wc -c < "$SSH_ARGV_LOG" | tr -d ' ')" = "$ssh_bytes_before"
+
+  # Route-fetch client rejects the same malformed ring and prints no value.
+  set +e
+  run_fetch "$invalid_ring" "$TMPROOT/fetch-${attack_name}.out"
+  fetch_rc=$?
+  set -e
+  test "$fetch_rc" -ne 0
+  grep -q '^flight-probe projection fetch failed$' "$TMPROOT/fetch-${attack_name}.out"
+  ! grep -q 'file:///etc/passwd' "$TMPROOT/fetch-${attack_name}.out"
+
+  # Exact operator-map values use the same credential grammar.
+  printf '%s' "$VALID_RING" > "$RING_FILE"
+  mkdir -p "$(dirname "$MAP_FILE")"
+  jq -cn --arg key "candidate-a/$NODE_ID" --arg value "$attack_value" \
+    '{($key):$value}' > "$MAP_FILE"
+  set +e
+  run_lifecycle prepare "$TMPROOT/map-${attack_name}.out"
+  map_rc=$?
+  set -e
+  test "$map_rc" -ne 0
+  grep -q 'invalid exact credential map' "$TMPROOT/map-${attack_name}.out"
+done
 
 # Strict bounded ring: an unknown third field fails closed and is not healed or
 # leaked by ordinary materialization.

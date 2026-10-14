@@ -16,6 +16,9 @@ OPERATION="${3:-materialize}"
 CATALOG_ROOT="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-$REPO_ROOT}/infra/catalog}"
 SSH_BIN="${FLIGHT_PROBE_SSH_BIN:-ssh}"
 SSH_OPTS_RAW="${SSH_OPTS:--i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6}"
+# Must match flight-probe-credentials.sh: 32 random bytes in canonical RFC 4648
+# base64. The restricted alphabet makes curl config construction non-injectable.
+CREDENTIAL_GRAMMAR='^[A-Za-z0-9+/]{43}=$'
 
 fail() { echo "::error::flight-probe projection failed: $*" >&2; exit 1; }
 valid_host() {
@@ -43,12 +46,14 @@ provider="$(LANE="$LANE" yq -N '.deployment_provider[strenv(LANE)] // "k3s"' "$c
 [[ "$provider" == k3s ]] || fail "projection target is not k3s"
 
 valid_ring() {
-  jq -e '
+  jq -e --arg credentialGrammar "$CREDENTIAL_GRAMMAR" '
+    def valid_credential:
+      type == "string" and length == 44 and test($credentialGrammar);
     type == "object" and
     (keys | sort) == ["active", "previous"] and
-    (.active | type == "string" and length >= 32 and length <= 256) and
+    (.active | valid_credential) and
     (.previous == null or
-      (.previous | type == "string" and length >= 32 and length <= 256)) and
+      (.previous | valid_credential)) and
     (.previous == null or .previous != .active)
   ' >/dev/null 2>&1 <<<"$1"
 }

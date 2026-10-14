@@ -18,6 +18,13 @@ const lane = process.env.FLIGHT_PROBE_LANE;
 const nodeId = process.env.FLIGHT_PROBE_NODE_ID;
 const oidcUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
 const oidcRequestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+// Must match flight-probe-credentials.sh: 32 random bytes in canonical RFC
+// 4648 base64. Restricting the alphabet prevents downstream config injection.
+const credentialPattern = /^[A-Za-z0-9+/]{43}=$/;
+const isCredential = (value) =>
+  typeof value === "string" &&
+  value.length === 44 &&
+  credentialPattern.test(value);
 
 function fail() {
   process.stderr.write("flight-probe projection fetch failed\n");
@@ -84,13 +91,9 @@ try {
     keys.length !== 2 ||
     keys[0] !== "active" ||
     keys[1] !== "previous" ||
-    typeof parsed.active !== "string" ||
-    parsed.active.length < 32 ||
-    parsed.active.length > 256 ||
+    !isCredential(parsed.active) ||
     (parsed.previous !== null &&
-      (typeof parsed.previous !== "string" ||
-        parsed.previous.length < 32 ||
-        parsed.previous.length > 256 ||
+      (!isCredential(parsed.previous) ||
         parsed.previous === parsed.active))
   ) {
     fail();
