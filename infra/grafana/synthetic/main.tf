@@ -247,31 +247,31 @@ resource "grafana_rule_group" "reliability_recording" {
     for_each = {
       io_pressure = {
         metric = "cogni_reliability_v1_io_pressure_percent"
-        expr   = "100 * max(rate(node_pressure_io_waiting_seconds_total{env=\"${each.value.environment}\"}[5m]))"
+        expr   = "(100 * max by (substrate_host) (rate(node_pressure_io_stalled_seconds_total{env=\"${each.value.environment}\",substrate_host!=\"\"}[5m]))) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_pressure_io_stalled_seconds_total{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
       }
       connections = {
         metric = "cogni_reliability_v1_connections_percent"
-        expr   = "100 * sum(pg_stat_database_numbackends{env=\"${each.value.environment}\"}) / max(pg_settings_max_connections{env=\"${each.value.environment}\"})"
+        expr   = "(100 * sum by (substrate_host) (pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\"}) / on (substrate_host) max by (substrate_host) (pg_settings_max_connections{env=\"${each.value.environment}\",substrate_host!=\"\"})) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000}) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_settings_max_connections{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
       }
       memory_headroom = {
         metric = "cogni_reliability_v1_memory_headroom_percent"
-        expr   = "100 * min(node_memory_MemAvailable_bytes{env=\"${each.value.environment}\"} / node_memory_MemTotal_bytes{env=\"${each.value.environment}\"})"
+        expr   = "(100 * min by (substrate_host) (node_memory_MemAvailable_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"} / node_memory_MemTotal_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_memory_MemAvailable_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000}) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_memory_MemTotal_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
       }
       disk_headroom = {
         metric = "cogni_reliability_v1_disk_headroom_percent"
-        expr   = "100 * min(node_filesystem_avail_bytes{env=\"${each.value.environment}\",mountpoint=\"/\"} / node_filesystem_size_bytes{env=\"${each.value.environment}\",mountpoint=\"/\"})"
+        expr   = "(100 * min by (substrate_host) (node_filesystem_avail_bytes{env=\"${each.value.environment}\",substrate_host!=\"\",mountpoint=\"/\"} / node_filesystem_size_bytes{env=\"${each.value.environment}\",substrate_host!=\"\",mountpoint=\"/\"})) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_filesystem_avail_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000}) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_filesystem_size_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
       }
       database_backends_share = {
         metric = "cogni_reliability_v1_database_backends_share_percent"
-        expr   = "100 * sum(avg_over_time(pg_stat_database_numbackends{env=\"${each.value.environment}\",datname=\"${each.value.database_name}\"}[5m])) / clamp_min(sum(avg_over_time(pg_stat_database_numbackends{env=\"${each.value.environment}\",datname!~\"template.*|postgres\"}[5m])), 1)"
+        expr   = "(100 * sum by (substrate_host) (avg_over_time(pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\",datname=\"${each.value.database_name}\"}[5m])) / on (substrate_host) clamp_min(sum by (substrate_host) (avg_over_time(pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\",datname!~\"template.*|postgres\"}[5m])), 1)) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
       }
       database_physical_reads_share = {
         metric = "cogni_reliability_v1_database_physical_reads_share_percent"
-        expr   = "100 * sum(increase(pg_stat_database_blks_read{env=\"${each.value.environment}\",datname=\"${each.value.database_name}\"}[5m])) / clamp_min(sum(increase(pg_stat_database_blks_read{env=\"${each.value.environment}\",datname!~\"template.*|postgres\"}[5m])), 1)"
+        expr   = "(100 * sum by (substrate_host) (increase(pg_stat_database_blks_read{env=\"${each.value.environment}\",substrate_host!=\"\",datname=\"${each.value.database_name}\"}[5m])) / on (substrate_host) clamp_min(sum by (substrate_host) (increase(pg_stat_database_blks_read{env=\"${each.value.environment}\",substrate_host!=\"\",datname!~\"template.*|postgres\"}[5m])), 1)) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_stat_database_blks_read{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
       }
       database_temp_bytes_share = {
         metric = "cogni_reliability_v1_database_temp_bytes_share_percent"
-        expr   = "100 * sum(increase(pg_stat_database_temp_bytes{env=\"${each.value.environment}\",datname=\"${each.value.database_name}\"}[5m])) / clamp_min(sum(increase(pg_stat_database_temp_bytes{env=\"${each.value.environment}\",datname!~\"template.*|postgres\"}[5m])), 1)"
+        expr   = "(100 * sum by (substrate_host) (increase(pg_stat_database_temp_bytes{env=\"${each.value.environment}\",substrate_host!=\"\",datname=\"${each.value.database_name}\"}[5m])) / on (substrate_host) clamp_min(sum by (substrate_host) (increase(pg_stat_database_temp_bytes{env=\"${each.value.environment}\",substrate_host!=\"\",datname!~\"template.*|postgres\"}[5m])), 1)) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_stat_database_temp_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
       }
     }
 

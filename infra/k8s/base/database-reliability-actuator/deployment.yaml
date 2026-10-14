@@ -103,17 +103,6 @@ spec:
               - secret:
                   name: database-reliability-actuator-env-secrets
                   optional: true
-                  items:
-                    - key: DATABASE_RELIABILITY_ADMIN_URL
-                      path: DATABASE_RELIABILITY_ADMIN_URL
-                    - key: DATABASE_RELIABILITY_STATUS_TOKEN
-                      path: DATABASE_RELIABILITY_STATUS_TOKEN
-                    - key: PROMETHEUS_READ_USERNAME
-                      path: PROMETHEUS_READ_USERNAME
-                    - key: PROMETHEUS_READ_PASSWORD
-                      path: PROMETHEUS_READ_PASSWORD
-                    - key: GRAFANA_SERVICE_ACCOUNT_TOKEN
-                      path: GRAFANA_SERVICE_ACCOUNT_TOKEN
 ---
 # Human-command process: no autonomous loop and no containment credential.
 apiVersion: apps/v1
@@ -202,17 +191,6 @@ spec:
               - secret:
                   name: database-reliability-readmitter-env-secrets
                   optional: true
-                  items:
-                    - key: DATABASE_RELIABILITY_READMIT_URL
-                      path: DATABASE_RELIABILITY_READMIT_URL
-                    - key: DATABASE_RELIABILITY_READMIT_TOKEN
-                      path: DATABASE_RELIABILITY_READMIT_TOKEN
-                    - key: DATABASE_RELIABILITY_STATUS_TOKEN
-                      path: DATABASE_RELIABILITY_STATUS_TOKEN
-                    - key: PROMETHEUS_READ_USERNAME
-                      path: PROMETHEUS_READ_USERNAME
-                    - key: PROMETHEUS_READ_PASSWORD
-                      path: PROMETHEUS_READ_PASSWORD
 ---
 # Role-less identity: the controller has no Kubernetes API authority.
 apiVersion: v1

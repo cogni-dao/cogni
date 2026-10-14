@@ -244,6 +244,86 @@ export interface DatabaseReadmissionPort {
   readmit(input: DatabaseContainmentAction): Promise<DatabaseContainmentStatus>;
 }
 
+/** Scalar-only observation produced by the isolated, own-database probe function. */
+export interface DatabaseRecoveryProbeObservation {
+  readonly database: string;
+  readonly role: string;
+  readonly systemTenantExists: boolean;
+  readonly serverAddress: string;
+  readonly serverPort: number;
+  readonly systemIdentifier: string;
+  readonly appRolesCanLogin: boolean;
+  readonly runtimeRolesPresent: boolean;
+  readonly runtimeRolesNoLogin: boolean;
+  readonly activeRuntimeSessions: number;
+  readonly observedAt: string;
+  readonly probeRoleIsolated: boolean;
+}
+
+export interface DatabaseRecoveryProbePort {
+  observe(input: {
+    readonly nodeId: string;
+    readonly nodeSlug: string;
+    readonly environment: DatabaseEnvironment;
+  }): Promise<DatabaseRecoveryProbeObservation>;
+}
+
+/** Durable control state; its absolute deadline is assigned once by PostgreSQL. */
+export interface DatabaseRecoveryIncident {
+  readonly nodeId: string;
+  readonly nodeSlug: string;
+  readonly environment: DatabaseEnvironment;
+  readonly incidentId: string;
+  readonly actorId: string;
+  readonly targetBuildSha: string;
+  readonly databaseSystemIdentifier: string;
+  readonly databaseName: string;
+  readonly appRole: string;
+  readonly serviceRole: string;
+  readonly state: "contained" | "recovering" | "readmitted" | "recontained";
+  readonly reason: string;
+  readonly containedAt: string;
+  readonly startedAt: string | null;
+  readonly deadlineAt: string | null;
+  readonly verifiedAt: string | null;
+}
+
+export interface DatabaseRecoveryIdentity {
+  readonly nodeId: string;
+  readonly environment: DatabaseEnvironment;
+  readonly incidentId: string;
+  readonly targetBuildSha: string;
+  readonly databaseSystemIdentifier: string;
+}
+
+/** Read-only startup enumeration does not depend on metrics or Loki availability. */
+export interface DatabaseRecoveryLedgerReaderPort {
+  current(input: {
+    readonly nodeId: string;
+    readonly environment: DatabaseEnvironment;
+  }): Promise<DatabaseRecoveryIncident | null>;
+  listPending(input: {
+    readonly environment: DatabaseEnvironment;
+  }): Promise<readonly DatabaseRecoveryIncident[]>;
+}
+
+export interface DatabaseRecoveryContainmentReceipt
+  extends DatabaseRecoveryIncident {
+  /** Assigned by the native transaction; concurrent retries cannot publish twice. */
+  readonly transitionApplied: boolean;
+}
+
+export interface DatabaseRecoveryContainPort {
+  contain(
+    input: DatabaseRecoveryIdentity & {
+      readonly nodeSlug: string;
+      readonly actorId: string;
+      readonly reason: DatabaseContainmentReason;
+      readonly databaseName: string;
+    }
+  ): Promise<DatabaseRecoveryContainmentReceipt>;
+}
+
 export interface DatabaseDsnPair {
   readonly app: string;
   readonly service: string;
@@ -323,7 +403,6 @@ export interface ReliabilityStatusReaderPort {
   }): Promise<ReliabilityStatusV1>;
 }
 
-/** Narrow human command seam; actor identity is supplied by authenticated app code. */
 export interface ReliabilityReadmitPort {
   readmit(input: {
     readonly nodeId: string;
@@ -332,7 +411,8 @@ export interface ReliabilityReadmitPort {
     readonly actorId: string;
     readonly incidentId: string;
   }): Promise<{
-    readonly phase: "open";
+    readonly phase: "open" | "recovering";
+    readonly deadlineAt?: string | null;
     readonly incidentId: string | null;
     readonly lastTransitionAt: string | null;
   }>;

@@ -116,6 +116,7 @@ describe("MimirMetricsAdapter", () => {
       database_tier: "shared",
       budget_profile: "shared-default-v1",
       policy_version: "reliability-status-v1",
+      substrate_host: "a".repeat(32),
     };
     mockFetch
       .mockResolvedValueOnce(
@@ -131,6 +132,9 @@ describe("MimirMetricsAdapter", () => {
       .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "41"] }]))
       .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "42"] }]))
       .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "43"] }]));
+    mockFetch.mockImplementation(async () =>
+      vector([{ metric: labels, value: [now, String(now)] }])
+    );
 
     const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
     const containment: DatabaseContainmentPort = {
@@ -183,6 +187,7 @@ describe("MimirMetricsAdapter", () => {
         environment: "candidate-a",
         buildSha,
         sourceSha: buildSha,
+        substrateHost: "a".repeat(32),
         desiredTier: "shared",
         budgetProfile: "shared-default-v1",
         incidentId: "realistic-mimir-fixture",
@@ -228,6 +233,7 @@ describe("MimirMetricsAdapter", () => {
       database_tier: "shared",
       budget_profile: "shared-default-v1",
       policy_version: "reliability-status-v1",
+      substrate_host: "a".repeat(32),
     };
     mockFetch
       .mockResolvedValueOnce(vector([]))
@@ -236,16 +242,31 @@ describe("MimirMetricsAdapter", () => {
       .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "80"] }]))
       .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "75"] }]))
       .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "10"] }]))
-      .mockResolvedValueOnce(
-        vector([{ metric: labels, value: [staleButTtlFresh, "60"] }])
-      )
-      .mockResolvedValueOnce(
-        vector([{ metric: labels, value: [staleButTtlFresh, "60"] }])
-      );
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "60"] }]))
+      .mockResolvedValueOnce(vector([{ metric: labels, value: [now, "60"] }]));
+    mockFetch.mockImplementation(async (url) =>
+      vector([
+        {
+          metric: labels,
+          value: [
+            now,
+            String(
+              new URL(url).searchParams
+                .get("query")
+                ?.includes("physical_reads") ||
+                new URL(url).searchParams.get("query")?.includes("temp_bytes")
+                ? staleButTtlFresh
+                : now
+            ),
+          ],
+        },
+      ])
+    );
 
     const snapshot = await adapter.queryReliabilitySnapshot({
       environment: "candidate-a",
       nodeSlug: "red",
+      substrateHost: "a".repeat(32),
       databaseTier: "shared",
       budgetProfile: "shared-default-v1",
     });
@@ -257,6 +278,149 @@ describe("MimirMetricsAdapter", () => {
         physicalReadsPct: null,
         tempBytesPct: null,
       },
+    });
+  });
+
+  it("refuses node attribution from another physical host in the same environment", async () => {
+    const now = Date.now() / 1000;
+    const labels = {
+      environment: "candidate-a",
+      node_slug: "operator",
+      database_tier: "shared",
+      budget_profile: "shared-default-v1",
+      policy_version: "reliability-status-v1",
+      substrate_host: "b".repeat(32),
+    };
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: "success",
+        data: {
+          resultType: "vector",
+          result: [{ metric: labels, value: [now, "90"] }],
+        },
+      }),
+    });
+    const snapshot = await adapter.queryReliabilitySnapshot({
+      environment: "candidate-a",
+      nodeSlug: "operator",
+      databaseTier: "shared",
+      budgetProfile: "shared-default-v1",
+      substrateHost: "a".repeat(32),
+    });
+    expect(snapshot).toMatchObject({
+      evidenceScope: "environment-shared",
+      ioPressurePct: null,
+      databaseShare5m: {
+        backendsPct: null,
+        physicalReadsPct: null,
+        tempBytesPct: null,
+      },
+    });
+  });
+
+  it("rejects fresh query evaluation timestamps over stale recording samples", async () => {
+    const evaluatedAt = Date.now() / 1000;
+    const labels = {
+      environment: "candidate-a",
+      node_slug: "operator",
+      database_tier: "shared",
+      budget_profile: "shared-default-v1",
+      policy_version: "reliability-status-v1",
+      substrate_host: "a".repeat(32),
+    };
+    mockFetch.mockImplementation(async (url) => ({
+      ok: true,
+      json: async () => ({
+        status: "success",
+        data: {
+          resultType: "vector",
+          result: [
+            {
+              metric: labels,
+              value: [
+                evaluatedAt,
+                new URL(url).searchParams.get("query")?.startsWith("timestamp(")
+                  ? String(evaluatedAt - 180)
+                  : "90",
+              ],
+            },
+          ],
+        },
+      }),
+    }));
+    const snapshot = await adapter.queryReliabilitySnapshot({
+      environment: "candidate-a",
+      nodeSlug: "operator",
+      databaseTier: "shared",
+      budgetProfile: "shared-default-v1",
+      substrateHost: "a".repeat(32),
+    });
+    expect(snapshot).toMatchObject({
+      evidenceScope: "environment-shared",
+      ioPressurePct: null,
+      connectionPct: null,
+      databaseShare5m: {
+        physicalReadsPct: null,
+        tempBytesPct: null,
+        backendsPct: null,
+      },
+    });
+    expect(
+      new Set(
+        mockFetch.mock.calls.map(([url]) =>
+          new URL(url).searchParams.get("time")
+        )
+      ).size
+    ).toBe(1);
+  });
+
+  it("rejects a source timestamp receipt whose physical host differs from its signal", async () => {
+    const evaluatedAt = Date.now() / 1000;
+    const labels = {
+      environment: "candidate-a",
+      node_slug: "operator",
+      database_tier: "shared",
+      budget_profile: "shared-default-v1",
+      policy_version: "reliability-status-v1",
+      substrate_host: "a".repeat(32),
+    };
+    mockFetch.mockImplementation(async (url) => {
+      const source = new URL(url).searchParams
+        .get("query")
+        ?.startsWith("timestamp(");
+      return {
+        ok: true,
+        json: async () => ({
+          status: "success",
+          data: {
+            resultType: "vector",
+            result: [
+              {
+                metric: {
+                  ...labels,
+                  substrate_host: source
+                    ? "b".repeat(32)
+                    : labels.substrate_host,
+                },
+                value: [evaluatedAt, source ? String(evaluatedAt) : "90"],
+              },
+            ],
+          },
+        }),
+      };
+    });
+    expect(
+      await adapter.queryReliabilitySnapshot({
+        environment: "candidate-a",
+        nodeSlug: "operator",
+        databaseTier: "shared",
+        budgetProfile: "shared-default-v1",
+        substrateHost: "a".repeat(32),
+      })
+    ).toMatchObject({
+      evidenceScope: "environment-shared",
+      ioPressurePct: null,
     });
   });
 

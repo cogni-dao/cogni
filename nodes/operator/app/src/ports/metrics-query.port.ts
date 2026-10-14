@@ -120,6 +120,8 @@ export interface ReliabilityQueryParams {
   readonly environment: ReliabilityEnvironment;
   readonly databaseTier: "shared" | "dedicated" | null;
   readonly budgetProfile: string | null;
+  /** Physical host machine-id attested by the applied DB/probe binding. */
+  readonly substrateHost?: string;
 }
 
 export interface RegionalReadinessMetric {

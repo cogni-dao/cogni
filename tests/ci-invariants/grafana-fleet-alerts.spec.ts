@@ -20,6 +20,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -166,6 +167,22 @@ describe("fleet Serve alert contract (bug.5459)", () => {
       expect(syntheticMain).toContain(metric);
     }
     expect(syntheticMain).toContain('policy_version = "reliability-status-v1"');
+    // node_exporter waiting is PSI Some; stalled is the canonical PSI Full counter.
+    expect(syntheticMain).toContain(
+      "rate(node_pressure_io_stalled_seconds_total"
+    );
+    expect(syntheticMain).not.toContain(
+      "rate(node_pressure_io_waiting_seconds_total"
+    );
+    expect(
+      readFileSync(
+        path.resolve(
+          __dirname,
+          "../../infra/compose/runtime/configs/alloy-config.metrics.alloy"
+        ),
+        "utf8"
+      )
+    ).toContain("|node_pressure_io_stalled_seconds_total|");
     for (const uid of [
       "reliability-io-warning",
       "reliability-connections-warning",
@@ -250,17 +267,42 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     );
     const serializedSweep = JSON.stringify(sweep);
     const serializedReadmitter = JSON.stringify(readmitter);
-    expect(serializedSweep).toContain("DATABASE_RELIABILITY_ADMIN_URL");
-    expect(serializedSweep).not.toContain("DATABASE_RELIABILITY_READMIT_URL");
-    expect(serializedSweep).not.toContain("DATABASE_RELIABILITY_READMIT_TOKEN");
-    expect(serializedReadmitter).toContain("DATABASE_RELIABILITY_READMIT_URL");
-    expect(serializedReadmitter).toContain(
-      "DATABASE_RELIABILITY_READMIT_TOKEN"
+    expect(sweep.spec.template.spec.volumes).toEqual([
+      {
+        name: "credentials",
+        projected: {
+          sources: [
+            {
+              secret: {
+                name: "database-reliability-actuator-env-secrets",
+                optional: true,
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    expect(readmitter.spec.template.spec.volumes).toEqual([
+      {
+        name: "credentials",
+        projected: {
+          sources: [
+            {
+              secret: {
+                name: "database-reliability-readmitter-env-secrets",
+                optional: true,
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    expect(serializedSweep).not.toContain(
+      "database-reliability-readmitter-env-secrets"
     );
     expect(serializedReadmitter).not.toContain(
-      "DATABASE_RELIABILITY_ADMIN_URL"
+      "database-reliability-actuator-env-secrets"
     );
-    expect(serializedReadmitter).not.toContain("GRAFANA_SERVICE_ACCOUNT_TOKEN");
     for (const environment of ["candidate-a", "preview", "production"]) {
       const externalSecret = readFileSync(
         path.resolve(
@@ -270,6 +312,21 @@ describe("fleet Serve alert contract (bug.5459)", () => {
         "utf8"
       );
       expect(externalSecret).not.toContain("GH_REVIEW_APP");
+      const serviceSecrets = yaml
+        .parseAllDocuments(externalSecret)
+        .map((document) => document.toJSON());
+      for (const secret of serviceSecrets) {
+        const component = secret.metadata.labels["app.kubernetes.io/component"];
+        expect(secret.spec.dataFrom).toEqual([
+          { extract: { key: `${environment}/${component}` } },
+        ]);
+        expect(
+          secret.spec.data.every(
+            (entry: { remoteRef: { key: string } }) =>
+              entry.remoteRef.key !== `${environment}/${component}`
+          )
+        ).toBe(true);
+      }
     }
   });
 
@@ -354,7 +411,13 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     );
     expect(replay).toContain("catalog_for_role shared-target");
     expect(replay).toContain("catalog_for_role shared-control");
-    expect(replay).toContain("catalog_for_role dedicated-neighbor");
+    expect(replay).not.toContain("catalog_for_role dedicated-neighbor");
+    expect(replay).toContain("actualDeployedBuildSha");
+    expect(replay).toContain("firstQualifyingRecordedAtEpoch");
+    expect(replay).toContain("maximumContainmentSeconds:60");
+    expect(replay).toContain(".transitionApplied == true");
+    expect(replay).toContain("timestamp(${io_metric})");
+    expect(replay).toContain('neighbor_shas=("$control_baseline_sha")');
     expect(replay).toContain("catalog_for_controller");
     expect(replay).toContain(
       'git -C "$root_dir" archive "$PLATFORM_BUILD_SHA"'
@@ -373,14 +436,8 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     expect(replay).toContain("export PGDATABASE");
     expect(replay).toContain(".expectedRegions[]");
     expect(replay).toContain('node_slug="%s",proof_class="serve"');
-    expect(replay).toContain("(.data.result | length == 2)");
-    expect(replay).toContain("(.values | length == 5)");
-    expect(replay).toContain("(.values[-1][0] - .values[-2][0]) == 60");
-    expect(replay).toContain(".[0] <= $end + 15");
-    expect(replay).toContain("($end - .values[-1][0]) <= 90");
-    expect(replay).toContain("queryRef reliability-status-v1.readiness-1m");
     expect(replay).toContain(
-      'status=$(curl -fsS --max-time 10 -H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER" "$reliability_status_url")'
+      'status=$(curl -fsS --max-time 10 -H "Cookie: $RELIABILITY_STATUS_COOKIE_HEADER" "$reliability_status_url")'
     );
     expect(replay).toContain(
       'target_before=$(actuator_get "$target_containment_status_path")'
@@ -390,20 +447,29 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     expect(replay).not.toContain(': "${ACTUATOR_STATUS_BASE_URL:');
     expect(replay).not.toContain(': "${ACTUATOR_VERSION_URL:');
     expect(replay).not.toContain(': "${RELIABILITY_READMIT_URL:');
-    expect(replay).toContain('-H "Cookie: $RELIABILITY_READMIT_COOKIE_HEADER"');
+    expect(replay).toContain('-H "Cookie: $RELIABILITY_STATUS_COOKIE_HEADER"');
     expect(replay).not.toContain("RELIABILITY_READMIT_AUTH_HEADER");
-    expect(replay).toContain('.phase == "open" and .incidentId == $incidentId');
     expect(replay).toContain(
-      'action=\\"contained\\" | nodeId=\\"$TARGET_NODE_ID\\" | environment=\\"candidate-a\\" | incidentId=\\"$incident_id\\"'
+      'nodeId=\\"$TARGET_NODE_ID\\" | environment=\\"candidate-a\\" | incidentId=\\"$incident_id\\"'
     );
-    expect(replay).toContain(
-      'action=\\"readmitted\\" | nodeId=\\"$TARGET_NODE_ID\\" | environment=\\"candidate-a\\" | incidentId=\\"$incident_id\\"'
-    );
+    expect(replay).not.toContain("verify_readmission_window");
+    expect(replay).not.toContain("-X POST");
+    expect(replay).toContain('runtimeState:"NOLOGIN"');
+    expect(replay).toContain("core_neighbor_sample");
+    expect(replay).toContain("describeNamespace");
+    expect(replay).toContain("describeTaskQueue");
+    expect(replay).toContain("/v1/internal/substrate?environment=");
+    expect(replay).not.toContain("DATABASE_RECOVERY_PROBE_URLS_JSON");
 
     const runProductionPlanner = (names: {
       readonly target: string;
       readonly controller: string;
       readonly dedicated: string;
+      readonly clients?: string;
+      readonly foreignDatabase?: boolean;
+      readonly poisonedDsn?: boolean;
+      readonly poisonedQuery?: boolean;
+      readonly phase?: string;
     }) => {
       const fixtureRoot = mkdtempSync(
         path.join(tmpdir(), "reliability-replay-plan-")
@@ -419,6 +485,12 @@ describe("fleet Serve alert contract (bug.5459)", () => {
           recursive: true,
         });
         mkdirSync(path.join(fixtureRoot, "scripts/ops"), { recursive: true });
+        writeFileSync(
+          path.join(fixtureRoot, "infra/database-budget-profiles.yaml"),
+          yaml.stringify({
+            "shared-default-v1": { roles: { app: { connection_limit: 2 } } },
+          })
+        );
         copyFileSync(
           SHARED_CONTAINMENT_REPLAY_FILE,
           path.join(
@@ -429,6 +501,25 @@ describe("fleet Serve alert contract (bug.5459)", () => {
         copyFileSync(
           IMAGE_TAGS_LIB_FILE,
           path.join(fixtureRoot, "scripts/ci/lib/image-tags.sh")
+        );
+        for (const name of ["appset-paths.sh", "lane-db-residency.sh"]) {
+          copyFileSync(
+            path.resolve(__dirname, `../../scripts/ci/lib/${name}`),
+            path.join(fixtureRoot, `scripts/ci/lib/${name}`)
+          );
+        }
+        mkdirSync(path.join(fixtureRoot, "scripts/setup/lib"), {
+          recursive: true,
+        });
+        copyFileSync(
+          path.resolve(
+            __dirname,
+            "../../scripts/setup/lib/cogni-deployment-identity.sh"
+          ),
+          path.join(
+            fixtureRoot,
+            "scripts/setup/lib/cogni-deployment-identity.sh"
+          )
         );
         writeFileSync(
           path.join(
@@ -455,6 +546,9 @@ describe("fleet Serve alert contract (bug.5459)", () => {
             reliability_validation: {
               "candidate-a": { role: "shared-target" },
             },
+            ...(names.foreignDatabase
+              ? { deployment_provider: { "candidate-a": "akash" } }
+              : {}),
           },
           {
             name: names.controller,
@@ -510,11 +604,42 @@ describe("fleet Serve alert contract (bug.5459)", () => {
           cwd: fixtureRoot,
           encoding: "utf8",
         }).trim();
+        const fakeBin = path.join(fixtureRoot, "fake-bin");
+        const sqlMarker = path.join(fixtureRoot, "sql-started");
+        if (names.poisonedDsn || names.poisonedQuery) {
+          mkdirSync(fakeBin);
+          writeFileSync(
+            path.join(fakeBin, "kubectl"),
+            `#!/usr/bin/env bash
+case "$*" in
+  *"get serviceaccount"*) exit 0 ;;
+  *"create token"*) printf 'fixture-jwt' ;;
+  *"bao write -field=token"*) printf 'fixture-token' ;;
+  *"bao kv get"*) printf '%s' '{"data":{"data":{"DATABASE_URL":"postgresql://app_${names.target}:fixture@${names.poisonedQuery ? "candidate-a.vm.example.invalid" : "foreign.example.invalid"}:5432/cogni_${names.target}${names.poisonedQuery ? "?host=foreign.example.invalid" : ""}"}}}' ;;
+  *) exit 98 ;;
+esac
+`,
+            { mode: 0o700 }
+          );
+          for (const command of ["psql", "pgbench"]) {
+            writeFileSync(
+              path.join(fakeBin, command),
+              `#!/usr/bin/env bash\ntouch '${sqlMarker}'\nexit 99\n`,
+              { mode: 0o700 }
+            );
+          }
+        }
         // Poison mutable worktree inputs after the commit. The production
         // planner must still read catalog + policy from PLATFORM_BUILD_SHA.
         writeFileSync(
           path.join(fixtureRoot, `infra/catalog/${names.target}.yaml`),
           yaml.stringify({ name: "worktree-poison", type: "infra" })
+        );
+        writeFileSync(
+          path.join(fixtureRoot, "infra/database-budget-profiles.yaml"),
+          yaml.stringify({
+            "shared-default-v1": { roles: { app: { connection_limit: 99 } } },
+          })
         );
         writeFileSync(
           path.join(
@@ -533,19 +658,41 @@ describe("fleet Serve alert contract (bug.5459)", () => {
             cwd: fixtureRoot,
             encoding: "utf8",
             env: {
-              PATH: process.env.PATH,
+              PATH: `${fakeBin}:${process.env.PATH}`,
               ALLOW_CANDIDATE_DATABASE_REPLAY: "1",
               DEPLOY_ENVIRONMENT: "candidate-a",
               PLATFORM_BUILD_SHA: sha,
               CANDIDATE_DOMAIN: "test.example.invalid",
-              REPLAY_PLAN_ONLY: "1",
+              FORK_DOMAIN_ROOT: "example.invalid",
+              REPLAY_PLAN_ONLY:
+                names.poisonedDsn || names.poisonedQuery ? "0" : "1",
+              ...(names.phase ? { REPLAY_PHASE: names.phase } : {}),
+              ...(names.poisonedDsn || names.poisonedQuery
+                ? {
+                    RELIABILITY_STATUS_COOKIE_HEADER: "fixture-session",
+                    MIMIR_QUERY_URL: "https://metrics.example.invalid",
+                    METRICS_AUTH_HEADER: "fixture",
+                    LOKI_QUERY_URL: "https://logs.example.invalid",
+                    LOKI_AUTH_HEADER: "fixture",
+                    INCIDENT_REQUEST_RATE: "1",
+                  }
+                : {}),
+              ...(names.clients ? { REPLAY_CLIENTS: names.clients } : {}),
             },
           }
         );
+        if (names.poisonedDsn || names.poisonedQuery)
+          expect(existsSync(sqlMarker)).toBe(false);
+        if (result.status !== 0) throw new Error(result.stderr);
         expect(result.stderr).toBe("");
         expect(result.status).toBe(0);
         return JSON.parse(result.stdout) as {
           platformBuildSha: string;
+          load: {
+            budgetProfile: string;
+            appConnectionLimit: number;
+            clients: number;
+          };
           controller: {
             slug: string;
             buildSha: string;
@@ -592,6 +739,56 @@ describe("fleet Serve alert contract (bug.5459)", () => {
         origin: "http://harbor-database-reliability-readmitter:8081",
       },
     });
+    expect(first).toMatchObject({
+      phase: "automatic-containment",
+      excluded: [{ node: "quartz" }],
+    });
+    expect(() =>
+      runProductionPlanner({
+        target: "ember",
+        controller: "harbor",
+        dedicated: "quartz",
+        phase: "combined",
+      })
+    ).toThrow("combined recovery proof unavailable");
+    expect(() =>
+      runProductionPlanner({
+        target: "ember",
+        controller: "harbor",
+        dedicated: "quartz",
+        poisonedQuery: true,
+      })
+    ).toThrow();
+    expect(first.load).toEqual({
+      budgetProfile: "shared-default-v1",
+      appConnectionLimit: 2,
+      clients: 1,
+      databaseEnvironment: "candidate-a",
+    });
+    expect(() =>
+      runProductionPlanner({
+        target: "ember",
+        controller: "harbor",
+        dedicated: "quartz",
+        clients: "8",
+      })
+    ).toThrow("shared replay clients exceed immutable app budget");
+    expect(() =>
+      runProductionPlanner({
+        target: "red",
+        controller: "harbor",
+        dedicated: "quartz",
+        foreignDatabase: true,
+      })
+    ).toThrow("shared replay refuses database residency outside candidate-a");
+    expect(() =>
+      runProductionPlanner({
+        target: "ember",
+        controller: "harbor",
+        dedicated: "quartz",
+        poisonedDsn: true,
+      })
+    ).toThrow("lane database residency disagreement");
     expect(first.validation).toMatchObject({
       sharedTarget: {
         slug: "ember",

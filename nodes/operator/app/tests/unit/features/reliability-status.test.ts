@@ -19,6 +19,8 @@ const routeMocks = vi.hoisted(() => ({
   readmit: vi.fn(),
   readStatus: vi.fn(),
   getDeployState: vi.fn(),
+  humanSession: vi.fn(),
+  localControl: vi.fn(),
 }));
 const ROUTE_NODE_ID = "123e4567-e89b-12d3-a456-426614174001";
 const ROUTE_BUILD_SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -26,6 +28,10 @@ const ROUTE_CATALOG_SHA = "89abcdef0123456789abcdef0123456789abcdef";
 
 vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn(async () => ({ id: "user-1" })),
+}));
+vi.mock("@/lib/auth/server", () => ({
+  getServerSessionUser: (...args: unknown[]) =>
+    routeMocks.humanSession(...args),
 }));
 vi.mock("@/app/_lib/node-rbac", () => ({
   resolveNodeAndAuthorize: vi.fn(async () => ({
@@ -37,6 +43,7 @@ vi.mock("@/app/_lib/node-rbac", () => ({
   })),
 }));
 vi.mock("@/bootstrap/container", () => ({
+  resolveLocalReliabilityControl: () => routeMocks.localControl(),
   getContainer: () => ({
     reliabilityStatusReader: { read: routeMocks.readStatus },
     deployCapability: { getDeployState: routeMocks.getDeployState },
@@ -673,6 +680,12 @@ describe("ReliabilityStatusV1 policy", () => {
 describe("reliability HTTP boundaries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    routeMocks.humanSession.mockResolvedValue({ id: "user-1" });
+    routeMocks.localControl.mockReturnValue({
+      nodeId: "00000000-0000-4000-8000-000000000001",
+      slug: "controller",
+      buildSha: ROUTE_CATALOG_SHA,
+    });
     process.env.APP_BUILD_SHA = ROUTE_CATALOG_SHA;
     process.env.DEPLOY_ENVIRONMENT = "candidate-a";
     routeMocks.resolvePlacement.mockResolvedValue({

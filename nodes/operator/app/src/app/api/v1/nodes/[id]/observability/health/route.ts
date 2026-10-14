@@ -11,8 +11,10 @@ import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import {
   getContainer,
   resolveDatabasePlacementResolver,
+  resolveLocalReliabilityControl,
 } from "@/bootstrap/container";
 import { readReliabilityStatus } from "@/features/nodes/reliability-status";
+import { getServerSessionUser } from "@/lib/auth/server";
 import type { DatabaseContainmentStatus } from "@/ports";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +27,42 @@ function isEnvironment(value: string | null | undefined): value is Environment {
   return ENVIRONMENTS.some((candidate) => candidate === value);
 }
 
+/** Local identity is image-owned; authorization remains solely OpenFGA. */
+async function resolveReliabilityGate(input: {
+  id: string;
+  userId: string;
+  action: "node.flight" | "node.manage_envs";
+}) {
+  const local = resolveLocalReliabilityControl();
+  if (input.id !== local.nodeId && input.id !== local.slug)
+    return { ...(await resolveNodeAndAuthorize(input)), local: null };
+  const node = { nodeId: local.nodeId, slug: local.slug };
+  if (!local.authorization)
+    return {
+      ok: false as const,
+      status: 503,
+      errorCode: "authz_unavailable",
+      local,
+    };
+  const decision = await local.authorization.check({
+    actorId: `user:${input.userId}`,
+    action: input.action,
+    resource: `node:${local.nodeId}`,
+    context: { tenantId: local.nodeId, nodeId: local.nodeId },
+  });
+  if (decision.decision !== "allow")
+    return {
+      ok: false as const,
+      status: decision.code === "authz_unavailable" ? 503 : 403,
+      errorCode:
+        decision.code === "authz_unavailable"
+          ? "authz_unavailable"
+          : "authz_denied",
+      local,
+    };
+  return { ok: true as const, node, local };
+}
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> }
@@ -34,7 +72,7 @@ export async function GET(
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const { id } = await context.params;
-  const gate = await resolveNodeAndAuthorize({
+  const gate = await resolveReliabilityGate({
     id,
     userId: user.id,
     action: "node.flight",
@@ -61,9 +99,11 @@ export async function GET(
     );
   }
 
-  const container = getContainer();
-  const actuatorStatus = container.reliabilityStatusReader
-    ? await container.reliabilityStatusReader
+  const statusReader =
+    gate.local?.statusReader ??
+    (gate.local ? undefined : getContainer().reliabilityStatusReader);
+  const actuatorStatus = statusReader
+    ? await statusReader
         .read({
           nodeId: gate.node.nodeId,
           nodeSlug: gate.node.slug,
@@ -74,6 +114,48 @@ export async function GET(
   if (actuatorStatus) {
     return NextResponse.json(reliabilityStatusV1Schema.parse(actuatorStatus));
   }
+  if (gate.local) {
+    const placement = gate.local.buildSha
+      ? await resolveDatabasePlacementResolver()
+          .resolve({
+            nodeSlug: gate.node.slug,
+            environment,
+            sourceRef: gate.local.buildSha,
+          })
+          .catch(() => null)
+      : null;
+    return NextResponse.json(
+      reliabilityStatusV1Schema.parse({
+        version: "reliability-status.v1",
+        nodeId: gate.node.nodeId,
+        slug: gate.node.slug,
+        environment,
+        buildSha: gate.local.buildSha,
+        databaseTier: placement?.desiredTier ?? "unknown",
+        budgetProfile: placement?.budgetProfile ?? null,
+        state: "unknown",
+        regionalReadiness: [],
+        utilization: {
+          evidenceScope: "environment-shared",
+          ioPressurePct: null,
+          connectionPct: null,
+          memoryHeadroomPct: null,
+          diskHeadroomPct: null,
+          databaseShare5m: {
+            backendsPct: null,
+            physicalReadsPct: null,
+            tempBytesPct: null,
+          },
+        },
+        incidentId: null,
+        incidentReason: "required reliability evidence is missing",
+        observedAt: new Date().toISOString(),
+        lastTransitionAt: null,
+        evidenceQueryRefs: [],
+      })
+    );
+  }
+  const container = getContainer();
 
   const deployedBuildSha = container.deployCapability
     ? await container.deployCapability
@@ -149,12 +231,12 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
-  const user = await getSessionUser();
+  const user = await getServerSessionUser();
   if (!user)
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const { id } = await context.params;
-  const gate = await resolveNodeAndAuthorize({
+  const gate = await resolveReliabilityGate({
     id,
     userId: user.id,
     action: "node.manage_envs",
@@ -180,8 +262,12 @@ export async function POST(
     return NextResponse.json({ error: "invalid_env" }, { status: 400 });
   }
 
-  const command = getContainer().reliabilityReadmit;
-  const statusReader = getContainer().reliabilityStatusReader;
+  const command =
+    gate.local?.readmit ??
+    (gate.local ? undefined : getContainer().reliabilityReadmit);
+  const statusReader =
+    gate.local?.statusReader ??
+    (gate.local ? undefined : getContainer().reliabilityStatusReader);
   if (!command || !statusReader) {
     return NextResponse.json(
       { error: "reliability_readmit_unavailable" },
@@ -206,12 +292,26 @@ export async function POST(
     );
   }
   const incidentId = currentStatus.incidentId;
-  const result = await command.readmit({
-    nodeId: gate.node.nodeId,
-    nodeSlug: gate.node.slug,
-    environment: environment as Environment,
-    actorId: user.id,
-    incidentId,
-  });
-  return NextResponse.json({ ...result, incidentId });
+  try {
+    const result = await command.readmit({
+      nodeId: gate.node.nodeId,
+      nodeSlug: gate.node.slug,
+      environment: environment as Environment,
+      actorId: user.id,
+      incidentId,
+    });
+    return NextResponse.json(
+      { ...result, incidentId },
+      { status: result.phase === "recovering" ? 202 : 200 }
+    );
+  } catch {
+    return NextResponse.json(
+      {
+        error: "reliability_recovery_unavailable",
+        state: "unknown",
+        incidentId,
+      },
+      { status: 503 }
+    );
+  }
 }

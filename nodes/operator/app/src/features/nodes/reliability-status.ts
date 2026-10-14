@@ -34,6 +34,7 @@ export interface ReliabilityStatusInput {
   readonly desiredTier: "shared" | "dedicated" | null;
   readonly budgetProfile: string | null;
   readonly database: DatabaseContainmentStatus | null;
+  readonly substrateHost?: string;
 }
 
 export interface ReliabilityTarget {
@@ -44,6 +45,7 @@ export interface ReliabilityTarget {
   readonly budgetProfile: string;
   readonly sourceSha: string;
   readonly cellId?: string;
+  readonly substrateHost?: string;
 }
 
 export interface ReliabilitySweepResult {
@@ -56,7 +58,6 @@ const UNKNOWN_REASON = "required reliability evidence is missing";
 export const EXPECTED_RELIABILITY_REGIONS =
   RELIABILITY_POLICY_V1.expectedRegions;
 export const RELIABILITY_EVIDENCE_TTL_MS = RELIABILITY_POLICY_V1.evidenceTtlMs;
-
 export function hasHealthyReadmissionWindow(input: {
   readonly nowMs: number;
   readonly series: readonly {
@@ -149,6 +150,7 @@ export async function readReliabilityStatus(
     environment: input.environment,
     databaseTier: input.desiredTier,
     budgetProfile: input.budgetProfile,
+    ...(input.substrateHost ? { substrateHost: input.substrateHost } : {}),
   });
 
   const utilization = {
@@ -255,6 +257,7 @@ export async function reconcileReliabilityContainment(
     budgetProfile: contained.budgetProfile,
     incidentReason: status.incidentReason ?? "critical policy triggered",
     lastTransitionAt: contained.lastTransitionAt,
+    incidentId: contained.incidentId,
   };
 }
 

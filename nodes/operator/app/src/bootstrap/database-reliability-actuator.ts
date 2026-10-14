@@ -20,26 +20,21 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import {
-  buildReliabilityReadinessQuery,
-  createProductionDatabaseContainmentAdapter,
-  createProductionDatabaseReadmissionAdapter,
-  HttpLokiReader,
-  HttpNodeProber,
   MimirMetricsAdapter,
-  ProbeDeployAdapter,
+  PinoDatabaseContainmentAuditWriter,
+  PostgresAdminSqlAdapter,
+  PostgresDatabaseContainmentControlAdapter,
+  PostgresDatabaseRecoveryProbeAdapter,
+  RecoveryLedgerDatabaseContainmentAdapter,
 } from "@/adapters/server";
 import {
-  hasHealthyReadmissionWindow,
-  isReadmissionRuntimeReady,
   isReliabilitySweepReady,
   RELIABILITY_EVIDENCE_TTL_MS,
   type ReliabilityTarget,
   runReliabilitySweep,
 } from "@/features/nodes/reliability-status";
-import type {
-  DatabaseContainmentStatus,
-  DatabaseContainmentStatusPort,
-} from "@/ports";
+import type {} from "@/ports";
+import { hostForEnv } from "@/shared/node-registry/deploy-hosts";
 import { EVENT_NAMES } from "@/shared/observability";
 
 const SWEEP_INTERVAL_MS = 60_000;
@@ -162,10 +157,6 @@ const [statusToken, prometheusUsername, prometheusPassword] = await Promise.all(
 );
 const adminDsn =
   mode === "sweep" ? await credential("DATABASE_RELIABILITY_ADMIN_URL") : null;
-const readmitDsn =
-  mode === "readmit"
-    ? await credential("DATABASE_RELIABILITY_READMIT_URL")
-    : null;
 const readmitToken =
   mode === "readmit"
     ? await credential("DATABASE_RELIABILITY_READMIT_TOKEN")
@@ -177,98 +168,34 @@ const metrics = new MimirMetricsAdapter({
   password: prometheusPassword,
   timeoutMs: 10_000,
 });
-const deploy = new ProbeDeployAdapter(new HttpNodeProber(), {
-  baseDomain: rootDomain,
-  primarySlug: reliabilityController.slug,
-});
-const containment =
-  mode === "sweep" && adminDsn
-    ? createProductionDatabaseContainmentAdapter({
-        adminDsn,
-        log,
-        loki: new HttpLokiReader({
-          grafanaUrl: requiredEnv("GRAFANA_URL"),
-          token: await credential("GRAFANA_SERVICE_ACCOUNT_TOKEN"),
-        }),
-        lokiEnvironment: environment,
-      })
-    : null;
-
-const DatabaseContainmentStatusSchema: z.ZodType<DatabaseContainmentStatus> =
-  z.object({
-    nodeId: z.string().uuid(),
-    nodeSlug: z.string().min(1),
-    environment: z.enum(["candidate-a", "preview", "production"]),
-    desiredTier: z.enum(["shared", "dedicated"]),
-    budgetProfile: z.string().min(1),
-    contained: z.boolean(),
-    phase: z.enum(["open", "contained", "recovering"]),
-    activeSessions: z.number().int().nonnegative(),
-    rolesPresent: z.boolean(),
-    rolesCanLogin: z.boolean(),
-    firewallFenced: z.boolean().nullable(),
-    cell: z.custom<DatabaseContainmentStatus["cell"]>(),
-    observedAt: z.string().datetime(),
-    lastTransitionAt: z.string().datetime().nullable(),
-    incidentId: z.string().nullable(),
-    reason: z
-      .enum([
-        "critical_io_pressure",
-        "critical_connections",
-        "critical_headroom",
-        "regional_readiness_failure",
-        "operator_action",
-      ])
-      .nullable(),
-  });
-
-class HttpContainmentStatusAdapter implements DatabaseContainmentStatusPort {
-  constructor(
-    private readonly baseUrl: string,
-    private readonly bearerToken: string
-  ) {}
-
-  async status(
-    input: Parameters<DatabaseContainmentStatusPort["status"]>[0]
-  ): Promise<DatabaseContainmentStatus> {
-    const url = new URL("/v1/internal/status", this.baseUrl);
-    url.searchParams.set("node_id", input.nodeId);
-    url.searchParams.set("node_slug", input.nodeSlug);
-    url.searchParams.set("environment", input.environment);
-    const response = await fetch(url, {
-      headers: { authorization: `Bearer ${this.bearerToken}` },
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!response.ok) {
-      throw new Error(`database_containment_status_failed:${response.status}`);
-    }
-    const status = DatabaseContainmentStatusSchema.parse(await response.json());
-    if (
-      status.nodeId !== input.nodeId ||
-      status.nodeSlug !== input.nodeSlug ||
-      status.environment !== input.environment ||
-      status.desiredTier !== input.desiredTier ||
-      status.budgetProfile !== input.budgetProfile
-    ) {
-      throw new Error("database_containment_status_identity_mismatch");
-    }
-    return status;
-  }
-}
-
-const readmissionStatus =
-  mode === "readmit"
-    ? new HttpContainmentStatusAdapter(
-        requiredEnv("DATABASE_RELIABILITY_ACTUATOR_URL"),
-        statusToken
+const recoveryProbes =
+  mode === "sweep"
+    ? new PostgresDatabaseRecoveryProbeAdapter(
+        JSON.parse(await credential("DATABASE_RECOVERY_PROBE_URLS_JSON"))
       )
     : null;
-const readmission =
-  mode === "readmit" && readmitDsn && readmissionStatus
-    ? createProductionDatabaseReadmissionAdapter({
-        readmitDsn,
-        status: readmissionStatus,
-        log,
+const recoveryVerifier =
+  mode === "sweep" && adminDsn
+    ? new PostgresDatabaseContainmentControlAdapter(
+        new PostgresAdminSqlAdapter(adminDsn)
+      )
+    : null;
+const containment =
+  recoveryProbes && recoveryVerifier
+    ? new RecoveryLedgerDatabaseContainmentAdapter({
+        ledger: recoveryVerifier,
+        probe: recoveryProbes,
+        audit: new PinoDatabaseContainmentAuditWriter(log),
+        targetBuildShaFor: (input) => {
+          const target = [...currentTargets.values()].find(
+            (row) =>
+              row.nodeId === input.nodeId &&
+              row.environment === input.environment
+          );
+          if (!target)
+            throw new Error("database_recovery_catalog_target_missing");
+          return target.sourceSha;
+        },
       })
     : null;
 
@@ -281,33 +208,25 @@ let stopping = false;
 const statusKey = (target: Pick<ReliabilityTarget, "environment" | "slug">) =>
   `${target.environment}/${target.slug}`;
 
-async function assertReadmissionEvidence(
-  target: ReliabilityTarget
-): Promise<void> {
-  const end = new Date();
-  const start = new Date(end.getTime() - 5 * 60_000);
-  const readiness = await metrics.queryRange({
-    query: buildReliabilityReadinessQuery({
-      environment: target.environment,
-      nodeSlug: target.slug,
-      window: "1m",
-    }),
-    start,
-    end,
-    step: "60s",
-  });
-  const healthy = hasHealthyReadmissionWindow({
-    nowMs: end.getTime(),
-    series: readiness.result,
-  });
-  if (!healthy) throw new Error("database_readmission_evidence_incomplete");
+function targetOrigin(target: ReliabilityTarget): string {
+  return `https://${hostForEnv(target.slug, target.slug === reliabilityController.slug, target.environment, rootDomain)}`;
+}
 
-  const deployed = await deploy.getDeployState({
-    env: target.environment,
-    node: target.slug,
-  });
-  if (deployed.buildSha !== target.sourceSha) {
-    throw new Error("database_readmission_build_sha_mismatch");
+async function readTargetBuildSha(
+  target: ReliabilityTarget
+): Promise<string | null> {
+  try {
+    const response = await fetch(new URL("/version", targetOrigin(target)), {
+      redirect: "error",
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return null;
+    const result = z
+      .object({ buildSha: z.string().regex(/^[0-9a-f]{40}$/) })
+      .parse(await response.json());
+    return result.buildSha;
+  } catch {
+    return null;
   }
 }
 
@@ -335,6 +254,21 @@ async function listTargets(): Promise<readonly ReliabilityTarget[]> {
       node.sourceSha ?? (node.isReliabilityController ? buildSha : undefined);
     if (!sourceSha)
       throw new Error(`reliability_catalog_source_sha_missing:${node.slug}`);
+    let substrateHost: string | undefined;
+    if (recoveryProbes) {
+      try {
+        substrateHost = recoveryProbes.bindingFor({
+          nodeId,
+          nodeSlug: node.slug,
+          environment,
+        }).substrateHost;
+      } catch {
+        log.warn(
+          { nodeId, nodeSlug: node.slug, environment },
+          "database_recovery_probe_binding_missing"
+        );
+      }
+    }
     return [
       {
         nodeId,
@@ -343,6 +277,7 @@ async function listTargets(): Promise<readonly ReliabilityTarget[]> {
         desiredTier: placement.tier,
         budgetProfile: placement.budgetProfile,
         sourceSha,
+        ...(substrateHost ? { substrateHost } : {}),
       },
     ];
   });
@@ -398,7 +333,9 @@ async function sweep(): Promise<void> {
   sweepRunning = true;
   const startedAt = Date.now();
   try {
-    const catalogTargets = await listTargets();
+    const catalogTargets = (await listTargets()).filter((target) =>
+      Boolean(target.substrateHost)
+    );
     if (catalogTargets.length === 0)
       throw new Error("reliability_targets_empty");
     const nextTargets = new Map(
@@ -412,13 +349,7 @@ async function sweep(): Promise<void> {
     const results = await runReliabilitySweep(catalogTargets, {
       metrics,
       containment,
-      buildShaFor: async (target) =>
-        (
-          await deploy.getDeployState({
-            env: target.environment,
-            node: target.slug,
-          })
-        ).buildSha,
+      buildShaFor: async (target) => readTargetBuildSha(target),
       incidentIdFor: (target) =>
         `reliability.v1:${target.environment}:${target.nodeId}:${minute}`,
     });
@@ -479,15 +410,10 @@ const server = createServer(async (request, response) => {
     }
     if (request.url === "/readyz") {
       if (mode === "readmit") {
-        const targets = await listTargets();
-        const ready = await isReadmissionRuntimeReady({
-          readmissionConfigured: readmission !== null,
-          targets,
-          status: readmissionStatus,
-        });
+        // Listener readiness is independent of the deliberately disabled LOGIN capability.
         response
-          .writeHead(ready ? 200 : 503)
-          .end(ready ? "ready" : "not ready");
+          .writeHead(200)
+          .end("ready; readmission disabled pending recovery proof");
         return;
       }
       const ready = isReliabilitySweepReady({
@@ -509,10 +435,13 @@ const server = createServer(async (request, response) => {
       request.method === "GET" && url.pathname === "/v1/status";
     const isInternalStatus =
       request.method === "GET" && url.pathname === "/v1/internal/status";
+    const isSubstrate =
+      request.method === "GET" && url.pathname === "/v1/internal/substrate";
     const isReadmit =
       request.method === "POST" && url.pathname === "/v1/readmit";
     const routeAllowed =
-      (mode === "sweep" && (isPublicStatus || isInternalStatus)) ||
+      (mode === "sweep" &&
+        (isPublicStatus || isInternalStatus || isSubstrate)) ||
       (mode === "readmit" && isReadmit);
     if (!routeAllowed) {
       response.writeHead(404).end("not found");
@@ -541,6 +470,36 @@ const server = createServer(async (request, response) => {
     if (!target || target.nodeId !== nodeId) {
       response.writeHead(503, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "reliability_status_unavailable" }));
+      return;
+    }
+    if (isSubstrate) {
+      if (!recoveryProbes)
+        throw new Error("database_recovery_probe_unavailable");
+      const startedAt = performance.now();
+      const binding = recoveryProbes.bindingFor({
+        nodeId: target.nodeId,
+        nodeSlug: target.slug,
+        environment,
+      });
+      const observed = await recoveryProbes.observe({
+        nodeId: target.nodeId,
+        nodeSlug: target.slug,
+        environment,
+      });
+      if (!observed.systemTenantExists)
+        throw new Error("database_recovery_system_tenant_missing");
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          substrateHost: binding.substrateHost,
+          databaseSystemIdentifier: observed.systemIdentifier,
+          databaseName: observed.database,
+          serverAddress: observed.serverAddress,
+          serverPort: observed.serverPort,
+          latencyMs: performance.now() - startedAt,
+          observedAt: observed.observedAt,
+        })
+      );
       return;
     }
     if (isPublicStatus) {
@@ -593,30 +552,22 @@ const server = createServer(async (request, response) => {
       response.writeHead(400).end("invalid readmission attribution");
       return;
     }
-    if (!readmission || !readmissionStatus) {
-      throw new Error("database_reliability_readmission_unavailable");
-    }
-    const before = await readmissionStatus.status(containmentInput);
-    if (before.phase !== "contained" || before.incidentId !== incidentId) {
-      response.writeHead(409).end("database incident is not current");
-      return;
-    }
-    await assertReadmissionEvidence(target);
-    const status = await readmission.readmit({
-      ...containmentInput,
-      incidentId,
-      actorId,
-      reason: "operator_action",
-    });
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify(status));
+    // The first shared proof leaves the incident fenced. LOGIN remains unavailable
+    // until independent deadline enforcement and the scoped regional protocol are proven.
+    response.writeHead(503, { "content-type": "application/json" });
+    response.end(
+      JSON.stringify({
+        error: "database_recovery_deadline_owner_unproven",
+        incidentId,
+      })
+    );
   } catch (error) {
     log.error(
       { event: EVENT_NAMES.NODE_RELIABILITY_HTTP_FAILED, error },
       EVENT_NAMES.NODE_RELIABILITY_HTTP_FAILED
     );
     if (!response.headersSent) {
-      response.writeHead(500, { "content-type": "application/json" });
+      response.writeHead(503, { "content-type": "application/json" });
     }
     response.end(
       JSON.stringify({ error: "database_reliability_request_failed" })

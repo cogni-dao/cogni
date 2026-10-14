@@ -179,7 +179,10 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
 
     const env = params.environment;
     const node = params.nodeSlug;
-    const identity = `environment="${env}",node_slug="${node}",database_tier="${params.databaseTier ?? "unknown"}",budget_profile="${params.budgetProfile ?? "unknown"}",policy_version="reliability-status-v1"`;
+    const substrateHost = /^[0-9a-f]{32}$/.test(params.substrateHost ?? "")
+      ? params.substrateHost
+      : null;
+    const identity = `environment="${env}",node_slug="${node}",database_tier="${params.databaseTier ?? "unknown"}",budget_profile="${params.budgetProfile ?? "unknown"}",policy_version="reliability-status-v1",substrate_host="${substrateHost ?? "unknown"}"`;
     const queries = {
       readiness: buildReliabilityReadinessQuery({
         environment: env,
@@ -195,8 +198,69 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       tempBytesShare: `cogni_reliability_v1_database_temp_bytes_share_percent{${identity}}`,
     } as const;
 
+    const evaluationTime = new Date();
+    const signalQueries = [
+      queries.io,
+      queries.connections,
+      queries.memory,
+      queries.disk,
+      queries.backendShare,
+      queries.physicalReadShare,
+      queries.tempBytesShare,
+    ];
+    // Query evaluation time is not the recording timestamp. Both reads use one
+    // fixed evaluation instant; timestamp(selector) supplies the actual source time.
+    const valueReads = Promise.all(
+      [queries.readiness, ...signalQueries].map((query) =>
+        this.queryInstant({ query, time: evaluationTime })
+      )
+    );
+    const timestampReads = Promise.all(
+      signalQueries.map((query) =>
+        this.queryInstant({
+          query: `timestamp(${query})`,
+          time: evaluationTime,
+        })
+      )
+    );
+    const [valueResults, sourceResults] = await Promise.all([
+      valueReads,
+      timestampReads,
+    ]);
+    const labels = (metric: Readonly<Record<string, string>>) =>
+      JSON.stringify(
+        Object.entries(metric)
+          .filter(([key]) => key !== "__name__")
+          .sort(([a], [b]) => a.localeCompare(b))
+      );
+    const withSourceTime = (
+      value: PrometheusInstantResult,
+      timestamp: PrometheusInstantResult
+    ): PrometheusInstantResult => {
+      const signal = value.result[0];
+      const source = timestamp.result[0];
+      const recordedAt = Number(source?.value[1]);
+      if (
+        value.result.length !== 1 ||
+        timestamp.result.length !== 1 ||
+        !signal ||
+        !source ||
+        labels(signal.metric) !== labels(source.metric) ||
+        !Number.isFinite(recordedAt) ||
+        recordedAt <= 0 ||
+        signal.value[0] !== source.value[0]
+      )
+        return { resultType: "vector", result: [] };
+      return {
+        resultType: "vector",
+        result: [
+          { metric: signal.metric, value: [recordedAt, signal.value[1]] },
+        ],
+      };
+    };
+    const readiness = valueResults[0];
+    if (!readiness) throw new Error("reliability_readiness_result_missing");
     const [
-      readiness,
       io,
       connections,
       memory,
@@ -204,16 +268,23 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       backendShare,
       physicalReadShare,
       tempBytesShare,
-    ] = await Promise.all([
-      this.queryInstant({ query: queries.readiness }),
-      this.queryInstant({ query: queries.io }),
-      this.queryInstant({ query: queries.connections }),
-      this.queryInstant({ query: queries.memory }),
-      this.queryInstant({ query: queries.disk }),
-      this.queryInstant({ query: queries.backendShare }),
-      this.queryInstant({ query: queries.physicalReadShare }),
-      this.queryInstant({ query: queries.tempBytesShare }),
-    ]);
+    ] = signalQueries.map((_, index) => {
+      const value = valueResults[index + 1];
+      const timestamp = sourceResults[index];
+      if (!value || !timestamp)
+        throw new Error("reliability_source_timestamp_result_missing");
+      return withSourceTime(value, timestamp);
+    });
+    if (
+      !io ||
+      !connections ||
+      !memory ||
+      !disk ||
+      !backendShare ||
+      !physicalReadShare ||
+      !tempBytesShare
+    )
+      throw new Error("reliability_source_timestamp_result_missing");
 
     const expectedLabels = {
       environment: env,
@@ -221,6 +292,7 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       database_tier: params.databaseTier,
       budget_profile: params.budgetProfile,
       policy_version: "reliability-status-v1",
+      substrate_host: substrateHost ?? null,
     };
     const observedAtSeconds = Date.now() / 1000;
     const attributed = (result: PrometheusInstantResult) =>
