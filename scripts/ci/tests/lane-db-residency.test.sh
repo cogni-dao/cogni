@@ -131,7 +131,7 @@ for catalog_file in "$CATALOG_DIR"/*.yaml; do
   done < <(yq -r '.envs[]?' "$catalog_file")
 done
 actual_sorted="$(printf '%s\n' ${actual[@]+"${actual[@]}"} | LC_ALL=C sort | paste -sd, -)"
-ledger_sorted="$(printf '%s\n' ${LANE_DB_RESIDENCY_ALLOWLIST[@]+"${LANE_DB_RESIDENCY_ALLOWLIST[@]}"} \
+ledger_sorted="$(printf '%s\n' ${LANE_DB_RESIDENCY_PINNED[@]+"${LANE_DB_RESIDENCY_PINNED[@]}"} \
   | LC_ALL=C sort | paste -sd, -)"
 [ "$actual_sorted" = "$ledger_sorted" ] || fail "allowlist drift: catalog says misresident='${actual_sorted}', scripts/ci/lib/lane-db-residency.sh says '${ledger_sorted}'. A lane that MOVED needs its entry DELETED; a lane that newly misresides needs FIXING, not a new entry (bug.5299)."
 echo "  ok  ledger == catalog: ${ledger_sorted:-<EMPTY — bug.5299 is DONE>}"

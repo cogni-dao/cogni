@@ -217,8 +217,23 @@ _resolve_node_value() {
 # Delegates to the ONE definition (scripts/ci/lib/appset-paths.sh) so the name this composes
 # and the name the provisioner creates cannot drift — that drift IS bug.5207. The fallback
 # keeps this file usable where the lib is not on the path (local/test callers).
+#
+# RE-KEYED ONTO THE RESIDENCY RESOLVER (bug.5299), same as its twin in image-tags.sh. The
+# control env is a PROXY for "whose Postgres instance"; `lane_db_vm_env <node> <lane>` is the
+# direct answer, and it is identical to the control env for every pair pinned in the residency
+# ledger — which today is every misresident pair, so this is byte-identical.
+# $1 is the NODE, optional: without it (and without the resolver on the path, which is the
+# case on the materialize path today) this falls back to exactly the pre-resolver behaviour.
+# ORDERING, NOT COSMETICS: activating the resolver on THIS side while the DSN still carries
+# the control env's ${VM_IP} would name the lane's suffix-less database on the WRONG host —
+# production's live `cogni_<node>` — which is bug.5207's destructive shape. The composer's
+# host substitution and this re-key land together or not at all; the pin ledger is what keeps
+# them in step until then.
 _lane_db_suffix() {
-  local lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
+  local node="${1:-}" lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
+  if [ -n "$node" ] && [ -n "$lane" ] && command -v lane_db_vm_env >/dev/null 2>&1; then
+    control="$(lane_db_vm_env "$node" "$lane")" || return 1
+  fi
   if command -v lane_db_suffix >/dev/null 2>&1; then
     lane_db_suffix "$lane" "$control"; return 0
   fi
@@ -228,7 +243,7 @@ _lane_db_suffix() {
 
 _compose_node_value() {
   local node="$1" k="$2" kind source shared service db sfx
-  sfx="$(_lane_db_suffix)"
+  sfx="$(_lane_db_suffix "$node")"
   db="cogni_${node//-/_}${sfx}"
   case "$k" in
     DATABASE_URL)
