@@ -1602,6 +1602,17 @@ eval "$OPENFGA_BOOTSTRAP_ENV"
 printf '%s\n' "$OPENFGA_BOOTSTRAP_ENV" >> "$RUNTIME_ENV"
 log_info "OpenFGA RBAC config resolved: store=${OPENFGA_STORE_ID} model=${OPENFGA_AUTHORIZATION_MODEL_ID}"
 
+classify_openbao_writer_login_failure() {
+  local rc="$1" output="$2"
+  if [[ $rc -eq 124 ]] || grep -qiE 'context deadline exceeded|Internal error occurred: Timeout occurred|i/o timeout|TLS handshake timeout|connection (refused|reset)|Code: (429|500|502|503|504)' <<<"$output"; then
+    printf '%s\n' server_transient
+  elif grep -qiE 'Code: 403|permission denied' <<<"$output"; then
+    printf '%s\n' permission_denied_recheck
+  else
+    printf '%s\n' permanent
+  fi
+}
+
 patch_operator_openfga_config() {
   if ! command -v kubectl >/dev/null 2>&1; then
     log_warn "kubectl not found — cannot patch OpenBao operator OpenFGA config"
@@ -1640,16 +1651,15 @@ patch_operator_openfga_config() {
       # there was no stderr for the regex to inspect. Exit status is the
       # authoritative timeout signal; retry it like the textual server
       # transient spellings, still bounded to three fresh-JWT attempts.
-      if [[ $login_rc -eq 124 ]] || grep -qiE 'context deadline exceeded|Internal error occurred: Timeout occurred|i/o timeout|TLS handshake timeout|connection (refused|reset)|Code: (429|500|502|503|504)' <<<"$login_out"; then
-        login_reason="server_transient"
-        max_attempts=3
-      elif grep -qiE 'Code: 403|permission denied' <<<"$login_out"; then
-        login_reason="permission_denied_recheck"
-        max_attempts=2
-      else
-        log_warn "OpenBao writer login failed permanently for ${DEPLOY_ENVIRONMENT}-writer"
-        return 1
-      fi
+      login_reason="$(classify_openbao_writer_login_failure "$login_rc" "$login_out")"
+      case "$login_reason" in
+        server_transient) max_attempts=3 ;;
+        permission_denied_recheck) max_attempts=2 ;;
+        *)
+          log_warn "OpenBao writer login failed permanently for ${DEPLOY_ENVIRONMENT}-writer"
+          return 1
+          ;;
+      esac
     fi
 
     if [[ $attempt -ge $max_attempts ]]; then

@@ -27,6 +27,20 @@ DOCKER_LOG="$TMPROOT/docker.log"
 mkdir -p "$FAKEBIN" "$RUNTIME_DIR/configs"
 : > "$DOCKER_LOG"
 
+# Exercise the exact classifier embedded in deploy-infra's remote script. GNU
+# timeout may return 124 with empty stderr; that is bounded/transient, while a
+# stable permission denial and an unknown failure retain their narrow classes.
+classifier="$(awk '
+  /^classify_openbao_writer_login_failure\(\) \{/ { capture=1 }
+  capture { print }
+  capture && /^}$/ { exit }
+' scripts/ci/deploy-infra.sh)"
+[[ -n "$classifier" ]] || { echo "OpenBao writer login classifier not found" >&2; exit 1; }
+eval "$classifier"
+[[ "$(classify_openbao_writer_login_failure 124 '')" == server_transient ]]
+[[ "$(classify_openbao_writer_login_failure 2 'Code: 403. permission denied')" == permission_denied_recheck ]]
+[[ "$(classify_openbao_writer_login_failure 7 'malformed role')" == permanent ]]
+
 printf 'services: {}\n' > "$RUNTIME_DIR/docker-compose.yml"
 printf 'LITELLM_MASTER_KEY=test-only\n' > "$RUNTIME_DIR/.env"
 printf 'model_list: []\n' > "$RUNTIME_DIR/configs/litellm.config.yaml"

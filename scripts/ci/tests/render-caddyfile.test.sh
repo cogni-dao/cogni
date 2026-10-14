@@ -150,11 +150,11 @@ grep -Fq 'loki.source.journal "kernel"' "$ALLOY_CONFIG" \
   || fail "kernel OOM/SIGKILL evidence is not shipped to Loki"
 grep -Eq 'regex[[:space:]]*= .*postgres.*temporal-postgres' "$ALLOY_CONFIG" \
   || fail "PostgreSQL stderr is not shipped to Loki"
-grep -Fq 'login_reason="server_transient"' "$DEPLOY_INFRA" \
+grep -Fq 'server_transient) max_attempts=3' "$DEPLOY_INFRA" \
   || fail "OpenBao writer login has no bounded transient retry"
-grep -Fq '[[ $login_rc -eq 124 ]]' "$DEPLOY_INFRA" \
+grep -Fq '[[ $rc -eq 124 ]]' "$DEPLOY_INFRA" \
   || fail "OpenBao writer login does not classify a silent GNU timeout as transient"
-grep -Fq 'login_reason="permission_denied_recheck"' "$DEPLOY_INFRA" \
+grep -Fq 'permission_denied_recheck) max_attempts=2' "$DEPLOY_INFRA" \
   || fail "OpenBao writer login does not recheck a 403 with one fresh JWT"
 grep -Fq 'OpenBao writer login failed permanently' "$DEPLOY_INFRA" \
   || fail "unknown OpenBao login failures do not fail closed"
