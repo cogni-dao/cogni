@@ -257,6 +257,26 @@ bao_exec "write auth/github-actions/role/gha-${DEPLOY_ENV}-writer \
   policies=${DEPLOY_ENV}-writer \
   token_ttl=10m token_max_ttl=10m token_num_uses=3" >/dev/null
 
+# Control-vault-only rendered-view reader. Each lane gets an exact GitHub
+# Environment + reusable-workflow binding and can read only that lane's
+# flight-prober authority bucket. The lane scope matches the target Environment's
+# existing lane-wide target-vault authority without exposing operator buckets.
+if [[ "${DEPLOY_ENV}" == "${FLEET_CONTROL_ENV}" ]]; then
+  for _lane in ${SECRET_LANES}; do
+    bao_policy "${DEPLOY_ENV}-${_lane}-flight-probe-reader" <<HCL
+path "cogni/data/${_lane}/flight-prober" { capabilities = ["read"] }
+HCL
+    bao_exec "write auth/github-actions/role/gha-${_lane}-flight-probe-reader \
+      role_type=jwt user_claim=sub \
+      bound_subject=repo:${GH_REPO}:environment:${_lane} \
+      bound_audiences=cogni-flight-probe-projection \
+      bound_claims='{\"repository\":\"${GH_REPO}\",\"environment\":\"${_lane}\",\"job_workflow_ref\":\"${GH_REPO}/.github/workflows/flight-probe-project.yml@refs/heads/main\"}' \
+      policies=${DEPLOY_ENV}-${_lane}-flight-probe-reader \
+      token_ttl=5m token_max_ttl=5m token_num_uses=2" >/dev/null
+  done
+  unset _lane
+fi
+
 # ── ClusterSecretStore (ESO store binding) ───────────────────────────────────
 CSS_LOCAL="$REPO_ROOT/infra/k8s/secrets/external-secrets/cluster-secret-store.yaml"
 if [[ -r "$CSS_LOCAL" ]]; then
