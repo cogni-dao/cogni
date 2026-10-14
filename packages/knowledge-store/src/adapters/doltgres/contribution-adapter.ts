@@ -18,6 +18,11 @@
  *     against stale metadata before recording the next sequence number.
  *   - try/finally restores dolt_checkout('main') and releases the connection on error.
  *   - knowledge_contributions metadata table on main tracks state/principal/idempotency.
+ *   - IDEMPOTENCY_CHECK_INSIDE_ADMISSION: create replays are resolved only
+ *     after the cross-replica write lock, so concurrent retries cannot both
+ *     create branches before the unique metadata row is visible.
+ *   - APPEND_HEAD_READ_INSIDE_ADMISSION: append metadata is read under the
+ *     same lock as the branch write; queued appends observe their predecessor.
  *   - Reads from a branch use reserved-conn checkout (AS OF deferred to v1).
  *   - PATCH_CARRIES_ONLY_UNGATED_FIELDS: the `patch` edit op applies a partial
  *     SET built from `KnowledgeEntryPatch`, which carries ONLY fields no write
@@ -926,6 +931,15 @@ export class DoltgresKnowledgeContributionAdapter
     const edits = input.edits ?? [];
 
     return await this.withBranch("contribution.create", async (conn) => {
+      await conn.unsafe(`SELECT dolt_checkout('main')`);
+      if (input.idempotencyKey) {
+        const replayRows = await conn.unsafe(
+          `SELECT * FROM knowledge_contributions WHERE principal_id = ${escapeValue(input.principal.id)} AND idempotency_key = ${escapeValue(input.idempotencyKey)} LIMIT 1`
+        );
+        if (replayRows.length > 0) {
+          return mapRecord(replayRows[0] as Record<string, unknown>);
+        }
+      }
       const baseCommit = await currentHash(conn, "main");
       await conn.unsafe(
         `SELECT dolt_checkout('-b', ${escapeRef(branch)}, 'main')`
@@ -1128,6 +1142,15 @@ export class DoltgresKnowledgeContributionAdapter
     return await this.withBranch(
       "contribution.create_edo_batch",
       async (conn) => {
+        await conn.unsafe(`SELECT dolt_checkout('main')`);
+        if (input.idempotencyKey) {
+          const replayRows = await conn.unsafe(
+            `SELECT * FROM knowledge_contributions WHERE principal_id = ${escapeValue(input.principal.id)} AND idempotency_key = ${escapeValue(input.idempotencyKey)} LIMIT 1`
+          );
+          if (replayRows.length > 0) {
+            return mapRecord(replayRows[0] as Record<string, unknown>);
+          }
+        }
         const baseCommit = await currentHash(conn, "main");
         await conn.unsafe(
           `SELECT dolt_checkout('-b', ${escapeRef(branch)}, 'main')`
@@ -1175,23 +1198,29 @@ export class DoltgresKnowledgeContributionAdapter
     edits: KnowledgeContributionEdit[];
   }): Promise<ContributionCommitRecord> {
     return await withContributionAppendLock(input.contributionId, async () => {
-      const rec = await this.getById(input.contributionId);
-      if (!rec) throw new ContributionNotFoundError(input.contributionId);
-      if (rec.state !== "open") {
-        throw new ContributionStateError(
-          `contribution ${input.contributionId} is ${rec.state}`
-        );
-      }
-      const seq = rec.commitCount + 1;
-      const ref = sourceRef(input.contributionId, seq);
-      const expectedHead = rec.headCommit ?? rec.baseCommit;
-      const headPredicate = rec.headCommit
-        ? `head_commit = ${escapeValue(rec.headCommit)}`
-        : "head_commit IS NULL";
-
       return await this.withBranch(
         "contribution.append_commit",
         async (conn) => {
+          await conn.unsafe(`SELECT dolt_checkout('main')`);
+          const recordRows = await conn.unsafe(
+            `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(input.contributionId)} LIMIT 1`
+          );
+          if (recordRows.length === 0) {
+            throw new ContributionNotFoundError(input.contributionId);
+          }
+          const rec = mapRecord(recordRows[0] as Record<string, unknown>);
+          if (rec.state !== "open") {
+            throw new ContributionStateError(
+              `contribution ${input.contributionId} is ${rec.state}`
+            );
+          }
+          const seq = rec.commitCount + 1;
+          const ref = sourceRef(input.contributionId, seq);
+          const expectedHead = rec.headCommit ?? rec.baseCommit;
+          const headPredicate = rec.headCommit
+            ? `head_commit = ${escapeValue(rec.headCommit)}`
+            : "head_commit IS NULL";
+
           await conn.unsafe(`SELECT dolt_checkout(${escapeRef(rec.branch)})`);
           const actualHead = await currentHash(conn, rec.branch);
           if (
@@ -1402,23 +1431,29 @@ export class DoltgresKnowledgeContributionAdapter
     }) => Promise<{ editCount: number; message: string }>
   ): Promise<ContributionRecord> {
     return await withContributionAppendLock(input.contributionId, async () => {
-      const rec = await this.getById(input.contributionId);
-      if (!rec) throw new ContributionNotFoundError(input.contributionId);
-      if (rec.state !== "open") {
-        throw new ContributionStateError(
-          `contribution ${input.contributionId} is ${rec.state}`
-        );
-      }
-      const seq = rec.commitCount + 1;
-      const ref = sourceRef(input.contributionId, seq);
-      const expectedHead = rec.headCommit ?? rec.baseCommit;
-      const headPredicate = rec.headCommit
-        ? `head_commit = ${escapeValue(rec.headCommit)}`
-        : "head_commit IS NULL";
-
       return await this.withBranch(
         "contribution.append_edo_commit",
         async (conn) => {
+          await conn.unsafe(`SELECT dolt_checkout('main')`);
+          const recordRows = await conn.unsafe(
+            `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(input.contributionId)} LIMIT 1`
+          );
+          if (recordRows.length === 0) {
+            throw new ContributionNotFoundError(input.contributionId);
+          }
+          const rec = mapRecord(recordRows[0] as Record<string, unknown>);
+          if (rec.state !== "open") {
+            throw new ContributionStateError(
+              `contribution ${input.contributionId} is ${rec.state}`
+            );
+          }
+          const seq = rec.commitCount + 1;
+          const ref = sourceRef(input.contributionId, seq);
+          const expectedHead = rec.headCommit ?? rec.baseCommit;
+          const headPredicate = rec.headCommit
+            ? `head_commit = ${escapeValue(rec.headCommit)}`
+            : "head_commit IS NULL";
+
           await conn.unsafe(`SELECT dolt_checkout(${escapeRef(rec.branch)})`);
           const actualHead = await currentHash(conn, rec.branch);
           if (
