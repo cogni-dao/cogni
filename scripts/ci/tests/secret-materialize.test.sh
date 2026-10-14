@@ -17,7 +17,8 @@
 #     cogni/<env>/<service> bucket, by the OWNER leg only (story.5016 amendment 1);
 #   - catalog-declared LiteLLM virtual keys are explicitly registered under the
 #     canonical node/env alias, without placing the plaintext key in lookup URLs;
-#   - lookup, registration, alias collision, and transport errors fail closed;
+#   - only a receipt-confirmed existing projection may defer gateway
+#     availability; new keys, auth, collision, and malformed responses fail closed;
 #   - no secret VALUE is echoed to stdout.
 
 set -euo pipefail
@@ -33,6 +34,7 @@ bash scripts/ci/tests/openbao-login-retry.test.sh
 
 TMPROOT=$(mktemp -d -t secret-materialize.XXXXXX)
 trap 'rm -rf "$TMPROOT"' EXIT
+export LITELLM_PROJECTION_RECEIPT_DIR="$TMPROOT/litellm-projection-receipts"
 
 FAKEBIN="$TMPROOT/bin"
 REMOTE_ROOT="$TMPROOT/remote"
@@ -190,6 +192,10 @@ case "$url" in
     ;;
   */key/list)
     [[ -n "$wanted_alias" ]] || exit 2
+    if [[ "${FAKE_LITELLM_FAIL_ALIAS:-}" == "1" ]]; then
+      respond 503 '{"error":"unavailable"}'
+      exit 0
+    fi
     if [[ "${FAKE_LITELLM_INVALID_ALIAS_LIST:-}" == "1" ]]; then
       respond 200 '{}'
       exit 0
@@ -490,9 +496,8 @@ if grep -qF "$VK" "$TMPROOT/out-reconcile.txt" || grep -qF "$COLLIDING_KEY" "$TM
 fi
 
 
-# A LiteLLM lookup outage also fails closed instead of painting the substrate
-# green with an unverified key registration.
-set +e
+# A LiteLLM lookup outage may defer an unchanged key ONLY because the preceding
+# successful reconcile wrote a matching non-secret projection receipt.
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \
@@ -505,14 +510,71 @@ env \
   FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
   FAKE_LITELLM_FAIL=1 \
   bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-unavailable.txt" 2>&1
-UNAVAILABLE_RC=$?
-set -e
-test "$UNAVAILABLE_RC" -ne 0 \
-  || { echo "LiteLLM outage must fail materialization" >&2; exit 1; }
-grep -q 'lookup-http-503' "$TMPROOT/out-unavailable.txt" \
-  || { echo "LiteLLM outage did not return a redacted status" >&2; exit 1; }
+grep -q 'projection_deferred=1' "$TMPROOT/out-unavailable.txt" \
+  || { echo "matching prior projection must defer visibly during gateway outage" >&2; cat "$TMPROOT/out-unavailable.txt" >&2; exit 1; }
+grep -q 'projection-unavailable-confirmed-lookup-http-503' "$TMPROOT/out-unavailable.txt" \
+  || { echo "deferred projection did not carry the receipt-confirmed redacted status" >&2; exit 1; }
 if grep -qF "$VK" "$TMPROOT/out-unavailable.txt" || grep -qF "$COLLIDING_KEY" "$TMPROOT/out-unavailable.txt"; then
   echo "LiteLLM key leaked in unavailable failure" >&2
+  exit 1
+fi
+
+# A receipt stops being usable as soon as a live lookup positively proves the
+# desired key is absent. Even if the second lookup then returns 503, materialize
+# must fail instead of deferring a projection already known to be missing.
+cp "$LITELLM_STORE" "$LITELLM_STORE.before-loss"
+: > "$LITELLM_STORE"
+set +e
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  FAKE_LITELLM_STORE="$LITELLM_STORE" \
+  FAKE_LITELLM_LOG="$LITELLM_LOG" \
+  FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
+  FAKE_LITELLM_FAIL_ALIAS=1 \
+  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-known-missing.txt" 2>&1
+KNOWN_MISSING_RC=$?
+set -e
+mv "$LITELLM_STORE.before-loss" "$LITELLM_STORE"
+test "$KNOWN_MISSING_RC" -ne 0 \
+  || { echo "known-missing LiteLLM key must not defer on a later 503" >&2; exit 1; }
+grep -q 'lookup-http-503' "$TMPROOT/out-known-missing.txt" \
+  || { echo "known-missing projection did not return the redacted fatal status" >&2; exit 1; }
+if grep -q 'projection-unavailable-confirmed' "$TMPROOT/out-known-missing.txt"; then
+  echo "stale projection receipt was trusted after live absence proof" >&2
+  exit 1
+fi
+
+# If custody was just minted (or rotated) and its hash has never been proven in
+# LiteLLM, the same 503 remains fatal. Removing the OpenBao value forces a fresh
+# key while retaining the old receipt; the hash mismatch prevents a retry from
+# laundering a failed birth into an allowed defer.
+rm -f "$VK_FILE"
+set +e
+env \
+  VM_HOST=fake \
+  DOMAIN=test.cognidao.org \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" \
+  FAKE_REMOTE_PATH="$FAKEBIN" \
+  FAKE_BAO_ROOT="$BAO_ROOT" \
+  FAKE_LITELLM_STORE="$LITELLM_STORE" \
+  FAKE_LITELLM_LOG="$LITELLM_LOG" \
+  FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
+  FAKE_LITELLM_FAIL=1 \
+  bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-new-unavailable.txt" 2>&1
+NEW_UNAVAILABLE_RC=$?
+set -e
+test "$NEW_UNAVAILABLE_RC" -ne 0 \
+  || { echo "new/unproven LiteLLM key must fail during gateway outage" >&2; exit 1; }
+grep -q 'lookup-http-503' "$TMPROOT/out-new-unavailable.txt" \
+  || { echo "new-key outage did not return the redacted fatal status" >&2; exit 1; }
+if grep -q 'projection_deferred' "$TMPROOT/out-new-unavailable.txt"; then
+  echo "new/unproven key was incorrectly deferred" >&2
   exit 1
 fi
 

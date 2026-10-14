@@ -712,17 +712,58 @@ jobs:
           path: out/
           retention-days: 1
 
+  # Recover the already-installed shared AI runtime BEFORE node-substrate may
+  # call LiteLLM for virtual-key projection. This is a receipt-validated,
+  # custody-free start of unchanged Postgres/LiteLLM/autoheal only; a missing or
+  # mismatched receipt reports custody_required and lets the authorized full
+  # reconcile below remain the sole installer (bug.5462).
+  recover-infra-runtime:
+    needs: decide
+    if: |
+      inputs.skip_infra != 'true' &&
+      needs.decide.outputs.has_targets == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.decide.outputs.environment }}
+    timeout-minutes: 10
+    concurrency:
+      group: deploy-infra-${{ needs.decide.outputs.environment }}
+      cancel-in-progress: false
+    env:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
+    steps:
+      - name: Checkout workflow tooling
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Setup SSH
+        run: |
+          set -euo pipefail
+          [ -n "$VM_HOST" ] || { echo "::error::VM_HOST is required for installed-runtime recovery"; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Recover receipt-matched runtime
+        id: recover
+        run: scripts/ci/deploy-infra.sh --recover-installed-runtime
+
+      - name: Report recovery state
+        run: |
+          echo "Installed runtime recovery state: ${{ steps.recover.outputs.recovery_state }}"
+
   # Per-node provider preflight on EVERY env (Invariants 16-17). All nodes
   # materialize source:agent secrets and reconcile placement-neutral state (DB,
   # ExternalSecret, shared runtime inventory). Only placement-specific steps branch:
   # k3s owns Caddy/NodePort edge mutation; Akash adds read-only controller/credential/
   # secret/egress assertions before promote-k8s writes a ComputeWorkload generation.
   node-substrate:
-    needs: [decide, reconcile-appset, reconcile-dns]
+    needs: [decide, reconcile-appset, reconcile-dns, recover-infra-runtime]
     if: |
       always() &&
       needs.decide.outputs.has_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
+      (needs.recover-infra-runtime.result == 'success' || needs.recover-infra-runtime.result == 'skipped') &&
       (
         needs.reconcile-dns.result == 'success' ||
         (needs.decide.outputs.has_k3s_node_targets != 'true' && needs.reconcile-dns.result == 'skipped')

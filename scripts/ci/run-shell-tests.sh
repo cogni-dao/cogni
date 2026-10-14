@@ -50,6 +50,7 @@ PARALLEL=(
   openbao-clobber-proof.test.sh
   secrets-fanout.test.sh
   secret-materialize.test.sh
+  recover-installed-runtime.test.sh
   reconcile-node-substrate.test.sh
   run-node-substrate.test.sh
   assert-target-substrate.test.sh
