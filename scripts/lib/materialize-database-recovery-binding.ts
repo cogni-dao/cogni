@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@scripts/lib/materialize-database-recovery-binding`
+ * Purpose: Validate measured private probe identity and merge its canonical binding for the sole secret materializer.
+ * Scope: Pure binding validation plus a stdin/stdout CLI; does not query databases, operate providers, or write secret stores.
+ * Invariants: Native and local cluster identifiers agree; DSN and node identity match; existing physical bindings cannot silently change.
+ * Side-effects: IO (CLI reads stdin and writes stdout or a safe validation error)
+ * Links: docs/spec/secrets-management.md, scripts/ci/secret-materialize.sh
+ * @internal
+ */
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";

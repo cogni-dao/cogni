@@ -2,10 +2,13 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Root-owned administrative Postgres schema. It intentionally lives outside the
- * app schema glob/barrel: global role admission and incident intent must commit
- * in the same administrative database transaction, independently of node apps.
- * No cross-database user FK or application privilege is appropriate here.
+ * Module: `@cogni/db-schema/infra-control`
+ * Purpose: Declare root-owned administrative incident state for atomic role containment and recovery intent.
+ * Scope: Schema definitions only, outside the app schema glob and barrel; does not define node application tables or cross-database user references.
+ * Invariants: Global role admission and durable intent share one administrative database transaction; current node and role bindings are unique.
+ * Side-effects: none
+ * Links: docs/spec/databases.md, infra/drizzle.control.config.ts
+ * @internal
  */
 import { sql } from "drizzle-orm";
 import {
