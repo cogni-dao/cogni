@@ -264,7 +264,7 @@ esac
 # rsync, image pulls, or the full remote reconciler. It trusts neither file
 # presence nor Docker restart policy: every installed input and local image must
 # byte-match the receipt written LAST by a successful full deploy.
-if [[ "$RECOVER_INSTALLED_RUNTIME" == "true" ]]; then
+if [[ "$RECOVER_INSTALLED_RUNTIME" == "true" || "$ENVIRONMENT" == candidate-* ]]; then
   [[ -n "${VM_HOST:-}" ]] || log_fatal "VM_HOST is required for installed-runtime recovery"
   recovery_output="$(ssh $SSH_OPTS root@"$VM_HOST" 'bash -s' <<'RECOVER_REMOTE'
 set -euo pipefail
@@ -360,7 +360,10 @@ RECOVER_REMOTE
     custody_required) log_warn "Installed runtime not mutated: full custody reconcile is required" ;;
     *) log_fatal "Unknown installed-runtime recovery state: $recovery_state" ;;
   esac
-  exit 0
+  if [[ "$RECOVER_INSTALLED_RUNTIME" == "true" ]]; then
+    exit 0
+  fi
+  log_info "Candidate full reconcile continuing after installed-runtime recovery preflight"
 fi
 
 # Validate required secrets

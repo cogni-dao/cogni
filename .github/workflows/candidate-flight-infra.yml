@@ -192,11 +192,6 @@ jobs:
         if: env.VM_HOST != '' && env.GRAFANA_PDC_SIGNING_TOKEN != ''
         run: bash scripts/grafana-pdc-token-preflight.sh
 
-      - name: Recover receipt-matched runtime
-        if: env.VM_HOST != ''
-        id: recover
-        run: bash scripts/ci/deploy-infra.sh --recover-installed-runtime
-
       - name: Deploy Compose infra to candidate-a VM
         if: env.VM_HOST != ''
         run: bash scripts/ci/deploy-infra.sh --ref "$COGNI_REPO_REF"

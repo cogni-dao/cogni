@@ -5,6 +5,7 @@
 # Proves bug.5462's custody-free recovery boundary: exact receipt match starts
 # only postgres -> LiteLLM -> autoheal with local images; missing/tampered state
 # returns custody_required without a Compose mutation; sealed OpenBao is degraded.
+# Candidate full reconcile invokes the same preflight before custody rendering.
 
 set -euo pipefail
 
@@ -155,5 +156,29 @@ write_receipt
 FAKE_OPENBAO_SEALED=true
 degraded_out="$(run_recovery)"
 grep -q '^recovery_state=recovered_degraded$' <<<"$degraded_out"
+
+# The normal candidate-a full-reconcile path shares the recovery preflight. It
+# reaches required-secret validation only after attempting installed recovery;
+# use a missing receipt so the preflight itself performs zero Docker mutation.
+rm -f "$RECEIPT"
+: > "$DOCKER_LOG"
+set +e
+candidate_full_out="$({
+  env \
+    PATH="$FAKEBIN:$PATH" \
+    VM_HOST=fake \
+    DEPLOY_ENVIRONMENT=candidate-a \
+    COGNI_RUNTIME_DIR="$RUNTIME_DIR" \
+    COGNI_RECOVERY_RECEIPT="$RECEIPT" \
+    FAKE_DOCKER_LOG="$DOCKER_LOG" \
+    bash scripts/ci/deploy-infra.sh
+} 2>&1)"
+candidate_full_rc=$?
+set -e
+[[ "$candidate_full_rc" -ne 0 ]] || { echo "candidate full reconcile unexpectedly passed without required secrets" >&2; exit 1; }
+grep -q '^recovery_state=custody_required$' <<<"$candidate_full_out"
+grep -q 'Candidate full reconcile continuing after installed-runtime recovery preflight' <<<"$candidate_full_out"
+grep -q 'Missing required environment variables' <<<"$candidate_full_out"
+[[ ! -s "$DOCKER_LOG" ]] || { echo "candidate full preflight mutated Docker without a receipt" >&2; exit 1; }
 
 echo "PASS: recover-installed-runtime.test.sh"
