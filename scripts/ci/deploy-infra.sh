@@ -1634,7 +1634,13 @@ patch_operator_openfga_config() {
       # Match the bounded policy used by every node-substrate login: server/control-plane
       # transients get three attempts; a 403 gets exactly one fresh-JWT recheck. Unknown
       # failures remain permanent. Never print login_out: a successful response is a token.
-      if grep -qiE 'context deadline exceeded|i/o timeout|TLS handshake timeout|connection (refused|reset)|Code: (429|500|502|503|504)' <<<"$login_out"; then
+      # GNU timeout exits 124 and may emit no text at all. The live candidate
+      # proof for bug.5462 hit exactly that shape: the 10-second kubectl/bao
+      # login deadline was misclassified as a permanent auth failure because
+      # there was no stderr for the regex to inspect. Exit status is the
+      # authoritative timeout signal; retry it like the textual server
+      # transient spellings, still bounded to three fresh-JWT attempts.
+      if [[ $login_rc -eq 124 ]] || grep -qiE 'context deadline exceeded|Internal error occurred: Timeout occurred|i/o timeout|TLS handshake timeout|connection (refused|reset)|Code: (429|500|502|503|504)' <<<"$login_out"; then
         login_reason="server_transient"
         max_attempts=3
       elif grep -qiE 'Code: 403|permission denied' <<<"$login_out"; then

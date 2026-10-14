@@ -38,6 +38,9 @@ fake_login() {
       echo 'error: Internal error occurred: Timeout occurred' >&2
       return 1
       ;;
+    silent_timeout:1)
+      return 124
+      ;;
     permission_then_success:1|permission_stable:1|permission_stable:2)
       echo 'Error writing data to auth/kubernetes/login: Code: 403. permission denied' >&2
       return 2
@@ -71,6 +74,16 @@ token="$(cogni_openbao_kubernetes_login_retry fake_login kubectl_timeout "$attem
 [ "$token" = 'token-sentinel' ]
 [ "$(cat "$attempts")" = 2 ]
 grep -q 'server_transient (attempt 1/3)' "$TMPROOT/kubectl-timeout.log"
+
+# GNU timeout returns 124 without guaranteeing stderr. Exit status alone is a
+# sufficient, bounded transient signal; otherwise a slow healthy control plane
+# is falsely reported as permanent auth drift.
+attempts="$TMPROOT/silent-timeout-attempts"
+token="$(cogni_openbao_kubernetes_login_retry fake_login silent_timeout "$attempts" \
+  2>"$TMPROOT/silent-timeout.log")"
+[ "$token" = 'token-sentinel' ]
+[ "$(cat "$attempts")" = 2 ]
+grep -q 'server_transient (attempt 1/3)' "$TMPROOT/silent-timeout.log"
 
 # Remote assertion scripts arrive on stdin; the same bytes must replay on retry.
 attempts="$TMPROOT/stdin-attempts"
