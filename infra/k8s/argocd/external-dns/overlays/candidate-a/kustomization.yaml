@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - target:
+      kind: ExternalSecret
+      name: external-dns-cloudflare
+    patch: |-
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: candidate-a/operator
+      - op: replace
+        path: /spec/data/1/remoteRef/key
+        value: candidate-a/operator
