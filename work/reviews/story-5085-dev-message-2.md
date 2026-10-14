@@ -19,3 +19,13 @@ Expert notes for the sprint window (~2 hours, CEO's clock):
 - Poly restoration to **shared** tier is not an acceptable shortcut — graduation is sticky and the CEO has now attached money to that boundary.
 
 ---
+
+## Addendum — node-genericity audit (CEO core invariant)
+
+The CEO's invariant — no bespoke callouts to any particular node in platform code — is now also codified in the strategy entry as `NODE_IDENTITY_IS_DATA_NOT_CODE`. I grepped both PR diffs for node-specific references in runtime code. Verdict: **runtime code is clean** (all `Poly*` hits in adapters/ports are the PolyForm license header). Three genericity fixes required before merge:
+
+1. **Rename `poly-dedicated-v1` in `infra/database-budget-profiles.yaml`** to a node-neutral name (e.g. `dedicated-small-v1`); `infra/catalog/poly.yaml` references it. Profiles are shared vocabulary — a node name inside one bakes identity into reusable config.
+2. **Parameterize the replay tooling**: `scripts/ops/poly-dedicated-cell-replay.sql` + `replay-poly-dedicated-cell.sh` → `replay-dedicated-cell.sh <node-slug>`. Every future graduated tenant runs this same proof; it must not be node-named.
+3. Cosmetic: the doc comment in `database-containment.port.ts` ("distinguishes Poly's dedicated cell") → genericize to "a node's dedicated cell".
+
+Node identity may appear ONLY in `infra/catalog/<node>.yaml` rows and billing/evidence records. Anything else is a review-blocking defect from now on.
