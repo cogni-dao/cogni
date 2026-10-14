@@ -527,7 +527,10 @@ describe("akash-tx-actuator runtime", () => {
       .sort();
 
     const sh = read("scripts/setup/lib/reconcile-secrets.sh");
-    const shBlock = /declare -ga PLATFORM_SERVICES=\(([\s\S]*?)\)/.exec(sh);
+    // The array carries inline comments such as `(task.5102)`. Terminate only
+    // at Bash's standalone closing-paren line, never at comment punctuation.
+    const shBlock =
+      /declare -ga PLATFORM_SERVICES=\(([\s\S]*?)^\s*\)\s*$/m.exec(sh);
     expect(
       shBlock,
       "PLATFORM_SERVICES must exist in the bash lib"
