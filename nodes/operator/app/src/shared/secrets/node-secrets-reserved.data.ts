@@ -65,6 +65,7 @@ export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   // into `cogni/<env>/akash-tx-actuator`. A self-serve write would clobber the value the
   // Crossplane Composition authenticates with and silently wedge every paid mutation.
   "AKASH_TX_ACTUATOR_TOKEN",
+  "DATABASE_RELIABILITY_STATUS_TOKEN", // private actuator status/readback auth
   "CONNECTIONS_ENCRYPTION_KEY", // AES key for BYO-AI connections at rest
   "INTERNAL_OPS_TOKEN", // deploy → governance schedule sync auth
   "METRICS_TOKEN", // Prometheus scrape → /api/metrics auth
