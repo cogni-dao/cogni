@@ -36,10 +36,21 @@ design so the search is unnecessary.
   2. **Before trusting DNS**, probe the winner directly:
      `curl -H 'Host: poly.cognidao.org' http://<provider-ip>/version` must return the **exact**
      source sha. A 404 is bug.5325 — the provider took the lease and never created the vhost.
-  3. From **inside the pod**: poly's `/api/internal/ops/poly/egress-check` → `blocked:false`.
-     Country selection narrows the pool; only this measures egress.
+  3. From **inside the pod**, the geo oracle must say `blocked:false`. Country selection
+     narrows the pool; only this measures egress. poly's
+     `/api/internal/ops/poly/egress-check` wraps it, but that route exists only on poly's
+     `main` — it is **NOT** on the catalog-pinned `242266ad`, so until the lease runs a
+     newer sha, call the oracle directly instead:
+     `curl -s https://polymarket.com/api/geoblock` → `{blocked,ip,country}`.
   4. `curl -s https://poly.cognidao.org/version` advances off `b51b840c`.
-  5. One CLOB order accepted and a row in `poly_copy_trade_fills`.
+  5. One CLOB order **accepted**. The proof is
+     `order_id IS NOT NULL AND status IN ('open','filled','partial')` in
+     `poly_copy_trade_fills` — **NOT** the existence of a row. `insertPending`
+     (`mirror-pipeline.ts:1223`) writes a row on EVERY attempt, including every 403, so
+     "a row appeared" certifies nothing. `order_id` is the only column that requires the
+     CLOB to have said yes (set by `markOrderId`, `order-ledger.ts:873-906`).
+     Note `status` is written at insert and never re-read from the CLOB on this path, so
+     `open` is an acceptance receipt, not a fill.
 - Operator changes: flight via `POST /api/v1/vcs/flight`, confirm `test.cognidao.org/version`
   equals the PR head sha, merge via `POST /api/v1/vcs/merge`, promote via
   `POST /api/v1/deploy/promote`.
@@ -83,9 +94,17 @@ design so the search is unnecessary.
 
 **The open question that decides the strategy**
 
-Eight auctions produced the same shape: `not_allowlisted=4–5, required_country=1–2`. The four
-permitted providers we allowlisted first (PT/BG/FI/NL) **have never bid**, despite being online
-with spare capacity. The only permitted provider that bids is DSTM CH — which wins on price (6.0
+Eight auctions produced the same shape: `not_allowlisted=4–5, required_country=1–2`. This was
+read as "the permitted providers never bid". **That reading was wrong** — see the root-cause
+item in Next Actions: the deployed allowlist was 6, not 11, so most bidders were refused by a
+gate we had already fixed on `main` but never shipped. Re-read this question only AFTER an
+auction runs against `allowedProviders: 11`.
+
+Historical bids are **pruned from chain state** — four public Akash REST endpoints return
+`Not Implemented` for a closed dseq — and nothing in the code ever logged which providers bid
+(`screenBids` returns aggregate counts only, and the bid roster is discarded in
+`akash-compute.adapter.ts:1032`). #2518 adds that roster to the `NO_ELIGIBLE_BIDS` line. A dry
+auction is unreadable after the fact, so capture it at auction time or not at all. The only permitted provider that bids is DSTM CH — which wins on price (6.0
 vs 9–18) and then **404s on `expose.accept`** (bug.5325). n=2 on host-route support: ZenCloud BE
 works, DSTM CH does not.
 
@@ -93,7 +112,9 @@ works, DSTM CH does not.
 Belgian incumbent) `active`. The ledger shows 10 `allocated` — `receipt state is not liveness`
 (bug.5324 is understated; trust the chain).
 
-**Open bugs**: bug.5325 (provider ignores `expose.accept`, holds and bills), bug.5322 (generation
+**Open bugs**: bug.5329 (a geo 403 is recorded as `stale_api_key` — poly has NO region error
+code, which is why this was chased as a credential bug; the raw text survives only in
+`errorMessage` / `attributes->>'error'`), bug.5325 (provider ignores `expose.accept`, holds and bills), bug.5322 (generation
 bump vs. incumbent), bug.5323 (refused mint invisible to CI and unreadable by the node), bug.5324
 (ledger read failure looks like `leases: []`), bug.5319 (candidate-a GitHub App reconcile loop).
 
@@ -116,16 +137,42 @@ bump vs. incumbent), bug.5323 (refused mint invisible to CI and unreadable by th
 
 ## Next Actions / Risks
 
-- [ ] Confirm #2516 and #2515 both reach **MERGED** (the queue drops PRs silently), then promote
-      operator, then promote poly. One auction now searches 3 providers instead of 1.
+- [x] #2516 and #2515 are **MERGED** (the queue did not drop them; it just runs CI on its own
+      rebased candidate, which takes ~10min — re-enqueuing is noise, not a fix).
+- [ ] **THE ROOT CAUSE WAS A MISSING PROMOTE, NOT PROVIDER LUCK.** Production's actuator was
+      running `AKASH_ALLOWED_PROVIDERS` with **6** entries while `main` had **11**: #2513
+      merged and was never promoted. Proof is the actuator's own boot line —
+      `scripts/loki-query.sh '{env="production",service="actuator"} |~ "akash_tx_actuator_listening"' 60 5`
+      → `allowedProviders: 6`. So every auction screened 6 ∩ `[BG,FI,NL,PT]` = **4 eligible,
+      3 of them one operator** (`digital frontier`), and **Froggy RO was never admissible in
+      prod at all** — which means #2516 changed nothing by itself and all nine auctions were
+      guaranteed to fail on `not_allowlisted`. After the promote it is **6 eligible across 4
+      distinct operators**. Zero new code was needed.
+- [ ] **`allowedProviders: 11` in that boot line is the promote gate — NOT `/version`**, which
+      lags the actuator by minutes because promote-k8s rolls the actuator Deployment first.
+      Then promote poly: gen-15 produced zero actuator events, so it never auctioned.
 - [ ] Read the screening line. If a provider wins, **probe `Host:` before trusting DNS** (step 2
       above) — that check is the difference between a cutover and another overnight stall.
-- [ ] **If the auction exhausts all three, STOP re-minting and spike this instead:** CNAME
-      `poly.cognidao.org` at the lease's **provider-assigned** ingress hostname rather than
-      requiring the provider to serve our custom host. The bare-ingress probe already succeeds
-      against it. That deletes bug.5325 entirely, widens the usable pool from ~10 to all 16
-      permitted-and-healthy providers, and removes the host-routed boot check's whole failure mode.
-      **This is the only move that changes the odds instead of re-rolling them.**
+- [ ] **The CNAME idea is RETIRED — do not spike it.** Its DNS half is already shipped:
+      `poly.cognidao.org` is ALREADY a **proxied** Cloudflare CNAME at the lease's
+      provider-assigned ingress hostname (`composition.yaml:588-593` picks it, filtering out
+      our own host per bug.5125; `:800-818` writes it). Its other half — dropping
+      `expose.accept` — would **break traffic**: Cloudflare's orange cloud _preserves_
+      `Host: poly.cognidao.org` to the origin, so the provider must Host-route or serve a 404. It would also void the bug.5237 stale-ownership guard and need a wider zone-wide
+      Cloudflare token. `proxied: true` is load-bearing for TLS (the provider serves a
+      `*.ingress.<provider>` cert), so an unproxied CNAME hard-fails the handshake.
+- [ ] **If the auction exhausts all three attempts, the fallback is `POLY_CLOB_HOST`** — a
+      permitted-country forwarder for the ORDER PATH ONLY. The code path is already live in
+      poly (`server-env.ts:261` → `container.ts:775`, plus wallet refresh + position close),
+      and Polymarket's L2 auth signs **method + path + body, NOT host**, so a transparent
+      proxy is signature-safe. Two traps: (a) bug.5277 — declaring the key in
+      `.cogni/repo-spec.yaml` WITHOUT a materialized value blocks EVERY poly prod promote,
+      so the declaration and the value must land in ONE commit; (b) it does not cover the
+      Data-API (`/positions`, `/user-pnl`) or the WS feed, and `egress-check` would still
+      report `blocked:true` because it targets polymarket.com directly — so steps 3 and 5
+      will disagree, and **step 5 is the one to trust**. Needs a host in a permitted country
+      that does not yet exist. Fallback only — do not build it before the auction has been
+      tried with the merged config actually live.
 - [ ] Froggy RO has a 3/3 failure record in `akash-provider-quality-mandate`. If those strikes are
       in `compute_provider_outcomes` it is permanently blacklisted and will be refused — invisible,
       because `not_allowlisted` is counted before `blacklisted` in the rejection order. Auto-recovery
