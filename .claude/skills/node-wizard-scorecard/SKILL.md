@@ -1,6 +1,6 @@
 ---
 name: node-wizard-scorecard
-description: Use when an agent receives a Cogni node wizard launch pack, takes over a newly published throwaway node, or must prove the node-wizard launch path end-to-end across child customization PR, child CI/image, parent pin, operator flight request, and candidate /version verification.
+description: Use when an agent receives a Cogni node wizard launch pack, takes over a newly published throwaway node, or must prove the node-wizard launch path end-to-end. SPAWN ENDS AT PRODUCTION (story.5025, binding): candidate-a is a transient proof slot that closes after validation; the run is done when the production URL serves the exact SHA on the node's own Crossplane lease. Covers parent birth PR, child CI/image, operator flight, candidate /version proof, production promote, and post-live validation.
 ---
 
 # Node Wizard Scorecard
@@ -153,6 +153,22 @@ Doltgres volume (the app `db-backup` job does NOT cover it).
 Include these rows in the human-facing scorecard when they are relevant to a
 fresh node spawn. If a row is blocked by missing credentials or absent endpoint
 surface, report the exact blocker instead of substituting a weaker health check.
+
+## Launch-path deltas — 2026-09-15 (toks5 proof run; check these FIRST)
+
+Every item below cost real time on the first post-Crossplane wizard run. Gate on them
+before deep-diving any other failure:
+
+| Delta | What to do |
+| --- | --- |
+| **Goal is PRODUCTION, not candidate** | The old pack stopped at candidate-a. Binding shape: candidate passive proof → promote the SAME digest to production → close the candidate slot (env verb). Do not present "done" at candidate. |
+| **Request ALL roles in ONE batch** | `developer` alone only covers flight/merge. A prod-complete run needs `production_promoter` + `env_manager` too — fire all three access-requests together so the owner's single UI visit approves everything. Rapid successive requests can 500 (OpenFGA write flake, bug.5113 class) — retry once, it lands. |
+| **Birth PR may be CI-red by generator drift** | Two known classes: the Caddyfile block drifts from `render-caddyfile.sh` canonical output (bug.5161 — fix by converging to the renderer) and the catalog row is missing `compute_egress_cidrs` entirely (bug.5162 — external-node-preflight refuses; add the fleet egress block). Check both before debugging anything else. |
+| **Flight dispatch can be silently swallowed** | `vcs/flight` returning `dispatched:true` does not guarantee a run: a concurrent flight's `flight-candidate-a-<target>` concurrency window can eat it. Verify a NEW candidate-flight run id appears within ~30s of your dispatch; re-dispatch if not. |
+| **verify-candidate red ≠ node dead** | If the candidate control-plane ref lags the XComputeWorkload-aware readiness fix (#2249), verify fails `invalid_resource_shape` while the node serves. Trust `/version.buildSha` + XR `Ready/serving`. |
+| **Local DNS negative-cache** | Fresh `<node>-test` hosts flap NXDOMAIN locally after first resolve. Probe with `curl --resolve <host>:443:$(dig +short <host> @1.1.1.1 \| tail -1)`. |
+| **Completion probes may 520 at the edge** | Long graph completions can exceed the Cloudflare window (bug.5160 class). readyz + register + `/version` prove node health; report the 520 as the edge row, not node failure. |
+| **Idempotence-guard refusal on create** | `allocation_unresolved` = the actuator refuses a possibly-spent key. FIRST verify the account has no orphan lease (Console API list). If clean, the recovery is the catalog replacement counter (`lease_epoch`, rename pending) — never a hand-mutation of ledger or cluster. |
 
 ## Minimal v0 Path
 
