@@ -93,8 +93,7 @@ try {
     keys[1] !== "previous" ||
     !isCredential(parsed.active) ||
     (parsed.previous !== null &&
-      (!isCredential(parsed.previous) ||
-        parsed.previous === parsed.active))
+      (!isCredential(parsed.previous) || parsed.previous === parsed.active))
   ) {
     fail();
   }
