@@ -31,7 +31,7 @@ describe("database CA process startup", () => {
       executable,
       [...wrapper.command.slice(1), ...wrapper.args],
       {
-        env: { DATABASE_SSL_CA_CERT: rootCertificates[0] },
+        env: { NODE_ENV: "test", DATABASE_SSL_CA_CERT: rootCertificates[0] },
         encoding: "utf8",
       }
     );
