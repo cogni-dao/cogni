@@ -48,10 +48,6 @@ const RUNTIME_POLICY_FILE = path.resolve(
   __dirname,
   "../../infra/k8s/base/database-reliability-actuator/deployment.yaml"
 );
-const PREVIEW_OVERLAY_FILE = path.resolve(
-  __dirname,
-  "../../infra/k8s/overlays/preview/operator/kustomization.yaml"
-);
 const CANDIDATE_FLIGHT_FILE = path.resolve(
   __dirname,
   "../../.github/workflows/candidate-flight.yml"
@@ -330,14 +326,19 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     }
   });
 
-  it("derives preview probes from the cognidao.org fleet root", () => {
-    const previewOverlay = readFileSync(PREVIEW_OVERLAY_FILE, "utf8");
-    expect(previewOverlay).not.toMatch(
-      /name: FORK_DOMAIN_ROOT\s+value: cogni-testing\.org/
-    );
-    expect(
-      previewOverlay.match(/name: FORK_DOMAIN_ROOT\s+value: cognidao\.org/g)
-    ).toHaveLength(2);
+  it("derives private controls from the verified cognidao.org fleet root", () => {
+    for (const environment of ["candidate-a", "preview"]) {
+      const overlay = readFileSync(
+        path.resolve(
+          __dirname,
+          `../../infra/k8s/overlays/${environment}/operator/kustomization.yaml`
+        ),
+        "utf8"
+      );
+      expect(
+        overlay.match(/name: FORK_DOMAIN_ROOT\s+value: cognidao\.org/g)
+      ).toHaveLength(2);
+    }
   });
 
   it("gates reliability runtime only after promotion and exact-SHA proof", () => {

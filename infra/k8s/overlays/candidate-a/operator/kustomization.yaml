@@ -87,7 +87,7 @@ patches:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
                   - name: FORK_DOMAIN_ROOT
-                    value: cogni-testing.org
+                    value: cognidao.org
   - target:
       kind: Deployment
       name: database-reliability-readmitter
@@ -105,7 +105,7 @@ patches:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
                   - name: FORK_DOMAIN_ROOT
-                    value: cogni-testing.org
+                    value: cognidao.org
                   - name: DATABASE_RELIABILITY_ACTUATOR_URL
                     value: http://operator-database-reliability-actuator:8080
   - target:
