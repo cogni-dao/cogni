@@ -23,8 +23,8 @@
  *     never go false and a deleted XR could never finish deleting.
  *   - NARROWEST_ACTIVATION: exactly one managed type is activated, and it is namespaced.
  *   - DNS_TYPE_FOLLOWS_TARGET: hostnames publish as CNAME; IPv4-only ingress publishes as A.
- *   - DNS_CREATE_AMBIGUITY_RECOVERS_BY_NAME: only provider-confirmed ambiguous DNS creates are
- *     released to the name-addressed OBSERVE path; paid lease creates remain fail-closed.
+ *   - CREATE_AMBIGUITY_RECOVERY_REQUIRES_IDEMPOTENCE_PROOF: DNS adopts by name; a paid lease
+ *     releases the guard only with exact-key, active-resource, external-handle and revision proof.
  *   - OVERLAP_BEFORE_CLOSE: a lease close is IRREVERSIBLE and its idempotence key is refused
  *     forever once settled, so the outgoing lease is held open until the incoming one is proven
  *     serving and DNS has flipped. Never more than two lease children for one (node, env).
@@ -1129,15 +1129,99 @@ describe("XComputeWorkload public reachability (bug.5152)", () => {
       'if and $dnsCreateAmbiguous (ne $dnsCreatePending "")'
     );
 
-    // The paid lease Request must retain Crossplane's leak-prevention refusal. This recovery is
-    // safe only because the DNS OBSERVE is name-addressed and adoption precedes CREATE.
+    // The paid lease has a separate receipt-backed recovery. DNS recovery must not accidentally
+    // weaken or substitute for those stricter gates.
     const leaseBlock = templateCode.slice(
       templateCode.indexOf(
         "composition-resource-name: {{ $leaseResourceName }}"
       ),
       templateCode.indexOf("composition-resource-name: dns-record")
     );
-    expect(leaseBlock).not.toContain("external-create-succeeded");
+    expect(leaseBlock).toContain("$recoverLeaseCreateAmbiguity");
+    expect(leaseBlock).toContain(
+      "crossplane.io/external-create-succeeded: {{ $leaseCreatePending | quote }}"
+    );
+  });
+});
+
+describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
+  const leaseBlock = templateCode.slice(
+    templateCode.indexOf("composition-resource-name: {{ $leaseResourceName }}"),
+    templateCode.indexOf("composition-resource-name: dns-record")
+  );
+
+  it("requires the provider refusal plus a durable exact-key allocation receipt", () => {
+    expect(templateCode).toContain('$leaseCreatePending := ""');
+    expect(templateCode).toContain("$leaseCreateAmbiguous := false");
+    expect(templateCode).toContain(
+      'get $leaseAnnotations "crossplane.io/external-create-pending"'
+    );
+    expect(templateCode).toContain(
+      '$leaseReceiptObserved := hasKey $resp "found"'
+    );
+    expect(templateCode).toContain(
+      '$leaseReceiptProven := and $leaseReceiptObserved $found $active (ne $externalName "") (eq $responseKey $currentKey)'
+    );
+    expect(templateCode).toContain(
+      "$leaseRevisionPending := ne $prevSha $desiredSha"
+    );
+    expect(templateCode).toContain(
+      '$recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven $leaseRevisionPending'
+    );
+    expect(templateCode).toContain(
+      "$unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity)"
+    );
+    expect(leaseBlock).toContain("{{- if $recoverLeaseCreateAmbiguity }}");
+    expect(templateCode).toContain('$failReason = "CreateResultAmbiguous"');
+  });
+
+  it("fails closed when any independent proof is absent", () => {
+    type Proof = {
+      ambiguous: boolean;
+      pending: string;
+      observed: boolean;
+      found: boolean;
+      active: boolean;
+      externalName: string;
+      responseKey: string;
+      currentKey: string;
+      previousSha: string;
+      desiredSha: string;
+    };
+    const safe = (p: Proof) =>
+      p.ambiguous &&
+      p.pending !== "" &&
+      p.observed &&
+      p.found &&
+      p.active &&
+      p.externalName !== "" &&
+      p.responseKey === p.currentKey &&
+      p.previousSha !== p.desiredSha;
+    const valid: Proof = {
+      ambiguous: true,
+      pending: "2026-10-14T07:05:33Z",
+      observed: true,
+      found: true,
+      active: true,
+      externalName: "1791427850757",
+      responseKey: "xcw:cogni-production:red:0",
+      currentKey: "xcw:cogni-production:red:0",
+      previousSha: "old",
+      desiredSha: "new",
+    };
+    expect(safe(valid)).toBe(true);
+    for (const unsafe of [
+      { ambiguous: false },
+      { pending: "" },
+      { observed: false },
+      { found: false },
+      { active: false },
+      { externalName: "" },
+      { responseKey: "different-key" },
+      { previousSha: "new" },
+    ]) {
+      expect(safe({ ...valid, ...unsafe })).toBe(false);
+    }
   });
 });
 
@@ -1986,7 +2070,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
    * worse than no copy: REMOVE is how the retained child eventually closes its lease, so it has
    * to keep speaking the same actuator wire as the child that minted it.
    */
-  describe("the retained Request is the paid Request, modulo four documented differences", () => {
+  describe("the retained Request is the paid Request, modulo five documented differences", () => {
     const COMMENT = /\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}/g;
     const retainedBlock = template.slice(
       template.lastIndexOf("{{- if $holdOutgoingLease }}"),
@@ -2021,6 +2105,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
               "gotemplating.fn.crossplane.io/composition-resource-name:"
             ) &&
             !t.startsWith("crossplane.io/reconcile-requested-at:") &&
+            !t.startsWith("crossplane.io/external-create-succeeded:") &&
             !t.startsWith("gotemplating.fn.crossplane.io/ready:")
           );
         })
@@ -2040,7 +2125,7 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
 
     it("differs nowhere else — same baseUrl, auth, mappings and isRemovedCheck", () => {
       expect(normalized(retainedBlock)).toEqual(normalized(candidateBlock));
-      // The four differences, asserted positively so a future edit cannot quietly merge them.
+      // The five differences, asserted positively so a future edit cannot quietly merge them.
       expect(retainedBlock).toContain(
         "composition-resource-name: {{ $retainedResourceName }}"
       );
@@ -2055,6 +2140,10 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       expect(retainedBlock).not.toContain(
         "gotemplating.fn.crossplane.io/ready"
       );
+      // Only the candidate can prove its exact current key and revision. The retained child is
+      // observe-only and must preserve Crossplane's generic ambiguity guard.
+      expect(candidateBlock).toContain("$recoverLeaseCreateAmbiguity");
+      expect(retainedBlock).not.toContain("external-create-succeeded");
     });
 
     it("is OBSERVE-only: expectedResponseCheck can never choose UPDATE on a live lease", () => {
