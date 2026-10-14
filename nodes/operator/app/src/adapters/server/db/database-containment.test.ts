@@ -15,16 +15,14 @@ import {
   createProductionCherryDatabaseCellAdapter,
   createProductionDatabaseContainmentAdapter,
   createProductionDatabaseReadmissionAdapter,
+  DatabaseDsnRotationAdapter,
+  DatabaseDsnRotationError,
   executeDatabaseCellLifecycleCommand,
   PinoLokiDatabaseContainmentAuditAdapter,
   PostgresAdminSqlAdapter,
   PostgresDatabaseCellVerifier,
   PostgresReadmitSqlAdapter,
 } from "./database-containment-production.adapter";
-import {
-  DatabaseDsnRotationAdapter,
-  DatabaseDsnRotationError,
-} from "./database-dsn-rotation.adapter";
 import {
   createPostgresDatabaseContainmentAdapter,
   createPostgresDatabaseReadmissionAdapter,

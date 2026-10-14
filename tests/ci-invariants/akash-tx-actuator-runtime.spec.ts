@@ -48,6 +48,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
 import {
+  candidateDeploymentFingerprint,
+  resolveDeploymentTargets,
+} from "@/features/compute/node-deployment-targets";
+import {
   CROSSPLANE_ACTUATOR_WALLET_ENVS,
   CROSSPLANE_CONTROL_PLANE_ENVS,
 } from "@/shared/node-registry/crossplane-control-plane";
@@ -559,6 +563,11 @@ describe("akash-tx-actuator runtime", () => {
     expect(combine).not.toContain('catalog="infra/catalog/${target}.yaml"');
     expect(combine).toContain("yq -e '.envs | contains([\"candidate-a\"])'");
     expect(combine).toContain(
+      'git -C app-src show "${BASE_SHA}:infra/catalog/${target}.yaml"'
+    );
+    expect(combine).toContain("candidateDeploymentFingerprint");
+    expect(combine).not.toContain("origin/${BASE_REF}");
+    expect(combine).toContain(
       'REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets"'
     );
     expect(combine).toContain(
@@ -583,9 +592,61 @@ describe("akash-tx-actuator runtime", () => {
       return row.envs?.includes("candidate-a") === true;
     });
     expect(candidateRemoteTargets).toEqual(["poly", "red"]);
-    expect(["operator", "scheduler-worker", ...candidateRemoteTargets]).toEqual(
-      ["operator", "scheduler-worker", "poly", "red"]
-    );
+
+    const base = {
+      name: "red",
+      type: "node",
+      node_id: "921b1d1d-4ded-4a6d-b3f1-f7d6affa406a",
+      port: 3200,
+      node_port: 32000,
+      source_repo: "https://github.com/cogni-dao/red.git",
+      source_sha: "c9e4c685ef78f2437aae8a732b03fe1af1df8b31",
+      image_repository: "ghcr.io/cogni-dao/red",
+      candidate_a_branch: "deploy/candidate-a-red",
+      envs: ["candidate-a", "production"],
+      deployment_provider: { "candidate-a": "akash" },
+      compute_api: { "candidate-a": "crossplane" },
+      lease_generation: { "candidate-a": 0 },
+    };
+    const baseFingerprint = candidateDeploymentFingerprint(base);
+    expect(
+      candidateDeploymentFingerprint({
+        ...base,
+        database: {
+          "candidate-a": {
+            tier: "shared",
+            budget_profile: "shared-default-v1",
+          },
+        },
+      })
+    ).toBe(baseFingerprint);
+    for (const changed of [
+      { ...base, source_sha: "a".repeat(40) },
+      { ...base, deployment_provider: { "candidate-a": "k3s" } },
+      { ...base, compute_api: { "candidate-a": "legacy" } },
+      { ...base, lease_generation: { "candidate-a": 1 } },
+      {
+        ...base,
+        required_placement_countries: { "candidate-a": ["DE"] },
+      },
+      { ...base, boot_recovery: { "candidate-a": "hold" } },
+    ]) {
+      expect(candidateDeploymentFingerprint(changed)).not.toBe(baseFingerprint);
+    }
+    expect(
+      resolveDeploymentTargets({
+        catalogRows: [base],
+        environment: "candidate-a",
+        flightTargets: ["red"],
+      }).deployment
+    ).toEqual(["red"]);
+    expect(() =>
+      resolveDeploymentTargets({
+        catalogRows: [{ ...base, name: "beacon", envs: ["production"] }],
+        environment: "candidate-a",
+        flightTargets: ["beacon"],
+      })
+    ).toThrow(/not configured for candidate-a/);
   });
 
   it("projects the bearer token under the name the provider-http placeholder dereferences", () => {
