@@ -45,6 +45,7 @@ import {
   AkashTxLeaseLogSourcesInputSchema,
   type AkashTxObserveInput,
   AkashTxObserveInputSchema,
+  AkashTxUpdateDatabaseCellInputSchema,
   AkashTxUpdateInputSchema,
 } from "@/contracts/compute.akash-tx.v1.contract";
 import {
@@ -107,7 +108,7 @@ export interface AkashTxHttpDeps {
     nodeSlug: string;
     environment: string;
     budgetProfile: string;
-  }) => ProvisionSpec;
+  }) => ProvisionSpec | Promise<ProvisionSpec>;
 }
 
 /**
@@ -255,7 +256,7 @@ export function createAkashTxDispatcher(
               "private database cell kit unavailable"
             );
           }
-          const spec = deps.databaseCellSpec({
+          const spec = await deps.databaseCellSpec({
             nodeId: input.identity.nodeId,
             nodeSlug: input.nodeSlug,
             environment: input.environment,
@@ -265,6 +266,31 @@ export function createAkashTxDispatcher(
             status: 200,
             body: await deps.actuator.create({
               cogniKey: input.cogniKey,
+              environment: input.environment,
+              identity: input.identity,
+              spec,
+            }),
+          };
+        }
+        case "/v1/akash/update-database-cell": {
+          const input = AkashTxUpdateDatabaseCellInputSchema.parse(payload);
+          if (!deps.databaseCellSpec) {
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "private database cell kit unavailable"
+            );
+          }
+          const spec = await deps.databaseCellSpec({
+            nodeId: input.identity.nodeId,
+            nodeSlug: input.nodeSlug,
+            environment: input.environment,
+            budgetProfile: input.budgetProfile,
+          });
+          return {
+            status: 200,
+            body: await deps.actuator.update({
+              cogniKey: input.cogniKey,
+              externalName: input.externalName,
               environment: input.environment,
               identity: input.identity,
               spec,

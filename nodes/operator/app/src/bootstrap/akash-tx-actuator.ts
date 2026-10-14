@@ -114,11 +114,15 @@ import {
   credentialFingerprint,
   resolveAkashTxWallet,
 } from "@/features/compute/akash-tx/akash-tx-wallet";
+import { AkashTxError } from "@/ports";
 import {
   ACCOUNT_WALLET_SCOPE_PATTERN,
   akashTxAllocations,
 } from "@/shared/db/akash-tx-allocations";
-import { DatabaseCellBootstrapKitsSchema } from "@/shared/secrets/database-cell-binding.data";
+import {
+  type DatabaseCellBootstrapKit,
+  DatabaseCellBootstrapKitsSchema,
+} from "@/shared/secrets/database-cell-binding.data";
 
 /**
  * The port the XComputeWorkload Composition hard-codes in
@@ -472,9 +476,7 @@ const actuator = new AkashTxActuator({
   migrationReports: new DrizzleNodeMigrationReportStore(getDb),
 });
 
-const cellKitsJson = await readCredential("AKASH_DATABASE_CELL_KITS_JSON");
-let databaseCellSpec: ReturnType<typeof databaseCellSpecFactory> | undefined;
-if (cellKitsJson) {
+async function loadDatabaseCellFactory() {
   const assetRoot = "/app/database-cell-bootstrap";
   const [bootstrap, provision, control, migration0, migration1, budgetYaml] =
     await Promise.all(
@@ -527,37 +529,63 @@ if (cellKitsJson) {
     })
     .parse(parseYaml(budgetYaml));
   const profile = profiles["dedicated-high-throughput-v1"];
-  databaseCellSpec = databaseCellSpecFactory(
-    DatabaseCellBootstrapKitsSchema.parse(JSON.parse(cellKitsJson)),
-    { bootstrap, provision, control, migration0, migration1 },
-    {
-      vcpus: profile.cell_capacity.vcpus,
-      memoryGiB: profile.cell_capacity.memory_gib,
-      storageGiB: profile.cell_capacity.storage_gib,
-      budget: {
-        appConnectionLimit: profile.roles.app.connection_limit,
-        appStatementTimeoutMs: profile.roles.app.statement_timeout_ms,
-        serviceConnectionLimit: profile.roles.service.connection_limit,
-        serviceStatementTimeoutMs: profile.roles.service.statement_timeout_ms,
-        lockTimeoutMs: profile.common.lock_timeout_ms,
-        idleInTransactionTimeoutMs:
-          profile.common.idle_in_transaction_session_timeout_ms,
-        tempFileLimitMiB: profile.common.temp_file_limit_mib,
-        workMemMiB: profile.common.work_mem_mib,
+  return (kits: readonly DatabaseCellBootstrapKit[]) =>
+    databaseCellSpecFactory(
+      kits,
+      { bootstrap, provision, control, migration0, migration1 },
+      {
+        vcpus: profile.cell_capacity.vcpus,
+        memoryGiB: profile.cell_capacity.memory_gib,
+        storageGiB: profile.cell_capacity.storage_gib,
+        budget: {
+          appConnectionLimit: profile.roles.app.connection_limit,
+          appStatementTimeoutMs: profile.roles.app.statement_timeout_ms,
+          serviceConnectionLimit: profile.roles.service.connection_limit,
+          serviceStatementTimeoutMs: profile.roles.service.statement_timeout_ms,
+          lockTimeoutMs: profile.common.lock_timeout_ms,
+          idleInTransactionTimeoutMs:
+            profile.common.idle_in_transaction_session_timeout_ms,
+          tempFileLimitMiB: profile.common.temp_file_limit_mib,
+          workMemMiB: profile.common.work_mem_mib,
+        },
       },
-    },
-    z
-      .string()
-      .regex(/^[0-9a-f]{40}$/)
-      .parse(runtimeEnv.APP_BUILD_SHA)
-  );
+      z
+        .string()
+        .regex(/^[0-9a-f]{40}$/)
+        .parse(runtimeEnv.APP_BUILD_SHA)
+    );
 }
+let databaseCellFactory: ReturnType<typeof loadDatabaseCellFactory> | undefined;
+const databaseCellSpec = async (
+  reference: Parameters<ReturnType<typeof databaseCellSpecFactory>>[0]
+) => {
+  // ESO updates this SAME owner-bank volume after the pod starts and after the
+  // observed endpoint is sealed. Never cache private mutable kit contents.
+  const cellKitsJson = await readCredential("AKASH_DATABASE_CELL_KITS_JSON");
+  if (!cellKitsJson)
+    throw new AkashTxError(
+      "ledger_unavailable",
+      "private database cell kit unavailable"
+    );
+  let kits: DatabaseCellBootstrapKit[];
+  try {
+    kits = DatabaseCellBootstrapKitsSchema.parse(JSON.parse(cellKitsJson));
+  } catch {
+    // JSON.parse may include private input excerpts. Redact before HTTP logging.
+    throw new AkashTxError(
+      "invalid_request",
+      "private database cell kit invalid"
+    );
+  }
+  databaseCellFactory ??= loadDatabaseCellFactory();
+  return (await databaseCellFactory)(kits)(reference);
+};
 
 const server = createAkashTxActuatorServer({
   actuator,
   token: bearerToken,
   log,
-  ...(databaseCellSpec ? { databaseCellSpec } : {}),
+  databaseCellSpec,
 });
 
 server.listen(LISTEN_PORT, "0.0.0.0", () => {

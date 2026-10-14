@@ -260,6 +260,10 @@ export const AkashTxCreateDatabaseCellInputSchema = z.strictObject({
   nodeSlug: ServiceNameSchema,
   budgetProfile: z.literal("dedicated-high-throughput-v1"),
 });
+export const AkashTxUpdateDatabaseCellInputSchema =
+  AkashTxCreateDatabaseCellInputSchema.extend({
+    externalName: ExternalNameSchema,
+  });
 
 /**
  * An update replaces the SDL in place and mints no lease, but it is still a mutation of a PAID

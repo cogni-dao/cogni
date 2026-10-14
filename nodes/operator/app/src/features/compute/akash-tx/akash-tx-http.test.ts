@@ -99,6 +99,78 @@ function dispatcherFor(actuator: AkashTxActuatorPort) {
 }
 
 describe("akash-tx dispatcher", () => {
+  it("resolves the current private kit for same-lease cell UPDATE without caller spec or secrets", async () => {
+    let kitVersion = "unsealed";
+    const versions: string[] = [];
+    const dispatch = createAkashTxDispatcher({
+      token: TOKEN,
+      actuator: stubActuator({
+        create: async (input) => {
+          versions.push(input.spec.services[0]?.env?.CERT_VERSION ?? "missing");
+          return {
+            externalName: "7001",
+            state: "pending",
+            endpoints: [],
+            replayed: false,
+            recovered: false,
+          };
+        },
+        update: async (input) => {
+          expect(input.externalName).toBe("7001");
+          versions.push(input.spec.services[0]?.env?.CERT_VERSION ?? "missing");
+          return { externalName: "7001", state: "active", endpoints: [] };
+        },
+      }),
+      databaseCellSpec: async () => ({
+        ...VALID_CREATE.spec,
+        services: VALID_CREATE.spec.services.map((service) => ({
+          ...service,
+          env: { CERT_VERSION: kitVersion },
+        })),
+      }),
+    });
+    const reference = {
+      cogniKey: "cell/production/toks9/1",
+      environment: "production",
+      identity: IDENTITY,
+      nodeSlug: "toks9",
+      budgetProfile: "dedicated-high-throughput-v1",
+    };
+    expect(
+      (
+        await dispatch({
+          method: "POST",
+          path: "/v1/akash/create-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify(reference),
+        })
+      ).status
+    ).toBe(200);
+    kitVersion = "observed-host-sealed";
+    const update = { ...reference, externalName: "7001" };
+    expect(
+      (
+        await dispatch({
+          method: "POST",
+          path: "/v1/akash/update-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify(update),
+        })
+      ).status
+    ).toBe(200);
+    expect(versions).toEqual(["unsealed", "observed-host-sealed"]);
+    expect(
+      (
+        await dispatch({
+          method: "POST",
+          path: "/v1/akash/update-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify({ ...update, tlsPrivateKey: "caller-key" }),
+        })
+      ).status
+    ).toBe(400);
+    expect(versions).toHaveLength(2);
+  });
   it("delegates a private cell reference through the same create path and refuses caller secrets", async () => {
     let received: unknown;
     const dispatch = createAkashTxDispatcher({
