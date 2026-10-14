@@ -15,6 +15,10 @@ spec:
       selector: {}
       template:
         metadata:
+          annotations:
+            # bug.red-0001 — re-list managed Requests after the production API-server
+            # interruption stranded Red's lease Request outside provider-http's poll loop.
+            cogni.io/recovery-rollout: "2026-10-14-red-provider-request"
           labels:
             app.kubernetes.io/part-of: crossplane-dormant-substrate
         spec:
