@@ -235,18 +235,41 @@ describe("POST /api/v1/agent/upgrade", () => {
   });
 
   it("returns the same material on retry only after grant copy succeeds", async () => {
+    mockWriteRelation
+      .mockResolvedValueOnce({
+        decision: "failure",
+        code: "authz_write_unavailable",
+      })
+      .mockResolvedValue({ decision: "success" });
+
     await testApiHandler({
       appHandler: upgradeHandler,
       url: "/api/v1/agent/upgrade",
       async test({ fetch }) {
         const first = await upgradeRequest(fetch);
+        expect(first.status).toBe(503);
+        const firstBody = await first.json();
+        expect(firstBody).toEqual({
+          error: "authz_unavailable",
+        });
+        expect(firstBody).not.toHaveProperty("apiKey");
+
         const retry = await upgradeRequest(fetch);
-        expect(first.status).toBe(201);
         expect(retry.status).toBe(201);
-        await expect(first.json()).resolves.toEqual(upgraded);
         await expect(retry.json()).resolves.toEqual(upgraded);
         expect(mockUpgrade).toHaveBeenCalledTimes(2);
-        expect(mockWriteRelation).toHaveBeenCalledTimes(4);
+        expect(mockUpgrade.mock.calls[0]).toEqual(mockUpgrade.mock.calls[1]);
+        expect(mockListRelations.mock.calls.map(([source]) => source)).toEqual([
+          "user:legacy-user",
+          "user:legacy-user",
+          "user:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/legacy-user",
+        ]);
+        expect(mockWriteRelation).toHaveBeenCalledTimes(3);
+        expect(mockWriteRelation).toHaveBeenLastCalledWith({
+          user: upgraded.principalId,
+          relation: "developer",
+          object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        });
       },
     });
   });
