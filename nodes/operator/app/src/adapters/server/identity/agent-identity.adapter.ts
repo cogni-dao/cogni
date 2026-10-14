@@ -256,10 +256,6 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
       ) {
         throw new AgentIdentityError("invalid_grant", "Invalid spawn grant");
       }
-      if (grant.expiresAt <= now) {
-        throw new AgentIdentityError("grant_expired", "Spawn grant expired");
-      }
-
       const secret = deriveSecret("spawn-credential", token);
       if (grant.status === "redeemed" && grant.redeemedActorId) {
         const [existing] = await tx
@@ -286,6 +282,9 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           );
         }
         return this.material(existing, secret);
+      }
+      if (grant.expiresAt <= now) {
+        throw new AgentIdentityError("grant_expired", "Spawn grant expired");
       }
 
       await tx.execute(
@@ -708,9 +707,6 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
       ) {
         throw new AgentIdentityError("invalid_grant", "Invalid recovery grant");
       }
-      if (grant.expiresAt <= now) {
-        throw new AgentIdentityError("grant_expired", "Recovery grant expired");
-      }
       if (grant.status === "redeemed" && grant.redeemedCredentialId) {
         const [existing] = await tx
           .select()
@@ -733,6 +729,9 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           },
           secret
         );
+      }
+      if (grant.expiresAt <= now) {
+        throw new AgentIdentityError("grant_expired", "Recovery grant expired");
       }
       const credentialId = randomUUID();
       const authenticateUntil = new Date(now.getTime() + AUTHENTICATE_TTL_MS);

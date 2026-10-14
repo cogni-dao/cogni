@@ -9,8 +9,9 @@
  *   the http_requests_total / http_request_duration_ms metrics like every
  *   other /api/v1/* route. auth.mode=none because the endpoint is the
  *   onboarding seam itself — callers can't present credentials they haven't
- *   been issued yet. Security hardening (invitation token) tracked in bug.0297.
- * Links: docs/spec/security-auth.md, bug.0297
+ *   been issued yet. The one-use, expiring spawn grant is the onboarding
+ *   authority; anonymous self-registration is not supported.
+ * Links: docs/spec/security-auth.md, docs/spec/identity-model.md
  * @public
  */
 

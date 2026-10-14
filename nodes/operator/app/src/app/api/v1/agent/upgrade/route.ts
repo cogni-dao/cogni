@@ -25,6 +25,12 @@ export const POST = wrapRouteHandlerWithLogging(
     }
     try {
       const container = getContainer();
+      if (!container.authorization) {
+        return NextResponse.json(
+          { error: "authz_unavailable" },
+          { status: 503 }
+        );
+      }
       const result = await container.agentIdentity.upgradeLegacy({
         legacyToken: token,
         legacyUserId: legacy.sub,
@@ -36,31 +42,29 @@ export const POST = wrapRouteHandlerWithLogging(
       // silently strand the grants that made the legacy agent useful. Copy both
       // legacy and node-qualified user tuples to the exact durable principal.
       // Keep the source tuples during the v1 compatibility window.
-      if (container.authorization) {
-        const sourceSubjects = new Set([
-          authzUserResource(legacy.sub),
-          `user:${getNodeId()}/${legacy.sub}`,
-        ]);
-        for (const source of sourceSubjects) {
-          const listed = await container.authorization.listRelations(source);
-          if (listed.decision !== "success") {
+      const sourceSubjects = new Set([
+        authzUserResource(legacy.sub),
+        `user:${getNodeId()}/${legacy.sub}`,
+      ]);
+      for (const source of sourceSubjects) {
+        const listed = await container.authorization.listRelations(source);
+        if (listed.decision !== "success") {
+          return NextResponse.json(
+            { error: "authz_unavailable" },
+            { status: 503 }
+          );
+        }
+        for (const tuple of listed.tuples) {
+          const written = await container.authorization.writeRelation({
+            user: result.principalId,
+            relation: tuple.relation,
+            object: tuple.object,
+          });
+          if (written.decision !== "success") {
             return NextResponse.json(
               { error: "authz_unavailable" },
               { status: 503 }
             );
-          }
-          for (const tuple of listed.tuples) {
-            const written = await container.authorization.writeRelation({
-              user: result.principalId,
-              relation: tuple.relation,
-              object: tuple.object,
-            });
-            if (written.decision !== "success") {
-              return NextResponse.json(
-                { error: "authz_unavailable" },
-                { status: 503 }
-              );
-            }
           }
         }
       }

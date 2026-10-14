@@ -119,6 +119,22 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     });
   });
 
+  it("replays a redeemed spawn grant after its redemption window expires", async () => {
+    const grant = await identity.createSpawnGrant({
+      issuerUserId: userId,
+      name: "lost-spawn-response",
+      idempotencyKey: randomUUID(),
+    });
+    const first = await identity.redeemSpawnGrant(grant.token);
+    now = new Date(new Date(grant.expiresAt).getTime() + 1);
+
+    await expect(identity.redeemSpawnGrant(grant.token)).resolves.toEqual(
+      first
+    );
+
+    now = new Date("2026-10-09T00:00:00.000Z");
+  });
+
   it("authenticates only on the issuing node and fails closed on a database error", async () => {
     const credential = await spawn("node-local-agent");
     await expect(
@@ -228,6 +244,25 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     await expect(identity.authenticate(first.apiKey)).resolves.toMatchObject({
       principal: { actorId: current.actorId },
     });
+  });
+
+  it("replays redeemed recovery after expiry without stranding the actor", async () => {
+    const current = await spawn("lost-recovery-response");
+    const grant = await identity.createRecoveryGrant({
+      issuerUserId: userId,
+      actorId: current.actorId,
+      idempotencyKey: randomUUID(),
+    });
+    const first = await identity.recover(grant.token);
+    now = new Date(new Date(grant.expiresAt).getTime() + 1);
+
+    await expect(identity.recover(grant.token)).resolves.toEqual(first);
+    await expect(identity.authenticate(current.apiKey)).resolves.toBeNull();
+    await expect(identity.authenticate(first.apiKey)).resolves.toMatchObject({
+      principal: { actorId: current.actorId },
+    });
+
+    now = new Date("2026-10-09T00:00:00.000Z");
   });
 
   it("upgrades a legacy user link idempotently without changing billing", async () => {
