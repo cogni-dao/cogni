@@ -1,0 +1,4 @@
+# Helm charts are pulled by Argo CD's repo-server at sync time (argocd-cm
+# kustomize.buildOptions: --enable-helm). A local `kustomize build --enable-helm`
+# vendors them under base/charts/; never commit that cache.
+charts/

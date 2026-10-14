@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k8s-monitoring
+  labels:
+    app.kubernetes.io/part-of: cogni-observability

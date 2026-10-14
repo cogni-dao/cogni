@@ -1,0 +1,173 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Grafana Alloy config for the in-cluster Kubernetes state collector (bug.5165).
+# Hand-authored (not the k8s-monitoring meta-chart) so the scrape set + cardinality
+# allowlist are explicit and reviewable — the same idiom as the Compose Alloy at
+# infra/compose/runtime/configs/alloy-config.metrics.alloy. See ../README.md for the
+# dedupe rationale vs the Compose Alloy.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/part-of: cogni-observability
+data:
+  config.alloy: |
+    // ======================================================================
+    // In-cluster Kubernetes state collector (bug.5165)
+    // ======================================================================
+    // Complements the Compose Alloy, which owns node_exporter (host), the
+    // docker-cAdvisor exporter (compose containers) and app/openfga/worker
+    // metrics. THIS collector owns the k3s layer the Compose Alloy structurally
+    // cannot see:
+    //   - kubelet + cAdvisor  -> per-POD container_* series (OOM, restarts, mem/cpu)
+    //   - kube-state-metrics  -> kube_pod_* / kube_deployment_* / kube_node_*
+    //                            object state (waiting/terminated reason, restart
+    //                            counts, unschedulable, phase ...)
+    // DEDUPE: node_exporter is NOT run here — the Compose Alloy is the sole shipper
+    // of host node_* series. The two cAdvisor universes are disjoint (docker.sock
+    // vs containerd/kubelet), so container_* series never collide: compose series
+    // carry a `service` label, these carry namespace/pod/container.
+
+    logging {
+      level  = "info"
+      format = "logfmt"
+    }
+
+    // ---- Service discovery ----
+    discovery.kubernetes "nodes" {
+      role = "node"
+    }
+
+    // Route kubelet + cAdvisor scrapes THROUGH the apiserver proxy so we depend on
+    // exactly one TLS identity (the cluster CA the ServiceAccount already mounts)
+    // and one RBAC verb (nodes/proxy), instead of dialing each kubelet's
+    // IP:10250 with its self-signed serving cert.
+    discovery.relabel "kubelet" {
+      targets = discovery.kubernetes.nodes.targets
+
+      rule {
+        target_label = "__address__"
+        replacement  = "kubernetes.default.svc.cluster.local:443"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_node_name"]
+        regex         = "(.+)"
+        target_label  = "__metrics_path__"
+        replacement   = "/api/v1/nodes/${1}/proxy/metrics"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_node_name"]
+        target_label  = "node"
+      }
+    }
+
+    discovery.relabel "cadvisor" {
+      targets = discovery.kubernetes.nodes.targets
+
+      rule {
+        target_label = "__address__"
+        replacement  = "kubernetes.default.svc.cluster.local:443"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_node_name"]
+        regex         = "(.+)"
+        target_label  = "__metrics_path__"
+        replacement   = "/api/v1/nodes/${1}/proxy/metrics/cadvisor"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_node_name"]
+        target_label  = "node"
+      }
+    }
+
+    // ---- Scrapes ----
+    prometheus.scrape "kubelet" {
+      targets           = discovery.relabel.kubelet.output
+      forward_to        = [prometheus.relabel.k8s_state.receiver]
+      job_name          = "kubelet"
+      scheme            = "https"
+      scrape_interval   = "30s"
+      scrape_timeout    = "10s"
+      bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+      tls_config {
+        ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+      }
+    }
+
+    prometheus.scrape "cadvisor" {
+      targets           = discovery.relabel.cadvisor.output
+      forward_to        = [prometheus.relabel.k8s_state.receiver]
+      job_name          = "cadvisor"
+      scheme            = "https"
+      scrape_interval   = "30s"
+      scrape_timeout    = "10s"
+      bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+      tls_config {
+        ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+      }
+    }
+
+    // kube-state-metrics is scraped over plain in-cluster HTTP at its stable
+    // Service DNS (fullnameOverride pins the name; namespace is hard-coded here
+    // because kustomize does not rewrite ConfigMap data strings).
+    prometheus.scrape "kube_state_metrics" {
+      targets = [
+        {"__address__" = "kube-state-metrics.k8s-monitoring.svc.cluster.local:8080", "job" = "kube-state-metrics"},
+      ]
+      forward_to      = [prometheus.relabel.k8s_state.receiver]
+      scrape_interval = "30s"
+      scrape_timeout  = "10s"
+    }
+
+    // ---- Allowlist + labels ----
+    // Keep only the series that answer "why did this container die / not schedule",
+    // to bound Grafana Cloud active series (mirrors the Compose Alloy's policy).
+    prometheus.relabel "k8s_state" {
+      forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+      rule {
+        source_labels = ["__name__"]
+        regex = "(up|container_(memory_working_set_bytes|memory_rss|spec_memory_limit_bytes|cpu_usage_seconds_total|cpu_cfs_throttled_periods_total|oom_events_total|network_receive_bytes_total|network_transmit_bytes_total)|kube_(pod_container_status_restarts_total|pod_container_status_last_terminated_reason|pod_container_status_waiting_reason|pod_container_status_terminated_reason|pod_container_status_running|pod_container_status_ready|pod_status_phase|pod_status_reason|pod_status_scheduled|pod_status_unschedulable|pod_container_resource_limits|pod_container_resource_requests|pod_info|pod_owner|pod_created|deployment_status_replicas.*|deployment_spec_replicas|daemonset_status_.*|statefulset_status_replicas.*|node_status_condition|node_status_capacity|node_status_allocatable|node_info))"
+        action = "keep"
+      }
+
+      // env label so queries can scope to candidate-a|preview|production, exactly
+      // like the Compose Alloy. Sourced from the DEPLOY_ENVIRONMENT container env
+      // var, which each overlay pins by name.
+      rule {
+        target_label = "env"
+        replacement  = sys.env("DEPLOY_ENVIRONMENT")
+      }
+      // Distinguishes these k3s-pod series from the Compose docker-cAdvisor series.
+      rule {
+        target_label = "source"
+        replacement  = "k8s"
+      }
+
+      // Drop high-cardinality labels; KEEP namespace/pod/container (needed for
+      // OOM/restart attribution).
+      rule {
+        regex  = "(id|image|uid|container_id)"
+        action = "labeldrop"
+      }
+    }
+
+    // ---- Remote write ----
+    // SAME Grafana Cloud Mimir the Compose Alloy uses. Credentials come from the
+    // grafana-cloud-metrics Secret (ESO -> OpenBao cogni/<env>/_shared), injected
+    // as env vars on the Deployment.
+    prometheus.remote_write "grafana_cloud" {
+      endpoint {
+        url = sys.env("PROMETHEUS_REMOTE_WRITE_URL")
+
+        basic_auth {
+          username = sys.env("PROMETHEUS_USERNAME")
+          password = sys.env("PROMETHEUS_PASSWORD")
+        }
+      }
+    }

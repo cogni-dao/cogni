@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Argo CD Application — in-cluster Kubernetes state collector (bug.5165).
+#
+# Makes k3s container-level state observable in Grafana Cloud: kube-state-metrics
+# (kube_pod_* / kube_deployment_* / kube_node_* object state) plus a Grafana Alloy
+# collector that scrapes the kubelet + cAdvisor (per-pod container_* series). An
+# OOMKilled / restart / terminated-reason / unschedulable pod becomes a single
+# Mimir query instead of an SSH-and-guess (closes the bug.5165 gap).
+#
+# Delivered like the sibling Crossplane control-plane apps: this file lives in
+# control-plane/candidate-a/ and is adopted by the candidate-a root app-of-apps
+# (directory.recurse: false). No provision-script edit and no blocking Phase-5b
+# wait — losing this collector can never block a deploy, it only reads + ships.
+#
+# targetRevision is deploy/candidate-a-control-plane (NOT main), mirroring
+# crossplane-xcomputeworkload for candidate-a: a control-plane change must be
+# provable on candidate-a BEFORE it is merged. The overlay path lives under
+# infra/k8s/argocd/, which IS present on that ref (a fast-forward of reviewed main).
+#
+# syncPolicy matches the sibling control-plane apps:
+#   - prune: false   — a manifest move must never cascade-delete the collector.
+#   - selfHeal: true — reconcile hand-edits/drift back to git.
+#   - ServerSideApply — kube-state-metrics + ExternalSecret objects are large.
+#   - CreateNamespace — first-sync convenience for the k8s-monitoring namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: k8s-monitoring
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: deploy/candidate-a-control-plane
+    path: infra/k8s/argocd/k8s-monitoring/overlays/candidate-a
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: k8s-monitoring
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
