@@ -870,7 +870,10 @@ ${edge_reconcile_snippet}
     bash '${alloy_helper_stage}' >/dev/null
   echo '[remote] alloy config reconciled ok'
 
-  runtime_config_json=\$(\"\${runtime_compose[@]}\" config --format json)
+  # Compose excludes profile-gated bootstrap services from config unless their
+  # profile is selected. Render every profile so provenance covers the exact
+  # db-provision and doltgres-provision mounts before either can execute.
+  runtime_config_json=\$(\"\${runtime_compose[@]}\" --profile '*' config --format json)
   printf '%s' \"\$runtime_config_json\" | jq -e '
     any(.services[\"db-provision\"].volumes[];
       .source == \"/opt/cogni-template-runtime/postgres-init/provision.sh\" and

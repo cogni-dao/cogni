@@ -373,6 +373,7 @@ grep -q 'cogni-reconcile.postgres-provisioner\.' "$REMOTE_ROOT/scp.log"
 install_line="$(grep -n 'exact runtime compose and provisioners installed ok' "$TMPROOT/out.txt" | cut -d: -f1)"
 provision_line="$(grep -n '\[remote\] db-provision ok' "$TMPROOT/out.txt" | cut -d: -f1)"
 [ "$install_line" -lt "$provision_line" ]
+grep -Fq -- "--profile * config --format json" "$REMOTE_ROOT/docker.log"
 grep -q 'migration role identity/budget readback failed' "$remote_provisioner"
 cmp infra/compose/runtime/docker-compose.yml "$REMOTE_ROOT/opt/cogni-template-runtime/docker-compose.yml"
 cmp infra/compose/runtime/doltgres-init/install-creds.sh "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/install-creds.sh"
