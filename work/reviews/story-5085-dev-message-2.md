@@ -29,3 +29,7 @@ The CEO's invariant — no bespoke callouts to any particular node in platform c
 3. Cosmetic: the doc comment in `database-containment.port.ts` ("distinguishes Poly's dedicated cell") → genericize to "a node's dedicated cell".
 
 Node identity may appear ONLY in `infra/catalog/<node>.yaml` rows and billing/evidence records. Anything else is a review-blocking defect from now on.
+
+## Addendum 2 — priority + billing honesty (CEO)
+
+**Core priority: ALL nodes back online, including Poly, ASAP. Economics never blocks restoration by a minute.** The strategy's v0 is meter-and-accrue only: record the cell's provider cost rate at provision and accrue usage from enable. Per-node billing settlement is in-progress elsewhere (`node-payer-account-keystone`: billing_accounts can carry non-human spend; per-node account + cost-as-debit are NOT built) — do not build or wait on any of it. Restore first; the meter starts at enable; the invoice follows the rail.
