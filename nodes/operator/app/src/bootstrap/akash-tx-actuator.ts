@@ -81,6 +81,8 @@ import { createAppDbClient, type Database } from "@cogni/db-client";
 import { BatchV1Api, CoreV1Api, KubeConfig } from "@kubernetes/client-node";
 import { sql } from "drizzle-orm";
 import pino from "pino";
+import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 
 import {
   AkashComputeAdapter,
@@ -103,6 +105,7 @@ import {
   AkashTxActuator,
   type AkashTxServingProbe,
 } from "@/features/compute/akash-tx/akash-tx-actuator";
+import { databaseCellSpecFactory } from "@/features/compute/akash-tx/akash-tx-database-cell";
 import { createAkashTxActuatorServer } from "@/features/compute/akash-tx/akash-tx-http";
 import {
   AkashTxWalletConfigError,
@@ -115,6 +118,7 @@ import {
   ACCOUNT_WALLET_SCOPE_PATTERN,
   akashTxAllocations,
 } from "@/shared/db/akash-tx-allocations";
+import { DatabaseCellBootstrapKitsSchema } from "@/shared/secrets/database-cell-binding.data";
 
 /**
  * The port the XComputeWorkload Composition hard-codes in
@@ -468,10 +472,92 @@ const actuator = new AkashTxActuator({
   migrationReports: new DrizzleNodeMigrationReportStore(getDb),
 });
 
+const cellKitsJson = await readCredential("AKASH_DATABASE_CELL_KITS_JSON");
+let databaseCellSpec: ReturnType<typeof databaseCellSpecFactory> | undefined;
+if (cellKitsJson) {
+  const assetRoot = "/app/database-cell-bootstrap";
+  const [bootstrap, provision, control, migration0, migration1, budgetYaml] =
+    await Promise.all(
+      [
+        "bootstrap.sh",
+        "provision.sh",
+        "apply-control.sql",
+        "control-migrations/0000_database_recovery_control.sql",
+        "control-migrations/0001_database_recovery_watchdog.sql",
+        "database-budget-profiles.yaml",
+      ].map((path) => readFile(`${assetRoot}/${path}`, "utf8"))
+    );
+  if (
+    !bootstrap ||
+    !provision ||
+    !control ||
+    !migration0 ||
+    !migration1 ||
+    !budgetYaml
+  ) {
+    throw new Error("reviewed private database cell assets are incomplete");
+  }
+  const positive = z.number().int().positive();
+  const profiles = z
+    .object({
+      "dedicated-high-throughput-v1": z.object({
+        cell_capacity: z.object({
+          vcpus: positive,
+          memory_gib: positive,
+          storage_gib: positive,
+          compute_class: z.literal("dedicated"),
+        }),
+        roles: z.object({
+          app: z.object({
+            connection_limit: positive,
+            statement_timeout_ms: positive,
+          }),
+          service: z.object({
+            connection_limit: positive,
+            statement_timeout_ms: positive,
+          }),
+        }),
+        common: z.object({
+          lock_timeout_ms: positive,
+          idle_in_transaction_session_timeout_ms: positive,
+          temp_file_limit_mib: positive,
+          work_mem_mib: positive,
+        }),
+      }),
+    })
+    .parse(parseYaml(budgetYaml));
+  const profile = profiles["dedicated-high-throughput-v1"];
+  databaseCellSpec = databaseCellSpecFactory(
+    DatabaseCellBootstrapKitsSchema.parse(JSON.parse(cellKitsJson)),
+    { bootstrap, provision, control, migration0, migration1 },
+    {
+      vcpus: profile.cell_capacity.vcpus,
+      memoryGiB: profile.cell_capacity.memory_gib,
+      storageGiB: profile.cell_capacity.storage_gib,
+      budget: {
+        appConnectionLimit: profile.roles.app.connection_limit,
+        appStatementTimeoutMs: profile.roles.app.statement_timeout_ms,
+        serviceConnectionLimit: profile.roles.service.connection_limit,
+        serviceStatementTimeoutMs: profile.roles.service.statement_timeout_ms,
+        lockTimeoutMs: profile.common.lock_timeout_ms,
+        idleInTransactionTimeoutMs:
+          profile.common.idle_in_transaction_session_timeout_ms,
+        tempFileLimitMiB: profile.common.temp_file_limit_mib,
+        workMemMiB: profile.common.work_mem_mib,
+      },
+    },
+    z
+      .string()
+      .regex(/^[0-9a-f]{40}$/)
+      .parse(runtimeEnv.APP_BUILD_SHA)
+  );
+}
+
 const server = createAkashTxActuatorServer({
   actuator,
   token: bearerToken,
   log,
+  ...(databaseCellSpec ? { databaseCellSpec } : {}),
 });
 
 server.listen(LISTEN_PORT, "0.0.0.0", () => {

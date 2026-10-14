@@ -252,6 +252,15 @@ export const AkashTxCreateInputSchema = z.strictObject({
   migration: AkashTxDeprecatedMigrationSchema.optional(),
 });
 
+/** Private cell reference: credentials and fixed workload assets are actuator-owned. */
+export const AkashTxCreateDatabaseCellInputSchema = z.strictObject({
+  cogniKey: CogniKeySchema,
+  environment: z.enum(["candidate-a", "preview", "production"]),
+  identity: AkashTxIdentitySchema,
+  nodeSlug: ServiceNameSchema,
+  budgetProfile: z.literal("dedicated-high-throughput-v1"),
+});
+
 /**
  * An update replaces the SDL in place and mints no lease, but it is still a mutation of a PAID
  * resource — so it states its identity, and the actuator refuses it when the durable receipt

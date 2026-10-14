@@ -38,6 +38,7 @@ import { createServer, type Server } from "node:http";
 import type { ProvisionSpec } from "@cogni/ai-tools";
 
 import {
+  AkashTxCreateDatabaseCellInputSchema,
   type AkashTxCreateInput,
   AkashTxCreateInputSchema,
   AkashTxDeleteInputSchema,
@@ -100,6 +101,13 @@ export interface AkashTxHttpDeps {
   /** Shared secret required on every operation. Empty is rejected at construction. */
   readonly token: string;
   readonly log?: AkashTxLogger;
+  /** Pure private-kit resolver; callers can supply a catalog reference only. */
+  readonly databaseCellSpec?: (input: {
+    nodeId: string;
+    nodeSlug: string;
+    environment: string;
+    budgetProfile: string;
+  }) => ProvisionSpec;
 }
 
 /**
@@ -239,6 +247,30 @@ export function createAkashTxDispatcher(
 
     try {
       switch (request.path) {
+        case "/v1/akash/create-database-cell": {
+          const input = AkashTxCreateDatabaseCellInputSchema.parse(payload);
+          if (!deps.databaseCellSpec) {
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "private database cell kit unavailable"
+            );
+          }
+          const spec = deps.databaseCellSpec({
+            nodeId: input.identity.nodeId,
+            nodeSlug: input.nodeSlug,
+            environment: input.environment,
+            budgetProfile: input.budgetProfile,
+          });
+          return {
+            status: 200,
+            body: await deps.actuator.create({
+              cogniKey: input.cogniKey,
+              environment: input.environment,
+              identity: input.identity,
+              spec,
+            }),
+          };
+        }
         case "/v1/akash/observe": {
           const input = AkashTxObserveInputSchema.parse(payload);
           const observation = await deps.actuator.observe(

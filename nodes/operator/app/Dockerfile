@@ -95,6 +95,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/standalo
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/.next/static ./nodes/operator/app/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/public ./nodes/operator/app/public
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-akash-tx-actuator/akash-tx-actuator.mjs ./nodes/operator/app/akash-tx-actuator.mjs
+# Private actuator-only database cell factory assets; no new image or controller.
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/ops/database-cell-bootstrap.sh /app/database-cell-bootstrap/bootstrap.sh
+COPY --from=builder --chown=nextjs:nodejs /app/infra/compose/runtime/postgres-init/ /app/database-cell-bootstrap/
+COPY --from=builder --chown=nextjs:nodejs /app/infra/database-budget-profiles.yaml /app/database-cell-bootstrap/database-budget-profiles.yaml
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-lease-log-pump/lease-log-pump.mjs ./nodes/operator/app/lease-log-pump.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/nodes/operator/app/dist-database-reliability-actuator/database-reliability-actuator.mjs ./nodes/operator/app/database-reliability-actuator.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/infra/catalog ./infra/catalog

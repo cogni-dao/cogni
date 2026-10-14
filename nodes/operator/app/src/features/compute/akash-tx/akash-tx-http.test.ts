@@ -99,6 +99,73 @@ function dispatcherFor(actuator: AkashTxActuatorPort) {
 }
 
 describe("akash-tx dispatcher", () => {
+  it("delegates a private cell reference through the same create path and refuses caller secrets", async () => {
+    let received: unknown;
+    const dispatch = createAkashTxDispatcher({
+      token: TOKEN,
+      actuator: stubActuator({
+        create: async (input) => {
+          received = input;
+          return {
+            externalName: "7001",
+            state: "pending",
+            endpoints: [],
+            replayed: false,
+            recovered: false,
+          };
+        },
+      }),
+      databaseCellSpec: () => VALID_CREATE.spec,
+    });
+    const input = {
+      cogniKey: "cell/production/toks9/1",
+      environment: "production",
+      identity: IDENTITY,
+      nodeSlug: "toks9",
+      budgetProfile: "dedicated-high-throughput-v1",
+    };
+    expect(
+      (
+        await dispatch({
+          method: "POST",
+          path: "/v1/akash/create-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify(input),
+        })
+      ).status
+    ).toBe(200);
+    expect(received).toEqual({
+      cogniKey: input.cogniKey,
+      environment: "production",
+      identity: IDENTITY,
+      spec: VALID_CREATE.spec,
+    });
+    for (const override of [
+      { rootPassword: "caller-secret" },
+      { spec: VALID_CREATE.spec },
+    ]) {
+      expect(
+        (
+          await dispatch({
+            method: "POST",
+            path: "/v1/akash/create-database-cell",
+            authorization: AUTH,
+            body: JSON.stringify({ ...input, ...override }),
+          })
+        ).status
+      ).toBe(400);
+    }
+    expect(
+      (
+        await dispatcherFor(stubActuator())({
+          method: "POST",
+          path: "/v1/akash/create-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify(input),
+        })
+      ).status
+    ).toBe(503);
+  });
   it("preserves named persistent volumes through strict wire validation", async () => {
     const volumes = [
       {
