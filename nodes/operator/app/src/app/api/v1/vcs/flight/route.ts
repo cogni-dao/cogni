@@ -25,8 +25,8 @@
  */
 
 import {
-  authzUserResource,
   type AuthzDecisionCode,
+  authzUserResource,
 } from "@cogni/authorization-core";
 import { billingAccounts } from "@cogni/db-schema/refs";
 import { flightOperation, type RequestPrincipal } from "@cogni/node-contracts";
@@ -287,7 +287,10 @@ export const POST = wrapRouteHandlerWithLogging(
             errorCode: "authn_unavailable",
           });
           return NextResponse.json(
-            { error: "authentication unavailable", errorCode: "authn_unavailable" },
+            {
+              error: "authentication unavailable",
+              errorCode: "authn_unavailable",
+            },
             { status: 503 }
           );
         }

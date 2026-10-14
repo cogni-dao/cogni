@@ -97,8 +97,7 @@ export const legacyAgentRequestPrincipalSchema = z
   })
   .superRefine((value, ctx) => {
     if (
-      principalLocalId(value.principalId) !==
-      value.legacyUserId.toLowerCase()
+      principalLocalId(value.principalId) !== value.legacyUserId.toLowerCase()
     ) {
       ctx.addIssue({
         code: "custom",

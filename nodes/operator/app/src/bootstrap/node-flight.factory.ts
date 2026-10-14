@@ -21,7 +21,8 @@ export function parseFlightProbeCredentials(
   if (!raw) return {};
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return {};
     return Object.fromEntries(
       Object.entries(parsed).filter(
         (entry): entry is [string, string] =>

@@ -111,9 +111,7 @@ describe("GET /api/v1/agent/me", () => {
         expect(agentMeV2Operation.output.safeParse(body).success).toBe(true);
         expect(body.identity.principalId).toBe(PRINCIPAL_ID);
         expect(body.identity.credentialId).toBe(CREDENTIAL_ID);
-        expect(body.nodes).toEqual([
-          { nodeId: NODE_ID, roles: ["developer"] },
-        ]);
+        expect(body.nodes).toEqual([{ nodeId: NODE_ID, roles: ["developer"] }]);
         expect(listRelations).toHaveBeenCalledWith(PRINCIPAL_ID);
         expect(listRelations).toHaveBeenCalledTimes(1);
       },

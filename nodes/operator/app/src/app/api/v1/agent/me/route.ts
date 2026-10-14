@@ -13,12 +13,12 @@
  */
 
 import {
-  authzUserResource,
   type AuthorizationPort,
+  authzUserResource,
 } from "@cogni/authorization-core";
 import {
-  agentMeV2Operation,
   type AgentRequestPrincipal,
+  agentMeV2Operation,
   type RequestPrincipal,
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
