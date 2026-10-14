@@ -64,6 +64,24 @@ export const AkashTxServiceSpecSchema = z.strictObject({
   cpuUnits: z.number().positive(),
   memoryMi: z.number().int().positive(),
   storageMi: z.number().int().positive(),
+  volumes: z
+    .array(
+      z.strictObject({
+        name: ServiceNameSchema,
+        sizeMi: z.number().int().positive(),
+        mountPath: z.string().regex(/^\/(?!$)(?!.*(?:\/\.\.?)(?:\/|$))[^\0]+$/),
+        tier: z.enum(["hdd", "ssd", "nvme"]),
+      })
+    )
+    .min(1)
+    .max(8)
+    .refine(
+      (volumes) =>
+        new Set(volumes.map((v) => v.name)).size === volumes.length &&
+        new Set(volumes.map((v) => v.mountPath)).size === volumes.length,
+      "volume names and mount paths must be unique"
+    )
+    .optional(),
   expose: z.array(AkashTxExposeSchema).optional(),
 });
 

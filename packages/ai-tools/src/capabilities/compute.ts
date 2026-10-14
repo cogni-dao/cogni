@@ -72,6 +72,13 @@ export interface ProvisionServiceSpec {
   readonly memoryMi: number;
   /** Ephemeral storage in Mi. */
   readonly storageMi: number;
+  /** Lease-scoped durable volumes. Recovery across leases requires an off-host backup. */
+  readonly volumes?: readonly {
+    readonly name: string;
+    readonly sizeMi: number;
+    readonly mountPath: string;
+    readonly tier: "hdd" | "ssd" | "nvme";
+  }[];
   /** Ports to expose. Omitted → service is internal-only (reachable by sibling services). */
   readonly expose?: readonly {
     /** Container port. */

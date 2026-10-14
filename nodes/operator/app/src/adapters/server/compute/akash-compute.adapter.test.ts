@@ -514,6 +514,51 @@ describe("AkashComputeAdapter.observeCost", () => {
 });
 
 describe("buildAkashSdl", () => {
+  it("mounts persistent state separately from the ephemeral container filesystem", () => {
+    const service = SPEC.services[0];
+    if (!service) throw new Error("missing fixture service");
+    const rendered = parseYaml(
+      buildAkashSdl(
+        {
+          ...SPEC,
+          services: [
+            {
+              ...service,
+              volumes: [
+                {
+                  name: "pgdata",
+                  sizeMi: 20480,
+                  mountPath: "/var/lib/postgresql/data",
+                  tier: "nvme",
+                },
+              ],
+            },
+          ],
+        },
+        { pricingDenom: "uact", pricingAmount: 100 }
+      )
+    );
+    expect(rendered.services.app.params.storage.pgdata).toEqual({
+      mount: "/var/lib/postgresql/data",
+      readOnly: false,
+    });
+    expect(rendered.profiles.compute.app.resources.storage).toEqual([
+      { size: `${service.storageMi}Mi` },
+      {
+        name: "pgdata",
+        size: "20480Mi",
+        attributes: { persistent: true, class: "beta3" },
+      },
+    ]);
+    const legacy = parseYaml(
+      buildAkashSdl(SPEC, { pricingDenom: "uact", pricingAmount: 100 })
+    );
+    expect(legacy.services.app.params).toBeUndefined();
+    expect(legacy.profiles.compute.app.resources.storage).toEqual([
+      { size: `${service.storageMi}Mi` },
+    ]);
+  });
+
   it("renders services, profiles, placement pricing, and deployment sections", () => {
     const sdl = buildAkashSdl(SPEC, {
       pricingDenom: "uakt",

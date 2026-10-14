@@ -99,6 +99,68 @@ function dispatcherFor(actuator: AkashTxActuatorPort) {
 }
 
 describe("akash-tx dispatcher", () => {
+  it("preserves named persistent volumes through strict wire validation", async () => {
+    const volumes = [
+      {
+        name: "pgdata",
+        sizeMi: 20480,
+        mountPath: "/var/lib/postgresql/data",
+        tier: "nvme",
+      },
+    ];
+    let received: unknown;
+    const dispatch = dispatcherFor(
+      stubActuator({
+        create: async (input) => {
+          received = input.spec.services[0]?.volumes;
+          return {
+            externalName: "7001",
+            state: "pending",
+            endpoints: [],
+            replayed: false,
+            recovered: false,
+          };
+        },
+      })
+    );
+    const payload = {
+      ...VALID_CREATE,
+      spec: {
+        ...VALID_CREATE.spec,
+        services: [{ ...VALID_CREATE.spec.services[0], volumes }],
+      },
+    };
+    const result = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: `Bearer ${TOKEN}`,
+      body: JSON.stringify(payload),
+    });
+    expect(result.status).toBe(200);
+    expect(received).toEqual(volumes);
+    for (const invalid of [
+      [{ ...volumes[0], mountPath: "/" }],
+      [{ ...volumes[0], mountPath: "/data/../etc" }],
+      [{ ...volumes[0], sizeMi: 0 }],
+      [{ ...volumes[0], tier: "unknown" }],
+      [volumes[0], volumes[0]],
+    ]) {
+      const denied = await dispatch({
+        method: "POST",
+        path: "/v1/akash/create",
+        authorization: `Bearer ${TOKEN}`,
+        body: JSON.stringify({
+          ...payload,
+          spec: {
+            ...payload.spec,
+            services: [{ ...payload.spec.services[0], volumes: invalid }],
+          },
+        }),
+      });
+      expect(denied.status).toBe(400);
+    }
+  });
+
   it("refuses to construct without a bearer token", () => {
     expect(() =>
       createAkashTxDispatcher({ actuator: stubActuator(), token: "" })

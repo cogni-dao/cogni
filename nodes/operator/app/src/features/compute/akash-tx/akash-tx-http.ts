@@ -115,6 +115,7 @@ function toSpec(parsed: AkashTxCreateInput["spec"]): ProvisionSpec {
       cpuUnits: service.cpuUnits,
       memoryMi: service.memoryMi,
       storageMi: service.storageMi,
+      ...(service.volumes ? { volumes: service.volumes } : {}),
       ...(service.env ? { env: service.env } : {}),
       ...(service.command ? { command: service.command } : {}),
       ...(service.args ? { args: service.args } : {}),
