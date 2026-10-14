@@ -27,7 +27,7 @@ tags: [governance, attribution, plugins, architecture]
 | **Spec**     | [attribution-ledger](./attribution-ledger.md)                                             | Core domain: store port, hashing, statement math |
 | **Spec**     | [packages-architecture](./packages-architecture.md)                                       | Package boundary rules                           |
 | **Research** | [attribution-scoring-design](../research/attribution-scoring-design.md)                   | LLM evaluation design, quarterly review model    |
-| **Standard** | [human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)             | actor_id and beneficiary evolution (orthogonal)  |
+| **Standard** | [human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)            | actor_id and beneficiary evolution (orthogonal)  |
 
 ## Design
 

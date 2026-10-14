@@ -24,7 +24,7 @@ tags: [identity, auth, web3]
 | ------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------ |
 | **Project**  | [proj.decentralized-identity](../../work/projects/proj.decentralized-identity.md)         | Roadmap, phases, work items                |
 | **Research** | [DID-first identity refactor](../research/did-first-identity-refactor.md)                 | Gap analysis, library eval                 |
-| **Standard** | [Human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)                    | Local user, actor, and binding boundaries  |
+| **Standard** | [Human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)            | Local user, actor, and binding boundaries  |
 | **Spec**     | [Authentication](./authentication.md)                                                     | SIWE flow, wallet-session                  |
 | **Spec**     | [RBAC](./rbac.md)                                                                         | Actor types (will drop wallet from format) |
 | **Spec**     | [User Context](./user-context.md)                                                         | Agent identity injection                   |

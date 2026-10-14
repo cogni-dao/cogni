@@ -29,7 +29,7 @@ tags: [governance, transparency, payments, attribution]
 | **Spec**     | [billing-evolution](./billing-evolution.md)                                               | Existing billing/credit system                             |
 | **Spec**     | [architecture](./architecture.md)                                                         | System architecture                                        |
 | **Spec**     | [decentralized-identity](./decentralized-user-identity.md)                                | Identity bindings (user_bindings)                          |
-| **Standard** | [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload)                  | All identity primitives (node_id, scope_id, user_id, etc.) |
+| **Standard** | [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload)                 | All identity primitives (node_id, scope_id, user_id, etc.) |
 
 ## Core Invariants
 

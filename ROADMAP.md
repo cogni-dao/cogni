@@ -102,15 +102,15 @@ The Feb-2026 "three separate daemons" plan was superseded: review and governance
 
 ## Related Docs
 
-| Doc                                                              | Purpose                                            |
-| ---------------------------------------------------------------- | -------------------------------------------------- |
-| [Node vs Operator Contract](docs/spec/node-operator-contract.md) | Boundaries, invariants, boot seams                 |
-| [Development Lifecycle](docs/spec/development-lifecycle.md)      | idea → deploy_verified status machine + agent loop |
-| [Merge Authority](docs/spec/merge-authority.md)                  | Operator as the network's merge authority          |
-| [DAO Governance Loop](docs/spec/dao-governance-loop.md)          | Review → vote → signal → merge override            |
-| [Node Formation](docs/spec/node-formation.md)                    | DAO formation + node birth                         |
-| [Attribution Ledger](docs/spec/attribution-ledger.md)            | Epoch attribution + payouts (vNext)                |
-| [CI/CD](docs/spec/ci-cd.md)                                      | Environments, deploy branches, candidate-flight    |
+| Doc                                                                       | Purpose                                            |
+| ------------------------------------------------------------------------- | -------------------------------------------------- |
+| [Node vs Operator Contract](docs/spec/node-operator-contract.md)          | Boundaries, invariants, boot seams                 |
+| [Development Lifecycle](docs/spec/development-lifecycle.md)               | idea → deploy_verified status machine + agent loop |
+| [Merge Authority](docs/spec/merge-authority.md)                           | Operator as the network's merge authority          |
+| [DAO Governance Loop](docs/spec/dao-governance-loop.md)                   | Review → vote → signal → merge override            |
+| [Node Formation](docs/spec/node-formation.md)                             | DAO formation + node birth                         |
+| [Attribution Ledger](docs/spec/attribution-ledger.md)                     | Epoch attribution + payouts (vNext)                |
+| [CI/CD](docs/spec/ci-cd.md)                                               | Environments, deploy branches, candidate-flight    |
 | [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) | All identity primitives                            |
 
 ---

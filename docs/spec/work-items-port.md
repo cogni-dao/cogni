@@ -20,13 +20,13 @@ tags: [work-system, ports, adapters]
 
 ### Key References
 
-|             |                                                                                           |                                   |
-| ----------- | ----------------------------------------------------------------------------------------- | --------------------------------- |
-| **Project** | [proj.agentic-project-management](../../work/projects/proj.agentic-project-management.md) | Roadmap and planning              |
-| **Spec**    | [Development Lifecycle](./development-lifecycle.md)                                       | Status enum and transition rules  |
-| **Standard** | [Human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)             | Actor kinds for SubjectRef        |
-| **Spec**    | [Docs + Work System](./docs-work-system.md)                                               | Frontmatter schema and ID formats |
-| **Package** | [`packages/work-items/`](../../packages/work-items/AGENTS.md)                             | Implementation                    |
+|              |                                                                                           |                                   |
+| ------------ | ----------------------------------------------------------------------------------------- | --------------------------------- |
+| **Project**  | [proj.agentic-project-management](../../work/projects/proj.agentic-project-management.md) | Roadmap and planning              |
+| **Spec**     | [Development Lifecycle](./development-lifecycle.md)                                       | Status enum and transition rules  |
+| **Standard** | [Human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)            | Actor kinds for SubjectRef        |
+| **Spec**     | [Docs + Work System](./docs-work-system.md)                                               | Frontmatter schema and ID formats |
+| **Package**  | [`packages/work-items/`](../../packages/work-items/AGENTS.md)                             | Implementation                    |
 
 ## Design
 
