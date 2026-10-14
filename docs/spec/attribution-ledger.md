@@ -29,7 +29,7 @@ tags: [governance, transparency, payments, attribution]
 | **Spec**     | [billing-evolution](./billing-evolution.md)                                               | Existing billing/credit system                             |
 | **Spec**     | [architecture](./architecture.md)                                                         | System architecture                                        |
 | **Spec**     | [decentralized-identity](./decentralized-user-identity.md)                                | Identity bindings (user_bindings)                          |
-| **Spec**     | [identity-model](./identity-model.md)                                                     | All identity primitives (node_id, scope_id, user_id, etc.) |
+| **Standard** | [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload)                  | All identity primitives (node_id, scope_id, user_id, etc.) |
 
 ## Core Invariants
 
@@ -93,7 +93,7 @@ tags: [governance, transparency, payments, attribution]
 
 The attribution ledger uses two orthogonal scoping keys:
 
-- **`node_id`** (UUID) — Deployment identity. Identifies the running instance. One node = one database, one set of infrastructure, one `docker compose up`. Never overloaded for governance semantics. See [identity-model spec](./identity-model.md).
+- **`node_id`** (UUID) — Deployment identity. Identifies the running instance. One node = one database and one infrastructure identity. Never overloaded for governance semantics. See [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload).
 - **`scope_id`** (UUID) — Governance/statement domain. Identifies which **project** an epoch, its activity, and its statements belong to. Derived deterministically as `uuidv5(node_id, scope_key)` where `scope_key` is the human-readable slug (e.g., `'default'`). A project is a human-defined ownership boundary (e.g., "chat service", "shared infrastructure", "code review daemon") with its own DAO, weight policy, and payment rails.
 
 **Terminology:** "Project" is the human concept. `scope_id` is the canonical database key. `scope_id` is not necessarily a filesystem path — path-based routing is one resolver strategy, but scopes can also be assigned by repository, by label, or by explicit declaration.
@@ -860,7 +860,7 @@ Enable transparent, verifiable credit distribution where contribution activity i
 
 ### Actor Migration Path (Planned)
 
-Finalized statements now preserve claimant identity explicitly (`claimant_key`, `claimant`) and treat `epoch_allocations.user_id` as the resolved-human override surface, not the only economic subject. `actor_id` is still the migration target: when the `actors` table ships ([proj.operator-plane](../../work/projects/proj.operator-plane.md) v1), claimant keys can resolve to actor-backed subjects without changing the deterministic statement model. For human actors (`kind=user`), `actor_id` bridges 1:1 to `user_id` via the actors table. For agent actors, `actor_id` enables new attribution paths (gateway usage → agent → rewards). Every economic event remains scoped by `(node_id, scope_id)` — `actor_id` is locally unique per node, not a global identity. No invariant changes — PAYOUT_DETERMINISTIC and ALL_MATH_BIGINT apply regardless of subject key. See [identity-model.md](./identity-model.md).
+Finalized statements now preserve claimant identity explicitly (`claimant_key`, `claimant`) and treat `epoch_allocations.user_id` as the resolved-human override surface, not the only economic subject. `actor_id` is the durable node-local attribution subject; claimant keys can resolve to actor-backed subjects without changing the deterministic statement model. For human actors (`kind=user`), `actor_id` bridges 1:1 to `user_id`; agent actors preserve AI authorship even when an explicit beneficiary receives value. Every economic event remains scoped by `(node_id, scope_id)`. No invariant changes — PAYOUT_DETERMINISTIC and ALL_MATH_BIGINT apply regardless of subject key. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard).
 
 ### AI Agent Developer Actors (V0 Addendum)
 
@@ -905,5 +905,5 @@ Optional accrual at epoch sign (Dr Expense:ContributorRewards / Cr Liability:Unc
 - [billing-ingest](./billing-ingest.md) — Callback-driven billing pipeline
 - [architecture](./architecture.md) — System architecture
 - [decentralized-user-identity](./decentralized-user-identity.md) — User identity bindings (`user_id` is canonical)
-- [identity-model](./identity-model.md) — All identity primitives (`node_id`, `scope_id`, `user_id`, `actor_id`, `billing_account_id`, `dao_address`)
+- [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) — All identity primitives (`node_id`, `scope_id`, `user_id`, `actor_id`, `billing_account_id`, `dao_address`)
 - [ai-governance-data](./ai-governance-data.md) — Autonomous governance agents (separate concern)

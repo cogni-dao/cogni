@@ -11,7 +11,7 @@
  * - RESOLVER_CONTRIBUTOR_WALLET: resolves the person's OWN wallet (users.wallet_address / user_bindings provider='wallet'); never an operator/treasury wallet.
  * - RESOLVER_GITHUB_VIA_BINDING: `identity:github:<externalId>` → user_id via user_bindings(provider='github', external_id), mirroring AttributionStore.resolveIdentities.
  * Side-effects: IO (database reads)
- * Links: docs/spec/identity-model.md, docs/spec/decentralized-user-identity.md, packages/aragon-osx/src/wallet-resolver.ts
+ * Links: https://cognidao.org/knowledge/human-ai-identity-standard, docs/spec/decentralized-user-identity.md, packages/aragon-osx/src/wallet-resolver.ts
  * @public
  */
 

@@ -46,7 +46,7 @@ MDI server.js
 
 ## Unified Actor Model
 
-`actor_id` is the canonical economic subject across all Cogni economic systems. See [identity-model.md](../../docs/spec/identity-model.md) for the full primitive definition.
+`actor_id` is the canonical economic subject across all Cogni economic systems. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard) for the full primitive definition.
 
 ### Core entities
 

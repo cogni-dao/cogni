@@ -283,7 +283,7 @@ The `tokenProvider` is an internal API exposed by `git-daemon` (or called in-pro
 
 ### Scope Routing at Ingestion
 
-When activity events are ingested, each event must be assigned a `scope_id` (governance/payout domain). See [Identity Model](./identity-model.md) and [Attribution Ledger §Project Scoping](./attribution-ledger.md#project-scoping).
+When activity events are ingested, each event must be assigned a `scope_id` (governance/payout domain). See [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) and [Attribution Ledger §Project Scoping](./attribution-ledger.md#project-scoping).
 
 **Routing rules:**
 
@@ -783,7 +783,7 @@ Admin app variables are optional — a Node may install only the review app.
 - [ ] Should the operator's node registry tables live in the same Postgres as the scheduler-worker (monorepo phase) or a separate database? Same DB is simpler; separate DB is cleaner for eventual extraction.
 - [ ] For push-triggered re-sync: should the webhook handler parse the push payload inline to detect `.cogni/**` changes, or re-fetch unconditionally and rely on SYNC_IDEMPOTENT (hash comparison) to short-circuit?
 - [ ] Should `.cogni/projects/*.yaml` manifests in external repos be fetched via individual `repos.getContent` calls, or via a tree listing + batch fetch? Tree listing is one API call but returns all files.
-- [ ] **Rename `.cogni/projects/` → `.cogni/scopes/`** — "scopes" is the canonical term in the identity model and attribution ledger. "Projects" is overloaded (GitHub projects, project management). All ~30 references across specs, tasks, and roadmap need updating when multi-scope ships. V0 doesn't need the directory at all — the default scope lives at the top level of `repo-spec.yaml`.
+- [ ] **Rename `.cogni/projects/` → `.cogni/scopes/`** — "scopes" is the canonical term in [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) and the attribution ledger. "Projects" is overloaded (GitHub projects, project management). All ~30 references across specs, tasks, and roadmap need updating when multi-scope ships. V0 doesn't need the directory at all — the default scope lives at the top level of `repo-spec.yaml`.
 
 ## Related
 
@@ -792,5 +792,5 @@ Admin app variables are optional — a Node may install only the review app.
 - [Services Architecture](./services-architecture.md) — service contracts git-daemon must satisfy
 - [Packages Architecture](./packages-architecture.md) — package contracts github-core must satisfy
 - [Graph Execution](./graph-execution.md) — review handler executes via graphExecutor
-- [Identity Model](./identity-model.md) — node_id, scope_id, user_id definitions and relationships
+- [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) — node_id, scope_id, user_id definitions and relationships
 - [Node Formation](./node-formation.md) — DAO formation generates repo-spec with node_id

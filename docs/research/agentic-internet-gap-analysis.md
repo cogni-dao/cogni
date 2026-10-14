@@ -154,7 +154,7 @@ Three protocols are crystallizing into the agent communication stack:
 
 **Our state:** `proj.agent-registry` is **Paused at Priority 2**. P0 (discovery) is done via `AgentCatalogPort`. P1 (registration documents, `AgentIdentityPort`, `agent_registrations` table) is not started. `proj.decentralized-identity` is Active with user bindings shipping (task.0089). `proj.rbac-hardening` has `agent:{id}` actor types and OBO delegation.
 
-**Recommendation: UNPAUSE `proj.agent-registry` and ELEVATE.** The Registration Track P0 (offchain `AgentRegistrationDocument` + content hash) aligns directly with A2A agent cards. Our identity model already has the five primitives (node, scope, user, billing, DAO). We need to extend it so agents are first-class identity holders that can obtain and present OAuth tokens. This is a prerequisite for MCP server auth.
+**Recommendation: UNPAUSE `proj.agent-registry` and ELEVATE.** The Registration Track P0 (offchain `AgentRegistrationDocument` + content hash) aligns directly with A2A agent cards. The current [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard) makes agents first-class durable actors with distinct credentials and permissions. This is a prerequisite for MCP server auth.
 
 ### 3.3 Agent Payments — `proj.ai-operator-wallet` (Active)
 

@@ -29,7 +29,7 @@ Provide a single one-page map of how Cogni's access-control surface composes —
 
 - Inventing new access-control mechanisms. Every layer below points at a canonical spec that owns its design.
 - Defining the runtime enforcement model for any single layer — those specs already exist.
-- Replacing `identity-model.md` or any other sibling spec. This file references them.
+- Replacing the [identity key standard](https://cognidao.org/knowledge/identity-keys-no-overload) or any other sibling contract. This file references them.
 
 ## Context
 
@@ -96,7 +96,7 @@ It is not a new spec. Every load-bearing claim points at an existing canonical s
 │      The six orthogonal keys: node_id, scope_id, user_id, actor_id, │
 │      billing_account_id, dao_address. Defines the vocabulary every  │
 │      layer above uses.                                              │
-│      Canonical: identity-model.md                                   │
+│      Canonical: identity-keys-no-overload (operator hub)            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -133,7 +133,7 @@ The dependency arrows above dictate the order in which capabilities can ship:
 
 | Phase  | Lands                                                                                       | Hard dependency | Why this order                                                                                                                                       |
 | ------ | ------------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **P0** | L3 substrate (OpenBao + ESO) + L0 identity model — both in node-template                    | —               | Foundational. L0 is already-written spec; L3 is `task.0284` substrate.                                                                               |
+| **P0** | L3 substrate (OpenBao + ESO) + L0 identity model — both in node-template                    | —               | Foundational. L0 is the [hub identity standard](https://cognidao.org/knowledge/human-ai-identity-standard); L3 is `task.0284` substrate.               |
 | **P1** | L3 live-VM E2E validation (`task.5062`)                                                     | P0              | Substrate must be proven before downstream ports inherit it.                                                                                         |
 | **P2** | L2 RBAC v0 (`proj.rbac-hardening`)                                                          | L0 only         | Enforcement layer comes online; uses `user:{walletAddress}` transitional shape. **Can ship in parallel with P1** — RBAC doesn't touch ESO substrate. |
 | **P3** | L1 identity migration completes + L2 actor type migrates to `user:{user_id}`                | P2              | Closes AUTHZ_NOT_AUTHN. Order matters: L1 must publish stable `user_id` BEFORE L2 can rely on it.                                                    |
@@ -193,7 +193,7 @@ We are NOT meaningfully reinventing wheels. Every primitive in the current stack
 
 ## Related
 
-- [Identity Model](./identity-model.md) — L0 canonical
+- [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) — L0 canonical
 - [Authentication](./authentication.md) — L1 canonical
 - [Decentralized User Identity](./decentralized-user-identity.md) — L1 bindings
 - [RBAC](./rbac.md) — L2 canonical

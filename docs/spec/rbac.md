@@ -414,7 +414,7 @@ role, `developer` → `can_flight`. New access levels (e.g. `maintainer` →
 `node_access_requests.role` CHECK, add the immutable OpenFGA relation, and label
 the capability in the UI. The request table's `role` column **is** the OpenFGA
 relation name — never overload `scope` (reserved for the governance domain
-`scope_id`; see [identity-model.md](./identity-model.md)).
+`scope_id`; see [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload)).
 
 Approval authority comes from the node creator/admin's current ownership of the
 node registry row. Ongoing flight authority comes only from OpenFGA.

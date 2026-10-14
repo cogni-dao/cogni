@@ -42,7 +42,7 @@ Cogni runs multiple sovereign nodes (operator, poly, resy) on shared infrastruct
 | Spec                                                  | Relevance                                                      |
 | ----------------------------------------------------- | -------------------------------------------------------------- |
 | [Database RLS](./database-rls.md)                     | RLS policy mechanics — applies within each node's DB           |
-| [Identity Model](./identity-model.md)                 | Identity primitive taxonomy — `user_id` is portable cross-node |
+| [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) | Identity primitive taxonomy — bindings are portable; `user_id` is node-local |
 | [Node Operator Contract](./node-operator-contract.md) | DATA_SOVEREIGNTY, NO_CROSS_IMPORTS, WALLET_CUSTODY             |
 | [Node Launch](./node-launch.md)                       | `provisionDatabase` step in node creation workflow             |
 | [System Tenant](./system-tenant.md)                   | `cogni_system` account lives in operator's DB                  |

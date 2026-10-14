@@ -96,7 +96,7 @@ The Feb-2026 "three separate daemons" plan was superseded: review and governance
 
 **Rules:** `billing_account_id`(DB) ≡ `tenantId`(runtime). `node_id` = deployment only, never governance/RLS. `scope_id` = governance only, never deployment routing. Do NOT introduce synonyms (`org_id`, `account_id`, `project_id` DB column). V0 default: `scope_id = 'default'`; multi-scope activates with `.cogni/projects/*.yaml`.
 
-→ Full taxonomy: [Identity Model](docs/spec/identity-model.md)
+→ Full taxonomy: [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload)
 
 ---
 
@@ -111,7 +111,7 @@ The Feb-2026 "three separate daemons" plan was superseded: review and governance
 | [Node Formation](docs/spec/node-formation.md)                    | DAO formation + node birth                         |
 | [Attribution Ledger](docs/spec/attribution-ledger.md)            | Epoch attribution + payouts (vNext)                |
 | [CI/CD](docs/spec/ci-cd.md)                                      | Environments, deploy branches, candidate-flight    |
-| [Identity Model](docs/spec/identity-model.md)                    | All identity primitives                            |
+| [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) | All identity primitives                            |
 
 ---
 

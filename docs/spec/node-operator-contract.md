@@ -63,7 +63,7 @@ Establish enforceable invariants ensuring Node sovereignty, deployment portabili
 
 ### Identity Primitives
 
-The system uses several orthogonal identity keys. Each has a single, non-overlapping purpose. See [Identity Model spec](./identity-model.md) for the full taxonomy.
+The system uses several orthogonal identity keys. Each has a single, non-overlapping purpose. See [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) for the full taxonomy.
 
 | Key                  | Type | Purpose                            | Scope                | Overloading Prohibited                            |
 | -------------------- | ---- | ---------------------------------- | -------------------- | ------------------------------------------------- |
@@ -83,7 +83,7 @@ The system uses several orthogonal identity keys. Each has a single, non-overlap
 
 Two orthogonal axes — keep them separate to avoid the recurring "is X a node?" confusion:
 
-1. **Governance unit = scope.** The DAO + product + payment-rails bundle is a `scope_id` (a Project, per the Definitions table above). One node can host many. Declared in `.cogni/projects/<scope_key>.yaml`; see [identity-model § Spec File Layering](./identity-model.md#spec-file-layering).
+1. **Governance unit = scope.** The DAO + product + payment-rails bundle is a `scope_id` (a Project, per the Definitions table above). One node can host many. Declared in `.cogni/projects/<scope_key>.yaml`; see [node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage).
 2. **Deployment shape = how that scope runs.** Independent of the bundle:
 
 | Shape               | Runs as                                                   | Own `node_id`/DB? | git-app / UI? | Example                |

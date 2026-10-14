@@ -9,7 +9,7 @@
 --   the operator `migrate` initContainer on the next deploy and seeds candidate-a + preview + production, and
 --   self-heals on every future reprovision (a fresh DB replays all migrations). Break-glass hand-seed retired.
 --   Design: docs/design/node-wizard-formation-wiring.md § Owner binding (tactical). Principle:
---   docs/spec/identity-model.md BINDING_IS_THE_MULTI_ENV_KEY. Postmortem:
+--   https://cognidao.org/knowledge/identity-keys-no-overload. Postmortem:
 --   pm.prod-reprovision-nodes-registry-reseed.2026-08-05.
 --
 -- BINDING_IS_THE_MULTI_ENV_KEY: `users.id` is an env-local surrogate (SIWE mints a fresh UUID per env on
