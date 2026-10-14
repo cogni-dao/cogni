@@ -4157,6 +4157,7 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
     expect(
       (dispatch?.params.inputs as Record<string, string>).node_source_sha
     ).toBeUndefined();
+    expect(requests.map((request) => request.route)).toEqual([DISPATCH_ROUTE]);
   });
 
   it("forwards source_sha only when provided (catalog-pin nodes omit it)", async () => {
@@ -4233,6 +4234,106 @@ describe("GitHubRepoWriter.dispatchNodePromote", () => {
       code: "promote_run_identity_missing",
       status: 502,
     });
+  });
+});
+
+describe("GitHubRepoWriter.dispatchServicePromote", () => {
+  const contentsRoute = "GET /repos/{owner}/{repo}/contents/{path}";
+  const encodeCatalog = (yaml: string) => ({
+    type: "file",
+    encoding: "base64",
+    content: Buffer.from(yaml).toString("base64"),
+  });
+
+  it("validates scheduler-worker as a catalog service and dispatches fixed production fields", async () => {
+    routeHandlers = {
+      [contentsRoute]: (params) => {
+        expect(params).toMatchObject({
+          owner: "Cogni-DAO",
+          repo: "cogni",
+          path: "infra/catalog/scheduler-worker.yaml",
+          ref: "main",
+        });
+        return encodeCatalog("name: scheduler-worker\ntype: service\n");
+      },
+      [DISPATCH_ROUTE]: () => ({
+        workflow_run_id: 12349,
+        run_url:
+          "https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/12349",
+        html_url: "https://github.com/Cogni-DAO/cogni/actions/runs/12349",
+      }),
+    };
+
+    const result = await makeWriter().dispatchServicePromote({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      service: "scheduler-worker",
+    });
+
+    expect(result.runId).toBe(12349);
+    expect(requests.at(-1)?.params).toMatchObject({
+      workflow_id: "promote-and-deploy.yml",
+      ref: "main",
+      inputs: {
+        environment: "production",
+        nodes: "scheduler-worker",
+        skip_infra: "true",
+      },
+    });
+  });
+
+  it("denies an unknown catalog target before workflow dispatch", async () => {
+    routeHandlers = {
+      [contentsRoute]: () => {
+        throw statusError(404, "Not Found");
+      },
+    };
+
+    await expect(
+      makeWriter().dispatchServicePromote({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        service: "missing-worker",
+      })
+    ).rejects.toMatchObject({ code: "catalog_missing", status: 404 });
+    expect(requests.map((request) => request.route)).toEqual([contentsRoute]);
+  });
+
+  it("denies a catalog entry that is not type service before workflow dispatch", async () => {
+    routeHandlers = {
+      [contentsRoute]: () => encodeCatalog("name: operator\ntype: node\n"),
+    };
+
+    await expect(
+      makeWriter().dispatchServicePromote({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        service: "operator",
+      })
+    ).rejects.toMatchObject({
+      code: "invalid_service_target",
+      status: 409,
+    });
+    expect(requests.map((request) => request.route)).toEqual([contentsRoute]);
+  });
+
+  it("denies catalog services outside the explicit allowlist", async () => {
+    routeHandlers = {
+      [contentsRoute]: () =>
+        encodeCatalog("name: another-worker\ntype: service\n"),
+    };
+
+    await expect(
+      makeWriter().dispatchServicePromote({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        service: "another-worker",
+      })
+    ).rejects.toMatchObject({
+      code: "service_target_not_allowed",
+      status: 403,
+    });
+    expect(requests.map((request) => request.route)).toEqual([contentsRoute]);
   });
 });
 

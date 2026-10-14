@@ -27,6 +27,7 @@ const NODE_ID = "22222222-2222-4222-8222-222222222222";
 
 const mockDeployPlane = vi.hoisted(() => ({
   dispatchNodePromote: vi.fn(),
+  dispatchServicePromote: vi.fn(),
   promoteNode: vi.fn(),
   promoteNodeFromPreview: vi.fn(),
 }));
@@ -164,6 +165,15 @@ describe("POST /api/v1/deploy/promote", () => {
       workflowUrl: "https://github.com/test-owner/test-repo/actions",
       message: "Promote dispatched: sigh → production.",
     });
+    mockDeployPlane.dispatchServicePromote.mockResolvedValue({
+      dispatched: true,
+      workflowUrl: "https://github.com/test-owner/test-repo/actions",
+      message: "Promote dispatched: scheduler-worker → production.",
+      runId: 12345,
+      runUrl: "https://github.com/test-owner/test-repo/actions/runs/12345",
+      runApiUrl:
+        "https://api.github.com/repos/test-owner/test-repo/actions/runs/12345",
+    });
     mockDeployPlane.promoteNode.mockResolvedValue({
       status: "dispatched",
       env: "production",
@@ -238,6 +248,91 @@ describe("POST /api/v1/deploy/promote", () => {
       })
     );
     expect(mockDeployPlane.promoteNode).not.toHaveBeenCalled();
+    expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+    expect(mockDeployPlane.dispatchServicePromote).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the bounded scheduler-worker service arm under operator production authz", async () => {
+    dbState.node = { id: NODE_ID, slug: "operator" };
+
+    const res = await post({
+      nodeId: NODE_ID,
+      env: "production",
+      service: "scheduler-worker",
+    });
+
+    expect(res.status).toBe(200);
+    expect(authzState.check).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "node.promote_production",
+        resource: `node:${NODE_ID}`,
+      })
+    );
+    expect(mockDeployPlane.dispatchServicePromote).toHaveBeenCalledWith({
+      owner: "test-owner",
+      repo: "test-repo",
+      service: "scheduler-worker",
+    });
+    expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
+    expect(mockDeployPlane.promoteNode).not.toHaveBeenCalled();
+    expect(mockDeployPlane.promoteNodeFromPreview).not.toHaveBeenCalled();
+  });
+
+  it("denies service promotion when the authorization resource is not the operator node", async () => {
+    const res = await post({
+      nodeId: NODE_ID,
+      env: "production",
+      service: "scheduler-worker",
+    });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: "service_promotion_operator_only",
+    });
+    expect(authzState.check).not.toHaveBeenCalled();
+    expect(mockDeployPlane.dispatchServicePromote).not.toHaveBeenCalled();
+  });
+
+  it("rejects service requests that try to select preview or source controls", async () => {
+    dbState.node = { id: NODE_ID, slug: "operator" };
+
+    const preview = await post({
+      nodeId: NODE_ID,
+      env: "preview",
+      service: "scheduler-worker",
+    });
+    expect(preview.status).toBe(400);
+
+    const sourceAddressed = await post({
+      nodeId: NODE_ID,
+      env: "production",
+      service: "scheduler-worker",
+      sourceSha: "0123456789012345678901234567890123456789",
+    });
+    expect(sourceAddressed.status).toBe(400);
+    expect(mockDeployPlane.dispatchServicePromote).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a typed service catalog denial without dispatch fallback", async () => {
+    dbState.node = { id: NODE_ID, slug: "operator" };
+    mockDeployPlane.dispatchServicePromote.mockRejectedValue(
+      Object.assign(new Error("service catalog entry not found"), {
+        code: "catalog_missing",
+        status: 404,
+      })
+    );
+
+    const res = await post({
+      nodeId: NODE_ID,
+      env: "production",
+      service: "missing-worker",
+    });
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({
+      error: "catalog_missing",
+      message: "service catalog entry not found",
+    });
     expect(mockDeployPlane.dispatchNodePromote).not.toHaveBeenCalled();
   });
 

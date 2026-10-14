@@ -62,6 +62,7 @@ import type {
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeFromPreviewInput,
   PromoteNodeInput,
+  PromoteServiceInput,
   PruneNodeEnvironmentInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
@@ -550,6 +551,14 @@ const PromoteDiscriminatorSchema = z.object({
   name: z.string(),
   source_repo: z.string().url().optional(),
 });
+
+const ServicePromotionCatalogSchema = z.object({
+  name: z.string(),
+  type: z.literal("service"),
+});
+
+const PROMOTABLE_SERVICES = new Set(["scheduler-worker"]);
+const CATALOG_TARGET_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function parseGhcrImageRepository(imageRepository: string): {
   owner: string;
@@ -2392,6 +2401,53 @@ export class GitHubRepoWriter implements DeployPlanePort {
       runUrl,
       runApiUrl,
     };
+  }
+
+  async dispatchServicePromote(
+    input: PromoteServiceInput
+  ): Promise<ObservedWorkflowDispatchResult> {
+    if (!CATALOG_TARGET_PATTERN.test(input.service)) {
+      throw deployPlaneError(
+        "invalid_service_target",
+        "service must be a catalog slug",
+        400
+      );
+    }
+    const catalogText = await this.fetchFileText({
+      owner: input.owner,
+      repo: input.repo,
+      path: `infra/catalog/${input.service}.yaml`,
+      ref: "main",
+    });
+    if (!catalogText) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `service catalog entry not found for ${input.service}`,
+        404
+      );
+    }
+    const row = ServicePromotionCatalogSchema.safeParse(parseYaml(catalogText));
+    if (!row.success || row.data.name !== input.service) {
+      throw deployPlaneError(
+        "invalid_service_target",
+        `catalog entry ${input.service} is not a matching service target`,
+        409
+      );
+    }
+    if (!PROMOTABLE_SERVICES.has(input.service)) {
+      throw deployPlaneError(
+        "service_target_not_allowed",
+        `service promotion is not enabled for ${input.service}`,
+        403
+      );
+    }
+
+    return this.dispatchNodePromote({
+      owner: input.owner,
+      repo: input.repo,
+      env: "production",
+      slug: input.service,
+    });
   }
 
   async commitExists(input: {
