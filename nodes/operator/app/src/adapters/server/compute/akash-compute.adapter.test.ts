@@ -226,6 +226,58 @@ const SPEC = {
   ],
 } as const;
 
+describe("AkashComputeAdapter.status", () => {
+  it("returns assigned transport endpoints through the existing observation path", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: {
+          deployment: { state: "active" },
+          leases: [
+            {
+              state: "active",
+              status: {
+                uris: ["app.example.org"],
+                forwarded_ports: {
+                  state: [
+                    {
+                      host: "provider.example.org",
+                      externalPort: 31057,
+                      proto: "TCP",
+                    },
+                    {
+                      host: "provider.example.org",
+                      externalPort: 31058,
+                      proto: "UDP",
+                    },
+                    {
+                      host: "provider.example.org/unsafe",
+                      externalPort: 31059,
+                    },
+                    { host: "provider.example.org", externalPort: 70000 },
+                    {
+                      host: "provider.example.org",
+                      externalPort: 31060,
+                      proto: "unknown",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      })
+    );
+    const status = await makeAdapter(fetchImpl).status({ leaseId: "7001" });
+    expect(status.endpoints).toEqual([
+      "app.example.org",
+      "tcp://provider.example.org:31057",
+      "udp://provider.example.org:31058",
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("GET");
+  });
+});
+
 describe("AkashComputeAdapter.observeCost", () => {
   const observedAt = new Date("2026-09-15T12:00:00.000Z");
 

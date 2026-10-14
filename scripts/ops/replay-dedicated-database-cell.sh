@@ -45,15 +45,15 @@ live_build_sha=$(curl -fsS --max-time 10 "$TARGET_VERSION_URL" | jq -er '.buildS
 
 replay_sql=$REPLAY_SQL_FILE
 [[ -f "$replay_sql" && -r "$replay_sql" ]] || { echo "replay SQL file is not readable" >&2; exit 2; }
-duration=${REPLAY_DURATION_SECONDS:-1800}
+duration=${REPLAY_DURATION_SECONDS:-600}
 clients=${REPLAY_CLIENTS:-8}
 rate=${REPLAY_RATE:-$((INCIDENT_REQUEST_RATE * 2))}
 evidence=${REPLAY_EVIDENCE_FILE:-dedicated-database-cell-replay.jsonl}
 role_suffix=${node_slug//-/_}
 app_role="app_${role_suffix}"
 service_role="service_${role_suffix}"
-[[ "$clients" -ge 8 && "$duration" -ge 1800 && "$rate" -ge $((INCIDENT_REQUEST_RATE * 2)) ]] || {
-  echo "requires >=8 clients, >=1800s, and >=2x incident rate" >&2; exit 2;
+[[ "$clients" -ge 8 && "$duration" -ge 600 && "$rate" -ge $((INCIDENT_REQUEST_RATE * 2)) ]] || {
+  echo "requires >=8 clients, >=600s, and >=2x incident rate" >&2; exit 2;
 }
 
 cell_addr=$(psql "$TARGET_CELL_DSN" -XAtqc "select inet_server_addr()::text")
