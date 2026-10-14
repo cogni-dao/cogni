@@ -788,6 +788,29 @@ remote "TEMPORAL_NAMESPACE='${node_temporal_namespace}' \
   || fail "node Temporal namespace ensure failed (rc=$?) for ${node_temporal_namespace} on ${SUBSTRATE_CONTROL_ENV}'s Temporal"
 mark_row node_temporal_namespace ensured "${node_temporal_namespace} registered on ${SUBSTRATE_CONTROL_ENV}'s Temporal (idempotent)"
 
+# Encode SQL before the SSH/container shells render it; only base64 crosses them.
+migration_identity_sql_b64="$(cat <<SQL | base64 | tr -d '\n'
+SELECT session_user = '${migration_role}'
+   AND current_user = '${app_role}'
+   AND current_database() = '${node_db}'
+   AND NOT role_state.rolsuper
+   AND NOT role_state.rolcreaterole
+   AND NOT role_state.rolcreatedb
+   AND NOT role_state.rolreplication
+   AND NOT role_state.rolbypassrls
+   AND role_state.rolconnlimit = 1
+   AND current_setting('statement_timeout') IN ('15min', '900s')
+   AND current_setting('temp_file_limit') = '${db_temp_file_limit_mib}MB'
+   AND (SELECT count(*) FROM pg_auth_members membership
+          JOIN pg_roles parent ON parent.oid = membership.roleid
+         WHERE membership.member = role_state.oid
+           AND parent.rolname ~ '^(app|service|migration)_') = 1
+   AND pg_has_role(session_user, '${app_role}', 'MEMBER')
+  FROM pg_roles role_state
+ WHERE role_state.rolname = session_user;
+SQL
+)"
+
 CURRENT_ROW="remote_reconcile"
 # Breadcrumbs ([remote] … ok) after every sub-step, stdout so they stream live:
 # bug.5278's silent exit 1 was only locatable by mtime forensics on the VM. With
@@ -924,26 +947,12 @@ ${edge_reconcile_snippet}
     echo '::error::OpenBao and projected migration DSN digests differ' >&2
     exit 1
   }
-  docker run --rm --network host -e DATABASE_MIGRATION_URL=\"\$projected_migration_dsn\" postgres:15 sh -ceu '
-    result=\$(psql \"\$DATABASE_MIGRATION_URL\" -XAtv ON_ERROR_STOP=1 -c \"
-      SELECT session_user = \047${migration_role}\047
-         AND current_user = \047${app_role}\047
-         AND current_database() = \047${node_db}\047
-         AND NOT role_state.rolsuper
-         AND NOT role_state.rolcreaterole
-         AND NOT role_state.rolcreatedb
-         AND NOT role_state.rolreplication
-         AND NOT role_state.rolbypassrls
-         AND role_state.rolconnlimit = 1
-         AND current_setting(\047statement_timeout\047) IN (\04715min\047, \047900s\047)
-         AND current_setting(\047temp_file_limit\047) = \047${db_temp_file_limit_mib}MB\047
-         AND (SELECT count(*) FROM pg_auth_members membership
-                JOIN pg_roles parent ON parent.oid = membership.roleid
-               WHERE membership.member = role_state.oid
-                 AND parent.rolname ~ \047^(app|service|migration)_\047) = 1
-         AND pg_has_role(session_user, \047${app_role}\047, \047MEMBER\047)
-        FROM pg_roles role_state
-       WHERE role_state.rolname = session_user\")
+  docker run --rm --network host \
+    -e DATABASE_MIGRATION_URL=\"\$projected_migration_dsn\" \
+    -e MIGRATION_IDENTITY_SQL_B64='${migration_identity_sql_b64}' \
+    postgres:15 sh -ceu '
+    result=\$(printf \"%s\" \"\$MIGRATION_IDENTITY_SQL_B64\" | base64 --decode |
+      psql \"\$DATABASE_MIGRATION_URL\" -XAtv ON_ERROR_STOP=1 -f -)
     [ \"\$result\" = t ]
   '
   echo '[remote] projected migration DSN digest and live identity verified ok'

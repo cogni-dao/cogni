@@ -205,7 +205,8 @@ echo "🔧 Starting Provisioning (Roles and Databases)..."
 #   <password> MUST be the OpenBao-read value (the same value ESO syncs to the pod):
 #   ALTERing to it can never diverge, and it is what makes rotation work. The
 #   bug.5002 anti-fix is reconciling to a rendered .env value — NEVER do that; the
-#   caller passes the OpenBao read here.
+#   caller passes the OpenBao read here. Existing LOGIN state is preserved: only
+#   the audited readmitter may reopen a contained runtime role.
 provision_app_role() {
   local role="$1" pass="$2" opts="${3:-}"
   if ! [[ "$role" =~ ^[a-zA-Z0-9_]+$ ]]; then
@@ -223,7 +224,7 @@ SQL
     echo "   -> Reconciling password for role '$role' to its OpenBao value..."
     PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
       -v pw="$pass" <<SQL
-ALTER ROLE "$role" WITH LOGIN PASSWORD :'pw';
+ALTER ROLE "$role" WITH PASSWORD :'pw';
 SQL
   fi
 }
@@ -272,7 +273,7 @@ DECLARE
   role_suffix text;
 BEGIN
   IF target_role !~ '^(app|service)_[a-z][a-z0-9_]*$' THEN
-    RAISE EXCEPTION 'database containment role is outside the per-node role namespace';
+    RAISE EXCEPTION 'database containment role is outside the per-node role namespace' USING ERRCODE = '42501';
   END IF;
   role_suffix := regexp_replace(target_role, '^(app|service)_', '');
   IF NOT EXISTS (
@@ -282,10 +283,10 @@ BEGIN
      WHERE database_role_boundary.datname = 'cogni_' || role_suffix
        AND app_owner.rolname = 'app_' || role_suffix
   ) OR NOT EXISTS (SELECT 1 FROM pg_roles provisioned_role WHERE provisioned_role.rolname = target_role) THEN
-    RAISE EXCEPTION 'database containment role is not provisioned';
+    RAISE EXCEPTION 'database containment role is not provisioned' USING ERRCODE = '42501';
   END IF;
   IF session_user <> '$RELIABILITY_ROLE' THEN
-    RAISE EXCEPTION 'containment requires the reliability actuator identity';
+    RAISE EXCEPTION 'containment requires the reliability actuator identity' USING ERRCODE = '42501';
   END IF;
   EXECUTE format('ALTER ROLE %I NOLOGIN', target_role);
   PERFORM pg_terminate_backend(pid)
@@ -306,10 +307,10 @@ DECLARE
   role_suffix text;
 BEGIN
   IF session_user <> '$READMITTER_ROLE' THEN
-    RAISE EXCEPTION 'readmission requires the dedicated human-gated identity';
+    RAISE EXCEPTION 'readmission requires the dedicated human-gated identity' USING ERRCODE = '42501';
   END IF;
   IF target_role !~ '^(app|service)_[a-z][a-z0-9_]*$' THEN
-    RAISE EXCEPTION 'database readmission role is outside the per-node role namespace';
+    RAISE EXCEPTION 'database readmission role is outside the per-node role namespace' USING ERRCODE = '42501';
   END IF;
   role_suffix := regexp_replace(target_role, '^(app|service)_', '');
   IF NOT EXISTS (
@@ -319,7 +320,7 @@ BEGIN
      WHERE database_role_boundary.datname = 'cogni_' || role_suffix
        AND app_owner.rolname = 'app_' || role_suffix
   ) OR NOT EXISTS (SELECT 1 FROM pg_roles provisioned_role WHERE provisioned_role.rolname = target_role) THEN
-    RAISE EXCEPTION 'database readmission role is not provisioned';
+    RAISE EXCEPTION 'database readmission role is not provisioned' USING ERRCODE = '42501';
   END IF;
   EXECUTE format('ALTER ROLE %I LOGIN', target_role);
 END
@@ -405,8 +406,8 @@ function provision_node_db() {
   provision_app_role "$migration_role" "$MIGRATION_PASS" "NOINHERIT"
   # CREATE-only opts are not reconciliation. Repair elevated attribute drift on
   # every run before applying budgets, and remove any inherited privilege edge.
-  run_sql_as_root postgres "ALTER ROLE \"$app_role\" LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS;"
-  run_sql_as_root postgres "ALTER ROLE \"$svc_role\" LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION BYPASSRLS;"
+  run_sql_as_root postgres "ALTER ROLE \"$app_role\" INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS;"
+  run_sql_as_root postgres "ALTER ROLE \"$svc_role\" INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION BYPASSRLS;"
   for runtime_role in "$app_role" "$svc_role"; do
     run_sql_as_root postgres "DO \$membership\$
 DECLARE granted_role text;
@@ -486,12 +487,12 @@ DECLARE
   runtime_memberships bigint;
 BEGIN
   SELECT rolconfig,
-         rolcanlogin AND rolinherit AND NOT rolsuper AND NOT rolcreaterole
+         rolinherit AND NOT rolsuper AND NOT rolcreaterole
            AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls
     INTO app_config, app_attributes_ok FROM pg_roles
     WHERE rolname = '$app_role' AND rolconnlimit = $DB_APP_CONNECTION_LIMIT;
   SELECT rolconfig,
-         rolcanlogin AND rolinherit AND NOT rolsuper AND NOT rolcreaterole
+         rolinherit AND NOT rolsuper AND NOT rolcreaterole
            AND NOT rolcreatedb AND NOT rolreplication AND rolbypassrls
     INTO service_config, service_attributes_ok FROM pg_roles
     WHERE rolname = '$svc_role' AND rolconnlimit = $DB_SERVICE_CONNECTION_LIMIT;
@@ -579,6 +580,13 @@ END
     "$svc_role:$APP_SERVICE_PASS"; do
     runtime_role="${runtime_credential%%:*}"
     runtime_password="${runtime_credential#*:}"
+    runtime_can_login="$(PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d postgres \
+      -XAtv ON_ERROR_STOP=1 -c "SELECT rolcanlogin FROM pg_roles WHERE rolname = '$runtime_role'")"
+    if [ "$runtime_can_login" = f ]; then
+      echo "   -> Runtime role '$runtime_role' remains contained; catalog budget readback passed, login probes deferred."
+      continue
+    fi
+    [ "$runtime_can_login" = t ] || { echo "❌ ERROR: runtime role '$runtime_role' login state missing"; exit 1; }
     session_budget="$(PGPASSWORD="$runtime_password" psql -h "$PG_HOST" -p "$PG_PORT" -U "$runtime_role" -d "$db_name" \
       -XAtv ON_ERROR_STOP=1 -c "SELECT string_agg(setting, ':' ORDER BY array_position(ARRAY['statement_timeout','lock_timeout','idle_in_transaction_session_timeout','temp_file_limit','work_mem'], name)) FROM pg_settings WHERE name = ANY (ARRAY['statement_timeout','lock_timeout','idle_in_transaction_session_timeout','temp_file_limit','work_mem'])")"
     expected_statement_timeout="$DB_APP_STATEMENT_TIMEOUT_MS"

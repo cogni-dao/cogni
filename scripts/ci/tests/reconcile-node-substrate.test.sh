@@ -238,9 +238,36 @@ exit 1
 EOF
 chmod +x "$FAKEBIN/kubectl"
 
+# Execute the actual container shell and capture the exact bytes delivered to psql.
+cat > "$FAKEBIN/psql" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$DATABASE_MIGRATION_URL" = 'postgresql://migration_operator:pernode-migration-pw-sentinel@127.0.0.1:5432/cogni_operator' ]
+[ "$#" -eq 5 ]
+[ "$2" = -XAtv ]
+[ "$3" = ON_ERROR_STOP=1 ]
+[ "$4" = -f ]
+[ "$5" = - ]
+cat > "${FAKE_REMOTE_ROOT}/migration-identity.sql"
+printf '%s' "$MIGRATION_IDENTITY_SQL_B64" > "${FAKE_REMOTE_ROOT}/migration-identity.b64"
+printf 't\n'
+EOF
+chmod +x "$FAKEBIN/psql"
+
 cat > "$FAKEBIN/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/docker.log"
+if [[ "$*" == *MIGRATION_IDENTITY_SQL_B64=* ]]; then
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -e) export "$2"; shift 2 ;;
+      postgres:15) shift; break ;;
+      *) shift ;;
+    esac
+  done
+  [ "$1" = sh ] && [ "$2" = -ceu ] && [ "$#" -eq 3 ]
+  exec "$@"
+fi
 if printf '%s\n' "$*" | grep -q ' config --format json'; then
   cat <<JSON
 {"services":{"db-provision":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/postgres-init/provision.sh","target":"/app/provision.sh","read_only":true}]},"doltgres":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/doltgres-init/install-creds.sh","target":"/usr/local/bin/install-creds.sh","read_only":true}]},"doltgres-provision":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/doltgres-init/provision.sh","target":"/app/provision.sh","read_only":true}]},"alloy":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy","target":"/etc/alloy/config.alloy","read_only":true}]},"caddy":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-edge/configs/Caddyfile.tmpl","target":"/etc/caddy/Caddyfile","read_only":true}]}}}
@@ -374,6 +401,30 @@ install_line="$(grep -n 'exact runtime compose and provisioners installed ok' "$
 provision_line="$(grep -n '\[remote\] db-provision ok' "$TMPROOT/out.txt" | cut -d: -f1)"
 [ "$install_line" -lt "$provision_line" ]
 grep -Fq -- "--profile * config --format json" "$REMOTE_ROOT/docker.log"
+cat > "$TMPROOT/expected-migration-identity.sql" <<'SQL'
+SELECT session_user = 'migration_operator'
+   AND current_user = 'app_operator'
+   AND current_database() = 'cogni_operator'
+   AND NOT role_state.rolsuper
+   AND NOT role_state.rolcreaterole
+   AND NOT role_state.rolcreatedb
+   AND NOT role_state.rolreplication
+   AND NOT role_state.rolbypassrls
+   AND role_state.rolconnlimit = 1
+   AND current_setting('statement_timeout') IN ('15min', '900s')
+   AND current_setting('temp_file_limit') = '128MB'
+   AND (SELECT count(*) FROM pg_auth_members membership
+          JOIN pg_roles parent ON parent.oid = membership.roleid
+         WHERE membership.member = role_state.oid
+           AND parent.rolname ~ '^(app|service|migration)_') = 1
+   AND pg_has_role(session_user, 'app_operator', 'MEMBER')
+  FROM pg_roles role_state
+ WHERE role_state.rolname = session_user;
+SQL
+base64 --decode < "$REMOTE_ROOT/migration-identity.b64" > "$TMPROOT/decoded-migration-identity.sql"
+cmp "$TMPROOT/expected-migration-identity.sql" "$TMPROOT/decoded-migration-identity.sql"
+cmp "$TMPROOT/expected-migration-identity.sql" "$REMOTE_ROOT/migration-identity.sql"
+! grep -Fq '\047' "$REMOTE_ROOT/migration-identity.sql"
 grep -q 'migration role identity/budget readback failed' "$remote_provisioner"
 cmp infra/compose/runtime/docker-compose.yml "$REMOTE_ROOT/opt/cogni-template-runtime/docker-compose.yml"
 cmp infra/compose/runtime/doltgres-init/install-creds.sh "$REMOTE_ROOT/opt/cogni-template-runtime/doltgres-init/install-creds.sh"
@@ -468,8 +519,8 @@ if grep -q 'app_readonly.*DB_.*TIMEOUT\|ALTER ROLE.*APP_READONLY.*CONNECTION LIM
   exit 1
 fi
 grep -q 'ALTER ROLE.*NOCREATEROLE' "$provisioner"
-grep -q 'ALTER ROLE.*app_role.*LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS' "$provisioner"
-grep -q 'ALTER ROLE.*svc_role.*LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION BYPASSRLS' "$provisioner"
+grep -q 'ALTER ROLE.*app_role.*INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS' "$provisioner"
+grep -q 'ALTER ROLE.*svc_role.*INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION BYPASSRLS' "$provisioner"
 grep -q 'runtime_memberships <> 0' "$provisioner"
 grep -q 'REVOKE ALL ON FUNCTION public.contain_database_role' "$provisioner"
 grep -q 'GRANT EXECUTE ON FUNCTION public.contain_database_role.*RELIABILITY_ROLE' "$provisioner"

@@ -93,19 +93,24 @@ roles_contained=0
 cleanup() {
   [[ -n "${load_pid:-}" ]] && kill "$load_pid" 2>/dev/null || true
   if [[ "$roles_contained" == 1 ]]; then
-    psql "$TARGET_CELL_READMIT_DSN" -Xv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" \
-      -c "SELECT public.readmit_database_role(:'app_role'); SELECT public.readmit_database_role(:'service_role')" >/dev/null || true
+    jq -cn --arg event manual_recovery_required --arg replayId "$replay_id" \
+      '{event:$event,replayId:$replayId,result:"failed",rolesRemainContained:true}' >>"$evidence"
+    echo "replay failed with target roles contained; audited manual recovery required" >&2
   fi
 }
 trap cleanup EXIT INT TERM
 
 role_count=$(psql "$TARGET_CELL_ADMIN_DSN" -XAtv ON_ERROR_STOP=1 \
   -v app_role="$app_role" -v service_role="$service_role" \
-  -c "SELECT count(*) FROM pg_roles WHERE rolname IN (:'app_role', :'service_role')")
+  -f - <<'SQL'
+SELECT count(*) FROM pg_roles WHERE rolname IN (:'app_role', :'service_role');
+SQL
+)
 [[ "$role_count" == 2 ]] || { echo "expected roles $app_role and $service_role" >&2; exit 1; }
 jq -cn --arg event role_assertion --arg replayId "$replay_id" --arg appRole "$app_role" \
   --arg serviceRole "$service_role" '{event:$event,replayId:$replayId,appRole:$appRole,serviceRole:$serviceRole,result:"pass"}' >>"$evidence"
 
+# This diagnostic credential cycle does not replace audited incident recovery.
 roles_contained=1
 psql "$TARGET_CELL_ADMIN_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" <<'SQL'
 SELECT public.contain_database_role(:'app_role');
@@ -113,34 +118,48 @@ SELECT public.contain_database_role(:'service_role');
 SQL
 contained=$(psql "$TARGET_CELL_ADMIN_DSN" -XAtv ON_ERROR_STOP=1 \
   -v app_role="$app_role" -v service_role="$service_role" \
-  -c "SELECT count(*) = 2 AND bool_and(NOT rolcanlogin) AND NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE usename IN (:'app_role', :'service_role')) FROM pg_roles WHERE rolname IN (:'app_role', :'service_role')")
+  -f - <<'SQL'
+SELECT count(*) = 2 AND bool_and(NOT rolcanlogin) AND NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE usename IN (:'app_role', :'service_role')) FROM pg_roles WHERE rolname IN (:'app_role', :'service_role');
+SQL
+)
 [[ "$contained" == t ]] || { echo "contain status failed" >&2; exit 1; }
 # The credential mounted into the autonomous pod must be unable to bypass the
 # app-layer actor check and re-enable login through direct SQL.
-if psql "$TARGET_CELL_ADMIN_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" \
-  -c "SELECT public.readmit_database_role(:'app_role')" >/dev/null 2>&1; then
-  echo "autonomous actuator credential unexpectedly readmitted $app_role" >&2
-  exit 1
-fi
-if psql "$TARGET_CELL_READMIT_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" \
-  -c "SELECT public.contain_database_role(:'app_role')" >/dev/null 2>&1; then
-  echo "readmission credential unexpectedly contained $app_role" >&2
-  exit 1
-fi
-if psql "$TARGET_CELL_READMIT_DSN" -Xqv ON_ERROR_STOP=1 \
-  -c "SELECT public.readmit_database_role('app_readonly')" >/dev/null 2>&1; then
-  echo "readmission credential unexpectedly changed app_readonly" >&2
-  exit 1
-fi
+expect_permission_denied() {
+  local dsn="$1" role="$2" sql="$3" error_file
+  error_file="$(mktemp)"
+  if psql "$dsn" -Xqv ON_ERROR_STOP=1 -v VERBOSITY=verbose -v app_role="$role" \
+    -f - <<<"$sql" >/dev/null 2>"$error_file"; then
+    rm -f "$error_file"
+    echo "authorization negative control unexpectedly succeeded" >&2
+    exit 1
+  fi
+  if ! grep -Eq 'ERROR: *42501:' "$error_file"; then
+    cat "$error_file" >&2
+    rm -f "$error_file"
+    echo "authorization negative control failed without permission SQLSTATE 42501" >&2
+    exit 1
+  fi
+  rm -f "$error_file"
+}
+expect_permission_denied "$TARGET_CELL_ADMIN_DSN" "$app_role" "SELECT public.readmit_database_role(:'app_role');"
+expect_permission_denied "$TARGET_CELL_READMIT_DSN" "$app_role" "SELECT public.contain_database_role(:'app_role');"
+expect_permission_denied "$TARGET_CELL_READMIT_DSN" app_readonly "SELECT public.readmit_database_role(:'app_role');"
 jq -cn --arg event autonomous_readmit_refused --arg replayId "$replay_id" \
   '{event:$event,replayId:$replayId,result:"pass"}' >>"$evidence"
 
 psql "$TARGET_CELL_READMIT_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" \
-  -c "SELECT public.readmit_database_role(:'app_role'); SELECT public.readmit_database_role(:'service_role')"
+  -f - <<'SQL'
+SELECT public.readmit_database_role(:'app_role');
+SELECT public.readmit_database_role(:'service_role');
+SQL
 roles_contained=0
 readmitted=$(psql "$TARGET_CELL_ADMIN_DSN" -XAtv ON_ERROR_STOP=1 \
   -v app_role="$app_role" -v service_role="$service_role" \
-  -c "SELECT count(*) = 2 AND bool_and(rolcanlogin) FROM pg_roles WHERE rolname IN (:'app_role', :'service_role')")
+  -f - <<'SQL'
+SELECT count(*) = 2 AND bool_and(rolcanlogin) FROM pg_roles WHERE rolname IN (:'app_role', :'service_role');
+SQL
+)
 [[ "$readmitted" == t ]] || { echo "readmit status failed" >&2; exit 1; }
 jq -cn --arg event containment_cycle --arg replayId "$replay_id" \
   '{event:$event,replayId:$replayId,containStatus:"contained",readmitStatus:"open",result:"pass"}' >>"$evidence"
