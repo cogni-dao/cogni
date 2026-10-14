@@ -170,21 +170,47 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
 
     const env = params.environment;
     const node = params.nodeSlug;
+    const database = `cogni_${node.replaceAll("-", "_")}`;
+    const databases = `env="${env}",datname!~"template.*|postgres"`;
     const queries = {
       readiness: `min_over_time(probe_success{environment="${env}",node_slug="${node}",proof_class="serve"}[5m])`,
-      io: `100 * max(rate(node_pressure_io_waiting_seconds_total{environment="${env}",node_slug="${node}"}[5m]))`,
-      connections: `100 * sum(pg_stat_database_numbackends{environment="${env}",node_slug="${node}"}) / max(pg_settings_max_connections{environment="${env}",node_slug="${node}"})`,
-      memory: `100 * min(node_memory_MemAvailable_bytes{environment="${env}",node_slug="${node}"} / node_memory_MemTotal_bytes{environment="${env}",node_slug="${node}"})`,
-      disk: `100 * min(node_filesystem_avail_bytes{environment="${env}",node_slug="${node}",mountpoint="/"} / node_filesystem_size_bytes{environment="${env}",node_slug="${node}",mountpoint="/"})`,
+      io: `100 * max(rate(node_pressure_io_waiting_seconds_total{env="${env}"}[5m]))`,
+      connections: `100 * sum(pg_stat_database_numbackends{env="${env}"}) / max(pg_settings_max_connections{env="${env}"})`,
+      memory: `100 * min(node_memory_MemAvailable_bytes{env="${env}"} / node_memory_MemTotal_bytes{env="${env}"})`,
+      disk: `100 * min(node_filesystem_avail_bytes{env="${env}",mountpoint="/"} / node_filesystem_size_bytes{env="${env}",mountpoint="/"})`,
+      backendShare: `100 * sum(avg_over_time(pg_stat_database_numbackends{env="${env}",datname="${database}"}[5m])) / clamp_min(sum(avg_over_time(pg_stat_database_numbackends{${databases}}[5m])), 1)`,
+      physicalReadShare: `100 * sum(increase(pg_stat_database_blks_read{env="${env}",datname="${database}"}[5m])) / clamp_min(sum(increase(pg_stat_database_blks_read{${databases}}[5m])), 1)`,
+      tempBytesShare: `100 * sum(increase(pg_stat_database_temp_bytes{env="${env}",datname="${database}"}[5m])) / clamp_min(sum(increase(pg_stat_database_temp_bytes{${databases}}[5m])), 1)`,
     } as const;
 
-    const [readiness, io, connections, memory, disk] = await Promise.all([
+    const [
+      readiness,
+      io,
+      connections,
+      memory,
+      disk,
+      backendShare,
+      physicalReadShare,
+      tempBytesShare,
+    ] = await Promise.all([
       this.queryInstant({ query: queries.readiness }),
       this.queryInstant({ query: queries.io }),
       this.queryInstant({ query: queries.connections }),
       this.queryInstant({ query: queries.memory }),
       this.queryInstant({ query: queries.disk }),
+      this.queryInstant({ query: queries.backendShare }),
+      this.queryInstant({ query: queries.physicalReadShare }),
+      this.queryInstant({ query: queries.tempBytesShare }),
     ]);
+
+    const databaseShare5m = {
+      backendsPct: singleValue(backendShare),
+      physicalReadsPct: singleValue(physicalReadShare),
+      tempBytesPct: singleValue(tempBytesShare),
+    };
+    const hasCompleteDatabaseAttribution = Object.values(databaseShare5m).every(
+      (value) => value !== null && Number.isFinite(value)
+    );
 
     return {
       regionalReadiness: readiness.result
@@ -198,10 +224,16 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
           observedAt: new Date(sample.value[0] * 1000).toISOString(),
         }))
         .sort((a, b) => a.region.localeCompare(b.region)),
+      evidenceScope: hasCompleteDatabaseAttribution
+        ? "node"
+        : "environment-shared",
       ioPressurePct: singleValue(io),
       connectionPct: singleValue(connections),
       memoryHeadroomPct: singleValue(memory),
       diskHeadroomPct: singleValue(disk),
+      databaseShare5m: hasCompleteDatabaseAttribution
+        ? databaseShare5m
+        : { backendsPct: null, physicalReadsPct: null, tempBytesPct: null },
       evidenceQueryRefs: Object.keys(queries).map(
         (signal) => `reliability.v1:${env}:${node}:${signal}`
       ),

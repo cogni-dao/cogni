@@ -30,10 +30,16 @@ const healthy = {
   },
   regionalReadiness: [{ healthy: true }, { healthy: true }],
   utilization: {
+    evidenceScope: "environment-shared" as const,
     ioPressurePct: 2,
     connectionPct: 20,
     memoryHeadroomPct: 70,
     diskHeadroomPct: 70,
+    databaseShare5m: {
+      backendsPct: null,
+      physicalReadsPct: null,
+      tempBytesPct: null,
+    },
   },
 };
 
@@ -92,7 +98,7 @@ describe("ReliabilityStatusV1 policy", () => {
     });
   });
 
-  it("automatically invokes the audited containment port on critical", async () => {
+  it("contains only a critical node with >=40% five-minute database attribution", async () => {
     const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
     const containment: DatabaseContainmentPort = {
       status: async () => healthy.database,
@@ -125,10 +131,16 @@ describe("ReliabilityStatusV1 policy", () => {
             observedAt: "2026-10-13T20:00:00.000Z",
           },
         ],
+        evidenceScope: "node",
         ioPressurePct: 20,
         connectionPct: 20,
         memoryHeadroomPct: 70,
         diskHeadroomPct: 70,
+        databaseShare5m: {
+          backendsPct: 20,
+          physicalReadsPct: 41,
+          tempBytesPct: 5,
+        },
         evidenceQueryRefs: ["reliability.v1:test"],
       }),
     } as MetricsQueryPort;
@@ -154,6 +166,120 @@ describe("ReliabilityStatusV1 policy", () => {
         incidentId: "replay-1",
       }),
     ]);
+  });
+
+  it("pages without mutation when shared-environment evidence is critical", async () => {
+    const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
+    const containment: DatabaseContainmentPort = {
+      status: async () => healthy.database,
+      contain: async (action) => {
+        actions.push(action);
+        return healthy.database;
+      },
+      readmit: async () => healthy.database,
+    };
+    const metrics = {
+      queryReliabilitySnapshot: async () => ({
+        regionalReadiness: [
+          {
+            region: "us",
+            healthy: true,
+            observedAt: healthy.database.observedAt,
+          },
+          {
+            region: "eu",
+            healthy: true,
+            observedAt: healthy.database.observedAt,
+          },
+        ],
+        evidenceScope: "environment-shared",
+        ioPressurePct: 20,
+        connectionPct: 20,
+        memoryHeadroomPct: 70,
+        diskHeadroomPct: 70,
+        databaseShare5m: {
+          backendsPct: null,
+          physicalReadsPct: null,
+          tempBytesPct: null,
+        },
+        evidenceQueryRefs: ["reliability.v1:test"],
+      }),
+    } as MetricsQueryPort;
+
+    const status = await reconcileReliabilityContainment(
+      {
+        nodeId: healthy.database.nodeId,
+        slug: healthy.database.nodeSlug,
+        environment: healthy.database.environment,
+        buildSha: healthy.buildSha,
+        desiredTier: healthy.database.desiredTier,
+        budgetProfile: healthy.database.budgetProfile,
+        incidentId: "replay-env-critical",
+      },
+      { metrics, containment }
+    );
+
+    expect(status).toMatchObject({
+      state: "warning",
+      incidentReason: "I/O pressure critical",
+      utilization: { evidenceScope: "environment-shared" },
+    });
+    expect(actions).toEqual([]);
+  });
+
+  it("does not contain node-attributed critical pressure below 40% share", async () => {
+    const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
+    const containment: DatabaseContainmentPort = {
+      status: async () => healthy.database,
+      contain: async (action) => {
+        actions.push(action);
+        return healthy.database;
+      },
+      readmit: async () => healthy.database,
+    };
+    const metrics = {
+      queryReliabilitySnapshot: async () => ({
+        regionalReadiness: [
+          {
+            region: "us",
+            healthy: true,
+            observedAt: healthy.database.observedAt,
+          },
+          {
+            region: "eu",
+            healthy: true,
+            observedAt: healthy.database.observedAt,
+          },
+        ],
+        evidenceScope: "node",
+        ioPressurePct: 20,
+        connectionPct: 20,
+        memoryHeadroomPct: 70,
+        diskHeadroomPct: 70,
+        databaseShare5m: {
+          backendsPct: 39.9,
+          physicalReadsPct: 39.9,
+          tempBytesPct: 39.9,
+        },
+        evidenceQueryRefs: ["reliability.v1:test"],
+      }),
+    } as MetricsQueryPort;
+
+    const status = await reconcileReliabilityContainment(
+      {
+        nodeId: healthy.database.nodeId,
+        slug: healthy.database.nodeSlug,
+        environment: healthy.database.environment,
+        buildSha: healthy.buildSha,
+        desiredTier: healthy.database.desiredTier,
+        budgetProfile: healthy.database.budgetProfile,
+        incidentId: "replay-below-threshold",
+      },
+      { metrics, containment }
+    );
+
+    expect(status.state).toBe("warning");
+    expect(actions).toEqual([]);
   });
 
   it("continues a bounded sweep when one target fails", async () => {
@@ -195,10 +321,16 @@ describe("ReliabilityStatusV1 policy", () => {
             observedAt: healthy.database.observedAt,
           },
         ],
+        evidenceScope: "environment-shared",
         ioPressurePct: 2,
         connectionPct: 20,
         memoryHeadroomPct: 70,
         diskHeadroomPct: 70,
+        databaseShare5m: {
+          backendsPct: null,
+          physicalReadsPct: null,
+          tempBytesPct: null,
+        },
         evidenceQueryRefs: ["reliability.v1:test"],
       }),
     } as MetricsQueryPort;

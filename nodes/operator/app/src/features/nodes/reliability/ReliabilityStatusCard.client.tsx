@@ -122,6 +122,14 @@ export function ReliabilityStatusCard({
                 value={percent(status.utilization.ioPressurePct)}
               />
               <Metric
+                label="Evidence scope"
+                value={status.utilization.evidenceScope}
+              />
+              <Metric
+                label="DB attribution"
+                value={databaseShare(status.utilization.databaseShare5m)}
+              />
+              <Metric
                 label="Connections"
                 value={percent(status.utilization.connectionPct)}
               />
@@ -185,4 +193,15 @@ function Metric({
 
 function percent(value: number | null): string {
   return value === null ? "unknown" : `${value.toFixed(1)}%`;
+}
+
+function databaseShare(
+  shares: ReliabilityStatusV1["utilization"]["databaseShare5m"]
+): string {
+  const values = Object.values(shares).filter(
+    (value): value is number => value !== null
+  );
+  return values.length === 3
+    ? `max ${Math.max(...values).toFixed(1)}%`
+    : "unknown";
 }

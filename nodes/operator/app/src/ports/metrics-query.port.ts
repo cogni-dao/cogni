@@ -128,10 +128,16 @@ export interface RegionalReadinessMetric {
 
 export interface ReliabilityMetricsSnapshot {
   readonly regionalReadiness: readonly RegionalReadinessMetric[];
+  readonly evidenceScope: "environment-shared" | "node";
   readonly ioPressurePct: number | null;
   readonly connectionPct: number | null;
   readonly memoryHeadroomPct: number | null;
   readonly diskHeadroomPct: number | null;
+  readonly databaseShare5m: {
+    readonly backendsPct: number | null;
+    readonly physicalReadsPct: number | null;
+    readonly tempBytesPct: number | null;
+  };
   readonly evidenceQueryRefs: readonly string[];
 }
 

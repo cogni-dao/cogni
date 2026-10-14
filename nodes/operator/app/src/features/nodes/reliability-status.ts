@@ -61,10 +61,12 @@ export async function readReliabilityStatus(
   });
 
   const utilization = {
+    evidenceScope: snapshot.evidenceScope,
     ioPressurePct: snapshot.ioPressurePct,
     connectionPct: snapshot.connectionPct,
     memoryHeadroomPct: snapshot.memoryHeadroomPct,
     diskHeadroomPct: snapshot.diskHeadroomPct,
+    databaseShare5m: snapshot.databaseShare5m,
   };
   const verdict = evaluateReliabilityPolicy({
     buildSha: input.buildSha,
@@ -122,7 +124,7 @@ export async function reconcileReliabilityContainment(
     },
     deps.metrics
   );
-  const reason = containmentReason(status.incidentReason);
+  const reason = containmentReason(status);
   if (!reason || database.phase === "contained") return status;
 
   const contained = await deps.containment.contain({
@@ -179,9 +181,19 @@ export async function runReliabilitySweep(
   return results;
 }
 
+const NOISY_NEIGHBOR_SHARE_PCT = 40;
+
 function containmentReason(
-  reason: string | null
+  status: ReliabilityStatusV1
 ): DatabaseContainmentReason | null {
+  const reason = status.incidentReason;
+  const shares = Object.values(status.utilization.databaseShare5m);
+  const hasNodeAttribution =
+    status.utilization.evidenceScope === "node" &&
+    shares.every((value) => value !== null && Number.isFinite(value)) &&
+    shares.some((value) => (value ?? 0) >= NOISY_NEIGHBOR_SHARE_PCT);
+  if (!hasNodeAttribution) return null;
+
   if (reason?.includes("I/O pressure critical")) return "critical_io_pressure";
   if (reason?.includes("database connections critical"))
     return "critical_connections";
@@ -200,10 +212,16 @@ export function evaluateReliabilityPolicy(input: {
   readonly database: DatabaseContainmentStatus | null;
   readonly regionalReadiness: readonly { healthy: boolean }[];
   readonly utilization: {
+    readonly evidenceScope: "environment-shared" | "node";
     readonly ioPressurePct: number | null;
     readonly connectionPct: number | null;
     readonly memoryHeadroomPct: number | null;
     readonly diskHeadroomPct: number | null;
+    readonly databaseShare5m: {
+      readonly backendsPct: number | null;
+      readonly physicalReadsPct: number | null;
+      readonly tempBytesPct: number | null;
+    };
   };
 }): { state: ReliabilityState; reason: string | null } {
   const database = input.database;
@@ -220,14 +238,29 @@ export function evaluateReliabilityPolicy(input: {
     };
   }
 
-  const values = Object.values(input.utilization);
+  const utilizationValues = [
+    input.utilization.ioPressurePct,
+    input.utilization.connectionPct,
+    input.utilization.memoryHeadroomPct,
+    input.utilization.diskHeadroomPct,
+  ];
+  const databaseShares = Object.values(input.utilization.databaseShare5m);
+  const hasValidAttributionEvidence =
+    input.utilization.evidenceScope === "environment-shared"
+      ? databaseShares.every((value) => value === null)
+      : databaseShares.every(
+          (value) => value !== null && Number.isFinite(value)
+        );
   const hasRequiredEvidence =
     input.buildSha !== null &&
     database !== null &&
     database.desiredTier !== undefined &&
     database.budgetProfile.length > 0 &&
     input.regionalReadiness.length >= 2 &&
-    values.every((value) => value !== null && Number.isFinite(value));
+    utilizationValues.every(
+      (value) => value !== null && Number.isFinite(value)
+    ) &&
+    hasValidAttributionEvidence;
   if (!hasRequiredEvidence) {
     return { state: "unknown", reason: UNKNOWN_REASON };
   }

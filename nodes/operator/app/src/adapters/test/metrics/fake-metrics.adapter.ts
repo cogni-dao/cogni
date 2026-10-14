@@ -62,10 +62,16 @@ export class FakeMetricsAdapter implements MetricsQueryPort {
         { region: "fake-us", healthy: true, observedAt },
         { region: "fake-eu", healthy: true, observedAt },
       ],
+      evidenceScope: "node",
       ioPressurePct: 1,
       connectionPct: 10,
       memoryHeadroomPct: 80,
       diskHeadroomPct: 80,
+      databaseShare5m: {
+        backendsPct: 10,
+        physicalReadsPct: 10,
+        tempBytesPct: 10,
+      },
       evidenceQueryRefs: [
         `reliability.v1:${params.environment}:${params.nodeSlug}:fake`,
       ],

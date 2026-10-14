@@ -122,12 +122,8 @@ spec:
                       path: DATABASE_RELIABILITY_ADMIN_URL
                     - key: DATABASE_RELIABILITY_STATUS_TOKEN
                       path: DATABASE_RELIABILITY_STATUS_TOKEN
-                    - key: DATABASE_RELIABILITY_CHERRY_BINDINGS_JSON
-                      path: DATABASE_RELIABILITY_CHERRY_BINDINGS_JSON
                     - key: GH_REVIEW_APP_PRIVATE_KEY_BASE64
                       path: GH_REVIEW_APP_PRIVATE_KEY_BASE64
-                    - key: CHERRY_AUTH_TOKEN
-                      path: CHERRY_AUTH_TOKEN
                     - key: PROMETHEUS_READ_USERNAME
                       path: PROMETHEUS_READ_USERNAME
                     - key: PROMETHEUS_READ_PASSWORD

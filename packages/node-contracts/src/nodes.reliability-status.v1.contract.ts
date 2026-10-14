@@ -46,10 +46,16 @@ export const reliabilityStatusV1Schema = z.object({
     })
   ),
   utilization: z.object({
+    evidenceScope: z.enum(["environment-shared", "node"]),
     ioPressurePct: z.number().min(0).nullable(),
     connectionPct: z.number().min(0).nullable(),
     memoryHeadroomPct: z.number().min(0).max(100).nullable(),
     diskHeadroomPct: z.number().min(0).max(100).nullable(),
+    databaseShare5m: z.object({
+      backendsPct: z.number().min(0).max(100).nullable(),
+      physicalReadsPct: z.number().min(0).max(100).nullable(),
+      tempBytesPct: z.number().min(0).max(100).nullable(),
+    }),
   }),
   incidentReason: z.string().min(1).max(128).nullable(),
   lastTransitionAt: z.string().datetime().nullable(),

@@ -18,7 +18,6 @@ import type { ReliabilityStatusV1 } from "@cogni/node-contracts";
 import pino from "pino";
 
 import {
-  type CherryFenceBinding,
   createProductionDatabaseContainmentAdapter,
   GitHubRepoWriter,
   HttpLokiReader,
@@ -73,27 +72,6 @@ function authorized(header: string | undefined, token: string): boolean {
   );
 }
 
-function bindingMap(value: string): ReadonlyMap<string, CherryFenceBinding> {
-  const parsed = JSON.parse(value) as Record<
-    string,
-    { ipId?: unknown; serverId?: unknown }
-  >;
-  const result = new Map<string, CherryFenceBinding>();
-  for (const [key, binding] of Object.entries(parsed)) {
-    if (
-      typeof binding.ipId !== "string" ||
-      !Number.isInteger(binding.serverId)
-    ) {
-      throw new Error(`database_reliability_binding_invalid:${key}`);
-    }
-    result.set(key, {
-      ipId: binding.ipId,
-      serverId: binding.serverId as number,
-    });
-  }
-  return result;
-}
-
 const environment = parseEnvironment(requiredEnv("DEPLOY_ENVIRONMENT"));
 const parentOwner = requiredEnv("NODE_SUBMODULE_PARENT_OWNER");
 const parentRepo = requiredEnv("NODE_SUBMODULE_PARENT_REPO");
@@ -105,24 +83,19 @@ const githubAppId = requiredEnv("GH_REVIEW_APP_ID");
 const [
   adminDsn,
   statusToken,
-  rawBindings,
   githubPrivateKeyBase64,
-  cherryToken,
   prometheusUsername,
   prometheusPassword,
   grafanaToken,
 ] = await Promise.all([
   credential("DATABASE_RELIABILITY_ADMIN_URL"),
   credential("DATABASE_RELIABILITY_STATUS_TOKEN"),
-  credential("DATABASE_RELIABILITY_CHERRY_BINDINGS_JSON"),
   credential("GH_REVIEW_APP_PRIVATE_KEY_BASE64"),
-  credential("CHERRY_AUTH_TOKEN"),
   credential("PROMETHEUS_READ_USERNAME"),
   credential("PROMETHEUS_READ_PASSWORD"),
   credential("GRAFANA_SERVICE_ACCOUNT_TOKEN"),
 ]);
 
-const bindings = bindingMap(rawBindings);
 const catalog = new GitHubRepoWriter({
   appId: githubAppId,
   privateKey: Buffer.from(githubPrivateKeyBase64, "base64").toString("utf8"),
@@ -143,15 +116,6 @@ const containment = createProductionDatabaseContainmentAdapter({
   log,
   loki: new HttpLokiReader({ grafanaUrl, token: grafanaToken }),
   lokiEnvironment: environment,
-  cherry: {
-    authToken: cherryToken,
-    timeoutMs: 15_000,
-    resolveBinding: async (input) => {
-      const binding = bindings.get(`${input.environment}/${input.nodeSlug}`);
-      if (!binding) throw new Error("database_source_fence_binding_missing");
-      return binding;
-    },
-  },
 });
 
 const statuses = new Map<string, ReliabilityStatusV1>();

@@ -280,42 +280,8 @@ groups:
         noDataState: Alerting
         execErrState: Alerting
 
-      # Append-only ordering is load-bearing: the Grafana provider models
-      # nested rules positionally. Inserting above an existing rule rewrites
-      # every later alert identity and destroys useful state/history.
-      - uid: fleet-serve-down
-        title: __ENVIRONMENT__ node serving unavailable
-        condition: THRESHOLD
-        for: 2m
-        data:
-          - refId: SERVING
-            datasourceUid: grafanacloud-prom
-            relativeTimeRange: { from: 300, to: 0 }
-            model:
-              datasource: { type: prometheus, uid: grafanacloud-prom }
-              # One alert instance per node. A regional probe failure alone is
-              # not a fleet outage: serving is unavailable only when every
-              # independent probe region reports failure.
-              expr: 'max by (environment, node_slug) (probe_success{environment="__ENVIRONMENT__",proof_class="serve"})'
-              instant: true
-              refId: SERVING
-          - refId: THRESHOLD
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: SERVING
-              conditions:
-                - evaluator: { type: lt, params: [1] }
-              refId: THRESHOLD
-        labels: { severity: critical, proof_class: serve }
-        annotations:
-          summary: "{{ $labels.node_slug }} is unreachable from every independent probe region."
-        noDataState: Alerting
-        execErrState: Alerting
-
-      # task.5247 — warning thresholds are append-only so existing Grafana rule
-      # identities and history remain stable. The operator read model evaluates
-      # these exact v1 thresholds and treats missing series as unknown.
+      # task.5247 — environment-level warnings intentionally precede the
+      # append-only Serve rule so its positional identity remains stable.
       - uid: reliability-io-warning
         title: __ENVIRONMENT__ host I/O pressure sustained above 10%
         condition: THRESHOLD
@@ -441,5 +407,38 @@ groups:
           }
         annotations:
           summary: "__ENVIRONMENT__ root disk headroom is below the v1 warning threshold."
+        noDataState: Alerting
+        execErrState: Alerting
+
+      # Append-only ordering is load-bearing: the Grafana provider models
+      # nested rules positionally. New rules stay above this terminal rule so
+      # the established Serve alert identity and history remain stable.
+      - uid: fleet-serve-down
+        title: __ENVIRONMENT__ node serving unavailable
+        condition: THRESHOLD
+        for: 2m
+        data:
+          - refId: SERVING
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              # One alert instance per node. A regional probe failure alone is
+              # not a fleet outage: serving is unavailable only when every
+              # independent probe region reports failure.
+              expr: 'max by (environment, node_slug) (probe_success{environment="__ENVIRONMENT__",proof_class="serve"})'
+              instant: true
+              refId: SERVING
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: SERVING
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: THRESHOLD
+        labels: { severity: critical, proof_class: serve }
+        annotations:
+          summary: "{{ $labels.node_slug }} is unreachable from every independent probe region."
         noDataState: Alerting
         execErrState: Alerting
