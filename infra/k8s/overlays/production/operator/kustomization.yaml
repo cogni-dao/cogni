@@ -14,6 +14,7 @@ resources:
   # Its old-account leases are closed (all 12 retired 2026-09-15) and its Console key
   # is dead; the pod was pure reconcile-churn + memory on a full box.
   - external-secret.yaml
+  - ../../../base/operator-migration-external-secret
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
   # story.5016 production cutover — the private Akash transaction actuator Crossplane calls.
@@ -57,6 +58,20 @@ images:
     newTag: "prod-placeholder-operator"
 
 patches:
+  - target:
+      kind: ExternalSecret
+      name: migration-secrets
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: production/operator-database-migration
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: replace
+        path: /spec/template/spec/initContainers/0/env/0/valueFrom/secretKeyRef/name
+        value: operator-migration-secrets
   # bug.5240 — same BY-NAME env rule as the actuator patch below.
   - target:
       kind: Deployment

@@ -4,8 +4,8 @@
 /**
  * Module: `@scripts/setup-secrets`
  * Purpose: Interactive secret provisioning for Cogni node formation.
- * Scope: Walks through all GitHub Actions secrets (preview + production), auto-generates agent-rotatable values, prompts for human-provided ones with dashboard URLs; does not modify code or deploy.
- * Invariants: Secrets set per-env only. Agent secrets use openssl rand.
+ * Scope: Walks through GitHub-managed secrets (preview + production), auto-generates agent-rotatable values, prompts for human-provided ones with dashboard URLs; does not modify code or deploy.
+ * Invariants: Secrets set per-env only. Agent secrets use openssl rand. Platform-service secrets remain solely owned by secret-materialize.
  * Side-effects: IO (sets GitHub Actions secrets via gh secret set)
  * Links: docs/runbooks/SECRET_ROTATION.md
  *
@@ -25,7 +25,11 @@
 
 import { execSync } from "node:child_process";
 import * as readline from "node:readline";
-import { loadSecretsCatalog, type Secret } from "./lib/secrets-catalog-loader";
+import {
+  isSetupSecretsManaged,
+  loadSecretsCatalog,
+  type Secret,
+} from "./lib/secrets-catalog-loader";
 
 // Types are imported from the loader. See docs/spec/secrets-classification.md
 // for tier definitions and docs/design/secrets-catalog-per-node.md for the
@@ -51,6 +55,9 @@ const REPO_ROOT = execSync("git rev-parse --show-toplevel", {
 const { secrets: SECRETS, routing: SECRET_ROUTING } = loadSecretsCatalog({
   repoRoot: REPO_ROOT,
 });
+const SETUP_MANAGED_SECRETS = SECRETS.filter((secret) =>
+  isSetupSecretsManaged(secret.name, SECRET_ROUTING)
+);
 
 // SSH_DEPLOY_KEY's value is generated per-env at write time. The catalog
 // marks the entry with `generate: { kind: ssh-key }`; actual key minting
@@ -366,8 +373,8 @@ async function main() {
   }
   const repoSecrets = getRepoSecrets();
   const inventorySecrets = nodeFilter
-    ? SECRETS.filter((s) => isNodeSecret(s, nodeFilter))
-    : SECRETS;
+    ? SETUP_MANAGED_SECRETS.filter((s) => isNodeSecret(s, nodeFilter))
+    : SETUP_MANAGED_SECRETS;
 
   // Print inventory for target environments only
   console.log(
@@ -653,7 +660,10 @@ async function main() {
         if (val.startsWith("'") && val.endsWith("'")) {
           val = val.slice(1, -1).replace(/'\\'''/g, "'");
         }
-        if (/^[A-Z_][A-Z0-9_]*$/.test(key)) {
+        if (
+          /^[A-Z_][A-Z0-9_]*$/.test(key) &&
+          isSetupSecretsManaged(key, SECRET_ROUTING)
+        ) {
           existing[key] = val;
         }
       }

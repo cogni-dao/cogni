@@ -28,6 +28,8 @@ production_branch: deploy/production-node-template
 # it is the per-env RENDER TEMPLATE for render-node-overlays.sh, not a deployed shape
 # (identical to overlays/preview/node-template/, an env node-template also does not join).
 envs: [production]
+database:
+  production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   production: akash
 # story.5016 production cutover — Crossplane authority; the private Akash transaction

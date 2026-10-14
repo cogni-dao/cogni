@@ -15,6 +15,7 @@ resources:
   # ledgers. Preview lands no ComputeWorkload CRs; operator akash e2e is
   # validated on candidate-a. See story.5016 / akash-actuator-wallet-cutover.
   - external-secret.yaml
+  - ../../../base/operator-migration-external-secret
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
 
@@ -38,6 +39,20 @@ images:
     digest: "sha256:be5e99490e9356f70c6af4b38b62cfbd9775f46047202e8c96ead10de35bd1a0"
 
 patches:
+  - target:
+      kind: ExternalSecret
+      name: migration-secrets
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: preview/operator-database-migration
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: replace
+        path: /spec/template/spec/initContainers/0/env/0/valueFrom/secretKeyRef/name
+        value: operator-migration-secrets
   # No akash-tx-actuator Deployment patch here: preview runs no akash writer
   # (see resources note above — one active writer per shared test wallet).
   # Node-specific ConfigMap values.

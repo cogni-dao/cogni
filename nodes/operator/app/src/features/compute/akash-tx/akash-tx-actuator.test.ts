@@ -1642,7 +1642,7 @@ describe("AkashTxActuator release migration (task.5135)", () => {
       nodeSlug: "toks9",
       environment: "candidate-a",
       bundleDigest: STEP.bundleDigest,
-      secretName: "toks9-compute-env-secrets",
+      secretName: "toks9-compute-migration-secrets",
     });
   });
 

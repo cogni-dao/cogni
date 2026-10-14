@@ -533,6 +533,52 @@ export const nodeDeploymentSchema = z
 
 export type NodeDeploymentSpec = z.infer<typeof nodeDeploymentSchema>;
 
+// ---------------------------------------------------------------------------
+// Provider-neutral state substrate (story.5085 / task.5246)
+// ---------------------------------------------------------------------------
+
+/**
+ * Database placement is an operator-managed state concern, not app compute.
+ * A dedicated cell means a distinct provider VM, Postgres process, and fixed
+ * block volume; it never means a stateful service inside an Akash workload.
+ */
+export const databaseTierSchema = z.enum(["shared", "dedicated"]);
+
+export type DatabaseTierSpec = z.infer<typeof databaseTierSchema>;
+
+export const databasePlacementSchema = z
+  .object({
+    tier: databaseTierSchema,
+    /** Named operator-owned budget; values never live in a node repo. */
+    budget_profile: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+  })
+  .strict();
+
+export type DatabasePlacementSpec = z.infer<typeof databasePlacementSchema>;
+
+/**
+ * A node states its desired database shape for every promotion environment.
+ * Keeping all three keys explicit prevents an omitted environment silently
+ * falling back from dedicated to shared during promotion.
+ */
+export const nodeStateSpecSchema = z
+  .object({
+    database: z
+      .object({
+        environments: z
+          .object({
+            "candidate-a": databasePlacementSchema,
+            preview: databasePlacementSchema,
+            production: databasePlacementSchema,
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export type NodeStateSpec = z.infer<typeof nodeStateSpecSchema>;
+
 /**
  * Schema for activity_ledger section — epoch and ingestion configuration.
  */
@@ -976,6 +1022,9 @@ export const repoSpecSchema = z
      * author migration.
      */
     deployment: nodeDeploymentSchema.optional(),
+
+    /** Provider-neutral state substrate requested by this sovereign node. */
+    state: nodeStateSpecSchema.optional(),
 
     /** PR review on/off + model selection (optional — defaults to enabled). */
     review: reviewConfigSchema.optional(),

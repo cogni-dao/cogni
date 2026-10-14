@@ -48,6 +48,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "yaml";
 import {
+  candidateDeploymentFingerprint,
+  resolveDeploymentTargets,
+} from "@/features/compute/node-deployment-targets";
+import {
   CROSSPLANE_ACTUATOR_WALLET_ENVS,
   CROSSPLANE_CONTROL_PLANE_ENVS,
 } from "@/shared/node-registry/crossplane-control-plane";
@@ -527,7 +531,10 @@ describe("akash-tx-actuator runtime", () => {
       .sort();
 
     const sh = read("scripts/setup/lib/reconcile-secrets.sh");
-    const shBlock = /declare -ga PLATFORM_SERVICES=\(([\s\S]*?)\)/.exec(sh);
+    // The array carries inline comments such as `(task.5102)`. Terminate only
+    // at Bash's standalone closing-paren line, never at comment punctuation.
+    const shBlock =
+      /declare -ga PLATFORM_SERVICES=\(([\s\S]*?)^\s*\)\s*$/m.exec(sh);
     expect(
       shBlock,
       "PLATFORM_SERVICES must exist in the bash lib"
@@ -540,6 +547,110 @@ describe("akash-tx-actuator runtime", () => {
 
     expect(shNames).toEqual(tsNames);
     expect(tsNames).toContain(OPENBAO_SERVICE);
+  });
+
+  it("keeps remote artifact resolution broad but candidate deployment environment-scoped", () => {
+    const workflow = read(".github/workflows/candidate-flight.yml");
+    const combineStart = workflow.indexOf("- name: Combine flight targets");
+    const combine = workflow.slice(
+      combineStart,
+      workflow.indexOf("- uses: pnpm/action-setup", combineStart)
+    );
+    expect(combine).toContain(
+      "done < <(jq -r '.[]' <<< \"$REMOTE_SOURCE_ARTIFACT_TARGETS_JSON\")"
+    );
+    expect(combine).toContain('catalog="app-src/infra/catalog/${target}.yaml"');
+    expect(combine).not.toContain('catalog="infra/catalog/${target}.yaml"');
+    expect(combine).toContain("yq -e '.envs | contains([\"candidate-a\"])'");
+    expect(combine).toContain(
+      'git -C app-src show "${BASE_SHA}:infra/catalog/${target}.yaml"'
+    );
+    expect(combine).toContain("candidateDeploymentFingerprint");
+    expect(combine).not.toContain("origin/${BASE_REF}");
+    expect(combine).toContain(
+      'REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets"'
+    );
+    expect(combine).toContain(
+      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    );
+    expect(combine).not.toContain(
+      'json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]") +'
+    );
+    expect(workflow).toContain(
+      `source_repo="$(yq -N '.source_repo // ""' "$catalog")"`
+    );
+    expect(workflow).toContain(
+      'if [ "$reliability_controller" = true ] && [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then'
+    );
+    expect(workflow).not.toMatch(/matrix\.node.*operator/);
+
+    const remoteArtifactRows = [
+      { name: "alpha", envs: ["candidate-a", "production"] },
+      { name: "bravo", envs: ["production"] },
+    ];
+    expect(
+      remoteArtifactRows
+        .filter((row) => row.envs.includes("candidate-a"))
+        .map((row) => row.name)
+    ).toEqual(["alpha"]);
+
+    const base = {
+      name: "alpha",
+      type: "node",
+      node_id: "921b1d1d-4ded-4a6d-b3f1-f7d6affa406a",
+      port: 3200,
+      node_port: 32000,
+      source_repo: "https://github.com/example/alpha.git",
+      source_sha: "c9e4c685ef78f2437aae8a732b03fe1af1df8b31",
+      image_repository: "ghcr.io/example/alpha",
+      candidate_a_branch: "deploy/candidate-a-alpha",
+      envs: ["candidate-a", "production"],
+      deployment_provider: { "candidate-a": "akash" },
+      compute_api: { "candidate-a": "crossplane" },
+      lease_generation: { "candidate-a": 0 },
+    };
+    const baseFingerprint = candidateDeploymentFingerprint(base);
+    expect(
+      candidateDeploymentFingerprint({
+        ...base,
+        database: {
+          "candidate-a": {
+            tier: "shared",
+            budget_profile: "shared-default-v1",
+          },
+        },
+        reliability_validation: {
+          "candidate-a": { role: "shared-target" },
+        },
+      })
+    ).toBe(baseFingerprint);
+    for (const changed of [
+      { ...base, source_sha: "a".repeat(40) },
+      { ...base, deployment_provider: { "candidate-a": "k3s" } },
+      { ...base, compute_api: { "candidate-a": "legacy" } },
+      { ...base, lease_generation: { "candidate-a": 1 } },
+      {
+        ...base,
+        required_placement_countries: { "candidate-a": ["DE"] },
+      },
+      { ...base, boot_recovery: { "candidate-a": "hold" } },
+    ]) {
+      expect(candidateDeploymentFingerprint(changed)).not.toBe(baseFingerprint);
+    }
+    expect(
+      resolveDeploymentTargets({
+        catalogRows: [base],
+        environment: "candidate-a",
+        flightTargets: ["alpha"],
+      }).deployment
+    ).toEqual(["alpha"]);
+    expect(() =>
+      resolveDeploymentTargets({
+        catalogRows: [{ ...base, name: "bravo", envs: ["production"] }],
+        environment: "candidate-a",
+        flightTargets: ["bravo"],
+      })
+    ).toThrow(/not configured for candidate-a/);
   });
 
   it("projects the bearer token under the name the provider-http placeholder dereferences", () => {
@@ -679,5 +790,27 @@ describe("akash-tx-actuator runtime", () => {
     const tsup = read(`nodes/operator/app/tsup.${SERVICE_NAME}.config.ts`);
     expect(tsup).toContain(`entry: ["src/bootstrap/${SERVICE_NAME}.ts"]`);
     expect(tsup).toContain(`outDir: "dist-${SERVICE_NAME}"`);
+  });
+
+  it("keeps dedicated database replay catalog-selected and node-generic", () => {
+    const replay = read("scripts/ops/replay-dedicated-database-cell.sh");
+    expect(replay).toContain(
+      "${TARGET_NODE_SLUG:?catalog target node slug required}"
+    );
+    expect(replay).toContain(
+      "${REPLAY_SQL_FILE:?reviewed workload SQL file required}"
+    );
+    expect(replay).toContain(
+      "${CATALOG_ROOT:?immutable catalog directory required}"
+    );
+    expect(replay).toContain('.reliability_validation."candidate-a".role');
+    expect(replay).toContain("dedicated-neighbor");
+    expect(replay).not.toMatch(/POLY_|NODE_SLUG:-poly|poly-cell|poly_trader/);
+
+    const profiles = parse<Record<string, unknown>>(
+      "infra/database-budget-profiles.yaml"
+    );
+    expect(profiles).toHaveProperty("dedicated-high-throughput-v1");
+    expect(profiles).not.toHaveProperty("poly-dedicated-v1");
   });
 });

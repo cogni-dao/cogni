@@ -91,6 +91,7 @@ jobs:
           NODE_SOURCE_SHA="${{ inputs.source_sha }}"
           COMMIT_STATUS_SHA=""
           RESOLVED_PR_NUMBER="${{ inputs.pr_number }}"
+          BASE_SHA=""
           if [ -n "$NODE_SLUG" ] || [ -n "$NODE_SOURCE_SHA" ]; then
             if [ -n "$PR_NUMBER" ]; then
               echo "::error::candidate-flight accepts either pr_number or node_slug/source_sha, not both"
@@ -163,7 +164,11 @@ jobs:
             # transitional monorepo dispatch until it is unified onto node_slug.)
             IMAGE_TAG="sha-${HEAD_SHA}"
           fi
+          if [ -n "$RESOLVED_PR_NUMBER" ]; then
+            BASE_SHA=$(gh api "repos/${{ github.repository }}/pulls/${RESOLVED_PR_NUMBER}" --jq '.base.sha')
+          fi
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "commit_status_sha=$COMMIT_STATUS_SHA" >> "$GITHUB_OUTPUT"
           echo "node_slug=$NODE_SLUG" >> "$GITHUB_OUTPUT"
@@ -243,34 +248,6 @@ jobs:
           OUTPUT_FILE: ${{ runner.temp }}/remote-source-artifact-targets.json
         run: bash ../scripts/ci/detect-remote-source-artifact-targets.sh
 
-      - name: Combine flight targets
-        id: flight-targets
-        env:
-          NORMAL_FLIGHT_TARGETS_JSON: ${{ steps.detect.outputs.flight_targets_json }}
-          REMOTE_SOURCE_ARTIFACT_TARGETS_JSON: ${{ steps.remote-source-artifact-targets.outputs.remote_source_artifact_targets_json }}
-          HAS_PARENT_TARGETS: ${{ steps.detect.outputs.has_targets }}
-          HAS_REMOTE_SOURCE_ARTIFACT_TARGETS: ${{ steps.remote-source-artifact-targets.outputs.has_remote_source_artifact_targets }}
-          NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
-          RESOLVED_PR_NUMBER: ${{ steps.meta.outputs.resolved_pr_number }}
-        run: |
-          set -euo pipefail
-          if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then
-            combined=$(python3 -c 'import json, os; print(json.dumps([os.environ["NODE_SLUG"]]))')
-          else
-            combined=$(python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]"); node = os.environ.get("NODE_SLUG", ""); items = ([node] if node else []) + items; out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
-          fi
-          csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
-          has_flight_targets=false
-          [ "$combined" != "[]" ] && has_flight_targets=true
-          has_image_inputs=false
-          if [ -n "$NODE_SLUG" ] || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_REMOTE_SOURCE_ARTIFACT_TARGETS" = "true" ]; then
-            has_image_inputs=true
-          fi
-          echo "flight_targets_json=$combined" >> "$GITHUB_OUTPUT"
-          echo "flight_targets=$csv" >> "$GITHUB_OUTPUT"
-          echo "has_flight_targets=$has_flight_targets" >> "$GITHUB_OUTPUT"
-          echo "has_image_inputs=$has_image_inputs" >> "$GITHUB_OUTPUT"
-
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
         with: { version: 9.12.2 }
 
@@ -283,6 +260,69 @@ jobs:
       - name: Install typed planner dependencies
         working-directory: app-src
         run: pnpm install --frozen-lockfile
+
+      - name: Combine flight targets
+        id: flight-targets
+        env:
+          NORMAL_FLIGHT_TARGETS_JSON: ${{ steps.detect.outputs.flight_targets_json }}
+          REMOTE_SOURCE_ARTIFACT_TARGETS_JSON: ${{ steps.remote-source-artifact-targets.outputs.remote_source_artifact_targets_json }}
+          HAS_PARENT_TARGETS: ${{ steps.detect.outputs.has_targets }}
+          HAS_REMOTE_SOURCE_ARTIFACT_TARGETS: ${{ steps.remote-source-artifact-targets.outputs.has_remote_source_artifact_targets }}
+          NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
+          RESOLVED_PR_NUMBER: ${{ steps.meta.outputs.resolved_pr_number }}
+          BASE_SHA: ${{ steps.meta.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then
+            combined=$(python3 -c 'import json, os; print(json.dumps([os.environ["NODE_SLUG"]]))')
+          else
+            # Remote artifact detection is intentionally broad so every changed
+            # child pin is still resolved and verified. The typed deployment
+            # fingerprint is narrower: control-plane-only catalog edits must not
+            # rematerialize an unchanged remote workload.
+            fingerprint_catalog() {
+              CATALOG_JSON="$1" pnpm --dir app-src/nodes/operator/app exec tsx -e '
+                import { candidateDeploymentFingerprint } from "./src/features/compute/node-deployment-targets.ts";
+                process.stdout.write(candidateDeploymentFingerprint(JSON.parse(process.env.CATALOG_JSON ?? "{}")));
+              '
+            }
+            remote_deployment_targets='[]'
+            while IFS= read -r target; do
+              catalog="app-src/infra/catalog/${target}.yaml"
+              if [ ! -f "$catalog" ]; then
+                echo "::error::remote artifact target ${target} has no catalog row"
+                exit 1
+              fi
+              if ! yq -e '.envs | contains(["candidate-a"])' "$catalog" >/dev/null; then
+                echo "::notice::Resolved artifact for ${target}; excluding it from candidate-a deployment"
+                continue
+              fi
+
+              base_catalog=$(git -C app-src show "${BASE_SHA}:infra/catalog/${target}.yaml" 2>/dev/null || true)
+              if [ -n "$base_catalog" ]; then
+                current_fingerprint=$(fingerprint_catalog "$(yq -o=json -I=0 '.' "$catalog")")
+                base_fingerprint=$(fingerprint_catalog "$(yq -o=json -I=0 '.' - <<< "$base_catalog")")
+                if [ "$current_fingerprint" = "$base_fingerprint" ]; then
+                  echo "::notice::Resolved artifact for ${target}; candidate deployment projection is unchanged"
+                  continue
+                fi
+              fi
+
+              remote_deployment_targets=$(jq -c --arg target "$target" '. + [$target]' <<< "$remote_deployment_targets")
+            done < <(jq -r '.[]' <<< "$REMOTE_SOURCE_ARTIFACT_TARGETS_JSON")
+            combined=$(REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets" python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_DEPLOYMENT_TARGETS_JSON"] or "[]"); node = os.environ.get("NODE_SLUG", ""); items = ([node] if node else []) + items; out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+          fi
+          csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
+          has_flight_targets=false
+          [ "$combined" != "[]" ] && has_flight_targets=true
+          has_image_inputs=false
+          if [ -n "$NODE_SLUG" ] || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_REMOTE_SOURCE_ARTIFACT_TARGETS" = "true" ]; then
+            has_image_inputs=true
+          fi
+          echo "flight_targets_json=$combined" >> "$GITHUB_OUTPUT"
+          echo "flight_targets=$csv" >> "$GITHUB_OUTPUT"
+          echo "has_flight_targets=$has_flight_targets" >> "$GITHUB_OUTPUT"
+          echo "has_image_inputs=$has_image_inputs" >> "$GITHUB_OUTPUT"
 
       - name: Select deployment targets by provider
         id: substrate-targets
@@ -1126,19 +1166,22 @@ jobs:
           set -euo pipefail
           substrate_runner="ci-src/scripts/ci/run-node-substrate.sh"
           # The default node-ref lane executes substrate automation from the trusted workflow
-          # ref, never from an arbitrary node source. Operator self-flights are the narrow
-          # exception: when the dispatched workflow commit and reviewed app commit are the
-          # SAME SHA, use that exact tree so substrate-script changes can earn pre-merge
-          # candidate proof. A feature workflow ref is already an explicit privileged dispatch;
-          # equality keeps it from becoming a generic remote-source code-execution seam.
-          if [ "${{ matrix.node }}" = "operator" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then
+          # ref, never from an arbitrary node source. An in-repository node self-flight is the
+          # narrow exception: when its catalog row has no remote source repository and the
+          # dispatched workflow commit equals the reviewed app commit, use that exact tree so
+          # substrate-script changes can earn pre-merge proof. The catalog topology decides;
+          # no node slug receives bespoke execution privilege.
+          catalog="app-src/infra/catalog/${{ matrix.node }}.yaml"
+          source_repo="$(yq -N '.source_repo // ""' "$catalog")"
+          reliability_controller="$(yq -r '.reliability.controller // false' "$catalog")"
+          if [ "$reliability_controller" = true ] && [ -z "$source_repo" ] && [ "$GITHUB_SHA" = "${{ needs.decide.outputs.head_sha }}" ]; then
             app_sha="$(git -C app-src rev-parse HEAD)"
             [ "$app_sha" = "$GITHUB_SHA" ] || {
               echo "::error::exact self-flight source mismatch: workflow=$GITHUB_SHA app=$app_sha"
               exit 1
             }
             substrate_runner="app-src/scripts/ci/run-node-substrate.sh"
-            echo "[candidate-proof] exact operator self-flight uses reviewed substrate runner at $GITHUB_SHA"
+            echo "[candidate-proof] exact in-repository self-flight uses reviewed substrate runner at $GITHUB_SHA"
           fi
           bash "$substrate_runner" candidate-a "${{ matrix.node }}"
 

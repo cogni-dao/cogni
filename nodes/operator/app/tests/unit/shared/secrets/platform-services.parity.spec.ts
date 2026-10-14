@@ -93,7 +93,7 @@ function loaderServices(): string[] {
 }
 
 function bashServices(): string[] {
-  const block = /declare -ga PLATFORM_SERVICES=\(([\s\S]*?)\)/.exec(
+  const block = /^declare -ga PLATFORM_SERVICES=\(\s*\n([\s\S]*?)^\s*\)$/m.exec(
     read("scripts/setup/lib/reconcile-secrets.sh")
   );
   expect(
@@ -115,8 +115,20 @@ describe("platform-service boundary parity", () => {
 
   it("mirrors the catalog loader and the bash declaration exactly", () => {
     const app = [...PLATFORM_SERVICES].sort();
+    expect(app).toContain("akash-tx-actuator");
+    expect(app).toContain("database-reliability-actuator");
+    expect(app).toContain("database-reliability-readmitter");
     expect(app).toEqual(loaderServices());
     expect(app).toEqual(bashServices());
+  });
+
+  it("keeps platform-service values outside interactive setup custody", () => {
+    const setupSecrets = read("scripts/setup-secrets.ts");
+    expect(setupSecrets).toContain("isSetupSecretsManaged");
+    expect(setupSecrets).toContain("SETUP_MANAGED_SECRETS");
+    expect(setupSecrets).not.toMatch(
+      /const inventorySecrets = nodeFilter\s*\? SECRETS\.filter/
+    );
   });
 
   it("names the same owner node the materializer mints these buckets on", () => {
