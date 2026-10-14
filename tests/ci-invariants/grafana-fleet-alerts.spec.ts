@@ -18,6 +18,7 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -117,6 +118,35 @@ const HISTORICAL_UID_PREFIX = [
 ] as const;
 
 describe("fleet Serve alert contract (bug.5459)", () => {
+  it("bounds new Grafana UIDs without changing valid existing identities", () => {
+    expect(syntheticMain).toContain(
+      'length("${rule.value.uid}-${each.value.uid_suffix}") <= 40'
+    );
+    expect(syntheticMain).toContain(
+      'substr("${rule.value.uid}-${each.value.uid_suffix}", 0, 26)'
+    );
+    expect(syntheticMain).toContain(
+      'substr(sha256("${rule.value.uid}-${each.value.uid_suffix}"), 0, 12)'
+    );
+    const prefixes = [
+      ...syntheticMain.matchAll(/uid\s*=\s*"(reliability-[^"]+-warning)"/g),
+    ].map((match) => match[1]);
+    expect(prefixes).toHaveLength(4);
+    const identities = prefixes.flatMap((prefix) =>
+      ["candidate-a", "preview", "production"].map((environment) => {
+        const full = `${prefix}-${environment}`;
+        const bounded =
+          full.length <= 40
+            ? full
+            : `${full.slice(0, 26)}-${createHash("sha256").update(full).digest("hex").slice(0, 12)}`;
+        expect(bounded.length).toBeLessThanOrEqual(40);
+        if (full.length <= 40) expect(bounded).toBe(full);
+        return bounded;
+      })
+    );
+    expect(new Set(identities).size).toBe(12);
+  });
+
   it("preserves the complete historical UID prefix and appends new rules", () => {
     expect(
       rules.filter((rule) => rule.uid === "fleet-serve-down")
