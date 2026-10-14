@@ -80,6 +80,7 @@ export async function claimWorkItemSession(input: {
     workItemId: input.workItemId,
     claimedByUserId: sessionUser.id,
     claimedByDisplayName: sessionUser.displayName,
+    now,
     deadlineAt: deadlineFromNow(now, ttlSeconds(input.body)),
     ...(input.body.lastCommand !== undefined && {
       lastCommand: input.body.lastCommand,
@@ -114,6 +115,7 @@ export async function heartbeatWorkItemSession(input: {
   const session = await getContainer().workItemSessions.heartbeat({
     workItemId: input.workItemId,
     claimedByUserId: sessionUser.id,
+    now,
     deadlineAt: deadlineFromNow(now, ttlSeconds(input.body)),
     ...(input.body.lastCommand !== undefined && {
       lastCommand: input.body.lastCommand,
@@ -150,6 +152,7 @@ export async function linkWorkItemSessionPr(input: {
   const session = await getContainer().workItemSessions.linkPr({
     workItemId: input.workItemId,
     claimedByUserId: sessionUser.id,
+    now,
     ...(input.body.branch !== undefined && { branch: input.body.branch }),
     ...(input.body.prNumber !== undefined && { prNumber: input.body.prNumber }),
   });

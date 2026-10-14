@@ -117,6 +117,7 @@ describe("app/_facades/work/coordination.server", () => {
       workItemId: "task.5007",
       claimedByUserId: "user-1",
       claimedByDisplayName: "agent-one",
+      now: NOW,
       deadlineAt: new Date("2026-05-02T12:02:00.000Z"),
       lastCommand: "/implement",
     });
@@ -159,6 +160,12 @@ describe("app/_facades/work/coordination.server", () => {
         now: NOW,
       })
     ).rejects.toBeInstanceOf(WorkItemSessionForbiddenError);
+    expect(port.heartbeat).toHaveBeenCalledWith({
+      workItemId: "task.5007",
+      claimedByUserId: "user-1",
+      now: NOW,
+      deadlineAt: new Date("2026-05-02T12:30:00.000Z"),
+    });
   });
 
   it("links PR metadata to both session state and the durable work item", async () => {
@@ -175,6 +182,13 @@ describe("app/_facades/work/coordination.server", () => {
     });
 
     expect(result.session).toMatchObject({
+      branch: "feat/session",
+      prNumber: 1201,
+    });
+    expect(port.linkPr).toHaveBeenCalledWith({
+      workItemId: "task.5007",
+      claimedByUserId: "user-1",
+      now: NOW,
       branch: "feat/session",
       prNumber: 1201,
     });
