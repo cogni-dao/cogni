@@ -22,12 +22,15 @@
  */
 
 import type {
+  CompareAndSwapNodeSecretsInput,
   OperatorSecretsPlanePort,
+  ReadNodeSecretsInput,
+  ReadNodeSecretsResult,
   WriteNodeSecretInput,
   WriteNodeSecretResult,
   WriteNodeSecretsInput,
   WriteNodeSecretsResult,
-} from "@/ports";
+} from "@/ports/operator-secrets-plane.port";
 
 export interface OpenBaoSecretsAdapterDeps {
   /** OpenBao ClusterIP base, e.g. `http://openbao.openbao.svc:8200`. */
@@ -42,6 +45,13 @@ export interface OpenBaoSecretsAdapterDeps {
 
 interface KvWriteResponse {
   readonly data?: { readonly version?: number };
+}
+
+interface KvReadResponse {
+  readonly data?: {
+    readonly data?: Readonly<Record<string, unknown>>;
+    readonly metadata?: { readonly version?: number };
+  };
 }
 
 export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
@@ -90,6 +100,60 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
     const version = exists
       ? await this.patch(token, dataPath, input.values)
       : await this.put(token, dataPath, input.values);
+    return {
+      written: true,
+      version,
+      path,
+      keys: Object.keys(input.values).sort(),
+    };
+  }
+
+  async readSecrets(
+    input: ReadNodeSecretsInput
+  ): Promise<ReadNodeSecretsResult> {
+    const bucket = input.service ?? input.nodeSlug;
+    const path = `cogni/${input.env}/${bucket}`;
+    const token = await this.login();
+    const res = await this.fetchImpl(
+      `${this.addr}/v1/cogni/data/${input.env}/${bucket}`,
+      { method: "GET", headers: { "x-vault-token": token } }
+    );
+    if (!res.ok) throw httpError("openbao_read_failed", res.status);
+    const body = (await res.json()) as KvReadResponse;
+    const version = body.data?.metadata?.version;
+    if (!Number.isSafeInteger(version) || (version ?? 0) < 1) {
+      throw httpError("openbao_read_invalid_version", res.status);
+    }
+    const bucketValues = body.data?.data;
+    const values: Record<string, string> = {};
+    for (const key of input.keys) {
+      const value = bucketValues?.[key];
+      if (typeof value !== "string" || value.length === 0) {
+        throw httpError("openbao_read_missing_key", res.status);
+      }
+      values[key] = value;
+    }
+    return { version: version as number, path, values };
+  }
+
+  async compareAndSwapSecrets(
+    input: CompareAndSwapNodeSecretsInput
+  ): Promise<WriteNodeSecretsResult> {
+    if (
+      !Number.isSafeInteger(input.expectedVersion) ||
+      input.expectedVersion < 1
+    ) {
+      throw new Error("openbao_cas_invalid_expected_version");
+    }
+    const bucket = input.service ?? input.nodeSlug;
+    const path = `cogni/${input.env}/${bucket}`;
+    const token = await this.login();
+    const version = await this.patchCas(
+      token,
+      `cogni/data/${input.env}/${bucket}`,
+      input.values,
+      input.expectedVersion
+    );
     return {
       written: true,
       version,
@@ -159,6 +223,33 @@ export class OpenBaoSecretsAdapter implements OperatorSecretsPlanePort {
       body: JSON.stringify({ data: values }),
     });
     return readVersion(res, "openbao_patch_failed");
+  }
+
+  private async patchCas(
+    token: string,
+    dataPath: string,
+    values: Readonly<Record<string, string>>,
+    expectedVersion: number
+  ): Promise<number> {
+    const res = await this.fetchImpl(`${this.addr}/v1/${dataPath}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/merge-patch+json",
+        "x-vault-token": token,
+      },
+      body: JSON.stringify({
+        options: { cas: expectedVersion },
+        data: values,
+      }),
+    });
+    if (res.status === 400) {
+      throw httpError("openbao_cas_conflict", res.status);
+    }
+    const version = await readVersion(res, "openbao_cas_write_failed");
+    if (version !== expectedVersion + 1) {
+      throw httpError("openbao_cas_invalid_result_version", res.status);
+    }
+    return version;
   }
 }
 

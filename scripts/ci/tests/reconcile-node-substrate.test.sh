@@ -73,7 +73,9 @@ put_secret node-template BILLING_INGEST_TOKEN existing-billing
 # gitlinks whose files are absent there).
 put_secret operator APP_DB_PASSWORD pernode-app-pw-sentinel
 put_secret operator APP_DB_SERVICE_PASSWORD pernode-svc-pw-sentinel
+put_secret operator-database-migration APP_DB_MIGRATION_PASSWORD pernode-migration-pw-sentinel
 put_secret database-reliability-actuator DATABASE_RELIABILITY_PASSWORD reliability-pw-sentinel
+put_secret database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD readmit-pw-sentinel
 # Doltgres superuser SSOT is operator-canonical (cogni/<env>/operator/DOLTGRES_PASSWORD),
 # shared env-wide; reconcile reads it from operator and injects it into doltgres-provision.
 put_secret operator DOLTGRES_PASSWORD doltgres-super-sentinel
@@ -164,6 +166,9 @@ if [ "${1:-}" = "-n" ] && [ "${3:-}" = "wait" ]; then
 fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "get" ] && [ "${4:-}" = "secret" ]; then
   printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
+  if printf '%s\n' "$*" | grep -q 'DATABASE_MIGRATION_URL'; then
+    printf '%s' 'cG9zdGdyZXNxbDovL21pZ3JhdGlvbg=='
+  fi
   exit 0
 fi
 if [ "${1:-}" = "exec" ]; then
@@ -328,6 +333,17 @@ grep -q 'COGNI_NODE_DBS=cogni_operator$' "$REMOTE_ROOT/opt/cogni-template-runtim
 # per-node OpenBao passwords injected via -e (provision.sh computes app_<node>).
 grep -q -- '-e COGNI_NODE_DBS=cogni_operator' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DATABASE_RELIABILITY_PASSWORD=reliability-pw-sentinel' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DATABASE_RELIABILITY_READMIT_PASSWORD=readmit-pw-sentinel' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e APP_DB_MIGRATION_PASSWORD=pernode-migration-pw-sentinel' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_BUDGET_PROFILE=shared-default-v1' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_APP_CONNECTION_LIMIT=2' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_APP_STATEMENT_TIMEOUT_MS=5000' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_SERVICE_CONNECTION_LIMIT=4' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_SERVICE_STATEMENT_TIMEOUT_MS=2000' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_LOCK_TIMEOUT_MS=2000' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_IDLE_IN_TRANSACTION_TIMEOUT_MS=30000' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_TEMP_FILE_LIMIT_MIB=128' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_WORK_MEM_MIB=16' "$REMOTE_ROOT/docker.log"
 grep -qE -- '--profile bootstrap run --rm .* db-provision' "$REMOTE_ROOT/docker.log"
 
 # PostgreSQL 15 security boundary: never grant broad CREATEROLE/role membership.
@@ -335,9 +351,49 @@ grep -qE -- '--profile bootstrap run --rm .* db-provision' "$REMOTE_ROOT/docker.
 # function plus status/session capabilities, and the function's guards exclude
 # postgres, app_readonly, and a made-up unprovisioned role.
 provisioner=infra/compose/runtime/postgres-init/provision.sh
+grep -q 'ALTER ROLE.*CONNECTION LIMIT.*DB_APP_CONNECTION_LIMIT' "$provisioner"
+grep -q 'ALTER ROLE.*CONNECTION LIMIT.*DB_SERVICE_CONNECTION_LIMIT' "$provisioner"
+grep -q 'ALTER ROLE.*SET statement_timeout' "$provisioner"
+grep -q 'ALTER ROLE.*SET lock_timeout' "$provisioner"
+grep -q 'ALTER ROLE.*SET idle_in_transaction_session_timeout' "$provisioner"
+grep -q 'ALTER ROLE.*SET temp_file_limit' "$provisioner"
+grep -q 'ALTER ROLE.*SET work_mem' "$provisioner"
+grep -q 'database budget profile.*failed readback' "$provisioner"
+grep -q 'rolconnlimit =.*DB_APP_CONNECTION_LIMIT' "$provisioner"
+grep -q 'rolconnlimit =.*DB_SERVICE_CONNECTION_LIMIT' "$provisioner"
+grep -q "statement_timeout=\${DB_SERVICE_STATEMENT_TIMEOUT_MS}ms" "$provisioner"
+grep -q 'key: DATABASE_MIGRATION_URL' infra/k8s/base/node-app/deployment.yaml
+grep -q 'operator-migration-secrets' "$REMOTE_ROOT/kubectl.log"
+grep -q 'creationPolicy: Owner' scripts/ci/reconcile-node-substrate.sh
+if grep -q 'DATABASE_MIGRATION_URL' packages/repo-spec/src/node-app-deployment.ts; then
+  echo "migration DSN must not enter the node runtime profile" >&2
+  exit 1
+fi
+rendered_node="$(kubectl kustomize infra/k8s/overlays/candidate-a/operator)"
+app_container="$(printf '%s' "$rendered_node" | yq 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "app")')"
+if grep -q 'DATABASE_MIGRATION_URL\|migration-secrets' <<<"$app_container"; then
+  echo "k3s app container must not receive the migration identity" >&2
+  exit 1
+fi
+printf '%s' "$rendered_node" | yq -e 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "migrate") | .env[] | select(.name == "DATABASE_URL") | .valueFrom.secretKeyRef.name == "operator-migration-secrets"' >/dev/null
+grep -q 'runtime role.*can override bounded parameter' "$provisioner"
+grep -q 'migration role identity/budget readback failed' "$provisioner"
+if grep -q 'app_readonly.*DB_.*TIMEOUT\|ALTER ROLE.*APP_READONLY.*CONNECTION LIMIT' "$provisioner"; then
+  echo "shared app_readonly must stay outside per-node budget profiles" >&2
+  exit 1
+fi
 grep -q 'ALTER ROLE.*NOCREATEROLE' "$provisioner"
-grep -q 'REVOKE ALL ON FUNCTION public.set_database_containment_role_login' "$provisioner"
-grep -q 'GRANT EXECUTE ON FUNCTION public.set_database_containment_role_login' "$provisioner"
+grep -q 'ALTER ROLE.*app_role.*LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS' "$provisioner"
+grep -q 'ALTER ROLE.*svc_role.*LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION BYPASSRLS' "$provisioner"
+grep -q 'runtime_memberships <> 0' "$provisioner"
+grep -q 'REVOKE ALL ON FUNCTION public.contain_database_role' "$provisioner"
+grep -q 'GRANT EXECUTE ON FUNCTION public.contain_database_role.*RELIABILITY_ROLE' "$provisioner"
+grep -q 'REVOKE ALL ON FUNCTION public.readmit_database_role' "$provisioner"
+grep -q 'GRANT EXECUTE ON FUNCTION public.readmit_database_role.*READMITTER_ROLE' "$provisioner"
+grep -q "session_user <> '\$RELIABILITY_ROLE'" "$provisioner"
+grep -q "session_user <> '\$READMITTER_ROLE'" "$provisioner"
+grep -q 'run_sql_as_root postgres "REVOKE SET ON PARAMETER \$bounded_parameter FROM PUBLIC;"' "$provisioner"
+grep -q 'GRANT SET ON PARAMETER statement_timeout.*migration_role' "$provisioner"
 grep -q "target_role !~ '\^(app|service)_" "$provisioner"
 grep -q "database_role_boundary.datname = 'cogni_'" "$provisioner"
 grep -q "app_owner.rolname = 'app_'" "$provisioner"
@@ -348,6 +404,10 @@ if grep -q 'GRANT .*pg_signal_backend.*RELIABILITY_ROLE' "$provisioner"; then
 fi
 if grep -q 'GRANT .* TO .*RELIABILITY_ROLE.*WITH ADMIN OPTION' "$provisioner"; then
   echo "PG15 reliability identity must not receive unsafe ADMIN membership" >&2
+  exit 1
+fi
+if grep -Eq 'GRANT[[:space:]]+"?(app|service)_' "$provisioner"; then
+  echo "reliability identity must not receive membership in node data roles" >&2
   exit 1
 fi
 # doltgres-provision gets the operator-canonical superuser injected via -e (fail-loud

@@ -79,6 +79,18 @@ APP_PASS="${APP_DB_PASSWORD:-}"
 APP_SERVICE_PASS="${APP_DB_SERVICE_PASSWORD:-}"
 RELIABILITY_ROLE="database_reliability_actuator"
 RELIABILITY_PASS="${DATABASE_RELIABILITY_PASSWORD:-}"
+READMITTER_ROLE="database_reliability_readmitter"
+READMITTER_PASS="${DATABASE_RELIABILITY_READMIT_PASSWORD:-}"
+MIGRATION_PASS="${APP_DB_MIGRATION_PASSWORD:-}"
+DB_BUDGET_PROFILE="${DB_BUDGET_PROFILE:-}"
+DB_APP_CONNECTION_LIMIT="${DB_APP_CONNECTION_LIMIT:-}"
+DB_APP_STATEMENT_TIMEOUT_MS="${DB_APP_STATEMENT_TIMEOUT_MS:-}"
+DB_SERVICE_CONNECTION_LIMIT="${DB_SERVICE_CONNECTION_LIMIT:-}"
+DB_SERVICE_STATEMENT_TIMEOUT_MS="${DB_SERVICE_STATEMENT_TIMEOUT_MS:-}"
+DB_LOCK_TIMEOUT_MS="${DB_LOCK_TIMEOUT_MS:-}"
+DB_IDLE_IN_TRANSACTION_TIMEOUT_MS="${DB_IDLE_IN_TRANSACTION_TIMEOUT_MS:-}"
+DB_TEMP_FILE_LIMIT_MIB="${DB_TEMP_FILE_LIMIT_MIB:-}"
+DB_WORK_MEM_MIB="${DB_WORK_MEM_MIB:-}"
 # Shared read-only role (env-level, NOT per-node): the Grafana datasource consumer.
 # Superuser-derived password; created once outside the per-node loop.
 APP_READONLY_USER="${APP_DB_READONLY_USER:-app_readonly}"
@@ -91,6 +103,24 @@ fi
 if [ "$INFRA_ONLY" != "1" ] && [ -z "$APP_SERVICE_PASS" ]; then
   echo "❌ ERROR: APP_DB_SERVICE_PASSWORD is required (per-node service role password from OpenBao)"
   exit 1
+fi
+if [ "$INFRA_ONLY" != "1" ] && [ -z "$MIGRATION_PASS" ]; then
+  echo "❌ ERROR: APP_DB_MIGRATION_PASSWORD is required (per-node migration role password from OpenBao)"
+  exit 1
+fi
+if [ "$INFRA_ONLY" != "1" ]; then
+  [ -n "$DB_BUDGET_PROFILE" ] || { echo "❌ ERROR: DB_BUDGET_PROFILE is required"; exit 1; }
+  for budget_name in \
+    DB_APP_CONNECTION_LIMIT DB_APP_STATEMENT_TIMEOUT_MS \
+    DB_SERVICE_CONNECTION_LIMIT DB_SERVICE_STATEMENT_TIMEOUT_MS \
+    DB_LOCK_TIMEOUT_MS DB_IDLE_IN_TRANSACTION_TIMEOUT_MS \
+    DB_TEMP_FILE_LIMIT_MIB DB_WORK_MEM_MIB; do
+    budget_value="${!budget_name:-}"
+    if ! [[ "$budget_value" =~ ^[1-9][0-9]*$ ]]; then
+      echo "❌ ERROR: $budget_name must be a positive integer from DB_BUDGET_PROFILE '$DB_BUDGET_PROFILE'"
+      exit 1
+    fi
+  done
 fi
 # DRIFT GUARD (bug.5031): this readonly-password derivation —
 # sha256('postgres-readonly:' + POSTGRES_ROOT_PASSWORD)[:32] — is duplicated in
@@ -204,12 +234,35 @@ SQL
 # only exact provisioned app_<slug>/service_<slug> roles and drains only that
 # role's sessions. The login role never receives pg_signal_backend. pg_monitor
 # provides read-only status visibility.
-if [ -n "$RELIABILITY_PASS" ]; then
+if [ -n "$RELIABILITY_PASS" ] && [ -n "$READMITTER_PASS" ]; then
   provision_app_role "$RELIABILITY_ROLE" "$RELIABILITY_PASS"
+  provision_app_role "$READMITTER_ROLE" "$READMITTER_PASS"
   run_sql_as_root postgres "ALTER ROLE \"$RELIABILITY_ROLE\" NOCREATEROLE INHERIT NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS;"
+  run_sql_as_root postgres "ALTER ROLE \"$READMITTER_ROLE\" NOCREATEROLE NOINHERIT NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS;"
+  run_sql_as_root postgres "REVOKE pg_signal_backend FROM \"$RELIABILITY_ROLE\", \"$READMITTER_ROLE\";"
+  run_sql_as_root postgres "REVOKE pg_monitor FROM \"$READMITTER_ROLE\";"
+  run_sql_as_root postgres "DO \$reliability_membership\$
+DECLARE member_role text;
+DECLARE granted_role text;
+BEGIN
+  FOREACH member_role IN ARRAY ARRAY['$RELIABILITY_ROLE', '$READMITTER_ROLE']
+  LOOP
+    FOR granted_role IN
+      SELECT parent.rolname
+        FROM pg_auth_members membership
+        JOIN pg_roles parent ON parent.oid = membership.roleid
+        JOIN pg_roles member ON member.oid = membership.member
+       WHERE member.rolname = member_role
+         AND parent.rolname ~ '^(app|service|migration)_'
+    LOOP
+      EXECUTE format('REVOKE %I FROM %I', granted_role, member_role);
+    END LOOP;
+  END LOOP;
+END
+\$reliability_membership\$;"
   run_sql_as_root postgres "GRANT pg_monitor TO \"$RELIABILITY_ROLE\";"
   PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d postgres -v ON_ERROR_STOP=1 <<SQL
-CREATE OR REPLACE FUNCTION public.set_database_containment_role_login(target_role text, allow_login boolean)
+CREATE OR REPLACE FUNCTION public.contain_database_role(target_role text)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -231,19 +284,51 @@ BEGIN
   ) OR NOT EXISTS (SELECT 1 FROM pg_roles provisioned_role WHERE provisioned_role.rolname = target_role) THEN
     RAISE EXCEPTION 'database containment role is not provisioned';
   END IF;
-  EXECUTE format('ALTER ROLE %I %s', target_role, CASE WHEN allow_login THEN 'LOGIN' ELSE 'NOLOGIN' END);
-  IF NOT allow_login THEN
-    PERFORM pg_terminate_backend(pid)
-      FROM pg_stat_activity
-     WHERE usename = target_role AND pid <> pg_backend_pid();
+  IF session_user <> '$RELIABILITY_ROLE' THEN
+    RAISE EXCEPTION 'containment requires the reliability actuator identity';
   END IF;
+  EXECUTE format('ALTER ROLE %I NOLOGIN', target_role);
+  PERFORM pg_terminate_backend(pid)
+    FROM pg_stat_activity
+   WHERE usename = target_role AND pid <> pg_backend_pid();
 END
 \$function\$;
-REVOKE ALL ON FUNCTION public.set_database_containment_role_login(text, boolean) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.set_database_containment_role_login(text, boolean) TO "$RELIABILITY_ROLE";
+REVOKE ALL ON FUNCTION public.contain_database_role(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.contain_database_role(text) TO "$RELIABILITY_ROLE";
+
+CREATE OR REPLACE FUNCTION public.readmit_database_role(target_role text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS \$function\$
+DECLARE
+  role_suffix text;
+BEGIN
+  IF session_user <> '$READMITTER_ROLE' THEN
+    RAISE EXCEPTION 'readmission requires the dedicated human-gated identity';
+  END IF;
+  IF target_role !~ '^(app|service)_[a-z][a-z0-9_]*$' THEN
+    RAISE EXCEPTION 'database readmission role is outside the per-node role namespace';
+  END IF;
+  role_suffix := regexp_replace(target_role, '^(app|service)_', '');
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_database database_role_boundary
+      JOIN pg_roles app_owner ON app_owner.oid = database_role_boundary.datdba
+     WHERE database_role_boundary.datname = 'cogni_' || role_suffix
+       AND app_owner.rolname = 'app_' || role_suffix
+  ) OR NOT EXISTS (SELECT 1 FROM pg_roles provisioned_role WHERE provisioned_role.rolname = target_role) THEN
+    RAISE EXCEPTION 'database readmission role is not provisioned';
+  END IF;
+  EXECUTE format('ALTER ROLE %I LOGIN', target_role);
+END
+\$function\$;
+REVOKE ALL ON FUNCTION public.readmit_database_role(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.readmit_database_role(text) TO "$READMITTER_ROLE";
 SQL
 else
-  echo "ℹ️  DATABASE_RELIABILITY_PASSWORD absent; reliability role not reconciled"
+  echo "ℹ️  reliability actuator/readmitter password absent; control roles not reconciled"
 fi
 
 # Shared read-only role (env-level; superuser-derived password; BYPASSRLS support
@@ -308,6 +393,7 @@ function provision_node_db() {
   local node="${db_name#cogni_}"
   local app_role="app_${node}"
   local svc_role="service_${node}"
+  local migration_role="migration_${node}"
 
   echo "🔧 Provisioning node '$node' (db '$db_name', roles '$app_role'/'$svc_role')..."
 
@@ -316,6 +402,124 @@ function provision_node_db() {
   # tables keeps the owning role tenant-isolated. svc_role is BYPASSRLS (workers).
   provision_app_role "$app_role" "$APP_PASS"
   provision_app_role "$svc_role" "$APP_SERVICE_PASS" "BYPASSRLS"
+  provision_app_role "$migration_role" "$MIGRATION_PASS" "NOINHERIT"
+  # CREATE-only opts are not reconciliation. Repair elevated attribute drift on
+  # every run before applying budgets, and remove any inherited privilege edge.
+  run_sql_as_root postgres "ALTER ROLE \"$app_role\" LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS;"
+  run_sql_as_root postgres "ALTER ROLE \"$svc_role\" LOGIN INHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION BYPASSRLS;"
+  for runtime_role in "$app_role" "$svc_role"; do
+    run_sql_as_root postgres "DO \$membership\$
+DECLARE granted_role text;
+BEGIN
+  FOR granted_role IN
+    SELECT parent.rolname
+      FROM pg_auth_members membership
+      JOIN pg_roles parent ON parent.oid = membership.roleid
+      JOIN pg_roles member ON member.oid = membership.member
+     WHERE member.rolname = '$runtime_role'
+  LOOP
+    EXECUTE format('REVOKE %I FROM %I', granted_role, '$runtime_role');
+  END LOOP;
+END
+\$membership\$;"
+  done
+  run_sql_as_root postgres "ALTER ROLE \"$migration_role\" LOGIN NOCREATEROLE NOINHERIT NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1;"
+  # Attribute and membership drift is privilege drift. Remove every inherited
+  # role before restoring the sole reviewed SET ROLE edge to this node's app
+  # owner; a re-run must repair an accidentally privileged migration identity.
+  run_sql_as_root postgres "DO \$membership\$
+DECLARE granted_role text;
+BEGIN
+  FOR granted_role IN
+    SELECT parent.rolname
+      FROM pg_auth_members membership
+      JOIN pg_roles parent ON parent.oid = membership.roleid
+      JOIN pg_roles member ON member.oid = membership.member
+     WHERE member.rolname = '$migration_role'
+  LOOP
+    EXECUTE format('REVOKE %I FROM %I', granted_role, '$migration_role');
+  END LOOP;
+END
+\$membership\$;"
+  run_sql_as_root postgres "GRANT \"$app_role\" TO \"$migration_role\";"
+
+  # PG15 grants SET on USERSET parameters to PUBLIC by default. Defaults alone
+  # are bypassable, so revoke the five resource parameters globally and grant
+  # migration's reviewed 15-minute allowance is a root-set role default, not a
+  # SET privilege; the credential cannot raise it (or any other ceiling).
+  for bounded_parameter in statement_timeout lock_timeout idle_in_transaction_session_timeout temp_file_limit work_mem; do
+    run_sql_as_root postgres "REVOKE SET ON PARAMETER $bounded_parameter FROM PUBLIC;"
+  done
+  run_sql_as_root postgres "ALTER ROLE \"$migration_role\" SET statement_timeout = '900000ms';"
+  run_sql_as_root postgres "ALTER ROLE \"$migration_role\" SET lock_timeout = '${DB_LOCK_TIMEOUT_MS}ms';"
+  run_sql_as_root postgres "ALTER ROLE \"$migration_role\" SET idle_in_transaction_session_timeout = '${DB_IDLE_IN_TRANSACTION_TIMEOUT_MS}ms';"
+  run_sql_as_root postgres "ALTER ROLE \"$migration_role\" SET temp_file_limit = '${DB_TEMP_FILE_LIMIT_MIB}MB';"
+  run_sql_as_root postgres "ALTER ROLE \"$migration_role\" SET work_mem = '${DB_WORK_MEM_MIB}MB';"
+
+  # Enforce the catalog-selected runtime-role budget. All settings below are
+  # PostgreSQL 15 per-role USER-context settings; no shared postgresql.conf
+  # mutation can spill one node's profile onto a neighbor. The migration
+  # process receives its reviewed 15-minute default from its isolated role.
+  run_sql_as_root postgres "ALTER ROLE \"$app_role\" CONNECTION LIMIT $DB_APP_CONNECTION_LIMIT;"
+  run_sql_as_root postgres "ALTER ROLE \"$svc_role\" CONNECTION LIMIT $DB_SERVICE_CONNECTION_LIMIT;"
+  for role_budget in \
+    "$app_role:$DB_APP_STATEMENT_TIMEOUT_MS" \
+    "$svc_role:$DB_SERVICE_STATEMENT_TIMEOUT_MS"; do
+    role="${role_budget%%:*}"
+    statement_timeout_ms="${role_budget##*:}"
+    run_sql_as_root postgres "ALTER ROLE \"$role\" SET statement_timeout = '${statement_timeout_ms}ms';"
+    run_sql_as_root postgres "ALTER ROLE \"$role\" SET lock_timeout = '${DB_LOCK_TIMEOUT_MS}ms';"
+    run_sql_as_root postgres "ALTER ROLE \"$role\" SET idle_in_transaction_session_timeout = '${DB_IDLE_IN_TRANSACTION_TIMEOUT_MS}ms';"
+    run_sql_as_root postgres "ALTER ROLE \"$role\" SET temp_file_limit = '${DB_TEMP_FILE_LIMIT_MIB}MB';"
+    run_sql_as_root postgres "ALTER ROLE \"$role\" SET work_mem = '${DB_WORK_MEM_MIB}MB';"
+  done
+  # The named profile is not considered enforced until PostgreSQL reads back
+  # the exact connection limit and every per-role setting. This catches a
+  # rejected/partially-applied ALTER before admitting the node.
+  run_sql_as_root postgres "DO \$budget\$
+DECLARE
+  app_config text[];
+  service_config text[];
+  app_attributes_ok boolean;
+  service_attributes_ok boolean;
+  runtime_memberships bigint;
+BEGIN
+  SELECT rolconfig,
+         rolcanlogin AND rolinherit AND NOT rolsuper AND NOT rolcreaterole
+           AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls
+    INTO app_config, app_attributes_ok FROM pg_roles
+    WHERE rolname = '$app_role' AND rolconnlimit = $DB_APP_CONNECTION_LIMIT;
+  SELECT rolconfig,
+         rolcanlogin AND rolinherit AND NOT rolsuper AND NOT rolcreaterole
+           AND NOT rolcreatedb AND NOT rolreplication AND rolbypassrls
+    INTO service_config, service_attributes_ok FROM pg_roles
+    WHERE rolname = '$svc_role' AND rolconnlimit = $DB_SERVICE_CONNECTION_LIMIT;
+  SELECT count(*) INTO runtime_memberships
+    FROM pg_auth_members membership
+    JOIN pg_roles member ON member.oid = membership.member
+   WHERE member.rolname IN ('$app_role', '$svc_role');
+  IF app_attributes_ok IS DISTINCT FROM true OR runtime_memberships <> 0
+     OR app_config IS NULL OR NOT app_config @> ARRAY[
+    'statement_timeout=${DB_APP_STATEMENT_TIMEOUT_MS}ms',
+    'lock_timeout=${DB_LOCK_TIMEOUT_MS}ms',
+    'idle_in_transaction_session_timeout=${DB_IDLE_IN_TRANSACTION_TIMEOUT_MS}ms',
+    'temp_file_limit=${DB_TEMP_FILE_LIMIT_MIB}MB',
+    'work_mem=${DB_WORK_MEM_MIB}MB'
+  ] THEN
+    RAISE EXCEPTION 'database budget profile $DB_BUDGET_PROFILE failed readback for $app_role';
+  END IF;
+  IF service_attributes_ok IS DISTINCT FROM true OR service_config IS NULL OR NOT service_config @> ARRAY[
+    'statement_timeout=${DB_SERVICE_STATEMENT_TIMEOUT_MS}ms',
+    'lock_timeout=${DB_LOCK_TIMEOUT_MS}ms',
+    'idle_in_transaction_session_timeout=${DB_IDLE_IN_TRANSACTION_TIMEOUT_MS}ms',
+    'temp_file_limit=${DB_TEMP_FILE_LIMIT_MIB}MB',
+    'work_mem=${DB_WORK_MEM_MIB}MB'
+  ] THEN
+    RAISE EXCEPTION 'database budget profile $DB_BUDGET_PROFILE failed readback for $svc_role';
+  END IF;
+END
+\$budget\$;"
+  echo "   -> Enforced and read back database budget '$DB_BUDGET_PROFILE' on '$app_role'/'$svc_role'."
 
   # Create database (idempotent), owned by the per-node app role.
   local db_exists
@@ -327,6 +531,73 @@ function provision_node_db() {
     echo "   -> Database '$db_name' already exists. Ensuring ownership '$app_role'..."
     run_sql_as_root "postgres" "ALTER DATABASE \"$db_name\" OWNER TO \"$app_role\";"
     run_sql_as_root "postgres" "GRANT CONNECT, CREATE, TEMP ON DATABASE \"$db_name\" TO \"$app_role\";"
+  fi
+  # Login as the isolated credential, then automatically SET ROLE to the
+  # object-owning app identity so migrations create/alter objects with the same
+  # ownership as before without exposing the app runtime credential.
+  run_sql_as_root postgres "ALTER ROLE \"$migration_role\" IN DATABASE \"$db_name\" SET role = '$app_role';"
+  run_sql_as_root "$db_name" "REVOKE ALL PRIVILEGES ON DATABASE \"$db_name\" FROM \"$migration_role\";"
+  run_sql_as_root "$db_name" "REVOKE ALL PRIVILEGES ON SCHEMA public FROM \"$migration_role\";"
+  run_sql_as_root "$db_name" "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"$migration_role\";"
+  run_sql_as_root "$db_name" "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"$migration_role\";"
+  run_sql_as_root postgres "DO \$migration_guard\$
+DECLARE
+  role_ok boolean;
+  memberships text[];
+  migration_config text[];
+BEGIN
+  SELECT rolcanlogin AND NOT rolsuper AND NOT rolinherit AND NOT rolcreaterole
+         AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls
+         AND rolconnlimit = 1,
+         rolconfig
+    INTO role_ok, migration_config
+    FROM pg_roles
+   WHERE rolname = '$migration_role';
+  SELECT coalesce(array_agg(parent.rolname ORDER BY parent.rolname), ARRAY[]::text[])
+    INTO memberships
+    FROM pg_auth_members membership
+    JOIN pg_roles parent ON parent.oid = membership.roleid
+    JOIN pg_roles member ON member.oid = membership.member
+   WHERE member.rolname = '$migration_role';
+  IF role_ok IS DISTINCT FROM true OR memberships <> ARRAY['$app_role']::text[] THEN
+    RAISE EXCEPTION 'migration role attribute/membership readback failed for $migration_role';
+  END IF;
+  IF migration_config IS NULL OR NOT migration_config @> ARRAY[
+    'statement_timeout=900000ms',
+    'lock_timeout=${DB_LOCK_TIMEOUT_MS}ms',
+    'idle_in_transaction_session_timeout=${DB_IDLE_IN_TRANSACTION_TIMEOUT_MS}ms',
+    'temp_file_limit=${DB_TEMP_FILE_LIMIT_MIB}MB',
+    'work_mem=${DB_WORK_MEM_MIB}MB'
+  ] THEN
+    RAISE EXCEPTION 'migration role budget readback failed for $migration_role';
+  END IF;
+END
+\$migration_guard\$;"
+  for runtime_credential in \
+    "$app_role:$APP_PASS" \
+    "$svc_role:$APP_SERVICE_PASS"; do
+    runtime_role="${runtime_credential%%:*}"
+    runtime_password="${runtime_credential#*:}"
+    for bounded_parameter in statement_timeout lock_timeout idle_in_transaction_session_timeout temp_file_limit work_mem; do
+      case "$bounded_parameter" in
+        statement_timeout|lock_timeout|idle_in_transaction_session_timeout) attempted_value="1h" ;;
+        temp_file_limit|work_mem) attempted_value="1GB" ;;
+      esac
+      if PGPASSWORD="$runtime_password" psql -h "$PG_HOST" -p "$PG_PORT" -U "$runtime_role" -d "$db_name" \
+        -v ON_ERROR_STOP=1 -c "SET $bounded_parameter = '$attempted_value'" >/dev/null 2>&1; then
+        echo "❌ ERROR: runtime role '$runtime_role' can override bounded parameter '$bounded_parameter'"
+        exit 1
+      fi
+    done
+  done
+  migration_identity="$(PGPASSWORD="$MIGRATION_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$migration_role" -d "$db_name" -XAtv ON_ERROR_STOP=1 \
+    -c "SELECT session_user || ':' || current_user || ':' || current_setting('statement_timeout')")"
+  [[ "$migration_identity" == "$migration_role:$app_role:15min" || "$migration_identity" == "$migration_role:$app_role:900s" ]] \
+    || { echo "❌ ERROR: migration role identity/budget readback failed: '$migration_identity'"; exit 1; }
+  if PGPASSWORD="$MIGRATION_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$migration_role" -d "$db_name" \
+    -v ON_ERROR_STOP=1 -c "SET statement_timeout = '1h'" >/dev/null 2>&1; then
+    echo "❌ ERROR: migration role can override its bounded statement_timeout"
+    exit 1
   fi
 
   # Cutover an already-provisioned DB: existing tables/schema are owned by the
@@ -360,6 +631,24 @@ function provision_node_db() {
   run_sql_as_root "$db_name" "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO \"$APP_READONLY_USER\";"
   run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT SELECT ON TABLES TO \"$APP_READONLY_USER\";"
   run_sql_as_root "$db_name" "ALTER DEFAULT PRIVILEGES FOR ROLE \"$app_role\" IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO \"$APP_READONLY_USER\";"
+
+  if [ -n "$RELIABILITY_PASS" ] && [ -n "$READMITTER_PASS" ]; then
+    for control_identity in \
+      "$RELIABILITY_ROLE:$RELIABILITY_PASS" \
+      "$READMITTER_ROLE:$READMITTER_PASS"; do
+      control_role="${control_identity%%:*}"
+      control_password="${control_identity#*:}"
+      if PGPASSWORD="$control_password" psql -h "$PG_HOST" -p "$PG_PORT" -U "$control_role" -d "$db_name" \
+        -v ON_ERROR_STOP=1 -c "SET ROLE \"$app_role\"" >/dev/null 2>&1; then
+        echo "❌ ERROR: control role '$control_role' can SET ROLE into '$app_role'"
+        exit 1
+      fi
+      data_access="$(PGPASSWORD="$control_password" psql -h "$PG_HOST" -p "$PG_PORT" -U "$control_role" -d "$db_name" -XAtv ON_ERROR_STOP=1 \
+        -c "SELECT coalesce(bool_or(has_table_privilege(session_user, format('%I.%I', schemaname, tablename), 'SELECT')), false) FROM pg_tables WHERE schemaname = 'public'")"
+      [[ "$data_access" == f ]] \
+        || { echo "❌ ERROR: control role '$control_role' can read node data in '$db_name'"; exit 1; }
+    done
+  fi
 
   echo "   ✅ Node '$node' provisioned (db '$db_name')."
 }

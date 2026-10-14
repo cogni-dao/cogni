@@ -5,17 +5,44 @@ set -euo pipefail
 : "${ALLOW_CANDIDATE_DATABASE_REPLAY:?must equal 1}"
 : "${POLY_CELL_DSN:?candidate dedicated-cell read-role DSN required}"
 : "${POLY_CELL_ADMIN_DSN:?candidate dedicated-cell reliability-control DSN required}"
+: "${POLY_CELL_READMIT_DSN:?separate human/operator readmission DSN required}"
 : "${SHARED_DB_DSN:?candidate shared Postgres DSN required}"
 : "${NEIGHBOR_READYZ_URLS:?comma-separated regional readyz URLs required}"
 : "${SHARED_IO_PSI_QUERY_URL:?Prometheus instant-query URL required}"
 : "${INCIDENT_REQUEST_RATE:?measured incident requests/second required}"
+: "${CELL_BACKUP_RECEIPT_FILE:?completed state-cell backup receipt required}"
+: "${CELL_RESTORE_RECEIPT_FILE:?completed state-cell restore receipt required}"
+: "${EXPECTED_BUILD_SHA:?flighted source SHA required}"
+: "${POLY_VERSION_URL:?live Poly /version URL required}"
 
 [[ "$ALLOW_CANDIDATE_DATABASE_REPLAY" == 1 ]] || { echo "candidate replay not authorized" >&2; exit 2; }
 [[ "${DEPLOY_ENVIRONMENT:-}" == candidate-a ]] || { echo "candidate-a only" >&2; exit 2; }
 command -v pgbench >/dev/null && command -v psql >/dev/null && command -v jq >/dev/null
 
-root_dir=$(git rev-parse --show-toplevel)
-replay_sql=${REPLAY_SQL_FILE:-$root_dir/scripts/ops/poly-dedicated-cell-replay.sql}
+live_build_sha=$(curl -fsS --max-time 10 "$POLY_VERSION_URL" | jq -er '.buildSha')
+[[ "$live_build_sha" == "$EXPECTED_BUILD_SHA" ]] || {
+  echo "live Poly buildSha does not match expected flight SHA" >&2
+  exit 1
+}
+
+replay_sql=${REPLAY_SQL_FILE:-$(mktemp -t poly-dedicated-replay.XXXXXX.sql)}
+if [[ -z "${REPLAY_SQL_FILE:-}" ]]; then
+  cat >"$replay_sql" <<'SQL'
+SELECT p.trader_wallet_id, p.condition_id, p.token_id, p.shares,
+       p.current_value_usdc, p.raw
+FROM poly_trader_position_snapshots AS p
+JOIN (
+  SELECT trader_wallet_id, condition_id, token_id, max(captured_at) AS captured_at
+  FROM poly_trader_position_snapshots
+  GROUP BY trader_wallet_id, condition_id, token_id
+) AS latest
+  ON latest.trader_wallet_id = p.trader_wallet_id
+ AND latest.condition_id = p.condition_id
+ AND latest.token_id = p.token_id
+ AND latest.captured_at = p.captured_at
+ORDER BY p.captured_at DESC;
+SQL
+fi
 duration=${REPLAY_DURATION_SECONDS:-1800}
 clients=${REPLAY_CLIENTS:-8}
 rate=${REPLAY_RATE:-$((INCIDENT_REQUEST_RATE * 2))}
@@ -35,18 +62,39 @@ shared_addr=$(psql "$SHARED_DB_DSN" -XAtqc "select inet_server_addr()::text")
   echo "dedicated and shared databases are not separate hosts" >&2; exit 2;
 }
 
-sha=$(git rev-parse HEAD)
+sha=$EXPECTED_BUILD_SHA
 replay_id="poly-cell-${sha:0:12}-$(date -u +%Y%m%dT%H%M%SZ)"
 jq -cn --arg event start --arg replayId "$replay_id" --arg sha "$sha" \
   --arg cell "$cell_addr" --arg shared "$shared_addr" --argjson clients "$clients" \
-  --argjson rate "$rate" '{event:$event,replayId:$replayId,sha:$sha,cell:$cell,shared:$shared,clients:$clients,rate:$rate}' >"$evidence"
+  --argjson rate "$rate" --arg versionUrl "$POLY_VERSION_URL" \
+  '{event:$event,replayId:$replayId,sha:$sha,versionUrl:$versionUrl,cell:$cell,shared:$shared,clients:$clients,rate:$rate}' >"$evidence"
+
+# Accepted provider requests are not restore evidence. Require the lifecycle
+# command's terminal receipts to bind the same cell/node/restore point and to
+# reproduce the exact schema/count/checksum observed at backup time.
+jq -en --slurpfile backup "$CELL_BACKUP_RECEIPT_FILE" \
+  --slurpfile restore "$CELL_RESTORE_RECEIPT_FILE" '
+  ($backup | length == 1) and ($restore | length == 1) and
+  ($backup[0].action == "backup") and ($restore[0].action == "restore") and
+  ($backup[0].cellId == $restore[0].cellId) and
+  ($backup[0].nodeId == $restore[0].nodeId) and
+  ($backup[0].restorePointId == $restore[0].restorePointId) and
+  ($backup[0].providerActionId | length > 0) and
+  ($restore[0].providerActionId | length > 0) and
+  ($backup[0].completedAt | length > 0) and
+  ($restore[0].completedAt | length > 0) and
+  ($backup[0].verification == $restore[0].verification)
+' >/dev/null || { echo "backup/restore receipt comparison failed" >&2; exit 1; }
+jq -cn --arg event restore_receipts_verified --arg replayId "$replay_id" \
+  '{event:$event,replayId:$replayId,result:"pass"}' >>"$evidence"
 
 roles_contained=0
 cleanup() {
   [[ -n "${load_pid:-}" ]] && kill "$load_pid" 2>/dev/null || true
+  [[ -z "${REPLAY_SQL_FILE:-}" ]] && rm -f "$replay_sql"
   if [[ "$roles_contained" == 1 ]]; then
-    psql "$POLY_CELL_ADMIN_DSN" -Xv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" \
-      -c "SELECT public.set_database_containment_role_login(:'app_role', true); SELECT public.set_database_containment_role_login(:'service_role', true)" >/dev/null || true
+    psql "$POLY_CELL_READMIT_DSN" -Xv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" \
+      -c "SELECT public.readmit_database_role(:'app_role'); SELECT public.readmit_database_role(:'service_role')" >/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -60,15 +108,35 @@ jq -cn --arg event role_assertion --arg replayId "$replay_id" --arg appRole "$ap
 
 roles_contained=1
 psql "$POLY_CELL_ADMIN_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" <<'SQL'
-SELECT public.set_database_containment_role_login(:'app_role', false);
-SELECT public.set_database_containment_role_login(:'service_role', false);
+SELECT public.contain_database_role(:'app_role');
+SELECT public.contain_database_role(:'service_role');
 SQL
 contained=$(psql "$POLY_CELL_ADMIN_DSN" -XAtv ON_ERROR_STOP=1 \
   -v app_role="$app_role" -v service_role="$service_role" \
   -c "SELECT count(*) = 2 AND bool_and(NOT rolcanlogin) AND NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE usename IN (:'app_role', :'service_role')) FROM pg_roles WHERE rolname IN (:'app_role', :'service_role')")
 [[ "$contained" == t ]] || { echo "contain status failed" >&2; exit 1; }
-psql "$POLY_CELL_ADMIN_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" \
-  -c "SELECT public.set_database_containment_role_login(:'app_role', true); SELECT public.set_database_containment_role_login(:'service_role', true)"
+# The credential mounted into the autonomous pod must be unable to bypass the
+# app-layer actor check and re-enable login through direct SQL.
+if psql "$POLY_CELL_ADMIN_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" \
+  -c "SELECT public.readmit_database_role(:'app_role')" >/dev/null 2>&1; then
+  echo "autonomous actuator credential unexpectedly readmitted $app_role" >&2
+  exit 1
+fi
+if psql "$POLY_CELL_READMIT_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" \
+  -c "SELECT public.contain_database_role(:'app_role')" >/dev/null 2>&1; then
+  echo "readmission credential unexpectedly contained $app_role" >&2
+  exit 1
+fi
+if psql "$POLY_CELL_READMIT_DSN" -Xqv ON_ERROR_STOP=1 \
+  -c "SELECT public.readmit_database_role('app_readonly')" >/dev/null 2>&1; then
+  echo "readmission credential unexpectedly changed app_readonly" >&2
+  exit 1
+fi
+jq -cn --arg event autonomous_readmit_refused --arg replayId "$replay_id" \
+  '{event:$event,replayId:$replayId,result:"pass"}' >>"$evidence"
+
+psql "$POLY_CELL_READMIT_DSN" -Xqv ON_ERROR_STOP=1 -v app_role="$app_role" -v service_role="$service_role" \
+  -c "SELECT public.readmit_database_role(:'app_role'); SELECT public.readmit_database_role(:'service_role')"
 roles_contained=0
 readmitted=$(psql "$POLY_CELL_ADMIN_DSN" -XAtv ON_ERROR_STOP=1 \
   -v app_role="$app_role" -v service_role="$service_role" \

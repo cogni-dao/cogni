@@ -140,7 +140,7 @@ PY
 
 cleanup() {
   local rc=$?
-  rm -f "${caddy_tmp:-}" "${database_reliability_es_tmp:-}"
+  rm -f "${caddy_tmp:-}" "${database_reliability_es_tmp:-}" "${migration_es_tmp:-}"
   if [ -n "$SUMMARY_FILE" ] && [ "$SUMMARY_WRITTEN" != "true" ]; then
     if [ "$rc" -eq 0 ]; then
       write_summary success
@@ -232,6 +232,34 @@ node_id="$(node_id_for_target "$TARGET_NODE")" \
   || fail "node_id missing for '$TARGET_NODE' (REPO_SPEC_IS_IDENTITY_SSOT)"
 node_temporal_namespace="cogni-${DEPLOY_ENVIRONMENT}-${node_id}"
 
+# Catalog-selected Postgres budget. The declaration becomes enforcement only
+# when this immutable checkout resolves the named profile and passes the exact
+# values to the one-node provisioner. Never silently fall back to a default.
+budget_profile="$(yq -er ".database.\"${DEPLOY_ENVIRONMENT}\".budget_profile" "$node_catalog_file")" \
+  || fail "database budget_profile missing for ${TARGET_NODE}/${DEPLOY_ENVIRONMENT}"
+budget_profiles_file="${APP_SOURCE_DIR}/infra/database-budget-profiles.yaml"
+[[ -f "$budget_profiles_file" ]] || fail "missing database budget profiles: $budget_profiles_file"
+budget_value() {
+  yq -er ".\"${budget_profile}\".$1" "$budget_profiles_file" \
+    || fail "budget profile '${budget_profile}' missing required field '$1'"
+}
+db_app_connection_limit="$(budget_value roles.app.connection_limit)"
+db_app_statement_timeout_ms="$(budget_value roles.app.statement_timeout_ms)"
+db_service_connection_limit="$(budget_value roles.service.connection_limit)"
+db_service_statement_timeout_ms="$(budget_value roles.service.statement_timeout_ms)"
+db_lock_timeout_ms="$(budget_value common.lock_timeout_ms)"
+db_idle_in_transaction_timeout_ms="$(budget_value common.idle_in_transaction_session_timeout_ms)"
+db_temp_file_limit_mib="$(budget_value common.temp_file_limit_mib)"
+db_work_mem_mib="$(budget_value common.work_mem_mib)"
+for budget_number in \
+  "$db_app_connection_limit" "$db_app_statement_timeout_ms" \
+  "$db_service_connection_limit" "$db_service_statement_timeout_ms" \
+  "$db_lock_timeout_ms" "$db_idle_in_transaction_timeout_ms" \
+  "$db_temp_file_limit_mib" "$db_work_mem_mib"; do
+  [[ "$budget_number" =~ ^[1-9][0-9]*$ ]] \
+    || fail "budget profile '${budget_profile}' contains a non-positive integer"
+done
+
 read -r -a SSH_OPTS_ARR <<< "$SSH_OPTS_RAW"
 # bug.5159 — multiplex every remote call over ONE ssh connection. Each remote() used to
 # open a fresh handshake (~20-40 per run); sshd/edge admission control drops bursts of
@@ -310,16 +338,19 @@ bao_get_field() {
 CURRENT_ROW="db_creds"
 app_db_password="$(bao_get_field "$TARGET_NODE" APP_DB_PASSWORD)"
 app_db_service_password="$(bao_get_field "$TARGET_NODE" APP_DB_SERVICE_PASSWORD)"
-[[ -n "$app_db_password" && -n "$app_db_service_password" ]] \
-  || fail "per-node DB creds absent at cogni/${DEPLOY_ENVIRONMENT}/${TARGET_NODE} — run secret-materialize first (it owns per-node APP_DB_PASSWORD/APP_DB_SERVICE_PASSWORD)"
+app_db_migration_password="$(bao_get_field "${TARGET_NODE}-database-migration" APP_DB_MIGRATION_PASSWORD)"
+[[ -n "$app_db_password" && -n "$app_db_service_password" && -n "$app_db_migration_password" ]] \
+  || fail "per-node DB creds absent at node/runtime or isolated migration OpenBao paths — run secret-materialize first"
 mark_row db_creds read "read per-node DB creds from OpenBao (key names only)"
 
 # Private containment actuator credential. secret-materialize mints this into a
 # dedicated platform-service bucket; the reader passes only the component
 # password to the one-shot provisioner and never exposes the root DSN.
 database_reliability_password=""
+database_reliability_readmit_password=""
 if [[ "$TARGET_NODE" == operator ]]; then
   database_reliability_password="$(bao_get_field database-reliability-actuator DATABASE_RELIABILITY_PASSWORD)"
+  database_reliability_readmit_password="$(bao_get_field database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD)"
   [[ -n "$database_reliability_password" ]] \
     || fail "DATABASE_RELIABILITY_PASSWORD absent at cogni/${DEPLOY_ENVIRONMENT}/database-reliability-actuator — operator materialization must precede provisioning"
   mark_row database_reliability_creds read "read dedicated reliability role password from OpenBao (key name only)"
@@ -428,6 +459,46 @@ if [[ -f "$external_secret_file" ]]; then
 else
   fail "missing node ExternalSecret leaf: $external_secret_file"
 fi
+
+# Migration is a separate capability, never a key in the node app's extracted
+# runtime Secret. The base initContainer names this prefixed Secret; off-cluster
+# Jobs use the parallel compute-migration ExternalSecret rendered by the operator.
+migration_es_tmp="$(mktemp)"
+cat > "$migration_es_tmp" <<YAML
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: ${TARGET_NODE}-migration-secrets
+  namespace: cogni-${DEPLOY_ENVIRONMENT}
+  labels:
+    app.kubernetes.io/part-of: cogni-secrets-substrate
+    app.kubernetes.io/component: database-migration
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: openbao-backend
+    kind: ClusterSecretStore
+  target:
+    name: ${TARGET_NODE}-migration-secrets
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  data:
+    - secretKey: DATABASE_MIGRATION_URL
+      remoteRef:
+        key: ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}-database-migration
+        property: DATABASE_MIGRATION_URL
+YAML
+copy_to_remote "$migration_es_tmp" "/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-migration-external-secret.yaml"
+remote "set -euo pipefail
+  ns='cogni-${DEPLOY_ENVIRONMENT}'
+  es='${TARGET_NODE}-migration-secrets'
+  kubectl -n \"\$ns\" apply -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-migration-external-secret.yaml' >/dev/null
+  rm -f '/tmp/${DEPLOY_ENVIRONMENT}-${TARGET_NODE}-migration-external-secret.yaml'
+  marker=\$(date +%s)
+  kubectl -n \"\$ns\" annotate externalsecret \"\$es\" force-sync=\"\$marker\" --overwrite >/dev/null
+  kubectl -n \"\$ns\" wait --for=condition=Ready \"externalsecret/\$es\" --timeout=120s >/dev/null
+  kubectl -n \"\$ns\" get secret \"\$es\" -o jsonpath='{.data.DATABASE_MIGRATION_URL}' | grep -q ."
+mark_row migration_externalsecret ready "migration-only DSN projected outside node runtime Secret"
 
 # The operator reliability controller is a stacked deploy surface (task.5247),
 # but its credential substrate is owned here. When that surface is present in
@@ -679,7 +750,18 @@ ${edge_reconcile_snippet}
     -e COGNI_NODE_DBS='${node_db}' \
     -e APP_DB_PASSWORD='${app_db_password}' \
     -e APP_DB_SERVICE_PASSWORD='${app_db_service_password}' \
+    -e APP_DB_MIGRATION_PASSWORD='${app_db_migration_password}' \
     -e DATABASE_RELIABILITY_PASSWORD='${database_reliability_password}' \
+    -e DATABASE_RELIABILITY_READMIT_PASSWORD='${database_reliability_readmit_password}' \
+    -e DB_BUDGET_PROFILE='${budget_profile}' \
+    -e DB_APP_CONNECTION_LIMIT='${db_app_connection_limit}' \
+    -e DB_APP_STATEMENT_TIMEOUT_MS='${db_app_statement_timeout_ms}' \
+    -e DB_SERVICE_CONNECTION_LIMIT='${db_service_connection_limit}' \
+    -e DB_SERVICE_STATEMENT_TIMEOUT_MS='${db_service_statement_timeout_ms}' \
+    -e DB_LOCK_TIMEOUT_MS='${db_lock_timeout_ms}' \
+    -e DB_IDLE_IN_TRANSACTION_TIMEOUT_MS='${db_idle_in_transaction_timeout_ms}' \
+    -e DB_TEMP_FILE_LIMIT_MIB='${db_temp_file_limit_mib}' \
+    -e DB_WORK_MEM_MIB='${db_work_mem_mib}' \
     db-provision >/dev/null
   echo '[remote] db-provision ok'
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then

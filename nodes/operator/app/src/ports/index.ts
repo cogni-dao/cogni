@@ -139,6 +139,7 @@ export type {
   ResolvedConnection,
 } from "./connection-broker.port";
 export type {
+  DatabaseCellActionReceipt,
   DatabaseCellMetricIdentity,
   DatabaseCellMetricsExporterPort,
   DatabaseCellMetricsTarget,
@@ -148,12 +149,14 @@ export type {
   DatabaseContainmentPort,
   DatabaseContainmentReason,
   DatabaseContainmentStatus,
+  DatabaseContainmentStatusPort,
   DatabaseDsnPair,
   DatabaseDsnRotationInput,
   DatabaseDsnRotationPort,
   DatabaseDsnRotationResult,
   DatabaseEnvironment,
   DatabasePlacementResolverPort,
+  DatabaseReadmissionPort,
   DatabaseRuntimeSecretSyncPort,
   DatabaseStateCellPort,
   DatabaseTier,

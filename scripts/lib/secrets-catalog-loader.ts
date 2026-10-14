@@ -147,7 +147,17 @@ export type SyncTarget = z.infer<typeof SyncTargetSchema>;
 export const PLATFORM_SERVICES: ReadonlySet<string> = new Set([
   "akash-tx-actuator",
   "database-reliability-actuator",
+  "database-reliability-readmitter",
 ]);
+
+/** setup-secrets must never mirror private platform-service values to GitHub. */
+export function isSetupSecretsManaged(
+  name: string,
+  routing: Readonly<Record<string, SecretRouting>>
+): boolean {
+  const service = routing[name]?.service;
+  return service === undefined || !PLATFORM_SERVICES.has(service);
+}
 
 const CatalogEntrySchema = z
   .object({

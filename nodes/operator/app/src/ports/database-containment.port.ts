@@ -29,6 +29,27 @@ export interface DatabaseCellStatus {
   readonly reason?: string;
 }
 
+export interface DatabaseCellActionReceipt {
+  readonly provider: string;
+  readonly cellId: string;
+  readonly nodeId: string;
+  readonly action: "backup" | "restore";
+  /** Caller-generated immutable backup label; contains no credentials. */
+  readonly backupLabel: string;
+  readonly acceptedAt: string;
+  /** Provider action identity polled to terminal success. */
+  readonly providerActionId: string;
+  /** Exact immutable restore point created/consumed by this action. */
+  readonly restorePointId: string;
+  readonly completedAt: string;
+  /** Database-level verification after the provider operation completed. */
+  readonly verification: {
+    readonly schemaFingerprint: string;
+    readonly rowCount: number;
+    readonly checksum: string;
+  };
+}
+
 /**
  * The complete, bounded Prometheus identity for one database failure domain.
  * Provider IDs, endpoints, incident IDs, and replay IDs are intentionally not
@@ -68,6 +89,7 @@ export interface ProvisionDatabaseCellInput {
   readonly nodeId: string;
   readonly nodeSlug: string;
   readonly environment: DatabaseEnvironment;
+  readonly databaseTier: "dedicated";
   readonly budgetProfile: string;
   readonly idempotencyKey: string;
   readonly storageGiB: number;
@@ -81,6 +103,16 @@ export interface DatabaseStateCellPort {
     readonly cellId: string;
     readonly expectedNodeId: string;
   }): Promise<void>;
+  backup(input: {
+    readonly cellId: string;
+    readonly expectedNodeId: string;
+    readonly backupLabel: string;
+  }): Promise<DatabaseCellActionReceipt>;
+  restore(input: {
+    readonly cellId: string;
+    readonly expectedNodeId: string;
+    readonly backupLabel: string;
+  }): Promise<DatabaseCellActionReceipt>;
 }
 
 export type DatabaseContainmentReason =
@@ -101,7 +133,8 @@ export interface DatabaseContainmentStatus {
   readonly activeSessions: number;
   readonly rolesPresent: boolean;
   readonly rolesCanLogin: boolean;
-  readonly firewallFenced: boolean;
+  /** Manual-secondary firewall observation; null when no read-only observer is wired. */
+  readonly firewallFenced: boolean | null;
   readonly cell: DatabaseCellStatus | null;
   readonly observedAt: string;
   readonly lastTransitionAt: string | null;
@@ -136,7 +169,7 @@ export interface DatabaseContainmentAction {
  * Typed action/status seam consumed by reliability policy. Implementations own
  * SQL sessions and source-specific firewall state; callers never receive admin DSNs.
  */
-export interface DatabaseContainmentPort {
+export interface DatabaseContainmentStatusPort {
   status(input: {
     readonly nodeId: string;
     readonly nodeSlug: string;
@@ -145,7 +178,15 @@ export interface DatabaseContainmentPort {
     readonly budgetProfile: string;
     readonly cellId?: string;
   }): Promise<DatabaseContainmentStatus>;
+}
+
+/** Autonomous sweep capability: status + NOLOGIN/session drain only. */
+export interface DatabaseContainmentPort extends DatabaseContainmentStatusPort {
   contain(input: DatabaseContainmentAction): Promise<DatabaseContainmentStatus>;
+}
+
+/** Human-gated capability: LOGIN only; never mounted in the sweep process. */
+export interface DatabaseReadmissionPort {
   readmit(input: DatabaseContainmentAction): Promise<DatabaseContainmentStatus>;
 }
 
@@ -169,9 +210,9 @@ export interface DatabaseDsnRotationInput {
   readonly incidentId: string;
   readonly actorId: string;
   readonly targetCellId: string;
+  /** Provider-observed hostname/IP for targetCellId; both DSNs must match it. */
+  readonly targetCellEndpoint: string;
   readonly target: DatabaseDsnPair;
-  /** Preserved-source pair used automatically if consumer verification fails. */
-  readonly rollback: DatabaseDsnPair;
 }
 
 export interface DatabaseDsnRotationResult {

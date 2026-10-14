@@ -10,12 +10,6 @@ shared-default-v1:
     service:
       connection_limit: 4
       statement_timeout_ms: 2000
-    migration:
-      connection_limit: 1
-      statement_timeout_ms: 900000
-    readonly:
-      connection_limit: 2
-      statement_timeout_ms: 5000
   common:
     lock_timeout_ms: 2000
     idle_in_transaction_session_timeout_ms: 30000
@@ -31,12 +25,6 @@ poly-dedicated-v1:
     service:
       connection_limit: 8
       statement_timeout_ms: 2000
-    migration:
-      connection_limit: 1
-      statement_timeout_ms: 900000
-    readonly:
-      connection_limit: 2
-      statement_timeout_ms: 5000
   common:
     lock_timeout_ms: 2000
     idle_in_transaction_session_timeout_ms: 30000

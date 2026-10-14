@@ -1402,7 +1402,7 @@ export function resolveDatabasePlacementResolver(): DatabasePlacementResolverPor
       });
       const node = nodes.find((candidate) => candidate.slug === nodeSlug);
       if (!node) throw new Error("database_placement_node_not_found");
-      const placement = node.databasePlacements[environment];
+      const placement = node.databasePlacements?.[environment];
       if (!placement) throw new Error("database_placement_env_not_declared");
       return {
         nodeId: node.nodeId,

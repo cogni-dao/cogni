@@ -2271,8 +2271,6 @@ source_repo: https://github.com/Cogni-DAO/atlas.git
 path_prefix: nodes/atlas/
 envs: [candidate-a]
 activity_env: candidate-a
-database:
-  candidate-a: { tier: dedicated, budget_profile: atlas-dedicated-v1 }
 deployment_provider:
   candidate-a: akash
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
@@ -2282,10 +2280,6 @@ type: node
 path_prefix: nodes/operator/
 envs: [candidate-a, preview, production]
 activity_env: production
-database:
-  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
-  preview: { tier: shared, budget_profile: shared-default-v1 }
-  production: { tier: shared, budget_profile: shared-default-v1 }
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 `,
           "nodes/operator/.cogni/repo-spec.yaml":
@@ -2312,12 +2306,6 @@ owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
         repoName: "atlas",
         deployEnvs: ["candidate-a"],
         activityEnv: "candidate-a",
-        databasePlacements: {
-          "candidate-a": {
-            tier: "dedicated",
-            budgetProfile: "atlas-dedicated-v1",
-          },
-        },
         // bug.5106 — declared placement is projected so the operator can resolve WHERE this
         // node runs without reading the catalog on the hot path.
         deploymentProviders: { "candidate-a": "akash" },
@@ -2331,17 +2319,6 @@ owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
         repoName: "cogni",
         deployEnvs: ["candidate-a", "preview", "production"],
         activityEnv: "production",
-        databasePlacements: {
-          "candidate-a": {
-            tier: "shared",
-            budgetProfile: "shared-default-v1",
-          },
-          preview: { tier: "shared", budgetProfile: "shared-default-v1" },
-          production: {
-            tier: "shared",
-            budgetProfile: "shared-default-v1",
-          },
-        },
         // No `deployment_provider` row ⇒ empty map ⇒ K3S_IS_DEFAULT everywhere.
         deploymentProviders: {},
         ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
@@ -2366,8 +2343,6 @@ source_repo: https://github.com/Cogni-DAO/atlas.git
 path_prefix: nodes/atlas/
 envs: [candidate-a]
 activity_env: candidate-a
-database:
-  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   candidate-a: fly-io
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
@@ -2400,8 +2375,6 @@ type: node
 path_prefix: nodes/operator/
 envs: [candidate-a]
 activity_env: candidate-a
-database:
-  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 `,
           "nodes/operator/.cogni/repo-spec.yaml": "node_id: not-a-uuid\n",
@@ -2439,8 +2412,6 @@ source_repo: https://github.com/Cogni-DAO/atlas.git
 path_prefix: nodes/atlas/
 envs: [candidate-a]
 activity_env: production
-database:
-  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 `),
         };

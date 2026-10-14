@@ -22,10 +22,7 @@
  * @public
  */
 
-import {
-  renderNodeDeploymentYaml,
-  renderNodeStateYaml,
-} from "@cogni/repo-spec";
+import { renderNodeDeploymentYaml } from "@cogni/repo-spec";
 import { v5 as uuidv5 } from "uuid";
 
 import type { NodeKnowledgeRemote } from "../knowledge-remote";
@@ -128,7 +125,12 @@ ${renderNodeDeploymentYaml().trimEnd()}
 # State substrate is declared separately from app compute. New nodes start on
 # bounded shared Postgres and graduate to a dedicated provider-VM cell only
 # through the operator's measured isolation policy.
-${renderNodeStateYaml().trimEnd()}
+state:
+  database:
+    environments:
+      candidate-a: { tier: shared, budget_profile: shared-default-v1 }
+      preview: { tier: shared, budget_profile: shared-default-v1 }
+      production: { tier: shared, budget_profile: shared-default-v1 }
 
 # Activity ledger ingestion + approver allowlist.
 # \`approvers\` gates the \`(admin)/\` route group and write routes under

@@ -57,6 +57,25 @@ images:
     newTag: "prod-placeholder-operator"
 
 patches:
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: node-app
+      spec:
+        template:
+          spec:
+            initContainers:
+              - name: migrate
+                env:
+                  - name: DATABASE_URL
+                    valueFrom:
+                      secretKeyRef:
+                        name: operator-migration-secrets
+                        key: DATABASE_MIGRATION_URL
   # bug.5240 — same BY-NAME env rule as the actuator patch below.
   - target:
       kind: Deployment

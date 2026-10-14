@@ -38,6 +38,25 @@ images:
     digest: "sha256:be5e99490e9356f70c6af4b38b62cfbd9775f46047202e8c96ead10de35bd1a0"
 
 patches:
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: node-app
+      spec:
+        template:
+          spec:
+            initContainers:
+              - name: migrate
+                env:
+                  - name: DATABASE_URL
+                    valueFrom:
+                      secretKeyRef:
+                        name: operator-migration-secrets
+                        key: DATABASE_MIGRATION_URL
   # No akash-tx-actuator Deployment patch here: preview runs no akash writer
   # (see resources note above — one active writer per shared test wallet).
   # Node-specific ConfigMap values.

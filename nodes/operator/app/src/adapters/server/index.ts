@@ -92,6 +92,9 @@ export {
 export {
   CherryDatabaseCellAdapter,
   type CherryDatabaseCellConfig,
+  type CherryDatabaseCellProvisionLease,
+  type CherryDatabaseCellVerifier,
+  PostgresCherryDatabaseCellProvisionLease,
 } from "./compute/cherry-database-cell.adapter";
 export { DrizzleComputeCostStore } from "./compute/compute-cost-store.adapter";
 export {
@@ -124,10 +127,23 @@ export {
   CherryDatabaseSourceFenceAdapter,
   type CherryFenceBinding,
   type CherryHostFirewallRuleClient,
+  createProductionCherryDatabaseCellAdapter,
   createProductionDatabaseContainmentAdapter,
+  createProductionDatabaseReadmissionAdapter,
+  type DatabaseCellLifecycleCommand,
+  type DatabaseCellLifecycleReceiptSink,
+  type DatabaseCellLifecycleResult,
+  executeDatabaseCellLifecycleCommand,
+  PinoDatabaseContainmentAuditWriter,
   PinoLokiDatabaseContainmentAuditAdapter,
   PostgresAdminSqlAdapter,
+  type PostgresDatabaseCellVerificationCredential,
+  PostgresDatabaseCellVerifier,
+  PostgresReadmitSqlAdapter,
+  type ProductionCherryDatabaseCellConfig,
   type ProductionDatabaseContainmentConfig,
+  type ProductionDatabaseReadmissionConfig,
+  runDatabaseCellLifecycleCli,
 } from "./db/database-containment-production.adapter";
 export {
   DatabaseDsnRotationAdapter,
@@ -137,12 +153,16 @@ export {
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";
 export {
   createPostgresDatabaseContainmentAdapter,
+  createPostgresDatabaseReadmissionAdapter,
   type DatabaseContainmentAuditEvent,
+  type DatabaseContainmentAuditWriter,
   DatabaseContainmentConfigurationError,
   type DatabaseControlSql,
   type DatabaseSourceFence,
   PostgresDatabaseContainmentAdapter,
   type PostgresDatabaseContainmentDeps,
+  PostgresDatabaseReadmissionAdapter,
+  type PostgresDatabaseReadmissionDeps,
 } from "./db/postgres-database-containment.adapter";
 export {
   ProbeDeployAdapter,

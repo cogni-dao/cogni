@@ -182,7 +182,7 @@ export interface CatalogNodeDefinition {
   readonly activityEnv: "candidate-a" | "preview" | "production";
   readonly ownerWallet: string;
   /** Catalog-owned database placement and budget for each deployed environment. */
-  readonly databasePlacements: Readonly<
+  readonly databasePlacements?: Readonly<
     Partial<
       Record<
         "candidate-a" | "preview" | "production",

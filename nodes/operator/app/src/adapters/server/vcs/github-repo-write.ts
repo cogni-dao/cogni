@@ -669,7 +669,8 @@ const CatalogRegistryRowSchema = z
           .strict()
           .optional(),
       })
-      .strict(),
+      .strict()
+      .optional(),
     // bug.5106 — WHERE this node's app runs, per env. Mirrors `deployment_provider` in
     // infra/catalog/_schema.json (`additionalProperties: false`, enum k3s|akash), so a row this
     // parser accepts is exactly a row CI accepts. Absent = every env on k3s (K3S_IS_DEFAULT).
@@ -691,7 +692,7 @@ const CatalogRegistryRowSchema = z
       });
     }
     for (const env of row.envs) {
-      if (!row.database[env]) {
+      if (row.database && !row.database[env]) {
         ctx.addIssue({
           code: "custom",
           path: ["database", env],
@@ -2634,17 +2635,21 @@ export class GitHubRepoWriter implements DeployPlanePort {
         deployEnvs: row.data.envs,
         activityEnv: row.data.activity_env,
         ownerWallet: row.data.owner_wallet,
-        databasePlacements: Object.fromEntries(
-          Object.entries(row.data.database).map(([env, placement]) => [
-            env,
-            placement
-              ? {
-                  tier: placement.tier,
-                  budgetProfile: placement.budget_profile,
-                }
-              : undefined,
-          ])
-        ),
+        ...(row.data.database
+          ? {
+              databasePlacements: Object.fromEntries(
+                Object.entries(row.data.database).map(([env, placement]) => [
+                  env,
+                  placement
+                    ? {
+                        tier: placement.tier,
+                        budgetProfile: placement.budget_profile,
+                      }
+                    : undefined,
+                ])
+              ),
+            }
+          : {}),
         deploymentProviders: row.data.deployment_provider ?? {},
       });
     }
