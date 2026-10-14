@@ -154,7 +154,7 @@ describe("buildNodeLaunchPack", () => {
       "auto-registers this node's `COGNI_NODE_API_KEY`"
     );
     expect(pack.prompt).toContain(
-      "saves it in the canonical primary checkout's `.env.cogni`"
+      "saves the resulting key in the canonical primary checkout's `.env.cogni`"
     );
     expect(pack.prompt).toContain("symlinks that file into this workspace");
     expect(pack.prompt).toContain("Non-Conductor or manual clone:");
