@@ -195,6 +195,10 @@ node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
+  - cidr: 65.108.194.156/32
+    ports: [7233]
+    envs: [production]
+    comment: Poly production lease egress measured during task.5246 isolated database cutover; Temporal only, no shared database access
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 213.146.212.69/32

@@ -70,10 +70,24 @@ required_keys_csv="$(paste -sd, - <<<"$required_keys")"
 # not preserved. Keep this slot non-empty or every later remote positional shifts.
 required_keys_arg="${required_keys_csv:-__none__}"
 
-egress_cidrs="$(yq -r '.compute_egress_cidrs[]?.cidr' "$catalog_file" | sort -u)"
-[ -n "$egress_cidrs" ] \
-  || fail "external-compute target '$node' has no compute_egress_cidrs"
-egress_cidrs_csv="$(paste -sd, - <<<"$egress_cidrs")"
+source "${SCRIPT_DIR}/lib/compute-egress-policy.sh"
+local egress_rules='' egress_rules_b64 count index cidr ports scope_status
+count="$(yq -N '.compute_egress_cidrs | length' "$catalog_file")"
+index=0
+while [[ "$index" -lt "$count" ]]; do
+  if compute_egress_entry_in_env "$catalog_file" "$index" "$DEPLOY_ENVIRONMENT"; then :; else
+    scope_status=$?
+    [[ "$scope_status" == 1 ]] && { index=$((index+1)); continue; }
+    fail "invalid entry environment scope for '$node'"
+  fi
+  cidr="$(yq -N ".compute_egress_cidrs[$index].cidr" "$catalog_file")"
+  ports="$(compute_egress_entry_ports "$catalog_file" "$index")" || fail "invalid entry port scope for '$node'"
+  egress_rules="${egress_rules}${cidr}:${ports}"$'\n'
+  index=$((index+1))
+done
+[[ -n "$egress_rules" ]] || fail "external-compute target '$node' has no compute_egress_cidrs for this environment"
+# Base64 preserves exact port commas without adding shell syntax to SSH argv.
+egress_rules_b64="$(printf '%s' "$egress_rules" | base64 | tr -d '\n')"
 
 # task.5104 / task.5138 — WHICH AUTHORITY owns this row's workload in this environment.
 # Shell twin of resolveNodeComputeApi() in
@@ -96,14 +110,14 @@ read -r -a ssh_opts <<< "$ssh_opts_raw"
 # The shared helper buffers this heredoc and retries only the OpenBao Kubernetes
 # login transient; stable 403 authz drift still fails after one fresh-JWT check.
 cogni_openbao_kubernetes_login_retry "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
-  "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_arg" "$egress_cidrs_csv" \
+  "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_arg" "$egress_rules_b64" \
   "$egress_allowlist" "$compute_api" "$vm_host" "$control_env" <<'REMOTE'
 set -euo pipefail
 env_name="$1"
 node="$2"
 required_keys_csv="$3"
 [ "$required_keys_csv" = "__none__" ] && required_keys_csv=""
-egress_cidrs_csv="$4"
+egress_rules_b64="$4"
 egress_allowlist="$5"
 authority="$6"
 # bug.5394 — the cluster this assertion actually reached. DEPLOY_ENVIRONMENT names the
@@ -224,15 +238,11 @@ mark_ok "all declared workload secret refs are materialized"
 
 [ -s "$egress_allowlist" ] \
   || fail "installed compute egress allowlist is missing"
-IFS=',' read -r -a egress_cidrs <<< "$egress_cidrs_csv"
-for cidr in "${egress_cidrs[@]}"; do
-  # render-compute-egress-allowlist.sh emits "<cidr>:<ports>" per line, so match the
-  # CIDR anchored at line start followed by its port list (or end of line). Never
-  # `grep -Fx` on the bare CIDR: that can never match a rendered line, so it fails
-  # closed on a correctly configured host.
-  grep -Eq "^${cidr//./\\.}(:|\$)" "$egress_allowlist" \
-    || fail "installed compute egress allowlist is missing catalog CIDR: $cidr"
-done
+while IFS= read -r rule; do
+  [[ -n "$rule" ]] || continue
+  grep -Fxq "$rule" "$egress_allowlist" \
+    || fail "installed compute egress allowlist is missing exact catalog rule: $rule"
+done < <(printf '%s' "$egress_rules_b64" | base64 -d)
 mark_ok "catalog compute egress CIDRs are installed"
 
 echo "External compute preconditions ready for ${node} in ${env_name} (compute_api=${authority})."

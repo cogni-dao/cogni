@@ -870,6 +870,19 @@ grep -q "External compute preconditions ready for toks5" "$TMPROOT/xcw-unpinned.
   exit 1
 }
 
+# Assert the exact entry's ports, and ignore entries scoped to another env.
+SCOPED_SRC="$TMPROOT/scoped-egress-src"
+mkdir -p "$SCOPED_SRC/infra/catalog" "$SCOPED_SRC/nodes/toks5/.cogni"
+cp "$XCW_SRC/nodes/toks5/.cogni/repo-spec.yaml" "$SCOPED_SRC/nodes/toks5/.cogni/repo-spec.yaml"
+yq '.envs = ["candidate-a","production"] | .compute_egress_cidrs = [{"cidr":"80.200.246.35/32","ports":[7233],"envs":["candidate-a"],"comment":"Temporal only"},{"cidr":"192.0.2.31/32","ports":[5432],"envs":["production"],"comment":"foreign env excluded"}]' "$XCW_SRC/infra/catalog/toks5.yaml" > "$SCOPED_SRC/infra/catalog/toks5.yaml"
+if env "${XCW_ENV[@]}" APP_SOURCE_DIR="$SCOPED_SRC" COGNI_CATALOG_ROOT="$SCOPED_SRC/infra/catalog" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-missing-port.out" 2>&1; then
+  echo "expected exact scoped ports to be required, rather than any rule for the CIDR" >&2; exit 1
+fi
+grep -Fq 'missing exact catalog rule: 80.200.246.35/32:7233' "$TMPROOT/scoped-missing-port.out"
+printf '%s\n' '80.200.246.35/32:7233' >> "$EXTERNAL_ALLOWLIST"
+env "${XCW_ENV[@]}" APP_SOURCE_DIR="$SCOPED_SRC" COGNI_CATALOG_ROOT="$SCOPED_SRC/infra/catalog" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-exact.out" 2>&1 || { cat "$TMPROOT/scoped-exact.out"; exit 1; }
+grep -q 'External compute preconditions ready for toks5' "$TMPROOT/scoped-exact.out"
+
 # An unknown authority is a loud stop, never a silent fall-through to legacy.
 BAD_SRC="$TMPROOT/bad-authority-src"
 mkdir -p "$BAD_SRC/infra/catalog" "$BAD_SRC/nodes/toks5/.cogni"
