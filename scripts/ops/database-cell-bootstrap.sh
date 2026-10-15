@@ -352,15 +352,25 @@ PGPASSWORD="$POSTGRES_ROOT_PASSWORD" psql -h 127.0.0.1 -p 5432 \
 # The sampler belongs to this cell process. It never queries application rows
 # and never substitutes host-wide/shared recordings for a bounded cell resource.
 collect_health() {
-  local observed memory_max memory_current io_full disk_stat connections
+  local observed memory_max memory_current inactive_file io_full disk_stat connections raw_memory_pct=null
   local memory_pct=null io_pct=null disk_pct=null connection_pct=null temporary
   observed="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   memory_max="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || true)"
   memory_current="$(cat /sys/fs/cgroup/memory.current 2>/dev/null || true)"
-  if [[ "$memory_max" =~ ^[1-9][0-9]*$ && "$memory_current" =~ ^[0-9]+$ ]] &&
-      [[ "$memory_current" -le "$memory_max" ]]; then
-    memory_pct="$(awk -v maximum="$memory_max" -v current="$memory_current" 'BEGIN { printf "%.6f", 100*(maximum-current)/maximum }')"
+  inactive_file="$(awk '$1 == "inactive_file" {print $2}' /sys/fs/cgroup/memory.stat 2>/dev/null || true)"
+  if [[ "$memory_max" =~ ^[1-9][0-9]*$ && "$memory_current" =~ ^[0-9]+$ && "$inactive_file" =~ ^[0-9]+$ ]] &&
+      [[ "$memory_current" -le "$memory_max" && "$inactive_file" -le "$memory_current" ]]; then
+    memory_pct="$(awk -v maximum="$memory_max" -v current="$memory_current" -v inactive="$inactive_file" 'BEGIN { printf "%.6f", 100*(maximum-current+inactive)/maximum }')"
+    raw_memory_pct="$(awk -v maximum="$memory_max" -v current="$memory_current" 'BEGIN { printf "%.6f", 100*(maximum-current)/maximum }')"
   fi
+  # cAdvisor's own-cgroup working set discounts only inactive file cache. Keep
+  # the raw observation privately for capacity proof without changing the ABI.
+  temporary="$(mktemp /run/database-cell/memory-diagnostics.XXXXXX)"
+  printf '{"observedAt":"%s","rawHeadroomPct":%s,"workingSetHeadroomPct":%s}\n' \
+    "$observed" "$raw_memory_pct" "$memory_pct" > "$temporary"
+  chown postgres:postgres "$temporary"
+  chmod 0600 "$temporary"
+  mv "$temporary" /run/database-cell/memory-diagnostics.json
   io_full="$(awk '$1 == "full" { for (i=2;i<=NF;i++) if ($i ~ /^avg60=/) {sub(/^avg60=/,"",$i); print $i} }' /sys/fs/cgroup/io.pressure 2>/dev/null || true)"
   if [[ "$io_full" =~ ^[0-9]+([.][0-9]+)?$ ]] &&
       awk -v value="$io_full" 'BEGIN {exit !(value>=0 && value<=100)}'; then
