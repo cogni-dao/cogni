@@ -515,4 +515,62 @@ for mutation in '.compute_egress_cidrs[0].ports = []' '.compute_egress_cidrs[0].
 done
 ok "renderer rejects empty, unsupported and out-of-row entry scopes"
 
+# Per-entry provider scope constrains BOTH the lane and actual destination.
+SCOPED_CATALOG="$TMPROOT/destination-scoped-catalog"
+mkdir -p "$SCOPED_CATALOG"
+cat > "$SCOPED_CATALOG/scoped.yaml" <<'EOF'
+name: scoped
+type: node
+envs: [candidate-a, preview, production]
+deployment_provider:
+  candidate-a: akash
+  preview: akash
+  production: akash
+compute_egress_cidrs:
+  - cidr: 198.51.100.201/32
+    comment: legacy unscoped provider
+EOF
+scoped_render() {
+  env COGNI_CATALOG_ROOT="$SCOPED_CATALOG" FLEET_CONTROL_ENV=preview bash "$RENDERER" "$@"
+}
+for pair in 'production production' 'preview production' 'candidate-a production' 'production preview' 'production candidate-a' 'candidate-a candidate-a'; do
+  read -r lane destination <<<"$pair"
+  scoped_render "$lane" "$destination" > "$TMPROOT/baseline-$lane-$destination"
+done
+cat >> "$SCOPED_CATALOG/scoped.yaml" <<'EOF'
+  - cidr: 65.108.194.156/32
+    envs: [preview]
+    comment: preview-only worker NAT
+EOF
+scoped_render preview preview > "$TMPROOT/scoped-preview"
+grep -Fxq "65.108.194.156/32:$PORTS" "$TMPROOT/scoped-preview" || fail "preview worker NAT missing from preview destination"
+grep -Fxq "198.51.100.201/32:$PORTS" "$TMPROOT/scoped-preview" || fail "scoped entry removed legacy provider trust"
+ok "preview entry admits exactly its existing five ports only to preview"
+for pair in 'production production' 'preview production' 'candidate-a production' 'production preview' 'production candidate-a' 'candidate-a candidate-a'; do
+  read -r lane destination <<<"$pair"
+  scoped_render "$lane" "$destination" > "$TMPROOT/after-$lane-$destination"
+  cmp "$TMPROOT/baseline-$lane-$destination" "$TMPROOT/after-$lane-$destination" || fail "scoped entry changed $lane -> $destination output"
+done
+ok "all production/control-twin and unrelated lane outputs remain byte-identical"
+
+# Validate the real catalog entry schema, not a reimplemented type checker.
+jq '.properties.compute_egress_cidrs.items' "$REPO_ROOT/infra/catalog/_schema.json" > "$TMPROOT/egress-entry.schema.json"
+printf '{"cidr":"65.108.194.156/32","comment":"fixture","envs":["preview"]}\n' > "$TMPROOT/egress-entry.json"
+check-jsonschema --schemafile "$TMPROOT/egress-entry.schema.json" "$TMPROOT/egress-entry.json" >/dev/null
+for invalid_scope in '[]' '"preview"' null '["unknown"]' '["preview","unknown"]' '["preview","preview"]'; do
+  printf '{"cidr":"65.108.194.156/32","comment":"fixture","envs":%s}\n' "$invalid_scope" > "$TMPROOT/egress-entry.json"
+  if check-jsonschema --schemafile "$TMPROOT/egress-entry.schema.json" "$TMPROOT/egress-entry.json" >/dev/null 2>&1; then
+    fail "entry schema accepted invalid scope $invalid_scope"
+  fi
+done
+ok "entry schema rejects scalar/null/empty/unknown/duplicate scopes"
+for invalid_scope in '[]' '"preview"' null '["unknown"]' '["preview","unknown"]'; do
+  yq -i ".compute_egress_cidrs[1].envs = $invalid_scope" "$SCOPED_CATALOG/scoped.yaml"
+  if scoped_render preview preview > "$TMPROOT/invalid-scope.out" 2> "$TMPROOT/invalid-scope.err"; then
+    fail "renderer accepted malformed scope $invalid_scope"
+  fi
+  grep -q 'invalid entry env' "$TMPROOT/invalid-scope.err" || fail "invalid scope failed for wrong reason"
+done
+ok "renderer fails closed for scalar/null/empty/unknown scopes outside schema CI"
+
 echo "PASS: all $PASS assertions"

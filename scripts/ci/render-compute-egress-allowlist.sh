@@ -112,6 +112,13 @@ for catalog_file in "$CATALOG_ROOT"/*.yaml; do
       exit 1
     }
 
+    if compute_egress_entry_in_env "$catalog_file" "$entry_index" "$DESTINATION_ENV"; then :; else
+      scope_status=$?
+      [[ "$scope_status" == 1 ]] && continue
+      echo "[render-compute-egress] ERROR: invalid entry env scope in $catalog_file" >&2
+      exit 1
+    fi
+
     # Fail LOUD at render time (schema also gates this in CI): a malformed CIDR
     # must abort the render, never reach the VM to be warn-skipped there.
     if ! printf '%s' "$cidr" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$'; then

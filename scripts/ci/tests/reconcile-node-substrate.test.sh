@@ -549,6 +549,36 @@ grep -qE -- '--profile bootstrap run --rm .* db-provision' "$REMOTE_ROOT/docker.
 # function plus status/session capabilities, and the function's guards exclude
 # postgres, app_readonly, and a made-up unprovisioned role.
 provisioner=infra/compose/runtime/postgres-init/provision.sh
+# The shared readonly role must be reconciled atomically, not through the
+# generic helper's independent existence/password sessions (bug.5471).
+awk '
+  /^# Shared read-only role \(env-level; superuser-derived/ { shared=1 }
+  shared { print }
+  shared && /^fi$/ { exit }
+' "$provisioner" > "$TMPROOT/shared-readonly.sh"
+grep -q 'APP_DB_READONLY_USER contains invalid characters' "$provisioner"
+test "$(grep -c 'PGPASSWORD=.*psql ' "$TMPROOT/shared-readonly.sh")" -eq 1
+if grep -q 'provision_app_role\|run_sql_as_root' "$TMPROOT/shared-readonly.sh"; then
+  echo "shared readonly reconciliation must not split PostgreSQL sessions" >&2; exit 1
+fi
+awk '
+  /^BEGIN ISOLATION LEVEL READ COMMITTED;$/ { if (step != 0) exit 1; step=1 }
+  /^SET LOCAL statement_timeout = '\''30s'\'';$/ { if (step != 1) exit 1; step=2 }
+  /^SELECT pg_advisory_xact_lock\(hashtextextended\(/ { if (step != 2) exit 1; step=3 }
+  /^SELECT EXISTS .*readonly_exists \\gset$/ { if (step != 3) exit 1; step=4 }
+  /^\\if :readonly_exists$/ { if (step != 4) exit 1; step=5 }
+  /^ALTER ROLE .* WITH PASSWORD :'\''pw'\'';$/ { if (step != 5) exit 1; step=6 }
+  /^\\else$/ { if (step != 6) exit 1; step=7 }
+  /^CREATE ROLE .* WITH LOGIN PASSWORD :'\''pw'\'' BYPASSRLS;$/ { if (step != 7) exit 1; step=8 }
+  /^\\endif$/ { if (step != 8) exit 1; step=9 }
+  /^ALTER ROLE .* SET default_transaction_read_only = on;$/ { if (step != 9) exit 1; step=10 }
+  /^ALTER ROLE .* SET statement_timeout = '\''30s'\'';$/ { if (step != 10) exit 1; step=11 }
+  /^GRANT pg_monitor TO / { if (step != 11) exit 1; step=12 }
+  /^COMMIT;$/ { if (step != 12) exit 1; step=13 }
+  END { if (step != 13) exit 1 }
+' "$TMPROOT/shared-readonly.sh"
+grep -Fq "'cogni:shared-readonly:' || :'readonly_role'" "$TMPROOT/shared-readonly.sh"
+grep -Fq -- '-v readonly_role="$APP_READONLY_USER" -v pw="$APP_READONLY_PASS"' "$TMPROOT/shared-readonly.sh"
 grep -q 'ALTER ROLE.*CONNECTION LIMIT.*DB_APP_CONNECTION_LIMIT' "$provisioner"
 grep -q 'ALTER ROLE.*CONNECTION LIMIT.*DB_SERVICE_CONNECTION_LIMIT' "$provisioner"
 grep -q 'ALTER ROLE.*SET statement_timeout' "$provisioner"

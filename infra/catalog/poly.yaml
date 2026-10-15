@@ -203,6 +203,9 @@ compute_egress_cidrs:
     ports: [7233]
     envs: [production]
     comment: Poly production lease egress measured during task.5246 isolated database cutover; Temporal only, no shared database access
+  - cidr: 65.108.194.156/32
+    envs: [preview]
+    comment: RHITE preview worker NAT; strict service_poly SCRAM authenticated from this IP on preview 2026-10-15T09:19:58Z (bug.5472); never production trust.
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 213.146.212.69/32

@@ -750,7 +750,7 @@ case "$*" in
     ;;
   "create token db-provisioner -n default") echo test-jwt; exit 0 ;;
   *"bao write -field=token auth/kubernetes/login"*) echo test-token; exit 0 ;;
-  *"bao kv get -format=json cogni/candidate-a/toks5"*)
+  *"bao kv get -format=json cogni/${FAKE_EXPECT_LANE_ENV:-candidate-a}/toks5"*)
     echo '{"data":{"data":{"AUTH_SECRET":"present","DATABASE_URL":"present","LITELLM_VIRTUAL_KEY":"present"}}}'
     exit 0
     ;;
@@ -789,6 +789,49 @@ env "${XCW_ENV[@]}" FLEET_CONTROL_ENV=production FAKE_EXPECT_CONTROL_ENV=product
   bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/xcw-foreign-control.out"
 grep -q "cogni-production/operator-akash-tx-actuator is available" "$TMPROOT/xcw-foreign-control.out"
 grep -q "all declared workload secret refs are materialized" "$TMPROOT/xcw-foreign-control.out"
+# Entry scope follows both lane and actual custodian destination (bug.5472).
+cp "$XCW_SRC/infra/catalog/toks5.yaml" "$TMPROOT/xcw-before-egress-scope.yaml"
+yq -i '.envs = ["candidate-a","preview","production"] | .deployment_provider.preview = "akash" | .deployment_provider.production = "akash" | .compute_api.preview = "crossplane" | .compute_api.production = "crossplane" | .compute_egress_cidrs += [{"cidr":"65.108.194.156/32","envs":["preview"],"comment":"preview worker"}]' "$XCW_SRC/infra/catalog/toks5.yaml"
+for lane in preview production candidate-a; do
+  env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT="$lane" FLEET_CONTROL_ENV=production \
+    FAKE_EXPECT_CONTROL_ENV=production FAKE_EXPECT_LANE_ENV="$lane" \
+    bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-$lane-control.out"
+  grep -q 'catalog compute egress CIDRs are installed' "$TMPROOT/scoped-$lane-control.out"
+done
+if env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=preview \
+  FAKE_EXPECT_CONTROL_ENV=preview FAKE_EXPECT_LANE_ENV=preview \
+  bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-preview-missing.out" 2>&1; then
+  echo 'preview destination must require its scoped provider CIDR' >&2; exit 1
+fi
+grep -q 'missing exact catalog rule: 65.108.194.156/32' "$TMPROOT/scoped-preview-missing.out"
+printf '%s\n' '65.108.194.156/32:5432,5435,6379,4000,7233' >> "$EXTERNAL_ALLOWLIST"
+env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=preview \
+  FAKE_EXPECT_CONTROL_ENV=preview FAKE_EXPECT_LANE_ENV=preview \
+  bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-preview-ready.out"
+grep -q 'catalog compute egress CIDRs are installed' "$TMPROOT/scoped-preview-ready.out"
+printf '%s\n' '65.108.194.156/32:5432,5435,6379,4000,7233' > "$EXTERNAL_ALLOWLIST"
+if env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=production \
+  FAKE_EXPECT_CONTROL_ENV=production FAKE_EXPECT_LANE_ENV=preview \
+  bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-legacy-missing.out" 2>&1; then
+  echo 'scoped entries must not waive legacy provider CIDRs' >&2; exit 1
+fi
+grep -q 'missing exact catalog rule: 80.200.246.35/32' "$TMPROOT/scoped-legacy-missing.out"
+printf '%s\n' '80.200.246.35/32:5432,5435,6379,4000,7233' > "$EXTERNAL_ALLOWLIST"
+yq -i '.compute_egress_cidrs |= .[1:]' "$XCW_SRC/infra/catalog/toks5.yaml"
+env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=production \
+  FAKE_EXPECT_CONTROL_ENV=production FAKE_EXPECT_LANE_ENV=preview FAKE_SSH_DROP_EMPTY_ARGS=1 \
+  bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-none-selected.out"
+grep -q 'catalog compute egress CIDRs are installed' "$TMPROOT/scoped-none-selected.out"
+for invalid_scope in '[]' '"preview"' null '["unknown"]'; do
+  yq -i ".compute_egress_cidrs[0].envs = $invalid_scope" "$XCW_SRC/infra/catalog/toks5.yaml"
+  if env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=production \
+    FAKE_EXPECT_CONTROL_ENV=production FAKE_EXPECT_LANE_ENV=preview \
+    bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-invalid.out" 2>&1; then
+    echo "assertion accepted malformed entry scope $invalid_scope" >&2; exit 1
+  fi
+  grep -q 'invalid entry environment scope' "$TMPROOT/scoped-invalid.out"
+done
+cp "$TMPROOT/xcw-before-egress-scope.yaml" "$XCW_SRC/infra/catalog/toks5.yaml"
 # Authority-independent checks still run on the crossplane path.
 grep -q "all declared workload secret refs are materialized" "$TMPROOT/xcw-success.out"
 grep -q "catalog compute egress CIDRs are installed" "$TMPROOT/xcw-success.out"

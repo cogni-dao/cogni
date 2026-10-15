@@ -73,6 +73,7 @@ required_keys_arg="${required_keys_csv:-__none__}"
 source "${SCRIPT_DIR}/lib/compute-egress-policy.sh"
 local egress_rules='' egress_rules_b64 count index cidr ports scope_status
 count="$(yq -N '.compute_egress_cidrs | length' "$catalog_file")"
+[[ "$count" -gt 0 ]] || fail "external-compute target has no compute_egress_cidrs"
 index=0
 while [[ "$index" -lt "$count" ]]; do
   if compute_egress_entry_in_env "$catalog_file" "$index" "$DEPLOY_ENVIRONMENT"; then :; else
@@ -80,12 +81,17 @@ while [[ "$index" -lt "$count" ]]; do
     [[ "$scope_status" == 1 ]] && { index=$((index+1)); continue; }
     fail "invalid entry environment scope for '$node'"
   fi
+  if compute_egress_entry_in_env "$catalog_file" "$index" "$control_env"; then :; else
+    scope_status=$?
+    [[ "$scope_status" == 1 ]] && { index=$((index+1)); continue; }
+    fail "invalid entry destination scope for '$node'"
+  fi
   cidr="$(yq -N ".compute_egress_cidrs[$index].cidr" "$catalog_file")"
   ports="$(compute_egress_entry_ports "$catalog_file" "$index")" || fail "invalid entry port scope for '$node'"
   egress_rules="${egress_rules}${cidr}:${ports}"$'\n'
   index=$((index+1))
 done
-[[ -n "$egress_rules" ]] || fail "external-compute target '$node' has no compute_egress_cidrs for this environment"
+[[ -n "$egress_rules" ]] || egress_rules=__none__
 # Base64 preserves exact port commas without adding shell syntax to SSH argv.
 egress_rules_b64="$(printf '%s' "$egress_rules" | base64 | tr -d '\n')"
 
@@ -242,7 +248,7 @@ expected_egress_rules="$(printf '%s' "$egress_rules_b64" | base64 -d)" \
   || fail "catalog egress transport could not be decoded"
 [[ -n "$expected_egress_rules" ]] || fail "catalog egress transport decoded no rules"
 while IFS= read -r rule; do
-  [[ -n "$rule" ]] || continue
+  [[ -n "$rule" && "$rule" != __none__ ]] || continue
   grep -Fxq "$rule" "$egress_allowlist" \
     || fail "installed compute egress allowlist is missing exact catalog rule: $rule"
 done <<< "$expected_egress_rules"

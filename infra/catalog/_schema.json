@@ -437,7 +437,7 @@
             },
             "minItems": 1,
             "uniqueItems": true,
-            "description": "Optional subset of this row's deployed environments; omitted preserves its full env set."
+            "description": "Optional subset of this row's deployed environments: BOTH workload lane and actual destination must be listed. Omitted preserves legacy scope."
           }
         }
       },

@@ -47,6 +47,7 @@ MUTATORS=(
 PARALLEL=(
   set-secret.test.sh
   catalog-akash-egress-schema.test.sh
+  render-compute-egress-allowlist.test.sh
   openbao-clobber-proof.test.sh
   secrets-fanout.test.sh
   secret-materialize.test.sh
