@@ -69,7 +69,8 @@ export function normalizeHtmlNavigation(
   const doctype = document.doctype
     ? `<!doctype ${document.doctype.name}>\n`
     : "";
-  return `${doctype}${document.documentElement.outerHTML}`;
+  const htmlElement = document.querySelector("html");
+  return htmlElement ? `${doctype}${htmlElement.outerHTML}` : documentHtml;
 }
 
 export function HtmlRenderer({ html, title }: HtmlRendererProps): ReactElement {
