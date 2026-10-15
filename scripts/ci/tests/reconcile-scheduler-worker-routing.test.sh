@@ -34,10 +34,28 @@ ENDPOINTS_SUBPATH="infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoint
 
 # Exact live fleet shapes from the rejected a00db9b review: canonical carries
 # 7 nodes/14 aliases; the watched test parent carries 9 nodes/18 aliases. The two
-# shared aliases (operator/node-template and their UUIDs) agree, producing one
-# deterministic 14-node/28-alias composite instead of deleting either roster.
+# candidate rosters contain 3 canonical + 8 watched nodes, sharing operator.
+# The 10-node composite must preserve every watched member without polling
+# nodes whose catalog envs exclude candidate-a.
 CANONICAL_ENDPOINTS="beacon=http://beacon-node-app:3000,f97f68f2-8406-4a3b-b5a9-d579b779f19d=http://beacon-node-app:3000,levelup=http://levelup-node-app:3000,557d8b59-8e3b-42f0-9aeb-a5c171296556=http://levelup-node-app:3000,node-template=http://node-template-node-app:3000,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://node-template-node-app:3000,operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,poly=https://poly-test.cognidao.org,4b06359a-a859-4399-888e-a8c7a6696f7e=https://poly-test.cognidao.org,red=https://red-test.cognidao.org,921b1d1d-4ded-4a6d-b3f1-f7d6affa406a=https://red-test.cognidao.org,toks5=http://toks5-node-app:3000,f66b260b-4633-41e2-8711-b7c1b8449cc1=http://toks5-node-app:3000"
 TEST_PARENT_ENDPOINTS="anotha=http://anotha-node-app:3000,e8ff1874-bde9-46c5-9b62-baee1349735e=http://anotha-node-app:3000,brother=http://brother-node-app:3000,9565871a-cb82-444e-ba18-fed9f6ea3ce1=http://brother-node-app:3000,ghcr=http://ghcr-node-app:3000,21d7ae14-210c-4495-ab6c-6fe5caad34a6=http://ghcr-node-app:3000,node-template=http://node-template-node-app:3000,b927a9dd-6132-4fc9-a51e-e3cee2568e3c=http://node-template-node-app:3000,operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,spawny-boi=https://spawny-boi-test.cogni-testing.org,d520f82e-486a-40f1-9e4f-c8ef7a016e9a=https://spawny-boi-test.cogni-testing.org,test-cog=http://test-cog-node-app:3000,cea5ddea-a18d-44cd-8ffb-4fdd1fd104ac=http://test-cog-node-app:3000,toks2=http://toks2-node-app:3000,cf909432-5324-4bff-bb2d-7806f545eeda=http://toks2-node-app:3000,yo=http://yo-node-app:3000,bb5abfa8-5435-47e8-8725-3ae5e0762791=http://yo-node-app:3000"
+
+seed_catalog() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json, pathlib, re, sys
+root, csv, excluded = pathlib.Path(sys.argv[1]), sys.argv[2], set(sys.argv[3].split(","))
+rows = dict(entry.split("=", 1) for entry in csv.split(","))
+catalog = root / "infra/catalog"
+catalog.mkdir(parents=True, exist_ok=True)
+for name, endpoint in rows.items():
+    if re.fullmatch(r"[0-9a-f-]{36}", name):
+        continue
+    ids = [key for key, value in rows.items() if re.fullmatch(r"[0-9a-f-]{36}", key) and value == endpoint]
+    assert len(ids) == 1
+    row = {"name": name, "type": "node", "node_id": ids[0], "envs": ["production"] if name in excluded else ["candidate-a", "production"]}
+    (catalog / (name + ".yaml")).write_text(json.dumps(row))
+PY
+}
 
 # ── Fixture: an APP_SOURCE with the NEW (post-node-add) base manifests ─────────
 APP_SRC="$TMPROOT/app-src"
@@ -50,6 +68,7 @@ metadata:
 data:
   COGNI_NODE_ENDPOINTS: "$CANONICAL_ENDPOINTS"
   TEMPORAL_NAMESPACE: "cogni-staging"
+  IMAGE_DIGEST: "placeholder"
 YAML
 cat >"$APP_SRC/$ENDPOINTS_SUBPATH" <<YAML
 apiVersion: v1
@@ -67,10 +86,19 @@ metadata:
   annotations:
     reloader.stakater.com/auto: "true"
 YAML
+cat >"$APP_SRC/$SUBPATH/kustomization.yaml" <<'YAML'
+resources:
+  - configmap.yaml
+  - deployment.yaml
+YAML
+seed_catalog "$APP_SRC" "$CANONICAL_ENDPOINTS" beacon,levelup,node-template,toks5
+cp "$REPO_ROOT/infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml" \
+  "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml"
 
 # Routing + lane-bootstrap authorities of the repository Argo actually watches.
 AUTHORITY_DIR="$TMPROOT/test-parent-main"
 mkdir -p "$AUTHORITY_DIR/$SUBPATH" "$(dirname "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH")"
+seed_catalog "$AUTHORITY_DIR" "$TEST_PARENT_ENDPOINTS" anotha
 cat >"$AUTHORITY_DIR/$SUBPATH/configmap.yaml" <<YAML
 apiVersion: v1
 kind: ConfigMap
@@ -88,6 +116,8 @@ data:
   COGNI_NODE_ENDPOINTS: "$TEST_PARENT_ENDPOINTS"
 YAML
 cat >"$AUTHORITY_DIR/infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml" <<'YAML'
+resources:
+  - ../../../base/scheduler-worker
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
@@ -100,6 +130,9 @@ patches:
       - op: replace
         path: /data/IMAGE_DIGEST
         value: "candidate-a-placeholder-scheduler-worker"
+      - op: replace
+        path: /data/COGNI_NODE_ENDPOINTS
+        value: "operator=http://stale-operator:3000"
   - target: { kind: Service, name: temporal }
     patch: |
       apiVersion: v1
@@ -110,6 +143,16 @@ patches:
         type: ExternalName
         externalName: cogni-candidate-a.vm.cognidao.org
 YAML
+cat >"$APP_SRC/$SUBPATH/temporal.yaml" <<'YAML'
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal
+spec:
+  type: ExternalName
+  externalName: placeholder.example
+YAML
+printf '  - temporal.yaml\n' >> "$APP_SRC/$SUBPATH/kustomization.yaml"
 
 # ── Fixture: a deploy/<env>-scheduler-worker checkout with the OLD configmap +
 #    a digest-pinned overlay that MUST survive the reconcile ────────────────────
@@ -175,17 +218,34 @@ run() {
 out1="$(run)" || fail "first reconcile exited non-zero: $out1"
 echo "$out1" | grep -q "updated locally" || fail "expected 'updated locally', got: $out1"
 COMPOSITE="$(yq -N '.data.COGNI_NODE_ENDPOINTS' "$DEPLOY_DIR/$ENDPOINTS_SUBPATH")"
-[ "$(tr ',' '\n' <<<"$COMPOSITE" | wc -l | tr -d ' ')" = 28 ] \
-  || fail "expected 28 aliases from the 7+9 node authorities"
-for alias in anotha brother ghcr spawny-boi test-cog toks2 yo beacon levelup poly red toks5 operator node-template; do
+[ "$(tr ',' '\n' <<<"$COMPOSITE" | wc -l | tr -d ' ')" = 20 ] \
+  || fail "expected 20 aliases from the 3+8 candidate member authorities"
+for alias in brother ghcr spawny-boi test-cog toks2 yo poly red operator node-template; do
   tr ',' '\n' <<<"$COMPOSITE" | grep -q "^${alias}=" \
     || fail "composite lost active alias ${alias}"
+done
+for alias in anotha beacon levelup toks5; do
+  if tr ',' '\n' <<<"$COMPOSITE" | grep -q "^${alias}="; then
+    fail "out-of-environment node remained: $alias"
+  fi
 done
 [ -f "$DEPLOY_DIR/$SUBPATH/deployment.yaml" ] \
   || fail "Reloader-annotated deployment.yaml not propagated to deploy branch"
 grep -q "reloader.stakater.com/auto" "$DEPLOY_DIR/$SUBPATH/deployment.yaml" \
   || fail "Reloader annotation missing after propagation"
-echo "PASS: composes real canonical + test-parent rosters without clobbering either authority"
+echo "PASS: scopes both actual rosters and preserves all 8 watched candidate members"
+
+RENDERED="$(kubectl kustomize "$(dirname "$OVERLAY")")"
+rendered_endpoints="$(yq -N 'select(.kind == "ConfigMap") | .data.COGNI_NODE_ENDPOINTS' <<< "$RENDERED")"
+[ "$rendered_endpoints" = "$COMPOSITE" ] || fail "provider endpoint patch is not effective in rendered desired state"
+case ",$rendered_endpoints," in
+  *",poly=https://poly-test.cognidao.org,"*) : ;;
+  *) fail "rendered Poly provider URL was replaced by the base default" ;;
+esac
+[ "$(yq -N 'select(.kind == "Deployment") | .spec.replicas' <<< "$RENDERED")" = 2 ] || fail "lost worker HA"
+[ "$(yq -N 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxSurge' <<< "$RENDERED")" = 0 ] || fail "candidate worker surge remains enabled"
+[ "$(yq -N 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxUnavailable' <<< "$RENDERED")" = 1 ] || fail "candidate serial rollout does not preserve one worker"
+echo "PASS: stale bootstrap topology renders effective provider routing and two-replica serial rollout"
 
 # ── 2. Overlay topology heals without changing promoted image identity ────────
 grep -q 'externalName: cogni-candidate-a.vm.cognidao.org' "$OVERLAY" \
@@ -230,6 +290,58 @@ if APP_SOURCE_DIR="$TMPROOT/nope" DEPLOY_BRANCH_DIR="$DEPLOY_DIR" \
   fail "reconcile should fail-loud when source manifests are absent"
 fi
 echo "PASS: fail-loud on missing source"
+
+# Missing or duplicate identity is not permission to drop a foreign queue.
+mv "$AUTHORITY_DIR/infra/catalog/brother.yaml" "$TMPROOT/brother.yaml"
+if run >/dev/null 2>&1; then
+  fail "an endpoint without catalog ownership must fail closed"
+fi
+mv "$TMPROOT/brother.yaml" "$AUTHORITY_DIR/infra/catalog/brother.yaml"
+cp "$AUTHORITY_DIR/infra/catalog/ghcr.yaml" "$TMPROOT/ghcr.yaml"
+yq -i '.node_id = "9565871a-cb82-444e-ba18-fed9f6ea3ce1"' "$AUTHORITY_DIR/infra/catalog/ghcr.yaml"
+if run >/dev/null 2>&1; then
+  fail "ambiguous catalog identity must fail closed"
+fi
+mv "$TMPROOT/ghcr.yaml" "$AUTHORITY_DIR/infra/catalog/ghcr.yaml"
+echo "PASS: missing and ambiguous foreign ownership refuse trimming"
+
+mv "$APP_SRC/$ENDPOINTS_SUBPATH" "$TMPROOT/reviewed-provider.yaml"
+if run >/dev/null 2>&1; then
+  fail "missing reviewed provider map must not fall back to the base map"
+fi
+mv "$TMPROOT/reviewed-provider.yaml" "$APP_SRC/$ENDPOINTS_SUBPATH"
+cp "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH" "$TMPROOT/watched-provider.yaml"
+yq -i 'del(.data.COGNI_NODE_ENDPOINTS)' "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH"
+if run >/dev/null 2>&1; then
+  fail "missing watched provider map must not fall back to the base map"
+fi
+mv "$TMPROOT/watched-provider.yaml" "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH"
+echo "PASS: both authorities require their provider-resolved environment map"
+
+cp "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH" "$TMPROOT/original-watched-provider.yaml"
+cp "$AUTHORITY_DIR/$SUBPATH/configmap.yaml" "$TMPROOT/original-watched-base.yaml"
+cp "$AUTHORITY_DIR/infra/catalog/operator.yaml" "$TMPROOT/original-watched-operator.yaml"
+yq -i '.node_id = "66666666-7777-8888-9999-aaaaaaaaaaaa"' "$AUTHORITY_DIR/infra/catalog/operator.yaml"
+sed -i.bak 's/4ff8eac1-4eba-4ed0-931b-b1fe4f64713d/66666666-7777-8888-9999-aaaaaaaaaaaa/g' \
+  "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"
+if run >"$TMPROOT/identity-error" 2>&1; then
+  fail "same slug and endpoint with different UUIDs must fail closed"
+fi
+grep -q 'authorities disagree' "$TMPROOT/identity-error" || fail "wrong rejection for cross-authority UUID rebind"
+cp "$TMPROOT/original-watched-provider.yaml" "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH"
+cp "$TMPROOT/original-watched-base.yaml" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"
+cp "$TMPROOT/original-watched-operator.yaml" "$AUTHORITY_DIR/infra/catalog/operator.yaml"
+yq -i '.name = "foreign-operator"' "$AUTHORITY_DIR/infra/catalog/operator.yaml"
+sed -i.bak 's#operator=http://operator-node-app:3000#foreign-operator=http://operator-node-app:3000#g' \
+  "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"
+if run >"$TMPROOT/identity-error" 2>&1; then
+  fail "same UUID and endpoint with different slugs must fail closed"
+fi
+grep -q 'authorities disagree' "$TMPROOT/identity-error" || fail "wrong rejection for cross-authority slug rebind"
+cp "$TMPROOT/original-watched-provider.yaml" "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH"
+cp "$TMPROOT/original-watched-base.yaml" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"
+cp "$TMPROOT/original-watched-operator.yaml" "$AUTHORITY_DIR/infra/catalog/operator.yaml"
+echo "PASS: same-endpoint cross-authority slug/UUID rebindings refuse"
 
 # ── 6. Conflicting ownership of one alias is never last-writer-wins ──────────
 sed -i.bak 's#operator=http://operator-node-app:3000#operator=https://foreign.example#' \

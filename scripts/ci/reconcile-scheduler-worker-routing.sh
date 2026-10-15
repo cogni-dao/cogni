@@ -172,6 +172,10 @@ if [ ! -f "$SRC_DIR/configmap.yaml" ]; then
   echo "[ERROR] $SRC_DIR/configmap.yaml missing — cannot propagate routing" >&2
   exit 1
 fi
+if [ ! -f "$ENDPOINTS_SRC" ]; then
+  echo "[ERROR] reviewed environment provider-routing patch is missing: $ENDPOINTS_SRC" >&2
+  exit 1
+fi
 
 # Self-validate against the catalog before propagating: never ship a stale routing
 # table to the worker. The renderer is the same SSOT the static gate uses; if it is
@@ -186,22 +190,11 @@ else
   echo "::warning::render-scheduler-worker-endpoints.sh absent at this ref — propagating committed configmap without re-validation"
 fi
 
-# Counts are telemetry only — the propagation itself is rsync + git, so a missing
-# yq must never block the reconcile.
-ENDPOINTS_CSV=""
-if command -v yq >/dev/null 2>&1; then
-  # Prefer the env-resolved map (what reaches the cluster); fall back to the base default.
-  if [ -f "$ENDPOINTS_SRC" ]; then
-    ENDPOINTS_CSV="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$ENDPOINTS_SRC" 2>/dev/null || true)"
-  fi
-  if [ -z "$ENDPOINTS_CSV" ]; then
-    ENDPOINTS_CSV="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$SRC_DIR/configmap.yaml" 2>/dev/null || true)"
-  fi
-fi
 command -v yq >/dev/null 2>&1 || {
   echo "[ERROR] yq is required to compose scheduler-worker route authorities" >&2
   exit 1
 }
+ENDPOINTS_CSV="$(yq -N '.data.COGNI_NODE_ENDPOINTS // ""' "$ENDPOINTS_SRC")"
 
 # ── Resolve the deploy-branch checkout ────────────────────────────────────────
 CLONED_DIR=""
@@ -304,14 +297,103 @@ authority_yaml() {
   fi
 }
 
+route_authority_catalog() {
+  local authority="$1" path row node_id prefix spec metadata='[]'
+  local paths=()
+  if [ "$authority" = reviewed ]; then
+    for path in "$APP_SOURCE_DIR"/infra/catalog/*.yaml; do
+      paths+=("infra/catalog/${path##*/}")
+    done
+  elif [ -n "${SWR_ROUTE_AUTHORITY_DIR:-}" ]; then
+    for path in "$SWR_ROUTE_AUTHORITY_DIR"/infra/catalog/*.yaml; do
+      paths+=("infra/catalog/${path##*/}")
+    done
+  else
+    mapfile -t paths < <(git -C "$WORKDIR" ls-tree --name-only origin/main:infra/catalog)
+    paths=("${paths[@]/#/infra/catalog/}")
+  fi
+  for path in "${paths[@]}"; do
+    [[ "$path" == *.yaml ]] || continue
+    if [ "$authority" = reviewed ]; then
+      row="$(cat "$APP_SOURCE_DIR/$path")" || return 1
+    else
+      row="$(authority_yaml "$path")" || return 1
+    fi
+    row="$(yq -o=json -I=0 'select(.type == "node")' <<< "$row")" || return 1
+    [ -n "$row" ] || continue
+    node_id="$(jq -r '.node_id // ""' <<< "$row")"
+    if [ -z "$node_id" ]; then
+      prefix="$(jq -r '.path_prefix // ""' <<< "$row")"
+      [[ "$prefix" =~ ^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*/$ ]] || {
+        echo "[ERROR] route authority has no catalog or repo-spec identity" >&2; return 1;
+      }
+      if [ "$authority" = reviewed ]; then
+        spec="$(cat "$APP_SOURCE_DIR/${prefix}.cogni/repo-spec.yaml")" || return 1
+      else
+        spec="$(authority_yaml "${prefix}.cogni/repo-spec.yaml")" || return 1
+      fi
+      node_id="$(yq -N '.node_id // ""' <<< "$spec")" || return 1
+    fi
+    metadata="$(jq -c --argjson row "$row" --arg node_id "$node_id" \
+      '. + [{name: $row.name, node_id: $node_id, envs: $row.envs}]' <<< "$metadata")" || return 1
+  done
+  printf '%s' "$metadata"
+}
+
+scope_authority_endpoints() {
+  ROUTE_ENDPOINTS="$1" ROUTE_CATALOG="$2" ROUTE_ENV="$DEPLOY_ENV" python3 - <<'PY'
+import json, os, re
+
+catalog = json.loads(os.environ["ROUTE_CATALOG"])
+aliases, members = {}, set()
+for row in catalog:
+    name, node_id, envs = row.get("name"), row.get("node_id"), row.get("envs")
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+        raise SystemExit("invalid route authority node name")
+    if not isinstance(node_id, str) or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", node_id):
+        raise SystemExit("missing route authority node identity")
+    if not isinstance(envs, list) or not all(isinstance(env, str) for env in envs):
+        raise SystemExit("missing route authority environment membership")
+    for alias in (name, node_id):
+        if alias in aliases:
+            raise SystemExit("ambiguous route authority identity")
+        aliases[alias] = name
+        if os.environ["ROUTE_ENV"] in envs:
+            members.add(alias)
+routes = {}
+for entry in filter(None, os.environ["ROUTE_ENDPOINTS"].split(",")):
+    alias, sep, endpoint = entry.partition("=")
+    if not sep or not endpoint or alias not in aliases or alias in routes:
+        raise SystemExit("scheduler route lacks unique catalog ownership")
+    routes[alias] = endpoint
+if not members <= routes.keys():
+    raise SystemExit("scheduler route authority omits an active member")
+for row in catalog:
+    if row["name"] in members and routes[row["name"]] != routes[row["node_id"]]:
+        raise SystemExit("scheduler slug and UUID routes disagree")
+print(",".join(f"{alias}={endpoint}" for alias, endpoint in routes.items() if alias in members))
+PY
+}
+
 yaml_endpoints() {
   yq -N '.data.COGNI_NODE_ENDPOINTS // ""' 2>/dev/null
 }
 
 merge_endpoint_authorities() {
   local watched_csv="$1" reviewed_csv="$2"
-  WATCHED_ENDPOINTS="$watched_csv" REVIEWED_ENDPOINTS="$reviewed_csv" python3 - <<'PY'
-import os
+  WATCHED_ENDPOINTS="$watched_csv" REVIEWED_ENDPOINTS="$reviewed_csv" \
+    WATCHED_CATALOG="$WATCHED_CATALOG" REVIEWED_CATALOG="$REVIEWED_CATALOG" python3 - <<'PY'
+import json, os
+
+node_ids, node_names = {}, {}
+for catalog in (os.environ["WATCHED_CATALOG"], os.environ["REVIEWED_CATALOG"]):
+    for row in json.loads(catalog):
+        name, node_id = row["name"], row["node_id"]
+        if name in node_ids and node_ids[name] != node_id:
+            raise SystemExit("scheduler authorities disagree on a slug's node identity")
+        if node_id in node_names and node_names[node_id] != name:
+            raise SystemExit("scheduler authorities disagree on a node identity's slug")
+        node_ids[name], node_names[node_id] = node_id, name
 
 routes = {}
 origins = {}
@@ -341,8 +423,10 @@ WATCHED_BASE_CSV="$(authority_yaml "$AUTHORITY_BASE_PATH" | yaml_endpoints)"
 WATCHED_ENV_CSV="$(authority_yaml "$AUTHORITY_ENDPOINTS_PATH" | yaml_endpoints)"
 REVIEWED_BASE_CSV="$(yaml_endpoints < "$SRC_DIR/configmap.yaml")"
 REVIEWED_ENV_CSV="$ENDPOINTS_CSV"
-[ -n "$REVIEWED_ENV_CSV" ] || REVIEWED_ENV_CSV="$REVIEWED_BASE_CSV"
-[ -n "$WATCHED_ENV_CSV" ] || WATCHED_ENV_CSV="$WATCHED_BASE_CSV"
+WATCHED_CATALOG="$(route_authority_catalog watched)"
+REVIEWED_CATALOG="$(route_authority_catalog reviewed)"
+WATCHED_ENV_CSV="$(scope_authority_endpoints "$WATCHED_ENV_CSV" "$WATCHED_CATALOG")"
+REVIEWED_ENV_CSV="$(scope_authority_endpoints "$REVIEWED_ENV_CSV" "$REVIEWED_CATALOG")"
 
 COMPOSITE_BASE_CSV="$(merge_endpoint_authorities "$WATCHED_BASE_CSV" "$REVIEWED_BASE_CSV")"
 COMPOSITE_ENV_CSV="$(merge_endpoint_authorities "$WATCHED_ENV_CSV" "$REVIEWED_ENV_CSV")"
@@ -363,18 +447,26 @@ COMPOSITE_ENDPOINTS="$COMPOSITE_BASE_CSV" yq -i \
   '.data.COGNI_NODE_ENDPOINTS = strenv(COMPOSITE_ENDPOINTS)' \
   "$DST_DIR/configmap.yaml"
 
-# Propagate this env's GENERATED provider-resolved endpoints patch. Absent at an
-# older ref → warn + skip (mirrors the renderer-absent path above) rather than
-# hard-fail a flight on a file the PR head predates.
-if [ -f "$ENDPOINTS_SRC" ]; then
-  mkdir -p "$(dirname "${WORKDIR}/${ENDPOINTS_SUBPATH}")"
-  cp "$ENDPOINTS_SRC" "${WORKDIR}/${ENDPOINTS_SUBPATH}"
-  COMPOSITE_ENDPOINTS="$COMPOSITE_ENV_CSV" yq -i \
-    '.data.COGNI_NODE_ENDPOINTS = strenv(COMPOSITE_ENDPOINTS)' \
-    "${WORKDIR}/${ENDPOINTS_SUBPATH}"
-  git -C "$WORKDIR" add -A "$ENDPOINTS_SUBPATH"
-else
-  echo "::warning::${ENDPOINTS_SUBPATH} absent at this ref — propagating base routing only"
+# Propagate only the reviewed environment's provider-resolved patch. A base map
+# cannot substitute for missing placement evidence.
+mkdir -p "$(dirname "${WORKDIR}/${ENDPOINTS_SUBPATH}")"
+cp "$ENDPOINTS_SRC" "${WORKDIR}/${ENDPOINTS_SUBPATH}"
+COMPOSITE_ENDPOINTS="$COMPOSITE_ENV_CSV" yq -i \
+  '.data.COGNI_NODE_ENDPOINTS = strenv(COMPOSITE_ENDPOINTS)' \
+  "${WORKDIR}/${ENDPOINTS_SUBPATH}"
+# Bootstrap topology may predate provider routing. Apply the owned map last,
+# including after any stale inline COGNI_NODE_ENDPOINTS patch.
+yq -i '.patches = ((.patches // []) | map(select(.path != "node-endpoints.patch.yaml"))) + [{"path": "node-endpoints.patch.yaml"}]' "$OVERLAY_DST"
+git -C "$WORKDIR" add -A "$ENDPOINTS_SUBPATH"
+
+if [ "$DEPLOY_ENV" = candidate-a ]; then
+  SERIAL_PATCH="infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml"
+  [ -f "$APP_SOURCE_DIR/$SERIAL_PATCH" ] || {
+    echo "[ERROR] reviewed candidate serial-rollout patch is missing" >&2; exit 1;
+  }
+  cp "$APP_SOURCE_DIR/$SERIAL_PATCH" "$WORKDIR/$SERIAL_PATCH"
+  yq -i '.patches = ((.patches // []) | map(select(.path != "serial-rollout.patch.yaml"))) + [{"path": "serial-rollout.patch.yaml"}]' "$OVERLAY_DST"
+  git -C "$WORKDIR" add -A "$SERIAL_PATCH"
 fi
 
 git -C "$WORKDIR" config user.name "github-actions[bot]"

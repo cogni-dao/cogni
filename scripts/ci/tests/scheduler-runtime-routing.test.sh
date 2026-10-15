@@ -81,6 +81,13 @@ for env in "${DEPLOY_ENVS[@]}"; do
   domain="$(domain_for_env "$env" "$FORK_ROOT")" || fail "no domain for env $env"
   for node in "${NODE_TARGETS[@]}"; do
     node_id="$(node_id_for_target "$node")"
+    if ! target_in_env "$node" "$env"; then
+      case ",$env_endpoints," in
+        *",$node="*|*",$node_id="*) fail "$env routing includes out-of-environment node $node" ;;
+        *) pass "$env excludes $node outside its declared membership" ;;
+      esac
+      continue
+    fi
     provider="$(deployment_provider_for_target "$node" "$env")" \
       || fail "unresolvable deployment_provider for $node in $env"
     if [ "$provider" = "akash" ]; then
@@ -189,9 +196,9 @@ PLACEMENT_CATALOG="$TMP_TREE/placement/infra/catalog"
 mkdir -p "$PLACEMENT_CATALOG"
 ZK_ID="11111111-2222-3333-4444-555555555555"
 ZA_ID="66666666-7777-8888-9999-aaaaaaaaaaaa"
-yq ".name = \"zk\" | .path_prefix = \"nodes/zk/\" | .node_port = 30401 | .image_tag_suffix = \"-zk\" | .migrator_tag_suffix = \"-zk-migrate\" | .source_repo = \"https://github.com/cogni-test-org/zk.git\" | .image_repository = \"ghcr.io/cogni-test-org/zk\" | .node_id = \"$ZK_ID\" | del(.deployment_provider) | del(.is_primary_host)" \
+yq ".name = \"zk\" | .envs = [\"candidate-a\", \"preview\", \"production\"] | .path_prefix = \"nodes/zk/\" | .node_port = 30401 | .image_tag_suffix = \"-zk\" | .migrator_tag_suffix = \"-zk-migrate\" | .source_repo = \"https://github.com/cogni-test-org/zk.git\" | .image_repository = \"ghcr.io/cogni-test-org/zk\" | .node_id = \"$ZK_ID\" | del(.deployment_provider) | del(.is_primary_host)" \
   infra/catalog/node-template.yaml > "$PLACEMENT_CATALOG/zk.yaml"
-yq ".name = \"za\" | .path_prefix = \"nodes/za/\" | .node_port = 30402 | .image_tag_suffix = \"-za\" | .migrator_tag_suffix = \"-za-migrate\" | .source_repo = \"https://github.com/cogni-test-org/za.git\" | .image_repository = \"ghcr.io/cogni-test-org/za\" | .node_id = \"$ZA_ID\" | del(.is_primary_host) | .deployment_provider = {\"candidate-a\": \"akash\", \"production\": \"akash\"}" \
+yq ".name = \"za\" | .envs = [\"candidate-a\", \"preview\", \"production\"] | .path_prefix = \"nodes/za/\" | .node_port = 30402 | .image_tag_suffix = \"-za\" | .migrator_tag_suffix = \"-za-migrate\" | .source_repo = \"https://github.com/cogni-test-org/za.git\" | .image_repository = \"ghcr.io/cogni-test-org/za\" | .node_id = \"$ZA_ID\" | del(.is_primary_host) | .deployment_provider = {\"candidate-a\": \"akash\", \"production\": \"akash\"}" \
   infra/catalog/node-template.yaml > "$PLACEMENT_CATALOG/za.yaml"
 
 assert_endpoint() {
@@ -225,6 +232,18 @@ assert_endpoint candidate-a "http://zk-node-app:3000" "https://za-test.example.t
 assert_endpoint preview "http://zk-node-app:3000" "http://za-node-app:3000"
 # production: za on akash -> bare public host.
 assert_endpoint production "http://zk-node-app:3000" "https://za.example.test"
+
+yq -i '.envs = ["production"]' "$PLACEMENT_CATALOG/zk.yaml"
+scoped_endpoints="$(COGNI_CATALOG_ROOT="$PLACEMENT_CATALOG" DOMAIN='' FORK_DOMAIN_ROOT=example.test \
+  bash scripts/ci/render-scheduler-worker-endpoints.sh --env candidate-a)"
+case ",$scoped_endpoints," in
+  *",zk="*|*",$ZK_ID="*) fail "an excluded node still allocates a per-node Worker" ;;
+  *) pass "env filtering removes both slug and UUID while retaining the placed sibling" ;;
+esac
+case ",$scoped_endpoints," in
+  *",$ZA_ID=https://za-test.example.test,"*) : ;;
+  *) fail "env filtering removed the active placed sibling" ;;
+esac
 
 # LiteLLM (Compose-on-VM) is a Cherry-resident consumer too: k3s -> VM NodePort,
 # akash -> the same public URL (no NodePort exists for an off-cluster workload).
@@ -296,5 +315,50 @@ for env in "${DEPLOY_ENVS[@]}"; do
   done
   pass "$env materializer substrate host -> $expected"
 done
+
+echo "[6/6] scheduler repair paths select only the worker and no tenant substrate"
+scope_paths=(
+  scripts/ci/render-scheduler-worker-endpoints.sh
+  scripts/ci/reconcile-scheduler-worker-routing.sh
+  scripts/ci/tests/scheduler-runtime-routing.test.sh
+  scripts/ci/tests/reconcile-scheduler-worker-routing.test.sh
+  infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml
+  infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml
+  infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml
+  infra/k8s/overlays/preview/scheduler-worker/node-endpoints.patch.yaml
+  infra/k8s/overlays/production/scheduler-worker/node-endpoints.patch.yaml
+)
+for path in "${scope_paths[@]}"; do
+  printf '%s\n' "$path" > "$TMP_TREE/changed-paths.txt"
+  : > "$TMP_TREE/target-outputs"
+  CHANGED_PATHS_FILE="$TMP_TREE/changed-paths.txt" GITHUB_OUTPUT="$TMP_TREE/target-outputs" \
+    bash scripts/ci/detect-affected.sh > /dev/null
+  python3 - "$TMP_TREE/target-outputs" "$path" <<'PY' || fail "scheduler-only detector contract changed"
+import json, sys
+values = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1]) if "=" in line)
+expected = ["scheduler-worker"] if sys.argv[2].startswith("infra/k8s/") else []
+assert json.loads(values["targets_json"]) == expected, (sys.argv[2], values)
+assert json.loads(values["flight_targets_json"]) == expected, (sys.argv[2], values)
+PY
+done
+printf '%s\n' "${scope_paths[@]}" > "$TMP_TREE/changed-paths.txt"
+: > "$TMP_TREE/target-outputs"
+CHANGED_PATHS_FILE="$TMP_TREE/changed-paths.txt" GITHUB_OUTPUT="$TMP_TREE/target-outputs" \
+  bash scripts/ci/detect-affected.sh > /dev/null
+grep -Fq 'flight_targets_json=["scheduler-worker"]' "$TMP_TREE/target-outputs" || fail "combined scheduler diff selects another workload"
+
+CATALOG_JSON="$(yq -o=json -I=0 '.' infra/catalog/scheduler-worker.yaml)" \
+  pnpm --dir nodes/operator/app exec tsx -e '
+    import assert from "node:assert/strict";
+    import { resolveDeploymentTargets } from "./src/features/compute/node-deployment-targets.ts";
+    assert.deepEqual(resolveDeploymentTargets({catalogRows:[JSON.parse(process.env.CATALOG_JSON!)],environment:"candidate-a",flightTargets:["scheduler-worker"]}), {
+      deployment:[],substrate:[],offCluster:[],providers:{"scheduler-worker":"k3s"},
+      k3s:["scheduler-worker"],k3sNodes:[],sourceRepositories:{},sourceShas:{}
+    });
+  ' || fail "scheduler-only flight touches a node/database substrate"
+[ "$(yq -N '.spec.replicas' infra/k8s/overlays/production/scheduler-worker/replicas.patch.yaml)" = 1 ] || fail "production worker count changed"
+[ "$(yq -N '.spec.strategy.rollingUpdate.maxSurge' infra/k8s/base/node-app/deployment.yaml)" = 1 ] || fail "operator surge policy changed"
+[ "$(yq -N '.spec.strategy.rollingUpdate.maxUnavailable' infra/k8s/base/node-app/deployment.yaml)" = 0 ] || fail "operator zero-downtime policy changed"
+pass "every repair path selects at most scheduler-worker, with empty node/database partitions"
 
 echo "PASS: scheduler-runtime-routing.test.sh"

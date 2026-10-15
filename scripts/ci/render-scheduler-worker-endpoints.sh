@@ -77,10 +77,16 @@ render() {
 
 # Provider-resolved map for one env.
 render_env() {
-  local env="$1" domain
+  local env="$1" domain node node_id url sep=""
   domain="$(domain_for_env "$env" "$FORK_ROOT")" \
     || { echo "[ERROR] cannot derive a public domain for env '$env'" >&2; return 1; }
-  node_internal_service_endpoint_csv "$env" "$domain"
+  for node in "${NODE_TARGETS[@]}"; do
+    target_in_env "$node" "$env" || continue
+    node_id="$(node_id_for_target "$node")" || return 1
+    url="$(node_app_url_for_target "$node" "$env" "$domain")" || return 1
+    printf '%s%s=%s,%s=%s' "$sep" "$node" "$url" "$node_id" "$url"
+    sep=","
+  done
 }
 
 # Namespace-specific routes for foreign lanes reconciled by one control env.
