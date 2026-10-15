@@ -232,6 +232,8 @@ grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
 node_db="$(node_database_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")"
 postgres_residency_env="$(lane_db_vm_env "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")" \
   || fail "cannot resolve Postgres residency for ${TARGET_NODE}/${DEPLOY_ENVIRONMENT}"
+lane_db_residency_check "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" \
+  || fail "foreign Postgres residency is forbidden"
 postgres_provision_here=false
 [[ "$postgres_residency_env" != "$SUBSTRATE_CONTROL_ENV" ]] || postgres_provision_here=true
 # Doltgres and its inventory retain control residency when Postgres moves.
@@ -400,6 +402,92 @@ migration_secret_version="$(bao_get_version "${TARGET_NODE}-database-migration")
   || fail "per-node DB creds absent at node/runtime or isolated migration OpenBao paths — run secret-materialize first"
 migration_dsn_sha256="$(printf '%s' "$migration_dsn" | shasum -a 256 | awk '{print $1}')"
 mark_row db_creds read "read per-node DB creds from OpenBao (key names only)"
+
+# Validate what the runtime actually receives, not two copies of a derivation.
+# All three Postgres identities must name this lane's database on its own host.
+CURRENT_ROW=db_host_agreement
+for database_dsn_key in DATABASE_URL DATABASE_SERVICE_URL; do
+  stored_dsn="$(bao_get_field "$TARGET_NODE" "$database_dsn_key")"
+  [[ -n "$stored_dsn" ]] || fail "stored ${database_dsn_key} is missing"
+  lane_db_assert_agreement "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$stored_dsn" \
+    || fail "stored ${database_dsn_key} disagrees with lane Postgres residency"
+done
+lane_db_assert_agreement "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$migration_dsn" \
+  || fail "stored migration DSN disagrees with lane Postgres residency"
+mark_row db_host_agreement ready "stored runtime and migration DSNs agree with lane-local Postgres host and database"
+
+# Insert after target-lane database credentials and bank-host agreement are verified.
+postgres_provisioned_remote=false
+if ! "$postgres_provision_here"; then
+  CURRENT_ROW=postgres_destination_provision
+  [[ "$postgres_residency_env" == "$DEPLOY_ENVIRONMENT" && "$DEPLOY_ENVIRONMENT" != production ]] \
+    || fail "refusing an upward-trust or non-lane Postgres provisioning target"
+  # Custody and residency are independent: retain the custodian's SSH identity,
+  # send only this lane's three credentials, and read root locally at destination.
+  destination_host="$(lane_db_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")" \
+    || fail "cannot resolve destination Postgres host"
+  control_vm_host="$VM_HOST"
+  VM_HOST="$destination_host"
+  stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/provision.sh" lane-postgres-provisioner
+  destination_provisioner="$STAGED_EXACT_PATH"
+  destination_provisioner_sha256="$STAGED_EXACT_SHA256"
+  VM_HOST="$control_vm_host"
+  {
+    printf 'set -euo pipefail\nset -a\n. /opt/cogni-template-runtime/.env\nset +a\n'
+    printf 'lane_env=%q\nlane_db=%q\nprovisioner=%q\nprovisioner_sha256=%q\n' \
+      "$postgres_residency_env" "$node_db" "$destination_provisioner" "$destination_provisioner_sha256"
+    printf 'lane_app_password=%q\nlane_service_password=%q\nlane_migration_password=%q\n' \
+      "$app_db_password" "$app_db_service_password" "$app_db_migration_password"
+    printf 'export LITELLM_DB_NAME=%q DB_PORT=%q\n' \
+      "$(yq -er '.services.db-provision.environment.LITELLM_DB_NAME' "$REPO_ROOT/infra/compose/runtime/docker-compose.yml")" \
+      "$(yq -er '.services.db-provision.environment.DB_PORT' "$REPO_ROOT/infra/compose/runtime/docker-compose.yml")"
+    printf 'export DB_BUDGET_PROFILE=%q DB_APP_CONNECTION_LIMIT=%q DB_APP_STATEMENT_TIMEOUT_MS=%q DB_SERVICE_CONNECTION_LIMIT=%q DB_SERVICE_STATEMENT_TIMEOUT_MS=%q DB_LOCK_TIMEOUT_MS=%q DB_IDLE_IN_TRANSACTION_TIMEOUT_MS=%q DB_TEMP_FILE_LIMIT_MIB=%q DB_WORK_MEM_MIB=%q\n' \
+      "$budget_profile" "$db_app_connection_limit" "$db_app_statement_timeout_ms" \
+      "$db_service_connection_limit" "$db_service_statement_timeout_ms" "$db_lock_timeout_ms" \
+      "$db_idle_in_transaction_timeout_ms" "$db_temp_file_limit_mib" "$db_work_mem_mib"
+    cat <<'DESTINATION'
+trap 'rm -f "$provisioner"' EXIT
+[ "$(sha256sum "$provisioner" | awk '{print $1}')" = "$provisioner_sha256" ]
+# Root authority was read on this destination before the lane-only payload.
+[ "${DEPLOY_ENVIRONMENT:-}" = "$lane_env" ] || {
+  echo '::error::destination runtime environment does not match Postgres residency' >&2
+  exit 1
+}
+export APP_DB_PASSWORD="$lane_app_password" APP_DB_SERVICE_PASSWORD="$lane_service_password"
+export APP_DB_MIGRATION_PASSWORD="$lane_migration_password" COGNI_NODE_DBS="$lane_db"
+: "${POSTGRES_ROOT_USER:?destination root user missing}"
+: "${POSTGRES_ROOT_PASSWORD:?destination root password missing}"
+: "${LITELLM_DB_NAME:?destination shared database name missing}"
+postgres_container=$(docker ps -q --filter label=com.docker.compose.project=cogni-runtime --filter label=com.docker.compose.service=postgres)
+[ -n "$postgres_container" ] && [ "$(printf '%s\n' "$postgres_container" | wc -l)" -eq 1 ]
+# Use the container's non-loopback address so localhost trust cannot bypass
+# runtime/migration password probes. The reviewed Compose has one PG network.
+DB_HOST=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$postgres_container")
+[[ "$DB_HOST" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || {
+  echo '::error::destination Postgres must have one non-loopback IPv4 address' >&2
+  exit 1
+}
+[[ "$DB_HOST" != 127.* ]] || exit 1
+export DB_HOST
+docker run --rm --pull=never --cpus=.5 --memory=256m --pids-limit=64 \
+  --network "container:$postgres_container" \
+  --mount "type=bind,src=$provisioner,dst=/app/provision.sh,readonly" \
+  -e DB_HOST -e DB_PORT -e POSTGRES_ROOT_USER -e POSTGRES_ROOT_PASSWORD \
+  -e APP_DB_READONLY_USER -e APP_DB_READONLY_PASSWORD -e LITELLM_DB_NAME \
+  -e APP_DB_PASSWORD -e APP_DB_SERVICE_PASSWORD -e APP_DB_MIGRATION_PASSWORD \
+  -e COGNI_NODE_DBS -e DB_BUDGET_PROFILE -e DB_APP_CONNECTION_LIMIT \
+  -e DB_APP_STATEMENT_TIMEOUT_MS -e DB_SERVICE_CONNECTION_LIMIT \
+  -e DB_SERVICE_STATEMENT_TIMEOUT_MS -e DB_LOCK_TIMEOUT_MS \
+  -e DB_IDLE_IN_TRANSACTION_TIMEOUT_MS -e DB_TEMP_FILE_LIMIT_MIB -e DB_WORK_MEM_MIB \
+  postgres:15 bash /app/provision.sh >/dev/null
+echo '[remote] exact lane-local Postgres provisioner completed'
+DESTINATION
+  } | cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@$destination_host" bash -s \
+    || fail "lane-local Postgres provisioning failed on ${postgres_residency_env}"
+  postgres_provisioned_remote=true
+  mark_row postgres_destination_provision updated "${node_db} provisioned on ${postgres_residency_env}; provisioner_sha256=${destination_provisioner_sha256}; root authority remained destination-local"
+fi
+
 
 # Private containment actuator credential. secret-materialize mints this into a
 # dedicated platform-service bucket; the reader passes only the component
@@ -951,23 +1039,9 @@ ${edge_reconcile_snippet}
     db-provision >/dev/null
   echo '[remote] db-provision ok'
   else
-    echo '::warning::Postgres provision skipped for ${TARGET_NODE}/${DEPLOY_ENVIRONMENT}: database belongs to ${postgres_residency_env}, this reconcile operates on ${SUBSTRATE_CONTROL_ENV}. Destination readiness is not proven here.'
+    echo '[remote] Postgres already provisioned on lane-local ${postgres_residency_env}; no Postgres mutation on ${SUBSTRATE_CONTROL_ENV}'
   fi
 
-  projected_migration_dsn=\$(kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' get secret '${TARGET_NODE}-migration-secrets' -o jsonpath='{.data.DATABASE_MIGRATION_URL}' | base64 --decode)
-  [ \"\$(printf '%s' \"\$projected_migration_dsn\" | sha256sum | awk '{print \$1}')\" = '${migration_dsn_sha256}' ] || {
-    echo '::error::OpenBao and projected migration DSN digests differ' >&2
-    exit 1
-  }
-  docker run --rm --network host \
-    -e DATABASE_MIGRATION_URL=\"\$projected_migration_dsn\" \
-    -e MIGRATION_IDENTITY_SQL_B64='${migration_identity_sql_b64}' \
-    postgres:15 sh -ceu '
-    result=\$(printf \"%s\" \"\$MIGRATION_IDENTITY_SQL_B64\" | base64 --decode |
-      psql \"\$DATABASE_MIGRATION_URL\" -XAtv ON_ERROR_STOP=1 -f -)
-    [ \"\$result\" = t ]
-  '
-  echo '[remote] projected migration DSN digest and live identity verified ok'
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then
     \"\${runtime_compose[@]}\" up -d doltgres >/dev/null
     echo '[remote] doltgres up ok'
@@ -983,16 +1057,40 @@ ${edge_reconcile_snippet}
 ${dolt_mirror_reconcile_snippet}  fi" \
   || fail "remote reconcile block failed (rc=$?) — the last '[remote] … ok' breadcrumb above names the last completed step"
 
+CURRENT_ROW=migration_dsn_proven
+# The projected secret remains control-owned; the unchanged public DSN is
+# authenticated from its Postgres owner, without opening cross-env SQL ports.
+projected_migration_dsn="$(remote "kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' get secret '${TARGET_NODE}-migration-secrets' -o jsonpath='{.data.DATABASE_MIGRATION_URL}' | base64 --decode")"
+[[ "$(printf '%s' "$projected_migration_dsn" | shasum -a 256 | awk '{print $1}')" == "$migration_dsn_sha256" ]] \
+  || fail "OpenBao and projected migration DSN digests differ"
+migration_probe_host="$VM_HOST"
+if ! "$postgres_provision_here"; then migration_probe_host="$destination_host"; fi
+{
+  printf 'set -euo pipefail\n'
+  printf 'export DATABASE_MIGRATION_URL=%q MIGRATION_IDENTITY_SQL_B64=%q PGCONNECT_TIMEOUT=10\n' \
+    "$projected_migration_dsn" "$migration_identity_sql_b64"
+  cat <<'MIGRATION_PROBE'
+docker run --rm --pull=never --network host \
+  -e DATABASE_MIGRATION_URL -e MIGRATION_IDENTITY_SQL_B64 -e PGCONNECT_TIMEOUT \
+  postgres:15 sh -ceu '
+  result=$(printf "%s" "$MIGRATION_IDENTITY_SQL_B64" | base64 --decode |
+    psql "$DATABASE_MIGRATION_URL" -XAtv ON_ERROR_STOP=1 -f -)
+  [ "$result" = t ]
+'
+MIGRATION_PROBE
+} | cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@$migration_probe_host" bash -s \
+  || fail "projected migration DSN authentication or live identity proof failed"
+echo '[remote] projected migration DSN digest and live identity verified ok'
+
 migration_secret_version_after="$(bao_get_version "${TARGET_NODE}-database-migration")"
 [[ "$migration_secret_version_after" == "$migration_secret_version" ]] \
   || fail "migration OpenBao version changed during ESO/DB proof — refusing a mixed-version receipt"
 mark_row migration_dsn_proven ready "stable OpenBao version, projected digest, and live migration identity verified"
 mark_row remote_reconcile updated "${DEPLOYMENT_PROVIDER} placement steps and control-resident inventory/provisioners reconciled on VM"
-if "$postgres_provision_here"; then
-  mark_row postgres_provision updated "${node_db} reconciled on ${SUBSTRATE_CONTROL_ENV}"
-  log "substrate ready inputs reconciled for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT})"
+if "$postgres_provision_here" || "$postgres_provisioned_remote"; then
+  mark_row postgres_provision updated "${node_db} reconciled on ${postgres_residency_env}"
+  log "substrate ready inputs reconciled for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT}); Postgres=${postgres_residency_env}, custody=${SUBSTRATE_CONTROL_ENV}"
 else
-  mark_row postgres_provision skipped "requires ${postgres_residency_env}; not provisioned or verified on ${SUBSTRATE_CONTROL_ENV}"
-  log "control-side inputs reconciled for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT}); Postgres readiness on ${postgres_residency_env} remains unverified"
+  fail "Postgres was not provisioned on its declared lane"
 fi
 write_summary success

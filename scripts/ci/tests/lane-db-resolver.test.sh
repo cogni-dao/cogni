@@ -65,6 +65,20 @@ for catalog_file in "$CATALOG_DIR"/*.yaml; do
 done
 [ "${#PAIRS[@]}" -ge 10 ] || fail "only ${#PAIRS[@]} (node, lane) pairs derived from $CATALOG_DIR — the enumeration is broken, not the fleet"
 
+# Current contract: all committed lanes, including future Akash births, own their
+# Postgres instance. The historical pins below are rollback fixtures only.
+[ -z "${LANE_DB_RESIDENCY_PINNED[*]:-}" ] || fail "committed residency ledger must be empty"
+for pair in "${PAIRS[@]}"; do
+  node="${pair%%/*}"; lane="${pair##*/}"
+  [ "$(lane_db_vm_env "$node" "$lane")" = "$lane" ] || fail "foreign Postgres: $pair"
+  [ "$(lane_db_host "$node" "$lane")" = "$(cogni_vm_host_for_env "$lane" "$(cogni_domain_root)" "$(cogni_deployment_slug)")" ] \
+    || fail "lane host drift: $pair"
+  [ "$(node_database_for_target "$node" "$lane")" = "cogni_${node//-/_}" ] \
+    || fail "lane-local database name drift: $pair"
+done
+echo '[current] every committed lane is resident; historical rollback coverage follows'
+LANE_DB_RESIDENCY_PINNED=("poly/candidate-a" "poly/preview" "red/candidate-a" "toks5/preview")
+
 # ── 1. INERT: every lane keeps the host it has today ─────────────────────────────
 # THE PRE-RESOLVER DERIVATION, spelled out once here as the baseline: the DSN's host is the
 # VM the composer SSHs into, i.e. the CONTROL env's VM alias. If `lane_db_host` ever differs
@@ -72,7 +86,9 @@ done
 echo "[1] lane_db_host is byte-identical to the pre-resolver host for all ${#PAIRS[@]} catalog pairs"
 for pair in "${PAIRS[@]}"; do
   node="${pair%%/*}"; lane="${pair##*/}"
-  baseline="$(cogni_vm_host_for_env "$(control_env_for "$lane" "$node")" "$(cogni_domain_root)" "$(cogni_deployment_slug)")"
+  baseline_env="$lane"
+  if _lane_db_is_pinned "$node" "$lane"; then baseline_env="$(control_env_for "$lane" "$node")"; fi
+  baseline="$(cogni_vm_host_for_env "$baseline_env" "$(cogni_domain_root)" "$(cogni_deployment_slug)")"
   got="$(lane_db_host "$node" "$lane")" || fail "lane_db_host ${node}/${lane} failed"
   [ "$got" = "$baseline" ] \
     || fail "RESIDENCY IS NOT INERT for ${node}/${lane}: resolver says '${got}', today's code uses '${baseline}'. A lane changed host in a PR that must not move any data (bug.5299)."
@@ -212,7 +228,9 @@ echo "[5] the re-key leaves every catalog-derivable database name byte-identical
 names=0
 for pair in "${PAIRS[@]}"; do
   node="${pair%%/*}"; lane="${pair##*/}"
-  pre="cogni_${node//-/_}$(lane_db_suffix "$lane" "$(control_env_for "$lane" "$node")")"
+  baseline_env="$lane"
+  if _lane_db_is_pinned "$node" "$lane"; then baseline_env="$(control_env_for "$lane" "$node")"; fi
+  pre="cogni_${node//-/_}$(lane_db_suffix "$lane" "$baseline_env")"
   post="$(node_database_for_target "$node" "$lane")"
   [ "$post" = "$pre" ] \
     || fail "the re-key CHANGED a database name for ${pair}: pre-resolver '${pre}', resolver '${post}'. That is a rename on a live instance (bug.5207's shape), not an inert change."

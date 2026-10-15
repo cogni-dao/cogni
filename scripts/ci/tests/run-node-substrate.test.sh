@@ -145,29 +145,41 @@ want="materialize production toks4|reconcile production toks4 provider=akash|ass
   got:  $got
   want: $want" >&2; exit 1; }
 
-# ── Case 6: SECRETS FOLLOW THE RECONCILING CLUSTER, DB SUBSTRATE FOLLOWS THE ENV.
-#    bug.5206. An akash node's non-production lane is reconciled by the production cluster,
-#    so its secrets belong in THAT vault. The flight running against the lane's OWN VM must
-#    decline the materialize + secret-bank assert it cannot legitimately make — and must
-#    STILL reconcile, because the workload dials this env's substrate host. ─────────────
-mk_stub "$TMPROOT/mat.sh" materialize 0
+# ── Case 6: the existing job selects the custodian's VM/key, while its target
+# lane keeps its own public domain and Postgres residency. No empty green path.
+cat > "$TMPROOT/mat.sh" <<EOF
+#!/usr/bin/env bash
+echo "materialize \$1 \$2 control=\${SECRETS_CONTROL_ENV:-unset} domain=\${DOMAIN:-unset}" >> "$ORDER"
+EOF
+chmod +x "$TMPROOT/mat.sh"
 mk_stub "$TMPROOT/rec.sh" reconcile 0
 mk_stub "$TMPROOT/assert.sh" assert 0
 : > "$ORDER"
-DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" \
+DEPLOYMENT_PROVIDER=akash COGNI_CATALOG_ROOT="$CATALOG_FIXTURE" DOMAIN=cognidao.org \
 RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
 RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
 RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
   bash "$RUNNER" candidate-a polyfix >/dev/null
-# A foreign-custodied lane has NO substrate on its own VM: the vault bank, the database, the
-# roles and the Temporal namespace all belong to the control cluster and are provisioned by
-# THAT cluster's run. Reconciling here mints `<control>-db-reader` against the LANE's OpenBao,
-# where it does not exist, and kills the flight. Doing nothing is the correct amount of work.
 got="$(paste -sd'|' - < "$ORDER")"
-want=""
-[ "$got" = "$want" ] || { echo "a foreign-custodied lane's own flight must touch NOTHING on its own VM:
+want="materialize candidate-a polyfix control=production domain=test.cognidao.org|reconcile candidate-a polyfix|assert candidate-a polyfix"
+[ "$got" = "$want" ] || { echo "a custodian-authorized foreign-lane job must materialize, reconcile and assert:
   got:  $got
-  want: <nothing>" >&2; exit 1; }
+  want: $want" >&2; exit 1; }
+
+# The foreign target remains fatal, unlike a degraded sibling in a production replay.
+mk_stub "$TMPROOT/mat.sh" materialize 7
+: > "$ORDER"
+if DEPLOYMENT_PROVIDER=akash DOMAIN=cognidao.org \
+   RUN_NODE_SUBSTRATE_MATERIALIZE_BIN="$TMPROOT/mat.sh" \
+   RUN_NODE_SUBSTRATE_RECONCILE_BIN="$TMPROOT/rec.sh" \
+   RUN_NODE_SUBSTRATE_ASSERT_BIN="$TMPROOT/assert.sh" \
+     bash "$RUNNER" candidate-a polyfix >/dev/null 2>&1; then
+  echo 'foreign target materialize failure must fail the runner' >&2; exit 1
+fi
+if grep -qE '^(reconcile|assert)' "$ORDER"; then
+  echo 'foreign materialize failure reached a later phase' >&2; exit 1
+fi
+mk_stub "$TMPROOT/mat.sh" materialize 0
 
 # ── Case 7: the control env writes its OWN secrets AND every lane it reconciles. ─────
 : > "$ORDER"

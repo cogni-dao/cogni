@@ -75,6 +75,7 @@ bao_get_field() {
     operator/DOLTGRES_PASSWORD) printf 'dg-superuser-pw' ;;
     */APP_DB_PASSWORD) printf 'app-pw-%s' "${1//-/_}" ;;
     */APP_DB_SERVICE_PASSWORD) printf 'svc-pw-%s' "${1//-/_}" ;;
+    */APP_DB_MIGRATION_PASSWORD) printf 'migration-pw-%s' "${1//-/_}" ;;
     *) printf '' ;;
   esac
 }
@@ -233,7 +234,42 @@ compose_base_ref() {
   )
 }
 
-# ── 1 + 2. INERT BY ENUMERATION: every pair, every DSN, four ways ────────────────
+# Current contract, before any historical fixture: all three Postgres DSNs use
+# their own lane's instance, including future catalog-born Akash nodes.
+[ -z "${LANE_DB_RESIDENCY_PINNED[*]:-}" ] || fail "committed residency ledger must be empty"
+(
+  export FORK_DOMAIN_ROOT=cognidao.org PATH="$SHIM:$PATH"
+  for pair in "${PAIRS[@]}"; do
+    node="${pair%%/*}"; lane="${pair##*/}"
+    for key in DATABASE_URL DATABASE_SERVICE_URL DATABASE_MIGRATION_URL; do
+      dsn="$(compose_now "$node" "$lane" "$key")"
+      after="${dsn##*@}"
+      [ "${after%%:*}" = "$(addr_for_env "$lane")" ] || fail "$pair/$key dials a foreign instance"
+      db_path="${after#*/}"
+      [ "${db_path%%\?*}" = "cogni_${node//-/_}" ] || fail "$pair/$key names a non-local DB"
+      lane_db_assert_agreement "$node" "$lane" "$dsn" >/dev/null || fail "$pair/$key disagrees"
+    done
+    [ "$(compose_now "$node" "$lane" DOLTGRES_URL)" = "$(compose_literal "$node" "$lane" DOLTGRES_URL)" ] \
+      || fail "$pair Doltgres residency changed"
+  done
+)
+echo '[current] all catalog lanes compose lane-local app/service/migration DSNs; Doltgres unchanged'
+
+# Historical pins are an EXPLICIT rollback fixture, not the committed contract.
+# Old inertness baselines apply only to the historical four or local-custody rows;
+# a future foreign-compute birth is covered above and never inherits these pins.
+HISTORICAL_PAIRS=()
+for pair in "${PAIRS[@]}"; do
+  node="${pair%%/*}"; lane="${pair##*/}"
+  case "$pair" in
+    poly/candidate-a|poly/preview|red/candidate-a|toks5/preview) HISTORICAL_PAIRS+=("$pair") ;;
+    *) [ "$(control_env_for "$lane" "$node")" != "$lane" ] || HISTORICAL_PAIRS+=("$pair") ;;
+  esac
+done
+PAIRS=("${HISTORICAL_PAIRS[@]}")
+LANE_DB_RESIDENCY_PINNED=("poly/candidate-a" "poly/preview" "red/candidate-a" "toks5/preview")
+
+# ── 1 + 2. HISTORICAL ROLLBACK: every fixture pair, every DSN, four ways ──────────
 echo "[1+2] every composed DSN is byte-identical to the pre-change value (${#PAIRS[@]} pairs x ${#DSN_KEYS[@]} keys)"
 if [ -n "$BASE_REF" ]; then
   echo "      baselines: hand-spelled + resolver-absent + ${BASE_REF}:scripts/setup/lib/reconcile-secrets.sh"

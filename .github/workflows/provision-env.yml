@@ -78,6 +78,7 @@ jobs:
     timeout-minutes: 60
     env:
       DEPLOY_ENV: ${{ inputs.env }}
+      TF_VAR_control_ssh_public_key: ${{ inputs.env != 'production' && inputs.env != (vars.FLEET_CONTROL_ENV || 'production') && vars.FLEET_CONTROL_SSH_PUBLIC_KEY || '' }}
       # Non-secret fork config — GH repo variable, plaintext, fork-owned.
       # The hub defaults to cognidao.org; forks should set FORK_DOMAIN_ROOT.
       FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
