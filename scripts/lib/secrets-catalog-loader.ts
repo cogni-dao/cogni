@@ -164,8 +164,8 @@ export function isSetupSecretsManaged(
   if (
     route?.tier === "A1" &&
     route.appliesTo === "database" &&
-    route.consumedBy?.length === 1 &&
-    route.consumedBy[0] === "compose"
+    route.consumedBy?.includes("compose") &&
+    !route.consumedBy.includes("pod")
   )
     return false;
   const service = route?.service;

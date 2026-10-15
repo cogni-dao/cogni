@@ -56,6 +56,7 @@ import {
   DatabaseCellCutoverReferenceSchema,
 } from "@/contracts/database-cell-binding.v1.contract";
 import type {
+  DatabaseCellAppliedProbeQualificationPort,
   DatabaseCellAppliedRegistrationPort,
   DatabaseCellBindingPort,
 } from "@/ports";
@@ -118,6 +119,7 @@ export interface AkashTxHttpDeps {
   readonly token: string;
   readonly databaseCellBindings?: DatabaseCellBindingPort;
   readonly databaseCellAppliedRegistration?: DatabaseCellAppliedRegistrationPort;
+  readonly databaseCellAppliedProbeQualification?: DatabaseCellAppliedProbeQualificationPort;
   readonly log?: AkashTxLogger;
   /** Pure private-kit resolver; callers can supply a catalog reference only. */
   readonly databaseCellSpec?: (input: {
@@ -349,6 +351,22 @@ export function createAkashTxDispatcher(
               identity: input.identity,
               spec,
             }),
+          };
+        }
+        case "/v1/akash/database-cell-binding/qualify-applied-probe": {
+          if (!deps.databaseCellAppliedProbeQualification)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "readonly applied probe qualification unavailable"
+            );
+          return {
+            status: 200,
+            body: {
+              qualification:
+                await deps.databaseCellAppliedProbeQualification.qualifyAppliedProbe(
+                  DatabaseCellAppliedRegistrationReferenceSchema.parse(payload)
+                ),
+            },
           };
         }
         case "/v1/akash/database-cell-binding/register-applied": {

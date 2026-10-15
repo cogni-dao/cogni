@@ -17,6 +17,9 @@
 #        for non-interactive use (CI / bootstrap auto-seed):
 #   echo -n "value" | pnpm secrets:set candidate-a node-app FOO
 #
+# Dynamic manual-cell banks: only owned probe PASSWORD and typed applied custody/
+# evidence INPUT keys, production only. SET_SECRET_EXPECTED_VERSION is mandatory;
+# positive versions use HTTP PATCH CAS only, zero uses proven-absent atomic creation.
 # Connectivity: $BAO_ADDR + $BAO_TOKEN must be set by the caller.
 #   Operator path: `kubectl port-forward -n openbao svc/openbao 8200:8200`
 #                  + `bao login -method=kubernetes role=<your-role>` (or any
@@ -54,6 +57,22 @@ case "$env_name" in
   *) die "Invalid env: '$env_name'. Must be candidate-a|preview|production." ;;
 esac
 
+# Narrow dynamic manual-cell components use the SAME canonical CLI and writer token.
+component_node='' component_kind=''
+case "$service/$key" in
+  *-database-recovery-probe/DATABASE_RECOVERY_PROBE_PASSWORD)
+    component_node="${service%-database-recovery-probe}"; component_kind=probe-password ;;
+  *-database-cell/DATABASE_CELL_APPLIED_CUSTODY_JSON|*-database-cell/DATABASE_CELL_APPLIED_EVIDENCE_BUNDLE_JSON)
+    component_node="${service%-database-cell}"; component_kind=applied-input ;;
+esac
+if [[ -n "$component_kind" ]]; then
+  [[ "$component_node" =~ ^[a-z][a-z0-9-]{0,62}$ && -f "$REPO_ROOT/infra/catalog/${component_node}.yaml" ]] || die "Dynamic component node is not catalog-owned."
+  command -v yq >/dev/null 2>&1 || die "yq is required for catalog-owned components."
+  [[ "$(yq -r '.type // ""' "$REPO_ROOT/infra/catalog/${component_node}.yaml")" == node ]] || die "Dynamic component owner must be a catalog node."
+  [[ "$env_name" == production ]] || die "Manual cell component writes require production."
+  [[ "${SET_SECRET_EXPECTED_VERSION:-}" =~ ^(0|[1-9][0-9]*)$ ]] || die "Dynamic component requires explicit SET_SECRET_EXPECTED_VERSION."
+fi
+
 # ── Service validation ──────────────────────────────────────────────────────
 # `_shared` is a sanctioned cross-service namespace per the spec. `_system`
 # is hard-refused (bootstrap-only). Other names must match a catalog entry.
@@ -68,7 +87,7 @@ case "$service" in
     ;;
   *)
     catalog_file="$REPO_ROOT/infra/catalog/${service}.yaml"
-    if [[ ! -f "$catalog_file" ]]; then
+    if [[ ! -f "$catalog_file" && -z "$component_kind" ]]; then
       die "Unknown service '$service' — no infra/catalog/${service}.yaml. List catalog entries: ls infra/catalog/*.yaml"
     fi
     ;;
@@ -92,6 +111,17 @@ fi
 
 if [[ -z "$value" ]]; then
   die "Empty value rejected. Run again and provide a non-empty value."
+fi
+
+if [[ "$component_kind" == applied-input ]]; then
+  command -v yq >/dev/null 2>&1 || die "yq is required for catalog-owned applied input validation."
+  component_node_id="$(yq -r '.node_id // ""' "$REPO_ROOT/infra/catalog/${component_node}.yaml")"
+  if [[ -z "$component_node_id" ]]; then
+    [[ -f "$REPO_ROOT/nodes/${component_node}/.cogni/repo-spec.yaml" ]] || die "Owned node identity unavailable."
+    component_node_id="$(yq -r '.node_id // ""' "$REPO_ROOT/nodes/${component_node}/.cogni/repo-spec.yaml")"
+  fi
+  # Typed validation stdout contains private custody; discard it, never log or echo.
+  printf '%s' "$value" | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" --validate-applied-input "$component_node" "$component_node_id" "$key" >/dev/null || die "Owned typed applied input validation refused."
 fi
 
 # ── Patch invocation ────────────────────────────────────────────────────────
@@ -127,6 +157,23 @@ See docs/guides/secrets-add-new.md."
 fi
 
 command -v bao >/dev/null 2>&1 || die "bao CLI not found on PATH (https://openbao.org/docs/install/)."
+
+# Explicit expected version is mandatory for the three reviewed dynamic input keys.
+# Never use read/write fallback: its CAS semantics differ from HTTP PATCH.
+if [[ -n "$component_kind" ]]; then
+  if [[ "$SET_SECRET_EXPECTED_VERSION" == 0 ]]; then
+    existing_rc=0
+    existing_out="$(bao kv get -format=json "$bao_path" 2>&1)" || existing_rc=$?
+    [[ "$existing_rc" != 0 ]] || die "CAS0 requires a genuinely absent component bank."
+    if ! printf '%s' "$existing_out" | grep -qiE 'no value found|does not exist|code: 404'; then
+      die "CAS0 absence is unproved; refusing component creation."
+    fi
+    printf '%s' "$value" | bao kv put -cas=0 "$bao_path" "${key}=-"
+  else
+    printf '%s' "$value" | bao kv patch -method=patch -cas="$SET_SECRET_EXPECTED_VERSION" "$bao_path" "${key}=-"
+  fi
+  exit $?
+fi
 
 # bug.5068: `cogni/<env>/<service>` is a SHARED multi-key bucket, and `bao kv put`
 # REPLACES every key at the path. The old guard (`kv metadata get` fails → put)

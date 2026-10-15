@@ -69,15 +69,23 @@ cell_placement_composed_value() {
     jq -r '.publicValues.DATABASE_SSL_CA_CERT // empty' <<<"$CELL_PLACEMENT_JSON"
     return 0
   fi
+  if [[ "$key" == DATABASE_RECOVERY_PROBE_URL ]]; then
+    jq -er '.logicalProbeDsn // empty' <<<"$CELL_PLACEMENT_JSON" 2>/dev/null
+    return $?
+  fi
   jq -er --arg key "$key" '.publicValues[$key] // empty' <<<"$CELL_PLACEMENT_JSON" 2>/dev/null
 }
 
 # Values must already exist in their real private consumer banks. This helper
 # never creates credentials or converts request data into secret custody.
 validate_applied_cell_consumer_custody() {
-  local node="$1" custody="$2" field service key value
+  validate_applied_cell_consumer_banks "$1" "$2" 'app service migration tls readOnlyProbe'
+}
+# The explicit probe-repair phase validates its canonical password and native proof separately.
+validate_applied_cell_consumer_banks() {
+  local node="$1" custody="$2" fields="$3" field service key value
   [[ "$(jq -r .nodeSlug <<<"$custody")" == "$node" && "$(jq -r .nodeId <<<"$custody")" == "$(node_id_for_target "$node")" && "$(jq -r .environment <<<"$custody")" == production ]] || fail "manual applied custody differs from owned target"
-  for field in app service migration tls readOnlyProbe; do
+  for field in $fields; do
     service="$(jq -r --arg field "$field" '.[$field].custody.service // .[$field].custodyRef.service // empty' <<<"$custody")"
     [[ -n "$service" ]] || continue
     key="$(jq -r --arg field "$field" '.[$field].custody.key // .[$field].custodyRef.key' <<<"$custody")"
@@ -342,4 +350,50 @@ materialize_database_cell_applied_registration() {
   cell_seed_exact "$bank" DATABASE_CELL_PLACEMENT_RECEIPT_JSON "$receipt"
   flush_batch "$bank"
   publish_database_cell_projection "$node" "$projection"
+}
+
+# Initial target probe alignment / post-rotation URL repair. This phase never rotates
+# a password, saves a binding, installs control, or retires any source aggregate.
+materialize_database_cell_probe_custody() {
+  [[ "$TARGET_NODE" == "$RELIABILITY_CONTROLLER" && "$DEPLOY_ENVIRONMENT" == production && "$SECRETS_CONTROL_ENV" == production ]] || fail "probe custody requires local production owner"
+  [[ "${DATABASE_CELL_CONTROL_NODE_ID:-}" =~ ^[0-9a-f-]{36}$ && "${DATABASE_CELL_REGISTER_PACKET_SHA256:-}" =~ ^[0-9a-f]{64}$ && "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" =~ ^[0-9a-f]{64}$ && -n "${DATABASE_CELL_REGISTER_COGNI_KEY:-}" ]] || fail "probe custody requires exact immutable owned references"
+  local node selected='' bank custody bundle raw version old_url password request response qualification current current_version next
+  for node in "${NODE_TARGETS[@]}"; do
+    [[ "$(node_id_for_target "$node")" == "$DATABASE_CELL_CONTROL_NODE_ID" ]] || continue
+    [[ -z "$selected" ]] || fail "ambiguous probe custody node"
+    selected="$node"
+  done
+  [[ -n "$selected" ]] || fail "probe custody node not owned"
+  node="$selected" bank="${selected}-database-recovery-probe"
+  prefetch_path "${node}-database-cell"
+  custody="$(bao_get_field "${node}-database-cell" DATABASE_CELL_APPLIED_CUSTODY_JSON)"
+  bundle="$(bao_get_field "${node}-database-cell" DATABASE_CELL_APPLIED_EVIDENCE_BUNDLE_JSON)"
+  [[ -n "$custody" && -n "$bundle" ]] || fail "actual target probe custody and evidence missing"
+  raw="$(bao_exec "" "kv get -format=json 'cogni/production/${bank}'")" || fail "current canonical probe component unavailable"
+  version="$(jq -er '.data.metadata.version | select(type=="number" and .>0)' <<<"$raw")" || fail "current probe KV version absent"
+  password="$(jq -er '.data.data.DATABASE_RECOVERY_PROBE_PASSWORD | select(type=="string" and length>0)' <<<"$raw")" || fail "canonical probe password absent"
+  old_url="$(jq -r '.data.data.DATABASE_RECOVERY_PROBE_URL // ""' <<<"$raw")"
+  printf '%s' "$custody" > "${CACHE_DIR}/probe-repair-custody"
+  printf '%s' "$password" > "${CACHE_DIR}/probe-repair-password"
+  custody="$(jq -n --slurpfile custody "${CACHE_DIR}/probe-repair-custody" --rawfile password "${CACHE_DIR}/probe-repair-password" '{custody:$custody[0],password:$password}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" --validate-probe-custody)" || fail "target probe canonical password mismatch"
+  validate_applied_cell_consumer_banks "$node" "$custody" 'app service migration tls'
+  # Only this owned phase tolerates the old logical probe URL, before readonly qualification.
+  materialize_database_cell_applied_custodies "$node" probe-repair
+  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "$DATABASE_CELL_REGISTER_READMISSION_SHA256" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet,readmissionReceiptId:$readmission}')"
+  response="$(cell_actor_http /v1/akash/database-cell-binding/qualify-applied-probe "$request")" || fail "actual target probe qualification unavailable"
+  printf '%s' "$bundle" > "${CACHE_DIR}/probe-repair-evidence"
+  printf '%s' "$response" > "${CACHE_DIR}/probe-repair-response"
+  printf '%s' "$request" > "${CACHE_DIR}/probe-repair-reference"
+  qualification="$(jq -n --slurpfile custody "${CACHE_DIR}/probe-repair-custody" --slurpfile bundle "${CACHE_DIR}/probe-repair-evidence" --slurpfile response "${CACHE_DIR}/probe-repair-response" --slurpfile reference "${CACHE_DIR}/probe-repair-reference" '{custody:$custody[0],bundle:$bundle[0],qualification:$response[0].qualification,reference:($reference[0]|del(.allocationEnvironment))}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" --validate-probe-qualification)" || fail "target probe proof differs from immutable owned references"
+  # Reread, compare, then CAS the exact bank version; a concurrent rotation must win.
+  current="$(bao_exec "" "kv get -format=json 'cogni/production/${bank}'")" || fail "probe component recheck unavailable"
+  current_version="$(jq -er '.data.metadata.version' <<<"$current")" || fail "probe KV recheck invalid"
+  [[ "$current_version" == "$version" && "$(jq -r .data.data.DATABASE_RECOVERY_PROBE_PASSWORD <<<"$current")" == "$password" && "$(jq -r '.data.data.DATABASE_RECOVERY_PROBE_URL // ""' <<<"$current")" == "$old_url" ]] || fail "probe component changed during qualification"
+  next="$(jq -r .readOnlyProbe.dsn <<<"$custody")"
+  if [[ "$next" != "$old_url" ]]; then
+    printf '%s' "$next" > "${CACHE_DIR}/probe-repair-url"
+    jq -n --rawfile url "${CACHE_DIR}/probe-repair-url" '{DATABASE_RECOVERY_PROBE_URL:$url}' | bao_exec -i "kv patch -method=patch -cas=${version} 'cogni/production/${bank}' -" >/dev/null || fail "probe URL CAS refused raced component"
+  fi
+  # Only credential-free evidence is logged; no body, password or DSN is emitted.
+  log "owned probe custody qualified sha=$(jq -r .qualificationSha256 <<<"$qualification") native=$(jq -r .systemIdentifier <<<"$qualification")"
 }

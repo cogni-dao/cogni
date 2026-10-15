@@ -250,6 +250,7 @@ export function projectDatabaseCellPlacement(input: unknown) {
     return {
       privatePlan: publicValues,
       publicValues,
+      logicalProbeDsn: custody.readOnlyProbe?.dsn ?? null,
       ...(custody.runtimePoolLimits
         ? { runtimePoolLimits: custody.runtimePoolLimits }
         : {}),
@@ -367,6 +368,7 @@ function projectBootstrapPlacement(input: unknown) {
     privatePlan: publicValues,
     // No public writer may consume privatePlan on readiness alone.
     publicValues: binding.phase === "applied" ? publicValues : null,
+    logicalProbeDsn: binding.phase === "applied" ? probe.dsn : null,
     probe,
     admin,
     readmit,
@@ -450,25 +452,207 @@ export function composeDatabaseCellControlComponents(input: unknown) {
   };
 }
 
+/** Target probe bytes come from owned custody, with its existing canonical password. */
+export function validateAppliedDatabaseCellProbeCustody(input: unknown) {
+  const value = z
+    .object({
+      custody: DatabaseCellAppliedCustodySchema,
+      password: z.string().min(1),
+    })
+    .strict()
+    .parse(input);
+  const derived = composeDatabaseCellDsn(
+    {
+      host: value.custody.canonicalEndpointHost,
+      port: Number(new URL(value.custody.app.dsn).port),
+    },
+    value.custody.databaseName,
+    `probe_${value.custody.databaseName.slice("cogni_".length)}`,
+    value.password
+  );
+  if (
+    !value.custody.readOnlyProbe ||
+    value.custody.readOnlyProbe.dsn !== derived
+  )
+    throw new Error(
+      "target probe differs from its canonical component password"
+    );
+  return value.custody;
+}
+
+const ProbeQualificationSchema = z
+  .object({
+    version: z.literal(1),
+    nodeId: z.string().uuid(),
+    nodeSlug: z.string().min(1),
+    environment: z.literal("production"),
+    cogniKey: z.string().min(1),
+    allocationReceiptId: z.string().uuid(),
+    dseq: z.string().regex(/^[0-9]+$/),
+    providerAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
+    systemIdentifier: z.string().regex(/^[0-9]+$/),
+    targetBuildSha: z.string().regex(/^[0-9a-f]{40}$/),
+    manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    readmissionReceiptId: z.string().min(1),
+    probeDsnSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    observedFactsSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    observedAt: z.string().datetime({ offset: true }),
+    qualificationSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+/** Authenticate the readonly actor result against the same immutable owned packet bytes. */
+export function validateAppliedDatabaseCellProbeQualification(input: unknown) {
+  const value = z
+    .object({
+      custody: DatabaseCellAppliedCustodySchema,
+      bundle: DatabaseCellAppliedEvidenceBundleSchema,
+      qualification: ProbeQualificationSchema,
+      reference: z
+        .object({
+          nodeId: z.string().uuid(),
+          cogniKey: z.string().min(1),
+          manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
+          readmissionReceiptId: z.string().regex(/^[0-9a-f]{64}$/),
+        })
+        .strict(),
+    })
+    .strict()
+    .parse(input);
+  const { qualificationSha256, ...core } = value.qualification;
+  const sha = (data: string) => createHash("sha256").update(data).digest("hex");
+  const packets = value.bundle.artifacts.filter(
+    (artifact) =>
+      artifact.kind === "manual-cutover" &&
+      artifact.sha256 === value.reference.manualCutoverPacketSha256
+  );
+  const readmits = value.bundle.artifacts.filter(
+    (artifact) =>
+      artifact.kind === "readmission" &&
+      artifact.sha256 === value.reference.readmissionReceiptId
+  );
+  if (packets.length !== 1 || readmits.length !== 1 || !packets[0])
+    throw new Error(
+      "immutable probe qualification references absent or ambiguous"
+    );
+  const packet = z
+    .object({
+      nodeId: z.string().uuid(),
+      nodeSlug: z.string(),
+      environment: z.literal("production"),
+      primary: z.object({
+        allocationReceiptId: z.string().uuid(),
+        systemIdentifier: z.string(),
+      }),
+      sourceFence: z.object({ systemIdentifier: z.string() }),
+    })
+    .parse(
+      JSON.parse(Buffer.from(packets[0].bytesBase64, "base64").toString("utf8"))
+    );
+  const age = Date.now() - Date.parse(core.observedAt);
+  if (
+    !value.custody.readOnlyProbe ||
+    qualificationSha256 !== sha(JSON.stringify(core)) ||
+    age < -5000 ||
+    age > 60000 ||
+    core.nodeId !== value.reference.nodeId ||
+    core.nodeId !== value.custody.nodeId ||
+    core.nodeId !== value.bundle.nodeId ||
+    core.nodeId !== packet.nodeId ||
+    core.nodeSlug !== value.custody.nodeSlug ||
+    core.nodeSlug !== packet.nodeSlug ||
+    core.cogniKey !== value.reference.cogniKey ||
+    core.manualCutoverPacketSha256 !==
+      value.reference.manualCutoverPacketSha256 ||
+    core.readmissionReceiptId !== value.reference.readmissionReceiptId ||
+    core.allocationReceiptId !== packet.primary.allocationReceiptId ||
+    core.systemIdentifier !== packet.primary.systemIdentifier ||
+    core.systemIdentifier === packet.sourceFence.systemIdentifier ||
+    core.targetBuildSha !== value.custody.targetBuildSha ||
+    core.probeDsnSha256 !== sha(value.custody.readOnlyProbe.dsn)
+  )
+    throw new Error(
+      "readonly probe qualification differs from immutable target custody"
+    );
+  return value.qualification;
+}
+
+/** Initial private inputs are typed owned custody/artifact bytes, never APPLIED history. */
+export function validateAppliedDatabaseCellInput(
+  input: unknown,
+  nodeSlug: string,
+  nodeId: string,
+  key: string
+) {
+  z.string().uuid().parse(nodeId);
+  if (key === "DATABASE_CELL_APPLIED_CUSTODY_JSON") {
+    const custody = DatabaseCellAppliedCustodySchema.parse(input);
+    if (
+      custody.nodeSlug !== nodeSlug ||
+      custody.nodeId !== nodeId ||
+      custody.environment !== "production"
+    )
+      throw new Error("applied input owner mismatch");
+    return custody;
+  }
+  if (key !== "DATABASE_CELL_APPLIED_EVIDENCE_BUNDLE_JSON")
+    throw new Error("unsupported applied input key");
+  const bundle = DatabaseCellAppliedEvidenceBundleSchema.parse(input);
+  const artifacts = bundle.artifacts.filter(
+    (artifact) => artifact.kind === "manual-cutover"
+  );
+  if (bundle.nodeId !== nodeId || artifacts.length !== 1 || !artifacts[0])
+    throw new Error("applied evidence owner absent or ambiguous");
+  const packet = z
+    .object({
+      nodeId: z.string().uuid(),
+      nodeSlug: z.string(),
+      environment: z.literal("production"),
+    })
+    .parse(
+      JSON.parse(
+        Buffer.from(artifacts[0].bytesBase64, "base64").toString("utf8")
+      )
+    );
+  if (packet.nodeId !== nodeId || packet.nodeSlug !== nodeSlug)
+    throw new Error("applied evidence owner mismatch");
+  return bundle;
+}
+
 if (process.argv[1]?.endsWith("materialize-database-cell-placement.ts")) {
   try {
     process.stdout.write(
       JSON.stringify(
-        process.argv[2] === "--control-components"
-          ? composeDatabaseCellControlComponents(
-              JSON.parse(readFileSync(0, "utf8"))
+        process.argv[2] === "--validate-applied-input"
+          ? validateAppliedDatabaseCellInput(
+              JSON.parse(readFileSync(0, "utf8")),
+              process.argv[3] ?? "",
+              process.argv[4] ?? "",
+              process.argv[5] ?? ""
             )
-          : process.argv[2] === "--validate-evidence"
-            ? DatabaseCellAppliedEvidenceBundleSchema.parse(
+          : process.argv[2] === "--validate-probe-custody"
+            ? validateAppliedDatabaseCellProbeCustody(
                 JSON.parse(readFileSync(0, "utf8"))
               )
-            : process.argv[2] === "--validate-applied-custody"
-              ? DatabaseCellAppliedCustodySchema.parse(
+            : process.argv[2] === "--validate-probe-qualification"
+              ? validateAppliedDatabaseCellProbeQualification(
                   JSON.parse(readFileSync(0, "utf8"))
                 )
-              : projectDatabaseCellPlacement(
-                  JSON.parse(readFileSync(0, "utf8"))
-                )
+              : process.argv[2] === "--control-components"
+                ? composeDatabaseCellControlComponents(
+                    JSON.parse(readFileSync(0, "utf8"))
+                  )
+                : process.argv[2] === "--validate-evidence"
+                  ? DatabaseCellAppliedEvidenceBundleSchema.parse(
+                      JSON.parse(readFileSync(0, "utf8"))
+                    )
+                  : process.argv[2] === "--validate-applied-custody"
+                    ? DatabaseCellAppliedCustodySchema.parse(
+                        JSON.parse(readFileSync(0, "utf8"))
+                      )
+                    : projectDatabaseCellPlacement(
+                        JSON.parse(readFileSync(0, "utf8"))
+                      )
       )
     );
   } catch {

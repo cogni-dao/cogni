@@ -583,3 +583,23 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly rowCount: string;
   };
 }
+
+/** Readonly qualification, never an applied allocation receipt. */
+export interface DatabaseCellAppliedProbeQualification {
+  version: 1;
+  nodeId: string;
+  nodeSlug: string;
+  environment: "production";
+  cogniKey: string;
+  allocationReceiptId: string;
+  dseq: string;
+  providerAccount: string;
+  systemIdentifier: string;
+  targetBuildSha: string;
+  manualCutoverPacketSha256: string;
+  readmissionReceiptId: string;
+  probeDsnSha256: string;
+  observedFactsSha256: string;
+  observedAt: string;
+  qualificationSha256: string;
+}

@@ -16,6 +16,7 @@ import type {
   AkashTxActuatorPort,
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
+  DatabaseCellAppliedProbeQualificationPort,
   DatabaseCellAppliedRegistrationEvidencePort,
   DatabaseCellAppliedRegistrationPort,
   DatabaseCellBindingPort,
@@ -46,7 +47,10 @@ interface BindingStore {
   ): Promise<void>;
 }
 export class DatabaseCellBinder
-  implements DatabaseCellBindingPort, DatabaseCellAppliedRegistrationPort
+  implements
+    DatabaseCellBindingPort,
+    DatabaseCellAppliedRegistrationPort,
+    DatabaseCellAppliedProbeQualificationPort
 {
   constructor(
     private readonly deps: {
@@ -320,6 +324,53 @@ export class DatabaseCellBinder
   async registerApplied(
     input: Parameters<DatabaseCellAppliedRegistrationPort["registerApplied"]>[0]
   ) {
+    return (await this.validateAppliedRegistration(input, true)).receipts;
+  }
+  async qualifyAppliedProbe(
+    input: Parameters<
+      DatabaseCellAppliedProbeQualificationPort["qualifyAppliedProbe"]
+    >[0]
+  ) {
+    const result = await this.validateAppliedRegistration(input, false);
+    const selected = result.receipts.filter(
+      (receipt) => receipt.binding.environment === "production"
+    );
+    const receipt = selected[0];
+    if (selected.length !== 1 || !receipt || !result.probeDsnSha256)
+      throw new AkashTxError(
+        "identity_conflict",
+        "owned probe qualification absent or ambiguous"
+      );
+    const core = {
+      version: 1 as const,
+      nodeId: receipt.binding.nodeId,
+      nodeSlug: receipt.binding.nodeSlug,
+      environment: "production" as const,
+      cogniKey: receipt.binding.cogniKey,
+      allocationReceiptId: receipt.binding.receiptId,
+      dseq: receipt.binding.dseq,
+      providerAccount: receipt.binding.providerAccount,
+      systemIdentifier: receipt.binding.systemIdentifier,
+      targetBuildSha: receipt.targetBuildSha,
+      manualCutoverPacketSha256: input.manualCutoverPacketSha256,
+      readmissionReceiptId: input.readmissionReceiptId,
+      probeDsnSha256: result.probeDsnSha256,
+      observedFactsSha256: result.observedFactsSha256,
+      observedAt: result.observedAt,
+    };
+    return {
+      ...core,
+      qualificationSha256: createHash("sha256")
+        .update(JSON.stringify(core))
+        .digest("hex"),
+    };
+  }
+  private async validateAppliedRegistration(
+    input: Parameters<
+      DatabaseCellAppliedRegistrationPort["registerApplied"]
+    >[0],
+    persist: boolean
+  ) {
     const refuse: (message: string) => never = (message) => {
       throw new AkashTxError("identity_conflict", message);
     };
@@ -356,6 +407,16 @@ export class DatabaseCellBinder
         "trusted applied registration evidence malformed"
       );
     const facts = parsedFacts.data;
+    const validated = (receipts: readonly AppliedDatabaseCellReceipt[]) => ({
+      receipts,
+      observedAt: facts.observedAt,
+      observedFactsSha256: createHash("sha256")
+        .update(JSON.stringify(facts))
+        .digest("hex"),
+      probeDsnSha256: custody.readOnlyProbe
+        ? createHash("sha256").update(custody.readOnlyProbe.dsn).digest("hex")
+        : null,
+    });
     const {
       provider,
       native,
@@ -768,7 +829,7 @@ export class DatabaseCellBinder
         "applied registration cannot replace prior physical identity or audited custody"
       );
     if (old) {
-      if (!control || old.binding.nativeControl) return previous;
+      if (!control || old.binding.nativeControl) return validated(previous);
       // Add genuine installed control to the same admitted identity. No role/login mutation,
       // invented incident, replacement allocation or rewritten original admission history.
       const next = AppliedDatabaseCellReceiptsSchema.parse(
@@ -785,8 +846,8 @@ export class DatabaseCellBinder
             : receipt
         )
       );
-      await this.deps.store.save(record, next, previous);
-      return next;
+      if (persist) await this.deps.store.save(record, next, previous);
+      return validated(next);
     }
     const receipt: AppliedDatabaseCellReceipt = {
       allocationEnvironment: "production",
@@ -869,8 +930,8 @@ export class DatabaseCellBinder
       ...previous,
       receipt,
     ]);
-    await this.deps.store.save(record, next, previous);
-    return next;
+    if (persist) await this.deps.store.save(record, next, previous);
+    return validated(next);
   }
 
   async cutover(input: DatabaseCellCutoverReference) {

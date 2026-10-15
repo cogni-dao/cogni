@@ -137,7 +137,7 @@ cell_seed_exact() {
 # Same owner-bank ESO volume as factory kits; no second secret reader or store.
 # Missing imported custody is inert. No root/TLS key/control credentials are minted.
 materialize_database_cell_applied_custodies() {
-  local selected_scope="${1:-}"
+  local selected_scope="${1:-}" publication="${2:-strict}"
   [[ "$DEPLOY_ENVIRONMENT" == production && "${SECRETS_CONTROL_ENV:-$DEPLOY_ENVIRONMENT}" == production ]] || return 0
   local node custody bundle entries='[]' bundles='[]' previous aggregate key
   for node in "${NODE_TARGETS[@]}"; do
@@ -145,7 +145,13 @@ materialize_database_cell_applied_custodies() {
     prefetch_path "${node}-database-cell"
     custody="$(bao_get_field "${node}-database-cell" DATABASE_CELL_APPLIED_CUSTODY_JSON)"
     if [[ -n "$custody" ]]; then
-      validate_applied_cell_consumer_custody "$node" "$custody"
+      if [[ "$publication" == probe-repair ]]; then
+        [[ "${SECRET_MATERIALIZE_PHASE:-}" == database-cell-probe-custody && "$selected_scope" == "$node" && "$(node_id_for_target "$node")" == "${DATABASE_CELL_CONTROL_NODE_ID:-}" ]] || fail "probe repair publication leaves explicit owned phase"
+        validate_applied_cell_consumer_banks "$node" "$custody" 'app service migration tls'
+      else
+        [[ "$publication" == strict ]] || fail "unknown applied custody publication"
+        validate_applied_cell_consumer_custody "$node" "$custody"
+      fi
       custody="$(printf '%s' "$custody" | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" --validate-applied-custody)" || fail "owned applied custody invalid"
       entries="$(jq --argjson entry "$custody" '.+[$entry]' <<<"$entries")"
     fi

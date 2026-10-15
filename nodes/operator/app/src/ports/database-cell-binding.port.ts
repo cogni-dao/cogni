@@ -99,3 +99,12 @@ export interface DatabaseCellAppliedRegistrationEvidencePort {
     readonly readmissionReceiptId: string;
   }): Promise<DatabaseCellAppliedRegistrationFacts>;
 }
+
+/** Full applied evidence validation without saving a binding or publishing any secret. */
+export interface DatabaseCellAppliedProbeQualificationPort {
+  qualifyAppliedProbe(
+    input: Parameters<DatabaseCellAppliedRegistrationPort["registerApplied"]>[0]
+  ): Promise<
+    import("@/types/database-cell").DatabaseCellAppliedProbeQualification
+  >;
+}

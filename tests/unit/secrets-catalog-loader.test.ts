@@ -146,6 +146,11 @@ describe("private database component setup ownership", () => {
         appliesTo: "database" as const,
         consumedBy: ["compose" as const],
       },
+      PRIVATE_CELL_WORKER: {
+        tier: "A1" as const,
+        appliesTo: "database" as const,
+        consumedBy: ["compose" as const, "worker" as const],
+      },
       POD_DATABASE: {
         tier: "A1" as const,
         appliesTo: "database" as const,
@@ -159,6 +164,7 @@ describe("private database component setup ownership", () => {
       },
     };
     expect(isSetupSecretsManaged("PRIVATE_CELL", routes)).toBe(false);
+    expect(isSetupSecretsManaged("PRIVATE_CELL_WORKER", routes)).toBe(false);
     for (const name of ["POD_DATABASE", "LEGACY_DATABASE", "WEB"])
       expect(isSetupSecretsManaged(name, routes)).toBe(true);
   });

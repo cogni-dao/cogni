@@ -118,6 +118,7 @@ function fixture() {
       systemIdentifier: "1234567890",
       appSourceSha: custody.targetBuildSha,
       sourceFenceReceiptSha256: "9".repeat(64),
+      sourceSystemIdentifier: "9876543210",
       restorationParityManifestSha256: "a".repeat(64),
       executionActor: { kind: "agent", id: nodeId },
       approvalAuthority: {
@@ -190,6 +191,17 @@ function fixture() {
 }
 
 describe("owned applied-cell managed observation", () => {
+  it("requires the authenticated source native identity in the manual packet", () => {
+    const { packet } = fixture();
+    expect(packet.sourceSystemIdentifier).not.toBe(packet.systemIdentifier);
+    const { sourceSystemIdentifier: _source, ...missingSource } = packet;
+    expect(
+      DatabaseCellAppliedRegistrationFactsSchema.shape.manualCutover.safeParse(
+        missingSource
+      ).success
+    ).toBe(false);
+  });
+
   it("binds current owned receipts/manifests while hashing mounted consumers rather than opaque provider env", async () => {
     const current = fixture();
     const facts = await observeAppliedCellManaged(current.input);

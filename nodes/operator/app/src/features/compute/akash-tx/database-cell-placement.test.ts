@@ -3,6 +3,15 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoSpecSchema } from "@cogni/repo-spec";
 import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
@@ -40,6 +49,9 @@ import {
 import {
   composeDatabaseCellControlComponents,
   projectDatabaseCellPlacement,
+  validateAppliedDatabaseCellInput,
+  validateAppliedDatabaseCellProbeCustody,
+  validateAppliedDatabaseCellProbeQualification,
 } from "../../../../../../../scripts/lib/materialize-database-cell-placement";
 
 const nodeId = "11111111-1111-4111-8111-111111111111";
@@ -1809,5 +1821,309 @@ describe("owned immutable applied evidence transport", () => {
         encoding: "utf8",
       })
     ).toBe("opaque-owned-current-dsn\n");
+  });
+});
+
+describe("readonly initial probe custody bootstrap", () => {
+  async function prepared() {
+    const facts = registrationFacts();
+    const password = "a".repeat(64);
+    const custody = {
+      ...appliedCustody(),
+      readOnlyProbe: {
+        dsn: composeDatabaseCellDsn(
+          { host: "poly-db.fixture.example.org", port: 15432 },
+          "cogni_alpha",
+          "probe_alpha",
+          password
+        ),
+        custodyRef: {
+          service: "alpha-database-recovery-probe",
+          key: "DATABASE_RECOVERY_PROBE_URL",
+        },
+      },
+    };
+    const artifact = (
+      kind: "manual-cutover" | "readmission",
+      data: unknown
+    ) => {
+      const bytes = Buffer.from(JSON.stringify(data));
+      return {
+        kind,
+        mediaType: "application/json",
+        sha256: shaBuffer(bytes),
+        bytesBase64: bytes.toString("base64"),
+      };
+    };
+    const manual = artifact("manual-cutover", {
+      nodeId,
+      nodeSlug: "alpha",
+      environment: "production",
+      primary: {
+        allocationReceiptId: facts.manualCutover.allocationReceiptId,
+        systemIdentifier: facts.native.systemIdentifier,
+      },
+      sourceFence: {
+        systemIdentifier: facts.manualCutover.sourceSystemIdentifier,
+      },
+    });
+    const readmit = artifact("readmission", { actual: "readonly-fixture" });
+    facts.manualCutover.packetSha256 = manual.sha256;
+    facts.readmission.packetSha256 = manual.sha256;
+    facts.readmission.receiptId = readmit.sha256;
+    const reference = {
+      cogniKey: "fixture-cell",
+      nodeId,
+      allocationEnvironment: "production",
+      manualCutoverPacketSha256: manual.sha256,
+      readmissionReceiptId: readmit.sha256,
+    };
+    const current = fixture({ appliedFacts: facts, appliedCustody: custody });
+    const qualification = await current.binder.qualifyAppliedProbe(reference);
+    const bundle = {
+      version: 1,
+      nodeId,
+      environment: "production",
+      artifacts: [manual, readmit],
+    };
+    const { allocationEnvironment: _lane, ...referenceOnly } = reference;
+    return {
+      facts,
+      custody,
+      password,
+      current,
+      qualification,
+      bundle,
+      reference,
+      referenceOnly,
+    };
+  }
+  it("fully qualifies native identity without saving APPLIED history and keeps ordinary registration strict", async () => {
+    const value = await prepared();
+    expect(value.current.writes()).toBe(0);
+    expect(await value.current.binder.read(value.reference)).toEqual([]);
+    expect(value.qualification.systemIdentifier).toBe(
+      value.facts.native.systemIdentifier
+    );
+    expect(value.qualification).not.toHaveProperty("dsn");
+    expect(
+      validateAppliedDatabaseCellInput(
+        value.custody,
+        "alpha",
+        nodeId,
+        "DATABASE_CELL_APPLIED_CUSTODY_JSON"
+      )
+    ).toEqual(value.custody);
+    expect(
+      validateAppliedDatabaseCellInput(
+        value.bundle,
+        "alpha",
+        nodeId,
+        "DATABASE_CELL_APPLIED_EVIDENCE_BUNDLE_JSON"
+      )
+    ).toEqual(value.bundle);
+    for (const [input, owner, key] of [
+      [value.custody, "foreign", "DATABASE_CELL_APPLIED_CUSTODY_JSON"],
+      [
+        { ...value.custody, environment: "preview" },
+        "alpha",
+        "DATABASE_CELL_APPLIED_CUSTODY_JSON",
+      ],
+      [value.bundle, "foreign", "DATABASE_CELL_APPLIED_EVIDENCE_BUNDLE_JSON"],
+      [value.custody, "alpha", "DATABASE_CELL_PLACEMENT_RECEIPT_JSON"],
+    ] as const)
+      expect(() =>
+        validateAppliedDatabaseCellInput(input, owner, nodeId, key)
+      ).toThrow();
+    expect(
+      validateAppliedDatabaseCellProbeCustody({
+        custody: value.custody,
+        password: value.password,
+      })
+    ).toEqual(value.custody);
+    expect(
+      validateAppliedDatabaseCellProbeQualification({
+        custody: value.custody,
+        bundle: value.bundle,
+        qualification: value.qualification,
+        reference: value.referenceOnly,
+      })
+    ).toEqual(value.qualification);
+    const [applied] = await value.current.binder.registerApplied(
+      value.reference
+    );
+    expect(value.current.writes()).toBe(1);
+    const projection = projectDatabaseCellPlacement({
+      receipt: applied,
+      custody: value.custody,
+    });
+    expect(projection.logicalProbeDsn).toBe(value.custody.readOnlyProbe.dsn);
+    expect(projection.publicValues).not.toHaveProperty(
+      "DATABASE_RECOVERY_PROBE_URL"
+    );
+    const repoRoot = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const rendered = execFileSync(
+      "bash",
+      [
+        "-c",
+        'set -eu; REPO_ROOT="$1"; source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"; TARGET_NODE=alpha; CELL_PLACEMENT_JSON="$2"; cell_placement_composed_value alpha DATABASE_RECOVERY_PROBE_URL',
+        "fixture",
+        repoRoot,
+        JSON.stringify(projection),
+      ],
+      { encoding: "utf8" }
+    );
+    expect(rendered.trim()).toBe(value.custody.readOnlyProbe.dsn);
+  });
+  it("refuses wrong passwords, native identities, owners and ambiguous immutable artifacts", async () => {
+    const value = await prepared();
+    expect(() =>
+      validateAppliedDatabaseCellProbeCustody({
+        custody: value.custody,
+        password: "wrong",
+      })
+    ).toThrow();
+    for (const mutate of [
+      { systemIdentifier: "999" },
+      { nodeId: "99999999-9999-4999-8999-999999999999" },
+      { manualCutoverPacketSha256: "0".repeat(64) },
+    ]) {
+      const { qualificationSha256: _digest, ...core } = {
+        ...value.qualification,
+        ...mutate,
+      };
+      const qualification = {
+        ...core,
+        qualificationSha256: shaBuffer(Buffer.from(JSON.stringify(core))),
+      };
+      expect(() =>
+        validateAppliedDatabaseCellProbeQualification({
+          custody: value.custody,
+          bundle: value.bundle,
+          qualification,
+          reference: value.referenceOnly,
+        })
+      ).toThrow();
+    }
+    expect(() =>
+      validateAppliedDatabaseCellProbeQualification({
+        custody: value.custody,
+        bundle: {
+          ...value.bundle,
+          artifacts: [...value.bundle.artifacts, value.bundle.artifacts[0]],
+        },
+        qualification: value.qualification,
+        reference: value.referenceOnly,
+      })
+    ).toThrow();
+    value.facts.native.systemIdentifier = "999";
+    await expect(
+      value.current.binder.qualifyAppliedProbe(value.reference)
+    ).rejects.toThrow();
+    expect(value.current.writes()).toBe(0);
+  });
+  it("publishes only logical URL after real qualification and rejects owner/password/native/KV races", async () => {
+    const value = await prepared();
+    const repoRoot = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const work = mkdtempSync(join(tmpdir(), "cell-probe-bootstrap-"));
+    const script = [
+      "set -eu",
+      'REPO_ROOT="$1"',
+      'CACHE_DIR="$2"',
+      'source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"',
+      "TARGET_NODE=operator; RELIABILITY_CONTROLLER=operator; DEPLOY_ENVIRONMENT=production; SECRETS_CONTROL_ENV=production; SECRET_MATERIALIZE_PHASE=database-cell-probe-custody",
+      'NODE_TARGETS=(alpha); [[ "$CASE" != ambiguous ]] || NODE_TARGETS=(alpha alpha)',
+      'DATABASE_CELL_CONTROL_NODE_ID="$NODE_ID"; DATABASE_CELL_REGISTER_COGNI_KEY=fixture-cell; DATABASE_CELL_REGISTER_PACKET_SHA256="$PACKET_SHA"; DATABASE_CELL_REGISTER_READMISSION_SHA256="$READMIT_SHA"',
+      '[[ "$CASE" != wrongowner ]] || TARGET_NODE=alpha',
+      '[[ "$CASE" != missingref ]] || DATABASE_CELL_REGISTER_PACKET_SHA256=""',
+      'fail() { echo "$*" >&2; exit 39; }',
+      'node_id_for_target() { printf "%s" "$NODE_ID"; }',
+      "prefetch_path() { :; }",
+      'bao_get_field() { case "$1/$2" in alpha-database-cell/DATABASE_CELL_APPLIED_CUSTODY_JSON) printf "%s" "$CUSTODY";; alpha-database-cell/DATABASE_CELL_APPLIED_EVIDENCE_BUNDLE_JSON) printf "%s" "$BUNDLE";; alpha/DATABASE_URL) printf "%s" "$APP_DSN";; alpha/DATABASE_SERVICE_URL) printf "%s" "$SERVICE_DSN";; *) fail "unexpected bank read";; esac; }',
+      'materialize_database_cell_applied_custodies() { [[ "$1" == alpha && "$2" == probe-repair ]]; }',
+      'cell_actor_http() { [[ "$1" == /v1/akash/database-cell-binding/qualify-applied-probe ]]; printf "%s" "$RESPONSE"; }',
+      'bao_exec() { case "$2" in *"kv get"*) if [[ -f "$CACHE_DIR/read-marker" && "$CASE" == race ]]; then printf "%s" "$RACED_BANK"; else printf "%s" "$BANK"; fi; touch "$CACHE_DIR/read-marker";; *"kv patch -method=patch -cas=7"*) [[ "$1" == -i ]]; cat > "$CACHE_DIR/written";; *) fail "unexpected writer operation";; esac; }',
+      "log() { :; }",
+      "materialize_database_cell_probe_custody",
+    ].join("\n");
+    const rawBank = {
+      data: {
+        metadata: { version: 7 },
+        data: {
+          DATABASE_RECOVERY_PROBE_PASSWORD: value.password,
+          DATABASE_RECOVERY_PROBE_URL: "old-source-retained",
+          SIBLING: "unchanged",
+        },
+      },
+    };
+    try {
+      for (const name of [
+        "valid",
+        "wrongowner",
+        "missingref",
+        "ambiguous",
+        "password",
+        "native",
+        "race",
+      ]) {
+        const dir = join(work, name);
+        mkdirSync(dir);
+        const bank = structuredClone(rawBank);
+        if (name === "password")
+          bank.data.data.DATABASE_RECOVERY_PROBE_PASSWORD = "wrong";
+        const qualification = structuredClone(value.qualification);
+        if (name === "native") {
+          qualification.systemIdentifier = "999";
+          const { qualificationSha256: _sha, ...core } = qualification;
+          qualification.qualificationSha256 = shaBuffer(
+            Buffer.from(JSON.stringify(core))
+          );
+        }
+        const env = {
+          // biome-ignore lint/style/noProcessEnv: inherit PATH for isolated shell fixture
+          ...process.env,
+          CASE: name,
+          NODE_ID: nodeId,
+          PACKET_SHA: value.reference.manualCutoverPacketSha256,
+          READMIT_SHA: value.reference.readmissionReceiptId,
+          CUSTODY: JSON.stringify(value.custody),
+          BUNDLE: JSON.stringify(value.bundle),
+          APP_DSN: value.custody.app.dsn,
+          SERVICE_DSN: value.custody.service.dsn,
+          RESPONSE: JSON.stringify({ qualification }),
+          BANK: JSON.stringify(bank),
+          RACED_BANK: JSON.stringify({
+            ...bank,
+            data: { ...bank.data, metadata: { version: 8 } },
+          }),
+        };
+        if (name === "valid") {
+          execFileSync("bash", ["-c", script, "fixture", repoRoot, dir], {
+            env,
+            encoding: "utf8",
+          });
+          expect(
+            JSON.parse(readFileSync(join(dir, "written"), "utf8"))
+          ).toEqual({
+            DATABASE_RECOVERY_PROBE_URL: value.custody.readOnlyProbe.dsn,
+          });
+        } else {
+          expect(() =>
+            execFileSync("bash", ["-c", script, "fixture", repoRoot, dir], {
+              env,
+              encoding: "utf8",
+              stdio: "pipe",
+            })
+          ).toThrow();
+          expect(existsSync(join(dir, "written"))).toBe(false);
+        }
+      }
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
   });
 });

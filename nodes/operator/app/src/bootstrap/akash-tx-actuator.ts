@@ -773,6 +773,7 @@ const server = createAkashTxActuatorServer({
   // The route is wired, but registration stays fail-closed until a distinct,
   // read-only applied-evidence producer is reviewed and injected into the binder.
   databaseCellAppliedRegistration: databaseCellBindings,
+  databaseCellAppliedProbeQualification: databaseCellBindings,
   ...{ databaseCellDiagnostic, databaseCellDiagnosticObserve },
   token: bearerToken,
   log,

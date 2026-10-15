@@ -440,6 +440,10 @@ fi
 source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
 source "$SCRIPT_DIR/lib/materialize-database-cell-placement.sh"
 case "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" in
+  database-cell-probe-custody)
+    created=0; unchanged=0
+    materialize_database_cell_probe_custody
+    exit 0 ;;
   database-cell-register-applied)
     created=0; unchanged=0
     materialize_database_cell_applied_registration
