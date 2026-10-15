@@ -67,6 +67,14 @@ spec:
                 name: node-app-config
             - secretRef:
                 name: node-app-secrets
+          env:
+            # Dedicated one-connection migration identity. Its 15-minute
+            # statement timeout is a PG15 USERSET session default, not a ceiling.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: migration-secrets
+                  key: DATABASE_MIGRATION_URL
           resources:
             requests:
               memory: "384Mi"
