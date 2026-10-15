@@ -81,8 +81,7 @@ export const EVENT_NAMES = {
   VCS_FLIGHT_REQUEST_COMPLETE: "feature.vcs_flight.request_complete",
   VCS_MERGE_REQUEST_COMPLETE: "feature.vcs_merge.request_complete",
   VCS_RUN_CI_REQUEST_COMPLETE: "feature.vcs_run_ci.request_complete",
-  FLIGHT_PROBE_PROJECTION_COMPLETE:
-    "feature.flight_probe_projection.complete",
+  FLIGHT_PROBE_PROJECTION_COMPLETE: "feature.flight_probe_projection.complete",
 
   // Adapter Events
   ADAPTER_LITELLM_COMPLETION_RESULT: "adapter.litellm.completion_result",

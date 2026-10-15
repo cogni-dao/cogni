@@ -70,10 +70,7 @@ describe("flight-probe credential projection route", () => {
         previous: null,
       }),
     });
-    const res = await handleFlightProbeCredentialProjection(
-      request(),
-      d
-    );
+    const res = await handleFlightProbeCredentialProjection(request(), d);
     expect(res.status).toBe(401);
     expect(res.headers.get("cache-control")).toBe("no-store");
     await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
