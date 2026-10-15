@@ -237,12 +237,14 @@ export class RemoteAuthorizationAdapter
 
     const actor = qualifiedReference(params.actorId);
     const account = qualifiedReference(params.resource);
-    const subject = params.subjectId
+    const subjectSupplied = params.subjectId !== undefined;
+    const subject = subjectSupplied
       ? qualifiedReference(params.subjectId)
       : undefined;
     if (
       !actor ||
       !account ||
+      (subjectSupplied && subject === undefined) ||
       (actor.kind !== "user" && actor.kind !== "agent") ||
       account.kind !== "billing_account" ||
       !LOCAL_ID_PATTERN.test(actor.localId) ||
