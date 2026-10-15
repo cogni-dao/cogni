@@ -49,7 +49,7 @@ Per the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-i
 - `actor_id` (UUID) is the economic subject — earns, spends, gets attributed
 - Actor kinds: `user | agent | system | org`
 - `user` actors have 1:1 FK to `users.id`
-- `agent` actors have optional `parent_actor_id` for hierarchy
+- `agent` actors may have accepted `parent_actor_id` stewardship for recovery; parentage never grants access or redirects rewards
 - `@cogni/ids` exports branded `ActorId` / `UserId` types
 
 The port's `SubjectRef` must align with actor kinds so that when the `actors` table lands (story.0117), assignment is a simple FK.

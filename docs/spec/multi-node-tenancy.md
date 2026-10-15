@@ -5,7 +5,7 @@ title: "Multi-Node Tenancy: Auth, Data Isolation, and Metering"
 status: active
 spec_state: proposed
 trust: draft
-summary: "Defines trust boundaries for multi-node deployments: shared identity with per-node sessions, DB-per-node isolation, node-local metering as authoritative source, and read-only inter-node communication."
+summary: "Defines trust boundaries for multi-node deployments: shared identity proof with node-local accounts and sessions, DB-per-node isolation, node-local metering as authoritative source, and read-only inter-node communication."
 read_when: Working on auth across nodes, per-node database provisioning, billing/metering aggregation, or inter-node API contracts.
 implements: []
 owner: derekg1729
@@ -23,11 +23,11 @@ Define trust boundaries for multi-node deployments across three concerns: authen
 ## Design
 
 > [!CRITICAL]
-> Shared identity, isolated sessions. DB-per-node, not tenancy columns. Node-local metering is authoritative; operator aggregation is derived.
+> Shared identity proof, node-local identities and sessions. DB-per-node, not tenancy columns. Node-local metering is authoritative; operator aggregation is derived.
 
 ## Context
 
-Cogni runs multiple sovereign nodes (operator, poly, resy) on shared infrastructure. Each node is a full-platform Next.js app with its own domain, its own database, and its own billing. The operator provides shared identity and optional aggregation services.
+Cogni runs multiple sovereign nodes (operator, poly, resy) on shared infrastructure. Each node is a full-platform Next.js app with its own domain, its own database, and its own billing. The operator provides optional identity proof/brokerage and aggregation services; each node remains the authority for its local identities.
 
 ### Current state (V0 — dev only)
 
@@ -63,7 +63,7 @@ All invariants are detailed in their respective sections below. Summary:
 
 | Invariant                         | Section                  |
 | --------------------------------- | ------------------------ |
-| SHARED_IDENTITY_ISOLATED_SESSIONS | Auth Model               |
+| SHARED_PROOF_LOCAL_IDENTITY       | Auth Model               |
 | ORIGIN_SCOPED_COOKIES             | Auth Model               |
 | SSO_THEN_LOCAL_SESSION            | Auth Model               |
 | DB_PER_NODE                       | Data Isolation           |
@@ -86,17 +86,17 @@ All invariants are detailed in their respective sections below. Summary:
 
 ### Auth invariants
 
-| Invariant                         | Rule                                                                                                                                                                                                                                      |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SHARED_IDENTITY_ISOLATED_SESSIONS | One identity provider (operator), per-node app sessions. A user signs in once via the operator IdP; each node mints and verifies its own local session.                                                                                   |
-| ORIGIN_SCOPED_COOKIES             | No parent-domain (`.cognidao.org`) session cookie. Each node's session cookie is scoped to its own origin (`poly.cognidao.org`, `resy.cognidao.org`). OWASP: parent-domain cookies expose all subdomains to cross-subdomain session risk. |
-| SSO_THEN_LOCAL_SESSION            | After IdP verification, the node creates a local JWT/session. The node never trusts a cookie from another origin.                                                                                                                         |
+| Invariant                   | Rule                                                                                                                                                                                                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SHARED_PROOF_LOCAL_IDENTITY | The operator may attest an immutable external subject, but every node re-proves that binding and mints its own local user/actor plus session. No operator UUID or bearer crosses the boundary.                                            |
+| ORIGIN_SCOPED_COOKIES       | No parent-domain (`.cognidao.org`) session cookie. Each node's session cookie is scoped to its own origin (`poly.cognidao.org`, `resy.cognidao.org`). OWASP: parent-domain cookies expose all subdomains to cross-subdomain session risk. |
+| SSO_THEN_LOCAL_SESSION      | After IdP verification, the node creates a local JWT/session. The node never trusts a cookie from another origin.                                                                                                                         |
 
 ### Architecture: three realms
 
-**Operator realm** — shared identity provider, shared `user_bindings` database, user account management. The operator is the IdP.
+**Operator realm** — identity proof provider and broker. Its users and `user_bindings` remain operator-local; it may attest an immutable external subject but never exports an operator account or UUID.
 
-**Node realm** — local authorization, local RLS, local metering. Each node mints its own session after the operator IdP confirms identity. The node's session cookie is origin-scoped and never shared.
+**Node realm** — local users/actors, evidenced bindings, authorization, RLS, and metering. After verifying the operator proof, each node creates or resolves its own local identity and mints its own session. The node's session cookie is origin-scoped and never shared.
 
 **Federation realm** (future) — sovereign nodes can trust the same IdP, a different IdP, or none at all. Trust relationships between nodes are explicit contracts, not shared sessions. Session model does not collapse when a node forks.
 
@@ -113,7 +113,7 @@ All invariants are detailed in their respective sections below. Summary:
 ### Production multi-domain requirements
 
 - **SIWE:** Verify against the domain field in the signed SIWE message itself, not a hardcoded `NEXTAUTH_URL.host`. Each node signs for its own domain.
-- **OAuth:** Per-node callback URLs registered with providers (GitHub, Discord, Google). Alternative: redirect proxy on operator that dispatches to correct node.
+- **OAuth:** Prefer the request-correlated operator broker so provider credentials stay off relying nodes. The proof carries the immutable provider subject; the node binds it to a local identity. A sovereign node may instead operate its own provider client without changing that local-identity rule.
 - **Cookies:** Origin-scoped per node. `poly.cognidao.org` cookie is never sent to `resy.cognidao.org`. No `Domain=.cognidao.org` attribute.
 
 ---

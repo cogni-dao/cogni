@@ -294,7 +294,7 @@ Use real FKs only inside operator Postgres:
 - `candidate_validation_targets.validation_request_id -> candidate_validation_requests.id`
 - `candidate_validation_lanes.active_validation_request_id -> candidate_validation_requests.id`
 
-Do **not** mint another agent identity in this coordinator. The durable-agent registration flow owns actor and credential creation; the coordinator consumes the authenticated request principal. A durable `agent:{node_id}/{actor_id}` remains distinct from a browser human, while legacy user-backed bearers are compatibility state only. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard).
+Do **not** mint another agent identity in this coordinator. The durable-agent registration flow owns actor and credential creation; the coordinator consumes the authenticated request principal. Phase 1's `claimed_by_user_id` accepts humans and legacy user-backed agent bearers only. Before durable agents use this coordinator, the session schema must add an actor/principal reference; it must never coerce `agent:{node_id}/{actor_id}` into a human FK. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard).
 
 Do **not** FK to Doltgres `work_items`. Cross-database FK is not available and would couple hot operational data to the versioned knowledge/work plane. Treat `work_item_id` as a validated external reference: on claim/create, the operator reads Dolt work item through `WorkItemQueryPort`; if missing, reject. Periodic reconciliation finds dangling refs.
 
@@ -305,7 +305,7 @@ Do **not** create a `nodes` table for v0. `node_targets` are catalog slugs resol
 Use the same separation as mature work management systems:
 
 - **Assignee:** durable accountable owner of the work item. This already exists as `WorkItem.assignees` and must remain on the Dolt-backed work item. Do not mirror it into `work_item_sessions`.
-- **Active claimant:** transient executor currently driving one operator handshake. This is `work_item_sessions.claimed_by_user_id`. It can be an external registered agent or a human user because both resolve to `SessionUser.id`.
+- **Active claimant:** transient executor currently driving one operator handshake. Phase 1 stores `work_item_sessions.claimed_by_user_id`, so it supports a human or legacy user-backed agent. Durable agents require the actor/principal schema evolution above.
 - **Reviewer:** durable review responsibility. This already exists as `WorkItem.reviewer`; PR 1 should read it for next-action text but not replace it.
 - **Requester:** event-level initiator, not a durable role. Use this word in API responses when helpful, but do not make it the main database role name.
 - **Evidence author:** when evidence exists later, use `created_by_user_id` for provenance. Do not add mutable `last_edited_by` columns across coordinator tables.
@@ -326,7 +326,7 @@ API:
 Behavior:
 
 - Claim validates `work_item_id` through the existing Dolt work-item port.
-- Claim uses the authenticated `SessionUser.id` as `claimed_by_user_id`; no separate participant/contact record is created.
+- Phase 1 claims use the authenticated compatibility `SessionUser.id` as `claimed_by_user_id`; no separate participant/contact record is created. This is not the durable-agent identity path.
 - Claim creates `work_item_sessions` with `deadline_at`.
 - Heartbeat updates `last_heartbeat_at` and returns `nextAction`.
 - PR-link records `branch` and `pr_number` on the active session after checking that the session belongs to the authenticated session owner.

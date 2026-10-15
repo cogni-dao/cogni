@@ -65,17 +65,19 @@ Establish enforceable invariants ensuring Node sovereignty, deployment portabili
 
 The system uses several orthogonal identity keys. Each has a single, non-overlapping purpose. See [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) for the full taxonomy.
 
-| Key                  | Type | Purpose                            | Scope                | Overloading Prohibited                            |
-| -------------------- | ---- | ---------------------------------- | -------------------- | ------------------------------------------------- |
-| `node_id`            | UUID | Deployment/instance identity       | Infra, DB tenancy    | Never used for governance domain or epoch scoping |
-| `scope_id`           | UUID | Governance/payout domain (project) | Ledger, epochs       | Never used for deployment identity                |
-| `user_id`            | UUID | Person identity                    | Cross-node           | Never replaced by wallet address or DID           |
-| `billing_account_id` | UUID | Payment/subscription tenancy       | Within a Node's DB   | Never used for governance or deployment identity  |
-| `dao_address`        | TEXT | On-chain contract identity         | Per-project on-chain | Attribute, not a database key                     |
+| Key                  | Type | Purpose                            | Scope                | Overloading Prohibited                             |
+| -------------------- | ---- | ---------------------------------- | -------------------- | -------------------------------------------------- |
+| `node_id`            | UUID | Deployment/instance identity       | Infra, DB tenancy    | Never used for governance domain or epoch scoping  |
+| `scope_id`           | UUID | Governance/payout domain (project) | Ledger, epochs       | Never used for deployment identity                 |
+| `user_id`            | UUID | Human identity                     | Node-local           | Never copied across nodes or replaced by a binding |
+| `billing_account_id` | UUID | Payment/subscription tenancy       | Within a Node's DB   | Never used for governance or deployment identity   |
+| `dao_address`        | TEXT | On-chain contract identity         | Per-project on-chain | Attribute, not a database key                      |
 
 **`node_id` = deployment identity only.** One node = one database, one set of infrastructure, one `docker compose up`. Multiple projects (scope_ids) can exist within a single node. `node_id` is never overloaded for governance semantics.
 
 **`scope_id` = governance domain.** Identifies which project an epoch, its activity, and its payouts belong to. V0 default: `scope_id = 'default'` (single-project nodes). Multi-scope activates when `.cogni/projects/*.yaml` manifests are added. All epoch-level invariants (`ONE_OPEN_EPOCH`, `EPOCH_WINDOW_UNIQUE`) are composite on `(node_id, scope_id)`. See [Attribution Ledger spec](./attribution-ledger.md#project-scoping).
+
+**Cross-node continuity uses bindings, not surrogate IDs.** A target node re-proves an immutable external binding and mints its own local `user_id` or `actor_id`; it never imports the operator's UUID or accepts a fleet-wide bearer.
 
 ### Node Topology — The Bundle Unit & Deployment Shapes
 

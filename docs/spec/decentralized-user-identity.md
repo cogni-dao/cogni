@@ -5,7 +5,7 @@ title: User Identity + Account Bindings
 status: active
 spec_state: active
 trust: reviewed
-summary: Stable user_id (UUID) as canonical identity. Wallet, Discord, and GitHub are evidenced bindings — never the identity itself. "Contributor" is a derived label, not an identity primitive. DID/VC portability deferred to P2.
+summary: Stable user_id (UUID) as the node-local human identity. Wallet, Discord, and GitHub are evidenced bindings — never the identity itself. "Contributor" is a derived label, not an identity primitive. DID/VC portability deferred to P2.
 read_when: Working on identity, auth, account linking, RBAC actor types, user context injection, or ledger attribution
 implements: proj.decentralized-identity
 owner: derekg1729
@@ -218,12 +218,13 @@ human stewardship and beneficiary policy separately.
 For the legacy P0 path, this lets a locally authenticated human prove control of
 an agent-operated GitHub account such as `flock-leader`. Under the
 [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard),
-that proof establishes an explicit stewardship/beneficiary decision; it does not
-turn the AI's source identity or authorship into the human's. The immutable provider
-identity binds to the durable agent actor, the allocation freezes the AI as earner
-and the selected beneficiary separately, and settlement later pins the beneficiary
-wallet. The frozen v1 broker carries subject provenance only; the claim ceremony
-and beneficiary policy live above it.
+that proof is evidence supplied to the claim ceremony; by itself it establishes
+neither stewardship nor beneficiary policy and never turns the AI's source identity
+or authorship into the human's. The immutable provider identity binds to the durable
+agent actor, the accepted claim records stewardship separately, the allocation
+freezes the AI as earner plus the explicitly selected beneficiary, and settlement
+later pins the beneficiary wallet. The frozen v1 broker carries subject provenance
+only; acceptance, recovery authority, and beneficiary policy live above it.
 
 **Attestation is not git-specific.** `claimantKey()` is
 `identity:<provider>:<external_id>` and `user_bindings.provider` already admits
@@ -251,7 +252,7 @@ Business logic references `id` (= `user_id`). `walletAddress` is nullable — `n
 
 ## Goal
 
-Provide a stable, auth-method-agnostic identity inside each node. `users.id` works whether the user arrives via wallet, Discord, or any future auth method. Wallet and external accounts are evidenced bindings, not the identity itself. Attribution preserves external claimant provenance and resolves it through node-local bindings only when ownership or settlement needs a local account.
+Provide a stable, auth-method-agnostic human identity inside each node. `users.id` works whether the human arrives via wallet, Discord, or any future auth method. Wallet and external accounts are evidenced bindings, not the identity itself. Durable AI identity remains a distinct `actor(kind=agent)`. Attribution preserves external claimant provenance and resolves it through node-local bindings only when ownership or settlement needs a local actor.
 
 ## Non-Goals
 
@@ -269,7 +270,7 @@ Provide a stable, auth-method-agnostic identity inside each node. `users.id` wor
 | Rule                             | Constraint                                                                                                                                                                                                                                                                                  |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | USER_ID_AT_CREATION              | Every user gets a UUID minted at first contact. No user exists without one.                                                                                                                                                                                                                 |
-| CANONICAL_IS_USER_ID             | Business logic identity references use `user_id`, never `wallet_address`, `discord_user_id`, or DID.                                                                                                                                                                                        |
+| CANONICAL_IS_USER_ID             | Human-account identity references use node-local `user_id`, never `wallet_address`, `discord_user_id`, or DID. Actor-aware economic authorship uses `actor_id`; it does not overload `user_id`.                                                                                             |
 | BINDINGS_ARE_EVIDENCED           | Every binding has proof recorded in `identity_events.payload` (SIWE signature, bot challenge, PR link). Bindings table is current-state index only.                                                                                                                                         |
 | NO_AUTO_MERGE                    | If a binding's `(provider, external_id)` is already bound to a different user, the bind attempt fails. Never silently re-point. DB-enforced via UNIQUE.                                                                                                                                     |
 | SIWE_UNCHANGED                   | SIWE authentication continues working. Binding additions are additive — no existing auth flow breaks.                                                                                                                                                                                       |

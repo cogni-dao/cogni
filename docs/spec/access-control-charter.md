@@ -79,14 +79,13 @@ It is not a new spec. Every load-bearing claim points at an existing canonical s
 │      Canonical: rbac.md, tool-use.md, tenant-connections.md         │
 └─────────────────────────────────────────────────────────────────────┘
                               ▲
-                              │  resolves to user_id via
+                              │  authenticates a principal via
                               │
 ┌─────────────────────────────────────────────────────────────────────┐
 │  L1  AUTHENTICATION (AuthN)                                         │
-│      How a request becomes a user_id. SIWE wallet + OAuth providers │
-│      (GitHub, Discord, Google), NextAuth v4, account linking via    │
-│      user_bindings.                                                 │
-│      Canonical: authentication.md, decentralized-user-identity.md   │
+│      How a request becomes a node-qualified principal. Humans use  │
+│      user_id; durable agents use actor_id + replaceable credential. │
+│      Canonical: authentication.md + human–AI identity standard      │
 └─────────────────────────────────────────────────────────────────────┘
                               ▲
                               │  references keys defined in
@@ -102,14 +101,14 @@ It is not a new spec. Every load-bearing claim points at an existing canonical s
 
 ### Layer contracts (what each layer guarantees to the layer above)
 
-| Layer                 | Provides                                                                                                                    | Consumes from below                                                                                                                                            |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **L0 Identity**       | A stable vocabulary of six orthogonal keys with prohibited-overloading invariants.                                          | —                                                                                                                                                              |
-| **L1 AuthN**          | A `user_id` (UUID) for every authenticated request, plus a SIWE-only `walletAddress` attribute. Session coherence for SIWE. | L0 keys.                                                                                                                                                       |
-| **L2 AuthZ**          | A boolean decision for `(actor, action, resource)` tuples. Tool-execution gating. Connection-credential gating.             | L0 keys + L1 `user_id` → resolves actor identity.                                                                                                              |
-| **L3 Secrets**        | A populated env var inside a pod (or a value rendered to `.env` on a Compose host). Audit trail of every read/write.        | L2 path-policy decisions for `eso-reader` / `<env>-writer` (today); future tenant-scoped paths governed by L2 (`cogni/<env>/_tenants/<billing_account_id>/*`). |
-| **L4 Governance/DAO** | An on-chain signal that authorizes a code or payout action. Multi-scope payment rails.                                      | L0 `scope_id` ↔ `dao_address` binding; L1 wallet identity for proposers.                                                                                      |
-| **L5 Operator Plane** | Substrate provisioning, tenant lifecycle, system-tenant execution context for governance agents.                            | All of L1–L4. Operator is a privileged consumer, not a peer.                                                                                                   |
+| Layer                 | Provides                                                                                                                                                                                                         | Consumes from below                                                                                                                                            |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **L0 Identity**       | A stable vocabulary of six orthogonal keys with prohibited-overloading invariants.                                                                                                                               | —                                                                                                                                                              |
+| **L1 AuthN**          | A node-qualified request principal: `user:{node_id}/{user_id}` for humans or `agent:{node_id}/{actor_id}` for durable AI, plus credential/session state. Legacy v1 agents remain user-backed compatibility only. | L0 keys.                                                                                                                                                       |
+| **L2 AuthZ**          | A boolean decision for `(principal, action, resource)` tuples. Tool-execution gating. Connection-credential gating.                                                                                              | L0 keys + the L1 principal; authentication never grants access by itself.                                                                                      |
+| **L3 Secrets**        | A populated env var inside a pod (or a value rendered to `.env` on a Compose host). Audit trail of every read/write.                                                                                             | L2 path-policy decisions for `eso-reader` / `<env>-writer` (today); future tenant-scoped paths governed by L2 (`cogni/<env>/_tenants/<billing_account_id>/*`). |
+| **L4 Governance/DAO** | An on-chain signal that authorizes a code or payout action. Multi-scope payment rails.                                                                                                                           | L0 `scope_id` ↔ `dao_address` binding; L1 wallet identity for proposers.                                                                                      |
+| **L5 Operator Plane** | Substrate provisioning, tenant lifecycle, system-tenant execution context for governance agents.                                                                                                                 | All of L1–L4. Operator is a privileged consumer, not a peer.                                                                                                   |
 
 ## Invariants
 
@@ -117,13 +116,13 @@ It is not a new spec. Every load-bearing claim points at an existing canonical s
 
 These are the rules that span layers and would otherwise be missed by looking at any single spec.
 
-1. **AUTHZ_NOT_AUTHN.** L2 RBAC actor type is `user:{user_id}` once identity ships. Today `rbac.md` acknowledges a `user:{walletAddress}` transitional shape — that migration is L1 → L2 and must happen before L2 enforcement leaves draft.
+1. **AUTHZ_NOT_AUTHN.** L2 consumes the node-qualified L1 principal: humans use `user:{node_id}/{user_id}` and durable agents use `agent:{node_id}/{actor_id}`. Wallet principals and user-backed v1 agent bearers are compatibility shapes only. Authentication, stewardship, and beneficiary policy never imply an allow decision.
 
 2. **SECRETS_PATH_IS_AN_AUTHZ_RESOURCE.** `secrets-management.md` Invariant 6 (RBAC_VIA_PATH_POLICY) defines OpenBao path policies as a separate-but-equivalent RBAC system to L2. They are not unified today. Any future tenant-scoped secret path (`cogni/<env>/_tenants/<billing_account_id>/*`) MUST resolve through L2 — do not invent a second authorization layer inside OpenBao policy HCL.
 
 3. **DAO_AUTHORITY_IS_NOT_L2.** L4 DAO governance authorizes code merges and payouts via on-chain signals; it does NOT authorize runtime requests. A user with DAO voting rights has no special L2 permission by default. The two layers intentionally never intersect at the request-handler level.
 
-4. **OPERATOR_PLANE_RUNS_AS_SYSTEM_TENANT.** L5 operator actions that produce side effects (deploys, secret rotations, governance execution) are attributed to the `cogni_system` tenant defined in `system-tenant.md`. Operator actions are NOT attributed to the human triggering them — that's an L1-vs-L5 distinction that prevents user impersonation by privileged automation.
+4. **OPERATOR_PLANE_RUNS_AS_SYSTEM_TENANT.** L5 operator actions that produce side effects (deploys, secret rotations, governance execution) execute inside the `cogni_system` billing account defined in `system-tenant.md`, but economic/action attribution belongs to a distinct `actor(kind=system)`. The initiating human remains request/audit provenance; neither the human nor the billing account is silently substituted as the acting system actor.
 
 5. **NO_ROOT_TOKEN_POST_BOOTSTRAP.** L3 Invariant 13 (NO_OPERATOR_ROOT_TOKEN_ON_LAPTOP) is a hard L5 boundary. After Phase 5b of `provision-env-vm.sh`, the operator plane writes secrets via short-lived writer-JWT only. Re-exporting the bootstrap root token IS the failure mode this charter exists to prevent.
 
@@ -131,15 +130,15 @@ These are the rules that span layers and would otherwise be missed by looking at
 
 The dependency arrows above dictate the order in which capabilities can ship:
 
-| Phase  | Lands                                                                                       | Hard dependency | Why this order                                                                                                                                       |
-| ------ | ------------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **P0** | L3 substrate (OpenBao + ESO) + L0 identity model — both in node-template                    | —               | Foundational. L0 is the [hub identity standard](https://cognidao.org/knowledge/human-ai-identity-standard); L3 is `task.0284` substrate.             |
-| **P1** | L3 live-VM E2E validation (`task.5062`)                                                     | P0              | Substrate must be proven before downstream ports inherit it.                                                                                         |
-| **P2** | L2 RBAC v0 (`proj.rbac-hardening`)                                                          | L0 only         | Enforcement layer comes online; uses `user:{walletAddress}` transitional shape. **Can ship in parallel with P1** — RBAC doesn't touch ESO substrate. |
-| **P3** | L1 identity migration completes + L2 actor type migrates to `user:{user_id}`                | P2              | Closes AUTHZ_NOT_AUTHN. Order matters: L1 must publish stable `user_id` BEFORE L2 can rely on it.                                                    |
-| **P4** | L5 system-tenant ships (`proj.system-tenant-governance`); operator-plane actions attributed | P2              | Closes OPERATOR_PLANE_RUNS_AS_SYSTEM_TENANT. Depends on L2 to gate operator actions.                                                                 |
-| **P5** | L3 multi-tenant secret paths + tenant-scoped OpenBao policies governed by L2                | P1 + P2         | Closes SECRETS_PATH_IS_AN_AUTHZ_RESOURCE. Depends on substrate being proven AND L2 enforcement being live.                                           |
-| **P6** | L4 DAO governance loop fully wired into production (multi-scope payout enforcement)         | P4              | Independent of L1–L3 at the request-handler level; depends on L5 for execution.                                                                      |
+| Phase  | Lands                                                                                           | Hard dependency | Why this order                                                                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **P0** | L3 substrate (OpenBao + ESO) + L0 identity model — both in node-template                        | —               | Foundational. L0 is the [hub identity standard](https://cognidao.org/knowledge/human-ai-identity-standard); L3 is `task.0284` substrate.             |
+| **P1** | L3 live-VM E2E validation (`task.5062`)                                                         | P0              | Substrate must be proven before downstream ports inherit it.                                                                                         |
+| **P2** | L2 RBAC v0 (`proj.rbac-hardening`)                                                              | L0 only         | Enforcement layer comes online; uses `user:{walletAddress}` transitional shape. **Can ship in parallel with P1** — RBAC doesn't touch ESO substrate. |
+| **P3** | L1 identity migration completes + L2 consumes node-qualified human and durable-agent principals | P2              | Closes AUTHZ_NOT_AUTHN. L1 must publish stable local `user_id`/`actor_id` subjects before L2 can rely on them.                                       |
+| **P4** | L5 system-tenant ships; operator actions separate system actor from billing context             | P2              | Closes OPERATOR_PLANE_RUNS_AS_SYSTEM_TENANT. Depends on L2 to gate operator actions.                                                                 |
+| **P5** | L3 multi-tenant secret paths + tenant-scoped OpenBao policies governed by L2                    | P1 + P2         | Closes SECRETS_PATH_IS_AN_AUTHZ_RESOURCE. Depends on substrate being proven AND L2 enforcement being live.                                           |
+| **P6** | L4 DAO governance loop fully wired into production (multi-scope payout enforcement)             | P4              | Independent of L1–L3 at the request-handler level; depends on L5 for execution.                                                                      |
 
 **Parallelism map:** P1 and P2 can ship concurrently — P1 is L3-only, P2 is L0+L2 only, they share no critical path. P5 is the first phase that requires BOTH branches converged. Compose-infra → OpenBao migration lives entirely within L3 and can ship any time after P1.
 
