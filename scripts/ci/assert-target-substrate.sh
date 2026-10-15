@@ -715,12 +715,16 @@ REMOTE
 local ssh_opts=()
 read -r -a ssh_opts <<< "$ssh_opts_raw"
 probe_log=$(mktemp)
-set +e
-"$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
+# OpenSSH reconstructs shell text, not argv. Quote every word so an empty
+# remote_root cannot disappear and shift the trailing controller identity.
+local remote_command
+printf -v remote_command '%q ' bash -s -- \
   "$DEPLOY_ENVIRONMENT" "$node" "$node_db" "$node_host" "$edge_key" "$node_port" \
   "$app_wait_attempts" "$app_wait_sleep_seconds" "$remote_root" \
   "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" \
-  "$reliability_controller" \
+  "$reliability_controller"
+set +e
+"$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" "$remote_command" \
   < "$remote_script" 2>&1 | tee "$probe_log"
 ssh_rc=${PIPESTATUS[0]}
 set -e
