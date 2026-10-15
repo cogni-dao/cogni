@@ -429,7 +429,7 @@ describe("ReliabilityStatusV1 policy", () => {
     }
   });
 
-  it("contains only a critical node with >=40% five-minute database attribution", async () => {
+  it("reports attributed critical pressure without changing role admission", async () => {
     const actions: Parameters<DatabaseContainmentPort["contain"]>[0][] = [];
     const containment: DatabaseContainmentPort = {
       status: async () => healthy.database,
@@ -490,14 +490,9 @@ describe("ReliabilityStatusV1 policy", () => {
       { metrics, containment }
     );
 
-    expect(status.state).toBe("contained");
-    expect(actions).toEqual([
-      expect.objectContaining({
-        reason: "critical_io_pressure",
-        actorId: "system:reliability-controller.v1",
-        incidentId: "replay-1",
-      }),
-    ]);
+    expect(status.state).toBe("warning");
+    expect(status.incidentReason).toBe("I/O pressure critical");
+    expect(actions).toEqual([]);
   });
 
   it("pages without mutation when shared-environment evidence is critical", async () => {

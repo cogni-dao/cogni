@@ -34,7 +34,7 @@ resources:
   # bug.5240 — the keyless lease-log pump rides wherever an actuator runs: it enumerates the
   # actuator's ledger (read-only op) and ships every live lease's logs to Loki.
   - ../../../base/lease-log-pump
-  # task.5247 — private autonomous database containment/status controller.
+  # task.5247 — private read-only database status observation.
   - ../../../base/database-reliability-actuator
   - ./database-reliability-actuator-external-secret.yaml
   - ./secrets-writer-sa.yaml
@@ -517,3 +517,10 @@ patches:
       kind: EndpointSlice
       metadata:
         name: doltgres-external-1
+
+# Locking and automatic readmission are retired; retain the status actuator.
+replicas:
+  - name: database-reliability-watchdog
+    count: 0
+  - name: database-reliability-readmitter
+    count: 0

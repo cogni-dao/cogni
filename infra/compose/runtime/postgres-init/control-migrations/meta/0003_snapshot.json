@@ -184,10 +184,7 @@
       "compositePrimaryKeys": {
         "database_cell_admissions_node_id_environment_pk": {
           "name": "database_cell_admissions_node_id_environment_pk",
-          "columns": [
-            "node_id",
-            "environment"
-          ]
+          "columns": ["node_id", "environment"]
         }
       },
       "uniqueConstraints": {},
@@ -321,11 +318,7 @@
       "compositePrimaryKeys": {
         "database_cell_readmission_audits_node_id_environment_incident_id_pk": {
           "name": "database_cell_readmission_audits_node_id_environment_incident_id_pk",
-          "columns": [
-            "node_id",
-            "environment",
-            "incident_id"
-          ]
+          "columns": ["node_id", "environment", "incident_id"]
         }
       },
       "uniqueConstraints": {},
@@ -430,10 +423,7 @@
       "compositePrimaryKeys": {
         "database_cell_replay_roles_node_id_environment_pk": {
           "name": "database_cell_replay_roles_node_id_environment_pk",
-          "columns": [
-            "node_id",
-            "environment"
-          ]
+          "columns": ["node_id", "environment"]
         }
       },
       "uniqueConstraints": {},
@@ -630,11 +620,7 @@
       "compositePrimaryKeys": {
         "database_recoveries_node_id_environment_incident_id_pk": {
           "name": "database_recoveries_node_id_environment_incident_id_pk",
-          "columns": [
-            "node_id",
-            "environment",
-            "incident_id"
-          ]
+          "columns": ["node_id", "environment", "incident_id"]
         }
       },
       "uniqueConstraints": {},
