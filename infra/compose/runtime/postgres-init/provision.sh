@@ -352,8 +352,19 @@ fi
 # Skipped in INFRA_ONLY: the per-node pass owns this role.
 if [ "$INFRA_ONLY" != "1" ]; then
   echo "🔧 Reconciling shared read-only role '$APP_READONLY_USER'..."
-  provision_app_role "$APP_READONLY_USER" "$APP_READONLY_PASS" "BYPASSRLS"
-  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 <<SQL
+  # Independent node jobs share this role. Lock before existence/read/update in
+  # the same transaction/session; a separate psql call would release the lock.
+  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "postgres" -v ON_ERROR_STOP=1 \
+    -v readonly_role="$APP_READONLY_USER" -v pw="$APP_READONLY_PASS" <<SQL
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SET LOCAL statement_timeout = '30s';
+SELECT pg_advisory_xact_lock(hashtextextended('cogni:shared-readonly:' || :'readonly_role', 0));
+SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'readonly_role') AS readonly_exists \gset
+\if :readonly_exists
+ALTER ROLE "$APP_READONLY_USER" WITH PASSWORD :'pw';
+\else
+CREATE ROLE "$APP_READONLY_USER" WITH LOGIN PASSWORD :'pw' BYPASSRLS;
+\endif
 ALTER ROLE "$APP_READONLY_USER" SET default_transaction_read_only = on;
 ALTER ROLE "$APP_READONLY_USER" SET statement_timeout = '30s';
 -- bug.5293: this role is also the metrics identity. Alloy's
@@ -366,6 +377,7 @@ ALTER ROLE "$APP_READONLY_USER" SET statement_timeout = '30s';
 -- table data access, so it does not widen this role beyond observability.
 -- Idempotent: GRANT of an already-held role membership is a no-op.
 GRANT pg_monitor TO "$APP_READONLY_USER";
+COMMIT;
 SQL
 fi
 
