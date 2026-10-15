@@ -609,16 +609,41 @@ spec:
               has returned the existing allocation, which froze Red production on its prior SHA.
 
               Release that guard only when FIVE independent facts agree: provider-http itself
-              reports the ambiguity; the pending timestamp exists; the last response is a real
-              found:true OBSERVE (not a CREATE/UPDATE echo); that observation is active with a
-              non-empty external handle under the exact current cogniKey; and the XR has not
-              served the desired SHA. Mirroring pending into succeeded then permits OBSERVE — it
-              does not vary cogniKey or leaseGeneration. If the external resource disappeared
-              after the observation, the actuator's one-allocation-per-key ledger remains the
-              final duplicate-spend fence. Any missing proof stays fail-closed.
+              reports the ambiguity; the pending timestamp exists; provider-http's current OR
+              cached successful response is a real found:true OBSERVE (not a CREATE/UPDATE echo);
+              that observation is active with a non-empty external handle under the exact current
+              cogniKey; and the XR has not served the desired SHA. The cache fallback is necessary
+              because provider-http overwrites status.response with a later transient refusal while
+              preserving its last successful observation in status.cache.response. It is used only
+              when the current response has no `found` key, and the cached response itself must be
+              2xx, found:true, active, and handle-bearing. Mirroring pending into succeeded then
+              permits OBSERVE — it does not vary cogniKey or leaseGeneration. If the external
+              resource disappeared after that observation, the actuator's one-allocation-per-key
+              ledger remains the final duplicate-spend fence. Any missing proof stays fail-closed.
             */ -}}
-            {{- $leaseReceiptObserved := hasKey $resp "found" }}
-            {{- $leaseReceiptProven := and $leaseReceiptObserved $found $active (ne $externalName "") (eq $responseKey $currentKey) }}
+            {{- $leaseReceiptResp := $resp }}
+            {{- $leaseReceiptStatus := $respStatus }}
+            {{- if and $leaseObs (not (hasKey $resp "found")) }}
+            {{- $leaseCacheRaw := dig "status" "cache" "response" "body" "" $leaseObs.resource }}
+            {{- if ne $leaseCacheRaw "" }}
+            {{- $leaseCacheResp := fromJson $leaseCacheRaw }}
+            {{- $leaseCacheStatus := int (dig "status" "cache" "response" "statusCode" 0 $leaseObs.resource) }}
+            {{- $leaseCacheRes := dig "resource" (dict) $leaseCacheResp }}
+            {{- $leaseCacheFound := dig "found" false $leaseCacheResp }}
+            {{- $leaseCacheState := dig "state" "unknown" $leaseCacheRes }}
+            {{- $leaseCacheExternalName := dig "externalName" "" $leaseCacheRes }}
+            {{- if and (ge $leaseCacheStatus 200) (lt $leaseCacheStatus 300) (hasKey $leaseCacheResp "found") $leaseCacheFound (eq $leaseCacheState "active") (ne $leaseCacheExternalName "") }}
+            {{- $leaseReceiptResp = $leaseCacheResp }}
+            {{- $leaseReceiptStatus = $leaseCacheStatus }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- $leaseReceiptRes := dig "resource" (dict) $leaseReceiptResp }}
+            {{- $leaseReceiptObserved := hasKey $leaseReceiptResp "found" }}
+            {{- $leaseReceiptFound := dig "found" false $leaseReceiptResp }}
+            {{- $leaseReceiptState := dig "state" "unknown" $leaseReceiptRes }}
+            {{- $leaseReceiptExternalName := dig "externalName" "" $leaseReceiptRes }}
+            {{- $leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey) }}
             {{- $leaseRevisionPending := ne $prevSha $desiredSha }}
             {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven $leaseRevisionPending }}
             {{- $unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity) }}

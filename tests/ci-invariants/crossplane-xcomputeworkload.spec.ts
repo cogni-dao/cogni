@@ -1157,10 +1157,19 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       'get $leaseAnnotations "crossplane.io/external-create-pending"'
     );
     expect(templateCode).toContain(
-      '$leaseReceiptObserved := hasKey $resp "found"'
+      '$leaseReceiptObserved := hasKey $leaseReceiptResp "found"'
     );
     expect(templateCode).toContain(
-      '$leaseReceiptProven := and $leaseReceiptObserved $found $active (ne $externalName "") (eq $responseKey $currentKey)'
+      'if and $leaseObs (not (hasKey $resp "found"))'
+    );
+    expect(templateCode).toContain(
+      '$leaseCacheRaw := dig "status" "cache" "response" "body" "" $leaseObs.resource'
+    );
+    expect(templateCode).toContain(
+      '$leaseCacheStatus := int (dig "status" "cache" "response" "statusCode" 0 $leaseObs.resource)'
+    );
+    expect(templateCode).toContain(
+      '$leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey)'
     );
     expect(templateCode).toContain(
       "$leaseRevisionPending := ne $prevSha $desiredSha"
@@ -1179,7 +1188,12 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     type Proof = {
       ambiguous: boolean;
       pending: string;
-      observed: boolean;
+      currentObserved: boolean;
+      cachedStatus: number;
+      cachedObserved: boolean;
+      cachedFound: boolean;
+      cachedActive: boolean;
+      cachedExternalName: string;
       found: boolean;
       active: boolean;
       externalName: string;
@@ -1188,19 +1202,35 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       previousSha: string;
       desiredSha: string;
     };
-    const safe = (p: Proof) =>
-      p.ambiguous &&
-      p.pending !== "" &&
-      p.observed &&
-      p.found &&
-      p.active &&
-      p.externalName !== "" &&
-      p.responseKey === p.currentKey &&
-      p.previousSha !== p.desiredSha;
+    const safe = (p: Proof) => {
+      const useCache = !p.currentObserved;
+      const receiptStatus = useCache ? p.cachedStatus : 200;
+      const observed = useCache ? p.cachedObserved : p.currentObserved;
+      const found = useCache ? p.cachedFound : p.found;
+      const active = useCache ? p.cachedActive : p.active;
+      const externalName = useCache ? p.cachedExternalName : p.externalName;
+      return (
+        p.ambiguous &&
+        p.pending !== "" &&
+        receiptStatus >= 200 &&
+        receiptStatus < 300 &&
+        observed &&
+        found &&
+        active &&
+        externalName !== "" &&
+        p.responseKey === p.currentKey &&
+        p.previousSha !== p.desiredSha
+      );
+    };
     const valid: Proof = {
       ambiguous: true,
       pending: "2026-10-14T07:05:33Z",
-      observed: true,
+      currentObserved: true,
+      cachedStatus: 200,
+      cachedObserved: true,
+      cachedFound: true,
+      cachedActive: true,
+      cachedExternalName: "1791427850757",
       found: true,
       active: true,
       externalName: "1791427850757",
@@ -1213,7 +1243,6 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
     for (const unsafe of [
       { ambiguous: false },
       { pending: "" },
-      { observed: false },
       { found: false },
       { active: false },
       { externalName: "" },
@@ -1221,6 +1250,36 @@ describe("XComputeWorkload paid create-ambiguity recovery (bug.5464)", () => {
       { previousSha: "new" },
     ]) {
       expect(safe({ ...valid, ...unsafe })).toBe(false);
+    }
+
+    // Red's exact live failure: a later retryable 503 overwrote status.response, while
+    // provider-http retained the last successful exact-key OBSERVE in status.cache.response.
+    expect(
+      safe({
+        ...valid,
+        currentObserved: false,
+        found: false,
+        active: false,
+        externalName: "",
+      })
+    ).toBe(true);
+    for (const unsafeCache of [
+      { cachedStatus: 503 },
+      { cachedObserved: false },
+      { cachedFound: false },
+      { cachedActive: false },
+      { cachedExternalName: "" },
+    ]) {
+      expect(
+        safe({
+          ...valid,
+          currentObserved: false,
+          found: false,
+          active: false,
+          externalName: "",
+          ...unsafeCache,
+        })
+      ).toBe(false);
     }
   });
 });
