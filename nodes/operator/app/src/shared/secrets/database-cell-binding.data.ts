@@ -141,6 +141,7 @@ export const DatabaseCellLogicalDatabaseSchema = z
     serviceRole: z.string(),
     migrationRole: z.string(),
     probeRole: z.string(),
+    backupRole: z.string(),
     sourceSha,
     budgetProfile: z.enum([
       "shared-default-v1",
@@ -151,6 +152,7 @@ export const DatabaseCellLogicalDatabaseSchema = z
     servicePassword: cellPassword,
     migrationPassword: cellPassword,
     probePassword: cellPassword,
+    backupPassword: cellPassword,
   })
   .strict();
 
@@ -203,6 +205,7 @@ export const DatabaseCellBootstrapKitSchema = z
         [lane.serviceRole, "service"],
         [lane.migrationRole, "migration"],
         [lane.probeRole, "probe"],
+        [lane.backupRole, "backup"],
       ]) {
         if (role !== `${prefix}_${suffix}`)
           ctx.addIssue({

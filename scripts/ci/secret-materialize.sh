@@ -656,7 +656,7 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" || "$TARGET_NODE" == "$RE
       # so compose it after the random-key pass below regardless of sort order.
       # Probe bindings are sealed only after native DB/system and physical-host readbacks.
       # The existing private writer publishes that receipt; random generation cannot establish identity.
-      [[ "$k" == "DATABASE_RELIABILITY_ADMIN_URL" || "$k" == "DATABASE_RELIABILITY_READMIT_URL" || "$k" == "DATABASE_RECOVERY_PROBE_URLS_JSON" ]] && continue
+      [[ "$k" == "DATABASE_RELIABILITY_ADMIN_URL" || "$k" == "DATABASE_RELIABILITY_READMIT_URL" || "$k" == "DATABASE_RECOVERY_PROBE_URLS_JSON" || "$k" == "AKASH_DATABASE_CELL_KITS_JSON" ]] && continue
       if [[ -f "${CACHE_DIR}/${svc}/${k}" ]]; then
         unchanged=$((unchanged + 1))
         continue
@@ -703,6 +703,11 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" || "$TARGET_NODE" == "$RE
     flush_batch "$svc"
   done
 fi
+
+# Same sole writer publishes catalog-selected, source-verified PRIVATE bootstrap kits.
+# shellcheck source=lib/materialize-database-cell-kits.sh
+source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
+materialize_database_cell_kits
 
 # A LiteLLM virtual key is a dual-plane generated secret: OpenBao owns its
 # bytes, while LiteLLM must store the same explicit key for authentication.
