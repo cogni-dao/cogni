@@ -17,8 +17,8 @@ import { z } from "zod";
 import type {
   AkashTxAllocationLedgerPort,
   AkashTxConsolePort,
-} from "@/ports/akash-tx.port";
-import type { DatabaseCellBindingReference } from "@/ports/database-cell-binding.port";
+  DatabaseCellBindingReference,
+} from "@/ports";
 import { DatabaseCellAppliedCustodySchema } from "@/shared/secrets/database-cell-binding.data";
 import type {
   DatabaseCellAppliedCustody,

@@ -3,7 +3,7 @@
 
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { AkashTxAllocationRecord } from "@/ports/akash-tx.port";
+import type { AkashTxAllocationRecord } from "@/ports";
 import { DatabaseCellAppliedCustodySchema } from "@/shared/secrets/database-cell-binding.data";
 import { DatabaseCellAppliedRegistrationFactsSchema } from "@/shared/secrets/database-cell-placement.data";
 import { observeAppliedCellManaged } from "./database-cell-applied-managed.adapter";

@@ -10,8 +10,8 @@
  * @internal
  */
 import { z } from "zod";
-import { AkashTxError } from "@/ports/akash-tx.port";
-import type { DatabaseCellAppliedRegistrationEvidencePort } from "@/ports/database-cell-binding.port";
+import type { DatabaseCellAppliedRegistrationEvidencePort } from "@/ports";
+import { AkashTxError } from "@/ports";
 import {
   DatabaseCellAppliedRegistrationFactsSchema,
   DatabaseCellBackupRuntimeObservationSchema,

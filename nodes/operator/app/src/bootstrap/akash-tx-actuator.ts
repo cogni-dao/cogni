@@ -122,8 +122,8 @@ import {
   observeDatabaseCellDiagnostic,
   prepareDatabaseCellDiagnostic,
 } from "@/features/compute/akash-tx/database-cell-diagnostic";
+import type { DatabaseCellBindingReference } from "@/ports";
 import { AkashTxError, type AkashTxWorkloadIdentity } from "@/ports";
-import type { DatabaseCellBindingReference } from "@/ports/database-cell-binding.port";
 import {
   ACCOUNT_WALLET_SCOPE_PATTERN,
   akashTxAllocations,
