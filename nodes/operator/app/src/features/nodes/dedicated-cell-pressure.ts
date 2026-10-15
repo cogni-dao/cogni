@@ -5,8 +5,8 @@
  * Module: `features/nodes/dedicated-cell-pressure`
  * Purpose: Require sustained node-attributed active pressure before dedicated containment.
  * Scope: Pure policy over a privately authenticated native pressure port.
- * Invariants: Three fresh samples, 75% active role budget, 40% attribution; idle is excluded.
- * Side-effects: none; incomplete host health remains unknown independently.
+ * Invariants: Three fresh samples, 75% active role budget, 40% node backend share; idle alone never triggers.
+ * Side-effects: Controller calls pressure/containment ports; pure evaluator has none.
  * Links: reliability-status.ts, ports/database-cell-pressure.port.ts
  * @internal
  */
@@ -117,7 +117,15 @@ export function knownCriticalDedicatedPressure(input: {
       if (!current) return null;
       return {
         budget: (100 * current.active) / current.connectionLimit,
-        attribution: (100 * current.active) / sample.totalBackends,
+        // Attribution belongs to the whole node; backend-share counts connections, including idle.
+        // The independent per-role ACTIVE/budget threshold prevents idle-only containment.
+        attribution:
+          (100 *
+            sample.roles.reduce(
+              (total, owned) => total + owned.connections,
+              0
+            )) /
+          sample.totalBackends,
       };
     });
     if (

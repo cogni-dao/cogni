@@ -26,7 +26,7 @@ function samples(): DatabaseCellPressureObservation[] {
     systemIdentifier: "123456789",
     targetBuildSha: sha,
     observedAt: new Date(started + offset).toISOString(),
-    totalBackends: 15,
+    totalBackends: 20,
     roles: [
       {
         name: "app_fixture",
@@ -42,10 +42,10 @@ function samples(): DatabaseCellPressureObservation[] {
         name: "service_fixture",
         kind: "service",
         connectionLimit: 8,
-        connections: 7,
+        connections: 2,
         active: 0,
         waiting: 0,
-        idle: 7,
+        idle: 2,
         idleInTransaction: 0,
       },
       {
@@ -95,8 +95,61 @@ describe("known critical dedicated cell pressure", () => {
 
   it("retains the canonical 40% attribution floor rather than the 25% warning floor", () => {
     expect(
-      evaluate(samples().map((sample) => ({ ...sample, totalBackends: 16 })))
+      evaluate(samples().map((sample) => ({ ...sample, totalBackends: 21 })))
     ).toBeNull();
+  });
+
+  it("attributes node-owned idle backends while requiring genuinely critical active replay work", () => {
+    const highIdle = samples().map((sample) => ({
+      ...sample,
+      totalBackends: 21,
+      roles: sample.roles.map((role) =>
+        role.kind === "app"
+          ? { ...role, connections: 3, idle: 3 }
+          : role.kind === "service"
+            ? { ...role, connections: 7, idle: 7 }
+            : { ...role, connections: 8, active: 8 }
+      ),
+    }));
+    expect(evaluate(highIdle)).toMatchObject({
+      role: "replay_fixture",
+      activeRoleBudgetPct: 100,
+    });
+    expect(evaluate(highIdle)?.attributedBackendsPct).toBeCloseTo(
+      (100 * 18) / 21
+    );
+  });
+
+  it("aggregates node attribution across app, service, and replay while retaining per-role active limits", () => {
+    const distributed = samples().map((sample) => ({
+      ...sample,
+      totalBackends: 21,
+      roles: sample.roles.map((role) => {
+        const active = role.kind === "service" ? 4 : 3;
+        return {
+          ...role,
+          connections: active,
+          active,
+          waiting: 0,
+          idle: 0,
+          idleInTransaction: 0,
+        };
+      }),
+    }));
+    expect(evaluate(distributed)).toMatchObject({
+      role: "app_fixture",
+      activeRoleBudgetPct: 75,
+    });
+    expect(evaluate(distributed)?.attributedBackendsPct).toBeCloseTo(
+      (100 * 10) / 21
+    );
+    const belowBudget = distributed.map((sample) => ({
+      ...sample,
+      roles: sample.roles.map((role) =>
+        role.kind === "app" ? { ...role, active: 2, connections: 2 } : role
+      ),
+    }));
+    expect(evaluate(belowBudget)).toBeNull();
   });
 
   it("requires active role budget pressure even when attribution is high", () => {
@@ -114,7 +167,7 @@ describe("known critical dedicated cell pressure", () => {
     const value = samples();
     const third = value[2];
     if (!third) throw new Error("fixture");
-    value[2] = { ...third, totalBackends: 16 };
+    value[2] = { ...third, totalBackends: 21 };
     expect(evaluate(value)).toBeNull();
     expect(evaluate(value.slice(0, 2))).toBeNull();
   });
