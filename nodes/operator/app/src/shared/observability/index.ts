@@ -18,7 +18,6 @@ export const EVENT_NAMES = {
   NODE_PUBLISH_SECRET_SHAPE_GENERATED:
     "feature.node_publish.secret_shape_generated",
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
-  WORK_ITEM_SESSION_COMPLETE: "feature.work_item_session.complete",
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
   // Env-membership merge → lane reconcile (task.5132). One terminal event per merged

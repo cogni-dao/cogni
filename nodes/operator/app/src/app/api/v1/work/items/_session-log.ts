@@ -11,7 +11,11 @@
  * @internal
  */
 
-import { EVENT_NAMES, type RequestContext } from "@/shared/observability";
+import {
+  EVENT_NAMES,
+  logEvent,
+  type RequestContext,
+} from "@/shared/observability";
 
 export interface WorkItemSessionLogFields {
   readonly operation: "claim" | "heartbeat" | "link_pr";
@@ -34,18 +38,10 @@ export function logWorkItemSessionComplete(
   startedAt: number,
   fields: WorkItemSessionLogFields
 ): void {
-  const payload = {
-    event: EVENT_NAMES.WORK_ITEM_SESSION_COMPLETE,
+  logEvent(ctx.log, EVENT_NAMES.WORK_ITEM_SESSION_COMPLETE, {
     reqId: ctx.reqId,
     routeId: ctx.routeId,
     durationMs: Math.round(performance.now() - startedAt),
     ...fields,
-  };
-  const level =
-    fields.outcome === "success"
-      ? "info"
-      : fields.status >= 500
-        ? "error"
-        : "warn";
-  ctx.log[level](payload, EVENT_NAMES.WORK_ITEM_SESSION_COMPLETE);
+  });
 }

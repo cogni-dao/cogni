@@ -47,20 +47,28 @@ export const POST = wrapRouteHandlerWithLogging<{
         ...fields,
       });
     if (!context) {
+      const response = NextResponse.json(
+        { error: "Internal server error" },
+        { status: 500 }
+      );
       logTerminal({
         outcome: "error",
         status: 500,
         errorCode: "internal_error",
       });
-      throw new Error("context required for dynamic routes");
+      return response;
     }
     if (!sessionUser) {
+      const response = NextResponse.json(
+        { error: "unauthorized" },
+        { status: 401 }
+      );
       logTerminal({
         outcome: "error",
         status: 401,
         errorCode: "auth_required",
       });
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+      return response;
     }
     const { id } = await context.params;
 
@@ -73,15 +81,16 @@ export const POST = wrapRouteHandlerWithLogging<{
 
     const parsed = workItemSessionHeartbeatOperation.input.safeParse(body);
     if (!parsed.success) {
+      const response = NextResponse.json(
+        { error: "invalid input", issues: parsed.error.issues },
+        { status: 400 }
+      );
       logTerminal({
         outcome: "error",
         status: 400,
         errorCode: "validation_error",
       });
-      return NextResponse.json(
-        { error: "invalid input", issues: parsed.error.issues },
-        { status: 400 }
-      );
+      return response;
     }
 
     try {
@@ -91,50 +100,58 @@ export const POST = wrapRouteHandlerWithLogging<{
         sessionUser,
         statusUrl: coordinationUrl(request, id),
       });
-      logTerminal({ outcome: "success", status: 200 });
-      return NextResponse.json(
+      const response = NextResponse.json(
         workItemSessionHeartbeatOperation.output.parse(output)
       );
+      logTerminal({ outcome: "success", status: 200 });
+      return response;
     } catch (error) {
       if ((error as Error)?.name === "CoordinationWorkItemNotFoundError") {
+        const response = NextResponse.json(
+          { error: (error as Error).message },
+          { status: 404 }
+        );
         logTerminal({
           outcome: "error",
           status: 404,
           errorCode: "work_item_not_found",
         });
-        return NextResponse.json(
-          { error: (error as Error).message },
-          { status: 404 }
-        );
+        return response;
       }
       if ((error as Error)?.name === "WorkItemSessionForbiddenError") {
+        const response = NextResponse.json(
+          { error: (error as Error).message },
+          { status: 403 }
+        );
         logTerminal({
           outcome: "error",
           status: 403,
           errorCode: "session_owned_by_other",
         });
-        return NextResponse.json(
-          { error: (error as Error).message },
-          { status: 403 }
-        );
+        return response;
       }
       if ((error as Error)?.name === "WorkItemSessionNotFoundError") {
+        const response = NextResponse.json(
+          { error: (error as Error).message },
+          { status: 404 }
+        );
         logTerminal({
           outcome: "error",
           status: 404,
           errorCode: "session_expired_or_missing",
         });
-        return NextResponse.json(
-          { error: (error as Error).message },
-          { status: 404 }
-        );
+        return response;
       }
+      const response = NextResponse.json(
+        { error: "Internal server error" },
+        { status: 500 }
+      );
       logTerminal({
         outcome: "error",
         status: 500,
         errorCode: "internal_error",
       });
-      throw error;
+      return response;
     }
   }
 );
