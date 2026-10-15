@@ -158,7 +158,17 @@ export function isSetupSecretsManaged(
   name: string,
   routing: Readonly<Record<string, SecretRouting>>
 ): boolean {
-  const service = routing[name]?.service;
+  const route = routing[name];
+  // Private node-scoped DB components are composed by the sole OpenBao writer,
+  // including dynamic per-cell banks. They are not GitHub setup inputs.
+  if (
+    route?.tier === "A1" &&
+    route.appliesTo === "database" &&
+    route.consumedBy?.length === 1 &&
+    route.consumedBy[0] === "compose"
+  )
+    return false;
+  const service = route?.service;
   return service === undefined || !PLATFORM_SERVICES.has(service);
 }
 

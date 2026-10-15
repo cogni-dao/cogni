@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-14
+- **Last reviewed:** 2026-10-15
 
 ## Purpose
 
@@ -29,7 +29,7 @@ Scripts for initializing and provisioning PostgreSQL databases in Docker environ
 
 ## Public Surface
 
-- **Exports:** provision.sh; apply-control.sql and immutable control-migrations for the declared administrative schema
+- **Exports:** provision.sh; apply-control.sql; explicitly invoked install-cell-control.sql / install-cell-logical-probe.sql and immutable control-migrations for the declared administrative schema
 - **CLI (if any):** Executed via `db-provision` service
 - **Env/Config keys:** `DB_HOST`, `POSTGRES_ROOT_USER`, `POSTGRES_ROOT_PASSWORD`, `APP_DB_NAME`, `APP_DB_USER`, `APP_DB_PASSWORD`, `APP_DB_SERVICE_USER`, `APP_DB_SERVICE_PASSWORD`, `APP_DB_READONLY_USER`, `APP_DB_READONLY_PASSWORD`, `LITELLM_DB_NAME` (note: these are provisioning vars, not runtime app vars)
 - **Files considered API:** `provision.sh`

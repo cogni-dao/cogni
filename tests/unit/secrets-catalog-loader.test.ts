@@ -138,6 +138,32 @@ describe("secrets-catalog-loader · openBaoPathFor (fan-out path resolution)", (
   });
 });
 
+describe("private database component setup ownership", () => {
+  it("keeps compose-only DB components in the sole OpenBao writer while preserving pod and legacy inputs", () => {
+    const routes = {
+      PRIVATE_CELL: {
+        tier: "A1" as const,
+        appliesTo: "database" as const,
+        consumedBy: ["compose" as const],
+      },
+      POD_DATABASE: {
+        tier: "A1" as const,
+        appliesTo: "database" as const,
+        consumedBy: ["pod" as const, "compose" as const],
+      },
+      LEGACY_DATABASE: { tier: "A1" as const, appliesTo: "database" as const },
+      WEB: {
+        tier: "A1" as const,
+        appliesTo: "web" as const,
+        consumedBy: ["compose" as const],
+      },
+    };
+    expect(isSetupSecretsManaged("PRIVATE_CELL", routes)).toBe(false);
+    for (const name of ["POD_DATABASE", "LEGACY_DATABASE", "WEB"])
+      expect(isSetupSecretsManaged(name, routes)).toBe(true);
+  });
+});
+
 describe("secrets-catalog-loader · REAL repo catalog (guards the migration)", () => {
   const repoRoot = execSync("git rev-parse --show-toplevel", {
     encoding: "utf-8",

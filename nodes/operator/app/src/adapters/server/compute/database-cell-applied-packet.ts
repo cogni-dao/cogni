@@ -98,6 +98,7 @@ const ManualPacket = z.object({
       }),
     }),
   }),
+  schemaEvolution: z.object({ receiptSha256: digest }).strict().optional(),
   sourceFence: z.object({
     handoffSha256: digest,
     systemIdentifier: z.string().regex(/^\d+$/),
@@ -184,6 +185,10 @@ export function mapAppliedManualPacket(artifact: {
     primaryServiceName: packet.primary.providerAdoption.serviceName,
     systemIdentifier: packet.primary.systemIdentifier,
     appSourceSha: packet.effectiveApp.sourceSha,
+    sourceSystemIdentifier: packet.sourceFence.systemIdentifier,
+    ...(packet.schemaEvolution
+      ? { schemaEvolution: packet.schemaEvolution }
+      : {}),
     sourceFenceReceiptSha256: packet.sourceFence.handoffSha256,
     restorationParityManifestSha256:
       packet.restoration.restorationParityManifestSha256,

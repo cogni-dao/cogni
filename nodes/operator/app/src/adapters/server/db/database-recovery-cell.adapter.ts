@@ -11,9 +11,13 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
 import postgres, { type Sql } from "postgres";
 import { z } from "zod";
 import type {
+  DatabaseCellBindingReference,
+  DatabaseCellPressureObservation,
+  DatabaseCellPressurePort,
   DatabaseRecoveryBeginPort,
   DatabaseRecoveryIncident,
   DatabaseRecoveryProbeObservation,
@@ -21,11 +25,20 @@ import type {
   DatabaseRecoveryVerificationPort,
 } from "@/ports";
 import {
+  DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS,
+  DatabaseCellLogicalProbeFunctionSchema,
+  DatabaseCellNativeControlFunctionObservationSchema,
   DatabaseRecoveryCellAdminBindingSchema,
   type DatabaseRecoveryCellBinding,
   DatabaseRecoveryCellProbeBindingSchema,
   DatabaseRecoveryCellReadmitBindingSchema,
 } from "@/shared/secrets/database-cell-binding.data";
+import { DatabaseCellNativeControlObservationSchema } from "@/shared/secrets/database-cell-placement.data";
+import type {
+  DatabaseCellAppliedCustody,
+  DatabaseCellAppliedRegistrationFacts,
+  DatabaseCellNativeControlObservation,
+} from "@/types/database-cell";
 import {
   type DatabaseControlSql,
   DatabaseRecoveryProbeObservationSchema,
@@ -57,7 +70,10 @@ function connect(binding: DatabaseRecoveryCellBinding): Sql {
   return postgres(url.toString(), {
     max: 1,
     prepare: false,
-    ssl: { ca: binding.tlsCaCertificate, rejectUnauthorized: true },
+    ssl: {
+      ...(binding.tlsCaCertificate ? { ca: binding.tlsCaCertificate } : {}),
+      rejectUnauthorized: true,
+    },
     connect_timeout: 5,
     connection: { statement_timeout: 5000, lock_timeout: 2000 },
   });
@@ -101,7 +117,12 @@ export class PostgresDatabaseCellRecoveryProbeAdapter
       (row) => keyFor(row) === keyFor(input) && row.nodeSlug === input.nodeSlug
     );
     if (!binding) throw new Error("database_recovery_cell_binding_missing");
-    const { dsn: _dsn, tlsCaCertificate: _ca, ...identity } = binding;
+    const {
+      dsn: _dsn,
+      tlsCaCertificate: _ca,
+      logicalProbeDsn: _logical,
+      ...identity
+    } = { logicalProbeDsn: undefined, ...binding };
     return identity;
   }
 
@@ -115,16 +136,39 @@ export class PostgresDatabaseCellRecoveryProbeAdapter
     const operation = (this.pending.get(key) ?? Promise.resolve())
       .catch(() => undefined)
       .then(async () => {
-        const sql = connect(binding);
+        if (binding.version === 2)
+          await qualifyDatabaseCellNativeControl(binding);
+        const sql = connect(
+          binding.version === 2
+            ? { ...binding, dsn: binding.logicalProbeDsn ?? "" }
+            : binding
+        );
         try {
           const rows = await sql.unsafe<{ observation: unknown }[]>(
             "SELECT public.database_recovery_probe() AS observation"
           );
           if (rows.length !== 1)
             throw new Error("database_recovery_cell_probe_receipt_missing");
-          const observation = DatabaseRecoveryProbeObservationSchema.extend({
-            cellSubstrate: DatabaseCellSubstrateSchema,
-          }).parse(rows[0]?.observation);
+          const observation = (
+            binding.version === 2
+              ? DatabaseRecoveryProbeObservationSchema
+              : DatabaseRecoveryProbeObservationSchema.extend({
+                  cellSubstrate: DatabaseCellSubstrateSchema,
+                })
+          ).parse(rows[0]?.observation);
+          if (binding.version === 2) {
+            const logical = DatabaseCellLogicalProbeFunctionSchema.parse(
+              (rows[0]?.observation as { logicalProbeFunction?: unknown })
+                ?.logicalProbeFunction
+            );
+            if (
+              logical.definitionSha256 !==
+              binding.nativeControl.logicalProbeDefinitionSha256
+            )
+              throw new Error(
+                "database_cell_logical_probe_definition_mismatch"
+              );
+          }
           if (
             observation.database !== binding.databaseName ||
             observation.role !== binding.probeRole ||
@@ -133,10 +177,13 @@ export class PostgresDatabaseCellRecoveryProbeAdapter
             !observation.runtimeRolesPresent
           )
             throw new Error("database_recovery_cell_probe_identity_mismatch");
+          if (binding.version === 2) return observation;
           return {
             ...observation,
             cellSubstrate: assertFreshCellSubstrate(
-              observation.cellSubstrate,
+              "cellSubstrate" in observation
+                ? observation.cellSubstrate
+                : undefined,
               binding.sourceSha
             ),
           };
@@ -273,11 +320,17 @@ export function routeCellRecoveryVerification(
     },
     contain: async (input) => {
       const cell = route(input);
-      if (cell)
+      if (!cell) return shared.contain(input);
+      if (cell.binding.version !== 2)
         throw new Error(
           "database_recovery_dedicated_automatic_containment_disabled"
         );
-      return shared.contain(input);
+      assertCellMutationInput(input, cell.binding);
+      if (input.databaseName !== cell.binding.databaseName)
+        throw new Error("database_recovery_cell_database_mismatch");
+      const result = await cell.control.contain(input);
+      assertIncident(result, cell.binding);
+      return result;
     },
     complete: async (input) => {
       const cell = route(input);
@@ -338,4 +391,237 @@ export function routeCellRecoveryBegin(
       return result;
     },
   };
+}
+
+/** Read-only qualification against the complete reviewed function set. Never installs control code. */
+export async function qualifyDatabaseCellNativeControl(
+  binding: DatabaseRecoveryCellBinding
+) {
+  if (binding.version !== 2)
+    throw new Error("database_cell_native_control_v2_required");
+  const sql = connect(binding);
+  try {
+    const rows = await sql.unsafe<{ observation: unknown }[]>(
+      "SELECT public.database_cell_control_qualification($1::uuid,$2::text) AS observation",
+      [binding.nodeId, binding.environment]
+    );
+    const value = z
+      .object({
+        nodeId: z.string().uuid(),
+        nodeSlug: z.string(),
+        environment: z.string(),
+        controlDatabaseName: z.literal("postgres"),
+        databaseName: z.string(),
+        systemIdentifier: z.string(),
+        allocationReceiptId: z.string().uuid(),
+        dseq: z.string(),
+        providerAccount: z.string(),
+        reviewedSourceSha: z.string(),
+        migrationManifestSha256: z.string(),
+        installedAt: z.string(),
+        observedAt: z.string().datetime({ offset: true }),
+        requiredFunctions: z
+          .array(DatabaseCellNativeControlFunctionObservationSchema)
+          .length(DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS.length),
+      })
+      .passthrough()
+      .parse(rows[0]?.observation);
+    for (const field of [
+      "nodeId",
+      "nodeSlug",
+      "environment",
+      "databaseName",
+      "systemIdentifier",
+      "allocationReceiptId",
+      "dseq",
+      "providerAccount",
+    ] as const)
+      if (value[field] !== binding[field])
+        throw new Error("database_cell_native_control_identity_mismatch");
+    const control = binding.nativeControl;
+    if (
+      value.reviewedSourceSha !== control.reviewedSourceSha ||
+      value.migrationManifestSha256 !== control.migrationManifestSha256 ||
+      Date.parse(value.installedAt) !== Date.parse(control.installedAt) ||
+      Date.now() - Date.parse(value.observedAt) < 0 ||
+      Date.now() - Date.parse(value.observedAt) > 5000 ||
+      new Set(value.requiredFunctions.map((fn) => fn.signature)).size !==
+        DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS.length ||
+      value.requiredFunctions.some(
+        (fn) =>
+          !control.functions.some(
+            (expected) =>
+              expected.signature === fn.signature &&
+              expected.definitionSha256 === fn.definitionSha256
+          )
+      )
+    )
+      throw new Error(
+        "database_cell_native_control_definition_or_freshness_mismatch"
+      );
+    return value;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+const pressureSchema = z.object({
+  nodeId: z.string().uuid(),
+  nodeSlug: z.string(),
+  environment: z.enum(["candidate-a", "preview", "production"]),
+  allocationReceiptId: z.string().uuid(),
+  dseq: z.string(),
+  providerAccount: z.string(),
+  databaseName: z.string(),
+  systemIdentifier: z.string(),
+  targetBuildSha: z.string().regex(/^[0-9a-f]{40}$/),
+  observedAt: z.string().datetime({ offset: true }),
+  totalBackends: z.number().int().nonnegative(),
+  queryRef: z.string(),
+  roles: z.array(
+    z.object({
+      name: z.string(),
+      kind: z.enum(["app", "service", "replay"]),
+      connectionLimit: z.number().int().positive(),
+      connections: z.number().int().nonnegative(),
+      active: z.number().int().nonnegative(),
+      waiting: z.number().int().nonnegative(),
+      idle: z.number().int().nonnegative(),
+      idleInTransaction: z.number().int().nonnegative(),
+    })
+  ),
+});
+/** Reuses only the existing private containment capability; no additional secret reader. */
+export class PostgresDatabaseCellPressureAdapter
+  implements DatabaseCellPressurePort
+{
+  constructor(
+    private readonly cells: readonly {
+      binding: DatabaseRecoveryCellBinding;
+      sql: DatabaseControlSql;
+    }[]
+  ) {}
+  async observe(
+    input: Parameters<DatabaseCellPressurePort["observe"]>[0]
+  ): Promise<DatabaseCellPressureObservation> {
+    const cell = this.cells.find(
+      (row) =>
+        keyFor(row.binding) === keyFor(input) &&
+        row.binding.nodeSlug === input.nodeSlug &&
+        row.binding.substrateHost === input.cellId
+    );
+    if (!cell || cell.binding.version !== 2)
+      throw new Error("database_cell_pressure_qualified_binding_missing");
+    const rows = await cell.sql.query<{ observation: unknown }>(
+      "SELECT public.database_cell_pressure($1::uuid,$2::text) AS observation",
+      [input.nodeId, input.environment]
+    );
+    const value = pressureSchema.parse(rows[0]?.observation);
+    for (const field of [
+      "nodeId",
+      "nodeSlug",
+      "environment",
+      "allocationReceiptId",
+      "dseq",
+      "providerAccount",
+      "databaseName",
+      "systemIdentifier",
+      "targetBuildSha",
+    ] as const)
+      if (value[field] !== cell.binding[field])
+        throw new Error("database_cell_pressure_native_identity_mismatch");
+    const age = Date.now() - Date.parse(value.observedAt);
+    if (age < 0 || age > 5000) throw new Error("database_cell_pressure_stale");
+    return value;
+  }
+}
+
+/** Composes actual existing observer measurements; performs no role/session mutation. */
+export async function observeDatabaseCellNativeControl(input: {
+  readonly custody: DatabaseCellAppliedCustody;
+  readonly reference: DatabaseCellBindingReference;
+  readonly native: DatabaseCellAppliedRegistrationFacts["native"];
+  readonly provider: DatabaseCellAppliedRegistrationFacts["provider"];
+  readonly packet: DatabaseCellAppliedRegistrationFacts["manualCutover"];
+}): Promise<DatabaseCellNativeControlObservation> {
+  const { custody, native, provider, packet, reference } = input;
+  if (
+    !custody.nativeControl ||
+    !custody.readOnlyProbe ||
+    reference.nodeId !== custody.nodeId ||
+    reference.allocationEnvironment !== custody.environment ||
+    packet.nodeId !== custody.nodeId ||
+    native.systemIdentifier !==
+      custody.nativeControl.provenance.systemIdentifier
+  )
+    throw new Error("database_cell_native_control_custody_or_identity_missing");
+  const url = new URL(custody.nativeControl.probe.dsn);
+  const binding = DatabaseRecoveryCellProbeBindingSchema.parse({
+    scope: "dedicated-cell",
+    version: 2,
+    nodeId: custody.nodeId,
+    nodeSlug: custody.nodeSlug,
+    environment: custody.environment,
+    databaseName: custody.databaseName,
+    probeRole: decodeURIComponent(url.username),
+    systemIdentifier: native.systemIdentifier,
+    substrateHost: `akash:${provider.providerAccount}:${provider.dseq}`,
+    targetBuildSha: custody.targetBuildSha,
+    endpoint: { host: url.hostname, port: Number(url.port) },
+    allocationReceiptId: packet.allocationReceiptId,
+    dseq: provider.dseq,
+    providerAccount: provider.providerAccount,
+    controlDatabaseName: "postgres",
+    nativeControl: custody.nativeControl.provenance,
+    tlsTrustKind: custody.tls.kind,
+    ...(custody.tls.kind === "private-ca"
+      ? { tlsCaCertificate: custody.tls.caCertificate }
+      : {}),
+    dsn: custody.nativeControl.probe.dsn,
+    logicalProbeDsn: custody.readOnlyProbe.dsn,
+    logicalProbeCustody: {
+      ...custody.readOnlyProbe.custodyRef,
+      dsnSha256: createHash("sha256")
+        .update(custody.readOnlyProbe.dsn)
+        .digest("hex"),
+    },
+    logicalProbeFunction: {
+      signature: "public.database_recovery_probe()",
+      definitionSha256:
+        custody.nativeControl.provenance.logicalProbeDefinitionSha256,
+      owner: "postgres",
+      securityDefiner: true,
+      publicCanExecute: false,
+      probeCanExecute: true,
+      searchPath: "pg_catalog, pg_temp",
+    },
+  });
+  const qualified = await qualifyDatabaseCellNativeControl(binding);
+  const sql = connect({ ...binding, dsn: custody.readOnlyProbe.dsn });
+  try {
+    const rows = await sql.unsafe<{ observation: unknown }[]>(
+      "SELECT public.database_recovery_probe() AS observation"
+    );
+    const logical = DatabaseRecoveryProbeObservationSchema.extend({
+      logicalProbeFunction: DatabaseCellLogicalProbeFunctionSchema,
+    }).parse(rows[0]?.observation);
+    if (
+      logical.database !== custody.databaseName ||
+      logical.role !== decodeURIComponent(url.username) ||
+      logical.systemIdentifier !== native.systemIdentifier ||
+      !logical.probeRoleIsolated ||
+      logical.logicalProbeFunction.definitionSha256 !==
+        custody.nativeControl.provenance.logicalProbeDefinitionSha256
+    )
+      throw new Error("database_cell_native_control_logical_probe_mismatch");
+    return DatabaseCellNativeControlObservationSchema.parse({
+      ...qualified,
+      logicalProbeFunction: logical.logicalProbeFunction,
+      exactRoleBounds: native.runtimeRoles.map(
+        ({ canLogin: _canLogin, roleReadOnly: _readOnly, ...bounds }) => bounds
+      ),
+    });
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
 }

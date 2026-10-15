@@ -18,7 +18,6 @@ import type { ReliabilityStatusV1 } from "@cogni/node-contracts";
 import pino from "pino";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-
 import {
   createCellAdminRecoveryControls,
   createCellReadmitRecoveryControls,
@@ -26,6 +25,7 @@ import {
   HttpReliabilityRecoveryAdapter,
   PinoDatabaseContainmentAuditWriter,
   PostgresAdminSqlAdapter,
+  PostgresDatabaseCellPressureAdapter,
   PostgresDatabaseCellRecoveryProbeAdapter,
   PostgresDatabaseRecoveryBeginAdapter,
   PostgresDatabaseRecoveryProbeAdapter,
@@ -35,6 +35,10 @@ import {
   routeCellRecoveryBegin,
   routeCellRecoveryVerification,
 } from "@/adapters/server";
+import {
+  DEDICATED_PRESSURE_INTERVAL_MS,
+  DedicatedCellPressureController,
+} from "@/features/nodes/dedicated-cell-pressure";
 import {
   hasHealthyScopedRecoveryWindow,
   isReliabilitySweepReady,
@@ -237,7 +241,13 @@ for (const cell of cellAdmins) {
     probe.probeRole !== cell.binding.probeRole ||
     probe.systemIdentifier !== cell.binding.systemIdentifier ||
     probe.substrateHost !== cell.binding.substrateHost ||
-    probe.sourceSha !== cell.binding.sourceSha ||
+    (probe.version === 2 && cell.binding.version === 2
+      ? probe.nativeControl.reviewedSourceSha !==
+          cell.binding.nativeControl.reviewedSourceSha ||
+        probe.nativeControl.migrationManifestSha256 !==
+          cell.binding.nativeControl.migrationManifestSha256
+      : probe.version !== cell.binding.version ||
+        probe.sourceSha !== cell.binding.sourceSha) ||
     probe.targetBuildSha !== cell.binding.targetBuildSha ||
     probe.endpoint.host !== cell.binding.endpoint.host ||
     probe.endpoint.port !== cell.binding.endpoint.port
@@ -587,6 +597,7 @@ async function listTargets(): Promise<readonly ReliabilityTarget[]> {
         budgetProfile: placement.budgetProfile,
         sourceSha,
         ...(substrateHost ? { substrateHost } : {}),
+        ...(cell ? { cellId: cell.substrateHost } : {}),
       },
     ];
   });
@@ -658,7 +669,7 @@ async function readDedicatedStatus(
   )
     throw new Error("database_recovery_cell_status_identity_mismatch");
   const health = observation.cellSubstrate;
-  if (!health) throw new Error("database_recovery_cell_substrate_missing");
+  // Manual cells have no trusted host pressure exporter; missing signals remain unknown.
   const contained =
     observation.runtimeRolesNoLogin && observation.activeRuntimeSessions === 0;
   let regionalReadiness: ReliabilityStatusV1["regionalReadiness"] = [];
@@ -690,15 +701,17 @@ async function readDedicatedStatus(
         : contained
           ? "contained"
           : healthy
-            ? "healthy"
+            ? health
+              ? "healthy"
+              : "unknown"
             : "unknown",
     regionalReadiness,
     utilization: {
       evidenceScope: "node",
-      ioPressurePct: health.ioPressurePct,
-      connectionPct: health.connectionPct,
-      memoryHeadroomPct: health.memoryHeadroomPct,
-      diskHeadroomPct: health.diskHeadroomPct,
+      ioPressurePct: health?.ioPressurePct ?? null,
+      connectionPct: health?.connectionPct ?? null,
+      memoryHeadroomPct: health?.memoryHeadroomPct ?? null,
+      diskHeadroomPct: health?.diskHeadroomPct ?? null,
       databaseShare5m: {
         backendsPct: null,
         physicalReadsPct: null,
@@ -716,6 +729,61 @@ async function readDedicatedStatus(
       null,
     evidenceQueryRefs: ["native:database_recovery_probe:dedicated-cell"],
   };
+}
+
+const dedicatedPressure =
+  containment && recoveryVerifier
+    ? new DedicatedCellPressureController({
+        pressure: new PostgresDatabaseCellPressureAdapter(cellAdmins),
+        containment,
+        recovery: recoveryVerifier,
+        nowMs: Date.now,
+        buildShaFor: readTargetBuildSha,
+      })
+    : null;
+let dedicatedPressureRunning = false;
+async function sweepDedicatedPressure(): Promise<void> {
+  if (!dedicatedPressure || stopping || dedicatedPressureRunning) return;
+  dedicatedPressureRunning = true;
+  try {
+    for (const target of await listTargets()) {
+      if (
+        target.desiredTier !== "dedicated" ||
+        !target.cellId ||
+        cellFor(target)?.version !== 2
+      )
+        continue;
+      try {
+        const result = await dedicatedPressure.observe({
+          ...target,
+          desiredTier: "dedicated",
+          cellId: target.cellId,
+        });
+        if (result.trigger)
+          log.warn({
+            event: "feature.node_reliability.dedicated_pressure.contained",
+            nodeId: target.nodeId,
+            environment: target.environment,
+            trigger: result.trigger,
+            incidentId: result.containment?.incidentId,
+          });
+      } catch (error) {
+        log.error({
+          event: "feature.node_reliability.dedicated_pressure.failed",
+          nodeId: target.nodeId,
+          environment: target.environment,
+          error,
+        });
+      }
+    }
+  } catch (error) {
+    log.error({
+      event: "feature.node_reliability.dedicated_pressure.targets_failed",
+      error,
+    });
+  } finally {
+    dedicatedPressureRunning = false;
+  }
 }
 
 async function sweep(): Promise<void> {
@@ -1128,6 +1196,13 @@ server.listen(port, "0.0.0.0", () => {
 });
 const interval =
   mode === "sweep" ? setInterval(() => void sweep(), SWEEP_INTERVAL_MS) : null;
+const dedicatedPressureInterval =
+  mode === "sweep"
+    ? setInterval(
+        () => void sweepDedicatedPressure(),
+        DEDICATED_PRESSURE_INTERVAL_MS
+      )
+    : null;
 const verificationInterval =
   mode === "sweep"
     ? setInterval(
@@ -1147,6 +1222,7 @@ async function shutdown(signal: string): Promise<void> {
   stopping = true;
   if (interval) clearInterval(interval);
   if (verificationInterval) clearInterval(verificationInterval);
+  if (dedicatedPressureInterval) clearInterval(dedicatedPressureInterval);
   log.info(
     { event: EVENT_NAMES.NODE_RELIABILITY_ACTUATOR_STOPPING, signal },
     EVENT_NAMES.NODE_RELIABILITY_ACTUATOR_STOPPING

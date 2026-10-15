@@ -150,6 +150,10 @@ export type {
   DatabaseCellNativeProof,
 } from "./database-cell-binding.port";
 export type {
+  DatabaseCellPressureObservation,
+  DatabaseCellPressurePort,
+} from "./database-cell-pressure.port";
+export type {
   DatabaseCellActionReceipt,
   DatabaseCellAllocation,
   DatabaseCellCapacity,

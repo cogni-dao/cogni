@@ -19,7 +19,10 @@ import type {
 } from "@/ports";
 import {
   composeDatabaseCellDsn,
+  DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS,
   DatabaseCellAppliedCustodySchema,
+  DatabaseCellNativeControlFunctionObservationSchema,
+  DatabaseRecoveryCellProbeBindingSchema,
 } from "@/shared/secrets/database-cell-binding.data";
 import {
   type AppliedDatabaseCellReceipt,
@@ -27,12 +30,17 @@ import {
   assessDatabaseCellBackupRuntime,
   DatabaseCellAllocationMetadataSchema,
   DatabaseCellAppliedEvidenceBundleSchema,
+  qualifyAppliedSchemaEvolution,
 } from "@/shared/secrets/database-cell-placement.data";
+import type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 import {
   materializeDatabaseCellKits,
   planDatabaseCellKits,
 } from "../../../../../../../scripts/lib/materialize-database-cell-kits";
-import { projectDatabaseCellPlacement } from "../../../../../../../scripts/lib/materialize-database-cell-placement";
+import {
+  composeDatabaseCellControlComponents,
+  projectDatabaseCellPlacement,
+} from "../../../../../../../scripts/lib/materialize-database-cell-placement";
 
 const nodeId = "11111111-1111-4111-8111-111111111111";
 const sourceSha = "a".repeat(40);
@@ -791,6 +799,7 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       allocationReceiptId: "22222222-2222-4222-8222-222222222222",
       systemIdentifier: "1234567890123456789",
       appSourceSha: appSha,
+      sourceSystemIdentifier: "12",
       sourceFenceReceiptSha256: "5".repeat(64),
       restorationParityManifestSha256: "6".repeat(64),
       executionActor: {
@@ -1230,6 +1239,508 @@ describe("audited already-applied registration", () => {
       "allocation changed"
     );
     expect(current.writes()).toBe(0);
+  });
+});
+
+function addQualifiedControl(
+  custody: DatabaseCellAppliedCustody,
+  facts: Mutable<DatabaseCellAppliedRegistrationFacts>
+) {
+  const endpoint = { host: custody.canonicalEndpointHost, port: 15432 };
+  const logicalDsn = composeDatabaseCellDsn(
+    endpoint,
+    custody.databaseName,
+    "probe_alpha",
+    "4".repeat(64)
+  );
+  const controlDsn = composeDatabaseCellDsn(
+    endpoint,
+    "postgres",
+    "probe_alpha",
+    "4".repeat(64)
+  );
+  const actuatorDsn = composeDatabaseCellDsn(
+    endpoint,
+    "postgres",
+    "database_reliability_actuator",
+    "5".repeat(64)
+  );
+  const readmitDsn = composeDatabaseCellDsn(
+    endpoint,
+    "postgres",
+    "database_reliability_readmitter",
+    "6".repeat(64)
+  );
+  const logicalProbeFunction = {
+    signature: "public.database_recovery_probe()" as const,
+    definitionSha256: "7".repeat(64),
+    owner: "postgres" as const,
+    securityDefiner: true as const,
+    publicCanExecute: false as const,
+    probeCanExecute: true as const,
+    searchPath: "pg_catalog, pg_temp",
+  };
+  const qualified = {
+    version: 1 as const,
+    nodeId,
+    nodeSlug: custody.nodeSlug,
+    environment: "production" as const,
+    controlDatabaseName: "postgres" as const,
+    databaseName: custody.databaseName,
+    systemIdentifier: facts.native.systemIdentifier,
+    allocationReceiptId: facts.manualCutover.allocationReceiptId,
+    dseq: facts.provider.dseq,
+    providerAccount: facts.provider.providerAccount,
+    reviewedSourceSha: "9".repeat(40),
+    migrationManifestSha256: "8".repeat(64),
+    installedAt: facts.readmission.admittedAt,
+    observedAt: facts.observedAt,
+    admission: {
+      manualPacketSha256: facts.manualCutover.packetSha256,
+      readmissionReceiptSha256: facts.readmission.receiptId,
+      admittedAt: facts.readmission.admittedAt,
+      importedAt: facts.readmission.admittedAt,
+      executionActor: facts.manualCutover.executionActor,
+      approvalAuthority: facts.manualCutover.approvalAuthority,
+    },
+    requiredFunctions: DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS.map((fn) => ({
+      ...fn,
+      definitionSha256: "a".repeat(64),
+      owner: "postgres" as const,
+      publicCanExecute: false as const,
+      searchPath: "pg_catalog, pg_temp",
+    })),
+    logicalProbeFunction,
+    exactRoleBounds: facts.manualCutover.preservedRoleBounds,
+  };
+  const bytes = Buffer.from(JSON.stringify(qualified));
+  const artifact = {
+    kind: "native-control-qualification" as const,
+    mediaType: "application/json" as const,
+    sha256: shaBuffer(bytes),
+    bytesBase64: bytes.toString("base64"),
+  };
+  return {
+    custody: {
+      ...custody,
+      readOnlyProbe: {
+        dsn: logicalDsn,
+        custodyRef: {
+          service: "alpha-database-recovery-probe",
+          key: "DATABASE_RECOVERY_PROBE_URL",
+        },
+      },
+      nativeControl: {
+        provenance: {
+          version: 1 as const,
+          controlDatabaseName: "postgres" as const,
+          reviewedSourceSha: qualified.reviewedSourceSha,
+          migrationManifestSha256: qualified.migrationManifestSha256,
+          systemIdentifier: qualified.systemIdentifier,
+          installedAt: qualified.installedAt,
+          qualifiedAt: qualified.observedAt,
+          qualificationReceiptSha256: artifact.sha256,
+          logicalProbeDefinitionSha256: logicalProbeFunction.definitionSha256,
+          functions: qualified.requiredFunctions.map(
+            ({ signature, definitionSha256 }) => ({
+              signature,
+              definitionSha256,
+            })
+          ),
+          custody: {
+            probe: {
+              service: "alpha-database-recovery-probe",
+              key: "DATABASE_CELL_CONTROL_PROBE_URL",
+              dsnSha256: shaBuffer(Buffer.from(controlDsn)),
+            },
+            actuator: {
+              service: "alpha-database-cell-actuator",
+              key: "DATABASE_CELL_ACTUATOR_URL",
+              dsnSha256: shaBuffer(Buffer.from(actuatorDsn)),
+            },
+            readmitter: {
+              service: "alpha-database-cell-readmitter",
+              key: "DATABASE_CELL_READMIT_URL",
+              dsnSha256: shaBuffer(Buffer.from(readmitDsn)),
+            },
+          },
+        },
+        probe: {
+          dsn: controlDsn,
+          custodyRef: {
+            service: "alpha-database-recovery-probe",
+            key: "DATABASE_CELL_CONTROL_PROBE_URL",
+          },
+        },
+      },
+    },
+    qualified,
+    controlMaterial: { actuatorDsn, readmitDsn },
+    evidenceBundle: {
+      version: 1 as const,
+      nodeId,
+      environment: "production" as const,
+      artifacts: [artifact],
+    },
+  };
+}
+
+describe("genuine installed control on admitted manual cells", () => {
+  const request = {
+    cogniKey: "fixture-cell",
+    nodeId,
+    allocationEnvironment: "production",
+    manualCutoverPacketSha256: "f".repeat(64),
+    readmissionReceiptId: "e".repeat(64),
+  };
+  it("prepares only scoped set-once control components without inventing installation or changing consumer DSNs", async () => {
+    const facts = registrationFacts();
+    facts.readmission.receiptId = request.readmissionReceiptId;
+    const custody = appliedCustody();
+    const current = fixture({ appliedFacts: facts, appliedCustody: custody });
+    const [receipt] = await current.binder.registerApplied(request);
+    const value = {
+      receipt,
+      custody: {
+        ...custody,
+        readOnlyProbe: {
+          dsn: composeDatabaseCellDsn(
+            { host: custody.canonicalEndpointHost, port: 15432 },
+            custody.databaseName,
+            "probe_alpha",
+            "4".repeat(64)
+          ),
+          custodyRef: {
+            service: "alpha-database-recovery-probe",
+            key: "DATABASE_RECOVERY_PROBE_URL",
+          },
+        },
+      },
+      actuatorPassword: "5".repeat(64),
+      readmitPassword: "6".repeat(64),
+    };
+    const plan = composeDatabaseCellControlComponents(value);
+    expect(plan.components).toHaveLength(5);
+    expect(plan.components.map((item) => item.service)).not.toContain("alpha");
+    expect(plan.components[0]?.value).toContain(
+      "/postgres?sslmode=verify-full"
+    );
+    expect(() =>
+      composeDatabaseCellControlComponents({
+        ...value,
+        readmitPassword: value.actuatorPassword,
+      })
+    ).toThrow(/distinct/);
+    expect(() =>
+      composeDatabaseCellControlComponents({
+        ...value,
+        receipt: {
+          ...receipt,
+          binding: { ...receipt?.binding, phase: "ready" },
+        },
+      })
+    ).toThrow();
+  });
+  it("adds actual qualified control with the same-row CAS, projects distinct private capabilities and refuses unqualified activation", async () => {
+    const facts = registrationFacts();
+    facts.readmission.receiptId = request.readmissionReceiptId;
+    const custody: DatabaseCellAppliedCustody = appliedCustody();
+    const current = fixture({ appliedFacts: facts, appliedCustody: custody });
+    const [original] = await current.binder.registerApplied(request);
+    const control = addQualifiedControl(custody, facts);
+    Object.assign(custody, control.custody);
+    facts.nativeControl = control.qualified;
+    const [receipt] = await current.binder.registerApplied(request);
+    expect(current.writes()).toBe(2);
+    expect(receipt?.registration).toEqual(original?.registration);
+    expect(receipt?.binding.sourceSha).toBeUndefined();
+    await current.binder.registerApplied(request);
+    expect(current.writes()).toBe(2);
+    expect(() =>
+      projectDatabaseCellPlacement({ receipt, custody, requireApplied: true })
+    ).toThrow(/requires real reviewed/);
+    const projected = projectDatabaseCellPlacement({
+      receipt,
+      custody,
+      requireApplied: true,
+      controlMaterial: control.controlMaterial,
+      evidenceBundle: control.evidenceBundle,
+    });
+    expect(projected.probe).toMatchObject({
+      version: 2,
+      controlDatabaseName: "postgres",
+      allocationReceiptId: facts.manualCutover.allocationReceiptId,
+      logicalProbeDsn: control.custody.readOnlyProbe.dsn,
+    });
+    expect(projected.probe).not.toHaveProperty("sourceSha");
+    expect(projected.probe).not.toHaveProperty("tlsCaCertificate");
+    expect(projected.admin).not.toHaveProperty("logicalProbeDsn");
+    expect(projected.retireSourceBinding).toEqual({
+      nodeId,
+      environment: "production",
+      systemIdentifier: "12",
+    });
+    expect(
+      DatabaseRecoveryCellProbeBindingSchema.safeParse({
+        ...(projected.probe as object),
+        sourceSha,
+      }).success
+    ).toBe(false);
+    expect(() =>
+      projectDatabaseCellPlacement({
+        receipt,
+        custody,
+        requireApplied: true,
+        controlMaterial: {
+          ...control.controlMaterial,
+          actuatorDsn: control.controlMaterial.readmitDsn,
+        },
+        evidenceBundle: control.evidenceBundle,
+      })
+    ).toThrow();
+    facts.nativeControl.logicalProbeFunction.definitionSha256 = "0".repeat(64);
+    await expect(current.binder.registerApplied(request)).rejects.toMatchObject(
+      { code: "identity_conflict" }
+    );
+  });
+  it("retires only the exact authenticated legacy source binding and refuses ambiguous or foreign native identity", () => {
+    const repoRoot = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const source = {
+      nodeId,
+      environment: "production",
+      systemIdentifier: "12",
+    };
+    const siblings = [
+      {
+        nodeId,
+        environment: "preview",
+        systemIdentifier: "12",
+        opaque: "preserve-preview",
+      },
+      {
+        nodeId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        environment: "production",
+        systemIdentifier: "12",
+        opaque: "preserve-neighbor",
+      },
+    ];
+    const script = [
+      "set -eu",
+      'REPO_ROOT="$1"',
+      'source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"',
+      'input="$(cat)"',
+      'fixture_prior="$(jq -c .prior <<<"$input")"',
+      'projection="$(jq -c .projection <<<"$input")"',
+      "DEPLOY_ENVIRONMENT=production; SECRETS_CONTROL_ENV=production",
+      `node_id_for_target() { printf '%s' '${nodeId}'; }`,
+      'fail() { echo "scoped retirement refused" >&2; exit 1; }',
+      "prefetch_path() { :; }",
+      'bao_get_field() { if [[ "$2" == DATABASE_RECOVERY_PROBE_URLS_JSON ]]; then printf "%s" "$fixture_prior"; else printf "[]"; fi; }',
+      'cell_seed_exact() { if [[ "$2" == DATABASE_RECOVERY_PROBE_URLS_JSON ]]; then result="$3"; fi; }',
+      "flush_batch() { :; }",
+      'publish_database_cell_projection alpha "$projection"',
+      'printf "%s" "$result"',
+    ].join("\n");
+    const run = (prior: unknown[]) =>
+      JSON.parse(
+        execFileSync("bash", ["-c", script, "fixture", repoRoot], {
+          encoding: "utf8",
+          input: JSON.stringify({
+            prior,
+            projection: {
+              retireSourceBinding: source,
+              probe: null,
+              admin: null,
+              readmit: null,
+              backup: null,
+              publicValues: null,
+            },
+          }),
+          stdio: ["pipe", "pipe", "pipe"],
+        })
+      );
+    expect(run([source, ...siblings])).toEqual(siblings);
+    expect(run(siblings)).toEqual(siblings);
+    expect(() =>
+      run([{ ...source, systemIdentifier: "unexpected" }, ...siblings])
+    ).toThrow();
+    expect(() => run([source, source, ...siblings])).toThrow();
+  });
+  it("rejects widened function capabilities and unsafe search paths against the fixed reviewed signature set", () => {
+    const fn = {
+      ...DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS[0],
+      definitionSha256: "a".repeat(64),
+      owner: "postgres",
+      publicCanExecute: false,
+      searchPath: "pg_catalog, pg_temp",
+    };
+    expect(
+      DatabaseCellNativeControlFunctionObservationSchema.safeParse(fn).success
+    ).toBe(true);
+    for (const changed of [
+      { ...fn, probeCanExecute: true },
+      { ...fn, publicCanExecute: true },
+      { ...fn, searchPath: "pg_temp, pg_catalog" },
+      { ...fn, signature: "public.forged()" },
+    ])
+      expect(
+        DatabaseCellNativeControlFunctionObservationSchema.safeParse(changed)
+          .success
+      ).toBe(false);
+  });
+});
+
+describe("separate canonical post-restore schema evolution", () => {
+  function evolutionFixture() {
+    const tag = "0002_fixture";
+    const marker = `COGNI_MIGRATION_RECEIPT_V1 ${JSON.stringify({
+      node: "poly",
+      declared: ["0000_fixture", "0001_fixture", tag],
+      applied: [
+        { tag: "0000_fixture", hash: "old-unrepaired-hash", appliedAtMs: 1 },
+        {
+          tag: "0001_fixture",
+          hash: "another-historical-hash",
+          appliedAtMs: 2,
+        },
+        { tag, hash: "7".repeat(64), appliedAtMs: 3 },
+      ],
+    })}\n`;
+    const before = {
+      copyHeader: "COPY public.execution_requests (id) FROM stdin;",
+      rows: 2,
+      sha256Sum: "1".repeat(64),
+      sha256Xor: "2".repeat(64),
+    };
+    return {
+      version: 1,
+      event: "poly_schema_evolution_applied",
+      nodeId,
+      environment: "production",
+      systemIdentifier: "1234567890123456789",
+      database: "cogni_alpha",
+      targetAppSha: appSha,
+      fromMigrationCount: 2,
+      toMigrationCount: 3,
+      startedAt: new Date(Date.now() - 2000).toISOString(),
+      completedAt: new Date(Date.now() - 1000).toISOString(),
+      migration: { tag, index: 2, when: 3, sqlSha256: "7".repeat(64) },
+      newColumns: [
+        {
+          name: "updated_at",
+          type: "timestamp with time zone",
+          notNull: true,
+          default: "now()",
+        },
+      ],
+      oldDefinitionSha256Before: "3".repeat(64),
+      oldDefinitionSha256After: "3".repeat(64),
+      preservedData: {
+        relation: "public.execution_requests",
+        columns: ["id"],
+        before,
+        after: { ...before },
+      },
+      preservedJournal: {
+        rowCount: 2,
+        method: "canonical-json-id-hash-created_at.v1",
+        beforeSha256: "4".repeat(64),
+        afterSha256: "4".repeat(64),
+      },
+      currentJournal: {
+        rowCount: 3,
+        method: "canonical-json-id-hash-created_at.v1",
+        sha256: "5".repeat(64),
+      },
+      canonicalMigrator: {
+        lockKey: "0x436f676e6901",
+        exitCode: 0,
+        receipt: {
+          bytesBase64: Buffer.from(marker).toString("base64"),
+          sha256: shaBuffer(Buffer.from(marker)),
+        },
+      },
+    };
+  }
+  it("authenticates actual canonical marker bytes, preserves historical hash drift and refuses altered old data/schema/journal", () => {
+    const value = evolutionFixture();
+    expect(qualifyAppliedSchemaEvolution(value).toMigrationCount).toBe(3);
+    for (const bad of [
+      { ...value, oldDefinitionSha256After: "0".repeat(64) },
+      {
+        ...value,
+        preservedData: {
+          ...value.preservedData,
+          after: { ...value.preservedData.after, rows: 1 },
+        },
+      },
+      {
+        ...value,
+        preservedJournal: {
+          ...value.preservedJournal,
+          afterSha256: "0".repeat(64),
+        },
+      },
+      {
+        ...value,
+        canonicalMigrator: {
+          ...value.canonicalMigrator,
+          receipt: {
+            ...value.canonicalMigrator.receipt,
+            sha256: "0".repeat(64),
+          },
+        },
+      },
+      {
+        ...value,
+        migration: { ...value.migration, sqlSha256: "0".repeat(64) },
+      },
+    ])
+      expect(() => qualifyAppliedSchemaEvolution(bad)).toThrow();
+  });
+  it("pins separate evolution to the admitted build and freshly observed current native journal", async () => {
+    const facts = registrationFacts();
+    const ref = {
+      cogniKey: "fixture-cell",
+      nodeId,
+      allocationEnvironment: "production",
+      manualCutoverPacketSha256: "f".repeat(64),
+      readmissionReceiptId: facts.readmission.receiptId,
+    };
+    facts.manualCutover.schemaEvolution = { receiptSha256: "6".repeat(64) };
+    const current = fixture({ appliedFacts: facts });
+    await expect(current.binder.registerApplied(ref)).rejects.toThrow(
+      /schema evolution/
+    );
+    facts.native.migrationJournal = {
+      rowCount: 89,
+      sha256: "5".repeat(64),
+      observedAt: facts.observedAt,
+    };
+    facts.schemaEvolution = {
+      receiptSha256: "6".repeat(64),
+      nodeId,
+      environment: "production",
+      systemIdentifier: facts.native.systemIdentifier,
+      targetAppSha: appSha,
+      fromMigrationCount: 88,
+      toMigrationCount: 89,
+      migrationSqlSha256: "7".repeat(64),
+      currentJournalSha256: "5".repeat(64),
+      completedAt: facts.manualCutover.approvedAt,
+      observedAt: facts.observedAt,
+    };
+    const [receipt] = await current.binder.registerApplied(ref);
+    expect(receipt?.registration?.schemaEvolutionReceiptSha256).toBe(
+      "6".repeat(64)
+    );
+    expect(facts.scheduledBackup.relations).toHaveLength(68);
+    facts.native.migrationJournal.sha256 = "0".repeat(64);
+    await expect(current.binder.registerApplied(ref)).rejects.toThrow(
+      /current native schema journal/
+    );
   });
 });
 

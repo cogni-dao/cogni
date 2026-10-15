@@ -13,11 +13,15 @@
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { z } from "zod";
+import { parseMigrationReceipt } from "@/shared/migrations/migration-receipt";
 import type { DatabaseCellAppliedRegistrationFacts } from "@/types/database-cell";
 
 import {
+  DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS,
   DatabaseCellBindingSchema,
+  DatabaseCellLogicalProbeFunctionSchema,
   DatabaseCellManualProvenanceSchema,
+  DatabaseCellNativeControlFunctionObservationSchema,
   DatabaseCellRoleBoundsSchema,
   DatabaseCellRuntimePoolLimitsSchema,
 } from "./database-cell-binding.data";
@@ -49,6 +53,11 @@ export const AppliedDatabaseCellReceiptSchema = z
         approvalAuthority,
         readmissionReceiptId: z.string().min(1).max(256),
         manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
+        sourceSystemIdentifier: z.string().regex(/^[0-9]+$/),
+        schemaEvolutionReceiptSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
         scheduledBackupReceiptSha256: z.string().regex(/^[0-9a-f]{64}$/),
         independentRecoveryReceiptSha256: z.string().regex(/^[0-9a-f]{64}$/),
         appAllocationReceiptId: z.string().uuid(),
@@ -80,6 +89,8 @@ export const AppliedDatabaseCellReceiptSchema = z
           !receipt.binding.manualProvenance ||
           receipt.binding.sourceSha !== undefined ||
           receipt.binding.phase !== "applied" ||
+          receipt.registration.sourceSystemIdentifier ===
+            receipt.binding.systemIdentifier ||
           receipt.registration.manualCutoverPacketSha256 !==
             receipt.binding.cutover?.packetSha256
         : !receipt.initialIncidentId ||
@@ -233,9 +244,75 @@ export function assessDatabaseCellBackupRuntime(
 }
 
 /** Validates measured adapter output; no request can supply this evidence bundle. */
+export const DatabaseCellNativeControlObservationSchema = z
+  .object({
+    version: z.literal(1),
+    nodeId: z.string().uuid(),
+    nodeSlug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
+    environment: z.literal("production"),
+    controlDatabaseName: z.literal("postgres"),
+    databaseName: z.string().regex(/^cogni_[a-z0-9_]+$/),
+    systemIdentifier,
+    allocationReceiptId: z.string().uuid(),
+    dseq: systemIdentifier,
+    providerAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
+    reviewedSourceSha: sourceSha,
+    migrationManifestSha256: digest,
+    installedAt: timestamp,
+    observedAt: timestamp,
+    admission: z
+      .object({
+        manualPacketSha256: digest,
+        readmissionReceiptSha256: digest,
+        admittedAt: timestamp,
+        importedAt: timestamp,
+        executionActor,
+        approvalAuthority,
+      })
+      .strict(),
+    requiredFunctions: z
+      .array(DatabaseCellNativeControlFunctionObservationSchema)
+      .length(DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS.length),
+    logicalProbeFunction: DatabaseCellLogicalProbeFunctionSchema,
+    exactRoleBounds: z.array(DatabaseCellRoleBoundsSchema).length(2),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      new Set(value.requiredFunctions.map((fn) => fn.signature)).size !==
+        DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS.length ||
+      Date.parse(value.observedAt) < Date.parse(value.installedAt) ||
+      Date.parse(value.admission.importedAt) <
+        Date.parse(value.admission.admittedAt) ||
+      Date.parse(value.observedAt) < Date.parse(value.admission.importedAt)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "native control qualification requires complete actual functions and chronological admission import",
+      });
+  });
+
 export const DatabaseCellAppliedRegistrationFactsSchema = z
   .object({
     observedAt: timestamp,
+    nativeControl: DatabaseCellNativeControlObservationSchema.optional(),
+    schemaEvolution: z
+      .object({
+        receiptSha256: digest,
+        nodeId: z.string().uuid(),
+        environment: z.literal("production"),
+        systemIdentifier,
+        targetAppSha: sourceSha,
+        fromMigrationCount: z.number().int().nonnegative(),
+        toMigrationCount: z.number().int().positive(),
+        migrationSqlSha256: digest,
+        currentJournalSha256: digest,
+        completedAt: timestamp,
+        observedAt: timestamp,
+      })
+      .strict()
+      .optional(),
     backupRuntime: DatabaseCellBackupRuntimeObservationSchema,
     provider: z
       .object({
@@ -274,6 +351,14 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
           )
           .min(2),
         activeRuntimeSessions: z.number().int().nonnegative(),
+        migrationJournal: z
+          .object({
+            rowCount: z.number().int().nonnegative().max(1024),
+            sha256: digest,
+            observedAt: timestamp,
+          })
+          .strict()
+          .optional(),
         serverVersionNum: z.number().int().min(150000).max(159999),
         tlsTrustKind: z.enum(["system", "private-ca"]),
         endpointIdentity: z
@@ -406,6 +491,11 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         allocationReceiptId: z.string().uuid(),
         systemIdentifier,
         appSourceSha: sourceSha,
+        sourceSystemIdentifier: systemIdentifier,
+        schemaEvolution: z
+          .object({ receiptSha256: digest })
+          .strict()
+          .optional(),
         sourceFenceReceiptSha256: digest,
         restorationParityManifestSha256: digest,
         executionActor,
@@ -480,6 +570,8 @@ export const DatabaseCellAppliedEvidenceBundleSchema = z
               "backup-runtime",
               "recovery-database-metadata",
               "recovery-data-parity",
+              "native-control-qualification",
+              "schema-evolution",
             ]),
             mediaType: z.literal("application/json"),
             sha256: digest,
@@ -535,3 +627,121 @@ export const DatabaseCellAppliedEvidenceBundleSchema = z
   }) satisfies z.ZodType<
   import("@/types/database-cell").DatabaseCellAppliedEvidenceBundle
 >;
+
+const evolutionFingerprint = z.object({
+  copyHeader: z.string().min(1),
+  rows: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  sha256Sum: digest,
+  sha256Xor: digest,
+});
+
+/** Separate actual post-restore migration evidence; never rewrites frozen original parity. */
+export function qualifyAppliedSchemaEvolution(input: unknown) {
+  const value = z
+    .object({
+      version: z.literal(1),
+      event: z.literal("poly_schema_evolution_applied"),
+      nodeId: z.string().uuid(),
+      environment: z.literal("production"),
+      systemIdentifier,
+      database: z.string(),
+      targetAppSha: z.string().regex(/^[0-9a-f]{40}$/),
+      fromMigrationCount: z.number().int().nonnegative().max(1023),
+      toMigrationCount: z.number().int().positive().max(1024),
+      startedAt: timestamp,
+      completedAt: timestamp,
+      migration: z.object({
+        tag: z.string().regex(/^[0-9]+_[a-z0-9_]+$/),
+        index: z.number().int().nonnegative(),
+        when: z.number().int().positive(),
+        sqlSha256: digest,
+      }),
+      newColumns: z
+        .array(
+          z.object({
+            name: z.string().regex(/^[a-z_][a-z0-9_]*$/),
+            type: z.string().min(1),
+            notNull: z.boolean(),
+            default: z.string().nullable(),
+          })
+        )
+        .min(1)
+        .max(16),
+      oldDefinitionSha256Before: digest,
+      oldDefinitionSha256After: digest,
+      preservedData: z.object({
+        relation: z.literal("public.execution_requests"),
+        columns: z
+          .array(z.string().regex(/^[a-z_][a-z0-9_]*$/))
+          .min(1)
+          .max(64),
+        before: evolutionFingerprint,
+        after: evolutionFingerprint,
+      }),
+      preservedJournal: z.object({
+        rowCount: z.number().int().nonnegative(),
+        method: z.literal("canonical-json-id-hash-created_at.v1"),
+        beforeSha256: digest,
+        afterSha256: digest,
+      }),
+      currentJournal: z.object({
+        rowCount: z.number().int().positive(),
+        method: z.literal("canonical-json-id-hash-created_at.v1"),
+        sha256: digest,
+      }),
+      canonicalMigrator: z.object({
+        lockKey: z.literal("0x436f676e6901"),
+        exitCode: z.literal(0),
+        receipt: z.object({
+          bytesBase64: z.string().min(1).max(192000),
+          sha256: digest,
+        }),
+      }),
+    })
+    .parse(input);
+  const bytes = Buffer.from(
+    value.canonicalMigrator.receipt.bytesBase64,
+    "base64"
+  );
+  const marker = bytes.toString("utf8");
+  const receipt = parseMigrationReceipt(marker);
+  const latest = receipt?.applied.find(
+    (row) => row.tag === value.migration.tag
+  );
+  if (
+    bytes.toString("base64") !== value.canonicalMigrator.receipt.bytesBase64 ||
+    createHash("sha256").update(bytes).digest("hex") !==
+      value.canonicalMigrator.receipt.sha256 ||
+    !receipt ||
+    receipt.node !== "poly" ||
+    receipt.declared.length !== value.toMigrationCount ||
+    receipt.applied.length !== value.toMigrationCount ||
+    new Set(receipt.declared).size !== receipt.declared.length ||
+    receipt.declared.at(-1) !== value.migration.tag ||
+    latest?.hash !== value.migration.sqlSha256 ||
+    latest.appliedAtMs !== value.migration.when ||
+    receipt.applied.filter((row) => row.tag === value.migration.tag).length !==
+      1 ||
+    value.toMigrationCount !== value.fromMigrationCount + 1 ||
+    value.migration.index !== value.fromMigrationCount ||
+    value.preservedJournal.rowCount !== value.fromMigrationCount ||
+    value.currentJournal.rowCount !== value.toMigrationCount ||
+    value.oldDefinitionSha256Before !== value.oldDefinitionSha256After ||
+    value.preservedJournal.beforeSha256 !==
+      value.preservedJournal.afterSha256 ||
+    JSON.stringify(value.preservedData.before) !==
+      JSON.stringify(value.preservedData.after) ||
+    value.preservedData.before.copyHeader !==
+      `COPY ${value.preservedData.relation} (${value.preservedData.columns.join(", ")}) FROM stdin;` ||
+    new Set(value.preservedData.columns).size !==
+      value.preservedData.columns.length ||
+    new Set(value.newColumns.map((column) => column.name)).size !==
+      value.newColumns.length ||
+    value.newColumns.some((column) =>
+      value.preservedData.columns.includes(column.name)
+    ) ||
+    Date.parse(value.startedAt) > Date.parse(value.completedAt)
+  )
+    throw new Error("applied_schema_evolution_receipt_chain_mismatch");
+  return value;
+}

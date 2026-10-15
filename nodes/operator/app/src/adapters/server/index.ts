@@ -131,6 +131,8 @@ export {
 export {
   createCellAdminRecoveryControls,
   createCellReadmitRecoveryControls,
+  observeDatabaseCellNativeControl,
+  PostgresDatabaseCellPressureAdapter,
   PostgresDatabaseCellRecoveryProbeAdapter,
   routeCellRecoveryBegin,
   routeCellRecoveryVerification,

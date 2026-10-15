@@ -137,9 +137,11 @@ cell_seed_exact() {
 # Same owner-bank ESO volume as factory kits; no second secret reader or store.
 # Missing imported custody is inert. No root/TLS key/control credentials are minted.
 materialize_database_cell_applied_custodies() {
+  local selected_scope="${1:-}"
   [[ "$DEPLOY_ENVIRONMENT" == production && "${SECRETS_CONTROL_ENV:-$DEPLOY_ENVIRONMENT}" == production ]] || return 0
   local node custody bundle entries='[]' bundles='[]' previous aggregate key
   for node in "${NODE_TARGETS[@]}"; do
+    [[ -z "$selected_scope" || "$node" == "$selected_scope" ]] || continue
     prefetch_path "${node}-database-cell"
     custody="$(bao_get_field "${node}-database-cell" DATABASE_CELL_APPLIED_CUSTODY_JSON)"
     if [[ -n "$custody" ]]; then
@@ -163,6 +165,11 @@ materialize_database_cell_applied_custodies() {
     esac
     [[ "$aggregate" != '[]' ]] || continue
     previous="$(bao_get_field akash-tx-actuator "$key")"
+    if [[ -n "$selected_scope" ]]; then
+      aggregate="$(jq -nc --argjson previous "${previous:-[]}" --argjson selected "$aggregate" '
+        if ($previous|type)!="array" then error("private aggregate is not an array") else
+        reduce $selected[] as $entry ($previous; map(select(.nodeId!=$entry.nodeId or .environment!=$entry.environment))+[$entry]) | sort_by(.nodeId,.environment) end')" || fail "scoped applied aggregate merge refused"
+    fi
     [[ "$previous" != "$aggregate" ]] || continue
     cell_seed_exact akash-tx-actuator "$key" "$aggregate"
   done

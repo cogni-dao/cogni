@@ -92,6 +92,7 @@ import {
   DrizzleProviderOutcomeStore,
   KubernetesMigrationJobAdapter,
   observeAppliedCellManaged,
+  observeDatabaseCellNativeControl,
   PostgresDatabaseCellObserver,
   ReadOnlyAppliedDatabaseCellObserver,
   safeHostRoutedVersionProbe,
@@ -633,6 +634,7 @@ const loadAppliedCellCustody = async (
 };
 
 const appliedCellObserver = new ReadOnlyAppliedDatabaseCellObserver({
+  observeNativeControl: observeDatabaseCellNativeControl,
   readOwnedBundle: async (reference) => {
     const value = await readCredential(
       "AKASH_DATABASE_CELL_APPLIED_EVIDENCE_BUNDLES_JSON"

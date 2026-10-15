@@ -15,6 +15,8 @@ import { AkashTxError } from "@/ports";
 import {
   DatabaseCellAppliedRegistrationFactsSchema,
   DatabaseCellBackupRuntimeObservationSchema,
+  DatabaseCellNativeControlObservationSchema,
+  qualifyAppliedSchemaEvolution,
 } from "@/shared/secrets/database-cell-placement.data";
 import type { DatabaseCellAppliedRegistrationFacts } from "@/types/database-cell";
 import {
@@ -222,6 +224,15 @@ export class ReadOnlyAppliedDatabaseCellObserver
         custody: Input["custody"];
         packet: Facts["manualCutover"];
       }) => Promise<AppliedDatabaseCellManagedObservation>;
+      observeNativeControl?:
+        | ((input: {
+            reference: Input["reference"];
+            custody: Input["custody"];
+            native: Facts["native"];
+            provider: Facts["provider"];
+            packet: Facts["manualCutover"];
+          }) => Promise<NonNullable<Facts["nativeControl"]>>)
+        | undefined;
     }
   ) {}
   async observe(input: Input): Promise<Facts> {
@@ -445,10 +456,89 @@ export class ReadOnlyAppliedDatabaseCellObserver
       throw new Error("applied_backup_managed_primary_endpoint_mismatch");
     const native = await observeAppliedDatabaseCellNative({
       custody: input.custody,
+      observeMigrationJournal: Boolean(packet.schemaEvolution),
       providerEndpoint: managed.providerEndpoint,
       appEgressIp: packet.appEgressIp,
       expectedRuntimeApplications: packet.expectedRuntimeApplications,
     });
+    let schemaEvolution: Facts["schemaEvolution"];
+    if (packet.schemaEvolution) {
+      const artifact = bundle.require("schema-evolution");
+      const evolution = qualifyAppliedSchemaEvolution(artifact.json);
+      const current = native.native.migrationJournal;
+      if (
+        artifact.sha256 !== packet.schemaEvolution.receiptSha256 ||
+        evolution.nodeId !== packet.nodeId ||
+        evolution.environment !== packet.environment ||
+        evolution.systemIdentifier !== packet.systemIdentifier ||
+        evolution.database !== input.custody.databaseName ||
+        evolution.targetAppSha !== packet.appSourceSha ||
+        !current ||
+        current.rowCount !== evolution.toMigrationCount ||
+        current.sha256 !== evolution.currentJournal.sha256 ||
+        Date.parse(evolution.completedAt) > Date.parse(readmission.admittedAt)
+      )
+        throw new Error("applied_schema_evolution_current_journal_mismatch");
+      schemaEvolution = {
+        receiptSha256: artifact.sha256,
+        nodeId: evolution.nodeId,
+        environment: evolution.environment,
+        systemIdentifier: evolution.systemIdentifier,
+        targetAppSha: evolution.targetAppSha,
+        fromMigrationCount: evolution.fromMigrationCount,
+        toMigrationCount: evolution.toMigrationCount,
+        migrationSqlSha256: evolution.migration.sqlSha256,
+        currentJournalSha256: current.sha256,
+        completedAt: evolution.completedAt,
+        observedAt: current.observedAt,
+      };
+    }
+    let nativeControl: Facts["nativeControl"];
+    if (input.custody.nativeControl) {
+      const artifact = bundle.require("native-control-qualification");
+      const installed = DatabaseCellNativeControlObservationSchema.parse(
+        artifact.json
+      );
+      const provenance = input.custody.nativeControl.provenance;
+      if (
+        !this.deps.observeNativeControl ||
+        artifact.sha256 !== provenance.qualificationReceiptSha256 ||
+        installed.observedAt !== provenance.qualifiedAt ||
+        installed.systemIdentifier !== provenance.systemIdentifier ||
+        installed.reviewedSourceSha !== provenance.reviewedSourceSha ||
+        installed.installedAt !== provenance.installedAt ||
+        installed.admission.manualPacketSha256 !== packet.packetSha256 ||
+        installed.admission.readmissionReceiptSha256 !==
+          readmission.receiptId ||
+        installed.logicalProbeFunction.definitionSha256 !==
+          provenance.logicalProbeDefinitionSha256 ||
+        canonicalEvidenceJson(
+          installed.requiredFunctions
+            .map(({ signature, definitionSha256 }) => ({
+              signature,
+              definitionSha256,
+            }))
+            .sort((a, b) => a.signature.localeCompare(b.signature))
+        ) !==
+          canonicalEvidenceJson(
+            [...provenance.functions].sort((a, b) =>
+              a.signature.localeCompare(b.signature)
+            )
+          )
+      )
+        throw new Error(
+          "applied_control_actual_qualification_artifact_unavailable"
+        );
+      nativeControl = DatabaseCellNativeControlObservationSchema.parse(
+        await this.deps.observeNativeControl({
+          reference: input.reference,
+          custody: input.custody,
+          native: native.native,
+          provider: managed.provider,
+          packet,
+        })
+      );
+    }
     const start =
       scheduled.metadata.dumpStartedAt ??
       dr.qualification.backup.firstServiceStartedAt;
@@ -456,6 +546,8 @@ export class ReadOnlyAppliedDatabaseCellObserver
       observedAt: new Date().toISOString(),
       provider: managed.provider,
       native: native.native,
+      ...(nativeControl ? { nativeControl } : {}),
+      ...(schemaEvolution ? { schemaEvolution } : {}),
       effectiveApp: {
         ...managed.effectiveApp,
         runtimeAdoption: native.runtimeAdoption,

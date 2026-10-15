@@ -16,13 +16,15 @@ import { checkServerIdentity, type PeerCertificate } from "node:tls";
 
 import postgres from "postgres";
 import { z } from "zod";
-
 import { DatabaseCellAppliedCustodySchema } from "@/shared/secrets/database-cell-binding.data";
-
 import type {
   DatabaseCellAppliedCustody,
   DatabaseCellAppliedRegistrationFacts,
 } from "@/types/database-cell";
+import {
+  canonicalEvidenceJson,
+  evidenceSha256,
+} from "./database-cell-applied-artifacts";
 
 const RoleSchema = z.object({
   name: z.string(),
@@ -65,6 +67,7 @@ export async function observeAppliedDatabaseCellNative(input: {
   appEgressIp: string;
   expectedRuntimeApplications: DatabaseCellAppliedRegistrationFacts["manualCutover"]["expectedRuntimeApplications"];
   providerEndpoint: { host: string; port: number };
+  observeMigrationJournal?: boolean;
 }): Promise<{
   native: DatabaseCellAppliedRegistrationFacts["native"];
   runtimeAdoption: DatabaseCellAppliedRegistrationFacts["effectiveApp"]["runtimeAdoption"];
@@ -180,6 +183,7 @@ export async function observeAppliedDatabaseCellNative(input: {
   let native: z.infer<typeof NativeSchema>;
   let peerCertificateDerSha256: string;
   let nativeObservedAt: string;
+  let migrationJournal: DatabaseCellAppliedRegistrationFacts["native"]["migrationJournal"];
   try {
     native = await probe.sql.begin("read only", async (tx) => {
       const rows =
@@ -192,7 +196,33 @@ export async function observeAppliedDatabaseCellNative(input: {
         (SELECT rolsuper FROM pg_roles WHERE rolname = session_user) AS "probeSuperuser",
         (SELECT rolbypassrls FROM pg_roles WHERE rolname = session_user) AS "probeBypassRls",
         (current_setting('default_transaction_read_only') = 'on') AS "probeDefaultReadOnly"`;
-      return NativeSchema.parse(rows[0]);
+      const identity = NativeSchema.parse(rows[0]);
+      if (
+        identity.database !== custody.databaseName ||
+        identity.role !== probe.role
+      )
+        throw new Error("applied_cell_native_scope_mismatch");
+      if (input.observeMigrationJournal) {
+        const journal =
+          await tx`SELECT id,hash,created_at FROM drizzle.__drizzle_migrations ORDER BY created_at,id LIMIT 1025`;
+        if (journal.length > 1024)
+          throw new Error("applied_current_journal_exceeds_bound");
+        const values = z
+          .array(
+            z.object({
+              id: z.coerce.number().int().nonnegative(),
+              hash: z.string(),
+              created_at: z.union([z.string(), z.number()]).transform(String),
+            })
+          )
+          .parse(journal);
+        migrationJournal = {
+          rowCount: values.length,
+          sha256: evidenceSha256(canonicalEvidenceJson(values)),
+          observedAt: new Date().toISOString(),
+        };
+      }
+      return identity;
     });
     peerCertificateDerSha256 = probe.certificate();
     nativeObservedAt = new Date().toISOString();
@@ -270,6 +300,7 @@ export async function observeAppliedDatabaseCellNative(input: {
       appRole: custody.appRole,
       serviceRole: custody.serviceRole,
       runtimeRoles,
+      ...(migrationJournal ? { migrationJournal } : {}),
       activeRuntimeSessions: native.activeRuntimeSessions,
       serverVersionNum: native.serverVersionNum,
       tlsTrustKind: custody.tls.kind,

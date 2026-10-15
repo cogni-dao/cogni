@@ -30,13 +30,34 @@ load_database_cell_placement() {
     catalog_pools="$(yq -o=json ".database.\"${DEPLOY_ENVIRONMENT}\".runtimePoolLimits // null" "${CATALOG_DIR}/${TARGET_NODE}.yaml" | jq -Sc .)" || fail "catalog runtime pool policy invalid"
     custody_pools="$(jq -Sc '.runtimePoolLimits // null' <<<"$kit")" || fail "applied runtime pool custody invalid"
     [[ "$catalog_pools" == "$custody_pools" ]] || fail "public runtime pool policy differs from audited applied custody"
-    CELL_PLACEMENT_JSON="$(jq -n --argjson receipt "$receipt" --argjson custody "$kit" --argjson requireApplied "$require_applied" '{receipt:$receipt,custody:$custody,requireApplied:$requireApplied}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "audited manual consumer custody invalid"
+    CELL_PLACEMENT_JSON="$(project_applied_database_cell "$TARGET_NODE" "$receipt" "$kit" "$require_applied")" || fail "audited manual consumer custody invalid"
     return 0
   fi
   kit="$(bao_get_field "$cell_bank" DATABASE_CELL_BOOTSTRAP_KIT_JSON)"
   prefetch_path "${TARGET_NODE}-database-backup"
   encryption="$(bao_get_field "${TARGET_NODE}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)"
   CELL_PLACEMENT_JSON="$(jq -n --argjson receipt "$receipt" --argjson kit "$kit" --arg backupEncryptionKey "$encryption" --argjson requireApplied "$require_applied" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey,requireApplied:$requireApplied}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "audited cell placement or scoped custody invalid"
+}
+
+# Private component DSNs travel through protected files/stdin, never worker kits
+# or readonly observer custody. The original owned consumer values are unchanged.
+project_applied_database_cell() {
+  local node="$1" receipt="$2" custody="$3" required="${4:-false}" bundle='null' material='null'
+  if [[ "$(jq -r '.binding.nativeControl != null' <<<"$receipt")" == true ]]; then
+    local bank
+    bank="${node}-database-cell-actuator"; prefetch_path "$bank"
+    printf '%s' "$(bao_get_field "$bank" DATABASE_CELL_ACTUATOR_URL)" > "${CACHE_DIR}/cell-actuator-dsn"
+    bank="${node}-database-cell-readmitter"; prefetch_path "$bank"
+    printf '%s' "$(bao_get_field "$bank" DATABASE_CELL_READMIT_URL)" > "${CACHE_DIR}/cell-readmit-dsn"
+    material="$(jq -n --rawfile actuatorDsn "${CACHE_DIR}/cell-actuator-dsn" --rawfile readmitDsn "${CACHE_DIR}/cell-readmit-dsn" '{actuatorDsn:$actuatorDsn,readmitDsn:$readmitDsn}')"
+    bundle="$(bao_get_field "${node}-database-cell" DATABASE_CELL_APPLIED_EVIDENCE_BUNDLE_JSON)"
+    [[ -n "$bundle" ]] || fail "actual installed native control evidence bytes missing"
+  fi
+  printf '%s' "$receipt" > "${CACHE_DIR}/cell-projection-receipt"
+  printf '%s' "$custody" > "${CACHE_DIR}/cell-projection-custody"
+  printf '%s' "$material" > "${CACHE_DIR}/cell-projection-material"
+  printf '%s' "$bundle" > "${CACHE_DIR}/cell-projection-evidence"
+  jq -n --slurpfile receipt "${CACHE_DIR}/cell-projection-receipt" --slurpfile custody "${CACHE_DIR}/cell-projection-custody" --argjson requireApplied "$required" --slurpfile material "${CACHE_DIR}/cell-projection-material" --slurpfile bundle "${CACHE_DIR}/cell-projection-evidence" '{receipt:$receipt[0],custody:$custody[0],requireApplied:$requireApplied} + (if $material[0]==null then {} else {controlMaterial:$material[0],evidenceBundle:$bundle[0]} end)' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts"
 }
 
 cell_placement_composed_value() {
@@ -68,6 +89,24 @@ validate_applied_cell_consumer_custody() {
     value="$(jq -r --arg field "$field" '.[$field].dsn // .[$field].caCertificate' <<<"$custody")"
     [[ "$(bao_get_field "$service" "$key")" == "$value" ]] || fail "manual applied consumer value differs from current secret custody"
   done
+  if [[ "$(jq -r '.nativeControl != null' <<<"$custody")" == true ]]; then
+    local role expected actual
+    for role in probe actuator readmitter; do
+      service="$(jq -r --arg role "$role" '.nativeControl.provenance.custody[$role].service' <<<"$custody")"
+      key="$(jq -r --arg role "$role" '.nativeControl.provenance.custody[$role].key' <<<"$custody")"
+      case "$role/$service/$key" in
+        "probe/${node}-database-recovery-probe/DATABASE_CELL_CONTROL_PROBE_URL"|"actuator/${node}-database-cell-actuator/DATABASE_CELL_ACTUATOR_URL"|"readmitter/${node}-database-cell-readmitter/DATABASE_CELL_READMIT_URL") ;;
+        *) fail "native control reference leaves scoped canonical banks" ;;
+      esac
+      prefetch_path "$service"
+      expected="$(jq -r --arg role "$role" '.nativeControl.provenance.custody[$role].dsnSha256' <<<"$custody")"
+      actual="$(printf '%s' "$(bao_get_field "$service" "$key")" | openssl dgst -sha256 | awk '{print $NF}')"
+      [[ "$actual" == "$expected" ]] || fail "native control reference differs from current canonical custody"
+      if [[ "$role" == probe ]]; then
+        [[ "$(bao_get_field "$service" "$key")" == "$(jq -r .nativeControl.probe.dsn <<<"$custody")" ]] || fail "readonly control probe differs from canonical custody"
+      fi
+    done
+  fi
 }
 
 # Fixed private service and path. Token and request travel through stdin into a
@@ -169,6 +208,19 @@ materialize_database_cell_endpoint() {
 
 publish_database_cell_projection() {
   local node="$1" projection="$2" service key field prior entry merged
+  local retire legacy=''
+  retire="$(jq -c '.retireSourceBinding // null' <<<"$projection")"
+  if [[ "$retire" != null ]]; then
+    [[ "$(jq -r .nodeId <<<"$retire")" == "$(node_id_for_target "$node")" && "$(jq -r .environment <<<"$retire")" == production && "$DEPLOY_ENVIRONMENT" == production && "$SECRETS_CONTROL_ENV" == production ]] || fail "source binding retirement leaves exact owned production scope"
+    prefetch_path database-reliability-actuator
+    prior="$(bao_get_field database-reliability-actuator DATABASE_RECOVERY_PROBE_URLS_JSON)"
+    legacy="$(jq -nc --argjson prior "${prior:-[]}" --argjson retire "$retire" '
+      if ($prior|type)!="array" then error("legacy bindings are not an array")
+      elif ([$prior[] | select(.nodeId==$retire.nodeId and .environment==$retire.environment)] | length)>1 then error("ambiguous owned source bindings") else
+      $prior | map(if .nodeId==$retire.nodeId and .environment==$retire.environment then
+        if .systemIdentifier==$retire.systemIdentifier then empty else error("unexpected owned source binding identity") end
+      else . end) end')" || fail "legacy source binding identity differs from authenticated manual packet"
+  fi
   while IFS=$'\t' read -r service key field; do
     prefetch_path "$service"
     prior="$(bao_get_field "$service" "$key")"
@@ -181,6 +233,9 @@ database-reliability-actuator	DATABASE_RECOVERY_CELL_PROBE_URLS_JSON	probe
 database-reliability-actuator	DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON	admin
 database-reliability-readmitter	DATABASE_RELIABILITY_CELL_READMIT_URLS_JSON	readmit
 PROJECTIONS
+  if [[ "$retire" != null && -n "$legacy" ]]; then
+    cell_seed_exact database-reliability-actuator DATABASE_RECOVERY_PROBE_URLS_JSON "$legacy"
+  fi
   flush_batch database-reliability-actuator
   flush_batch database-reliability-readmitter
   if [[ "$(jq -r '.backup != null' <<<"$projection")" == true ]]; then
@@ -203,4 +258,88 @@ PROJECTIONS
     flush_batch "${node}-database-migration"
     flush_batch "$node"
   fi
+}
+
+# Explicit canonical writer phase. Produces private components only; never installs
+# roles/DDL, republishes consumers, or activates a catalog marker.
+materialize_database_cell_control_components() {
+  [[ "$TARGET_NODE" == "$RELIABILITY_CONTROLLER" && "$DEPLOY_ENVIRONMENT" == production && "$SECRETS_CONTROL_ENV" == production ]] || fail "cell control components require the local production owner"
+  [[ "${DATABASE_CELL_CONTROL_NODE_ID:-}" =~ ^[0-9a-f-]{36}$ ]] || fail "one explicit cell control node identity required"
+  local node selected='' receipt custody bank password plan service key value
+  for node in "${NODE_TARGETS[@]}"; do
+    [[ "$(node_id_for_target "$node")" == "$DATABASE_CELL_CONTROL_NODE_ID" ]] || continue
+    [[ -z "$selected" ]] || fail "ambiguous cell control node identity"
+    selected="$node"
+  done
+  [[ -n "$selected" ]] || fail "cell control node is not catalog-owned"
+  node="$selected" bank="${selected}-database-cell"
+  prefetch_path "$bank"
+  receipt="$(bao_get_field "$bank" DATABASE_CELL_PLACEMENT_RECEIPT_JSON)"
+  custody="$(bao_get_field "$bank" DATABASE_CELL_APPLIED_CUSTODY_JSON)"
+  [[ -n "$receipt" && -n "$custody" ]] || fail "audited applied cell receipt and current custody required"
+  validate_applied_cell_consumer_custody "$node" "$custody"
+  local actuator_password readmit_password
+  for service in actuator readmitter; do
+    bank="${node}-database-cell-${service}"
+    prefetch_path "$bank"
+    key=DATABASE_CELL_ACTUATOR_PASSWORD
+    [[ "$service" != readmitter ]] || key=DATABASE_CELL_READMIT_PASSWORD
+    password="$(bao_get_field "$bank" "$key")"
+    if [[ -z "$password" ]]; then
+      key_is_agent_generated "$key" && [[ "$(_cat_field "$key" '.generate.kind')" == hex && "$(_cat_field "$key" '.generate.bytes')" == 32 ]] || fail "scoped control catalog generator differs from reviewed contract"
+      password="$(randHex 32)"
+    fi
+    [[ "$password" =~ ^[0-9a-f]{64}$ ]] || fail "scoped control password generation invalid"
+    if [[ "$service" == actuator ]]; then actuator_password="$password"; else readmit_password="$password"; fi
+  done
+  printf '%s' "$actuator_password" > "${CACHE_DIR}/cell-actuator-password"
+  printf '%s' "$readmit_password" > "${CACHE_DIR}/cell-readmit-password"
+  printf '%s' "$receipt" > "${CACHE_DIR}/cell-component-receipt"
+  printf '%s' "$custody" > "${CACHE_DIR}/cell-component-custody"
+  plan="$(jq -n --slurpfile receipt "${CACHE_DIR}/cell-component-receipt" --slurpfile custody "${CACHE_DIR}/cell-component-custody" --rawfile actuatorPassword "${CACHE_DIR}/cell-actuator-password" --rawfile readmitPassword "${CACHE_DIR}/cell-readmit-password" '{receipt:$receipt[0],custody:$custody[0],actuatorPassword:$actuatorPassword,readmitPassword:$readmitPassword}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" --control-components)" || fail "scoped control component plan refused"
+  while IFS= read -r value; do
+    service="$(jq -r .service <<<"$value")" key="$(jq -r .key <<<"$value")"
+    prefetch_path "$service"
+    # Existing material must match, including URL byte identity. A partial retry
+    # may fill absent fields, never replace an installed private capability.
+    password="$(bao_get_field "$service" "$key")"
+    [[ -z "$password" || "$password" == "$(jq -r .value <<<"$value")" ]] || fail "existing scoped control component differs"
+  done < <(jq -c '.components[]' <<<"$plan")
+  while IFS= read -r value; do
+    service="$(jq -r .service <<<"$value")" key="$(jq -r .key <<<"$value")"
+    cell_seed_exact "$service" "$key" "$(jq -r .value <<<"$value")"
+  done < <(jq -c '.components[]' <<<"$plan")
+  flush_batch "${node}-database-recovery-probe"
+  flush_batch "${node}-database-cell-actuator"
+  flush_batch "${node}-database-cell-readmitter"
+}
+
+# Reference-only audited import through the existing private binder. The actor
+# authenticates mounted immutable bytes and current native/provider observations.
+materialize_database_cell_applied_registration() {
+  [[ "$TARGET_NODE" == "$RELIABILITY_CONTROLLER" && "$DEPLOY_ENVIRONMENT" == production && "$SECRETS_CONTROL_ENV" == production ]] || fail "manual registration requires the local production owner"
+  [[ "${DATABASE_CELL_CONTROL_NODE_ID:-}" =~ ^[0-9a-f-]{36}$ && "${DATABASE_CELL_REGISTER_PACKET_SHA256:-}" =~ ^[0-9a-f]{64}$ && "${DATABASE_CELL_REGISTER_READMISSION_SHA256:-}" =~ ^[0-9a-f]{64}$ && -n "${DATABASE_CELL_REGISTER_COGNI_KEY:-}" ]] || fail "audited manual registration requires explicit owned references"
+  local node selected='' bank custody response receipt projection request
+  for node in "${NODE_TARGETS[@]}"; do
+    [[ "$(node_id_for_target "$node")" == "$DATABASE_CELL_CONTROL_NODE_ID" ]] || continue
+    [[ -z "$selected" ]] || fail "ambiguous manual registration node"
+    selected="$node"
+  done
+  [[ -n "$selected" ]] || fail "manual registration node is not catalog-owned"
+  node="$selected" bank="${selected}-database-cell"
+  prefetch_path "$bank"
+  prefetch_path akash-tx-actuator
+  custody="$(bao_get_field "$bank" DATABASE_CELL_APPLIED_CUSTODY_JSON)"
+  [[ -n "$custody" ]] || fail "actual applied consumer custody absent"
+  validate_applied_cell_consumer_custody "$node" "$custody"
+  materialize_database_cell_applied_custodies "$node"
+  request="$(jq -nc --arg cogniKey "$DATABASE_CELL_REGISTER_COGNI_KEY" --arg nodeId "$DATABASE_CELL_CONTROL_NODE_ID" --arg packet "$DATABASE_CELL_REGISTER_PACKET_SHA256" --arg readmission "$DATABASE_CELL_REGISTER_READMISSION_SHA256" '{cogniKey:$cogniKey,nodeId:$nodeId,allocationEnvironment:"production",manualCutoverPacketSha256:$packet,readmissionReceiptId:$readmission}')"
+  response="$(cell_actor_http /v1/akash/database-cell-binding/register-applied "$request")"
+  receipt="$(jq -ec '.receipts[] | select(.binding.environment=="production" and .registration.kind=="audited-manual")' <<<"$response")" || fail "actual applied registration receipt absent"
+  # Validate every private target and real qualification before any publication.
+  projection="$(project_applied_database_cell "$node" "$receipt" "$custody" false)" || fail "actual registered private projection refused"
+  [[ "$(jq -r .binding.nodeId <<<"$receipt")" == "$DATABASE_CELL_CONTROL_NODE_ID" && "$(jq -r .binding.cogniKey <<<"$receipt")" == "$DATABASE_CELL_REGISTER_COGNI_KEY" ]] || fail "registered binding left the owned reference"
+  cell_seed_exact "$bank" DATABASE_CELL_PLACEMENT_RECEIPT_JSON "$receipt"
+  flush_batch "$bank"
+  publish_database_cell_projection "$node" "$projection"
 }

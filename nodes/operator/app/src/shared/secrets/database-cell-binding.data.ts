@@ -11,10 +11,223 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { z } from "zod";
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
+/** Reviewed installation contract, never a caller-selected list of safe functions. */
+export const DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS = [
+  {
+    signature: "cogni_control.require_actor(text)",
+    securityDefiner: false,
+    probeCanExecute: false,
+    actuatorCanExecute: false,
+    readmitterCanExecute: false,
+  },
+  {
+    signature: "cogni_control.assert_system(text)",
+    securityDefiner: false,
+    probeCanExecute: false,
+    actuatorCanExecute: false,
+    readmitterCanExecute: false,
+  },
+  {
+    signature: "cogni_control.lock_current(uuid,text)",
+    securityDefiner: false,
+    probeCanExecute: false,
+    actuatorCanExecute: false,
+    readmitterCanExecute: false,
+  },
+  {
+    signature: "cogni_control.receipt(cogni_control.database_recoveries)",
+    securityDefiner: false,
+    probeCanExecute: false,
+    actuatorCanExecute: false,
+    readmitterCanExecute: false,
+  },
+  {
+    signature:
+      "cogni_control.apply_roles(cogni_control.database_recoveries,boolean)",
+    securityDefiner: false,
+    probeCanExecute: false,
+    actuatorCanExecute: false,
+    readmitterCanExecute: false,
+  },
+  {
+    signature:
+      "public.contain_database_incident(uuid,text,text,text,text,text,text,text,text)",
+    securityDefiner: true,
+    probeCanExecute: false,
+    actuatorCanExecute: true,
+    readmitterCanExecute: false,
+  },
+  {
+    signature:
+      "public.begin_database_recovery(uuid,text,text,text,text,text,text)",
+    securityDefiner: true,
+    probeCanExecute: false,
+    actuatorCanExecute: false,
+    readmitterCanExecute: true,
+  },
+  {
+    signature: "public.complete_database_recovery(uuid,text,text,text,text)",
+    securityDefiner: true,
+    probeCanExecute: false,
+    actuatorCanExecute: true,
+    readmitterCanExecute: false,
+  },
+  {
+    signature: "public.recontain_database_recovery(uuid,text,text,text)",
+    securityDefiner: true,
+    probeCanExecute: false,
+    actuatorCanExecute: true,
+    readmitterCanExecute: false,
+  },
+  {
+    signature: "public.list_database_recoveries()",
+    securityDefiner: true,
+    probeCanExecute: false,
+    actuatorCanExecute: true,
+    readmitterCanExecute: true,
+  },
+  {
+    signature: "public.database_recovery_watchdog_tick(text,text)",
+    securityDefiner: true,
+    probeCanExecute: false,
+    actuatorCanExecute: true,
+    readmitterCanExecute: false,
+  },
+  {
+    signature: "public.database_cell_pressure(uuid,text)",
+    securityDefiner: true,
+    probeCanExecute: false,
+    actuatorCanExecute: true,
+    readmitterCanExecute: false,
+  },
+  {
+    signature: "public.database_cell_control_qualification(uuid,text)",
+    securityDefiner: true,
+    probeCanExecute: true,
+    actuatorCanExecute: false,
+    readmitterCanExecute: false,
+  },
+  {
+    signature: "public.import_database_cell_admission(jsonb)",
+    securityDefiner: false,
+    probeCanExecute: false,
+    actuatorCanExecute: false,
+    readmitterCanExecute: false,
+  },
+  {
+    signature:
+      "public.register_database_cell_replay(uuid,text,text,text,integer,text)",
+    securityDefiner: false,
+    probeCanExecute: false,
+    actuatorCanExecute: false,
+    readmitterCanExecute: false,
+  },
+] as const;
+const controlSignature = z
+  .string()
+  .refine(
+    (signature) =>
+      DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS.some(
+        (expected) => expected.signature === signature
+      ),
+    "function is outside the reviewed native control contract"
+  );
+const controlFunctionFingerprint = z
+  .object({
+    signature: controlSignature,
+    definitionSha256: sha256,
+  })
+  .strict();
+const controlCustodyReference = z
+  .object({
+    service: z.string().regex(/^[a-z][a-z0-9-]{0,90}$/),
+    key: z.string().regex(/^[A-Z][A-Z0-9_]+$/),
+    dsnSha256: sha256,
+  })
+  .strict();
+export const DatabaseCellNativeControlProvenanceSchema = z
+  .object({
+    version: z.literal(1),
+    controlDatabaseName: z.literal("postgres"),
+    reviewedSourceSha: z.string().regex(/^[0-9a-f]{40}$/),
+    migrationManifestSha256: sha256,
+    systemIdentifier: z.string().regex(/^[0-9]+$/),
+    installedAt: z.string().datetime({ offset: true }),
+    qualifiedAt: z.string().datetime({ offset: true }),
+    qualificationReceiptSha256: sha256,
+    logicalProbeDefinitionSha256: sha256,
+    functions: z
+      .array(controlFunctionFingerprint)
+      .length(DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS.length),
+    custody: z
+      .object({
+        probe: controlCustodyReference,
+        actuator: controlCustodyReference,
+        readmitter: controlCustodyReference,
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      new Set(value.functions.map((fn) => fn.signature)).size !==
+        DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS.length ||
+      Date.parse(value.qualifiedAt) < Date.parse(value.installedAt)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "native control requires the complete reviewed function set and actual chronological qualification",
+      });
+  });
+export const DatabaseCellNativeControlFunctionObservationSchema =
+  controlFunctionFingerprint
+    .extend({
+      owner: z.literal("postgres"),
+      securityDefiner: z.boolean(),
+      publicCanExecute: z.literal(false),
+      probeCanExecute: z.boolean(),
+      actuatorCanExecute: z.boolean(),
+      readmitterCanExecute: z.boolean(),
+      searchPath: z.string(),
+    })
+    .strict()
+    .superRefine((value, ctx) => {
+      const expected = DATABASE_CELL_NATIVE_CONTROL_FUNCTIONS.find(
+        (fn) => fn.signature === value.signature
+      );
+      if (
+        !expected ||
+        value.securityDefiner !== expected.securityDefiner ||
+        value.probeCanExecute !== expected.probeCanExecute ||
+        value.actuatorCanExecute !== expected.actuatorCanExecute ||
+        value.readmitterCanExecute !== expected.readmitterCanExecute ||
+        value.searchPath.replaceAll(/\s/g, "") !== "pg_catalog,pg_temp"
+      )
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "native function privileges or search path differ from the reviewed capability split",
+        });
+    });
+export const DatabaseCellLogicalProbeFunctionSchema = z
+  .object({
+    signature: z.literal("public.database_recovery_probe()"),
+    definitionSha256: sha256,
+    owner: z.literal("postgres"),
+    securityDefiner: z.literal(true),
+    publicCanExecute: z.literal(false),
+    probeCanExecute: z.literal(true),
+    searchPath: z
+      .string()
+      .refine((value) => value.replaceAll(/\s/g, "") === "pg_catalog,pg_temp"),
+  })
+  .strict();
 export const DatabaseCellManualProvenanceSchema = z
   .object({
     kind: z.literal("manual-observed"),
@@ -76,6 +289,7 @@ const DatabaseCellBindingBaseSchema = z
       })
       .strict()
       .optional(),
+    nativeControl: DatabaseCellNativeControlProvenanceSchema.optional(),
   })
   .strict();
 export const DatabaseCellBindingSchema = z
@@ -103,6 +317,15 @@ export const DatabaseCellBindingSchema = z
       });
     }
     const suffix = binding.databaseName.slice("cogni_".length);
+    if (
+      binding.nativeControl &&
+      binding.nativeControl.systemIdentifier !== binding.systemIdentifier
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "native control provenance belongs to a different physical cell",
+      });
     for (const [role, prefix] of [
       [binding.appRole, "app"],
       [binding.serviceRole, "service"],
@@ -244,6 +467,15 @@ export const DatabaseCellAppliedCustodySchema = z
       .object({ dsn: z.string().min(1), custodyRef: custodyReference })
       .strict()
       .optional(),
+    nativeControl: z
+      .object({
+        provenance: DatabaseCellNativeControlProvenanceSchema,
+        probe: z
+          .object({ dsn: z.string().min(1), custodyRef: custodyReference })
+          .strict(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((custody, ctx) => {
@@ -286,6 +518,69 @@ export const DatabaseCellAppliedCustodySchema = z
           message:
             "runtime pools, read pool and leader must preserve per-role connection reserve",
         });
+    }
+    if (custody.nativeControl) {
+      const { provenance, probe } = custody.nativeControl;
+      const refs = provenance.custody;
+      const expectedRefs = [
+        [
+          refs.probe,
+          `${custody.nodeSlug}-database-recovery-probe`,
+          "DATABASE_CELL_CONTROL_PROBE_URL",
+        ],
+        [
+          refs.actuator,
+          `${custody.nodeSlug}-database-cell-actuator`,
+          "DATABASE_CELL_ACTUATOR_URL",
+        ],
+        [
+          refs.readmitter,
+          `${custody.nodeSlug}-database-cell-readmitter`,
+          "DATABASE_CELL_READMIT_URL",
+        ],
+      ] as const;
+      if (
+        expectedRefs.some(
+          ([ref, service, key]) => ref.service !== service || ref.key !== key
+        ) ||
+        probe.custodyRef.service !== refs.probe.service ||
+        probe.custodyRef.key !== refs.probe.key
+      )
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "native control capability leaves its distinct owned component bank",
+        });
+      try {
+        if (
+          createHash("sha256").update(probe.dsn).digest("hex") !==
+          refs.probe.dsnSha256
+        )
+          throw new Error();
+        const dsn = new URL(probe.dsn);
+        const logicalProbe = custody.readOnlyProbe
+          ? new URL(custody.readOnlyProbe.dsn)
+          : null;
+        if (
+          !logicalProbe ||
+          dsn.protocol !== "postgresql:" ||
+          dsn.hostname !== custody.canonicalEndpointHost ||
+          dsn.port !== logicalProbe.port ||
+          decodeURIComponent(dsn.username) !== `probe_${suffix}` ||
+          dsn.password !== logicalProbe.password ||
+          dsn.pathname !== "/postgres" ||
+          dsn.searchParams.size !== 1 ||
+          dsn.searchParams.get("sslmode") !== "verify-full" ||
+          dsn.hash
+        )
+          throw new Error();
+      } catch {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "control probe must reuse the exact isolated logical probe credential on the owned postgres control database",
+        });
+      }
     }
     const consumers: [{ dsn: string }, string][] = [
       [custody.app, custody.appRole],
@@ -514,6 +809,7 @@ export type { DatabaseCellBootstrapKit } from "@/types/database-cell";
 export const DatabaseRecoveryCellCommonSchema = z
   .object({
     scope: z.literal("dedicated-cell"),
+    version: z.never().optional(),
     nodeId: z.string().uuid(),
     nodeSlug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
     environment,
@@ -539,39 +835,148 @@ export const DatabaseRecoveryCellCommonSchema = z
   })
   .strict();
 
+const manualControlCommon = DatabaseRecoveryCellCommonSchema.omit({
+  sourceSha: true,
+  tlsCaCertificate: true,
+})
+  .extend({
+    version: z.literal(2),
+    sourceSha: z.never().optional(),
+    controlDatabaseName: z.literal("postgres"),
+    allocationReceiptId: z.string().uuid(),
+    dseq: z.string().regex(/^[0-9]+$/),
+    providerAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
+    nativeControl: DatabaseCellNativeControlProvenanceSchema,
+    tlsTrustKind: z.enum(["system", "private-ca"]),
+    tlsCaCertificate: z
+      .string()
+      .startsWith("-----BEGIN CERTIFICATE-----")
+      .optional(),
+    logicalProbeDsn: z.string().url().optional(),
+    logicalProbeCustody: controlCustodyReference.optional(),
+    logicalProbeFunction: DatabaseCellLogicalProbeFunctionSchema.optional(),
+  })
+  .strict();
+
 function privateRoute(expectedRole: "probe" | "actuator" | "readmitter") {
-  return DatabaseRecoveryCellCommonSchema.extend({
-    dsn: z.string().url(),
-  }).superRefine((value, ctx) => {
-    const url = new URL(value.dsn);
-    const role =
-      expectedRole === "probe"
-        ? value.probeRole
-        : `database_reliability_${expectedRole}`;
-    const database = expectedRole === "probe" ? value.databaseName : "postgres";
-    if (
-      !["postgres:", "postgresql:"].includes(url.protocol) ||
-      decodeURIComponent(url.username) !== role ||
-      !url.password ||
-      url.hostname !== value.endpoint.host ||
-      url.port !== String(value.endpoint.port) ||
-      decodeURIComponent(url.pathname.slice(1)) !== database ||
-      [...url.searchParams.keys()].some((key) => key !== "sslmode") ||
-      url.searchParams.getAll("sslmode").length !== 1 ||
-      url.searchParams.get("sslmode") !== "verify-full" ||
-      value.probeRole !==
-        `probe_${value.databaseName.slice("cogni_".length)}` ||
-      ![
-        `cogni_${value.nodeSlug.replaceAll("-", "_")}`,
-        `cogni_${value.nodeSlug.replaceAll("-", "_")}_${value.environment.replaceAll("-", "_")}`,
-      ].includes(value.databaseName)
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "private cell DSN does not match the applied scoped identity",
-      });
-    }
-  });
+  return z
+    .union([
+      DatabaseRecoveryCellCommonSchema.extend({
+        dsn: z.string().url(),
+      }).strict(),
+      manualControlCommon.extend({ dsn: z.string().url() }).strict(),
+    ])
+    .superRefine((value, ctx) => {
+      const manual = "version" in value && value.version === 2;
+      const role =
+        expectedRole === "probe"
+          ? value.probeRole
+          : `database_reliability_${expectedRole}`;
+      const validDsn = (dsn: string, database: string, expected: string) => {
+        const url = new URL(dsn);
+        return (
+          ["postgres:", "postgresql:"].includes(url.protocol) &&
+          decodeURIComponent(url.username) === expected &&
+          Boolean(url.password) &&
+          url.hostname === value.endpoint.host &&
+          url.port === String(value.endpoint.port) &&
+          decodeURIComponent(url.pathname.slice(1)) === database &&
+          [...url.searchParams.keys()].every((key) => key === "sslmode") &&
+          url.searchParams.getAll("sslmode").length === 1 &&
+          url.searchParams.get("sslmode") === "verify-full" &&
+          !url.hash
+        );
+      };
+      if (
+        !validDsn(
+          value.dsn,
+          manual || expectedRole !== "probe" ? "postgres" : value.databaseName,
+          role
+        ) ||
+        value.probeRole !==
+          `probe_${value.databaseName.slice("cogni_".length)}` ||
+        ![
+          `cogni_${value.nodeSlug.replaceAll("-", "_")}`,
+          `cogni_${value.nodeSlug.replaceAll("-", "_")}_${value.environment.replaceAll("-", "_")}`,
+        ].includes(value.databaseName)
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "private cell DSN does not match the applied scoped identity",
+        });
+      }
+      if (!manual) return;
+      if (
+        value.environment !== "production" ||
+        value.nativeControl.systemIdentifier !== value.systemIdentifier ||
+        (value.tlsTrustKind === "system"
+          ? value.tlsCaCertificate !== undefined
+          : value.tlsCaCertificate === undefined)
+      )
+        ctx.addIssue({
+          code: "custom",
+          message: "manual control identity or TLS custody differs",
+        });
+      const ref = value.nativeControl.custody[expectedRole];
+      const bank =
+        expectedRole === "probe"
+          ? `${value.nodeSlug}-database-recovery-probe`
+          : `${value.nodeSlug}-database-cell-${expectedRole}`;
+      const key =
+        expectedRole === "probe"
+          ? "DATABASE_CELL_CONTROL_PROBE_URL"
+          : expectedRole === "actuator"
+            ? "DATABASE_CELL_ACTUATOR_URL"
+            : "DATABASE_CELL_READMIT_URL";
+      const sha = (dsn: string) =>
+        createHash("sha256").update(dsn).digest("hex");
+      if (
+        ref.service !== bank ||
+        ref.key !== key ||
+        ref.dsnSha256 !== sha(value.dsn)
+      )
+        ctx.addIssue({
+          code: "custom",
+          message: "manual control DSN differs from installed scoped custody",
+        });
+      if (expectedRole === "probe") {
+        if (
+          !value.logicalProbeDsn ||
+          !value.logicalProbeCustody ||
+          !value.logicalProbeFunction ||
+          !validDsn(
+            value.logicalProbeDsn,
+            value.databaseName,
+            value.probeRole
+          ) ||
+          value.logicalProbeCustody.service !==
+            `${value.nodeSlug}-database-recovery-probe` ||
+          value.logicalProbeCustody.key !== "DATABASE_RECOVERY_PROBE_URL" ||
+          value.logicalProbeCustody.dsnSha256 !== sha(value.logicalProbeDsn) ||
+          value.logicalProbeFunction.definitionSha256 !==
+            value.nativeControl.logicalProbeDefinitionSha256 ||
+          new URL(value.logicalProbeDsn).username !==
+            new URL(value.dsn).username ||
+          new URL(value.logicalProbeDsn).password !==
+            new URL(value.dsn).password
+        )
+          ctx.addIssue({
+            code: "custom",
+            message:
+              "manual logical health capability is missing or differs from qualified custody",
+          });
+      } else if (
+        value.logicalProbeDsn ||
+        value.logicalProbeCustody ||
+        value.logicalProbeFunction
+      )
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "mutating workers cannot receive the logical probe credential",
+        });
+    });
 }
 export const DatabaseRecoveryCellProbeBindingSchema = privateRoute("probe");
 export const DatabaseRecoveryCellAdminBindingSchema = privateRoute("actuator");

@@ -15,6 +15,13 @@
       "when": 1792018576505,
       "tag": "0001_database_recovery_watchdog",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792059884756,
+      "tag": "0002_dedicated_cell_admission",
+      "breakpoints": true
     }
   ]
 }

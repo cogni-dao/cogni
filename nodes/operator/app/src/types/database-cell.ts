@@ -41,6 +41,79 @@ interface DatabaseCellBindingBase {
   cutover?:
     | { packetSha256: string; actorId: string; approvedAt: string }
     | undefined;
+  /** Actual subsequently installed control code; separate from the database image. */
+  nativeControl?: DatabaseCellNativeControlProvenance | undefined;
+}
+export interface DatabaseCellControlCustodyReference {
+  readonly service: string;
+  readonly key: string;
+  readonly dsnSha256: string;
+}
+export interface DatabaseCellNativeControlProvenance {
+  readonly version: 1;
+  readonly controlDatabaseName: "postgres";
+  readonly reviewedSourceSha: string;
+  readonly migrationManifestSha256: string;
+  readonly systemIdentifier: string;
+  readonly installedAt: string;
+  readonly qualifiedAt: string;
+  readonly qualificationReceiptSha256: string;
+  readonly logicalProbeDefinitionSha256: string;
+  readonly functions: readonly {
+    readonly signature: string;
+    readonly definitionSha256: string;
+  }[];
+  /** Mutating capability references/digests only; never their credentials. */
+  readonly custody: {
+    readonly probe: DatabaseCellControlCustodyReference;
+    readonly actuator: DatabaseCellControlCustodyReference;
+    readonly readmitter: DatabaseCellControlCustodyReference;
+  };
+}
+export interface DatabaseCellNativeControlObservation {
+  readonly version: 1;
+  readonly nodeId: string;
+  readonly nodeSlug: string;
+  readonly environment: "production";
+  readonly controlDatabaseName: "postgres";
+  readonly databaseName: string;
+  readonly systemIdentifier: string;
+  readonly allocationReceiptId: string;
+  readonly dseq: string;
+  readonly providerAccount: string;
+  readonly reviewedSourceSha: string;
+  readonly migrationManifestSha256: string;
+  readonly installedAt: string;
+  readonly observedAt: string;
+  readonly admission: {
+    readonly manualPacketSha256: string;
+    readonly readmissionReceiptSha256: string;
+    readonly admittedAt: string;
+    readonly importedAt: string;
+    readonly executionActor: DatabaseCellExecutionActor;
+    readonly approvalAuthority: DatabaseCellApprovalAuthority;
+  };
+  readonly requiredFunctions: readonly {
+    readonly signature: string;
+    readonly definitionSha256: string;
+    readonly owner: "postgres";
+    readonly securityDefiner: boolean;
+    readonly publicCanExecute: false;
+    readonly probeCanExecute: boolean;
+    readonly actuatorCanExecute: boolean;
+    readonly readmitterCanExecute: boolean;
+    readonly searchPath: string;
+  }[];
+  readonly logicalProbeFunction: {
+    readonly signature: "public.database_recovery_probe()";
+    readonly definitionSha256: string;
+    readonly owner: "postgres";
+    readonly securityDefiner: true;
+    readonly publicCanExecute: false;
+    readonly probeCanExecute: true;
+    readonly searchPath: string;
+  };
+  readonly exactRoleBounds: readonly DatabaseCellRoleBounds[];
 }
 export interface DatabaseCellManualProvenance {
   readonly kind: "manual-observed";
@@ -123,6 +196,8 @@ export interface AppliedDatabaseCellReceipt {
         approvalAuthority: DatabaseCellApprovalAuthority;
         readmissionReceiptId: string;
         manualCutoverPacketSha256: string;
+        sourceSystemIdentifier: string;
+        schemaEvolutionReceiptSha256?: string | undefined;
         scheduledBackupReceiptSha256: string;
         independentRecoveryReceiptSha256: string;
         appAllocationReceiptId: string;
@@ -226,6 +301,15 @@ export interface DatabaseCellAppliedCustody {
         readonly custodyRef: DatabaseCellCustodyReference;
       }
     | undefined;
+  readonly nativeControl?:
+    | {
+        readonly provenance: DatabaseCellNativeControlProvenance;
+        readonly probe: {
+          readonly dsn: string;
+          readonly custodyRef: DatabaseCellCustodyReference;
+        };
+      }
+    | undefined;
 }
 
 export type DatabaseCellAppliedEvidenceKind =
@@ -239,7 +323,9 @@ export type DatabaseCellAppliedEvidenceKind =
   | "current-app-readiness"
   | "backup-runtime"
   | "recovery-database-metadata"
-  | "recovery-data-parity";
+  | "recovery-data-parity"
+  | "native-control-qualification"
+  | "schema-evolution";
 /** Authenticated transport only; adapters must additionally parse each kind's actual typed contents. */
 export interface DatabaseCellAppliedEvidenceBundle {
   readonly version: 1;
@@ -311,6 +397,22 @@ export interface DatabaseCellBackupRuntimeObservation {
 
 export interface DatabaseCellAppliedRegistrationFacts {
   readonly observedAt: string;
+  readonly nativeControl?: DatabaseCellNativeControlObservation | undefined;
+  readonly schemaEvolution?:
+    | {
+        readonly receiptSha256: string;
+        readonly nodeId: string;
+        readonly environment: "production";
+        readonly systemIdentifier: string;
+        readonly targetAppSha: string;
+        readonly fromMigrationCount: number;
+        readonly toMigrationCount: number;
+        readonly migrationSqlSha256: string;
+        readonly currentJournalSha256: string;
+        readonly completedAt: string;
+        readonly observedAt: string;
+      }
+    | undefined;
   readonly backupRuntime: DatabaseCellBackupRuntimeObservation;
   readonly provider: {
     readonly observedAt: string;
@@ -340,6 +442,13 @@ export interface DatabaseCellAppliedRegistrationFacts {
       readonly roleReadOnly: boolean;
     })[];
     readonly activeRuntimeSessions: number;
+    readonly migrationJournal?:
+      | {
+          readonly rowCount: number;
+          readonly sha256: string;
+          readonly observedAt: string;
+        }
+      | undefined;
     readonly serverVersionNum: number;
     readonly tlsTrustKind: "system" | "private-ca";
     readonly endpointIdentity: DatabaseCellEndpointIdentity;
@@ -424,6 +533,8 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly allocationReceiptId: string;
     readonly systemIdentifier: string;
     readonly appSourceSha: string;
+    readonly sourceSystemIdentifier: string;
+    readonly schemaEvolution?: { readonly receiptSha256: string } | undefined;
     readonly sourceFenceReceiptSha256: string;
     readonly restorationParityManifestSha256: string;
     readonly executionActor: DatabaseCellExecutionActor;

@@ -455,6 +455,7 @@ export class DatabaseCellBinder
         Date.parse(facts.observedAt) + 5000 ||
       packet.allocationReceiptId !== record.receiptId ||
       packet.systemIdentifier !== native.systemIdentifier ||
+      packet.sourceSystemIdentifier === native.systemIdentifier ||
       packet.appSourceSha !== custody.targetBuildSha ||
       packet.appAllocationReceiptId !== app.allocationReceiptId ||
       packet.appSdlHash !== app.appliedSdlHash
@@ -645,6 +646,86 @@ export class DatabaseCellBinder
       refuse(
         "registration current backup timer or latest completed backup is unhealthy or inconsistent"
       );
+    const evolution = facts.schemaEvolution;
+    if (Boolean(packet.schemaEvolution) !== Boolean(evolution))
+      refuse(
+        "current schema evolution requires its authenticated separate receipt"
+      );
+    if (
+      evolution &&
+      (!fresh(evolution.observedAt) ||
+        evolution.receiptSha256 !== packet.schemaEvolution?.receiptSha256 ||
+        evolution.nodeId !== custody.nodeId ||
+        evolution.environment !== custody.environment ||
+        evolution.systemIdentifier !== native.systemIdentifier ||
+        evolution.targetAppSha !== custody.targetBuildSha ||
+        evolution.toMigrationCount !== evolution.fromMigrationCount + 1 ||
+        native.migrationJournal?.rowCount !== evolution.toMigrationCount ||
+        native.migrationJournal.sha256 !== evolution.currentJournalSha256 ||
+        !fresh(native.migrationJournal.observedAt) ||
+        Date.parse(evolution.completedAt) > Date.parse(readmission.admittedAt))
+    )
+      refuse(
+        "current native schema journal differs from canonical post-restore evolution"
+      );
+    const control = custody.nativeControl?.provenance;
+    const qualification = facts.nativeControl;
+    if (Boolean(control) !== Boolean(qualification))
+      refuse(
+        "native control custody requires genuine fresh read-only qualification"
+      );
+    if (control && qualification) {
+      const functions = (
+        values: readonly { signature: string; definitionSha256: string }[]
+      ) =>
+        JSON.stringify(
+          values
+            .map(({ signature, definitionSha256 }) => ({
+              signature,
+              definitionSha256,
+            }))
+            .sort((a, b) => a.signature.localeCompare(b.signature))
+        );
+      const roles = (values: typeof qualification.exactRoleBounds) =>
+        JSON.stringify(
+          [...values].sort((a, b) => a.name.localeCompare(b.name))
+        );
+      if (
+        !fresh(qualification.observedAt) ||
+        qualification.nodeId !== custody.nodeId ||
+        qualification.nodeSlug !== custody.nodeSlug ||
+        qualification.environment !== "production" ||
+        qualification.controlDatabaseName !== "postgres" ||
+        qualification.databaseName !== custody.databaseName ||
+        qualification.systemIdentifier !== native.systemIdentifier ||
+        control.systemIdentifier !== native.systemIdentifier ||
+        qualification.allocationReceiptId !== record.receiptId ||
+        qualification.dseq !== record.externalName ||
+        qualification.providerAccount !== record.providerAccount ||
+        qualification.reviewedSourceSha !== control.reviewedSourceSha ||
+        qualification.migrationManifestSha256 !==
+          control.migrationManifestSha256 ||
+        qualification.installedAt !== control.installedAt ||
+        qualification.logicalProbeFunction.definitionSha256 !==
+          control.logicalProbeDefinitionSha256 ||
+        Date.parse(control.qualifiedAt) >
+          Date.parse(qualification.observedAt) ||
+        qualification.admission.manualPacketSha256 !== packet.packetSha256 ||
+        qualification.admission.readmissionReceiptSha256 !==
+          readmission.receiptId ||
+        qualification.admission.admittedAt !== readmission.admittedAt ||
+        JSON.stringify(qualification.admission.executionActor) !==
+          JSON.stringify(packet.executionActor) ||
+        JSON.stringify(qualification.admission.approvalAuthority) !==
+          JSON.stringify(packet.approvalAuthority) ||
+        functions(qualification.requiredFunctions) !==
+          functions(control.functions) ||
+        roles(qualification.exactRoleBounds) !== roles(custody.budget.roles)
+      )
+        refuse(
+          "native control differs from actual installation, immutable admission or owned capabilities"
+        );
+    }
     const previous = await this.read(input);
     const old = previous.find(
       (receipt) => receipt.binding.environment === "production"
@@ -657,6 +738,10 @@ export class DatabaseCellBinder
         old.binding.endpoint.port !== Number(canonical.port) ||
         old.binding.cutover?.packetSha256 !== packet.packetSha256 ||
         old.registration?.readmissionReceiptId !== readmission.receiptId ||
+        old.registration.sourceSystemIdentifier !==
+          packet.sourceSystemIdentifier ||
+        old.registration.schemaEvolutionReceiptSha256 !==
+          packet.schemaEvolution?.receiptSha256 ||
         JSON.stringify(old.registration.executionActor) !==
           JSON.stringify(packet.executionActor) ||
         JSON.stringify(old.registration.approvalAuthority) !==
@@ -672,6 +757,9 @@ export class DatabaseCellBinder
         old.registration.migrationDsnSha256 !== app.migrationDsnSha256 ||
         old.registration.tlsCaSha256 !== app.tlsCaSha256 ||
         old.registration.migrationConsumer !== app.migrationConsumer ||
+        (old.binding.nativeControl !== undefined &&
+          JSON.stringify(old.binding.nativeControl) !==
+            JSON.stringify(control)) ||
         old.registration.tlsTrustKind !== app.tlsTrustKind ||
         JSON.stringify(old.registration.runtimePoolLimits) !==
           JSON.stringify(custody.runtimePoolLimits))
@@ -679,7 +767,27 @@ export class DatabaseCellBinder
       refuse(
         "applied registration cannot replace prior physical identity or audited custody"
       );
-    if (old) return previous;
+    if (old) {
+      if (!control || old.binding.nativeControl) return previous;
+      // Add genuine installed control to the same admitted identity. No role/login mutation,
+      // invented incident, replacement allocation or rewritten original admission history.
+      const next = AppliedDatabaseCellReceiptsSchema.parse(
+        previous.map((receipt) =>
+          receipt === old
+            ? {
+                ...receipt,
+                binding: {
+                  ...receipt.binding,
+                  nativeControl: control,
+                  probeRole: `probe_${custody.databaseName.slice("cogni_".length)}`,
+                },
+              }
+            : receipt
+        )
+      );
+      await this.deps.store.save(record, next, previous);
+      return next;
+    }
     const receipt: AppliedDatabaseCellReceipt = {
       allocationEnvironment: "production",
       targetBuildSha: custody.targetBuildSha,
@@ -689,6 +797,13 @@ export class DatabaseCellBinder
         approvalAuthority: packet.approvalAuthority,
         readmissionReceiptId: readmission.receiptId,
         manualCutoverPacketSha256: packet.packetSha256,
+        sourceSystemIdentifier: packet.sourceSystemIdentifier,
+        ...(packet.schemaEvolution
+          ? {
+              schemaEvolutionReceiptSha256:
+                packet.schemaEvolution.receiptSha256,
+            }
+          : {}),
         scheduledBackupReceiptSha256: backup.receiptSha256,
         independentRecoveryReceiptSha256: recovery.receiptSha256,
         appAllocationReceiptId: app.allocationReceiptId,
@@ -729,6 +844,12 @@ export class DatabaseCellBinder
               migrationRole: decodeURIComponent(
                 new URL(custody.migration.dsn).username
               ),
+            }
+          : {}),
+        ...(control
+          ? {
+              nativeControl: control,
+              probeRole: `probe_${custody.databaseName.slice("cogni_".length)}`,
             }
           : {}),
         systemIdentifier: native.systemIdentifier,

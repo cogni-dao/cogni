@@ -440,6 +440,16 @@ fi
 source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
 source "$SCRIPT_DIR/lib/materialize-database-cell-placement.sh"
 case "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" in
+  database-cell-register-applied)
+    created=0; unchanged=0
+    materialize_database_cell_applied_registration
+    log "audited cell registration complete: created=${created} unchanged=${unchanged}"
+    exit 0 ;;
+  database-cell-control-components)
+    created=0; unchanged=0
+    materialize_database_cell_control_components
+    log "cell control components complete: created=${created} unchanged=${unchanged}"
+    exit 0 ;;
   database-cell-seal|database-cell-cutover)
     created=0; unchanged=0
     materialize_database_cell_endpoint
