@@ -93,6 +93,45 @@ const statusSchema = (
 ).properties as YamlObject;
 
 describe("XComputeWorkload composite API (task.5096)", () => {
+  it("keeps object schemas compatible with Kubernetes CRD validation", () => {
+    const conflicts: string[] = [];
+    const visit = (value: unknown, location: string): void => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      const schema = value as YamlObject;
+      if (
+        schema.properties !== undefined &&
+        Object.keys(schema.properties as YamlObject).length > 0 &&
+        schema.additionalProperties !== undefined &&
+        schema.additionalProperties !== null &&
+        schema.additionalProperties !== true
+      ) {
+        conflicts.push(location);
+      }
+      for (const [key, child] of Object.entries(
+        (schema.properties ?? {}) as YamlObject
+      )) {
+        visit(child, `${location}.properties.${key}`);
+      }
+      for (const key of ["items", "additionalProperties", "not"]) {
+        visit(schema[key], `${location}.${key}`);
+      }
+      for (const key of ["allOf", "anyOf", "oneOf"]) {
+        for (const [index, child] of (
+          (schema[key] ?? []) as unknown[]
+        ).entries()) {
+          visit(child, `${location}.${key}[${index}]`);
+        }
+      }
+    };
+    for (const item of xrdSpec.versions as YamlObject[]) {
+      visit((item.schema as YamlObject).openAPIV3Schema, String(item.name));
+    }
+    expect(
+      conflicts,
+      "Kubernetes forbids declared properties with additionalProperties false or a map schema"
+    ).toEqual([]);
+  });
+
   it("publishes a namespaced composite bound to its Composition", () => {
     expect(xrd.apiVersion).toBe("apiextensions.crossplane.io/v2");
     expect(xrdSpec.group).toBe("compute.cogni.io");

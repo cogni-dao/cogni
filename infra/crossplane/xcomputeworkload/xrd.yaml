@@ -274,7 +274,6 @@ spec:
                         also owns a separate read pool and one dedicated job leader; applied
                         cell custody validates their sum against native caps with reserve.
                       type: object
-                      additionalProperties: false
                       required: [replicaCount, app, service, read]
                       properties:
                         replicaCount: { type: integer, enum: [1] }
