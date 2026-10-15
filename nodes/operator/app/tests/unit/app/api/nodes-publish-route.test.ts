@@ -11,6 +11,8 @@
  * @internal
  */
 
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbState = vi.hoisted(() => ({
@@ -43,6 +45,8 @@ const dbState = vi.hoisted(() => ({
     | { status?: string; publishPrUrl?: string; updatedAt?: Date }
     | undefined,
   throwOnUpdate: false,
+  readQuery: undefined as { sql: string; params: unknown[] } | undefined,
+  updateQuery: undefined as { sql: string; params: unknown[] } | undefined,
 }));
 
 const envState = vi.hoisted(() => ({
@@ -151,9 +155,10 @@ vi.mock("@cogni/db-client", () => ({
 const mockTx = {
   select: () => ({
     from: () => ({
-      where: () => ({
-        limit: () => (dbState.current ? [dbState.current] : []),
-      }),
+      where: (condition: SQL) => {
+        dbState.readQuery = new PgDialect().sqlToQuery(condition);
+        return { limit: () => (dbState.current ? [dbState.current] : []) };
+      },
     }),
   }),
   update: () => ({
@@ -163,9 +168,10 @@ const mockTx = {
       }
       dbState.patch = patch;
       return {
-        where: () => ({
-          returning: () => [{ ...dbState.current, ...patch }],
-        }),
+        where: (condition: SQL) => {
+          dbState.updateQuery = new PgDialect().sqlToQuery(condition);
+          return { returning: () => [{ ...dbState.current, ...patch }] };
+        },
       };
     },
   }),
@@ -188,15 +194,15 @@ const defaultNode = {
   publishPrUrl: null,
 };
 
-async function publishNode() {
+async function publishNode(id = defaultNode.id) {
   return POST(
     new Request(
-      "https://operator.test.cognidao.org/api/v1/nodes/11111111-1111-4111-8111-111111111111/publish",
+      `https://operator.test.cognidao.org/api/v1/nodes/${id}/publish`,
       { method: "POST" }
     ),
     {
       params: Promise.resolve({
-        id: "11111111-1111-4111-8111-111111111111",
+        id,
       }),
     }
   );
@@ -207,6 +213,8 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     dbState.current = { ...defaultNode };
     dbState.patch = undefined;
     dbState.throwOnUpdate = false;
+    dbState.readQuery = undefined;
+    dbState.updateQuery = undefined;
     envState.current = {
       GH_REVIEW_APP_ID: "1",
       GH_REVIEW_APP_PRIVATE_KEY_BASE64:
@@ -296,11 +304,19 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     expect(mockEnsureDatabase).toHaveBeenCalledTimes(1);
   });
 
-  it("mints the node repo as a template fork before opening the submodule pin PR", async () => {
-    const response = await publishNode();
+  it.each([
+    defaultNode.id,
+    "atlas",
+  ])("mints and updates the canonical node via %s", async (id) => {
+    const response = await publishNode(id);
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    expect(dbState.updateQuery?.params).toEqual([defaultNode.id, "user-1"]);
+    if (id === "atlas") {
+      expect(dbState.readQuery?.sql).toContain('"nodes"."slug"');
+      expect(dbState.readQuery?.sql).not.toContain('"nodes"."id"');
+    }
     expect(mockEnsureDatabase).toHaveBeenCalledWith({
       owner: "cogni-dao",
       repo: "atlas",
@@ -358,7 +374,8 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       expect.objectContaining({
         event: "feature.node_publish.complete",
         phase: "started",
-        nodeId: "11111111-1111-4111-8111-111111111111",
+        nodeRef: id,
+        nodeId: undefined,
       }),
       "feature.node_publish.complete"
     );
