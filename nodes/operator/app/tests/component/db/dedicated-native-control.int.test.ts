@@ -83,7 +83,7 @@ beforeAll(async () => {
     throw new Error("fixture cannot target production");
   await sql.unsafe(`CREATE ROLE database_reliability_actuator LOGIN PASSWORD '${fixturePassword}'; CREATE ROLE database_reliability_readmitter LOGIN PASSWORD '${fixturePassword}';
     CREATE ROLE app_poly_fixture LOGIN CONNECTION LIMIT 4;
-    CREATE ROLE service_poly_fixture LOGIN CONNECTION LIMIT 8;
+    CREATE ROLE service_poly_fixture LOGIN PASSWORD '${fixturePassword}' CONNECTION LIMIT 8;
     CREATE ROLE probe_poly_fixture LOGIN PASSWORD '${fixturePassword}' CONNECTION LIMIT 2;
     ALTER ROLE probe_poly_fixture SET default_transaction_read_only=on;
     `);
@@ -239,6 +239,60 @@ describe.sequential("owned Poly native control", () => {
     await expect(
       actuator.unsafe("SELECT public.import_database_cell_admission('{}')")
     ).rejects.toThrow();
+  });
+  it("counts client connections while an actual owned parallel worker is active", async () => {
+    const logicalUrl = new URL(fixtureUrl);
+    logicalUrl.pathname = "/cogni_poly_fixture";
+    const logical = postgres(logicalUrl.toString(), { max: 1, prepare: false });
+    logicalUrl.username = "service_poly_fixture";
+    logicalUrl.password = fixturePassword;
+    const service = postgres(logicalUrl.toString(), { max: 1, prepare: false });
+    let running: Promise<unknown> | undefined;
+    try {
+      // Thirty-two real fixture rows and one sleeping worker bound CPU/memory and duration.
+      await logical.unsafe(`CREATE TABLE public.native_parallel_pressure_fixture AS SELECT n FROM generate_series(1,32) n;
+        ALTER TABLE public.native_parallel_pressure_fixture SET (parallel_workers=1);
+        CREATE FUNCTION public.native_parallel_pressure_delay(n integer) RETURNS integer
+          LANGUAGE plpgsql VOLATILE PARALLEL SAFE AS $$BEGIN PERFORM pg_sleep(0.04); RETURN n; END$$;
+        GRANT SELECT ON public.native_parallel_pressure_fixture TO service_poly_fixture;`);
+      running = service.begin("read only", async (tx) => {
+        await tx.unsafe(`SET LOCAL max_parallel_workers_per_gather=1;
+          SET LOCAL min_parallel_table_scan_size=0; SET LOCAL parallel_setup_cost=0;
+          SET LOCAL parallel_tuple_cost=0; SET LOCAL parallel_leader_participation=off;
+          SET LOCAL force_parallel_mode=on;`);
+        await tx`SELECT sum(public.native_parallel_pressure_delay(n)) FROM public.native_parallel_pressure_fixture`;
+      });
+      let actual: { workers: number; clients: number } | undefined;
+      for (let i = 0; i < 50; i++) {
+        [actual] = await sql<{ workers: number; clients: number }[]>`
+          SELECT count(*) FILTER(WHERE backend_type='parallel worker')::int workers,
+            count(*) FILTER(WHERE backend_type='client backend')::int clients
+          FROM pg_stat_activity WHERE datname='cogni_poly_fixture' AND usename='service_poly_fixture'`;
+        if (actual && actual.workers >= 1) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(actual?.workers).toBeGreaterThanOrEqual(1);
+      expect(actual?.clients).toBe(1);
+      const [pressure] = await actuator.unsafe<
+        {
+          o: { roles: { name: string; connections: number; active: number }[] };
+        }[]
+      >("SELECT public.database_cell_pressure($1::uuid,'production') o", [
+        nodeId,
+      ]);
+      const measured = pressure?.o.roles.find(
+        (role) => role.name === "service_poly_fixture"
+      );
+      console.info("native_parallel_pressure_fixture", { actual, measured });
+      expect(measured?.connections).toBe(actual?.clients);
+      expect(measured?.active).toBe(1);
+    } finally {
+      await running;
+      await service.end({ timeout: 1 });
+      await logical.unsafe(`DROP FUNCTION IF EXISTS public.native_parallel_pressure_delay(integer);
+        DROP TABLE IF EXISTS public.native_parallel_pressure_fixture;`);
+      await logical.end({ timeout: 1 });
+    }
   });
   it("distinguishes idle from active owned replay pressure and contains all owned roles", async () => {
     await sql.unsafe(

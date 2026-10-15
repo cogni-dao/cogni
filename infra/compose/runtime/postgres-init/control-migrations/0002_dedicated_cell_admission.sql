@@ -233,7 +233,7 @@ BEGIN
       count(s.pid) FILTER(WHERE s.state='idle') idle,
       count(s.pid) FILTER(WHERE s.state IN('idle in transaction','idle in transaction (aborted)')) idle_tx
     FROM owned o JOIN pg_roles r ON r.rolname=o.name
-    LEFT JOIN pg_stat_activity s ON s.usename=o.name AND s.datname=o.database_name
+    LEFT JOIN pg_stat_activity s ON s.usename=o.name AND s.datname=o.database_name AND s.backend_type='client backend'
     GROUP BY o.name,o.kind,r.rolconnlimit
   ) SELECT jsonb_agg(jsonb_build_object('name',name,'kind',kind,'connectionLimit',rolconnlimit,'connections',connections,
       'active',active,'waiting',waiting,'idle',idle,'idleInTransaction',idle_tx) ORDER BY name) INTO role_pressure FROM pressure;
