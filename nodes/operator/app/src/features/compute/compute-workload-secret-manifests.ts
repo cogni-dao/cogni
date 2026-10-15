@@ -124,6 +124,17 @@ export function buildComputeSecretResources(input: {
                 property: "DATABASE_MIGRATION_URL",
               },
             },
+            ...(secretKeys.includes("DOLTGRES_URL")
+              ? [
+                  {
+                    secretKey: "DOLTGRES_URL",
+                    remoteRef: {
+                      key: `${input.environment}/${input.slug}`,
+                      property: "DOLTGRES_URL",
+                    },
+                  },
+                ]
+              : []),
           ],
         },
       },
