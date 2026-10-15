@@ -240,17 +240,13 @@ grep -q "Node substrate ready for node-template" "$TMPROOT/success.out"
 # bug.5299 — the preflight states WHOSE Postgres the lane's database is on, not just that
 # some database exists. node-template/candidate-a is reconciled by its own env, so this is
 # the resident verdict and the asserted name is unchanged (lane_db_suffix is empty).
-grep -q "\[OK\] lane database residency: node-template/candidate-a is reconciled by its own env (candidate-a)" "$TMPROOT/success.out"
+grep -q "\[OK\] lane database residency: node-template/candidate-a uses its own environment" "$TMPROOT/success.out"
 grep -q "runtime env includes DB inventory: cogni_node_template" "$TMPROOT/success.out"
 
 # bug.5299 — A MISRESIDENT LANE CANNOT BE GREEN ON THE LANELESS HUSK.
-# This call passed no lane, so it named `cogni_<node>` and asserted it against whatever VM it
-# SSH'd into: for a foreign-custodied lane that proved an unused database exists, never that
-# the lane's own database does. Declare candidate-a akash (placement is what relocates the
-# control env) while leaving DEPLOYMENT_PROVIDER unset — the "caller forgot the provider"
-# shape that lands an akash row on this k3s branch — and the residency gate must refuse it
-# instead of passing on the husk. node-template/candidate-a is NOT on the allowlist, and
-# adding it there is not the remedy.
+# Foreign COMPUTE custody is now valid with lane-local Postgres. Inject an explicit
+# historical PG pin into a copied existing reader instead: the residency gate must
+# reject that actual foreign PG placement before claiming a local database exists.
 MISRESIDENT_TREE="$TMPROOT/misresident-src"
 mkdir -p "$MISRESIDENT_TREE"
 cp -R "$HAPPY_TREE/." "$MISRESIDENT_TREE/"
@@ -262,13 +258,19 @@ misresident_appset="$MISRESIDENT_TREE/$(CATALOG_DIR="$MISRESIDENT_TREE/infra/cat
 mkdir -p "$(dirname "$misresident_appset")"
 cp "$HAPPY_TREE/$(CATALOG_DIR="$HAPPY_TREE/infra/catalog" appset_rel_path candidate-a node-template)" \
   "$misresident_appset"
+MISRESIDENT_SCRIPT="$TMPROOT/misresident-reader"
+mkdir -p "$MISRESIDENT_SCRIPT/lib"
+cp scripts/ci/assert-target-substrate.sh "$MISRESIDENT_SCRIPT/"
+cp scripts/ci/lib/*.sh "$MISRESIDENT_SCRIPT/lib/"
+printf '\nLANE_DB_RESIDENCY_PINNED=("node-template/candidate-a")\n' \
+  >> "$MISRESIDENT_SCRIPT/lib/lane-db-residency.sh"
 if env "${BASE_ENV[@]}" APP_SOURCE_DIR="$MISRESIDENT_TREE" \
   COGNI_CATALOG_ROOT="$MISRESIDENT_TREE/infra/catalog" \
-  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/misresident.out" 2>&1; then
-  echo "expected a misresident, non-allowlisted lane to fail the substrate preflight" >&2
+  bash "$MISRESIDENT_SCRIPT/assert-target-substrate.sh" >"$TMPROOT/misresident.out" 2>&1; then
+  echo "expected an explicitly foreign PG lane to fail the substrate preflight" >&2
   exit 1
 fi
-grep -q "node-template/candidate-a is MISRESIDENT and NOT allowlisted" "$TMPROOT/misresident.out"
+grep -q "node-template/candidate-a must use its own environment's Postgres; foreign residency is forbidden" "$TMPROOT/misresident.out"
 grep -q "lane database residency check failed for node-template/candidate-a" "$TMPROOT/misresident.out"
 # It must fail on RESIDENCY, before claiming anything about the husk on this host.
 if grep -q "Postgres database exists: cogni_node_template" "$TMPROOT/misresident.out"; then
