@@ -89,7 +89,7 @@ lease_generation:
   # 84.48 ACT free at the time of this bump — the per-deployment escrow ran dry while the
   # account was unfunded, and the account has since been topped up. Gen-3 is the reviewed
   # re-mint; production (gen-20, Finland) was serving the expected sha throughout.
-  preview: 4
+  preview: 5
   # 20 -> 21 after gen-20 booted the old eed16dc0 bundle, missed the boot
   # deadline for the promoted 9033a162 bundle, and was closed by policy.
   # The settled xcw:cogni-production:<node-id>:20 key is spent and cannot be
@@ -195,6 +195,9 @@ node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
+  - cidr: 65.108.194.156/32
+    envs: [preview]
+    comment: RHITE preview worker NAT; strict service_poly SCRAM authenticated from this IP on preview 2026-10-15T09:19:58Z (bug.5472); never production trust.
   - cidr: 80.200.246.35/32
     comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
   - cidr: 213.146.212.69/32
