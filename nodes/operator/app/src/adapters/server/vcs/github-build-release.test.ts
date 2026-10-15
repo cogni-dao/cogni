@@ -46,7 +46,9 @@ function producer() {
 }
 
 describe("GitHub build release carrier", () => {
-  beforeEach(() => request.mockReset());
+  beforeEach(() => {
+    request.mockReset();
+  });
 
   function mockCarrier(artifacts = listed(), run = producer()) {
     request.mockImplementation(async (route: string) => {

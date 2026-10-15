@@ -3,10 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type {
-  BuildReleaseArtifact,
-  BuildReleasePort,
-} from "@/ports/build-release.port";
+import type { BuildReleaseArtifact, BuildReleasePort } from "@/ports";
 import {
   type BuildRelease,
   resolveBuildRelease,
@@ -136,6 +133,14 @@ describe("SHA build releases", () => {
     await expect(
       resolve([artifact({ ...release(), schema_version: 1 })])
     ).rejects.toMatchObject({ code: "release_invalid" });
+  });
+
+  it("uses a v2 rebuild while a legacy artifact remains within retention", async () => {
+    const result = await resolve([
+      artifact({ ...release(), schema_version: 1 }),
+      artifact(release(), 2),
+    ]);
+    expect(result.artifact.id).toBe(2);
   });
 
   it.each([

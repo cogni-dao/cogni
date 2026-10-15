@@ -16,7 +16,7 @@ import {
   type BuildReleaseArtifact,
   BuildReleaseError,
   type BuildReleasePort,
-} from "@/ports/build-release.port";
+} from "@/ports";
 
 const execFileAsync = promisify(execFile);
 const MAX_BYTES = 2 * 1024 * 1024;

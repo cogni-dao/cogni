@@ -218,6 +218,8 @@ the flight receipt. Missing, expired, or legacy records require a fresh build;
 there is no partial-image or single-target fallback for an in-repo release.
 GitHub artifact retention bounds this carrier's lifetime; it is not a permanent
 release archive or a claim that downstream promotion has adopted the record.
+Legacy v1 artifacts may remain in retention after a v2 rebuild; they carry no
+deployment authority once a validated v2 record is available.
 Remote-source nodes continue to use their declared source-SHA OCI bundle lane.
 
 `pr-*`, `mq-*`, and `preview-*` tags are transitional/control-plane artifact aliases for legacy in-repo build mechanics. They may exist while workflows are being migrated, but no node deploy request should use them as artifact identity.

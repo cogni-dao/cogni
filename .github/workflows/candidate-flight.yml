@@ -107,6 +107,7 @@ jobs:
               echo "::error::source_sha must be a 40-char hex SHA"
               exit 1
             fi
+            NODE_SOURCE_SHA=$(printf '%s' "$NODE_SOURCE_SHA" | tr '[:upper:]' '[:lower:]')
             BASE_REF=main
             CATALOG="infra/catalog/${NODE_SLUG}.yaml"
             if [ ! -f "$CATALOG" ]; then

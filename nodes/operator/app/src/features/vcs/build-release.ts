@@ -8,7 +8,7 @@ import {
   type BuildReleaseArtifact,
   BuildReleaseError,
   type BuildReleasePort,
-} from "@/ports/build-release.port";
+} from "@/ports";
 
 const sha = z.string().regex(/^[a-f0-9]{40}$/);
 const target = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
@@ -185,8 +185,20 @@ export async function resolveBuildRelease(input: {
       "No successful unexpired build release exists; rerun PR Build for this SHA"
     );
   }
-  const releases = artifacts.map((artifact) => {
+  for (const artifact of artifacts)
     verifyProducer(artifact, input.repository, sourceSha);
+  const current = artifacts.filter(
+    (artifact) =>
+      !z.object({ schema_version: z.literal(1) }).safeParse(artifact.payload)
+        .success
+  );
+  if (current.length === 0) {
+    throw new BuildReleaseError(
+      "release_invalid",
+      "Only legacy build records exist; rebuild this SHA using the release v2 producer"
+    );
+  }
+  const releases = current.map((artifact) => {
     return {
       artifact,
       release: validateBuildRelease(artifact.payload, {
