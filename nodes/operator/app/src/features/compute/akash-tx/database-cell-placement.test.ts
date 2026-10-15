@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { DatabaseCellBindingReferenceSchema } from "@/contracts/database-cell-binding.v1.contract";
@@ -204,6 +206,64 @@ describe("same-receipt production cell placement", () => {
     await expect(
       current.binder.cutover({ ...input, allocationEnvironment: "candidate-a" })
     ).rejects.toThrow("production");
+  });
+  it("preserves applied physical custody across unrelated operator artifacts and refuses mismatches", async () => {
+    const current = fixture();
+    current.restore();
+    const receipts = await current.binder.cutover({
+      ...current.ref,
+      actorId: "human:fixture",
+      packetSha256: "f".repeat(64),
+    });
+    const repoRoot = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const script = `set -euo pipefail
+REPO_ROOT="$1"
+IFS= read -r CELL_RECEIPT
+IFS= read -r CELL_KIT
+IFS= read -r CELL_BACKUP_KEY
+TARGET_NODE=controller RELIABILITY_CONTROLLER=controller DEPLOY_ENVIRONMENT=production DOMAIN=fixture.example.org
+APP_SOURCE_DIR="$REPO_ROOT" CATALOG_DIR=/unused-catalog
+NODE_TARGETS=(alpha)
+git() { printf '%s' cccccccccccccccccccccccccccccccccccccccc; }
+prefetch_path() { :; }
+node_id_for_target() { printf '%s' 11111111-1111-4111-8111-111111111111; }
+bao_get_field() {
+  case "$2" in
+    DATABASE_CELL_PLACEMENT_RECEIPT_JSON) printf '%s' "$CELL_RECEIPT" ;;
+    DATABASE_CELL_BOOTSTRAP_KIT_JSON) printf '%s' "$CELL_KIT" ;;
+    DATABASE_CELL_BACKUP_ENCRYPTION_KEY) printf '%s' "$CELL_BACKUP_KEY" ;;
+  esac
+}
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+seed_kv() { fail "unexpected secret write"; }
+remote() { fail "unexpected source native census"; }
+curl() { fail "unexpected source version census"; }
+source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-kits.sh"
+materialize_database_cell_kits`;
+    const input = (value: unknown) =>
+      [
+        JSON.stringify(receipts[0]),
+        JSON.stringify(value),
+        "e".repeat(64),
+        "",
+      ].join("\n");
+    expect(
+      execFileSync("bash", ["-c", script, "fixture", repoRoot], {
+        cwd: repoRoot,
+        input: input(scopedKit),
+        encoding: "utf8",
+      })
+    ).toBe("");
+    expect(() =>
+      execFileSync("bash", ["-c", script, "fixture", repoRoot], {
+        cwd: repoRoot,
+        input: input({ ...scopedKit, sourceSha: "d".repeat(40) }),
+        encoding: "utf8",
+        stdio: "pipe",
+      })
+    ).toThrow();
   });
   it("rejects forged ownership/IP endpoint before receipt persistence", async () => {
     const current = fixture();

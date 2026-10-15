@@ -15,18 +15,20 @@ materialize_database_cell_kits() {
   [[ "$operator_sha" =~ ^[0-9a-f]{40}$ ]] || fail "cell bootstrap artifact provenance missing"
   for cell_node in "${NODE_TARGETS[@]}"; do
     catalog="${CATALOG_DIR}/${cell_node}.yaml"
+    # An applied physical cell owns its bootstrap artifact. An unrelated operator
+    # release must not replace that artifact while its audited binding stays put.
+    prefetch_path "${cell_node}-database-cell"
+    kit_json="$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_PLACEMENT_RECEIPT_JSON)"
+    if [[ -n "$kit_json" && "$(jq -r .binding.phase <<<"$kit_json")" == applied ]]; then
+      [[ "$(jq -r .binding.nodeSlug <<<"$kit_json")" == "$cell_node" && "$(jq -r .binding.nodeId <<<"$kit_json")" == "$(node_id_for_target "$cell_node")" && "$(jq -r .allocationEnvironment <<<"$kit_json")" == "$DEPLOY_ENVIRONMENT" ]] || fail "applied cell does not own this catalog scope"
+      prefetch_path "${cell_node}-database-backup"
+      jq -n --argjson receipt "$kit_json" --argjson kit "$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_BOOTSTRAP_KIT_JSON)" --arg backupEncryptionKey "$(bao_get_field "${cell_node}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" > /dev/null || fail "applied cell bootstrap custody differs from its binding"
+      continue
+    fi
     while IFS= read -r lane; do
       [[ -n "$lane" ]] || continue
       physical="$(lane_db_vm_env "$cell_node" "$lane")" || fail "cell source residency unresolved"
       [[ "$physical" == "$DEPLOY_ENVIRONMENT" ]] || continue
-      # A committed cutover owns its endpoint. Reflight never recenses that
-      # dedicated DSN as though it were still hosted by this shared VM.
-      prefetch_path "${cell_node}-database-cell"
-      kit_json="$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_PLACEMENT_RECEIPT_JSON)"
-      if [[ -n "$kit_json" && "$(jq -r .binding.phase <<<"$kit_json")" == applied && "$(jq -r .binding.environment <<<"$kit_json")" == "$lane" ]]; then
-        [[ "$(jq -r .binding.nodeSlug <<<"$kit_json")" == "$cell_node" ]] || fail "applied cell receipt target differs"
-        continue
-      fi
       source_ns="__cell-source-${cell_node}-${lane}"
       prefetch_path "$cell_node" "$lane" "$source_ns"
       node_uuid="$(node_id_for_target "$cell_node")"
