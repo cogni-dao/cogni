@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 set -euo pipefail
+export FLEET_CONTROL_ENV=production
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -91,6 +92,7 @@ put_secret operator DOLT_CREDS_KEYID dolt-mirror-keyid-sentinel
 
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
+printf 'called\n' >> "${FAKE_REMOTE_ROOT}/ssh-calls.log"
 while [ "$#" -gt 0 ] && [[ "$1" == -* ]]; do
   case "$1" in
     -i|-o) shift 2 ;;
@@ -193,8 +195,8 @@ if [ "${1:-}" = "-n" ] && [ "${3:-}" = "wait" ]; then
 fi
 if [ "${1:-}" = "-n" ] && [ "${3:-}" = "get" ] && [ "${4:-}" = "secret" ]; then
   printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/kubectl.log"
-  if printf '%s\n' "$*" | grep -q 'operator-migration-secrets.*DATABASE_MIGRATION_URL'; then
-    printf '%s' 'cG9zdGdyZXNxbDovL21pZ3JhdGlvbl9vcGVyYXRvcjpwZXJub2RlLW1pZ3JhdGlvbi1wdy1zZW50aW5lbEAxMjcuMC4wLjE6NTQzMi9jb2duaV9vcGVyYXRvcg=='
+  if printf '%s\n' "$*" | grep -q 'migration-secrets.*DATABASE_MIGRATION_URL'; then
+    printf '%s' "${FAKE_MIGRATION_DSN:-postgresql://migration_operator:pernode-migration-pw-sentinel@127.0.0.1:5432/cogni_operator}" | base64
   elif printf '%s\n' "$*" | grep -q 'jsonpath='; then
     printf '%s' 'cHJlc2VudA=='
   fi
@@ -243,15 +245,16 @@ chmod +x "$FAKEBIN/kubectl"
 cat > "$FAKEBIN/psql" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[ "$DATABASE_MIGRATION_URL" = 'postgresql://migration_operator:pernode-migration-pw-sentinel@127.0.0.1:5432/cogni_operator' ]
+[ "$DATABASE_MIGRATION_URL" = "${FAKE_MIGRATION_DSN:-postgresql://migration_operator:pernode-migration-pw-sentinel@127.0.0.1:5432/cogni_operator}" ]
 [ "$#" -eq 5 ]
+[ "$1" = "$DATABASE_MIGRATION_URL" ]
 [ "$2" = -XAtv ]
 [ "$3" = ON_ERROR_STOP=1 ]
 [ "$4" = -f ]
 [ "$5" = - ]
 cat > "${FAKE_REMOTE_ROOT}/migration-identity.sql"
 printf '%s' "$MIGRATION_IDENTITY_SQL_B64" > "${FAKE_REMOTE_ROOT}/migration-identity.b64"
-printf 't\n'
+printf '%s\n' "${FAKE_MIGRATION_PROBE_RESULT:-t}"
 EOF
 chmod +x "$FAKEBIN/psql"
 
@@ -531,6 +534,19 @@ grep -q 'REVOKE ALL ON FUNCTION public.contain_database_role' "$provisioner"
 grep -q 'GRANT EXECUTE ON FUNCTION public.contain_database_role.*RELIABILITY_ROLE' "$provisioner"
 grep -q 'REVOKE ALL ON FUNCTION public.readmit_database_role' "$provisioner"
 grep -q 'GRANT EXECUTE ON FUNCTION public.readmit_database_role.*READMITTER_ROLE' "$provisioner"
+awk -v guard="  IF to_regnamespace('cogni_control') IS NOT NULL THEN" '
+  /^CREATE OR REPLACE FUNCTION public\.(contain|readmit)_database_role\(/ { in_legacy=1 }
+  in_legacy && /^BEGIN$/ {
+    if (getline <= 0 || $0 != guard) exit 1
+    seen++; in_legacy=0
+  }
+  END { if (seen != 2) exit 1 }
+' "$provisioner"
+if grep -Eq '^GRANT EXECUTE ON FUNCTION public\.(contain|readmit)_database_role' "$provisioner"; then
+  echo "legacy control EXECUTE grants must not be unconditional" >&2; exit 1
+fi
+grep -q "IF to_regnamespace('cogni_control') IS NULL THEN" "$provisioner"
+grep -q 'FROM "\$RELIABILITY_ROLE", "\$READMITTER_ROLE"' "$provisioner"
 grep -q "session_user <> '\$RELIABILITY_ROLE'" "$provisioner"
 grep -q "session_user <> '\$READMITTER_ROLE'" "$provisioner"
 grep -q 'REVOKE SET ON PARAMETER temp_file_limit FROM PUBLIC' "$provisioner"
@@ -723,6 +739,120 @@ set -e
 [ "$offset_rc" -ne 0 ] || { echo "expected reconcile to fail for node-template in production (restricted fixture)" >&2; exit 1; }
 grep -q "is not in the 'production' node-set" "$TMPROOT/offset-env.out" \
   || { echo "missing node-set rejection message; got:" >&2; cat "$TMPROOT/offset-env.out" >&2; exit 1; }
+
+# Exercise a real pinned pair and an unpinned foreign pair through the same
+# reconciler. Stubs capture commands; no remote host or database is contacted.
+FOREIGN_SOURCE="$TMPROOT/foreign-source"
+FOREIGN_CATALOG="$FOREIGN_SOURCE/infra/catalog"
+mkdir -p "$FOREIGN_CATALOG" "$BAO_ROOT/cogni/production/operator"
+cp infra/catalog/*.yaml "$FOREIGN_CATALOG/"
+cp infra/database-budget-profiles.yaml "$FOREIGN_SOURCE/infra/"
+printf '%s' doltgres-super-sentinel > "$BAO_ROOT/cogni/production/operator/DOLTGRES_PASSWORD"
+FOREIGN_NODE=poly-guard-fixture
+cp "$FOREIGN_CATALOG/poly.yaml" "$FOREIGN_CATALOG/$FOREIGN_NODE.yaml"
+yq -i ".name = \"$FOREIGN_NODE\"" "$FOREIGN_CATALOG/$FOREIGN_NODE.yaml"
+
+for foreign_node in poly "$FOREIGN_NODE"; do
+  control_db="cogni_${foreign_node//-/_}_candidate_a"
+  migration_db="cogni_${foreign_node//-/_}"
+  [[ "$foreign_node" != poly ]] || migration_db="$control_db"
+  foreign_migration_dsn="postgresql://migration_${migration_db#cogni_}:foreign-migration-sentinel@127.0.0.1:5432/$migration_db"
+  put_secret "$foreign_node" APP_DB_PASSWORD foreign-app-sentinel
+  put_secret "$foreign_node" APP_DB_SERVICE_PASSWORD foreign-service-sentinel
+  put_secret "$foreign_node-database-migration" APP_DB_MIGRATION_PASSWORD foreign-migration-sentinel
+  put_secret "$foreign_node-database-recovery-probe" DATABASE_RECOVERY_PROBE_PASSWORD foreign-probe-sentinel
+  put_secret "$foreign_node-database-migration" DATABASE_MIGRATION_URL "$foreign_migration_dsn"
+  mkdir -p "$FOREIGN_SOURCE/nodes/$foreign_node/k8s/external-secrets/candidate-a"
+  cp nodes/operator/k8s/external-secrets/candidate-a/external-secret.yaml \
+    "$FOREIGN_SOURCE/nodes/$foreign_node/k8s/external-secrets/candidate-a/external-secret.yaml"
+  docker_log_start="$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')"
+  env \
+    VM_HOST=fake DOMAIN=test.cognidao.org DEPLOYMENT_PROVIDER=akash \
+    SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+    APP_SOURCE_DIR="$FOREIGN_SOURCE" COGNI_CATALOG_ROOT="$FOREIGN_CATALOG" \
+    RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
+    RECONCILE_NODE_SUBSTRATE_SCP_BIN="$FAKEBIN/scp" \
+    FAKE_REMOTE_ROOT="$REMOTE_ROOT" FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" \
+    FAKE_MIGRATION_DSN="$foreign_migration_dsn" \
+    SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/$foreign_node-summary.json" \
+    bash scripts/ci/reconcile-node-substrate.sh candidate-a "$foreign_node" \
+    > "$TMPROOT/$foreign_node.out"
+  tail -n "+$((docker_log_start + 1))" "$REMOTE_ROOT/docker.log" > "$TMPROOT/$foreign_node-docker.log"
+  grep -qE -- "--profile bootstrap run --rm -e COGNI_NODE_DBS=$control_db .* doltgres-provision" \
+    "$TMPROOT/$foreign_node-docker.log"
+  grep -q "$control_db" "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
+  grep -q 'projected migration DSN digest and live identity verified ok' "$TMPROOT/$foreign_node.out"
+  jq -e '.rows[] | select(.row == "migration_dsn_proven") | .state == "ready"' \
+    "$TMPROOT/$foreign_node-summary.json" >/dev/null
+  # Preserve the exact SQL-byte assertion for each lane's separate PG identity.
+  sed "s/operator/${migration_db#cogni_}/g" "$TMPROOT/expected-migration-identity.sql" \
+    > "$TMPROOT/$foreign_node-expected-migration.sql"
+  cmp "$TMPROOT/$foreign_node-expected-migration.sql" "$REMOTE_ROOT/migration-identity.sql"
+  if [ "$foreign_node" = poly ]; then
+    grep -qE -- "--profile bootstrap run --rm -e COGNI_NODE_DBS=$control_db .* db-provision" \
+      "$TMPROOT/$foreign_node-docker.log"
+    grep -q "substrate ready inputs reconciled for poly" "$TMPROOT/$foreign_node.out"
+  else
+    if grep -qE ' up -d postgres| db-provision$' "$TMPROOT/$foreign_node-docker.log"; then
+      echo "foreign-resident Postgres mutation reached the control VM" >&2; exit 1
+    fi
+    if grep -q "substrate ready" "$TMPROOT/$foreign_node.out"; then
+      echo "foreign Postgres omission falsely reported readiness" >&2; exit 1
+    fi
+    grep -q '::warning::Postgres provision skipped' "$TMPROOT/$foreign_node.out"
+    jq -e '.rows[] | select(.row == "postgres_provision") | .state == "skipped"' \
+      "$TMPROOT/$foreign_node-summary.json" >/dev/null
+    if grep -q 'foreign-app-sentinel\|foreign-service-sentinel\|foreign-migration-sentinel\|foreign-probe-sentinel' \
+      "$TMPROOT/$foreign_node.out" "$TMPROOT/$foreign_node-summary.json"; then
+      echo "foreign guard evidence leaked a credential" >&2; exit 1
+    fi
+  fi
+done
+
+# Skipping control-host mutations must never bypass destination authentication.
+docker_log_start="$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')"
+if env \
+  VM_HOST=fake DOMAIN=test.cognidao.org DEPLOYMENT_PROVIDER=akash \
+  SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+  APP_SOURCE_DIR="$FOREIGN_SOURCE" COGNI_CATALOG_ROOT="$FOREIGN_CATALOG" \
+  RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
+  RECONCILE_NODE_SUBSTRATE_SCP_BIN="$FAKEBIN/scp" \
+  FAKE_REMOTE_ROOT="$REMOTE_ROOT" FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" \
+  FAKE_MIGRATION_DSN="$foreign_migration_dsn" FAKE_MIGRATION_PROBE_RESULT=f \
+  SUBSTRATE_RECONCILE_SUMMARY_FILE="$TMPROOT/foreign-probe-failed-summary.json" \
+  bash scripts/ci/reconcile-node-substrate.sh candidate-a "$FOREIGN_NODE" \
+  > "$TMPROOT/foreign-probe-failed.out" 2>&1; then
+  echo "foreign destination probe failure unexpectedly reconciled" >&2; exit 1
+fi
+tail -n "+$((docker_log_start + 1))" "$REMOTE_ROOT/docker.log" > "$TMPROOT/foreign-probe-failed-docker.log"
+if grep -qE ' up -d postgres| db-provision$' "$TMPROOT/foreign-probe-failed-docker.log"; then
+  echo "failed foreign probe reached control-host Postgres mutation" >&2; exit 1
+fi
+jq -e '.status == "failure" and ([.rows[] | select(.row == "migration_dsn_proven" and .state == "ready")] | length == 0)' \
+  "$TMPROOT/foreign-probe-failed-summary.json" >/dev/null
+
+# A missing catalog must stop before SSH, including the control-env fast path.
+for lane in candidate-a production; do
+  docker_log_start="$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')"
+  ssh_log_start="$(wc -l < "$REMOTE_ROOT/ssh-calls.log" | tr -d ' ')"
+  scp_log_start="$(wc -l < "$REMOTE_ROOT/scp.log" | tr -d ' ')"
+  if env \
+    VM_HOST=fake DOMAIN=test.cognidao.org \
+    SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+    APP_SOURCE_DIR="$FOREIGN_SOURCE" COGNI_CATALOG_ROOT="$FOREIGN_CATALOG" \
+    RECONCILE_NODE_SUBSTRATE_SSH_BIN="$FAKEBIN/ssh" \
+    FAKE_REMOTE_ROOT="$REMOTE_ROOT" FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" \
+    bash scripts/ci/reconcile-node-substrate.sh "$lane" missing-node \
+    > "$TMPROOT/missing-$lane.out" 2>&1; then
+    echo "missing catalog unexpectedly reconciled" >&2; exit 1
+  fi
+  [ "$docker_log_start" = "$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')" ] \
+    || { echo "missing catalog reached remote mutation" >&2; exit 1; }
+  [ "$ssh_log_start" = "$(wc -l < "$REMOTE_ROOT/ssh-calls.log" | tr -d ' ')" ] \
+    || { echo "missing catalog reached SSH" >&2; exit 1; }
+  [ "$scp_log_start" = "$(wc -l < "$REMOTE_ROOT/scp.log" | tr -d ' ')" ] \
+    || { echo "missing catalog reached SCP" >&2; exit 1; }
+done
 
 # Reliability reconciliation follows an explicit catalog capability, never a
 # privileged slug. Renaming the fixture and moving the bit yields the new owner

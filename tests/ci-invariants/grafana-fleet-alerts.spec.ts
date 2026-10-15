@@ -122,6 +122,42 @@ const HISTORICAL_UID_PREFIX = [
 ] as const;
 
 describe("fleet Serve alert contract (bug.5459)", () => {
+  it("binds regional serve success to a deployed SHA response and denies missing receipts", () => {
+    const serveCheck = syntheticMain.slice(
+      syntheticMain.indexOf(
+        'resource "grafana_synthetic_monitoring_check" "environment_readyz"'
+      ),
+      syntheticMain.indexOf(
+        'resource "grafana_synthetic_monitoring_check" "database_recovery"'
+      )
+    );
+    expect(serveCheck).toContain("for_each = local.environment_targets");
+    expect(serveCheck).toContain("no_follow_redirects = true");
+    expect(serveCheck).toContain(
+      "toset(keys(var.serve_build_shas)) == toset(keys(local.environment_targets))"
+    );
+    expect(serveCheck).toContain("Refusing Grafana changes");
+    expect(serveCheck).toContain(
+      'lookup(var.serve_build_shas, each.key, "unverified")'
+    );
+    const bodyMatchers = serveCheck.slice(
+      serveCheck.indexOf("fail_if_body_not_matches_regexp")
+    );
+    expect(bodyMatchers).toContain("buildSha");
+    expect(bodyMatchers).toContain("${var.serve_build_shas[each.key]}");
+    expect(bodyMatchers).toContain(
+      "contains(keys(var.serve_build_shas), each.key)"
+    );
+    expect(bodyMatchers).toContain(': "a^"');
+    expect(/a^/.test('{"status":"healthy"}')).toBe(false);
+    expect(
+      readFileSync(
+        path.join(path.dirname(SYNTHETIC_MAIN_FILE), "variables.tf"),
+        "utf8"
+      )
+    ).toContain('regex("^[0-9a-f]{40}$", build_sha)');
+  });
+
   it("projects existing Grafana authority only to the actuator and keeps readmission query credentials isolated", () => {
     const repoRoot = path.resolve(__dirname, "../..");
     const catalog = loadSecretsCatalog({ repoRoot });

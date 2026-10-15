@@ -221,11 +221,19 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
   basic_metrics_only = true
   folder_uid         = data.grafana_folder.reliability.uid
 
+  lifecycle {
+    precondition {
+      condition     = toset(keys(var.serve_build_shas)) == toset(keys(local.environment_targets))
+      error_message = "Refusing Grafana changes: serve_build_shas must contain exactly every catalog slot, bound to approved deployed-SHA receipts."
+    }
+  }
+
   labels = {
-    environment = each.value.environment
-    node_slug   = each.value.node_slug
-    proof_class = "serve"
-    managed_by  = "opentofu"
+    environment      = each.value.environment
+    node_slug        = each.value.node_slug
+    proof_class      = "serve"
+    target_build_sha = lookup(var.serve_build_shas, each.key, "unverified")
+    managed_by       = "opentofu"
   }
 
   settings {
@@ -237,6 +245,7 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
       valid_status_codes  = [200]
       fail_if_body_not_matches_regexp = [
         "\\\"status\\\"[[:space:]]*:[[:space:]]*\\\"healthy\\\"",
+        contains(keys(var.serve_build_shas), each.key) ? "\\\"buildSha\\\"[[:space:]]*:[[:space:]]*\\\"${var.serve_build_shas[each.key]}\\\"" : "a^",
       ]
     }
   }

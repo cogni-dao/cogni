@@ -22,7 +22,7 @@ materialize_database_cell_kits() {
     if [[ -n "$kit_json" && "$(jq -r .binding.phase <<<"$kit_json")" =~ ^(applied|superseded)$ ]]; then
       [[ "$(jq -r .binding.nodeSlug <<<"$kit_json")" == "$cell_node" && "$(jq -r .binding.nodeId <<<"$kit_json")" == "$(node_id_for_target "$cell_node")" && "$(jq -r .allocationEnvironment <<<"$kit_json")" == "$DEPLOY_ENVIRONMENT" ]] || fail "applied cell does not own this catalog scope"
       prefetch_path "${cell_node}-database-backup"
-      jq -n --argjson receipt "$kit_json" --argjson kit "$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_BOOTSTRAP_KIT_JSON)" --arg backupEncryptionKey "$(bao_get_field "${cell_node}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" > /dev/null || fail "applied cell bootstrap custody differs from its binding"
+      jq -n --argjson receipt "$kit_json" --argjson kit "$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_BOOTSTRAP_KIT_JSON)" --arg backupEncryptionKey "$(bao_get_field "${cell_node}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" > /dev/null || fail "applied cell bootstrap custody differs from its binding"
       continue
     fi
     while IFS= read -r lane; do
@@ -59,7 +59,7 @@ materialize_database_cell_kits() {
     pg_user=$(docker exec "$container_id" printenv POSTGRES_USER)
     [ -n "$pg_user" ]
     docker exec "$container_id" psql -U "$pg_user" -d postgres -XAtv ON_ERROR_STOP=1 -c "SELECT jsonb_build_object('\''systemIdentifier'\'', (SELECT system_identifier::text FROM pg_control_system()), '\''databases'\'', (SELECT jsonb_agg(datname) FROM pg_database), '\''roles'\'', (SELECT jsonb_agg(rolname) FROM pg_roles));"')"
-  plans="$(jq -n --arg operatorSourceSha "$operator_sha" --arg environment "$DEPLOY_ENVIRONMENT" --arg expectedSourceHost "$VM_IP" --argjson nativeSource "$native_source" --argjson slots "$slots" '{operatorSourceSha:$operatorSourceSha,environment:$environment,expectedSourceHost:$expectedSourceHost,nativeSource:$nativeSource,slots:$slots}' | pnpm exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-kits.ts" --plan)" || fail "actual cell source identity did not validate"
+  plans="$(jq -n --arg operatorSourceSha "$operator_sha" --arg environment "$DEPLOY_ENVIRONMENT" --arg expectedSourceHost "$VM_IP" --argjson nativeSource "$native_source" --argjson slots "$slots" '{operatorSourceSha:$operatorSourceSha,environment:$environment,expectedSourceHost:$expectedSourceHost,nativeSource:$nativeSource,slots:$slots}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-kits.ts" --plan)" || fail "actual cell source identity did not validate"
   while IFS= read -r cell_node; do
     cell_bank="${cell_node}-database-cell"
     prefetch_path "$cell_bank"
@@ -74,7 +74,7 @@ materialize_database_cell_kits() {
   done < <(jq -r '.[].nodeSlug' <<<"$plans")
   prefetch_path akash-tx-actuator
   published_json="$(bao_get_field akash-tx-actuator AKASH_DATABASE_CELL_KITS_JSON)"
-  output="$(jq -n --argjson plans "$plans" --argjson existingKits "$existing_kits" --argjson existingAuthorities "$existing_authorities" --argjson existingPublished "${published_json:-[]}" '{plans:$plans,existingKits:$existingKits,existingAuthorities:$existingAuthorities,existingPublished:$existingPublished}' | pnpm exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-kits.ts")" || fail "private cell kit generation failed"
+  output="$(jq -n --argjson plans "$plans" --argjson existingKits "$existing_kits" --argjson existingAuthorities "$existing_authorities" --argjson existingPublished "${published_json:-[]}" '{plans:$plans,existingKits:$existingKits,existingAuthorities:$existingAuthorities,existingPublished:$existingPublished}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-kits.ts")" || fail "private cell kit generation failed"
   # Write components first. A restart resumes identical material; only then publish
   # the private actuator projection, so no bootstrap can observe missing authority.
   while IFS= read -r cell_node; do

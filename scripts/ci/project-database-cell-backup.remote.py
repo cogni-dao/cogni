@@ -34,7 +34,7 @@ for kit in kits:
         raise ValueError("backup custody differs within one cell")
     existing.append((kit, url, role))
 
-root = Path(sys.argv[1] if len(sys.argv) == 2 else "/opt/cogni/database-cell-backup")
+root = Path(sys.argv[1] if len(sys.argv) == 2 else "/opt/cogni-template-runtime/database-cell-backup")
 root.mkdir(mode=0o700, parents=True, exist_ok=True)
 for node, entries in groups.items():
     directory = root / node

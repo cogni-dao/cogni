@@ -16,7 +16,7 @@ load_database_cell_placement() {
   kit="$(bao_get_field "$cell_bank" DATABASE_CELL_BOOTSTRAP_KIT_JSON)"
   prefetch_path "${TARGET_NODE}-database-backup"
   encryption="$(bao_get_field "${TARGET_NODE}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)"
-  CELL_PLACEMENT_JSON="$(jq -n --argjson receipt "$receipt" --argjson kit "$kit" --arg backupEncryptionKey "$encryption" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "audited cell placement or scoped custody invalid"
+  CELL_PLACEMENT_JSON="$(jq -n --argjson receipt "$receipt" --argjson kit "$kit" --arg backupEncryptionKey "$encryption" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "audited cell placement or scoped custody invalid"
 }
 
 cell_placement_composed_value() {
@@ -68,7 +68,7 @@ materialize_database_cell_endpoint() {
     discovery="$(cell_actor_http /v1/akash/database-cell-binding/discover "$identity")"
     reference="$(jq -c .reference <<<"$discovery")"
     # Endpoint selected from the current owned lease, never from an env or caller.
-    host="$(jq -r '.endpoints[] | select(startswith("tcp://"))' <<<"$discovery" | pnpm exec tsx -e 'import {isIP} from "node:net"; import{readFileSync}from"node:fs"; const values=[...new Set(readFileSync(0,"utf8").trim().split("\n"))]; if(values.length!==1)process.exit(1); const u=new URL(values[0]); if(isIP(u.hostname)||! /^[a-z0-9][a-z0-9.-]+$/.test(u.hostname)||!u.port||u.username||u.password||u.search||u.hash)process.exit(1); process.stdout.write(u.hostname);')" || fail "cell requires exactly one actual measured DNS TCP endpoint"
+    host="$(jq -r '.endpoints[] | select(startswith("tcp://"))' <<<"$discovery" | pnpm --dir "$REPO_ROOT" exec tsx -e 'import {isIP} from "node:net"; import{readFileSync}from"node:fs"; const values=[...new Set(readFileSync(0,"utf8").trim().split("\n"))]; if(values.length!==1)process.exit(1); const u=new URL(values[0]); if(isIP(u.hostname)||! /^[a-z0-9][a-z0-9.-]+$/.test(u.hostname)||!u.port||u.username||u.password||u.search||u.hash)process.exit(1); process.stdout.write(u.hostname);')" || fail "cell requires exactly one actual measured DNS TCP endpoint"
     authority_ca="${CACHE_DIR}/cell-ca.pem" authority_key="${CACHE_DIR}/cell-ca-key.pem" server_key="${CACHE_DIR}/cell-server-key.pem" old_chain="${CACHE_DIR}/cell-old-chain.pem" chain="${CACHE_DIR}/cell-new-chain.pem"
     printf '%s' "$(bao_get_field "$cell_bank" DATABASE_CELL_TLS_CA_CERTIFICATE)" > "$authority_ca"
     printf '%s' "$(bao_get_field "$cell_bank" DATABASE_CELL_TLS_CA_PRIVATE_KEY)" > "$authority_key"
@@ -88,7 +88,7 @@ materialize_database_cell_endpoint() {
     fi
     # Wait for the existing mounted hot factory to acknowledge these exact bytes.
     # ESO Ready alone can describe a previous version of this same Secret.
-    expected_certificate="$(printf '%s' "$kit" | pnpm exec tsx -e 'import{createHash}from"node:crypto";import{readFileSync}from"node:fs";process.stdout.write(createHash("sha256").update(JSON.parse(readFileSync(0,"utf8")).tlsCertificate).digest("hex"));')"
+    expected_certificate="$(printf '%s' "$kit" | pnpm --dir "$REPO_ROOT" exec tsx -e 'import{createHash}from"node:crypto";import{readFileSync}from"node:fs";process.stdout.write(createHash("sha256").update(JSON.parse(readFileSync(0,"utf8")).tlsCertificate).digest("hex"));')"
     for attempt in {1..12}; do
       discovery="$(cell_actor_http /v1/akash/database-cell-binding/discover "$identity")"
       [[ "$(jq -r .kitCertificateSha256 <<<"$discovery")" != "$expected_certificate" ]] || break
@@ -114,7 +114,7 @@ materialize_database_cell_endpoint() {
     flush_batch "$cell_bank"
     prefetch_path "${node}-database-backup"
     backup_encryption="$(bao_get_field "${node}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)"
-    projection="$(jq -n --argjson receipt "$receipt" --argjson kit "$kit" --arg backupEncryptionKey "$backup_encryption" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "sealed cell private projection invalid"
+    projection="$(jq -n --argjson receipt "$receipt" --argjson kit "$kit" --arg backupEncryptionKey "$backup_encryption" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "sealed cell private projection invalid"
     publish_database_cell_projection "$node" "$projection"
   done
 }

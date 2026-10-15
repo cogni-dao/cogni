@@ -488,7 +488,7 @@ if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == "db-ready" ]]; then
     --arg expectedHost "$COGNI_LANE_DB_HOST" --arg machineId "$machine_id" --arg localSystemIdentifier "$local_system_id" --argjson observation "$observation" \
     --argjson existingBindings "$prior_bindings" \
     '{nodeId:$nodeId,nodeSlug:$nodeSlug,environment:$environment,databaseName:$databaseName,probeRole:$probeRole,dsn:$dsn,expectedHost:$expectedHost,machineId:$machineId,localSystemIdentifier:$localSystemIdentifier,observation:$observation,existingBindings:$existingBindings}' \
-    | pnpm exec tsx "$REPO_ROOT/scripts/lib/materialize-database-recovery-binding.ts")" \
+    | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-recovery-binding.ts")" \
     || fail "DB-ready measured binding validation failed"
   if [[ "$next_bindings" == "$prior_bindings" ]]; then
     log 'DB-ready binding converged; created=0'
