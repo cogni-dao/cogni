@@ -195,6 +195,12 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       response = await run();
       return response;
+    } catch {
+      response = NextResponse.json(
+        { error: "promotion_failed" },
+        { status: 500 }
+      );
+      return response;
     } finally {
       const status = response?.status ?? 500;
       const errorCodes: Record<number, string> = {

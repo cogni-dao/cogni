@@ -185,6 +185,27 @@ describe("POST /api/v1/deploy/promote", () => {
     });
   });
 
+  it("records one bounded terminal failure when authorization throws", async () => {
+    authzState.check.mockRejectedValue(new Error("private authz diagnostic"));
+    const res = await post({ nodeId: NODE_ID, env: "production" });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "promotion_failed" });
+    expect(mockLog.info).toHaveBeenCalledTimes(1);
+    expect(mockLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_promote.complete",
+        targetNodeId: NODE_ID,
+        errorCode: "unhandled",
+        status: 500,
+      }),
+      expect.any(String)
+    );
+    expect(JSON.stringify(mockLog.info.mock.calls)).not.toContain(
+      "private authz diagnostic"
+    );
+    expect(mockDeployPlane.promoteNodeFromPreview).not.toHaveBeenCalled();
+  });
+
   it("returns 401 when unauthenticated", async () => {
     mockGetSessionUser.mockResolvedValue(null);
     const res = await post({ nodeId: NODE_ID, env: "production" });

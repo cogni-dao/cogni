@@ -540,7 +540,7 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
-  it("returns classified node-ref preflight failures with request and adapter logs", async () => {
+  it("returns classified node-ref preflight failures with one terminal log", async () => {
     mockDeployPlane.prepareNodeRefCandidateFlight.mockRejectedValue(
       statusError(422, "source_missing", "sourceSha not found")
     );
@@ -602,6 +602,41 @@ describe("POST /api/v1/vcs/flight", () => {
           targetNodeId: NODE_ID,
           slug: "creative",
           sourceSha8: SOURCE_SHA.slice(0, 8),
+        });
+      },
+    });
+  });
+
+  it("emits only failure when the dispatch response violates the output contract", async () => {
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef()
+    );
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue({
+      dispatched: true,
+    });
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(500);
+        expect(await res.json()).toEqual({ error: "flight_dispatch_failed" });
+        const terminals = [
+          ...mockLog.info.mock.calls,
+          ...mockLog.warn.mock.calls,
+          ...mockLog.error.mock.calls,
+        ].filter(
+          ([fields]) => fields?.event === "feature.vcs_flight.request_complete"
+        );
+        expect(terminals).toHaveLength(1);
+        expect(terminals[0]?.[0]).toMatchObject({
+          outcome: "error",
+          status: 500,
         });
       },
     });

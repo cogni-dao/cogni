@@ -379,6 +379,20 @@ export const POST = wrapRouteHandlerWithLogging(
           ...(workflowRef ? { workflowRef } : {}),
         });
 
+        const output = flightOperation.output.parse({
+          dispatched: dispatch.dispatched,
+          slot: "candidate-a",
+          nodeRef: {
+            nodeId: prepared.nodeId,
+            slug: prepared.slug,
+            sourceSha: prepared.sourceSha,
+            sourceRepo: prepared.sourceRepo,
+            image: prepared.image,
+          },
+          workflowUrl: dispatch.workflowUrl,
+          message: dispatch.message,
+        });
+
         logTerminal({
           mode: "node_ref",
           outcome: "success",
@@ -388,22 +402,7 @@ export const POST = wrapRouteHandlerWithLogging(
           sourceSha8: prepared.sourceSha.slice(0, 8),
           dispatchStatus: "initiated",
         });
-        return NextResponse.json(
-          flightOperation.output.parse({
-            dispatched: dispatch.dispatched,
-            slot: "candidate-a",
-            nodeRef: {
-              nodeId: prepared.nodeId,
-              slug: prepared.slug,
-              sourceSha: prepared.sourceSha,
-              sourceRepo: prepared.sourceRepo,
-              image: prepared.image,
-            },
-            workflowUrl: dispatch.workflowUrl,
-            message: dispatch.message,
-          }),
-          { status: 202 }
-        );
+        return NextResponse.json(output, { status: 202 });
       } catch (error) {
         const dispatchError = dispatchErrorResponse(error);
         const deployPlaneError = handleDeployPlaneError(error);
