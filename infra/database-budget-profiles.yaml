@@ -21,6 +21,28 @@ shared-default-v1:
     temp_file_limit_mib: 128
     work_mem_mib: 16
 
+operator-control-v1:
+  design_rate_per_minute: 60
+  cell_capacity:
+    vcpus: 2
+    memory_gib: 4
+    storage_gib: 50
+    compute_class: shared
+  roles:
+    app:
+      # Rolling app (2 x 2), actuator (2 x 1), one diagnostic connection.
+      connection_limit: 7
+      statement_timeout_ms: 5000
+    service:
+      # Rolling app (2 x 4), worker (3 x 2), one diagnostic connection.
+      connection_limit: 15
+      statement_timeout_ms: 2000
+  common:
+    lock_timeout_ms: 2000
+    idle_in_transaction_session_timeout_ms: 30000
+    temp_file_limit_mib: 128
+    work_mem_mib: 16
+
 dedicated-high-throughput-v1:
   design_rate_per_minute: 240
   cell_capacity:

@@ -411,7 +411,11 @@
       "properties": {
         "tier": { "enum": ["shared", "dedicated"] },
         "budget_profile": {
-          "enum": ["shared-default-v1", "dedicated-high-throughput-v1"]
+          "enum": [
+            "shared-default-v1",
+            "operator-control-v1",
+            "dedicated-high-throughput-v1"
+          ]
         }
       }
     }

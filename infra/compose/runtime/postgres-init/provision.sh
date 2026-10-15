@@ -602,6 +602,36 @@ END
       continue
     fi
     [ "$runtime_can_login" = t ] || { echo "❌ ERROR: runtime role '$runtime_role' login state missing"; exit 1; }
+    runtime_role_saturated="$(PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d postgres \
+      -XAtv ON_ERROR_STOP=1 -c "SELECT role_budget.rolconnlimit > 0 AND
+        (SELECT count(*) FROM pg_stat_activity
+          WHERE usename = role_budget.rolname AND backend_type = 'client backend') >= role_budget.rolconnlimit
+        FROM pg_roles role_budget WHERE role_budget.rolname = '$runtime_role'")"
+    case "$runtime_role_saturated" in
+      t)
+        run_sql_as_root "$db_name" "DO \$deferred_probe\$
+BEGIN
+  IF has_parameter_privilege('$runtime_role', 'temp_file_limit', 'SET') IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'runtime role $runtime_role can override enforced temp_file_limit';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_db_role_setting role_settings
+    CROSS JOIN LATERAL unnest(role_settings.setconfig) AS setting(value)
+    WHERE role_settings.setrole = (SELECT oid FROM pg_roles WHERE rolname = '$runtime_role')
+      AND role_settings.setdatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
+      AND split_part(setting.value, '=', 1) IN (
+        'statement_timeout', 'lock_timeout', 'idle_in_transaction_session_timeout', 'temp_file_limit', 'work_mem')
+  ) THEN
+    RAISE EXCEPTION 'runtime role $runtime_role per-database budget overrides prevent saturated probe deferral';
+  END IF;
+END
+\$deferred_probe\$;"
+        echo "::warning::runtime_role_probe_deferred role=$runtime_role reason=role_connection_limit authentication=unverified catalog_budget=verified"
+        continue
+        ;;
+      f) ;;
+      *) echo "❌ ERROR: runtime role '$runtime_role' admission state missing"; exit 1 ;;
+    esac
     session_budget="$(PGPASSWORD="$runtime_password" psql -h "$PG_HOST" -p "$PG_PORT" -U "$runtime_role" -d "$db_name" \
       -XAtv ON_ERROR_STOP=1 -c "SELECT string_agg(setting, ':' ORDER BY array_position(ARRAY['statement_timeout','lock_timeout','idle_in_transaction_session_timeout','temp_file_limit','work_mem'], name)) FROM pg_settings WHERE name = ANY (ARRAY['statement_timeout','lock_timeout','idle_in_transaction_session_timeout','temp_file_limit','work_mem'])")"
     expected_statement_timeout="$DB_APP_STATEMENT_TIMEOUT_MS"

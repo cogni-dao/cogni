@@ -6,6 +6,7 @@
 
 - **Owners:** @cogni-dao
 - **Status:** stable
+- **Last reviewed:** 2026-10-15
 
 ## Purpose
 
@@ -41,17 +42,17 @@ Database client factory and Drizzle adapter implementations for scheduling and l
 ## Public Surface
 
 - **Exports (root `@cogni/db-client`):**
-  - `createAppDbClient(url)` — client factory for `app_user` role (RLS enforced)
+  - `createAppDbClient(url, options?)` — client factory for `app_user` role (RLS enforced); injected `DbClientOptions` bounds process pool size and names the consumer
   - `withTenantScope(db, actorId, fn)` — transaction wrapper setting RLS context
   - `setTenantContext(tx, actorId)` — sets RLS context in existing transaction
-  - `Database`, `LoggerLike` — Drizzle client type (includes `$client: Sql` for pool control) and logger interface
+  - `Database`, `DbClientOptions`, `LoggerLike` — Drizzle client type (includes `$client: Sql` for pool control), optional pool configuration, and logger interface
   - `DrizzleScheduleUserAdapter`, `DrizzleScheduleWorkerAdapter` — schedule adapters (split by trust boundary)
   - `DrizzleExecutionGrantUserAdapter`, `DrizzleExecutionGrantWorkerAdapter` — grant adapters (split by trust boundary)
   - `DrizzleExecutionRequestAdapter`, `DrizzleGraphRunAdapter` (canonical), `DrizzleScheduleRunAdapter` (deprecated alias)
   - `DrizzleAttributionAdapter` — ledger adapter (shared by app + worker, uses serviceDb/BYPASSRLS). Constructor takes `scopeId`; all epochId-based methods enforce scope via `resolveEpochScoped()` (SCOPE_GATED_QUERIES).
   - Re-exports from `@cogni/db-schema` (tables, types)
 - **Exports (sub-path `@cogni/db-client/service`):**
-  - `createServiceDbClient(url)` — client factory for `app_service` role (BYPASSRLS)
+  - `createServiceDbClient(url, options?)` — client factory for `app_service` role (BYPASSRLS), accepting the same optional pool configuration
 - **Env/Config keys:** none (accepts DATABASE_URL via factory parameter)
 - **Files considered API:** `index.ts` (root), `service.ts` (sub-path)
 

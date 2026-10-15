@@ -205,7 +205,10 @@ if (!databaseUrl) {
   );
 }
 
-const db: Database = createAppDbClient(databaseUrl);
+const db: Database = createAppDbClient(databaseUrl, {
+  max: 1,
+  applicationName: "cogni_operator_akash_tx_actuator",
+});
 const getDb = async (): Promise<Database> => db;
 
 /**

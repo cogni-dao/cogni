@@ -472,10 +472,10 @@ grep -q -- '-e COGNI_NODE_DBS=cogni_operator' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DATABASE_RELIABILITY_PASSWORD=reliability-pw-sentinel' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DATABASE_RELIABILITY_READMIT_PASSWORD=readmit-pw-sentinel' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e APP_DB_MIGRATION_PASSWORD=pernode-migration-pw-sentinel' "$REMOTE_ROOT/docker.log"
-grep -q -- '-e DB_BUDGET_PROFILE=shared-default-v1' "$REMOTE_ROOT/docker.log"
-grep -q -- '-e DB_APP_CONNECTION_LIMIT=2' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_BUDGET_PROFILE=operator-control-v1' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_APP_CONNECTION_LIMIT=7' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DB_APP_STATEMENT_TIMEOUT_MS=5000' "$REMOTE_ROOT/docker.log"
-grep -q -- '-e DB_SERVICE_CONNECTION_LIMIT=4' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DB_SERVICE_CONNECTION_LIMIT=15' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DB_SERVICE_STATEMENT_TIMEOUT_MS=2000' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DB_LOCK_TIMEOUT_MS=2000' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DB_IDLE_IN_TRANSACTION_TIMEOUT_MS=30000' "$REMOTE_ROOT/docker.log"
@@ -874,5 +874,93 @@ if grep -q 'TARGET_NODE.*==.*operator' scripts/ci/reconcile-node-substrate.sh; t
   echo "reliability reconciliation must not branch on a node slug" >&2
   exit 1
 fi
+
+# Exercise the production runtime-loop orchestration separately from the real
+# PG15 admission/ACL fixture. No subprocess failure may be swallowed.
+awk '/^  for runtime_credential in / { capture=1 }
+  /^  migration_identity=/ { exit }
+  capture { print }' "$provisioner" > "$TMPROOT/runtime-probe-loop.sh"
+test -s "$TMPROOT/runtime-probe-loop.sh"
+cat > "$TMPROOT/runtime-probe-harness.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+probe_case="$1"
+probe_log="$3"
+PG_HOST=fixture PG_PORT=5432 PG_USER=postgres PG_PASS=root
+db_name=cogni_fixture app_role=app_fixture svc_role=service_fixture
+APP_PASS=app APP_SERVICE_PASS=service
+DB_APP_STATEMENT_TIMEOUT_MS=5000 DB_SERVICE_STATEMENT_TIMEOUT_MS=2000
+DB_LOCK_TIMEOUT_MS=1000 DB_IDLE_IN_TRANSACTION_TIMEOUT_MS=30000
+DB_TEMP_FILE_LIMIT_MIB=128 DB_WORK_MEM_MIB=16
+psql() {
+  local actor="" database="" sql=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -U) actor="$2"; shift 2 ;;
+      -d) database="$2"; shift 2 ;;
+      -c) sql="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "$sql" in
+    "SELECT rolcanlogin"*)
+      if [ "$probe_case" = contained ]; then echo f; else echo t; fi ;;
+    "SELECT role_budget.rolconnlimit"*)
+      case "$probe_case" in
+        saturated|unsafe_acl|database_override) echo t ;;
+        metadata_failure) return 2 ;;
+        metadata_invalid) echo unknown ;;
+        *) echo f ;;
+      esac ;;
+    "DO "*)
+      [ "$actor:$database" = postgres:cogni_fixture ]
+      printf 'safety:%s\n' "$database" >> "$probe_log"
+      case "$probe_case" in unsafe_acl|database_override) return 1 ;; esac ;;
+    "SELECT string_agg"*)
+      printf 'authenticated:%s\n' "$actor" >> "$probe_log"
+      [ "$probe_case" != wrong_password ] || return 2
+      if [ "$actor" = app_fixture ]; then
+        echo 5000:1000:30000:131072:16384
+      else
+        echo 2000:1000:30000:131072:16384
+      fi ;;
+    "SET temp_file_limit"*)
+      printf 'negative_set:%s\n' "$actor" >> "$probe_log"
+      return 1 ;;
+    *) echo "unexpected probe query" >&2; exit 1 ;;
+  esac
+}
+run_sql_as_root() {
+  PGPASSWORD="$PG_PASS" psql -U "$PG_USER" -d "$1" -c "$2"
+}
+source "$2"
+SH
+for probe_case in saturated spare contained; do
+  : > "$TMPROOT/runtime-$probe_case.log"
+  bash "$TMPROOT/runtime-probe-harness.sh" "$probe_case" "$TMPROOT/runtime-probe-loop.sh" \
+    "$TMPROOT/runtime-$probe_case.log" > "$TMPROOT/runtime-$probe_case.out"
+done
+[ "$(grep -c 'runtime_role_probe_deferred.*authentication=unverified' "$TMPROOT/runtime-saturated.out")" = 2 ]
+[ "$(grep -c 'safety:cogni_fixture' "$TMPROOT/runtime-saturated.log")" = 2 ]
+if grep -q 'authenticated:\|negative_set:' "$TMPROOT/runtime-saturated.log"; then
+  echo "saturated runtime probe opened a runtime session" >&2; exit 1
+fi
+[ "$(grep -c 'authenticated:' "$TMPROOT/runtime-spare.log")" = 2 ]
+[ "$(grep -c 'negative_set:' "$TMPROOT/runtime-spare.log")" = 2 ]
+if grep -q 'runtime_role_probe_deferred' "$TMPROOT/runtime-spare.out"; then
+  echo "spare runtime probe unexpectedly deferred" >&2; exit 1
+fi
+[ "$(grep -c 'remains contained' "$TMPROOT/runtime-contained.out")" = 2 ]
+[ ! -s "$TMPROOT/runtime-contained.log" ]
+for probe_case in wrong_password unsafe_acl database_override metadata_failure metadata_invalid; do
+  : > "$TMPROOT/runtime-$probe_case.log"
+  if bash "$TMPROOT/runtime-probe-harness.sh" "$probe_case" "$TMPROOT/runtime-probe-loop.sh" \
+    "$TMPROOT/runtime-$probe_case.log" > "$TMPROOT/runtime-$probe_case.out" 2>&1; then
+    echo "runtime probe failure '$probe_case' unexpectedly passed" >&2; exit 1
+  fi
+  if grep -q 'runtime_role_probe_deferred' "$TMPROOT/runtime-$probe_case.out"; then
+    echo "failed runtime probe '$probe_case' reported deferral" >&2; exit 1
+  fi
+done
 
 echo "PASS: reconcile-node-substrate.test.sh"
