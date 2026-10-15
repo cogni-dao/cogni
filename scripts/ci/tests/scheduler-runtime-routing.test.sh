@@ -365,7 +365,8 @@ echo "[7/7] candidate startup samples actual available memory before the heavy w
 SERIAL_PATCH=infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml
 RENDERED="$(kubectl kustomize infra/k8s/overlays/candidate-a/scheduler-worker)"
 RENDERED_JSON="$(yq -o=json -I=0 'select(.kind == "Deployment")' <<< "$RENDERED")"
-RENDERED_JSON="$RENDERED_JSON" python3 - <<'PY' || fail "candidate init contract drifted"
+EVICTION_FLOOR="$(sed -n '/variable "eviction_hard_memory" {/,/^}/p' infra/provision/cherry/base/variables.tf | sed -n 's/.*default *= *"\([^"]*\)".*/\1/p')"
+EVICTION_FLOOR="$EVICTION_FLOOR" RENDERED_JSON="$RENDERED_JSON" python3 - <<'PY' || fail "candidate init contract drifted"
 import json, os
 deployment = json.loads(os.environ["RENDERED_JSON"])
 spec = deployment["spec"]["template"]["spec"]
@@ -373,7 +374,13 @@ main = next(c for c in spec["containers"] if c["name"] == "scheduler-worker")
 guard = next(c for c in spec["initContainers"] if c["name"] == "startup-memory-budget")
 assert guard["image"] == main["image"], (guard["image"], main["image"])
 assert guard["command"][:2] == ["/bin/sh", "-ec"]
+assert os.environ["EVICTION_FLOOR"] == "200Mi", "candidate reserve profile needs requalification"
+reserve_line = next(line.strip() for line in guard["command"][2].splitlines() if line.strip().startswith("candidate_reserve_bytes="))
+assert int(reserve_line.split("=", 1)[1]) == (int(os.environ["EVICTION_FLOOR"][:-2]) + 56) * 1024 * 1024
 assert guard["env"] == [{"name":"MAIN_MEMORY_LIMIT_BYTES", "valueFrom":{"resourceFieldRef":{"containerName":"scheduler-worker", "resource":"limits.memory", "divisor":"1"}}}]
+assert deployment["spec"]["paused"] is False
+assert deployment["spec"]["replicas"] == 2
+assert spec.get("terminationGracePeriodSeconds", 30) == 30
 assert main["resources"]["limits"]["memory"] == "1Gi"
 assert guard["resources"]["limits"]["memory"] == "32Mi"
 assert guard["resources"]["requests"]["memory"] == "8Mi"
@@ -437,11 +444,16 @@ def run(name, samples, success, reason, budget="1073741824", expected_sleeps=Non
     if expected_sleeps is not None:
         assert json.loads((root / "state.json").read_text())["index"] == expected_sleeps, name
     print("  ok - inline guard " + name)
-run("below-budget then actual release", [sample("10.25", 800000), sample("12.25", 1441792)], True, "requiredKiB=1441792", expected_sleeps=1)
-run("already sufficient", [sample(0, 1441792)], True, "eligible", expected_sleeps=0)
-run("timeout wins even newly sufficient at boundary", [sample(0, 800000), sample(180, 1441792)], False, "timed out", expected_sleeps=1)
+# The observed failed sample was below the old 1Gi+384Mi profile.
+assert 1393980 < (1024 + 384) * 1024
+run("observed 1393980KiB now eligible", [sample(0, 1393980)], True, "requiredKiB=1310720", expected_sleeps=0)
+run("one KiB below calibrated budget times out", [sample(0, 1310719), sample(180, 1310719)], False, "timed out", expected_sleeps=1)
+run("below-budget then actual release", [sample("10.25", 800000), sample("12.25", 1310720)], True, "requiredKiB=1310720", expected_sleeps=1)
+run("already sufficient", [sample(0, 1310720)], True, "eligible", expected_sleeps=0)
+run("timeout wins even newly sufficient at boundary", [sample(0, 800000), sample(180, 1310720)], False, "timed out", expected_sleeps=1)
 run("below budget timeout", [sample(0, 800000), sample(181, 800000)], False, "timed out")
-run("actual main limit change affects threshold", [sample(0, 1966080)], True, "requiredKiB=1966080", budget="1610612736")
+run("larger main limit refuses old calibrated threshold", [sample(0, 1310720), sample(180, 1310720)], False, "timed out", budget="1610612736", expected_sleeps=1)
+run("actual main limit change affects threshold", [sample(0, 1835008)], True, "requiredKiB=1835008", budget="1610612736")
 for budget in ("", "0", "-1", "1.5", "unknown", "99999999999999999999999"):
     run("invalid main budget " + repr(budget), [sample(0, 9999999)], False, "invalid main limit", budget=budget, expected_sleeps=0)
 for meminfo in (None, "", "MemAvailable: nope kB\n", "MemAvailable: 9999999 MB\n", "MemAvailable: 9999999 kB\nMemAvailable: 9999999 kB\n"):

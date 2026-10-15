@@ -257,6 +257,7 @@ case ",$rendered_endpoints," in
   *) fail "rendered Poly provider URL was replaced by the base default" ;;
 esac
 [ "$(yq -N 'select(.kind == "Deployment") | .spec.replicas' <<< "$RENDERED")" = 2 ] || fail "lost worker HA"
+[ "$(yq -N 'select(.kind == "Deployment") | .spec.paused' <<< "$RENDERED")" = false ] || fail "source must explicitly reconcile an unpaused worker"
 [ "$(yq -N 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxSurge' <<< "$RENDERED")" = 0 ] || fail "candidate worker surge remains enabled"
 [ "$(yq -N 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxUnavailable' <<< "$RENDERED")" = 1 ] || fail "candidate serial rollout does not preserve one worker"
 echo "PASS: stale bootstrap topology renders effective provider routing and two-replica serial rollout"
