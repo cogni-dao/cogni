@@ -654,8 +654,9 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
     createHash("sha256").update(value).digest("hex");
   const lane = scopedKit.logicalDatabases[0];
   if (!lane) throw new Error("fixture lane missing");
+  const observedNow = Date.now();
   const ago = (seconds: number) =>
-    new Date(Date.now() - seconds * 1000).toISOString();
+    new Date(observedNow - seconds * 1000).toISOString();
   const canonical = { host: "poly-db.fixture.example.org", port: 15432 };
   const url = (role: string, password: string) =>
     composeDatabaseCellDsn(canonical, lane.databaseName, role, password);
@@ -676,7 +677,7 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       observedAt: ago(0),
       timerActiveState: "active",
       serviceActiveState: "inactive",
-      nextRunAt: new Date(Date.now() + 900000).toISOString(),
+      nextRunAt: new Date(observedNow + 900000).toISOString(),
       intervalSeconds: 900,
       jitterSeconds: 61,
       installedFullTimeoutSeconds: 3700,
