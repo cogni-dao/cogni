@@ -671,10 +671,22 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       },
     },
     provider: {
+      observedAt: ago(0),
       dseq: "123",
       providerAccount: `akash1${"a".repeat(38)}`,
       appliedSdlHash: "d".repeat(64),
       postgresImageDigest: manualProvenance().postgresImageDigest,
+      manifestVersion: Buffer.alloc(32, 6).toString("base64"),
+      service: {
+        name: "postgres",
+        observedGeneration: 2,
+        replicas: 1,
+        updatedReplicas: 1,
+        readyReplicas: 1,
+        availableReplicas: 1,
+        total: 1,
+        available: 1,
+      },
     },
     native: {
       databaseName: lane.databaseName,
@@ -759,6 +771,13 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       environment: "production",
       manualProvenance: manualProvenance(),
       appAllocationReceiptId: "88888888-8888-4888-8888-888888888888",
+      primaryManifestVersion: Buffer.alloc(32, 6).toString("base64"),
+      primaryServiceName: "postgres",
+      appCogniKey: "fixture-app",
+      appDseq: "456",
+      appDsnSha256: sha(url(lane.appRole, lane.appPassword)),
+      serviceDsnSha256: sha(url(lane.serviceRole, lane.servicePassword)),
+      migrationConsumer: "app-database-url",
       appSdlHash: "c".repeat(64),
       appManifestVersion: Buffer.alloc(32, 9).toString("base64"),
       appImageDigest: `sha256:${"9".repeat(64)}`,
@@ -1082,6 +1101,15 @@ describe("audited already-applied registration", () => {
   });
   it("refuses wrong managed allocation, current DSNs, app SHA, partial recovery, schema drift and same-provider recovery", async () => {
     const invalidCases = [
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.provider.manifestVersion = Buffer.alloc(32, 7).toString("base64");
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.provider.service.total = 2;
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.manualCutover.appDsnSha256 = "0".repeat(64);
+      },
       (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
         const service = f.effectiveApp.providerManifest.services[0];
         if (service) service.updatedReplicas = 0;

@@ -420,6 +420,18 @@ export class DatabaseCellBinder
         "registration requires fresh paid-endpoint DNS, strict TLS and native identity proof"
       );
     if (
+      !fresh(provider.observedAt) ||
+      provider.manifestVersion !== packet.primaryManifestVersion ||
+      provider.service.name !== packet.primaryServiceName ||
+      provider.service.observedGeneration <= 0 ||
+      [
+        provider.service.replicas,
+        provider.service.updatedReplicas,
+        provider.service.readyReplicas,
+        provider.service.availableReplicas,
+        provider.service.total,
+        provider.service.available,
+      ].some((count) => count !== 1) ||
       provider.dseq !== record.externalName ||
       provider.providerAccount !== record.providerAccount ||
       provider.appliedSdlHash !== record.lastAppliedSdlHash ||
@@ -550,6 +562,9 @@ export class DatabaseCellBinder
         (expected) =>
           ![custody.appRole, custody.serviceRole].includes(expected.role)
       ) ||
+      packet.appDsnSha256 !== sha(custody.app.dsn) ||
+      packet.serviceDsnSha256 !== sha(custody.service.dsn) ||
+      packet.migrationConsumer !== custody.migration.kind ||
       app.appDsnSha256 !== sha(custody.app.dsn) ||
       app.serviceDsnSha256 !== sha(custody.service.dsn) ||
       app.migrationConsumer !== custody.migration.kind ||

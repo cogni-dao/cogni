@@ -91,7 +91,9 @@ import {
   DrizzleNodeMigrationReportStore,
   DrizzleProviderOutcomeStore,
   KubernetesMigrationJobAdapter,
+  observeAppliedCellManaged,
   PostgresDatabaseCellObserver,
+  ReadOnlyAppliedDatabaseCellObserver,
   safeHostRoutedVersionProbe,
   safeReadyzProbe,
   safeVersionProbe,
@@ -121,6 +123,7 @@ import {
   prepareDatabaseCellDiagnostic,
 } from "@/features/compute/akash-tx/database-cell-diagnostic";
 import { AkashTxError, type AkashTxWorkloadIdentity } from "@/ports";
+import type { DatabaseCellBindingReference } from "@/ports/database-cell-binding.port";
 import {
   ACCOUNT_WALLET_SCOPE_PATTERN,
   akashTxAllocations,
@@ -130,6 +133,7 @@ import {
   type DatabaseCellBootstrapKit,
   DatabaseCellBootstrapKitsSchema,
 } from "@/shared/secrets/database-cell-binding.data";
+import { DatabaseCellAppliedEvidenceBundleSchema } from "@/shared/secrets/database-cell-placement.data";
 
 /**
  * The port the XComputeWorkload Composition hard-codes in
@@ -598,39 +602,78 @@ const databaseCellSpec = async (
 };
 
 const databaseCellObserver = new PostgresDatabaseCellObserver();
+const loadAppliedCellCustody = async (
+  reference: DatabaseCellBindingReference
+) => {
+  const value = await readCredential(
+    "AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON"
+  );
+  if (!value)
+    throw new AkashTxError(
+      "ledger_unavailable",
+      "private applied cell custody unavailable"
+    );
+  try {
+    const entries = z
+      .array(DatabaseCellAppliedCustodySchema)
+      .parse(JSON.parse(value));
+    const selected = entries.filter(
+      (entry) =>
+        entry.nodeId === reference.nodeId &&
+        entry.environment === reference.allocationEnvironment
+    );
+    if (selected.length !== 1 || !selected[0]) throw new Error();
+    return selected[0];
+  } catch {
+    throw new AkashTxError(
+      "identity_conflict",
+      "private applied cell custody absent, ambiguous or invalid"
+    );
+  }
+};
+
+const appliedCellObserver = new ReadOnlyAppliedDatabaseCellObserver({
+  readOwnedBundle: async (reference) => {
+    const value = await readCredential(
+      "AKASH_DATABASE_CELL_APPLIED_EVIDENCE_BUNDLES_JSON"
+    );
+    if (!value)
+      throw new AkashTxError(
+        "ledger_unavailable",
+        "owned applied evidence unavailable"
+      );
+    const entries = z
+      .array(DatabaseCellAppliedEvidenceBundleSchema)
+      .parse(JSON.parse(value));
+    const selected = entries.filter(
+      (entry) =>
+        entry.nodeId === reference.nodeId &&
+        entry.environment === reference.allocationEnvironment
+    );
+    if (selected.length !== 1 || !selected[0])
+      throw new AkashTxError(
+        "identity_conflict",
+        "owned applied evidence absent or ambiguous"
+      );
+    return selected[0];
+  },
+  observeManaged: async (input) =>
+    observeAppliedCellManaged({
+      ...input,
+      ledger: allocationLedger,
+      console: consoleClient,
+      readMountedCustody: () => loadAppliedCellCustody(input.reference),
+    }),
+});
+
 const databaseCellBindings = new DatabaseCellBinder({
   ledger: allocationLedger,
   actuator,
   store: new DrizzleDatabaseCellBindingStore(getDb, wallet.walletScope),
   observeNative: databaseCellObserver.observe.bind(databaseCellObserver),
   buildSha: runtimeEnv.APP_BUILD_SHA ?? "",
-  appliedCustody: async (reference) => {
-    const value = await readCredential(
-      "AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON"
-    );
-    if (!value)
-      throw new AkashTxError(
-        "ledger_unavailable",
-        "private applied cell custody unavailable"
-      );
-    try {
-      const entries = z
-        .array(DatabaseCellAppliedCustodySchema)
-        .parse(JSON.parse(value));
-      const selected = entries.filter(
-        (entry) =>
-          entry.nodeId === reference.nodeId &&
-          entry.environment === reference.allocationEnvironment
-      );
-      if (selected.length !== 1 || !selected[0]) throw new Error();
-      return selected[0];
-    } catch {
-      throw new AkashTxError(
-        "identity_conflict",
-        "private applied cell custody absent, ambiguous or invalid"
-      );
-    }
-  },
+  appliedCustody: loadAppliedCellCustody,
+  observeApplied: appliedCellObserver.observe.bind(appliedCellObserver),
   kit: async (reference) => {
     const kits = await loadDatabaseCellKits();
     const selected = kits.filter(

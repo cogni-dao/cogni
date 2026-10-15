@@ -239,10 +239,24 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
     backupRuntime: DatabaseCellBackupRuntimeObservationSchema,
     provider: z
       .object({
+        observedAt: timestamp,
         dseq: systemIdentifier,
         providerAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
         appliedSdlHash: digest,
         postgresImageDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+        manifestVersion,
+        service: z
+          .object({
+            name: z.string().min(1).max(63),
+            observedGeneration: z.number().int().positive(),
+            replicas: z.number().int().nonnegative(),
+            updatedReplicas: z.number().int().nonnegative(),
+            readyReplicas: z.number().int().nonnegative(),
+            availableReplicas: z.number().int().nonnegative(),
+            total: z.number().int().nonnegative(),
+            available: z.number().int().nonnegative(),
+          })
+          .strict(),
       })
       .strict(),
     native: z
@@ -360,6 +374,16 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         environment: z.literal("production"),
         manualProvenance: DatabaseCellManualProvenanceSchema,
         appAllocationReceiptId: z.string().uuid(),
+        primaryManifestVersion: manifestVersion,
+        primaryServiceName: z.string().min(1).max(63),
+        appCogniKey: z.string().min(1).max(512),
+        appDseq: systemIdentifier,
+        appDsnSha256: digest,
+        serviceDsnSha256: digest,
+        migrationConsumer: z.enum([
+          "app-database-url",
+          "dedicated-migration-url",
+        ]),
         appSdlHash: digest,
         appManifestVersion: manifestVersion,
         appImageDigest: imageDigest,

@@ -313,10 +313,22 @@ export interface DatabaseCellAppliedRegistrationFacts {
   readonly observedAt: string;
   readonly backupRuntime: DatabaseCellBackupRuntimeObservation;
   readonly provider: {
+    readonly observedAt: string;
     readonly dseq: string;
     readonly providerAccount: string;
     readonly appliedSdlHash: string;
     readonly postgresImageDigest: string;
+    readonly manifestVersion: string;
+    readonly service: {
+      readonly name: string;
+      readonly observedGeneration: number;
+      readonly replicas: number;
+      readonly updatedReplicas: number;
+      readonly readyReplicas: number;
+      readonly availableReplicas: number;
+      readonly total: number;
+      readonly available: number;
+    };
   };
   readonly native: {
     readonly databaseName: string;
@@ -390,6 +402,13 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly environment: "production";
     readonly manualProvenance: DatabaseCellManualProvenance;
     readonly appAllocationReceiptId: string;
+    readonly primaryManifestVersion: string;
+    readonly primaryServiceName: string;
+    readonly appCogniKey: string;
+    readonly appDseq: string;
+    readonly appDsnSha256: string;
+    readonly serviceDsnSha256: string;
+    readonly migrationConsumer: "app-database-url" | "dedicated-migration-url";
     readonly appSdlHash: string;
     readonly appManifestVersion: string;
     readonly appImageDigest: string;
