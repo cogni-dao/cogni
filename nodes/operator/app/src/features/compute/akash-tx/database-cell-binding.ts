@@ -574,7 +574,13 @@ export class DatabaseCellBinder
       (runtime.latestAttempt.completedAt !== null &&
         Date.parse(runtime.latestAttempt.completedAt) <
           Date.parse(runtime.latestAttempt.startedAt)) ||
-      Date.parse(runtime.nextRunAt) < Date.parse(runtime.observedAt) - 5000 ||
+      runtime.serviceActiveState === "failed" ||
+      (runtime.nextRunAt === null
+        ? !["active", "activating"].includes(runtime.serviceActiveState) ||
+          runtime.latestAttempt.completedAt !== null ||
+          runtime.latestAttempt.exitCode !== null
+        : Date.parse(runtime.nextRunAt) <
+          Date.parse(runtime.observedAt) - 5000) ||
       Date.parse(latest.completedAt) < Date.parse(latest.snapshotStartedAt) ||
       Date.parse(latest.completedAt) > Date.parse(runtime.observedAt) + 5000 ||
       Date.parse(latest.completedAt) < Date.parse(backup.completedAt) ||

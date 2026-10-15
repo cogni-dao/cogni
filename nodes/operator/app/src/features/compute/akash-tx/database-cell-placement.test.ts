@@ -653,6 +653,7 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
     backupRuntime: {
       observedAt: ago(0),
       timerActiveState: "active",
+      serviceActiveState: "inactive",
       nextRunAt: new Date(Date.now() + 900000).toISOString(),
       intervalSeconds: 900,
       jitterSeconds: 61,
@@ -964,6 +965,18 @@ describe("audited already-applied registration", () => {
       }).retentionPolicy
     ).toBe("retain");
   });
+  it("accepts a genuine running oneshot without inventing its next timer timestamp", async () => {
+    const facts = registrationFacts();
+    facts.backupRuntime.nextRunAt = null;
+    facts.backupRuntime.serviceActiveState = "active";
+    facts.backupRuntime.latestAttempt.completedAt = null;
+    facts.backupRuntime.latestAttempt.exitCode = null;
+    const current = fixture({ appliedFacts: facts });
+    await expect(current.binder.registerApplied(request)).resolves.toHaveLength(
+      1
+    );
+    expect(current.writes()).toBe(1);
+  });
   it("compares authenticated complete relation manifests without node-specific table-count policy", async () => {
     const facts = registrationFacts();
     const relations = ["public.positions", "drizzle.__drizzle_migrations"];
@@ -977,6 +990,9 @@ describe("audited already-applied registration", () => {
   });
   it("refuses wrong managed allocation, current DSNs, app SHA, partial recovery, schema drift and same-provider recovery", async () => {
     const invalidCases = [
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.backupRuntime.nextRunAt = null;
+      },
       (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
         f.provider.postgresImageDigest = `sha256:${"0".repeat(64)}`;
       },

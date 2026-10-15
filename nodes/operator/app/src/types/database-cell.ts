@@ -229,7 +229,8 @@ export type DatabaseCellAppliedEvidenceKind =
   | "recovery-schema"
   | "current-app-readiness"
   | "backup-runtime"
-  | "recovery-database-metadata";
+  | "recovery-database-metadata"
+  | "recovery-data-parity";
 /** Authenticated transport only; adapters must additionally parse each kind's actual typed contents. */
 export interface DatabaseCellAppliedEvidenceBundle {
   readonly version: 1;
@@ -267,7 +268,14 @@ export interface DatabaseCellBackupRuntimeObservation {
     | "activating"
     | "deactivating"
     | "unknown";
-  readonly nextRunAt: string;
+  readonly nextRunAt: string | null;
+  readonly serviceActiveState:
+    | "active"
+    | "inactive"
+    | "failed"
+    | "activating"
+    | "deactivating"
+    | "unknown";
   readonly intervalSeconds: number;
   readonly jitterSeconds: number;
   readonly installedFullTimeoutSeconds: number;
