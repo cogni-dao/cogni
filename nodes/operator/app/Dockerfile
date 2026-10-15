@@ -36,6 +36,11 @@ RUN ARCH=$(node -p "process.arch === 'x64' ? 'x64' : 'arm64'") && \
 
 # 3. Copy full source (filtered by .dockerignore)
 COPY . .
+# The private cell factory loads these exact reviewed assets at runtime. Explicit
+# builder copies fail here if the filtered context loses an asset, before app builds.
+COPY infra/database-budget-profiles.yaml ./infra/database-budget-profiles.yaml
+COPY infra/compose/runtime/postgres-init/provision.sh infra/compose/runtime/postgres-init/apply-control.sql ./infra/compose/runtime/postgres-init/
+COPY infra/compose/runtime/postgres-init/control-migrations/0000_database_recovery_control.sql infra/compose/runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql ./infra/compose/runtime/postgres-init/control-migrations/
 
 ARG APP_ENV=production
 
