@@ -71,6 +71,7 @@ export {
   type AkashTxErrorCode,
   type AkashTxLeaseLogSource,
   type AkashTxLeaseLogSources,
+  type AkashTxManagedDeploymentDefinition,
   type AkashTxMigrationPhase,
   type AkashTxMigrationPort,
   type AkashTxMigrationStep,
@@ -139,6 +140,21 @@ export type {
   ResolvedConnection,
 } from "./connection-broker.port";
 export type {
+  DatabaseCellAppliedProbeQualificationPort,
+  DatabaseCellAppliedRegistrationEvidencePort,
+  DatabaseCellAppliedRegistrationFacts,
+  DatabaseCellAppliedRegistrationPort,
+  DatabaseCellBindingPort,
+  DatabaseCellBindingReference,
+  DatabaseCellCutoverReference,
+  DatabaseCellNativeObserverPort,
+  DatabaseCellNativeProof,
+} from "./database-cell-binding.port";
+export type {
+  DatabaseCellPressureObservation,
+  DatabaseCellPressurePort,
+} from "./database-cell-pressure.port";
+export type {
   DatabaseCellActionReceipt,
   DatabaseCellAllocation,
   DatabaseCellCapacity,
@@ -164,10 +180,24 @@ export type {
   DatabaseEnvironment,
   DatabasePlacementResolverPort,
   DatabaseReadmissionPort,
+  DatabaseRecoveryBeginPort,
+  DatabaseRecoveryContainmentReceipt,
+  DatabaseRecoveryContainPort,
+  DatabaseRecoveryIdentity,
+  DatabaseRecoveryIncident,
+  DatabaseRecoveryLedgerReaderPort,
+  DatabaseRecoveryProbeObservation,
+  DatabaseRecoveryProbePort,
+  DatabaseRecoveryVerificationPort,
+  DatabaseRecoveryWatchdogPort,
   DatabaseRuntimeSecretSyncPort,
   DatabaseStateCellPort,
   DatabaseTier,
   ProvisionDatabaseCellInput,
+  ReliabilityReadmitPort,
+  ReliabilityRecoveryCheck,
+  ReliabilityRecoveryReaderPort,
+  ReliabilityStatusReaderPort,
 } from "./database-containment.port";
 export { DATABASE_CELL_METRIC_LABEL_KEYS } from "./database-containment.port";
 export type {
@@ -253,6 +283,10 @@ export type {
   PrometheusRangeResult,
   PrometheusTimeSeries,
   RangeQueryParams,
+  RegionalReadinessMetric,
+  ReliabilityEnvironment,
+  ReliabilityMetricsSnapshot,
+  ReliabilityQueryParams,
   TemplateDataPoint,
   TemplateQueryParams,
   TemplateQueryResult,

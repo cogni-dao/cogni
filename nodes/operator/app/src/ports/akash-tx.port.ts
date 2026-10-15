@@ -339,8 +339,34 @@ export interface AkashTxProviderOutcomesPort {
 /**
  * The Console transaction client the actuator needs. Structurally satisfied by
  * AkashComputeAdapter — SDL construction, provider screening, and bid/lease mechanics stay
- * inside that adapter and never cross this seam.
+ * inside that adapter. The private read-only proof seam exposes observed definition
+ * bytes only; their opaque environment values never prove effective secrets.
  */
+/** Private observed definition, not reconstructed managed spec or readable secret values. */
+export interface AkashTxManagedDeploymentDefinition {
+  readonly observedAt: string;
+  readonly leaseId: string;
+  readonly ownerAccount: string;
+  readonly providerAccount: string;
+  /** May contain opaque/redacted env values. Never log or use them as DSN evidence. */
+  readonly providerSdl: string;
+  /** Hash of returned definition bytes ONLY; not the guarded full managed SDL hash. */
+  readonly providerSdlSha256: string;
+  readonly consoleManifestVersion: string;
+  readonly chainManifestVersion: string;
+  /** Provider-reported current rollout counters, not inspection of terminated pods. */
+  readonly services: readonly {
+    readonly name: string;
+    readonly observedGeneration: number;
+    readonly replicas: number;
+    readonly updatedReplicas: number;
+    readonly readyReplicas: number;
+    readonly availableReplicas: number;
+    readonly total: number;
+    readonly available: number;
+  }[];
+}
+
 export interface AkashTxConsolePort {
   /** Opaque pre-transaction high-water mark; the recovery scan's baseline. */
   allocationCursor(): Promise<string>;
@@ -367,6 +393,10 @@ export interface AkashTxConsolePort {
    */
   findAllocationSince(cursor: string): Promise<AkashAllocationProbe>;
   status(input: { leaseId: string }): Promise<ProvisionOutput>;
+  /** Read-only existing Console auth/client. Missing implementation denies applied qualification. */
+  readManagedDefinition?(input: {
+    leaseId: string;
+  }): Promise<AkashTxManagedDeploymentDefinition>;
   /**
    * The screened country of a provider account, or `null` when the marketplace read did not
    * resolve one. Exists so the UPDATE path can tell whether the lease it is about to re-image
@@ -452,6 +482,10 @@ export type AkashTxAllocationState =
   | "failed";
 
 export interface AkashTxAllocationRecord {
+  /** Durable policy; no delete request can override retained storage custody. */
+  readonly retentionPolicy?: "retain";
+  /** Verified credential-free cell placement stored on this same allocation row. */
+  readonly appliedDatabaseCellBinding?: readonly import("@/types/database-cell").AppliedDatabaseCellReceipt[];
   /** Durable allocation receipt row. Cost intervals attach here, never to a mutable node row. */
   readonly receiptId: string;
   readonly cogniKey: string;
@@ -505,6 +539,7 @@ export interface AkashTxAllocationLedgerPort {
     workload: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
@@ -524,6 +559,7 @@ export interface AkashTxAllocationLedgerPort {
     cogniKey: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }): Promise<
     | { state: "bound"; record: AkashTxAllocationRecord }
     | { state: "absent" }

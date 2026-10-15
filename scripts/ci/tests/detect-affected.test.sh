@@ -40,10 +40,10 @@ output=$(
   bash scripts/ci/detect-affected.sh
 )
 
-echo "$output" | grep -q 'Selection reason: turbo-affected-package-change:packages/node-contracts/src/foo.ts'
-echo "$output" | grep -q 'Targets: operator,scheduler-worker'
+grep -q 'Selection reason: turbo-affected-package-change:packages/node-contracts/src/foo.ts' <<< "$output"
+grep -q 'Targets: operator,scheduler-worker' <<< "$output"
 
-if echo "$output" | grep -q 'litellm\|oss\|node-template'; then
+if grep -q 'litellm\|oss\|node-template' <<< "$output"; then
   echo "[FAIL] package-level turbo affected selected packages absent from turbo output" >&2
   echo "$output" >&2
   exit 1
@@ -57,7 +57,7 @@ fallback_output=$(
   bash scripts/ci/detect-affected.sh 2>&1
 )
 
-echo "$fallback_output" | grep -q 'Selection reason: shared-package-change:packages/node-contracts/src/foo.ts:turbo-fallback'
+grep -q 'Selection reason: shared-package-change:packages/node-contracts/src/foo.ts:turbo-fallback' <<< "$fallback_output"
 
 expected_fallback_targets=$(
   # shellcheck source=../lib/image-tags.sh
@@ -72,7 +72,7 @@ expected_fallback_targets=$(
   IFS=,
   printf '%s\n' "${ordered_targets[*]}"
 )
-echo "$fallback_output" | grep -q "Targets: ${expected_fallback_targets}"
+grep -q "Targets: ${expected_fallback_targets}" <<< "$fallback_output"
 
 empty_output=$(
   TURBO_BIN="$tmpdir/turbo-empty-stub" \
@@ -81,8 +81,8 @@ empty_output=$(
   CHANGED_PATHS_FILE="$tmpdir/changed-paths.txt" \
   bash scripts/ci/detect-affected.sh
 )
-echo "$empty_output" | grep -q 'Selection reason: turbo-no-image-targets:packages/node-contracts/src/foo.ts'
-echo "$empty_output" | grep -q 'Targets: none'
+grep -q 'Selection reason: turbo-no-image-targets:packages/node-contracts/src/foo.ts' <<< "$empty_output"
+grep -q 'Targets: none' <<< "$empty_output"
 
 # Substrate machinery: a change to a per-node provisioning script (not an image
 # build input) must select the node set so node-substrate re-runs on candidate-a.
@@ -93,7 +93,7 @@ substrate_output=$(
   CHANGED_PATHS_FILE="$tmpdir/substrate-paths.txt" \
   bash scripts/ci/detect-affected.sh
 )
-echo "$substrate_output" | grep -q 'Selection reason: substrate-machinery:scripts/ci/reconcile-node-substrate.sh'
+grep -q 'Selection reason: substrate-machinery:scripts/ci/reconcile-node-substrate.sh' <<< "$substrate_output"
 
 expected_substrate_targets=$(
   # shellcheck source=../lib/image-tags.sh
@@ -109,10 +109,10 @@ expected_substrate_targets=$(
   IFS=,
   printf '%s\n' "${ordered_targets[*]}"
 )
-echo "$substrate_output" | grep -q "Targets: ${expected_substrate_targets}"
+grep -q "Targets: ${expected_substrate_targets}" <<< "$substrate_output"
 # Substrate-only change must NOT fan to non-node image targets (no no-op rebuilds
 # beyond the node set; deploy-infra / litellm etc. stay out).
-echo "$substrate_output" | grep -q 'Flight targets:'
+grep -q 'Flight targets:' <<< "$substrate_output"
 
 # Edge Caddy reconcile is substrate behavior too: the script mutates VM edge
 # routing during node-substrate, so a change must not produce a no-op flight.
@@ -123,8 +123,8 @@ edge_caddy_output=$(
   CHANGED_PATHS_FILE="$tmpdir/edge-caddy-paths.txt" \
   bash scripts/ci/detect-affected.sh
 )
-echo "$edge_caddy_output" | grep -q 'Selection reason: substrate-machinery:scripts/ci/reconcile-edge-caddy.remote.sh'
-echo "$edge_caddy_output" | grep -q "Targets: ${expected_substrate_targets}"
+grep -q 'Selection reason: substrate-machinery:scripts/ci/reconcile-edge-caddy.remote.sh' <<< "$edge_caddy_output"
+grep -q "Targets: ${expected_substrate_targets}" <<< "$edge_caddy_output"
 
 # bug.5299 — the substrate PREFLIGHT ASSERTER and the libs it sources are substrate
 # machinery too. A change to them that selects no target ships with the gate never having
@@ -140,8 +140,8 @@ for asserter_path in \
     CHANGED_PATHS_FILE="$tmpdir/asserter-paths.txt" \
     bash scripts/ci/detect-affected.sh
   )
-  echo "$asserter_output" | grep -q "Selection reason: substrate-machinery:${asserter_path}"
-  echo "$asserter_output" | grep -q "Targets: ${expected_substrate_targets}"
+  grep -q "Selection reason: substrate-machinery:${asserter_path}" <<< "$asserter_output"
+  grep -q "Targets: ${expected_substrate_targets}" <<< "$asserter_output"
 done
 
 # NEGATIVE CONTROL — the rule is an explicit list, not a scripts/ci/** prefix. An unrelated
@@ -154,7 +154,7 @@ unrelated_output=$(
   CHANGED_PATHS_FILE="$tmpdir/unrelated-paths.txt" \
   bash scripts/ci/detect-affected.sh
 )
-if echo "$unrelated_output" | grep -q 'Selection reason: substrate-machinery:'; then
+if grep -q 'Selection reason: substrate-machinery:' <<< "$unrelated_output"; then
   echo "[FAIL] unrelated CI script classified as substrate machinery" >&2
   echo "$unrelated_output" >&2
   exit 1
@@ -171,9 +171,9 @@ controller_output=$(
   CHANGED_PATHS_FILE="$tmpdir/controller-paths.txt" \
   bash scripts/ci/detect-affected.sh
 )
-echo "$controller_output" | grep -q 'Selection reason: operator-image-input:infra/k8s/base/compute-workload-controller/rbac.yaml'
-echo "$controller_output" | grep -q '^Targets: operator$'
-echo "$controller_output" | grep -q '^Flight targets: operator$'
+grep -q 'Selection reason: operator-image-input:infra/k8s/base/compute-workload-controller/rbac.yaml' <<< "$controller_output"
+grep -q '^Targets: operator$' <<< "$controller_output"
+grep -q '^Flight targets: operator$' <<< "$controller_output"
 
 
 # task.5102 — same coupling for the Akash transaction actuator: it is a second process
@@ -186,8 +186,8 @@ actuator_output=$(
   CHANGED_PATHS_FILE="$tmpdir/actuator-paths.txt" \
   bash scripts/ci/detect-affected.sh
 )
-echo "$actuator_output" | grep -q 'Selection reason: operator-image-input:infra/k8s/base/akash-tx-actuator/deployment.yaml'
-echo "$actuator_output" | grep -q '^Targets: operator$'
-echo "$actuator_output" | grep -q '^Flight targets: operator$'
+grep -q 'Selection reason: operator-image-input:infra/k8s/base/akash-tx-actuator/deployment.yaml' <<< "$actuator_output"
+grep -q '^Targets: operator$' <<< "$actuator_output"
+grep -q '^Flight targets: operator$' <<< "$actuator_output"
 
 echo "detect-affected.test.sh OK"

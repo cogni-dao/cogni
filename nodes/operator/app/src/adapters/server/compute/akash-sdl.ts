@@ -55,6 +55,18 @@ export function buildAkashSdl(
 
     services[svc.name] = {
       image: svc.image,
+      ...(svc.volumes?.length
+        ? {
+            params: {
+              storage: Object.fromEntries(
+                svc.volumes.map((volume) => [
+                  volume.name,
+                  { mount: volume.mountPath, readOnly: false },
+                ])
+              ),
+            },
+          }
+        : {}),
       ...(svc.command ? { command: [...svc.command] } : {}),
       ...(svc.args ? { args: [...svc.args] } : {}),
       ...(svc.env
@@ -78,7 +90,19 @@ export function buildAkashSdl(
       resources: {
         cpu: { units: svc.cpuUnits },
         memory: { size: `${svc.memoryMi}Mi` },
-        storage: [{ size: `${svc.storageMi}Mi` }],
+        storage: [
+          { size: `${svc.storageMi}Mi` },
+          ...(svc.volumes ?? []).map((volume) => ({
+            name: volume.name,
+            size: `${volume.sizeMi}Mi`,
+            attributes: {
+              persistent: true,
+              class: ({ hdd: "beta1", ssd: "beta2", nvme: "beta3" } as const)[
+                volume.tier
+              ],
+            },
+          })),
+        ],
       },
     };
 

@@ -38,14 +38,28 @@ import { createServer, type Server } from "node:http";
 import type { ProvisionSpec } from "@cogni/ai-tools";
 
 import {
+  AkashTxCreateDatabaseCellInputSchema,
   type AkashTxCreateInput,
   AkashTxCreateInputSchema,
   AkashTxDeleteInputSchema,
   AkashTxLeaseLogSourcesInputSchema,
   type AkashTxObserveInput,
   AkashTxObserveInputSchema,
+  AkashTxPrepareDatabaseCellDiagnosticInputSchema,
+  AkashTxUpdateDatabaseCellInputSchema,
   AkashTxUpdateInputSchema,
 } from "@/contracts/compute.akash-tx.v1.contract";
+import {
+  DatabaseCellAppliedRegistrationReferenceSchema,
+  DatabaseCellBindingIdentitySchema,
+  DatabaseCellBindingReferenceSchema,
+  DatabaseCellCutoverReferenceSchema,
+} from "@/contracts/database-cell-binding.v1.contract";
+import type {
+  DatabaseCellAppliedProbeQualificationPort,
+  DatabaseCellAppliedRegistrationPort,
+  DatabaseCellBindingPort,
+} from "@/ports";
 import {
   type AkashTxActuatorPort,
   AkashTxError,
@@ -53,6 +67,10 @@ import {
 } from "@/ports";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
+import type {
+  DatabaseCellDiagnosticReceipt,
+  observeDatabaseCellDiagnostic,
+} from "./database-cell-diagnostic";
 
 /** Maximum accepted request body. A workload spec is kilobytes; anything larger is abuse. */
 export const AKASH_TX_MAX_BODY_BYTES = 1_048_576;
@@ -99,7 +117,27 @@ export interface AkashTxHttpDeps {
   readonly actuator: AkashTxActuatorPort;
   /** Shared secret required on every operation. Empty is rejected at construction. */
   readonly token: string;
+  readonly databaseCellBindings?: DatabaseCellBindingPort;
+  readonly databaseCellAppliedRegistration?: DatabaseCellAppliedRegistrationPort;
+  readonly databaseCellAppliedProbeQualification?: DatabaseCellAppliedProbeQualificationPort;
   readonly log?: AkashTxLogger;
+  /** Pure private-kit resolver; callers can supply a catalog reference only. */
+  readonly databaseCellSpec?: (input: {
+    nodeId: string;
+    nodeSlug: string;
+    environment: string;
+    budgetProfile: string;
+  }) => ProvisionSpec | Promise<ProvisionSpec>;
+  readonly databaseCellDiagnostic?: (
+    input: ReturnType<
+      typeof AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse
+    >
+  ) => Promise<DatabaseCellDiagnosticReceipt>;
+  readonly databaseCellDiagnosticObserve?: (
+    input: ReturnType<
+      typeof AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse
+    >
+  ) => ReturnType<typeof observeDatabaseCellDiagnostic>;
 }
 
 /**
@@ -115,6 +153,7 @@ function toSpec(parsed: AkashTxCreateInput["spec"]): ProvisionSpec {
       cpuUnits: service.cpuUnits,
       memoryMi: service.memoryMi,
       storageMi: service.storageMi,
+      ...(service.volumes ? { volumes: service.volumes } : {}),
       ...(service.env ? { env: service.env } : {}),
       ...(service.command ? { command: service.command } : {}),
       ...(service.args ? { args: service.args } : {}),
@@ -238,6 +277,150 @@ export function createAkashTxDispatcher(
 
     try {
       switch (request.path) {
+        case "/v1/akash/observe-database-cell-diagnostic": {
+          const input =
+            AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse(payload);
+          if (!deps.databaseCellDiagnosticObserve)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "private diagnostic observation unavailable"
+            );
+          return {
+            status: 200,
+            body: await deps.databaseCellDiagnosticObserve(input),
+          };
+        }
+        case "/v1/akash/prepare-database-cell-diagnostic": {
+          const input =
+            AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse(payload);
+          if (!deps.databaseCellDiagnostic) {
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "private diagnostic executor unavailable"
+            );
+          }
+          return {
+            status: 200,
+            body: await deps.databaseCellDiagnostic(input),
+          };
+        }
+        case "/v1/akash/create-database-cell": {
+          const input = AkashTxCreateDatabaseCellInputSchema.parse(payload);
+          if (!deps.databaseCellSpec) {
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "private database cell kit unavailable"
+            );
+          }
+          const spec = await deps.databaseCellSpec({
+            nodeId: input.identity.nodeId,
+            nodeSlug: input.nodeSlug,
+            environment: input.environment,
+            budgetProfile: input.budgetProfile,
+          });
+          return {
+            status: 200,
+            body: await deps.actuator.create({
+              cogniKey: input.cogniKey,
+              environment: input.environment,
+              identity: input.identity,
+              spec,
+            }),
+          };
+        }
+        case "/v1/akash/update-database-cell": {
+          const input = AkashTxUpdateDatabaseCellInputSchema.parse(payload);
+          if (!deps.databaseCellSpec) {
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "private database cell kit unavailable"
+            );
+          }
+          const spec = await deps.databaseCellSpec({
+            nodeId: input.identity.nodeId,
+            nodeSlug: input.nodeSlug,
+            environment: input.environment,
+            budgetProfile: input.budgetProfile,
+          });
+          return {
+            status: 200,
+            body: await deps.actuator.update({
+              cogniKey: input.cogniKey,
+              externalName: input.externalName,
+              environment: input.environment,
+              identity: input.identity,
+              spec,
+            }),
+          };
+        }
+        case "/v1/akash/database-cell-binding/qualify-applied-probe": {
+          if (!deps.databaseCellAppliedProbeQualification)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "readonly applied probe qualification unavailable"
+            );
+          return {
+            status: 200,
+            body: {
+              qualification:
+                await deps.databaseCellAppliedProbeQualification.qualifyAppliedProbe(
+                  DatabaseCellAppliedRegistrationReferenceSchema.parse(payload)
+                ),
+            },
+          };
+        }
+        case "/v1/akash/database-cell-binding/register-applied": {
+          if (!deps.databaseCellAppliedRegistration)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "applied cell registration capability unavailable"
+            );
+          return {
+            status: 200,
+            body: {
+              receipts:
+                await deps.databaseCellAppliedRegistration.registerApplied(
+                  DatabaseCellAppliedRegistrationReferenceSchema.parse(payload)
+                ),
+            },
+          };
+        }
+        case "/v1/akash/database-cell-binding/discover": {
+          if (!deps.databaseCellBindings)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "cell binding capability unavailable"
+            );
+          return {
+            status: 200,
+            body: await deps.databaseCellBindings.discover(
+              DatabaseCellBindingIdentitySchema.parse(payload)
+            ),
+          };
+        }
+        case "/v1/akash/database-cell-binding/read":
+        case "/v1/akash/database-cell-binding/seal":
+        case "/v1/akash/database-cell-binding/cutover": {
+          if (!deps.databaseCellBindings)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "cell binding capability unavailable"
+            );
+          const operation = request.path.split("/").at(-1);
+          const receipts =
+            operation === "cutover"
+              ? await deps.databaseCellBindings.cutover(
+                  DatabaseCellCutoverReferenceSchema.parse(payload)
+                )
+              : operation === "seal"
+                ? await deps.databaseCellBindings.seal(
+                    DatabaseCellBindingReferenceSchema.parse(payload)
+                  )
+                : await deps.databaseCellBindings.read(
+                    DatabaseCellBindingReferenceSchema.parse(payload)
+                  );
+          return { status: 200, body: { receipts } };
+        }
         case "/v1/akash/observe": {
           const input = AkashTxObserveInputSchema.parse(payload);
           const observation = await deps.actuator.observe(

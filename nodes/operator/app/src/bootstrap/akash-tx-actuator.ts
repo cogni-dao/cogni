@@ -76,19 +76,25 @@
  */
 
 import { readFile } from "node:fs/promises";
-
 import { createAppDbClient, type Database } from "@cogni/db-client";
 import { BatchV1Api, CoreV1Api, KubeConfig } from "@kubernetes/client-node";
 import { sql } from "drizzle-orm";
 import pino from "pino";
+import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 
 import {
   AkashComputeAdapter,
   DrizzleAkashTxAllocationLedger,
   DrizzleComputeCostStore,
+  DrizzleDatabaseCellBindingStore,
   DrizzleNodeMigrationReportStore,
   DrizzleProviderOutcomeStore,
   KubernetesMigrationJobAdapter,
+  observeAppliedCellManaged,
+  observeDatabaseCellNativeControl,
+  PostgresDatabaseCellObserver,
+  ReadOnlyAppliedDatabaseCellObserver,
   safeHostRoutedVersionProbe,
   safeReadyzProbe,
   safeVersionProbe,
@@ -103,6 +109,7 @@ import {
   AkashTxActuator,
   type AkashTxServingProbe,
 } from "@/features/compute/akash-tx/akash-tx-actuator";
+import { databaseCellSpecFactory } from "@/features/compute/akash-tx/akash-tx-database-cell";
 import { createAkashTxActuatorServer } from "@/features/compute/akash-tx/akash-tx-http";
 import {
   AkashTxWalletConfigError,
@@ -111,10 +118,23 @@ import {
   credentialFingerprint,
   resolveAkashTxWallet,
 } from "@/features/compute/akash-tx/akash-tx-wallet";
+import { DatabaseCellBinder } from "@/features/compute/akash-tx/database-cell-binding";
+import {
+  observeDatabaseCellDiagnostic,
+  prepareDatabaseCellDiagnostic,
+} from "@/features/compute/akash-tx/database-cell-diagnostic";
+import type { DatabaseCellBindingReference } from "@/ports";
+import { AkashTxError, type AkashTxWorkloadIdentity } from "@/ports";
 import {
   ACCOUNT_WALLET_SCOPE_PATTERN,
   akashTxAllocations,
 } from "@/shared/db/akash-tx-allocations";
+import {
+  DatabaseCellAppliedCustodySchema,
+  type DatabaseCellBootstrapKit,
+  DatabaseCellBootstrapKitsSchema,
+} from "@/shared/secrets/database-cell-binding.data";
+import { DatabaseCellAppliedEvidenceBundleSchema } from "@/shared/secrets/database-cell-placement.data";
 
 /**
  * The port the XComputeWorkload Composition hard-codes in
@@ -432,9 +452,13 @@ try {
 const kubeConfig = new KubeConfig();
 kubeConfig.loadFromCluster();
 
+const allocationLedger = new DrizzleAkashTxAllocationLedger(
+  getDb,
+  wallet.walletScope
+);
 const actuator = new AkashTxActuator({
   console: consoleClient,
-  ledger: new DrizzleAkashTxAllocationLedger(getDb, wallet.walletScope),
+  ledger: allocationLedger,
   costEvidence: consoleClient,
   costStore: new DrizzleComputeCostStore(getDb),
   providerConsumerAccountId: wallet.expectedAccountId,
@@ -471,10 +495,289 @@ const actuator = new AkashTxActuator({
   migrationReports: new DrizzleNodeMigrationReportStore(getDb),
 });
 
+async function loadDatabaseCellFactory() {
+  const assetRoot = "/app/database-cell-bootstrap";
+  const [bootstrap, provision, control, migration0, migration1, budgetYaml] =
+    await Promise.all(
+      [
+        "bootstrap.sh",
+        "provision.sh",
+        "apply-control.sql",
+        "control-migrations/0000_database_recovery_control.sql",
+        "control-migrations/0001_database_recovery_watchdog.sql",
+        "database-budget-profiles.yaml",
+      ].map((path) => readFile(`${assetRoot}/${path}`, "utf8"))
+    );
+  if (
+    !bootstrap ||
+    !provision ||
+    !control ||
+    !migration0 ||
+    !migration1 ||
+    !budgetYaml
+  ) {
+    throw new Error("reviewed private database cell assets are incomplete");
+  }
+  const positive = z.number().int().positive();
+  const profiles = z
+    .object({
+      "dedicated-high-throughput-v1": z.object({
+        cell_capacity: z.object({
+          vcpus: positive,
+          memory_gib: positive,
+          storage_gib: positive,
+          compute_class: z.literal("dedicated"),
+        }),
+        roles: z.object({
+          app: z.object({
+            connection_limit: positive,
+            statement_timeout_ms: positive,
+          }),
+          service: z.object({
+            connection_limit: positive,
+            statement_timeout_ms: positive,
+          }),
+        }),
+        common: z.object({
+          lock_timeout_ms: positive,
+          idle_in_transaction_session_timeout_ms: positive,
+          temp_file_limit_mib: positive,
+          work_mem_mib: positive,
+        }),
+      }),
+    })
+    .parse(parseYaml(budgetYaml));
+  const profile = profiles["dedicated-high-throughput-v1"];
+  return (kits: readonly DatabaseCellBootstrapKit[]) =>
+    databaseCellSpecFactory(
+      kits,
+      { bootstrap, provision, control, migration0, migration1 },
+      {
+        vcpus: profile.cell_capacity.vcpus,
+        memoryGiB: profile.cell_capacity.memory_gib,
+        storageGiB: profile.cell_capacity.storage_gib,
+        budget: {
+          appConnectionLimit: profile.roles.app.connection_limit,
+          appStatementTimeoutMs: profile.roles.app.statement_timeout_ms,
+          serviceConnectionLimit: profile.roles.service.connection_limit,
+          serviceStatementTimeoutMs: profile.roles.service.statement_timeout_ms,
+          lockTimeoutMs: profile.common.lock_timeout_ms,
+          idleInTransactionTimeoutMs:
+            profile.common.idle_in_transaction_session_timeout_ms,
+          tempFileLimitMiB: profile.common.temp_file_limit_mib,
+          workMemMiB: profile.common.work_mem_mib,
+        },
+      },
+      z
+        .string()
+        .regex(/^[0-9a-f]{40}$/)
+        .parse(runtimeEnv.APP_BUILD_SHA)
+    );
+}
+async function loadDatabaseCellKits(): Promise<DatabaseCellBootstrapKit[]> {
+  // ESO updates this SAME owner-bank volume after the pod starts and after the
+  // observed endpoint is sealed. Never cache private mutable kit contents.
+  const cellKitsJson = await readCredential("AKASH_DATABASE_CELL_KITS_JSON");
+  if (!cellKitsJson)
+    throw new AkashTxError(
+      "ledger_unavailable",
+      "private database cell kit unavailable"
+    );
+  try {
+    return DatabaseCellBootstrapKitsSchema.parse(JSON.parse(cellKitsJson));
+  } catch {
+    // JSON.parse may include private input excerpts. Redact before HTTP logging.
+    throw new AkashTxError(
+      "invalid_request",
+      "private database cell kit invalid"
+    );
+  }
+}
+let databaseCellFactory: ReturnType<typeof loadDatabaseCellFactory> | undefined;
+const databaseCellSpec = async (
+  reference: Parameters<ReturnType<typeof databaseCellSpecFactory>>[0]
+) => {
+  const kits = await loadDatabaseCellKits();
+  databaseCellFactory ??= loadDatabaseCellFactory();
+  return (await databaseCellFactory)(kits)(reference);
+};
+
+const databaseCellObserver = new PostgresDatabaseCellObserver();
+const loadAppliedCellCustody = async (
+  reference: DatabaseCellBindingReference
+) => {
+  const value = await readCredential(
+    "AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON"
+  );
+  if (!value)
+    throw new AkashTxError(
+      "ledger_unavailable",
+      "private applied cell custody unavailable"
+    );
+  try {
+    const entries = z
+      .array(DatabaseCellAppliedCustodySchema)
+      .parse(JSON.parse(value));
+    const selected = entries.filter(
+      (entry) =>
+        entry.nodeId === reference.nodeId &&
+        entry.environment === reference.allocationEnvironment
+    );
+    if (selected.length !== 1 || !selected[0]) throw new Error();
+    return selected[0];
+  } catch {
+    throw new AkashTxError(
+      "identity_conflict",
+      "private applied cell custody absent, ambiguous or invalid"
+    );
+  }
+};
+
+const appliedCellObserver = new ReadOnlyAppliedDatabaseCellObserver({
+  observeNativeControl: observeDatabaseCellNativeControl,
+  readOwnedBundle: async (reference) => {
+    const value = await readCredential(
+      "AKASH_DATABASE_CELL_APPLIED_EVIDENCE_BUNDLES_JSON"
+    );
+    if (!value)
+      throw new AkashTxError(
+        "ledger_unavailable",
+        "owned applied evidence unavailable"
+      );
+    const entries = z
+      .array(DatabaseCellAppliedEvidenceBundleSchema)
+      .parse(JSON.parse(value));
+    const selected = entries.filter(
+      (entry) =>
+        entry.nodeId === reference.nodeId &&
+        entry.environment === reference.allocationEnvironment
+    );
+    if (selected.length !== 1 || !selected[0])
+      throw new AkashTxError(
+        "identity_conflict",
+        "owned applied evidence absent or ambiguous"
+      );
+    return selected[0];
+  },
+  observeManaged: async (input) =>
+    observeAppliedCellManaged({
+      ...input,
+      ledger: allocationLedger,
+      console: consoleClient,
+      readMountedCustody: () => loadAppliedCellCustody(input.reference),
+    }),
+});
+
+const databaseCellBindings = new DatabaseCellBinder({
+  ledger: allocationLedger,
+  actuator,
+  store: new DrizzleDatabaseCellBindingStore(getDb, wallet.walletScope),
+  observeNative: databaseCellObserver.observe.bind(databaseCellObserver),
+  buildSha: runtimeEnv.APP_BUILD_SHA ?? "",
+  appliedCustody: loadAppliedCellCustody,
+  observeApplied: appliedCellObserver.observe.bind(appliedCellObserver),
+  kit: async (reference) => {
+    const kits = await loadDatabaseCellKits();
+    const selected = kits.filter(
+      (kit) =>
+        kit.nodeId === reference.nodeId &&
+        kit.environment === reference.allocationEnvironment
+    );
+    if (selected.length !== 1 || !selected[0])
+      throw new Error("owned cell bootstrap kit absent or ambiguous");
+    return selected[0];
+  },
+});
+
+const resolveDatabaseCellDiagnosticContext = async (input: {
+  cogniKey: string;
+  externalName: string;
+  environment: string;
+  identity: AkashTxWorkloadIdentity;
+  nodeSlug: string;
+  budgetProfile: string;
+}) => {
+  const record = await allocationLedger.read({ cogniKey: input.cogniKey });
+  if (
+    !record ||
+    record.state !== "allocated" ||
+    record.externalName !== input.externalName ||
+    record.environment !== input.environment ||
+    record.identity.nodeId !== input.identity.nodeId ||
+    record.identity.compositeUid !== input.identity.compositeUid ||
+    record.identity.compositeGeneration !==
+      input.identity.compositeGeneration ||
+    !record.providerAccount ||
+    !record.lastAppliedSdlHash
+  )
+    throw new AkashTxError(
+      "identity_conflict",
+      "diagnostic reference differs from its applied allocation"
+    );
+  const kits = await loadDatabaseCellKits();
+  const matching = kits.filter(
+    (kit) =>
+      kit.nodeId === input.identity.nodeId &&
+      kit.environment === input.environment &&
+      kit.nodeSlug === input.nodeSlug
+  );
+  const kit = matching[0];
+  const receipts = await databaseCellBindings.read({
+    cogniKey: input.cogniKey,
+    nodeId: input.identity.nodeId,
+    allocationEnvironment: input.environment,
+  });
+  const production = receipts.filter(
+    (receipt) =>
+      receipt.binding.environment === "production" &&
+      receipt.binding.phase === "ready"
+  );
+  const receipt = production[0];
+  if (
+    matching.length !== 1 ||
+    !kit ||
+    production.length !== 1 ||
+    !receipt ||
+    record.workload !== `${kit.nodeSlug}-database-cell` ||
+    receipt.binding.appliedSdlHash !== record.lastAppliedSdlHash ||
+    receipt.binding.budgetProfile !== input.budgetProfile
+  )
+    throw new AkashTxError(
+      "identity_conflict",
+      "diagnostic scope lacks its current ready production receipt"
+    );
+  return {
+    kit,
+    binding: receipt.binding,
+    actuatorBuildSha: runtimeEnv.APP_BUILD_SHA ?? "",
+  };
+};
+const databaseCellDiagnostic = async (
+  input: Parameters<typeof resolveDatabaseCellDiagnosticContext>[0]
+) => {
+  const { kit, binding, actuatorBuildSha } =
+    await resolveDatabaseCellDiagnosticContext(input);
+  return prepareDatabaseCellDiagnostic(kit, binding, actuatorBuildSha);
+};
+const databaseCellDiagnosticObserve = async (
+  input: Parameters<typeof resolveDatabaseCellDiagnosticContext>[0]
+) => {
+  const { kit, binding, actuatorBuildSha } =
+    await resolveDatabaseCellDiagnosticContext(input);
+  return observeDatabaseCellDiagnostic(kit, binding, actuatorBuildSha);
+};
+
 const server = createAkashTxActuatorServer({
   actuator,
+  databaseCellBindings,
+  // The route is wired, but registration stays fail-closed until a distinct,
+  // read-only applied-evidence producer is reviewed and injected into the binder.
+  databaseCellAppliedRegistration: databaseCellBindings,
+  databaseCellAppliedProbeQualification: databaseCellBindings,
+  ...{ databaseCellDiagnostic, databaseCellDiagnosticObserve },
   token: bearerToken,
   log,
+  databaseCellSpec,
 });
 
 server.listen(LISTEN_PORT, "0.0.0.0", () => {

@@ -72,7 +72,7 @@ describe("buildComputeSecretResources", () => {
     ]);
   });
 
-  it("emits no projection for a zero-ref workload", () => {
+  it("emits only private migration URL and CA for a zero-ref app workload", () => {
     const resources = buildComputeSecretResources({
       slug: "echo",
       environment: "candidate-a",
@@ -89,6 +89,14 @@ describe("buildComputeSecretResources", () => {
               secretKey: "DATABASE_MIGRATION_URL",
               remoteRef: {
                 key: "candidate-a/echo-database-migration",
+                property: "DATABASE_MIGRATION_URL",
+              },
+            },
+            {
+              secretKey: "DATABASE_SSL_CA_CERT",
+              remoteRef: {
+                key: "candidate-a/echo-database-migration",
+                property: "DATABASE_SSL_CA_CERT",
               },
             },
           ],
@@ -126,6 +134,13 @@ describe("buildComputeSecretResources", () => {
         remoteRef: {
           key: `${environment}/echo-database-migration`,
           property: "DATABASE_MIGRATION_URL",
+        },
+      },
+      {
+        secretKey: "DATABASE_SSL_CA_CERT",
+        remoteRef: {
+          key: `${environment}/echo-database-migration`,
+          property: "DATABASE_SSL_CA_CERT",
         },
       },
       {
@@ -168,6 +183,13 @@ describe("buildComputeSecretResources", () => {
         remoteRef: {
           key: "preview/echo-database-migration",
           property: "DATABASE_MIGRATION_URL",
+        },
+      },
+      {
+        secretKey: "DATABASE_SSL_CA_CERT",
+        remoteRef: {
+          key: "preview/echo-database-migration",
+          property: "DATABASE_SSL_CA_CERT",
         },
       },
     ]);

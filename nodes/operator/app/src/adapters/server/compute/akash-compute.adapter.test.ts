@@ -87,6 +87,8 @@ interface HarnessOpts {
    * still says active. Defaults to true.
    */
   closeIsVerifiable?: boolean;
+  /** The provider accepts the lease but the Console response is lost. */
+  loseLeaseResponse?: boolean;
 }
 
 /**
@@ -125,6 +127,7 @@ function harness(opts: HarnessOpts = {}) {
       };
       const lease = body.leases[0];
       if (lease) leased.push({ dseq: lease.dseq, provider: lease.provider });
+      if (opts.loseLeaseResponse) throw new TypeError("lease response lost");
       return jsonResponse({ data: {} });
     }
     if (method === "DELETE") {
@@ -225,6 +228,173 @@ const SPEC = {
     },
   ],
 } as const;
+
+describe("AkashComputeAdapter.status", () => {
+  it("returns assigned transport endpoints through the existing observation path", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: {
+          deployment: { state: "active" },
+          leases: [
+            {
+              state: "active",
+              status: {
+                uris: ["app.example.org"],
+                forwarded_ports: {
+                  state: [
+                    {
+                      host: "provider.example.org",
+                      externalPort: 31057,
+                      proto: "TCP",
+                    },
+                    {
+                      host: "provider.example.org",
+                      externalPort: 31058,
+                      proto: "UDP",
+                    },
+                    {
+                      host: "provider.example.org/unsafe",
+                      externalPort: 31059,
+                    },
+                    { host: "provider.example.org", externalPort: 70000 },
+                    {
+                      host: "provider.example.org",
+                      externalPort: 31060,
+                      proto: "unknown",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      })
+    );
+    const status = await makeAdapter(fetchImpl).status({ leaseId: "7001" });
+    expect(status.endpoints).toEqual([
+      "app.example.org",
+      "tcp://provider.example.org:31057",
+      "udp://provider.example.org:31058",
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("GET");
+  });
+});
+
+describe("AkashComputeAdapter.readManagedDefinition", () => {
+  const version = Buffer.alloc(32, 1).toString("base64");
+  const provider = `akash1${"a".repeat(38)}`;
+  const sdl =
+    "services:\n  app:\n    env: [DATABASE_URL=opaque-redacted-token]\n";
+  const detail = {
+    deployment: {
+      id: { dseq: "7001", owner: "akash1consumer" },
+      state: "active",
+      hash: version,
+    },
+    consoleSettings: { sdl, manifestVersion: version },
+    leases: [
+      {
+        state: "active",
+        id: { dseq: "7001", gseq: 1, oseq: 1, provider },
+        status: {
+          services: {
+            app: {
+              observed_generation: 1,
+              replicas: 1,
+              updated_replicas: 1,
+              ready_replicas: 1,
+              available_replicas: 1,
+              total: 1,
+              available: 1,
+            },
+          },
+        },
+      },
+    ],
+  };
+  it("uses the existing readonly client and labels returned-definition bytes separately from full secret-bearing managed SDL", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ data: detail })
+    );
+    const observed = await makeAdapter(fetchImpl).readManagedDefinition({
+      leaseId: "7001",
+    });
+    expect(observed).toMatchObject({
+      leaseId: "7001",
+      ownerAccount: "akash1consumer",
+      providerAccount: provider,
+      providerSdl: sdl,
+      providerSdlSha256: createHash("sha256").update(sdl).digest("hex"),
+      consoleManifestVersion: version,
+      chainManifestVersion: version,
+      services: [
+        {
+          name: "app",
+          observedGeneration: 1,
+          replicas: 1,
+          updatedReplicas: 1,
+          readyReplicas: 1,
+          availableReplicas: 1,
+          total: 1,
+          available: 1,
+        },
+      ],
+    });
+    expect(observed).not.toHaveProperty("appDsnSha256");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(`${BASE}/v1/deployments/7001`);
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("GET");
+  });
+  it("refuses missing, mismatched, ambiguous and oversized current definitions without mutation or echoed values", async () => {
+    for (const value of [
+      { ...detail, consoleSettings: undefined },
+      { ...detail, leases: [{ ...detail.leases[0], status: undefined }] },
+      {
+        ...detail,
+        leases: [
+          {
+            ...detail.leases[0],
+            status: { services: { app: { replicas: 1 } } },
+          },
+        ],
+      },
+      {
+        ...detail,
+        deployment: {
+          ...detail.deployment,
+          id: { dseq: "7001", owner: "foreign-account" },
+        },
+      },
+      { ...detail, deployment: { ...detail.deployment, id: { dseq: "7002" } } },
+      {
+        ...detail,
+        consoleSettings: {
+          sdl,
+          manifestVersion: Buffer.alloc(32, 2).toString("base64"),
+        },
+      },
+      { ...detail, leases: [...detail.leases, ...detail.leases] },
+      {
+        ...detail,
+        consoleSettings: {
+          sdl: "private".repeat(50000),
+          manifestVersion: version,
+        },
+      },
+    ]) {
+      const fetchImpl = vi.fn<typeof fetch>(async () =>
+        jsonResponse({ data: value })
+      );
+      await expect(
+        makeAdapter(fetchImpl).readManagedDefinition({ leaseId: "7001" })
+      ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+      expect(
+        fetchImpl.mock.calls.every(([, init]) => init?.method === "GET")
+      ).toBe(true);
+    }
+  });
+});
 
 describe("AkashComputeAdapter.observeCost", () => {
   const observedAt = new Date("2026-09-15T12:00:00.000Z");
@@ -514,6 +684,51 @@ describe("AkashComputeAdapter.observeCost", () => {
 });
 
 describe("buildAkashSdl", () => {
+  it("mounts persistent state separately from the ephemeral container filesystem", () => {
+    const service = SPEC.services[0];
+    if (!service) throw new Error("missing fixture service");
+    const rendered = parseYaml(
+      buildAkashSdl(
+        {
+          ...SPEC,
+          services: [
+            {
+              ...service,
+              volumes: [
+                {
+                  name: "pgdata",
+                  sizeMi: 20480,
+                  mountPath: "/var/lib/postgresql/data",
+                  tier: "nvme",
+                },
+              ],
+            },
+          ],
+        },
+        { pricingDenom: "uact", pricingAmount: 100 }
+      )
+    );
+    expect(rendered.services.app.params.storage.pgdata).toEqual({
+      mount: "/var/lib/postgresql/data",
+      readOnly: false,
+    });
+    expect(rendered.profiles.compute.app.resources.storage).toEqual([
+      { size: `${service.storageMi}Mi` },
+      {
+        name: "pgdata",
+        size: "20480Mi",
+        attributes: { persistent: true, class: "beta3" },
+      },
+    ]);
+    const legacy = parseYaml(
+      buildAkashSdl(SPEC, { pricingDenom: "uact", pricingAmount: 100 })
+    );
+    expect(legacy.services.app.params).toBeUndefined();
+    expect(legacy.profiles.compute.app.resources.storage).toEqual([
+      { size: `${service.storageMi}Mi` },
+    ]);
+  });
+
   it("renders services, profiles, placement pricing, and deployment sections", () => {
     const sdl = buildAkashSdl(SPEC, {
       pricingDenom: "uakt",
@@ -1461,6 +1676,83 @@ describe("AkashComputeAdapter transaction boundary (task.5095)", () => {
       String(call[0]).includes("/version")
     );
     expect(probed).toBe(false);
+  });
+
+  it("preserves a retained allocation after an accepted lease loses its response", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1zen")],
+      bids: (dseq) => [bidEntry(dseq, "akash1zen", "100")],
+      loseLeaseResponse: true,
+    });
+    const published: string[] = [];
+    const error = await makeAdapter(h.fetchImpl)
+      .allocateAndLease({
+        spec: {
+          ...SPEC,
+          services: SPEC.services.map((service) => ({
+            ...service,
+            volumes: [
+              {
+                name: "database",
+                sizeMi: 1024,
+                mountPath: "/data",
+                tier: "nvme",
+              },
+            ],
+          })),
+        },
+        onAllocated: async (dseq) => {
+          published.push(dseq);
+        },
+      })
+      .catch((value: unknown) => value);
+    expect(published).toEqual(["1"]);
+    expect(h.leased).toEqual([{ dseq: "1", provider: "akash1zen" }]);
+    expect(h.deletes).toEqual([]);
+    expect(h.createBodies).toHaveLength(1);
+    expect(error).toMatchObject({
+      code: "ALLOCATION_OUTCOME_UNKNOWN",
+      rolledBack: false,
+    });
+    expect((error as AkashComputeError).rolledBackDseq).toBeUndefined();
+  });
+
+  it("preserves retained storage after boot timeout instead of closing and trying another provider", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1zen")],
+      bids: (dseq) => [bidEntry(dseq, "akash1zen", "100")],
+      serving: () => false,
+    });
+    const error = await makeAdapter(h.fetchImpl, {
+      bootSloMs: 5,
+      bootPollIntervalMs: 1,
+      maxProviderAttempts: 3,
+    })
+      .provision({ env: "test", spec: { ...SPEC, retentionPolicy: "retain" } })
+      .catch((value: unknown) => value);
+    expect(error).toMatchObject({
+      code: "ALLOCATION_OUTCOME_UNKNOWN",
+      rolledBack: false,
+    });
+    expect(h.deletes).toEqual([]);
+    expect(h.createBodies).toHaveLength(1);
+    expect(h.leased).toHaveLength(1);
+  });
+
+  it("still verifies and closes a retained deployment rejected before any lease submission", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1froggy", { isAudited: false })],
+      bids: (dseq) => [bidEntry(dseq, "akash1froggy", "50")],
+    });
+    const error = await makeAdapter(h.fetchImpl)
+      .allocateAndLease({ spec: { ...SPEC, retentionPolicy: "retain" } })
+      .catch((value: unknown) => value);
+    expect(h.leased).toEqual([]);
+    expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
+    expect(error).toMatchObject({
+      code: "NO_ELIGIBLE_BIDS",
+      rolledBackDseq: "1",
+    });
   });
 
   it("screens providers on the transaction path and closes the deployment when none qualify", async () => {

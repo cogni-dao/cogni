@@ -38,6 +38,14 @@ describe("node-secrets reserved-key guard (gate 2)", () => {
     expect(isNodeOwnedSecretKey("POLY_WALLET_AEAD_KEY_HEX")).toBe(false);
   });
 
+  it.each([
+    "DATABASE_RECOVERY_PROBE_PASSWORD",
+    "DATABASE_RECOVERY_PROBE_URL",
+    "DATABASE_RECOVERY_PROBE_URLS_JSON",
+  ])("refuses substrate-owned probe material %s", (key) => {
+    expect(isNodeOwnedSecretKey(key)).toBe(false);
+  });
+
   it("the reserved set is a denylist (small + fixed), not a per-node allowlist", () => {
     // Denylist invariant: a key absent from the set is allowed by default.
     expect(SUBSTRATE_RESERVED_KEYS.has("X_OAUTH_CLIENT_ID")).toBe(false);

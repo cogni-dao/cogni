@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import {
+  RELIABILITY_POLICY_V1,
+  reliabilityStatusV1Schema,
+} from "@cogni/node-contracts";
 import type { Logger } from "pino";
 import postgres, { type Sql } from "postgres";
 import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 import type {
   DatabaseCellActionReceipt,
   DatabaseCellCapacity,
@@ -25,12 +30,25 @@ import type {
   DatabaseDsnSecretsWriteResult,
   DatabaseEnvironment,
   DatabaseReadmissionPort,
+  DatabaseRecoveryBeginPort,
+  DatabaseRecoveryContainmentReceipt,
+  DatabaseRecoveryContainPort,
+  DatabaseRecoveryIncident,
+  DatabaseRecoveryLedgerReaderPort,
+  DatabaseRecoveryProbeObservation,
+  DatabaseRecoveryProbePort,
+  DatabaseRecoveryVerificationPort,
+  DatabaseRecoveryWatchdogPort,
   DatabaseRuntimeSecretSyncPort,
   DatabaseStateCellPort,
   DatabaseTier,
   LokiReaderPort,
   ProvisionDatabaseCellInput,
+  ReliabilityReadmitPort,
+  ReliabilityRecoveryReaderPort,
+  ReliabilityStatusReaderPort,
 } from "@/ports";
+import { EVENT_NAMES } from "@/shared/observability";
 import {
   CherryDatabaseCellAdapter,
   type CherryDatabaseCellConfig,
@@ -45,6 +63,501 @@ export interface DatabaseControlSql {
     sql: string,
     params?: readonly unknown[]
   ): Promise<readonly T[]>;
+}
+
+const DatabaseRecoveryIncidentSchema = z
+  .object({
+    nodeId: z.string().uuid(),
+    nodeSlug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
+    environment: z.enum(["candidate-a", "preview", "production"]),
+    incidentId: z.string().regex(/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/),
+    actorId: z.string().min(1),
+    targetBuildSha: z.string().regex(/^[0-9a-f]{40}$/),
+    databaseSystemIdentifier: z.string().regex(/^[1-9][0-9]*$/),
+    databaseName: z.string().regex(/^cogni_[a-z0-9_]+$/),
+    appRole: z.string().regex(/^app_[a-z0-9_]+$/),
+    serviceRole: z.string().regex(/^service_[a-z0-9_]+$/),
+    state: z.enum(["contained", "recovering", "readmitted", "recontained"]),
+    reason: z.string().min(1).max(256),
+    containedAt: z
+      .string()
+      .datetime({ offset: true })
+      .transform((value) => new Date(value).toISOString()),
+    startedAt: z
+      .string()
+      .datetime({ offset: true })
+      .transform((value) => new Date(value).toISOString())
+      .nullable(),
+    deadlineAt: z
+      .string()
+      .datetime({ offset: true })
+      .transform((value) => new Date(value).toISOString())
+      .nullable(),
+    verifiedAt: z
+      .string()
+      .datetime({ offset: true })
+      .transform((value) => new Date(value).toISOString())
+      .nullable(),
+  })
+  .superRefine((incident, context) => {
+    if (
+      ["recovering", "readmitted"].includes(incident.state) &&
+      (!incident.startedAt ||
+        !incident.deadlineAt ||
+        Date.parse(incident.deadlineAt) - Date.parse(incident.startedAt) !==
+          600_000)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "recovery intent lacks its immutable ten-minute deadline",
+      });
+    }
+    if (incident.state === "readmitted" && !incident.verifiedAt) {
+      context.addIssue({
+        code: "custom",
+        message: "readmission lacks terminal verification",
+      });
+    }
+  });
+
+const DatabaseRecoveryProbeBindingSchema = z.object({
+  nodeId: z.string().uuid(),
+  nodeSlug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
+  environment: z.enum(["candidate-a", "preview", "production"]),
+  databaseName: z.string().regex(/^cogni_[a-z0-9_]+$/),
+  probeRole: z.string().regex(/^probe_[a-z0-9_]+$/),
+  systemIdentifier: z.string().regex(/^[1-9][0-9]*$/),
+  substrateHost: z.string().regex(/^[0-9a-f]{32}$/),
+  dsn: z.string().url(),
+});
+export type DatabaseRecoveryProbeBinding = z.infer<
+  typeof DatabaseRecoveryProbeBindingSchema
+>;
+
+export const DatabaseRecoveryProbeObservationSchema = z.object({
+  database: z.string(),
+  role: z.string(),
+  systemTenantExists: z.boolean(),
+  serverAddress: z.string().min(1),
+  serverPort: z.number().int().positive(),
+  systemIdentifier: z.string().regex(/^[1-9][0-9]*$/),
+  appRolesCanLogin: z.boolean(),
+  runtimeRolesPresent: z.boolean(),
+  runtimeRolesNoLogin: z.boolean(),
+  activeRuntimeSessions: z.number().int().nonnegative(),
+  observedAt: z
+    .string()
+    .datetime({ offset: true })
+    .transform((value) => new Date(value).toISOString()),
+  probeRoleIsolated: z.boolean(),
+});
+
+/** Probe credentials remain closure-private and can execute only the guarded scalar function. */
+export class PostgresDatabaseRecoveryProbeAdapter
+  implements DatabaseRecoveryProbePort
+{
+  private readonly bindings: readonly DatabaseRecoveryProbeBinding[];
+  private readonly pending = new Map<string, Promise<void>>();
+
+  constructor(bindings: unknown) {
+    this.bindings = z
+      .array(DatabaseRecoveryProbeBindingSchema)
+      .min(1)
+      .parse(bindings);
+    const keys = this.bindings.map(
+      (binding) => `${binding.environment}/${binding.nodeId}`
+    );
+    if (new Set(keys).size !== keys.length)
+      throw new Error("database_recovery_probe_binding_ambiguous");
+    for (const binding of this.bindings) {
+      const uri = new URL(binding.dsn);
+      if (
+        !["postgres:", "postgresql:"].includes(uri.protocol) ||
+        decodeURIComponent(uri.username) !== binding.probeRole ||
+        uri.pathname !== `/${binding.databaseName}` ||
+        uri.port !== "5432" ||
+        [...uri.searchParams.keys()].some(
+          (key) => !["sslmode", "connect_timeout", "sslrootcert"].includes(key)
+        )
+      )
+        throw new Error("database_recovery_probe_dsn_identity_mismatch");
+    }
+  }
+
+  bindingFor(
+    input: Parameters<DatabaseRecoveryProbePort["observe"]>[0]
+  ): Omit<DatabaseRecoveryProbeBinding, "dsn"> {
+    const binding = this.bindings.find(
+      (row) =>
+        row.nodeId === input.nodeId &&
+        row.nodeSlug === input.nodeSlug &&
+        row.environment === input.environment
+    );
+    if (!binding) throw new Error("database_recovery_probe_binding_missing");
+    const { dsn: _dsn, ...identity } = binding;
+    return identity;
+  }
+
+  async observe(
+    input: Parameters<DatabaseRecoveryProbePort["observe"]>[0]
+  ): Promise<DatabaseRecoveryProbeObservation> {
+    const identity = this.bindingFor(input);
+    const binding = this.bindings.find(
+      (row) =>
+        row.nodeId === identity.nodeId &&
+        row.environment === identity.environment
+    );
+    if (!binding) throw new Error("database_recovery_probe_binding_missing");
+    const key = `${binding.environment}/${binding.nodeId}`;
+    const predecessor = this.pending.get(key) ?? Promise.resolve();
+    const operation = predecessor
+      .catch(() => undefined)
+      .then(() => this.observeBinding(binding));
+    const completion = operation.then(
+      () => undefined,
+      () => undefined
+    );
+    this.pending.set(key, completion);
+    try {
+      return await operation;
+    } finally {
+      if (this.pending.get(key) === completion) this.pending.delete(key);
+    }
+  }
+
+  private async observeBinding(
+    binding: DatabaseRecoveryProbeBinding
+  ): Promise<DatabaseRecoveryProbeObservation> {
+    const sql = postgres(binding.dsn, {
+      max: 1,
+      prepare: false,
+      connect_timeout: 5,
+      connection: { statement_timeout: 5000, lock_timeout: 2000 },
+    });
+    try {
+      const rows = await sql.unsafe<{ observation: unknown }[]>(
+        "SELECT public.database_recovery_probe() AS observation"
+      );
+      if (rows.length !== 1)
+        throw new Error("database_recovery_probe_receipt_missing");
+      const observation = DatabaseRecoveryProbeObservationSchema.parse(
+        rows[0]?.observation
+      );
+      if (
+        observation.database !== binding.databaseName ||
+        observation.role !== binding.probeRole ||
+        observation.systemIdentifier !== binding.systemIdentifier ||
+        !observation.probeRoleIsolated ||
+        !observation.runtimeRolesPresent
+      )
+        throw new Error(
+          "database_recovery_probe_observation_identity_mismatch"
+        );
+      return observation;
+    } finally {
+      // The next observer or DB-ready materializer needs this role's single slot.
+      await sql.end({ timeout: 5 });
+    }
+  }
+}
+
+/** Native guarded functions are the authority; Loki remains audit evidence only. */
+export class PostgresDatabaseRecoveryReader
+  implements DatabaseRecoveryLedgerReaderPort
+{
+  constructor(protected readonly recoverySql: DatabaseControlSql) {}
+
+  protected async list(): Promise<readonly DatabaseRecoveryIncident[]> {
+    const rows = await this.recoverySql.query<{ incident: unknown }>(
+      "SELECT public.list_database_recoveries() AS incident"
+    );
+    return rows.map((row) =>
+      DatabaseRecoveryIncidentSchema.parse(row.incident)
+    );
+  }
+
+  async current(input: {
+    readonly nodeId: string;
+    readonly environment: DatabaseEnvironment;
+  }): Promise<DatabaseRecoveryIncident | null> {
+    const matches = (await this.list()).filter(
+      (row) =>
+        row.nodeId === input.nodeId && row.environment === input.environment
+    );
+    if (matches.length > 1)
+      throw new Error("database_recovery_incident_ambiguous");
+    return matches[0] ?? null;
+  }
+
+  async listPending(input: {
+    readonly environment: DatabaseEnvironment;
+  }): Promise<readonly DatabaseRecoveryIncident[]> {
+    return (await this.list()).filter(
+      (row) =>
+        row.environment === input.environment && row.state === "recovering"
+    );
+  }
+
+  protected async result(
+    sql: string,
+    params: readonly unknown[]
+  ): Promise<DatabaseRecoveryContainmentReceipt> {
+    const rows = await this.recoverySql.query<{ incident: unknown }>(
+      sql,
+      params
+    );
+    if (rows.length !== 1) throw new Error("database_recovery_receipt_missing");
+    return {
+      ...DatabaseRecoveryIncidentSchema.parse(rows[0]?.incident),
+      ...z.object({ transitionApplied: z.boolean() }).parse(rows[0]?.incident),
+    };
+  }
+}
+
+/** Actuator composition exposes exact-incident NOLOGIN/proof only. */
+export class PostgresDatabaseContainmentControlAdapter
+  extends PostgresDatabaseRecoveryReader
+  implements DatabaseRecoveryContainPort
+{
+  contain(
+    input: Parameters<DatabaseRecoveryContainPort["contain"]>[0]
+  ): Promise<DatabaseRecoveryContainmentReceipt> {
+    return this.result(
+      "SELECT public.contain_database_incident($1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text,$8::text,$9::text) AS incident",
+      [
+        input.nodeId,
+        input.nodeSlug,
+        input.environment,
+        input.incidentId,
+        input.actorId,
+        input.reason,
+        input.targetBuildSha,
+        input.databaseSystemIdentifier,
+        input.databaseName,
+      ]
+    );
+  }
+}
+
+/** LOGIN requires the native independently renewed watchdog capability. */
+export class PostgresDatabaseRecoveryBeginAdapter
+  extends PostgresDatabaseRecoveryReader
+  implements DatabaseRecoveryBeginPort
+{
+  begin(
+    input: Parameters<DatabaseRecoveryBeginPort["begin"]>[0]
+  ): Promise<DatabaseRecoveryContainmentReceipt> {
+    if (!/^human:[a-zA-Z0-9._@:-]{1,120}$/.test(input.actorId)) {
+      throw new Error("database_readmission_requires_human_actor");
+    }
+    return this.result(
+      "SELECT public.begin_database_recovery($1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text) AS incident",
+      [
+        input.nodeId,
+        input.nodeSlug,
+        input.environment,
+        input.incidentId,
+        input.actorId,
+        input.targetBuildSha,
+        input.databaseSystemIdentifier,
+      ]
+    );
+  }
+}
+
+/** Completion never grants LOGIN; the guarded mutation checks the current incident again. */
+export class PostgresDatabaseRecoveryVerificationAdapter
+  extends PostgresDatabaseContainmentControlAdapter
+  implements DatabaseRecoveryVerificationPort
+{
+  complete(
+    input: Parameters<DatabaseRecoveryVerificationPort["complete"]>[0]
+  ): Promise<DatabaseRecoveryContainmentReceipt> {
+    return this.result(
+      "SELECT public.complete_database_recovery($1::uuid,$2::text,$3::text,$4::text,$5::text) AS incident",
+      [
+        input.nodeId,
+        input.environment,
+        input.incidentId,
+        input.targetBuildSha,
+        input.databaseSystemIdentifier,
+      ]
+    );
+  }
+
+  recontain(
+    input: Parameters<DatabaseRecoveryVerificationPort["recontain"]>[0]
+  ): Promise<DatabaseRecoveryContainmentReceipt> {
+    return this.result(
+      "SELECT public.recontain_database_recovery($1::uuid,$2::text,$3::text,$4::text) AS incident",
+      [input.nodeId, input.environment, input.incidentId, input.reason]
+    );
+  }
+}
+
+export class PostgresDatabaseRecoveryWatchdogAdapter
+  implements DatabaseRecoveryWatchdogPort
+{
+  constructor(private readonly sql: DatabaseControlSql) {}
+
+  async tick(
+    input: Parameters<DatabaseRecoveryWatchdogPort["tick"]>[0]
+  ): Promise<Awaited<ReturnType<DatabaseRecoveryWatchdogPort["tick"]>>> {
+    const rows = await this.sql.query<{ receipt: unknown }>(
+      "SELECT public.database_recovery_watchdog_tick($1::text,$2::text) AS receipt",
+      [input.environment, input.ownerId]
+    );
+    if (rows.length !== 1)
+      throw new Error("database_recovery_watchdog_receipt_missing");
+    const receipt = z
+      .object({
+        observedAt: z
+          .string()
+          .datetime({ offset: true })
+          .transform((value) => new Date(value).toISOString()),
+        heartbeatExpiresAt: z
+          .string()
+          .datetime({ offset: true })
+          .transform((value) => new Date(value).toISOString()),
+        transitions: z.array(
+          DatabaseRecoveryIncidentSchema.and(
+            z.object({ transitionApplied: z.literal(true) })
+          )
+        ),
+      })
+      .parse(rows[0]?.receipt);
+    if (
+      Date.parse(receipt.heartbeatExpiresAt) -
+        Date.parse(receipt.observedAt) !==
+        15_000 ||
+      receipt.transitions.some(
+        (row) =>
+          row.environment !== input.environment || row.state !== "recontained"
+      )
+    ) {
+      throw new Error("database_recovery_watchdog_receipt_invalid");
+    }
+    return receipt;
+  }
+}
+
+/** Production containment/status reads the native ledger and isolated probe, never Loki for authority. */
+export class RecoveryLedgerDatabaseContainmentAdapter
+  implements DatabaseContainmentPort
+{
+  constructor(
+    private readonly deps: {
+      readonly ledger: DatabaseRecoveryContainPort &
+        DatabaseRecoveryLedgerReaderPort;
+      readonly probe: DatabaseRecoveryProbePort;
+      readonly targetBuildShaFor: (input: {
+        nodeId: string;
+        environment: DatabaseEnvironment;
+      }) => string;
+      readonly audit: DatabaseContainmentAuditWriter;
+    }
+  ) {}
+
+  async status(
+    input: Parameters<DatabaseContainmentStatusPort["status"]>[0]
+  ): Promise<DatabaseContainmentStatus> {
+    const [observation, incident] = await Promise.all([
+      this.deps.probe.observe(input),
+      this.deps.ledger.current(input),
+    ]);
+    if (
+      incident &&
+      (incident.nodeSlug !== input.nodeSlug ||
+        incident.databaseSystemIdentifier !== observation.systemIdentifier ||
+        incident.databaseName !== observation.database)
+    ) {
+      throw new Error("database_recovery_status_identity_mismatch");
+    }
+    const contained =
+      observation.runtimeRolesNoLogin &&
+      observation.activeRuntimeSessions === 0;
+    const phase =
+      incident?.state === "recovering"
+        ? "recovering"
+        : contained
+          ? "contained"
+          : observation.appRolesCanLogin
+            ? "open"
+            : "recovering";
+    return {
+      ...input,
+      desiredTier: input.desiredTier,
+      budgetProfile: input.budgetProfile,
+      contained,
+      phase,
+      activeSessions: observation.activeRuntimeSessions,
+      rolesPresent: observation.runtimeRolesPresent,
+      rolesCanLogin: observation.appRolesCanLogin,
+      firewallFenced: null,
+      cell: null,
+      observedAt: observation.observedAt,
+      lastTransitionAt:
+        incident?.verifiedAt ??
+        incident?.startedAt ??
+        incident?.containedAt ??
+        null,
+      incidentId: incident?.incidentId ?? null,
+      reason: incident
+        ? [
+            "critical_io_pressure",
+            "critical_connections",
+            "critical_headroom",
+            "regional_readiness_failure",
+            "operator_action",
+          ].includes(incident.reason)
+          ? (incident.reason as DatabaseContainmentAction["reason"])
+          : "operator_action"
+        : null,
+    };
+  }
+
+  async contain(
+    input: DatabaseContainmentAction
+  ): Promise<DatabaseContainmentStatus> {
+    const observation = await this.deps.probe.observe(input);
+    const occurredAt = new Date().toISOString();
+    const event = {
+      incidentId: input.incidentId,
+      actorId: input.actorId,
+      nodeId: input.nodeId,
+      nodeSlug: input.nodeSlug,
+      environment: input.environment,
+      reason: input.reason,
+      occurredAt,
+    };
+    const receipt = await this.deps.ledger.contain({
+      ...input,
+      databaseName: observation.database,
+      targetBuildSha: this.deps.targetBuildShaFor(input),
+      databaseSystemIdentifier: observation.systemIdentifier,
+    });
+    if (receipt.transitionApplied)
+      await this.deps.audit.append({
+        ...event,
+        action: "containment_requested",
+        transitionApplied: true,
+        containedAt: receipt.containedAt,
+      });
+    const status = await this.status(input);
+    if (!status.contained)
+      throw new Error("database_containment_not_confirmed");
+    if (receipt.transitionApplied)
+      await this.deps.audit.append({
+        ...event,
+        occurredAt: new Date().toISOString(),
+        action: "contained",
+        transitionApplied: true,
+        containedAt: receipt.containedAt,
+        databaseObservedAt: status.observedAt,
+        activeSessions: status.activeSessions,
+      });
+    return status;
+  }
 }
 
 export interface DatabaseSourceFence {
@@ -82,6 +595,10 @@ export interface DatabaseContainmentAuditEvent {
   readonly reason: DatabaseContainmentAction["reason"];
   readonly occurredAt: string;
   readonly errorCode?: string;
+  readonly transitionApplied?: boolean;
+  readonly containedAt?: string;
+  readonly databaseObservedAt?: string;
+  readonly activeSessions?: number;
 }
 
 export interface DatabaseContainmentAuditWriter {
@@ -370,6 +887,207 @@ function rolesFor(nodeSlug: string): readonly string[] {
   // The as-built per-node roles are app + service. `app_readonly` remains an
   // environment-shared v0 support role, so revoking it would contain every node.
   return [`app_${suffix}`, `service_${suffix}`];
+}
+
+export class HttpReliabilityStatusAdapter
+  implements ReliabilityStatusReaderPort
+{
+  constructor(
+    private readonly config: {
+      readonly baseUrl: string;
+      readonly bearerToken: string;
+      readonly timeoutMs?: number;
+    }
+  ) {}
+
+  async read(
+    input: Parameters<ReliabilityStatusReaderPort["read"]>[0]
+  ): Promise<Awaited<ReturnType<ReliabilityStatusReaderPort["read"]>>> {
+    const url = new URL("/v1/status", this.config.baseUrl);
+    url.searchParams.set("node_id", input.nodeId);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${this.config.bearerToken}` },
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 5_000),
+    });
+    if (!response.ok) {
+      throw new Error(`reliability actuator status failed: ${response.status}`);
+    }
+    const status = reliabilityStatusV1Schema.parse(await response.json());
+    if (
+      status.nodeId !== input.nodeId ||
+      status.slug !== input.nodeSlug ||
+      status.environment !== input.environment
+    ) {
+      throw new Error("reliability actuator returned a cross-node status");
+    }
+    const ageMs = Date.now() - Date.parse(status.observedAt);
+    if (ageMs < -15_000 || ageMs > RELIABILITY_POLICY_V1.evidenceTtlMs) {
+      throw new Error("reliability actuator returned stale status");
+    }
+    return status;
+  }
+}
+
+export class HttpReliabilityRecoveryAdapter
+  implements ReliabilityRecoveryReaderPort
+{
+  constructor(
+    private readonly config: {
+      readonly baseUrl: string;
+      readonly bearerToken: string;
+      readonly timeoutMs?: number;
+    }
+  ) {}
+
+  async verify(input: {
+    readonly nodeId: string;
+    readonly nodeSlug: string;
+    readonly environment: DatabaseEnvironment;
+  }): Promise<void> {
+    const url = new URL("/v1/internal/recovery-verify", this.config.baseUrl);
+    url.searchParams.set("node_id", input.nodeId);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.config.bearerToken}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 15_000),
+    });
+    if (!response.ok)
+      throw new Error("database_recovery_verification_unavailable");
+  }
+
+  async readBoundTarget(input: {
+    nodeSlug: string;
+    environment: DatabaseEnvironment;
+    proofClass: "recovery" | "recovery-product";
+  }) {
+    if (!/^[a-z][a-z0-9-]{0,62}$/.test(input.nodeSlug))
+      throw new Error("database_recovery_target_invalid");
+    const url = new URL("/v1/internal/recovery", this.config.baseUrl);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    url.searchParams.set("proof_class", input.proofClass);
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${this.config.bearerToken}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 8_000),
+    });
+    if (!response.ok) throw new Error("database_recovery_evidence_unavailable");
+    return z
+      .object({
+        status: z.literal("healthy"),
+        buildSha: z.string().regex(/^[0-9a-f]{40}$/),
+        databaseSystemIdentifier: z.string().regex(/^[1-9][0-9]*$/),
+        incidentId: z
+          .string()
+          .regex(/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/),
+        proofClass: z.literal(input.proofClass),
+      })
+      .strict()
+      .parse(await response.json());
+  }
+
+  readWindow(input: Parameters<ReliabilityRecoveryReaderPort["read"]>[0]) {
+    return this.readProof(input, "/v1/internal/recovery-window");
+  }
+
+  read(input: Parameters<ReliabilityRecoveryReaderPort["read"]>[0]) {
+    return this.readProof(input, "/v1/internal/recovery");
+  }
+
+  private async readProof(
+    input: Parameters<ReliabilityRecoveryReaderPort["read"]>[0],
+    path: "/v1/internal/recovery" | "/v1/internal/recovery-window"
+  ): Promise<Awaited<ReturnType<ReliabilityRecoveryReaderPort["read"]>>> {
+    const url = new URL(path, this.config.baseUrl);
+    url.searchParams.set("node_id", input.nodeId);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    url.searchParams.set("proof_class", input.proofClass);
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${this.config.bearerToken}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 15_000),
+    });
+    if (!response.ok) throw new Error("database_recovery_evidence_unavailable");
+    return z
+      .object({
+        status: z.literal("healthy"),
+        buildSha: z.literal(input.expectedBuildSha),
+        databaseSystemIdentifier: z.string().regex(/^[1-9][0-9]*$/),
+        incidentId: z
+          .string()
+          .regex(/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/),
+        proofClass: z.literal(input.proofClass),
+      })
+      .strict()
+      .parse(await response.json());
+  }
+}
+
+export class HttpReliabilityReadmitAdapter implements ReliabilityReadmitPort {
+  constructor(
+    private readonly config: {
+      readonly baseUrl: string;
+      readonly bearerToken: string;
+      readonly timeoutMs?: number;
+    }
+  ) {}
+
+  async readmit(
+    input: Parameters<ReliabilityReadmitPort["readmit"]>[0]
+  ): Promise<Awaited<ReturnType<ReliabilityReadmitPort["readmit"]>>> {
+    const url = new URL("/v1/readmit", this.config.baseUrl);
+    url.searchParams.set("node_id", input.nodeId);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.config.bearerToken}`,
+        "x-cogni-actor-id": `human:${input.actorId}`,
+        "x-cogni-incident-id": input.incidentId,
+      },
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 15_000),
+    });
+    if (!response.ok) {
+      if (
+        response.status === 409 &&
+        z
+          .object({
+            error: z.literal("database_recovery_new_incident_required"),
+          })
+          .safeParse(await response.json().catch(() => null)).success
+      ) {
+        throw new Error("database_recovery_new_incident_required");
+      }
+      throw new Error(
+        `reliability actuator readmit failed: ${response.status}`
+      );
+    }
+    const body = (await response.json()) as {
+      phase?: unknown;
+      incidentId?: unknown;
+      lastTransitionAt?: unknown;
+      deadlineAt?: unknown;
+    };
+    if (body.phase !== "open" && body.phase !== "recovering") {
+      throw new Error("reliability actuator readmit did not begin recovery");
+    }
+    return {
+      phase: body.phase,
+      incidentId: typeof body.incidentId === "string" ? body.incidentId : null,
+      lastTransitionAt:
+        typeof body.lastTransitionAt === "string"
+          ? body.lastTransitionAt
+          : null,
+      deadlineAt: typeof body.deadlineAt === "string" ? body.deadlineAt : null,
+    };
+  }
 }
 
 export interface ProductionDatabaseContainmentConfig {
@@ -948,7 +1666,12 @@ export class PostgresAdminSqlAdapter implements DatabaseControlSql {
     ) {
       throw new Error("database_control_dsn_not_least_privilege");
     }
-    this.client = postgres(adminDsn, { max: 1, prepare: false });
+    this.client = postgres(adminDsn, {
+      max: 1,
+      prepare: false,
+      connect_timeout: 5,
+      connection: { statement_timeout: 5000, lock_timeout: 2000 },
+    });
   }
 
   async query<T extends Record<string, unknown>>(
@@ -956,6 +1679,10 @@ export class PostgresAdminSqlAdapter implements DatabaseControlSql {
     params: readonly unknown[] = []
   ): Promise<readonly T[]> {
     return this.client.unsafe<T[]>(statement, [...params] as never[]);
+  }
+
+  async close(): Promise<void> {
+    await this.client.end({ timeout: 5 });
   }
 }
 
@@ -974,7 +1701,12 @@ export class PostgresReadmitSqlAdapter implements DatabaseControlSql {
     ) {
       throw new Error("database_readmit_dsn_not_least_privilege");
     }
-    this.client = postgres(readmitDsn, { max: 1, prepare: false });
+    this.client = postgres(readmitDsn, {
+      max: 1,
+      prepare: false,
+      connect_timeout: 5,
+      connection: { statement_timeout: 5000, lock_timeout: 2000 },
+    });
   }
 
   async query<T extends Record<string, unknown>>(
@@ -993,8 +1725,8 @@ export class PinoDatabaseContainmentAuditWriter
 
   async append(event: DatabaseContainmentAuditEvent): Promise<void> {
     this.log.info(
-      { event: "database_containment_transition", ...event },
-      "database_containment_transition"
+      { event: EVENT_NAMES.NODE_RELIABILITY_TRANSITION, ...event },
+      EVENT_NAMES.NODE_RELIABILITY_TRANSITION
     );
   }
 }
@@ -1023,7 +1755,7 @@ export class PinoLokiDatabaseContainmentAuditAdapter extends PinoDatabaseContain
     const serviceSelector =
       DATABASE_CONTAINMENT_AUDIT_SERVICES.map(escapeLogQl).join("|");
     const rows = await this.loki.queryRange({
-      query: `{env="${escapeLogQl(this.lokiEnvironment)}",service=~"${serviceSelector}"} | json | event="database_containment_transition" | nodeId="${escapeLogQl(input.nodeId)}" | environment="${escapeLogQl(input.environment)}"`,
+      query: `{env="${escapeLogQl(this.lokiEnvironment)}",service=~"${serviceSelector}"} | json | event="${EVENT_NAMES.NODE_RELIABILITY_TRANSITION}" | nodeId="${escapeLogQl(input.nodeId)}" | environment="${escapeLogQl(input.environment)}"`,
       startNs: String(nowNs - 30n * 24n * 60n * 60n * 1_000_000_000n),
       endNs: String(nowNs),
       limit: 1,

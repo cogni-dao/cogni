@@ -32,21 +32,32 @@ touch "$REMOTE_ROOT/opt/cogni-template-runtime/docker-compose.yml"
 
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
-while [ "$#" -gt 0 ] && [ "$1" != "bash" ]; do
+while [ "$#" -gt 0 ] && [[ "$1" != root@* ]]; do
   shift
 done
-[ "${1:-}" = "bash" ] || { echo "fake ssh: missing bash command" >&2; exit 2; }
+[ "$#" -gt 0 ] || { echo "fake ssh: missing remote host" >&2; exit 2; }
 shift
-[ "${1:-}" = "-s" ] && shift
-[ "${1:-}" = "--" ] && shift
-remote_args=()
-for arg in "$@"; do
-  if [ "${FAKE_SSH_DROP_EMPTY_ARGS:-}" = "1" ] && [ -z "$arg" ]; then
-    continue
-  fi
-  remote_args+=("$arg")
-done
-PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -s -- "${remote_args[@]}"
+# OpenSSH joins command arguments; the remote login shell reparses that text.
+# Direct argv execution hid the missing empty positional in the real flight.
+if [ "${FAKE_SSH_ASSERT_POSITIONALS:-}" = 1 ]; then
+  remote_header=$(sed '/^namespace=/,$d')
+  {
+    printf '%s\n' "$remote_header"
+    printf '%s\n' 'printf "ARGV\t%s\t%s\t%s\t%s\t%s\t%s\n" "$#" "$remote_root" "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" "$reliability_controller"'
+    printf '%s\n' 'printf "WIRE\t%s\t%s\t%s\t%s\t%s\n" "${9}" "${10}" "${11}" "${12}" "${13:-}"'
+  } | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+elif [[ -n "${FAKE_EGRESS_TRANSPORT:-}" ]]; then
+  remote_script="$(cat)"
+  case "$FAKE_EGRESS_TRANSPORT" in
+    corrupt) replacement='egress_rules_b64="%%%"' ;;
+    empty) replacement='egress_rules_b64=""' ;;
+    *) exit 2 ;;
+  esac
+  remote_script="${remote_script/'egress_rules_b64="$4"'/$replacement}"
+  printf '%s\n' "$remote_script" | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+else
+  PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+fi
 EOF
 chmod +x "$FAKEBIN/ssh"
 
@@ -242,6 +253,27 @@ grep -q "Node substrate ready for node-template" "$TMPROOT/success.out"
 # the resident verdict and the asserted name is unchanged (lane_db_suffix is empty).
 grep -q "\[OK\] lane database residency: node-template/candidate-a uses its own environment" "$TMPROOT/success.out"
 grep -q "runtime env includes DB inventory: cogni_node_template" "$TMPROOT/success.out"
+
+# Run the real generated argument decoder through both shell layers, stopping
+# before any remote probe. Required identities precede the optional root at13.
+expected_sha=$(git rev-parse HEAD)
+expected_id=$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)
+for probe_root in "" "$REMOTE_ROOT" "$TMPROOT/remote root' ; literal"; do
+  if ! env "${BASE_ENV[@]}" TARGET=operator APP_SOURCE_DIR="$REPO_ROOT" \
+    COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" \
+    ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT="$probe_root" \
+    ASSERT_DATABASE_RELIABILITY_RUNTIME=false FAKE_SSH_ASSERT_POSITIONALS=1 \
+    bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/argv.out"; then
+    cat "$TMPROOT/argv.out" >&2
+    exit 1
+  fi
+  printf 'ARGV\t13\t%s\t%s\t%s\tfalse\ttrue\n' \
+    "$probe_root" "$expected_sha" "$expected_id" >"$TMPROOT/argv.expected"
+  printf 'WIRE\t%s\t%s\tfalse\ttrue\t%s\n' \
+    "$expected_sha" "$expected_id" "$probe_root" >>"$TMPROOT/argv.expected"
+  grep -E '^(ARGV|WIRE)' "$TMPROOT/argv.out" >"$TMPROOT/argv.actual"
+  cmp "$TMPROOT/argv.expected" "$TMPROOT/argv.actual"
+done
 
 # bug.5299 — A MISRESIDENT LANE CANNOT BE GREEN ON THE LANELESS HUSK.
 # Foreign COMPUTE custody is now valid with lane-local Postgres. Inject an explicit
@@ -759,7 +791,7 @@ grep -q "cogni-production/operator-akash-tx-actuator is available" "$TMPROOT/xcw
 grep -q "all declared workload secret refs are materialized" "$TMPROOT/xcw-foreign-control.out"
 # Entry scope follows both lane and actual custodian destination (bug.5472).
 cp "$XCW_SRC/infra/catalog/toks5.yaml" "$TMPROOT/xcw-before-egress-scope.yaml"
-yq -i '.deployment_provider.preview = "akash" | .deployment_provider.production = "akash" | .compute_api.preview = "crossplane" | .compute_api.production = "crossplane" | .compute_egress_cidrs += [{"cidr":"65.108.194.156/32","envs":["preview"],"comment":"preview worker"}]' "$XCW_SRC/infra/catalog/toks5.yaml"
+yq -i '.envs = ["candidate-a","preview","production"] | .deployment_provider.preview = "akash" | .deployment_provider.production = "akash" | .compute_api.preview = "crossplane" | .compute_api.production = "crossplane" | .compute_egress_cidrs += [{"cidr":"65.108.194.156/32","envs":["preview"],"comment":"preview worker"}]' "$XCW_SRC/infra/catalog/toks5.yaml"
 for lane in preview production candidate-a; do
   env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT="$lane" FLEET_CONTROL_ENV=production \
     FAKE_EXPECT_CONTROL_ENV=production FAKE_EXPECT_LANE_ENV="$lane" \
@@ -771,7 +803,7 @@ if env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=preview \
   bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-preview-missing.out" 2>&1; then
   echo 'preview destination must require its scoped provider CIDR' >&2; exit 1
 fi
-grep -q 'missing catalog CIDR: 65.108.194.156/32' "$TMPROOT/scoped-preview-missing.out"
+grep -q 'missing exact catalog rule: 65.108.194.156/32' "$TMPROOT/scoped-preview-missing.out"
 printf '%s\n' '65.108.194.156/32:5432,5435,6379,4000,7233' >> "$EXTERNAL_ALLOWLIST"
 env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=preview \
   FAKE_EXPECT_CONTROL_ENV=preview FAKE_EXPECT_LANE_ENV=preview \
@@ -783,7 +815,7 @@ if env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=production \
   bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-legacy-missing.out" 2>&1; then
   echo 'scoped entries must not waive legacy provider CIDRs' >&2; exit 1
 fi
-grep -q 'missing catalog CIDR: 80.200.246.35/32' "$TMPROOT/scoped-legacy-missing.out"
+grep -q 'missing exact catalog rule: 80.200.246.35/32' "$TMPROOT/scoped-legacy-missing.out"
 printf '%s\n' '80.200.246.35/32:5432,5435,6379,4000,7233' > "$EXTERNAL_ALLOWLIST"
 yq -i '.compute_egress_cidrs |= .[1:]' "$XCW_SRC/infra/catalog/toks5.yaml"
 env "${XCW_ENV[@]}" DEPLOY_ENVIRONMENT=preview FLEET_CONTROL_ENV=production \
@@ -797,7 +829,7 @@ for invalid_scope in '[]' '"preview"' null '["unknown"]'; do
     bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-invalid.out" 2>&1; then
     echo "assertion accepted malformed entry scope $invalid_scope" >&2; exit 1
   fi
-  grep -q 'invalid compute egress entry envs' "$TMPROOT/scoped-invalid.out"
+  grep -q 'invalid entry environment scope' "$TMPROOT/scoped-invalid.out"
 done
 cp "$TMPROOT/xcw-before-egress-scope.yaml" "$XCW_SRC/infra/catalog/toks5.yaml"
 # Authority-independent checks still run on the crossplane path.
@@ -889,6 +921,27 @@ grep -q "External compute preconditions ready for toks5" "$TMPROOT/xcw-unpinned.
   cat "$TMPROOT/xcw-unpinned.out" >&2
   exit 1
 }
+
+# A corrupt/empty SSH transport must never bypass every installed-rule check.
+for transport in corrupt empty; do
+  if env "${XCW_ENV[@]}" FAKE_EGRESS_TRANSPORT="$transport" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/egress-transport-$transport.out" 2>&1; then
+    echo "expected $transport catalog egress transport to fail closed" >&2; exit 1
+  fi
+  grep -q 'catalog egress transport' "$TMPROOT/egress-transport-$transport.out"
+done
+
+# Assert the exact entry's ports, and ignore entries scoped to another env.
+SCOPED_SRC="$TMPROOT/scoped-egress-src"
+mkdir -p "$SCOPED_SRC/infra/catalog" "$SCOPED_SRC/nodes/toks5/.cogni"
+cp "$XCW_SRC/nodes/toks5/.cogni/repo-spec.yaml" "$SCOPED_SRC/nodes/toks5/.cogni/repo-spec.yaml"
+yq '.envs = ["candidate-a","production"] | .compute_egress_cidrs = [{"cidr":"80.200.246.35/32","ports":[7233],"envs":["candidate-a"],"comment":"Temporal only"},{"cidr":"192.0.2.31/32","ports":[5432],"envs":["production"],"comment":"foreign env excluded"}]' "$XCW_SRC/infra/catalog/toks5.yaml" > "$SCOPED_SRC/infra/catalog/toks5.yaml"
+if env "${XCW_ENV[@]}" APP_SOURCE_DIR="$SCOPED_SRC" COGNI_CATALOG_ROOT="$SCOPED_SRC/infra/catalog" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-missing-port.out" 2>&1; then
+  echo "expected exact scoped ports to be required, rather than any rule for the CIDR" >&2; exit 1
+fi
+grep -Fq 'missing exact catalog rule: 80.200.246.35/32:7233' "$TMPROOT/scoped-missing-port.out"
+printf '%s\n' '80.200.246.35/32:7233' >> "$EXTERNAL_ALLOWLIST"
+env "${XCW_ENV[@]}" APP_SOURCE_DIR="$SCOPED_SRC" COGNI_CATALOG_ROOT="$SCOPED_SRC/infra/catalog" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/scoped-exact.out" 2>&1 || { cat "$TMPROOT/scoped-exact.out"; exit 1; }
+grep -q 'External compute preconditions ready for toks5' "$TMPROOT/scoped-exact.out"
 
 # An unknown authority is a loud stop, never a silent fall-through to legacy.
 BAD_SRC="$TMPROOT/bad-authority-src"

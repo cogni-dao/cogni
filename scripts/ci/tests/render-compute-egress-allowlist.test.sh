@@ -475,8 +475,48 @@ grep -q '198.51.100.23/32' "$TMPROOT/migration.removed" && fail "custodian rule 
 grep -q 'drop-public' "$TMPROOT/migration.removed" || fail "custodian removal lost public DROP"
 ok "custodian admission is idempotent and removed with catalog/control convergence"
 
-# Per-entry provider scope constrains BOTH the lane and actual destination.
+# Entry-level scope preserves defaults while admitting a production Temporal NAT
+# without granting database access or leaking into another environment.
 SCOPED_CATALOG="$TMPROOT/scoped-catalog"
+mkdir -p "$SCOPED_CATALOG"
+cat > "$SCOPED_CATALOG/scopea.yaml" <<'EOF'
+name: scopea
+type: node
+envs: [candidate-a, production]
+deployment_provider: {candidate-a: akash, production: akash}
+compute_egress_cidrs:
+  - {cidr: 65.108.194.156/32, ports: [7233], envs: [production], comment: production Temporal only}
+  - {cidr: 65.108.194.156/32, ports: [5432], envs: [candidate-a], comment: distinct candidate database scope}
+  - {cidr: 198.51.100.30/32, ports: [7233, 5432], envs: [production], comment: normalized pair}
+  - {cidr: 198.51.100.30/32, ports: [5432, 7233], envs: [production], comment: equivalent reordered pair}
+EOF
+COGNI_CATALOG_ROOT="$SCOPED_CATALOG" bash "$RENDERER" production > "$TMPROOT/scoped-production.list"
+grep -v '^#' "$TMPROOT/scoped-production.list" > "$TMPROOT/scoped-production.rules"
+printf '%s\n' '65.108.194.156/32:7233' '198.51.100.30/32:5432,7233' > "$TMPROOT/scoped-production.expected"
+diff -u "$TMPROOT/scoped-production.expected" "$TMPROOT/scoped-production.rules" || fail "production scoped rules differ"
+COGNI_CATALOG_ROOT="$SCOPED_CATALOG" bash "$RENDERER" candidate-a > "$TMPROOT/scoped-candidate.list"
+grep -v '^#' "$TMPROOT/scoped-candidate.list" > "$TMPROOT/scoped-candidate.rules"
+printf '%s\n' '65.108.194.156/32:5432' > "$TMPROOT/scoped-candidate.expected"
+diff -u "$TMPROOT/scoped-candidate.expected" "$TMPROOT/scoped-candidate.rules" || fail "entry environment scope leaked"
+ok "entry scopes preserve distinct same-CIDR ports and normalize equivalent sets"
+
+# The unchanged hardener must install only the declared Temporal port for Poly.
+cp "$TMPROOT/scoped-production.list" "$STAGED_ALLOWLIST"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/scoped-installed.rules"
+grep -q -- '-s 65.108.194.156/32 -p tcp -m multiport --dports 7233 .*compute-egress-allow.* ACCEPT' "$TMPROOT/scoped-installed.rules" || fail "Temporal-only rule missing"
+if grep '65.108.194.156/32' "$TMPROOT/scoped-installed.rules" | grep -q -- '--dports 5432'; then fail "Temporal NAT gained database access"; fi
+ok "hardener installs new production NAT for Temporal only"
+
+cp "$SCOPED_CATALOG/scopea.yaml" "$TMPROOT/scope-valid.yaml"
+for mutation in '.compute_egress_cidrs[0].ports = []' '.compute_egress_cidrs[0].ports = [8080]' '.compute_egress_cidrs[0].ports = ["7233"]' '.compute_egress_cidrs[0].envs = []' '.compute_egress_cidrs[0].envs = ["preview"]'; do
+  yq "$mutation" "$TMPROOT/scope-valid.yaml" > "$SCOPED_CATALOG/scopea.yaml"
+  if COGNI_CATALOG_ROOT="$SCOPED_CATALOG" bash "$RENDERER" production > /dev/null 2>&1; then fail "invalid entry scope accepted: $mutation"; fi
+done
+ok "renderer rejects empty, unsupported and out-of-row entry scopes"
+
+# Per-entry provider scope constrains BOTH the lane and actual destination.
+SCOPED_CATALOG="$TMPROOT/destination-scoped-catalog"
 mkdir -p "$SCOPED_CATALOG"
 cat > "$SCOPED_CATALOG/scoped.yaml" <<'EOF'
 name: scoped
@@ -529,7 +569,7 @@ for invalid_scope in '[]' '"preview"' null '["unknown"]' '["preview","unknown"]'
   if scoped_render preview preview > "$TMPROOT/invalid-scope.out" 2> "$TMPROOT/invalid-scope.err"; then
     fail "renderer accepted malformed scope $invalid_scope"
   fi
-  grep -q 'invalid entry envs' "$TMPROOT/invalid-scope.err" || fail "invalid scope failed for wrong reason"
+  grep -q 'invalid entry env' "$TMPROOT/invalid-scope.err" || fail "invalid scope failed for wrong reason"
 done
 ok "renderer fails closed for scalar/null/empty/unknown scopes outside schema CI"
 

@@ -25,6 +25,11 @@ command -v yq >/dev/null 2>&1 || fail "yq is required to read catalog targets"
 catalog_file="${COGNI_CATALOG_ROOT}/${TARGET}.yaml"
 [ -f "$catalog_file" ] || fail "missing catalog file: $catalog_file"
 target_type="$(yq -N '.type // ""' "$catalog_file")"
+reliability_controller="$(yq -N '.reliability.controller // false' "$catalog_file")"
+case "$reliability_controller" in
+  true|false) ;;
+  *) fail "reliability.controller must be a boolean for '$TARGET'" ;;
+esac
 deployment_provider="${DEPLOYMENT_PROVIDER:-k3s}"
 case "$deployment_provider" in
   k3s|akash) ;;
@@ -65,22 +70,30 @@ required_keys_csv="$(paste -sd, - <<<"$required_keys")"
 # not preserved. Keep this slot non-empty or every later remote positional shifts.
 required_keys_arg="${required_keys_csv:-__none__}"
 
-egress_count="$(yq -N '.compute_egress_cidrs | length' "$catalog_file")"
-[ "$egress_count" -gt 0 ] 2>/dev/null \
-  || fail "external-compute target '$node' has no compute_egress_cidrs"
-egress_cidrs="$(
-  for ((entry_index=0; entry_index<egress_count; entry_index++)); do
-    if yq -N -e ".compute_egress_cidrs[$entry_index] | has(\"envs\")" "$catalog_file" >/dev/null 2>&1; then
-      scope=".compute_egress_cidrs[$entry_index].envs"
-      yq -N -e "$scope | select((tag == \"!!seq\") and (length > 0)) | all_c(. == \"candidate-a\" or . == \"preview\" or . == \"production\")" "$catalog_file" >/dev/null \
-        || fail "invalid compute egress entry envs for '$node'"
-      yq -N -e "$scope | (contains([\"$DEPLOY_ENVIRONMENT\"]) and contains([\"$control_env\"]))" "$catalog_file" >/dev/null 2>&1 || continue
-    fi
-    yq -r ".compute_egress_cidrs[$entry_index].cidr" "$catalog_file"
-  done | sort -u
-)"
-egress_cidrs_csv="$(paste -sd, - <<<"$egress_cidrs")"
-egress_cidrs_arg="${egress_cidrs_csv:-__none__}"
+source "${SCRIPT_DIR}/lib/compute-egress-policy.sh"
+local egress_rules='' egress_rules_b64 count index cidr ports scope_status
+count="$(yq -N '.compute_egress_cidrs | length' "$catalog_file")"
+[[ "$count" -gt 0 ]] || fail "external-compute target has no compute_egress_cidrs"
+index=0
+while [[ "$index" -lt "$count" ]]; do
+  if compute_egress_entry_in_env "$catalog_file" "$index" "$DEPLOY_ENVIRONMENT"; then :; else
+    scope_status=$?
+    [[ "$scope_status" == 1 ]] && { index=$((index+1)); continue; }
+    fail "invalid entry environment scope for '$node'"
+  fi
+  if compute_egress_entry_in_env "$catalog_file" "$index" "$control_env"; then :; else
+    scope_status=$?
+    [[ "$scope_status" == 1 ]] && { index=$((index+1)); continue; }
+    fail "invalid entry destination scope for '$node'"
+  fi
+  cidr="$(yq -N ".compute_egress_cidrs[$index].cidr" "$catalog_file")"
+  ports="$(compute_egress_entry_ports "$catalog_file" "$index")" || fail "invalid entry port scope for '$node'"
+  egress_rules="${egress_rules}${cidr}:${ports}"$'\n'
+  index=$((index+1))
+done
+[[ -n "$egress_rules" ]] || egress_rules=__none__
+# Base64 preserves exact port commas without adding shell syntax to SSH argv.
+egress_rules_b64="$(printf '%s' "$egress_rules" | base64 | tr -d '\n')"
 
 # task.5104 / task.5138 — WHICH AUTHORITY owns this row's workload in this environment.
 # Shell twin of resolveNodeComputeApi() in
@@ -103,15 +116,14 @@ read -r -a ssh_opts <<< "$ssh_opts_raw"
 # The shared helper buffers this heredoc and retries only the OpenBao Kubernetes
 # login transient; stable 403 authz drift still fails after one fresh-JWT check.
 cogni_openbao_kubernetes_login_retry "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
-  "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_arg" "$egress_cidrs_arg" \
+  "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_arg" "$egress_rules_b64" \
   "$egress_allowlist" "$compute_api" "$vm_host" "$control_env" <<'REMOTE'
 set -euo pipefail
 env_name="$1"
 node="$2"
 required_keys_csv="$3"
 [ "$required_keys_csv" = "__none__" ] && required_keys_csv=""
-egress_cidrs_csv="$4"
-[ "$egress_cidrs_csv" = "__none__" ] && egress_cidrs_csv=""
+egress_rules_b64="$4"
 egress_allowlist="$5"
 authority="$6"
 # bug.5394 — the cluster this assertion actually reached. DEPLOY_ENVIRONMENT names the
@@ -232,15 +244,14 @@ mark_ok "all declared workload secret refs are materialized"
 
 [ -s "$egress_allowlist" ] \
   || fail "installed compute egress allowlist is missing"
-IFS=',' read -r -a egress_cidrs <<< "$egress_cidrs_csv"
-for cidr in "${egress_cidrs[@]}"; do
-  # render-compute-egress-allowlist.sh emits "<cidr>:<ports>" per line, so match the
-  # CIDR anchored at line start followed by its port list (or end of line). Never
-  # `grep -Fx` on the bare CIDR: that can never match a rendered line, so it fails
-  # closed on a correctly configured host.
-  grep -Eq "^${cidr//./\\.}(:|\$)" "$egress_allowlist" \
-    || fail "installed compute egress allowlist is missing catalog CIDR: $cidr"
-done
+expected_egress_rules="$(printf '%s' "$egress_rules_b64" | base64 -d)" \
+  || fail "catalog egress transport could not be decoded"
+[[ -n "$expected_egress_rules" ]] || fail "catalog egress transport decoded no rules"
+while IFS= read -r rule; do
+  [[ -n "$rule" && "$rule" != __none__ ]] || continue
+  grep -Fxq "$rule" "$egress_allowlist" \
+    || fail "installed compute egress allowlist is missing exact catalog rule: $rule"
+done <<< "$expected_egress_rules"
 mark_ok "catalog compute egress CIDRs are installed"
 
 echo "External compute preconditions ready for ${node} in ${env_name} (compute_api=${authority})."
@@ -257,9 +268,23 @@ local check_dns="${CHECK_DNS:-true}"
 local remote_root="${ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT:-}"
 local app_wait_attempts="${ASSERT_TARGET_SUBSTRATE_APP_WAIT_ATTEMPTS:-12}"
 local app_wait_sleep_seconds="${ASSERT_TARGET_SUBSTRATE_APP_WAIT_SLEEP_SECONDS:-5}"
+local assert_database_reliability_runtime="${ASSERT_DATABASE_RELIABILITY_RUNTIME:-true}"
+local expected_build_sha="__not_controller__"
+local expected_node_id="__not_controller__"
 
 [ -n "$vm_host" ] || fail "VM_HOST is required for type=node target '$node'"
 [ -n "$domain" ] || fail "DOMAIN is required for type=node target '$node'"
+case "$assert_database_reliability_runtime" in
+  true|false) ;;
+  *) fail "ASSERT_DATABASE_RELIABILITY_RUNTIME must be true or false" ;;
+esac
+if [ "$reliability_controller" = true ]; then
+  expected_build_sha="$(git -C "$APP_SOURCE_DIR" rev-parse HEAD)"
+  [[ "$expected_build_sha" =~ ^[0-9a-f]{40}$ ]] \
+    || fail "app source does not resolve an exact 40-hex build SHA"
+  expected_node_id="$(node_id_for_target "$node")" \
+    || fail "node_id missing for '$node'"
+fi
 
 contains_node=false
 for catalog_node in "${NODE_TARGETS[@]}"; do
@@ -351,7 +376,11 @@ edge_key="$5"
 node_port="$6"
 app_wait_attempts="$7"
 app_wait_sleep_seconds="$8"
-remote_root="${9:-}"
+expected_build_sha="${9}"
+expected_node_id="${10}"
+assert_database_reliability_runtime="${11}"
+reliability_controller="${12}"
+remote_root="${13:-}"
 
 namespace="cogni-${env_name}"
 app_name="${env_name}-${node}"
@@ -388,6 +417,108 @@ if kubectl get namespace "$namespace" >/dev/null 2>&1; then
   mark_ok "namespace exists: $namespace"
 else
   mark_fail "namespace missing: $namespace"
+fi
+
+if [ "$reliability_controller" = true ]; then
+  actuator_deployment="${node}-database-reliability-actuator"
+  readmitter_deployment="${node}-database-reliability-readmitter"
+  app_deployment="${node}-node-app"
+
+  if [ "$assert_database_reliability_runtime" = true ]; then
+    for controller in "$actuator_deployment" "$readmitter_deployment"; do
+      available="$(kubectl -n "$namespace" get deployment "$controller" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+      if [ "${available:-0}" -ge 1 ] 2>/dev/null; then
+        mark_ok "database reliability Deployment available: $controller"
+      else
+        mark_fail "database reliability Deployment unavailable: $controller (availableReplicas='${available:-0}')"
+      fi
+    done
+    app_image="$(kubectl -n "$namespace" get deployment "$app_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].image}' 2>/dev/null || true)"
+    actuator_image="$(kubectl -n "$namespace" get deployment "$actuator_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="actuator")].image}' 2>/dev/null || true)"
+    readmitter_image="$(kubectl -n "$namespace" get deployment "$readmitter_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="readmitter")].image}' 2>/dev/null || true)"
+    if [ -n "$app_image" ] && [ "$actuator_image" = "$app_image" ] && [ "$readmitter_image" = "$app_image" ]; then
+      mark_ok "database reliability processes use the exact controller image"
+    else
+      mark_fail "database reliability image mismatch (app='${app_image:-absent}', actuator='${actuator_image:-absent}', readmitter='${readmitter_image:-absent}')"
+    fi
+  fi
+
+  for secret_contract in \
+    "database-reliability-actuator-env-secrets:DATABASE_RELIABILITY_ADMIN_URL,DATABASE_RELIABILITY_STATUS_TOKEN" \
+    "database-reliability-readmitter-env-secrets:DATABASE_RELIABILITY_READMIT_URL,DATABASE_RELIABILITY_READMIT_TOKEN,DATABASE_RELIABILITY_STATUS_TOKEN"; do
+    secret_name="${secret_contract%%:*}"
+    key_csv="${secret_contract#*:}"
+    if ! kubectl -n "$namespace" get secret "$secret_name" >/dev/null 2>&1; then
+      mark_fail "database reliability Secret missing: $secret_name"
+      continue
+    fi
+    IFS=',' read -r -a required_control_keys <<<"$key_csv"
+    for required_control_key in "${required_control_keys[@]}"; do
+      if [ -n "$(kubectl -n "$namespace" get secret "$secret_name" -o jsonpath="{.data.${required_control_key}}" 2>/dev/null || true)" ]; then
+        mark_ok "database reliability Secret $secret_name carries $required_control_key"
+      else
+        mark_fail "database reliability Secret $secret_name missing $required_control_key"
+      fi
+    done
+  done
+
+  if [ "$assert_database_reliability_runtime" = true ]; then
+    # The public app owns only bearer clients. Run the roundtrip from that exact
+    # network/secret boundary so the assertion never prints or exports a token.
+    if kubectl -n "$namespace" exec deployment/"$app_deployment" -c app -- \
+    node --input-type=module -e '
+      const [expectedSha, nodeId, environment, nodeSlug] = process.argv.slice(1);
+      const actuator = process.env.DATABASE_RELIABILITY_ACTUATOR_URL;
+      const readmitter = process.env.DATABASE_RELIABILITY_READMITTER_URL;
+      const statusToken = process.env.DATABASE_RELIABILITY_STATUS_TOKEN;
+      const readmitToken = process.env.DATABASE_RELIABILITY_READMIT_TOKEN;
+      if (!actuator || !readmitter || !statusToken || !readmitToken) process.exit(20);
+      const auth = { authorization: `Bearer ${statusToken}` };
+      const statusUrl = new URL("/v1/status", actuator);
+      statusUrl.searchParams.set("node_id", nodeId);
+      statusUrl.searchParams.set("node_slug", nodeSlug);
+      statusUrl.searchParams.set("environment", environment);
+      const checkVersion = async (base) => {
+        const response = await fetch(new URL("/version", base));
+        const body = response.ok ? await response.json() : {};
+        if (!response.ok || body.buildSha !== expectedSha) process.exit(21);
+      };
+      await checkVersion(actuator);
+      await checkVersion(readmitter);
+      const status = await fetch(statusUrl, { headers: auth });
+      if (!status.ok) process.exit(22);
+      const body = await status.json();
+      if (body.nodeId !== nodeId || body.slug !== nodeSlug || body.environment !== environment) process.exit(23);
+      const ready = await fetch(new URL("/readyz", readmitter));
+      if (!ready.ok) process.exit(24);
+      // Exercise authentication and routing without permitting a state change:
+      // this valid-but-deliberately-noncurrent incident must be rejected before
+      // the evidence gate or readmission adapter is reached.
+      const readmitUrl = new URL("/v1/readmit", readmitter);
+      readmitUrl.searchParams.set("node_id", nodeId);
+      readmitUrl.searchParams.set("node_slug", nodeSlug);
+      readmitUrl.searchParams.set("environment", environment);
+      const mismatchCandidate = `reliability.v1:flight-mismatch-${expectedSha}`;
+      const mismatchIncident = body.incidentId === mismatchCandidate
+        ? `${mismatchCandidate}-other`
+        : mismatchCandidate;
+      const rejectedReadmit = await fetch(readmitUrl, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${readmitToken}`,
+          "x-cogni-actor-id": "human:flight-assert",
+          "x-cogni-incident-id": mismatchIncident,
+        },
+      });
+      if (rejectedReadmit.status !== 409) process.exit(25);
+    ' "$expected_build_sha" "$expected_node_id" "$env_name" "$node"; then
+      mark_ok "database reliability exact-SHA, authenticated status, readiness, and harmless readmit-rejection roundtrips passed"
+    else
+      mark_fail "database reliability exact-SHA/authenticated/readiness roundtrip failed"
+    fi
+  else
+    mark_ok "database reliability runtime checks deferred until post-promotion verification"
+  fi
 fi
 
 if kubectl -n argocd get applicationset "$appset_name" >/dev/null 2>&1; then
@@ -610,10 +741,17 @@ REMOTE
 local ssh_opts=()
 read -r -a ssh_opts <<< "$ssh_opts_raw"
 probe_log=$(mktemp)
-set +e
-"$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
+# OpenSSH reconstructs shell text, not argv. Quote every word and keep the
+# optional root last so required controller identity never shifts.
+local remote_command
+printf -v remote_command '%q ' bash -s -- \
   "$DEPLOY_ENVIRONMENT" "$node" "$node_db" "$node_host" "$edge_key" "$node_port" \
-  "$app_wait_attempts" "$app_wait_sleep_seconds" "$remote_root" < "$remote_script" 2>&1 | tee "$probe_log"
+  "$app_wait_attempts" "$app_wait_sleep_seconds" \
+  "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" \
+  "$reliability_controller" "$remote_root"
+set +e
+"$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" "$remote_command" \
+  < "$remote_script" 2>&1 | tee "$probe_log"
 ssh_rc=${PIPESTATUS[0]}
 set -e
 if grep -Eq '(^|\r)(\[FAIL\]|::error::assert-target-substrate:)' "$probe_log"; then

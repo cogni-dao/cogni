@@ -16,6 +16,61 @@
   ],
   "allOf": [
     {
+      "$comment": "Entry egress env scope must be a subset of the owning row\u2019s envs.",
+      "if": {
+        "required": ["compute_egress_cidrs"],
+        "properties": {
+          "compute_egress_cidrs": {
+            "contains": {
+              "required": ["envs"],
+              "properties": {
+                "envs": { "contains": { "const": "candidate-a" } }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": { "envs": { "contains": { "const": "candidate-a" } } }
+      }
+    },
+    {
+      "$comment": "Entry egress env scope must be a subset of the owning row\u2019s envs.",
+      "if": {
+        "required": ["compute_egress_cidrs"],
+        "properties": {
+          "compute_egress_cidrs": {
+            "contains": {
+              "required": ["envs"],
+              "properties": { "envs": { "contains": { "const": "preview" } } }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": { "envs": { "contains": { "const": "preview" } } }
+      }
+    },
+    {
+      "$comment": "Entry egress env scope must be a subset of the owning row\u2019s envs.",
+      "if": {
+        "required": ["compute_egress_cidrs"],
+        "properties": {
+          "compute_egress_cidrs": {
+            "contains": {
+              "required": ["envs"],
+              "properties": {
+                "envs": { "contains": { "const": "production" } }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": { "envs": { "contains": { "const": "production" } } }
+      }
+    },
+    {
       "if": {
         "properties": { "type": { "const": "node" } },
         "required": ["type"]
@@ -253,7 +308,7 @@
     },
     "database": {
       "type": "object",
-      "description": "Provider-neutral per-environment Postgres placement. Shared means a bounded database on the environment pool; dedicated means an operator-managed provider VM, process, and fixed block volume. This is state placement, never Akash app placement.",
+      "description": "Per-environment Postgres placement. Dedicated state uses a separate process and retained persistent volume, independent of app rollout. An activated akash-cell placement requires its audited allocation binding.",
       "additionalProperties": false,
       "properties": {
         "candidate-a": { "$ref": "#/$defs/databasePlacement" },
@@ -347,7 +402,7 @@
     },
     "compute_egress_cidrs": {
       "type": "array",
-      "description": "task.5052 (story.5016) — workload-owned provider egress CIDRs admitted to substrate ports (5432,5435,6379,4000,7233). A row contributes only where its envs[] includes the workload lane AND deployment_provider.<lane> is akash (bug.5191). Entries omitting envs preserve legacy provider admission; optional per-entry envs additionally constrains BOTH the workload lane and actual destination environment (bug.5472). Decommissioning, removing lane membership, or moving placement to k3s removes the row's admission. scripts/ci/render-compute-egress-allowlist.sh renders the existing hardener input. Absent/empty = fail-closed. Provider NATs are multi-tenant: declare the narrowest CIDR, usually /32.",
+      "description": "task.5052 (story.5016) — egress CIDRs of the decentralized-compute infrastructure (e.g. Akash provider NAT) that hosts THIS row's workload, allowed to reach the env VM's substrate ports (5432,5435,6379,4000,7233). Lives on the workload's own row — NOT per-env and NOT a shared infra row — because an egress IP is a property of where the workload runs: the per-env allowlist is the union of compute_egress_cidrs across rows that BOTH list that env in envs[] AND declare deployment_provider.<env>: akash (bug.5191 \u2014 membership alone is not placement, and a k3s-placed row must open no provider hole), so decommissioning the workload, trimming an env from envs[], or moving that env back to k3s closes its holes with it. Rendered by scripts/ci/render-compute-egress-allowlist.sh into the allowlist consumed by infra/provision/cherry/harden-docker-public-ports.sh. Absent/empty = fail-closed: no off-cluster compute reaches the substrate ports. Optional per-entry ports and envs narrow access further; omitted fields preserve legacy scope. Provider egress NATs are multi-tenant — declare the narrowest CIDR (usually /32).",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -364,12 +419,25 @@
             "pattern": "^[^\\n]+$",
             "description": "Single-line provenance: which provider(s) egress via this CIDR and the work item that added it."
           },
-          "envs": {
+          "ports": {
             "type": "array",
+            "items": {
+              "type": "integer",
+              "enum": [5432, 5435, 6379, 4000, 7233]
+            },
             "minItems": 1,
             "uniqueItems": true,
-            "items": { "enum": ["candidate-a", "preview", "production"] },
-            "description": "Optional scope: BOTH the workload lane and actual destination environment must be listed. Omitted preserves legacy unscoped provider admission."
+            "description": "Optional narrow subset of substrate TCP ports; omitted preserves all legacy ports."
+          },
+          "envs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["candidate-a", "preview", "production"]
+            },
+            "minItems": 1,
+            "uniqueItems": true,
+            "description": "Optional subset of this row's deployed environments: BOTH workload lane and actual destination must be listed. Omitted preserves legacy scope."
           }
         }
       },
@@ -417,6 +485,18 @@
       "required": ["tier", "budget_profile"],
       "properties": {
         "tier": { "enum": ["shared", "dedicated"] },
+        "placement": { "const": "akash-cell" },
+        "runtimePoolLimits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["replicaCount", "app", "service", "read"],
+          "properties": {
+            "replicaCount": { "const": 1 },
+            "app": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "service": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "read": { "type": "integer", "minimum": 1, "maximum": 1000 }
+          }
+        },
         "budget_profile": {
           "enum": [
             "shared-default-v1",
@@ -424,7 +504,13 @@
             "dedicated-high-throughput-v1"
           ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["placement"] },
+          "then": { "properties": { "tier": { "const": "dedicated" } } }
+        }
+      ]
     }
   }
 }

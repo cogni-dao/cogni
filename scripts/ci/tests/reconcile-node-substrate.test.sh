@@ -90,6 +90,7 @@ put_secret operator APP_DB_SERVICE_PASSWORD pernode-svc-pw-sentinel
 put_secret operator DATABASE_URL 'postgresql://app_operator:pernode-app-pw-sentinel@127.0.0.1:5432/cogni_operator'
 put_secret operator DATABASE_SERVICE_URL 'postgresql://service_operator:pernode-svc-pw-sentinel@127.0.0.1:5432/cogni_operator'
 put_secret operator-database-migration APP_DB_MIGRATION_PASSWORD pernode-migration-pw-sentinel
+put_secret operator-database-recovery-probe DATABASE_RECOVERY_PROBE_PASSWORD pernode-probe-pw-sentinel
 put_secret operator-database-migration DATABASE_MIGRATION_URL 'postgresql://migration_operator:pernode-migration-pw-sentinel@127.0.0.1:5432/cogni_operator'
 put_secret database-reliability-actuator DATABASE_RELIABILITY_PASSWORD reliability-pw-sentinel
 put_secret database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD readmit-pw-sentinel
@@ -310,7 +311,7 @@ if [[ "$*" == *MIGRATION_IDENTITY_SQL_B64* ]]; then
 fi
 if printf '%s\n' "$*" | grep -q ' config --format json'; then
   cat <<JSON
-{"services":{"db-provision":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/postgres-init/provision.sh","target":"/app/provision.sh","read_only":true}]},"doltgres":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/doltgres-init/install-creds.sh","target":"/usr/local/bin/install-creds.sh","read_only":true}]},"doltgres-provision":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/doltgres-init/provision.sh","target":"/app/provision.sh","read_only":true}]},"alloy":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy","target":"/etc/alloy/config.alloy","read_only":true}]},"caddy":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-edge/configs/Caddyfile.tmpl","target":"/etc/caddy/Caddyfile","read_only":true}]}}}
+{"services":{"db-provision":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/postgres-init/provision.sh","target":"/app/provision.sh","read_only":true},{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/postgres-init/apply-control.sql","target":"/app/apply-control.sql","read_only":true},{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/postgres-init/control-migrations/0000_database_recovery_control.sql","target":"/app/control-migrations/0000_database_recovery_control.sql","read_only":true},{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql","target":"/app/control-migrations/0001_database_recovery_watchdog.sql","read_only":true}]},"doltgres":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/doltgres-init/install-creds.sh","target":"/usr/local/bin/install-creds.sh","read_only":true}]},"doltgres-provision":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/doltgres-init/provision.sh","target":"/app/provision.sh","read_only":true}]},"alloy":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-runtime/configs/alloy-config.metrics.alloy","target":"/etc/alloy/config.alloy","read_only":true}]},"caddy":{"volumes":[{"source":"${FAKE_REMOTE_ROOT}/opt/cogni-template-edge/configs/Caddyfile.tmpl","target":"/etc/caddy/Caddyfile","read_only":true}]}}}
 JSON
   exit 0
 fi
@@ -451,6 +452,9 @@ env \
 grep -q "substrate ready inputs reconciled for operator" "$TMPROOT/out.txt"
 remote_provisioner="$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/provision.sh"
 cmp infra/compose/runtime/postgres-init/provision.sh "$remote_provisioner"
+cmp infra/compose/runtime/postgres-init/apply-control.sql "$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/apply-control.sql"
+cmp infra/compose/runtime/postgres-init/control-migrations/0000_database_recovery_control.sql "$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/control-migrations/0000_database_recovery_control.sql"
+cmp infra/compose/runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql "$REMOTE_ROOT/opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql"
 # GNU stat accepts -f as "filesystem" mode and can emit output before rejecting
 # the BSD format operand. Prefer GNU's file-format form, then fall back to BSD.
 provisioner_mode="$(stat -c '%a' "$remote_provisioner" 2>/dev/null || stat -f '%Lp' "$remote_provisioner")"
@@ -528,6 +532,7 @@ grep -q -- '-e COGNI_NODE_DBS=cogni_operator' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DATABASE_RELIABILITY_PASSWORD=reliability-pw-sentinel' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DATABASE_RELIABILITY_READMIT_PASSWORD=readmit-pw-sentinel' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e APP_DB_MIGRATION_PASSWORD=pernode-migration-pw-sentinel' "$REMOTE_ROOT/docker.log"
+grep -q -- '-e DATABASE_RECOVERY_PROBE_PASSWORD=pernode-probe-pw-sentinel' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DB_BUDGET_PROFILE=operator-control-v1' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DB_APP_CONNECTION_LIMIT=7' "$REMOTE_ROOT/docker.log"
 grep -q -- '-e DB_APP_STATEMENT_TIMEOUT_MS=5000' "$REMOTE_ROOT/docker.log"
@@ -842,6 +847,7 @@ for foreign_node in poly "$FOREIGN_NODE"; do
   put_secret "$foreign_node" DATABASE_URL "postgresql://app_${migration_db#cogni_}:foreign-app-sentinel@127.0.0.1:5432/$migration_db"
   put_secret "$foreign_node" DATABASE_SERVICE_URL "postgresql://service_${migration_db#cogni_}:foreign-service-sentinel@127.0.0.1:5432/$migration_db"
   put_secret "$foreign_node-database-migration" APP_DB_MIGRATION_PASSWORD foreign-migration-sentinel
+  put_secret "$foreign_node-database-recovery-probe" DATABASE_RECOVERY_PROBE_PASSWORD foreign-probe-sentinel
   put_secret "$foreign_node-database-migration" DATABASE_MIGRATION_URL "$foreign_migration_dsn"
   mkdir -p "$FOREIGN_SOURCE/nodes/$foreign_node/k8s/external-secrets/candidate-a"
   cp nodes/operator/k8s/external-secrets/candidate-a/external-secret.yaml \

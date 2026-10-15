@@ -18,6 +18,8 @@ import type {
   PrometheusInstantResult,
   PrometheusRangeResult,
   RangeQueryParams,
+  ReliabilityMetricsSnapshot,
+  ReliabilityQueryParams,
   TemplateQueryParams,
   TemplateQueryResult,
 } from "@/ports";
@@ -48,6 +50,31 @@ export class FakeMetricsAdapter implements MetricsQueryPort {
     return {
       resultType: "vector",
       result: [],
+    };
+  }
+
+  async queryReliabilitySnapshot(
+    params: ReliabilityQueryParams
+  ): Promise<ReliabilityMetricsSnapshot> {
+    const observedAt = new Date().toISOString();
+    return {
+      regionalReadiness: [
+        { region: "Frankfurt", healthy: true, observedAt },
+        { region: "Ohio", healthy: true, observedAt },
+      ],
+      evidenceScope: "node",
+      ioPressurePct: 1,
+      connectionPct: 10,
+      memoryHeadroomPct: 80,
+      diskHeadroomPct: 80,
+      databaseShare5m: {
+        backendsPct: 10,
+        physicalReadsPct: 10,
+        tempBytesPct: 10,
+      },
+      evidenceQueryRefs: [
+        `reliability.v1:${params.environment}:${params.nodeSlug}:fake`,
+      ],
     };
   }
 

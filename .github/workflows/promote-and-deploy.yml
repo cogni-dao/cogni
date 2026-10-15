@@ -764,6 +764,22 @@ jobs:
           token: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT || github.token }}
           path: app-src
 
+      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+        with: { version: 9.12.2 }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: |
+            ci-src/pnpm-lock.yaml
+            app-src/pnpm-lock.yaml
+
+      - name: Install typed substrate dependencies
+        run: |
+          pnpm --dir ci-src install --frozen-lockfile
+          pnpm --dir app-src install --frozen-lockfile
+
       - name: Checkout per-node preview branch (preview-forward mode)
         if: fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node]
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4

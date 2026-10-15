@@ -61,8 +61,11 @@ locals {
   environment_targets = merge([
     for environment, config in local.environment_configs : {
       for entry in local.catalog : "${environment}/${entry.name}" => {
-        environment = environment
-        node_slug   = entry.name
+        environment    = environment
+        node_slug      = entry.name
+        database_tier  = try(entry.database[environment].tier, null)
+        budget_profile = try(entry.database[environment].budget_profile, null)
+        database_name  = "cogni_${replace(entry.name, "-", "_")}"
         host = (
           try(entry.is_primary_host, false)
           ? config.primary_host
@@ -81,6 +84,19 @@ locals {
     ])
   }
 
+  shared_database_targets = {
+    for key, target in local.environment_targets : key => target
+    if target.database_tier == "shared" && target.budget_profile != null
+  }
+
+  recovery_targets = merge([
+    for slot, receipt in var.recovery_receipts : {
+      for proof_class in ["recovery", "recovery-product"] : "${slot}/${proof_class}" => merge(
+        local.environment_targets[slot], receipt, { proof_class = proof_class }
+      )
+    }
+  ]...)
+
   public_probe_ids = [
     for probe_name in var.public_probe_names :
     data.grafana_synthetic_monitoring_probes.public.probes[probe_name]
@@ -91,6 +107,40 @@ locals {
   fleet_alert_group = yamldecode(
     file("${path.module}/../alerts/fleet-capacity.alerts.yaml")
   ).groups[0]
+
+  reliability_policy = jsondecode(
+    file("${path.module}/../../../packages/node-contracts/src/reliability-policy.v1.json")
+  )
+  reliability_warning_rules = {
+    io = {
+      uid       = "reliability-io-warning"
+      title     = "host I/O pressure sustained above warning threshold"
+      metric    = "cogni_reliability_v1_io_pressure_percent"
+      threshold = local.reliability_policy.signals.ioPressurePercent.warning
+      direction = local.reliability_policy.signals.ioPressurePercent.direction
+    }
+    connections = {
+      uid       = "reliability-connections-warning"
+      title     = "PostgreSQL connections sustained above warning threshold"
+      metric    = "cogni_reliability_v1_connections_percent"
+      threshold = local.reliability_policy.signals.connectionsPercent.warning
+      direction = local.reliability_policy.signals.connectionsPercent.direction
+    }
+    memory = {
+      uid       = "reliability-memory-warning"
+      title     = "memory headroom sustained below warning threshold"
+      metric    = "cogni_reliability_v1_memory_headroom_percent"
+      threshold = local.reliability_policy.signals.memoryHeadroomPercent.warning
+      direction = local.reliability_policy.signals.memoryHeadroomPercent.direction
+    }
+    disk = {
+      uid       = "reliability-disk-warning"
+      title     = "root disk headroom sustained below warning threshold"
+      metric    = "cogni_reliability_v1_disk_headroom_percent"
+      threshold = local.reliability_policy.signals.diskHeadroomPercent.warning
+      direction = local.reliability_policy.signals.diskHeadroomPercent.direction
+    }
+  }
 }
 
 data "grafana_folder" "reliability" {
@@ -107,6 +157,13 @@ resource "grafana_dashboard" "fleet_status" {
   provider    = grafana.stack
   folder      = data.grafana_folder.reliability.uid
   config_json = file("${path.module}/../dashboards/operator/fleet-status.json")
+  overwrite   = true
+}
+
+resource "grafana_dashboard" "fleet_capacity" {
+  provider    = grafana.stack
+  folder      = data.grafana_folder.reliability.uid
+  config_json = file("${path.module}/../dashboards/operator/fleet-capacity.json")
   overwrite   = true
 }
 
@@ -164,11 +221,19 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
   basic_metrics_only = true
   folder_uid         = data.grafana_folder.reliability.uid
 
+  lifecycle {
+    precondition {
+      condition     = toset(keys(var.serve_build_shas)) == toset(keys(local.environment_targets))
+      error_message = "Refusing Grafana changes: serve_build_shas must contain exactly every catalog slot, bound to approved deployed-SHA receipts."
+    }
+  }
+
   labels = {
-    environment = each.value.environment
-    node_slug   = each.value.node_slug
-    proof_class = "serve"
-    managed_by  = "opentofu"
+    environment      = each.value.environment
+    node_slug        = each.value.node_slug
+    proof_class      = "serve"
+    target_build_sha = lookup(var.serve_build_shas, each.key, "unverified")
+    managed_by       = "opentofu"
   }
 
   settings {
@@ -180,9 +245,127 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
       valid_status_codes  = [200]
       fail_if_body_not_matches_regexp = [
         "\\\"status\\\"[[:space:]]*:[[:space:]]*\\\"healthy\\\"",
+        contains(keys(var.serve_build_shas), each.key) ? "\\\"buildSha\\\"[[:space:]]*:[[:space:]]*\\\"${var.serve_build_shas[each.key]}\\\"" : "a^",
       ]
     }
   }
+}
+
+resource "grafana_synthetic_monitoring_check" "database_recovery" {
+  provider = grafana.sm
+  for_each = local.recovery_targets
+  job      = "cogni-${each.value.environment}-${each.value.node_slug}-${each.value.proof_class}"
+  target = each.value.database_tier == "dedicated" ? (
+    "https://${local.environment_configs[each.value.environment].primary_host}/readyz?proof=${each.value.proof_class}&node_slug=${each.value.node_slug}"
+  ) : "https://${each.value.host}/readyz?proof=${each.value.proof_class}"
+  enabled            = true
+  probes             = [for region in local.reliability_policy.expectedRegions : data.grafana_synthetic_monitoring_probes.public.probes[region]]
+  frequency          = 60000
+  timeout            = 10000
+  basic_metrics_only = true
+  folder_uid         = data.grafana_folder.reliability.uid
+  labels = {
+    environment                = each.value.environment
+    node_slug                  = each.value.node_slug
+    proof_class                = each.value.proof_class
+    target_build_sha           = each.value.build_sha
+    database_system_identifier = each.value.database_system_identifier
+    managed_by                 = "opentofu"
+  }
+  settings {
+    http {
+      method              = "GET"
+      ip_version          = "V4"
+      fail_if_not_ssl     = true
+      no_follow_redirects = true
+      valid_status_codes  = [200]
+      fail_if_body_not_matches_regexp = [
+        "\\\"status\\\"[[:space:]]*:[[:space:]]*\\\"healthy\\\"",
+        "\\\"buildSha\\\"[[:space:]]*:[[:space:]]*\\\"${each.value.build_sha}\\\"",
+        "\\\"databaseSystemIdentifier\\\"[[:space:]]*:[[:space:]]*\\\"${each.value.database_system_identifier}\\\"",
+        "\\\"proofClass\\\"[[:space:]]*:[[:space:]]*\\\"${each.value.proof_class}\\\"",
+        "\\\"incidentId\\\"[[:space:]]*:[[:space:]]*\\\"${replace(each.value.incident_id, ".", "\\.")}\\\"",
+      ]
+    }
+  }
+}
+
+# Versioned current-state contract. Every consumer (actuator, alerts, dashboard)
+# reads these recorded percent series; policy math is evaluated exactly once.
+resource "grafana_rule_group" "reliability_recording" {
+  provider         = grafana.stack
+  for_each         = local.shared_database_targets
+  name             = "reliability-status-v1-${replace(each.key, "/", "-")}"
+  folder_uid       = data.grafana_folder.reliability.uid
+  interval_seconds = 60
+
+  dynamic "rule" {
+    for_each = {
+      io_pressure = {
+        metric = "cogni_reliability_v1_io_pressure_percent"
+        expr   = "(100 * max by (substrate_host) (rate(node_pressure_io_stalled_seconds_total{env=\"${each.value.environment}\",substrate_host!=\"\"}[5m]))) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_pressure_io_stalled_seconds_total{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
+      }
+      connections = {
+        metric = "cogni_reliability_v1_connections_percent"
+        expr   = "(100 * sum by (substrate_host) (pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\"}) / on (substrate_host) max by (substrate_host) (pg_settings_max_connections{env=\"${each.value.environment}\",substrate_host!=\"\"})) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000}) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_settings_max_connections{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
+      }
+      memory_headroom = {
+        metric = "cogni_reliability_v1_memory_headroom_percent"
+        expr   = "(100 * min by (substrate_host) (node_memory_MemAvailable_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"} / node_memory_MemTotal_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_memory_MemAvailable_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000}) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_memory_MemTotal_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
+      }
+      disk_headroom = {
+        metric = "cogni_reliability_v1_disk_headroom_percent"
+        expr   = "(100 * min by (substrate_host) (node_filesystem_avail_bytes{env=\"${each.value.environment}\",substrate_host!=\"\",mountpoint=\"/\"} / node_filesystem_size_bytes{env=\"${each.value.environment}\",substrate_host!=\"\",mountpoint=\"/\"})) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_filesystem_avail_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000}) and on (substrate_host) (time() - min by (substrate_host) (timestamp(node_filesystem_size_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
+      }
+      database_backends_share = {
+        metric = "cogni_reliability_v1_database_backends_share_percent"
+        expr   = "(100 * sum by (substrate_host) (avg_over_time(pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\",datname=\"${each.value.database_name}\"}[5m])) / on (substrate_host) clamp_min(sum by (substrate_host) (avg_over_time(pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\",datname!~\"template.*|postgres\"}[5m])), 1)) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_stat_database_numbackends{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
+      }
+      database_physical_reads_share = {
+        metric = "cogni_reliability_v1_database_physical_reads_share_percent"
+        expr   = "(100 * sum by (substrate_host) (increase(pg_stat_database_blks_read{env=\"${each.value.environment}\",substrate_host!=\"\",datname=\"${each.value.database_name}\"}[5m])) / on (substrate_host) clamp_min(sum by (substrate_host) (increase(pg_stat_database_blks_read{env=\"${each.value.environment}\",substrate_host!=\"\",datname!~\"template.*|postgres\"}[5m])), 1)) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_stat_database_blks_read{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
+      }
+      database_temp_bytes_share = {
+        metric = "cogni_reliability_v1_database_temp_bytes_share_percent"
+        expr   = "(100 * sum by (substrate_host) (increase(pg_stat_database_temp_bytes{env=\"${each.value.environment}\",substrate_host!=\"\",datname=\"${each.value.database_name}\"}[5m])) / on (substrate_host) clamp_min(sum by (substrate_host) (increase(pg_stat_database_temp_bytes{env=\"${each.value.environment}\",substrate_host!=\"\",datname!~\"template.*|postgres\"}[5m])), 1)) and on (substrate_host) (time() - min by (substrate_host) (timestamp(pg_stat_database_temp_bytes{env=\"${each.value.environment}\",substrate_host!=\"\"})) <= ${local.reliability_policy.evidenceTtlMs / 1000})"
+      }
+    }
+
+    content {
+      name      = "${rule.key}-${each.value.environment}-${each.value.node_slug}"
+      for       = "0s"
+      is_paused = false
+      labels = {
+        policy_version = "reliability-status-v1"
+        environment    = each.value.environment
+        node_slug      = each.value.node_slug
+        database_tier  = each.value.database_tier
+        budget_profile = each.value.budget_profile
+      }
+
+      record {
+        metric                = rule.value.metric
+        from                  = "A"
+        target_datasource_uid = "grafanacloud-prom"
+      }
+
+      data {
+        ref_id         = "A"
+        datasource_uid = "grafanacloud-prom"
+        model = jsonencode({
+          datasource = { type = "prometheus", uid = "grafanacloud-prom" }
+          expr       = rule.value.expr
+          instant    = true
+          refId      = "A"
+        })
+        relative_time_range {
+          from = 600
+          to   = 0
+        }
+      }
+    }
+  }
+
 }
 
 resource "grafana_rule_group" "fleet_capacity" {
@@ -245,6 +428,75 @@ resource "grafana_rule_group" "fleet_capacity" {
             from = try(data.value.relativeTimeRange.from, 0)
             to   = try(data.value.relativeTimeRange.to, 0)
           }
+        }
+      }
+    }
+  }
+
+  # Suffix-only rules consume the same JSON policy contract as the TypeScript
+  # evaluator. This avoids threshold math drifting between API and Grafana.
+  dynamic "rule" {
+    for_each = local.reliability_warning_rules
+
+    content {
+      uid = length("${rule.value.uid}-${each.value.uid_suffix}") <= 40 ? "${rule.value.uid}-${each.value.uid_suffix}" : format(
+        "%s-%s",
+        substr("${rule.value.uid}-${each.value.uid_suffix}", 0, 26),
+        substr(sha256("${rule.value.uid}-${each.value.uid_suffix}"), 0, 12)
+      )
+      name           = "${each.key} ${rule.value.title}"
+      condition      = "THRESHOLD"
+      for            = contains(["io", "connections"], rule.key) ? "5m" : "10m"
+      no_data_state  = "Alerting"
+      exec_err_state = "Alerting"
+      annotations = {
+        summary = "${each.key} ${rule.value.title}."
+      }
+      labels = {
+        environment    = each.key
+        severity       = "warning"
+        proof_class    = "run"
+        policy_version = local.reliability_policy.version
+      }
+      is_paused = false
+
+      notification_settings {
+        contact_point = grafana_contact_point.query_only.name
+        mute_timings  = [grafana_mute_timing.query_only.name]
+      }
+
+      data {
+        ref_id         = "SIGNAL"
+        datasource_uid = "grafanacloud-prom"
+        model = jsonencode({
+          datasource = { type = "prometheus", uid = "grafanacloud-prom" }
+          expr       = "${rule.value.direction == "above" ? "max" : "min"}(${rule.value.metric}{environment=\"${each.key}\",policy_version=\"${local.reliability_policy.version}\"})"
+          instant    = true
+          refId      = "SIGNAL"
+        })
+        relative_time_range {
+          from = 900
+          to   = 0
+        }
+      }
+
+      data {
+        ref_id         = "THRESHOLD"
+        datasource_uid = "__expr__"
+        model = jsonencode({
+          type       = "threshold"
+          expression = "SIGNAL"
+          conditions = [{
+            evaluator = {
+              type   = rule.value.direction == "above" ? "gt" : "lt"
+              params = [rule.value.threshold]
+            }
+          }]
+          refId = "THRESHOLD"
+        })
+        relative_time_range {
+          from = 0
+          to   = 0
         }
       }
     }

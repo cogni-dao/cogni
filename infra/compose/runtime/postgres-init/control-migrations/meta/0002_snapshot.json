@@ -1,0 +1,712 @@
+{
+  "id": "183fb24f-2914-4907-8b68-0191b01025eb",
+  "prevId": "9ed74ea5-2fff-4267-88d0-97707b922b78",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "cogni_control.database_cell_admissions": {
+      "name": "database_cell_admissions",
+      "schema": "cogni_control",
+      "columns": {
+        "node_id": {
+          "name": "node_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "node_slug": {
+          "name": "node_slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "allocation_receipt_id": {
+          "name": "allocation_receipt_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dseq": {
+          "name": "dseq",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_account": {
+          "name": "provider_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "database_system_identifier": {
+          "name": "database_system_identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "database_name": {
+          "name": "database_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "app_role": {
+          "name": "app_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_role": {
+          "name": "service_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "probe_role": {
+          "name": "probe_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_build_sha": {
+          "name": "target_build_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "manual_packet_sha256": {
+          "name": "manual_packet_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "readmission_receipt_sha256": {
+          "name": "readmission_receipt_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "execution_actor": {
+          "name": "execution_actor",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approval_authority": {
+          "name": "approval_authority",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "preserved_role_bounds": {
+          "name": "preserved_role_bounds",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "admitted_at": {
+          "name": "admitted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "imported_at": {
+          "name": "imported_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "reviewed_control_source_sha": {
+          "name": "reviewed_control_source_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "migration_manifest_sha256": {
+          "name": "migration_manifest_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "installed_at": {
+          "name": "installed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "database_cell_admissions_owned_database": {
+          "name": "database_cell_admissions_owned_database",
+          "columns": [
+            {
+              "expression": "database_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "database_cell_admissions_owned_roles": {
+          "name": "database_cell_admissions_owned_roles",
+          "columns": [
+            {
+              "expression": "app_role",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_role",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "database_cell_admissions_node_id_environment_pk": {
+          "name": "database_cell_admissions_node_id_environment_pk",
+          "columns": ["node_id", "environment"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "database_cell_admissions_environment": {
+          "name": "database_cell_admissions_environment",
+          "value": "\"cogni_control\".\"database_cell_admissions\".\"environment\" IN ('candidate-a', 'preview', 'production')"
+        },
+        "database_cell_admissions_native_system": {
+          "name": "database_cell_admissions_native_system",
+          "value": "\"cogni_control\".\"database_cell_admissions\".\"database_system_identifier\" ~ '^[1-9][0-9]*$'"
+        },
+        "database_cell_admissions_app_sha": {
+          "name": "database_cell_admissions_app_sha",
+          "value": "\"cogni_control\".\"database_cell_admissions\".\"target_build_sha\" ~ '^[0-9a-f]{40}$'"
+        },
+        "database_cell_admissions_control_sha": {
+          "name": "database_cell_admissions_control_sha",
+          "value": "\"cogni_control\".\"database_cell_admissions\".\"reviewed_control_source_sha\" ~ '^[0-9a-f]{40}$'"
+        },
+        "database_cell_admissions_packet_sha": {
+          "name": "database_cell_admissions_packet_sha",
+          "value": "\"cogni_control\".\"database_cell_admissions\".\"manual_packet_sha256\" ~ '^[0-9a-f]{64}$'"
+        },
+        "database_cell_admissions_receipt_sha": {
+          "name": "database_cell_admissions_receipt_sha",
+          "value": "\"cogni_control\".\"database_cell_admissions\".\"readmission_receipt_sha256\" ~ '^[0-9a-f]{64}$'"
+        },
+        "database_cell_admissions_migration_sha": {
+          "name": "database_cell_admissions_migration_sha",
+          "value": "\"cogni_control\".\"database_cell_admissions\".\"migration_manifest_sha256\" ~ '^[0-9a-f]{64}$'"
+        },
+        "database_cell_admissions_real_admission_time": {
+          "name": "database_cell_admissions_real_admission_time",
+          "value": "\"cogni_control\".\"database_cell_admissions\".\"admitted_at\" <= \"cogni_control\".\"database_cell_admissions\".\"imported_at\" AND \"cogni_control\".\"database_cell_admissions\".\"installed_at\" <= \"cogni_control\".\"database_cell_admissions\".\"imported_at\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "cogni_control.database_cell_readmission_audits": {
+      "name": "database_cell_readmission_audits",
+      "schema": "cogni_control",
+      "columns": {
+        "node_id": {
+          "name": "node_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "incident_id": {
+          "name": "incident_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "manual_packet_sha256": {
+          "name": "manual_packet_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "readmission_receipt_sha256": {
+          "name": "readmission_receipt_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expected_previous_receipt_sha256": {
+          "name": "expected_previous_receipt_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contained_at": {
+          "name": "contained_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "admitted_at": {
+          "name": "admitted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "execution_actor": {
+          "name": "execution_actor",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approval_authority": {
+          "name": "approval_authority",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "imported_at": {
+          "name": "imported_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "database_cell_readmission_audits_receipt": {
+          "name": "database_cell_readmission_audits_receipt",
+          "columns": [
+            {
+              "expression": "readmission_receipt_sha256",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "database_cell_readmission_audits_node_id_environment_incident_id_pk": {
+          "name": "database_cell_readmission_audits_node_id_environment_incident_id_pk",
+          "columns": ["node_id", "environment", "incident_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "database_cell_readmission_audits_environment": {
+          "name": "database_cell_readmission_audits_environment",
+          "value": "\"cogni_control\".\"database_cell_readmission_audits\".\"environment\" IN ('candidate-a','preview','production')"
+        },
+        "database_cell_readmission_audits_sha": {
+          "name": "database_cell_readmission_audits_sha",
+          "value": "\"cogni_control\".\"database_cell_readmission_audits\".\"manual_packet_sha256\" ~ '^[0-9a-f]{64}$' AND \"cogni_control\".\"database_cell_readmission_audits\".\"readmission_receipt_sha256\" ~ '^[0-9a-f]{64}$' AND \"cogni_control\".\"database_cell_readmission_audits\".\"expected_previous_receipt_sha256\" ~ '^[0-9a-f]{64}$'"
+        },
+        "database_cell_readmission_audits_time": {
+          "name": "database_cell_readmission_audits_time",
+          "value": "\"cogni_control\".\"database_cell_readmission_audits\".\"contained_at\" <= \"cogni_control\".\"database_cell_readmission_audits\".\"admitted_at\" AND \"cogni_control\".\"database_cell_readmission_audits\".\"admitted_at\" <= \"cogni_control\".\"database_cell_readmission_audits\".\"imported_at\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "cogni_control.database_cell_replay_roles": {
+      "name": "database_cell_replay_roles",
+      "schema": "cogni_control",
+      "columns": {
+        "node_id": {
+          "name": "node_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "database_name": {
+          "name": "database_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role_name": {
+          "name": "role_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_limit": {
+          "name": "connection_limit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workload_manifest_sha256": {
+          "name": "workload_manifest_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "registered_at": {
+          "name": "registered_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "database_cell_replay_roles_owned_database": {
+          "name": "database_cell_replay_roles_owned_database",
+          "columns": [
+            {
+              "expression": "database_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "database_cell_replay_roles_owned_role": {
+          "name": "database_cell_replay_roles_owned_role",
+          "columns": [
+            {
+              "expression": "role_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "database_cell_replay_roles_node_id_environment_pk": {
+          "name": "database_cell_replay_roles_node_id_environment_pk",
+          "columns": ["node_id", "environment"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "database_cell_replay_roles_environment": {
+          "name": "database_cell_replay_roles_environment",
+          "value": "\"cogni_control\".\"database_cell_replay_roles\".\"environment\" IN ('candidate-a', 'preview', 'production')"
+        },
+        "database_cell_replay_roles_bounded_connections": {
+          "name": "database_cell_replay_roles_bounded_connections",
+          "value": "\"cogni_control\".\"database_cell_replay_roles\".\"connection_limit\" = 8"
+        },
+        "database_cell_replay_roles_workload_sha": {
+          "name": "database_cell_replay_roles_workload_sha",
+          "value": "\"cogni_control\".\"database_cell_replay_roles\".\"workload_manifest_sha256\" ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "cogni_control.database_recoveries": {
+      "name": "database_recoveries",
+      "schema": "cogni_control",
+      "columns": {
+        "node_id": {
+          "name": "node_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "node_slug": {
+          "name": "node_slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "incident_id": {
+          "name": "incident_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_build_sha": {
+          "name": "target_build_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "database_system_identifier": {
+          "name": "database_system_identifier",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "database_name": {
+          "name": "database_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "app_role": {
+          "name": "app_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_role": {
+          "name": "service_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'contained'"
+        },
+        "is_current": {
+          "name": "is_current",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contained_at": {
+          "name": "contained_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deadline_at": {
+          "name": "deadline_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_at": {
+          "name": "verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "database_recoveries_current_node_env": {
+          "name": "database_recoveries_current_node_env",
+          "columns": [
+            {
+              "expression": "node_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "environment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"cogni_control\".\"database_recoveries\".\"is_current\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "database_recoveries_current_role_pair": {
+          "name": "database_recoveries_current_role_pair",
+          "columns": [
+            {
+              "expression": "app_role",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_role",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"cogni_control\".\"database_recoveries\".\"is_current\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "database_recoveries_pending_deadline": {
+          "name": "database_recoveries_pending_deadline",
+          "columns": [
+            {
+              "expression": "deadline_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"cogni_control\".\"database_recoveries\".\"is_current\" AND \"cogni_control\".\"database_recoveries\".\"state\" = 'recovering'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "database_recoveries_node_id_environment_incident_id_pk": {
+          "name": "database_recoveries_node_id_environment_incident_id_pk",
+          "columns": ["node_id", "environment", "incident_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "database_recoveries_environment": {
+          "name": "database_recoveries_environment",
+          "value": "\"cogni_control\".\"database_recoveries\".\"environment\" IN ('candidate-a', 'preview', 'production')"
+        },
+        "database_recoveries_state": {
+          "name": "database_recoveries_state",
+          "value": "\"cogni_control\".\"database_recoveries\".\"state\" IN ('contained', 'recovering', 'readmitted', 'recontained')"
+        },
+        "database_recoveries_build_sha": {
+          "name": "database_recoveries_build_sha",
+          "value": "\"cogni_control\".\"database_recoveries\".\"target_build_sha\" ~ '^[0-9a-f]{40}$'"
+        },
+        "database_recoveries_fixed_deadline": {
+          "name": "database_recoveries_fixed_deadline",
+          "value": "(\"cogni_control\".\"database_recoveries\".\"started_at\" IS NULL AND \"cogni_control\".\"database_recoveries\".\"deadline_at\" IS NULL) OR \"cogni_control\".\"database_recoveries\".\"deadline_at\" = \"cogni_control\".\"database_recoveries\".\"started_at\" + interval '10 minutes'"
+        },
+        "database_recoveries_recovering_intent": {
+          "name": "database_recoveries_recovering_intent",
+          "value": "\"cogni_control\".\"database_recoveries\".\"state\" <> 'recovering' OR (\"cogni_control\".\"database_recoveries\".\"started_at\" IS NOT NULL AND \"cogni_control\".\"database_recoveries\".\"deadline_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "cogni_control.database_recovery_watchdog_ticks": {
+      "name": "database_recovery_watchdog_ticks",
+      "schema": "cogni_control",
+      "columns": {
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "protocol_version": {
+          "name": "protocol_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enforced_at": {
+          "name": "enforced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "database_recovery_watchdog_environment": {
+          "name": "database_recovery_watchdog_environment",
+          "value": "\"cogni_control\".\"database_recovery_watchdog_ticks\".\"environment\" IN ('candidate-a', 'preview', 'production')"
+        },
+        "database_recovery_watchdog_protocol": {
+          "name": "database_recovery_watchdog_protocol",
+          "value": "\"cogni_control\".\"database_recovery_watchdog_ticks\".\"protocol_version\" = 1"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {
+    "cogni_control": "cogni_control"
+  },
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

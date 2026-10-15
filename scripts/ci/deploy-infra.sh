@@ -1946,6 +1946,11 @@ else
   log_info "Skipping inline full backup in ${DEPLOY_ENVIRONMENT}; scheduled singleton owns production backups"
 fi
 systemctl start cogni-db-backup.timer
+# Only prepare the cell timer when the sole-writer kit has been projected by
+# read-only reconciliation. First enable waits for capacity and restore proof.
+if compgen -G '/opt/cogni-template-runtime/database-cell-backup/*/targets.tsv' >/dev/null; then
+  bash /opt/cogni-template-runtime/db-backup/install-cell-timer.sh
+fi
 if [[ "$backup_validated" == 1 ]]; then
   emit_deployment_event "infra_deployment.db_backup_scheduled" "success" "db-backup timer installed; candidate validation completed when applicable"
 else

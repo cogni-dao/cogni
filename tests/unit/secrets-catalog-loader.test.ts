@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  isSetupSecretsManaged,
   loadSecretsCatalog,
   openBaoPathFor,
 } from "../../scripts/lib/secrets-catalog-loader";
@@ -74,6 +75,25 @@ describe("secrets-catalog-loader · capability fan-out (v2)", () => {
     expect(routing.AUTH_SECRET.service).toBeUndefined();
   });
 
+  it.each([
+    "agent",
+    "derived",
+  ])("requires an actual generator declaration for %s origin", (source) => {
+    writeOperatorCatalog(`
+  - name: OWNED_VALUE
+    tier: A1
+    service: akash-tx-actuator
+    required: false
+    category: Database
+    source: ${source}
+    description: typed private value
+    steps: ["canonical writer"]
+`);
+    expect(() => loadSecretsCatalog({ repoRoot })).toThrow(
+      /requires generate field/
+    );
+  });
+
   it("rejects an entry that declares both service and appliesTo", () => {
     writeOperatorCatalog(`
   - name: AUTH_SECRET
@@ -118,13 +138,59 @@ describe("secrets-catalog-loader · openBaoPathFor (fan-out path resolution)", (
   });
 });
 
+describe("private database component setup ownership", () => {
+  it("keeps compose-only DB components in the sole OpenBao writer while preserving pod and legacy inputs", () => {
+    const routes = {
+      PRIVATE_CELL: {
+        tier: "A1" as const,
+        appliesTo: "database" as const,
+        consumedBy: ["compose" as const],
+      },
+      PRIVATE_CELL_WORKER: {
+        tier: "A1" as const,
+        appliesTo: "database" as const,
+        consumedBy: ["compose" as const, "worker" as const],
+      },
+      POD_DATABASE: {
+        tier: "A1" as const,
+        appliesTo: "database" as const,
+        consumedBy: ["pod" as const, "compose" as const],
+      },
+      LEGACY_DATABASE: { tier: "A1" as const, appliesTo: "database" as const },
+      WEB: {
+        tier: "A1" as const,
+        appliesTo: "web" as const,
+        consumedBy: ["compose" as const],
+      },
+    };
+    expect(isSetupSecretsManaged("PRIVATE_CELL", routes)).toBe(false);
+    expect(isSetupSecretsManaged("PRIVATE_CELL_WORKER", routes)).toBe(false);
+    for (const name of ["POD_DATABASE", "LEGACY_DATABASE", "WEB"])
+      expect(isSetupSecretsManaged(name, routes)).toBe(true);
+  });
+});
+
 describe("secrets-catalog-loader · REAL repo catalog (guards the migration)", () => {
   const repoRoot = execSync("git rev-parse --show-toplevel", {
     encoding: "utf-8",
   }).trim();
 
   it("loads without collision + migrates A1 baseline to appliesTo", () => {
-    const { routing } = loadSecretsCatalog({ repoRoot });
+    const { secrets, routing } = loadSecretsCatalog({ repoRoot });
+    for (const name of [
+      "AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON",
+      "AKASH_DATABASE_CELL_APPLIED_EVIDENCE_BUNDLES_JSON",
+    ]) {
+      expect(secrets.find((secret) => secret.name === name)).toMatchObject({
+        source: "derived",
+        required: false,
+      });
+      expect(routing[name]).toMatchObject({
+        service: "akash-tx-actuator",
+        consumedBy: ["compose"],
+      });
+      expect(isSetupSecretsManaged(name, routing)).toBe(false);
+    }
     // node-template's A1 now lives operator-domain as capability-gated entries.
     expect(routing.AUTH_SECRET).toMatchObject({ appliesTo: "web" });
     expect(routing.AUTH_SECRET.service).toBeUndefined();

@@ -46,6 +46,7 @@ Bottom-of-tree type definitions. TS utility types, branded types, ambient global
   - `ai-span.ts` - AiSpanPort, AiSpanHandle (provider-agnostic span interface for tool instrumentation)
   - `run-context.ts` - Re-exports RunContext from @cogni/ai-core
   - `next-auth.d.ts` - NextAuth session extensions
+- `database-cell.ts` — allocation, private kit, minimal applied consumer custody, execution/approval identity, applied receipt, endpoint identity, credential-free readonly probe qualification, and audited registration facts shared by ports and runtime parsers
 - **Files considered API:** **/\*.ts, **/\*.d.ts
 
 ## Ports (optional)

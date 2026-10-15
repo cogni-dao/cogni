@@ -1,0 +1,29 @@
+{
+  "version": "reliability-status-v1",
+  "evidenceTtlMs": 120000,
+  "maxSignalAttributionSkewMs": 75000,
+  "expectedRegions": ["Frankfurt", "Ohio"],
+  "noisyNeighborSharePercent": 40,
+  "signals": {
+    "ioPressurePercent": {
+      "warning": 10,
+      "critical": 20,
+      "direction": "above"
+    },
+    "connectionsPercent": {
+      "warning": 60,
+      "critical": 75,
+      "direction": "above"
+    },
+    "memoryHeadroomPercent": {
+      "warning": 25,
+      "critical": 15,
+      "direction": "below"
+    },
+    "diskHeadroomPercent": {
+      "warning": 25,
+      "critical": 15,
+      "direction": "below"
+    }
+  }
+}

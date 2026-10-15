@@ -48,7 +48,7 @@ declare -ga NODE_BASELINE_KEYS=(
   CONNECTIONS_ENCRYPTION_KEY POLY_WALLET_AEAD_KEY_HEX
   POLY_WALLET_AEAD_KEY_ID
   APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD
-  DATABASE_URL DATABASE_SERVICE_URL
+  DATABASE_URL DATABASE_SERVICE_URL DATABASE_SSL_CA_CERT
   DOLTGRES_PASSWORD DOLTGRES_URL
   POSTHOG_API_KEY POSTHOG_HOST OPENROUTER_API_KEY
   EVM_RPC_URL POLYGON_RPC_URL
@@ -294,11 +294,19 @@ _doltgres_db_suffix() {
 # DOLTGRES_URL below keeps `${VM_IP}` — see `_doltgres_db_suffix`.
 _compose_node_value() {
   local node="$1" k="$2" kind source shared service db sfx dg_sfx pg_host
+  if declare -F cell_placement_composed_value >/dev/null && cell_placement_composed_value "$node" "$k"; then return 0; fi
   sfx="$(_lane_db_suffix "$node")"
   dg_sfx="$(_doltgres_db_suffix)"
   pg_host="${COGNI_LANE_DB_HOST:-${VM_IP}}"
   db="cogni_${node//-/_}${sfx}"
   case "$k" in
+    DATABASE_SSL_CA_CERT)
+      if command -v node >/dev/null 2>&1; then
+        node -e 'process.stdout.write(require("node:tls").rootCertificates[0])'
+      else
+        openssl x509 -in /etc/ssl/certs/ca-certificates.crt -outform PEM
+      fi
+      return 0 ;;
     DATABASE_RELIABILITY_ADMIN_URL)
       # Private platform-service DSN. The component password is generated into
       # this same isolated bucket first; hexadecimal encoding is URL-safe.
@@ -316,6 +324,9 @@ _compose_node_value() {
     DATABASE_SERVICE_URL)
       printf 'postgresql://service_%s%s:%s@%s:5432/%s?sslmode=disable' \
         "${node//-/_}" "${sfx}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
+    DATABASE_RECOVERY_PROBE_URL)
+      printf 'postgresql://probe_%s%s:%s@%s:5432/%s?sslmode=disable' \
+        "${node//-/_}" "${sfx}" "$(bao_get_field "${node}-database-recovery-probe" DATABASE_RECOVERY_PROBE_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
     DATABASE_MIGRATION_URL)
       printf 'postgresql://migration_%s%s:%s@%s:5432/%s?sslmode=disable' \
         "${node//-/_}" "${sfx}" "$(bao_get_field "${node}-database-migration" APP_DB_MIGRATION_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
