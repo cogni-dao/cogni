@@ -168,6 +168,41 @@ describe("GET /readyz async substrate contract", () => {
     mocks.getContainer.mockReset();
   });
 
+  it("resolves a remote cell through the private sealed target without runtime DB access or caller SHA", async () => {
+    const evidence = {
+      status: "healthy",
+      buildSha: "b".repeat(40),
+      databaseSystemIdentifier: "123456",
+      incidentId: "reliability.v1:cell",
+      proofClass: "recovery",
+    };
+    const readBoundTarget = vi.fn().mockResolvedValue(evidence);
+    const read = vi.fn();
+    mocks.getContainer.mockImplementation(() => {
+      throw new Error("runtime role NOLOGIN");
+    });
+    mocks.localRecovery.mockReturnValue({
+      slug: "operator",
+      buildSha: "a".repeat(40),
+      recoveryReader: { read, readBoundTarget },
+    });
+    mocks.serverEnv.mockReturnValue({ DEPLOY_ENVIRONMENT: "candidate-a" });
+    const response = await GET(
+      request("/readyz?proof=recovery&node_slug=fixture")
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(evidence);
+    expect(readBoundTarget).toHaveBeenCalledWith({
+      nodeSlug: "fixture",
+      environment: "candidate-a",
+      proofClass: "recovery",
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
+    mocks.getContainer.mockReset();
+  });
+
   it("rejects unavailable scoped recovery instead of falling back to shallow readiness", async () => {
     mocks.localRecovery.mockReturnValue({ buildSha: "a".repeat(40) });
     const response = await GET(request("/readyz?proof=recovery"));

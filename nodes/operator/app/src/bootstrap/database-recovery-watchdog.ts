@@ -17,6 +17,7 @@ import {
   PostgresAdminSqlAdapter,
   PostgresDatabaseRecoveryWatchdogAdapter,
 } from "@/adapters/server";
+import { createCellAdminRecoveryControls } from "@/adapters/server/db/database-recovery-cell.adapter";
 import type { DatabaseEnvironment } from "@/ports";
 import { EVENT_NAMES } from "@/shared/observability";
 
@@ -25,6 +26,7 @@ export async function runDatabaseRecoveryWatchdog(input: {
   readonly buildSha: string;
   readonly ownerId: string;
   readonly adminDsn: string;
+  readonly cellAdminBindings?: unknown;
 }): Promise<never> {
   if (!/^[0-9a-f-]{36}$/.test(input.ownerId)) {
     throw new Error("database_recovery_watchdog_pod_identity_missing");
@@ -37,6 +39,15 @@ export async function runDatabaseRecoveryWatchdog(input: {
   });
   const sql = new PostgresAdminSqlAdapter(input.adminDsn);
   const watchdog = new PostgresDatabaseRecoveryWatchdogAdapter(sql);
+  const cells = createCellAdminRecoveryControls(input.cellAdminBindings ?? []);
+  const cellLedgers = cells.filter(
+    (cell, index) =>
+      cells.findIndex(
+        (row) =>
+          row.binding.substrateHost === cell.binding.substrateHost &&
+          row.binding.environment === cell.binding.environment
+      ) === index
+  );
   let running = false;
   let stopping = false;
   let lastTickAt: number | null = null;
@@ -44,25 +55,57 @@ export async function runDatabaseRecoveryWatchdog(input: {
     if (running || stopping) return;
     running = true;
     try {
-      const receipt = await watchdog.tick(input);
-      lastTickAt = Date.now();
-      for (const incident of receipt.transitions) {
-        log.info(
-          {
-            event: EVENT_NAMES.NODE_RELIABILITY_TRANSITION,
-            action: "recontained",
-            ...incident,
-            occurredAt: receipt.observedAt,
-          },
-          EVENT_NAMES.NODE_RELIABILITY_TRANSITION
-        );
+      const receipts = await Promise.allSettled([
+        watchdog.tick(input),
+        ...cellLedgers.map(async (cell) => {
+          const receipt = await cell.watchdog.tick({
+            environment: cell.binding.environment,
+            ownerId: input.ownerId,
+          });
+          if (
+            receipt.transitions.some(
+              (incident) =>
+                incident.nodeId !== cell.binding.nodeId ||
+                incident.databaseSystemIdentifier !==
+                  cell.binding.systemIdentifier
+            )
+          )
+            throw new Error(
+              "database_recovery_cell_watchdog_identity_mismatch"
+            );
+          return receipt;
+        }),
+      ]);
+      lastTickAt = receipts.every((result) => result.status === "fulfilled")
+        ? Date.now()
+        : null;
+      for (const result of receipts) {
+        if (result.status === "rejected") {
+          log.error({
+            event: "feature.node_reliability.watchdog.failed",
+            error: result.reason,
+          });
+          continue;
+        }
+        const receipt = result.value;
+        for (const incident of receipt.transitions) {
+          log.info(
+            {
+              event: EVENT_NAMES.NODE_RELIABILITY_TRANSITION,
+              action: "recontained",
+              ...incident,
+              occurredAt: receipt.observedAt,
+            },
+            EVENT_NAMES.NODE_RELIABILITY_TRANSITION
+          );
+        }
+        log.info({
+          event: "feature.node_reliability.watchdog.complete",
+          observedAt: receipt.observedAt,
+          heartbeatExpiresAt: receipt.heartbeatExpiresAt,
+          transitions: receipt.transitions.length,
+        });
       }
-      log.info({
-        event: "feature.node_reliability.watchdog.complete",
-        observedAt: receipt.observedAt,
-        heartbeatExpiresAt: receipt.heartbeatExpiresAt,
-        transitions: receipt.transitions.length,
-      });
     } catch (error) {
       lastTickAt = null;
       log.error({ event: "feature.node_reliability.watchdog.failed", error });
@@ -95,7 +138,7 @@ export async function runDatabaseRecoveryWatchdog(input: {
     stopping = true;
     clearInterval(interval);
     server.close();
-    await sql.close();
+    await Promise.all([sql.close(), ...cells.map((cell) => cell.sql.close())]);
   }
   process.once("SIGTERM", () => void stop());
   process.once("SIGINT", () => void stop());

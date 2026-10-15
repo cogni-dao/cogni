@@ -134,7 +134,7 @@ export type DatabaseRecoveryProbeBinding = z.infer<
   typeof DatabaseRecoveryProbeBindingSchema
 >;
 
-const DatabaseRecoveryProbeObservationSchema = z.object({
+export const DatabaseRecoveryProbeObservationSchema = z.object({
   database: z.string(),
   role: z.string(),
   systemTenantExists: z.boolean(),
@@ -958,6 +958,37 @@ export class HttpReliabilityRecoveryAdapter
     });
     if (!response.ok)
       throw new Error("database_recovery_verification_unavailable");
+  }
+
+  async readBoundTarget(input: {
+    nodeSlug: string;
+    environment: DatabaseEnvironment;
+    proofClass: "recovery" | "recovery-product";
+  }) {
+    if (!/^[a-z][a-z0-9-]{0,62}$/.test(input.nodeSlug))
+      throw new Error("database_recovery_target_invalid");
+    const url = new URL("/v1/internal/recovery", this.config.baseUrl);
+    url.searchParams.set("node_slug", input.nodeSlug);
+    url.searchParams.set("environment", input.environment);
+    url.searchParams.set("proof_class", input.proofClass);
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${this.config.bearerToken}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(this.config.timeoutMs ?? 8_000),
+    });
+    if (!response.ok) throw new Error("database_recovery_evidence_unavailable");
+    return z
+      .object({
+        status: z.literal("healthy"),
+        buildSha: z.string().regex(/^[0-9a-f]{40}$/),
+        databaseSystemIdentifier: z.string().regex(/^[1-9][0-9]*$/),
+        incidentId: z
+          .string()
+          .regex(/^reliability\.v1:[a-zA-Z0-9._:-]{1,180}$/),
+        proofClass: z.literal(input.proofClass),
+      })
+      .strict()
+      .parse(await response.json());
   }
 
   async read(

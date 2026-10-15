@@ -258,6 +258,16 @@ export interface DatabaseRecoveryProbeObservation {
   readonly activeRuntimeSessions: number;
   readonly observedAt: string;
   readonly probeRoleIsolated: boolean;
+  readonly cellSubstrate?: {
+    readonly version: 1;
+    readonly scope: "dedicated-cell";
+    readonly sourceSha: string;
+    readonly observedAt: string;
+    readonly ioPressurePct: number;
+    readonly connectionPct: number;
+    readonly memoryHeadroomPct: number;
+    readonly diskHeadroomPct: number;
+  };
 }
 
 export interface DatabaseRecoveryProbePort {
@@ -448,6 +458,12 @@ export interface ReliabilityStatusReaderPort {
 }
 
 export interface ReliabilityRecoveryReaderPort {
+  /** The private controller resolves the canonical catalog/receipt; callers cannot assert a SHA. */
+  readBoundTarget?(input: {
+    readonly nodeSlug: string;
+    readonly environment: DatabaseEnvironment;
+    readonly proofClass: ReliabilityRecoveryCheck["proofClass"];
+  }): Promise<ReliabilityRecoveryCheck>;
   read(input: {
     readonly nodeId: string;
     readonly nodeSlug: string;

@@ -31,6 +31,13 @@ import {
   RecoveryLedgerDatabaseContainmentAdapter,
 } from "@/adapters/server";
 import {
+  createCellAdminRecoveryControls,
+  createCellReadmitRecoveryControls,
+  PostgresDatabaseCellRecoveryProbeAdapter,
+  routeCellRecoveryBegin,
+  routeCellRecoveryVerification,
+} from "@/adapters/server/db/database-recovery-cell.adapter";
+import {
   hasHealthyScopedRecoveryWindow,
   isReliabilitySweepReady,
   RELIABILITY_EVIDENCE_TTL_MS,
@@ -117,6 +124,16 @@ async function credential(name: string): Promise<string> {
   return value;
 }
 
+async function optionalCellBindings(name: string): Promise<unknown> {
+  const raw = await readFile(`${CREDENTIAL_DIR}/${name}`, "utf8").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return "[]";
+      throw error;
+    }
+  );
+  return JSON.parse(raw);
+}
+
 function parseEnvironment(value: string): Environment {
   if (["candidate-a", "preview", "production"].includes(value))
     return value as Environment;
@@ -152,6 +169,9 @@ if (mode === "watchdog") {
     buildSha,
     ownerId: requiredEnv("POD_UID"),
     adminDsn: await credential("DATABASE_RELIABILITY_ADMIN_URL"),
+    cellAdminBindings: await optionalCellBindings(
+      "DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON"
+    ),
   });
   throw new Error("database_recovery_watchdog_exited");
 }
@@ -187,24 +207,92 @@ const metrics = new MimirMetricsAdapter({
   password: prometheusPassword,
   timeoutMs: 10_000,
 });
-const recoveryProbes =
+const sharedRecoveryProbes =
   mode === "sweep"
     ? new PostgresDatabaseRecoveryProbeAdapter(
         JSON.parse(await credential("DATABASE_RECOVERY_PROBE_URLS_JSON"))
       )
     : null;
+const cellProbeBindings =
+  mode === "sweep"
+    ? await optionalCellBindings("DATABASE_RECOVERY_CELL_PROBE_URLS_JSON")
+    : [];
+const cellProbes =
+  mode === "sweep"
+    ? new PostgresDatabaseCellRecoveryProbeAdapter(cellProbeBindings)
+    : null;
+const cellAdmins =
+  mode === "sweep"
+    ? createCellAdminRecoveryControls(
+        await optionalCellBindings("DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON")
+      )
+    : [];
+const cellReadmitters =
+  mode === "readmit"
+    ? createCellReadmitRecoveryControls(
+        await optionalCellBindings(
+          "DATABASE_RELIABILITY_CELL_READMIT_URLS_JSON"
+        )
+      )
+    : [];
+for (const cell of cellAdmins) {
+  if (!cellProbes) throw new Error("database_recovery_cell_probe_unavailable");
+  const probe = cellProbes.bindingFor(cell.binding);
+  if (
+    probe.nodeSlug !== cell.binding.nodeSlug ||
+    probe.databaseName !== cell.binding.databaseName ||
+    probe.probeRole !== cell.binding.probeRole ||
+    probe.systemIdentifier !== cell.binding.systemIdentifier ||
+    probe.substrateHost !== cell.binding.substrateHost ||
+    probe.sourceSha !== cell.binding.sourceSha ||
+    probe.targetBuildSha !== cell.binding.targetBuildSha ||
+    probe.endpoint.host !== cell.binding.endpoint.host ||
+    probe.endpoint.port !== cell.binding.endpoint.port
+  )
+    throw new Error("database_recovery_cell_capability_bindings_mismatch");
+}
+const cellIdentities =
+  mode === "sweep"
+    ? cellAdmins.map((row) => row.binding)
+    : cellReadmitters.map((row) => row.binding);
+const cellFor = (input: { nodeId: string; environment: string }) =>
+  cellIdentities.find(
+    (row) =>
+      row.nodeId === input.nodeId && row.environment === input.environment
+  );
+const recoveryProbes =
+  sharedRecoveryProbes && cellProbes
+    ? {
+        bindingFor: (
+          input: Parameters<typeof sharedRecoveryProbes.bindingFor>[0]
+        ) =>
+          cellFor(input)
+            ? cellProbes.bindingFor(input)
+            : sharedRecoveryProbes.bindingFor(input),
+        observe: (input: Parameters<typeof sharedRecoveryProbes.observe>[0]) =>
+          cellFor(input)
+            ? cellProbes.observe(input)
+            : sharedRecoveryProbes.observe(input),
+      }
+    : null;
 const recoveryVerifier =
   mode === "sweep" && adminDsn
-    ? new PostgresDatabaseRecoveryVerificationAdapter(
-        new PostgresAdminSqlAdapter(adminDsn)
+    ? routeCellRecoveryVerification(
+        new PostgresDatabaseRecoveryVerificationAdapter(
+          new PostgresAdminSqlAdapter(adminDsn)
+        ),
+        cellAdmins
       )
     : null;
 const recoveryBegin =
   mode === "readmit"
-    ? new PostgresDatabaseRecoveryBeginAdapter(
-        new PostgresReadmitSqlAdapter(
-          await credential("DATABASE_RELIABILITY_READMIT_URL")
-        )
+    ? routeCellRecoveryBegin(
+        new PostgresDatabaseRecoveryBeginAdapter(
+          new PostgresReadmitSqlAdapter(
+            await credential("DATABASE_RELIABILITY_READMIT_URL")
+          )
+        ),
+        cellReadmitters
       )
     : null;
 const recoveryReader =
@@ -284,13 +372,15 @@ async function recoveryCheck(
     }),
     recoveryVerifier.current(target),
     readTargetBuildSha(target),
-    metrics.queryReliabilitySnapshot({
-      nodeSlug: target.slug,
-      environment: target.environment,
-      databaseTier: target.desiredTier,
-      budgetProfile: target.budgetProfile,
-      substrateHost: binding.substrateHost,
-    }),
+    target.desiredTier === "dedicated"
+      ? Promise.resolve(null)
+      : metrics.queryReliabilitySnapshot({
+          nodeSlug: target.slug,
+          environment: target.environment,
+          databaseTier: target.desiredTier,
+          budgetProfile: target.budgetProfile,
+          substrateHost: binding.substrateHost,
+        }),
     product,
   ]);
   if (
@@ -303,18 +393,21 @@ async function recoveryCheck(
     throw new Error("database_recovery_identity_unproved");
   }
   const age = Date.now() - Date.parse(observation.observedAt);
+  const health =
+    target.desiredTier === "dedicated" ? observation.cellSubstrate : substrate;
   if (
+    !health ||
     age < -15_000 ||
     age > RELIABILITY_EVIDENCE_TTL_MS ||
-    substrate.evidenceScope !== "node" ||
-    substrate.ioPressurePct === null ||
-    substrate.ioPressurePct >= 10 ||
-    substrate.connectionPct === null ||
-    substrate.connectionPct >= 60 ||
-    substrate.memoryHeadroomPct === null ||
-    substrate.memoryHeadroomPct <= 25 ||
-    substrate.diskHeadroomPct === null ||
-    substrate.diskHeadroomPct <= 25
+    (target.desiredTier === "shared" && substrate?.evidenceScope !== "node") ||
+    health.ioPressurePct === null ||
+    health.ioPressurePct >= 10 ||
+    health.connectionPct === null ||
+    health.connectionPct >= 60 ||
+    health.memoryHeadroomPct === null ||
+    health.memoryHeadroomPct <= 25 ||
+    health.diskHeadroomPct === null ||
+    health.diskHeadroomPct <= 25
   ) {
     throw new Error("database_recovery_substrate_unproved");
   }
@@ -462,8 +555,13 @@ async function listTargets(): Promise<readonly ReliabilityTarget[]> {
       (node.isReliabilityController ? reliabilityController.nodeId : undefined);
     if (!nodeId)
       throw new Error(`reliability_catalog_node_id_missing:${node.slug}`);
+    const cell = cellFor({ nodeId, environment });
+    if (cell && (placement.tier !== "dedicated" || cell.nodeSlug !== node.slug))
+      throw new Error("database_recovery_cell_catalog_identity_mismatch");
     const sourceSha =
-      node.sourceSha ?? (node.isReliabilityController ? buildSha : undefined);
+      cell?.targetBuildSha ??
+      node.sourceSha ??
+      (node.isReliabilityController ? buildSha : undefined);
     if (!sourceSha)
       throw new Error(`reliability_catalog_source_sha_missing:${node.slug}`);
     let substrateHost: string | undefined;
@@ -539,6 +637,71 @@ const CatalogEntrySchema = z
     >,
   }));
 
+async function readDedicatedStatus(
+  target: ReliabilityTarget
+): Promise<ReliabilityStatusV1> {
+  if (!recoveryProbes || !recoveryVerifier || !cellFor(target))
+    throw new Error("database_recovery_cell_binding_missing");
+  const [observation, incident, actualSha] = await Promise.all([
+    recoveryProbes.observe({
+      nodeId: target.nodeId,
+      nodeSlug: target.slug,
+      environment: target.environment,
+    }),
+    recoveryVerifier.current(target),
+    readTargetBuildSha(target),
+  ]);
+  if (
+    actualSha !== target.sourceSha ||
+    (incident &&
+      (incident.targetBuildSha !== target.sourceSha ||
+        incident.databaseSystemIdentifier !== observation.systemIdentifier))
+  )
+    throw new Error("database_recovery_cell_status_identity_mismatch");
+  const health = observation.cellSubstrate;
+  if (!health) throw new Error("database_recovery_cell_substrate_missing");
+  const contained =
+    observation.runtimeRolesNoLogin && observation.activeRuntimeSessions === 0;
+  return {
+    version: "reliability-status.v1",
+    nodeId: target.nodeId,
+    slug: target.slug,
+    environment: target.environment,
+    buildSha: actualSha,
+    databaseTier: "dedicated",
+    budgetProfile: target.budgetProfile,
+    state:
+      incident?.state === "recovering"
+        ? "recovering"
+        : contained
+          ? "contained"
+          : "unknown",
+    regionalReadiness: [],
+    utilization: {
+      evidenceScope: "node",
+      ioPressurePct: health.ioPressurePct,
+      connectionPct: health.connectionPct,
+      memoryHeadroomPct: health.memoryHeadroomPct,
+      diskHeadroomPct: health.diskHeadroomPct,
+      databaseShare5m: {
+        backendsPct: null,
+        physicalReadsPct: null,
+        tempBytesPct: null,
+      },
+    },
+    incidentId: incident?.incidentId ?? null,
+    incidentReason:
+      incident?.reason ?? "dedicated regional readiness remains unproved",
+    observedAt: new Date().toISOString(),
+    lastTransitionAt:
+      incident?.verifiedAt ??
+      incident?.startedAt ??
+      incident?.containedAt ??
+      null,
+    evidenceQueryRefs: ["native:database_recovery_probe:dedicated-cell"],
+  };
+}
+
 async function sweep(): Promise<void> {
   if (sweepRunning || stopping) return;
   if (!containment) throw new Error("database_reliability_sweep_unavailable");
@@ -559,13 +722,38 @@ async function sweep(): Promise<void> {
       if (!nextTargets.has(key)) statuses.delete(key);
     }
     const minute = Math.floor(Date.now() / SWEEP_INTERVAL_MS);
-    const results = await runReliabilitySweep(catalogTargets, {
-      metrics,
-      containment,
-      buildShaFor: async (target) => readTargetBuildSha(target),
-      incidentIdFor: (target) =>
-        `reliability.v1:${target.environment}:${target.nodeId}:${minute}`,
-    });
+    const results = [
+      ...(await runReliabilitySweep(
+        catalogTargets.filter((target) => target.desiredTier === "shared"),
+        {
+          metrics,
+          containment,
+          buildShaFor: async (target) => readTargetBuildSha(target),
+          incidentIdFor: (target) =>
+            `reliability.v1:${target.environment}:${target.nodeId}:${minute}`,
+        }
+      )),
+    ];
+    for (const target of catalogTargets.filter(
+      (row) => row.desiredTier === "dedicated"
+    )) {
+      try {
+        results.push({
+          target,
+          status: await readDedicatedStatus(target),
+          error: null,
+        });
+      } catch (error) {
+        results.push({
+          target,
+          status: null,
+          error:
+            error instanceof Error
+              ? error.message
+              : "database_recovery_cell_status_unproved",
+        });
+      }
+    }
     for (const result of results) {
       if (result.status) statuses.set(statusKey(result.target), result.status);
       log[result.error ? "error" : "info"](
@@ -689,7 +877,12 @@ const server = createServer(async (request, response) => {
               (candidate) => statusKey(candidate) === key
             )
         : undefined;
-    if (!target || target.nodeId !== nodeId) {
+    const isBoundCellRead =
+      isRecovery &&
+      !nodeId &&
+      target?.desiredTier === "dedicated" &&
+      Boolean(cellFor(target));
+    if (!target || (!isBoundCellRead && target.nodeId !== nodeId)) {
       response.writeHead(503, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "reliability_status_unavailable" }));
       return;

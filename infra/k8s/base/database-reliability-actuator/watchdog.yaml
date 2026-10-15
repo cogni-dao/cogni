@@ -101,6 +101,8 @@ spec:
                   items:
                     - key: DATABASE_RELIABILITY_ADMIN_URL
                       path: DATABASE_RELIABILITY_ADMIN_URL
+                    - key: DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON
+                      path: DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -130,3 +132,16 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 127.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 1
+          endPort: 65535
