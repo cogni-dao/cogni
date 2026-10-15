@@ -17,13 +17,27 @@ import * as fullSchema from "@cogni/db-schema";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
-export function buildClient(connectionString: string, applicationName: string) {
+export interface DbClientOptions {
+  /** Maximum connections owned by this process, not the database role's limit. */
+  readonly max?: number;
+  readonly applicationName?: string;
+}
+
+export function buildClient(
+  connectionString: string,
+  applicationName: string,
+  options: DbClientOptions = {}
+) {
+  const max = options.max ?? 10;
+  if (!Number.isSafeInteger(max) || max < 1) {
+    throw new Error("Database pool max must be a positive safe integer");
+  }
   const client = postgres(connectionString, {
-    max: 10,
+    max,
     idle_timeout: 20,
     connect_timeout: 10,
     connection: {
-      application_name: applicationName,
+      application_name: options.applicationName ?? applicationName,
     },
   });
 
