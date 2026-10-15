@@ -19,7 +19,7 @@ materialize_database_cell_kits() {
     # release must not replace that artifact while its audited binding stays put.
     prefetch_path "${cell_node}-database-cell"
     kit_json="$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_PLACEMENT_RECEIPT_JSON)"
-    if [[ -n "$kit_json" && "$(jq -r .binding.phase <<<"$kit_json")" == applied ]]; then
+    if [[ -n "$kit_json" && "$(jq -r .binding.phase <<<"$kit_json")" =~ ^(applied|superseded)$ ]]; then
       [[ "$(jq -r .binding.nodeSlug <<<"$kit_json")" == "$cell_node" && "$(jq -r .binding.nodeId <<<"$kit_json")" == "$(node_id_for_target "$cell_node")" && "$(jq -r .allocationEnvironment <<<"$kit_json")" == "$DEPLOY_ENVIRONMENT" ]] || fail "applied cell does not own this catalog scope"
       prefetch_path "${cell_node}-database-backup"
       jq -n --argjson receipt "$kit_json" --argjson kit "$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_BOOTSTRAP_KIT_JSON)" --arg backupEncryptionKey "$(bao_get_field "${cell_node}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" > /dev/null || fail "applied cell bootstrap custody differs from its binding"
