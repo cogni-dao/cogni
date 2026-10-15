@@ -71,9 +71,9 @@ jobs:
       - name: Checkout app source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          # Shallow is enough: the workflow_dispatch path does its own
-          # `git fetch origin main --depth=100` before the ancestor check.
-          fetch-depth: 1
+          ref: ${{ inputs.sha || github.sha }}
+          # The artifact selector compares the actual merged commit to its parent.
+          fetch-depth: 2
 
       - name: Resolve target SHA and associated PR
         id: pr
@@ -155,6 +155,7 @@ jobs:
           fi
 
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(git rev-parse "${HEAD_SHA}^1")" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "pr_head_sha=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "image_tag=sha-${HEAD_SHA}" >> "$GITHUB_OUTPUT"
@@ -178,6 +179,8 @@ jobs:
         id: remote-source-artifact-targets
         if: steps.pr.outputs.skip != 'true'
         env:
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
           OUTPUT_FILE: ${{ runner.temp }}/remote-source-artifact-targets.json
         run: bash scripts/ci/detect-remote-source-artifact-targets.sh

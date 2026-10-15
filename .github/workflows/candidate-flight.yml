@@ -243,6 +243,8 @@ jobs:
         id: remote-source-artifact-targets
         working-directory: app-src
         env:
+          BASE_SHA: ${{ steps.meta.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
           COGNI_CATALOG_ROOT: infra/catalog
           OUTPUT_FILE: ${{ runner.temp }}/remote-source-artifact-targets.json
