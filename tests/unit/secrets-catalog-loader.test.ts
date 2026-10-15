@@ -111,6 +111,22 @@ describe("secrets-catalog-loader · capability fan-out (v2)", () => {
       /mutually exclusive/
     );
   });
+
+  it("rejects a noncanonical flight-probe key size", () => {
+    writeOperatorCatalog(`
+  - name: FLIGHT_PROBE_API_KEY
+    tier: A1
+    appliesTo: all-nodes
+    required: true
+    category: Core App
+    source: agent
+    description: bounded flight-prober key ring
+    steps: ["auto"]
+    materializeOnly: true
+    generate: { kind: flight-probe-key-ring, bytes: 33 }
+`);
+    expect(() => loadSecretsCatalog({ repoRoot })).toThrow(/schema error/);
+  });
 });
 
 describe("secrets-catalog-loader · openBaoPathFor (fan-out path resolution)", () => {
@@ -225,7 +241,7 @@ describe("secrets-catalog-loader · REAL repo catalog (guards the migration)", (
     });
     const ring = JSON.parse(secret?.generate?.() ?? "null") as unknown;
     expect(ring).toEqual({
-      active: expect.stringMatching(/^.{32,}$/),
+      active: expect.stringMatching(/^[A-Za-z0-9+/]{43}=$/),
       previous: null,
     });
   });

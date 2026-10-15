@@ -197,6 +197,22 @@ test "$(jq -r '.previous' "$RING_FILE")" = "$OLD"
 [[ "$OLD" =~ $CREDENTIAL_GRAMMAR ]]
 test "$(cat "$TARGET_RING_FILE")" = "$(cat "$RING_FILE")"
 test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key]' "$MAP_FILE")" = "$OLD"
+PREPARED_RING="$(cat "$RING_FILE")"
+run_lifecycle materialize "$TMPROOT/materialize-prepared.out"
+test "$(cat "$RING_FILE")" = "$PREPARED_RING"
+test "$(cat "$TARGET_RING_FILE")" = "$PREPARED_RING"
+test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key]' "$MAP_FILE")" = "$OLD"
+cp "$MAP_FILE" "$TMPROOT/prepared-map.json"
+printf '{}' > "$MAP_FILE"
+set +e
+run_lifecycle materialize "$TMPROOT/materialize-prepared-missing-map.out"
+materialize_missing_map_rc=$?
+set -e
+test "$materialize_missing_map_rc" -ne 0
+grep -q 'neither bounded ring key during pending rotation' \
+  "$TMPROOT/materialize-prepared-missing-map.out"
+test "$(cat "$RING_FILE")" = "$PREPARED_RING"
+cp "$TMPROOT/prepared-map.json" "$MAP_FILE"
 run_lifecycle prepare "$TMPROOT/prepare-retry.out"
 test "$(jq -r '.active' "$RING_FILE")" = "$NEW"
 grep -q 'no third key minted' "$TMPROOT/prepare-retry.out"
@@ -205,6 +221,9 @@ grep -q 'no third key minted' "$TMPROOT/prepare-retry.out"
 run_lifecycle activate "$TMPROOT/activate.out"
 test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key]' "$MAP_FILE")" = "$NEW"
 test "$(jq -r '.previous' "$RING_FILE")" = "$OLD"
+run_lifecycle materialize "$TMPROOT/materialize-activated.out"
+test "$(cat "$RING_FILE")" = "$PREPARED_RING"
+test "$(jq -r --arg key "candidate-a/$NODE_ID" '.[$key]' "$MAP_FILE")" = "$NEW"
 run_lifecycle finish "$TMPROOT/finish.out"
 test "$(jq -r '.active' "$RING_FILE")" = "$NEW"
 test "$(jq -r '.previous' "$RING_FILE")" = null

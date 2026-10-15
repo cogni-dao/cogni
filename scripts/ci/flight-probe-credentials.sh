@@ -261,8 +261,15 @@ case "$OPERATION" in
       log "created control-authoritative ring for ${LANE}/${TARGET_NODE}"
     fi
     sync_local_target_view "$RING"
-    store_map_entry set "$ACTIVE"
-    log "materialized exact map entry ${MAP_KEY} in control env ${CONTROL_ENV}"
+    if [[ -n "$PREVIOUS" ]]; then
+      load_map
+      [[ "$MAP_ACTIVE" == "$PREVIOUS" || "$MAP_ACTIVE" == "$ACTIVE" ]] \
+        || fail "operator map points at neither bounded ring key during pending rotation"
+      log "preserved pending rotation phase for ${MAP_KEY} during materialization"
+    else
+      store_map_entry set "$ACTIVE"
+      log "materialized exact map entry ${MAP_KEY} in control env ${CONTROL_ENV}"
+    fi
     ;;
   prepare)
     load_ring || fail "cannot rotate absent ring; run materialize first"

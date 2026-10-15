@@ -87,7 +87,7 @@ const GenerateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("hex"), bytes: z.number().int().positive() }),
   z.object({
     kind: z.literal("flight-probe-key-ring"),
-    bytes: z.number().int().min(32),
+    bytes: z.literal(32),
   }),
   z.object({
     kind: z.literal("sk-cogni"),
