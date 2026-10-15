@@ -95,9 +95,19 @@ for catalog_file in "$CATALOG_ROOT"/*.yaml; do
 
   i=0
   while [ "$i" -lt "$count" ]; do
+    entry_index="$i"
     cidr="$(yq -N ".compute_egress_cidrs[$i].cidr // \"\"" "$catalog_file")"
     comment="$(yq -N ".compute_egress_cidrs[$i].comment // \"\"" "$catalog_file" | head -n1)"
     i=$((i + 1))
+
+    if yq -N -e ".compute_egress_cidrs[$entry_index] | has(\"envs\")" "$catalog_file" >/dev/null 2>&1; then
+      scope=".compute_egress_cidrs[$entry_index].envs"
+      yq -N -e "$scope | select((tag == \"!!seq\") and (length > 0)) | all_c(. == \"candidate-a\" or . == \"preview\" or . == \"production\")" "$catalog_file" >/dev/null || {
+        echo "[render-compute-egress] ERROR: invalid entry envs for $cidr in $catalog_file" >&2
+        exit 1
+      }
+      yq -N -e "$scope | (contains([\"$ENV_NAME\"]) and contains([\"$DESTINATION_ENV\"]))" "$catalog_file" >/dev/null 2>&1 || continue
+    fi
 
     # Fail LOUD at render time (schema also gates this in CI): a malformed CIDR
     # must abort the render, never reach the VM to be warn-skipped there.

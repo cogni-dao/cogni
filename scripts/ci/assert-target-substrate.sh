@@ -65,10 +65,22 @@ required_keys_csv="$(paste -sd, - <<<"$required_keys")"
 # not preserved. Keep this slot non-empty or every later remote positional shifts.
 required_keys_arg="${required_keys_csv:-__none__}"
 
-egress_cidrs="$(yq -r '.compute_egress_cidrs[]?.cidr' "$catalog_file" | sort -u)"
-[ -n "$egress_cidrs" ] \
+egress_count="$(yq -N '.compute_egress_cidrs | length' "$catalog_file")"
+[ "$egress_count" -gt 0 ] 2>/dev/null \
   || fail "external-compute target '$node' has no compute_egress_cidrs"
+egress_cidrs="$(
+  for ((entry_index=0; entry_index<egress_count; entry_index++)); do
+    if yq -N -e ".compute_egress_cidrs[$entry_index] | has(\"envs\")" "$catalog_file" >/dev/null 2>&1; then
+      scope=".compute_egress_cidrs[$entry_index].envs"
+      yq -N -e "$scope | select((tag == \"!!seq\") and (length > 0)) | all_c(. == \"candidate-a\" or . == \"preview\" or . == \"production\")" "$catalog_file" >/dev/null \
+        || fail "invalid compute egress entry envs for '$node'"
+      yq -N -e "$scope | (contains([\"$DEPLOY_ENVIRONMENT\"]) and contains([\"$control_env\"]))" "$catalog_file" >/dev/null 2>&1 || continue
+    fi
+    yq -r ".compute_egress_cidrs[$entry_index].cidr" "$catalog_file"
+  done | sort -u
+)"
 egress_cidrs_csv="$(paste -sd, - <<<"$egress_cidrs")"
+egress_cidrs_arg="${egress_cidrs_csv:-__none__}"
 
 # task.5104 / task.5138 — WHICH AUTHORITY owns this row's workload in this environment.
 # Shell twin of resolveNodeComputeApi() in
@@ -91,7 +103,7 @@ read -r -a ssh_opts <<< "$ssh_opts_raw"
 # The shared helper buffers this heredoc and retries only the OpenBao Kubernetes
 # login transient; stable 403 authz drift still fails after one fresh-JWT check.
 cogni_openbao_kubernetes_login_retry "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
-  "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_arg" "$egress_cidrs_csv" \
+  "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_arg" "$egress_cidrs_arg" \
   "$egress_allowlist" "$compute_api" "$vm_host" "$control_env" <<'REMOTE'
 set -euo pipefail
 env_name="$1"
@@ -99,6 +111,7 @@ node="$2"
 required_keys_csv="$3"
 [ "$required_keys_csv" = "__none__" ] && required_keys_csv=""
 egress_cidrs_csv="$4"
+[ "$egress_cidrs_csv" = "__none__" ] && egress_cidrs_csv=""
 egress_allowlist="$5"
 authority="$6"
 # bug.5394 — the cluster this assertion actually reached. DEPLOY_ENVIRONMENT names the
