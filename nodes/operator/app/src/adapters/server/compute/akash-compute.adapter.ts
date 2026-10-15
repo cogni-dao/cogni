@@ -250,7 +250,19 @@ interface ConsoleLease {
   price?: { denom?: string; amount?: string };
   status?: {
     uris?: string[];
-    services?: Record<string, { uris?: string[] }>;
+    services?: Record<
+      string,
+      {
+        uris?: string[];
+        observed_generation?: number;
+        replicas?: number;
+        updated_replicas?: number;
+        ready_replicas?: number;
+        available_replicas?: number;
+        total?: number;
+        available?: number;
+      }
+    >;
     forwarded_ports?: Record<
       string,
       { host?: string; externalPort?: number; proto?: string }[]
@@ -687,6 +699,57 @@ export class AkashComputeAdapter
         "UNEXPECTED_SHAPE",
         "active paid definition and current manifest identity unavailable"
       );
+    const services = Object.entries(lease.status?.services ?? {}).map(
+      ([name, service]) => {
+        const value = {
+          name,
+          observedGeneration: service.observed_generation,
+          replicas: service.replicas,
+          updatedReplicas: service.updated_replicas,
+          readyReplicas: service.ready_replicas,
+          availableReplicas: service.available_replicas,
+          total: service.total,
+          available: service.available,
+        };
+        const fields = [
+          value.observedGeneration,
+          value.replicas,
+          value.updatedReplicas,
+          value.readyReplicas,
+          value.availableReplicas,
+          value.total,
+          value.available,
+        ];
+        if (
+          !name ||
+          fields.some(
+            (count) =>
+              typeof count !== "number" ||
+              !Number.isSafeInteger(count) ||
+              count < 0
+          )
+        )
+          throw new AkashComputeError(
+            "UNEXPECTED_SHAPE",
+            "provider rollout observation incomplete"
+          );
+        return {
+          name,
+          observedGeneration: Number(value.observedGeneration),
+          replicas: Number(value.replicas),
+          updatedReplicas: Number(value.updatedReplicas),
+          readyReplicas: Number(value.readyReplicas),
+          availableReplicas: Number(value.availableReplicas),
+          total: Number(value.total),
+          available: Number(value.available),
+        };
+      }
+    );
+    if (services.length === 0 || services.length > 32)
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "provider rollout observation absent"
+      );
     return {
       observedAt: this.now().toISOString(),
       leaseId: input.leaseId,
@@ -696,6 +759,7 @@ export class AkashComputeAdapter
       providerSdlSha256: createHash("sha256").update(sdl).digest("hex"),
       consoleManifestVersion: consoleVersion,
       chainManifestVersion: chainVersion,
+      services,
     };
   }
 

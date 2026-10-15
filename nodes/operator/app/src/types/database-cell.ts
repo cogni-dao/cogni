@@ -258,6 +258,12 @@ export interface DatabaseCellApprovalAuthority {
   readonly delegationDigest: string;
 }
 
+/** Exact-exported basis requires a real captured server snapshot; other starts are conservative lower bounds. */
+export type DatabaseCellSnapshotTimeBasis =
+  | "service-start-conservative"
+  | "dump-command-start-conservative"
+  | "exact-exported-snapshot";
+
 /** Current schedule truth is separate from the historical archive qualified by DR. */
 export interface DatabaseCellBackupRuntimeObservation {
   readonly observedAt: string;
@@ -288,6 +294,7 @@ export interface DatabaseCellBackupRuntimeObservation {
     readonly archiveSha256: string;
     readonly archiveBytes: number;
     readonly snapshotStartedAt: string;
+    readonly snapshotTimeBasis: DatabaseCellSnapshotTimeBasis;
     readonly completedAt: string;
     readonly snapshotAgeSeconds: number;
   };
@@ -328,6 +335,7 @@ export interface DatabaseCellAppliedRegistrationFacts {
       readonly buildSha: string;
       readonly observedAt: string;
     }[];
+    /** Current owned configured values, not opaque provider env-token hashes. */
     readonly appDsnSha256: string;
     readonly serviceDsnSha256: string;
     readonly migrationDsnSha256: string;
@@ -335,6 +343,34 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly tlsTrustKind: "system" | "private-ca";
     readonly migrationConsumer: "app-database-url" | "dedicated-migration-url";
     readonly readinessReceiptSha256: string;
+    readonly providerManifest: {
+      readonly observedAt: string;
+      readonly services: readonly {
+        readonly name: string;
+        readonly observedGeneration: number;
+        readonly replicas: number;
+        readonly updatedReplicas: number;
+        readonly readyReplicas: number;
+        readonly availableReplicas: number;
+        readonly total: number;
+        readonly available: number;
+      }[];
+      readonly consoleVersion: string;
+      readonly chainVersion: string;
+      readonly imageDigest: string;
+    };
+    readonly runtimeAdoption: {
+      readonly observedAt: string;
+      readonly systemIdentifier: string;
+      /** Public boot egress is distinct from provider-forwarded native peer addresses. */
+      readonly publicBootEgressIp: string;
+      readonly sessions: readonly {
+        readonly role: string;
+        readonly applicationName: string;
+        readonly peerAddress: string;
+        readonly count: number;
+      }[];
+    };
   };
   readonly manualCutover: {
     readonly packetSha256: string;
@@ -345,6 +381,14 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly manualProvenance: DatabaseCellManualProvenance;
     readonly appAllocationReceiptId: string;
     readonly appSdlHash: string;
+    readonly appManifestVersion: string;
+    readonly appImageDigest: string;
+    readonly appEgressIp: string;
+    readonly appServiceName: string;
+    readonly expectedRuntimeApplications: readonly {
+      readonly role: string;
+      readonly applicationName: string;
+    }[];
     readonly expectedRelations: readonly string[];
     readonly preservedRoleBounds: readonly DatabaseCellRoleBounds[];
     readonly allocationReceiptId: string;
@@ -372,6 +416,7 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly archiveSha256: string;
     readonly archiveBytes: number;
     readonly snapshotStartedAt: string;
+    readonly snapshotTimeBasis: DatabaseCellSnapshotTimeBasis;
     readonly completedAt: string;
     readonly verifiedArchiveReceiptSha256: string;
     readonly schedulerUnitSha256: string;

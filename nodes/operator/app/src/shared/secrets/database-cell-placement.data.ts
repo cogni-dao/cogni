@@ -11,6 +11,7 @@
  * @internal
  */
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import { z } from "zod";
 import type { DatabaseCellAppliedRegistrationFacts } from "@/types/database-cell";
 
@@ -129,6 +130,9 @@ export const DatabaseCellAllocationMetadataSchema = z.union([
 
 const digest = z.string().regex(/^[0-9a-f]{64}$/);
 const sourceSha = z.string().regex(/^[0-9a-f]{40}$/);
+const manifestVersion = z.string().regex(/^[A-Za-z0-9+/]{43}=$/);
+const imageDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+const ipAddress = z.string().refine((value) => Boolean(isIP(value)));
 const timestamp = z.string().datetime({ offset: true });
 const systemIdentifier = z.string().regex(/^[0-9]+$/);
 const endpoint = z
@@ -150,6 +154,12 @@ const snapshotFingerprint = {
   relations,
   rowCount: z.string().regex(/^(0|[1-9][0-9]*)$/),
 };
+
+const snapshotTimeBasis = z.enum([
+  "service-start-conservative",
+  "dump-command-start-conservative",
+  "exact-exported-snapshot",
+]);
 
 /** Measured current timer/service facts; no invented RPO policy or unconditional bound. */
 export const DatabaseCellBackupRuntimeObservationSchema = z
@@ -187,6 +197,7 @@ export const DatabaseCellBackupRuntimeObservationSchema = z
         archiveSha256: digest,
         archiveBytes: z.number().int().positive(),
         snapshotStartedAt: timestamp,
+        snapshotTimeBasis,
         completedAt: timestamp,
         snapshotAgeSeconds: z.number().nonnegative(),
       })
@@ -277,6 +288,51 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
           "dedicated-migration-url",
         ]),
         readinessReceiptSha256: digest,
+        providerManifest: z
+          .object({
+            observedAt: timestamp,
+            services: z
+              .array(
+                z
+                  .object({
+                    name: z.string().min(1).max(63),
+                    observedGeneration: z.number().int().positive(),
+                    replicas: z.number().int().nonnegative(),
+                    updatedReplicas: z.number().int().nonnegative(),
+                    readyReplicas: z.number().int().nonnegative(),
+                    availableReplicas: z.number().int().nonnegative(),
+                    total: z.number().int().nonnegative(),
+                    available: z.number().int().nonnegative(),
+                  })
+                  .strict()
+              )
+              .min(1)
+              .max(32),
+            consoleVersion: manifestVersion,
+            chainVersion: manifestVersion,
+            imageDigest,
+          })
+          .strict(),
+        runtimeAdoption: z
+          .object({
+            observedAt: timestamp,
+            systemIdentifier,
+            publicBootEgressIp: ipAddress,
+            sessions: z
+              .array(
+                z
+                  .object({
+                    role: z.string().min(1).max(63),
+                    applicationName: z.string().min(1).max(63),
+                    peerAddress: ipAddress,
+                    count: z.number().int().positive(),
+                  })
+                  .strict()
+              )
+              .min(1)
+              .max(128),
+          })
+          .strict(),
         regions: z
           .array(
             z
@@ -302,6 +358,21 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         manualProvenance: DatabaseCellManualProvenanceSchema,
         appAllocationReceiptId: z.string().uuid(),
         appSdlHash: digest,
+        appManifestVersion: manifestVersion,
+        appImageDigest: imageDigest,
+        appEgressIp: ipAddress,
+        appServiceName: z.string().min(1).max(63),
+        expectedRuntimeApplications: z
+          .array(
+            z
+              .object({
+                role: z.string().min(1).max(63),
+                applicationName: z.string().min(1).max(63),
+              })
+              .strict()
+          )
+          .min(1)
+          .max(16),
         expectedRelations: relations,
         preservedRoleBounds: z.array(DatabaseCellRoleBoundsSchema).length(2),
         allocationReceiptId: z.string().uuid(),
@@ -333,6 +404,7 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         archiveSha256: digest,
         archiveBytes: z.number().int().positive(),
         snapshotStartedAt: timestamp,
+        snapshotTimeBasis,
         completedAt: timestamp,
         verifiedArchiveReceiptSha256: digest,
         schedulerUnitSha256: digest,

@@ -294,7 +294,23 @@ describe("AkashComputeAdapter.readManagedDefinition", () => {
     },
     consoleSettings: { sdl, manifestVersion: version },
     leases: [
-      { state: "active", id: { dseq: "7001", gseq: 1, oseq: 1, provider } },
+      {
+        state: "active",
+        id: { dseq: "7001", gseq: 1, oseq: 1, provider },
+        status: {
+          services: {
+            app: {
+              observed_generation: 1,
+              replicas: 1,
+              updated_replicas: 1,
+              ready_replicas: 1,
+              available_replicas: 1,
+              total: 1,
+              available: 1,
+            },
+          },
+        },
+      },
     ],
   };
   it("uses the existing readonly client and labels returned-definition bytes separately from full secret-bearing managed SDL", async () => {
@@ -312,6 +328,18 @@ describe("AkashComputeAdapter.readManagedDefinition", () => {
       providerSdlSha256: createHash("sha256").update(sdl).digest("hex"),
       consoleManifestVersion: version,
       chainManifestVersion: version,
+      services: [
+        {
+          name: "app",
+          observedGeneration: 1,
+          replicas: 1,
+          updatedReplicas: 1,
+          readyReplicas: 1,
+          availableReplicas: 1,
+          total: 1,
+          available: 1,
+        },
+      ],
     });
     expect(observed).not.toHaveProperty("appDsnSha256");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -321,6 +349,16 @@ describe("AkashComputeAdapter.readManagedDefinition", () => {
   it("refuses missing, mismatched, ambiguous and oversized current definitions without mutation or echoed values", async () => {
     for (const value of [
       { ...detail, consoleSettings: undefined },
+      { ...detail, leases: [{ ...detail.leases[0], status: undefined }] },
+      {
+        ...detail,
+        leases: [
+          {
+            ...detail.leases[0],
+            status: { services: { app: { replicas: 1 } } },
+          },
+        ],
+      },
       {
         ...detail,
         deployment: {

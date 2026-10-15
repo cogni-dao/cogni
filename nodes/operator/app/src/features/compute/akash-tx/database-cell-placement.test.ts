@@ -663,6 +663,7 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
         archiveSha256: "0".repeat(64),
         archiveBytes: 2846000000,
         snapshotStartedAt: ago(10),
+        snapshotTimeBasis: "dump-command-start-conservative",
         completedAt: ago(8),
         snapshotAgeSeconds: 10,
       },
@@ -712,6 +713,37 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       tlsTrustKind: "system",
       migrationConsumer: "app-database-url",
       readinessReceiptSha256: "4".repeat(64),
+      providerManifest: {
+        observedAt: ago(0),
+        services: [
+          {
+            name: "app",
+            observedGeneration: 1,
+            replicas: 1,
+            updatedReplicas: 1,
+            readyReplicas: 1,
+            availableReplicas: 1,
+            total: 1,
+            available: 1,
+          },
+        ],
+        consoleVersion: Buffer.alloc(32, 9).toString("base64"),
+        chainVersion: Buffer.alloc(32, 9).toString("base64"),
+        imageDigest: `sha256:${"9".repeat(64)}`,
+      },
+      runtimeAdoption: {
+        observedAt: ago(0),
+        systemIdentifier: "1234567890123456789",
+        publicBootEgressIp: "192.0.2.44",
+        sessions: [
+          {
+            role: lane.serviceRole,
+            applicationName: "cogni_service",
+            peerAddress: "10.233.83.0",
+            count: 3,
+          },
+        ],
+      },
       regions: [
         { region: "eu", status: 200, buildSha: appSha, observedAt: ago(0) },
         { region: "us", status: 200, buildSha: appSha, observedAt: ago(0) },
@@ -726,6 +758,13 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       manualProvenance: manualProvenance(),
       appAllocationReceiptId: "88888888-8888-4888-8888-888888888888",
       appSdlHash: "c".repeat(64),
+      appManifestVersion: Buffer.alloc(32, 9).toString("base64"),
+      appImageDigest: `sha256:${"9".repeat(64)}`,
+      appEgressIp: "192.0.2.44",
+      appServiceName: "app",
+      expectedRuntimeApplications: [
+        { role: lane.serviceRole, applicationName: "cogni_service" },
+      ],
       expectedRelations: relationNames,
       preservedRoleBounds: preservedRoleBounds(),
       allocationReceiptId: "22222222-2222-4222-8222-222222222222",
@@ -775,6 +814,7 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       archiveSha256: "8".repeat(64),
       archiveBytes: 2845520022,
       snapshotStartedAt: ago(20),
+      snapshotTimeBasis: "service-start-conservative",
       completedAt: ago(18),
       verifiedArchiveReceiptSha256: "9".repeat(64),
       schedulerUnitSha256: "a".repeat(64),
@@ -988,8 +1028,42 @@ describe("audited already-applied registration", () => {
     expect(receipts[0]?.binding.phase).toBe("applied");
     expect(current.writes()).toBe(1);
   });
+  it("refuses absent native session evidence without accepting malformed observer facts", async () => {
+    const facts = registrationFacts();
+    facts.effectiveApp.runtimeAdoption.sessions = [];
+    const current = fixture({ appliedFacts: facts });
+    await expect(current.binder.registerApplied(request)).rejects.toMatchObject(
+      { code: "ledger_unavailable" }
+    );
+    expect(current.writes()).toBe(0);
+  });
   it("refuses wrong managed allocation, current DSNs, app SHA, partial recovery, schema drift and same-provider recovery", async () => {
     const invalidCases = [
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        const service = f.effectiveApp.providerManifest.services[0];
+        if (service) service.updatedReplicas = 0;
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        const service = f.effectiveApp.providerManifest.services[0];
+        if (service) service.total = 2;
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        const session = f.effectiveApp.runtimeAdoption.sessions[0];
+        if (session) session.applicationName = "foreign_observer";
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.effectiveApp.providerManifest.consoleVersion = Buffer.alloc(
+          32,
+          8
+        ).toString("base64");
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.effectiveApp.runtimeAdoption.publicBootEgressIp = "192.0.2.45";
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        const session = f.effectiveApp.runtimeAdoption.sessions[0];
+        if (session) session.role = "foreign_role";
+      },
       (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
         f.backupRuntime.nextRunAt = null;
       },

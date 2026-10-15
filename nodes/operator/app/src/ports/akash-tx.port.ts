@@ -354,6 +354,17 @@ export interface AkashTxManagedDeploymentDefinition {
   readonly providerSdlSha256: string;
   readonly consoleManifestVersion: string;
   readonly chainManifestVersion: string;
+  /** Provider-reported current rollout counters, not inspection of terminated pods. */
+  readonly services: readonly {
+    readonly name: string;
+    readonly observedGeneration: number;
+    readonly replicas: number;
+    readonly updatedReplicas: number;
+    readonly readyReplicas: number;
+    readonly availableReplicas: number;
+    readonly total: number;
+    readonly available: number;
+  }[];
 }
 
 export interface AkashTxConsolePort {

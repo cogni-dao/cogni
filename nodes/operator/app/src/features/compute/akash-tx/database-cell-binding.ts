@@ -506,9 +506,46 @@ export class DatabaseCellBinder
       custody.migration.kind === "app-database-url"
         ? custody.app.dsn
         : custody.migration.dsn;
+    const appService = app.providerManifest.services.filter(
+      (service) => service.name === packet.appServiceName
+    );
+    const currentAppService = appService[0];
     if (
+      !fresh(app.providerManifest.observedAt) ||
+      appService.length !== 1 ||
+      !currentAppService ||
+      currentAppService.observedGeneration <= 0 ||
+      [
+        currentAppService.replicas,
+        currentAppService.updatedReplicas,
+        currentAppService.readyReplicas,
+        currentAppService.availableReplicas,
+        currentAppService.total,
+        currentAppService.available,
+      ].some((count) => count !== 1) ||
       app.nodeId !== custody.nodeId ||
       app.deployedSourceSha !== custody.targetBuildSha ||
+      app.providerManifest.consoleVersion !== packet.appManifestVersion ||
+      app.providerManifest.chainVersion !== packet.appManifestVersion ||
+      app.providerManifest.imageDigest !== packet.appImageDigest ||
+      !fresh(app.runtimeAdoption.observedAt) ||
+      app.runtimeAdoption.systemIdentifier !== native.systemIdentifier ||
+      app.runtimeAdoption.publicBootEgressIp !== packet.appEgressIp ||
+      app.runtimeAdoption.sessions.length === 0 ||
+      app.runtimeAdoption.sessions.some(
+        (session) =>
+          session.count <= 0 ||
+          ![custody.appRole, custody.serviceRole].includes(session.role) ||
+          !packet.expectedRuntimeApplications.some(
+            (expected) =>
+              expected.role === session.role &&
+              expected.applicationName === session.applicationName
+          )
+      ) ||
+      packet.expectedRuntimeApplications.some(
+        (expected) =>
+          ![custody.appRole, custody.serviceRole].includes(expected.role)
+      ) ||
       app.appDsnSha256 !== sha(custody.app.dsn) ||
       app.serviceDsnSha256 !== sha(custody.service.dsn) ||
       app.migrationConsumer !== custody.migration.kind ||
