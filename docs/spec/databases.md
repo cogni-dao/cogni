@@ -49,11 +49,11 @@ Dedicated state-cell capacity comes from the catalog's named database budget pro
 
 **Postgres vs Doltgres:** This spec covers the Postgres (awareness plane) side. The knowledge plane runs on a separate Doltgres server with per-node `knowledge_<node>` databases and git-like versioning — see [Knowledge Data Plane](knowledge-data-plane.md).
 
-| Environment | Databases                                                         | Configured via                   |
-| ----------- | ----------------------------------------------------------------- | -------------------------------- |
-| Development | `cogni_operator`, `cogni_poly`, `cogni_resy`                      | `COGNI_NODE_DBS` in `.env.local` |
-| Test        | `cogni_template_stack_test`, `cogni_poly_test`, `cogni_resy_test` | `COGNI_NODE_DBS` in `.env.test`  |
-| CI          | `cogni_template_test`                                             | `COGNI_NODE_DBS` in `ci.yaml`    |
+| Environment    | Databases                                                                              | Configured via                                          |
+| -------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Development    | `cogni_operator`, `cogni_poly`, `cogni_resy`                                           | `COGNI_NODE_DBS` in `.env.local`                        |
+| Test           | `cogni_template_stack_test`, `cogni_poly_test`, `cogni_resy_test`                      | `COGNI_NODE_DBS` in `.env.test`                         |
+| CI             | `cogni_template_test`                                                                  | `COGNI_NODE_DBS` in `ci.yaml`                           |
 | Deployed lanes | `cogni_<normalized_node>` on the lane-owned shared instance or reviewed dedicated cell | Catalog/repo-spec placement and lane-aware provisioning |
 
 `COGNI_NODE_DBS` is required — `provision.sh` fails fast if not set. No defaults, no fallback chain.
@@ -190,9 +190,9 @@ See [Database RLS Spec](database-rls.md) for the dual-client architecture and st
 
 **Runtime Variables** (used by app, never by provisioning):
 
-| Variable               | Purpose                      |
-| ---------------------- | ---------------------------- |
-| `DATABASE_URL`         | `app_<node>` role (RLS enforced) |
+| Variable               | Purpose                           |
+| ---------------------- | --------------------------------- |
+| `DATABASE_URL`         | `app_<node>` role (RLS enforced)  |
 | `DATABASE_SERVICE_URL` | `service_<node>` role (BYPASSRLS) |
 
 > **Note:** The runtime app never receives `POSTGRES_ROOT_*`, `APP_DB_*`, or `COGNI_NODE_DBS`. These are provisioning-only.

@@ -30,12 +30,12 @@ Keep node runtime, rollout and administrative credentials separate while every P
 
 Applications receive explicit connection strings, never provisioning credential components. PostgreSQL runtime and migration identities are distinct. Secret custody does not choose database residency.
 
-| Credential | Role | Consumer |
-| --- | --- | --- |
-| `DATABASE_URL` | `app_<normalized_slug>`, RLS enforced | application request paths |
-| `DATABASE_SERVICE_URL` | `service_<normalized_slug>`, BYPASSRLS | authorized system/worker paths |
-| `DATABASE_MIGRATION_URL` | `migration_<normalized_slug>`, isolated rollout identity | PostgreSQL migration only |
-| Provisioning root/component inputs | administrative identity | authorized provisioning, never an app credential |
+| Credential                         | Role                                                     | Consumer                                         |
+| ---------------------------------- | -------------------------------------------------------- | ------------------------------------------------ |
+| `DATABASE_URL`                     | `app_<normalized_slug>`, RLS enforced                    | application request paths                        |
+| `DATABASE_SERVICE_URL`             | `service_<normalized_slug>`, BYPASSRLS                   | authorized system/worker paths                   |
+| `DATABASE_MIGRATION_URL`           | `migration_<normalized_slug>`, isolated rollout identity | PostgreSQL migration only                        |
+| Provisioning root/component inputs | administrative identity                                  | authorized provisioning, never an app credential |
 
 Historical local-development `app_user` and `app_service` examples are not fallbacks for deployed node roles. See [database role and placement contracts](databases.md#database-placement-and-budgets).
 
@@ -51,12 +51,12 @@ Historical local-development `app_user` and `app_service` examples are not fallb
 
 ## Rollout mapping
 
-| Surface | PostgreSQL migrator input |
-| --- | --- |
-| Kubernetes `migrate` init container | `DATABASE_URL` from `migration-secrets.DATABASE_MIGRATION_URL` |
-| Akash/Crossplane declared `migrate` step | `databaseUrlSecretKey: DATABASE_MIGRATION_URL`, mapped to the migrator's `DATABASE_URL` |
-| Ordinary application container | app/service DSNs; no isolated migration credential |
-| Authorized provisioner | existing environment-scoped administrative inputs; no root credential exported to the workload |
+| Surface                                  | PostgreSQL migrator input                                                                      |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Kubernetes `migrate` init container      | `DATABASE_URL` from `migration-secrets.DATABASE_MIGRATION_URL`                                 |
+| Akash/Crossplane declared `migrate` step | `databaseUrlSecretKey: DATABASE_MIGRATION_URL`, mapped to the migrator's `DATABASE_URL`        |
+| Ordinary application container           | app/service DSNs; no isolated migration credential                                             |
+| Authorized provisioner                   | existing environment-scoped administrative inputs; no root credential exported to the workload |
 
 Migrations execute from the same immutable runtime artifact as the app, using the node's declared command/layout. Doltgres is a separate engine and declared phase using `DOLTGRES_URL`; the PostgreSQL per-role contract does not claim equivalent Doltgres permissions or environment isolation.
 
@@ -79,14 +79,14 @@ Component inputs used by local Compose or authorized infrastructure provisioning
 
 ## Executable sources
 
-| Source | Owns |
-| --- | --- |
-| `scripts/ci/lib/lane-db-residency.sh` | lane-owned shared PostgreSQL derivation and DSN agreement |
-| `scripts/ci/secret-materialize.sh` | node-scoped app/service and isolated migration credential materialization |
-| `scripts/ci/assert-target-substrate.sh` | fail-closed lane/credential substrate assertions |
-| `nodes/operator/app/src/features/compute/compute-workload-secret-manifests.ts` | separate runtime and migration ExternalSecret projections |
-| `nodes/operator/app/src/features/compute/akash-tx/akash-tx-migration-step.ts` | declared migration secret-key selection and execution |
-| `infra/k8s/base/node-app/deployment.yaml` | isolated migration credential mapped to the init container input |
+| Source                                                                         | Owns                                                                      |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `scripts/ci/lib/lane-db-residency.sh`                                          | lane-owned shared PostgreSQL derivation and DSN agreement                 |
+| `scripts/ci/secret-materialize.sh`                                             | node-scoped app/service and isolated migration credential materialization |
+| `scripts/ci/assert-target-substrate.sh`                                        | fail-closed lane/credential substrate assertions                          |
+| `nodes/operator/app/src/features/compute/compute-workload-secret-manifests.ts` | separate runtime and migration ExternalSecret projections                 |
+| `nodes/operator/app/src/features/compute/akash-tx/akash-tx-migration-step.ts`  | declared migration secret-key selection and execution                     |
+| `infra/k8s/base/node-app/deployment.yaml`                                      | isolated migration credential mapped to the init container input          |
 
 ## Related
 

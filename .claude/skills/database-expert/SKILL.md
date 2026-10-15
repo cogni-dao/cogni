@@ -16,20 +16,20 @@ Route to the owning contract and current evidence; do not maintain a second arch
 
 ## Canonical routing
 
-| Question | Read first |
-| --- | --- |
-| Product and ownership north star | [Node BaaS substrate model](https://cognidao.org/knowledge/node-baas-substrate-model) |
-| Postgres residency, roles, budgets, cell lifecycle, backups | [Database contract](../../../docs/spec/databases.md#database-placement-and-budgets) |
-| Lane identity versus reconciliation/payment/secret custody | [Lane vs control env](../../../docs/spec/node-ci-cd-contract.md#lane-vs-control-env); hub `lane-is-not-control`, `lane-db-two-derivations` |
-| Database-per-node and shared/dedicated tenancy | [Multi-node tenancy](../../../docs/spec/multi-node-tenancy.md); hub `noisy-neighbor-database-architecture` (check current reviewed revision) |
-| Explicit DSNs and RLS | [URL alignment](../../../docs/spec/database-url-alignment.md), [RLS](../../../docs/spec/database-rls.md) |
-| Schema ownership, generation, journals, migration delivery | [schema-update](../schema-update/SKILL.md), then the owning node repo's schema/migration contracts |
-| Doltgres knowledge, work items, provenance | [Knowledge data plane](../../../docs/spec/knowledge-data-plane.md); hub `knowledge-contribution-flow` |
-| Secrets, rotation, projection, CAS | [cicd-secrets-expert](../cicd-secrets-expert/SKILL.md) |
-| Substrate implementation boundary and CI/CD | [Platform boundary](../../../docs/spec/cicd-platform-boundary.md), [devops-expert](../devops-expert/SKILL.md) |
-| Node-scoped data access | Hub `node-data-support-plane`; [substrate access](../../../docs/spec/substrate-access-grant.md) |
-| Placement/session evidence versus logs | Hub `operator-topology-direct-reads`, `node-service-logs-read`, `operator-infra-logs-read` |
-| Crash attribution, shared pressure, diagnostic auth | Hub `prod-oom-misdiagnosis-taxonomy`, `control-plane-self-starvation`, `postgres-crash-observability`, `grafana-postgres-auth-drift` |
+| Question                                                    | Read first                                                                                                                                   |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Product and ownership north star                            | [Node BaaS substrate model](https://cognidao.org/knowledge/node-baas-substrate-model)                                                        |
+| Postgres residency, roles, budgets, cell lifecycle, backups | [Database contract](../../../docs/spec/databases.md#database-placement-and-budgets)                                                          |
+| Lane identity versus reconciliation/payment/secret custody  | [Lane vs control env](../../../docs/spec/node-ci-cd-contract.md#lane-vs-control-env); hub `lane-is-not-control`, `lane-db-two-derivations`   |
+| Database-per-node and shared/dedicated tenancy              | [Multi-node tenancy](../../../docs/spec/multi-node-tenancy.md); hub `noisy-neighbor-database-architecture` (check current reviewed revision) |
+| Explicit DSNs and RLS                                       | [URL alignment](../../../docs/spec/database-url-alignment.md), [RLS](../../../docs/spec/database-rls.md)                                     |
+| Schema ownership, generation, journals, migration delivery  | [schema-update](../schema-update/SKILL.md), then the owning node repo's schema/migration contracts                                           |
+| Doltgres knowledge, work items, provenance                  | [Knowledge data plane](../../../docs/spec/knowledge-data-plane.md); hub `knowledge-contribution-flow`                                        |
+| Secrets, rotation, projection, CAS                          | [cicd-secrets-expert](../cicd-secrets-expert/SKILL.md)                                                                                       |
+| Substrate implementation boundary and CI/CD                 | [Platform boundary](../../../docs/spec/cicd-platform-boundary.md), [devops-expert](../devops-expert/SKILL.md)                                |
+| Node-scoped data access                                     | Hub `node-data-support-plane`; [substrate access](../../../docs/spec/substrate-access-grant.md)                                              |
+| Placement/session evidence versus logs                      | Hub `operator-topology-direct-reads`, `node-service-logs-read`, `operator-infra-logs-read`                                                   |
+| Crash attribution, shared pressure, diagnostic auth         | Hub `prod-oom-misdiagnosis-taxonomy`, `control-plane-self-starvation`, `postgres-crash-observability`, `grafana-postgres-auth-drift`         |
 
 Do not replace the skill with a pointer to an unmerged entry or merge your own knowledge contribution. Unmigrated specs retain their contracts; the hub owns rationale and evolving guidance.
 
