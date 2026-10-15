@@ -102,27 +102,24 @@ describe("flight-probe credential projection route", () => {
     "oidc_rejected",
     "projection_denied",
     "upstream_unavailable",
-  ] as const)(
-    "keeps %s externally uniform but internally diagnosable",
-    async (errorCode) => {
-      const error = Object.assign(new Error("redacted"), { code: errorCode });
-      const d = deps({ readRing: vi.fn().mockRejectedValue(error) });
-      const res = await handleFlightProbeCredentialProjection(request(), d);
+  ] as const)("keeps %s externally uniform but internally diagnosable", async (errorCode) => {
+    const error = Object.assign(new Error("redacted"), { code: errorCode });
+    const d = deps({ readRing: vi.fn().mockRejectedValue(error) });
+    const res = await handleFlightProbeCredentialProjection(request(), d);
 
-      expect(res.status).toBe(401);
-      expect(res.headers.get("cache-control")).toBe("no-store");
-      await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
-      expect(d.audit).toHaveBeenCalledOnce();
-      expect(d.audit).toHaveBeenCalledWith({
-        lane: "candidate-a",
-        nodeId: NODE_ID,
-        status: 401,
-        durationMs: expect.any(Number),
-        outcome: "error",
-        errorCode,
-      });
-    }
-  );
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
+    expect(d.audit).toHaveBeenCalledOnce();
+    expect(d.audit).toHaveBeenCalledWith({
+      lane: "candidate-a",
+      nodeId: NODE_ID,
+      status: 401,
+      durationMs: expect.any(Number),
+      outcome: "error",
+      errorCode,
+    });
+  });
 
   it("maps untyped dependency failures to a bounded upstream code", async () => {
     const d = deps({

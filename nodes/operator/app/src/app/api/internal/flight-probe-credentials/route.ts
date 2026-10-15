@@ -172,9 +172,7 @@ export async function handleFlightProbeCredentialProjection(
   }
 }
 
-function projectionFailureCode(
-  error: unknown
-): FlightProbeProjectionErrorCode {
+function projectionFailureCode(error: unknown): FlightProbeProjectionErrorCode {
   if (isFlightProbeProjectionError(error)) return error.code;
   if (error instanceof z.ZodError) return "projection_denied";
   return "upstream_unavailable";
