@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-worker
+  annotations:
+    # ConfigMap changes use the final composed checksum; Secret rotations retain
+    # Reloader's existing transport. Typed auto is OR-enabled in pinned v1.4.17.
+    reloader.stakater.com/auto: "false"
+    configmap.reloader.stakater.com/auto: "false"
+    secret.reloader.stakater.com/auto: "true"
+spec:
+  replicas: 2
+  # Reconcile the normal state atomically with this template and its image.
+  paused: false
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  template:
+    spec:
+      initContainers:
+        - name: startup-memory-budget
+          # The existing images transformer promotes init and main together.
+          image: ghcr.io/cogni-dao/cogni-template:placeholder
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              # Eligibility sample, not a memory reservation or readmission SLO.
+              # Candidate profile: canonical eviction_hard_memory=200Mi in
+              # infra/provision/cherry/base/variables.tf plus a 56Mi cushion.
+              # Keep the full main limit; steady working set is not startup peak.
+              # Concurrent initial replicas sample independently; no RAM is locked.
+              candidate_reserve_bytes=268435456
+              required_kib="$(awk -v reserve_bytes="$candidate_reserve_bytes" 'BEGIN {
+                v = ENVIRON["MAIN_MEMORY_LIMIT_BYTES"]
+                if (v !~ /^[1-9][0-9]*$/ || v + 0 > 9007199254740991 - reserve_bytes - 1023) exit 1
+                printf "%.0f", int((v + reserve_bytes + 1023) / 1024)
+              }')" || { echo 'startup-memory: invalid main limit' >&2; exit 1; }
+              started=''
+              previous=''
+              while :; do
+                sample="$(awk '
+                  FILENAME == ARGV[1] {
+                    clocks++
+                    if (NF != 2 || $1 !~ /^[0-9]+([.][0-9]+)?$/) invalid = 1
+                    now = int($1)
+                    next
+                  }
+                  $1 == "MemAvailable:" {
+                    memories++
+                    if (NF != 3 || $2 !~ /^[0-9]+$/ || $3 != "kB") invalid = 1
+                    available = $2
+                  }
+                  END {
+                    if (invalid || clocks != 1 || memories != 1) exit 1
+                    printf "%.0f %.0f", now, available
+                  }
+                ' /proc/uptime /proc/meminfo)" || { echo 'startup-memory: invalid proc sample' >&2; exit 1; }
+                now="${sample%% *}"
+                available="${sample#* }"
+                [ -n "$started" ] || started="$now"
+                if [ -n "$previous" ] && [ "$now" -lt "$previous" ]; then
+                  echo 'startup-memory: monotonic clock regressed' >&2
+                  exit 1
+                fi
+                previous="$now"
+                # Deadline wins over newly sufficient memory at the boundary.
+                if [ "$((now - started))" -ge 180 ]; then
+                  echo "startup-memory: timed out availableKiB=$available requiredKiB=$required_kib" >&2
+                  exit 1
+                fi
+                if [ "$available" -ge "$required_kib" ]; then
+                  echo "startup-memory: eligible availableKiB=$available requiredKiB=$required_kib"
+                  exit 0
+                fi
+                sleep 2
+              done
+          env:
+            - name: MAIN_MEMORY_LIMIT_BYTES
+              valueFrom:
+                resourceFieldRef:
+                  containerName: scheduler-worker
+                  resource: limits.memory
+                  divisor: "1"
+          resources:
+            requests:
+              memory: "8Mi"
+              cpu: "10m"
+            limits:
+              memory: "32Mi"
+              cpu: "100m"
