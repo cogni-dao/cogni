@@ -19,6 +19,14 @@ materialize_database_cell_kits() {
       [[ -n "$lane" ]] || continue
       physical="$(lane_db_vm_env "$cell_node" "$lane")" || fail "cell source residency unresolved"
       [[ "$physical" == "$DEPLOY_ENVIRONMENT" ]] || continue
+      # A committed cutover owns its endpoint. Reflight never recenses that
+      # dedicated DSN as though it were still hosted by this shared VM.
+      prefetch_path "${cell_node}-database-cell"
+      kit_json="$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_PLACEMENT_RECEIPT_JSON)"
+      if [[ -n "$kit_json" && "$(jq -r .binding.phase <<<"$kit_json")" == applied && "$(jq -r .binding.environment <<<"$kit_json")" == "$lane" ]]; then
+        [[ "$(jq -r .binding.nodeSlug <<<"$kit_json")" == "$cell_node" ]] || fail "applied cell receipt target differs"
+        continue
+      fi
       source_ns="__cell-source-${cell_node}-${lane}"
       prefetch_path "$cell_node" "$lane" "$source_ns"
       node_uuid="$(node_id_for_target "$cell_node")"
@@ -79,6 +87,12 @@ materialize_database_cell_kits() {
       cell_seed_exact "$backup_component_bank" DATABASE_CELL_BACKUP_PASSWORD "$(jq -r .backupPassword <<<"$backup_lane")"
       flush_batch "$backup_component_bank"
     done < <(jq -c '.logicalDatabases[]' <<<"$kit_json")
+    if [[ "$(jq -r '.diagnostic != null' <<<"$kit_json")" == true ]]; then
+      backup_component_bank="${cell_node}-database-replay-$(jq -r .diagnostic.sourceDatabaseName <<<"$kit_json")"
+      prefetch_path "$backup_component_bank"
+      cell_seed_exact "$backup_component_bank" DATABASE_CELL_REPLAY_PASSWORD "$(jq -r .diagnostic.replayPassword <<<"$kit_json")"
+      flush_batch "$backup_component_bank"
+    fi
     backup_bank="${cell_node}-database-backup"
     prefetch_path "$backup_bank"
     backup_key="$(bao_get_field "$backup_bank" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)"

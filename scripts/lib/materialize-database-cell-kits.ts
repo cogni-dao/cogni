@@ -278,6 +278,28 @@ export function materializeDatabaseCellKits(input: unknown): {
       })
     );
     const passwords = () => randomBytes(24).toString("hex");
+    const logicalPlans = [
+      ...plan.logicalDatabases,
+      ...(old?.logicalDatabases.filter(
+        (lane) =>
+          !plan.logicalDatabases.some(
+            (current) => current.environment === lane.environment
+          )
+      ) ?? []),
+    ];
+    const production = logicalPlans.find(
+      (lane) => lane.environment === "production"
+    );
+    const diagnostic = production
+      ? {
+          sourceDatabaseName: production.databaseName,
+          databaseName: `${production.databaseName}_diagnostic`,
+          replayRole: `replay_${production.databaseName.slice("cogni_".length)}_diagnostic`,
+          replayPassword: old?.diagnostic?.replayPassword ?? passwords(),
+          targetBuildSha: production.sourceSha,
+        }
+      : undefined;
+
     return DatabaseCellBootstrapKitSchema.parse({
       ...plan,
       rootPassword: old?.rootPassword ?? passwords(),
@@ -294,7 +316,8 @@ export function materializeDatabaseCellKits(input: unknown): {
             tlsCertificate: created?.tlsCertificate,
             tlsPrivateKey: created?.tlsPrivateKey,
           }),
-      logicalDatabases: plan.logicalDatabases.map((lane) => {
+      ...(diagnostic ? { diagnostic } : {}),
+      logicalDatabases: logicalPlans.map((lane) => {
         const previous = old?.logicalDatabases.find(
           (value) => value.environment === lane.environment
         );

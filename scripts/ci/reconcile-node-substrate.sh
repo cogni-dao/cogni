@@ -697,6 +697,16 @@ fi
 stage_exact "$REPO_ROOT/infra/compose/runtime/configs/alloy-config.metrics.alloy" alloy-config
 alloy_config_stage="$STAGED_EXACT_PATH"
 alloy_config_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/scripts/ci/project-database-cell-backup.remote.py" cell-backup-projector
+cell_backup_projector_stage="$STAGED_EXACT_PATH"
+if [[ "$reliability_controller" == true && "$DEPLOY_ENVIRONMENT" == production && "$SUBSTRATE_CONTROL_ENV" == production ]]; then
+  for backup_node in "${NODE_TARGETS[@]}"; do
+    backup_json="$(bao_get_field "${backup_node}-database-backup" DATABASE_CELL_BACKUP_KITS_JSON)"
+    [[ -n "$backup_json" ]] || continue
+    printf '%s' "$backup_json" | remote "python3 '${cell_backup_projector_stage}'"
+  done
+fi
+
 stage_exact "$REPO_ROOT/scripts/ci/reconcile-alloy-config.remote.sh" alloy-helper
 alloy_helper_stage="$STAGED_EXACT_PATH"
 

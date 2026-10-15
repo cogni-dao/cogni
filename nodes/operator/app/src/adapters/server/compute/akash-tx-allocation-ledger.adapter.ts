@@ -55,6 +55,7 @@ import type {
   AkashTxWorkloadIdentity,
 } from "@/ports";
 import { akashTxAllocations } from "@/shared/db/schema";
+import { AppliedDatabaseCellReceiptsSchema } from "@/shared/secrets/database-cell-placement.data";
 
 interface AllocationRow {
   id: string;
@@ -69,6 +70,7 @@ interface AllocationRow {
   externalName: string | null;
   providerAccount: string | null;
   lastAppliedSdlHash: string | null;
+  appliedDatabaseCellBinding: unknown;
 }
 
 const SELECTION = {
@@ -84,10 +86,18 @@ const SELECTION = {
   externalName: akashTxAllocations.externalName,
   providerAccount: akashTxAllocations.providerAccount,
   lastAppliedSdlHash: akashTxAllocations.lastAppliedSdlHash,
+  appliedDatabaseCellBinding: akashTxAllocations.appliedDatabaseCellBinding,
 };
 
 function toRecord(row: AllocationRow): AkashTxAllocationRecord {
   return {
+    ...(row.appliedDatabaseCellBinding == null
+      ? {}
+      : {
+          appliedDatabaseCellBinding: AppliedDatabaseCellReceiptsSchema.parse(
+            row.appliedDatabaseCellBinding
+          ),
+        }),
     receiptId: row.id,
     cogniKey: row.cogniKey,
     identity: {

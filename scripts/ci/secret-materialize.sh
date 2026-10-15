@@ -436,6 +436,18 @@ if [[ "${SECRETS_CONTROL_ENV}" != "$DEPLOY_ENVIRONMENT" ]]; then
   done
 fi
 
+# Same canonical writer loads applied cell custody before composing any runtime URL.
+source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
+source "$SCRIPT_DIR/lib/materialize-database-cell-placement.sh"
+case "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" in
+  database-cell-seal|database-cell-cutover)
+    created=0; unchanged=0
+    materialize_database_cell_endpoint
+    log "cell placement materialization complete: created=${created} unchanged=${unchanged}"
+    exit 0 ;;
+esac
+load_database_cell_placement
+
 # Same sole writer, second owner-only phase after the read-only DB reconcile.
 # No baseline minting/rotation and no VM .env authority in this phase.
 if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == "db-ready" ]]; then
@@ -656,7 +668,7 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" || "$TARGET_NODE" == "$RE
       # so compose it after the random-key pass below regardless of sort order.
       # Probe bindings are sealed only after native DB/system and physical-host readbacks.
       # The existing private writer publishes that receipt; random generation cannot establish identity.
-      [[ "$k" == "DATABASE_RELIABILITY_ADMIN_URL" || "$k" == "DATABASE_RELIABILITY_READMIT_URL" || "$k" == "DATABASE_RECOVERY_PROBE_URLS_JSON" || "$k" == "AKASH_DATABASE_CELL_KITS_JSON" ]] && continue
+      [[ "$k" == "DATABASE_RELIABILITY_ADMIN_URL" || "$k" == "DATABASE_RELIABILITY_READMIT_URL" || "$k" == "DATABASE_RECOVERY_PROBE_URLS_JSON" || "$k" == "AKASH_DATABASE_CELL_KITS_JSON" || "$k" == "DATABASE_RECOVERY_CELL_PROBE_URLS_JSON" || "$k" == "DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON" || "$k" == "DATABASE_RELIABILITY_CELL_READMIT_URLS_JSON" ]] && continue
       if [[ -f "${CACHE_DIR}/${svc}/${k}" ]]; then
         unchanged=$((unchanged + 1))
         continue

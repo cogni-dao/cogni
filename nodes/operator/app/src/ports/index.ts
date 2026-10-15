@@ -139,6 +139,13 @@ export type {
   ResolvedConnection,
 } from "./connection-broker.port";
 export type {
+  DatabaseCellBindingPort,
+  DatabaseCellBindingReference,
+  DatabaseCellCutoverReference,
+  DatabaseCellNativeObserverPort,
+  DatabaseCellNativeProof,
+} from "./database-cell-binding.port";
+export type {
   DatabaseCellActionReceipt,
   DatabaseCellAllocation,
   DatabaseCellCapacity,

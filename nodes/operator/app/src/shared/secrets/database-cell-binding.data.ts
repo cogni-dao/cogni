@@ -114,7 +114,7 @@ export const DatabaseCellBindingSchema = z
     }
   });
 
-export type DatabaseCellBinding = z.infer<typeof DatabaseCellBindingSchema>;
+export type { DatabaseCellBinding } from "@/types/database-cell";
 
 /** Values come from the declared immutable profile, never a CREATE caller. */
 export const DatabaseCellBudgetSchema = z
@@ -171,9 +171,50 @@ export const DatabaseCellBootstrapKitSchema = z
     tlsCertificate: z.string().startsWith("-----BEGIN CERTIFICATE-----"),
     tlsPrivateKey: z.string().regex(/^-----BEGIN (RSA )?PRIVATE KEY-----/),
     logicalDatabases: z.array(DatabaseCellLogicalDatabaseSchema).min(1).max(3),
+    diagnostic: z
+      .object({
+        sourceDatabaseName: z.string(),
+        databaseName: z.string(),
+        replayRole: z.string(),
+        replayPassword: cellPassword,
+        targetBuildSha: sourceSha,
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((kit, ctx) => {
+    if (kit.diagnostic) {
+      const production = kit.logicalDatabases.find(
+        (lane) => lane.environment === "production"
+      );
+      if (
+        !production ||
+        kit.diagnostic.sourceDatabaseName !== production.databaseName ||
+        kit.diagnostic.databaseName !==
+          `${production.databaseName}_diagnostic` ||
+        kit.diagnostic.replayRole !==
+          `replay_${kit.diagnostic.databaseName.slice("cogni_".length)}` ||
+        kit.diagnostic.targetBuildSha !== production.sourceSha ||
+        [
+          kit.rootPassword,
+          kit.actuatorPassword,
+          kit.readmitPassword,
+          ...kit.logicalDatabases.flatMap((lane) => [
+            lane.appPassword,
+            lane.servicePassword,
+            lane.migrationPassword,
+            lane.probePassword,
+            lane.backupPassword,
+          ]),
+        ].includes(kit.diagnostic.replayPassword)
+      )
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "diagnostic component differs from its isolated production clone scope",
+        });
+    }
     const environments = new Set<string>();
     const databases = new Set<string>();
     const base = `cogni_${kit.nodeSlug.replaceAll("-", "_")}`;
@@ -231,9 +272,7 @@ export const DatabaseCellBootstrapKitsSchema = z
     }
   });
 
-export type DatabaseCellBootstrapKit = z.infer<
-  typeof DatabaseCellBootstrapKitSchema
->;
+export type { DatabaseCellBootstrapKit } from "@/types/database-cell";
 
 /** Tagged private projection: dedicated endpoints never enter the shared 5432 seal. */
 export const DatabaseRecoveryCellCommonSchema = z

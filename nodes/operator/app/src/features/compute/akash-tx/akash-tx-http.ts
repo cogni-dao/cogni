@@ -49,6 +49,12 @@ import {
   AkashTxUpdateInputSchema,
 } from "@/contracts/compute.akash-tx.v1.contract";
 import {
+  DatabaseCellBindingIdentitySchema,
+  DatabaseCellBindingReferenceSchema,
+  DatabaseCellCutoverReferenceSchema,
+} from "@/contracts/database-cell-binding.v1.contract";
+import type { DatabaseCellBindingPort } from "@/ports";
+import {
   type AkashTxActuatorPort,
   AkashTxError,
   type AkashTxErrorCode,
@@ -101,6 +107,7 @@ export interface AkashTxHttpDeps {
   readonly actuator: AkashTxActuatorPort;
   /** Shared secret required on every operation. Empty is rejected at construction. */
   readonly token: string;
+  readonly databaseCellBindings?: DatabaseCellBindingPort;
   readonly log?: AkashTxLogger;
   /** Pure private-kit resolver; callers can supply a catalog reference only. */
   readonly databaseCellSpec?: (input: {
@@ -296,6 +303,42 @@ export function createAkashTxDispatcher(
               spec,
             }),
           };
+        }
+        case "/v1/akash/database-cell-binding/discover": {
+          if (!deps.databaseCellBindings)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "cell binding capability unavailable"
+            );
+          return {
+            status: 200,
+            body: await deps.databaseCellBindings.discover(
+              DatabaseCellBindingIdentitySchema.parse(payload)
+            ),
+          };
+        }
+        case "/v1/akash/database-cell-binding/read":
+        case "/v1/akash/database-cell-binding/seal":
+        case "/v1/akash/database-cell-binding/cutover": {
+          if (!deps.databaseCellBindings)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "cell binding capability unavailable"
+            );
+          const operation = request.path.split("/").at(-1);
+          const receipts =
+            operation === "cutover"
+              ? await deps.databaseCellBindings.cutover(
+                  DatabaseCellCutoverReferenceSchema.parse(payload)
+                )
+              : operation === "seal"
+                ? await deps.databaseCellBindings.seal(
+                    DatabaseCellBindingReferenceSchema.parse(payload)
+                  )
+                : await deps.databaseCellBindings.read(
+                    DatabaseCellBindingReferenceSchema.parse(payload)
+                  );
+          return { status: 200, body: { receipts } };
         }
         case "/v1/akash/observe": {
           const input = AkashTxObserveInputSchema.parse(payload);

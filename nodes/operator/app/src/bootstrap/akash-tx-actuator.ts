@@ -76,7 +76,6 @@
  */
 
 import { readFile } from "node:fs/promises";
-
 import { createAppDbClient, type Database } from "@cogni/db-client";
 import { BatchV1Api, CoreV1Api, KubeConfig } from "@kubernetes/client-node";
 import { sql } from "drizzle-orm";
@@ -88,9 +87,11 @@ import {
   AkashComputeAdapter,
   DrizzleAkashTxAllocationLedger,
   DrizzleComputeCostStore,
+  DrizzleDatabaseCellBindingStore,
   DrizzleNodeMigrationReportStore,
   DrizzleProviderOutcomeStore,
   KubernetesMigrationJobAdapter,
+  PostgresDatabaseCellObserver,
   safeHostRoutedVersionProbe,
   safeReadyzProbe,
   safeVersionProbe,
@@ -114,7 +115,9 @@ import {
   credentialFingerprint,
   resolveAkashTxWallet,
 } from "@/features/compute/akash-tx/akash-tx-wallet";
-import { AkashTxError } from "@/ports";
+import { DatabaseCellBinder } from "@/features/compute/akash-tx/database-cell-binding";
+import { prepareDatabaseCellDiagnostic } from "@/features/compute/akash-tx/database-cell-diagnostic";
+import { AkashTxError, type AkashTxWorkloadIdentity } from "@/ports";
 import {
   ACCOUNT_WALLET_SCOPE_PATTERN,
   akashTxAllocations,
@@ -437,9 +440,13 @@ try {
 const kubeConfig = new KubeConfig();
 kubeConfig.loadFromCluster();
 
+const allocationLedger = new DrizzleAkashTxAllocationLedger(
+  getDb,
+  wallet.walletScope
+);
 const actuator = new AkashTxActuator({
   console: consoleClient,
-  ledger: new DrizzleAkashTxAllocationLedger(getDb, wallet.walletScope),
+  ledger: allocationLedger,
   costEvidence: consoleClient,
   costStore: new DrizzleComputeCostStore(getDb),
   providerConsumerAccountId: wallet.expectedAccountId,
@@ -581,8 +588,98 @@ const databaseCellSpec = async (
   return (await databaseCellFactory)(kits)(reference);
 };
 
+const databaseCellObserver = new PostgresDatabaseCellObserver();
+const databaseCellBindings = new DatabaseCellBinder({
+  ledger: allocationLedger,
+  actuator,
+  store: new DrizzleDatabaseCellBindingStore(getDb, wallet.walletScope),
+  observeNative: databaseCellObserver.observe.bind(databaseCellObserver),
+  buildSha: runtimeEnv.APP_BUILD_SHA ?? "",
+  kit: async (reference) => {
+    const kits = DatabaseCellBootstrapKitsSchema.parse(
+      JSON.parse(await readCredential("AKASH_DATABASE_CELL_KITS_JSON"))
+    );
+    const selected = kits.filter(
+      (kit) =>
+        kit.nodeId === reference.nodeId &&
+        kit.environment === reference.allocationEnvironment
+    );
+    if (selected.length !== 1 || !selected[0])
+      throw new Error("owned cell bootstrap kit absent or ambiguous");
+    return selected[0];
+  },
+});
+
+const databaseCellDiagnostic = async (input: {
+  cogniKey: string;
+  externalName: string;
+  environment: string;
+  identity: AkashTxWorkloadIdentity;
+  nodeSlug: string;
+  budgetProfile: string;
+}) => {
+  const record = await allocationLedger.read({ cogniKey: input.cogniKey });
+  if (
+    !record ||
+    record.state !== "allocated" ||
+    record.externalName !== input.externalName ||
+    record.environment !== input.environment ||
+    record.identity.nodeId !== input.identity.nodeId ||
+    record.identity.compositeUid !== input.identity.compositeUid ||
+    record.identity.compositeGeneration !==
+      input.identity.compositeGeneration ||
+    !record.providerAccount ||
+    !record.lastAppliedSdlHash
+  )
+    throw new AkashTxError(
+      "identity_conflict",
+      "diagnostic reference differs from its applied allocation"
+    );
+  const kits = DatabaseCellBootstrapKitsSchema.parse(
+    JSON.parse(await readCredential("AKASH_DATABASE_CELL_KITS_JSON"))
+  );
+  const matching = kits.filter(
+    (kit) =>
+      kit.nodeId === input.identity.nodeId &&
+      kit.environment === input.environment &&
+      kit.nodeSlug === input.nodeSlug
+  );
+  const kit = matching[0];
+  const receipts = await databaseCellBindings.read({
+    cogniKey: input.cogniKey,
+    nodeId: input.identity.nodeId,
+    allocationEnvironment: input.environment,
+  });
+  const production = receipts.filter(
+    (receipt) =>
+      receipt.binding.environment === "production" &&
+      receipt.binding.phase === "ready"
+  );
+  const receipt = production[0];
+  if (
+    matching.length !== 1 ||
+    !kit ||
+    production.length !== 1 ||
+    !receipt ||
+    record.workload !== `${kit.nodeSlug}-database-cell` ||
+    receipt.binding.appliedSdlHash !== record.lastAppliedSdlHash ||
+    receipt.binding.budgetProfile !== input.budgetProfile
+  )
+    throw new AkashTxError(
+      "identity_conflict",
+      "diagnostic scope lacks its current ready production receipt"
+    );
+  return prepareDatabaseCellDiagnostic(
+    kit,
+    receipt.binding,
+    runtimeEnv.APP_BUILD_SHA ?? ""
+  );
+};
+
 const server = createAkashTxActuatorServer({
   actuator,
+  databaseCellBindings,
+  ...{ databaseCellDiagnostic },
   token: bearerToken,
   log,
   databaseCellSpec,

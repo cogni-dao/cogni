@@ -294,6 +294,7 @@ _doltgres_db_suffix() {
 # DOLTGRES_URL below keeps `${VM_IP}` — see `_doltgres_db_suffix`.
 _compose_node_value() {
   local node="$1" k="$2" kind source shared service db sfx dg_sfx pg_host
+  if declare -F cell_placement_composed_value >/dev/null && cell_placement_composed_value "$node" "$k"; then return 0; fi
   sfx="$(_lane_db_suffix "$node")"
   dg_sfx="$(_doltgres_db_suffix)"
   pg_host="${COGNI_LANE_DB_HOST:-${VM_IP}}"
