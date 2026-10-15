@@ -101,7 +101,7 @@ describe("MimirMetricsAdapter", () => {
     });
   });
 
-  it("accepts one exact database series as node-attributed evidence", async () => {
+  it("reports exact node-attributed critical evidence without mutating admission", async () => {
     const vector = (result: unknown[]) => ({
       ok: true,
       json: async () => ({
@@ -196,7 +196,8 @@ describe("MimirMetricsAdapter", () => {
     );
 
     expect(status).toMatchObject({
-      state: "contained",
+      state: "warning",
+      incidentReason: "I/O pressure critical",
       utilization: {
         evidenceScope: "node",
         databaseShare5m: {
@@ -206,9 +207,7 @@ describe("MimirMetricsAdapter", () => {
         },
       },
     });
-    expect(actions).toEqual([
-      expect.objectContaining({ reason: "critical_io_pressure" }),
-    ]);
+    expect(actions).toEqual([]);
     expect(mockFetch.mock.calls.slice(5).map(([url]) => String(url))).toEqual(
       expect.arrayContaining([
         expect.stringContaining("cogni_reliability_v1_database"),
