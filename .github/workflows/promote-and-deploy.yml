@@ -664,12 +664,18 @@ jobs:
           APP: ${{ matrix.node }}
           SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}
           NODE: ${{ matrix.node }}
+          NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
         run: |
           set -euo pipefail
           # PIN_IS_NEVER_REPINNED_TO_BIRTH (bug.5306) — hand the guard this node's catalog
           # birth sha so it can refuse a silent rollback. Absent/unreadable leaves the guard
           # inert, which is the pre-bug.5306 behaviour.
           CATALOG_BIRTH_SHA="$(yq -N '.source_sha // ""' "../app-src/infra/catalog/${NODE}.yaml" 2>/dev/null || true)"
+          # An exact source-addressed request is deliberate deploy authority.
+          # Keep the birth-regression fence for every implicit or mismatched pin.
+          if [ -n "$NODE_SOURCE_SHA" ] && [ "$NODE_SOURCE_SHA" = "$SOURCE_SHA" ]; then
+            CATALOG_BIRTH_SHA=""
+          fi
           export CATALOG_BIRTH_SHA
           bash ../app-src/scripts/ci/update-source-sha-map.sh
 
