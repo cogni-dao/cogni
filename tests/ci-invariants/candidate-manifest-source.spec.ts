@@ -230,17 +230,23 @@ describe("candidate-a manifest source", () => {
     expect(combine.run).toContain(
       'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
     );
-    expect(combine.run).toContain("items = ([node] if node else []) + items");
+    expect(combine.env?.NORMAL_FLIGHT_TARGETS_JSON).toBe(
+      "${{ steps.detect.outputs.flight_targets_json }}"
+    );
     expect(images.run).toContain(
       'if [ -n "$NODE" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
     );
     expect(images.run).toContain("resolve-pr-build-images.sh");
   });
 
-  it("fails a node-ref before mutation when its exact image is absent", () => {
+  it("fails an affected node-ref before mutation when its exact image is absent", () => {
     const guard = namedStep("decide", "Require requested node image");
 
-    expect(guard.if).toBe("steps.meta.outputs.node_slug != ''");
+    // Behavioral scope cases execute the workflow in deployment-workflows.test.sh.
+    // This structural invariant pins the guard to the authoritative affected set.
+    expect(guard.if).toContain(
+      "steps.flight-targets.outputs.flight_targets_json"
+    );
     expect(guard.env?.NODE).toBe("${{ steps.meta.outputs.node_slug }}");
     expect(guard.env?.PAYLOAD_FILE).toBe(
       "${{ runner.temp }}/resolved-pr-images.json"
