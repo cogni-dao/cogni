@@ -529,6 +529,19 @@ grep -q 'REVOKE ALL ON FUNCTION public.contain_database_role' "$provisioner"
 grep -q 'GRANT EXECUTE ON FUNCTION public.contain_database_role.*RELIABILITY_ROLE' "$provisioner"
 grep -q 'REVOKE ALL ON FUNCTION public.readmit_database_role' "$provisioner"
 grep -q 'GRANT EXECUTE ON FUNCTION public.readmit_database_role.*READMITTER_ROLE' "$provisioner"
+awk -v guard="  IF to_regnamespace('cogni_control') IS NOT NULL THEN" '
+  /^CREATE OR REPLACE FUNCTION public\.(contain|readmit)_database_role\(/ { in_legacy=1 }
+  in_legacy && /^BEGIN$/ {
+    if (getline <= 0 || $0 != guard) exit 1
+    seen++; in_legacy=0
+  }
+  END { if (seen != 2) exit 1 }
+' "$provisioner"
+if grep -Eq '^GRANT EXECUTE ON FUNCTION public\.(contain|readmit)_database_role' "$provisioner"; then
+  echo "legacy control EXECUTE grants must not be unconditional" >&2; exit 1
+fi
+grep -q "IF to_regnamespace('cogni_control') IS NULL THEN" "$provisioner"
+grep -q 'FROM "\$RELIABILITY_ROLE", "\$READMITTER_ROLE"' "$provisioner"
 grep -q "session_user <> '\$RELIABILITY_ROLE'" "$provisioner"
 grep -q "session_user <> '\$READMITTER_ROLE'" "$provisioner"
 grep -q 'REVOKE SET ON PARAMETER temp_file_limit FROM PUBLIC' "$provisioner"
