@@ -611,4 +611,14 @@ for invalid_scope in '[]' '"preview"' null '["unknown"]' '["preview","unknown"]'
 done
 ok "renderer fails closed for scalar/null/empty/unknown scopes outside schema CI"
 
+# A long live chain exceeds the pipe buffer. Finding the first managed rule must
+# still drain iptables' output, or pipefail turns SIGPIPE into exit 141.
+printf '%s\n' '-m comment --comment cogni-harden-internal-ports:old -j ACCEPT' > "$IPT_STATE"
+awk 'BEGIN { for (i=1; i<=2000; i++) print "-s 192.0.2.1/32 -p tcp --dport 5432 -m comment --comment unmanaged-fixture-" i " -j REJECT" }' >> "$IPT_STATE"
+run_harden
+[ "$(grep -c unmanaged-fixture "$IPT_STATE")" = 2000 ] || fail "large-chain reconciliation changed unmanaged fences"
+grep -q 'cogni-harden-internal-ports:old' "$IPT_STATE" && fail "large-chain reconciliation retained stale managed rules"
+grep -q 'cogni-harden-internal-ports:drop-public' "$IPT_STATE" || fail "large-chain reconciliation lost public DROP"
+ok "large-chain reconciliation drains iptables output and preserves unmanaged fences"
+
 echo "PASS: all $PASS assertions"

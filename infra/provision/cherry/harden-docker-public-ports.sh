@@ -52,7 +52,9 @@ iptables -L DOCKER-USER -n >/dev/null
 # fails to match the stored rule (`Bad rule (does a matching rule exist...)`)
 # and aborts under set -e. (bug.5171)
 while :; do
-  ln=$(iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | awk -v t="$TAG" '$0 ~ t {print $1; exit}')
+  # Drain the listing even after the first match. Exiting awk early can SIGPIPE
+  # iptables on a long chain and abort reconciliation under pipefail (exit 141).
+  ln=$(iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | awk -v t="$TAG" '!found && $0 ~ t {print $1; found=1}')
   [ -z "$ln" ] && break
   iptables -D DOCKER-USER "$ln"
 done
