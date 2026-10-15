@@ -372,6 +372,13 @@ if [ "$INFRA_ONLY" != 1 ] && [ -n "$RELIABILITY_PASS" ] && [ -n "$READMITTER_PAS
   run_sql_as_root postgres 'GRANT EXECUTE ON FUNCTION public.begin_database_recovery(uuid,text,text,text,text,text,text) TO database_reliability_readmitter;'
 fi
 
+# Always last: even infra-only reconciliation must not revive fencing authority.
+[ -f /app/control-migrations/0003_disable_database_locking.sql ] || {
+  echo "❌ ERROR: database locking retirement migration is missing"; exit 1;
+}
+PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d postgres \
+  -Xv ON_ERROR_STOP=1 -f /app/control-migrations/0003_disable_database_locking.sql
+
 # Shared read-only role (env-level; superuser-derived password; BYPASSRLS support
 # reads for the Grafana datasource). Created once, outside the per-node loop.
 # Skipped in INFRA_ONLY: the per-node pass owns this role.

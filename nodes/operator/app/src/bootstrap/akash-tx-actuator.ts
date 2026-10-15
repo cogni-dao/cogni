@@ -497,23 +497,32 @@ const actuator = new AkashTxActuator({
 
 async function loadDatabaseCellFactory() {
   const assetRoot = "/app/database-cell-bootstrap";
-  const [bootstrap, provision, control, migration0, migration1, budgetYaml] =
-    await Promise.all(
-      [
-        "bootstrap.sh",
-        "provision.sh",
-        "apply-control.sql",
-        "control-migrations/0000_database_recovery_control.sql",
-        "control-migrations/0001_database_recovery_watchdog.sql",
-        "database-budget-profiles.yaml",
-      ].map((path) => readFile(`${assetRoot}/${path}`, "utf8"))
-    );
+  const [
+    bootstrap,
+    provision,
+    control,
+    migration0,
+    migration1,
+    lockingRetirement,
+    budgetYaml,
+  ] = await Promise.all(
+    [
+      "bootstrap.sh",
+      "provision.sh",
+      "apply-control.sql",
+      "control-migrations/0000_database_recovery_control.sql",
+      "control-migrations/0001_database_recovery_watchdog.sql",
+      "control-migrations/0003_disable_database_locking.sql",
+      "database-budget-profiles.yaml",
+    ].map((path) => readFile(`${assetRoot}/${path}`, "utf8"))
+  );
   if (
     !bootstrap ||
     !provision ||
     !control ||
     !migration0 ||
     !migration1 ||
+    !lockingRetirement ||
     !budgetYaml
   ) {
     throw new Error("reviewed private database cell assets are incomplete");
@@ -551,7 +560,14 @@ async function loadDatabaseCellFactory() {
   return (kits: readonly DatabaseCellBootstrapKit[]) =>
     databaseCellSpecFactory(
       kits,
-      { bootstrap, provision, control, migration0, migration1 },
+      {
+        bootstrap,
+        provision,
+        control,
+        migration0,
+        migration1,
+        lockingRetirement,
+      },
       {
         vcpus: profile.cell_capacity.vcpus,
         memoryGiB: profile.cell_capacity.memory_gib,

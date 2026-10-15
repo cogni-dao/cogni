@@ -438,11 +438,16 @@ if ! "$postgres_provision_here"; then
   stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/provision.sh" lane-postgres-provisioner
   destination_provisioner="$STAGED_EXACT_PATH"
   destination_provisioner_sha256="$STAGED_EXACT_SHA256"
+  stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0003_disable_database_locking.sql" lane-postgres-locking-retirement
+  destination_locking_retirement="$STAGED_EXACT_PATH"
+  destination_locking_retirement_sha256="$STAGED_EXACT_SHA256"
   VM_HOST="$control_vm_host"
   {
     printf 'set -euo pipefail\nset -a\n. /opt/cogni-template-runtime/.env\nset +a\n'
     printf 'lane_env=%q\nlane_db=%q\nprovisioner=%q\nprovisioner_sha256=%q\n' \
       "$postgres_residency_env" "$node_db" "$destination_provisioner" "$destination_provisioner_sha256"
+    printf 'locking_retirement=%q\nlocking_retirement_sha256=%q\n' \
+      "$destination_locking_retirement" "$destination_locking_retirement_sha256"
     printf 'lane_app_password=%q\nlane_service_password=%q\nlane_migration_password=%q\n' \
       "$app_db_password" "$app_db_service_password" "$app_db_migration_password"
     printf 'export LITELLM_DB_NAME=%q DB_PORT=%q\n' \
@@ -453,8 +458,9 @@ if ! "$postgres_provision_here"; then
       "$db_service_connection_limit" "$db_service_statement_timeout_ms" "$db_lock_timeout_ms" \
       "$db_idle_in_transaction_timeout_ms" "$db_temp_file_limit_mib" "$db_work_mem_mib"
     cat <<'DESTINATION'
-trap 'rm -f "$provisioner"' EXIT
+trap 'rm -f "$provisioner" "$locking_retirement"' EXIT
 [ "$(sha256sum "$provisioner" | awk '{print $1}')" = "$provisioner_sha256" ]
+[ "$(sha256sum "$locking_retirement" | awk '{print $1}')" = "$locking_retirement_sha256" ]
 # Root authority was read on this destination before the lane-only payload.
 [ "${DEPLOY_ENVIRONMENT:-}" = "$lane_env" ] || {
   echo '::error::destination runtime environment does not match Postgres residency' >&2
@@ -479,6 +485,7 @@ export DB_HOST
 docker run --rm --pull=never --cpus=.5 --memory=256m --pids-limit=64 \
   --network "container:$postgres_container" \
   --mount "type=bind,src=$provisioner,dst=/app/provision.sh,readonly" \
+  --mount "type=bind,src=$locking_retirement,dst=/app/control-migrations/0003_disable_database_locking.sql,readonly" \
   -e DB_HOST -e DB_PORT -e POSTGRES_ROOT_USER -e POSTGRES_ROOT_PASSWORD \
   -e APP_DB_READONLY_USER -e APP_DB_READONLY_PASSWORD -e LITELLM_DB_NAME \
   -e APP_DB_PASSWORD -e APP_DB_SERVICE_PASSWORD -e APP_DB_MIGRATION_PASSWORD \
@@ -824,6 +831,9 @@ postgres_control_migration_sha256="$STAGED_EXACT_SHA256"
 stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql" postgres-watchdog-migration
 postgres_watchdog_migration_stage="$STAGED_EXACT_PATH"
 postgres_watchdog_migration_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0003_disable_database_locking.sql" postgres-locking-retirement
+postgres_locking_retirement_stage="$STAGED_EXACT_PATH"
+postgres_locking_retirement_sha256="$STAGED_EXACT_SHA256"
 stage_exact "$REPO_ROOT/infra/compose/runtime/doltgres-init/install-creds.sh" doltgres-install-creds
 doltgres_install_creds_stage="$STAGED_EXACT_PATH"
 doltgres_install_creds_sha256="$STAGED_EXACT_SHA256"
@@ -965,6 +975,7 @@ remote "set -euo pipefail
   install_exact '${postgres_control_apply_stage}' /opt/cogni-template-runtime/postgres-init/apply-control.sql '${postgres_control_apply_sha256}' 0444 postgres-control-apply
   install_exact '${postgres_control_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0000_database_recovery_control.sql '${postgres_control_migration_sha256}' 0444 postgres-control-migration
   install_exact '${postgres_watchdog_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql '${postgres_watchdog_migration_sha256}' 0444 postgres-watchdog-migration
+  install_exact '${postgres_locking_retirement_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0003_disable_database_locking.sql '${postgres_locking_retirement_sha256}' 0444 postgres-locking-retirement
   install_exact '${doltgres_install_creds_stage}' /opt/cogni-template-runtime/doltgres-init/install-creds.sh '${doltgres_install_creds_sha256}' 0555 doltgres-install-creds
   install_exact '${doltgres_provisioner_stage}' /opt/cogni-template-runtime/doltgres-init/provision.sh '${doltgres_provisioner_sha256}' 0444 doltgres-provisioner
   echo '[remote] exact runtime compose and provisioners installed ok'
@@ -1035,6 +1046,9 @@ ${edge_reconcile_snippet}
     any(.services[\"db-provision\"].volumes[];
       .source == \"/opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql\" and
       .target == \"/app/control-migrations/0001_database_recovery_watchdog.sql\" and .read_only == true) and
+    any(.services[\"db-provision\"].volumes[];
+      .source == \"/opt/cogni-template-runtime/postgres-init/control-migrations/0003_disable_database_locking.sql\" and
+      .target == \"/app/control-migrations/0003_disable_database_locking.sql\" and .read_only == true) and
     any(.services.doltgres.volumes[];
       .source == \"/opt/cogni-template-runtime/doltgres-init/install-creds.sh\" and
       .target == \"/usr/local/bin/install-creds.sh\" and .read_only == true) and

@@ -422,10 +422,11 @@ fi
 if [ "$reliability_controller" = true ]; then
   actuator_deployment="${node}-database-reliability-actuator"
   readmitter_deployment="${node}-database-reliability-readmitter"
+  watchdog_deployment="${node}-database-reliability-watchdog"
   app_deployment="${node}-node-app"
 
   if [ "$assert_database_reliability_runtime" = true ]; then
-    for controller in "$actuator_deployment" "$readmitter_deployment"; do
+    for controller in "$actuator_deployment"; do
       available="$(kubectl -n "$namespace" get deployment "$controller" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
       if [ "${available:-0}" -ge 1 ] 2>/dev/null; then
         mark_ok "database reliability Deployment available: $controller"
@@ -433,13 +434,20 @@ if [ "$reliability_controller" = true ]; then
         mark_fail "database reliability Deployment unavailable: $controller (availableReplicas='${available:-0}')"
       fi
     done
+    for retired_controller in "$readmitter_deployment" "$watchdog_deployment"; do
+      desired="$(kubectl -n "$namespace" get deployment "$retired_controller" -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
+      if [ "$desired" = 0 ]; then
+        mark_ok "database admission writer retired: $retired_controller"
+      else
+        mark_fail "database admission writer must have zero desired replicas: $retired_controller (replicas='${desired:-absent}')"
+      fi
+    done
     app_image="$(kubectl -n "$namespace" get deployment "$app_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].image}' 2>/dev/null || true)"
     actuator_image="$(kubectl -n "$namespace" get deployment "$actuator_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="actuator")].image}' 2>/dev/null || true)"
-    readmitter_image="$(kubectl -n "$namespace" get deployment "$readmitter_deployment" -o jsonpath='{.spec.template.spec.containers[?(@.name=="readmitter")].image}' 2>/dev/null || true)"
-    if [ -n "$app_image" ] && [ "$actuator_image" = "$app_image" ] && [ "$readmitter_image" = "$app_image" ]; then
+    if [ -n "$app_image" ] && [ "$actuator_image" = "$app_image" ]; then
       mark_ok "database reliability processes use the exact controller image"
     else
-      mark_fail "database reliability image mismatch (app='${app_image:-absent}', actuator='${actuator_image:-absent}', readmitter='${readmitter_image:-absent}')"
+      mark_fail "database reliability image mismatch (app='${app_image:-absent}', actuator='${actuator_image:-absent}')"
     fi
   fi
 
@@ -469,10 +477,8 @@ if [ "$reliability_controller" = true ]; then
     node --input-type=module -e '
       const [expectedSha, nodeId, environment, nodeSlug] = process.argv.slice(1);
       const actuator = process.env.DATABASE_RELIABILITY_ACTUATOR_URL;
-      const readmitter = process.env.DATABASE_RELIABILITY_READMITTER_URL;
       const statusToken = process.env.DATABASE_RELIABILITY_STATUS_TOKEN;
-      const readmitToken = process.env.DATABASE_RELIABILITY_READMIT_TOKEN;
-      if (!actuator || !readmitter || !statusToken || !readmitToken) process.exit(20);
+      if (!actuator || !statusToken) process.exit(20);
       const auth = { authorization: `Bearer ${statusToken}` };
       const statusUrl = new URL("/v1/status", actuator);
       statusUrl.searchParams.set("node_id", nodeId);
@@ -484,35 +490,14 @@ if [ "$reliability_controller" = true ]; then
         if (!response.ok || body.buildSha !== expectedSha) process.exit(21);
       };
       await checkVersion(actuator);
-      await checkVersion(readmitter);
       const status = await fetch(statusUrl, { headers: auth });
       if (!status.ok) process.exit(22);
       const body = await status.json();
       if (body.nodeId !== nodeId || body.slug !== nodeSlug || body.environment !== environment) process.exit(23);
-      const ready = await fetch(new URL("/readyz", readmitter));
+      const ready = await fetch(new URL("/readyz", actuator));
       if (!ready.ok) process.exit(24);
-      // Exercise authentication and routing without permitting a state change:
-      // this valid-but-deliberately-noncurrent incident must be rejected before
-      // the evidence gate or readmission adapter is reached.
-      const readmitUrl = new URL("/v1/readmit", readmitter);
-      readmitUrl.searchParams.set("node_id", nodeId);
-      readmitUrl.searchParams.set("node_slug", nodeSlug);
-      readmitUrl.searchParams.set("environment", environment);
-      const mismatchCandidate = `reliability.v1:flight-mismatch-${expectedSha}`;
-      const mismatchIncident = body.incidentId === mismatchCandidate
-        ? `${mismatchCandidate}-other`
-        : mismatchCandidate;
-      const rejectedReadmit = await fetch(readmitUrl, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${readmitToken}`,
-          "x-cogni-actor-id": "human:flight-assert",
-          "x-cogni-incident-id": mismatchIncident,
-        },
-      });
-      if (rejectedReadmit.status !== 409) process.exit(25);
     ' "$expected_build_sha" "$expected_node_id" "$env_name" "$node"; then
-      mark_ok "database reliability exact-SHA, authenticated status, readiness, and harmless readmit-rejection roundtrips passed"
+      mark_ok "database reliability exact-SHA, authenticated status and observer readiness roundtrips passed"
     else
       mark_fail "database reliability exact-SHA/authenticated/readiness roundtrip failed"
     fi

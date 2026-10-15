@@ -310,6 +310,7 @@ services:
       - ./postgres-init/apply-control.sql:/app/apply-control.sql:ro
       - ./postgres-init/control-migrations/0000_database_recovery_control.sql:/app/control-migrations/0000_database_recovery_control.sql:ro
       - ./postgres-init/control-migrations/0001_database_recovery_watchdog.sql:/app/control-migrations/0001_database_recovery_watchdog.sql:ro
+      - ./postgres-init/control-migrations/0003_disable_database_locking.sql:/app/control-migrations/0003_disable_database_locking.sql:ro
     entrypoint: ["/bin/bash", "/app/provision.sh"]
     depends_on:
       postgres:
