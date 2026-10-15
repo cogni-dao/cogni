@@ -126,6 +126,7 @@ import {
   akashTxAllocations,
 } from "@/shared/db/akash-tx-allocations";
 import {
+  DatabaseCellAppliedCustodySchema,
   type DatabaseCellBootstrapKit,
   DatabaseCellBootstrapKitsSchema,
 } from "@/shared/secrets/database-cell-binding.data";
@@ -603,6 +604,33 @@ const databaseCellBindings = new DatabaseCellBinder({
   store: new DrizzleDatabaseCellBindingStore(getDb, wallet.walletScope),
   observeNative: databaseCellObserver.observe.bind(databaseCellObserver),
   buildSha: runtimeEnv.APP_BUILD_SHA ?? "",
+  appliedCustody: async (reference) => {
+    const value = await readCredential(
+      "AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON"
+    );
+    if (!value)
+      throw new AkashTxError(
+        "ledger_unavailable",
+        "private applied cell custody unavailable"
+      );
+    try {
+      const entries = z
+        .array(DatabaseCellAppliedCustodySchema)
+        .parse(JSON.parse(value));
+      const selected = entries.filter(
+        (entry) =>
+          entry.nodeId === reference.nodeId &&
+          entry.environment === reference.allocationEnvironment
+      );
+      if (selected.length !== 1 || !selected[0]) throw new Error();
+      return selected[0];
+    } catch {
+      throw new AkashTxError(
+        "identity_conflict",
+        "private applied cell custody absent, ambiguous or invalid"
+      );
+    }
+  },
   kit: async (reference) => {
     const kits = await loadDatabaseCellKits();
     const selected = kits.filter(

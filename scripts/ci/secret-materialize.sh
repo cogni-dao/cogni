@@ -606,7 +606,7 @@ else
   created=$((created + 1))
 fi
 migration_ca="$(_compose_node_value "$TARGET_NODE" DATABASE_SSL_CA_CERT)"
-if [[ "$(bao_get_field "$migration_service" DATABASE_SSL_CA_CERT)" != "$migration_ca" ]]; then
+if [[ -n "$migration_ca" && "$(bao_get_field "$migration_service" DATABASE_SSL_CA_CERT)" != "$migration_ca" ]]; then
   rm -f "${CACHE_DIR}/${migration_service}/DATABASE_SSL_CA_CERT"
   seed_kv "$migration_service" DATABASE_SSL_CA_CERT "$migration_ca"
   created=$((created + 1))

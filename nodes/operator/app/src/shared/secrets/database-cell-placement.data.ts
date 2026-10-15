@@ -10,10 +10,26 @@
  * Links: shared/secrets/database-cell-binding.data.ts, shared/db/akash-tx-allocations.ts
  * @internal
  */
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { DatabaseCellAppliedRegistrationFacts } from "@/types/database-cell";
 
 import { DatabaseCellBindingSchema } from "./database-cell-binding.data";
+
+const executionActor = z
+  .object({ kind: z.enum(["agent", "human"]), id: z.string().uuid() })
+  .strict();
+const approvalAuthority = z
+  .object({
+    kind: z.literal("conversation-user"),
+    label: z.literal("CEO"),
+    humanAppUserId: z.string().uuid().nullable(),
+    source: z.literal("direct-user-instruction"),
+    decisionRef: z.string().min(1).max(2048),
+    capturedAt: z.string().datetime({ offset: true }),
+    delegationDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
 
 export const AppliedDatabaseCellReceiptSchema = z
   .object({
@@ -23,12 +39,21 @@ export const AppliedDatabaseCellReceiptSchema = z
     registration: z
       .object({
         kind: z.literal("audited-manual"),
+        executionActor,
+        approvalAuthority,
         readmissionReceiptId: z.string().min(1).max(256),
         manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
         scheduledBackupReceiptSha256: z.string().regex(/^[0-9a-f]{64}$/),
         independentRecoveryReceiptSha256: z.string().regex(/^[0-9a-f]{64}$/),
         appAllocationReceiptId: z.string().uuid(),
         appSdlHash: z.string().regex(/^[0-9a-f]{64}$/),
+        appDsnSha256: z.string().regex(/^[0-9a-f]{64}$/),
+        serviceDsnSha256: z.string().regex(/^[0-9a-f]{64}$/),
+        migrationDsnSha256: z.string().regex(/^[0-9a-f]{64}$/),
+        tlsCaSha256: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
         migrationConsumer: z.enum([
           "app-database-url",
           "dedicated-migration-url",
@@ -48,7 +73,9 @@ export const AppliedDatabaseCellReceiptSchema = z
           receipt.binding.phase !== "applied" ||
           receipt.registration.manualCutoverPacketSha256 !==
             receipt.binding.cutover?.packetSha256
-        : !receipt.initialIncidentId
+        : !receipt.initialIncidentId ||
+          !receipt.binding.migrationRole ||
+          !receipt.binding.probeRole
     ) {
       ctx.addIssue({
         code: "custom",
@@ -140,6 +167,12 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
                 name: z.string().min(1),
                 canLogin: z.boolean(),
                 connectionLimit: z.number().int().min(-1),
+                statementTimeoutMs: z.number().int().nonnegative(),
+                lockTimeoutMs: z.number().int().nonnegative(),
+                idleInTransactionTimeoutMs: z.number().int().nonnegative(),
+                tempFileLimitMiB: z.number().int().min(-1),
+                workMemMiB: z.number().nonnegative(),
+                roleReadOnly: z.boolean(),
               })
               .strict()
           )
@@ -206,7 +239,8 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         appSourceSha: sourceSha,
         sourceFenceReceiptSha256: digest,
         restorationParityManifestSha256: digest,
-        authorizedActorId: z.string().regex(/^human:[a-zA-Z0-9._@:-]{1,120}$/),
+        executionActor,
+        approvalAuthority,
         approvedAt: timestamp,
       })
       .strict(),
@@ -217,7 +251,8 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         allocationReceiptId: z.string().uuid(),
         systemIdentifier,
         admittedAt: timestamp,
-        authorizedActorId: z.string().regex(/^human:[a-zA-Z0-9._@:-]{1,120}$/),
+        executionActor,
+        approvalAuthority,
       })
       .strict(),
     scheduledBackup: z
@@ -249,3 +284,81 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
       .strict(),
   })
   .strict() satisfies z.ZodType<DatabaseCellAppliedRegistrationFacts>;
+
+/** The existing private bank authenticates custody; hashes verify exact frozen bytes.
+ * This envelope is not a success proof. The producer must validate typed artifact
+ * contents, links and live observations before returning registration facts.
+ */
+export const DatabaseCellAppliedEvidenceBundleSchema = z
+  .object({
+    version: z.literal(1),
+    nodeId: z.string().uuid(),
+    environment: z.literal("production"),
+    artifacts: z
+      .array(
+        z
+          .object({
+            kind: z.enum([
+              "manual-cutover",
+              "readmission",
+              "source-parity",
+              "scheduled-backup",
+              "backup-archive-verification",
+              "independent-recovery",
+              "recovery-schema",
+              "current-app-readiness",
+            ]),
+            mediaType: z.literal("application/json"),
+            sha256: digest,
+            bytesBase64: z
+              .string()
+              .min(4)
+              .max(262144)
+              .regex(
+                /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+              ),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(16),
+  })
+  .strict()
+  .superRefine((bundle, ctx) => {
+    if (
+      Buffer.byteLength(JSON.stringify(bundle), "utf8") > 256 * 1024 ||
+      new Set(bundle.artifacts.map((a) => a.kind)).size !==
+        bundle.artifacts.length
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "applied evidence bundle exceeds bounded unique artifact custody",
+      });
+    for (const artifact of bundle.artifacts) {
+      const bytes = Buffer.from(artifact.bytesBase64, "base64");
+      if (
+        bytes.toString("base64") !== artifact.bytesBase64 ||
+        createHash("sha256").update(bytes).digest("hex") !== artifact.sha256
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          message: "applied evidence bytes differ from their frozen digest",
+        });
+        continue;
+      }
+      try {
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        const value: unknown = JSON.parse(text);
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          throw new Error();
+      } catch {
+        ctx.addIssue({
+          code: "custom",
+          message: "applied evidence requires actual JSON object bytes",
+        });
+      }
+    }
+  }) satisfies z.ZodType<
+  import("@/types/database-cell").DatabaseCellAppliedEvidenceBundle
+>;

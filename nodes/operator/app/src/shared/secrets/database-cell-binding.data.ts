@@ -42,8 +42,8 @@ export const DatabaseCellBindingSchema = z
     databaseName: z.string().regex(/^cogni_[a-z0-9_]+$/),
     appRole: z.string(),
     serviceRole: z.string(),
-    migrationRole: z.string(),
-    probeRole: z.string(),
+    migrationRole: z.string().optional(),
+    probeRole: z.string().optional(),
     systemIdentifier: z.string().regex(/^[0-9]+$/),
     failureDomainId: z.string().min(1).max(256),
     sourceSha: z.string().regex(/^[0-9a-f]{40}$/),
@@ -80,7 +80,7 @@ export const DatabaseCellBindingSchema = z
       [binding.migrationRole, "migration"],
       [binding.probeRole, "probe"],
     ]) {
-      if (role !== `${prefix}_${suffix}`)
+      if (role !== undefined && role !== `${prefix}_${suffix}`)
         ctx.addIssue({
           code: "custom",
           message: "cell role does not match its database",
@@ -129,6 +129,129 @@ export const DatabaseCellBudgetSchema = z
     workMemMiB: z.number().int().positive(),
   })
   .strict();
+
+const custodyReference = z
+  .object({
+    service: z.string().regex(/^[a-z][a-z0-9-]{0,127}$/),
+    key: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/),
+  })
+  .strict();
+const currentConsumer = z
+  .object({ dsn: z.string().min(1), custody: custodyReference })
+  .strict();
+/** Resolved only from the existing private cell bank; never accepted over HTTP. */
+export const DatabaseCellAppliedCustodySchema = z
+  .object({
+    version: z.literal(1),
+    nodeId: z.string().uuid(),
+    nodeSlug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
+    environment: z.literal("production"),
+    sourceSha: z.string().regex(/^[0-9a-f]{40}$/),
+    targetBuildSha: z.string().regex(/^[0-9a-f]{40}$/),
+    canonicalEndpointHost: z
+      .string()
+      .max(253)
+      .regex(/^[a-z0-9][a-z0-9.-]+$/)
+      .refine((host) => !isIP(host)),
+    databaseName: z.string().regex(/^cogni_[a-z0-9_]+$/),
+    appRole: z.string(),
+    serviceRole: z.string(),
+    budgetProfile: z.enum([
+      "shared-default-v1",
+      "dedicated-high-throughput-v1",
+    ]),
+    budget: DatabaseCellBudgetSchema,
+    tlsCertificate: z.string().startsWith("-----BEGIN CERTIFICATE-----"),
+    tls: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("system") }).strict(),
+      z
+        .object({
+          kind: z.literal("private-ca"),
+          caCertificate: z.string().startsWith("-----BEGIN CERTIFICATE-----"),
+          custody: custodyReference,
+        })
+        .strict(),
+    ]),
+    app: currentConsumer,
+    service: currentConsumer,
+    migration: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("app-database-url") }).strict(),
+      z
+        .object({
+          kind: z.literal("dedicated-migration-url"),
+          dsn: z.string().min(1),
+          custody: custodyReference,
+        })
+        .strict(),
+    ]),
+    readOnlyProbeCustody: custodyReference.optional(),
+  })
+  .strict()
+  .superRefine((custody, ctx) => {
+    const base = `cogni_${custody.nodeSlug.replaceAll("-", "_")}`;
+    const suffix = custody.databaseName.slice("cogni_".length);
+    if (
+      ![base, `${base}_production`].includes(custody.databaseName) ||
+      custody.appRole !== `app_${suffix}` ||
+      custody.serviceRole !== `service_${suffix}`
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "applied custody leaves its canonical node database",
+      });
+    const consumers: [{ dsn: string }, string][] = [
+      [custody.app, custody.appRole],
+      [custody.service, custody.serviceRole],
+      ...(custody.migration.kind === "dedicated-migration-url"
+        ? [
+            [custody.migration, `migration_${suffix}`] as [
+              { dsn: string },
+              string,
+            ],
+          ]
+        : []),
+    ];
+    for (const [consumer, role] of consumers) {
+      try {
+        const dsn = new URL(consumer.dsn);
+        if (
+          dsn.protocol !== "postgresql:" ||
+          dsn.hostname !== custody.canonicalEndpointHost ||
+          !dsn.port ||
+          !dsn.password ||
+          decodeURIComponent(dsn.username) !== role ||
+          decodeURIComponent(dsn.pathname.slice(1)) !== custody.databaseName ||
+          dsn.searchParams.get("sslmode") !== "verify-full" ||
+          dsn.hash ||
+          dsn.searchParams.size !== 1
+        )
+          throw new Error();
+      } catch {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "applied consumer DSN differs from canonical strict TLS custody",
+        });
+      }
+    }
+    if (
+      custody.app.custody.service !== custody.nodeSlug ||
+      custody.app.custody.key !== "DATABASE_URL" ||
+      custody.service.custody.service !== custody.nodeSlug ||
+      custody.service.custody.key !== "DATABASE_SERVICE_URL" ||
+      (custody.migration.kind === "dedicated-migration-url" &&
+        (custody.migration.custody.service !==
+          `${custody.nodeSlug}-database-migration` ||
+          custody.migration.custody.key !== "DATABASE_MIGRATION_URL"))
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "applied consumer references leave their existing owned bank",
+      });
+  }) satisfies z.ZodType<
+  import("@/types/database-cell").DatabaseCellAppliedCustody
+>;
+export type { DatabaseCellAppliedCustody } from "@/types/database-cell";
 
 const cellPassword = z.string().regex(/^[0-9a-f]{48}$/);
 const environment = z.enum(["candidate-a", "preview", "production"]);

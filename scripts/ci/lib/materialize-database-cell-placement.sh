@@ -22,6 +22,13 @@ load_database_cell_placement() {
     return 0
   fi
   [[ "$(jq -r .binding.nodeSlug <<<"$receipt")" == "$TARGET_NODE" && "$(jq -r .binding.nodeId <<<"$receipt")" == "$(node_id_for_target "$TARGET_NODE")" && "$(jq -r .allocationEnvironment <<<"$receipt")" == "$SECRETS_CONTROL_ENV" && "$(jq -r .binding.environment <<<"$receipt")" == "$DEPLOY_ENVIRONMENT" ]] || fail "cell placement does not own this target lane"
+  if [[ "$(jq -r '.registration.kind // ""' <<<"$receipt")" == audited-manual ]]; then
+    kit="$(bao_get_field "$cell_bank" DATABASE_CELL_APPLIED_CUSTODY_JSON)"
+    [[ -n "$kit" ]] || fail "audited manual cell current consumer custody missing"
+    validate_applied_cell_consumer_custody "$TARGET_NODE" "$kit"
+    CELL_PLACEMENT_JSON="$(jq -n --argjson receipt "$receipt" --argjson custody "$kit" --argjson requireApplied "$require_applied" '{receipt:$receipt,custody:$custody,requireApplied:$requireApplied}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "audited manual consumer custody invalid"
+    return 0
+  fi
   kit="$(bao_get_field "$cell_bank" DATABASE_CELL_BOOTSTRAP_KIT_JSON)"
   prefetch_path "${TARGET_NODE}-database-backup"
   encryption="$(bao_get_field "${TARGET_NODE}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)"
@@ -31,7 +38,32 @@ load_database_cell_placement() {
 cell_placement_composed_value() {
   local node="$1" key="$2"
   [[ "$node" == "$TARGET_NODE" && -n "$CELL_PLACEMENT_JSON" ]] || return 1
+  # System trust deliberately owns an absent custom-CA value. Return success with
+  # empty stdout so the shared substrate CA composer cannot supply another value.
+  if [[ "$key" == DATABASE_SSL_CA_CERT ]]; then
+    jq -r '.publicValues.DATABASE_SSL_CA_CERT // empty' <<<"$CELL_PLACEMENT_JSON"
+    return 0
+  fi
   jq -er --arg key "$key" '.publicValues[$key] // empty' <<<"$CELL_PLACEMENT_JSON" 2>/dev/null
+}
+
+# Values must already exist in their real private consumer banks. This helper
+# never creates credentials or converts request data into secret custody.
+validate_applied_cell_consumer_custody() {
+  local node="$1" custody="$2" field service key value
+  [[ "$(jq -r .nodeSlug <<<"$custody")" == "$node" && "$(jq -r .nodeId <<<"$custody")" == "$(node_id_for_target "$node")" && "$(jq -r .environment <<<"$custody")" == production ]] || fail "manual applied custody differs from owned target"
+  for field in app service migration tls; do
+    service="$(jq -r --arg field "$field" '.[$field].custody.service // empty' <<<"$custody")"
+    [[ -n "$service" ]] || continue
+    key="$(jq -r --arg field "$field" '.[$field].custody.key' <<<"$custody")"
+    case "$service/$key" in
+      "$node/DATABASE_URL"|"$node/DATABASE_SERVICE_URL"|"$node/DATABASE_SSL_CA_CERT"|"${node}-database-migration/DATABASE_MIGRATION_URL") ;;
+      *) fail "manual applied custody reference leaves owned consumer banks" ;;
+    esac
+    prefetch_path "$service"
+    value="$(jq -r --arg field "$field" '.[$field].dsn // .[$field].caCertificate' <<<"$custody")"
+    [[ "$(bao_get_field "$service" "$key")" == "$value" ]] || fail "manual applied consumer value differs from current secret custody"
+  done
 }
 
 # Fixed private service and path. Token and request travel through stdin into a
@@ -70,6 +102,9 @@ materialize_database_cell_endpoint() {
     [[ "$(lane_db_vm_env "$node" production)" == production ]] || continue
     cell_bank="${node}-database-cell"
     prefetch_path "$cell_bank"
+    # Imported admitted cells are never resealed, rekeyed or provider-updated by
+    # the factory phase. Their target loader validates the applied consumer path.
+    if [[ "$(bao_get_field "$cell_bank" DATABASE_CELL_PLACEMENT_RECEIPT_JSON | jq -r '.registration.kind // ""' 2>/dev/null)" == audited-manual ]]; then continue; fi
     kit="$(bao_get_field "$cell_bank" DATABASE_CELL_BOOTSTRAP_KIT_JSON)"
     [[ -n "$kit" ]] || fail "canonical private bootstrap kit missing"
     if [[ "${SECRET_MATERIALIZE_PHASE}" == database-cell-cutover && "${DATABASE_CELL_CUTOVER_NODE_ID:-}" != "$(jq -r .nodeId <<<"$kit")" ]]; then continue; fi
@@ -134,6 +169,7 @@ publish_database_cell_projection() {
     prefetch_path "$service"
     prior="$(bao_get_field "$service" "$key")"
     entry="$(jq -c --arg field "$field" '.[$field]' <<<"$projection")"
+    [[ "$entry" != null ]] || continue
     merged="$(jq -nc --argjson prior "${prior:-[]}" --argjson entry "$entry" '$prior|map(select(.nodeId!=$entry.nodeId or .environment!=$entry.environment))+[$entry]|sort_by(.nodeId,.environment)')"
     cell_seed_exact "$service" "$key" "$merged"
   done <<'PROJECTIONS'
@@ -143,17 +179,21 @@ database-reliability-readmitter	DATABASE_RELIABILITY_CELL_READMIT_URLS_JSON	read
 PROJECTIONS
   flush_batch database-reliability-actuator
   flush_batch database-reliability-readmitter
-  cell_seed_exact "${node}-database-backup" DATABASE_CELL_BACKUP_KITS_JSON "$(jq -c '[.backup]' <<<"$projection")"
-  flush_batch "${node}-database-backup"
+  if [[ "$(jq -r '.backup != null' <<<"$projection")" == true ]]; then
+    cell_seed_exact "${node}-database-backup" DATABASE_CELL_BACKUP_KITS_JSON "$(jq -c '[.backup]' <<<"$projection")"
+    flush_batch "${node}-database-backup"
+  fi
   # Approved receipt is the durable publication point. Each consumer bank resumes
   # from that same bundle after a crash; no phase recomposes a dedicated DSN shared.
   if [[ "$(jq -r '.publicValues != null' <<<"$projection")" == true ]]; then
     prefetch_path "$node"
     for key in DATABASE_URL DATABASE_SERVICE_URL DATABASE_SSL_CA_CERT; do
+      jq -e --arg key "$key" '.publicValues | has($key)' <<<"$projection" >/dev/null || continue
       cell_seed_exact "$node" "$key" "$(jq -r --arg key "$key" '.publicValues[$key]' <<<"$projection")"
     done
     prefetch_path "${node}-database-migration"
     for key in DATABASE_MIGRATION_URL DATABASE_SSL_CA_CERT; do
+      jq -e --arg key "$key" '.publicValues | has($key)' <<<"$projection" >/dev/null || continue
       cell_seed_exact "${node}-database-migration" "$key" "$(jq -r --arg key "$key" '.publicValues[$key]' <<<"$projection")"
     done
     flush_batch "${node}-database-migration"

@@ -31,8 +31,8 @@ export interface DatabaseCellBinding {
   databaseName: string;
   appRole: string;
   serviceRole: string;
-  migrationRole: string;
-  probeRole: string;
+  migrationRole?: string | undefined;
+  probeRole?: string | undefined;
   systemIdentifier: string;
   failureDomainId: string;
   sourceSha: string;
@@ -102,12 +102,18 @@ export interface AppliedDatabaseCellReceipt {
   registration?:
     | {
         kind: "audited-manual";
+        executionActor: DatabaseCellExecutionActor;
+        approvalAuthority: DatabaseCellApprovalAuthority;
         readmissionReceiptId: string;
         manualCutoverPacketSha256: string;
         scheduledBackupReceiptSha256: string;
         independentRecoveryReceiptSha256: string;
         appAllocationReceiptId: string;
         appSdlHash: string;
+        appDsnSha256: string;
+        serviceDsnSha256: string;
+        migrationDsnSha256: string;
+        tlsCaSha256?: string | undefined;
         migrationConsumer: "app-database-url" | "dedicated-migration-url";
         tlsTrustKind: "system" | "private-ca";
         registeredAt: string;
@@ -133,6 +139,87 @@ export interface DatabaseCellEndpointIdentity {
   readonly systemIdentifier: string;
 }
 
+/** Existing private bank/key identity; request callers cannot select credential custody. */
+export interface DatabaseCellCustodyReference {
+  readonly service: string;
+  readonly key: string;
+}
+/** Imported current consumers only: no provider root, signing key, or invented control roles. */
+export interface DatabaseCellAppliedCustody {
+  readonly version: 1;
+  readonly nodeId: string;
+  readonly nodeSlug: string;
+  readonly environment: "production";
+  readonly sourceSha: string;
+  readonly targetBuildSha: string;
+  readonly canonicalEndpointHost: string;
+  readonly databaseName: string;
+  readonly appRole: string;
+  readonly serviceRole: string;
+  readonly budgetProfile: "shared-default-v1" | "dedicated-high-throughput-v1";
+  readonly budget: DatabaseCellBudget;
+  readonly tlsCertificate: string;
+  readonly tls:
+    | { readonly kind: "system" }
+    | {
+        readonly kind: "private-ca";
+        readonly caCertificate: string;
+        readonly custody: DatabaseCellCustodyReference;
+      };
+  readonly app: {
+    readonly dsn: string;
+    readonly custody: DatabaseCellCustodyReference;
+  };
+  readonly service: {
+    readonly dsn: string;
+    readonly custody: DatabaseCellCustodyReference;
+  };
+  readonly migration:
+    | { readonly kind: "app-database-url" }
+    | {
+        readonly kind: "dedicated-migration-url";
+        readonly dsn: string;
+        readonly custody: DatabaseCellCustodyReference;
+      };
+  readonly readOnlyProbeCustody?: DatabaseCellCustodyReference | undefined;
+}
+
+export type DatabaseCellAppliedEvidenceKind =
+  | "manual-cutover"
+  | "readmission"
+  | "source-parity"
+  | "scheduled-backup"
+  | "backup-archive-verification"
+  | "independent-recovery"
+  | "recovery-schema"
+  | "current-app-readiness";
+/** Authenticated transport only; adapters must additionally parse each kind's actual typed contents. */
+export interface DatabaseCellAppliedEvidenceBundle {
+  readonly version: 1;
+  readonly nodeId: string;
+  readonly environment: "production";
+  readonly artifacts: readonly {
+    readonly kind: DatabaseCellAppliedEvidenceKind;
+    readonly mediaType: "application/json";
+    readonly sha256: string;
+    readonly bytesBase64: string;
+  }[];
+}
+
+export interface DatabaseCellExecutionActor {
+  readonly kind: "agent" | "human";
+  readonly id: string;
+}
+export interface DatabaseCellApprovalAuthority {
+  readonly kind: "conversation-user";
+  readonly label: "CEO";
+  readonly humanAppUserId: string | null;
+  readonly source: "direct-user-instruction";
+  readonly decisionRef: string;
+  readonly capturedAt: string;
+  readonly delegationDigest: string;
+}
+
 export interface DatabaseCellAppliedRegistrationFacts {
   readonly observedAt: string;
   readonly provider: {
@@ -149,6 +236,12 @@ export interface DatabaseCellAppliedRegistrationFacts {
       readonly name: string;
       readonly canLogin: boolean;
       readonly connectionLimit: number;
+      readonly statementTimeoutMs: number;
+      readonly lockTimeoutMs: number;
+      readonly idleInTransactionTimeoutMs: number;
+      readonly tempFileLimitMiB: number;
+      readonly workMemMiB: number;
+      readonly roleReadOnly: boolean;
     }[];
     readonly activeRuntimeSessions: number;
     readonly serverVersionNum: number;
@@ -190,7 +283,8 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly appSourceSha: string;
     readonly sourceFenceReceiptSha256: string;
     readonly restorationParityManifestSha256: string;
-    readonly authorizedActorId: string;
+    readonly executionActor: DatabaseCellExecutionActor;
+    readonly approvalAuthority: DatabaseCellApprovalAuthority;
     readonly approvedAt: string;
   };
   readonly readmission: {
@@ -199,7 +293,8 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly allocationReceiptId: string;
     readonly systemIdentifier: string;
     readonly admittedAt: string;
-    readonly authorizedActorId: string;
+    readonly executionActor: DatabaseCellExecutionActor;
+    readonly approvalAuthority: DatabaseCellApprovalAuthority;
   };
   readonly scheduledBackup: {
     readonly receiptSha256: string;

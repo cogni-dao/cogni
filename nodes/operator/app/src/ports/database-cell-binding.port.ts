@@ -12,6 +12,7 @@
  */
 import type {
   AppliedDatabaseCellReceipt,
+  DatabaseCellAppliedCustody,
   DatabaseCellAppliedRegistrationFacts,
   DatabaseCellBootstrapKit,
   DatabaseCellEndpointIdentity,
@@ -93,7 +94,7 @@ export type { DatabaseCellAppliedRegistrationFacts } from "@/types/database-cell
 export interface DatabaseCellAppliedRegistrationEvidencePort {
   observe(input: {
     readonly reference: DatabaseCellBindingReference;
-    readonly kit: DatabaseCellBootstrapKit;
+    readonly custody: DatabaseCellAppliedCustody;
     readonly manualCutoverPacketSha256: string;
     readonly readmissionReceiptId: string;
   }): Promise<DatabaseCellAppliedRegistrationFacts>;

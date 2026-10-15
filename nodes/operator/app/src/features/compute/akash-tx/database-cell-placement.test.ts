@@ -22,6 +22,7 @@ import {
   type AppliedDatabaseCellReceipt,
   AppliedDatabaseCellReceiptSchema,
   DatabaseCellAllocationMetadataSchema,
+  DatabaseCellAppliedEvidenceBundleSchema,
 } from "@/shared/secrets/database-cell-placement.data";
 import {
   materializeDatabaseCellKits,
@@ -132,7 +133,12 @@ function fixture(
         : {}),
     }),
     buildSha: sourceSha,
-    ...(appliedFacts ? { observeApplied: async () => appliedFacts } : {}),
+    ...(appliedFacts
+      ? {
+          observeApplied: async () => appliedFacts,
+          appliedCustody: async () => appliedCustody(),
+        }
+      : {}),
     observeNative: async () => {
       nativeReads += 1;
       return scopedKit.logicalDatabases.map(
@@ -205,9 +211,9 @@ describe("same-receipt production cell placement", () => {
       backupEncryptionKey: "e".repeat(64),
     });
     expect(projection.publicValues).toBeNull();
-    expect(projection.backup.dsn).toContain("backup_alpha:");
-    expect(projection.admin.dsn).toContain("database_reliability_actuator:");
-    expect(projection.readmit.dsn).toContain(
+    expect(projection.backup?.dsn).toContain("backup_alpha:");
+    expect(projection.admin?.dsn).toContain("database_reliability_actuator:");
+    expect(projection.readmit?.dsn).toContain(
       "database_reliability_readmitter:"
     );
   });
@@ -526,6 +532,47 @@ type Mutable<T> = T extends readonly (infer Item)[]
   : T extends object
     ? { -readonly [Key in keyof T]: Mutable<T[Key]> }
     : T;
+function appliedCustody() {
+  const lane = scopedKit.logicalDatabases[0];
+  if (!lane) throw new Error("fixture lane absent");
+  const endpoint = { host: "poly-db.fixture.example.org", port: 15432 };
+  return {
+    version: 1 as const,
+    nodeId,
+    nodeSlug: "alpha",
+    environment: "production" as const,
+    sourceSha,
+    targetBuildSha: appSha,
+    canonicalEndpointHost: endpoint.host,
+    databaseName: lane.databaseName,
+    appRole: lane.appRole,
+    serviceRole: lane.serviceRole,
+    budgetProfile: lane.budgetProfile,
+    budget,
+    tlsCertificate: scopedKit.tlsCertificate,
+    tls: { kind: "system" as const },
+    app: {
+      dsn: composeDatabaseCellDsn(
+        endpoint,
+        lane.databaseName,
+        lane.appRole,
+        lane.appPassword
+      ),
+      custody: { service: "alpha", key: "DATABASE_URL" },
+    },
+    service: {
+      dsn: composeDatabaseCellDsn(
+        endpoint,
+        lane.databaseName,
+        lane.serviceRole,
+        lane.servicePassword
+      ),
+      custody: { service: "alpha", key: "DATABASE_SERVICE_URL" },
+    },
+    migration: { kind: "app-database-url" as const },
+  };
+}
+
 function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
   const sha = (value: string) =>
     createHash("sha256").update(value).digest("hex");
@@ -560,8 +607,28 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       appRole: lane.appRole,
       serviceRole: lane.serviceRole,
       runtimeRoles: [
-        { name: lane.appRole, canLogin: true, connectionLimit: 2 },
-        { name: lane.serviceRole, canLogin: true, connectionLimit: 8 },
+        {
+          name: lane.appRole,
+          canLogin: true,
+          connectionLimit: 2,
+          statementTimeoutMs: budget.appStatementTimeoutMs,
+          lockTimeoutMs: budget.lockTimeoutMs,
+          idleInTransactionTimeoutMs: budget.idleInTransactionTimeoutMs,
+          tempFileLimitMiB: budget.tempFileLimitMiB,
+          workMemMiB: budget.workMemMiB,
+          roleReadOnly: false,
+        },
+        {
+          name: lane.serviceRole,
+          canLogin: true,
+          connectionLimit: 8,
+          statementTimeoutMs: budget.serviceStatementTimeoutMs,
+          lockTimeoutMs: budget.lockTimeoutMs,
+          idleInTransactionTimeoutMs: budget.idleInTransactionTimeoutMs,
+          tempFileLimitMiB: budget.tempFileLimitMiB,
+          workMemMiB: budget.workMemMiB,
+          roleReadOnly: false,
+        },
       ],
       activeRuntimeSessions: 3,
       serverVersionNum: 150018,
@@ -612,7 +679,19 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       appSourceSha: appSha,
       sourceFenceReceiptSha256: "5".repeat(64),
       restorationParityManifestSha256: "6".repeat(64),
-      authorizedActorId: "human:fixture",
+      executionActor: {
+        kind: "agent",
+        id: "2c4b7be4-173f-49bc-97e6-043736c0dbd1",
+      },
+      approvalAuthority: {
+        kind: "conversation-user",
+        label: "CEO",
+        humanAppUserId: null,
+        source: "direct-user-instruction",
+        decisionRef: "conductor://fixture/direct-user-delegation",
+        capturedAt: ago(6),
+        delegationDigest: "d".repeat(64),
+      },
       approvedAt: ago(5),
     },
     readmission: {
@@ -621,7 +700,19 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       allocationReceiptId: "22222222-2222-4222-8222-222222222222",
       systemIdentifier: "1234567890123456789",
       admittedAt: ago(4),
-      authorizedActorId: "human:fixture",
+      executionActor: {
+        kind: "agent",
+        id: "2c4b7be4-173f-49bc-97e6-043736c0dbd1",
+      },
+      approvalAuthority: {
+        kind: "conversation-user",
+        label: "CEO",
+        humanAppUserId: null,
+        source: "direct-user-instruction",
+        decisionRef: "conductor://fixture/direct-user-delegation",
+        capturedAt: ago(6),
+        delegationDigest: "d".repeat(64),
+      },
     },
     scheduledBackup: {
       receiptSha256: "7".repeat(64),
@@ -696,6 +787,13 @@ describe("audited already-applied registration", () => {
     const receipts = await current.binder.registerApplied(request);
     expect(receipts[0]?.binding.phase).toBe("applied");
     expect(receipts[0]?.initialIncidentId).toBeUndefined();
+    expect(receipts[0]?.binding.cutover?.actorId).toBe(
+      "agent:2c4b7be4-173f-49bc-97e6-043736c0dbd1"
+    );
+    expect(
+      receipts[0]?.registration?.approvalAuthority.humanAppUserId
+    ).toBeNull();
+    expect(receipts[0]?.binding.migrationRole).toBeUndefined();
     expect(
       AppliedDatabaseCellReceiptSchema.safeParse({
         ...receipts[0],
@@ -708,13 +806,13 @@ describe("audited already-applied registration", () => {
     expect(await current.binder.registerApplied(request)).toEqual(receipts);
     expect(current.writes()).toBe(1);
     expect(current.nativeReads()).toBe(0);
+    await expect(current.binder.seal(request)).rejects.toThrow(
+      "cannot enter prestage"
+    );
+    expect(current.nativeReads()).toBe(0);
     const projected = projectDatabaseCellPlacement({
       receipt: receipts[0],
-      kit: {
-        ...scopedKit,
-        canonicalEndpointHost: "poly-db.fixture.example.org",
-      },
-      backupEncryptionKey: "e".repeat(64),
+      custody: appliedCustody(),
       requireApplied: true,
     });
     expect(
@@ -725,6 +823,23 @@ describe("audited already-applied registration", () => {
         Buffer.from(projected.publicValues?.DATABASE_MIGRATION_URL ?? "")
       )
     ).toBe(facts.effectiveApp.migrationDsnSha256);
+    expect(projected.publicValues).not.toHaveProperty("DATABASE_SSL_CA_CERT");
+    expect(projected.probe).toBeNull();
+    expect(projected.admin).toBeNull();
+    expect(projected.readmit).toBeNull();
+    expect(projected.backup).toBeNull();
+    expect(() =>
+      projectDatabaseCellPlacement({
+        receipt: receipts[0],
+        custody: {
+          ...appliedCustody(),
+          app: {
+            ...appliedCustody().app,
+            dsn: appliedCustody().app.dsn.replace(":15432", ":15433"),
+          },
+        },
+      })
+    ).toThrow();
     expect(
       DatabaseCellAllocationMetadataSchema.parse({
         version: 1,
@@ -733,14 +848,37 @@ describe("audited already-applied registration", () => {
       }).retentionPolicy
     ).toBe("retain");
   });
+  it("compares authenticated complete relation manifests without node-specific table-count policy", async () => {
+    const facts = registrationFacts();
+    const relations = ["public.positions", "drizzle.__drizzle_migrations"];
+    facts.manualCutover.expectedRelations = relations;
+    facts.scheduledBackup.relations = relations;
+    facts.independentRecovery.relations = relations;
+    const current = fixture({ appliedFacts: facts });
+    const receipts = await current.binder.registerApplied(request);
+    expect(receipts[0]?.binding.phase).toBe("applied");
+    expect(current.writes()).toBe(1);
+  });
   it("refuses wrong managed allocation, current DSNs, app SHA, partial recovery, schema drift and same-provider recovery", async () => {
     const invalidCases = [
       (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
-        f.native.runtimeRoles[0] = {
-          name: f.native.appRole,
-          canLogin: false,
-          connectionLimit: 2,
-        };
+        const role = f.native.runtimeRoles[0];
+        if (role) role.connectionLimit += 1;
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        const role = f.native.runtimeRoles[0];
+        if (role) role.roleReadOnly = true;
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.readmission.executionActor.id =
+          "33333333-3333-4333-8333-333333333333";
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.readmission.approvalAuthority.delegationDigest = "0".repeat(64);
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        const role = f.native.runtimeRoles[0];
+        if (role) role.canLogin = false;
       },
       (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
         f.effectiveApp.regions = f.effectiveApp.regions.map((region) => ({
@@ -799,5 +937,73 @@ describe("audited already-applied registration", () => {
       "allocation changed"
     );
     expect(current.writes()).toBe(0);
+  });
+});
+
+describe("owned immutable applied evidence transport", () => {
+  it("requires exact actual JSON bytes and refuses altered digests, duplicate kinds and oversized bundles", () => {
+    const bytes = Buffer.from(
+      JSON.stringify({ actual: "frozen-artifact", rows: 20409387 })
+    );
+    const artifact = {
+      kind: "source-parity",
+      mediaType: "application/json",
+      sha256: shaBuffer(bytes),
+      bytesBase64: bytes.toString("base64"),
+    };
+    const bundle = {
+      version: 1,
+      nodeId,
+      environment: "production",
+      artifacts: [artifact],
+    };
+    expect(
+      DatabaseCellAppliedEvidenceBundleSchema.safeParse(bundle).success
+    ).toBe(true);
+    expect(
+      DatabaseCellAppliedEvidenceBundleSchema.safeParse({
+        ...bundle,
+        artifacts: [{ ...artifact, sha256: "0".repeat(64) }],
+      }).success
+    ).toBe(false);
+    expect(
+      DatabaseCellAppliedEvidenceBundleSchema.safeParse({
+        ...bundle,
+        artifacts: [artifact, artifact],
+      }).success
+    ).toBe(false);
+    const large = Buffer.from(JSON.stringify({ value: "x".repeat(200000) }));
+    expect(
+      DatabaseCellAppliedEvidenceBundleSchema.safeParse({
+        ...bundle,
+        artifacts: [
+          {
+            ...artifact,
+            sha256: shaBuffer(large),
+            bytesBase64: large.toString("base64"),
+          },
+        ],
+      }).success
+    ).toBe(false);
+  });
+  it("system trust owns empty custom CA composition without shared fallback", () => {
+    const repoRoot = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const script = [
+      "set -eu",
+      'REPO_ROOT="$1"',
+      'source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"',
+      "TARGET_NODE=alpha",
+      `CELL_PLACEMENT_JSON='{"publicValues":{"DATABASE_URL":"opaque-owned-current-dsn"}}'`,
+      'value="$(cell_placement_composed_value alpha DATABASE_SSL_CA_CERT)"',
+      '[ -z "$value" ]',
+      "cell_placement_composed_value alpha DATABASE_URL",
+    ].join("\n");
+    expect(
+      execFileSync("bash", ["-c", script, "fixture", repoRoot], {
+        encoding: "utf8",
+      })
+    ).toBe("opaque-owned-current-dsn\n");
   });
 });

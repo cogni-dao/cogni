@@ -5,6 +5,7 @@
 
 materialize_database_cell_kits() {
   [[ "$TARGET_NODE" == "$RELIABILITY_CONTROLLER" ]] || return 0
+  materialize_database_cell_applied_custodies
   local cell_node lane catalog physical node_uuid source_sha source_slot
   local source_ns cell_bank kit_json authority_json profile budget_json version_json source_host backup_bank backup_key backup_lane backup_component_bank
   local cell_domain_root="$DOMAIN"
@@ -27,6 +28,14 @@ materialize_database_cell_kits() {
     kit_json="$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_PLACEMENT_RECEIPT_JSON)"
     if [[ -n "$kit_json" && "$(jq -r .binding.phase <<<"$kit_json")" =~ ^(applied|superseded)$ ]]; then
       [[ "$(jq -r .binding.nodeSlug <<<"$kit_json")" == "$cell_node" && "$(jq -r .binding.nodeId <<<"$kit_json")" == "$(node_id_for_target "$cell_node")" && "$(jq -r .allocationEnvironment <<<"$kit_json")" == "$DEPLOY_ENVIRONMENT" ]] || fail "applied cell does not own this catalog scope"
+      if [[ "$(jq -r '.registration.kind // ""' <<<"$kit_json")" == audited-manual ]]; then
+        local applied_custody
+        applied_custody="$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_APPLIED_CUSTODY_JSON)"
+        [[ -n "$applied_custody" ]] || fail "audited manual current custody missing"
+        validate_applied_cell_consumer_custody "$cell_node" "$applied_custody"
+        jq -n --argjson receipt "$kit_json" --argjson custody "$applied_custody" '{receipt:$receipt,custody:$custody}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" >/dev/null || fail "manual cell custody differs from binding"
+        continue
+      fi
       prefetch_path "${cell_node}-database-backup"
       jq -n --argjson receipt "$kit_json" --argjson kit "$(bao_get_field "${cell_node}-database-cell" DATABASE_CELL_BOOTSTRAP_KIT_JSON)" --arg backupEncryptionKey "$(bao_get_field "${cell_node}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" > /dev/null || fail "applied cell bootstrap custody differs from its binding"
       continue
@@ -123,4 +132,39 @@ cell_seed_exact() {
   rm -f "${CACHE_DIR}/${bank}/${key}"
   seed_kv "$bank" "$key" "$value"
   created=$((created+1))
+}
+
+# Same owner-bank ESO volume as factory kits; no second secret reader or store.
+# Missing imported custody is inert. No root/TLS key/control credentials are minted.
+materialize_database_cell_applied_custodies() {
+  [[ "$DEPLOY_ENVIRONMENT" == production && "${SECRETS_CONTROL_ENV:-$DEPLOY_ENVIRONMENT}" == production ]] || return 0
+  local node custody bundle entries='[]' bundles='[]' previous aggregate key
+  for node in "${NODE_TARGETS[@]}"; do
+    prefetch_path "${node}-database-cell"
+    custody="$(bao_get_field "${node}-database-cell" DATABASE_CELL_APPLIED_CUSTODY_JSON)"
+    if [[ -n "$custody" ]]; then
+      validate_applied_cell_consumer_custody "$node" "$custody"
+      custody="$(printf '%s' "$custody" | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" --validate-applied-custody)" || fail "owned applied custody invalid"
+      entries="$(jq --argjson entry "$custody" '.+[$entry]' <<<"$entries")"
+    fi
+    bundle="$(bao_get_field "${node}-database-cell" DATABASE_CELL_APPLIED_EVIDENCE_BUNDLE_JSON)"
+    if [[ -n "$bundle" ]]; then
+      [[ "$(jq -r .nodeId <<<"$bundle")" == "$(node_id_for_target "$node")" && "$(jq -r .environment <<<"$bundle")" == production ]] || fail "manual evidence leaves owned production scope"
+      bundle="$(printf '%s' "$bundle" | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts" --validate-evidence)" || fail "manual evidence bytes, digests or bounds invalid"
+      bundles="$(jq --argjson entry "$bundle" '.+[$entry]' <<<"$bundles")"
+    fi
+  done
+  [[ "$entries" != '[]' || "$bundles" != '[]' ]] || return 0
+  prefetch_path akash-tx-actuator
+  for key in AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON AKASH_DATABASE_CELL_APPLIED_EVIDENCE_BUNDLES_JSON; do
+    case "$key" in
+      AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON) aggregate="$entries" ;;
+      AKASH_DATABASE_CELL_APPLIED_EVIDENCE_BUNDLES_JSON) aggregate="$bundles" ;;
+    esac
+    [[ "$aggregate" != '[]' ]] || continue
+    previous="$(bao_get_field akash-tx-actuator "$key")"
+    [[ "$previous" != "$aggregate" ]] || continue
+    cell_seed_exact akash-tx-actuator "$key" "$aggregate"
+  done
+  flush_batch akash-tx-actuator
 }

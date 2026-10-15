@@ -26,7 +26,8 @@ import type {
 } from "@/ports";
 import { AkashTxError } from "@/ports";
 import {
-  composeDatabaseCellDsn,
+  type DatabaseCellAppliedCustody,
+  DatabaseCellAppliedCustodySchema,
   type DatabaseCellBootstrapKit,
 } from "@/shared/secrets/database-cell-binding.data";
 import {
@@ -53,6 +54,9 @@ export class DatabaseCellBinder
       store: BindingStore;
       observeNative: DatabaseCellNativeObserverPort["observe"];
       observeApplied?: DatabaseCellAppliedRegistrationEvidencePort["observe"];
+      appliedCustody?(
+        reference: DatabaseCellBindingReference
+      ): Promise<DatabaseCellAppliedCustody>;
       kit(
         reference: DatabaseCellBindingReference
       ): Promise<DatabaseCellBootstrapKit>;
@@ -151,6 +155,12 @@ export class DatabaseCellBinder
 
   async seal(input: DatabaseCellBindingReference) {
     const record = await this.record(input);
+    const previous = await this.read(input);
+    if (previous.some((receipt) => receipt.registration))
+      throw new AkashTxError(
+        "identity_conflict",
+        "an audited admitted cell cannot enter prestage qualification"
+      );
     const kit = await this.deps.kit(input);
     if (
       kit.nodeId !== input.nodeId ||
@@ -238,7 +248,6 @@ export class DatabaseCellBinder
         );
       }
     }
-    const previous = await this.read(input);
     const receipts = AppliedDatabaseCellReceiptsSchema.parse(
       proofs.map(({ lane, observation, incident }) => {
         const old = previous.find(
@@ -319,33 +328,23 @@ export class DatabaseCellBinder
       !input.readmissionReceiptId
     )
       refuse("production registration requires audited receipt references");
-    if (!this.deps.observeApplied)
+    if (!this.deps.observeApplied || !this.deps.appliedCustody)
       throw new AkashTxError(
         "ledger_unavailable",
         "read-only applied registration evidence producer unavailable"
       );
     const record = await this.record(input);
-    const kit = await this.deps.kit(input);
-    const lanes = kit.logicalDatabases.filter(
-      (lane) => lane.environment === "production"
+    const custody = DatabaseCellAppliedCustodySchema.parse(
+      await this.deps.appliedCustody(input)
     );
-    const lane = lanes[0];
-    if (
-      kit.nodeId !== input.nodeId ||
-      kit.environment !== "production" ||
-      lanes.length !== 1 ||
-      !lane ||
-      !kit.canonicalEndpointHost
-    )
-      refuse(
-        "registration lacks its owned production kit and canonical DNS custody"
-      );
+    if (custody.nodeId !== input.nodeId || custody.environment !== "production")
+      refuse("registration lacks its owned production applied custody");
     // This observer is distinct from prestage qualification. It must only read actual
     // provider/native/runtime state and authenticated immutable receipt artifacts.
     const parsedFacts = DatabaseCellAppliedRegistrationFactsSchema.safeParse(
       await this.deps.observeApplied({
         reference: input,
-        kit,
+        custody,
         manualCutoverPacketSha256: input.manualCutoverPacketSha256,
         readmissionReceiptId: input.readmissionReceiptId,
       })
@@ -384,7 +383,7 @@ export class DatabaseCellBinder
     if (!providerEndpointValue) refuse("registration provider endpoint absent");
     const providerEndpoint = new URL(providerEndpointValue);
     const canonical = new URL(
-      `tcp://${kit.canonicalEndpointHost}:${providerEndpoint.port}`
+      `tcp://${custody.canonicalEndpointHost}:${providerEndpoint.port}`
     );
     if (
       isIP(providerEndpoint.hostname) ||
@@ -392,7 +391,11 @@ export class DatabaseCellBinder
       providerEndpoint.username ||
       providerEndpoint.password ||
       providerEndpoint.search ||
-      providerEndpoint.hash
+      providerEndpoint.hash ||
+      Number(new URL(custody.app.dsn).port) !== Number(canonical.port) ||
+      Number(new URL(custody.service.dsn).port) !== Number(canonical.port) ||
+      (custody.migration.kind === "dedicated-migration-url" &&
+        Number(new URL(custody.migration.dsn).port) !== Number(canonical.port))
     )
       refuse("registration requires the actual strict DNS provider endpoint");
     const sha = (value: string) =>
@@ -408,7 +411,7 @@ export class DatabaseCellBinder
         providerEndpoint,
         canonical,
         createHash("sha256")
-          .update(new X509Certificate(kit.tlsCertificate).raw)
+          .update(new X509Certificate(custody.tlsCertificate).raw)
           .digest("hex")
       )
     )
@@ -419,21 +422,21 @@ export class DatabaseCellBinder
       provider.dseq !== record.externalName ||
       provider.providerAccount !== record.providerAccount ||
       provider.appliedSdlHash !== record.lastAppliedSdlHash ||
-      native.databaseName !== lane.databaseName ||
-      native.appRole !== lane.appRole ||
-      native.serviceRole !== lane.serviceRole
+      native.databaseName !== custody.databaseName ||
+      native.appRole !== custody.appRole ||
+      native.serviceRole !== custody.serviceRole
     )
       refuse(
         "registration native identity or managed SDL differs from custody"
       );
     if (
       packet.packetSha256 !== input.manualCutoverPacketSha256 ||
-      packet.nodeId !== kit.nodeId ||
-      packet.nodeSlug !== kit.nodeSlug ||
-      packet.cellSourceSha !== kit.sourceSha ||
+      packet.nodeId !== custody.nodeId ||
+      packet.nodeSlug !== custody.nodeSlug ||
+      packet.cellSourceSha !== custody.sourceSha ||
       packet.allocationReceiptId !== record.receiptId ||
       packet.systemIdentifier !== native.systemIdentifier ||
-      packet.appSourceSha !== lane.sourceSha ||
+      packet.appSourceSha !== custody.targetBuildSha ||
       packet.appAllocationReceiptId !== app.allocationReceiptId ||
       packet.appSdlHash !== app.appliedSdlHash
     )
@@ -445,51 +448,73 @@ export class DatabaseCellBinder
       readmission.packetSha256 !== packet.packetSha256 ||
       readmission.allocationReceiptId !== record.receiptId ||
       readmission.systemIdentifier !== native.systemIdentifier ||
-      readmission.authorizedActorId !== packet.authorizedActorId ||
+      JSON.stringify(readmission.executionActor) !==
+        JSON.stringify(packet.executionActor) ||
+      JSON.stringify(readmission.approvalAuthority) !==
+        JSON.stringify(packet.approvalAuthority) ||
+      Date.parse(packet.approvalAuthority.capturedAt) >
+        Date.parse(packet.approvedAt) ||
       Date.parse(readmission.admittedAt) < Date.parse(packet.approvedAt) ||
       Date.parse(readmission.admittedAt) > Date.now() + 5_000
     )
       refuse(
         "registration readmission identity or chronology differs from its reviewed packet"
       );
-    const runtimeRoles = [lane.appRole, lane.serviceRole];
+    const runtimeRoles = [
+      {
+        name: custody.appRole,
+        limit: custody.budget.appConnectionLimit,
+        timeout: custody.budget.appStatementTimeoutMs,
+      },
+      {
+        name: custody.serviceRole,
+        limit: custody.budget.serviceConnectionLimit,
+        timeout: custody.budget.serviceStatementTimeoutMs,
+      },
+    ];
     if (
-      runtimeRoles.some(
-        (name) =>
-          native.runtimeRoles.filter(
-            (role) => role.name === name && role.canLogin
-          ).length !== 1
-      )
+      runtimeRoles.some(({ name, limit, timeout }) => {
+        const roles = native.runtimeRoles.filter((role) => role.name === name);
+        const role = roles[0];
+        return (
+          roles.length !== 1 ||
+          !role ||
+          !role.canLogin ||
+          role.roleReadOnly ||
+          role.connectionLimit !== limit ||
+          role.statementTimeoutMs !== timeout ||
+          role.lockTimeoutMs !== custody.budget.lockTimeoutMs ||
+          role.idleInTransactionTimeoutMs !==
+            custody.budget.idleInTransactionTimeoutMs ||
+          role.tempFileLimitMiB !== custody.budget.tempFileLimitMiB ||
+          role.workMemMiB !== custody.budget.workMemMiB
+        );
+      })
     )
-      refuse("registration must observe the genuinely admitted runtime roles");
-    const url = (role: string, password: string) =>
-      composeDatabaseCellDsn(
-        { host: canonical.hostname, port: Number(canonical.port) },
-        lane.databaseName,
-        role,
-        password
+      refuse(
+        "registration must observe the admitted runtime roles and exact owned budget caps"
       );
-    const appDsn = url(lane.appRole, lane.appPassword);
+    const migrationDsn =
+      custody.migration.kind === "app-database-url"
+        ? custody.app.dsn
+        : custody.migration.dsn;
     if (
-      app.nodeId !== kit.nodeId ||
-      app.deployedSourceSha !== lane.sourceSha ||
-      app.appDsnSha256 !== sha(appDsn) ||
-      app.serviceDsnSha256 !==
-        sha(url(lane.serviceRole, lane.servicePassword)) ||
-      app.migrationDsnSha256 !==
-        sha(
-          app.migrationConsumer === "app-database-url"
-            ? appDsn
-            : url(lane.migrationRole, lane.migrationPassword)
-        ) ||
+      app.nodeId !== custody.nodeId ||
+      app.deployedSourceSha !== custody.targetBuildSha ||
+      app.appDsnSha256 !== sha(custody.app.dsn) ||
+      app.serviceDsnSha256 !== sha(custody.service.dsn) ||
+      app.migrationConsumer !== custody.migration.kind ||
+      app.migrationDsnSha256 !== sha(migrationDsn) ||
       app.tlsTrustKind !== native.tlsTrustKind ||
-      (app.tlsTrustKind === "private-ca" &&
-        app.tlsCaSha256 !== sha(kit.tlsCaCertificate)) ||
+      app.tlsTrustKind !== custody.tls.kind ||
+      (custody.tls.kind === "private-ca"
+        ? app.tlsCaSha256 !== sha(custody.tls.caCertificate)
+        : app.tlsCaSha256 !== undefined) ||
       new Set(app.regions.map((region) => region.region)).size < 2 ||
       app.regions.some(
         (region) =>
           region.status !== 200 ||
-          region.buildSha !== lane.sourceSha ||
+          region.buildSha !== custody.targetBuildSha ||
           !fresh(region.observedAt)
       )
     )
@@ -500,10 +525,9 @@ export class DatabaseCellBinder
       JSON.stringify([...values].sort()) ===
       JSON.stringify([...packet.expectedRelations].sort());
     if (
-      (kit.nodeSlug === "poly" && packet.expectedRelations.length !== 68) ||
       !sameRelations(backup.relations) ||
       !sameRelations(recovery.relations) ||
-      backup.databaseName !== lane.databaseName ||
+      backup.databaseName !== custody.databaseName ||
       backup.systemIdentifier !== native.systemIdentifier ||
       backup.executorFailureDomainId ===
         `akash:${record.providerAccount}:${record.externalName}` ||
@@ -539,12 +563,20 @@ export class DatabaseCellBinder
         old.binding.endpoint.port !== Number(canonical.port) ||
         old.binding.cutover?.packetSha256 !== packet.packetSha256 ||
         old.registration?.readmissionReceiptId !== readmission.receiptId ||
+        JSON.stringify(old.registration.executionActor) !==
+          JSON.stringify(packet.executionActor) ||
+        JSON.stringify(old.registration.approvalAuthority) !==
+          JSON.stringify(packet.approvalAuthority) ||
         old.registration.scheduledBackupReceiptSha256 !==
           backup.receiptSha256 ||
         old.registration.independentRecoveryReceiptSha256 !==
           recovery.receiptSha256 ||
         old.registration.appAllocationReceiptId !== app.allocationReceiptId ||
         old.registration.appSdlHash !== app.appliedSdlHash ||
+        old.registration.appDsnSha256 !== app.appDsnSha256 ||
+        old.registration.serviceDsnSha256 !== app.serviceDsnSha256 ||
+        old.registration.migrationDsnSha256 !== app.migrationDsnSha256 ||
+        old.registration.tlsCaSha256 !== app.tlsCaSha256 ||
         old.registration.migrationConsumer !== app.migrationConsumer ||
         old.registration.tlsTrustKind !== app.tlsTrustKind)
     )
@@ -554,15 +586,21 @@ export class DatabaseCellBinder
     if (old) return previous;
     const receipt: AppliedDatabaseCellReceipt = {
       allocationEnvironment: "production",
-      targetBuildSha: lane.sourceSha,
+      targetBuildSha: custody.targetBuildSha,
       registration: {
         kind: "audited-manual",
+        executionActor: packet.executionActor,
+        approvalAuthority: packet.approvalAuthority,
         readmissionReceiptId: readmission.receiptId,
         manualCutoverPacketSha256: packet.packetSha256,
         scheduledBackupReceiptSha256: backup.receiptSha256,
         independentRecoveryReceiptSha256: recovery.receiptSha256,
         appAllocationReceiptId: app.allocationReceiptId,
         appSdlHash: app.appliedSdlHash,
+        appDsnSha256: app.appDsnSha256,
+        serviceDsnSha256: app.serviceDsnSha256,
+        migrationDsnSha256: app.migrationDsnSha256,
+        ...(app.tlsCaSha256 ? { tlsCaSha256: app.tlsCaSha256 } : {}),
         migrationConsumer: app.migrationConsumer,
         tlsTrustKind: app.tlsTrustKind,
         registeredAt: facts.observedAt,
@@ -572,8 +610,8 @@ export class DatabaseCellBinder
         phase: "applied",
         receiptId: record.receiptId,
         cogniKey: record.cogniKey,
-        nodeId: kit.nodeId,
-        nodeSlug: kit.nodeSlug,
+        nodeId: custody.nodeId,
+        nodeSlug: custody.nodeSlug,
         environment: "production",
         provider: "akash",
         dseq: record.externalName,
@@ -582,22 +620,27 @@ export class DatabaseCellBinder
           host: canonical.hostname,
           port: Number(canonical.port),
           tlsMode: "verify-full",
-          tlsCertificateSha256: sha(kit.tlsCertificate),
+          tlsCertificateSha256: sha(custody.tlsCertificate),
         },
-        databaseName: lane.databaseName,
-        appRole: lane.appRole,
-        serviceRole: lane.serviceRole,
-        migrationRole: lane.migrationRole,
-        probeRole: lane.probeRole,
+        databaseName: custody.databaseName,
+        appRole: custody.appRole,
+        serviceRole: custody.serviceRole,
+        ...(custody.migration.kind === "dedicated-migration-url"
+          ? {
+              migrationRole: decodeURIComponent(
+                new URL(custody.migration.dsn).username
+              ),
+            }
+          : {}),
         systemIdentifier: native.systemIdentifier,
         failureDomainId: `akash:${record.providerAccount}:${record.externalName}`,
-        sourceSha: kit.sourceSha,
-        budgetProfile: lane.budgetProfile,
+        sourceSha: custody.sourceSha,
+        budgetProfile: custody.budgetProfile,
         appliedSdlHash: record.lastAppliedSdlHash,
         readyAt: facts.observedAt,
         cutover: {
           packetSha256: packet.packetSha256,
-          actorId: packet.authorizedActorId,
+          actorId: `${packet.executionActor.kind}:${packet.executionActor.id}`,
           approvedAt: packet.approvedAt,
         },
       },
