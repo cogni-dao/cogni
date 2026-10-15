@@ -31,13 +31,15 @@ import {
   resolveRuntimeProfileSecretRefs,
 } from "@cogni/repo-spec";
 
+import { z } from "zod";
 import type {
   ComputeWorkloadSpec,
   DeclaredProvisionServiceSpec,
 } from "@/ports";
-
 import { writerFor } from "@/shared/node-registry/crossplane-control-plane";
 import { databaseConsumerCommand } from "@/shared/secrets/database-ca-command";
+import { DatabaseCellRuntimePoolLimitsSchema } from "@/shared/secrets/database-cell-binding.data";
+import type { DatabaseCellRuntimePoolLimits } from "@/types/database-cell";
 
 import type { NodeComputeApi } from "./node-compute-api";
 import type { DeploymentEnvironment } from "./node-deployment-provider";
@@ -210,6 +212,33 @@ export type BootRecovery = "hold" | "auto";
  */
 export interface XComputeWorkloadRuntime {
   readonly substrateHost: string;
+  readonly databasePoolLimits?: DatabaseCellRuntimePoolLimits;
+}
+
+/** Public catalog policy only. Missing limits preserve the child's defaults. */
+export function resolveNodeDatabasePoolLimits(input: {
+  readonly catalog: unknown;
+  readonly environment: DeploymentEnvironment;
+}): DatabaseCellRuntimePoolLimits | undefined {
+  const lane = z
+    .object({
+      runtimePoolLimits: DatabaseCellRuntimePoolLimitsSchema.optional(),
+    })
+    .passthrough();
+  const catalog = z
+    .object({
+      database: z
+        .object({
+          "candidate-a": lane.optional(),
+          preview: lane.optional(),
+          production: lane.optional(),
+        })
+        .strict()
+        .optional(),
+    })
+    .passthrough()
+    .parse(input.catalog);
+  return catalog.database?.[input.environment]?.runtimePoolLimits;
 }
 
 /** RFC-1123 hostname, the `format: hostname` the XRD declares for `spec.runtime.substrateHost`. */
@@ -425,6 +454,21 @@ export function buildComputeWorkloadManifest(
       throw new Error(
         "[compute-workload-manifest] runtime.substrateHost must be a lowercase RFC-1123 hostname"
       );
+    }
+    if (input.runtime.databasePoolLimits) {
+      DatabaseCellRuntimePoolLimitsSchema.parse(
+        input.runtime.databasePoolLimits
+      );
+      if (
+        services.filter(
+          (service) => service.runtimeProfile === "cogni-node-app-v1"
+        ).length !== 1
+      )
+        throw new Error(
+          "[compute-workload-manifest] database pool limits require exactly one app service and one replica"
+        );
+      // Current ProvisionSpec/SDL contract always renders count:1 for each service.
+      // The explicit policy refuses expansion until a budget-aware replica path exists.
     }
     // THE MIS-WIRE GUARD. The one wrong value that would still render, still sync, and still
     // pass every static check is the node's own browser-facing host — the Cloudflare-proxied

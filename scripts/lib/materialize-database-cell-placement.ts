@@ -77,7 +77,9 @@ export function projectDatabaseCellPlacement(input: unknown) {
       b.endpoint.tlsCertificateSha256 !==
         createHash("sha256").update(custody.tlsCertificate).digest("hex") ||
       receipt.registration.migrationConsumer !== custody.migration.kind ||
-      receipt.registration.tlsTrustKind !== custody.tls.kind
+      receipt.registration.tlsTrustKind !== custody.tls.kind ||
+      JSON.stringify(receipt.registration.runtimePoolLimits) !==
+        JSON.stringify(custody.runtimePoolLimits)
     )
       throw new Error(
         "applied consumer custody differs from audited current binding"
@@ -122,6 +124,9 @@ export function projectDatabaseCellPlacement(input: unknown) {
     return {
       privatePlan: publicValues,
       publicValues,
+      ...(custody.runtimePoolLimits
+        ? { runtimePoolLimits: custody.runtimePoolLimits }
+        : {}),
       probe: null,
       admin: null,
       readmit: null,

@@ -83,6 +83,7 @@ function fixture(
     canonicalEndpointHost?: string;
     endpointIdentity?: DatabaseCellNativeProof["endpointIdentity"];
     appliedFacts?: DatabaseCellAppliedRegistrationFacts;
+    appliedCustody?: import("@/types/database-cell").DatabaseCellAppliedCustody;
     conflict?: boolean;
   } = {}
 ) {
@@ -140,7 +141,8 @@ function fixture(
     ...(appliedFacts
       ? {
           observeApplied: async () => appliedFacts,
-          appliedCustody: async () => appliedCustody(),
+          appliedCustody: async () =>
+            options.appliedCustody ?? appliedCustody(),
         }
       : {}),
     observeNative: async () => {
@@ -905,6 +907,47 @@ describe("audited already-applied registration", () => {
         },
       }).success
     ).toBe(false);
+  });
+  it("bounds both service pools plus the leader with reserves and pins the same registered public policy", async () => {
+    const limits = { replicaCount: 1 as const, app: 3, service: 4, read: 2 };
+    const custody = { ...appliedCustody(), runtimePoolLimits: limits };
+    expect(DatabaseCellAppliedCustodySchema.safeParse(custody).success).toBe(
+      true
+    );
+    for (const invalid of [
+      { ...limits, app: 4 },
+      { ...limits, service: 6 },
+      { ...limits, read: 3 },
+      { ...limits, replicaCount: 2 },
+    ])
+      expect(
+        DatabaseCellAppliedCustodySchema.safeParse({
+          ...custody,
+          runtimePoolLimits: invalid,
+        }).success
+      ).toBe(false);
+    const facts = registrationFacts();
+    facts.effectiveApp.runtimePoolLimits = limits;
+    facts.manualCutover.runtimePoolLimits = limits;
+    const current = fixture({ appliedFacts: facts, appliedCustody: custody });
+    const receipts = await current.binder.registerApplied(request);
+    expect(receipts[0]?.registration?.runtimePoolLimits).toEqual(limits);
+    expect(
+      projectDatabaseCellPlacement({ receipt: receipts[0], custody })
+    ).toMatchObject({ runtimePoolLimits: limits });
+    expect(() =>
+      projectDatabaseCellPlacement({
+        receipt: receipts[0],
+        custody: { ...custody, runtimePoolLimits: { ...limits, app: 2 } },
+      })
+    ).toThrow(/custody differs/);
+    facts.effectiveApp.runtimePoolLimits = { ...limits, app: 2 };
+    await expect(
+      fixture({
+        appliedFacts: facts,
+        appliedCustody: custody,
+      }).binder.registerApplied(request)
+    ).rejects.toMatchObject({ code: "identity_conflict" });
   });
   it("fails closed without a distinct read-only evidence producer", async () => {
     const current = fixture();

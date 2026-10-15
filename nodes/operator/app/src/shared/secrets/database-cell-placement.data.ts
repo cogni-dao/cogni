@@ -19,6 +19,7 @@ import {
   DatabaseCellBindingSchema,
   DatabaseCellManualProvenanceSchema,
   DatabaseCellRoleBoundsSchema,
+  DatabaseCellRuntimePoolLimitsSchema,
 } from "./database-cell-binding.data";
 
 const executionActor = z
@@ -64,6 +65,7 @@ export const AppliedDatabaseCellReceiptSchema = z
           "dedicated-migration-url",
         ]),
         tlsTrustKind: z.enum(["system", "private-ca"]),
+        runtimePoolLimits: DatabaseCellRuntimePoolLimitsSchema.optional(),
         registeredAt: z.string().datetime({ offset: true }),
       })
       .strict()
@@ -288,6 +290,7 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
           "dedicated-migration-url",
         ]),
         readinessReceiptSha256: digest,
+        runtimePoolLimits: DatabaseCellRuntimePoolLimitsSchema.optional(),
         providerManifest: z
           .object({
             observedAt: timestamp,
@@ -362,6 +365,7 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         appImageDigest: imageDigest,
         appEgressIp: ipAddress,
         appServiceName: z.string().min(1).max(63),
+        runtimePoolLimits: DatabaseCellRuntimePoolLimitsSchema.optional(),
         expectedRuntimeApplications: z
           .array(
             z

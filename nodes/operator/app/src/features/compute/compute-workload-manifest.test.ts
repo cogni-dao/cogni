@@ -8,6 +8,7 @@ import {
   bootPolicyForEnvironment,
   buildComputeWorkloadManifest,
   computeWorkloadManifestFile,
+  resolveNodeDatabasePoolLimits,
 } from "./compute-workload-manifest";
 import { deploymentEnvironmentSchema } from "./node-deployment-provider";
 import {
@@ -128,6 +129,64 @@ describe("buildComputeWorkloadManifest", () => {
     expect(manifest.spec.workload.services[0]).not.toHaveProperty("image");
     expect(manifest.spec.workload.services[0]).not.toHaveProperty("env");
     expect(manifest.spec.workload.services[0]).not.toHaveProperty("expose");
+  });
+
+  it("carries lane-scoped public pool policy for one app replica and preserves absent defaults", () => {
+    const limits = { replicaCount: 1 as const, app: 3, service: 4, read: 2 };
+    const catalog = {
+      database: {
+        production: { tier: "dedicated", runtimePoolLimits: limits },
+      },
+    };
+    expect(
+      resolveNodeDatabasePoolLimits({ catalog, environment: "production" })
+    ).toEqual(limits);
+    expect(
+      resolveNodeDatabasePoolLimits({ catalog, environment: "preview" })
+    ).toBeUndefined();
+    expect(
+      resolveNodeDatabasePoolLimits({ catalog: {}, environment: "production" })
+    ).toBeUndefined();
+    for (const invalid of [
+      { ...limits, replicaCount: 2 },
+      { ...limits, read: 0 },
+      { ...limits, app: 1.5 },
+      { ...limits, unknown: 1 },
+    ])
+      expect(() =>
+        resolveNodeDatabasePoolLimits({
+          catalog: { database: { production: { runtimePoolLimits: invalid } } },
+          environment: "production",
+        })
+      ).toThrow();
+    const input = {
+      slug: "toks4",
+      environment: "production" as const,
+      bundleRef: `ghcr.io/cogni-dao/toks4@sha256:${BUNDLE_DIGEST}`,
+      bundle,
+      publicHost: "toks4.cognidao.org",
+      computeApi: "crossplane" as const,
+      leaseGeneration: 0,
+      runtime: {
+        substrateHost: "cogni.vm.cognidao.org",
+        databasePoolLimits: limits,
+      },
+    };
+    expect(buildComputeWorkloadManifest(input).spec).toMatchObject({
+      runtime: { databasePoolLimits: limits },
+    });
+    const noApp: ResolvedNodeArtifactBundle = {
+      ...bundle,
+      services: bundle.services.filter(
+        (entry) => entry.service.runtimeProfile !== "cogni-node-app-v1"
+      ),
+    };
+    expect(() =>
+      buildComputeWorkloadManifest({
+        ...input,
+        bundle: noApp,
+      })
+    ).toThrow(/exactly one app service/);
   });
 
   it("rejects a mutable OCI bundle tag", () => {

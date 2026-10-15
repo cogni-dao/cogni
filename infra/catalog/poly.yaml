@@ -40,7 +40,11 @@ envs: [candidate-a, preview, production]
 database:
   candidate-a: { tier: dedicated, budget_profile: dedicated-high-throughput-v1 }
   preview: { tier: dedicated, budget_profile: dedicated-high-throughput-v1 }
-  production: { tier: dedicated, budget_profile: dedicated-high-throughput-v1 }
+  production:
+    tier: dedicated
+    budget_profile: dedicated-high-throughput-v1
+    # One app replica: service + read + leader = 7/8; app = 3/4. Reserve one each.
+    runtimePoolLimits: { replicaCount: 1, app: 3, service: 4, read: 2 }
 reliability_validation:
   candidate-a: { role: dedicated-neighbor }
 deployment_provider:

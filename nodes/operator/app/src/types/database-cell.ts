@@ -132,6 +132,7 @@ export interface AppliedDatabaseCellReceipt {
         migrationDsnSha256: string;
         tlsCaSha256?: string | undefined;
         migrationConsumer: "app-database-url" | "dedicated-migration-url";
+        runtimePoolLimits?: DatabaseCellRuntimePoolLimits | undefined;
         tlsTrustKind: "system" | "private-ca";
         registeredAt: string;
       }
@@ -171,6 +172,13 @@ export interface DatabaseCellRoleBounds {
   readonly tempFileLimitMiB: number;
   readonly workMemMiB: number;
 }
+/** One app replica, including its separate service read pool and dedicated job leader. */
+export interface DatabaseCellRuntimePoolLimits {
+  readonly replicaCount: 1;
+  readonly app: number;
+  readonly service: number;
+  readonly read: number;
+}
 /** Imported current consumers only: no provider root, signing key, or invented control roles. */
 export interface DatabaseCellAppliedCustody {
   readonly version: 1;
@@ -184,6 +192,7 @@ export interface DatabaseCellAppliedCustody {
   readonly appRole: string;
   readonly serviceRole: string;
   readonly budgetProfile: "shared-default-v1" | "dedicated-high-throughput-v1";
+  readonly runtimePoolLimits?: DatabaseCellRuntimePoolLimits | undefined;
   readonly budget: {
     readonly kind: "preserved-role-bounds";
     readonly roles: readonly DatabaseCellRoleBounds[];
@@ -343,6 +352,7 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly tlsTrustKind: "system" | "private-ca";
     readonly migrationConsumer: "app-database-url" | "dedicated-migration-url";
     readonly readinessReceiptSha256: string;
+    readonly runtimePoolLimits?: DatabaseCellRuntimePoolLimits | undefined;
     readonly providerManifest: {
       readonly observedAt: string;
       readonly services: readonly {
@@ -385,6 +395,7 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly appImageDigest: string;
     readonly appEgressIp: string;
     readonly appServiceName: string;
+    readonly runtimePoolLimits?: DatabaseCellRuntimePoolLimits | undefined;
     readonly expectedRuntimeApplications: readonly {
       readonly role: string;
       readonly applicationName: string;

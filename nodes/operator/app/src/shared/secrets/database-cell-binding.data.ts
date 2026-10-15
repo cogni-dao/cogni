@@ -181,6 +181,15 @@ const currentConsumer = z
   .object({ dsn: z.string().min(1), custody: custodyReference })
   .strict();
 /** Resolved only from the existing private cell bank; never accepted over HTTP. */
+export const DatabaseCellRuntimePoolLimitsSchema = z
+  .object({
+    replicaCount: z.literal(1),
+    app: z.number().int().positive().max(1000),
+    service: z.number().int().positive().max(1000),
+    read: z.number().int().positive().max(1000),
+  })
+  .strict();
+
 export const DatabaseCellAppliedCustodySchema = z
   .object({
     version: z.literal(1),
@@ -201,6 +210,7 @@ export const DatabaseCellAppliedCustodySchema = z
       "shared-default-v1",
       "dedicated-high-throughput-v1",
     ]),
+    runtimePoolLimits: DatabaseCellRuntimePoolLimitsSchema.optional(),
     budget: z
       .object({
         kind: z.literal("preserved-role-bounds"),
@@ -258,6 +268,25 @@ export const DatabaseCellAppliedCustodySchema = z
         code: "custom",
         message: "applied custody leaves its canonical node database",
       });
+    const pools = custody.runtimePoolLimits;
+    if (pools) {
+      const appCap =
+        custody.budget.roles.find((role) => role.name === custody.appRole)
+          ?.connectionLimit ?? 0;
+      const serviceCap =
+        custody.budget.roles.find((role) => role.name === custody.serviceRole)
+          ?.connectionLimit ?? 0;
+      // Dedicated leader uses the service role too. Keep one connection spare per role.
+      if (
+        pools.app * pools.replicaCount >= appCap ||
+        (pools.service + pools.read + 1) * pools.replicaCount >= serviceCap
+      )
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "runtime pools, read pool and leader must preserve per-role connection reserve",
+        });
+    }
     const consumers: [{ dsn: string }, string][] = [
       [custody.app, custody.appRole],
       [custody.service, custody.serviceRole],

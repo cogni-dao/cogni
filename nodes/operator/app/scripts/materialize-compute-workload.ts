@@ -29,6 +29,7 @@ import { parse, stringify } from "yaml";
 import {
   buildComputeWorkloadManifest,
   computeWorkloadManifestFile,
+  resolveNodeDatabasePoolLimits,
 } from "@/features/compute/compute-workload-manifest";
 import { buildComputeSecretResources } from "@/features/compute/compute-workload-secret-manifests";
 import {
@@ -199,6 +200,17 @@ async function main(): Promise<void> {
       "[materialize-compute-workload] --dns-zone-id must be a 32-character hex Cloudflare zone id"
     );
   }
+  const databasePoolLimits = resolveNodeDatabasePoolLimits({
+    catalog,
+    environment,
+  });
+  if (
+    databasePoolLimits &&
+    (computeApi !== "crossplane" || !values["substrate-host"]?.trim())
+  )
+    throw new Error(
+      "[materialize-compute-workload] declared database pool limits require Crossplane runtime topology"
+    );
   const manifest = buildComputeWorkloadManifest({
     slug: catalogIdentity.slug,
     environment,
@@ -220,7 +232,12 @@ async function main(): Promise<void> {
       ? { dns: { provider: "cloudflare" as const, zoneId: dnsZoneId } }
       : {}),
     ...(computeApi === "crossplane" && values["substrate-host"]?.trim()
-      ? { runtime: { substrateHost: values["substrate-host"].trim() } }
+      ? {
+          runtime: {
+            substrateHost: values["substrate-host"].trim(),
+            ...(databasePoolLimits ? { databasePoolLimits } : {}),
+          },
+        }
       : {}),
   });
   // Read the resolved secret refs straight off the workload the manifest builder just emitted,

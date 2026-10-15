@@ -523,6 +523,10 @@ export class DatabaseCellBinder
         currentAppService.total,
         currentAppService.available,
       ].some((count) => count !== 1) ||
+      JSON.stringify(app.runtimePoolLimits) !==
+        JSON.stringify(custody.runtimePoolLimits) ||
+      JSON.stringify(packet.runtimePoolLimits) !==
+        JSON.stringify(custody.runtimePoolLimits) ||
       app.nodeId !== custody.nodeId ||
       app.deployedSourceSha !== custody.targetBuildSha ||
       app.providerManifest.consoleVersion !== packet.appManifestVersion ||
@@ -653,7 +657,9 @@ export class DatabaseCellBinder
         old.registration.migrationDsnSha256 !== app.migrationDsnSha256 ||
         old.registration.tlsCaSha256 !== app.tlsCaSha256 ||
         old.registration.migrationConsumer !== app.migrationConsumer ||
-        old.registration.tlsTrustKind !== app.tlsTrustKind)
+        old.registration.tlsTrustKind !== app.tlsTrustKind ||
+        JSON.stringify(old.registration.runtimePoolLimits) !==
+          JSON.stringify(custody.runtimePoolLimits))
     )
       refuse(
         "applied registration cannot replace prior physical identity or audited custody"
@@ -678,6 +684,9 @@ export class DatabaseCellBinder
         ...(app.tlsCaSha256 ? { tlsCaSha256: app.tlsCaSha256 } : {}),
         migrationConsumer: app.migrationConsumer,
         tlsTrustKind: app.tlsTrustKind,
+        ...(custody.runtimePoolLimits
+          ? { runtimePoolLimits: custody.runtimePoolLimits }
+          : {}),
         registeredAt: facts.observedAt,
       },
       binding: {

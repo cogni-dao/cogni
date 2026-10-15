@@ -26,6 +26,10 @@ load_database_cell_placement() {
     kit="$(bao_get_field "$cell_bank" DATABASE_CELL_APPLIED_CUSTODY_JSON)"
     [[ -n "$kit" ]] || fail "audited manual cell current consumer custody missing"
     validate_applied_cell_consumer_custody "$TARGET_NODE" "$kit"
+    local catalog_pools custody_pools
+    catalog_pools="$(yq -o=json ".database.\"${DEPLOY_ENVIRONMENT}\".runtimePoolLimits // null" "${CATALOG_DIR}/${TARGET_NODE}.yaml" | jq -Sc .)" || fail "catalog runtime pool policy invalid"
+    custody_pools="$(jq -Sc '.runtimePoolLimits // null' <<<"$kit")" || fail "applied runtime pool custody invalid"
+    [[ "$catalog_pools" == "$custody_pools" ]] || fail "public runtime pool policy differs from audited applied custody"
     CELL_PLACEMENT_JSON="$(jq -n --argjson receipt "$receipt" --argjson custody "$kit" --argjson requireApplied "$require_applied" '{receipt:$receipt,custody:$custody,requireApplied:$requireApplied}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "audited manual consumer custody invalid"
     return 0
   fi
