@@ -371,6 +371,18 @@ PLATFORM_TOKEN="$(cat "$PLATFORM_TOKEN_FILE")"
 [[ "$PLATFORM_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
   || { echo "AKASH_TX_ACTUATOR_TOKEN must be the catalog generator's hex/32 output" >&2; exit 1; }
 
+# Optional authenticated cell aggregates are DERIVED by their typed owner phase,
+# not random credentials. A cold platform pass must not mint placeholder proofs.
+for key in AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON AKASH_DATABASE_CELL_APPLIED_EVIDENCE_BUNDLES_JSON; do
+  if [ -e "$BAO_ROOT/cogni/candidate-a/akash-tx-actuator/$key" ]; then
+    echo "cold platform pass invented optional authenticated cell aggregate $key" >&2
+    exit 1
+  fi
+  # An existing private value is preserved until its real typed publisher has
+  # authenticated replacement input. This fixture is deliberately not proof.
+  put_secret akash-tx-actuator "$key" '{"fixture":"existing-private-unqualified-value"}'
+done
+
 # 3. source:human keys at a platform path are NEVER generated — a vendor-minted Console
 #    credential must come through the sanctioned write path, not be invented here.
 if [ -e "$BAO_ROOT/cogni/candidate-a/akash-tx-actuator/AKASH_ACTUATOR_CONSOLE_API_KEY" ]; then
@@ -405,6 +417,14 @@ env \
   bash scripts/ci/secret-materialize.sh candidate-a node-template > "$TMPROOT/out-platform2.txt"
 test "$(cat "$PLATFORM_TOKEN_FILE")" = "$PLATFORM_TOKEN" \
   || { echo "re-run rotated AKASH_TX_ACTUATOR_TOKEN" >&2; exit 1; }
+for key in AKASH_DATABASE_CELL_APPLIED_CUSTODIES_JSON AKASH_DATABASE_CELL_APPLIED_EVIDENCE_BUNDLES_JSON; do
+  test "$(cat "$BAO_ROOT/cogni/candidate-a/akash-tx-actuator/$key")" = '{"fixture":"existing-private-unqualified-value"}' \
+    || { echo "platform pass replaced existing authenticated cell aggregate $key without typed evidence" >&2; exit 1; }
+  if grep -qF 'existing-private-unqualified-value' "$TMPROOT/out-platform2.txt"; then
+    echo "platform pass leaked private cell aggregate" >&2
+    exit 1
+  fi
+done
 
 # Drift repair: a stale per-node DOLTGRES_URL must recompose from the operator
 # canonical superuser, matching DATABASE_URL/_SERVICE_URL behavior. This is the
