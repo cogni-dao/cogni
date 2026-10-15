@@ -364,6 +364,32 @@ describe("fleet Serve alert contract (bug.5459)", () => {
         resource.kind === "NetworkPolicy" &&
         resource.metadata.name === "database-reliability-readmitter"
     );
+    for (const policy of [actuatorPolicy, readmitterPolicy]) {
+      expect(policy.spec.egress).toContainEqual({
+        to: [
+          {
+            ipBlock: {
+              cidr: "0.0.0.0/0",
+              except: [
+                "10.0.0.0/8",
+                "172.16.0.0/12",
+                "192.168.0.0/16",
+                "169.254.0.0/16",
+                "127.0.0.0/8",
+              ],
+            },
+          },
+        ],
+        ports: [{ protocol: "TCP", port: 1, endPort: 65535 }],
+      });
+      expect(policy.spec.egress).toContainEqual({
+        to: [{ ipBlock: { cidr: "0.0.0.0/0" } }],
+        ports: [
+          { protocol: "TCP", port: 443 },
+          { protocol: "TCP", port: 5432 },
+        ],
+      });
+    }
     expect(actuatorPolicy.spec.ingress).toEqual([
       expect.objectContaining({
         from: [

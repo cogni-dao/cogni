@@ -262,6 +262,19 @@ spec:
       ports:
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 5432 }
+    # Dedicated cells use provider-assigned public TLS ports. The runtime selects
+    # only sealed cell endpoints; private and link-local destinations stay excluded.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 127.0.0.0/8
+      ports:
+        - { protocol: TCP, port: 1, endPort: 65535 }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -298,3 +311,16 @@ spec:
       ports:
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 5432 }
+    # Dedicated cells use provider-assigned public TLS ports. The runtime selects
+    # only sealed cell endpoints; private and link-local destinations stay excluded.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 127.0.0.0/8
+      ports:
+        - { protocol: TCP, port: 1, endPort: 65535 }
