@@ -361,4 +361,94 @@ CATALOG_JSON="$(yq -o=json -I=0 '.' infra/catalog/scheduler-worker.yaml)" \
 [ "$(yq -N '.spec.strategy.rollingUpdate.maxUnavailable' infra/k8s/base/node-app/deployment.yaml)" = 0 ] || fail "operator zero-downtime policy changed"
 pass "every repair path selects at most scheduler-worker, with empty node/database partitions"
 
+echo "[7/7] candidate startup samples actual available memory before the heavy worker"
+SERIAL_PATCH=infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml
+RENDERED="$(kubectl kustomize infra/k8s/overlays/candidate-a/scheduler-worker)"
+RENDERED_JSON="$(yq -o=json -I=0 'select(.kind == "Deployment")' <<< "$RENDERED")"
+RENDERED_JSON="$RENDERED_JSON" python3 - <<'PY' || fail "candidate init contract drifted"
+import json, os
+deployment = json.loads(os.environ["RENDERED_JSON"])
+spec = deployment["spec"]["template"]["spec"]
+main = next(c for c in spec["containers"] if c["name"] == "scheduler-worker")
+guard = next(c for c in spec["initContainers"] if c["name"] == "startup-memory-budget")
+assert guard["image"] == main["image"], (guard["image"], main["image"])
+assert guard["command"][:2] == ["/bin/sh", "-ec"]
+assert guard["env"] == [{"name":"MAIN_MEMORY_LIMIT_BYTES", "valueFrom":{"resourceFieldRef":{"containerName":"scheduler-worker", "resource":"limits.memory", "divisor":"1"}}}]
+assert main["resources"]["limits"]["memory"] == "1Gi"
+assert guard["resources"]["limits"]["memory"] == "32Mi"
+assert guard["resources"]["requests"]["memory"] == "8Mi"
+assert deployment["metadata"]["annotations"]["secret.reloader.stakater.com/auto"] == "true"
+assert deployment["metadata"]["annotations"]["reloader.stakater.com/auto"] == "false"
+PY
+[ "$(yq -N 'select(.kind == "ConfigMap") | .metadata.annotations."reloader.stakater.com/ignore"' <<< "$RENDERED")" = true ] \
+  || fail "candidate ConfigMap can independently trigger a Reloader rollout"
+for env in preview production; do
+  other="$(kubectl kustomize "infra/k8s/overlays/$env/scheduler-worker")"
+  [ "$(yq -N 'select(.kind == "Deployment") | (.spec.template.spec.initContainers // []) | length' <<< "$other")" = 0 ] \
+    || fail "$env unexpectedly gained candidate startup policy"
+  [ "$(yq -N 'select(.kind == "Deployment") | .metadata.annotations."reloader.stakater.com/auto"' <<< "$other")" = true ] \
+    || fail "$env Reloader transport changed"
+done
+
+GUARD_DIR="$TMP_TREE/startup-guard"
+mkdir -p "$GUARD_DIR/bin"
+yq -N '.spec.template.spec.initContainers[] | select(.name == "startup-memory-budget") | .command[2]' "$SERIAL_PATCH" > "$GUARD_DIR/guard.sh"
+cat > "$GUARD_DIR/bin/awk" <<'PY'
+#!/usr/bin/env python3
+# Test-only proc read fixtures. Production has no path override or bypass knob.
+import json, os, pathlib, subprocess, sys
+root = pathlib.Path(os.environ["GUARD_FIXTURE"])
+state = json.loads((root / "state.json").read_text())
+args = sys.argv[1:]
+if "/proc/uptime" in args:
+    samples = state["samples"]
+    sample = samples[min(state["index"], len(samples) - 1)]
+    (root / "uptime").write_text(sample["uptime"])
+    memory = root / "meminfo"
+    if sample["meminfo"] is None:
+        memory.unlink(missing_ok=True)
+    else:
+        memory.write_text(sample["meminfo"])
+    args = [str(root / "uptime") if arg == "/proc/uptime" else str(memory) if arg == "/proc/meminfo" else arg for arg in args]
+sys.exit(subprocess.call([os.environ["GUARD_REAL_AWK"], *args]))
+PY
+cat > "$GUARD_DIR/bin/sleep" <<'PY'
+#!/usr/bin/env python3
+import json, os, pathlib, sys
+root = pathlib.Path(os.environ["GUARD_FIXTURE"])
+state = json.loads((root / "state.json").read_text())
+state["index"] += 1
+if sys.argv[1:] != ["2"] or state["index"] > 4:
+    raise SystemExit("fixture detected unexpected or unbounded polling")
+(root / "state.json").write_text(json.dumps(state))
+PY
+chmod +x "$GUARD_DIR/bin/awk" "$GUARD_DIR/bin/sleep"
+GUARD_REAL_AWK="$(command -v awk)" GUARD_DIR="$GUARD_DIR" python3 - <<'PY' || fail "actual inline memory guard failed its finite-state fixtures"
+import json, os, pathlib, subprocess
+root = pathlib.Path(os.environ["GUARD_DIR"])
+def sample(seconds, kib):
+    return {"uptime": f"{seconds} 0.00\n", "meminfo": f"MemTotal: 6062904 kB\nMemAvailable: {kib} kB\n"}
+def run(name, samples, success, reason, budget="1073741824", expected_sleeps=None):
+    (root / "state.json").write_text(json.dumps({"index":0,"samples":samples}))
+    env = {**os.environ, "PATH":str(root / "bin") + os.pathsep + os.environ["PATH"], "GUARD_FIXTURE":str(root), "MAIN_MEMORY_LIMIT_BYTES":budget}
+    result = subprocess.run(["/bin/sh", "-ec", (root / "guard.sh").read_text()], env=env, text=True, capture_output=True, timeout=5)
+    assert (result.returncode == 0) == success, (name, result.returncode, result.stdout, result.stderr)
+    assert reason in result.stdout + result.stderr, (name, result.stdout, result.stderr)
+    if expected_sleeps is not None:
+        assert json.loads((root / "state.json").read_text())["index"] == expected_sleeps, name
+    print("  ok - inline guard " + name)
+run("below-budget then actual release", [sample("10.25", 800000), sample("12.25", 1441792)], True, "requiredKiB=1441792", expected_sleeps=1)
+run("already sufficient", [sample(0, 1441792)], True, "eligible", expected_sleeps=0)
+run("timeout wins even newly sufficient at boundary", [sample(0, 800000), sample(180, 1441792)], False, "timed out", expected_sleeps=1)
+run("below budget timeout", [sample(0, 800000), sample(181, 800000)], False, "timed out")
+run("actual main limit change affects threshold", [sample(0, 1966080)], True, "requiredKiB=1966080", budget="1610612736")
+for budget in ("", "0", "-1", "1.5", "unknown", "99999999999999999999999"):
+    run("invalid main budget " + repr(budget), [sample(0, 9999999)], False, "invalid main limit", budget=budget, expected_sleeps=0)
+for meminfo in (None, "", "MemAvailable: nope kB\n", "MemAvailable: 9999999 MB\n", "MemAvailable: 9999999 kB\nMemAvailable: 9999999 kB\n"):
+    run("missing/malformed memory " + repr(meminfo), [{"uptime":"0.00 0.00\n", "meminfo":meminfo}], False, "invalid proc sample", expected_sleeps=0)
+run("malformed monotonic clock", [{"uptime":"bad 0.00\n", "meminfo":"MemAvailable: 9999999 kB\n"}], False, "invalid proc sample")
+run("clock rollback", [sample(10, 800000), sample(9, 9999999)], False, "clock regressed", expected_sleeps=1)
+PY
+pass "same-image bounded init uses actual main budget/proc samples; production and Secret rotation remain unchanged"
+
 echo "PASS: scheduler-runtime-routing.test.sh"

@@ -13,6 +13,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: scheduler-worker-config
+  annotations:
+    reloader.stakater.com/ignore: "true"
 data:
   COGNI_NODE_ENDPOINTS: "operator=http://operator-node-app:3000,4ff8eac1-4eba-4ed0-931b-b1fe4f64713d=http://operator-node-app:3000,poly=https://poly-test.cognidao.org,4b06359a-a859-4399-888e-a8c7a6696f7e=https://poly-test.cognidao.org,red=https://red-test.cognidao.org,921b1d1d-4ded-4a6d-b3f1-f7d6affa406a=https://red-test.cognidao.org"
   TEMPORAL_CUSTODIED_NODE_ENDPOINTS: "{}"

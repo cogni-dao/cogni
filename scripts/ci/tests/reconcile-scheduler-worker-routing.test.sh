@@ -75,6 +75,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: scheduler-worker-config
+  annotations:
+    reloader.stakater.com/ignore: "true"
 data:
   COGNI_NODE_ENDPOINTS: "$CANONICAL_ENDPOINTS"
 YAML
@@ -85,6 +87,18 @@ metadata:
   name: scheduler-worker
   annotations:
     reloader.stakater.com/auto: "true"
+spec:
+  template:
+    spec:
+      containers:
+        - name: scheduler-worker
+          image: ghcr.io/cogni-dao/cogni-template:placeholder
+          envFrom:
+            - configMapRef:
+                name: scheduler-worker-config
+          resources:
+            limits:
+              memory: 1Gi
 YAML
 cat >"$APP_SRC/$SUBPATH/kustomization.yaml" <<'YAML'
 resources:
@@ -247,6 +261,22 @@ esac
 [ "$(yq -N 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxUnavailable' <<< "$RENDERED")" = 1 ] || fail "candidate serial rollout does not preserve one worker"
 echo "PASS: stale bootstrap topology renders effective provider routing and two-replica serial rollout"
 
+config_checksum() {
+  kubectl kustomize "$(dirname "$OVERLAY")" | yq -N \
+    'select(.kind == "Deployment") | .spec.template.metadata.annotations."cogni.dev/scheduler-config-sha256"'
+}
+INITIAL_CHECKSUM="$(config_checksum)"
+[[ "$INITIAL_CHECKSUM" =~ ^[0-9a-f]{64}$ ]] || fail "actual composed config has no Podtemplate checksum"
+[ "$(yq -N 'select(.kind == "ConfigMap") | .metadata.annotations."reloader.stakater.com/ignore"' <<< "$RENDERED")" = true ] \
+  || fail "new ConfigMap update can still reload the old generic-auto Deployment"
+for annotation in reloader.stakater.com/auto configmap.reloader.stakater.com/auto; do
+  [ "$(yq -N "select(.kind == \"Deployment\") | .metadata.annotations.\"$annotation\"" <<< "$RENDERED")" = false ] \
+    || fail "candidate ConfigMap Reloader remains enabled"
+done
+[ "$(yq -N 'select(.kind == "Deployment") | .metadata.annotations."secret.reloader.stakater.com/auto"' <<< "$RENDERED")" = true ] \
+  || fail "Secret rotation lost its existing Reloader transport"
+echo "PASS: composed checksum owns config rollout; same-update ignore protects the first transition; Secret reload remains enabled"
+
 # ── 2. Overlay topology heals without changing promoted image identity ────────
 grep -q 'externalName: cogni-candidate-a.vm.cognidao.org' "$OVERLAY" \
   || fail "env overlay did not heal from the lane substrate authority"
@@ -283,6 +313,78 @@ import json, sys
 assert json.load(open(sys.argv[1]))["status"] == "noop"
 PY
 echo "PASS: idempotent (second run is a clean no-op)"
+
+# The digest follows the final composed consumer, not just one routing source.
+cp "$APP_SRC/$SUBPATH/configmap.yaml" "$TMPROOT/config-original.yaml"
+cp "$APP_SRC/$ENDPOINTS_SUBPATH" "$TMPROOT/reviewed-original.yaml"
+cp "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH" "$TMPROOT/watched-original.yaml"
+for field in TEMPORAL_NAMESPACE TEMPORAL_ADDRESS; do
+  FIELD="$field" yq -i '.data[strenv(FIELD)] = "changed-bootstrap-value"' "$APP_SRC/$SUBPATH/configmap.yaml"
+  run >/dev/null || fail "changed bootstrap config refused"
+  [ "$(config_checksum)" != "$INITIAL_CHECKSUM" ] || fail "$field absent from effective checksum"
+  cp "$TMPROOT/config-original.yaml" "$APP_SRC/$SUBPATH/configmap.yaml"
+done
+yq -i '.binaryData.STARTUP_HINT = "YmluYXJ5LWNvbmZpZw=="' "$APP_SRC/$SUBPATH/configmap.yaml"
+run >/dev/null || fail "binary config refused"
+[ "$(config_checksum)" != "$INITIAL_CHECKSUM" ] || fail "binaryData absent from checksum"
+cp "$TMPROOT/config-original.yaml" "$APP_SRC/$SUBPATH/configmap.yaml"
+yq -i '.data.TEMPORAL_CUSTODIED_NODE_ENDPOINTS = "{\"cogni-preview\":\"foreign=https://foreign.example\"}"' "$APP_SRC/$ENDPOINTS_SUBPATH"
+run >/dev/null || fail "custodied config refused"
+[ "$(config_checksum)" != "$INITIAL_CHECKSUM" ] || fail "custodied namespace routes absent from checksum"
+cp "$TMPROOT/reviewed-original.yaml" "$APP_SRC/$ENDPOINTS_SUBPATH"
+for authority in "$APP_SRC" "$AUTHORITY_DIR"; do
+  sed -i.bak -e 's#https://poly-test.cognidao.org#https://new-poly.example#g' \
+    -e 's#http://brother-node-app:3000#https://new-brother.example#g' "$authority/$ENDPOINTS_SUBPATH"
+  run >/dev/null || fail "owned routing update refused"
+  [ "$(config_checksum)" != "$INITIAL_CHECKSUM" ] || fail "route authority absent from checksum"
+  cp "$TMPROOT/reviewed-original.yaml" "$APP_SRC/$ENDPOINTS_SUBPATH"
+  cp "$TMPROOT/watched-original.yaml" "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH"
+done
+run >/dev/null
+[ "$(config_checksum)" = "$INITIAL_CHECKSUM" ] || fail "original effective config digest did not restore"
+echo "PASS: actual rendered checksum includes both routing authorities, custody, Temporal bootstrap and binaryData"
+
+python3 - "$APP_SRC/$SUBPATH/configmap.yaml" <<'PY'
+import json, subprocess, sys
+value = json.loads(subprocess.check_output(["yq", "-o=json", ".", sys.argv[1]]))
+value["data"] = dict(reversed(list(value["data"].items())))
+open(sys.argv[1], "w").write(json.dumps(value))
+PY
+run >/dev/null
+[ "$(config_checksum)" = "$INITIAL_CHECKSUM" ] || fail "format/key order changed effective checksum"
+cp "$TMPROOT/config-original.yaml" "$APP_SRC/$SUBPATH/configmap.yaml"
+(
+  cd "$DEPLOY_DIR"
+  bash "$REPO_ROOT/scripts/ci/promote-k8s-image.sh" --no-commit --env candidate-a --app scheduler-worker \
+    --digest ghcr.io/cogni-dao/cogni-template@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+    --source-sha eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee >/dev/null
+)
+run >/dev/null
+[ "$(config_checksum)" = "$INITIAL_CHECKSUM" ] || fail "promotion-only GIT_SHA/IMAGE_DIGEST caused checksum drift"
+BEFORE_TEMPLATE="$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -o=json -I=0 'select(.kind == "Deployment") | .spec.template')"
+yq -i '.data.TEMPORAL_NAMESPACE = "config-only-change"' "$APP_SRC/$SUBPATH/configmap.yaml"
+run >/dev/null
+AFTER_TEMPLATE="$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -o=json -I=0 'select(.kind == "Deployment") | .spec.template')"
+BEFORE_TEMPLATE="$BEFORE_TEMPLATE" AFTER_TEMPLATE="$AFTER_TEMPLATE" python3 - <<'PY' || fail "config update mutated more than the checksum"
+import json, os
+before, after = (json.loads(os.environ[key]) for key in ("BEFORE_TEMPLATE", "AFTER_TEMPLATE"))
+annotation = "cogni.dev/scheduler-config-sha256"
+assert before["metadata"]["annotations"].pop(annotation) != after["metadata"]["annotations"].pop(annotation)
+assert before == after
+PY
+cp "$TMPROOT/config-original.yaml" "$APP_SRC/$SUBPATH/configmap.yaml"
+echo "PASS: canonical ordering and promotion identities do not churn checksum; config-only change mutates exactly one template annotation"
+
+cp "$APP_SRC/$SUBPATH/deployment.yaml" "$TMPROOT/deployment-original.yaml"
+yq -i 'del(.spec.template.spec.containers[0].resources.limits.memory)' "$APP_SRC/$SUBPATH/deployment.yaml"
+if run >"$TMPROOT/budget-error" 2>&1; then fail "missing main limit must refuse a fallback startup budget"; fi
+grep -q 'explicit main memory limit' "$TMPROOT/budget-error" || fail "wrong missing-main-limit refusal"
+cp "$TMPROOT/deployment-original.yaml" "$APP_SRC/$SUBPATH/deployment.yaml"
+yq -i '.spec.template.spec.containers[0].envFrom[0].configMapRef.name = "foreign"' "$APP_SRC/$SUBPATH/deployment.yaml"
+if run >"$TMPROOT/consumer-error" 2>&1; then fail "unexpected effective config consumer must refuse"; fi
+grep -q 'unexpected worker ConfigMap consumer' "$TMPROOT/consumer-error" || fail "wrong unexpected-consumer refusal"
+cp "$TMPROOT/deployment-original.yaml" "$APP_SRC/$SUBPATH/deployment.yaml"
+echo "PASS: missing main limit and mismatched consumer fail closed before publishing a checksum"
 
 # ── 5. Fail-loud on a missing source ───────────────────────────────────────────
 if APP_SOURCE_DIR="$TMPROOT/nope" DEPLOY_BRANCH_DIR="$DEPLOY_DIR" \

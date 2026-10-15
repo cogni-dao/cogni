@@ -467,6 +467,53 @@ if [ "$DEPLOY_ENV" = candidate-a ]; then
   cp "$APP_SOURCE_DIR/$SERIAL_PATCH" "$WORKDIR/$SERIAL_PATCH"
   yq -i '.patches = ((.patches // []) | map(select(.path != "serial-rollout.patch.yaml"))) + [{"path": "serial-rollout.patch.yaml"}]' "$OVERLAY_DST"
   git -C "$WORKDIR" add -A "$SERIAL_PATCH"
+
+  # Hash the ACTUAL consumed ConfigMap after all authority/bootstrap patches,
+  # not the source routing fragment. Promotion updates only GIT_SHA/IMAGE_DIGEST
+  # later in this transaction; image identity already changes the Pod template.
+  CHECKSUM_PATCH="infra/k8s/overlays/candidate-a/scheduler-worker/config-checksum.patch.yaml"
+  yq -i '.patches = ((.patches // []) | map(select(.path != "config-checksum.patch.yaml")))' "$OVERLAY_DST"
+  RENDERED_CONFIG="$(kubectl kustomize "$(dirname "$OVERLAY_DST")" | yq -o=json -I=0 '.')"
+  CONFIG_SHA="$(SWR_RENDERED_CONFIG="$RENDERED_CONFIG" python3 - <<'PY'
+import hashlib, json, os
+
+resources = [json.loads(line) for line in os.environ["SWR_RENDERED_CONFIG"].splitlines() if line.strip()]
+workers = [r for r in resources if r.get("kind") == "Deployment" and r.get("metadata", {}).get("name") == "scheduler-worker"]
+if len(workers) != 1:
+    raise SystemExit("expected exactly one scheduler-worker Deployment")
+containers = [c for c in workers[0].get("spec", {}).get("template", {}).get("spec", {}).get("containers", []) if c.get("name") == "scheduler-worker"]
+if len(containers) != 1 or not containers[0].get("resources", {}).get("limits", {}).get("memory"):
+    raise SystemExit("worker startup budget requires an explicit main memory limit")
+references = [e["configMapRef"].get("name") for e in containers[0].get("envFrom", []) if "configMapRef" in e]
+if references != ["scheduler-worker-config"]:
+    raise SystemExit("unexpected worker ConfigMap consumer")
+maps = [r for r in resources if r.get("kind") == "ConfigMap" and r.get("metadata", {}).get("name") == references[0]]
+if len(maps) != 1:
+    raise SystemExit("expected exactly one consumed worker ConfigMap")
+config = maps[0]
+if config.get("metadata", {}).get("annotations", {}).get("reloader.stakater.com/ignore") != "true":
+    raise SystemExit("worker ConfigMap must ignore Reloader atomically with its data")
+data, binary = config.get("data", {}), config.get("binaryData", {})
+if not isinstance(data, dict) or not isinstance(binary, dict) or not all(isinstance(v, str) for v in [*data.values(), *binary.values()]):
+    raise SystemExit("invalid worker ConfigMap payload")
+effective = {"data": {k: v for k, v in data.items() if k not in {"GIT_SHA", "IMAGE_DIGEST"}}, "binaryData": binary}
+print(hashlib.sha256(json.dumps(effective, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())
+PY
+  )"
+  cat > "$WORKDIR/$CHECKSUM_PATCH" <<YAML
+# Generated from the final consumed non-secret ConfigMap; promotion identity excluded.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-worker
+spec:
+  template:
+    metadata:
+      annotations:
+        cogni.dev/scheduler-config-sha256: "$CONFIG_SHA"
+YAML
+  yq -i '.patches += [{"path": "config-checksum.patch.yaml"}]' "$OVERLAY_DST"
+  git -C "$WORKDIR" add -A "$CHECKSUM_PATCH"
 fi
 
 git -C "$WORKDIR" config user.name "github-actions[bot]"
@@ -494,4 +541,4 @@ fi
 git -C "$WORKDIR" push --quiet origin "HEAD:${BRANCH}"
 STATUS="updated"
 write_summary "$STATUS"
-echo "scheduler-worker routing propagated to ${BRANCH} (${COMMIT_SHA:0:8}) — Argo sync + Reloader will roll the worker."
+echo "scheduler-worker routing propagated to ${BRANCH} (${COMMIT_SHA:0:8}) — Argo sync converges the worker rollout."

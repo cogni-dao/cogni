@@ -122,7 +122,7 @@ patch_path() {
 }
 
 write_patch() {
-  local env="$1" file endpoints custody_routes custody_yaml
+  local env="$1" file endpoints custody_routes custody_yaml reloader_annotation=''
   file="$(patch_path "$env")"
   endpoints="$(render_env "$env")" || return 1
   custody_routes="$(render_custodied_routes "$env")" || return 1
@@ -130,6 +130,13 @@ write_patch() {
     custody_yaml='"{}"'
   else
     custody_yaml="'${custody_routes}'"
+  fi
+  if [ "$env" = candidate-a ]; then
+    # Pinned Reloader reads NEW resource annotations before workload auto flags.
+    # Atomic data+ignore prevents an intermediate old-image config-only rollout.
+    reloader_annotation='
+  annotations:
+    reloader.stakater.com/ignore: "true"'
   fi
   cat >"$file" <<YAML
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
@@ -146,7 +153,7 @@ write_patch() {
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: scheduler-worker-config
+  name: scheduler-worker-config${reloader_annotation}
 data:
   COGNI_NODE_ENDPOINTS: "${endpoints}"
   TEMPORAL_CUSTODIED_NODE_ENDPOINTS: ${custody_yaml}
@@ -207,6 +214,10 @@ check() {
       echo "[ERROR] $(patch_path "$env") has stale/absent TEMPORAL_CUSTODIED_NODE_ENDPOINTS for env '$env'." >&2
       echo "Expected: $expected" >&2
       echo "Actual: ${actual:-<missing>}" >&2
+      rc=1
+    fi
+    if [ "$env" = candidate-a ] && [ "$(yq -N '.metadata.annotations."reloader.stakater.com/ignore" // ""' "$(patch_path "$env")")" != true ]; then
+      echo "[ERROR] candidate scheduler ConfigMap must atomically exclude Reloader config events." >&2
       rc=1
     fi
     kustomization="$OVERLAY_ROOT/$env/scheduler-worker/kustomization.yaml"
