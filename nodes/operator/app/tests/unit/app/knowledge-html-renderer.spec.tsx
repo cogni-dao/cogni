@@ -97,19 +97,18 @@ describe("HtmlRenderer", () => {
     expect(document.querySelector("base")).toBeNull();
 
     const internal = document.querySelector("#internal");
-    expect(internal).toHaveAttribute(
-      "href",
+    expect(internal?.getAttribute("href")).toBe(
       new URL("/knowledge/core", window.location.href).href
     );
-    expect(internal).toHaveAttribute("target", "_top");
-    expect(internal).toHaveAttribute("rel", "noopener noreferrer");
+    expect(internal?.getAttribute("target")).toBe("_top");
+    expect(internal?.getAttribute("rel")).toBe("noopener noreferrer");
 
     const external = document.querySelector("#external");
-    expect(external).toHaveAttribute("target", "_top");
-    expect(external).toHaveAttribute("rel", "noopener noreferrer");
+    expect(external?.getAttribute("target")).toBe("_top");
+    expect(external?.getAttribute("rel")).toBe("noopener noreferrer");
 
     const unsafe = document.querySelector("#unsafe");
-    expect(unsafe).not.toHaveAttribute("href");
-    expect(unsafe).not.toHaveAttribute("target");
+    expect(unsafe?.hasAttribute("href")).toBe(false);
+    expect(unsafe?.hasAttribute("target")).toBe(false);
   });
 });
