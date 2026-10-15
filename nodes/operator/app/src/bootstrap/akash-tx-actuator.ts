@@ -562,10 +562,7 @@ async function loadDatabaseCellFactory() {
         .parse(runtimeEnv.APP_BUILD_SHA)
     );
 }
-let databaseCellFactory: ReturnType<typeof loadDatabaseCellFactory> | undefined;
-const databaseCellSpec = async (
-  reference: Parameters<ReturnType<typeof databaseCellSpecFactory>>[0]
-) => {
+async function loadDatabaseCellKits(): Promise<DatabaseCellBootstrapKit[]> {
   // ESO updates this SAME owner-bank volume after the pod starts and after the
   // observed endpoint is sealed. Never cache private mutable kit contents.
   const cellKitsJson = await readCredential("AKASH_DATABASE_CELL_KITS_JSON");
@@ -574,9 +571,8 @@ const databaseCellSpec = async (
       "ledger_unavailable",
       "private database cell kit unavailable"
     );
-  let kits: DatabaseCellBootstrapKit[];
   try {
-    kits = DatabaseCellBootstrapKitsSchema.parse(JSON.parse(cellKitsJson));
+    return DatabaseCellBootstrapKitsSchema.parse(JSON.parse(cellKitsJson));
   } catch {
     // JSON.parse may include private input excerpts. Redact before HTTP logging.
     throw new AkashTxError(
@@ -584,6 +580,12 @@ const databaseCellSpec = async (
       "private database cell kit invalid"
     );
   }
+}
+let databaseCellFactory: ReturnType<typeof loadDatabaseCellFactory> | undefined;
+const databaseCellSpec = async (
+  reference: Parameters<ReturnType<typeof databaseCellSpecFactory>>[0]
+) => {
+  const kits = await loadDatabaseCellKits();
   databaseCellFactory ??= loadDatabaseCellFactory();
   return (await databaseCellFactory)(kits)(reference);
 };
@@ -596,9 +598,7 @@ const databaseCellBindings = new DatabaseCellBinder({
   observeNative: databaseCellObserver.observe.bind(databaseCellObserver),
   buildSha: runtimeEnv.APP_BUILD_SHA ?? "",
   kit: async (reference) => {
-    const kits = DatabaseCellBootstrapKitsSchema.parse(
-      JSON.parse(await readCredential("AKASH_DATABASE_CELL_KITS_JSON"))
-    );
+    const kits = await loadDatabaseCellKits();
     const selected = kits.filter(
       (kit) =>
         kit.nodeId === reference.nodeId &&
@@ -635,9 +635,7 @@ const databaseCellDiagnostic = async (input: {
       "identity_conflict",
       "diagnostic reference differs from its applied allocation"
     );
-  const kits = DatabaseCellBootstrapKitsSchema.parse(
-    JSON.parse(await readCredential("AKASH_DATABASE_CELL_KITS_JSON"))
-  );
+  const kits = await loadDatabaseCellKits();
   const matching = kits.filter(
     (kit) =>
       kit.nodeId === input.identity.nodeId &&
