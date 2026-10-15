@@ -31,6 +31,25 @@ read_env_file_value() {
   ' "$env_file" 2>/dev/null
 }
 
+resolve_node_api_base() {
+  local node_slug=""
+
+  if [[ -f "$SRC/.cogni/repo-spec.yaml" ]]; then
+    node_slug="$(awk '
+      /^intent:/ { in_intent = 1; next }
+      in_intent && /^[^[:space:]]/ { in_intent = 0 }
+      in_intent && /^[[:space:]]+name:/ {
+        sub(/^[[:space:]]+name:[[:space:]]*/, ""); gsub(/["'"'"']/, ""); print; exit
+      }
+    ' "$SRC/.cogni/repo-spec.yaml" 2>/dev/null)"
+  fi
+
+  case "$node_slug" in
+    operator | cogni-template | "") printf '%s\n' 'https://cognidao.org/api/v1' ;;
+    *) printf 'https://%s.cognidao.org/api/v1\n' "$node_slug" ;;
+  esac
+}
+
 require_primary_checkout() {
   if [[ ! -d "$SRC" ]]; then
     printf 'set COGNI_TEMPLATE_ROOT to your main checkout\n' >&2
@@ -87,7 +106,7 @@ redeem_primary_cogni_spawn_grant() {
     warn "no COGNI_AGENT_SPAWN_TOKEN was provided"
     return 1
   fi
-  api_base="${COGNI_NODE_API_BASE:-https://cognidao.org/api/v1}"
+  api_base="$NODE_API_BASE"
   response="$(
     curl -fsS --max-time 10 -X POST "$api_base/agent/register" \
       -H 'content-type: application/json' \
@@ -159,6 +178,7 @@ link_from_primary() {
 }
 
 require_primary_checkout
+NODE_API_BASE="${COGNI_NODE_API_BASE:-$(resolve_node_api_base)}"
 refresh_primary_main
 refresh_workspace_base_ref
 ensure_primary_cogni_env
@@ -172,7 +192,7 @@ link_from_primary ".local-auth"
 # in the background; neither path ever registers a replacement principal after
 # an authentication failure.
 bash scripts/agent/refresh-agent-credential.sh ".env.cogni" \
-  "${COGNI_NODE_API_BASE:-https://cognidao.org/api/v1}" || true
+  "$NODE_API_BASE" || true
 
 # Codex requires hook trust per config source. Keep one stable, user-level
 # presenter installed so every local Conductor worktree inherits the

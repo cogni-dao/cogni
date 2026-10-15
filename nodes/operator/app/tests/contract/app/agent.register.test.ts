@@ -386,6 +386,11 @@ describe("POST /api/v1/agent/upgrade", () => {
           relation: "developer",
           object: "repository:cogni-dao/cogni",
         },
+        {
+          user: "user:legacy-user",
+          relation: "developer",
+          object: "node:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        },
       ],
     });
 

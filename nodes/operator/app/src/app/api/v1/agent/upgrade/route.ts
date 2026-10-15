@@ -7,7 +7,6 @@ import { verifyLegacyAgentApiKey } from "@/app/_lib/auth/request-identity";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeId } from "@/shared/config";
-import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
 import {
   agentIdentityErrorResponse,
   agentIdentityRateLimitResponse,
@@ -17,14 +16,22 @@ import {
 
 export const runtime = "nodejs";
 
-const MIGRATABLE_NODE_ROLES = new Set<string>(NODE_ACCESS_ROLES);
+// Freeze this migration allowlist independently from the access-request
+// catalog. Adding a future human/node role must never silently make it
+// transferable to a legacy agent.
+const MIGRATABLE_NODE_ROLES = new Set([
+  "developer",
+  "secrets_manager",
+  "production_promoter",
+  "env_manager",
+]);
 
 function isMigratableNodeGrant(tuple: {
   object: string;
   relation: string;
 }): boolean {
   return (
-    tuple.object.startsWith("node:") &&
+    tuple.object === `node:${getNodeId()}` &&
     MIGRATABLE_NODE_ROLES.has(tuple.relation)
   );
 }
