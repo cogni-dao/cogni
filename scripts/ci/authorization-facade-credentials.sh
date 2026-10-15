@@ -102,6 +102,8 @@ AUTHORITY_PATH="cogni/${LANE}/authorization-facade"
 RING_KEY="$NODE_ID"
 TARGET_PATH="cogni/${LANE}/${TARGET_NODE}"
 TARGET_KEY=AUTHORIZATION_FACADE_TOKEN
+ROTATION_STATE_PATH="cogni/${LANE}/authorization-facade-rotation-state"
+WORKLOAD_URL="${AUTHORIZATION_FACADE_WORKLOAD_URL:-}"
 
 load_ring() {
   read_path "$AUTHORITY_PATH"
@@ -125,6 +127,107 @@ store_ring() {
 }
 
 mint() { printf 'cogni_naz_sk_v2_%s_%s_%s' "$LANE" "$NODE_ID" "$(openssl rand -hex 32)"; }
+
+credential_digest() { printf '%s' "$1" | sha256sum | awk '{print $1}'; }
+
+valid_rotation_state() {
+  jq -e '
+    type=="object" and
+    (keys|sort)==["activatedBootId","activatedBuildSha","activeSha256","preActivationBootId","preActivationBuildSha","preparedAt","previousSha256"] and
+    (.activeSha256|type=="string" and test("^[0-9a-f]{64}$")) and
+    (.previousSha256|type=="string" and test("^[0-9a-f]{64}$")) and
+    (.preActivationBootId|type=="string" and test("^[0-9a-f-]{36}$")) and
+    (.preActivationBuildSha|type=="string" and test("^[0-9a-f]{40}$")) and
+    (.preparedAt|type=="string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T")) and
+    ((.activatedBootId==null and .activatedBuildSha==null) or
+      ((.activatedBootId|type=="string" and test("^[0-9a-f-]{36}$")) and
+       (.activatedBuildSha|type=="string" and test("^[0-9a-f]{40}$"))))
+  ' >/dev/null 2>&1 <<<"$1"
+}
+
+load_rotation_state() {
+  read_path "$ROTATION_STATE_PATH"
+  ROTATION_STATE="$(jq -r --arg key "$RING_KEY" '.[$key] // empty' <<<"$PATH_DATA")"
+  [[ -n "$ROTATION_STATE" ]] || return 1
+  valid_rotation_state "$ROTATION_STATE" || fail "rotation receipt state invalid"
+}
+
+store_rotation_state() {
+  local desired="$1" attempt
+  valid_rotation_state "$desired" || fail "refusing invalid rotation receipt state"
+  for attempt in 1 2 3 4 5; do
+    read_path "$ROTATION_STATE_PATH"
+    if write_field_cas "$ROTATION_STATE_PATH" "$RING_KEY" "$desired" "$PATH_EXISTS" "$PATH_VERSION"; then
+      ROTATION_STATE="$desired"
+      return
+    fi
+  done
+  fail "concurrent rotation-state CAS writes did not converge"
+}
+
+clear_rotation_state() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    read_path "$ROTATION_STATE_PATH"
+    [[ -z "$(jq -r --arg key "$RING_KEY" '.[$key] // empty' <<<"$PATH_DATA")" ]] && return
+    if write_field_cas "$ROTATION_STATE_PATH" "$RING_KEY" "" "$PATH_EXISTS" "$PATH_VERSION"; then return; fi
+  done
+  fail "concurrent rotation-state clear did not converge"
+}
+
+workload_receipt() {
+  local token="$1" challenge response metadata status content_type redirect_url body rc
+  [[ "$WORKLOAD_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] \
+    || fail "AUTHORIZATION_FACADE_WORKLOAD_URL must be an HTTPS origin"
+  challenge="$(openssl rand -hex 32)"
+  set +e
+  response="$({
+    printf 'header = "Authorization: Bearer %s"\n' "$token"
+    printf 'header = "X-Cogni-Rotation-Challenge: %s"\n' "$challenge"
+  } | curl --silent --show-error --proto '=https' --tlsv1.2 --max-time 15 \
+      --max-filesize 4096 --request POST --config - \
+      --write-out $'\n%{http_code}|%{content_type}|%{redirect_url}' \
+      "${WORKLOAD_URL}/api/internal/authorization-facade-workload-receipt" 2>/dev/null)"
+  rc=$?
+  set -e
+  [[ $rc -eq 0 ]] || fail "workload receipt transport failed"
+  metadata="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  IFS='|' read -r status content_type redirect_url <<<"$metadata"
+  [[ "$status" == 200 && "$content_type" =~ ^application/json([[:space:]]*;|$) \
+    && -z "$redirect_url" && ${#body} -le 4096 ]] || fail "workload receipt unavailable"
+  jq -e --arg challenge "$challenge" '
+    type=="object" and
+    (keys|sort)==["bootId","buildSha","challenge","semanticCode"] and
+    .challenge==$challenge and
+    (.bootId|type=="string" and test("^[0-9a-f-]{36}$")) and
+    (.buildSha|type=="string" and test("^[0-9a-f]{40}$")) and
+    (.semanticCode=="authz_allowed" or .semanticCode=="authz_denied")
+  ' >/dev/null 2>&1 <<<"$body" || fail "workload receipt invalid"
+  RECEIPT="$body"
+}
+
+ensure_pending_rotation_state() {
+  local active_digest previous_digest pre_boot pre_build prepared_at desired
+  [[ -n "$PREVIOUS" ]] || fail "overlap absent"
+  active_digest="$(credential_digest "$ACTIVE")"
+  previous_digest="$(credential_digest "$PREVIOUS")"
+  if load_rotation_state \
+    && [[ "$(jq -r '.activeSha256' <<<"$ROTATION_STATE")" == "$active_digest" ]] \
+    && [[ "$(jq -r '.previousSha256' <<<"$ROTATION_STATE")" == "$previous_digest" ]]; then
+    echo "::warning::credential overlap remains pending since $(jq -r '.preparedAt' <<<"$ROTATION_STATE") for ${LANE}/${TARGET_NODE}" >&2
+    return
+  fi
+  workload_receipt "$PREVIOUS"
+  pre_boot="$(jq -r '.bootId' <<<"$RECEIPT")"
+  pre_build="$(jq -r '.buildSha' <<<"$RECEIPT")"
+  prepared_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  desired="$(jq -cn \
+    --arg active "$active_digest" --arg previous "$previous_digest" \
+    --arg boot "$pre_boot" --arg build "$pre_build" --arg prepared "$prepared_at" \
+    '{activeSha256:$active,previousSha256:$previous,preActivationBootId:$boot,preActivationBuildSha:$build,preparedAt:$prepared,activatedBootId:null,activatedBuildSha:null}')"
+  store_rotation_state "$desired"
+}
 
 load_target_scalar() {
   read_path "$TARGET_PATH"
@@ -158,13 +261,24 @@ if [[ "$PHASE" == authority ]]; then
         store_ring "$({ printf '%s\0' "$next"; printf '%s' "$ACTIVE"; } | jq -Rsc 'split("\u0000")|{active:.[0],previous:.[1]}')"
       else
         echo "::warning::credential overlap remains pending for ${LANE}/${TARGET_NODE}; no third credential minted" >&2
-      fi ;;
-    activate) load_ring && [[ -n "$PREVIOUS" ]] || fail "prepare before activate" ;;
+      fi
+      ensure_pending_rotation_state ;;
+    activate)
+      load_ring && [[ -n "$PREVIOUS" ]] || fail "prepare before activate"
+      ensure_pending_rotation_state ;;
     finish)
       load_ring && [[ -n "$PREVIOUS" ]] || fail "prepare before finish"
+      load_rotation_state || fail "workload activation receipt absent"
+      [[ "$(jq -r '.activatedBootId // empty' <<<"$ROTATION_STATE")" != "" ]] \
+        || fail "workload activation receipt pending"
+      workload_receipt "$ACTIVE"
       if [[ "$PROVIDER" == akash ]]; then load_target_scalar; [[ "$TARGET_SCALAR" == "$ACTIVE" ]] || fail "workload view is not active"; fi ;;
     cancel)
       load_ring && [[ -n "$PREVIOUS" ]] || fail "prepare before cancel"
+      load_rotation_state || fail "rotation receipt state absent"
+      [[ "$(jq -r '.activatedBootId // empty' <<<"$ROTATION_STATE")" == "" ]] \
+        || fail "cancel refused after workload activation"
+      workload_receipt "$PREVIOUS"
       if [[ "$PROVIDER" == akash ]]; then load_target_scalar; [[ "$TARGET_SCALAR" == "$PREVIOUS" ]] || fail "cancel refused after activation"; fi ;;
   esac
   log "authority phase ${OPERATION} ready for ${LANE}/${TARGET_NODE}; values redacted"
@@ -195,12 +309,29 @@ if [[ "$PHASE" == custody ]]; then
 fi
 
 case "$OPERATION" in
+  activate)
+    [[ -n "$PREVIOUS" ]] || fail "overlap absent"
+    load_rotation_state || fail "rotation receipt state absent"
+    active_digest="$(credential_digest "$ACTIVE")"
+    previous_digest="$(credential_digest "$PREVIOUS")"
+    [[ "$(jq -r '.activeSha256' <<<"$ROTATION_STATE")" == "$active_digest" \
+      && "$(jq -r '.previousSha256' <<<"$ROTATION_STATE")" == "$previous_digest" ]] \
+      || fail "rotation receipt state does not match authority ring"
+    workload_receipt "$ACTIVE"
+    activated_boot="$(jq -r '.bootId' <<<"$RECEIPT")"
+    [[ "$activated_boot" != "$(jq -r '.preActivationBootId' <<<"$ROTATION_STATE")" ]] \
+      || fail "workload has not restarted since rotation prepare"
+    store_rotation_state "$(jq -c \
+      --arg boot "$activated_boot" --arg build "$(jq -r '.buildSha' <<<"$RECEIPT")" \
+      '.activatedBootId=$boot|.activatedBuildSha=$build' <<<"$ROTATION_STATE")" ;;
   finish)
     [[ -n "$PREVIOUS" ]] || { log "finish already finalized"; exit 0; }
-    store_ring "$(printf '%s' "$ACTIVE" | jq -Rsc '{active:.,previous:null}')" ;;
+    store_ring "$(printf '%s' "$ACTIVE" | jq -Rsc '{active:.,previous:null}')"
+    clear_rotation_state ;;
   cancel)
     [[ -n "$PREVIOUS" ]] || { log "cancel already finalized"; exit 0; }
-    store_ring "$(printf '%s' "$PREVIOUS" | jq -Rsc '{active:.,previous:null}')" ;;
+    store_ring "$(printf '%s' "$PREVIOUS" | jq -Rsc '{active:.,previous:null}')"
+    clear_rotation_state ;;
   *) : ;;
 esac
 log "finalize phase ${OPERATION} complete for ${LANE}/${TARGET_NODE}; values redacted"

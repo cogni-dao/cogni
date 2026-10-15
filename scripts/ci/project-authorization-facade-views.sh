@@ -100,6 +100,13 @@ if [[ "$PROVIDER" == k3s ]]; then
   if [[ "$OPERATION" == finish && "$current" != "$ACTIVE" ]]; then
     fail "finish refused before activation"
   fi
+  if [[ "$OPERATION" == activate ]]; then
+    deployment_before="$(remote "kubectl -n 'cogni-${LANE}' get deployment '${TARGET_NODE}-node-app' -o jsonpath='{.metadata.generation}{\"|\"}{.metadata.resourceVersion}'")" \
+      || fail "target deployment missing before activation"
+    [[ "$deployment_before" =~ ^[0-9]+\|[0-9]+$ ]] || fail "target deployment revision invalid"
+    deployment_generation_before="${deployment_before%%|*}"
+    deployment_resource_version_before="${deployment_before##*|}"
+  fi
 fi
 
 OPERATOR_PATH="cogni/${LANE}/operator"
@@ -131,6 +138,38 @@ remote "set -euo pipefail
   done
   if kubectl -n \"\$ns\" get deployment operator-node-app >/dev/null 2>&1; then kubectl -n \"\$ns\" rollout status deployment/operator-node-app --timeout=180s >/dev/null; fi
   if [[ '${PROVIDER}' == k3s ]] && kubectl -n \"\$ns\" get deployment '${TARGET_NODE}-node-app' >/dev/null 2>&1; then kubectl -n \"\$ns\" rollout status 'deployment/${TARGET_NODE}-node-app' --timeout=180s >/dev/null; fi"
+
+if [[ "$PROVIDER" == k3s && "$OPERATION" == activate ]]; then
+  workload_digest="$(printf '%s' "$WORKLOAD" | sha256sum | awk '{print $1}')"
+  remote "set -euo pipefail
+    ns='cogni-${LANE}'
+    secret='${TARGET_NODE}-env-secrets'
+    deployment='${TARGET_NODE}-node-app'
+    expected='${workload_digest}'
+    matched=false
+    for _ in \$(seq 1 60); do
+      actual=\$(kubectl -n \"\$ns\" get secret \"\$secret\" -o jsonpath='{.data.AUTHORIZATION_FACADE_TOKEN}' 2>/dev/null \
+        | base64 -d 2>/dev/null | sha256sum | awk '{print \$1}')
+      if [[ \"\$actual\" == \"\$expected\" ]]; then matched=true; break; fi
+      sleep 2
+    done
+    [[ \"\$matched\" == true ]] || { echo 'projected workload credential did not converge' >&2; exit 1; }
+    kubectl -n \"\$ns\" rollout restart \"deployment/\$deployment\" >/dev/null
+    advanced=false
+    for _ in \$(seq 1 60); do
+      current=\$(kubectl -n \"\$ns\" get \"deployment/\$deployment\" \
+        -o jsonpath='{.metadata.generation}{\"|\"}{.metadata.resourceVersion}')
+      generation=\${current%%|*}; resource_version=\${current##*|}
+      if (( generation > ${deployment_generation_before} )) \
+        && [[ \"\$resource_version\" != '${deployment_resource_version_before}' ]]; then
+        advanced=true; break
+      fi
+      sleep 2
+    done
+    [[ \"\$advanced\" == true ]] || { echo 'deployment revision did not advance' >&2; exit 1; }
+    kubectl -n \"\$ns\" rollout status \"deployment/\$deployment\" --timeout=180s >/dev/null" \
+      || fail "new workload rollout did not converge"
+fi
 
 probe() {
   local candidate="$1"
