@@ -185,9 +185,10 @@ export async function GET(request: Request) {
       // The node serves an agent's session-start cognition as a substrate.
       // Wire a SessionStart hook that echoes the bundle's markdown into context;
       // Claude Code and Codex both inject SessionStart stdout. The bundle is
-      // public + index-only (full entry bodies stay behind the authed routes).
+      // principal-authenticated + index-first (full entry bodies stay behind
+      // the same target-node bearer authority).
       bootstrapUrl: `${origin}/api/v1/cognition`,
-      sessionStartHook: `curl -fsS ${origin}/api/v1/cognition | jq -r .markdown`,
+      sessionStartHook: `curl -fsS -H "Authorization: Bearer $COGNI_NODE_API_KEY" ${origin}/api/v1/cognition | jq -r .markdown`,
     },
     defaults: {
       model: "gpt-4o-mini",

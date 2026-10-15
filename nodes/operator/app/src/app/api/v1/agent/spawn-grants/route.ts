@@ -7,6 +7,7 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
   agentIdentityErrorResponse,
+  agentIdentityRateLimitResponse,
   agentIdentityResponse,
   isSameOriginMutation,
 } from "../_shared";
@@ -20,6 +21,13 @@ export const POST = wrapRouteHandlerWithLogging(
   },
   async (ctx, request, sessionUser) => {
     const startedAt = performance.now();
+    const rateLimited = agentIdentityRateLimitResponse(
+      ctx,
+      startedAt,
+      "spawn_grant",
+      request
+    );
+    if (rateLimited) return rateLimited;
     if (!isSameOriginMutation(request)) {
       return agentIdentityResponse(
         ctx,

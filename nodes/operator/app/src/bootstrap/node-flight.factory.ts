@@ -37,9 +37,11 @@ export function parseFlightProbeCredentials(
 }
 
 /**
- * Real-fetch prober for the liveness gate — exercises a node's PUBLIC surface only (serving +
- * run-carries). The operator holds NO Grafana token; observability querying is a dev-direct RBAC
- * concern (docs/spec/grafana-observability-access.md), not an operator-API proxy.
+ * Real-fetch prober for the liveness gate — exercises a node's external surface
+ * (serving + run-carries). The target node is the sole issuer and verifier of
+ * each mapped durable probe credential; operator only custodies and presents it.
+ * The operator holds NO Grafana token; observability querying is a dev-direct
+ * RBAC concern (docs/spec/grafana-observability-access.md), not an operator-API proxy.
  */
 export function createNodeProber(): NodeProber {
   const credentials = parseFlightProbeCredentials(

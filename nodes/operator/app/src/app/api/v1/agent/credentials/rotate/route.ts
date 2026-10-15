@@ -6,6 +6,7 @@ import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   agentIdentityErrorResponse,
+  agentIdentityRateLimitResponse,
   agentIdentityResponse,
   requestBearer,
 } from "../../_shared";
@@ -16,6 +17,13 @@ export const POST = wrapRouteHandlerWithLogging(
   { routeId: "agent.credentials.rotate", auth: { mode: "none" } },
   async (ctx, request) => {
     const startedAt = performance.now();
+    const rateLimited = agentIdentityRateLimitResponse(
+      ctx,
+      startedAt,
+      "rotate",
+      request
+    );
+    if (rateLimited) return rateLimited;
     const token = requestBearer(request);
     const parsed = rotateAgentCredentialOperation.input.safeParse(
       await request.json()

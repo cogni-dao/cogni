@@ -122,3 +122,8 @@ CREATE INDEX "agent_recovery_grants_actor_status_idx" ON "agent_recovery_grants"
 CREATE UNIQUE INDEX "agent_spawn_grants_issuer_idempotency_unique" ON "agent_spawn_grants" USING btree ("issuer_actor_id","idempotency_key");--> statement-breakpoint
 CREATE INDEX "agent_spawn_grants_issuer_status_idx" ON "agent_spawn_grants" USING btree ("issuer_actor_id","status");--> statement-breakpoint
 CREATE INDEX "agent_spawn_grants_billing_status_idx" ON "agent_spawn_grants" USING btree ("billing_account_id","status");
+--> statement-breakpoint
+DROP TRIGGER IF EXISTS actor_stewardship_events_append_only ON "actor_stewardship_events";--> statement-breakpoint
+CREATE TRIGGER actor_stewardship_events_append_only
+  BEFORE UPDATE OR DELETE ON "actor_stewardship_events"
+  FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();

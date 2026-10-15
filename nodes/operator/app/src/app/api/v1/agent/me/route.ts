@@ -27,7 +27,11 @@ import {
 } from "@/app/_lib/auth/request-identity";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { agentIdentityResponse, requestBearer } from "../_shared";
+import {
+  agentIdentityRateLimitResponse,
+  agentIdentityResponse,
+  requestBearer,
+} from "../_shared";
 
 const NODE_PREFIX = "node:";
 const DURABLE_PREFIX = "cogni_ag_sk_v2_";
@@ -73,6 +77,13 @@ export const GET = wrapRouteHandlerWithLogging(
   { routeId: "agent.me.read", auth: { mode: "none" } },
   async (ctx, request) => {
     const startedAt = performance.now();
+    const rateLimited = agentIdentityRateLimitResponse(
+      ctx,
+      startedAt,
+      "me",
+      request
+    );
+    if (rateLimited) return rateLimited;
     const bearer = requestBearer(request);
     let principal: RequestPrincipal | null;
     let durableStatus: {

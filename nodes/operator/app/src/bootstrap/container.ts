@@ -715,7 +715,8 @@ function createContainer(): Container {
   );
   const agentIdentity = new DrizzleAgentIdentityAdapter(
     getServiceDb(),
-    getNodeId()
+    getNodeId(),
+    env.AUTH_SECRET
   );
   // TreasuryReadPort: always uses ViemTreasuryAdapter (no test fake needed - mocked at port level in tests)
   const treasuryReadPort = new ViemTreasuryAdapter(evmOnchainClient);

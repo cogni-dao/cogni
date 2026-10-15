@@ -135,6 +135,12 @@ if [ -n "$pending" ]; then
   request POST /agent/credentials/confirm "$pending" || exit 0
   if [ "$HTTP_STATUS" -ge 200 ] 2>/dev/null && [ "$HTTP_STATUS" -lt 300 ] 2>/dev/null; then
     replace_keys "$pending" ""
+  elif [ "$HTTP_STATUS" = "401" ]; then
+    # The pending confirmation window expired or the slot was revoked. Keep
+    # the still-valid predecessor and clear only the unusable pending slot so
+    # the next bounded refresh attempt can rotate again. Transient failures
+    # retain pending for crash-safe retry.
+    replace_keys "$active" ""
   fi
   exit 0
 fi

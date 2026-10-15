@@ -24,7 +24,12 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
   const userId = randomUUID();
   const billingAccountId = randomUUID();
   let now = new Date("2026-10-09T00:00:00.000Z");
-  const identity = new DrizzleAgentIdentityAdapter(db, nodeId, () => now);
+  const identity = new DrizzleAgentIdentityAdapter(
+    db,
+    nodeId,
+    "component-agent-issuance-key-at-least-32-bytes",
+    () => now
+  );
 
   beforeAll(async () => {
     await db.insert(users).values({
@@ -71,7 +76,13 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
   });
 
   it("caps outstanding spawn grants per issuer", async () => {
-    for (let index = 0; index < 5; index += 1) {
+    const idempotencyKey = randomUUID();
+    const first = await identity.createSpawnGrant({
+      issuerUserId: userId,
+      name: "cap-0",
+      idempotencyKey,
+    });
+    for (let index = 1; index < 5; index += 1) {
       await identity.createSpawnGrant({
         issuerUserId: userId,
         name: `cap-${index}`,
@@ -82,11 +93,28 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     await expect(
       identity.createSpawnGrant({
         issuerUserId: userId,
+        name: "cap-0",
+        idempotencyKey,
+      })
+    ).resolves.toEqual(first);
+    await expect(
+      identity.createSpawnGrant({
+        issuerUserId: userId,
+        name: "different-request",
+        idempotencyKey,
+      })
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "invalid_grant",
+    });
+
+    await expect(
+      identity.createSpawnGrant({
+        issuerUserId: userId,
         name: "over-cap",
         idempotencyKey: randomUUID(),
       })
     ).rejects.toMatchObject<Partial<AgentIdentityError>>({
-      code: "spawn_limit",
+      code: "grant_limit",
     });
 
     await db
@@ -119,18 +147,31 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     });
   });
 
-  it("replays a redeemed spawn grant after its redemption window expires", async () => {
+  it("never re-emits spawn credential material after grant expiry", async () => {
     const grant = await identity.createSpawnGrant({
       issuerUserId: userId,
       name: "lost-spawn-response",
       idempotencyKey: randomUUID(),
     });
     const first = await identity.redeemSpawnGrant(grant.token);
+    const actorsBeforeReplay = await db.select().from(actors);
+    const credentialsBeforeReplay = await db.select().from(agentCredentials);
     now = new Date(new Date(grant.expiresAt).getTime() + 1);
 
-    await expect(identity.redeemSpawnGrant(grant.token)).resolves.toEqual(
-      first
+    await expect(identity.redeemSpawnGrant(grant.token)).rejects.toMatchObject<
+      Partial<AgentIdentityError>
+    >({
+      code: "grant_already_redeemed",
+    });
+    expect(await db.select().from(actors)).toHaveLength(
+      actorsBeforeReplay.length
     );
+    expect(await db.select().from(agentCredentials)).toHaveLength(
+      credentialsBeforeReplay.length
+    );
+    await expect(identity.authenticate(first.apiKey)).resolves.toMatchObject({
+      principal: { actorId: first.actorId },
+    });
 
     now = new Date("2026-10-09T00:00:00.000Z");
   });
@@ -149,6 +190,7 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     const otherNode = new DrizzleAgentIdentityAdapter(
       db,
       `other-${nodeId}`,
+      "component-agent-issuance-key-at-least-32-bytes",
       () => now
     );
     await expect(otherNode.authenticate(credential.apiKey)).resolves.toBeNull();
@@ -160,11 +202,45 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
         },
       } as never,
       nodeId,
+      "component-agent-issuance-key-at-least-32-bytes",
       () => now
     );
     await expect(unavailable.authenticate(credential.apiKey)).rejects.toThrow(
       "database unavailable"
     );
+  });
+
+  it("audiences grant derivation to the node even when auth roots and surrogates match", async () => {
+    const idempotencyKey = randomUUID();
+    const first = await identity.createSpawnGrant({
+      issuerUserId: userId,
+      name: "same-fixture-agent",
+      idempotencyKey,
+    });
+    await db
+      .delete(agentSpawnGrants)
+      .where(eq(agentSpawnGrants.id, first.grantId));
+
+    const otherNode = new DrizzleAgentIdentityAdapter(
+      db,
+      randomUUID(),
+      "component-agent-issuance-key-at-least-32-bytes",
+      () => now
+    );
+    const second = await otherNode.createSpawnGrant({
+      issuerUserId: userId,
+      name: "same-fixture-agent",
+      idempotencyKey,
+    });
+
+    expect(second.token).not.toBe(first.token);
+    await expect(identity.redeemSpawnGrant(second.token)).rejects.toMatchObject<
+      Partial<AgentIdentityError>
+    >({ code: "invalid_grant" });
+
+    await db
+      .delete(agentSpawnGrants)
+      .where(eq(agentSpawnGrants.id, second.grantId));
   });
 
   it("keeps the predecessor active until confirm, then revokes it atomically", async () => {
@@ -194,6 +270,32 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       status: "revoked",
       replacedByCredentialId: first.credentialId,
     });
+  });
+
+  it("replays the same rotation safely after its pending window expires", async () => {
+    const current = await spawn("lost-rotation-response");
+    const idempotencyKey = randomUUID();
+    const first = await identity.rotate({
+      token: current.apiKey,
+      idempotencyKey,
+    });
+    now = new Date(new Date(first.pendingExpiresAt).getTime() + 1);
+
+    const replay = await identity.rotate({
+      token: current.apiKey,
+      idempotencyKey,
+    });
+
+    expect(replay.credentialId).toBe(first.credentialId);
+    expect(replay.apiKey).toBe(first.apiKey);
+    expect(new Date(replay.pendingExpiresAt).getTime()).toBeGreaterThan(
+      new Date(first.pendingExpiresAt).getTime()
+    );
+    await expect(identity.confirm(replay.apiKey)).resolves.toMatchObject({
+      principal: { actorId: current.actorId },
+    });
+
+    now = new Date("2026-10-09T00:00:00.000Z");
   });
 
   it("permits rotation, but not data access, during renew-only grace", async () => {
@@ -246,7 +348,57 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     });
   });
 
-  it("replays redeemed recovery after expiry without stranding the actor", async () => {
+  it("caps outstanding recovery grants in the shared issuer grant budget", async () => {
+    const current = await spawn("recovery-cap-agent");
+    const other = await spawn("recovery-cap-other-agent");
+    const idempotencyKey = randomUUID();
+    const first = await identity.createRecoveryGrant({
+      issuerUserId: userId,
+      actorId: current.actorId,
+      idempotencyKey,
+    });
+    for (let index = 1; index < 5; index += 1) {
+      await identity.createRecoveryGrant({
+        issuerUserId: userId,
+        actorId: current.actorId,
+        idempotencyKey: randomUUID(),
+      });
+    }
+
+    await expect(
+      identity.createRecoveryGrant({
+        issuerUserId: userId,
+        actorId: current.actorId,
+        idempotencyKey,
+      })
+    ).resolves.toEqual(first);
+
+    await expect(
+      identity.createRecoveryGrant({
+        issuerUserId: userId,
+        actorId: other.actorId,
+        idempotencyKey,
+      })
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "invalid_grant",
+    });
+
+    await expect(
+      identity.createRecoveryGrant({
+        issuerUserId: userId,
+        actorId: current.actorId,
+        idempotencyKey: randomUUID(),
+      })
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "grant_limit",
+    });
+
+    await db
+      .delete(agentRecoveryGrants)
+      .where(eq(agentRecoveryGrants.status, "pending"));
+  });
+
+  it("never re-emits recovered credential material after grant expiry", async () => {
     const current = await spawn("lost-recovery-response");
     const grant = await identity.createRecoveryGrant({
       issuerUserId: userId,
@@ -254,9 +406,19 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       idempotencyKey: randomUUID(),
     });
     const first = await identity.recover(grant.token);
+    const actorsBeforeReplay = await db.select().from(actors);
+    const credentialsBeforeReplay = await db.select().from(agentCredentials);
     now = new Date(new Date(grant.expiresAt).getTime() + 1);
 
-    await expect(identity.recover(grant.token)).resolves.toEqual(first);
+    await expect(identity.recover(grant.token)).rejects.toMatchObject<
+      Partial<AgentIdentityError>
+    >({ code: "grant_already_redeemed" });
+    expect(await db.select().from(actors)).toHaveLength(
+      actorsBeforeReplay.length
+    );
+    expect(await db.select().from(agentCredentials)).toHaveLength(
+      credentialsBeforeReplay.length
+    );
     await expect(identity.authenticate(current.apiKey)).resolves.toBeNull();
     await expect(identity.authenticate(first.apiKey)).resolves.toMatchObject({
       principal: { actorId: current.actorId },

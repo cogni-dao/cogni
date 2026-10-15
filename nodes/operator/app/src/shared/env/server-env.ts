@@ -219,7 +219,8 @@ export const serverSchema = z.object({
   // Required env-scoped deployment parent for submodule pin PRs and node-ref flights.
   NODE_SUBMODULE_PARENT_OWNER: optionalString,
   NODE_SUBMODULE_PARENT_REPO: optionalString,
-  // Host → durable node-agent bearer map for external run-carries probes.
+  // Host → target-node-issued durable agent bearer map for external run-carries
+  // probes. Operator custodies but never mints these identity credentials.
   // Secret-managed and optional at process start; a missing host fails that
   // probe loudly and never falls back to anonymous registration.
   FLIGHT_PROBE_CREDENTIALS_JSON: optionalString,

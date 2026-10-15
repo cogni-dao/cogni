@@ -3,9 +3,9 @@
 
 /**
  * Module: `@bootstrap/http/rateLimiter`
- * Purpose: In-memory rate limiter for public API endpoints.
- * Scope: Token bucket algorithm; extracts client IP from X-Real-IP (set by Caddy from TCP source); returns 429 when limit exceeded. Does NOT persist state across instances or restarts.
- * Invariants: 10 req/min/IP + burst 5; new clients start with 15 tokens (10 base + 5 burst); cleanup stale entries every 60s;
+ * Purpose: In-memory rate limiter for public and agent-identity API endpoints.
+ * Scope: Token bucket algorithm; extracts client IP from X-Real-IP (set by Caddy from TCP source); callers return 429 when a budget is exhausted. Does NOT persist state across instances or restarts.
+ * Invariants: Public API is 10 req/min/IP + burst 5; agent identity is 30 req/min/IP/operation + burst 10; cleanup stale entries every 60s;
  *             X-Real-IP set by Caddy via header_up directive (non-spoofable).
  * Side-effects: global (in-memory rate limit store with periodic cleanup)
  * Notes: Per-instance limitation - multiple app instances each have independent limits (acceptable for MVP).
@@ -169,4 +169,16 @@ export const publicApiLimiter = new TokenBucketRateLimiter({
   maxTokens: 10,
   refillRate: 10 / 60, // 10 tokens per 60 seconds
   burstSize: 5,
+});
+
+/**
+ * Agent identity lifecycle limiter. The operation name is part of the caller's
+ * key, so status polling cannot consume the registration/recovery budget.
+ * Per-instance enforcement complements the durable actor/grant caps; it bounds
+ * database and cryptographic work even when every presented token is invalid.
+ */
+export const agentIdentityApiLimiter = new TokenBucketRateLimiter({
+  maxTokens: 30,
+  refillRate: 30 / 60,
+  burstSize: 10,
 });

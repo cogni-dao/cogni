@@ -5,19 +5,14 @@
  * Module: `@adapters/server/identity/agent-identity`
  * Purpose: Postgres-backed durable agent actors, grants, and node-local opaque credentials.
  * Scope: Owns transactional spawn/recovery/rotation state. Does not grant OpenFGA permissions or mutate attribution.
- * Invariants: HASH_ONLY_STORAGE; NODE_LOCAL_BEARER; ROTATION_PRESERVES_ACTOR; OLD_VALID_UNTIL_CONFIRM.
+ * Invariants: HASH_ONLY_STORAGE; NODE_LOCAL_BEARER; ROTATION_PRESERVES_ACTOR;
+ *   OLD_VALID_UNTIL_CONFIRM; IDEMPOTENT_GRANT_ISSUANCE.
  * Side-effects: PostgreSQL reads/writes and cryptographic RNG.
- * Links: task.5211, task.5217
+ * Links: https://cognidao.org/knowledge/human-ai-identity-standard, task.5252
  * @public
  */
 
-import {
-  createHmac,
-  hkdfSync,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHmac, hkdfSync, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   actorStewardshipEvents,
   actors,
@@ -63,8 +58,16 @@ function deriveSecret(label: string, material: string): string {
   ).toString("base64url");
 }
 
-function randomToken(prefix: string): string {
-  return `${prefix}${randomBytes(32).toString("base64url")}`;
+function deterministicGrantToken(
+  prefix: string,
+  label: string,
+  issuanceKey: Buffer,
+  material: string
+): string {
+  const secret = createHmac("sha256", issuanceKey)
+    .update(`cogni-agent-v2\0${label}\0${material}`, "utf8")
+    .digest("base64url");
+  return `${prefix}${secret}`;
 }
 
 function credentialToken(id: string, secret: string): string {
@@ -112,11 +115,27 @@ function principal(input: {
 }
 
 export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
+  private readonly issuanceKey: Buffer;
+
   constructor(
     private readonly db: Database,
     private readonly nodeId: string,
+    issuanceRootKey: string,
     private readonly now: () => Date = () => new Date()
-  ) {}
+  ) {
+    // Derive a node-audienced subkey before grant-specific domain separation.
+    // Even nodes accidentally provisioned with the same AUTH_SECRET cannot
+    // issue or reconstruct each other's spawn/recovery tokens.
+    this.issuanceKey = Buffer.from(
+      hkdfSync(
+        "sha256",
+        issuanceRootKey,
+        "cogni-agent-v2",
+        `grant-issuance:${nodeId}`,
+        32
+      )
+    );
+  }
 
   private async ensureHumanActor(
     tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
@@ -154,18 +173,104 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
     return { id, billingAccountId: billing.id };
   }
 
+  private async lockIssuerGrants(
+    tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+    issuerActorId: string
+  ): Promise<void> {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`agent-grants:${issuerActorId}`}))`
+    );
+  }
+
+  private async assertOutstandingGrantCapacity(
+    tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+    issuerActorId: string,
+    now: Date
+  ): Promise<void> {
+    // Callers hold the issuer-wide grant lock. One shared ceiling prevents
+    // alternating spawn and recovery requests from bypassing a per-table bound.
+    const [[spawn], [recovery]] = await Promise.all([
+      tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(agentSpawnGrants)
+        .where(
+          and(
+            eq(agentSpawnGrants.issuerActorId, issuerActorId),
+            eq(agentSpawnGrants.status, "pending"),
+            gt(agentSpawnGrants.expiresAt, now)
+          )
+        ),
+      tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(agentRecoveryGrants)
+        .where(
+          and(
+            eq(agentRecoveryGrants.issuerActorId, issuerActorId),
+            eq(agentRecoveryGrants.status, "pending"),
+            gt(agentRecoveryGrants.expiresAt, now)
+          )
+        ),
+    ]);
+    if (
+      (spawn?.count ?? 0) + (recovery?.count ?? 0) >=
+      MAX_OUTSTANDING_GRANTS_PER_ISSUER
+    ) {
+      throw new AgentIdentityError(
+        "grant_limit",
+        "Outstanding agent grant limit reached"
+      );
+    }
+  }
+
   async createSpawnGrant(input: {
     issuerUserId: string;
     name: string;
     idempotencyKey: string;
   }): Promise<{ grantId: string; token: string; expiresAt: string }> {
-    const token = randomToken(SPAWN_TOKEN_PREFIX);
-    const tokenHash = hashOpaque("spawn-grant", token);
     const now = this.now();
-    const expiresAt = new Date(now.getTime() + SPAWN_TTL_MS);
 
     return this.db.transaction(async (tx) => {
       const issuer = await this.ensureHumanActor(tx, input.issuerUserId);
+      await this.lockIssuerGrants(tx, issuer.id);
+      const token = deterministicGrantToken(
+        SPAWN_TOKEN_PREFIX,
+        "spawn-grant",
+        this.issuanceKey,
+        `${this.nodeId}\0${issuer.id}\0${input.name}\0${input.idempotencyKey}`
+      );
+      const [sameRequest] = await tx
+        .select({
+          id: agentSpawnGrants.id,
+          agentName: agentSpawnGrants.agentName,
+          status: agentSpawnGrants.status,
+          expiresAt: agentSpawnGrants.expiresAt,
+        })
+        .from(agentSpawnGrants)
+        .where(
+          and(
+            eq(agentSpawnGrants.issuerActorId, issuer.id),
+            eq(agentSpawnGrants.idempotencyKey, input.idempotencyKey)
+          )
+        )
+        .limit(1);
+      if (sameRequest) {
+        if (
+          sameRequest.agentName !== input.name ||
+          sameRequest.status !== "pending" ||
+          sameRequest.expiresAt <= now
+        ) {
+          throw new AgentIdentityError(
+            "invalid_grant",
+            "Spawn grant idempotency key cannot be reused"
+          );
+        }
+        return {
+          grantId: sameRequest.id,
+          token,
+          expiresAt: asIso(sameRequest.expiresAt),
+        };
+      }
+
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${`agent-spawn:${issuer.billingAccountId}`}))`
       );
@@ -187,44 +292,13 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         );
       }
 
-      const [outstanding] = await tx
-        .select({ count: sql<number>`count(*)::int` })
-        .from(agentSpawnGrants)
-        .where(
-          and(
-            eq(agentSpawnGrants.issuerActorId, issuer.id),
-            eq(agentSpawnGrants.status, "pending"),
-            gt(agentSpawnGrants.expiresAt, now)
-          )
-        );
-      if ((outstanding?.count ?? 0) >= MAX_OUTSTANDING_GRANTS_PER_ISSUER) {
-        throw new AgentIdentityError(
-          "spawn_limit",
-          "Outstanding spawn grant limit reached"
-        );
-      }
-
-      const [sameRequest] = await tx
-        .select({ id: agentSpawnGrants.id })
-        .from(agentSpawnGrants)
-        .where(
-          and(
-            eq(agentSpawnGrants.issuerActorId, issuer.id),
-            eq(agentSpawnGrants.idempotencyKey, input.idempotencyKey)
-          )
-        )
-        .limit(1);
-      if (sameRequest) {
-        throw new AgentIdentityError(
-          "invalid_grant",
-          "Spawn grant was already issued for this idempotency key"
-        );
-      }
+      await this.assertOutstandingGrantCapacity(tx, issuer.id, now);
 
       const grantId = randomUUID();
+      const expiresAt = new Date(now.getTime() + SPAWN_TTL_MS);
       await tx.insert(agentSpawnGrants).values({
         id: grantId,
-        tokenHash,
+        tokenHash: hashOpaque("spawn-grant", token),
         nodeId: this.nodeId,
         issuerActorId: issuer.id,
         acceptedParentActorId: issuer.id,
@@ -256,8 +330,16 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
       ) {
         throw new AgentIdentityError("invalid_grant", "Invalid spawn grant");
       }
-      const secret = deriveSecret("spawn-credential", token);
       if (grant.status === "redeemed" && grant.redeemedActorId) {
+        // A short replay window makes a lost HTTP response recoverable, but
+        // the expired one-use grant must never become a perpetual secret
+        // recovery oracle. The durable actor remains recognizable below.
+        if (grant.expiresAt <= now) {
+          throw new AgentIdentityError(
+            "grant_already_redeemed",
+            "Spawn grant was redeemed; use credential recovery"
+          );
+        }
         const [existing] = await tx
           .select({
             credentialId: agentCredentials.id,
@@ -281,12 +363,14 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
             "Redeemed grant is incomplete"
           );
         }
+        const secret = deriveSecret("spawn-credential", token);
         return this.material(existing, secret);
       }
       if (grant.expiresAt <= now) {
         throw new AgentIdentityError("grant_expired", "Spawn grant expired");
       }
 
+      const secret = deriveSecret("spawn-credential", token);
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${`agent-spawn:${grant.billingAccountId}`}))`
       );
@@ -489,6 +573,42 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           pendingExpiresAt: asIso(pending.pendingExpiresAt),
         };
       }
+      if (pending && pending.rotationIdempotencyKey === input.idempotencyKey) {
+        // A caller may lose the rotate response and retry only after the
+        // pending confirmation window. The material is deterministic for this
+        // predecessor + idempotency key, and secret_hash is globally unique,
+        // so inserting a replacement would collide with the expired row.
+        // Renew the same pending credential instead: stable identity/material,
+        // bounded confirmation window, and no orphaned secret row.
+        const authenticateUntil = new Date(now.getTime() + AUTHENTICATE_TTL_MS);
+        const renewUntil = new Date(
+          authenticateUntil.getTime() + RENEW_GRACE_MS
+        );
+        const pendingExpiresAt = new Date(now.getTime() + PENDING_TTL_MS);
+        await tx
+          .update(agentCredentials)
+          .set({
+            authenticateUntil,
+            renewUntil,
+            pendingExpiresAt,
+            revokedAt: null,
+          })
+          .where(eq(agentCredentials.id, pending.id));
+        return {
+          ...this.material(
+            {
+              credentialId: pending.id,
+              actorId: current.principal.actorId,
+              billingAccountId: current.principal.billingAccountId,
+              authenticateUntil,
+              renewUntil,
+            },
+            secret
+          ),
+          predecessorCredentialId: parsed.id,
+          pendingExpiresAt: asIso(pendingExpiresAt),
+        };
+      }
       if (pending) {
         await tx
           .update(agentCredentials)
@@ -629,9 +749,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
     actorId: string;
     idempotencyKey: string;
   }): Promise<{ grantId: string; token: string; expiresAt: string }> {
-    const token = randomToken(RECOVERY_TOKEN_PREFIX);
     const now = this.now();
-    const expiresAt = new Date(now.getTime() + SPAWN_TTL_MS);
     return this.db.transaction(async (tx) => {
       const issuer = await this.ensureHumanActor(tx, input.issuerUserId);
       const [target] = await tx
@@ -651,7 +769,48 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           "Only the accepted steward may recover this agent"
         );
       }
+      await this.lockIssuerGrants(tx, issuer.id);
+      const token = deterministicGrantToken(
+        RECOVERY_TOKEN_PREFIX,
+        "recovery-grant",
+        this.issuanceKey,
+        `${this.nodeId}\0${issuer.id}\0${input.actorId}\0${input.idempotencyKey}`
+      );
+      const [sameRequest] = await tx
+        .select({
+          id: agentRecoveryGrants.id,
+          actorId: agentRecoveryGrants.actorId,
+          status: agentRecoveryGrants.status,
+          expiresAt: agentRecoveryGrants.expiresAt,
+        })
+        .from(agentRecoveryGrants)
+        .where(
+          and(
+            eq(agentRecoveryGrants.issuerActorId, issuer.id),
+            eq(agentRecoveryGrants.idempotencyKey, input.idempotencyKey)
+          )
+        )
+        .limit(1);
+      if (sameRequest) {
+        if (
+          sameRequest.actorId !== input.actorId ||
+          sameRequest.status !== "pending" ||
+          sameRequest.expiresAt <= now
+        ) {
+          throw new AgentIdentityError(
+            "invalid_grant",
+            "Recovery grant idempotency key cannot be reused"
+          );
+        }
+        return {
+          grantId: sameRequest.id,
+          token,
+          expiresAt: asIso(sameRequest.expiresAt),
+        };
+      }
+      await this.assertOutstandingGrantCapacity(tx, issuer.id, now);
       const grantId = randomUUID();
+      const expiresAt = new Date(now.getTime() + SPAWN_TTL_MS);
       await tx.insert(agentRecoveryGrants).values({
         id: grantId,
         tokenHash: hashOpaque("recovery-grant", token),
@@ -667,7 +826,6 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
 
   async recover(token: string): Promise<AgentCredentialMaterial> {
     const tokenHash = hashOpaque("recovery-grant", token);
-    const secret = deriveSecret("recover-credential", token);
     const now = this.now();
     return this.db.transaction(async (tx) => {
       await tx.execute(
@@ -708,6 +866,14 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         throw new AgentIdentityError("invalid_grant", "Invalid recovery grant");
       }
       if (grant.status === "redeemed" && grant.redeemedCredentialId) {
+        // Permit response-loss replay only while the one-use grant remains
+        // live. After expiry, expose no credential material at all.
+        if (grant.expiresAt <= now) {
+          throw new AgentIdentityError(
+            "grant_already_redeemed",
+            "Recovery grant was redeemed; request a new recovery grant"
+          );
+        }
         const [existing] = await tx
           .select()
           .from(agentCredentials)
@@ -719,6 +885,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
             "Recovery is incomplete"
           );
         }
+        const secret = deriveSecret("recover-credential", token);
         return this.material(
           {
             credentialId: existing.id,
@@ -733,6 +900,7 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
       if (grant.expiresAt <= now) {
         throw new AgentIdentityError("grant_expired", "Recovery grant expired");
       }
+      const secret = deriveSecret("recover-credential", token);
       const credentialId = randomUUID();
       const authenticateUntil = new Date(now.getTime() + AUTHENTICATE_TTL_MS);
       const renewUntil = new Date(authenticateUntil.getTime() + RENEW_GRACE_MS);

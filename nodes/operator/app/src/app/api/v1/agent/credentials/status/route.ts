@@ -4,7 +4,11 @@
 import { agentCredentialStatusOperation } from "@cogni/node-contracts";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { agentIdentityResponse, requestBearer } from "../../_shared";
+import {
+  agentIdentityRateLimitResponse,
+  agentIdentityResponse,
+  requestBearer,
+} from "../../_shared";
 
 export const runtime = "nodejs";
 
@@ -12,6 +16,13 @@ export const GET = wrapRouteHandlerWithLogging(
   { routeId: "agent.credentials.status", auth: { mode: "none" } },
   async (ctx, request) => {
     const startedAt = performance.now();
+    const rateLimited = agentIdentityRateLimitResponse(
+      ctx,
+      startedAt,
+      "status",
+      request
+    );
+    if (rateLimited) return rateLimited;
     const token = requestBearer(request);
     if (!token) {
       return agentIdentityResponse(

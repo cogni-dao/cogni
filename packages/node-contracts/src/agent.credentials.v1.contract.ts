@@ -8,7 +8,7 @@
  * Invariants: CREDENTIAL_NE_PRINCIPAL; NODE_LOCAL_BEARER; HUMAN_AND_AGENT_ARE_DISTINCT;
  *   SHARED_STORE_PRINCIPALS_ARE_NODE_QUALIFIED.
  * Side-effects: none
- * Links: task.5211, task.5217
+ * Links: https://cognidao.org/knowledge/human-ai-identity-standard, task.5252
  * @public
  */
 

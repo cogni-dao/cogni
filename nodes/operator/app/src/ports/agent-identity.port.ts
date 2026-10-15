@@ -7,7 +7,7 @@
  * Scope: Interfaces only; secret generation, persistence, and request delivery live outside this port.
  * Invariants: CREDENTIAL_NE_PRINCIPAL; ROTATION_PRESERVES_ACTOR; NO_AUTH_SECRET_FALLBACK.
  * Side-effects: none
- * Links: task.5211, task.5217
+ * Links: https://cognidao.org/knowledge/human-ai-identity-standard, task.5252
  * @public
  */
 
@@ -87,7 +87,9 @@ export class AgentIdentityError extends Error {
     readonly code:
       | "invalid_grant"
       | "grant_expired"
+      | "grant_already_redeemed"
       | "spawn_limit"
+      | "grant_limit"
       | "rotation_pending"
       | "invalid_credential"
       | "recovery_denied"

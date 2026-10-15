@@ -15,6 +15,8 @@
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const mockFeatureWarn = vi.hoisted(() => vi.fn());
+
 const mockRedeem = vi.fn().mockResolvedValue({
   actorId: "11111111-1111-4111-8111-111111111111",
   principalId:
@@ -36,6 +38,7 @@ const upgraded = {
   renewUntil: "2026-02-07T00:00:00.000Z",
 };
 const mockUpgrade = vi.fn().mockResolvedValue(upgraded);
+const mockRecover = vi.fn().mockResolvedValue(upgraded);
 const mockListRelations = vi.fn().mockResolvedValue({
   decision: "success",
   tuples: [
@@ -75,7 +78,7 @@ vi.mock("@/bootstrap/container", () => {
   const childLogger = {
     info: vi.fn(),
     error: vi.fn(),
-    warn: vi.fn(),
+    warn: mockFeatureWarn,
     debug: vi.fn(),
   };
   const log = {
@@ -92,6 +95,7 @@ vi.mock("@/bootstrap/container", () => {
       config: { unhandledErrorPolicy: "rethrow" },
       agentIdentity: {
         redeemSpawnGrant: mockRedeem,
+        recover: mockRecover,
         upgradeLegacy: mockUpgrade,
       },
       authorization,
@@ -99,8 +103,11 @@ vi.mock("@/bootstrap/container", () => {
   };
 });
 
+import * as recoverHandler from "@/app/api/v1/agent/recover/route";
 import * as registerHandler from "@/app/api/v1/agent/register/route";
 import * as upgradeHandler from "@/app/api/v1/agent/upgrade/route";
+import { agentIdentityApiLimiter } from "@/bootstrap/http";
+import { AgentIdentityError } from "@/ports";
 
 describe("POST /api/v1/agent/register", () => {
   beforeEach(() => {
@@ -168,6 +175,123 @@ describe("POST /api/v1/agent/register", () => {
       },
     });
   });
+
+  it("returns 409 without secret material when an expired redeemed grant is replayed", async () => {
+    mockRedeem.mockRejectedValueOnce(
+      new AgentIdentityError(
+        "grant_already_redeemed",
+        "Spawn grant was redeemed; use credential recovery"
+      )
+    );
+    await testApiHandler({
+      appHandler: registerHandler,
+      url: "/api/v1/agent/register",
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          body: JSON.stringify({
+            spawnToken: "cogni_ag_sg_v1_abcdefghijklmnopqrstuvwxyz0123456789",
+          }),
+          headers: { "content-type": "application/json" },
+        });
+
+        expect(response.status).toBe(409);
+        const body = await response.json();
+        expect(body).toEqual({
+          error: "grant_already_redeemed",
+          error_description:
+            "Spawn grant was redeemed; use credential recovery",
+        });
+        expect(body).not.toHaveProperty("apiKey");
+        expect(mockFeatureWarn).toHaveBeenCalledTimes(1);
+        expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
+          operation: "register",
+          statusCode: 409,
+          errorCode: "http_409",
+          reasonCode: "grant_already_redeemed",
+        });
+        expect(JSON.stringify(mockFeatureWarn.mock.calls[0]?.[0])).not.toMatch(
+          /apiKey|spawnToken|credentialId|actorId|userId/
+        );
+      },
+    });
+  });
+
+  it("rate-limits registration work before grant redemption", async () => {
+    vi.spyOn(agentIdentityApiLimiter, "consume").mockReturnValueOnce(false);
+    await testApiHandler({
+      appHandler: registerHandler,
+      url: "/api/v1/agent/register",
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          body: JSON.stringify({
+            spawnToken: "cogni_ag_sg_v1_abcdefghijklmnopqrstuvwxyz0123456789",
+          }),
+          headers: {
+            "content-type": "application/json",
+            "x-real-ip": "192.0.2.41",
+          },
+        });
+
+        expect(response.status).toBe(429);
+        await expect(response.json()).resolves.toEqual({
+          error: "rate_limited",
+        });
+        expect(mockRedeem).not.toHaveBeenCalled();
+        expect(mockFeatureWarn).toHaveBeenCalledTimes(1);
+        expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
+          operation: "register",
+          statusCode: 429,
+          reasonCode: "rate_limited",
+        });
+      },
+    });
+  });
+});
+
+describe("POST /api/v1/agent/recover", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns 409 without secret material when an expired redeemed grant is replayed", async () => {
+    mockRecover.mockRejectedValueOnce(
+      new AgentIdentityError(
+        "grant_already_redeemed",
+        "Recovery grant was redeemed; request a new recovery grant"
+      )
+    );
+    await testApiHandler({
+      appHandler: recoverHandler,
+      url: "/api/v1/agent/recover",
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          body: JSON.stringify({
+            recoveryToken:
+              "cogni_ag_rg_v1_abcdefghijklmnopqrstuvwxyz0123456789",
+          }),
+          headers: { "content-type": "application/json" },
+        });
+
+        expect(response.status).toBe(409);
+        const body = await response.json();
+        expect(body).toEqual({
+          error: "grant_already_redeemed",
+          error_description:
+            "Recovery grant was redeemed; request a new recovery grant",
+        });
+        expect(body).not.toHaveProperty("apiKey");
+        expect(mockFeatureWarn).toHaveBeenCalledTimes(1);
+        expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
+          operation: "recover",
+          statusCode: 409,
+          reasonCode: "grant_already_redeemed",
+        });
+      },
+    });
+  });
 });
 
 function upgradeRequest(fetch: (init?: RequestInit) => Promise<Response>) {
@@ -213,6 +337,12 @@ describe("POST /api/v1/agent/upgrade", () => {
           error: "authz_unavailable",
         });
         expect(mockUpgrade).not.toHaveBeenCalled();
+        expect(mockFeatureWarn).toHaveBeenCalledTimes(1);
+        expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
+          operation: "upgrade",
+          statusCode: 503,
+          reasonCode: "authz_unavailable",
+        });
       },
     });
   });
@@ -230,6 +360,49 @@ describe("POST /api/v1/agent/upgrade", () => {
         const response = await upgradeRequest(fetch);
         expect(response.status).toBe(503);
         expect(mockWriteRelation).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("migrates only explicit agent-safe direct node roles", async () => {
+    mockListRelations.mockResolvedValue({
+      decision: "success",
+      tuples: [
+        {
+          user: "user:legacy-user",
+          relation: "developer",
+          object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
+        {
+          user: "user:legacy-user",
+          relation: "admin",
+          object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
+        {
+          user: "user:legacy-user",
+          relation: "developer",
+          object: "repository:cogni-dao/cogni",
+        },
+      ],
+    });
+
+    await testApiHandler({
+      appHandler: upgradeHandler,
+      url: "/api/v1/agent/upgrade",
+      async test({ fetch }) {
+        const response = await upgradeRequest(fetch);
+        expect(response.status).toBe(201);
+        expect(mockWriteRelation).toHaveBeenCalledTimes(2);
+        expect(mockWriteRelation).toHaveBeenNthCalledWith(1, {
+          user: upgraded.principalId,
+          relation: "developer",
+          object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        });
+        expect(mockWriteRelation).toHaveBeenNthCalledWith(2, {
+          user: upgraded.principalId,
+          relation: "developer",
+          object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        });
       },
     });
   });

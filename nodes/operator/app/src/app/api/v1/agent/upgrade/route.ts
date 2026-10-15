@@ -7,18 +7,39 @@ import { verifyLegacyAgentApiKey } from "@/app/_lib/auth/request-identity";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeId } from "@/shared/config";
+import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
 import {
   agentIdentityErrorResponse,
+  agentIdentityRateLimitResponse,
   agentIdentityResponse,
   requestBearer,
 } from "../_shared";
 
 export const runtime = "nodejs";
 
+const MIGRATABLE_NODE_ROLES = new Set<string>(NODE_ACCESS_ROLES);
+
+function isMigratableNodeGrant(tuple: {
+  object: string;
+  relation: string;
+}): boolean {
+  return (
+    tuple.object.startsWith("node:") &&
+    MIGRATABLE_NODE_ROLES.has(tuple.relation)
+  );
+}
+
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "agent.credentials.legacy_upgrade", auth: { mode: "none" } },
   async (ctx, request) => {
     const startedAt = performance.now();
+    const rateLimited = agentIdentityRateLimitResponse(
+      ctx,
+      startedAt,
+      "upgrade",
+      request
+    );
+    if (rateLimited) return rateLimited;
     const token = requestBearer(request);
     const legacy = token ? verifyLegacyAgentApiKey(token) : null;
     const parsed = upgradeLegacyAgentCredentialOperation.input.safeParse(
@@ -52,9 +73,10 @@ export const POST = wrapRouteHandlerWithLogging(
       });
 
       // Upgrade changes the credential and creates an agent actor; it must not
-      // silently strand the grants that made the legacy agent useful. Copy both
-      // legacy and node-qualified user tuples to the exact durable principal.
-      // Keep the source tuples during the v1 compatibility window.
+      // silently strand the direct node grants that made the legacy agent
+      // useful. Migrate only the explicit agent-safe role allowlist: never copy
+      // admin/owner/governance or an unrelated future relation by accident.
+      // Keep source tuples during the v1 compatibility window.
       const sourceSubjects = new Set([
         authzUserResource(legacy.sub),
         `user:${getNodeId()}/${legacy.sub}`,
@@ -71,6 +93,7 @@ export const POST = wrapRouteHandlerWithLogging(
           );
         }
         for (const tuple of listed.tuples) {
+          if (!isMigratableNodeGrant(tuple)) continue;
           const written = await container.authorization.writeRelation({
             user: result.principalId,
             relation: tuple.relation,

@@ -51,7 +51,10 @@ case "$url" in
     printf '200'
     ;;
   */agent/credentials/confirm)
-    if [[ "${FAKE_CONFIRM_FAIL:-0}" == 1 ]]; then
+    if [[ "${FAKE_CONFIRM_STATUS:-200}" == 401 ]]; then
+      printf '%s' '{"error":"invalid_token"}' >"$output"
+      printf '401'
+    elif [[ "${FAKE_CONFIRM_FAIL:-0}" == 1 ]]; then
       printf '%s' '{"error":"unavailable"}' >"$output"
       printf '503'
     else
@@ -92,6 +95,19 @@ grep -Fq 'COGNI_NODE_API_KEY=cogni_ag_sk_v2_22222222-2222-4222-8222-222222222222
 if grep -Fq 'COGNI_NODE_API_KEY_PENDING=' "$ENV_TARGET"; then
   fail "pending slot remained after confirmation"
 fi
+
+printf '%s\n' \
+  'COGNI_NODE_API_KEY=cogni_ag_sk_v2_11111111-1111-4111-8111-111111111111.active' \
+  'COGNI_NODE_API_KEY_PENDING=cogni_ag_sk_v2_expired.pending' >"$ENV_TARGET"
+FAKE_CONFIRM_STATUS=401 bash "$REFRESH" "$ENV_LINK" https://node.example/api/v1
+grep -Fq 'COGNI_NODE_API_KEY=cogni_ag_sk_v2_11111111-1111-4111-8111-111111111111.active' "$ENV_TARGET" ||
+  fail "expired pending confirmation replaced the active predecessor"
+if grep -Fq 'COGNI_NODE_API_KEY_PENDING=' "$ENV_TARGET"; then
+  fail "expired pending confirmation remained wedged"
+fi
+FAKE_CONFIRM_STATUS=200 bash "$REFRESH" "$ENV_LINK" https://node.example/api/v1
+grep -Fq 'COGNI_NODE_API_KEY=cogni_ag_sk_v2_22222222-2222-4222-8222-222222222222.pending' "$ENV_TARGET" ||
+  fail "refresh did not recover after clearing expired pending material"
 
 : >"$FAKE_CALLS"
 printf '%s\n' 'COGNI_NODE_API_KEY=cogni_ag_sk_v2_revoked.secret' >"$ENV_TARGET"
