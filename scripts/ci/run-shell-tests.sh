@@ -62,6 +62,7 @@ PARALLEL=(
   reconcile-node-dns.test.sh
   check-deploy-ref-ancestry.test.sh
   aggregate-decide-outcome.test.sh
+  aggregate-rollup.test.sh
   require-node-ref-vm.test.sh
   resolve-substrate-gate.test.sh
   detect-affected.test.sh
