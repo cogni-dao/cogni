@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 import { execFileSync } from "node:child_process";
+import { createHash, X509Certificate } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -63,7 +64,12 @@ const kit = materializeDatabaseCellKits({
 if (!kit) throw new Error("fixture kit absent");
 const scopedKit = kit;
 
-function fixture() {
+function fixture(
+  options: {
+    canonicalEndpointHost?: string;
+    endpointIdentity?: DatabaseCellNativeProof["endpointIdentity"];
+  } = {}
+) {
   let saved: readonly AppliedDatabaseCellReceipt[] = [];
   let writes = 0;
   let endpoints = ["tcp://provider.example.org:15432"];
@@ -105,12 +111,20 @@ function fixture() {
         writes += 1;
       },
     },
-    kit: async () => scopedKit,
+    kit: async () => ({
+      ...scopedKit,
+      ...(options.canonicalEndpointHost
+        ? { canonicalEndpointHost: options.canonicalEndpointHost }
+        : {}),
+    }),
     buildSha: sourceSha,
     observeNative: async () =>
       scopedKit.logicalDatabases.map(
         (lane): DatabaseCellNativeProof => ({
           lane,
+          ...(options.endpointIdentity
+            ? { endpointIdentity: options.endpointIdentity }
+            : {}),
           observation: {
             database: lane.databaseName,
             role: lane.probeRole,
@@ -412,5 +426,63 @@ fi`;
     );
     expect(first).toContain("migration_alpha:");
     expect(first).not.toContain("10.0.0.1");
+  });
+});
+
+describe("owned canonical DNS cell endpoint", () => {
+  it("requires fresh measured provider/DNS/TLS/native identity facts before sealing an alias", async () => {
+    const canonicalEndpointHost = "poly-db.fixture.example.org";
+    const missing = fixture({ canonicalEndpointHost });
+    await expect(missing.binder.seal(missing.ref)).rejects.toThrow(
+      "not proven"
+    );
+    const endpointIdentity = {
+      observedAt: new Date().toISOString(),
+      provider: {
+        host: "provider.example.org",
+        port: 15432,
+        addresses: ["192.0.2.10"],
+      },
+      canonical: {
+        host: canonicalEndpointHost,
+        port: 15432,
+        addresses: ["192.0.2.10"],
+      },
+      peerCertificateDerSha256: createHash("sha256")
+        .update(new X509Certificate(scopedKit.tlsCertificate).raw)
+        .digest("hex"),
+      systemIdentifier: "1234567890123456789",
+    };
+    const valid = fixture({ canonicalEndpointHost, endpointIdentity });
+    const sealed = await valid.binder.seal(valid.ref);
+    expect(sealed[0]?.binding.endpoint.host).toBe(canonicalEndpointHost);
+    expect(sealed[0]?.binding.endpoint.port).toBe(15432);
+    expect(sealed[0]?.binding.systemIdentifier).toBe(
+      endpointIdentity.systemIdentifier
+    );
+    for (const mismatch of [
+      {
+        ...endpointIdentity,
+        canonical: { ...endpointIdentity.canonical, addresses: ["192.0.2.11"] },
+      },
+      { ...endpointIdentity, peerCertificateDerSha256: "0".repeat(64) },
+      { ...endpointIdentity, systemIdentifier: "999" },
+      { ...endpointIdentity, observedAt: "2000-01-01T00:00:00Z" },
+    ]) {
+      const invalid = fixture({
+        canonicalEndpointHost,
+        endpointIdentity: mismatch,
+      });
+      await expect(invalid.binder.seal(invalid.ref)).rejects.toThrow(
+        "not proven"
+      );
+      expect(invalid.writes()).toBe(0);
+    }
+    expect(
+      DatabaseCellBindingReferenceSchema.safeParse({
+        ...valid.ref,
+        canonicalEndpointHost,
+      }).success
+    ).toBe(false);
   });
 });

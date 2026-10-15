@@ -82,6 +82,8 @@ export interface DatabaseCellBootstrapKit {
   tlsCaCertificate: string;
   tlsCertificate: string;
   tlsPrivateKey: string;
+  /** Owned canonical DNS alias; native endpoint proof must link it to the paid lease. */
+  canonicalEndpointHost?: string | undefined;
   logicalDatabases: DatabaseCellLogicalDatabase[];
   diagnostic?:
     | {

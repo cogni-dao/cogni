@@ -45,6 +45,22 @@ export interface DatabaseCellBindingPort {
 }
 
 export interface DatabaseCellNativeProof {
+  /** Measured by the trusted native observer, never accepted from a binding request. */
+  readonly endpointIdentity?: {
+    readonly observedAt: string;
+    readonly provider: {
+      readonly host: string;
+      readonly port: number;
+      readonly addresses: readonly string[];
+    };
+    readonly canonical: {
+      readonly host: string;
+      readonly port: number;
+      readonly addresses: readonly string[];
+    };
+    readonly peerCertificateDerSha256: string;
+    readonly systemIdentifier: string;
+  };
   readonly lane: DatabaseCellBootstrapKit["logicalDatabases"][number];
   readonly observation: {
     readonly database: string;
@@ -60,6 +76,10 @@ export interface DatabaseCellNativeProof {
 export interface DatabaseCellNativeObserverPort {
   observe(
     kit: DatabaseCellBootstrapKit,
-    endpoint: { host: string; port: number }
+    endpoint: {
+      host: string;
+      port: number;
+      providerEndpoint?: { host: string; port: number };
+    }
   ): Promise<readonly DatabaseCellNativeProof[]>;
 }

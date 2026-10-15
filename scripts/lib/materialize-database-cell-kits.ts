@@ -310,6 +310,9 @@ export function materializeDatabaseCellKits(input: unknown): {
             tlsCaCertificate: old.tlsCaCertificate,
             tlsCertificate: old.tlsCertificate,
             tlsPrivateKey: old.tlsPrivateKey,
+            ...(old.canonicalEndpointHost
+              ? { canonicalEndpointHost: old.canonicalEndpointHost }
+              : {}),
           }
         : {
             tlsCaCertificate: created?.tlsCaCertificate,

@@ -170,6 +170,12 @@ export const DatabaseCellBootstrapKitSchema = z
     tlsCaCertificate: z.string().startsWith("-----BEGIN CERTIFICATE-----"),
     tlsCertificate: z.string().startsWith("-----BEGIN CERTIFICATE-----"),
     tlsPrivateKey: z.string().regex(/^-----BEGIN (RSA )?PRIVATE KEY-----/),
+    canonicalEndpointHost: z
+      .string()
+      .max(253)
+      .regex(/^[a-z0-9][a-z0-9.-]+$/)
+      .refine((host) => !isIP(host))
+      .optional(),
     logicalDatabases: z.array(DatabaseCellLogicalDatabaseSchema).min(1).max(3),
     diagnostic: z
       .object({

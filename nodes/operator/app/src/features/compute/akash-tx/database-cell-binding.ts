@@ -10,7 +10,7 @@
  * Links: ports/database-cell-binding.port.ts, shared/secrets/database-cell-placement.data.ts
  * @internal
  */
-import { createHash } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
 import { isIP } from "node:net";
 import type {
   AkashTxActuatorPort,
@@ -20,6 +20,7 @@ import type {
   DatabaseCellBindingReference,
   DatabaseCellCutoverReference,
   DatabaseCellNativeObserverPort,
+  DatabaseCellNativeProof,
 } from "@/ports";
 import { AkashTxError } from "@/ports";
 import type { DatabaseCellBootstrapKit } from "@/shared/secrets/database-cell-binding.data";
@@ -174,7 +175,11 @@ export class DatabaseCellBinder implements DatabaseCellBindingPort {
         "invalid_request",
         "cell must expose one measured TCP endpoint"
       );
-    const endpoint = endpoints[0];
+    const providerEndpoint = endpoints[0];
+    const endpoint =
+      kit.canonicalEndpointHost && providerEndpoint
+        ? new URL(`tcp://${kit.canonicalEndpointHost}:${providerEndpoint.port}`)
+        : providerEndpoint;
     if (
       !endpoint ||
       isIP(endpoint.hostname) ||
@@ -192,7 +197,37 @@ export class DatabaseCellBinder implements DatabaseCellBindingPort {
     const proofs = await this.deps.observeNative(kit, {
       host: endpoint.hostname,
       port: Number(endpoint.port),
+      ...(kit.canonicalEndpointHost && providerEndpoint
+        ? {
+            providerEndpoint: {
+              host: providerEndpoint.hostname,
+              port: Number(providerEndpoint.port),
+            },
+          }
+        : {}),
     });
+    if (kit.canonicalEndpointHost && providerEndpoint) {
+      const certificateDerSha256 = createHash("sha256")
+        .update(new X509Certificate(kit.tlsCertificate).raw)
+        .digest("hex");
+      if (
+        !proofs.length ||
+        proofs.some(
+          (proof) =>
+            !matchesEndpointIdentity(
+              proof,
+              providerEndpoint,
+              endpoint,
+              certificateDerSha256
+            )
+        )
+      ) {
+        throw new AkashTxError(
+          "identity_conflict",
+          "canonical cell DNS, TLS and native identity are not proven against the paid endpoint"
+        );
+      }
+    }
     const previous = await this.read(input);
     const receipts = AppliedDatabaseCellReceiptsSchema.parse(
       proofs.map(({ lane, observation, incident }) => {
@@ -331,4 +366,34 @@ export class DatabaseCellBinder implements DatabaseCellBindingPort {
     await this.deps.store.save(await this.record(input), applied, receipts);
     return applied;
   }
+}
+
+/** Alias facts must describe the same live endpoint; a configured hostname is never proof. */
+function matchesEndpointIdentity(
+  proof: DatabaseCellNativeProof,
+  provider: URL,
+  canonical: URL,
+  certificateDerSha256: string
+): boolean {
+  const identity = proof.endpointIdentity;
+  if (!identity) return false;
+  const observedAt = Date.parse(identity.observedAt);
+  return (
+    Number.isFinite(observedAt) &&
+    observedAt <= Date.now() + 5_000 &&
+    observedAt >= Date.now() - 60_000 &&
+    identity.provider.host === provider.hostname &&
+    identity.provider.port === Number(provider.port) &&
+    identity.canonical.host === canonical.hostname &&
+    identity.canonical.port === Number(canonical.port) &&
+    identity.systemIdentifier === proof.observation.systemIdentifier &&
+    identity.peerCertificateDerSha256 === certificateDerSha256 &&
+    identity.provider.addresses.length > 0 &&
+    identity.canonical.addresses.length > 0 &&
+    identity.provider.addresses.every((address) => Boolean(isIP(address))) &&
+    identity.canonical.addresses.every((address) => Boolean(isIP(address))) &&
+    identity.provider.addresses.some((address) =>
+      identity.canonical.addresses.includes(address)
+    )
+  );
 }
