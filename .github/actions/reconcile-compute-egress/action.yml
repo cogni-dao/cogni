@@ -14,6 +14,12 @@ inputs:
       required: false,
       description: "Actual substrate VM environment; defaults to lane",
     }
+  fork_domain_root:
+    {
+      required: false,
+      default: "",
+      description: "Explicit repository-owned domain root; no fallback for foreign trust",
+    }
   vm_host: { required: true, description: "Environment substrate VM host" }
   ssh_deploy_key:
     { required: true, description: "Existing environment SSH deployment key" }
@@ -28,7 +34,7 @@ runs:
         DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
         DESTINATION_ENVIRONMENT: ${{ inputs.destination_environment || inputs.environment }}
         # New foreign trust must never inherit a workflow's legacy DAO fallback.
-        FORK_DOMAIN_ROOT: ${{ vars.FORK_DOMAIN_ROOT }}
+        FORK_DOMAIN_ROOT: ${{ inputs.fork_domain_root }}
         ALLOWLIST: ${{ runner.temp }}/compute-egress-allowlist
       run: |
         set -euo pipefail
