@@ -192,17 +192,19 @@ esac
 [[ -d "$COGNI_CATALOG_ROOT" ]] || fail "missing catalog root: $COGNI_CATALOG_ROOT"
 
 # shellcheck source=lib/appset-paths.sh
-CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-.}/infra/catalog}" \
-  source "$SCRIPT_DIR/lib/appset-paths.sh"
+CATALOG_DIR="$COGNI_CATALOG_ROOT"
+source "$SCRIPT_DIR/lib/appset-paths.sh"
 # shellcheck source=lib/image-tags.sh
 source "$SCRIPT_DIR/lib/image-tags.sh"
+# shellcheck source=lib/lane-db-residency.sh
+source "$SCRIPT_DIR/lib/lane-db-residency.sh"
 
 # WHICH CLUSTER AM I RECONCILING AGAINST (bug.5206)? For every row that exists today this is
 # the env itself. For an akash node's non-production lane the PAYING cluster reconciles it, so
 # this script runs against THAT cluster's VM — its vault, its roles, its Postgres. The lane
 # still names the secret path and the database; only the IDENTITY follows the cluster.
-SUBSTRATE_CONTROL_ENV="$(CATALOG_DIR="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR:-.}/infra/catalog}" \
-  control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE" 2>/dev/null || printf '%s' "$DEPLOY_ENVIRONMENT")"
+SUBSTRATE_CONTROL_ENV="$(control_env_for "$DEPLOY_ENVIRONMENT" "$TARGET_NODE")" \
+  || fail "cannot resolve control environment for ${TARGET_NODE}/${DEPLOY_ENVIRONMENT}"
 
 node_known=false
 for node in "${NODE_TARGETS[@]}"; do
@@ -228,6 +230,12 @@ grep -qxF "$DEPLOY_ENVIRONMENT" <<<"$node_envs" \
   || fail "'$TARGET_NODE' is not in the '$DEPLOY_ENVIRONMENT' node-set (envs: $(yq -r '.envs | join(",")' "$node_catalog_file")) — add the env to infra/catalog/${TARGET_NODE}.yaml to deploy it here"
 
 node_db="$(node_database_for_target "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")"
+postgres_residency_env="$(lane_db_vm_env "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")" \
+  || fail "cannot resolve Postgres residency for ${TARGET_NODE}/${DEPLOY_ENVIRONMENT}"
+postgres_provision_here=false
+[[ "$postgres_residency_env" != "$SUBSTRATE_CONTROL_ENV" ]] || postgres_provision_here=true
+# Doltgres and its inventory retain control residency when Postgres moves.
+node_doltgres_db="$(node_database_for_target "$TARGET_NODE")$(lane_db_suffix "$DEPLOY_ENVIRONMENT" "$SUBSTRATE_CONTROL_ENV")"
 node_role_suffix="${node_db#cogni_}"
 migration_role="migration_${node_role_suffix}"
 app_role="app_${node_role_suffix}"
@@ -849,11 +857,11 @@ ${edge_reconcile_snippet}
   touch \"\$runtime_env\"
   current=\$(awk -F= '/^COGNI_NODE_DBS=/ {print substr(\$0, length(\"COGNI_NODE_DBS=\") + 1)}' \"\$runtime_env\" | tail -1)
   if [[ -z \"\$current\" ]]; then
-    next='${node_db}'
-  elif [[ \",\$current,\" == *\",${node_db},\"* ]]; then
+    next='${node_doltgres_db}'
+  elif [[ \",\$current,\" == *\",${node_doltgres_db},\"* ]]; then
     next=\"\$current\"
   else
-    next=\"\$current,${node_db}\"
+    next=\"\$current,${node_doltgres_db}\"
   fi
   # ATOMIC-OR-REFUSE. This file is the SHARED runtime env every compose service reads.
   # An in-place sed or append mutates it live, so a reader in that window sees a truncated or
@@ -916,6 +924,7 @@ ${edge_reconcile_snippet}
   }
   echo '[remote] exact runtime compose mounts verified ok'
 
+  if ${postgres_provision_here}; then
   \"\${runtime_compose[@]}\" up -d postgres >/dev/null
   echo '[remote] postgres up ok'
   # Single-node db-provision: override COGNI_NODE_DBS to THIS node and inject its
@@ -941,6 +950,9 @@ ${edge_reconcile_snippet}
     -e DB_WORK_MEM_MIB='${db_work_mem_mib}' \
     db-provision >/dev/null
   echo '[remote] db-provision ok'
+  else
+    echo '::warning::Postgres provision skipped for ${TARGET_NODE}/${DEPLOY_ENVIRONMENT}: database belongs to ${postgres_residency_env}, this reconcile operates on ${SUBSTRATE_CONTROL_ENV}. Destination readiness is not proven here.'
+  fi
 
   projected_migration_dsn=\$(kubectl -n 'cogni-${DEPLOY_ENVIRONMENT}' get secret '${TARGET_NODE}-migration-secrets' -o jsonpath='{.data.DATABASE_MIGRATION_URL}' | base64 --decode)
   [ \"\$(printf '%s' \"\$projected_migration_dsn\" | sha256sum | awk '{print \$1}')\" = '${migration_dsn_sha256}' ] || {
@@ -959,13 +971,13 @@ ${edge_reconcile_snippet}
   if \"\${runtime_compose[@]}\" config --services 2>/dev/null | grep -q '^doltgres$'; then
     \"\${runtime_compose[@]}\" up -d doltgres >/dev/null
     echo '[remote] doltgres up ok'
-    # bug.5033: node-scope doltgres-provision with -e COGNI_NODE_DBS='${node_db}',
+    # bug.5033: node-scope doltgres-provision with its control-resident input,
     # symmetric with db-provision above. Otherwise doltgres-provision relied on the
     # env-file COGNI_NODE_DBS (whole fleet) and the surrounding grep gate silently
     # skips on any compose hiccup → knowledge_<node> uncreated → node-app
     # Init:CrashLoopBackOff. Scoping to THIS node is deterministic + idempotent.
     \"\${runtime_compose[@]}\" --profile bootstrap run --rm \
-      -e COGNI_NODE_DBS='${node_db}' \
+      -e COGNI_NODE_DBS='${node_doltgres_db}' \
       ${dg_pw_env} doltgres-provision >/dev/null
     echo '[remote] doltgres-provision ok'
 ${dolt_mirror_reconcile_snippet}  fi" \
@@ -975,6 +987,12 @@ migration_secret_version_after="$(bao_get_version "${TARGET_NODE}-database-migra
 [[ "$migration_secret_version_after" == "$migration_secret_version" ]] \
   || fail "migration OpenBao version changed during ESO/DB proof — refusing a mixed-version receipt"
 mark_row migration_dsn_proven ready "stable OpenBao version, projected digest, and live migration identity verified"
-mark_row remote_reconcile updated "${DEPLOYMENT_PROVIDER} placement steps, DB inventory, and DB provisioners reconciled on VM"
-log "substrate ready inputs reconciled for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT})"
+mark_row remote_reconcile updated "${DEPLOYMENT_PROVIDER} placement steps and control-resident inventory/provisioners reconciled on VM"
+if "$postgres_provision_here"; then
+  mark_row postgres_provision updated "${node_db} reconciled on ${SUBSTRATE_CONTROL_ENV}"
+  log "substrate ready inputs reconciled for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT})"
+else
+  mark_row postgres_provision skipped "requires ${postgres_residency_env}; not provisioned or verified on ${SUBSTRATE_CONTROL_ENV}"
+  log "control-side inputs reconciled for ${TARGET_NODE} (${DEPLOY_ENVIRONMENT}); Postgres readiness on ${postgres_residency_env} remains unverified"
+fi
 write_summary success

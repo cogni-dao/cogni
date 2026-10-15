@@ -272,6 +272,9 @@ AS \$function\$
 DECLARE
   role_suffix text;
 BEGIN
+  IF to_regnamespace('cogni_control') IS NOT NULL THEN
+    RAISE EXCEPTION 'legacy containment disabled by versioned recovery control' USING ERRCODE = '42501';
+  END IF;
   IF target_role !~ '^(app|service)_[a-z][a-z0-9_]*$' THEN
     RAISE EXCEPTION 'database containment role is outside the per-node role namespace' USING ERRCODE = '42501';
   END IF;
@@ -295,7 +298,6 @@ BEGIN
 END
 \$function\$;
 REVOKE ALL ON FUNCTION public.contain_database_role(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.contain_database_role(text) TO "$RELIABILITY_ROLE";
 
 CREATE OR REPLACE FUNCTION public.readmit_database_role(target_role text)
 RETURNS void
@@ -306,6 +308,9 @@ AS \$function\$
 DECLARE
   role_suffix text;
 BEGIN
+  IF to_regnamespace('cogni_control') IS NOT NULL THEN
+    RAISE EXCEPTION 'legacy readmission disabled by versioned recovery control' USING ERRCODE = '42501';
+  END IF;
   IF session_user <> '$READMITTER_ROLE' THEN
     RAISE EXCEPTION 'readmission requires the dedicated human-gated identity' USING ERRCODE = '42501';
   END IF;
@@ -326,7 +331,17 @@ BEGIN
 END
 \$function\$;
 REVOKE ALL ON FUNCTION public.readmit_database_role(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.readmit_database_role(text) TO "$READMITTER_ROLE";
+DO \$legacy_grants\$
+BEGIN
+  IF to_regnamespace('cogni_control') IS NULL THEN
+    GRANT EXECUTE ON FUNCTION public.contain_database_role(text) TO "$RELIABILITY_ROLE";
+    GRANT EXECUTE ON FUNCTION public.readmit_database_role(text) TO "$READMITTER_ROLE";
+  ELSE
+    REVOKE ALL ON FUNCTION public.contain_database_role(text), public.readmit_database_role(text)
+      FROM "$RELIABILITY_ROLE", "$READMITTER_ROLE";
+  END IF;
+END
+\$legacy_grants\$;
 SQL
 else
   echo "ℹ️  reliability actuator/readmitter password absent; control roles not reconciled"

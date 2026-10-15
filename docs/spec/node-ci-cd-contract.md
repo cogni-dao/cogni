@@ -89,6 +89,21 @@ cluster is production's.
 
 > **Path and name follow the LANE. Identity and substrate follow the CONTROL env.**
 
+> **One cell of that rule is under revision (`bug.5299`).** "Postgres host"
+> follows the control env today, which puts every Akash node's candidate-a and
+> preview relational data plane on the production instance — measured at ~40% of
+> its peak backends. The rationale below justifies **vault** custody following
+> the renderer; it does not justify the **data** plane, because the app dials its
+> database over the network from Akash at runtime, never from the reconciling
+> cluster. The ruling and its evidence are in
+> the hub entry `db-residency-follows-lane`, which extends
+> `noisy-neighbor-database-architecture`; `docs/spec/databases.md` is amended by
+> task.5246 under `SPECS_FOLLOW_THE_DECISION`, not here. Reconciliation and
+> payment authority stay with the control env; only the database server moves.
+> The change is NOT one cell: independent review found four name-derivation
+> sites, three `${VM_IP}` interpolations, an SSH-target provisioning model, and
+> an unresolved trust direction. See bug.5299.
+
 The durable _why_ — the eleven live-discovered conflations, the destructive
 one, and the open `bug.5208` question about `cogni-test-org` throwaways — lives
 in the knowledge hub as `lane-is-not-control` (with `substrate-one-derivation`,
