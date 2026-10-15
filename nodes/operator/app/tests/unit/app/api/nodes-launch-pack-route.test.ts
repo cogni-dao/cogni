@@ -70,20 +70,24 @@ describe("GET /api/v1/nodes/[id]/launch-pack", () => {
     envState.DOLTHUB_OWNER = "cogni-dao";
   });
 
-  it("returns the launch pack with node repo, parent PR, scorecard prompt, and candidate URL", async () => {
+  it.each([
+    "11111111-1111-4111-8111-111111111111",
+    "atlas",
+  ])("returns the canonical launch pack via %s", async (id) => {
     const response = await GET(
       new Request(
         "https://test.cognidao.org/api/v1/nodes/11111111-1111-4111-8111-111111111111/launch-pack"
       ),
       {
         params: Promise.resolve({
-          id: "11111111-1111-4111-8111-111111111111",
+          id,
         }),
       }
     );
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    expect(body.nodeId).toBe("11111111-1111-4111-8111-111111111111");
     expect(body.nodeRepoUrl).toBe("https://github.com/Cogni-DAO/atlas");
     expect(body.knowledgeRepoUrl).toBe(
       "https://www.dolthub.com/repositories/cogni-dao/atlas"

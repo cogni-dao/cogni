@@ -22,6 +22,7 @@ import {
   buildNodeLaunchPack,
   nodeRepoUrlForSlug,
 } from "@/features/nodes/launch-pack";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
@@ -63,7 +64,7 @@ export async function GET(request: Request, ctx: RouteParams) {
         .from(nodes)
         .where(
           and(
-            eq(nodes.id, parsed.data.nodeId),
+            nodeIdOrSlug(parsed.data.nodeId),
             eq(nodes.ownerUserId, session.id)
           )
         )

@@ -33,6 +33,7 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
 
@@ -40,7 +41,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const promoteInput = z.object({
-  nodeId: z.string().min(1),
+  nodeId: z.string().min(1).describe("Node UUID or unique slug"),
   // preview: the activation trigger for a lane's first write (story.5039) — without it, an env
   // activated via the env verb never serves until a node-repo merge manufactures the auto path.
   // production: the RBAC-gated manual dispatch, unchanged.
@@ -69,7 +70,7 @@ export const POST = wrapRouteHandlerWithLogging(
     const nodeRows = await db
       .select({ id: nodes.id, slug: nodes.slug })
       .from(nodes)
-      .where(eq(nodes.id, nodeId))
+      .where(nodeIdOrSlug(nodeId))
       .limit(1);
     const node = nodeRows[0];
     if (!node) {

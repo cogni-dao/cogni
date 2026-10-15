@@ -33,6 +33,7 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import type { DeployPlanePort, PreparedNodeRefCandidateFlight } from "@/ports";
 import { nodes } from "@/shared/db/nodes";
 import { type ServerEnv, serverEnv } from "@/shared/env";
@@ -53,6 +54,7 @@ interface FlightLogFields {
   readonly status: number;
   readonly errorCode?: string | undefined;
   readonly nodeId?: string | undefined;
+  readonly nodeRef?: string | undefined;
   readonly slug?: string | undefined;
   readonly sourceSha8?: string | undefined;
   readonly githubStatus?: number | undefined;
@@ -270,7 +272,7 @@ export const POST = wrapRouteHandlerWithLogging(
       const rows = await db
         .select()
         .from(nodes)
-        .where(eq(nodes.id, nodeRef.nodeId))
+        .where(nodeIdOrSlug(nodeRef.nodeId))
         .limit(1);
       const node = rows[0];
       if (!node) {
@@ -279,7 +281,7 @@ export const POST = wrapRouteHandlerWithLogging(
           outcome: "error",
           status: 404,
           errorCode: "node_not_found",
-          nodeId: nodeRef.nodeId,
+          nodeRef: nodeRef.nodeId,
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });
         return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -292,7 +294,7 @@ export const POST = wrapRouteHandlerWithLogging(
           outcome: "error",
           status: authz.status,
           errorCode: authz.errorCode,
-          nodeId: nodeRef.nodeId,
+          nodeId: node.id,
           slug: node.slug,
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });
@@ -341,7 +343,7 @@ export const POST = wrapRouteHandlerWithLogging(
           outcome: "error",
           status: 503,
           errorCode: "node_parent_config_missing",
-          nodeId: nodeRef.nodeId,
+          nodeId: node.id,
           slug: node.slug,
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });
@@ -367,7 +369,7 @@ export const POST = wrapRouteHandlerWithLogging(
           operation: "prepare_node_ref_candidate_flight",
           reasonCode: errorCode,
           status: githubStatus(error),
-          nodeId: nodeRef.nodeId,
+          nodeId: node.id,
           slug: node.slug,
         });
         if (response) {
@@ -377,7 +379,7 @@ export const POST = wrapRouteHandlerWithLogging(
             status: response.status,
             errorCode,
             githubStatus: githubStatus(error),
-            nodeId: nodeRef.nodeId,
+            nodeId: node.id,
             slug: node.slug,
             sourceSha8: nodeRef.sourceSha.slice(0, 8),
           });
@@ -389,7 +391,7 @@ export const POST = wrapRouteHandlerWithLogging(
           status: 500,
           errorCode,
           githubStatus: githubStatus(error),
-          nodeId: nodeRef.nodeId,
+          nodeId: node.id,
           slug: node.slug,
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });

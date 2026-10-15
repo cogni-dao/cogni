@@ -25,7 +25,7 @@ export const NodeLaunchPackStatusSchema = z.enum([
 export const nodeLaunchPackOperation = {
   id: "nodes.launch-pack.v1",
   input: z.object({
-    nodeId: z.string().uuid(),
+    nodeId: z.string().min(1).describe("Node UUID or unique slug"),
   }),
   output: z.object({
     kind: z.literal("cogni.node.launch_pack.v0"),

@@ -33,6 +33,7 @@ import { listAccessRequests } from "@/features/nodes/access-requests";
 import { DistributionsCard } from "@/features/nodes/DistributionsCard.client";
 import { FLIGHT_ENVS } from "@/features/nodes/flight-status";
 import { nodeRepoUrlForSlug } from "@/features/nodes/launch-pack";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { NodeOperationsDetail } from "@/features/nodes/operations/NodeOperationsTable.client";
 import { ResetDaoDangerZone } from "@/features/nodes/ResetDaoDangerZone.client";
 import { NodeWizard } from "@/features/nodes/wizard/NodeWizard.client";
@@ -72,7 +73,7 @@ export default async function NodeDashboardPage({
       tx
         .select()
         .from(nodes)
-        .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+        .where(and(nodeIdOrSlug(id), eq(nodes.ownerUserId, session.id)))
         .limit(1)
   );
 

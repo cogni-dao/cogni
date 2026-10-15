@@ -23,6 +23,7 @@ import { resolveAppDb } from "@/bootstrap/container";
 import { withRootSpan } from "@/bootstrap/otel";
 import { evaluateNodeCapacity } from "@/features/nodes/capacity";
 import { createDoltHubDatabaseEnsurer } from "@/features/nodes/dolthub-database";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
@@ -176,6 +177,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         session: undefined,
       });
       const { id } = await routeArgs.params;
+      let resolvedNodeId: string | undefined;
       let currentStep: PublishStep = "auth";
 
       const durationMs = () => Math.round(performance.now() - startTime);
@@ -188,7 +190,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             event: EVENT_NAMES.NODE_PUBLISH_COMPLETE,
             reqId: ctx.reqId,
             routeId: ctx.routeId,
-            nodeId: id,
+            nodeId: resolvedNodeId,
+            nodeRef: id,
             step: currentStep,
             durationMs: durationMs(),
             ...fields,
@@ -206,7 +209,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             event: EVENT_NAMES.NODE_PUBLISH_COMPLETE,
             reqId: ctx.reqId,
             routeId: ctx.routeId,
-            nodeId: id,
+            nodeId: resolvedNodeId,
+            nodeRef: id,
             phase: "step",
             step,
             outcome,
@@ -252,7 +256,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             event: EVENT_NAMES.NODE_PUBLISH_COMPLETE,
             reqId: ctx.reqId,
             routeId: ctx.routeId,
-            nodeId: id,
+            nodeId: resolvedNodeId,
+            nodeRef: id,
             phase: "started",
           },
           EVENT_NAMES.NODE_PUBLISH_COMPLETE
@@ -342,7 +347,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             tx
               .select()
               .from(nodes)
-              .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+              .where(and(nodeIdOrSlug(id), eq(nodes.ownerUserId, session.id)))
               .limit(1)
         );
         const node = existing[0];
@@ -356,6 +361,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
           logRequestEnd(ctx.log, { status: 404, durationMs: durationMs() });
           return NextResponse.json({ error: "not found" }, { status: 404 });
         }
+        resolvedNodeId = node.id;
         logStep("load_node", "success", {
           slug: node.slug,
           nodeStatus: node.status,
@@ -472,7 +478,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
               event: EVENT_NAMES.ADAPTER_GITHUB_REPO_WRITE_ERROR,
               reqId: ctx.reqId,
               routeId: ctx.routeId,
-              nodeId: id,
+              nodeId: resolvedNodeId,
+              nodeRef: id,
               dep: "github",
               step: "check_capacity",
               reasonCode: errorCode,
@@ -684,7 +691,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
               reqId: ctx.reqId,
               traceId,
               routeId: ctx.routeId,
-              nodeId: id,
+              nodeId: resolvedNodeId,
+              nodeRef: id,
               slug: node.slug,
               childRepoUrl: minted.cloneUrl,
               childRepoHeadSha: minted.headSha,
@@ -726,7 +734,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
               event: EVENT_NAMES.ADAPTER_GITHUB_REPO_WRITE_ERROR,
               reqId: ctx.reqId,
               routeId: ctx.routeId,
-              nodeId: id,
+              nodeId: resolvedNodeId,
+              nodeRef: id,
               dep: "github",
               step: currentStep,
               reasonCode: errorCode,
@@ -755,7 +764,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
               step: currentStep,
               reqId: ctx.reqId,
               routeId: ctx.routeId,
-              nodeId: id,
+              nodeId: resolvedNodeId,
+              nodeRef: id,
               githubStatus: status,
             },
             { status: responseStatus }
@@ -775,7 +785,9 @@ export async function POST(request: Request, routeArgs: RouteParams) {
                 publishPrUrl: pr.prUrl,
                 updatedAt: new Date(),
               })
-              .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+              .where(
+                and(eq(nodes.id, node.id), eq(nodes.ownerUserId, session.id))
+              )
               .returning()
         );
         logStep("update_node", "success", {
@@ -786,7 +798,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         logEvent(ctx.log, EVENT_NAMES.NODE_PUBLISH_COMPLETE, {
           reqId: ctx.reqId,
           routeId: ctx.routeId,
-          nodeId: id,
+          nodeId: resolvedNodeId,
+          nodeRef: id,
           outcome: "success",
           slug: node.slug,
           nodeStatus: node.status,
@@ -815,7 +828,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             step: currentStep,
             reqId: ctx.reqId,
             routeId: ctx.routeId,
-            nodeId: id,
+            nodeId: resolvedNodeId,
+            nodeRef: id,
           },
           { status: 500 }
         );

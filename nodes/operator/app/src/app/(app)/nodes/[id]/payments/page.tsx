@@ -17,6 +17,7 @@ import { and, eq } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 
 import { resolveAppDb } from "@/bootstrap/container";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { nodes } from "@/shared/db/nodes";
 
@@ -44,7 +45,7 @@ export default async function NodePaymentActivationPage({
       tx
         .select()
         .from(nodes)
-        .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+        .where(and(nodeIdOrSlug(id), eq(nodes.ownerUserId, session.id)))
         .limit(1)
   );
 

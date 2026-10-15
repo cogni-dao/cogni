@@ -22,6 +22,7 @@ import { z } from "zod";
 
 import { resolveAppDb } from "@/bootstrap/container";
 import { getCurrentTraceId } from "@/bootstrap/otel";
+import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { type NodeEvent, transition } from "@/features/nodes/state-machine";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { type NodeStatus, nodes } from "@/shared/db/nodes";
@@ -77,7 +78,7 @@ export async function GET(_request: Request, ctx: RouteParams) {
       tx
         .select()
         .from(nodes)
-        .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+        .where(and(nodeIdOrSlug(id), eq(nodes.ownerUserId, session.id)))
         .limit(1)
   );
 
@@ -120,7 +121,7 @@ export async function PATCH(request: Request, ctx: RouteParams) {
       outcome: "error",
       status: 400,
       errorCode: "invalid_json",
-      nodeId: id,
+      nodeRef: id,
       durationMs: Math.round(performance.now() - startTime),
     });
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
@@ -133,7 +134,7 @@ export async function PATCH(request: Request, ctx: RouteParams) {
       outcome: "error",
       status: 400,
       errorCode: "invalid_input",
-      nodeId: id,
+      nodeRef: id,
       issueCount: parsed.error.issues.length,
       durationMs: Math.round(performance.now() - startTime),
     });
@@ -151,7 +152,7 @@ export async function PATCH(request: Request, ctx: RouteParams) {
       tx
         .select()
         .from(nodes)
-        .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+        .where(and(nodeIdOrSlug(id), eq(nodes.ownerUserId, session.id)))
         .limit(1)
   );
 
@@ -163,7 +164,7 @@ export async function PATCH(request: Request, ctx: RouteParams) {
       outcome: "error",
       status: 404,
       errorCode: "node_not_found",
-      nodeId: id,
+      nodeRef: id,
       durationMs: Math.round(performance.now() - startTime),
     });
     return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -231,7 +232,7 @@ export async function PATCH(request: Request, ctx: RouteParams) {
       tx
         .update(nodes)
         .set(patch)
-        .where(and(eq(nodes.id, id), eq(nodes.ownerUserId, session.id)))
+        .where(and(eq(nodes.id, current.id), eq(nodes.ownerUserId, session.id)))
         .returning()
   );
 
