@@ -67,8 +67,8 @@ The simplification target is one artifact contract and one promotion primitive. 
 
 11. **LANE_AND_CONTROL_ENV_ARE_DIFFERENT_QUESTIONS**: "env" names two
     independent things, and every consumer must state which one it means.
-    **Path and name follow the LANE. Identity and substrate follow the CONTROL
-    env.** Resolve the control env with `control_env_for` (`scripts/ci/lib/appset-paths.sh`)
+    **Workload identity and Postgres residency follow the LANE. Reconciliation,
+    payment and secret custody follow the CONTROL env.** Resolve the control env with `control_env_for` (`scripts/ci/lib/appset-paths.sh`)
     or `controlEnvFor` (`nodes/operator/app/src/features/compute/node-deployment-provider.ts`)
     — never by reading the env variable directly. See `## Lane vs control env` below.
 
@@ -82,27 +82,24 @@ still do for every k3s node. They diverge the moment a node runs a
 all, so its desired state has to be reconciled by _some_ cluster, and that
 cluster is production's.
 
-| question                               | name            | decides                                                                                                                      |
-| -------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| What is this workload?                 | **lane**        | public URL, vault path prefix, XR namespace, deploy branch, idempotence key, DB name suffix, **migration-receipt namespace** |
-| Who reconciles, pays and custodies it? | **control env** | AppSet directory, vault host + writer role, actuator namespace, substrate host, Postgres host, owner-inherited keys          |
+| question                               | name            | decides                                                                                                                                                  |
+| -------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| What is this workload?                 | **lane**        | public URL, vault path prefix, XR namespace, deploy branch, idempotence key, Postgres environment and database identity, **migration-receipt namespace** |
+| Who reconciles, pays and custodies it? | **control env** | AppSet directory, vault host + writer role, actuator namespace, control-plane substrate host, owner-inherited keys                                       |
 
-> **Path and name follow the LANE. Identity and substrate follow the CONTROL env.**
+> **Workload identity and Postgres residency follow the LANE. Reconciliation,
+> payment and secret custody follow the CONTROL env.**
 
-> **One cell of that rule is under revision (`bug.5299`).** "Postgres host"
-> follows the control env today, which puts every Akash node's candidate-a and
-> preview relational data plane on the production instance — measured at ~40% of
-> its peak backends. The rationale below justifies **vault** custody following
-> the renderer; it does not justify the **data** plane, because the app dials its
-> database over the network from Akash at runtime, never from the reconciling
-> cluster. The ruling and its evidence are in
-> the hub entry `db-residency-follows-lane`, which extends
-> `noisy-neighbor-database-architecture`; `docs/spec/databases.md` is amended by
-> task.5246 under `SPECS_FOLLOW_THE_DECISION`, not here. Reconciliation and
-> payment authority stay with the control env; only the database server moves.
-> The change is NOT one cell: independent review found four name-derivation
-> sites, three `${VM_IP}` interpolations, an SSH-target provisioning model, and
-> an unresolved trust direction. See bug.5299.
+Shared-tier Postgres placement is resolved separately by `lane_db_vm_env` /
+`lane_db_host` in `scripts/ci/lib/lane-db-residency.sh`: candidate-a, preview and
+production each use their own environment's instance, with no foreign-residency
+exception. Database names alone do not isolate a shared production server.
+`lane_db_assert_agreement` checks the stored runtime app/service and migration
+DSNs against the resolved host and database; missing or mismatched values fail
+closed. Secret custody and migration execution authority do not select the
+database host. Reviewed dedicated-cell placement/cutover follows the
+[database contract](databases.md#database-placement-and-budgets); this rule
+does not override that lifecycle or assert Doltgres/Temporal isolation.
 
 The durable _why_ — the eleven live-discovered conflations, the destructive
 one, and the open `bug.5208` question about `cogni-test-org` throwaways — lives
@@ -135,6 +132,7 @@ candidate-a flight the production vault is rejected.
 | follows     | value                                                                                                    |
 | ----------- | -------------------------------------------------------------------------------------------------------- |
 | lane        | `poly-test.cognidao.org` · `cogni/candidate-a/poly` · ns `cogni-candidate-a` · `deploy/candidate-a-poly` |
+| Postgres    | candidate-a instance via `lane_db_host poly candidate-a` · database `cogni_poly`                         |
 | control env | `appsets/production/…` · production OpenBao + `production-writer` · `cogni.vm.cognidao.org`              |
 
 The AppSet filename keeps the **lane** (`candidate-a-poly-applicationset.yaml`)
@@ -174,10 +172,13 @@ it was asked for. The question was wrong. A Job named `migrate-<slug>-<digest12>
 in the ACTUATOR's namespace answers _"has this node's bundle been migrated by
 whoever is paying?"_ — while the only useful question is _"has THIS DATABASE been
 migrated?"_. One node at one digest with two lanes has two databases
-(`cogni_poly` and `cogni_poly_candidate_a`, same Postgres since the lane suffix)
+(`cogni_poly` and the historical `cogni_poly_candidate_a` on the same server)
 and produced ONE Job name, so the first lane's receipt answered for the second.
 poly's candidate-a lease then served an empty schema until its boot deadline
 closed it.
+
+Environment-owned Postgres now separates their servers; receipt identity still
+has to distinguish the lanes.
 
 > **A receipt proves a fact about a resource, so it must live where that resource
 > is addressed.** For anything a lane owns, that is the LANE — even when the
