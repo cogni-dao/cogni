@@ -7,6 +7,7 @@ import {
   ComputeLifecycleError,
   type ComputeWorkloadMigrationInput,
 } from "@/ports";
+import { withDatabaseCaTrust } from "@/shared/secrets/database-ca-command";
 import {
   KubernetesMigrationJobAdapter,
   type MigrationJobLogger,
@@ -191,7 +192,10 @@ describe("KubernetesMigrationJobAdapter", () => {
     const main = pod?.containers[0];
     expect(init?.name).toBe("migrate");
     expect(init?.image).toBe(input().image);
-    expect(init?.command).toEqual([...POSTGRES_PHASE.command]);
+    expect(init?.command).toEqual(
+      withDatabaseCaTrust(POSTGRES_PHASE.command).command
+    );
+    expect(init?.args).toEqual([...POSTGRES_PHASE.command]);
     expect(init?.env).toEqual([
       { name: "NODE_NAME", value: "toks4" },
       {
@@ -200,6 +204,16 @@ describe("KubernetesMigrationJobAdapter", () => {
           secretKeyRef: {
             name: "toks4-compute-env-secrets",
             key: "DATABASE_URL",
+          },
+        },
+      },
+      {
+        name: "DATABASE_SSL_CA_CERT",
+        valueFrom: {
+          secretKeyRef: {
+            name: "toks4-compute-env-secrets",
+            key: "DATABASE_SSL_CA_CERT",
+            optional: true,
           },
         },
       },
@@ -212,7 +226,10 @@ describe("KubernetesMigrationJobAdapter", () => {
       limits: { memory: "1Gi", cpu: "1000m" },
     });
     expect(main?.name).toBe("migrate-doltgres");
-    expect(main?.command).toEqual([...DOLTGRES_PHASE.command]);
+    expect(main?.command).toEqual(
+      withDatabaseCaTrust(DOLTGRES_PHASE.command).command
+    );
+    expect(main?.args).toEqual([...DOLTGRES_PHASE.command]);
     expect(main?.env).toContainEqual({
       name: "DATABASE_URL",
       valueFrom: {

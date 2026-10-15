@@ -23,6 +23,7 @@ const journals = globSync(
   [
     "nodes/*/app/src/adapters/server/db/migrations/meta/_journal.json",
     "nodes/*/app/src/adapters/server/db/doltgres-migrations/meta/_journal.json",
+    "infra/compose/runtime/postgres-init/control-migrations/meta/_journal.json",
   ],
   { cwd: repoRoot }
 );

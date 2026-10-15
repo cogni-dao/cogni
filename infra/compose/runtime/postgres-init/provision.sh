@@ -82,6 +82,12 @@ RELIABILITY_PASS="${DATABASE_RELIABILITY_PASSWORD:-}"
 READMITTER_ROLE="database_reliability_readmitter"
 READMITTER_PASS="${DATABASE_RELIABILITY_READMIT_PASSWORD:-}"
 MIGRATION_PASS="${APP_DB_MIGRATION_PASSWORD:-}"
+PROBE_PASS="${DATABASE_RECOVERY_PROBE_PASSWORD:-}"
+SYSTEM_BILLING_ACCOUNT_ID="${COGNI_SYSTEM_BILLING_ACCOUNT_ID:-}"
+if [ -n "$PROBE_PASS" ] && ! [[ "$SYSTEM_BILLING_ACCOUNT_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+  echo "❌ ERROR: recovery probe requires the canonical system billing account identity"
+  exit 1
+fi
 DB_BUDGET_PROFILE="${DB_BUDGET_PROFILE:-}"
 DB_APP_CONNECTION_LIMIT="${DB_APP_CONNECTION_LIMIT:-}"
 DB_APP_STATEMENT_TIMEOUT_MS="${DB_APP_STATEMENT_TIMEOUT_MS:-}"
@@ -339,12 +345,31 @@ BEGIN
   ELSE
     REVOKE ALL ON FUNCTION public.contain_database_role(text), public.readmit_database_role(text)
       FROM "$RELIABILITY_ROLE", "$READMITTER_ROLE";
+    REVOKE ALL ON FUNCTION public.begin_database_recovery(uuid,text,text,text,text,text,text) FROM "$READMITTER_ROLE";
   END IF;
 END
 \$legacy_grants\$;
 SQL
 else
   echo "ℹ️  reliability actuator/readmitter password absent; control roles not reconciled"
+fi
+
+if [ "$INFRA_ONLY" != 1 ] && [ -n "$RELIABILITY_PASS" ] && [ -n "$READMITTER_PASS" ]; then
+  [ -f /app/apply-control.sql ] || { echo "❌ ERROR: administrative control apply artifact missing"; exit 1; }
+  [ -f /app/control-migrations/0000_database_recovery_control.sql ] || {
+    echo "❌ ERROR: versioned administrative control schema is missing"; exit 1;
+  }
+  [ -n "$RELIABILITY_PASS" ] && [ -n "$READMITTER_PASS" ] || {
+    echo "❌ ERROR: administrative recovery schema requires both isolated control identities"; exit 1;
+  }
+  [ -f /app/control-migrations/0001_database_recovery_watchdog.sql ] || {
+    echo "❌ ERROR: versioned administrative watchdog migration is missing"; exit 1;
+  }
+  previous_control_schema_sha="$(sha256sum /app/control-migrations/0000_database_recovery_control.sql | cut -d' ' -f1)"
+  control_schema_sha="$(cat /app/control-migrations/0000_database_recovery_control.sql /app/control-migrations/0001_database_recovery_watchdog.sql | sha256sum | cut -d' ' -f1)"
+  PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d postgres \
+    -Xv ON_ERROR_STOP=1 -v previous_control_schema_sha="$previous_control_schema_sha" -v expected_control_schema_sha="$control_schema_sha" -f /app/apply-control.sql
+  run_sql_as_root postgres 'GRANT EXECUTE ON FUNCTION public.begin_database_recovery(uuid,text,text,text,text,text,text) TO database_reliability_readmitter;'
 fi
 
 # Shared read-only role (env-level; superuser-derived password; BYPASSRLS support
@@ -703,6 +728,133 @@ END
       [[ "$data_access" == f ]] \
         || { echo "❌ ERROR: control role '$control_role' can read node data in '$db_name'"; exit 1; }
     done
+  fi
+
+  # Recovery observes a contained node through a distinct capability; it never
+  # inherits runtime/migration privilege or exposes node rows to the private sweep.
+  if [ -n "$PROBE_PASS" ]; then
+    local probe_role="probe_${node}"
+    provision_app_role "$probe_role" "$PROBE_PASS" "NOINHERIT"
+    run_sql_as_root postgres "ALTER ROLE \"$probe_role\" LOGIN NOINHERIT NOCREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1;"
+    run_sql_as_root postgres "DO \$membership\$
+DECLARE granted_role text;
+BEGIN
+  FOR granted_role IN
+    SELECT parent.rolname FROM pg_auth_members membership
+    JOIN pg_roles parent ON parent.oid = membership.roleid
+    JOIN pg_roles member ON member.oid = membership.member
+    WHERE member.rolname = '$probe_role'
+  LOOP
+    EXECUTE format('REVOKE %I FROM %I', granted_role, '$probe_role');
+  END LOOP;
+END
+\$membership\$;"
+    if [ -n "$RELIABILITY_PASS" ] && [ -n "$READMITTER_PASS" ]; then
+      run_sql_as_root postgres "REVOKE ALL ON FUNCTION public.contain_database_role(text), public.readmit_database_role(text) FROM \"$probe_role\";"
+    fi
+    run_sql_as_root postgres "ALTER ROLE \"$probe_role\" SET default_transaction_read_only = on;"
+    run_sql_as_root postgres "ALTER ROLE \"$probe_role\" SET statement_timeout = '2000ms';"
+    run_sql_as_root postgres "ALTER ROLE \"$probe_role\" SET lock_timeout = '1000ms';"
+    run_sql_as_root postgres "ALTER ROLE \"$probe_role\" SET idle_in_transaction_session_timeout = '2000ms';"
+    run_sql_as_root postgres "ALTER ROLE \"$probe_role\" SET temp_file_limit = '0';"
+    run_sql_as_root postgres "ALTER ROLE \"$probe_role\" SET work_mem = '1MB';"
+    run_sql_as_root postgres "REVOKE SET ON PARAMETER temp_file_limit FROM PUBLIC, \"$probe_role\";"
+    run_sql_as_root "$db_name" "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"$probe_role\";"
+    run_sql_as_root "$db_name" "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"$probe_role\";"
+    run_sql_as_root "$db_name" "REVOKE CREATE ON SCHEMA public FROM \"$probe_role\";"
+    # PUBLIC still grants CONNECT/TEMP at the database level. The capability
+    # boundary is this function's exact scoped caller, not a claimed PG deny ACL.
+    run_sql_as_root "$db_name" "GRANT CONNECT ON DATABASE \"$db_name\" TO \"$probe_role\";"
+    PGPASSWORD="$PG_PASS" psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$db_name" -v ON_ERROR_STOP=1 <<SQL
+CREATE OR REPLACE FUNCTION public.database_recovery_probe()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS \$function\$
+DECLARE
+  system_tenant_exists boolean := false;
+  runtime_role_count bigint;
+  runtime_can_login boolean;
+  runtime_no_login boolean;
+  runtime_sessions bigint;
+BEGIN
+  IF session_user <> '$probe_role' OR current_database() <> '$db_name' THEN
+    RAISE EXCEPTION 'recovery probe requires the exact node-scoped identity' USING ERRCODE = '42501';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = '$probe_role'
+    AND r.rolcanlogin AND NOT r.rolinherit AND NOT r.rolsuper AND NOT r.rolcreaterole
+    AND NOT r.rolcreatedb AND NOT r.rolreplication AND NOT r.rolbypassrls AND r.rolconnlimit = 1)
+    OR EXISTS (SELECT 1 FROM pg_auth_members membership JOIN pg_roles member ON member.oid = membership.member
+      WHERE member.rolname = '$probe_role') OR EXISTS (
+    SELECT 1 FROM pg_class relation JOIN pg_namespace schema ON schema.oid = relation.relnamespace
+    WHERE schema.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND schema.nspname !~ '^pg_toast'
+      AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND has_table_privilege('$probe_role', relation.oid, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+  ) OR EXISTS (
+    SELECT 1 FROM pg_class relation JOIN pg_namespace schema ON schema.oid = relation.relnamespace
+    WHERE schema.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND schema.nspname !~ '^pg_toast' AND relation.relkind = 'S'
+      AND CASE WHEN relation.relkind = 'S' THEN has_sequence_privilege('$probe_role', relation.oid, 'USAGE, UPDATE') ELSE false END
+  ) OR EXISTS (
+    SELECT 1 FROM pg_proc routine JOIN pg_namespace schema ON schema.oid = routine.pronamespace
+    WHERE routine.prosecdef AND schema.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND routine.oid <> 'public.database_recovery_probe()'::regprocedure
+      AND has_function_privilege('$probe_role', routine.oid, 'EXECUTE')
+  ) OR has_schema_privilege('$probe_role', 'public', 'CREATE') THEN
+    RAISE EXCEPTION 'recovery probe effective capability is not isolated' USING ERRCODE = '42501';
+  END IF;
+  SELECT count(*), bool_and(rolcanlogin), bool_and(NOT rolcanlogin)
+    INTO runtime_role_count, runtime_can_login, runtime_no_login
+    FROM pg_roles WHERE rolname IN ('$app_role', '$svc_role');
+  IF runtime_role_count <> 2 THEN
+    RAISE EXCEPTION 'recovery probe runtime role pair is missing';
+  END IF;
+  SELECT count(*) INTO runtime_sessions FROM pg_stat_activity
+    WHERE usename IN ('$app_role', '$svc_role');
+  IF to_regclass('public.billing_accounts') IS NOT NULL THEN
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.billing_accounts WHERE id = \$1::text AND is_system_tenant)'
+      INTO system_tenant_exists USING '$SYSTEM_BILLING_ACCOUNT_ID';
+  END IF;
+  RETURN jsonb_build_object(
+    'database', current_database(), 'role', session_user,
+    'systemTenantExists', system_tenant_exists, 'probeRoleIsolated', true, 'observedAt', clock_timestamp(),
+    'serverAddress', inet_server_addr()::text, 'serverPort', inet_server_port(),
+    'systemIdentifier', (SELECT system_identifier::text FROM pg_control_system()),
+    'runtimeRolesPresent', true, 'runtimeRolesNoLogin', runtime_no_login,
+    'appRolesCanLogin', runtime_can_login, 'activeRuntimeSessions', runtime_sessions);
+END
+\$function\$;
+ALTER FUNCTION public.database_recovery_probe() OWNER TO "$PG_USER";
+REVOKE ALL ON FUNCTION public.database_recovery_probe() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.database_recovery_probe() TO "$probe_role";
+-- Effective privilege checks include PUBLIC. Do not repair legacy broad grants
+-- by revoking app privileges globally: refuse the probe until the owner narrows them.
+DO \$probe_privileges\$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_class relation JOIN pg_namespace schema ON schema.oid = relation.relnamespace
+    WHERE schema.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND schema.nspname !~ '^pg_toast'
+      AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND has_table_privilege('$probe_role', relation.oid, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+  ) OR EXISTS (
+    SELECT 1 FROM pg_class relation JOIN pg_namespace schema ON schema.oid = relation.relnamespace
+    WHERE schema.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND schema.nspname !~ '^pg_toast' AND relation.relkind = 'S'
+      AND CASE WHEN relation.relkind = 'S' THEN has_sequence_privilege('$probe_role', relation.oid, 'USAGE, UPDATE') ELSE false END
+  ) OR EXISTS (
+    SELECT 1 FROM pg_proc routine JOIN pg_namespace schema ON schema.oid = routine.pronamespace
+    WHERE routine.prosecdef AND schema.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND routine.oid <> 'public.database_recovery_probe()'::regprocedure
+      AND has_function_privilege('$probe_role', routine.oid, 'EXECUTE')
+  ) OR has_schema_privilege('$probe_role', 'public', 'CREATE') THEN
+    RAISE EXCEPTION 'recovery probe has effective mutation or unrelated definer authority' USING ERRCODE = '42501';
+  END IF;
+END
+\$probe_privileges\$;
+SQL
   fi
 
   echo "   ✅ Node '$node' provisioned (db '$db_name')."

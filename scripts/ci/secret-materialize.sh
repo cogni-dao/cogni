@@ -178,6 +178,7 @@ export CATALOG_DIR
 . "$SCRIPT_DIR/lib/appset-paths.sh"
 # shellcheck source=lib/lane-db-residency.sh
 . "$SCRIPT_DIR/lib/lane-db-residency.sh"
+RELIABILITY_CONTROLLER="$(reliability_controller_for_env "$DEPLOY_ENVIRONMENT")" || fail "reliability controller ownership unresolved"
 COGNI_LANE_DB_HOST="$(lane_db_dsn_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV" "$VM_IP")" \
   || fail "could not resolve which Postgres host ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'s database lives on (bug.5299) — refusing to compose a DSN against a guessed host"
 export COGNI_LANE_DB_HOST
@@ -280,8 +281,8 @@ prefetch_path() {
   mkdir -p "${CACHE_DIR}/${ns}"
   while IFS=$'\t' read -r key val; do
     [[ -z "$key" ]] && continue
-    printf '%s' "$val" > "${CACHE_DIR}/${ns}/${key}"
-  done < <(printf '%s' "$json" | jq -r 'to_entries[] | [.key, .value] | @tsv')
+    printf '%s' "$val" | base64 --decode > "${CACHE_DIR}/${ns}/${key}"
+  done < <(printf '%s' "$json" | jq -r 'to_entries[] | [.key, (.value | tostring | @base64)] | @tsv')
 }
 
 # Reads serve from the cache the single prefetch populated — no per-key ssh.
@@ -392,7 +393,7 @@ DSN_DEFER_KEYS=" "
 # zero churn while a half-migrated node self-heals. This includes stale per-node
 # DOLTGRES_URL copies: node-substrate provisions with the operator SSOT, so the pod
 # must receive a URL derived from that same SSOT or the migrator 28P01s.
-COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL "
+COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL DATABASE_SSL_CA_CERT "
 
 # Transitional shared/human inheritance — the blind ancestor scan the north star
 # replaces with explicit catalog `inheritFrom` (catalog-custody lane). Now serves
@@ -434,6 +435,72 @@ if [[ "${SECRETS_CONTROL_ENV}" != "$DEPLOY_ENVIRONMENT" ]]; then
     prefetch_path "$svc" "$SECRETS_CONTROL_ENV" "__owner__/$svc"
   done
 fi
+
+# Same canonical writer loads applied cell custody before composing any runtime URL.
+source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
+source "$SCRIPT_DIR/lib/materialize-database-cell-placement.sh"
+case "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" in
+  database-cell-seal|database-cell-cutover)
+    created=0; unchanged=0
+    materialize_database_cell_endpoint
+    log "cell placement materialization complete: created=${created} unchanged=${unchanged}"
+    exit 0 ;;
+esac
+load_database_cell_placement
+
+# Same sole writer, second owner-only phase after the read-only DB reconcile.
+# No baseline minting/rotation and no VM .env authority in this phase.
+if [[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == "db-ready" ]]; then
+  [[ "$TARGET_NODE" == "$RELIABILITY_CONTROLLER" && "$SECRETS_CONTROL_ENV" == "$DEPLOY_ENVIRONMENT" ]] \
+    || fail "DB-ready probe sealing is restricted to the local catalog owner leg"
+  [[ "$(lane_db_vm_env "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")" == "$SECRETS_CONTROL_ENV" && "$COGNI_LANE_DB_HOST" == "$VM_IP" ]] \
+    || fail "DB-ready probe receipt is outside the physical local substrate"
+  probe_service="${TARGET_NODE}-database-recovery-probe"
+  prefetch_path "$probe_service"
+  prefetch_path database-reliability-actuator
+  probe_password="$(bao_get_field "$probe_service" DATABASE_RECOVERY_PROBE_PASSWORD)"
+  probe_dsn="$(bao_get_field "$probe_service" DATABASE_RECOVERY_PROBE_URL)"
+  [[ "$probe_password" =~ ^[0-9a-f]+$ && -n "$probe_dsn" ]] || fail "DB-ready probe component material is absent; pre-reconcile must run first"
+  [[ "$probe_dsn" == "$(_compose_node_value "$TARGET_NODE" DATABASE_RECOVERY_PROBE_URL)" ]] \
+    || fail "DB-ready probe DSN diverges from canonical materialized residency"
+  probe_suffix="${TARGET_NODE//-/_}$(_lane_db_suffix "$TARGET_NODE")"
+  probe_database="cogni_${probe_suffix}"
+  probe_role="probe_${probe_suffix}"
+  probe_node_id="$(node_id_for_target "$TARGET_NODE")" || fail "DB-ready node identity unresolved"
+  machine_id="$(remote 'cat /etc/machine-id' | tr -d '[:space:]')"
+  [[ "$machine_id" =~ ^[0-9a-f]{32}$ ]] || fail "physical host machine-id is invalid"
+  # Bind the TCP observation to the actual local Compose Postgres data directory,
+  # independently of any published-port proxy. Metadata read requires no root secret.
+  local_system_id="$(remote 'set -euo pipefail
+    container_id=$(docker ps --filter label=com.docker.compose.project=cogni-runtime --filter label=com.docker.compose.service=postgres -q)
+    [[ "$container_id" =~ ^[0-9a-f]{12,64}$ ]] || exit 1
+    docker exec "$container_id" env LC_ALL=C pg_controldata /var/lib/postgresql/data | sed -n "s/^Database system identifier: *//p"')" \
+    || fail "local Compose Postgres physical identity unavailable"
+  [[ "$local_system_id" =~ ^[0-9]+$ ]] || fail "local Postgres system identifier invalid"
+  # TCP to the EXACT DSN host, bounded private identity; successful function execution
+  # proves the provisioned role/database boundary before any secret-array write.
+  observation="$(remote "docker run --rm --network host -e PGPASSWORD='${probe_password}' -e PGCONNECT_TIMEOUT=5 postgres:15 psql -h '${COGNI_LANE_DB_HOST}' -p 5432 -U '${probe_role}' -d '${probe_database}' -XAtv ON_ERROR_STOP=1 -c 'SELECT public.database_recovery_probe();'")" \
+    || fail "DB-ready native probe receipt unavailable"
+  prior_bindings="$(bao_get_field database-reliability-actuator DATABASE_RECOVERY_PROBE_URLS_JSON)"
+  [[ -n "$prior_bindings" ]] || prior_bindings='[]'
+  next_bindings="$(jq -n --arg nodeId "$probe_node_id" --arg nodeSlug "$TARGET_NODE" --arg environment "$DEPLOY_ENVIRONMENT" \
+    --arg databaseName "$probe_database" --arg probeRole "$probe_role" --arg dsn "$probe_dsn" \
+    --arg expectedHost "$COGNI_LANE_DB_HOST" --arg machineId "$machine_id" --arg localSystemIdentifier "$local_system_id" --argjson observation "$observation" \
+    --argjson existingBindings "$prior_bindings" \
+    '{nodeId:$nodeId,nodeSlug:$nodeSlug,environment:$environment,databaseName:$databaseName,probeRole:$probeRole,dsn:$dsn,expectedHost:$expectedHost,machineId:$machineId,localSystemIdentifier:$localSystemIdentifier,observation:$observation,existingBindings:$existingBindings}' \
+    | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-recovery-binding.ts")" \
+    || fail "DB-ready measured binding validation failed"
+  if [[ "$next_bindings" == "$prior_bindings" ]]; then
+    log 'DB-ready binding converged; created=0'
+  else
+    rm -f "${CACHE_DIR}/database-reliability-actuator/DATABASE_RECOVERY_PROBE_URLS_JSON"
+    seed_kv database-reliability-actuator DATABASE_RECOVERY_PROBE_URLS_JSON "$next_bindings"
+    flush_batch database-reliability-actuator
+    log 'DB-ready binding sealed into private actuator bank; created=1'
+  fi
+  exit 0
+fi
+[[ "${SECRET_MATERIALIZE_PHASE:-pre-reconcile}" == "pre-reconcile" ]] || fail "unsupported materializer phase"
 
 log "materializing node-owned OpenBao values for ${DEPLOY_ENVIRONMENT}/${TARGET_NODE} (key names only)"
 created=0
@@ -538,7 +605,35 @@ else
   seed_kv "$migration_service" DATABASE_MIGRATION_URL "$migration_dsn"
   created=$((created + 1))
 fi
+migration_ca="$(_compose_node_value "$TARGET_NODE" DATABASE_SSL_CA_CERT)"
+if [[ "$(bao_get_field "$migration_service" DATABASE_SSL_CA_CERT)" != "$migration_ca" ]]; then
+  rm -f "${CACHE_DIR}/${migration_service}/DATABASE_SSL_CA_CERT"
+  seed_kv "$migration_service" DATABASE_SSL_CA_CERT "$migration_ca"
+  created=$((created + 1))
+fi
 flush_batch "$migration_service"
+
+# The recovery credential can invoke only its own node's narrow root-owned probe.
+# Keep both password and URL out of the public node envFrom bank.
+probe_service="${TARGET_NODE}-database-recovery-probe"
+prefetch_path "$probe_service"
+probe_password="$(bao_get_field "$probe_service" DATABASE_RECOVERY_PROBE_PASSWORD)"
+if [[ -z "$probe_password" ]]; then
+  probe_password="$(_resolve_node_value "$probe_service" DATABASE_RECOVERY_PROBE_PASSWORD)"
+  [[ -n "$probe_password" ]] || fail "recovery probe password generation returned empty"
+  seed_kv "$probe_service" DATABASE_RECOVERY_PROBE_PASSWORD "$probe_password"
+  created=$((created + 1))
+fi
+probe_dsn="$(_compose_node_value "$TARGET_NODE" DATABASE_RECOVERY_PROBE_URL)"
+[[ -n "$probe_dsn" ]] || fail "recovery probe DSN composition returned empty"
+if [[ "$(bao_get_field "$probe_service" DATABASE_RECOVERY_PROBE_URL)" == "$probe_dsn" ]]; then
+  unchanged=$((unchanged + 1))
+else
+  rm -f "${CACHE_DIR}/${probe_service}/DATABASE_RECOVERY_PROBE_URL"
+  seed_kv "$probe_service" DATABASE_RECOVERY_PROBE_URL "$probe_dsn"
+  created=$((created + 1))
+fi
+flush_batch "$probe_service"
 
 # ── Platform-service agent secrets (non-node OpenBao buckets) ─────────────────
 # PLATFORM_SERVICES (reconcile-secrets.sh) own `cogni/<env>/<service>/*` instead of
@@ -556,8 +651,12 @@ flush_batch "$migration_service"
 # `infra/k8s/base/akash-tx-actuator/*` maps to the operator target in detect-affected.sh, so
 # any change to a platform service's manifests already brings its owner leg along.
 PLATFORM_SERVICE_OWNER_NODE="${PLATFORM_SERVICE_OWNER_NODE:-operator}"
-if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
+if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" || "$TARGET_NODE" == "$RELIABILITY_CONTROLLER" ]]; then
   for svc in "${PLATFORM_SERVICES[@]}"; do
+    case "$svc" in
+      database-reliability-actuator|database-reliability-readmitter) [[ "$TARGET_NODE" == "$RELIABILITY_CONTROLLER" ]] || continue ;;
+      *) [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]] || continue ;;
+    esac
     prefetch_path "$svc"
     mapfile -t svc_keys < <(
       yq -N ".secrets[] | select(.service == \"${svc}\" and .source == \"agent\") | .name" \
@@ -567,7 +666,9 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
       [[ -n "$k" ]] || continue
       # This DSN depends on the generated component password in the same batch,
       # so compose it after the random-key pass below regardless of sort order.
-      [[ "$k" == "DATABASE_RELIABILITY_ADMIN_URL" || "$k" == "DATABASE_RELIABILITY_READMIT_URL" ]] && continue
+      # Probe bindings are sealed only after native DB/system and physical-host readbacks.
+      # The existing private writer publishes that receipt; random generation cannot establish identity.
+      [[ "$k" == "DATABASE_RELIABILITY_ADMIN_URL" || "$k" == "DATABASE_RELIABILITY_READMIT_URL" || "$k" == "DATABASE_RECOVERY_PROBE_URLS_JSON" || "$k" == "AKASH_DATABASE_CELL_KITS_JSON" || "$k" == "DATABASE_RECOVERY_CELL_PROBE_URLS_JSON" || "$k" == "DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON" || "$k" == "DATABASE_RELIABILITY_CELL_READMIT_URLS_JSON" ]] && continue
       if [[ -f "${CACHE_DIR}/${svc}/${k}" ]]; then
         unchanged=$((unchanged + 1))
         continue
@@ -614,6 +715,11 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
     flush_batch "$svc"
   done
 fi
+
+# Same sole writer publishes catalog-selected, source-verified PRIVATE bootstrap kits.
+# shellcheck source=lib/materialize-database-cell-kits.sh
+source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
+materialize_database_cell_kits
 
 # A LiteLLM virtual key is a dual-plane generated secret: OpenBao owns its
 # bytes, while LiteLLM must store the same explicit key for authentication.

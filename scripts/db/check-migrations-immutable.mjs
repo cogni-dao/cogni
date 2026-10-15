@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs";
 const BASE_REF = process.env.MIGRATIONS_BASE_REF?.trim() || "origin/main";
 
 const MIGRATION_DIR_PATTERN =
-  /^nodes\/[^/]+\/app\/src\/adapters\/server\/db\/(?:migrations|doltgres-migrations)\//;
+  /^(?:nodes\/[^/]+\/app\/src\/adapters\/server\/db\/(?:migrations|doltgres-migrations)|infra\/compose\/runtime\/postgres-init\/control-migrations)\//;
 const SQL_PATTERN = /\.sql$/;
 const SNAPSHOT_PATTERN = /meta\/[^/]+_snapshot\.json$/;
 const JOURNAL_PATTERN = /meta\/_journal\.json$/;

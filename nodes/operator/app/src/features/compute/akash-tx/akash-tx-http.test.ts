@@ -99,6 +99,361 @@ function dispatcherFor(actuator: AkashTxActuatorPort) {
 }
 
 describe("akash-tx dispatcher", () => {
+  it("prepares a diagnostic from authenticated references without allocating or accepting credentials", async () => {
+    const received: unknown[] = [];
+    const dispatch = createAkashTxDispatcher({
+      token: TOKEN,
+      actuator: stubActuator({
+        create: async () => {
+          throw new Error("diagnostic must not allocate");
+        },
+      }),
+      databaseCellDiagnostic: async (input) => {
+        received.push(input);
+        return {
+          version: 1,
+          action: "diagnostic-clone",
+          allocationReceiptId: "receipt",
+          nodeId: input.identity.nodeId,
+          nodeSlug: input.nodeSlug,
+          environment: "production",
+          provider: "akash",
+          providerAccount: "provider",
+          dseq: input.externalName,
+          failureDomainId: "failure-domain",
+          systemIdentifier: "123",
+          sourceSha: "a".repeat(40),
+          targetBuildSha: "b".repeat(40),
+          sourceDatabaseName: "cogni_toks9",
+          databaseName: "cogni_toks9_diagnostic",
+          replayRole: "replay_toks9_diagnostic",
+          connectionLimit: 8,
+          statementTimeoutMs: 2000,
+          verification: { rows: "1000", sha256: "a".repeat(64) },
+          completedAt: "2026-10-15T00:00:00Z",
+        };
+      },
+    });
+    const input = {
+      cogniKey: "cell/production/toks9/1",
+      environment: "production",
+      identity: IDENTITY,
+      nodeSlug: "toks9",
+      budgetProfile: "dedicated-high-throughput-v1",
+      externalName: "7001",
+    };
+    const request = {
+      method: "POST",
+      path: "/v1/akash/prepare-database-cell-diagnostic",
+      authorization: AUTH,
+      body: JSON.stringify(input),
+    };
+    const { authorization: _authorization, ...unauthenticatedRequest } =
+      request;
+    expect((await dispatch(unauthenticatedRequest)).status).toBe(401);
+    expect(
+      (
+        await dispatch({
+          ...request,
+          body: JSON.stringify({ ...input, rootPassword: "caller-secret" }),
+        })
+      ).status
+    ).toBe(400);
+    expect(received).toHaveLength(0);
+    const response = await dispatch(request);
+    expect(response.status).toBe(200);
+    expect(received).toEqual([input]);
+    expect(JSON.stringify(response.body)).not.toContain("Password");
+  });
+  it("invokes only the owned diagnostic observer after auth and strict reference validation", async () => {
+    const received: unknown[] = [];
+    const observation = {
+      version: 1,
+      action: "diagnostic-status",
+      nodeId: IDENTITY.nodeId,
+      sourceSha: "a".repeat(40),
+      targetBuildSha: "b".repeat(40),
+      systemIdentifier: "1",
+      failureDomainId: "akash:neutral:1",
+      parentRolesContained: true,
+      parentRuntimeSessions: 0,
+      replayRole: "replay_toks9_diagnostic",
+      replayConnections: 8,
+      connectionLimit: 8,
+      cellSubstrate: {
+        version: 1 as const,
+        scope: "dedicated-cell" as const,
+        sourceSha: "a".repeat(40),
+        observedAt: "2026-10-15T00:00:00Z",
+        ioPressurePct: 0,
+        connectionPct: 10,
+        memoryHeadroomPct: 80,
+        diskHeadroomPct: 80,
+      },
+      observedAt: "2026-10-15T00:00:00Z",
+    };
+    const dispatch = createAkashTxDispatcher({
+      actuator: stubActuator(),
+      token: TOKEN,
+      databaseCellDiagnostic: async () => {
+        throw Error("observer must not clone");
+      },
+      databaseCellDiagnosticObserve: async (input) => {
+        received.push(input);
+        return observation;
+      },
+    });
+    const input = {
+      cogniKey: "cell/production/toks9/1",
+      environment: "production",
+      identity: IDENTITY,
+      nodeSlug: "toks9",
+      budgetProfile: "dedicated-high-throughput-v1",
+      externalName: "7001",
+    };
+    const request = {
+      method: "POST",
+      path: "/v1/akash/observe-database-cell-diagnostic",
+      authorization: AUTH,
+      body: JSON.stringify(input),
+    };
+    const { authorization: _authorization, ...unauthenticated } = request;
+    expect((await dispatch(unauthenticated)).status).toBe(401);
+    for (const override of [
+      { endpoint: "foreign.example" },
+      { rootPassword: "caller-secret" },
+      { databaseName: "foreign_db" },
+    ])
+      expect(
+        (
+          await dispatch({
+            ...request,
+            body: JSON.stringify({ ...input, ...override }),
+          })
+        ).status
+      ).toBe(400);
+    expect(received).toEqual([]);
+    expect(await dispatch(request)).toEqual({ status: 200, body: observation });
+    expect(received).toEqual([input]);
+    expect((await dispatcherFor(stubActuator())(request)).status).toBe(503);
+  });
+  it("denies diagnostic preparation when its private executor is unavailable", async () => {
+    const response = await dispatcherFor(stubActuator())({
+      method: "POST",
+      path: "/v1/akash/prepare-database-cell-diagnostic",
+      authorization: AUTH,
+      body: JSON.stringify({
+        cogniKey: "cell/production/toks9/1",
+        environment: "production",
+        identity: IDENTITY,
+        nodeSlug: "toks9",
+        budgetProfile: "dedicated-high-throughput-v1",
+        externalName: "7001",
+      }),
+    });
+    expect(response.status).toBe(503);
+  });
+  it("resolves the current private kit for same-lease cell UPDATE without caller spec or secrets", async () => {
+    let kitVersion = "unsealed";
+    const versions: string[] = [];
+    const dispatch = createAkashTxDispatcher({
+      token: TOKEN,
+      actuator: stubActuator({
+        create: async (input) => {
+          versions.push(input.spec.services[0]?.env?.CERT_VERSION ?? "missing");
+          return {
+            externalName: "7001",
+            state: "pending",
+            endpoints: [],
+            replayed: false,
+            recovered: false,
+          };
+        },
+        update: async (input) => {
+          expect(input.externalName).toBe("7001");
+          versions.push(input.spec.services[0]?.env?.CERT_VERSION ?? "missing");
+          return { externalName: "7001", state: "active", endpoints: [] };
+        },
+      }),
+      databaseCellSpec: async () => ({
+        ...VALID_CREATE.spec,
+        services: VALID_CREATE.spec.services.map((service) => ({
+          ...service,
+          env: { CERT_VERSION: kitVersion },
+        })),
+      }),
+    });
+    const reference = {
+      cogniKey: "cell/production/toks9/1",
+      environment: "production",
+      identity: IDENTITY,
+      nodeSlug: "toks9",
+      budgetProfile: "dedicated-high-throughput-v1",
+    };
+    expect(
+      (
+        await dispatch({
+          method: "POST",
+          path: "/v1/akash/create-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify(reference),
+        })
+      ).status
+    ).toBe(200);
+    kitVersion = "observed-host-sealed";
+    const update = { ...reference, externalName: "7001" };
+    expect(
+      (
+        await dispatch({
+          method: "POST",
+          path: "/v1/akash/update-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify(update),
+        })
+      ).status
+    ).toBe(200);
+    expect(versions).toEqual(["unsealed", "observed-host-sealed"]);
+    expect(
+      (
+        await dispatch({
+          method: "POST",
+          path: "/v1/akash/update-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify({ ...update, tlsPrivateKey: "caller-key" }),
+        })
+      ).status
+    ).toBe(400);
+    expect(versions).toHaveLength(2);
+  });
+  it("delegates a private cell reference through the same create path and refuses caller secrets", async () => {
+    let received: unknown;
+    const dispatch = createAkashTxDispatcher({
+      token: TOKEN,
+      actuator: stubActuator({
+        create: async (input) => {
+          received = input;
+          return {
+            externalName: "7001",
+            state: "pending",
+            endpoints: [],
+            replayed: false,
+            recovered: false,
+          };
+        },
+      }),
+      databaseCellSpec: () => VALID_CREATE.spec,
+    });
+    const input = {
+      cogniKey: "cell/production/toks9/1",
+      environment: "production",
+      identity: IDENTITY,
+      nodeSlug: "toks9",
+      budgetProfile: "dedicated-high-throughput-v1",
+    };
+    expect(
+      (
+        await dispatch({
+          method: "POST",
+          path: "/v1/akash/create-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify(input),
+        })
+      ).status
+    ).toBe(200);
+    expect(received).toEqual({
+      cogniKey: input.cogniKey,
+      environment: "production",
+      identity: IDENTITY,
+      spec: VALID_CREATE.spec,
+    });
+    for (const override of [
+      { rootPassword: "caller-secret" },
+      { spec: VALID_CREATE.spec },
+    ]) {
+      expect(
+        (
+          await dispatch({
+            method: "POST",
+            path: "/v1/akash/create-database-cell",
+            authorization: AUTH,
+            body: JSON.stringify({ ...input, ...override }),
+          })
+        ).status
+      ).toBe(400);
+    }
+    expect(
+      (
+        await dispatcherFor(stubActuator())({
+          method: "POST",
+          path: "/v1/akash/create-database-cell",
+          authorization: AUTH,
+          body: JSON.stringify(input),
+        })
+      ).status
+    ).toBe(503);
+  });
+  it("preserves named persistent volumes through strict wire validation", async () => {
+    const volumes = [
+      {
+        name: "pgdata",
+        sizeMi: 20480,
+        mountPath: "/var/lib/postgresql/data",
+        tier: "nvme",
+      },
+    ];
+    let received: unknown;
+    const dispatch = dispatcherFor(
+      stubActuator({
+        create: async (input) => {
+          received = input.spec.services[0]?.volumes;
+          return {
+            externalName: "7001",
+            state: "pending",
+            endpoints: [],
+            replayed: false,
+            recovered: false,
+          };
+        },
+      })
+    );
+    const payload = {
+      ...VALID_CREATE,
+      spec: {
+        ...VALID_CREATE.spec,
+        services: [{ ...VALID_CREATE.spec.services[0], volumes }],
+      },
+    };
+    const result = await dispatch({
+      method: "POST",
+      path: "/v1/akash/create",
+      authorization: `Bearer ${TOKEN}`,
+      body: JSON.stringify(payload),
+    });
+    expect(result.status).toBe(200);
+    expect(received).toEqual(volumes);
+    for (const invalid of [
+      [{ ...volumes[0], mountPath: "/" }],
+      [{ ...volumes[0], mountPath: "/data/../etc" }],
+      [{ ...volumes[0], sizeMi: 0 }],
+      [{ ...volumes[0], tier: "unknown" }],
+      [volumes[0], volumes[0]],
+    ]) {
+      const denied = await dispatch({
+        method: "POST",
+        path: "/v1/akash/create",
+        authorization: `Bearer ${TOKEN}`,
+        body: JSON.stringify({
+          ...payload,
+          spec: {
+            ...payload.spec,
+            services: [{ ...payload.spec.services[0], volumes: invalid }],
+          },
+        }),
+      });
+      expect(denied.status).toBe(400);
+    }
+  });
+
   it("refuses to construct without a bearer token", () => {
     expect(() =>
       createAkashTxDispatcher({ actuator: stubActuator(), token: "" })

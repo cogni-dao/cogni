@@ -652,6 +652,7 @@ describe("AkashTxActuator.create", () => {
       state: "allocated",
       externalName: "7001",
       allocationCursor: "7000",
+      lastAppliedSdlHash: api.sdlHash(SPEC),
     });
   });
 
@@ -1165,7 +1166,13 @@ describe("AkashTxActuator.update / delete", () => {
       externalName: "7001",
       environment: "candidate-a",
       identity: IDENTITY,
-      spec: SPEC,
+      spec: {
+        ...SPEC,
+        services: SPEC.services.map((service) => ({
+          ...service,
+          image: "ghcr.io/cogni-dao/toks9:sha-def",
+        })),
+      },
     });
 
     expect(resource.externalName).toBe("7001");
@@ -1315,7 +1322,7 @@ describe("AkashTxActuator.update / delete", () => {
       spec: SPEC,
     });
 
-    // First update applies the SDL once and records its hash on the receipt.
+    // CREATE already applied and recorded this SDL; the first identical UPDATE also no-ops.
     await actuator.update({
       cogniKey: "k1",
       externalName: "7001",
@@ -1323,7 +1330,7 @@ describe("AkashTxActuator.update / delete", () => {
       identity: IDENTITY,
       spec: SPEC,
     });
-    expect(api.updateCalls).toBe(1);
+    expect(api.updateCalls).toBe(0);
     const recordedHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
     expect(recordedHash).toBe(api.sdlHash(SPEC));
 
@@ -1336,7 +1343,7 @@ describe("AkashTxActuator.update / delete", () => {
       spec: SPEC,
     });
     expect(resource.externalName).toBe("7001");
-    expect(api.updateCalls).toBe(1);
+    expect(api.updateCalls).toBe(0);
     // The receipt hash is unchanged — the no-op wrote nothing.
     expect(ledger.rows.get("k1")?.lastAppliedSdlHash).toBe(recordedHash);
   });
@@ -1357,7 +1364,7 @@ describe("AkashTxActuator.update / delete", () => {
       identity: IDENTITY,
       spec: SPEC,
     });
-    expect(api.updateCalls).toBe(1);
+    expect(api.updateCalls).toBe(0);
     const firstHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
 
     // A real promote: new image sha → different SDL → different hash → the PUT MUST still fire.
@@ -1375,7 +1382,7 @@ describe("AkashTxActuator.update / delete", () => {
       identity: IDENTITY,
       spec: nextSpec,
     });
-    expect(api.updateCalls).toBe(2);
+    expect(api.updateCalls).toBe(1);
     const secondHash = ledger.rows.get("k1")?.lastAppliedSdlHash;
     expect(secondHash).toBe(api.sdlHash(nextSpec));
     expect(secondHash).not.toBe(firstHash);
@@ -1845,7 +1852,13 @@ describe("AkashTxActuator identity binding (task.5103)", () => {
       externalName: "7001",
       environment: "candidate-a",
       identity: { ...IDENTITY, compositeGeneration: 9 },
-      spec: SPEC,
+      spec: {
+        ...SPEC,
+        services: SPEC.services.map((service) => ({
+          ...service,
+          image: "ghcr.io/cogni-dao/toks9:sha-def",
+        })),
+      },
     });
 
     expect(order).toEqual([

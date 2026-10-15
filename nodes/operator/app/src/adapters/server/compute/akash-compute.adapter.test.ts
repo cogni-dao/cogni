@@ -226,6 +226,58 @@ const SPEC = {
   ],
 } as const;
 
+describe("AkashComputeAdapter.status", () => {
+  it("returns assigned transport endpoints through the existing observation path", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: {
+          deployment: { state: "active" },
+          leases: [
+            {
+              state: "active",
+              status: {
+                uris: ["app.example.org"],
+                forwarded_ports: {
+                  state: [
+                    {
+                      host: "provider.example.org",
+                      externalPort: 31057,
+                      proto: "TCP",
+                    },
+                    {
+                      host: "provider.example.org",
+                      externalPort: 31058,
+                      proto: "UDP",
+                    },
+                    {
+                      host: "provider.example.org/unsafe",
+                      externalPort: 31059,
+                    },
+                    { host: "provider.example.org", externalPort: 70000 },
+                    {
+                      host: "provider.example.org",
+                      externalPort: 31060,
+                      proto: "unknown",
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      })
+    );
+    const status = await makeAdapter(fetchImpl).status({ leaseId: "7001" });
+    expect(status.endpoints).toEqual([
+      "app.example.org",
+      "tcp://provider.example.org:31057",
+      "udp://provider.example.org:31058",
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("GET");
+  });
+});
+
 describe("AkashComputeAdapter.observeCost", () => {
   const observedAt = new Date("2026-09-15T12:00:00.000Z");
 
@@ -514,6 +566,51 @@ describe("AkashComputeAdapter.observeCost", () => {
 });
 
 describe("buildAkashSdl", () => {
+  it("mounts persistent state separately from the ephemeral container filesystem", () => {
+    const service = SPEC.services[0];
+    if (!service) throw new Error("missing fixture service");
+    const rendered = parseYaml(
+      buildAkashSdl(
+        {
+          ...SPEC,
+          services: [
+            {
+              ...service,
+              volumes: [
+                {
+                  name: "pgdata",
+                  sizeMi: 20480,
+                  mountPath: "/var/lib/postgresql/data",
+                  tier: "nvme",
+                },
+              ],
+            },
+          ],
+        },
+        { pricingDenom: "uact", pricingAmount: 100 }
+      )
+    );
+    expect(rendered.services.app.params.storage.pgdata).toEqual({
+      mount: "/var/lib/postgresql/data",
+      readOnly: false,
+    });
+    expect(rendered.profiles.compute.app.resources.storage).toEqual([
+      { size: `${service.storageMi}Mi` },
+      {
+        name: "pgdata",
+        size: "20480Mi",
+        attributes: { persistent: true, class: "beta3" },
+      },
+    ]);
+    const legacy = parseYaml(
+      buildAkashSdl(SPEC, { pricingDenom: "uact", pricingAmount: 100 })
+    );
+    expect(legacy.services.app.params).toBeUndefined();
+    expect(legacy.profiles.compute.app.resources.storage).toEqual([
+      { size: `${service.storageMi}Mi` },
+    ]);
+  });
+
   it("renders services, profiles, placement pricing, and deployment sections", () => {
     const sdl = buildAkashSdl(SPEC, {
       pricingDenom: "uakt",

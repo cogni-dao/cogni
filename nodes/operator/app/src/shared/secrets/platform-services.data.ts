@@ -91,10 +91,24 @@ export const PLATFORM_SERVICE_OWNED_KEYS: ReadonlyMap<string, string> = new Map<
 >([
   ["AKASH_ACTUATOR_CONSOLE_API_KEY", "akash-tx-actuator"],
   ["AKASH_TX_ACTUATOR_TOKEN", "akash-tx-actuator"],
+  ["AKASH_DATABASE_CELL_KITS_JSON", "akash-tx-actuator"],
+  ["DATABASE_RECOVERY_CELL_PROBE_URLS_JSON", "database-reliability-actuator"],
+  [
+    "DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON",
+    "database-reliability-actuator",
+  ],
+  [
+    "DATABASE_RELIABILITY_CELL_READMIT_URLS_JSON",
+    "database-reliability-readmitter",
+  ],
+
   ["DATABASE_RELIABILITY_PASSWORD", "database-reliability-actuator"],
   ["DATABASE_RELIABILITY_ADMIN_URL", "database-reliability-actuator"],
+  ["DATABASE_RECOVERY_PROBE_URLS_JSON", "database-reliability-actuator"],
   ["DATABASE_RELIABILITY_READMIT_PASSWORD", "database-reliability-readmitter"],
   ["DATABASE_RELIABILITY_READMIT_URL", "database-reliability-readmitter"],
+  ["DATABASE_RELIABILITY_STATUS_TOKEN", "database-reliability-actuator"],
+  ["DATABASE_RELIABILITY_READMIT_TOKEN", "database-reliability-readmitter"],
 ]);
 
 /**

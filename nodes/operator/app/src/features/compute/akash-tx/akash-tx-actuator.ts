@@ -658,6 +658,10 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       externalName: allocated.leaseId,
       providerAccount: allocated.providerAccount,
     });
+    await this.ledger.recordAppliedSdlHash({
+      cogniKey: input.cogniKey,
+      sdlHash: this.console.sdlHash(input.spec),
+    });
     const allocationRecord = await this.requireStoredHandle(
       input.cogniKey,
       allocated.leaseId,

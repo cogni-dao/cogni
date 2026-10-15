@@ -20,8 +20,11 @@ cogni_ssh_transport_retry() {
   if [ ! -t 0 ]; then cat >"$_stdin"; fi
   _rc=255
   for _attempt in 1 2 3; do
-    "$@" <"$_stdin" 2>"$_err"
-    _rc=$?
+    if "$@" <"$_stdin" 2>"$_err"; then
+      _rc=0
+    else
+      _rc=$?
+    fi
     if [ "$_rc" -ne 0 ] && grep -qiE 'kex_exchange_identification|connection (reset|closed|refused|timed out)|broken pipe|banner exchange' "$_err"; then
       cat "$_err" >&2
       echo "[ssh-retry] transport failure (attempt ${_attempt}/3) — retrying" >&2

@@ -185,20 +185,16 @@ describe("PostgresDatabaseContainmentAdapter", () => {
 
   it("writes structured audit and reads the latest transition from Loki", async () => {
     const info = vi.fn();
-    let durableQuery = "";
-    const queryRange = async (input: { readonly query: string }) => {
-      durableQuery = input.query;
-      return [
-        {
-          ts: "1",
-          line: JSON.stringify({
-            ...ACTION,
-            action: "contained",
-            occurredAt: "2026-10-13T23:30:00.000Z",
-          }),
-        },
-      ];
-    };
+    const queryRange = vi.fn(async () => [
+      {
+        ts: "1",
+        line: JSON.stringify({
+          ...ACTION,
+          action: "readmitted",
+          occurredAt: "2026-10-13T23:30:00.000Z",
+        }),
+      },
+    ]);
     const adapter = new PinoLokiDatabaseContainmentAuditAdapter(
       { info } as never,
       { queryRange },
@@ -210,17 +206,20 @@ describe("PostgresDatabaseContainmentAdapter", () => {
       occurredAt: "2026-10-13T23:30:00.000Z",
     });
     expect(info).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "database_containment_transition" }),
-      "database_containment_transition"
+      expect.objectContaining({ event: "feature.node_reliability.transition" }),
+      "feature.node_reliability.transition"
     );
     await expect(adapter.latest(ACTION)).resolves.toMatchObject({
       incidentId: "incident-1",
-      action: "contained",
+      action: "readmitted",
     });
-    expect(durableQuery).toContain(
-      'service=~"database-reliability-actuator|database-reliability-readmitter"'
+    expect(queryRange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.stringContaining(
+          'service=~"database-reliability-actuator|database-reliability-readmitter"'
+        ),
+      })
     );
-    expect(durableQuery).not.toContain('service="operator"');
   });
 
   it("fences node A's source-CIDR rule while preserving node B access", async () => {

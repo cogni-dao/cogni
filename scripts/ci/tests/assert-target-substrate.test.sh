@@ -32,21 +32,23 @@ touch "$REMOTE_ROOT/opt/cogni-template-runtime/docker-compose.yml"
 
 cat > "$FAKEBIN/ssh" <<'EOF'
 #!/usr/bin/env bash
-while [ "$#" -gt 0 ] && [ "$1" != "bash" ]; do
+while [ "$#" -gt 0 ] && [[ "$1" != root@* ]]; do
   shift
 done
-[ "${1:-}" = "bash" ] || { echo "fake ssh: missing bash command" >&2; exit 2; }
+[ "$#" -gt 0 ] || { echo "fake ssh: missing remote host" >&2; exit 2; }
 shift
-[ "${1:-}" = "-s" ] && shift
-[ "${1:-}" = "--" ] && shift
-remote_args=()
-for arg in "$@"; do
-  if [ "${FAKE_SSH_DROP_EMPTY_ARGS:-}" = "1" ] && [ -z "$arg" ]; then
-    continue
-  fi
-  remote_args+=("$arg")
-done
-PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -s -- "${remote_args[@]}"
+# OpenSSH joins command arguments; the remote login shell reparses that text.
+# Direct argv execution hid the missing empty positional in the real flight.
+if [ "${FAKE_SSH_ASSERT_POSITIONALS:-}" = 1 ]; then
+  remote_header=$(sed '/^namespace=/,$d')
+  {
+    printf '%s\n' "$remote_header"
+    printf '%s\n' 'printf "ARGV\t%s\t%s\t%s\t%s\t%s\t%s\n" "$#" "$remote_root" "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" "$reliability_controller"'
+    printf '%s\n' 'printf "WIRE\t%s\t%s\t%s\t%s\t%s\n" "${9}" "${10}" "${11}" "${12}" "${13:-}"'
+  } | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+else
+  PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+fi
 EOF
 chmod +x "$FAKEBIN/ssh"
 
@@ -242,6 +244,27 @@ grep -q "Node substrate ready for node-template" "$TMPROOT/success.out"
 # the resident verdict and the asserted name is unchanged (lane_db_suffix is empty).
 grep -q "\[OK\] lane database residency: node-template/candidate-a uses its own environment" "$TMPROOT/success.out"
 grep -q "runtime env includes DB inventory: cogni_node_template" "$TMPROOT/success.out"
+
+# Run the real generated argument decoder through both shell layers, stopping
+# before any remote probe. Required identities precede the optional root at13.
+expected_sha=$(git rev-parse HEAD)
+expected_id=$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)
+for probe_root in "" "$REMOTE_ROOT" "$TMPROOT/remote root' ; literal"; do
+  if ! env "${BASE_ENV[@]}" TARGET=operator APP_SOURCE_DIR="$REPO_ROOT" \
+    COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" \
+    ASSERT_TARGET_SUBSTRATE_REMOTE_ROOT="$probe_root" \
+    ASSERT_DATABASE_RELIABILITY_RUNTIME=false FAKE_SSH_ASSERT_POSITIONALS=1 \
+    bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/argv.out"; then
+    cat "$TMPROOT/argv.out" >&2
+    exit 1
+  fi
+  printf 'ARGV\t13\t%s\t%s\t%s\tfalse\ttrue\n' \
+    "$probe_root" "$expected_sha" "$expected_id" >"$TMPROOT/argv.expected"
+  printf 'WIRE\t%s\t%s\tfalse\ttrue\t%s\n' \
+    "$expected_sha" "$expected_id" "$probe_root" >>"$TMPROOT/argv.expected"
+  grep -E '^(ARGV|WIRE)' "$TMPROOT/argv.out" >"$TMPROOT/argv.actual"
+  cmp "$TMPROOT/argv.expected" "$TMPROOT/argv.actual"
+done
 
 # bug.5299 — A MISRESIDENT LANE CANNOT BE GREEN ON THE LANELESS HUSK.
 # Foreign COMPUTE custody is now valid with lane-local Postgres. Inject an explicit

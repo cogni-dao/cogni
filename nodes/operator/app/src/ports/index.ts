@@ -139,6 +139,13 @@ export type {
   ResolvedConnection,
 } from "./connection-broker.port";
 export type {
+  DatabaseCellBindingPort,
+  DatabaseCellBindingReference,
+  DatabaseCellCutoverReference,
+  DatabaseCellNativeObserverPort,
+  DatabaseCellNativeProof,
+} from "./database-cell-binding.port";
+export type {
   DatabaseCellActionReceipt,
   DatabaseCellAllocation,
   DatabaseCellCapacity,
@@ -164,10 +171,24 @@ export type {
   DatabaseEnvironment,
   DatabasePlacementResolverPort,
   DatabaseReadmissionPort,
+  DatabaseRecoveryBeginPort,
+  DatabaseRecoveryContainmentReceipt,
+  DatabaseRecoveryContainPort,
+  DatabaseRecoveryIdentity,
+  DatabaseRecoveryIncident,
+  DatabaseRecoveryLedgerReaderPort,
+  DatabaseRecoveryProbeObservation,
+  DatabaseRecoveryProbePort,
+  DatabaseRecoveryVerificationPort,
+  DatabaseRecoveryWatchdogPort,
   DatabaseRuntimeSecretSyncPort,
   DatabaseStateCellPort,
   DatabaseTier,
   ProvisionDatabaseCellInput,
+  ReliabilityReadmitPort,
+  ReliabilityRecoveryCheck,
+  ReliabilityRecoveryReaderPort,
+  ReliabilityStatusReaderPort,
 } from "./database-containment.port";
 export { DATABASE_CELL_METRIC_LABEL_KEYS } from "./database-containment.port";
 export type {
@@ -253,6 +274,10 @@ export type {
   PrometheusRangeResult,
   PrometheusTimeSeries,
   RangeQueryParams,
+  RegionalReadinessMetric,
+  ReliabilityEnvironment,
+  ReliabilityMetricsSnapshot,
+  ReliabilityQueryParams,
   TemplateDataPoint,
   TemplateQueryParams,
   TemplateQueryResult,

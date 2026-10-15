@@ -13,6 +13,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { RELIABILITY_POLICY_V1 } from "@cogni/node-contracts";
 
 import type {
   InstantQueryParams,
@@ -22,6 +23,8 @@ import type {
   PrometheusInstantResult,
   PrometheusRangeResult,
   RangeQueryParams,
+  ReliabilityMetricsSnapshot,
+  ReliabilityQueryParams,
   TemplateDataPoint,
   TemplateQueryParams,
   TemplateQueryResult,
@@ -30,6 +33,14 @@ import type {
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 const logger = makeLogger({ component: "MimirMetricsAdapter" });
+
+export function buildReliabilityReadinessQuery(input: {
+  readonly environment: ReliabilityQueryParams["environment"];
+  readonly nodeSlug: string;
+  readonly window: "1m" | "5m";
+}): string {
+  return `min_over_time(probe_success{environment="${input.environment}",node_slug="${input.nodeSlug}",proof_class="serve"}[${input.window}])`;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Template Query Configuration (GOVERNED_METRICS)
@@ -104,19 +115,26 @@ function generateQueryRef(
   return `mqt_${hash}`;
 }
 
-export interface MimirAdapterConfig {
-  url: string; // Grafana Cloud Mimir endpoint
-  username: string; // Basic auth username
-  password: string; // Basic auth password/token
-  timeoutMs: number; // Query timeout in milliseconds
-}
+export type MimirAdapterConfig = {
+  url: string;
+  timeoutMs: number;
+} & (
+  | { username: string; password: string; bearerToken?: never }
+  | { bearerToken: string; username?: never; password?: never }
+);
 
 /**
  * Mimir adapter for Prometheus metrics queries.
  * Implements Prometheus HTTP API v1 query and query_range endpoints.
  */
 export class MimirMetricsAdapter implements MetricsQueryPort {
-  constructor(private readonly config: MimirAdapterConfig) {}
+  constructor(private readonly config: MimirAdapterConfig) {
+    if (
+      "bearerToken" in config &&
+      (!config.bearerToken || config.username || config.password)
+    )
+      throw new Error("mimir_bearer_auth_invalid");
+  }
 
   /**
    * Execute a range query (query_range).
@@ -157,6 +175,195 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
 
     const result = await this.fetch<PrometheusInstantResult>(url);
     return result;
+  }
+
+  async queryReliabilitySnapshot(
+    params: ReliabilityQueryParams
+  ): Promise<ReliabilityMetricsSnapshot> {
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(params.nodeSlug)) {
+      throw new Error("invalid reliability node slug");
+    }
+
+    const env = params.environment;
+    const node = params.nodeSlug;
+    const substrateHost = /^[0-9a-f]{32}$/.test(params.substrateHost ?? "")
+      ? params.substrateHost
+      : null;
+    const identity = `environment="${env}",node_slug="${node}",database_tier="${params.databaseTier ?? "unknown"}",budget_profile="${params.budgetProfile ?? "unknown"}",policy_version="reliability-status-v1",substrate_host="${substrateHost ?? "unknown"}"`;
+    const queries = {
+      readiness: buildReliabilityReadinessQuery({
+        environment: env,
+        nodeSlug: node,
+        window: "5m",
+      }),
+      io: `cogni_reliability_v1_io_pressure_percent{${identity}}`,
+      connections: `cogni_reliability_v1_connections_percent{${identity}}`,
+      memory: `cogni_reliability_v1_memory_headroom_percent{${identity}}`,
+      disk: `cogni_reliability_v1_disk_headroom_percent{${identity}}`,
+      backendShare: `cogni_reliability_v1_database_backends_share_percent{${identity}}`,
+      physicalReadShare: `cogni_reliability_v1_database_physical_reads_share_percent{${identity}}`,
+      tempBytesShare: `cogni_reliability_v1_database_temp_bytes_share_percent{${identity}}`,
+    } as const;
+
+    const evaluationTime = new Date();
+    const signalQueries = [
+      queries.io,
+      queries.connections,
+      queries.memory,
+      queries.disk,
+      queries.backendShare,
+      queries.physicalReadShare,
+      queries.tempBytesShare,
+    ];
+    // Query evaluation time is not the recording timestamp. Both reads use one
+    // fixed evaluation instant; timestamp(selector) supplies the actual source time.
+    const valueReads = Promise.all(
+      [queries.readiness, ...signalQueries].map((query) =>
+        this.queryInstant({ query, time: evaluationTime })
+      )
+    );
+    const timestampReads = Promise.all(
+      signalQueries.map((query) =>
+        this.queryInstant({
+          query: `timestamp(${query})`,
+          time: evaluationTime,
+        })
+      )
+    );
+    const [valueResults, sourceResults] = await Promise.all([
+      valueReads,
+      timestampReads,
+    ]);
+    const labels = (metric: Readonly<Record<string, string>>) =>
+      JSON.stringify(
+        Object.entries(metric)
+          .filter(([key]) => key !== "__name__")
+          .sort(([a], [b]) => a.localeCompare(b))
+      );
+    const withSourceTime = (
+      value: PrometheusInstantResult,
+      timestamp: PrometheusInstantResult
+    ): PrometheusInstantResult => {
+      const signal = value.result[0];
+      const source = timestamp.result[0];
+      const recordedAt = Number(source?.value[1]);
+      if (
+        value.result.length !== 1 ||
+        timestamp.result.length !== 1 ||
+        !signal ||
+        !source ||
+        labels(signal.metric) !== labels(source.metric) ||
+        !Number.isFinite(recordedAt) ||
+        recordedAt <= 0 ||
+        signal.value[0] !== source.value[0]
+      )
+        return { resultType: "vector", result: [] };
+      return {
+        resultType: "vector",
+        result: [
+          { metric: signal.metric, value: [recordedAt, signal.value[1]] },
+        ],
+      };
+    };
+    const readiness = valueResults[0];
+    if (!readiness) throw new Error("reliability_readiness_result_missing");
+    const [
+      io,
+      connections,
+      memory,
+      disk,
+      backendShare,
+      physicalReadShare,
+      tempBytesShare,
+    ] = signalQueries.map((_, index) => {
+      const value = valueResults[index + 1];
+      const timestamp = sourceResults[index];
+      if (!value || !timestamp)
+        throw new Error("reliability_source_timestamp_result_missing");
+      return withSourceTime(value, timestamp);
+    });
+    if (
+      !io ||
+      !connections ||
+      !memory ||
+      !disk ||
+      !backendShare ||
+      !physicalReadShare ||
+      !tempBytesShare
+    )
+      throw new Error("reliability_source_timestamp_result_missing");
+
+    const expectedLabels = {
+      environment: env,
+      node_slug: node,
+      database_tier: params.databaseTier,
+      budget_profile: params.budgetProfile,
+      policy_version: "reliability-status-v1",
+      substrate_host: substrateHost ?? null,
+    };
+    const observedAtSeconds = Date.now() / 1000;
+    const attributed = (result: PrometheusInstantResult) =>
+      singleAttributedSample(result, expectedLabels, observedAtSeconds);
+    const ioSample = attributed(io);
+    const connectionSample = attributed(connections);
+    const backendShareSample = attributed(backendShare);
+    const physicalReadShareSample = attributed(physicalReadShare);
+    const tempBytesShareSample = attributed(tempBytesShare);
+    const coTemporal = (
+      signal: AttributedSample | null,
+      share: AttributedSample | null
+    ) =>
+      signal !== null &&
+      share !== null &&
+      Math.abs(signal.observedAtSeconds - share.observedAtSeconds) * 1000 <=
+        RELIABILITY_POLICY_V1.maxSignalAttributionSkewMs;
+    const databaseShare5m = {
+      backendsPct: coTemporal(connectionSample, backendShareSample)
+        ? (backendShareSample?.value ?? null)
+        : null,
+      physicalReadsPct: coTemporal(ioSample, physicalReadShareSample)
+        ? (physicalReadShareSample?.value ?? null)
+        : null,
+      tempBytesPct: coTemporal(ioSample, tempBytesShareSample)
+        ? (tempBytesShareSample?.value ?? null)
+        : null,
+    };
+    const hasCompleteDatabaseAttribution = Object.values(databaseShare5m).every(
+      (value) => value !== null && Number.isFinite(value)
+    );
+
+    return {
+      regionalReadiness: readiness.result
+        .map((sample) => ({
+          region:
+            sample.metric.probe ??
+            sample.metric.region ??
+            sample.metric.instance ??
+            "unknown",
+          healthy: Number(sample.value[1]) >= 1,
+          observedAt: new Date(sample.value[0] * 1000).toISOString(),
+        }))
+        .sort((a, b) => a.region.localeCompare(b.region)),
+      evidenceScope: hasCompleteDatabaseAttribution
+        ? "node"
+        : "environment-shared",
+      ioPressurePct:
+        coTemporal(ioSample, physicalReadShareSample) &&
+        coTemporal(ioSample, tempBytesShareSample)
+          ? (ioSample?.value ?? null)
+          : null,
+      connectionPct: coTemporal(connectionSample, backendShareSample)
+        ? (connectionSample?.value ?? null)
+        : null,
+      memoryHeadroomPct: attributed(memory)?.value ?? null,
+      diskHeadroomPct: attributed(disk)?.value ?? null,
+      databaseShare5m: hasCompleteDatabaseAttribution
+        ? databaseShare5m
+        : { backendsPct: null, physicalReadsPct: null, tempBytesPct: null },
+      evidenceQueryRefs: Object.keys(queries).map(
+        (signal) => `reliability.v1:${env}:${node}:${signal}`
+      ),
+    };
   }
 
   /**
@@ -304,9 +511,10 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
    * Internal fetch with auth, timeout, and error handling.
    */
   private async fetch<T>(url: URL): Promise<T> {
-    const authHeader = `Basic ${Buffer.from(
-      `${this.config.username}:${this.config.password}`
-    ).toString("base64")}`;
+    const authHeader =
+      "bearerToken" in this.config
+        ? `Bearer ${this.config.bearerToken}`
+        : `Basic ${Buffer.from(`${this.config.username}:${this.config.password}`).toString("base64")}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(
@@ -317,6 +525,7 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
     try {
       const response = await fetch(url.toString(), {
         method: "GET",
+        redirect: "error",
         headers: {
           Authorization: authHeader,
           Accept: "application/json",
@@ -386,6 +595,35 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       clearTimeout(timeoutId);
     }
   }
+}
+
+interface AttributedSample {
+  readonly value: number;
+  readonly observedAtSeconds: number;
+}
+
+function singleAttributedSample(
+  result: PrometheusInstantResult,
+  expectedLabels: Readonly<Record<string, string | null>>,
+  observedAtSeconds: number
+): AttributedSample | null {
+  const sample = result.result[0];
+  if (
+    result.result.length !== 1 ||
+    !sample ||
+    Object.entries(expectedLabels).some(
+      ([key, expected]) => expected === null || sample.metric[key] !== expected
+    ) ||
+    sample.value[0] > observedAtSeconds + 15 ||
+    observedAtSeconds - sample.value[0] >
+      RELIABILITY_POLICY_V1.evidenceTtlMs / 1000
+  ) {
+    return null;
+  }
+  const value = Number(sample.value[1]);
+  return Number.isFinite(value)
+    ? { value, observedAtSeconds: sample.value[0] }
+    : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

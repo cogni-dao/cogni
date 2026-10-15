@@ -102,6 +102,47 @@ export interface MetricsQueryPort {
    * @throws If service/environment not in allowlist or query fails
    */
   queryTemplate?(params: TemplateQueryParams): Promise<TemplateQueryResult>;
+
+  /**
+   * Execute the closed reliability query set for one node/environment.
+   * Callers cannot supply PromQL. Missing or ambiguous series are returned as
+   * null so policy evaluation can fail closed instead of manufacturing green.
+   */
+  queryReliabilitySnapshot(
+    params: ReliabilityQueryParams
+  ): Promise<ReliabilityMetricsSnapshot>;
+}
+
+export type ReliabilityEnvironment = "candidate-a" | "preview" | "production";
+
+export interface ReliabilityQueryParams {
+  readonly nodeSlug: string;
+  readonly environment: ReliabilityEnvironment;
+  readonly databaseTier: "shared" | "dedicated" | null;
+  readonly budgetProfile: string | null;
+  /** Physical host machine-id attested by the applied DB/probe binding. */
+  readonly substrateHost?: string;
+}
+
+export interface RegionalReadinessMetric {
+  readonly region: string;
+  readonly healthy: boolean;
+  readonly observedAt: string;
+}
+
+export interface ReliabilityMetricsSnapshot {
+  readonly regionalReadiness: readonly RegionalReadinessMetric[];
+  readonly evidenceScope: "environment-shared" | "node";
+  readonly ioPressurePct: number | null;
+  readonly connectionPct: number | null;
+  readonly memoryHeadroomPct: number | null;
+  readonly diskHeadroomPct: number | null;
+  readonly databaseShare5m: {
+    readonly backendsPct: number | null;
+    readonly physicalReadsPct: number | null;
+    readonly tempBytesPct: number | null;
+  };
+  readonly evidenceQueryRefs: readonly string[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

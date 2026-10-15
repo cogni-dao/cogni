@@ -64,6 +64,24 @@ export const AkashTxServiceSpecSchema = z.strictObject({
   cpuUnits: z.number().positive(),
   memoryMi: z.number().int().positive(),
   storageMi: z.number().int().positive(),
+  volumes: z
+    .array(
+      z.strictObject({
+        name: ServiceNameSchema,
+        sizeMi: z.number().int().positive(),
+        mountPath: z.string().regex(/^\/(?!$)(?!.*(?:\/\.\.?)(?:\/|$))[^\0]+$/),
+        tier: z.enum(["hdd", "ssd", "nvme"]),
+      })
+    )
+    .min(1)
+    .max(8)
+    .refine(
+      (volumes) =>
+        new Set(volumes.map((v) => v.name)).size === volumes.length &&
+        new Set(volumes.map((v) => v.mountPath)).size === volumes.length,
+      "volume names and mount paths must be unique"
+    )
+    .optional(),
   expose: z.array(AkashTxExposeSchema).optional(),
 });
 
@@ -233,6 +251,21 @@ export const AkashTxCreateInputSchema = z.strictObject({
   /** DEPRECATED, parsed and ignored — see `AkashTxDeprecatedMigrationSchema`. */
   migration: AkashTxDeprecatedMigrationSchema.optional(),
 });
+
+/** Private cell reference: credentials and fixed workload assets are actuator-owned. */
+export const AkashTxCreateDatabaseCellInputSchema = z.strictObject({
+  cogniKey: CogniKeySchema,
+  environment: z.enum(["candidate-a", "preview", "production"]),
+  identity: AkashTxIdentitySchema,
+  nodeSlug: ServiceNameSchema,
+  budgetProfile: z.literal("dedicated-high-throughput-v1"),
+});
+export const AkashTxUpdateDatabaseCellInputSchema =
+  AkashTxCreateDatabaseCellInputSchema.extend({
+    externalName: ExternalNameSchema,
+  });
+export const AkashTxPrepareDatabaseCellDiagnosticInputSchema =
+  AkashTxUpdateDatabaseCellInputSchema;
 
 /**
  * An update replaces the SDL in place and mints no lease, but it is still a mutation of a PAID

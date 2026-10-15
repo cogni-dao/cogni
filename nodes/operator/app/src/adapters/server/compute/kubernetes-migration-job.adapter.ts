@@ -53,6 +53,7 @@ import {
   type ComputeWorkloadMigrationPhase,
   type ComputeWorkloadMigrationPort,
 } from "@/ports";
+import { withDatabaseCaTrust } from "@/shared/secrets/database-ca-command";
 
 const DIGEST_PATTERN = /^sha256:([0-9a-f]{64})$/;
 const MANAGED_BY_LABEL_VALUE = "compute-workload-controller";
@@ -92,7 +93,7 @@ function phaseContainer(
   return {
     name: phase.name,
     image: input.image,
-    command: [...phase.command],
+    ...withDatabaseCaTrust(phase.command),
     env: [
       { name: "NODE_NAME", value: input.nodeSlug },
       {
@@ -101,6 +102,16 @@ function phaseContainer(
           secretKeyRef: {
             name: input.secretName,
             key: phase.databaseUrlSecretKey,
+          },
+        },
+      },
+      {
+        name: "DATABASE_SSL_CA_CERT",
+        valueFrom: {
+          secretKeyRef: {
+            name: input.secretName,
+            key: "DATABASE_SSL_CA_CERT",
+            optional: true,
           },
         },
       },

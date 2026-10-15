@@ -133,6 +133,11 @@ import {
   PlatformModelProvider,
 } from "@/adapters/server/ai/providers";
 import {
+  HttpReliabilityReadmitAdapter,
+  HttpReliabilityRecoveryAdapter,
+  HttpReliabilityStatusAdapter,
+} from "@/adapters/server/db/database-containment-production.adapter";
+import {
   DoltgresNotConfiguredError,
   getDoltgresWorkItemsAdapter,
 } from "@/adapters/server/db/doltgres/client";
@@ -216,6 +221,9 @@ import type {
   PaymentAttemptUserRepository,
   PaymentRailGuardPort,
   ReceiptDelivery,
+  ReliabilityReadmitPort,
+  ReliabilityRecoveryReaderPort,
+  ReliabilityStatusReaderPort,
   RunStreamPort,
   ServiceAccountService,
   ThreadPersistencePort,
@@ -281,6 +289,10 @@ export interface Container {
   /** Fail-closed guard for live payment rail activation before issuing payment intents. */
   paymentRailGuard: PaymentRailGuardPort;
   metricsQuery: MetricsQueryPort;
+  /** Authenticated read-only projection from the private actuator. */
+  reliabilityStatusReader?: ReliabilityStatusReaderPort;
+  /** Human-session-attributed, recovery-gated readmission command. */
+  reliabilityReadmit?: ReliabilityReadmitPort;
   treasuryReadPort: TreasuryReadPort;
   /** AI telemetry DB writer - always wired */
   aiTelemetry: AiTelemetryPort;
@@ -426,6 +438,66 @@ export function getContainer(): Container {
     });
   }
   return _container;
+}
+
+/** Recovery of this node must survive fencing both of its ordinary runtime DB roles. */
+export function resolveLocalReliabilityControl(): {
+  readonly nodeId: string;
+  readonly slug: string;
+  readonly buildSha: string | null;
+  readonly authorization: AuthorizationPort | undefined;
+  readonly statusReader: ReliabilityStatusReaderPort | undefined;
+  readonly recoveryReader: ReliabilityRecoveryReaderPort | undefined;
+  readonly readmit: ReliabilityReadmitPort | undefined;
+} {
+  const env = serverEnv();
+  return {
+    nodeId: getNodeId(),
+    slug: getNodeName(),
+    buildSha:
+      env.APP_BUILD_SHA && /^[0-9a-f]{40}$/.test(env.APP_BUILD_SHA)
+        ? env.APP_BUILD_SHA
+        : null,
+    authorization:
+      env.OPENFGA_API_URL && env.OPENFGA_STORE_ID
+        ? new OpenFgaAuthorizationAdapter({
+            apiUrl: env.OPENFGA_API_URL,
+            storeId: env.OPENFGA_STORE_ID,
+            timeoutMs: env.OPENFGA_TIMEOUT_MS,
+            writeMaxRetries: env.OPENFGA_WRITE_MAX_RETRIES,
+            ...(env.OPENFGA_API_TOKEN !== undefined
+              ? { apiToken: env.OPENFGA_API_TOKEN }
+              : {}),
+            ...(env.OPENFGA_AUTHORIZATION_MODEL_ID !== undefined
+              ? { authorizationModelId: env.OPENFGA_AUTHORIZATION_MODEL_ID }
+              : {}),
+          })
+        : undefined,
+    statusReader:
+      env.DATABASE_RELIABILITY_ACTUATOR_URL &&
+      env.DATABASE_RELIABILITY_STATUS_TOKEN
+        ? new HttpReliabilityStatusAdapter({
+            baseUrl: env.DATABASE_RELIABILITY_ACTUATOR_URL,
+            bearerToken: env.DATABASE_RELIABILITY_STATUS_TOKEN,
+          })
+        : undefined,
+    recoveryReader:
+      env.DATABASE_RELIABILITY_ACTUATOR_URL &&
+      env.DATABASE_RELIABILITY_STATUS_TOKEN
+        ? new HttpReliabilityRecoveryAdapter({
+            baseUrl: env.DATABASE_RELIABILITY_ACTUATOR_URL,
+            bearerToken: env.DATABASE_RELIABILITY_STATUS_TOKEN,
+          })
+        : undefined,
+    readmit:
+      env.DATABASE_RELIABILITY_READMITTER_URL &&
+      env.DATABASE_RELIABILITY_READMIT_TOKEN
+        ? new HttpReliabilityReadmitAdapter({
+            baseUrl: env.DATABASE_RELIABILITY_READMITTER_URL,
+            bearerToken: env.DATABASE_RELIABILITY_READMIT_TOKEN,
+          })
+        : undefined,
+  };
 }
 
 /**
@@ -580,6 +652,9 @@ function createContainer(): Container {
             queryTemplate: async () => {
               throw notConfiguredError;
             },
+            queryReliabilitySnapshot: async () => {
+              throw notConfiguredError;
+            },
           } satisfies MetricsQueryPort;
         }
 
@@ -592,6 +667,22 @@ function createContainer(): Container {
         return new MimirMetricsAdapter(mimirConfig);
       })();
 
+  const reliabilityStatusReader =
+    env.DATABASE_RELIABILITY_ACTUATOR_URL &&
+    env.DATABASE_RELIABILITY_STATUS_TOKEN
+      ? new HttpReliabilityStatusAdapter({
+          baseUrl: env.DATABASE_RELIABILITY_ACTUATOR_URL,
+          bearerToken: env.DATABASE_RELIABILITY_STATUS_TOKEN,
+        })
+      : undefined;
+  const reliabilityReadmit =
+    env.DATABASE_RELIABILITY_READMITTER_URL &&
+    env.DATABASE_RELIABILITY_READMIT_TOKEN
+      ? new HttpReliabilityReadmitAdapter({
+          baseUrl: env.DATABASE_RELIABILITY_READMITTER_URL,
+          bearerToken: env.DATABASE_RELIABILITY_READMIT_TOKEN,
+        })
+      : undefined;
   // FinancialLedger: optional — only when TIGERBEETLE_ADDRESS is configured
   // @cogni/financial-ledger/adapters is in serverExternalPackages (N-API addon, not bundleable)
   const financialLedger: FinancialLedgerPort | undefined = (() => {
@@ -1129,6 +1220,8 @@ function createContainer(): Container {
     paymentRailsActive: !!getPaymentConfig(),
     paymentRailGuard,
     metricsQuery,
+    ...(reliabilityStatusReader ? { reliabilityStatusReader } : {}),
+    ...(reliabilityReadmit ? { reliabilityReadmit } : {}),
     treasuryReadPort,
     aiTelemetry,
     langfuse,
@@ -1393,7 +1486,11 @@ let cachedDatabasePlacementResolver: DatabasePlacementResolverPort | undefined;
 export function resolveDatabasePlacementResolver(): DatabasePlacementResolverPort {
   if (cachedDatabasePlacementResolver) return cachedDatabasePlacementResolver;
   cachedDatabasePlacementResolver = {
-    resolve: async ({ nodeSlug, environment }) => {
+    resolve: async ({ nodeSlug, environment, sourceRef }) => {
+      const imageBuildSha = serverEnv().APP_BUILD_SHA;
+      if (!/^[0-9a-f]{40}$/.test(sourceRef) || sourceRef !== imageBuildSha) {
+        throw new Error("database_placement_source_ref_invalid");
+      }
       const row = await readImageCatalogRow(nodeSlug);
       const placement = row.database?.[environment];
       if (!placement) throw new Error("database_placement_env_not_declared");

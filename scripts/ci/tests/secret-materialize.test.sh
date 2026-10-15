@@ -106,6 +106,7 @@ if [ "${1:-}" = "exec" ]; then
     [ -d "${FAKE_BAO_ROOT}/${path}" ] && exit 0 || exit 2
   fi
   if printf '%s\n' "$*" | grep -Eq 'bao kv (put|patch)'; then
+    [[ -z "${FAKE_PATCH_LOG:-}" ]] || printf '%s\n' "$*" >> "$FAKE_PATCH_LOG"
     key_arg="${args[$last_index]}"
     path="${args[$((last_index - 1))]}"
     mkdir -p "${FAKE_BAO_ROOT}/${path}"
@@ -113,8 +114,8 @@ if [ "${1:-}" = "exec" ]; then
       # batched form: a JSON object of key/value pairs arrives on stdin
       while IFS=$'\t' read -r k v; do
         [ -z "$k" ] && continue
-        printf '%s' "$v" > "${FAKE_BAO_ROOT}/${path}/${k}"
-      done < <(jq -r 'to_entries[] | [.key, .value] | @tsv')
+        printf '%s' "$v" | base64 --decode > "${FAKE_BAO_ROOT}/${path}/${k}"
+      done < <(jq -r 'to_entries[] | [.key, (.value | tostring | @base64)] | @tsv')
       exit 0
     fi
     key="${key_arg%%=*}"
@@ -285,6 +286,9 @@ for k in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD; do
 done
 # Postgres DSNs composed sole-source here, embedding the per-node app_<node> role
 # (regression guard: a shared app_user DSN is the bug.5002 split-brain we killed)
+# Real multiline public CA bytes survive Bao JSON and the materializer prefetch cache.
+openssl x509 -in "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_SSL_CA_CERT" -noout >/dev/null
+cmp "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_SSL_CA_CERT" "$BAO_ROOT/cogni/candidate-a/node-template-database-migration/DATABASE_SSL_CA_CERT"
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_URL" \
   || { echo "materialize did not compose DATABASE_URL" >&2; exit 1; }
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_SERVICE_URL" \
@@ -572,5 +576,72 @@ if grep -qF "$VK" "$TMPROOT/out-invalid-alias-list.txt" || grep -qF "$COLLIDING_
   echo "LiteLLM key leaked in malformed alias-list failure" >&2
   exit 1
 fi
+
+# DB-ready second phase reuses the sole writer without reminting any component.
+cat > "$FAKEBIN/cat" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == /etc/machine-id ]]; then printf '%s\n' "${FAKE_MACHINE_ID:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"; exit 0; fi
+/bin/cat "$@"
+EOF
+cat > "$FAKEBIN/docker" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  ps) printf '%s\n' abcdef123456; exit 0 ;;
+  exec) printf 'Database system identifier: %s\n' "${FAKE_LOCAL_SYSTEM_ID:-9876543210123456789}"; exit 0 ;;
+esac
+[[ -f "${FAKE_PROBE_RECEIPT:-}" ]] || exit 1
+/bin/cat "$FAKE_PROBE_RECEIPT"
+EOF
+chmod +x "$FAKEBIN/cat" "$FAKEBIN/docker"
+PROBE_BANK="$BAO_ROOT/cogni/candidate-a/node-template-database-recovery-probe"
+[ -s "$PROBE_BANK/DATABASE_RECOVERY_PROBE_PASSWORD" ] && [ -s "$PROBE_BANK/DATABASE_RECOVERY_PROBE_URL" ]
+[ ! -e "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_RECOVERY_PROBE_PASSWORD" ]
+[ ! -e "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_RECOVERY_PROBE_URL" ]
+cat > "$TMPROOT/probe.json" <<'JSON'
+{"database":"cogni_node_template","role":"probe_node_template","systemTenantExists":true,"serverAddress":"10.0.0.1","serverPort":5432,"systemIdentifier":"9876543210123456789","appRolesCanLogin":true,"runtimeRolesPresent":true,"runtimeRolesNoLogin":false,"activeRuntimeSessions":0,"observedAt":"2026-10-14T21:00:00.000+00:00","probeRoleIsolated":true}
+JSON
+DB_READY_CATALOG="$TMPROOT/db-ready-catalog"
+mkdir -p "$DB_READY_CATALOG"
+cp "$REPO_ROOT"/infra/catalog/*.yaml "$DB_READY_CATALOG/"
+yq -i '.reliability.controller = false' "$DB_READY_CATALOG/operator.yaml"
+yq -i '.reliability.controller = true | .envs = ["candidate-a", "production"]' "$DB_READY_CATALOG/node-template.yaml"
+run_db_ready() {
+  env VM_HOST=fake DOMAIN=test.cognidao.org SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+    SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" FAKE_REMOTE_PATH="$FAKEBIN" FAKE_BAO_ROOT="$BAO_ROOT" \
+    COGNI_CATALOG_ROOT="$DB_READY_CATALOG" SECRET_MATERIALIZE_PHASE=db-ready \
+    FAKE_PROBE_RECEIPT="$TMPROOT/probe.json" FAKE_PATCH_LOG="$TMPROOT/db-ready-writes" \
+    FAKE_MACHINE_ID="${1:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" FAKE_LOCAL_SYSTEM_ID="${2:-9876543210123456789}" \
+    bash scripts/ci/secret-materialize.sh candidate-a node-template
+}
+# A missing cold component fails before sealing; pre-phase already minted it above.
+mv "$PROBE_BANK/DATABASE_RECOVERY_PROBE_PASSWORD" "$TMPROOT/cold-probe-password"
+: > "$TMPROOT/db-ready-writes"
+if run_db_ready > /dev/null 2>&1; then echo 'missing cold probe component accepted' >&2; exit 1; fi
+[ ! -s "$TMPROOT/db-ready-writes" ]
+mv "$TMPROOT/cold-probe-password" "$PROBE_BANK/DATABASE_RECOVERY_PROBE_PASSWORD"
+# Retain another previously sealed scope during the owner-only merge.
+put_secret database-reliability-actuator DATABASE_RECOVERY_PROBE_URLS_JSON '[{"nodeId":"33333333-3333-4333-8333-333333333333","nodeSlug":"other","environment":"preview","databaseName":"cogni_other","probeRole":"probe_other","systemIdentifier":"1234567890123456789","substrateHost":"cccccccccccccccccccccccccccccccc","dsn":"postgresql://probe_other:fixture@10.0.0.2:5432/cogni_other?sslmode=disable"}]'
+probe_password_before=$(cat "$PROBE_BANK/DATABASE_RECOVERY_PROBE_PASSWORD")
+: > "$TMPROOT/db-ready-writes"
+run_db_ready > "$TMPROOT/db-ready-out"
+BINDING_FILE="$BAO_ROOT/cogni/candidate-a/database-reliability-actuator/DATABASE_RECOVERY_PROBE_URLS_JSON"
+jq -e 'length == 2 and any(.[]; .databaseName == "cogni_node_template" and .probeRole == "probe_node_template" and .systemIdentifier == "9876543210123456789" and .substrateHost == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") and any(.[]; .nodeSlug == "other" and .environment == "preview")' "$BINDING_FILE" >/dev/null
+[ "$(cat "$PROBE_BANK/DATABASE_RECOVERY_PROBE_PASSWORD")" = "$probe_password_before" ]
+[ ! -e "$BAO_ROOT/cogni/candidate-a/node-template/DATABASE_RECOVERY_PROBE_URLS_JSON" ]
+[ "$(wc -l < "$TMPROOT/db-ready-writes" | tr -d ' ')" = 1 ]
+: > "$TMPROOT/db-ready-writes"
+run_db_ready > "$TMPROOT/db-ready-out-repeat"
+[ ! -s "$TMPROOT/db-ready-writes" ]
+grep -q 'created=0' "$TMPROOT/db-ready-out-repeat"
+if run_db_ready bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb > /dev/null 2>&1; then echo 'stale physical binding accepted' >&2; exit 1; fi
+[ ! -s "$TMPROOT/db-ready-writes" ]
+# A proxied TCP cluster must not be paired with local host metrics.
+if run_db_ready aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1111111111111111111 > /dev/null 2>&1; then echo 'foreign TCP cluster paired with local machine-id' >&2; exit 1; fi
+[ ! -s "$TMPROOT/db-ready-writes" ]
+# A foreign native DB or non-owner matrix leg fails before any write.
+jq '.database="cogni_other"' "$TMPROOT/probe.json" > "$TMPROOT/wrong.json"
+mv "$TMPROOT/wrong.json" "$TMPROOT/probe.json"
+if run_db_ready >/dev/null 2>&1; then echo 'foreign native DB accepted' >&2; exit 1; fi
+[ ! -s "$TMPROOT/db-ready-writes" ]
 
 echo "PASS: secret-materialize.test.sh"

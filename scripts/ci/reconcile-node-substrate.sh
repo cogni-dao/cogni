@@ -396,6 +396,13 @@ CURRENT_ROW="db_creds"
 app_db_password="$(bao_get_field "$TARGET_NODE" APP_DB_PASSWORD)"
 app_db_service_password="$(bao_get_field "$TARGET_NODE" APP_DB_SERVICE_PASSWORD)"
 app_db_migration_password="$(bao_get_field "${TARGET_NODE}-database-migration" APP_DB_MIGRATION_PASSWORD)"
+database_recovery_probe_password="$(bao_get_field "${TARGET_NODE}-database-recovery-probe" DATABASE_RECOVERY_PROBE_PASSWORD)"
+system_billing_account_id="$(node --experimental-strip-types --input-type=module -e '
+  const identity = await import(process.argv[1]);
+  process.stdout.write(identity.COGNI_SYSTEM_BILLING_ACCOUNT_ID);
+' "$REPO_ROOT/packages/node-shared/src/constants/system-tenant.ts")"
+[[ -n "$database_recovery_probe_password" && "$system_billing_account_id" =~ ^[0-9a-f-]{36}$ ]] \
+  || fail "isolated probe password or canonical system billing identity missing"
 migration_dsn="$(bao_get_field "${TARGET_NODE}-database-migration" DATABASE_MIGRATION_URL)"
 migration_secret_version="$(bao_get_version "${TARGET_NODE}-database-migration")"
 [[ -n "$app_db_password" && -n "$app_db_service_password" && -n "$app_db_migration_password" && -n "$migration_dsn" && -n "$migration_secret_version" ]] \
@@ -691,10 +698,10 @@ if [[ "$reliability_controller" == true && -f "$database_reliability_es_file" ]]
     for key in DATABASE_RELIABILITY_STATUS_TOKEN DATABASE_RELIABILITY_READMIT_TOKEN; do
       kubectl -n \"\$ns\" get secret ${TARGET_NODE}-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done
-    for key in DATABASE_RELIABILITY_ADMIN_URL DATABASE_RELIABILITY_STATUS_TOKEN PROMETHEUS_READ_USERNAME PROMETHEUS_READ_PASSWORD GRAFANA_SERVICE_ACCOUNT_TOKEN; do
+    for key in DATABASE_RELIABILITY_ADMIN_URL DATABASE_RELIABILITY_STATUS_TOKEN GRAFANA_URL GRAFANA_SERVICE_ACCOUNT_TOKEN; do
       kubectl -n \"\$ns\" get secret database-reliability-actuator-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done
-    for key in DATABASE_RELIABILITY_READMIT_URL DATABASE_RELIABILITY_READMIT_TOKEN DATABASE_RELIABILITY_STATUS_TOKEN PROMETHEUS_READ_USERNAME PROMETHEUS_READ_PASSWORD; do
+    for key in DATABASE_RELIABILITY_READMIT_URL DATABASE_RELIABILITY_READMIT_TOKEN DATABASE_RELIABILITY_STATUS_TOKEN; do
       kubectl -n \"\$ns\" get secret database-reliability-readmitter-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done"
   mark_row database_reliability_externalsecrets ready "freshly reconciled controller, actuator, and readmitter ExternalSecrets"
@@ -786,6 +793,16 @@ fi
 stage_exact "$REPO_ROOT/infra/compose/runtime/configs/alloy-config.metrics.alloy" alloy-config
 alloy_config_stage="$STAGED_EXACT_PATH"
 alloy_config_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/scripts/ci/project-database-cell-backup.remote.py" cell-backup-projector
+cell_backup_projector_stage="$STAGED_EXACT_PATH"
+if [[ "$reliability_controller" == true && "$DEPLOY_ENVIRONMENT" == production && "$SUBSTRATE_CONTROL_ENV" == production ]]; then
+  for backup_node in "${NODE_TARGETS[@]}"; do
+    backup_json="$(bao_get_field "${backup_node}-database-backup" DATABASE_CELL_BACKUP_KITS_JSON)"
+    [[ -n "$backup_json" ]] || continue
+    printf '%s' "$backup_json" | remote "python3 '${cell_backup_projector_stage}'"
+  done
+fi
+
 stage_exact "$REPO_ROOT/scripts/ci/reconcile-alloy-config.remote.sh" alloy-helper
 alloy_helper_stage="$STAGED_EXACT_PATH"
 
@@ -798,6 +815,15 @@ runtime_compose_sha256="$STAGED_EXACT_SHA256"
 stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/provision.sh" postgres-provisioner
 postgres_provisioner_stage="$STAGED_EXACT_PATH"
 postgres_provisioner_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/apply-control.sql" postgres-control-apply
+postgres_control_apply_stage="$STAGED_EXACT_PATH"
+postgres_control_apply_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0000_database_recovery_control.sql" postgres-control-migration
+postgres_control_migration_stage="$STAGED_EXACT_PATH"
+postgres_control_migration_sha256="$STAGED_EXACT_SHA256"
+stage_exact "$REPO_ROOT/infra/compose/runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql" postgres-watchdog-migration
+postgres_watchdog_migration_stage="$STAGED_EXACT_PATH"
+postgres_watchdog_migration_sha256="$STAGED_EXACT_SHA256"
 stage_exact "$REPO_ROOT/infra/compose/runtime/doltgres-init/install-creds.sh" doltgres-install-creds
 doltgres_install_creds_stage="$STAGED_EXACT_PATH"
 doltgres_install_creds_sha256="$STAGED_EXACT_SHA256"
@@ -936,6 +962,9 @@ remote "set -euo pipefail
 
   install_exact '${runtime_compose_stage}' /opt/cogni-template-runtime/docker-compose.yml '${runtime_compose_sha256}' 0444 runtime-compose
   install_exact '${postgres_provisioner_stage}' /opt/cogni-template-runtime/postgres-init/provision.sh '${postgres_provisioner_sha256}' 0444 postgres-provisioner
+  install_exact '${postgres_control_apply_stage}' /opt/cogni-template-runtime/postgres-init/apply-control.sql '${postgres_control_apply_sha256}' 0444 postgres-control-apply
+  install_exact '${postgres_control_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0000_database_recovery_control.sql '${postgres_control_migration_sha256}' 0444 postgres-control-migration
+  install_exact '${postgres_watchdog_migration_stage}' /opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql '${postgres_watchdog_migration_sha256}' 0444 postgres-watchdog-migration
   install_exact '${doltgres_install_creds_stage}' /opt/cogni-template-runtime/doltgres-init/install-creds.sh '${doltgres_install_creds_sha256}' 0555 doltgres-install-creds
   install_exact '${doltgres_provisioner_stage}' /opt/cogni-template-runtime/doltgres-init/provision.sh '${doltgres_provisioner_sha256}' 0444 doltgres-provisioner
   echo '[remote] exact runtime compose and provisioners installed ok'
@@ -997,6 +1026,15 @@ ${edge_reconcile_snippet}
     any(.services[\"db-provision\"].volumes[];
       .source == \"/opt/cogni-template-runtime/postgres-init/provision.sh\" and
       .target == \"/app/provision.sh\" and .read_only == true) and
+    any(.services[\"db-provision\"].volumes[];
+      .source == \"/opt/cogni-template-runtime/postgres-init/apply-control.sql\" and
+      .target == \"/app/apply-control.sql\" and .read_only == true) and
+    any(.services[\"db-provision\"].volumes[];
+      .source == \"/opt/cogni-template-runtime/postgres-init/control-migrations/0000_database_recovery_control.sql\" and
+      .target == \"/app/control-migrations/0000_database_recovery_control.sql\" and .read_only == true) and
+    any(.services[\"db-provision\"].volumes[];
+      .source == \"/opt/cogni-template-runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql\" and
+      .target == \"/app/control-migrations/0001_database_recovery_watchdog.sql\" and .read_only == true) and
     any(.services.doltgres.volumes[];
       .source == \"/opt/cogni-template-runtime/doltgres-init/install-creds.sh\" and
       .target == \"/usr/local/bin/install-creds.sh\" and .read_only == true) and
@@ -1025,6 +1063,8 @@ ${edge_reconcile_snippet}
     -e APP_DB_PASSWORD='${app_db_password}' \
     -e APP_DB_SERVICE_PASSWORD='${app_db_service_password}' \
     -e APP_DB_MIGRATION_PASSWORD='${app_db_migration_password}' \
+    -e DATABASE_RECOVERY_PROBE_PASSWORD='${database_recovery_probe_password}' \
+    -e COGNI_SYSTEM_BILLING_ACCOUNT_ID='${system_billing_account_id}' \
     -e DATABASE_RELIABILITY_PASSWORD='${database_reliability_password}' \
     -e DATABASE_RELIABILITY_READMIT_PASSWORD='${database_reliability_readmit_password}' \
     -e DB_BUDGET_PROFILE='${budget_profile}' \

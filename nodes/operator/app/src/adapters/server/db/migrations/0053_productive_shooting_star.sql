@@ -1,0 +1,1 @@
+ALTER TABLE "akash_tx_allocations" ADD COLUMN "applied_database_cell_binding" jsonb;

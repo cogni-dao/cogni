@@ -452,6 +452,8 @@ export type AkashTxAllocationState =
   | "failed";
 
 export interface AkashTxAllocationRecord {
+  /** Verified credential-free cell placement stored on this same allocation row. */
+  readonly appliedDatabaseCellBinding?: readonly import("@/types/database-cell").AppliedDatabaseCellReceipt[];
   /** Durable allocation receipt row. Cost intervals attach here, never to a mutable node row. */
   readonly receiptId: string;
   readonly cogniKey: string;

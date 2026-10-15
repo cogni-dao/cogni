@@ -249,6 +249,10 @@ interface ConsoleLease {
   status?: {
     uris?: string[];
     services?: Record<string, { uris?: string[] }>;
+    forwarded_ports?: Record<
+      string,
+      { host?: string; externalPort?: number; proto?: string }[]
+    >;
   } | null;
 }
 
@@ -1551,7 +1555,24 @@ function provisionOutputFromDetail(
     const perService = Object.values(lease.status?.services ?? {}).flatMap(
       (svc) => svc.uris ?? []
     );
-    return [...direct, ...perService];
+    const forwarded = Object.values(lease.status?.forwarded_ports ?? {})
+      .flat()
+      .flatMap((port) => {
+        if (
+          !port.host ||
+          !/^[a-zA-Z0-9.-]+$/.test(port.host) ||
+          !Number.isInteger(port.externalPort) ||
+          !port.externalPort ||
+          port.externalPort < 1 ||
+          port.externalPort > 65535 ||
+          !["TCP", "UDP"].includes((port.proto ?? "TCP").toUpperCase())
+        )
+          return [];
+        return [
+          `${(port.proto ?? "TCP").toLowerCase()}://${port.host}:${port.externalPort}`,
+        ];
+      });
+    return [...direct, ...perService, ...forwarded];
   });
   return {
     provider: PROVIDER,

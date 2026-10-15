@@ -307,7 +307,7 @@ else
         selection_reason="workflow-build-change:${path}"
         break
         ;;
-      infra/k8s/base/compute-workload-controller/* | infra/k8s/base/akash-tx-actuator/*)
+      infra/k8s/base/compute-workload-controller/* | infra/k8s/base/akash-tx-actuator/* | infra/k8s/base/database-reliability-actuator/*)
         # Both run inside the operator image (the ComputeWorkload controller and the
         # Akash transaction actuator). Their manifests are candidate inputs too, so
         # build that exact source SHA rather than flighting new manifests against an
