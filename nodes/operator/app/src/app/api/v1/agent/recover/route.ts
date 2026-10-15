@@ -4,10 +4,7 @@
 import { recoverAgentCredentialOperation } from "@cogni/node-contracts";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import {
-  agentIdentityErrorResponse,
-  agentIdentityResponse,
-} from "../_shared";
+import { agentIdentityErrorResponse, agentIdentityResponse } from "../_shared";
 
 export const runtime = "nodejs";
 
