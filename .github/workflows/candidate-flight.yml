@@ -118,7 +118,7 @@ jobs:
               HEAD_SHA="$NODE_SOURCE_SHA"
               COMMIT_STATUS_SHA="$NODE_SOURCE_SHA"
               # The operator API deliberately dispatches the uniform node-ref
-              # contract. For an in-repo SHA, recover its open PR so the flight
+              # contract. For an in-repo SHA, recover its exact-head open PR so the flight
               # keeps the PR's complete build/deploy scope (for example the
               # scheduler-worker image changed by the same commit). Remote node
               # SHAs belong to another repository and must stay single-target.
@@ -126,17 +126,17 @@ jobs:
                 gh api --paginate \
                   -H 'Accept: application/vnd.github+json' \
                   "repos/${{ github.repository }}/commits/${NODE_SOURCE_SHA}/pulls" \
-                  --jq '.[] | select(.state == "open") | .number'
+                  --jq ".[] | select(.state == \"open\" and (.head.sha | ascii_downcase) == (\"${NODE_SOURCE_SHA}\" | ascii_downcase)) | .number"
               )
               if [ "${#MATCHING_PRS[@]}" -gt 1 ]; then
-                echo "::error::in-repo node-ref ${NODE_SOURCE_SHA} belongs to multiple open PRs: ${MATCHING_PRS[*]}"
+                echo "::error::in-repo node-ref ${NODE_SOURCE_SHA} is the exact head of multiple open PRs: ${MATCHING_PRS[*]}"
                 exit 1
               fi
               if [ "${#MATCHING_PRS[@]}" -eq 1 ]; then
                 RESOLVED_PR_NUMBER="${MATCHING_PRS[0]}"
                 echo "Resolved in-repo node-ref ${NODE_SOURCE_SHA} to PR #${RESOLVED_PR_NUMBER}"
               else
-                echo "::notice::in-repo node-ref ${NODE_SOURCE_SHA} has no open PR; preserving single-target node-ref behavior"
+                echo "::notice::in-repo node-ref ${NODE_SOURCE_SHA} has no exact-head open PR; preserving single-target node-ref behavior"
               fi
             else
               # Remote node: source_sha belongs to the child repo; parent
