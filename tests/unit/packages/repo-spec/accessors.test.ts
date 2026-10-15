@@ -773,10 +773,10 @@ describe("extractOwningNode", () => {
     });
   });
 
-  it("RIDE_ALONG: poly + poly manager skill status card → single { poly, rideAlongApplied: true }", () => {
+  it("RIDE_ALONG: poly + node skill doc → single { poly, rideAlongApplied: true }", () => {
     const result = extractOwningNode(standardSpec(), [
       "nodes/poly/app/src/foo.ts",
-      ".claude/skills/poly-dev-manager/SKILL.md",
+      ".claude/skills/node-maintainer/SKILL.md",
     ]);
     expect(result).toEqual({
       kind: "single",
