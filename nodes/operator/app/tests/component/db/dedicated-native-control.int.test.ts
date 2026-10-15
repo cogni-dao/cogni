@@ -37,6 +37,7 @@ beforeAll(async () => {
   if (!url) {
     container = await new PostgreSqlContainer("postgres:15-alpine")
       .withUsername("postgres")
+      .withDatabase("postgres")
       .withCommand([
         "postgres",
         "-c",
@@ -56,11 +57,17 @@ beforeAll(async () => {
   if (!["127.0.0.1", "localhost"].includes(endpoint.hostname))
     throw new Error("fixture endpoint must be loopback");
   sql = postgres(url, { max: 1, prepare: false });
-  const [{ label }] = await sql<
-    { label: string }[]
-  >`SELECT current_setting('cluster_name') label`;
-  if (label !== "task5246-poly-fixture")
-    throw new Error("owned fixture cluster marker missing");
+  const [{ label, database, role }] = await sql<
+    { label: string; database: string; role: string }[]
+  >`SELECT current_setting('cluster_name') label, current_database() AS database, session_user AS role`;
+  if (
+    label !== "task5246-poly-fixture" ||
+    database !== "postgres" ||
+    role !== "postgres"
+  )
+    throw new Error(
+      "owned fixture requires its administrative postgres database and session identity"
+    );
   endpoint.password = fixturePassword;
   endpoint.username = "database_reliability_actuator";
   actuator = postgres(endpoint.toString(), { max: 1, prepare: false });

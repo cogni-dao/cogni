@@ -630,6 +630,152 @@ function build(consoleOptions: FakeConsoleOptions = {}) {
   return { actuator, ledger, api, log, migration, cost: costs.cost };
 }
 
+describe("qualified cell app releases", () => {
+  const qualifiedSha = "a".repeat(40);
+  const otherSha = "b".repeat(40);
+  function withCell() {
+    const context = build();
+    const provider = `akash1${"a".repeat(38)}`;
+    context.ledger.rows.set("cell", {
+      receiptId: "22222222-2222-4222-8222-222222222222",
+      cogniKey: "cell",
+      identity: IDENTITY,
+      workload: "toks9-database-cell",
+      environment: "production",
+      state: "allocated",
+      externalName: "9001",
+      providerAccount: provider,
+      appliedDatabaseCellBinding: [
+        {
+          allocationEnvironment: "production",
+          targetBuildSha: qualifiedSha,
+          initialIncidentId: "original-incident",
+          binding: {
+            version: 1,
+            phase: "applied",
+            receiptId: "22222222-2222-4222-8222-222222222222",
+            cogniKey: "cell",
+            nodeId: IDENTITY.nodeId,
+            nodeSlug: "toks9",
+            environment: "production",
+            provider: "akash",
+            dseq: "9001",
+            providerAccount: provider,
+            endpoint: {
+              host: "cell.example.org",
+              port: 5432,
+              tlsMode: "verify-full",
+              tlsCertificateSha256: "c".repeat(64),
+            },
+            databaseName: "cogni_toks9",
+            appRole: "app_toks9",
+            serviceRole: "service_toks9",
+            migrationRole: "migration_toks9",
+            probeRole: "probe_toks9",
+            systemIdentifier: "123",
+            failureDomainId: `akash:${provider}:9001`,
+            budgetProfile: "bounded",
+            appliedSdlHash: "d".repeat(64),
+            sourceSha: "e".repeat(40),
+            readyAt: "2026-10-15T00:00:00Z",
+            cutover: {
+              packetSha256: "f".repeat(64),
+              actorId: "human:fixture",
+              approvedAt: "2026-10-15T00:00:00Z",
+            },
+          },
+        },
+      ],
+    });
+    return context;
+  }
+  const specAt = (sha: string): ProvisionSpec => ({
+    ...SPEC,
+    services: SPEC.services.map((service) => ({
+      ...service,
+      env: { COGNI_REPO_SHA: sha },
+    })),
+  });
+  it("refuses missing or changed app SHA before creating a receipt or touching the provider", async () => {
+    for (const spec of [SPEC, specAt(otherSha)]) {
+      const { actuator, ledger, api } = withCell();
+      await expect(
+        actuator.create({
+          cogniKey: "app",
+          environment: "production",
+          identity: IDENTITY,
+          spec,
+        })
+      ).rejects.toMatchObject({ code: "identity_conflict" });
+      expect(ledger.rows.has("app")).toBe(false);
+      expect(api.allocateCalls).toBe(0);
+    }
+  });
+  it("allows the exact qualified SHA and refuses a later update before rebinding its receipt", async () => {
+    const { actuator, ledger, api } = withCell();
+    await actuator.create({
+      cogniKey: "app",
+      environment: "production",
+      identity: IDENTITY,
+      spec: specAt(qualifiedSha),
+    });
+    const before = ledger.rows.get("app");
+    await expect(
+      actuator.update({
+        cogniKey: "app",
+        externalName: "7001",
+        environment: "production",
+        identity: { ...IDENTITY, compositeGeneration: 4 },
+        spec: specAt(otherSha),
+      })
+    ).rejects.toMatchObject({ code: "identity_conflict" });
+    expect(ledger.rows.get("app")).toEqual(before);
+    expect(api.updateCalls).toBe(0);
+    await actuator.update({
+      cogniKey: "app",
+      externalName: "7001",
+      environment: "production",
+      identity: { ...IDENTITY, compositeGeneration: 4 },
+      spec: specAt(qualifiedSha),
+    });
+    expect(ledger.rows.get("app")?.identity.compositeGeneration).toBe(4);
+    expect(api.updateCalls).toBe(0);
+  });
+  it("refuses an unqualified production migration before the release Job runs, including before app allocation", async () => {
+    const { actuator, migration } = withCell();
+    for (const sha of [undefined, otherSha]) {
+      await expect(
+        actuator.observe({
+          cogniKey: "unallocated-app",
+          workload: SPEC.name,
+          environment: "production",
+          migration: STEP,
+          ...(sha ? { expectedSourceSha: sha } : {}),
+        })
+      ).rejects.toMatchObject({ code: "identity_conflict" });
+    }
+    expect(migration.calls).toEqual([]);
+    await actuator.observe({
+      cogniKey: "unallocated-app",
+      workload: SPEC.name,
+      environment: "production",
+      migration: STEP,
+      expectedSourceSha: qualifiedSha,
+    });
+    expect(migration.calls).toHaveLength(1);
+  });
+  it("preserves unrelated node and nonproduction releases", async () => {
+    for (const input of [
+      { environment: "preview", identity: IDENTITY },
+      { environment: "production", identity: OTHER_IDENTITY },
+    ]) {
+      const { actuator, api } = withCell();
+      await actuator.create({ cogniKey: "app", ...input, spec: SPEC });
+      expect(api.allocateCalls).toBe(1);
+    }
+  });
+});
+
 describe("AkashTxActuator.create", () => {
   it("writes the pre-transaction cursor BEFORE the Console transaction", async () => {
     const { actuator, ledger, api } = build();
