@@ -89,6 +89,8 @@ export function databaseCellSpecFactory(
       DATABASE_CELL_TLS_CERTIFICATE: kit.tlsCertificate,
       DATABASE_CELL_TLS_PRIVATE_KEY: kit.tlsPrivateKey,
       DATABASE_CELL_SOURCE_SHA: actuatorBuildSha,
+      DATABASE_CELL_NODE_ID: kit.nodeId,
+      DATABASE_CELL_NODE_SLUG: kit.nodeSlug,
       DATABASE_CELL_INDEXED_LANES: "1",
       COGNI_NODE_DBS: kit.logicalDatabases
         .map((lane) => lane.databaseName)
@@ -98,10 +100,14 @@ export function databaseCellSpecFactory(
     };
     kit.logicalDatabases.forEach((lane, index) => {
       const fields = {
+        ENVIRONMENT: lane.environment,
+        TARGET_BUILD_SHA: lane.sourceSha,
         APP_DB_PASSWORD: lane.appPassword,
         APP_DB_SERVICE_PASSWORD: lane.servicePassword,
         APP_DB_MIGRATION_PASSWORD: lane.migrationPassword,
         DATABASE_RECOVERY_PROBE_PASSWORD: lane.probePassword,
+        DATABASE_CELL_BACKUP_ROLE: lane.backupRole,
+        DATABASE_CELL_BACKUP_PASSWORD: lane.backupPassword,
         DB_BUDGET_PROFILE: lane.budgetProfile,
         DB_APP_CONNECTION_LIMIT: lane.budget.appConnectionLimit,
         DB_APP_STATEMENT_TIMEOUT_MS: lane.budget.appStatementTimeoutMs,

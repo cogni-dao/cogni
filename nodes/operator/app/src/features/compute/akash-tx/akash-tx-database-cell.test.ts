@@ -37,6 +37,7 @@ const kit = {
       serviceRole: `service_${suffix}`,
       migrationRole: `migration_${suffix}`,
       probeRole: `probe_${suffix}`,
+      backupRole: `backup_${suffix}`,
       sourceSha: "b".repeat(40),
       budgetProfile: "dedicated-high-throughput-v1",
       budget,
@@ -44,6 +45,7 @@ const kit = {
       servicePassword: "b".repeat(48),
       migrationPassword: password,
       probePassword: password,
+      backupPassword: "c".repeat(48),
     };
   }),
 };
@@ -91,6 +93,10 @@ describe("private database cell factory", () => {
       "b".repeat(48)
     );
     expect(service.env?.CELL_LANE_1_APP_DB_PASSWORD).toBe(password);
+    expect(service.env?.DATABASE_CELL_NODE_ID).toBe(nodeId);
+    expect(service.env?.CELL_LANE_0_ENVIRONMENT).toBe("candidate-a");
+    expect(service.env?.CELL_LANE_0_TARGET_BUILD_SHA).toBe("b".repeat(40));
+    expect(service.env?.DATABASE_CELL_SOURCE_SHA).toBe("a".repeat(40));
     expect(
       Buffer.from(service.env?.CELL_ASSET_MIGRATION1 ?? "", "base64").toString()
     ).toBe(assets.migration1);
