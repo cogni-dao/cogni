@@ -11,7 +11,7 @@
  * @public
  */
 export type CellEnvironment = "candidate-a" | "preview" | "production";
-export interface DatabaseCellBinding {
+interface DatabaseCellBindingBase {
   version: 1;
   phase: "ready" | "applied" | "superseded";
   receiptId: string;
@@ -35,7 +35,6 @@ export interface DatabaseCellBinding {
   probeRole?: string | undefined;
   systemIdentifier: string;
   failureDomainId: string;
-  sourceSha: string;
   budgetProfile: string;
   appliedSdlHash: string;
   readyAt: string;
@@ -43,6 +42,24 @@ export interface DatabaseCellBinding {
     | { packetSha256: string; actorId: string; approvedAt: string }
     | undefined;
 }
+export interface DatabaseCellManualProvenance {
+  readonly kind: "manual-observed";
+  readonly postgresImageDigest: string;
+  readonly managedSdlSha256: string;
+  readonly qualificationArtifactSha256: string;
+  readonly qualifiedAt: string;
+  readonly originalProvisionerArtifact?:
+    | {
+        readonly sha256: string;
+        readonly executorSourceSha?: string | undefined;
+      }
+    | undefined;
+}
+export type DatabaseCellBinding = DatabaseCellBindingBase &
+  (
+    | { sourceSha: string; manualProvenance?: undefined }
+    | { sourceSha?: undefined; manualProvenance: DatabaseCellManualProvenance }
+  );
 export interface DatabaseCellBudget {
   appConnectionLimit: number;
   appStatementTimeoutMs: number;
@@ -160,7 +177,7 @@ export interface DatabaseCellAppliedCustody {
   readonly nodeId: string;
   readonly nodeSlug: string;
   readonly environment: "production";
-  readonly sourceSha: string;
+  readonly manualProvenance: DatabaseCellManualProvenance;
   readonly targetBuildSha: string;
   readonly canonicalEndpointHost: string;
   readonly databaseName: string;
@@ -194,7 +211,12 @@ export interface DatabaseCellAppliedCustody {
         readonly dsn: string;
         readonly custody: DatabaseCellCustodyReference;
       };
-  readonly readOnlyProbeCustody?: DatabaseCellCustodyReference | undefined;
+  readonly readOnlyProbe?:
+    | {
+        readonly dsn: string;
+        readonly custodyRef: DatabaseCellCustodyReference;
+      }
+    | undefined;
 }
 
 export type DatabaseCellAppliedEvidenceKind =
@@ -205,7 +227,9 @@ export type DatabaseCellAppliedEvidenceKind =
   | "backup-archive-verification"
   | "independent-recovery"
   | "recovery-schema"
-  | "current-app-readiness";
+  | "current-app-readiness"
+  | "backup-runtime"
+  | "recovery-database-metadata";
 /** Authenticated transport only; adapters must additionally parse each kind's actual typed contents. */
 export interface DatabaseCellAppliedEvidenceBundle {
   readonly version: 1;
@@ -268,6 +292,7 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly dseq: string;
     readonly providerAccount: string;
     readonly appliedSdlHash: string;
+    readonly postgresImageDigest: string;
   };
   readonly native: {
     readonly databaseName: string;
@@ -309,7 +334,7 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly nodeId: string;
     readonly nodeSlug: string;
     readonly environment: "production";
-    readonly cellSourceSha: string;
+    readonly manualProvenance: DatabaseCellManualProvenance;
     readonly appAllocationReceiptId: string;
     readonly appSdlHash: string;
     readonly expectedRelations: readonly string[];

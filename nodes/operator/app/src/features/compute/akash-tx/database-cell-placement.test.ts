@@ -17,7 +17,10 @@ import type {
   DatabaseCellAppliedRegistrationFacts,
   DatabaseCellNativeProof,
 } from "@/ports";
-import { composeDatabaseCellDsn } from "@/shared/secrets/database-cell-binding.data";
+import {
+  composeDatabaseCellDsn,
+  DatabaseCellAppliedCustodySchema,
+} from "@/shared/secrets/database-cell-binding.data";
 import {
   type AppliedDatabaseCellReceipt,
   AppliedDatabaseCellReceiptSchema,
@@ -201,6 +204,22 @@ describe("same-receipt production cell placement", () => {
   it("seals native identity idempotently while readiness keeps every public DSN unchanged", async () => {
     const { ref, binder, writes } = fixture();
     const first = await binder.seal(ref);
+    expect(
+      AppliedDatabaseCellReceiptSchema.safeParse({
+        ...first[0],
+        binding: { ...first[0]?.binding, sourceSha: undefined },
+      }).success
+    ).toBe(false);
+    expect(
+      AppliedDatabaseCellReceiptSchema.safeParse({
+        ...first[0],
+        binding: {
+          ...first[0]?.binding,
+          sourceSha: undefined,
+          manualProvenance: manualProvenance(),
+        },
+      }).success
+    ).toBe(false);
     expect(first[0]?.allocationEnvironment).toBe("production");
     expect(first[0]?.targetBuildSha).toBe(appSha);
     expect(first[0]?.initialIncidentId).toBe("native-cell-initial");
@@ -555,6 +574,15 @@ function preservedRoleBounds() {
     },
   ];
 }
+function manualProvenance() {
+  return {
+    kind: "manual-observed" as const,
+    postgresImageDigest: `sha256:${"1".repeat(64)}`,
+    managedSdlSha256: "d".repeat(64),
+    qualificationArtifactSha256: "2".repeat(64),
+    qualifiedAt: "2026-10-15T06:58:00Z",
+  };
+}
 function appliedCustody() {
   const lane = scopedKit.logicalDatabases[0];
   if (!lane) throw new Error("fixture lane absent");
@@ -564,7 +592,7 @@ function appliedCustody() {
     nodeId,
     nodeSlug: "alpha",
     environment: "production" as const,
-    sourceSha,
+    manualProvenance: manualProvenance(),
     targetBuildSha: appSha,
     canonicalEndpointHost: endpoint.host,
     databaseName: lane.databaseName,
@@ -642,6 +670,7 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       dseq: "123",
       providerAccount: `akash1${"a".repeat(38)}`,
       appliedSdlHash: "d".repeat(64),
+      postgresImageDigest: manualProvenance().postgresImageDigest,
     },
     native: {
       databaseName: lane.databaseName,
@@ -693,7 +722,7 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       nodeId,
       nodeSlug: "alpha",
       environment: "production",
-      cellSourceSha: sourceSha,
+      manualProvenance: manualProvenance(),
       appAllocationReceiptId: "88888888-8888-4888-8888-888888888888",
       appSdlHash: "c".repeat(64),
       expectedRelations: relationNames,
@@ -794,6 +823,48 @@ describe("audited already-applied registration", () => {
         }).success
       ).toBe(false);
   });
+  it("accepts only the actual canonical read-only probe custody reference", () => {
+    const custody = appliedCustody();
+    const probe = {
+      dsn: composeDatabaseCellDsn(
+        { host: custody.canonicalEndpointHost, port: 15432 },
+        custody.databaseName,
+        "probe_alpha",
+        "f".repeat(48)
+      ),
+      custodyRef: {
+        service: "alpha-database-recovery-probe",
+        key: "DATABASE_RECOVERY_PROBE_URL",
+      },
+    };
+    expect(
+      DatabaseCellAppliedCustodySchema.safeParse({
+        ...custody,
+        readOnlyProbe: probe,
+      }).success
+    ).toBe(true);
+    expect(
+      DatabaseCellAppliedCustodySchema.safeParse({
+        ...custody,
+        readOnlyProbe: {
+          ...probe,
+          custodyRef: {
+            ...probe.custodyRef,
+            service: "another-database-recovery-probe",
+          },
+        },
+      }).success
+    ).toBe(false);
+    expect(
+      DatabaseCellAppliedCustodySchema.safeParse({
+        ...custody,
+        readOnlyProbe: {
+          ...probe,
+          dsn: probe.dsn.replace("probe_alpha", "postgres"),
+        },
+      }).success
+    ).toBe(false);
+  });
   it("fails closed without a distinct read-only evidence producer", async () => {
     const current = fixture();
     await expect(current.binder.registerApplied(request)).rejects.toMatchObject(
@@ -818,6 +889,21 @@ describe("audited already-applied registration", () => {
       receipts[0]?.registration?.approvalAuthority.humanAppUserId
     ).toBeNull();
     expect(receipts[0]?.binding.migrationRole).toBeUndefined();
+    expect(receipts[0]?.binding.sourceSha).toBeUndefined();
+    expect(receipts[0]?.binding.manualProvenance).toEqual(manualProvenance());
+    expect(
+      AppliedDatabaseCellReceiptSchema.safeParse({
+        ...receipts[0],
+        binding: { ...receipts[0]?.binding, sourceSha },
+      }).success
+    ).toBe(false);
+    expect(() =>
+      projectDatabaseCellPlacement({
+        receipt: receipts[0],
+        custody: appliedCustody(),
+        requireApplied: true,
+      })
+    ).toThrow("requires real reviewed native control");
     expect(
       AppliedDatabaseCellReceiptSchema.safeParse({
         ...receipts[0],
@@ -844,7 +930,6 @@ describe("audited already-applied registration", () => {
     const projected = projectDatabaseCellPlacement({
       receipt: receipts[0],
       custody: appliedCustody(),
-      requireApplied: true,
     });
     expect(
       shaBuffer(Buffer.from(projected.publicValues?.DATABASE_URL ?? ""))
@@ -892,6 +977,13 @@ describe("audited already-applied registration", () => {
   });
   it("refuses wrong managed allocation, current DSNs, app SHA, partial recovery, schema drift and same-provider recovery", async () => {
     const invalidCases = [
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.provider.postgresImageDigest = `sha256:${"0".repeat(64)}`;
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        const role = f.manualCutover.preservedRoleBounds[0];
+        if (role) role.tempFileLimitMiB += 1;
+      },
       (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
         f.backupRuntime.timerActiveState = "inactive";
       },

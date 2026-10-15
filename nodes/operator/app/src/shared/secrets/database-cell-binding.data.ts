@@ -15,7 +15,26 @@ import { isIP } from "node:net";
 import { z } from "zod";
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
-export const DatabaseCellBindingSchema = z
+export const DatabaseCellManualProvenanceSchema = z
+  .object({
+    kind: z.literal("manual-observed"),
+    postgresImageDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    managedSdlSha256: sha256,
+    qualificationArtifactSha256: sha256,
+    qualifiedAt: z.string().datetime({ offset: true }),
+    originalProvisionerArtifact: z
+      .object({
+        sha256,
+        executorSourceSha: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/)
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+const DatabaseCellBindingBaseSchema = z
   .object({
     version: z.literal(1),
     phase: z.enum(["ready", "applied", "superseded"]),
@@ -46,7 +65,6 @@ export const DatabaseCellBindingSchema = z
     probeRole: z.string().optional(),
     systemIdentifier: z.string().regex(/^[0-9]+$/),
     failureDomainId: z.string().min(1).max(256),
-    sourceSha: z.string().regex(/^[0-9a-f]{40}$/),
     budgetProfile: z.string().min(1).max(128),
     appliedSdlHash: sha256,
     readyAt: z.string().datetime({ offset: true }),
@@ -59,7 +77,18 @@ export const DatabaseCellBindingSchema = z
       .strict()
       .optional(),
   })
-  .strict()
+  .strict();
+export const DatabaseCellBindingSchema = z
+  .union([
+    DatabaseCellBindingBaseSchema.extend({
+      sourceSha: z.string().regex(/^[0-9a-f]{40}$/),
+      manualProvenance: z.never().optional(),
+    }).strict(),
+    DatabaseCellBindingBaseSchema.extend({
+      manualProvenance: DatabaseCellManualProvenanceSchema,
+      sourceSha: z.never().optional(),
+    }).strict(),
+  ])
   .superRefine((binding, ctx) => {
     const base = `cogni_${binding.nodeSlug.replaceAll("-", "_")}`;
     if (
@@ -158,7 +187,7 @@ export const DatabaseCellAppliedCustodySchema = z
     nodeId: z.string().uuid(),
     nodeSlug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
     environment: z.literal("production"),
-    sourceSha: z.string().regex(/^[0-9a-f]{40}$/),
+    manualProvenance: DatabaseCellManualProvenanceSchema,
     targetBuildSha: z.string().regex(/^[0-9a-f]{40}$/),
     canonicalEndpointHost: z
       .string()
@@ -201,7 +230,10 @@ export const DatabaseCellAppliedCustodySchema = z
         })
         .strict(),
     ]),
-    readOnlyProbeCustody: custodyReference.optional(),
+    readOnlyProbe: z
+      .object({ dsn: z.string().min(1), custodyRef: custodyReference })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((custody, ctx) => {
@@ -229,6 +261,14 @@ export const DatabaseCellAppliedCustodySchema = z
     const consumers: [{ dsn: string }, string][] = [
       [custody.app, custody.appRole],
       [custody.service, custody.serviceRole],
+      ...(custody.readOnlyProbe
+        ? [
+            [custody.readOnlyProbe, `probe_${suffix}`] as [
+              { dsn: string },
+              string,
+            ],
+          ]
+        : []),
       ...(custody.migration.kind === "dedicated-migration-url"
         ? [
             [custody.migration, `migration_${suffix}`] as [
@@ -261,6 +301,17 @@ export const DatabaseCellAppliedCustodySchema = z
         });
       }
     }
+    if (
+      custody.readOnlyProbe &&
+      (custody.readOnlyProbe.custodyRef.service !==
+        `${custody.nodeSlug}-database-recovery-probe` ||
+        custody.readOnlyProbe.custodyRef.key !== "DATABASE_RECOVERY_PROBE_URL")
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "read-only probe reference leaves its actual owned credential bank",
+      });
     if (
       custody.app.custody.service !== custody.nodeSlug ||
       custody.app.custody.key !== "DATABASE_URL" ||

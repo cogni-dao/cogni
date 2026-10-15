@@ -52,12 +52,12 @@ cell_placement_composed_value() {
 validate_applied_cell_consumer_custody() {
   local node="$1" custody="$2" field service key value
   [[ "$(jq -r .nodeSlug <<<"$custody")" == "$node" && "$(jq -r .nodeId <<<"$custody")" == "$(node_id_for_target "$node")" && "$(jq -r .environment <<<"$custody")" == production ]] || fail "manual applied custody differs from owned target"
-  for field in app service migration tls; do
-    service="$(jq -r --arg field "$field" '.[$field].custody.service // empty' <<<"$custody")"
+  for field in app service migration tls readOnlyProbe; do
+    service="$(jq -r --arg field "$field" '.[$field].custody.service // .[$field].custodyRef.service // empty' <<<"$custody")"
     [[ -n "$service" ]] || continue
-    key="$(jq -r --arg field "$field" '.[$field].custody.key' <<<"$custody")"
+    key="$(jq -r --arg field "$field" '.[$field].custody.key // .[$field].custodyRef.key' <<<"$custody")"
     case "$service/$key" in
-      "$node/DATABASE_URL"|"$node/DATABASE_SERVICE_URL"|"$node/DATABASE_SSL_CA_CERT"|"${node}-database-migration/DATABASE_MIGRATION_URL") ;;
+      "$node/DATABASE_URL"|"$node/DATABASE_SERVICE_URL"|"$node/DATABASE_SSL_CA_CERT"|"${node}-database-migration/DATABASE_MIGRATION_URL"|"${node}-database-recovery-probe/DATABASE_RECOVERY_PROBE_URL") ;;
       *) fail "manual applied custody reference leaves owned consumer banks" ;;
     esac
     prefetch_path "$service"

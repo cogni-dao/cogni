@@ -3,7 +3,7 @@
 
 /**
  * Module: `@features/compute/akash-tx/database-cell-binding`
- * Purpose: Seal native cell identity into the existing paid allocation before audited cutover.
+ * Purpose: Seal native prestage identity or register an audited admitted cell on its existing paid allocation.
  * Scope: One bounded observe and native read per request; does not allocate compute or publish secrets.
  * Invariants: Caller supplies references only; provider receipt, owned kit and scoped native observations supply binding facts.
  * Side-effects: IO (existing provider observation, native proof, allocation metadata)
@@ -423,6 +423,8 @@ export class DatabaseCellBinder
       provider.dseq !== record.externalName ||
       provider.providerAccount !== record.providerAccount ||
       provider.appliedSdlHash !== record.lastAppliedSdlHash ||
+      provider.postgresImageDigest !==
+        custody.manualProvenance.postgresImageDigest ||
       native.databaseName !== custody.databaseName ||
       native.appRole !== custody.appRole ||
       native.serviceRole !== custody.serviceRole
@@ -434,7 +436,11 @@ export class DatabaseCellBinder
       packet.packetSha256 !== input.manualCutoverPacketSha256 ||
       packet.nodeId !== custody.nodeId ||
       packet.nodeSlug !== custody.nodeSlug ||
-      packet.cellSourceSha !== custody.sourceSha ||
+      JSON.stringify(packet.manualProvenance) !==
+        JSON.stringify(custody.manualProvenance) ||
+      custody.manualProvenance.managedSdlSha256 !== record.lastAppliedSdlHash ||
+      Date.parse(custody.manualProvenance.qualifiedAt) >
+        Date.parse(facts.observedAt) + 5000 ||
       packet.allocationReceiptId !== record.receiptId ||
       packet.systemIdentifier !== native.systemIdentifier ||
       packet.appSourceSha !== custody.targetBuildSha ||
@@ -660,7 +666,7 @@ export class DatabaseCellBinder
           : {}),
         systemIdentifier: native.systemIdentifier,
         failureDomainId: `akash:${record.providerAccount}:${record.externalName}`,
-        sourceSha: custody.sourceSha,
+        manualProvenance: custody.manualProvenance,
         budgetProfile: custody.budgetProfile,
         appliedSdlHash: record.lastAppliedSdlHash,
         readyAt: facts.observedAt,

@@ -47,7 +47,12 @@ const AppliedInputSchema = z
 
 export function projectDatabaseCellPlacement(input: unknown) {
   if (typeof input === "object" && input !== null && "custody" in input) {
-    const { receipt, custody } = AppliedInputSchema.parse(input);
+    const { receipt, custody, requireApplied } =
+      AppliedInputSchema.parse(input);
+    if (requireApplied)
+      throw new Error(
+        "manual cell placement activation requires real reviewed native control projections"
+      );
     const b = receipt.binding;
     if (
       !receipt.registration ||
@@ -56,7 +61,10 @@ export function projectDatabaseCellPlacement(input: unknown) {
       receipt.allocationEnvironment !== "production" ||
       b.nodeId !== custody.nodeId ||
       b.nodeSlug !== custody.nodeSlug ||
-      b.sourceSha !== custody.sourceSha ||
+      b.sourceSha !== undefined ||
+      JSON.stringify(b.manualProvenance) !==
+        JSON.stringify(custody.manualProvenance) ||
+      b.appliedSdlHash !== custody.manualProvenance.managedSdlSha256 ||
       receipt.targetBuildSha !== custody.targetBuildSha ||
       b.databaseName !== custody.databaseName ||
       b.appRole !== custody.appRole ||

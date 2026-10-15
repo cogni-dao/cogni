@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
-- **Last reviewed:** 2026-09-29 (isolated fleet control-env configuration)
+- **Last reviewed:** 2026-10-15 (applied cell custody and truthful provenance)
 
 ## Purpose
 
@@ -40,7 +40,7 @@ App-local building blocks that cannot be extracted to `@cogni/node-shared` (env,
 - **App-local exports:**
   - Environment validation (`serverEnv`, `clientEnv`) — reads `process.env`
   - Database schemas (Drizzle ORM) — `db/schema.ts`
-  - Cell allocation metadata — backward-compatible native bindings and retained lifecycle validation
+  - Cell allocation metadata — backward-compatible native bindings, retained lifecycle, minimal applied custody, immutable evidence bytes, per-role bounds and manual-observed provenance
   - Config server (`repoSpec.server.ts`) — file I/O + env
   - AI model catalog (`model-catalog.server.ts`) — LiteLLM fetch + env
   - Node app scaffold generators (`node-app-scaffold/gens/`) — pure catalog,

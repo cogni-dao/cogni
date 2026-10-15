@@ -3,7 +3,7 @@
 
 /**
  * Module: `@shared/secrets/database-cell-placement.data`
- * Purpose: Bind a logical database's native incident to its truthful physical allocation receipt.
+ * Purpose: Bind genuine native incidents or audited manual registrations to truthful physical allocation receipts.
  * Scope: Pure schemas and types; does not allocate resources or authorize cutover.
  * Invariants: Physical allocation environment and operator source remain separate from logical environment and app build.
  * Side-effects: none
@@ -16,6 +16,7 @@ import type { DatabaseCellAppliedRegistrationFacts } from "@/types/database-cell
 
 import {
   DatabaseCellBindingSchema,
+  DatabaseCellManualProvenanceSchema,
   DatabaseCellRoleBoundsSchema,
 } from "./database-cell-binding.data";
 
@@ -73,10 +74,14 @@ export const AppliedDatabaseCellReceiptSchema = z
     if (
       receipt.registration
         ? receipt.initialIncidentId !== undefined ||
+          !receipt.binding.manualProvenance ||
+          receipt.binding.sourceSha !== undefined ||
           receipt.binding.phase !== "applied" ||
           receipt.registration.manualCutoverPacketSha256 !==
             receipt.binding.cutover?.packetSha256
         : !receipt.initialIncidentId ||
+          !receipt.binding.sourceSha ||
+          receipt.binding.manualProvenance !== undefined ||
           !receipt.binding.migrationRole ||
           !receipt.binding.probeRole
     ) {
@@ -216,6 +221,7 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         dseq: systemIdentifier,
         providerAccount: z.string().regex(/^akash1[0-9a-z]{38}$/),
         appliedSdlHash: digest,
+        postgresImageDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
       })
       .strict(),
     native: z
@@ -285,7 +291,7 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         nodeId: z.string().uuid(),
         nodeSlug: z.string().min(1),
         environment: z.literal("production"),
-        cellSourceSha: sourceSha,
+        manualProvenance: DatabaseCellManualProvenanceSchema,
         appAllocationReceiptId: z.string().uuid(),
         appSdlHash: digest,
         expectedRelations: relations,
@@ -363,6 +369,8 @@ export const DatabaseCellAppliedEvidenceBundleSchema = z
               "independent-recovery",
               "recovery-schema",
               "current-app-readiness",
+              "backup-runtime",
+              "recovery-database-metadata",
             ]),
             mediaType: z.literal("application/json"),
             sha256: digest,
