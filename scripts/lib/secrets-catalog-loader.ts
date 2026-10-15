@@ -188,8 +188,9 @@ const CatalogEntrySchema = z
     required: z.boolean(),
     category: z.string(),
     // ORIGIN of the value: agent = we generate it (`generate:` required);
-    // human = vendor-minted, a human supplies it once (un-generatable by us).
-    source: z.enum(["agent", "human"]),
+    // human = vendor-minted; derived = canonical materializer composes owned inputs.
+    // Derived structured custody is never a random credential or human prompt.
+    source: z.enum(["agent", "human", "derived"]),
     // Orthogonal axis — does the value ALSO live in an external system that we
     // must keep in lockstep? A generated value can still need mirroring outward
     // (e.g. the GitHub App webhook secret: source: agent + syncTo: the App).
@@ -203,8 +204,8 @@ const CatalogEntrySchema = z
     generate: GenerateSchema.optional(),
     transform: TransformSchema.optional(),
   })
-  .refine((e) => e.source !== "agent" || e.generate !== undefined, {
-    message: "source: agent requires generate field",
+  .refine((e) => e.source === "human" || e.generate !== undefined, {
+    message: "source: agent or derived requires generate field",
   })
   .refine((e) => !(e.service !== undefined && e.appliesTo !== undefined), {
     message:
@@ -226,7 +227,7 @@ export interface Secret {
   required: boolean;
   category: string;
   description: string;
-  source: "agent" | "human";
+  source: "agent" | "human" | "derived";
   syncTo?: SyncTarget;
   url?: string;
   steps: string[];
