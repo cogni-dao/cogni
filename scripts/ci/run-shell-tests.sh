@@ -6,10 +6,9 @@
 # Purpose: Run the hermetic scripts/ci/tests/*.test.sh suite in PARALLEL with
 #          correct exit-code aggregation, replacing the ~22 serial `bash …` steps
 #          that made the `unit` CI job an 8-minute monolith (task.5140). Every
-#          listed test is pure-bash — mktemp + PATH-shim sandboxes, or a read-only
-#          `cd REPO_ROOT` drift compare against committed files — with no network,
-#          docker, or shared writable state, so they are mutually independent and
-#          safe to run concurrently with each other.
+#          listed test uses isolated fixtures or read-only drift comparisons
+#          against committed files, with no external network, docker, or shared
+#          writable state, so they are safe to run concurrently with each other.
 # Usage:   bash scripts/ci/run-shell-tests.sh
 # Exit:    0 iff EVERY test passed; 1 if any failed (a non-zero from any leg is
 #          preserved — a green here means all legs were actually green).
@@ -48,6 +47,7 @@ PARALLEL=(
   set-secret.test.sh
   catalog-akash-egress-schema.test.sh
   render-compute-egress-allowlist.test.sh
+  smoke-candidate.test.sh
   openbao-clobber-proof.test.sh
   secrets-fanout.test.sh
   secret-materialize.test.sh

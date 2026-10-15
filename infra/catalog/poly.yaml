@@ -7,7 +7,7 @@ image_tag_suffix: "-poly"
 migrator_tag_suffix: "-poly-migrate"
 source_repo: https://github.com/cogni-dao/poly.git
 image_repository: ghcr.io/cogni-dao/poly
-source_sha: 242266ad474aee590e2fbafcad08a0431d350b45
+source_sha: 1de3e508550327a1dd41a07fa11446d018a7373c
 candidate_a_branch: deploy/candidate-a-poly
 preview_branch: deploy/preview-poly
 production_branch: deploy/production-poly
@@ -200,9 +200,9 @@ node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
   - cidr: 65.108.194.156/32
-    ports: [7233]
+    ports: [5435, 6379, 4000, 7233]
     envs: [production]
-    comment: Poly production lease egress measured during task.5246 isolated database cutover; Temporal only, no shared database access
+    comment: Poly lease egress measured during task.5246; shared Doltgres, Redis, LiteLLM and Temporal remain required after Postgres isolation. Published Postgres 5432 stays excluded (bug.5481).
   - cidr: 65.108.194.156/32
     envs: [preview]
     comment: RHITE preview worker NAT; strict service_poly SCRAM authenticated from this IP on preview 2026-10-15T09:19:58Z (bug.5472); never production trust.

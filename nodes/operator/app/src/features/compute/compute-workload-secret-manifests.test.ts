@@ -7,6 +7,34 @@ import { parse, stringify } from "yaml";
 import { buildComputeSecretResources } from "./compute-workload-secret-manifests";
 
 describe("buildComputeSecretResources", () => {
+  it("JSON-escapes runtime transport values while preserving raw migration inputs", () => {
+    const resources = buildComputeSecretResources({
+      slug: "poly",
+      environment: "preview",
+      secretRefs: [
+        { key: "DATABASE_SSL_CA_CERT" },
+        { key: "DATABASE_URL" },
+        { key: "DOLTGRES_URL" },
+      ],
+    });
+    const runtime = resources.find(
+      ({ file }) => file === "compute-env-external-secret.yaml"
+    )?.manifest as { spec: { target: { template: unknown } } };
+    expect(runtime.spec.target.template).toEqual({
+      engineVersion: "v2",
+      mergePolicy: "Replace",
+      data: {
+        DATABASE_SSL_CA_CERT: String.raw`{{ index . "DATABASE_SSL_CA_CERT" | toJson | trimPrefix "\"" | trimSuffix "\"" }}`,
+        DATABASE_URL: String.raw`{{ index . "DATABASE_URL" | toJson | trimPrefix "\"" | trimSuffix "\"" }}`,
+        DOLTGRES_URL: String.raw`{{ index . "DOLTGRES_URL" | toJson | trimPrefix "\"" | trimSuffix "\"" }}`,
+      },
+    });
+    const migration = resources.find(
+      ({ file }) => file === "compute-migration-external-secret.yaml"
+    )?.manifest as { spec: { target: object } };
+    expect(migration.spec.target).not.toHaveProperty("template");
+  });
+
   it("renders only the declared union with exact get-only RBAC", () => {
     const resources = buildComputeSecretResources({
       slug: "toks4",
