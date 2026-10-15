@@ -350,11 +350,11 @@ edge_key="$5"
 node_port="$6"
 app_wait_attempts="$7"
 app_wait_sleep_seconds="$8"
-remote_root="${9:-}"
-expected_build_sha="${10}"
-expected_node_id="${11}"
-assert_database_reliability_runtime="${12}"
-reliability_controller="${13}"
+expected_build_sha="${9}"
+expected_node_id="${10}"
+assert_database_reliability_runtime="${11}"
+reliability_controller="${12}"
+remote_root="${13:-}"
 
 namespace="cogni-${env_name}"
 app_name="${env_name}-${node}"
@@ -715,14 +715,14 @@ REMOTE
 local ssh_opts=()
 read -r -a ssh_opts <<< "$ssh_opts_raw"
 probe_log=$(mktemp)
-# OpenSSH reconstructs shell text, not argv. Quote every word so an empty
-# remote_root cannot disappear and shift the trailing controller identity.
+# OpenSSH reconstructs shell text, not argv. Quote every word and keep the
+# optional root last so required controller identity never shifts.
 local remote_command
 printf -v remote_command '%q ' bash -s -- \
   "$DEPLOY_ENVIRONMENT" "$node" "$node_db" "$node_host" "$edge_key" "$node_port" \
-  "$app_wait_attempts" "$app_wait_sleep_seconds" "$remote_root" \
+  "$app_wait_attempts" "$app_wait_sleep_seconds" \
   "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" \
-  "$reliability_controller"
+  "$reliability_controller" "$remote_root"
 set +e
 "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" "$remote_command" \
   < "$remote_script" 2>&1 | tee "$probe_log"

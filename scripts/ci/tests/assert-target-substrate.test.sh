@@ -44,6 +44,7 @@ if [ "${FAKE_SSH_ASSERT_POSITIONALS:-}" = 1 ]; then
   {
     printf '%s\n' "$remote_header"
     printf '%s\n' 'printf "ARGV\t%s\t%s\t%s\t%s\t%s\t%s\n" "$#" "$remote_root" "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" "$reliability_controller"'
+    printf '%s\n' 'printf "WIRE\t%s\t%s\t%s\t%s\t%s\n" "${9}" "${10}" "${11}" "${12}" "${13:-}"'
   } | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
 else
   PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
@@ -245,7 +246,7 @@ grep -q "\[OK\] lane database residency: node-template/candidate-a is reconciled
 grep -q "runtime env includes DB inventory: cogni_node_template" "$TMPROOT/success.out"
 
 # Run the real generated argument decoder through both shell layers, stopping
-# before any remote probe. Trailing controller identity must survive all roots.
+# before any remote probe. Required identities precede the optional root at13.
 expected_sha=$(git rev-parse HEAD)
 expected_id=$(yq -r '.node_id' nodes/operator/.cogni/repo-spec.yaml)
 for probe_root in "" "$REMOTE_ROOT" "$TMPROOT/remote root' ; literal"; do
@@ -259,7 +260,9 @@ for probe_root in "" "$REMOTE_ROOT" "$TMPROOT/remote root' ; literal"; do
   fi
   printf 'ARGV\t13\t%s\t%s\t%s\tfalse\ttrue\n' \
     "$probe_root" "$expected_sha" "$expected_id" >"$TMPROOT/argv.expected"
-  grep '^ARGV' "$TMPROOT/argv.out" >"$TMPROOT/argv.actual"
+  printf 'WIRE\t%s\t%s\tfalse\ttrue\t%s\n' \
+    "$expected_sha" "$expected_id" "$probe_root" >>"$TMPROOT/argv.expected"
+  grep -E '^(ARGV|WIRE)' "$TMPROOT/argv.out" >"$TMPROOT/argv.actual"
   cmp "$TMPROOT/argv.expected" "$TMPROOT/argv.actual"
 done
 
