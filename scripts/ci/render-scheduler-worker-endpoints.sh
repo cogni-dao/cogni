@@ -77,10 +77,16 @@ render() {
 
 # Provider-resolved map for one env.
 render_env() {
-  local env="$1" domain
+  local env="$1" domain node node_id url sep=""
   domain="$(domain_for_env "$env" "$FORK_ROOT")" \
     || { echo "[ERROR] cannot derive a public domain for env '$env'" >&2; return 1; }
-  node_internal_service_endpoint_csv "$env" "$domain"
+  for node in "${NODE_TARGETS[@]}"; do
+    target_in_env "$node" "$env" || continue
+    node_id="$(node_id_for_target "$node")" || return 1
+    url="$(node_app_url_for_target "$node" "$env" "$domain")" || return 1
+    printf '%s%s=%s,%s=%s' "$sep" "$node" "$url" "$node_id" "$url"
+    sep=","
+  done
 }
 
 # Namespace-specific routes for foreign lanes reconciled by one control env.
@@ -116,7 +122,7 @@ patch_path() {
 }
 
 write_patch() {
-  local env="$1" file endpoints custody_routes custody_yaml
+  local env="$1" file endpoints custody_routes custody_yaml reloader_annotation=''
   file="$(patch_path "$env")"
   endpoints="$(render_env "$env")" || return 1
   custody_routes="$(render_custodied_routes "$env")" || return 1
@@ -124,6 +130,13 @@ write_patch() {
     custody_yaml='"{}"'
   else
     custody_yaml="'${custody_routes}'"
+  fi
+  if [ "$env" = candidate-a ]; then
+    # Pinned Reloader reads NEW resource annotations before workload auto flags.
+    # Atomic data+ignore prevents an intermediate old-image config-only rollout.
+    reloader_annotation='
+  annotations:
+    reloader.stakater.com/ignore: "true"'
   fi
   cat >"$file" <<YAML
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
@@ -140,7 +153,7 @@ write_patch() {
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: scheduler-worker-config
+  name: scheduler-worker-config${reloader_annotation}
 data:
   COGNI_NODE_ENDPOINTS: "${endpoints}"
   TEMPORAL_CUSTODIED_NODE_ENDPOINTS: ${custody_yaml}
@@ -201,6 +214,10 @@ check() {
       echo "[ERROR] $(patch_path "$env") has stale/absent TEMPORAL_CUSTODIED_NODE_ENDPOINTS for env '$env'." >&2
       echo "Expected: $expected" >&2
       echo "Actual: ${actual:-<missing>}" >&2
+      rc=1
+    fi
+    if [ "$env" = candidate-a ] && [ "$(yq -N '.metadata.annotations."reloader.stakater.com/ignore" // ""' "$(patch_path "$env")")" != true ]; then
+      echo "[ERROR] candidate scheduler ConfigMap must atomically exclude Reloader config events." >&2
       rc=1
     fi
     kustomization="$OVERLAY_ROOT/$env/scheduler-worker/kustomization.yaml"
