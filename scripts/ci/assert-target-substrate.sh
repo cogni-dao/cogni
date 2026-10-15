@@ -238,11 +238,14 @@ mark_ok "all declared workload secret refs are materialized"
 
 [ -s "$egress_allowlist" ] \
   || fail "installed compute egress allowlist is missing"
+expected_egress_rules="$(printf '%s' "$egress_rules_b64" | base64 -d)" \
+  || fail "catalog egress transport could not be decoded"
+[[ -n "$expected_egress_rules" ]] || fail "catalog egress transport decoded no rules"
 while IFS= read -r rule; do
   [[ -n "$rule" ]] || continue
   grep -Fxq "$rule" "$egress_allowlist" \
     || fail "installed compute egress allowlist is missing exact catalog rule: $rule"
-done < <(printf '%s' "$egress_rules_b64" | base64 -d)
+done <<< "$expected_egress_rules"
 mark_ok "catalog compute egress CIDRs are installed"
 
 echo "External compute preconditions ready for ${node} in ${env_name} (compute_api=${authority})."

@@ -46,6 +46,15 @@ if [ "${FAKE_SSH_ASSERT_POSITIONALS:-}" = 1 ]; then
     printf '%s\n' 'printf "ARGV\t%s\t%s\t%s\t%s\t%s\t%s\n" "$#" "$remote_root" "$expected_build_sha" "$expected_node_id" "$assert_database_reliability_runtime" "$reliability_controller"'
     printf '%s\n' 'printf "WIRE\t%s\t%s\t%s\t%s\t%s\n" "${9}" "${10}" "${11}" "${12}" "${13:-}"'
   } | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
+elif [[ -n "${FAKE_EGRESS_TRANSPORT:-}" ]]; then
+  remote_script="$(cat)"
+  case "$FAKE_EGRESS_TRANSPORT" in
+    corrupt) replacement='egress_rules_b64="%%%"' ;;
+    empty) replacement='egress_rules_b64=""' ;;
+    *) exit 2 ;;
+  esac
+  remote_script="${remote_script/'egress_rules_b64="$4"'/$replacement}"
+  printf '%s\n' "$remote_script" | PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
 else
   PATH="${FAKE_REMOTE_PATH}:${PATH}" bash -c "$*"
 fi
@@ -869,6 +878,14 @@ grep -q "External compute preconditions ready for toks5" "$TMPROOT/xcw-unpinned.
   cat "$TMPROOT/xcw-unpinned.out" >&2
   exit 1
 }
+
+# A corrupt/empty SSH transport must never bypass every installed-rule check.
+for transport in corrupt empty; do
+  if env "${XCW_ENV[@]}" FAKE_EGRESS_TRANSPORT="$transport" bash scripts/ci/assert-target-substrate.sh > "$TMPROOT/egress-transport-$transport.out" 2>&1; then
+    echo "expected $transport catalog egress transport to fail closed" >&2; exit 1
+  fi
+  grep -q 'catalog egress transport' "$TMPROOT/egress-transport-$transport.out"
+done
 
 # Assert the exact entry's ports, and ignore entries scoped to another env.
 SCOPED_SRC="$TMPROOT/scoped-egress-src"
