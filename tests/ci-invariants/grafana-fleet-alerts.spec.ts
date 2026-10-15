@@ -682,6 +682,7 @@ describe("fleet Serve alert contract (bug.5459)", () => {
       readonly dedicated: string;
       readonly clients?: string;
       readonly foreignDatabase?: boolean;
+      readonly akashCompute?: boolean;
       readonly poisonedDsn?: boolean;
       readonly poisonedQuery?: boolean;
       readonly phase?: string;
@@ -723,6 +724,21 @@ describe("fleet Serve alert contract (bug.5459)", () => {
             path.join(fixtureRoot, `scripts/ci/lib/${name}`)
           );
         }
+        if (names.foreignDatabase) {
+          // Poison only the copied resolver. Real Akash compute now keeps lane-local
+          // Postgres; an explicit historical foreign pin must still fail closed.
+          const resolver = path.join(
+            fixtureRoot,
+            "scripts/ci/lib/lane-db-residency.sh"
+          );
+          writeFileSync(
+            resolver,
+            readFileSync(resolver, "utf8").replace(
+              "LANE_DB_RESIDENCY_PINNED=()",
+              `LANE_DB_RESIDENCY_PINNED=("${names.target}/candidate-a")`
+            )
+          );
+        }
         mkdirSync(path.join(fixtureRoot, "scripts/setup/lib"), {
           recursive: true,
         });
@@ -761,7 +777,7 @@ describe("fleet Serve alert contract (bug.5459)", () => {
             reliability_validation: {
               "candidate-a": { role: "shared-target" },
             },
-            ...(names.foreignDatabase
+            ...(names.foreignDatabase || names.akashCompute
               ? { deployment_provider: { "candidate-a": "akash" } }
               : {}),
           },
@@ -988,9 +1004,17 @@ esac
         clients: "8",
       })
     ).toThrow("shared replay clients exceed immutable app budget");
+    expect(
+      runProductionPlanner({
+        target: "ember",
+        controller: "harbor",
+        dedicated: "quartz",
+        akashCompute: true,
+      }).load
+    ).toMatchObject({ databaseEnvironment: "candidate-a" });
     expect(() =>
       runProductionPlanner({
-        target: "red",
+        target: "ember",
         controller: "harbor",
         dedicated: "quartz",
         foreignDatabase: true,
