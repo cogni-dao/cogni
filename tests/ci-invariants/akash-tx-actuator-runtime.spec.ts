@@ -13,8 +13,8 @@
  *   - ADDRESS_IS_THE_CONTRACT: the Service is named exactly `akash-tx-actuator` on port 8080,
  *     and the overlay's `operator-` namePrefix is undone for it.
  *   - PRIVATE_BY_CONSTRUCTION: ClusterIP only — no Ingress, no NodePort, no public route.
- *   - LEAST_PRIVILEGE_CREDENTIALS: an explicit projected key list, never `envFrom` over the
- *     whole operator Secret.
+ *   - LEAST_PRIVILEGE_CREDENTIALS: the complete actuator-owned bank, with only DATABASE_URL
+ *     projected from the foreign operator Secret and no public-app access to the actor bank.
  *   - WALLET_IS_UNREACHABLE_FROM_THE_OPERATOR_APP: the Console credential and the bearer token
  *     live in the actuator's OWN OpenBao bucket + ExternalSecret, so the public operator app —
  *     which consumes ALL of `cogni/<env>/operator` via `dataFrom: extract` + `envFrom` — has no
@@ -189,7 +189,7 @@ const overlay = parse<{
 interface ProjectedSecretSource {
   readonly secret: {
     readonly name: string;
-    readonly items: { readonly key: string }[];
+    readonly items?: { readonly key: string }[];
   };
 }
 
@@ -386,23 +386,24 @@ describe("akash-tx-actuator runtime", () => {
     expect(probes.readinessProbe).not.toHaveProperty("initialDelaySeconds");
   });
 
-  it("receives only the three credentials it needs, as files, from two blast radii", () => {
-    // envFrom over operator-env-secrets would hand a wallet writer the whole operator
-    // bucket; an explicit item list is the blast radius we actually want.
+  it("receives its complete owned bank and only the foreign ledger DSN, as files", () => {
+    // cicd-secrets-expert invariants 1–3: new owned keys need no projection YAML edit.
+    // The foreign operator bank remains narrowed to the one legitimate ledger DSN.
     expect(container()).not.toHaveProperty("envFrom");
     const sources = projectedSources();
 
-    // The wallet + the token that unlocks it come from the actuator's OWN Secret.
-    expect(sources[0]?.secret.name).toBe(ENV_SECRET_NAME);
-    expect(sources[0]?.secret.items.map((item) => item.key)).toEqual([
-      ...ACTUATOR_OWNED_KEYS,
-    ]);
+    // Omitting items mounts all OWN keys, including sole-materializer bootstrap kits.
+    expect(sources[0]?.secret).toEqual({
+      name: ENV_SECRET_NAME,
+      optional: true,
+    });
     // Only the ledger DSN legitimately comes from the operator bucket: the receipts table is
     // operator-local schema in the operator's own Postgres.
-    expect(sources[1]?.secret.name).toBe("operator-env-secrets");
-    expect(sources[1]?.secret.items.map((item) => item.key)).toEqual([
-      "DATABASE_URL",
-    ]);
+    expect(sources[1]?.secret).toEqual({
+      name: "operator-env-secrets",
+      optional: true,
+      items: [{ key: "DATABASE_URL", path: "DATABASE_URL" }],
+    });
     expect(sources).toHaveLength(2);
   });
 
@@ -442,10 +443,24 @@ describe("akash-tx-actuator runtime", () => {
   it("NEVER projects the legacy controller wallet — it must not possess both", () => {
     // task.5095 projected AKASH_CONSOLE_API_KEY purely to byte-compare it, which meant the
     // actuator held the very credential it claimed isolation from (story.5016 amendment 3).
-    const projectedKeys = projectedSources().flatMap((source) =>
-      source.secret.items.map((item) => item.key)
-    );
+    const catalog = yaml.parse(read("infra/secrets-catalog.yaml")) as {
+      secrets: { name: string; service?: string }[];
+    };
+    const ownedKeys = catalog.secrets
+      .filter((secret) => secret.service === OPENBAO_SERVICE)
+      .map((secret) => secret.name);
+    expect(ownedKeys).toEqual(expect.arrayContaining([...ACTUATOR_OWNED_KEYS]));
+    const projectedKeys = projectedSources().flatMap((source) => {
+      if (source.secret.items)
+        return source.secret.items.map((item) => item.key);
+      // A whole foreign bank is forbidden, even when its catalog keys look harmless.
+      expect(source.secret.name).toBe(ENV_SECRET_NAME);
+      return ownedKeys;
+    });
     expect(projectedKeys).not.toContain("AKASH_CONSOLE_API_KEY");
+    expect(catalog.secrets.map((secret) => secret.name)).not.toContain(
+      "AKASH_CONSOLE_API_KEY"
+    );
     // The replacement is a NON-SECRET pin, carried as plain Deployment config.
     const envNames = (container().env as { name: string }[] | undefined)?.map(
       (entry) => entry.name
