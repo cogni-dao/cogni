@@ -112,6 +112,7 @@ import { AgentIdentityError } from "@/ports";
 describe("POST /api/v1/agent/register", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(agentIdentityApiLimiter, "consume").mockReturnValue(true);
     authorization = {
       listRelations: mockListRelations,
       writeRelation: mockWriteRelation,
@@ -253,6 +254,7 @@ describe("POST /api/v1/agent/register", () => {
 describe("POST /api/v1/agent/recover", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(agentIdentityApiLimiter, "consume").mockReturnValue(true);
   });
 
   it("returns 409 without secret material when an expired redeemed grant is replayed", async () => {
@@ -308,6 +310,7 @@ function upgradeRequest(fetch: (init?: RequestInit) => Promise<Response>) {
 describe("POST /api/v1/agent/upgrade", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(agentIdentityApiLimiter, "consume").mockReturnValue(true);
     authorization = {
       listRelations: mockListRelations,
       writeRelation: mockWriteRelation,
