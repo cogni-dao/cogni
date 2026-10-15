@@ -139,6 +139,9 @@ export type {
   ResolvedConnection,
 } from "./connection-broker.port";
 export type {
+  DatabaseCellAppliedRegistrationEvidencePort,
+  DatabaseCellAppliedRegistrationFacts,
+  DatabaseCellAppliedRegistrationPort,
   DatabaseCellBindingPort,
   DatabaseCellBindingReference,
   DatabaseCellCutoverReference,

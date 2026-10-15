@@ -16,6 +16,8 @@ import type {
   AkashTxActuatorPort,
   AkashTxAllocationLedgerPort,
   AkashTxAllocationRecord,
+  DatabaseCellAppliedRegistrationEvidencePort,
+  DatabaseCellAppliedRegistrationPort,
   DatabaseCellBindingPort,
   DatabaseCellBindingReference,
   DatabaseCellCutoverReference,
@@ -23,10 +25,14 @@ import type {
   DatabaseCellNativeProof,
 } from "@/ports";
 import { AkashTxError } from "@/ports";
-import type { DatabaseCellBootstrapKit } from "@/shared/secrets/database-cell-binding.data";
+import {
+  composeDatabaseCellDsn,
+  type DatabaseCellBootstrapKit,
+} from "@/shared/secrets/database-cell-binding.data";
 import {
   type AppliedDatabaseCellReceipt,
   AppliedDatabaseCellReceiptsSchema,
+  DatabaseCellAppliedRegistrationFactsSchema,
 } from "@/shared/secrets/database-cell-placement.data";
 
 interface BindingStore {
@@ -37,13 +43,16 @@ interface BindingStore {
     expected: readonly AppliedDatabaseCellReceipt[]
   ): Promise<void>;
 }
-export class DatabaseCellBinder implements DatabaseCellBindingPort {
+export class DatabaseCellBinder
+  implements DatabaseCellBindingPort, DatabaseCellAppliedRegistrationPort
+{
   constructor(
     private readonly deps: {
       ledger: Pick<AkashTxAllocationLedgerPort, "read" | "listAllocated">;
       actuator: Pick<AkashTxActuatorPort, "observe">;
       store: BindingStore;
       observeNative: DatabaseCellNativeObserverPort["observe"];
+      observeApplied?: DatabaseCellAppliedRegistrationEvidencePort["observe"];
       kit(
         reference: DatabaseCellBindingReference
       ): Promise<DatabaseCellBootstrapKit>;
@@ -215,7 +224,8 @@ export class DatabaseCellBinder implements DatabaseCellBindingPort {
         proofs.some(
           (proof) =>
             !matchesEndpointIdentity(
-              proof,
+              proof.endpointIdentity,
+              proof.observation.systemIdentifier,
               providerEndpoint,
               endpoint,
               certificateDerSha256
@@ -297,6 +307,309 @@ export class DatabaseCellBinder implements DatabaseCellBindingPort {
       await this.deps.store.save(record, receipts, previous);
     return receipts;
   }
+  async registerApplied(
+    input: Parameters<DatabaseCellAppliedRegistrationPort["registerApplied"]>[0]
+  ) {
+    const refuse: (message: string) => never = (message) => {
+      throw new AkashTxError("identity_conflict", message);
+    };
+    if (
+      input.allocationEnvironment !== "production" ||
+      !/^[0-9a-f]{64}$/.test(input.manualCutoverPacketSha256) ||
+      !input.readmissionReceiptId
+    )
+      refuse("production registration requires audited receipt references");
+    if (!this.deps.observeApplied)
+      throw new AkashTxError(
+        "ledger_unavailable",
+        "read-only applied registration evidence producer unavailable"
+      );
+    const record = await this.record(input);
+    const kit = await this.deps.kit(input);
+    const lanes = kit.logicalDatabases.filter(
+      (lane) => lane.environment === "production"
+    );
+    const lane = lanes[0];
+    if (
+      kit.nodeId !== input.nodeId ||
+      kit.environment !== "production" ||
+      lanes.length !== 1 ||
+      !lane ||
+      !kit.canonicalEndpointHost
+    )
+      refuse(
+        "registration lacks its owned production kit and canonical DNS custody"
+      );
+    // This observer is distinct from prestage qualification. It must only read actual
+    // provider/native/runtime state and authenticated immutable receipt artifacts.
+    const parsedFacts = DatabaseCellAppliedRegistrationFactsSchema.safeParse(
+      await this.deps.observeApplied({
+        reference: input,
+        kit,
+        manualCutoverPacketSha256: input.manualCutoverPacketSha256,
+        readmissionReceiptId: input.readmissionReceiptId,
+      })
+    );
+    if (!parsedFacts.success)
+      throw new AkashTxError(
+        "ledger_unavailable",
+        "trusted applied registration evidence malformed"
+      );
+    const facts = parsedFacts.data;
+    const {
+      provider,
+      native,
+      effectiveApp: app,
+      manualCutover: packet,
+      readmission,
+      scheduledBackup: backup,
+      independentRecovery: recovery,
+    } = facts;
+    const observed = await this.deps.actuator.observe({
+      cogniKey: record.cogniKey,
+      externalName: record.externalName,
+    });
+    const endpoints = [...new Set(observed.resource?.endpoints ?? [])].filter(
+      (value) => value.startsWith("tcp://")
+    );
+    if (
+      !observed.found ||
+      observed.resource?.state !== "active" ||
+      observed.resource.externalName !== record.externalName ||
+      observed.resource.providerAccount !== record.providerAccount ||
+      endpoints.length !== 1
+    )
+      refuse("registration provider differs from its allocated primary");
+    const providerEndpointValue = endpoints[0];
+    if (!providerEndpointValue) refuse("registration provider endpoint absent");
+    const providerEndpoint = new URL(providerEndpointValue);
+    const canonical = new URL(
+      `tcp://${kit.canonicalEndpointHost}:${providerEndpoint.port}`
+    );
+    if (
+      isIP(providerEndpoint.hostname) ||
+      !providerEndpoint.port ||
+      providerEndpoint.username ||
+      providerEndpoint.password ||
+      providerEndpoint.search ||
+      providerEndpoint.hash
+    )
+      refuse("registration requires the actual strict DNS provider endpoint");
+    const sha = (value: string) =>
+      createHash("sha256").update(value).digest("hex");
+    const fresh = (value: string) =>
+      Date.parse(value) >= Date.now() - 60_000 &&
+      Date.parse(value) <= Date.now() + 5_000;
+    if (
+      !fresh(facts.observedAt) ||
+      !matchesEndpointIdentity(
+        native.endpointIdentity,
+        native.systemIdentifier,
+        providerEndpoint,
+        canonical,
+        createHash("sha256")
+          .update(new X509Certificate(kit.tlsCertificate).raw)
+          .digest("hex")
+      )
+    )
+      refuse(
+        "registration requires fresh paid-endpoint DNS, strict TLS and native identity proof"
+      );
+    if (
+      provider.dseq !== record.externalName ||
+      provider.providerAccount !== record.providerAccount ||
+      provider.appliedSdlHash !== record.lastAppliedSdlHash ||
+      native.databaseName !== lane.databaseName ||
+      native.appRole !== lane.appRole ||
+      native.serviceRole !== lane.serviceRole
+    )
+      refuse(
+        "registration native identity or managed SDL differs from custody"
+      );
+    if (
+      packet.packetSha256 !== input.manualCutoverPacketSha256 ||
+      packet.nodeId !== kit.nodeId ||
+      packet.nodeSlug !== kit.nodeSlug ||
+      packet.cellSourceSha !== kit.sourceSha ||
+      packet.allocationReceiptId !== record.receiptId ||
+      packet.systemIdentifier !== native.systemIdentifier ||
+      packet.appSourceSha !== lane.sourceSha ||
+      packet.appAllocationReceiptId !== app.allocationReceiptId ||
+      packet.appSdlHash !== app.appliedSdlHash
+    )
+      refuse(
+        "manual packet differs from the actual primary allocation or application"
+      );
+    if (
+      readmission.receiptId !== input.readmissionReceiptId ||
+      readmission.packetSha256 !== packet.packetSha256 ||
+      readmission.allocationReceiptId !== record.receiptId ||
+      readmission.systemIdentifier !== native.systemIdentifier ||
+      readmission.authorizedActorId !== packet.authorizedActorId ||
+      Date.parse(readmission.admittedAt) < Date.parse(packet.approvedAt) ||
+      Date.parse(readmission.admittedAt) > Date.now() + 5_000
+    )
+      refuse(
+        "registration readmission identity or chronology differs from its reviewed packet"
+      );
+    const runtimeRoles = [lane.appRole, lane.serviceRole];
+    if (
+      runtimeRoles.some(
+        (name) =>
+          native.runtimeRoles.filter(
+            (role) => role.name === name && role.canLogin
+          ).length !== 1
+      )
+    )
+      refuse("registration must observe the genuinely admitted runtime roles");
+    const url = (role: string, password: string) =>
+      composeDatabaseCellDsn(
+        { host: canonical.hostname, port: Number(canonical.port) },
+        lane.databaseName,
+        role,
+        password
+      );
+    const appDsn = url(lane.appRole, lane.appPassword);
+    if (
+      app.nodeId !== kit.nodeId ||
+      app.deployedSourceSha !== lane.sourceSha ||
+      app.appDsnSha256 !== sha(appDsn) ||
+      app.serviceDsnSha256 !==
+        sha(url(lane.serviceRole, lane.servicePassword)) ||
+      app.migrationDsnSha256 !==
+        sha(
+          app.migrationConsumer === "app-database-url"
+            ? appDsn
+            : url(lane.migrationRole, lane.migrationPassword)
+        ) ||
+      app.tlsTrustKind !== native.tlsTrustKind ||
+      (app.tlsTrustKind === "private-ca" &&
+        app.tlsCaSha256 !== sha(kit.tlsCaCertificate)) ||
+      new Set(app.regions.map((region) => region.region)).size < 2 ||
+      app.regions.some(
+        (region) =>
+          region.status !== 200 ||
+          region.buildSha !== lane.sourceSha ||
+          !fresh(region.observedAt)
+      )
+    )
+      refuse(
+        "registration current application DSN, TLS, source SHA or regional readiness differs from custody"
+      );
+    const sameRelations = (values: readonly string[]) =>
+      JSON.stringify([...values].sort()) ===
+      JSON.stringify([...packet.expectedRelations].sort());
+    if (
+      (kit.nodeSlug === "poly" && packet.expectedRelations.length !== 68) ||
+      !sameRelations(backup.relations) ||
+      !sameRelations(recovery.relations) ||
+      backup.databaseName !== lane.databaseName ||
+      backup.systemIdentifier !== native.systemIdentifier ||
+      backup.executorFailureDomainId ===
+        `akash:${record.providerAccount}:${record.externalName}` ||
+      recovery.archiveSha256 !== backup.archiveSha256 ||
+      recovery.restoredSystemIdentifier === native.systemIdentifier ||
+      recovery.providerAccount === record.providerAccount ||
+      recovery.recoveryFailureDomainId !==
+        `akash:${recovery.providerAccount}:${recovery.dseq}` ||
+      recovery.recoveryFailureDomainId ===
+        `akash:${record.providerAccount}:${record.externalName}` ||
+      recovery.fullSchemaFingerprintSha256 !==
+        backup.fullSchemaFingerprintSha256 ||
+      recovery.fullDataFingerprintSha256 !== backup.fullDataFingerprintSha256 ||
+      recovery.sequenceStateFingerprintSha256 !==
+        backup.sequenceStateFingerprintSha256 ||
+      recovery.rowCount !== backup.rowCount ||
+      Date.parse(backup.completedAt) < Date.parse(backup.snapshotStartedAt) ||
+      Date.parse(recovery.completedAt) < Date.parse(backup.completedAt) ||
+      Date.parse(recovery.completedAt) > Date.now() + 5_000
+    )
+      refuse(
+        "registration requires an actual scheduled full backup and matching independent complete recovery"
+      );
+    const previous = await this.read(input);
+    const old = previous.find(
+      (receipt) => receipt.binding.environment === "production"
+    );
+    if (
+      old &&
+      (old.binding.phase !== "applied" ||
+        old.binding.systemIdentifier !== native.systemIdentifier ||
+        old.binding.endpoint.host !== canonical.hostname ||
+        old.binding.endpoint.port !== Number(canonical.port) ||
+        old.binding.cutover?.packetSha256 !== packet.packetSha256 ||
+        old.registration?.readmissionReceiptId !== readmission.receiptId ||
+        old.registration.scheduledBackupReceiptSha256 !==
+          backup.receiptSha256 ||
+        old.registration.independentRecoveryReceiptSha256 !==
+          recovery.receiptSha256 ||
+        old.registration.appAllocationReceiptId !== app.allocationReceiptId ||
+        old.registration.appSdlHash !== app.appliedSdlHash ||
+        old.registration.migrationConsumer !== app.migrationConsumer ||
+        old.registration.tlsTrustKind !== app.tlsTrustKind)
+    )
+      refuse(
+        "applied registration cannot replace prior physical identity or audited custody"
+      );
+    if (old) return previous;
+    const receipt: AppliedDatabaseCellReceipt = {
+      allocationEnvironment: "production",
+      targetBuildSha: lane.sourceSha,
+      registration: {
+        kind: "audited-manual",
+        readmissionReceiptId: readmission.receiptId,
+        manualCutoverPacketSha256: packet.packetSha256,
+        scheduledBackupReceiptSha256: backup.receiptSha256,
+        independentRecoveryReceiptSha256: recovery.receiptSha256,
+        appAllocationReceiptId: app.allocationReceiptId,
+        appSdlHash: app.appliedSdlHash,
+        migrationConsumer: app.migrationConsumer,
+        tlsTrustKind: app.tlsTrustKind,
+        registeredAt: facts.observedAt,
+      },
+      binding: {
+        version: 1,
+        phase: "applied",
+        receiptId: record.receiptId,
+        cogniKey: record.cogniKey,
+        nodeId: kit.nodeId,
+        nodeSlug: kit.nodeSlug,
+        environment: "production",
+        provider: "akash",
+        dseq: record.externalName,
+        providerAccount: record.providerAccount,
+        endpoint: {
+          host: canonical.hostname,
+          port: Number(canonical.port),
+          tlsMode: "verify-full",
+          tlsCertificateSha256: sha(kit.tlsCertificate),
+        },
+        databaseName: lane.databaseName,
+        appRole: lane.appRole,
+        serviceRole: lane.serviceRole,
+        migrationRole: lane.migrationRole,
+        probeRole: lane.probeRole,
+        systemIdentifier: native.systemIdentifier,
+        failureDomainId: `akash:${record.providerAccount}:${record.externalName}`,
+        sourceSha: kit.sourceSha,
+        budgetProfile: lane.budgetProfile,
+        appliedSdlHash: record.lastAppliedSdlHash,
+        readyAt: facts.observedAt,
+        cutover: {
+          packetSha256: packet.packetSha256,
+          actorId: packet.authorizedActorId,
+          approvedAt: packet.approvedAt,
+        },
+      },
+    };
+    const next = AppliedDatabaseCellReceiptsSchema.parse([
+      ...previous,
+      receipt,
+    ]);
+    await this.deps.store.save(record, next, previous);
+    return next;
+  }
+
   async cutover(input: DatabaseCellCutoverReference) {
     if (
       input.allocationEnvironment !== "production" ||
@@ -370,12 +683,12 @@ export class DatabaseCellBinder implements DatabaseCellBindingPort {
 
 /** Alias facts must describe the same live endpoint; a configured hostname is never proof. */
 function matchesEndpointIdentity(
-  proof: DatabaseCellNativeProof,
+  identity: DatabaseCellNativeProof["endpointIdentity"],
+  systemIdentifier: string,
   provider: URL,
   canonical: URL,
   certificateDerSha256: string
 ): boolean {
-  const identity = proof.endpointIdentity;
   if (!identity) return false;
   const observedAt = Date.parse(identity.observedAt);
   return (
@@ -386,7 +699,7 @@ function matchesEndpointIdentity(
     identity.provider.port === Number(provider.port) &&
     identity.canonical.host === canonical.hostname &&
     identity.canonical.port === Number(canonical.port) &&
-    identity.systemIdentifier === proof.observation.systemIdentifier &&
+    identity.systemIdentifier === systemIdentifier &&
     identity.peerCertificateDerSha256 === certificateDerSha256 &&
     identity.provider.addresses.length > 0 &&
     identity.canonical.addresses.length > 0 &&

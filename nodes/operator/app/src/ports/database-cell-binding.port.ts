@@ -12,7 +12,9 @@
  */
 import type {
   AppliedDatabaseCellReceipt,
+  DatabaseCellAppliedRegistrationFacts,
   DatabaseCellBootstrapKit,
+  DatabaseCellEndpointIdentity,
 } from "@/types/database-cell";
 
 export interface DatabaseCellBindingReference {
@@ -46,21 +48,7 @@ export interface DatabaseCellBindingPort {
 
 export interface DatabaseCellNativeProof {
   /** Measured by the trusted native observer, never accepted from a binding request. */
-  readonly endpointIdentity?: {
-    readonly observedAt: string;
-    readonly provider: {
-      readonly host: string;
-      readonly port: number;
-      readonly addresses: readonly string[];
-    };
-    readonly canonical: {
-      readonly host: string;
-      readonly port: number;
-      readonly addresses: readonly string[];
-    };
-    readonly peerCertificateDerSha256: string;
-    readonly systemIdentifier: string;
-  };
+  readonly endpointIdentity?: DatabaseCellEndpointIdentity;
   readonly lane: DatabaseCellBootstrapKit["logicalDatabases"][number];
   readonly observation: {
     readonly database: string;
@@ -82,4 +70,31 @@ export interface DatabaseCellNativeObserverPort {
       providerEndpoint?: { host: string; port: number };
     }
   ): Promise<readonly DatabaseCellNativeProof[]>;
+}
+
+/**
+ * Post-readmission import seam. Separate from prestage seal/cutover:
+ * the request names audited receipts, never supplies native facts or approval flags.
+ * Missing trusted evidence supply refuses registration; prestage containment is unchanged.
+ */
+export interface DatabaseCellAppliedRegistrationPort {
+  registerApplied(
+    input: DatabaseCellBindingReference & {
+      readonly manualCutoverPacketSha256: string;
+      readonly readmissionReceiptId: string;
+    }
+  ): Promise<readonly AppliedDatabaseCellReceipt[]>;
+}
+
+/** Credential-free measured facts; digest references must be loaded and validated by the adapter. */
+export type { DatabaseCellAppliedRegistrationFacts } from "@/types/database-cell";
+
+/** Authenticates artifact custody and rereads provider/native/runtime truth; never trusts request success assertions. */
+export interface DatabaseCellAppliedRegistrationEvidencePort {
+  observe(input: {
+    readonly reference: DatabaseCellBindingReference;
+    readonly kit: DatabaseCellBootstrapKit;
+    readonly manualCutoverPacketSha256: string;
+    readonly readmissionReceiptId: string;
+  }): Promise<DatabaseCellAppliedRegistrationFacts>;
 }

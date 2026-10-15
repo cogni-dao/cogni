@@ -50,11 +50,15 @@ import {
   AkashTxUpdateInputSchema,
 } from "@/contracts/compute.akash-tx.v1.contract";
 import {
+  DatabaseCellAppliedRegistrationReferenceSchema,
   DatabaseCellBindingIdentitySchema,
   DatabaseCellBindingReferenceSchema,
   DatabaseCellCutoverReferenceSchema,
 } from "@/contracts/database-cell-binding.v1.contract";
-import type { DatabaseCellBindingPort } from "@/ports";
+import type {
+  DatabaseCellAppliedRegistrationPort,
+  DatabaseCellBindingPort,
+} from "@/ports";
 import {
   type AkashTxActuatorPort,
   AkashTxError,
@@ -113,6 +117,7 @@ export interface AkashTxHttpDeps {
   /** Shared secret required on every operation. Empty is rejected at construction. */
   readonly token: string;
   readonly databaseCellBindings?: DatabaseCellBindingPort;
+  readonly databaseCellAppliedRegistration?: DatabaseCellAppliedRegistrationPort;
   readonly log?: AkashTxLogger;
   /** Pure private-kit resolver; callers can supply a catalog reference only. */
   readonly databaseCellSpec?: (input: {
@@ -344,6 +349,22 @@ export function createAkashTxDispatcher(
               identity: input.identity,
               spec,
             }),
+          };
+        }
+        case "/v1/akash/database-cell-binding/register-applied": {
+          if (!deps.databaseCellAppliedRegistration)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "applied cell registration capability unavailable"
+            );
+          return {
+            status: 200,
+            body: {
+              receipts:
+                await deps.databaseCellAppliedRegistration.registerApplied(
+                  DatabaseCellAppliedRegistrationReferenceSchema.parse(payload)
+                ),
+            },
           };
         }
         case "/v1/akash/database-cell-binding/discover": {

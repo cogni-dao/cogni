@@ -1070,3 +1070,62 @@ describe("lease-log-sources route (bug.5240)", () => {
     expect(response.status).toBe(400);
   });
 });
+
+describe("private applied cell registration", () => {
+  const input = {
+    cogniKey: "fixture-primary",
+    nodeId: IDENTITY.nodeId,
+    allocationEnvironment: "production",
+    manualCutoverPacketSha256: "f".repeat(64),
+    readmissionReceiptId: "manual-readmission-fixture",
+  };
+  it("authenticates and admits references only before reaching the registration capability", async () => {
+    const received: unknown[] = [];
+    const dispatch = createAkashTxDispatcher({
+      actuator: stubActuator(),
+      token: TOKEN,
+      databaseCellAppliedRegistration: {
+        registerApplied: async (value) => {
+          received.push(value);
+          return [];
+        },
+      },
+    });
+    const request = {
+      method: "POST",
+      path: "/v1/akash/database-cell-binding/register-applied",
+      authorization: AUTH,
+      body: JSON.stringify(input),
+    };
+    const { authorization: _authorization, ...unauthenticated } = request;
+    expect((await dispatch(unauthenticated)).status).toBe(401);
+    expect(
+      (
+        await dispatch({
+          ...request,
+          body: JSON.stringify({
+            ...input,
+            approved: true,
+            systemIdentifier: "forged",
+          }),
+        })
+      ).status
+    ).toBe(400);
+    expect(received).toEqual([]);
+    expect((await dispatch(request)).status).toBe(200);
+    expect(received).toEqual([input]);
+  });
+  it("fails closed when the applied evidence capability is unavailable", async () => {
+    const dispatch = dispatcherFor(stubActuator());
+    expect(
+      (
+        await dispatch({
+          method: "POST",
+          path: "/v1/akash/database-cell-binding/register-applied",
+          authorization: AUTH,
+          body: JSON.stringify(input),
+        })
+      ).status
+    ).toBe(503);
+  });
+});

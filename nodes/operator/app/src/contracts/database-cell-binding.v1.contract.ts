@@ -27,3 +27,10 @@ export const DatabaseCellCutoverReferenceSchema =
 
 export const DatabaseCellBindingIdentitySchema =
   DatabaseCellBindingReferenceSchema.omit({ cogniKey: true });
+
+/** References only; authorization and measured facts come from trusted evidence custody. */
+export const DatabaseCellAppliedRegistrationReferenceSchema =
+  DatabaseCellBindingReferenceSchema.extend({
+    manualCutoverPacketSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    readmissionReceiptId: z.string().min(1).max(256),
+  });

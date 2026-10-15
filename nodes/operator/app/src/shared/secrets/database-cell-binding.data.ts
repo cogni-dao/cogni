@@ -350,3 +350,18 @@ export const DatabaseRecoveryCellReadmitBindingSchema =
 export type DatabaseRecoveryCellBinding = z.infer<
   typeof DatabaseRecoveryCellProbeBindingSchema
 >;
+
+/** Canonical strict-TLS URL composition; callers keep credentials in private custody. */
+export function composeDatabaseCellDsn(
+  endpoint: { host: string; port: number },
+  database: string,
+  role: string,
+  password: string
+): string {
+  const value = new URL(`postgresql://${endpoint.host}:${endpoint.port}`);
+  value.username = role;
+  value.password = password;
+  value.pathname = `/${database}`;
+  value.searchParams.set("sslmode", "verify-full");
+  return value.href;
+}

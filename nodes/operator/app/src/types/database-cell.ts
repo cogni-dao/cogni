@@ -98,6 +98,138 @@ export interface DatabaseCellBootstrapKit {
 export interface AppliedDatabaseCellReceipt {
   allocationEnvironment: CellEnvironment;
   targetBuildSha: string;
-  initialIncidentId: string;
+  initialIncidentId?: string | undefined;
+  registration?:
+    | {
+        kind: "audited-manual";
+        readmissionReceiptId: string;
+        manualCutoverPacketSha256: string;
+        scheduledBackupReceiptSha256: string;
+        independentRecoveryReceiptSha256: string;
+        appAllocationReceiptId: string;
+        appSdlHash: string;
+        migrationConsumer: "app-database-url" | "dedicated-migration-url";
+        tlsTrustKind: "system" | "private-ca";
+        registeredAt: string;
+      }
+    | undefined;
   binding: DatabaseCellBinding;
+}
+
+/** Facts measured on the authenticated connection to the owned paid endpoint. */
+export interface DatabaseCellEndpointIdentity {
+  readonly observedAt: string;
+  readonly provider: {
+    readonly host: string;
+    readonly port: number;
+    readonly addresses: readonly string[];
+  };
+  readonly canonical: {
+    readonly host: string;
+    readonly port: number;
+    readonly addresses: readonly string[];
+  };
+  readonly peerCertificateDerSha256: string;
+  readonly systemIdentifier: string;
+}
+
+export interface DatabaseCellAppliedRegistrationFacts {
+  readonly observedAt: string;
+  readonly provider: {
+    readonly dseq: string;
+    readonly providerAccount: string;
+    readonly appliedSdlHash: string;
+  };
+  readonly native: {
+    readonly databaseName: string;
+    readonly systemIdentifier: string;
+    readonly appRole: string;
+    readonly serviceRole: string;
+    readonly runtimeRoles: readonly {
+      readonly name: string;
+      readonly canLogin: boolean;
+      readonly connectionLimit: number;
+    }[];
+    readonly activeRuntimeSessions: number;
+    readonly serverVersionNum: number;
+    readonly tlsTrustKind: "system" | "private-ca";
+    readonly endpointIdentity: DatabaseCellEndpointIdentity;
+  };
+  readonly effectiveApp: {
+    readonly allocationReceiptId: string;
+    readonly deployedSourceSha: string;
+    readonly appliedSdlHash: string;
+    readonly nodeId: string;
+    readonly environment: "production";
+    readonly regions: readonly {
+      readonly region: string;
+      readonly status: number;
+      readonly buildSha: string;
+      readonly observedAt: string;
+    }[];
+    readonly appDsnSha256: string;
+    readonly serviceDsnSha256: string;
+    readonly migrationDsnSha256: string;
+    readonly tlsCaSha256?: string | undefined;
+    readonly tlsTrustKind: "system" | "private-ca";
+    readonly migrationConsumer: "app-database-url" | "dedicated-migration-url";
+    readonly readinessReceiptSha256: string;
+  };
+  readonly manualCutover: {
+    readonly packetSha256: string;
+    readonly purpose: "production-primary";
+    readonly nodeId: string;
+    readonly nodeSlug: string;
+    readonly environment: "production";
+    readonly cellSourceSha: string;
+    readonly appAllocationReceiptId: string;
+    readonly appSdlHash: string;
+    readonly expectedRelations: readonly string[];
+    readonly allocationReceiptId: string;
+    readonly systemIdentifier: string;
+    readonly appSourceSha: string;
+    readonly sourceFenceReceiptSha256: string;
+    readonly restorationParityManifestSha256: string;
+    readonly authorizedActorId: string;
+    readonly approvedAt: string;
+  };
+  readonly readmission: {
+    readonly receiptId: string;
+    readonly packetSha256: string;
+    readonly allocationReceiptId: string;
+    readonly systemIdentifier: string;
+    readonly admittedAt: string;
+    readonly authorizedActorId: string;
+  };
+  readonly scheduledBackup: {
+    readonly receiptSha256: string;
+    readonly databaseName: string;
+    readonly systemIdentifier: string;
+    readonly archiveSha256: string;
+    readonly archiveBytes: number;
+    readonly snapshotStartedAt: string;
+    readonly completedAt: string;
+    readonly verifiedArchiveReceiptSha256: string;
+    readonly schedulerUnitSha256: string;
+    readonly executorFailureDomainId: string;
+    readonly fullSchemaFingerprintSha256: string;
+    readonly fullDataFingerprintSha256: string;
+    readonly sequenceStateFingerprintSha256: string;
+    readonly relations: readonly string[];
+    readonly rowCount: string;
+  };
+  readonly independentRecovery: {
+    readonly receiptSha256: string;
+    readonly archiveSha256: string;
+    readonly restoredSystemIdentifier: string;
+    readonly providerAccount: string;
+    readonly dseq: string;
+    readonly recoveryFailureDomainId: string;
+    readonly completedAt: string;
+    readonly fullSchemaFingerprintSha256: string;
+    readonly fullDataFingerprintSha256: string;
+    readonly sequenceStateFingerprintSha256: string;
+    readonly relations: readonly string[];
+    readonly rowCount: string;
+  };
 }

@@ -697,6 +697,9 @@ const databaseCellDiagnosticObserve = async (
 const server = createAkashTxActuatorServer({
   actuator,
   databaseCellBindings,
+  // The route is wired, but registration stays fail-closed until a distinct,
+  // read-only applied-evidence producer is reviewed and injected into the binder.
+  databaseCellAppliedRegistration: databaseCellBindings,
   ...{ databaseCellDiagnostic, databaseCellDiagnosticObserve },
   token: bearerToken,
   log,

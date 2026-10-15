@@ -53,7 +53,17 @@ export class DrizzleDatabaseCellBindingStore {
     if (
       !record.externalName ||
       !record.providerAccount ||
-      !record.lastAppliedSdlHash
+      !record.lastAppliedSdlHash ||
+      validated.some(
+        ({ allocationEnvironment, binding }) =>
+          allocationEnvironment !== record.environment ||
+          binding.receiptId !== record.receiptId ||
+          binding.cogniKey !== record.cogniKey ||
+          binding.nodeId !== record.identity.nodeId ||
+          binding.dseq !== record.externalName ||
+          binding.providerAccount !== record.providerAccount ||
+          binding.appliedSdlHash !== record.lastAppliedSdlHash
+      )
     )
       throw new Error("cell allocation is not applied");
     const db = await this.getDb();
@@ -83,6 +93,8 @@ export class DrizzleDatabaseCellBindingStore {
       )
       .returning({ id: akashTxAllocations.id });
     if (updated.length !== 1)
-      throw new Error("cell allocation changed during native sealing");
+      throw new Error(
+        "cell allocation changed during binding compare-and-swap"
+      );
   }
 }

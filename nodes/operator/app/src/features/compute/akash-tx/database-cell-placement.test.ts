@@ -7,11 +7,20 @@ import { fileURLToPath } from "node:url";
 import { repoSpecSchema } from "@cogni/repo-spec";
 import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { describe, expect, it } from "vitest";
-import { DatabaseCellBindingReferenceSchema } from "@/contracts/database-cell-binding.v1.contract";
+import {
+  DatabaseCellAppliedRegistrationReferenceSchema,
+  DatabaseCellBindingReferenceSchema,
+} from "@/contracts/database-cell-binding.v1.contract";
 import { DatabaseCellBinder } from "@/features/compute/akash-tx/database-cell-binding";
-import type { AkashTxAllocationRecord, DatabaseCellNativeProof } from "@/ports";
+import type {
+  AkashTxAllocationRecord,
+  DatabaseCellAppliedRegistrationFacts,
+  DatabaseCellNativeProof,
+} from "@/ports";
+import { composeDatabaseCellDsn } from "@/shared/secrets/database-cell-binding.data";
 import {
   type AppliedDatabaseCellReceipt,
+  AppliedDatabaseCellReceiptSchema,
   DatabaseCellAllocationMetadataSchema,
 } from "@/shared/secrets/database-cell-placement.data";
 import {
@@ -68,9 +77,13 @@ function fixture(
   options: {
     canonicalEndpointHost?: string;
     endpointIdentity?: DatabaseCellNativeProof["endpointIdentity"];
+    appliedFacts?: DatabaseCellAppliedRegistrationFacts;
+    conflict?: boolean;
   } = {}
 ) {
   let saved: readonly AppliedDatabaseCellReceipt[] = [];
+  let nativeReads = 0;
+  const appliedFacts = options.appliedFacts;
   let writes = 0;
   let endpoints = ["tcp://provider.example.org:15432"];
   let restored = false;
@@ -106,6 +119,7 @@ function fixture(
     store: {
       read: async () => saved,
       save: async (_record, receipts, expected) => {
+        if (options.conflict) throw new Error("allocation changed during CAS");
         expect(saved).toEqual(expected);
         saved = receipts;
         writes += 1;
@@ -118,8 +132,10 @@ function fixture(
         : {}),
     }),
     buildSha: sourceSha,
-    observeNative: async () =>
-      scopedKit.logicalDatabases.map(
+    ...(appliedFacts ? { observeApplied: async () => appliedFacts } : {}),
+    observeNative: async () => {
+      nativeReads += 1;
+      return scopedKit.logicalDatabases.map(
         (lane): DatabaseCellNativeProof => ({
           lane,
           ...(options.endpointIdentity
@@ -136,9 +152,11 @@ function fixture(
           },
           incident: { incidentId: "native-cell-initial", state: "contained" },
         })
-      ),
+      );
+    },
   });
   return {
+    nativeReads: () => nativeReads,
     ref,
     binder,
     writes: () => writes,
@@ -500,5 +518,286 @@ describe("owned canonical DNS cell endpoint", () => {
         canonicalEndpointHost,
       }).success
     ).toBe(false);
+  });
+});
+
+type Mutable<T> = T extends readonly (infer Item)[]
+  ? Mutable<Item>[]
+  : T extends object
+    ? { -readonly [Key in keyof T]: Mutable<T[Key]> }
+    : T;
+function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
+  const sha = (value: string) =>
+    createHash("sha256").update(value).digest("hex");
+  const lane = scopedKit.logicalDatabases[0];
+  if (!lane) throw new Error("fixture lane missing");
+  const ago = (seconds: number) =>
+    new Date(Date.now() - seconds * 1000).toISOString();
+  const canonical = { host: "poly-db.fixture.example.org", port: 15432 };
+  const url = (role: string, password: string) =>
+    composeDatabaseCellDsn(canonical, lane.databaseName, role, password);
+  const relationNames = Array.from(
+    { length: 68 },
+    (_, index) => `public.table_${index}`
+  );
+  const fingerprint = {
+    fullSchemaFingerprintSha256: "1".repeat(64),
+    fullDataFingerprintSha256: "2".repeat(64),
+    sequenceStateFingerprintSha256: "3".repeat(64),
+    relations: relationNames,
+    rowCount: "20409387",
+  };
+  return {
+    observedAt: ago(0),
+    provider: {
+      dseq: "123",
+      providerAccount: `akash1${"a".repeat(38)}`,
+      appliedSdlHash: "d".repeat(64),
+    },
+    native: {
+      databaseName: lane.databaseName,
+      systemIdentifier: "1234567890123456789",
+      appRole: lane.appRole,
+      serviceRole: lane.serviceRole,
+      runtimeRoles: [
+        { name: lane.appRole, canLogin: true, connectionLimit: 2 },
+        { name: lane.serviceRole, canLogin: true, connectionLimit: 8 },
+      ],
+      activeRuntimeSessions: 3,
+      serverVersionNum: 150018,
+      tlsTrustKind: "system",
+      endpointIdentity: {
+        observedAt: ago(0),
+        provider: {
+          host: "provider.example.org",
+          port: 15432,
+          addresses: ["192.0.2.10"],
+        },
+        canonical: { ...canonical, addresses: ["192.0.2.10"] },
+        peerCertificateDerSha256: shaBuffer(
+          new X509Certificate(scopedKit.tlsCertificate).raw
+        ),
+        systemIdentifier: "1234567890123456789",
+      },
+    },
+    effectiveApp: {
+      allocationReceiptId: "88888888-8888-4888-8888-888888888888",
+      deployedSourceSha: appSha,
+      appliedSdlHash: "c".repeat(64),
+      nodeId,
+      environment: "production",
+      appDsnSha256: sha(url(lane.appRole, lane.appPassword)),
+      serviceDsnSha256: sha(url(lane.serviceRole, lane.servicePassword)),
+      migrationDsnSha256: sha(url(lane.appRole, lane.appPassword)),
+      tlsTrustKind: "system",
+      migrationConsumer: "app-database-url",
+      readinessReceiptSha256: "4".repeat(64),
+      regions: [
+        { region: "eu", status: 200, buildSha: appSha, observedAt: ago(0) },
+        { region: "us", status: 200, buildSha: appSha, observedAt: ago(0) },
+      ],
+    },
+    manualCutover: {
+      packetSha256: "f".repeat(64),
+      purpose: "production-primary",
+      nodeId,
+      nodeSlug: "alpha",
+      environment: "production",
+      cellSourceSha: sourceSha,
+      appAllocationReceiptId: "88888888-8888-4888-8888-888888888888",
+      appSdlHash: "c".repeat(64),
+      expectedRelations: relationNames,
+      allocationReceiptId: "22222222-2222-4222-8222-222222222222",
+      systemIdentifier: "1234567890123456789",
+      appSourceSha: appSha,
+      sourceFenceReceiptSha256: "5".repeat(64),
+      restorationParityManifestSha256: "6".repeat(64),
+      authorizedActorId: "human:fixture",
+      approvedAt: ago(5),
+    },
+    readmission: {
+      receiptId: "readmission-fixture",
+      packetSha256: "f".repeat(64),
+      allocationReceiptId: "22222222-2222-4222-8222-222222222222",
+      systemIdentifier: "1234567890123456789",
+      admittedAt: ago(4),
+      authorizedActorId: "human:fixture",
+    },
+    scheduledBackup: {
+      receiptSha256: "7".repeat(64),
+      databaseName: lane.databaseName,
+      systemIdentifier: "1234567890123456789",
+      archiveSha256: "8".repeat(64),
+      archiveBytes: 2845520022,
+      snapshotStartedAt: ago(20),
+      completedAt: ago(18),
+      verifiedArchiveReceiptSha256: "9".repeat(64),
+      schedulerUnitSha256: "a".repeat(64),
+      executorFailureDomainId: "independent-backup-host",
+      ...fingerprint,
+    },
+    independentRecovery: {
+      receiptSha256: "b".repeat(64),
+      archiveSha256: "8".repeat(64),
+      restoredSystemIdentifier: "999999999999999999",
+      providerAccount: `akash1${"b".repeat(38)}`,
+      dseq: "456",
+      recoveryFailureDomainId: `akash:akash1${"b".repeat(38)}:456`,
+      completedAt: ago(15),
+      ...fingerprint,
+    },
+  };
+}
+function shaBuffer(value: Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+describe("audited already-applied registration", () => {
+  const request = {
+    cogniKey: "fixture-cell",
+    nodeId,
+    allocationEnvironment: "production",
+    manualCutoverPacketSha256: "f".repeat(64),
+    readmissionReceiptId: "readmission-fixture",
+  };
+  it("admits reference-only input and refuses caller observations or approval flags", () => {
+    expect(
+      DatabaseCellAppliedRegistrationReferenceSchema.safeParse(request).success
+    ).toBe(true);
+    for (const injection of [
+      { approved: true },
+      { systemIdentifier: "123" },
+      { backupPassed: true },
+      { actorId: "human:forged" },
+      { endpoint: "forged.invalid" },
+      { rootPassword: "secret" },
+    ])
+      expect(
+        DatabaseCellAppliedRegistrationReferenceSchema.safeParse({
+          ...request,
+          ...injection,
+        }).success
+      ).toBe(false);
+  });
+  it("fails closed without a distinct read-only evidence producer", async () => {
+    const current = fixture();
+    await expect(current.binder.registerApplied(request)).rejects.toMatchObject(
+      { code: "ledger_unavailable" }
+    );
+    expect(current.nativeReads()).toBe(0);
+    expect(current.writes()).toBe(0);
+  });
+  it("registers current admitted sessions using genuine receipts, preserves projection and repeats without writes", async () => {
+    const facts = registrationFacts();
+    const current = fixture({
+      canonicalEndpointHost: "poly-db.fixture.example.org",
+      appliedFacts: facts,
+    });
+    const receipts = await current.binder.registerApplied(request);
+    expect(receipts[0]?.binding.phase).toBe("applied");
+    expect(receipts[0]?.initialIncidentId).toBeUndefined();
+    expect(
+      AppliedDatabaseCellReceiptSchema.safeParse({
+        ...receipts[0],
+        initialIncidentId: "invented-native-history",
+      }).success
+    ).toBe(false);
+    expect(receipts[0]?.registration?.readmissionReceiptId).toBe(
+      request.readmissionReceiptId
+    );
+    expect(await current.binder.registerApplied(request)).toEqual(receipts);
+    expect(current.writes()).toBe(1);
+    expect(current.nativeReads()).toBe(0);
+    const projected = projectDatabaseCellPlacement({
+      receipt: receipts[0],
+      kit: {
+        ...scopedKit,
+        canonicalEndpointHost: "poly-db.fixture.example.org",
+      },
+      backupEncryptionKey: "e".repeat(64),
+      requireApplied: true,
+    });
+    expect(
+      shaBuffer(Buffer.from(projected.publicValues?.DATABASE_URL ?? ""))
+    ).toBe(facts.effectiveApp.appDsnSha256);
+    expect(
+      shaBuffer(
+        Buffer.from(projected.publicValues?.DATABASE_MIGRATION_URL ?? "")
+      )
+    ).toBe(facts.effectiveApp.migrationDsnSha256);
+    expect(
+      DatabaseCellAllocationMetadataSchema.parse({
+        version: 1,
+        retentionPolicy: "retain",
+        bindings: receipts,
+      }).retentionPolicy
+    ).toBe("retain");
+  });
+  it("refuses wrong managed allocation, current DSNs, app SHA, partial recovery, schema drift and same-provider recovery", async () => {
+    const invalidCases = [
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.native.runtimeRoles[0] = {
+          name: f.native.appRole,
+          canLogin: false,
+          connectionLimit: 2,
+        };
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.effectiveApp.regions = f.effectiveApp.regions.map((region) => ({
+          ...region,
+          region: "same-region",
+        }));
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.provider.appliedSdlHash = "0".repeat(64);
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.manualCutover.allocationReceiptId =
+          "33333333-3333-4333-8333-333333333333";
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.effectiveApp.appDsnSha256 = "0".repeat(64);
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.effectiveApp.deployedSourceSha = "0".repeat(40);
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.independentRecovery.relations =
+          f.independentRecovery.relations.slice(1);
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.independentRecovery.fullSchemaFingerprintSha256 = "0".repeat(64);
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.independentRecovery.providerAccount = f.provider.providerAccount;
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.readmission.receiptId = "other-readmission";
+      },
+    ];
+    for (const mutate of invalidCases) {
+      const facts = registrationFacts();
+      mutate(facts);
+      const current = fixture({
+        canonicalEndpointHost: "poly-db.fixture.example.org",
+        appliedFacts: facts,
+      });
+      await expect(
+        current.binder.registerApplied(request)
+      ).rejects.toMatchObject({ code: "identity_conflict" });
+      expect(current.writes()).toBe(0);
+      expect(current.nativeReads()).toBe(0);
+    }
+  });
+  it("propagates a same-row CAS conflict without inventing an applied receipt", async () => {
+    const current = fixture({
+      canonicalEndpointHost: "poly-db.fixture.example.org",
+      appliedFacts: registrationFacts(),
+      conflict: true,
+    });
+    await expect(current.binder.registerApplied(request)).rejects.toThrow(
+      "allocation changed"
+    );
+    expect(current.writes()).toBe(0);
   });
 });

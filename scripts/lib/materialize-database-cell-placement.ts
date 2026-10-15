@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 
 import {
+  composeDatabaseCellDsn,
   DatabaseCellBootstrapKitSchema,
   DatabaseRecoveryCellAdminBindingSchema,
   DatabaseRecoveryCellProbeBindingSchema,
@@ -73,16 +74,8 @@ export function projectDatabaseCellPlacement(input: unknown) {
   if (binding.endpoint.tlsMode !== "verify-full") {
     throw new Error("cell endpoint has not completed strict DNS TLS sealing");
   }
-  const url = (role: string, password: string, database: string) => {
-    const value = new URL(
-      `postgresql://${binding.endpoint.host}:${binding.endpoint.port}`
-    );
-    value.username = role;
-    value.password = password;
-    value.pathname = `/${database}`;
-    value.searchParams.set("sslmode", "verify-full");
-    return value.href;
-  };
+  const url = (role: string, password: string, database: string) =>
+    composeDatabaseCellDsn(binding.endpoint, database, role, password);
   const common = {
     scope: "dedicated-cell" as const,
     nodeId: binding.nodeId,
@@ -123,11 +116,12 @@ export function projectDatabaseCellPlacement(input: unknown) {
       lane.servicePassword,
       lane.databaseName
     ),
-    DATABASE_MIGRATION_URL: url(
-      lane.migrationRole,
-      lane.migrationPassword,
-      lane.databaseName
-    ),
+    // An imported manual cell preserves its measured migration consumer. Changing
+    // to a separate role requires real credential/consumer reconciliation first.
+    DATABASE_MIGRATION_URL:
+      receipt.registration?.migrationConsumer === "app-database-url"
+        ? url(lane.appRole, lane.appPassword, lane.databaseName)
+        : url(lane.migrationRole, lane.migrationPassword, lane.databaseName),
     DATABASE_SSL_CA_CERT: kit.tlsCaCertificate,
   };
   return {
