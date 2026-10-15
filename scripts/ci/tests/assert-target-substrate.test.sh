@@ -474,6 +474,12 @@ YAML
 cat > "$EXTERNAL_BIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
+  *"get deployment operator-akash-tx-actuator"*|*"get secret akash-tx-actuator-"*)
+    [[ "$*" == "-n cogni-${FAKE_EXPECT_CONTROL_ENV:-production} "* ]] || exit 1 ;;
+  *"bao write -field=token auth/kubernetes/login"*)
+    [[ "$*" == *"role=${FAKE_EXPECT_CONTROL_ENV:-production}-db-reader "* ]] || exit 1 ;;
+esac
+case "$*" in
   # bug.5394 — the lane/cluster addressing guard runs before every namespaced lookup.
   # FAKE_LANE_NOT_HOSTED=1 makes this cluster deny hosting the lane, i.e. the #2602
   # shape: right lane name, wrong cluster.
@@ -573,7 +579,7 @@ grep -q "all declared workload secret refs are materialized" "$TMPROOT/external-
 # ---------------------------------------------------------------------------
 
 grep -q "compute_api=crossplane" "$TMPROOT/external-success.out"
-grep -q "cogni-candidate-a/operator-akash-tx-actuator is available" "$TMPROOT/external-success.out"
+grep -q "cogni-production/operator-akash-tx-actuator is available" "$TMPROOT/external-success.out"
 grep -q "AKASH_ALLOWED_PROVIDERS is declared" "$TMPROOT/external-success.out"
 if grep -q "compute workload controller" "$TMPROOT/external-success.out"; then
   echo "expected the crossplane path to assert no legacy controller" >&2
@@ -621,6 +627,8 @@ name: toks5
 type: node
 node_id: 4d2a5f3b-9c1e-4a77-bd62-1f0c7e8a4411
 path_prefix: nodes/toks5/
+deployment_provider:
+  candidate-a: akash
 compute_api:
   candidate-a: crossplane
 compute_egress_cidrs:
@@ -638,6 +646,12 @@ deployment:
 YAML
 cat > "$XCW_BIN/kubectl" <<'EOF'
 #!/usr/bin/env bash
+case "$*" in
+  *"get deployment operator-akash-tx-actuator"*|*"get secret akash-tx-actuator-"*)
+    [[ "$*" == "-n cogni-${FAKE_EXPECT_CONTROL_ENV:-candidate-a} "* ]] || exit 1 ;;
+  *"bao write -field=token auth/kubernetes/login"*)
+    [[ "$*" == *"role=${FAKE_EXPECT_CONTROL_ENV:-candidate-a}-db-reader "* ]] || exit 1 ;;
+esac
 case "$*" in
   # bug.5394 — the lane/cluster addressing guard runs before every namespaced lookup.
   # FAKE_LANE_NOT_HOSTED=1 makes this cluster deny hosting the lane, i.e. the #2602
@@ -715,6 +729,7 @@ EOF
 chmod +x "$XCW_BIN/kubectl"
 
 XCW_ENV=(
+  FLEET_CONTROL_ENV=candidate-a
   TARGET=toks5
   DEPLOYMENT_PROVIDER=akash
   DEPLOY_ENVIRONMENT=candidate-a
@@ -736,6 +751,12 @@ grep -q "cogni-candidate-a/operator-akash-tx-actuator is available" "$TMPROOT/xc
 grep -q "Secret cogni-candidate-a/akash-tx-actuator-auth carries key 'token'" "$TMPROOT/xcw-success.out"
 grep -q "Secret cogni-candidate-a/akash-tx-actuator-env-secrets exists" "$TMPROOT/xcw-success.out"
 grep -q "AKASH_ALLOWED_PROVIDERS is declared on cogni-candidate-a/operator-akash-tx-actuator (pinned to 1 provider(s))" "$TMPROOT/xcw-success.out"
+# The same lane keeps its candidate KV path but uses the actual production
+# custodian's actuator and reader. Strict mocks reject lane-namespace/role drift.
+env "${XCW_ENV[@]}" FLEET_CONTROL_ENV=production FAKE_EXPECT_CONTROL_ENV=production \
+  bash scripts/ci/assert-target-substrate.sh >"$TMPROOT/xcw-foreign-control.out"
+grep -q "cogni-production/operator-akash-tx-actuator is available" "$TMPROOT/xcw-foreign-control.out"
+grep -q "all declared workload secret refs are materialized" "$TMPROOT/xcw-foreign-control.out"
 # Authority-independent checks still run on the crossplane path.
 grep -q "all declared workload secret refs are materialized" "$TMPROOT/xcw-success.out"
 grep -q "catalog compute egress CIDRs are installed" "$TMPROOT/xcw-success.out"
