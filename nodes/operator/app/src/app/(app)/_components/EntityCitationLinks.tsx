@@ -32,7 +32,7 @@ function otherEndpoint(link: CitationLinkDto, entityId: string) {
 
 function chipLabel(link: CitationLinkDto, entityId: string): string {
   const endpoint = otherEndpoint(link, entityId);
-  return `${link.citationType} ${endpoint.id}`;
+  return `${link.citationType} ${endpoint.title ?? endpoint.id}`;
 }
 
 export function EntityCitationLinks({

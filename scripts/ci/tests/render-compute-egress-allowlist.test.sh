@@ -110,6 +110,10 @@ type: infra
 EOF
 
 export COGNI_CATALOG_ROOT="$CATALOG"
+# Existing provider-only cases represent an isolated fleet, with no production
+# custodian and no implicit DNS/domain authority.
+export FLEET_CONTROL_ENV=candidate-a
+unset FORK_DOMAIN_ROOT COGNI_DOMAIN_ROOT COGNI_DEPLOYMENT_SLUG
 PORTS="5432,5435,6379,4000,7233"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -209,6 +213,126 @@ if bash "$RENDERER" candidate-a > /dev/null 2>&1; then
 fi
 rm "$CATALOG/badplacement.yaml"
 ok "unsupported deployment_provider aborts the render"
+
+# Native migration custody: hermetic DNS, no production/fork network lookups.
+DNSBIN="$TMPROOT/dns-bin"
+mkdir -p "$DNSBIN"
+cat > "$DNSBIN/getent" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$2" >> "$DNS_QUERY_LOG"
+[ "$1" = ahostsv4 ] && [ "$2" = "$FAKE_EXPECTED_ALIAS" ] || exit 1
+printf '%s\n' "${FAKE_MIGRATION_IPS-198.51.100.23}"
+EOF
+for tool in dig python3; do
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$DNSBIN/$tool"
+done
+chmod +x "$DNSBIN/"*
+export DNS_QUERY_LOG="$TMPROOT/dns-queries"
+: > "$DNS_QUERY_LOG"
+MIGRATION_ENV=(
+  PATH="$DNSBIN:$PATH"
+  FLEET_CONTROL_ENV=production
+  FORK_DOMAIN_ROOT=migration.fixture.test
+  FAKE_EXPECTED_ALIAS=cogni.vm.migration.fixture.test
+)
+OUT_MIGRATION="$TMPROOT/candidate-migration.list"
+env "${MIGRATION_ENV[@]}" bash "$RENDERER" candidate-a > "$OUT_MIGRATION"
+grep -Fxq '198.51.100.23/32:5432' "$OUT_MIGRATION" || fail "missing migration control /32:5432"
+[ "$(grep -Fc '198.51.100.23/32:5432' "$OUT_MIGRATION")" = 1 ] || fail "migration rule duplicated across rows"
+grep -v '^#' "$OUT_MIGRATION" | grep -v '^198.51.100.23/32:5432$' > "$TMPROOT/provider-preserved"
+diff -u "$EXPECTED_A" "$TMPROOT/provider-preserved" || fail "provider rules changed"
+ok "foreign nonproduction lanes add exactly one custodian /32:5432; provider rules unchanged"
+
+env "${MIGRATION_ENV[@]}" bash "$RENDERER" preview > "$TMPROOT/preview-migration.list"
+grep -Fxq '198.51.100.23/32:5432' "$TMPROOT/preview-migration.list" || fail "preview migration control missing"
+ok "preview owner Postgres admits only the production migration custodian"
+
+env "${MIGRATION_ENV[@]}" COGNI_DEPLOYMENT_SLUG=forkfleet FORK_DOMAIN_ROOT=fork.fixture.test \
+  FAKE_EXPECTED_ALIAS=forkfleet.vm.fork.fixture.test \
+  bash "$RENDERER" candidate-a > "$TMPROOT/fork-migration.list"
+grep -q '^# migration custodian: forkfleet.vm.fork.fixture.test ' "$TMPROOT/fork-migration.list" \
+  || fail "fork control alias did not use explicit fork identity"
+ok "foreign fork custody resolves only its explicit fork domain and deployment slug"
+
+for target_env in production candidate-b; do
+  : > "$DNS_QUERY_LOG"
+  env "${MIGRATION_ENV[@]}" bash "$RENDERER" "$target_env" > "$TMPROOT/no-migration.list"
+  grep -q '^198.51.100.23/' "$TMPROOT/no-migration.list" && fail "migration admission leaked into $target_env"
+  [ ! -s "$DNS_QUERY_LOG" ] || fail "unrelated/production env performed foreign DNS"
+done
+ok "production and unrelated envs never admit or resolve migration control"
+
+: > "$DNS_QUERY_LOG"
+env "${MIGRATION_ENV[@]}" FLEET_CONTROL_ENV=candidate-a bash "$RENDERER" candidate-a > "$TMPROOT/isolated.list"
+diff -u "$OUT_A" "$TMPROOT/isolated.list" || fail "isolated fleet gained foreign trust"
+[ ! -s "$DNS_QUERY_LOG" ] || fail "isolated fleet resolved a production host"
+env "${MIGRATION_ENV[@]}" FLEET_CONTROL_ENV=preview bash "$RENDERER" candidate-a > "$TMPROOT/uptrust.list"
+grep -q '^198.51.100.23/' "$TMPROOT/uptrust.list" && fail "nonproduction control gained uptrust admission"
+ok "self-control and nonproduction control grant no cross-environment admission"
+
+: > "$DNS_QUERY_LOG"
+env "${MIGRATION_ENV[@]}" FORK_DOMAIN_ROOT= \
+  bash "$RENDERER" candidate-a production > "$TMPROOT/control-twin.list"
+diff -u "$OUT_A" "$TMPROOT/control-twin.list" || fail "control-host twin provider rows changed or gained a migration rule"
+[ ! -s "$DNS_QUERY_LOG" ] || fail "control-host twin resolved foreign migration trust"
+ok "actual production control-host twin preserves provider rules with NO custodian/self admission"
+
+if env "${MIGRATION_ENV[@]}" FORK_DOMAIN_ROOT= bash "$RENDERER" candidate-a > /dev/null 2> "$TMPROOT/no-root.err"; then
+  fail "foreign custody accepted a defaulted domain root"
+fi
+grep -q 'explicit FORK_DOMAIN_ROOT is required' "$TMPROOT/no-root.err" || fail "missing root failed for wrong reason"
+ok "foreign migration custody fails closed without explicit fleet domain"
+
+for address in '' '198.51.100.23
+198.51.100.24' 127.0.0.1 0.0.0.0 255.255.255.255 224.0.0.1 999.1.1.1 malformed; do
+  if env "${MIGRATION_ENV[@]}" FAKE_MIGRATION_IPS="$address" bash "$RENDERER" candidate-a > /dev/null 2>&1; then
+    fail "unsafe/missing/ambiguous custodian IPv4 accepted: $address"
+  fi
+done
+ok "missing, ambiguous, loopback, unspecified, broadcast, multicast, and malformed IPv4 fail closed"
+
+env "${MIGRATION_ENV[@]}" FAKE_MIGRATION_IPS='80.200.246.35' \
+  bash "$RENDERER" candidate-a > "$TMPROOT/shared-source.list"
+grep -Fxq "80.200.246.35/32:$PORTS" "$TMPROOT/shared-source.list" || fail "provider port declaration changed"
+grep -Fxq '80.200.246.35/32:5432' "$TMPROOT/shared-source.list" || fail "provider CIDR dedupe suppressed migration rule"
+ok "custodian rule dedupe is independent of a matching provider CIDR"
+
+MIGRATION_ONLY_CATALOG="$TMPROOT/migration-only-catalog"
+mkdir -p "$MIGRATION_ONLY_CATALOG"
+cat > "$MIGRATION_ONLY_CATALOG/only.yaml" <<'EOF'
+name: only
+type: node
+envs: [candidate-a]
+deployment_provider:
+  candidate-a: akash
+EOF
+env "${MIGRATION_ENV[@]}" COGNI_CATALOG_ROOT="$MIGRATION_ONLY_CATALOG" \
+  bash "$RENDERER" candidate-a > "$TMPROOT/migration-only.list"
+[ "$(grep -v '^#' "$TMPROOT/migration-only.list")" = '198.51.100.23/32:5432' ] \
+  || fail "native migration admission wrongly depends on provider CIDRs"
+ok "an actual foreign Akash lane needs migration admission even without provider CIDRs"
+yq -i '.deployment_provider."candidate-a" = "k3s"' "$MIGRATION_ONLY_CATALOG/only.yaml"
+: > "$DNS_QUERY_LOG"
+env "${MIGRATION_ENV[@]}" COGNI_CATALOG_ROOT="$MIGRATION_ONLY_CATALOG" \
+  bash "$RENDERER" candidate-a > "$TMPROOT/k3s-only.list"
+grep -qv '^#' "$TMPROOT/k3s-only.list" && fail "k3s-only lane gained migration admission"
+[ ! -s "$DNS_QUERY_LOG" ] || fail "k3s-only lane performed foreign DNS"
+ok "a k3s-only lane resolves and admits no foreign migration control"
+
+ACTION="$REPO_ROOT/.github/actions/reconcile-compute-egress/action.yml"
+[ "$(yq -r '.runs.steps[0].env.FORK_DOMAIN_ROOT' "$ACTION")" = '${{ vars.FORK_DOMAIN_ROOT }}' ] \
+  || fail "composite must source explicit repo-owned root, not inherit DAO fallback"
+[ "$(yq -r '.runs.steps[0].env.DESTINATION_ENVIRONMENT' "$ACTION")" = '${{ inputs.destination_environment || inputs.environment }}' ] \
+  || fail "composite destination must default to lane"
+for workflow in candidate-flight.yml promote-and-deploy.yml; do
+  actual_destination="$(yq -r '.jobs.reconcile-compute-egress-control.steps[] | select(.uses == "./app-src/.github/actions/reconcile-compute-egress") | .with.destination_environment' "$REPO_ROOT/.github/workflows/$workflow")"
+  [ "$actual_destination" = '${{ vars.FLEET_CONTROL_ENV || '\''production'\'' }}' ] \
+    || fail "$workflow control twin did not declare its actual destination"
+done
+yq -r '.jobs.reconcile-compute-egress.if' "$REPO_ROOT/.github/workflows/promote-and-deploy.yml" \
+  | grep -Fq "needs.decide.outputs.has_external_compute_node_targets == 'true'" \
+  || fail "foreign Akash-only promote must reconcile its lane-owned Postgres firewall"
+ok "canonical composite/control twins preserve explicit trust provenance and actual destination; Akash owner job runs"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Fake VM toolchain for harden-docker-public-ports.sh
@@ -319,5 +443,24 @@ PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/rules.4"
 grep -q 'compute-egress-allow' "$TMPROOT/rules.4" \
   || fail "without a staged file, the installed allowlist must still apply"
 ok "no staged file: previously installed allowlist still renders (boot path)"
+
+cp "$OUT_MIGRATION" "$STAGED_ALLOWLIST"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/migration.rules"
+grep -q -- '-s 198.51.100.23/32 -p tcp -m multiport --dports 5432 .*compute-egress-allow.* ACCEPT' "$TMPROOT/migration.rules" \
+  || fail "hardener did not install exact custodian TCP5432 ACCEPT"
+if grep '198.51.100.23/32' "$TMPROOT/migration.rules" | grep -qE -- '--dports (5432,|5435|6379|4000|7233|8080)'; then
+  fail "migration custodian gained unrelated substrate ports"
+fi
+ok "existing hardener installs custodian /32 for TCP5432 only"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/migration.rules.second"
+diff -u "$TMPROOT/migration.rules" "$TMPROOT/migration.rules.second" || fail "custodian rule is not idempotent"
+cp "$OUT_A" "$STAGED_ALLOWLIST"
+run_harden
+PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/migration.removed"
+grep -q '198.51.100.23/32' "$TMPROOT/migration.removed" && fail "custodian rule did not converge away"
+grep -q 'drop-public' "$TMPROOT/migration.removed" || fail "custodian removal lost public DROP"
+ok "custodian admission is idempotent and removed with catalog/control convergence"
 
 echo "PASS: all $PASS assertions"
