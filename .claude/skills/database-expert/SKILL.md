@@ -7,12 +7,12 @@ description: Cogni database architecture and operations. Use for PostgreSQL envi
 
 > The contract lives in the hub, not here. This file is only the trigger.
 
-Fetch and follow the [node database contract](https://cognidao.org/knowledge/node-database-contract) before database work:
+Fetch and follow the [database expert skill](https://cognidao.org/knowledge/database-expert) before database work:
 
 ```bash
 # COGNI_NODE_API_KEY is the saved node-agent key from .env.cogni.
 curl -fsS --max-time 20 -H "Authorization: Bearer $COGNI_NODE_API_KEY" \
-  https://cognidao.org/api/v1/knowledge/node-database-contract | jq -er .content
+  https://cognidao.org/api/v1/knowledge/database-expert | jq -er .content
 ```
 
-That contract routes to the owning specs, skills, and knowledge atoms. If recall fails or the entry is not published, report the unavailable contract and stop database operations; do not substitute a stale local manual or an unmerged proposal.
+That skill routes to the owning specs, contracts, and knowledge atoms. If recall fails or the entry is not published, report the unavailable skill and stop database operations; do not substitute a stale local manual or an unmerged proposal.
