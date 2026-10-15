@@ -991,10 +991,19 @@ export class HttpReliabilityRecoveryAdapter
       .parse(await response.json());
   }
 
-  async read(
-    input: Parameters<ReliabilityRecoveryReaderPort["read"]>[0]
+  readWindow(input: Parameters<ReliabilityRecoveryReaderPort["read"]>[0]) {
+    return this.readProof(input, "/v1/internal/recovery-window");
+  }
+
+  read(input: Parameters<ReliabilityRecoveryReaderPort["read"]>[0]) {
+    return this.readProof(input, "/v1/internal/recovery");
+  }
+
+  private async readProof(
+    input: Parameters<ReliabilityRecoveryReaderPort["read"]>[0],
+    path: "/v1/internal/recovery" | "/v1/internal/recovery-window"
   ): Promise<Awaited<ReturnType<ReliabilityRecoveryReaderPort["read"]>>> {
-    const url = new URL("/v1/internal/recovery", this.config.baseUrl);
+    const url = new URL(path, this.config.baseUrl);
     url.searchParams.set("node_id", input.nodeId);
     url.searchParams.set("node_slug", input.nodeSlug);
     url.searchParams.set("environment", input.environment);

@@ -458,6 +458,9 @@ export interface ReliabilityStatusReaderPort {
 }
 
 export interface ReliabilityRecoveryReaderPort {
+  readWindow?(
+    input: Parameters<ReliabilityRecoveryReaderPort["read"]>[0]
+  ): Promise<ReliabilityRecoveryCheck>;
   /** The private controller resolves the canonical catalog/receipt; callers cannot assert a SHA. */
   readBoundTarget?(input: {
     readonly nodeSlug: string;

@@ -52,12 +52,6 @@ spec:
               value: replace-in-overlay
             - name: FORK_DOMAIN_ROOT
               value: replace-in-overlay
-            - name: PROMETHEUS_QUERY_URL
-              valueFrom:
-                secretKeyRef:
-                  name: operator-env-secrets
-                  key: PROMETHEUS_QUERY_URL
-                  optional: true
             - name: GRAFANA_URL
               valueFrom:
                 secretKeyRef:
@@ -149,12 +143,6 @@ spec:
               value: replace-in-overlay
             - name: DATABASE_RELIABILITY_ACTUATOR_URL
               value: replace-in-overlay
-            - name: PROMETHEUS_QUERY_URL
-              valueFrom:
-                secretKeyRef:
-                  name: operator-env-secrets
-                  key: PROMETHEUS_QUERY_URL
-                  optional: true
           ports:
             - name: http
               containerPort: 8081

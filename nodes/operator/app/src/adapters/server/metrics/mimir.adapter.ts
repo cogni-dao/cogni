@@ -115,19 +115,26 @@ function generateQueryRef(
   return `mqt_${hash}`;
 }
 
-export interface MimirAdapterConfig {
-  url: string; // Grafana Cloud Mimir endpoint
-  username: string; // Basic auth username
-  password: string; // Basic auth password/token
-  timeoutMs: number; // Query timeout in milliseconds
-}
+export type MimirAdapterConfig = {
+  url: string;
+  timeoutMs: number;
+} & (
+  | { username: string; password: string; bearerToken?: never }
+  | { bearerToken: string; username?: never; password?: never }
+);
 
 /**
  * Mimir adapter for Prometheus metrics queries.
  * Implements Prometheus HTTP API v1 query and query_range endpoints.
  */
 export class MimirMetricsAdapter implements MetricsQueryPort {
-  constructor(private readonly config: MimirAdapterConfig) {}
+  constructor(private readonly config: MimirAdapterConfig) {
+    if (
+      "bearerToken" in config &&
+      (!config.bearerToken || config.username || config.password)
+    )
+      throw new Error("mimir_bearer_auth_invalid");
+  }
 
   /**
    * Execute a range query (query_range).
@@ -504,9 +511,10 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
    * Internal fetch with auth, timeout, and error handling.
    */
   private async fetch<T>(url: URL): Promise<T> {
-    const authHeader = `Basic ${Buffer.from(
-      `${this.config.username}:${this.config.password}`
-    ).toString("base64")}`;
+    const authHeader =
+      "bearerToken" in this.config
+        ? `Bearer ${this.config.bearerToken}`
+        : `Basic ${Buffer.from(`${this.config.username}:${this.config.password}`).toString("base64")}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(
@@ -517,6 +525,7 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
     try {
       const response = await fetch(url.toString(), {
         method: "GET",
+        redirect: "error",
         headers: {
           Authorization: authHeader,
           Accept: "application/json",

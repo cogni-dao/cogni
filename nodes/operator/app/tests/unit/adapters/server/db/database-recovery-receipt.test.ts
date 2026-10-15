@@ -45,6 +45,51 @@ const readerFor = (receipt: unknown) =>
       [{ incident: receipt }] as unknown as readonly T[],
   });
 
+describe("private recovery window delegation", () => {
+  it("requests only the closed window proof and binds the returned SHA/incident", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "healthy",
+          buildSha: containedReceipt.targetBuildSha,
+          databaseSystemIdentifier: containedReceipt.databaseSystemIdentifier,
+          incidentId: containedReceipt.incidentId,
+          proofClass: "recovery",
+        })
+      )
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const reader = new HttpReliabilityRecoveryAdapter({
+        baseUrl: "http://actuator.internal",
+        bearerToken: "fixture",
+      });
+      const evidence = await reader.readWindow({
+        nodeId: containedReceipt.nodeId,
+        nodeSlug: "operator",
+        environment: "candidate-a",
+        expectedBuildSha: containedReceipt.targetBuildSha,
+        proofClass: "recovery",
+      });
+      expect(evidence.incidentId).toBe(containedReceipt.incidentId);
+      const url = new URL(String(fetch.mock.calls[0]?.[0]));
+      expect(url.pathname).toBe("/v1/internal/recovery-window");
+      expect([...url.searchParams.keys()].sort()).toEqual([
+        "environment",
+        "node_id",
+        "node_slug",
+        "proof_class",
+      ]);
+      expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+        headers: { authorization: "Bearer fixture" },
+        redirect: "error",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("native durable incident receipts", () => {
   it("requires a completed native watchdog enforcement transaction and bounded heartbeat", async () => {
     const transition = {

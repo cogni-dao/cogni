@@ -602,10 +602,10 @@ if [[ "$reliability_controller" == true && -f "$database_reliability_es_file" ]]
     for key in DATABASE_RELIABILITY_STATUS_TOKEN DATABASE_RELIABILITY_READMIT_TOKEN; do
       kubectl -n \"\$ns\" get secret ${TARGET_NODE}-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done
-    for key in DATABASE_RELIABILITY_ADMIN_URL DATABASE_RELIABILITY_STATUS_TOKEN PROMETHEUS_READ_USERNAME PROMETHEUS_READ_PASSWORD GRAFANA_SERVICE_ACCOUNT_TOKEN; do
+    for key in DATABASE_RELIABILITY_ADMIN_URL DATABASE_RELIABILITY_STATUS_TOKEN GRAFANA_URL GRAFANA_SERVICE_ACCOUNT_TOKEN; do
       kubectl -n \"\$ns\" get secret database-reliability-actuator-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done
-    for key in DATABASE_RELIABILITY_READMIT_URL DATABASE_RELIABILITY_READMIT_TOKEN DATABASE_RELIABILITY_STATUS_TOKEN PROMETHEUS_READ_USERNAME PROMETHEUS_READ_PASSWORD; do
+    for key in DATABASE_RELIABILITY_READMIT_URL DATABASE_RELIABILITY_READMIT_TOKEN DATABASE_RELIABILITY_STATUS_TOKEN; do
       kubectl -n \"\$ns\" get secret database-reliability-readmitter-env-secrets -o \"jsonpath={.data.\$key}\" | grep -q .
     done"
   mark_row database_reliability_externalsecrets ready "freshly reconciled controller, actuator, and readmitter ExternalSecrets"

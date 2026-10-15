@@ -21,7 +21,6 @@ import { z } from "zod";
 
 import {
   HttpReliabilityRecoveryAdapter,
-  MimirMetricsAdapter,
   PinoDatabaseContainmentAuditWriter,
   PostgresAdminSqlAdapter,
   PostgresDatabaseRecoveryBeginAdapter,
@@ -37,6 +36,7 @@ import {
   routeCellRecoveryBegin,
   routeCellRecoveryVerification,
 } from "@/adapters/server/db/database-recovery-cell.adapter";
+import { createGrafanaMimirAdapter } from "@/adapters/server/metrics/grafana-mimir.adapter";
 import {
   hasHealthyScopedRecoveryWindow,
   isReliabilitySweepReady,
@@ -186,14 +186,7 @@ const log = pino({ level: runtimeEnv.LOG_LEVEL ?? "info" }).child({
       : "database-reliability-readmitter",
 });
 const rootDomain = requiredEnv("FORK_DOMAIN_ROOT");
-const prometheusUrl = requiredEnv("PROMETHEUS_QUERY_URL");
-const [statusToken, prometheusUsername, prometheusPassword] = await Promise.all(
-  [
-    credential("DATABASE_RELIABILITY_STATUS_TOKEN"),
-    credential("PROMETHEUS_READ_USERNAME"),
-    credential("PROMETHEUS_READ_PASSWORD"),
-  ]
-);
+const statusToken = await credential("DATABASE_RELIABILITY_STATUS_TOKEN");
 const adminDsn =
   mode === "sweep" ? await credential("DATABASE_RELIABILITY_ADMIN_URL") : null;
 const readmitToken =
@@ -201,12 +194,14 @@ const readmitToken =
     ? await credential("DATABASE_RELIABILITY_READMIT_TOKEN")
     : null;
 
-const metrics = new MimirMetricsAdapter({
-  url: prometheusUrl,
-  username: prometheusUsername,
-  password: prometheusPassword,
-  timeoutMs: 10_000,
-});
+const metrics =
+  mode === "sweep"
+    ? await createGrafanaMimirAdapter({
+        grafanaUrl: await credential("GRAFANA_URL"),
+        bearerToken: await credential("GRAFANA_SERVICE_ACCOUNT_TOKEN"),
+        timeoutMs: 10_000,
+      })
+    : null;
 const sharedRecoveryProbes =
   mode === "sweep"
     ? new PostgresDatabaseRecoveryProbeAdapter(
@@ -338,7 +333,7 @@ async function recoveryCheck(
   target: ReliabilityTarget,
   proofClass: ReliabilityRecoveryCheck["proofClass"]
 ): Promise<ReliabilityRecoveryCheck> {
-  if (!recoveryProbes || !recoveryVerifier)
+  if (!recoveryProbes || !recoveryVerifier || !metrics)
     throw new Error("database_recovery_probe_unavailable");
   const binding = recoveryProbes.bindingFor({
     nodeId: target.nodeId,
@@ -441,6 +436,7 @@ async function assertRecoveryWindow(
   incident: DatabaseRecoveryIncident,
   proofClass: ReliabilityRecoveryCheck["proofClass"]
 ): Promise<ReliabilityStatusV1["regionalReadiness"]> {
+  if (!metrics) throw new Error("database_recovery_window_owner_unavailable");
   const end = new Date();
   const result = await metrics.queryRange({
     query: `min_over_time(probe_success{environment="${target.environment}",node_slug="${target.slug}",proof_class="${proofClass}",target_build_sha="${incident.targetBuildSha}",database_system_identifier="${incident.databaseSystemIdentifier}"}[1m])`,
@@ -726,7 +722,8 @@ async function readDedicatedStatus(
 
 async function sweep(): Promise<void> {
   if (sweepRunning || stopping) return;
-  if (!containment) throw new Error("database_reliability_sweep_unavailable");
+  if (!containment || !metrics)
+    throw new Error("database_reliability_sweep_unavailable");
   sweepRunning = true;
   const startedAt = Date.now();
   try {
@@ -862,6 +859,9 @@ const server = createServer(async (request, response) => {
       request.method === "GET" && url.pathname === "/v1/internal/substrate";
     const isRecovery =
       request.method === "GET" && url.pathname === "/v1/internal/recovery";
+    const isRecoveryWindow =
+      request.method === "GET" &&
+      url.pathname === "/v1/internal/recovery-window";
     const isRecoveryVerify =
       request.method === "POST" &&
       url.pathname === "/v1/internal/recovery-verify";
@@ -873,6 +873,7 @@ const server = createServer(async (request, response) => {
           isInternalStatus ||
           isSubstrate ||
           isRecovery ||
+          isRecoveryWindow ||
           isRecoveryVerify)) ||
       (mode === "readmit" && isReadmit);
     if (!routeAllowed) {
@@ -909,13 +910,19 @@ const server = createServer(async (request, response) => {
       response.end(JSON.stringify({ error: "reliability_status_unavailable" }));
       return;
     }
-    if (isRecovery) {
+    if (isRecovery || isRecoveryWindow) {
       const proof = url.searchParams.get("proof_class");
       if (proof !== "recovery" && proof !== "recovery-product") {
         response.writeHead(400).end("invalid recovery proof class");
         return;
       }
       const evidence = await recoveryCheck(target, proof);
+      if (isRecoveryWindow) {
+        const incident = await recoveryVerifier?.current(target);
+        if (!incident || incident.incidentId !== evidence.incidentId)
+          throw new Error("database_recovery_incident_changed");
+        await assertRecoveryWindow(target, incident, proof);
+      }
       response
         .writeHead(200, { "content-type": "application/json" })
         .end(JSON.stringify(evidence));
@@ -1036,8 +1043,7 @@ const server = createServer(async (request, response) => {
         );
       return;
     }
-    await assertRecoveryWindow(target, current, "recovery");
-    const evidence = await recoveryReader.read({
+    const evidence = await recoveryReader.readWindow({
       nodeId: target.nodeId,
       nodeSlug: target.slug,
       environment,

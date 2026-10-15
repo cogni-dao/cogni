@@ -122,7 +122,7 @@ const HISTORICAL_UID_PREFIX = [
 ] as const;
 
 describe("fleet Serve alert contract (bug.5459)", () => {
-  it("resolves private telemetry credentials from their canonical shared bank", () => {
+  it("projects existing Grafana authority only to the actuator and keeps readmission query credentials isolated", () => {
     const repoRoot = path.resolve(__dirname, "../..");
     const catalog = loadSecretsCatalog({ repoRoot });
     for (const environment of ["candidate-a", "preview", "production"]) {
@@ -139,31 +139,36 @@ describe("fleet Serve alert contract (bug.5459)", () => {
           )
         )
         .map((document) => document.toJSON());
-      for (const resource of resources) {
-        for (const key of [
-          "PROMETHEUS_READ_USERNAME",
-          "PROMETHEUS_READ_PASSWORD",
-        ]) {
-          const routing = catalog.routing[key];
-          if (!routing) throw new Error("canonical telemetry routing missing");
-          const expected = openBaoPathFor(routing, key, "operator", environment)
-            ?.replace(/^cogni\//, "")
-            .slice(0, -key.length - 1);
-          expect(expected).toBe(`${environment}/_shared`);
-          expect(
-            resource.spec.data.find(
-              (entry: { secretKey: string }) => entry.secretKey === key
-            ).remoteRef
-          ).toEqual({ key: expected, property: key });
-        }
-        const grafana = resource.spec.data.find(
-          (entry: { secretKey: string }) =>
-            entry.secretKey === "GRAFANA_SERVICE_ACCOUNT_TOKEN"
-        );
-        if (grafana)
-          expect(grafana.remoteRef.key).toBe(`${environment}/operator`);
+      const [actuator, readmitter] = resources;
+      for (const key of ["GRAFANA_URL", "GRAFANA_SERVICE_ACCOUNT_TOKEN"]) {
+        const routing = catalog.routing[key];
+        if (!routing) throw new Error("canonical Grafana routing missing");
+        const expected = openBaoPathFor(routing, key, "operator", environment)
+          ?.replace(/^cogni\//, "")
+          .slice(0, -key.length - 1);
+        expect(expected).toBe(`${environment}/operator`);
+        expect(
+          actuator.spec.data.find(
+            (entry: { secretKey: string }) => entry.secretKey === key
+          ).remoteRef
+        ).toEqual({ key: expected, property: key });
       }
+      expect(
+        readmitter.spec.data.map(
+          (entry: { secretKey: string }) => entry.secretKey
+        )
+      ).toEqual(["DATABASE_RELIABILITY_STATUS_TOKEN"]);
+      for (const resource of resources)
+        expect(
+          resource.spec.data.map(
+            (entry: { secretKey: string }) => entry.secretKey
+          )
+        ).not.toContain("PROMETHEUS_READ_PASSWORD");
     }
+    const source = readFileSync(RELIABILITY_ACTUATOR_FILE, "utf8");
+    expect(source).toContain('mode === "sweep"');
+    expect(source).toContain("await recoveryReader.readWindow");
+    expect(source).not.toContain('credential("PROMETHEUS_READ_PASSWORD")');
   });
 
   it("keeps the recovery watchdog independent and validates regional response identity", () => {
