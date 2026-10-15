@@ -88,6 +88,7 @@ metadata:
   annotations:
     reloader.stakater.com/auto: "true"
 spec:
+  replicas: 2
   template:
     spec:
       containers:
@@ -108,6 +109,8 @@ YAML
 seed_catalog "$APP_SRC" "$CANONICAL_ENDPOINTS" beacon,levelup,node-template,toks5
 cp "$REPO_ROOT/infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml" \
   "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml"
+cp "$REPO_ROOT/infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml" \
+  "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml"
 
 # Routing + lane-bootstrap authorities of the repository Argo actually watches.
 AUTHORITY_DIR="$TMPROOT/test-parent-main"
@@ -256,11 +259,11 @@ case ",$rendered_endpoints," in
   *",poly=https://poly-test.cognidao.org,"*) : ;;
   *) fail "rendered Poly provider URL was replaced by the base default" ;;
 esac
-[ "$(yq -N 'select(.kind == "Deployment") | .spec.replicas' <<< "$RENDERED")" = 2 ] || fail "lost worker HA"
+[ "$(yq -N 'select(.kind == "Deployment") | .spec.replicas' <<< "$RENDERED")" = 1 ] || fail "candidate memory footprint override lost"
 [ "$(yq -N 'select(.kind == "Deployment") | .spec.paused' <<< "$RENDERED")" = false ] || fail "source must explicitly reconcile an unpaused worker"
 [ "$(yq -N 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxSurge' <<< "$RENDERED")" = 0 ] || fail "candidate worker surge remains enabled"
-[ "$(yq -N 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxUnavailable' <<< "$RENDERED")" = 1 ] || fail "candidate serial rollout does not preserve one worker"
-echo "PASS: stale bootstrap topology renders effective provider routing and two-replica serial rollout"
+[ "$(yq -N 'select(.kind == "Deployment") | .spec.strategy.rollingUpdate.maxUnavailable' <<< "$RENDERED")" = 1 ] || fail "candidate serial rollout policy changed"
+echo "PASS: stale bootstrap topology renders effective provider routing and one-replica serial rollout"
 
 config_checksum() {
   kubectl kustomize "$(dirname "$OVERLAY")" | yq -N \
@@ -314,6 +317,18 @@ import json, sys
 assert json.load(open(sys.argv[1]))["status"] == "noop"
 PY
 echo "PASS: idempotent (second run is a clean no-op)"
+
+REPLICAS_PATCH=infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml
+mv "$APP_SRC/$REPLICAS_PATCH" "$TMPROOT/replicas-original.yaml"
+run >/dev/null || fail "older reviewed source without replica override refused"
+[ ! -f "$DEPLOY_DIR/$REPLICAS_PATCH" ] || fail "stale replica override survived source rollback"
+[ "$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')" = 2 ] \
+  || fail "source rollback did not restore the base replica policy"
+mv "$TMPROOT/replicas-original.yaml" "$APP_SRC/$REPLICAS_PATCH"
+run >/dev/null || fail "reviewed one-replica policy did not restore"
+[ "$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')" = 1 ] \
+  || fail "restored source replica override is ineffective"
+echo "PASS: replica override follows reviewed source, including older-source rollback"
 
 # The digest follows the final composed consumer, not just one routing source.
 cp "$APP_SRC/$SUBPATH/configmap.yaml" "$TMPROOT/config-original.yaml"

@@ -468,6 +468,17 @@ if [ "$DEPLOY_ENV" = candidate-a ]; then
   yq -i '.patches = ((.patches // []) | map(select(.path != "serial-rollout.patch.yaml"))) + [{"path": "serial-rollout.patch.yaml"}]' "$OVERLAY_DST"
   git -C "$WORKDIR" add -A "$SERIAL_PATCH"
 
+  REPLICAS_PATCH="infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml"
+  yq -i '.patches = ((.patches // []) | map(select(.path != "replicas.patch.yaml")))' "$OVERLAY_DST"
+  if [ -f "$APP_SOURCE_DIR/$REPLICAS_PATCH" ]; then
+    cp "$APP_SOURCE_DIR/$REPLICAS_PATCH" "$WORKDIR/$REPLICAS_PATCH"
+    yq -i '.patches += [{"path": "replicas.patch.yaml"}]' "$OVERLAY_DST"
+    git -C "$WORKDIR" add -A "$REPLICAS_PATCH"
+  else
+    rm -f "$WORKDIR/$REPLICAS_PATCH"
+    git -C "$WORKDIR" rm --ignore-unmatch -- "$REPLICAS_PATCH"
+  fi
+
   # Hash the ACTUAL consumed ConfigMap after all authority/bootstrap patches,
   # not the source routing fragment. Promotion updates only GIT_SHA/IMAGE_DIGEST
   # later in this transaction; image identity already changes the Pod template.

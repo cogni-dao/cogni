@@ -324,6 +324,7 @@ scope_paths=(
   scripts/ci/tests/reconcile-scheduler-worker-routing.test.sh
   infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml
   infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml
+  infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml
   infra/k8s/overlays/candidate-a/scheduler-worker/node-endpoints.patch.yaml
   infra/k8s/overlays/preview/scheduler-worker/node-endpoints.patch.yaml
   infra/k8s/overlays/production/scheduler-worker/node-endpoints.patch.yaml
@@ -379,7 +380,7 @@ reserve_line = next(line.strip() for line in guard["command"][2].splitlines() if
 assert int(reserve_line.split("=", 1)[1]) == (int(os.environ["EVICTION_FLOOR"][:-2]) + 56) * 1024 * 1024
 assert guard["env"] == [{"name":"MAIN_MEMORY_LIMIT_BYTES", "valueFrom":{"resourceFieldRef":{"containerName":"scheduler-worker", "resource":"limits.memory", "divisor":"1"}}}]
 assert deployment["spec"]["paused"] is False
-assert deployment["spec"]["replicas"] == 2
+assert deployment["spec"]["replicas"] == 1
 assert spec.get("terminationGracePeriodSeconds", 30) == 30
 assert main["resources"]["limits"]["memory"] == "1Gi"
 assert guard["resources"]["limits"]["memory"] == "32Mi"
