@@ -33,6 +33,7 @@ import {
 import {
   type AppliedDatabaseCellReceipt,
   AppliedDatabaseCellReceiptsSchema,
+  assessDatabaseCellBackupRuntime,
   DatabaseCellAppliedRegistrationFactsSchema,
 } from "@/shared/secrets/database-cell-placement.data";
 
@@ -460,39 +461,40 @@ export class DatabaseCellBinder
       refuse(
         "registration readmission identity or chronology differs from its reviewed packet"
       );
-    const runtimeRoles = [
-      {
-        name: custody.appRole,
-        limit: custody.budget.appConnectionLimit,
-        timeout: custody.budget.appStatementTimeoutMs,
-      },
-      {
-        name: custody.serviceRole,
-        limit: custody.budget.serviceConnectionLimit,
-        timeout: custody.budget.serviceStatementTimeoutMs,
-      },
-    ];
+    const fields = [
+      "connectionLimit",
+      "statementTimeoutMs",
+      "lockTimeoutMs",
+      "idleInTransactionTimeoutMs",
+      "tempFileLimitMiB",
+      "workMemMiB",
+    ] as const;
     if (
-      runtimeRoles.some(({ name, limit, timeout }) => {
-        const roles = native.runtimeRoles.filter((role) => role.name === name);
-        const role = roles[0];
+      custody.budget.roles.some((expected) => {
+        const observedRoles = native.runtimeRoles.filter(
+          (role) => role.name === expected.name
+        );
+        const frozenRoles = packet.preservedRoleBounds.filter(
+          (role) => role.name === expected.name
+        );
+        const actual = observedRoles[0];
+        const frozen = frozenRoles[0];
         return (
-          roles.length !== 1 ||
-          !role ||
-          !role.canLogin ||
-          role.roleReadOnly ||
-          role.connectionLimit !== limit ||
-          role.statementTimeoutMs !== timeout ||
-          role.lockTimeoutMs !== custody.budget.lockTimeoutMs ||
-          role.idleInTransactionTimeoutMs !==
-            custody.budget.idleInTransactionTimeoutMs ||
-          role.tempFileLimitMiB !== custody.budget.tempFileLimitMiB ||
-          role.workMemMiB !== custody.budget.workMemMiB
+          observedRoles.length !== 1 ||
+          frozenRoles.length !== 1 ||
+          !actual ||
+          !frozen ||
+          !actual.canLogin ||
+          actual.roleReadOnly ||
+          fields.some(
+            (key) =>
+              actual[key] !== expected[key] || frozen[key] !== expected[key]
+          )
         );
       })
     )
       refuse(
-        "registration must observe the admitted runtime roles and exact owned budget caps"
+        "registration must observe admitted roles with exact authenticated preserved bounds"
       );
     const migrationDsn =
       custody.migration.kind === "app-database-url"
@@ -550,6 +552,30 @@ export class DatabaseCellBinder
     )
       refuse(
         "registration requires an actual scheduled full backup and matching independent complete recovery"
+      );
+    const runtime = facts.backupRuntime;
+    const latest = runtime.latestCompletedBackup;
+    const assessed = assessDatabaseCellBackupRuntime(runtime);
+    // A passing historical DR archive cannot conceal a stopped/failed live timer.
+    // No product RPO SLA is invented: actual age and conditional cadence remain facts.
+    if (
+      !fresh(runtime.observedAt) ||
+      runtime.timerActiveState !== "active" ||
+      (runtime.latestAttempt.exitCode !== null &&
+        runtime.latestAttempt.exitCode !== 0) ||
+      (runtime.latestAttempt.completedAt === null) !==
+        (runtime.latestAttempt.exitCode === null) ||
+      (runtime.latestAttempt.completedAt !== null &&
+        Date.parse(runtime.latestAttempt.completedAt) <
+          Date.parse(runtime.latestAttempt.startedAt)) ||
+      Date.parse(runtime.nextRunAt) < Date.parse(runtime.observedAt) - 5000 ||
+      Date.parse(latest.completedAt) < Date.parse(latest.snapshotStartedAt) ||
+      Date.parse(latest.completedAt) > Date.parse(runtime.observedAt) + 5000 ||
+      Date.parse(latest.completedAt) < Date.parse(backup.completedAt) ||
+      Math.abs(latest.snapshotAgeSeconds - assessed.snapshotAgeSeconds) > 5
+    )
+      refuse(
+        "registration current backup timer or latest completed backup is unhealthy or inconsistent"
       );
     const previous = await this.read(input);
     const old = previous.find(

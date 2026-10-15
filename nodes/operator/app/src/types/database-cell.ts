@@ -144,6 +144,16 @@ export interface DatabaseCellCustodyReference {
   readonly service: string;
   readonly key: string;
 }
+/** Effective per-role settings preserved by an authenticated manual cutover. */
+export interface DatabaseCellRoleBounds {
+  readonly name: string;
+  readonly connectionLimit: number;
+  readonly statementTimeoutMs: number;
+  readonly lockTimeoutMs: number;
+  readonly idleInTransactionTimeoutMs: number;
+  readonly tempFileLimitMiB: number;
+  readonly workMemMiB: number;
+}
 /** Imported current consumers only: no provider root, signing key, or invented control roles. */
 export interface DatabaseCellAppliedCustody {
   readonly version: 1;
@@ -157,7 +167,10 @@ export interface DatabaseCellAppliedCustody {
   readonly appRole: string;
   readonly serviceRole: string;
   readonly budgetProfile: "shared-default-v1" | "dedicated-high-throughput-v1";
-  readonly budget: DatabaseCellBudget;
+  readonly budget: {
+    readonly kind: "preserved-role-bounds";
+    readonly roles: readonly DatabaseCellRoleBounds[];
+  };
   readonly tlsCertificate: string;
   readonly tls:
     | { readonly kind: "system" }
@@ -220,8 +233,37 @@ export interface DatabaseCellApprovalAuthority {
   readonly delegationDigest: string;
 }
 
+/** Current schedule truth is separate from the historical archive qualified by DR. */
+export interface DatabaseCellBackupRuntimeObservation {
+  readonly observedAt: string;
+  readonly timerActiveState:
+    | "active"
+    | "inactive"
+    | "failed"
+    | "activating"
+    | "deactivating"
+    | "unknown";
+  readonly nextRunAt: string;
+  readonly intervalSeconds: number;
+  readonly jitterSeconds: number;
+  readonly installedFullTimeoutSeconds: number;
+  readonly latestAttempt: {
+    readonly startedAt: string;
+    readonly completedAt: string | null;
+    readonly exitCode: number | null;
+  };
+  readonly latestCompletedBackup: {
+    readonly archiveSha256: string;
+    readonly archiveBytes: number;
+    readonly snapshotStartedAt: string;
+    readonly completedAt: string;
+    readonly snapshotAgeSeconds: number;
+  };
+}
+
 export interface DatabaseCellAppliedRegistrationFacts {
   readonly observedAt: string;
+  readonly backupRuntime: DatabaseCellBackupRuntimeObservation;
   readonly provider: {
     readonly dseq: string;
     readonly providerAccount: string;
@@ -232,17 +274,10 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly systemIdentifier: string;
     readonly appRole: string;
     readonly serviceRole: string;
-    readonly runtimeRoles: readonly {
-      readonly name: string;
+    readonly runtimeRoles: readonly (DatabaseCellRoleBounds & {
       readonly canLogin: boolean;
-      readonly connectionLimit: number;
-      readonly statementTimeoutMs: number;
-      readonly lockTimeoutMs: number;
-      readonly idleInTransactionTimeoutMs: number;
-      readonly tempFileLimitMiB: number;
-      readonly workMemMiB: number;
       readonly roleReadOnly: boolean;
-    }[];
+    })[];
     readonly activeRuntimeSessions: number;
     readonly serverVersionNum: number;
     readonly tlsTrustKind: "system" | "private-ca";
@@ -278,6 +313,7 @@ export interface DatabaseCellAppliedRegistrationFacts {
     readonly appAllocationReceiptId: string;
     readonly appSdlHash: string;
     readonly expectedRelations: readonly string[];
+    readonly preservedRoleBounds: readonly DatabaseCellRoleBounds[];
     readonly allocationReceiptId: string;
     readonly systemIdentifier: string;
     readonly appSourceSha: string;

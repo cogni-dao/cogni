@@ -21,6 +21,7 @@ import { composeDatabaseCellDsn } from "@/shared/secrets/database-cell-binding.d
 import {
   type AppliedDatabaseCellReceipt,
   AppliedDatabaseCellReceiptSchema,
+  assessDatabaseCellBackupRuntime,
   DatabaseCellAllocationMetadataSchema,
   DatabaseCellAppliedEvidenceBundleSchema,
 } from "@/shared/secrets/database-cell-placement.data";
@@ -532,6 +533,28 @@ type Mutable<T> = T extends readonly (infer Item)[]
   : T extends object
     ? { -readonly [Key in keyof T]: Mutable<T[Key]> }
     : T;
+function preservedRoleBounds() {
+  return [
+    {
+      name: "app_alpha",
+      connectionLimit: 4,
+      statementTimeoutMs: 5000,
+      lockTimeoutMs: 0,
+      idleInTransactionTimeoutMs: 30000,
+      tempFileLimitMiB: 256,
+      workMemMiB: 8,
+    },
+    {
+      name: "service_alpha",
+      connectionLimit: 8,
+      statementTimeoutMs: 2000,
+      lockTimeoutMs: 0,
+      idleInTransactionTimeoutMs: 30000,
+      tempFileLimitMiB: 128,
+      workMemMiB: 8,
+    },
+  ];
+}
 function appliedCustody() {
   const lane = scopedKit.logicalDatabases[0];
   if (!lane) throw new Error("fixture lane absent");
@@ -548,7 +571,10 @@ function appliedCustody() {
     appRole: lane.appRole,
     serviceRole: lane.serviceRole,
     budgetProfile: lane.budgetProfile,
-    budget,
+    budget: {
+      kind: "preserved-role-bounds" as const,
+      roles: preservedRoleBounds(),
+    },
     tlsCertificate: scopedKit.tlsCertificate,
     tls: { kind: "system" as const },
     app: {
@@ -596,6 +622,22 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
   };
   return {
     observedAt: ago(0),
+    backupRuntime: {
+      observedAt: ago(0),
+      timerActiveState: "active",
+      nextRunAt: new Date(Date.now() + 900000).toISOString(),
+      intervalSeconds: 900,
+      jitterSeconds: 61,
+      installedFullTimeoutSeconds: 3700,
+      latestAttempt: { startedAt: ago(10), completedAt: ago(8), exitCode: 0 },
+      latestCompletedBackup: {
+        archiveSha256: "0".repeat(64),
+        archiveBytes: 2846000000,
+        snapshotStartedAt: ago(10),
+        completedAt: ago(8),
+        snapshotAgeSeconds: 10,
+      },
+    },
     provider: {
       dseq: "123",
       providerAccount: `akash1${"a".repeat(38)}`,
@@ -606,30 +648,11 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       systemIdentifier: "1234567890123456789",
       appRole: lane.appRole,
       serviceRole: lane.serviceRole,
-      runtimeRoles: [
-        {
-          name: lane.appRole,
-          canLogin: true,
-          connectionLimit: 2,
-          statementTimeoutMs: budget.appStatementTimeoutMs,
-          lockTimeoutMs: budget.lockTimeoutMs,
-          idleInTransactionTimeoutMs: budget.idleInTransactionTimeoutMs,
-          tempFileLimitMiB: budget.tempFileLimitMiB,
-          workMemMiB: budget.workMemMiB,
-          roleReadOnly: false,
-        },
-        {
-          name: lane.serviceRole,
-          canLogin: true,
-          connectionLimit: 8,
-          statementTimeoutMs: budget.serviceStatementTimeoutMs,
-          lockTimeoutMs: budget.lockTimeoutMs,
-          idleInTransactionTimeoutMs: budget.idleInTransactionTimeoutMs,
-          tempFileLimitMiB: budget.tempFileLimitMiB,
-          workMemMiB: budget.workMemMiB,
-          roleReadOnly: false,
-        },
-      ],
+      runtimeRoles: preservedRoleBounds().map((role) => ({
+        ...role,
+        canLogin: true,
+        roleReadOnly: false,
+      })),
       activeRuntimeSessions: 3,
       serverVersionNum: 150018,
       tlsTrustKind: "system",
@@ -674,6 +697,7 @@ function registrationFacts(): Mutable<DatabaseCellAppliedRegistrationFacts> {
       appAllocationReceiptId: "88888888-8888-4888-8888-888888888888",
       appSdlHash: "c".repeat(64),
       expectedRelations: relationNames,
+      preservedRoleBounds: preservedRoleBounds(),
       allocationReceiptId: "22222222-2222-4222-8222-222222222222",
       systemIdentifier: "1234567890123456789",
       appSourceSha: appSha,
@@ -806,6 +830,13 @@ describe("audited already-applied registration", () => {
     expect(await current.binder.registerApplied(request)).toEqual(receipts);
     expect(current.writes()).toBe(1);
     expect(current.nativeReads()).toBe(0);
+    expect(facts.backupRuntime.latestCompletedBackup.archiveSha256).not.toBe(
+      facts.scheduledBackup.archiveSha256
+    );
+    expect(assessDatabaseCellBackupRuntime(facts.backupRuntime)).toMatchObject({
+      snapshotAgeSeconds: 10,
+      conditionalNominalWindowSeconds: 4661,
+    });
     await expect(current.binder.seal(request)).rejects.toThrow(
       "cannot enter prestage"
     );
@@ -861,6 +892,15 @@ describe("audited already-applied registration", () => {
   });
   it("refuses wrong managed allocation, current DSNs, app SHA, partial recovery, schema drift and same-provider recovery", async () => {
     const invalidCases = [
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.backupRuntime.timerActiveState = "inactive";
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.backupRuntime.latestAttempt.exitCode = 1;
+      },
+      (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
+        f.backupRuntime.latestCompletedBackup.snapshotAgeSeconds = 200;
+      },
       (f: Mutable<DatabaseCellAppliedRegistrationFacts>) => {
         const role = f.native.runtimeRoles[0];
         if (role) role.connectionLimit += 1;

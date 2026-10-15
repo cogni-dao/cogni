@@ -130,6 +130,18 @@ export const DatabaseCellBudgetSchema = z
   })
   .strict();
 
+export const DatabaseCellRoleBoundsSchema = z
+  .object({
+    name: z.string().min(1),
+    connectionLimit: z.number().int().positive(),
+    statementTimeoutMs: z.number().int().nonnegative(),
+    lockTimeoutMs: z.number().int().nonnegative(),
+    idleInTransactionTimeoutMs: z.number().int().nonnegative(),
+    tempFileLimitMiB: z.number().int().min(-1),
+    workMemMiB: z.number().positive(),
+  })
+  .strict();
+
 const custodyReference = z
   .object({
     service: z.string().regex(/^[a-z][a-z0-9-]{0,127}$/),
@@ -160,7 +172,12 @@ export const DatabaseCellAppliedCustodySchema = z
       "shared-default-v1",
       "dedicated-high-throughput-v1",
     ]),
-    budget: DatabaseCellBudgetSchema,
+    budget: z
+      .object({
+        kind: z.literal("preserved-role-bounds"),
+        roles: z.array(DatabaseCellRoleBoundsSchema).length(2),
+      })
+      .strict(),
     tlsCertificate: z.string().startsWith("-----BEGIN CERTIFICATE-----"),
     tls: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("system") }).strict(),
@@ -190,6 +207,16 @@ export const DatabaseCellAppliedCustodySchema = z
   .superRefine((custody, ctx) => {
     const base = `cogni_${custody.nodeSlug.replaceAll("-", "_")}`;
     const suffix = custody.databaseName.slice("cogni_".length);
+    if (
+      new Set(custody.budget.roles.map((role) => role.name)).size !== 2 ||
+      ![custody.appRole, custody.serviceRole].every((name) =>
+        custody.budget.roles.some((role) => role.name === name)
+      )
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "preserved bounds must name exactly the owned runtime roles",
+      });
     if (
       ![base, `${base}_production`].includes(custody.databaseName) ||
       custody.appRole !== `app_${suffix}` ||

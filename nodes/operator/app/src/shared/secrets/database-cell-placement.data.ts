@@ -14,7 +14,10 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { DatabaseCellAppliedRegistrationFacts } from "@/types/database-cell";
 
-import { DatabaseCellBindingSchema } from "./database-cell-binding.data";
+import {
+  DatabaseCellBindingSchema,
+  DatabaseCellRoleBoundsSchema,
+} from "./database-cell-binding.data";
 
 const executionActor = z
   .object({ kind: z.enum(["agent", "human"]), id: z.string().uuid() })
@@ -143,10 +146,71 @@ const snapshotFingerprint = {
   rowCount: z.string().regex(/^(0|[1-9][0-9]*)$/),
 };
 
+/** Measured current timer/service facts; no invented RPO policy or unconditional bound. */
+export const DatabaseCellBackupRuntimeObservationSchema = z
+  .object({
+    observedAt: timestamp,
+    timerActiveState: z.enum([
+      "active",
+      "inactive",
+      "failed",
+      "activating",
+      "deactivating",
+      "unknown",
+    ]),
+    nextRunAt: timestamp,
+    intervalSeconds: z.number().int().positive(),
+    jitterSeconds: z.number().int().nonnegative(),
+    installedFullTimeoutSeconds: z.number().int().positive(),
+    latestAttempt: z
+      .object({
+        startedAt: timestamp,
+        completedAt: timestamp.nullable(),
+        exitCode: z.number().int().nullable(),
+      })
+      .strict(),
+    latestCompletedBackup: z
+      .object({
+        archiveSha256: digest,
+        archiveBytes: z.number().int().positive(),
+        snapshotStartedAt: timestamp,
+        completedAt: timestamp,
+        snapshotAgeSeconds: z.number().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict() satisfies z.ZodType<
+  import("@/types/database-cell").DatabaseCellBackupRuntimeObservation
+>;
+
+/** Honest conditional scheduling arithmetic. Failures/skips invalidate this window. */
+export function assessDatabaseCellBackupRuntime(
+  value: import("@/types/database-cell").DatabaseCellBackupRuntimeObservation
+) {
+  const runtime = DatabaseCellBackupRuntimeObservationSchema.parse(value);
+  return {
+    snapshotAgeSeconds: Math.max(
+      0,
+      (Date.parse(runtime.observedAt) -
+        Date.parse(runtime.latestCompletedBackup.snapshotStartedAt)) /
+        1000
+    ),
+    conditionalNominalWindowSeconds:
+      runtime.intervalSeconds +
+      runtime.jitterSeconds +
+      runtime.installedFullTimeoutSeconds,
+    assumptions: [
+      "every scheduled run starts",
+      "no failed, skipped or overlapping runs",
+    ],
+  };
+}
+
 /** Validates measured adapter output; no request can supply this evidence bundle. */
 export const DatabaseCellAppliedRegistrationFactsSchema = z
   .object({
     observedAt: timestamp,
+    backupRuntime: DatabaseCellBackupRuntimeObservationSchema,
     provider: z
       .object({
         dseq: systemIdentifier,
@@ -162,19 +226,10 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         serviceRole: z.string().min(1),
         runtimeRoles: z
           .array(
-            z
-              .object({
-                name: z.string().min(1),
-                canLogin: z.boolean(),
-                connectionLimit: z.number().int().min(-1),
-                statementTimeoutMs: z.number().int().nonnegative(),
-                lockTimeoutMs: z.number().int().nonnegative(),
-                idleInTransactionTimeoutMs: z.number().int().nonnegative(),
-                tempFileLimitMiB: z.number().int().min(-1),
-                workMemMiB: z.number().nonnegative(),
-                roleReadOnly: z.boolean(),
-              })
-              .strict()
+            DatabaseCellRoleBoundsSchema.extend({
+              canLogin: z.boolean(),
+              roleReadOnly: z.boolean(),
+            }).strict()
           )
           .min(2),
         activeRuntimeSessions: z.number().int().nonnegative(),
@@ -234,6 +289,7 @@ export const DatabaseCellAppliedRegistrationFactsSchema = z
         appAllocationReceiptId: z.string().uuid(),
         appSdlHash: digest,
         expectedRelations: relations,
+        preservedRoleBounds: z.array(DatabaseCellRoleBoundsSchema).length(2),
         allocationReceiptId: z.string().uuid(),
         systemIdentifier,
         appSourceSha: sourceSha,
