@@ -486,7 +486,9 @@ export class AkashComputeAdapter
         p.spec.name,
         undefined,
         screening,
-        tried
+        tried,
+        undefined,
+        retainsStorage(p.spec)
       );
       if (result.kind === "ok") return result.output;
       finalBootFailureStage = result.stage;
@@ -525,7 +527,8 @@ export class AkashComputeAdapter
       p.expectedSourceSha,
       this.withPlacement(await this.loadScreeningContext(), p.spec),
       new Set<string>(),
-      onAllocated
+      onAllocated,
+      retainsStorage(p.spec)
     );
     if (result.kind === "ok") return result.output;
     throw new AkashComputeError(
@@ -845,7 +848,8 @@ export class AkashComputeAdapter
     expectedSourceSha: string | undefined,
     screening: ScreeningContext,
     tried: Set<string>,
-    onAllocated?: (resource: ProvisionOutput) => Promise<void>
+    onAllocated?: (resource: ProvisionOutput) => Promise<void>,
+    retainStorage = false
   ): Promise<
     | { kind: "ok"; output: ProvisionOutput }
     | { kind: "slo_failed"; stage: BootFailureStage }
@@ -854,7 +858,8 @@ export class AkashComputeAdapter
       sdl,
       screening,
       tried,
-      onAllocated
+      onAllocated,
+      retainStorage
     );
 
     // Boot SLO: the lease is paying from here — the workload must PROVE registry egress by
@@ -880,6 +885,12 @@ export class AkashComputeAdapter
         error instanceof AkashComputeError &&
         error.code === "BOOT_SLO_TIMEOUT"
       ) {
+        if (retainStorage) {
+          throw new AkashComputeError(
+            "ALLOCATION_OUTCOME_UNKNOWN",
+            `retained deployment ${dseq} did not satisfy boot proof; allocation preserved for audited recovery`
+          );
+        }
         await this.release({ leaseId: String(dseq) }).catch(() => {
           // best-effort close; the SLO strike below is what must land
         });
@@ -934,21 +945,23 @@ export class AkashComputeAdapter
         ? async (resource) => {
             await p.onAllocated?.(resource.leaseId);
           }
-        : undefined
+        : undefined,
+      retainsStorage(p.spec)
     );
     return { leaseId: String(dseq), providerAccount: provider };
   }
 
   /**
-   * Create → publish handle → screen → lease. Every failure after the dseq exists closes
-   * the deployment (escrow refunds) and names the dseq; a lost response leaves the
-   * deployment findable from the caller's pre-POST cursor (findAllocationSince).
+   * Create → publish handle → screen → lease. Unleased failures close with readback.
+   * Retained storage is never automatically closed once lease submission starts;
+   * an uncertain outcome remains recoverable through the same durable receipt.
    */
   private async createAndLease(
     sdl: string,
     screening: ScreeningContext,
     tried: Set<string>,
-    onAllocated?: (resource: ProvisionOutput) => Promise<void>
+    onAllocated?: (resource: ProvisionOutput) => Promise<void>,
+    retainStorage = false
   ): Promise<{ dseq: string; provider: string }> {
     const created = await this.request<{ dseq?: string; manifest?: unknown }>(
       "POST",
@@ -989,9 +1002,9 @@ export class AkashComputeAdapter
       }
     }
 
-    // A dseq means the deployment (and its escrow) exists on-chain — never strand it: from
-    // here every failure path (missing manifest, no bids, lease error, SLO miss) closes the
-    // deployment (refunding escrow), and every error names the dseq.
+    // Before leasing there can be no provider data. After submission begins, an
+    // error may hide a live stateful lease and cannot authorize its destruction.
+    let leaseAttempted = false;
     let provider: string;
     try {
       if (created?.manifest === undefined) {
@@ -1002,6 +1015,7 @@ export class AkashComputeAdapter
       }
       const bid = await this.awaitScreenedBid(dseq, screening, tried);
       provider = String(bid.provider);
+      leaseAttempted = true;
       await this.request(
         "POST",
         "/v1/leases",
@@ -1019,6 +1033,12 @@ export class AkashComputeAdapter
         this.writeTimeoutMs
       );
     } catch (error) {
+      if (retainStorage && leaseAttempted) {
+        throw new AkashComputeError(
+          "ALLOCATION_OUTCOME_UNKNOWN",
+          `retained deployment ${dseq} lease submission failed or was not acknowledged; allocation preserved for observation`
+        );
+      }
       // The close is best-effort, but WHETHER it closed is not: a verified close is the only
       // evidence that lets the caller settle its receipt and release the wallet slot instead
       // of holding it against spend that no longer exists (bug.5192).
@@ -1477,7 +1497,8 @@ export type AkashComputeErrorCode =
   | "NO_BIDS"
   | "NO_ELIGIBLE_BIDS"
   | "BOOT_SLO_TIMEOUT"
-  | "AMBIGUOUS_ADOPTION";
+  | "AMBIGUOUS_ADOPTION"
+  | "ALLOCATION_OUTCOME_UNKNOWN";
 
 /** Stable error codes for the Akash Console path. */
 export class AkashComputeError extends Error {
@@ -1820,4 +1841,12 @@ function costEvidenceFromDetail(
     },
     observedAt,
   };
+}
+
+/** The volume declaration itself requires retention even if the caller omits policy. */
+function retainsStorage(spec: ProvisionSpec): boolean {
+  return (
+    spec.retentionPolicy === "retain" ||
+    spec.services.some((service) => Boolean(service.volumes?.length))
+  );
 }

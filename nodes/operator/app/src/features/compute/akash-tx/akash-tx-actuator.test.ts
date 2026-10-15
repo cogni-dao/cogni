@@ -1426,6 +1426,33 @@ describe("AkashTxActuator.update / delete", () => {
     expect(ledger.rows.get("k1")?.state).toBe("allocated");
   });
 
+  it("keeps the recorded retained lease after an uncertain lease POST and replays without another paid create", async () => {
+    const { actuator, api, ledger } = build();
+    api.allocateAndLease = async (input) => {
+      api.allocateCalls += 1;
+      await input.onAllocated?.("7001");
+      throw consoleError("ALLOCATION_OUTCOME_UNKNOWN");
+    };
+    const input = {
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: { ...SPEC, retentionPolicy: "retain" as const },
+    };
+    await expect(actuator.create(input)).rejects.toMatchObject({
+      code: "outcome_unknown",
+    });
+    expect(ledger.rows.get("k1")).toMatchObject({
+      state: "allocated",
+      externalName: "7001",
+      retentionPolicy: "retain",
+    });
+    expect(ledger.failCalls).toEqual([]);
+    expect((await actuator.create(input)).replayed).toBe(true);
+    expect(api.allocateCalls).toBe(1);
+    expect(api.releaseCalls).toEqual([]);
+  });
+
   it("retains an existing allocation before a persistent update and cannot downgrade it", async () => {
     const { actuator, api, ledger } = build();
     await actuator.create({

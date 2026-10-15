@@ -87,6 +87,8 @@ interface HarnessOpts {
    * still says active. Defaults to true.
    */
   closeIsVerifiable?: boolean;
+  /** The provider accepts the lease but the Console response is lost. */
+  loseLeaseResponse?: boolean;
 }
 
 /**
@@ -125,6 +127,7 @@ function harness(opts: HarnessOpts = {}) {
       };
       const lease = body.leases[0];
       if (lease) leased.push({ dseq: lease.dseq, provider: lease.provider });
+      if (opts.loseLeaseResponse) throw new TypeError("lease response lost");
       return jsonResponse({ data: {} });
     }
     if (method === "DELETE") {
@@ -1558,6 +1561,83 @@ describe("AkashComputeAdapter transaction boundary (task.5095)", () => {
       String(call[0]).includes("/version")
     );
     expect(probed).toBe(false);
+  });
+
+  it("preserves a retained allocation after an accepted lease loses its response", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1zen")],
+      bids: (dseq) => [bidEntry(dseq, "akash1zen", "100")],
+      loseLeaseResponse: true,
+    });
+    const published: string[] = [];
+    const error = await makeAdapter(h.fetchImpl)
+      .allocateAndLease({
+        spec: {
+          ...SPEC,
+          services: SPEC.services.map((service) => ({
+            ...service,
+            volumes: [
+              {
+                name: "database",
+                sizeMi: 1024,
+                mountPath: "/data",
+                tier: "nvme",
+              },
+            ],
+          })),
+        },
+        onAllocated: async (dseq) => {
+          published.push(dseq);
+        },
+      })
+      .catch((value: unknown) => value);
+    expect(published).toEqual(["1"]);
+    expect(h.leased).toEqual([{ dseq: "1", provider: "akash1zen" }]);
+    expect(h.deletes).toEqual([]);
+    expect(h.createBodies).toHaveLength(1);
+    expect(error).toMatchObject({
+      code: "ALLOCATION_OUTCOME_UNKNOWN",
+      rolledBack: false,
+    });
+    expect((error as AkashComputeError).rolledBackDseq).toBeUndefined();
+  });
+
+  it("preserves retained storage after boot timeout instead of closing and trying another provider", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1zen")],
+      bids: (dseq) => [bidEntry(dseq, "akash1zen", "100")],
+      serving: () => false,
+    });
+    const error = await makeAdapter(h.fetchImpl, {
+      bootSloMs: 5,
+      bootPollIntervalMs: 1,
+      maxProviderAttempts: 3,
+    })
+      .provision({ env: "test", spec: { ...SPEC, retentionPolicy: "retain" } })
+      .catch((value: unknown) => value);
+    expect(error).toMatchObject({
+      code: "ALLOCATION_OUTCOME_UNKNOWN",
+      rolledBack: false,
+    });
+    expect(h.deletes).toEqual([]);
+    expect(h.createBodies).toHaveLength(1);
+    expect(h.leased).toHaveLength(1);
+  });
+
+  it("still verifies and closes a retained deployment rejected before any lease submission", async () => {
+    const h = harness({
+      providers: [providerEntry("akash1froggy", { isAudited: false })],
+      bids: (dseq) => [bidEntry(dseq, "akash1froggy", "50")],
+    });
+    const error = await makeAdapter(h.fetchImpl)
+      .allocateAndLease({ spec: { ...SPEC, retentionPolicy: "retain" } })
+      .catch((value: unknown) => value);
+    expect(h.leased).toEqual([]);
+    expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
+    expect(error).toMatchObject({
+      code: "NO_ELIGIBLE_BIDS",
+      rolledBackDseq: "1",
+    });
   });
 
   it("screens providers on the transaction path and closes the deployment when none qualify", async () => {
