@@ -68,6 +68,19 @@ function resolve(artifacts: readonly BuildReleaseArtifact[]) {
 }
 
 describe("SHA build releases", () => {
+  it("excludes only catalog-declared infra from the required app flight closure", () => {
+    const payload = release();
+    payload.targets[1].target = "litellm";
+    payload.scope.build_targets = ["operator", "litellm"];
+    payload.scope.flight_targets = ["operator"];
+    expect(
+      validateBuildRelease(payload, {
+        ...context,
+        nonFlightTargets: ["litellm"],
+      })
+    ).toBeDefined();
+    expect(() => validateBuildRelease(payload, context)).toThrow();
+  });
   it("carries the complete worker and app scope with pinned digests without a PR dependency", async () => {
     const result = await resolve([artifact()]);
     expect(result.release.scope.flight_targets).toEqual([
@@ -181,6 +194,7 @@ describe("SHA build releases", () => {
     "wrong-repository",
     "wrong-sha",
     "foreign-flight",
+    "omitted-worker-flight",
     "unrecorded-addition",
     "unsafe-path",
   ])("rejects an invalid sealed release: %s", (kind) => {
@@ -195,6 +209,7 @@ describe("SHA build releases", () => {
     if (kind === "wrong-repository") payload.repository = "attacker/cogni";
     if (kind === "wrong-sha") payload.head_sha = "c".repeat(40);
     if (kind === "foreign-flight") payload.scope.flight_targets.push("foreign");
+    if (kind === "omitted-worker-flight") payload.scope.flight_targets.pop();
     if (kind === "unrecorded-addition")
       payload.scope.added_paths.push("missing.ts");
     if (kind === "unsafe-path") payload.scope.changed_paths.push("../escape");

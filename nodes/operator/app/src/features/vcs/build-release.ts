@@ -57,7 +57,11 @@ export type BuildRelease = z.infer<typeof buildReleaseSchema>;
 
 export function validateBuildRelease(
   payload: unknown,
-  input: { readonly repository: string; readonly sourceSha: string }
+  input: {
+    readonly repository: string;
+    readonly sourceSha: string;
+    readonly nonFlightTargets?: readonly string[];
+  }
 ): BuildRelease {
   const result = buildReleaseSchema.safeParse(payload);
   if (!result.success) {
@@ -79,6 +83,9 @@ export function validateBuildRelease(
   }
   const built = release.targets.map((item) => item.target);
   const expected = release.scope.build_targets;
+  const expectedFlight = built.filter(
+    (item) => !(input.nonFlightTargets ?? []).includes(item)
+  );
   if (
     new Set(built).size !== built.length ||
     new Set(expected).size !== expected.length ||
@@ -87,6 +94,10 @@ export function validateBuildRelease(
     new Set(release.scope.flight_targets).size !==
       release.scope.flight_targets.length ||
     release.scope.flight_targets.some((item) => !built.includes(item)) ||
+    expectedFlight.length !== release.scope.flight_targets.length ||
+    expectedFlight.some(
+      (item) => !release.scope.flight_targets.includes(item)
+    ) ||
     release.scope.added_paths.some(
       (item) => !release.scope.changed_paths.includes(item)
     )
@@ -158,6 +169,7 @@ export async function resolveBuildRelease(input: {
   readonly repository: string;
   readonly sourceSha: string;
   readonly port: BuildReleasePort;
+  readonly nonFlightTargets?: readonly string[];
 }): Promise<{
   readonly release: BuildRelease;
   readonly artifact: BuildReleaseArtifact;
@@ -180,6 +192,7 @@ export async function resolveBuildRelease(input: {
       release: validateBuildRelease(artifact.payload, {
         repository: input.repository,
         sourceSha,
+        nonFlightTargets: input.nonFlightTargets ?? [],
       }),
     };
   });

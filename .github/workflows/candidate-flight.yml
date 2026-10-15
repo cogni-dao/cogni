@@ -197,6 +197,7 @@ jobs:
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
           NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
           RELEASE_OUTPUT_DIR: ${{ runner.temp }}/release
+          CATALOG_ROOT: ${{ github.workspace }}/app-src/infra/catalog
         run: pnpm exec tsx scripts/resolve-build-release.ts
 
       - name: Load release changed paths

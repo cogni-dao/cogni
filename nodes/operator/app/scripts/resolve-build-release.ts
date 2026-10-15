@@ -2,9 +2,15 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /** Read/validate CI release metadata and emit inputs for the existing flight writer. */
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  readdir,
+  readFile,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
-
+import { parse } from "yaml";
 import { z } from "zod";
 
 import { GitHubBuildReleaseAdapter } from "../src/adapters/server/vcs/github-build-release";
@@ -18,6 +24,7 @@ async function main(): Promise<void> {
     RELEASE_OUTPUT_DIR: z.string().min(1),
     GITHUB_OUTPUT: z.string().min(1),
     GH_TOKEN: z.string().min(1),
+    CATALOG_ROOT: z.string().min(1),
     NODE_SLUG: z
       .union([z.literal(""), z.string().regex(/^[a-z0-9][a-z0-9-]*$/)])
       .optional(),
@@ -28,11 +35,31 @@ async function main(): Promise<void> {
   const sourceSha = environment.SOURCE_SHA.toLowerCase();
   const directory = environment.RELEASE_OUTPUT_DIR;
   const outputFile = environment.GITHUB_OUTPUT;
+  const nonFlightTargets: string[] = [];
+  const knownTargets = new Set<string>();
+  for (const name of await readdir(environment.CATALOG_ROOT)) {
+    if (!/^[a-z0-9][a-z0-9-]*\.ya?ml$/.test(name)) continue;
+    const catalog = z
+      .object({ type: z.enum(["node", "service", "infra"]) })
+      .parse(
+        parse(await readFile(join(environment.CATALOG_ROOT, name), "utf8"))
+      );
+    knownTargets.add(name.replace(/\.ya?ml$/, ""));
+    if (catalog.type === "infra")
+      nonFlightTargets.push(name.replace(/\.ya?ml$/, ""));
+  }
   const { release, artifact } = await resolveBuildRelease({
     repository,
     sourceSha,
     port: new GitHubBuildReleaseAdapter(environment.GH_TOKEN),
+    nonFlightTargets,
   });
+  if (release.scope.build_targets.some((target) => !knownTargets.has(target))) {
+    throw new BuildReleaseError(
+      "release_invalid",
+      "Build release names a target absent from the exact source catalog"
+    );
+  }
   const node = environment.NODE_SLUG || undefined;
   if (node && !release.targets.some((item) => item.target === node)) {
     throw new BuildReleaseError(
