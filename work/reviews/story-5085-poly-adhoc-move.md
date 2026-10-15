@@ -7,7 +7,7 @@ Poly prod has been fenced (`/readyz` 503) since 2026-10-13. The current task.524
 ## Steps (one owner, CEO-authorized, every command + output logged to task.5246)
 
 1. **Cell.** Provision one Akash Postgres 15 lease for Poly prod using the spike.5006 recipe: persistent volume, TLS, and an off-host backup target. Record lease/provider/DNS.
-2. **Fence holds.** Poly is already fenced, so there are no writers and no dual-write risk. Confirm zero Poly sessions on shared prod PG.
+2. **Fence holds (verified 2026-10-15 05:45Z, read-only, Grafana operator-prod datasource).** `pg_roles`: `app_poly`, `service_poly` (and all `*_poly_*` lane roles) have `rolcanlogin=false`. `pg_stat_activity` on `cogni_poly` shows only 2 idle `app_readonly` (Grafana) sessions. `tup_inserted+updated+deleted` stayed at 246 across a 20s window. `cogni_poly` = 19 GB. There are no writers, so `pg_dump` is consistent. `/readyz` 503 is NOT the fence; NOLOGIN is.
 3. **Copy.** Run `pg_dump -Fc` on the Poly prod DB from shared prod PG, then `pg_restore` it into the cell. Verify per-table row counts plus checksums on the key tables.
 4. **Point.** Write the Poly prod app/service/migration DSNs into OpenBao (the existing writer path). ESO syncs, then restart Poly.
 5. **Stop the overwrite.** The materializer recomposes shared DSNs on every deploy (task.5246 finding), so a routine Poly deploy would silently point Poly back at shared PG. Until a durable placement binding ships, freeze Poly prod promotes, or land a one-line catalog override the materializer honors. This is the only code on the critical path.
