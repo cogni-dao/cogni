@@ -52,7 +52,9 @@ iptables -L DOCKER-USER -n >/dev/null
 # fails to match the stored rule (`Bad rule (does a matching rule exist...)`)
 # and aborts under set -e. (bug.5171)
 while :; do
-  ln=$(iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | awk -v t="$TAG" '$0 ~ t {print $1; exit}')
+  # Drain the listing even after the first match. Exiting awk early can SIGPIPE
+  # iptables on a long chain and abort reconciliation under pipefail (exit 141).
+  ln=$(iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | awk -v t="$TAG" '!found && $0 ~ t {print $1; found=1}')
   [ -z "$ln" ] && break
   iptables -D DOCKER-USER "$ln"
 done
@@ -98,12 +100,18 @@ if [ -f "$ALLOWLIST_FILE" ]; then
     case "$ports" in
       *[!0-9,]*|"") echo "[harden] WARN: skipping invalid ports: $line" >&2; continue ;;
     esac
-    if iptables -A DOCKER-USER -s "$cidr" -p tcp -m multiport --dports "$ports" \
-      -m comment --comment "$TAG:compute-egress-allow" -j ACCEPT; then
-      echo "[harden] compute-egress allow: $cidr -> $ports"
-    else
-      echo "[harden] WARN: iptables rejected allowlist line: $line" >&2
-    fi
+    # DOCKER-USER sees DNAT destinations: published Doltgres 5435 and Postgres
+    # 5432 both arrive as container port 5432. Grants name published ports.
+    IFS=, read -r -a published_ports <<< "$ports"
+    for published_port in "${published_ports[@]}"; do
+      if iptables -A DOCKER-USER -s "$cidr" -p tcp \
+        -m conntrack --ctdir ORIGINAL --ctorigdstport "$published_port" \
+        -m comment --comment "$TAG:compute-egress-allow" -j ACCEPT; then
+        echo "[harden] compute-egress allow: $cidr -> published $published_port"
+      else
+        echo "[harden] WARN: iptables rejected allowlist port: $cidr:$published_port" >&2
+      fi
+    done
   done < "$ALLOWLIST_FILE"
 fi
 
