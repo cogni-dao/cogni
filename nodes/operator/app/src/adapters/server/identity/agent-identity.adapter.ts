@@ -984,6 +984,28 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         .where(eq(actors.legacyUserId, input.legacyUserId))
         .limit(1);
       if (!actor) {
+        // Legacy migration creates the same durable actor shape as spawn, so it
+        // must share the billing-account ceiling. Lock the account before the
+        // count/create pair; retries for an existing legacy actor remain exempt.
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${`agent-spawn:${billing.id}`}))`
+        );
+        const [active] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(actors)
+          .where(
+            and(
+              eq(actors.kind, "agent"),
+              eq(actors.billingAccountId, billing.id),
+              eq(actors.status, "active")
+            )
+          );
+        if ((active?.count ?? 0) >= MAX_ACTIVE_AGENTS_PER_BILLING_ACCOUNT) {
+          throw new AgentIdentityError(
+            "spawn_limit",
+            "Active agent limit reached"
+          );
+        }
         const actorId = randomUUID();
         await tx.insert(actors).values({
           id: actorId,

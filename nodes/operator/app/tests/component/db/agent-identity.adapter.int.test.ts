@@ -485,4 +485,45 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       },
     });
   });
+
+  it("applies the active-agent billing cap to a first legacy upgrade", async () => {
+    const cappedUserId = randomUUID();
+    const cappedBillingAccountId = randomUUID();
+    const cappedActorIds = Array.from({ length: 25 }, () => randomUUID());
+    await db.insert(users).values({
+      id: cappedUserId,
+      name: "Capped legacy steward",
+      walletAddress: `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`,
+    });
+    await db.insert(billingAccounts).values({
+      id: cappedBillingAccountId,
+      ownerUserId: cappedUserId,
+      balanceCredits: 0n,
+    });
+    await db.insert(actors).values(
+      cappedActorIds.map((id, index) => ({
+        id,
+        kind: "agent" as const,
+        displayName: `legacy-cap-fixture-${index}`,
+        billingAccountId: cappedBillingAccountId,
+      }))
+    );
+
+    await expect(
+      identity.upgradeLegacy({
+        legacyToken: "cogni_ag_sk_v1_capped-legacy-token",
+        legacyUserId: cappedUserId,
+        displayName: "capped-legacy-agent",
+        idempotencyKey: randomUUID(),
+      })
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "spawn_limit",
+    });
+
+    await db.delete(actors).where(inArray(actors.id, cappedActorIds));
+    await db
+      .delete(billingAccounts)
+      .where(eq(billingAccounts.id, cappedBillingAccountId));
+    await db.delete(users).where(eq(users.id, cappedUserId));
+  });
 });
