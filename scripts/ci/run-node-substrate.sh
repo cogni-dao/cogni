@@ -167,20 +167,26 @@ if [ "$CONTROL_ENV" = "$DEPLOY_ENVIRONMENT" ]; then
       || lane_degraded "$lane" materialize $?
   done
 else
-  # A FOREIGN-CUSTODIED LANE HAS NO SUBSTRATE ON ITS OWN VM, so its own flight reconciles
-  # NOTHING here (bug.5206). Everything reconcile would provision — the vault bank, the
-  # database, the roles, the Temporal namespace — belongs to the CONTROL cluster and is
-  # provisioned by THAT cluster's substrate run, which is the only run holding the identities
-  # to do it. Running it here anyway produced exactly one outcome: a mint of
-  # `production-db-reader` against the LANE's OpenBao, where that role does not exist —
-  # `invalid role name "production-db-reader"`, and the flight dies.
-  #
-  # The alternative (resolve the reader from the VM's env instead) would "work" by
-  # provisioning a SECOND copy of the lane's database on the lane's own VM — a ghost nothing
-  # dials, since the DSN the workload receives is composed against the control VM. Reconciling
-  # nothing is not a gap here; it is the correct amount of work.
-  echo "::notice::${TARGET_NODE}'s ${DEPLOY_ENVIRONMENT} lane is reconciled by '${CONTROL_ENV}' — its ENTIRE substrate (vault bank, database, roles, Temporal namespace) lives in that cluster and is provisioned by ${CONTROL_ENV}'s own substrate run. Nothing to reconcile on this VM."
-  echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}: substrate is ${CONTROL_ENV}'s — nothing to do here"
+  # Run under the catalog-selected custodian's GitHub environment/SSH identity.
+  # It owns this lane's secrets; only Postgres provisioning is delegated to the
+  # lane's own VM. A nonproduction custodian may never provision production.
+  [ "$DEPLOY_ENVIRONMENT" != production ] || {
+    echo "::error::nonproduction control may not provision a production lane" >&2
+    exit 1
+  }
+  lane_domain=""
+  case "$DEPLOY_ENVIRONMENT" in
+    preview) lane_domain="preview.$DOMAIN_ROOT" ;;
+    candidate-a) lane_domain="test.$DOMAIN_ROOT" ;;
+  esac
+  [ -n "$lane_domain" ] || { echo "::error::cannot derive lane domain" >&2; exit 1; }
+  SECRETS_CONTROL_ENV="$CONTROL_ENV" DOMAIN="$lane_domain" \
+    bash "$MATERIALIZE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+  DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" DOMAIN="$lane_domain" \
+    bash "$RECONCILE_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+  TARGET="$TARGET_NODE" DEPLOYMENT_PROVIDER="$DEPLOYMENT_PROVIDER" DOMAIN="$lane_domain" \
+    bash "$ASSERT_BIN" "$DEPLOY_ENVIRONMENT" "$TARGET_NODE"
+  echo "[run-node-substrate] ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}: lane-local Postgres and control-custodied substrate verified"
   exit 0
 fi
 

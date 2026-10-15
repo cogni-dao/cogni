@@ -44,6 +44,13 @@ local ssh_bin="${ASSERT_TARGET_SUBSTRATE_SSH_BIN:-ssh}"
 local ssh_opts_raw="${SSH_OPTS:--i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6}"
 local repo_spec="${APP_SOURCE_DIR}/nodes/${node}/.cogni/repo-spec.yaml"
 local egress_allowlist="${ASSERT_TARGET_SUBSTRATE_EGRESS_ALLOWLIST:-/etc/cogni/compute-egress-allowlist}"
+local catalog_dir="${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}"
+# The custodian owns the shared actuator and reader identity, not the lane's PG.
+# shellcheck source=scripts/ci/lib/appset-paths.sh
+CATALOG_DIR="$catalog_dir" . "${SCRIPT_DIR}/lib/appset-paths.sh"
+local control_env
+control_env="$(CATALOG_DIR="$catalog_dir" control_env_for "$DEPLOY_ENVIRONMENT" "$node")" \
+  || fail "cannot resolve external-compute custodian"
 
 [ -n "$vm_host" ] || fail "VM_HOST is required for external-compute target '$node'"
 [ -n "$domain" ] || fail "DOMAIN is required for external-compute target '$node'"
@@ -85,7 +92,7 @@ read -r -a ssh_opts <<< "$ssh_opts_raw"
 # login transient; stable 403 authz drift still fails after one fresh-JWT check.
 cogni_openbao_kubernetes_login_retry "$ssh_bin" "${ssh_opts[@]}" "root@${vm_host}" bash -s -- \
   "$DEPLOY_ENVIRONMENT" "$node" "$required_keys_arg" "$egress_cidrs_csv" \
-  "$egress_allowlist" "$compute_api" "$vm_host" <<'REMOTE'
+  "$egress_allowlist" "$compute_api" "$vm_host" "$control_env" <<'REMOTE'
 set -euo pipefail
 env_name="$1"
 node="$2"
@@ -100,6 +107,8 @@ authority="$6"
 # "absent" for resources that are perfectly healthy in the lane's own cluster.
 vm_host="${7:-unknown}"
 namespace="cogni-${env_name}"
+control_env="$8"
+control_namespace="cogni-${control_env}"
 actuator="operator-akash-tx-actuator"
 xcw_crd="xcomputeworkloads.compute.cogni.io"
 xcw_composition="xcomputeworkload-akash"
@@ -114,12 +123,10 @@ echo "[INFO] compute authority for ${node} in ${env_name}: compute_api=${authori
 echo "[INFO] asserting lane ${env_name} (namespace ${namespace}) against the cluster reachable from ${vm_host}"
 
 # ── LANE_AND_CLUSTER_MUST_AGREE (bug.5394) ──────────────────────────────────────
-# Every assertion below is namespaced to the lane. If this VM's cluster does not host
-# the lane at all, those lookups come back empty and the first one to notice blames the
-# resource instead of the address — #2602 pointed this job's SSH at the production VM
-# while still asserting candidate-a, and the resulting "actuator is not available
-# (availableReplicas='0')" sent four sessions after a phantom actuator outage while the
-# real one was healthy. Check the address before trusting any answer about the lane.
+# The custodian cluster must host the lane namespace for its projected secrets/XR.
+# Shared actuator resources below belong to the catalog control namespace instead;
+# neither namespace says where the lane's Postgres lives. Check lane hosting before
+# trusting resource answers, without confusing absent lane state with a dead actuator.
 if ! kubectl get namespace "$namespace" >/dev/null 2>&1; then
   present="$(kubectl get namespace -o name 2>/dev/null | sed 's#^namespace/##' | grep '^cogni-' | paste -sd, - || true)"
   fail "lane ${env_name} is not hosted by the cluster reachable from ${vm_host}: namespace ${namespace} does not exist there (cogni-* namespaces present: ${present:-none}). This is an ADDRESSING failure, not a substrate failure — the lane's own resources are untouched and unasserted. Point this job at the environment that owns ${namespace} (its own VM_HOST / SSH_DEPLOY_KEY) and re-run; do NOT read the per-resource assertions below as evidence about ${env_name}."
@@ -143,20 +150,20 @@ if [ "$authority" = "crossplane" ]; then
     || fail "compute_api=crossplane for ${node} in ${env_name}: ClusterProviderConfig/${xcw_provider_config} (http.m.crossplane.io/v1alpha2) is missing; provider-http has no config to send actuator requests under"
   mark_ok "crossplane authority: ClusterProviderConfig/${xcw_provider_config} exists"
 
-  available="$(kubectl -n "$namespace" get deployment "$actuator" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+  available="$(kubectl -n "$control_namespace" get deployment "$actuator" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
   [ "${available:-0}" -ge 1 ] 2>/dev/null \
-    || fail "compute_api=crossplane for ${node} in ${env_name}: akash transaction actuator is not available: ${namespace}/${actuator} (availableReplicas='${available:-0}'); every OBSERVE would fail connection-refused and no lease can be minted"
-  mark_ok "crossplane authority: ${namespace}/${actuator} is available"
+    || fail "compute_api=crossplane for ${node} in ${env_name}: akash transaction actuator is not available: ${control_namespace}/${actuator} (availableReplicas='${available:-0}'); every OBSERVE would fail connection-refused and no lease can be minted"
+  mark_ok "crossplane authority: ${control_namespace}/${actuator} is available"
 
-  kubectl -n "$namespace" get secret "$actuator_auth_secret" >/dev/null 2>&1 \
-    || fail "compute_api=crossplane for ${node} in ${env_name}: Secret ${namespace}/${actuator_auth_secret} is missing; the Composition placeholder {{ ${actuator_auth_secret}:${namespace}:token }} cannot resolve"
-  [ -n "$(kubectl -n "$namespace" get secret "$actuator_auth_secret" -o jsonpath='{.data.token}' 2>/dev/null || true)" ] \
-    || fail "compute_api=crossplane for ${node} in ${env_name}: Secret ${namespace}/${actuator_auth_secret} carries no 'token' key; the Composition placeholder {{ ${actuator_auth_secret}:${namespace}:token }} cannot resolve"
-  mark_ok "crossplane authority: Secret ${namespace}/${actuator_auth_secret} carries key 'token'"
+  kubectl -n "$control_namespace" get secret "$actuator_auth_secret" >/dev/null 2>&1 \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: Secret ${control_namespace}/${actuator_auth_secret} is missing; the Composition placeholder {{ ${actuator_auth_secret}:${control_namespace}:token }} cannot resolve"
+  [ -n "$(kubectl -n "$control_namespace" get secret "$actuator_auth_secret" -o jsonpath='{.data.token}' 2>/dev/null || true)" ] \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: Secret ${control_namespace}/${actuator_auth_secret} carries no 'token' key; the Composition placeholder {{ ${actuator_auth_secret}:${control_namespace}:token }} cannot resolve"
+  mark_ok "crossplane authority: Secret ${control_namespace}/${actuator_auth_secret} carries key 'token'"
 
-  kubectl -n "$namespace" get secret "$actuator_env_secret" >/dev/null 2>&1 \
-    || fail "compute_api=crossplane for ${node} in ${env_name}: Secret ${namespace}/${actuator_env_secret} is missing; the actuator has no wallet credential and refuses to boot"
-  mark_ok "crossplane authority: Secret ${namespace}/${actuator_env_secret} exists"
+  kubectl -n "$control_namespace" get secret "$actuator_env_secret" >/dev/null 2>&1 \
+    || fail "compute_api=crossplane for ${node} in ${env_name}: Secret ${control_namespace}/${actuator_env_secret} is missing; the actuator has no wallet credential and refuses to boot"
+  mark_ok "crossplane authority: Secret ${control_namespace}/${actuator_env_secret} exists"
 
   # AKASH_ALLOWED_PROVIDERS is NOT a secret and NOT reachable by exec-ing the deleted
   # controller. The actuator receives it as a plain, by-name env var on its own
@@ -175,15 +182,15 @@ if [ "$authority" = "crossplane" ]; then
   # index. So the check inverts from "has a value" to "is declared", and the value is
   # REPORTED (pin size) instead of demanded — a preflight should surface the placement
   # policy in the log, not legislate it.
-  allowed_providers_declared="$(kubectl -n "$namespace" get deployment "$actuator" -o jsonpath='{.spec.template.spec.containers[?(@.name=="actuator")].env[?(@.name=="AKASH_ALLOWED_PROVIDERS")].name}' 2>/dev/null || true)"
+  allowed_providers_declared="$(kubectl -n "$control_namespace" get deployment "$actuator" -o jsonpath='{.spec.template.spec.containers[?(@.name=="actuator")].env[?(@.name=="AKASH_ALLOWED_PROVIDERS")].name}' 2>/dev/null || true)"
   [ "$allowed_providers_declared" = "AKASH_ALLOWED_PROVIDERS" ] \
-    || fail "compute_api=crossplane for ${node} in ${env_name}: AKASH_ALLOWED_PROVIDERS is not declared on ${namespace}/${actuator}; the overlay did not merge the base actuator env contract by name, so no placement policy can be read off the pod spec"
-  allowed_providers="$(kubectl -n "$namespace" get deployment "$actuator" -o jsonpath='{.spec.template.spec.containers[?(@.name=="actuator")].env[?(@.name=="AKASH_ALLOWED_PROVIDERS")].value}' 2>/dev/null || true)"
+    || fail "compute_api=crossplane for ${node} in ${env_name}: AKASH_ALLOWED_PROVIDERS is not declared on ${control_namespace}/${actuator}; the overlay did not merge the base actuator env contract by name, so no placement policy can be read off the pod spec"
+  allowed_providers="$(kubectl -n "$control_namespace" get deployment "$actuator" -o jsonpath='{.spec.template.spec.containers[?(@.name=="actuator")].env[?(@.name=="AKASH_ALLOWED_PROVIDERS")].value}' 2>/dev/null || true)"
   if [ -n "$allowed_providers" ]; then
     allowed_providers_count="$(printf '%s' "$allowed_providers" | tr ',' '\n' | grep -c '[^[:space:]]' || true)"
-    mark_ok "crossplane authority: AKASH_ALLOWED_PROVIDERS is declared on ${namespace}/${actuator} (pinned to ${allowed_providers_count} provider(s))"
+    mark_ok "crossplane authority: AKASH_ALLOWED_PROVIDERS is declared on ${control_namespace}/${actuator} (pinned to ${allowed_providers_count} provider(s))"
   else
-    mark_ok "crossplane authority: AKASH_ALLOWED_PROVIDERS is declared on ${namespace}/${actuator} (no provider pin; bids screened on audit + required country + quality + price + strikes)"
+    mark_ok "crossplane authority: AKASH_ALLOWED_PROVIDERS is declared on ${control_namespace}/${actuator} (no provider pin; bids screened on audit + required country + quality + price + strikes)"
   fi
 else
   # RETIRED AUTHORITY (task.5138 purge; deletion tracked by task.5098). The bespoke
@@ -198,8 +205,8 @@ fi
 # boundary. Both hold identically for legacy and crossplane rows.
 jwt="$(kubectl create token db-provisioner -n default)"
 token="$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 \
-  bao write -field=token auth/kubernetes/login role="${env_name}-db-reader" jwt="$jwt")"
-[ -n "$token" ] || fail "could not mint ${env_name}-db-reader token"
+  bao write -field=token auth/kubernetes/login role="${control_env}-db-reader" jwt="$jwt")"
+[ -n "$token" ] || fail "could not mint ${control_env}-db-reader token"
 secret_json="$(kubectl exec -n openbao openbao-0 -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$token" \
   bao kv get -format=json "cogni/${env_name}/${node}")"
 IFS=',' read -r -a required_keys <<< "$required_keys_csv"

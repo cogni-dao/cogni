@@ -28,7 +28,7 @@ Immutable VM provisioning with SSH deploy key management, Docker/Docker Compose 
 ## Public Surface
 
 - **Exports:** none
-- **Env/Config keys:** `CHERRY_AUTH_TOKEN`, SSH key paths
+- **Env/Config keys:** `CHERRY_AUTH_TOKEN`, SSH key paths, optional `control_ssh_public_key` (public, same-fleet custodian; nonproduction only)
 - **Files considered API:** `variables.tf`, `terraform.tfvars.example`
 
 ## Responsibilities

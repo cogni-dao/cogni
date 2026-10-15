@@ -36,6 +36,12 @@ variable "public_key_path" {
   # No default - specified in env.*.tfvars
 }
 
+variable "control_ssh_public_key" {
+  description = "Optional same-fleet custodian PUBLIC key for downward-trust nonproduction database provisioning"
+  type        = string
+  default     = ""
+}
+
 variable "ssh_private_key" {
   description = "SSH private key content for bootstrap health check. Empty to skip."
   type        = string
@@ -103,4 +109,3 @@ variable "eviction_hard_memory" {
   type        = string
   default     = "200Mi"
 }
-

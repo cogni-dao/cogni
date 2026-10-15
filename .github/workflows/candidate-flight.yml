@@ -977,7 +977,7 @@ jobs:
       group: external-node-preflight-candidate-a-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    environment: candidate-a
+    environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:

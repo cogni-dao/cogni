@@ -35,6 +35,7 @@ resource "cherryservers_server" "server" {
       harden_script        = file("${path.module}/../harden-docker-public-ports.sh")
       system_reserved_memory = var.system_reserved_memory
       eviction_hard_memory   = var.eviction_hard_memory
+      control_ssh_public_key = var.environment == "production" ? "" : var.control_ssh_public_key
     }))
     allow_reinstall = true
     
