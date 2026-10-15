@@ -57,16 +57,16 @@ MDI server.js
 | `budget_allocations`         | `actor_id, funded_by_actor_id, limit, spent, policy`           | Delegated spend slices                                       |
 | `charge_receipts.actor_id`   | FK → actors (nullable, v1+; v0 uses `external_agent_ref` TEXT) | Usage attribution: which actor made this LLM call            |
 | `epoch_allocations.actor_id` | FK → actors (planned, bridges to user_id)                      | Reward attribution: which actor earned this epoch            |
-| `claims`                     | `actor_id, statement_id, wallet, amount` (future)              | On-chain claim against the wallet pinned at materialization   |
+| `claims`                     | `actor_id, statement_id, wallet, amount` (future)              | On-chain claim against the wallet pinned at materialization  |
 
 ### Actor kinds
 
-| Kind     | Description                                    | Example                 |
-| -------- | ---------------------------------------------- | ----------------------- |
-| `user`   | Human person. 1:1 FK to `users.id`.            | Connor (MDI operator)   |
+| Kind     | Description                                                    | Example                 |
+| -------- | -------------------------------------------------------------- | ----------------------- |
+| `user`   | Human person. 1:1 FK to `users.id`.                            | Connor (MDI operator)   |
 | `agent`  | AI agent. May have accepted stewardship via `parent_actor_id`. | MDI agent "Kai"         |
-| `system` | Internal system processes. Sentinel.           | `cogni_system`          |
-| `org`    | Treasury / collective. No direct login.        | MDI collective treasury |
+| `system` | Internal system processes. Sentinel.                           | `cogni_system`          |
+| `org`    | Treasury / collective. No direct login.                        | MDI collective treasury |
 
 ### Reward rollup policy
 
