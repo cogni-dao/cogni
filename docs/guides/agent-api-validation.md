@@ -22,9 +22,10 @@ For post-flight PR validation, use [`.claude/skills/validate-candidate`](../../.
 
 - [ ] Running target: `pnpm dev:stack` (local) **or** live candidate-a URL.
 - [ ] Funded wallet + funded billing account for the node under test.
+- [ ] A human-issued one-use `COGNI_AGENT_SPAWN_TOKEN`, or an existing target-node-issued `COGNI_NODE_API_KEY`.
 - [ ] `curl`, `jq`, and SSE-capable client (`curl -N` is enough).
 
-## Quickstart — free poem in 3 calls
+## Quickstart — durable identity in 3 calls
 
 ```bash
 BASE=http://localhost:3000
@@ -32,22 +33,21 @@ BASE=http://localhost:3000
 # 1. Discover
 curl $BASE/.well-known/agent.json | jq .
 
-# 2. Register (no wallet required)
+# 2. Redeem the authorized human-issued spawn grant
 CREDS=$(curl -s -X POST $BASE/api/v1/agent/register \
   -H "Content-Type: application/json" \
-  -d '{"name": "my-agent"}')
+  -d "$(jq -nc --arg token "$COGNI_AGENT_SPAWN_TOKEN" '{spawnToken:$token}')")
 API_KEY=$(echo $CREDS | jq -r .apiKey)
 
-# 3. Request poem (graph_name is required — routes through platform key)
-curl -s -X POST $BASE/api/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{"model":"gpt-oss-120b","graph_name":"poet","messages":[{"role":"user","content":"Write a haiku about APIs."}]}'
+# 3. Read back the exact actor principal and credential liveness
+curl -s $BASE/api/v1/agent/me \
+  -H "Authorization: Bearer $API_KEY" | jq .
 ```
 
-> **Why `graph_name`?** Without it, completions tries a direct LiteLLM call using a per-user
-> virtual key that doesn't exist for newly registered agents. Routing via a named graph uses
-> the platform key instead. This is a known gap — see shortcomings below.
+> Fresh v2 actors intentionally are not projected into a human `userId`. Do not
+> continue from identity proof to chat/run proof until
+> [task.5264](https://cognidao.org/work/items/task.5264) lands the actor-aware
+> execution boundary; an upgraded legacy actor is not substitute north-star proof.
 
 ## Work items — the contribution ledger
 
@@ -71,11 +71,16 @@ curl -H "Authorization: Bearer $API_KEY" \
 
 Run this disposable round trip against the node being validated. `BASE` must be
 that node's own origin; the procedure deliberately has no operator fallback and
-does not send a `node` field. One freshly registered node agent owns the entire
-sequence: discover → register → create → claim → heartbeat → patch →
+does not send a `node` field. One target-node-issued agent credential owns the entire
+sequence: discover → authenticate → create → claim → heartbeat → patch →
 done readback → release → delete → `404`. The discovery checks prove the
 node advertises every operation before the client mutates its local work-item
 store.
+
+This fresh-agent round trip is an acceptance target, not currently runnable:
+[task.5264](https://cognidao.org/work/items/task.5264) must first remove the
+SessionUser/userId coupling. Do not grade a legacy compatibility projection as
+this proof.
 
 This is a temporary executable validation client owned by
 [story.5060](https://cognidao.org/work/items/story.5060). That story must
@@ -90,6 +95,7 @@ set -euo pipefail
 BASE=${BASE%/}
 RUN_ID="work-item-validation-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 COMMAND="/validate-candidate"
+: "${COGNI_NODE_API_KEY:?set COGNI_NODE_API_KEY to a target-node-issued credential with work-item access}"
 
 # Discover the node-local registration and work-item actions.
 AGENT_JSON=$(curl -fsS "$BASE/.well-known/agent.json")
@@ -119,11 +125,8 @@ jq -e '
   .paths["/work/items/{id}"].delete != null
 ' <<<"$OPENAPI"
 
-# Register one fresh agent on this node. Its key owns every mutation below.
-CREDS=$(curl -fsS -X POST "$BASE/api/v1/agent/register" \
-  -H "content-type: application/json" \
-  -d "$(jq -nc --arg name "$RUN_ID" '{name:$name}')")
-API_KEY=$(jq -er .apiKey <<<"$CREDS")
+# Use the target-node-issued credential. Anonymous name-only registration is forbidden.
+API_KEY="$COGNI_NODE_API_KEY"
 
 # Create one disposable row in this node's store and always clean it up.
 ID=""
@@ -282,17 +285,22 @@ Do not use this to bypass missing gates. If PR Manager cannot prove eligibility,
 1. **Discover API surface:**
    - `GET /.well-known/agent.json` — confirms `registrationUrl`, `runs`, `runStream`, `completions`.
 
-2. **Register machine actor:**
-   - `POST /api/v1/agent/register` with `{ "name": "validator-agent" }`.
-   - Persist returned `apiKey`, `userId`, `billingAccountId`. (v0 contract does
-     not return `actorId` — the `actors` table does not exist yet and any
-     logical actor identifier can be derived from `userId`; see bug.0297 for
-     the deferred schema work.)
+2. **Redeem an authorized machine actor:**
+   - An authenticated human first creates a same-origin one-use spawn grant.
+   - `POST /api/v1/agent/register` with `{ "spawnToken": "$COGNI_AGENT_SPAWN_TOKEN" }`.
+   - Persist returned `apiKey`, `actorId`, `principalId`, and `billingAccountId`.
+     The credential is replaceable; `actorId` and the node-qualified `principalId`
+     are the stable identity.
+
+   **Gate:** stop here for a fresh v2 actor until
+   [task.5264](https://cognidao.org/work/items/task.5264) is deployed. Steps 3–6
+   describe the execution proof that task unlocks; a compatibility-only legacy
+   projection does not satisfy it.
 
 3. **Execute graph:**
    - `POST /api/v1/chat/completions` with `graph_name` + `Authorization: Bearer <apiKey>`.
    - **ALWAYS use the free model, bare id: `"model": "gpt-oss-120b"`** (the
-     LiteLLM `default_free`; zero credits charged, so a fresh self-registered
+     LiteLLM `default_free`; zero credits charged, so an authorized target-issued
      key works — no wallet, no top-up). Never a paid model, never a prefixed id
      (`openai/gpt-oss-120b` is rejected upstream and, per bug.5130, surfaces as
      a misleading `insufficient_quota` 429).
@@ -304,7 +312,9 @@ Do not use this to bypass missing gates. If PR Manager cannot prove eligibility,
 
 4. **List runs as machine actor:**
    - `GET /api/v1/agent/runs` with `Authorization: Bearer <apiKey>`.
-   - Verify new run appears and `requestedBy == userId`.
+   - Verify the new run appears. Do not treat a legacy `requestedBy == userId`
+     projection as actor attribution; fresh v2 actors remain blocked from this
+     route until actor-aware execution lands.
 
 5. **Stream run events:**
    - `GET /api/v1/agent/runs/{runId}/stream` with bearer key.
@@ -348,7 +358,7 @@ health**; never grade it as a pass:
 1. **Successful AI response** — the completion returns real assistant text
    (`choices[0].message.content` non-empty) using the free model
    (`gpt-oss-120b`, bare id) + a valid `graph_name`, from a fresh
-   self-registered agent key. ~5–15s is normal; a ~30s edge cut (520) means the
+   target-node-issued agent key. ~5–15s is normal; a ~30s edge cut (520) means the
    execution loop is broken (see the 2026-09-11 stale worker-routing incident,
    bug.5121) — and note that heavy parallel probing can starve the 2-pod
    scheduler-worker pool into false 520s, so verify failures sequentially.
@@ -369,8 +379,8 @@ planes — track under story.5023/bug.5127.
 
 ## Proof criteria
 
-- Agent completes **discover → register → auth → execute → list runs → stream events** with no browser session.
-- Node-local work-item validation completes **agent.json/OpenAPI discovery → fresh registration → create → claim → heartbeat → summary patch → `done` patch → exact GET readback → release → delete → `404` readback** against one explicit node `BASE`.
+- Agent completes **discover → authorized spawn-grant redemption → auth → execute → list runs → stream events** with no browser session after the human grant ceremony.
+- Node-local work-item validation completes **agent.json/OpenAPI discovery → target-node credential auth → create → claim → heartbeat → summary patch → `done` patch → exact GET readback → release → delete → `404` readback** against one explicit node `BASE`.
 - Graph execution produced a successful run (`status: "success"`).
 - Metering path recorded downstream (charge receipt / billing telemetry) for the run.
 - **Knowledge compounds:** the linked-atoms contribution diff shows all entries with their `domain`, and a self-referential cite (`citingId === citedId`) is rejected `400`.
@@ -385,16 +395,19 @@ planes — track under story.5023/bug.5127.
 
 ## Known shortcomings for next iteration
 
-1. **High**: `graph_name` required on completions for new agents — without it, calls fail with
-   "model not found" because no LiteLLM virtual key exists for a freshly registered account.
+1. **Critical ([task.5264](https://cognidao.org/work/items/task.5264))**: fresh durable v2 actors are not yet accepted by SessionUser-shaped
+   chat/run/work-item routes. Those routes must consume the exact agent principal and
+   billing account without projecting the AI into a human `userId`; an upgraded legacy
+   actor is compatibility evidence, not north-star proof.
+2. **High**: `graph_name` required on completions for new agents — without it, calls fail with
+   "model not found" because no LiteLLM virtual key exists for a freshly spawned account.
    Fix: provision a platform virtual key at registration time, or route all completions through
    the graph executor by default.
-2. **High**: no machine-accessible graph/agent listing endpoint (`GET /api/v1/ai/agents`
+3. **High**: no machine-accessible graph/agent listing endpoint (`GET /api/v1/ai/agents`
    uses session auth only). Agents cannot self-discover available graphs.
-3. **High**: `POST /api/v1/ai/chat` (the primary human chat path) still uses `getSessionUser` —
+4. **High**: `POST /api/v1/ai/chat` (the primary human chat path) still uses `getSessionUser` —
    Bearer tokens rejected. Agents must use `chat/completions` instead.
-4. **High**: no explicit revocation/introspection endpoint for issued machine keys.
-5. **Medium**: no first-class "run submit" machine endpoint yet (registration + run read are
+5. **Medium**: no first-class "run submit" machine endpoint yet (credential redemption + run read are
    shipped; run create is indirect via chat/completions).
 6. Billing strategy transition is in-flight: threshold policy + x402/hyperion split needs a
    single canonical gate (see `proj.x402-e2e-migration`).
