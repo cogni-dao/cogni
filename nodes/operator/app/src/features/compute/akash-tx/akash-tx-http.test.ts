@@ -148,9 +148,9 @@ describe("akash-tx dispatcher", () => {
       authorization: AUTH,
       body: JSON.stringify(input),
     };
-    expect(
-      (await dispatch({ ...request, authorization: undefined })).status
-    ).toBe(401);
+    const { authorization: _authorization, ...unauthenticatedRequest } =
+      request;
+    expect((await dispatch(unauthenticatedRequest)).status).toBe(401);
     expect(
       (
         await dispatch({
