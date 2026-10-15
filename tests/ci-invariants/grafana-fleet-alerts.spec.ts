@@ -197,6 +197,10 @@ describe("fleet Serve alert contract (bug.5459)", () => {
         key: "DATABASE_RELIABILITY_ADMIN_URL",
         path: "DATABASE_RELIABILITY_ADMIN_URL",
       },
+      {
+        key: "DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON",
+        path: "DATABASE_RELIABILITY_CELL_ADMIN_URLS_JSON",
+      },
     ]);
     const source = readFileSync(RELIABILITY_ACTUATOR_FILE, "utf8");
     expect(source.indexOf('if (mode === "watchdog")')).toBeLessThan(
@@ -211,6 +215,11 @@ describe("fleet Serve alert contract (bug.5459)", () => {
       "local.reliability_policy.expectedRegions"
     );
     expect(recoveryChecks).toContain("fail_if_body_not_matches_regexp");
+    expect(recoveryChecks).toContain('each.value.database_tier == "dedicated"');
+    expect(recoveryChecks).toContain(
+      "local.environment_configs[each.value.environment].primary_host"
+    );
+    expect(recoveryChecks).toContain("&node_slug=${each.value.node_slug}");
     for (const identity of [
       "buildSha",
       "databaseSystemIdentifier",

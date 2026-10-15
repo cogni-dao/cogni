@@ -243,10 +243,12 @@ resource "grafana_synthetic_monitoring_check" "environment_readyz" {
 }
 
 resource "grafana_synthetic_monitoring_check" "database_recovery" {
-  provider           = grafana.sm
-  for_each           = local.recovery_targets
-  job                = "cogni-${each.value.environment}-${each.value.node_slug}-${each.value.proof_class}"
-  target             = "https://${each.value.host}/readyz?proof=${each.value.proof_class}"
+  provider = grafana.sm
+  for_each = local.recovery_targets
+  job      = "cogni-${each.value.environment}-${each.value.node_slug}-${each.value.proof_class}"
+  target = each.value.database_tier == "dedicated" ? (
+    "https://${local.environment_configs[each.value.environment].primary_host}/readyz?proof=${each.value.proof_class}&node_slug=${each.value.node_slug}"
+  ) : "https://${each.value.host}/readyz?proof=${each.value.proof_class}"
   enabled            = true
   probes             = [for region in local.reliability_policy.expectedRegions : data.grafana_synthetic_monitoring_probes.public.probes[region]]
   frequency          = 60000

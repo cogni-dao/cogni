@@ -440,7 +440,7 @@ async function assertRecoveryWindow(
   target: ReliabilityTarget,
   incident: DatabaseRecoveryIncident,
   proofClass: ReliabilityRecoveryCheck["proofClass"]
-): Promise<void> {
+): Promise<ReliabilityStatusV1["regionalReadiness"]> {
   const end = new Date();
   const result = await metrics.queryRange({
     query: `min_over_time(probe_success{environment="${target.environment}",node_slug="${target.slug}",proof_class="${proofClass}",target_build_sha="${incident.targetBuildSha}",database_system_identifier="${incident.databaseSystemIdentifier}"}[1m])`,
@@ -463,6 +463,11 @@ async function assertRecoveryWindow(
   ) {
     throw new Error("database_readmission_evidence_incomplete");
   }
+  return result.result.map((series) => ({
+    region: series.metric.probe ?? series.metric.region ?? "",
+    healthy: true,
+    observedAt: new Date((series.values.at(-1)?.[0] ?? 0) * 1000).toISOString(),
+  }));
 }
 
 let verificationRunning = false;
@@ -662,6 +667,21 @@ async function readDedicatedStatus(
   if (!health) throw new Error("database_recovery_cell_substrate_missing");
   const contained =
     observation.runtimeRolesNoLogin && observation.activeRuntimeSessions === 0;
+  let regionalReadiness: ReliabilityStatusV1["regionalReadiness"] = [];
+  let healthy = false;
+  if (
+    incident?.state === "readmitted" &&
+    incident.verifiedAt &&
+    observation.appRolesCanLogin
+  ) {
+    await recoveryCheck(target, "recovery-product");
+    regionalReadiness = await assertRecoveryWindow(
+      target,
+      incident,
+      "recovery-product"
+    );
+    healthy = true;
+  }
   return {
     version: "reliability-status.v1",
     nodeId: target.nodeId,
@@ -675,8 +695,10 @@ async function readDedicatedStatus(
         ? "recovering"
         : contained
           ? "contained"
-          : "unknown",
-    regionalReadiness: [],
+          : healthy
+            ? "healthy"
+            : "unknown",
+    regionalReadiness,
     utilization: {
       evidenceScope: "node",
       ioPressurePct: health.ioPressurePct,
