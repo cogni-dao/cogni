@@ -9,8 +9,10 @@
 
 import { z } from "zod";
 import {
+  type FlightProbeProjectionErrorCode,
   type FlightProbeRing,
   flightProbeRingSchema,
+  isFlightProbeProjectionError,
 } from "@/shared/secrets/flight-probe-credential";
 
 export const flightProbeLaneSchema = z.enum([
@@ -56,7 +58,8 @@ export class OpenBaoFlightProbeProjectionAdapter {
     readonly lane: FlightProbeLane;
     readonly nodeId: string;
   }): Promise<FlightProbeRing> {
-    const login = await this.fetchImpl(
+    const login = await fetchOrUnavailable(
+      this.fetchImpl,
       `${this.addr}/v1/auth/github-actions/login`,
       {
         method: "POST",
@@ -79,7 +82,8 @@ export class OpenBaoFlightProbeProjectionAdapter {
     // The role can read exactly this lane's authority bucket. Lane-wide access
     // is no broader than the GitHub Environment's existing target-vault
     // authority; the route returns only the requested catalog UUID field.
-    const read = await this.fetchImpl(
+    const read = await fetchOrUnavailable(
+      this.fetchImpl,
       `${this.addr}/v1/cogni/data/${input.lane}/flight-prober`,
       {
         method: "GET",
@@ -113,7 +117,7 @@ export class OpenBaoFlightProbeProjectionAdapter {
 async function readBoundedJson(
   response: Response,
   maxBytes: number,
-  errorCode: string
+  errorCode: FlightProbeProjectionErrorCode
 ): Promise<unknown> {
   const contentType = response.headers.get("content-type")?.toLowerCase();
   if (
@@ -149,7 +153,8 @@ async function readBoundedJson(
       // Preserve the uniform projection error even if upstream cancellation fails.
     }
     if (isProjectionError(error)) throw error;
-    throw projectionError(errorCode);
+    if (error instanceof SyntaxError) throw projectionError(errorCode);
+    throw projectionError("upstream_unavailable");
   } finally {
     reader.releaseLock();
   }
@@ -163,13 +168,27 @@ async function cancelResponse(response: Response): Promise<void> {
   }
 }
 
-function isProjectionError(error: unknown): error is Error & { code: string } {
-  return (
-    error instanceof Error &&
-    typeof (error as { code?: unknown }).code === "string"
-  );
+function isProjectionError(
+  error: unknown
+): error is Error & { code: FlightProbeProjectionErrorCode } {
+  return isFlightProbeProjectionError(error);
 }
 
-function projectionError(code: string): Error & { code: string } {
+async function fetchOrUnavailable(
+  fetchImpl: typeof fetch,
+  input: string,
+  init: RequestInit
+): Promise<Response> {
+  try {
+    return await fetchImpl(input, init);
+  } catch (error) {
+    if (isProjectionError(error)) throw error;
+    throw projectionError("upstream_unavailable");
+  }
+}
+
+function projectionError(
+  code: FlightProbeProjectionErrorCode
+): Error & { code: FlightProbeProjectionErrorCode } {
   return Object.assign(new Error(code), { code });
 }

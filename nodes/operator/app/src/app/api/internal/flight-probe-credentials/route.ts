@@ -16,7 +16,11 @@ import {
   wrapRouteHandlerWithLogging,
 } from "@/bootstrap/http";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
-import { flightProbeRingSchema } from "@/shared/secrets/flight-probe-credential";
+import {
+  type FlightProbeProjectionErrorCode,
+  flightProbeRingSchema,
+  isFlightProbeProjectionError,
+} from "@/shared/secrets/flight-probe-credential";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,7 +54,10 @@ export type ProjectionDeps = {
     status: 200 | 401 | 429;
     durationMs: number;
     outcome: "success" | "error";
-    errorCode?: "unauthorized" | "rate_limited";
+    errorCode?:
+      | "unauthorized"
+      | "rate_limited"
+      | FlightProbeProjectionErrorCode;
   }) => void;
 };
 
@@ -154,15 +161,23 @@ export async function handleFlightProbeCredentialProjection(
     );
     audit({ ...parsed.data, status: 200, outcome: "success" });
     return response(200, ring);
-  } catch {
+  } catch (error) {
     audit({
       ...parsed.data,
       status: 401,
       outcome: "error",
-      errorCode: "unauthorized",
+      errorCode: projectionFailureCode(error),
     });
     return response(401, { error: "unauthorized" });
   }
+}
+
+function projectionFailureCode(
+  error: unknown
+): FlightProbeProjectionErrorCode {
+  if (isFlightProbeProjectionError(error)) return error.code;
+  if (error instanceof z.ZodError) return "projection_denied";
+  return "upstream_unavailable";
 }
 
 export const POST = wrapRouteHandlerWithLogging(

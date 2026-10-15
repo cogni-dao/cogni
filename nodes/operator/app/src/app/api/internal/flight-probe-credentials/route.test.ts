@@ -88,10 +88,6 @@ describe("flight-probe credential projection route", () => {
   it.each([
     ["non-control", { isControl: () => false }],
     ["unknown node", { isCatalogNode: () => false }],
-    [
-      "OpenBao rejection",
-      { readRing: vi.fn().mockRejectedValue(new Error("denied")) },
-    ],
   ])("uses the same denial for %s", async (_case, override) => {
     const res = await handleFlightProbeCredentialProjection(
       request(),
@@ -100,6 +96,46 @@ describe("flight-probe credential projection route", () => {
     expect(res.status).toBe(401);
     expect(res.headers.get("cache-control")).toBe("no-store");
     await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
+  });
+
+  it.each([
+    "oidc_rejected",
+    "projection_denied",
+    "upstream_unavailable",
+  ] as const)(
+    "keeps %s externally uniform but internally diagnosable",
+    async (errorCode) => {
+      const error = Object.assign(new Error("redacted"), { code: errorCode });
+      const d = deps({ readRing: vi.fn().mockRejectedValue(error) });
+      const res = await handleFlightProbeCredentialProjection(request(), d);
+
+      expect(res.status).toBe(401);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
+      expect(d.audit).toHaveBeenCalledOnce();
+      expect(d.audit).toHaveBeenCalledWith({
+        lane: "candidate-a",
+        nodeId: NODE_ID,
+        status: 401,
+        durationMs: expect.any(Number),
+        outcome: "error",
+        errorCode,
+      });
+    }
+  );
+
+  it("maps untyped dependency failures to a bounded upstream code", async () => {
+    const d = deps({
+      readRing: vi.fn().mockRejectedValue(new Error("sensitive detail")),
+    });
+    const res = await handleFlightProbeCredentialProjection(request(), d);
+
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
+    expect(d.audit).toHaveBeenCalledOnce();
+    expect(d.audit).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "upstream_unavailable" })
+    );
   });
 
   it("requires TLS before consulting OpenBao", async () => {

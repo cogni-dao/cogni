@@ -108,6 +108,25 @@ describe("OpenBaoFlightProbeProjectionAdapter", () => {
     });
   });
 
+  it.each(["login", "kv"])(
+    "classifies an unavailable %s dependency without exposing its error",
+    async (stage) => {
+      const fetchImpl =
+        stage === "login"
+          ? vi.fn<typeof fetch>().mockRejectedValue(new Error("socket detail"))
+          : vi
+              .fn<typeof fetch>()
+              .mockResolvedValueOnce(
+                jsonResponse({ auth: { client_token: BAO_TOKEN } })
+              )
+              .mockRejectedValueOnce(new Error("socket detail"));
+
+      await expect(readRing(adapter(fetchImpl))).rejects.toMatchObject({
+        code: "upstream_unavailable",
+      });
+    }
+  );
+
   it("rejects a login redirect without forwarding the OIDC JWT", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(null, {

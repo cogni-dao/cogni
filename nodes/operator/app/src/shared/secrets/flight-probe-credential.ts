@@ -24,3 +24,19 @@ export const flightProbeRingSchema = z
   .refine((ring) => ring.previous === null || ring.previous !== ring.active);
 
 export type FlightProbeRing = z.infer<typeof flightProbeRingSchema>;
+
+export type FlightProbeProjectionErrorCode =
+  | "oidc_rejected"
+  | "projection_denied"
+  | "upstream_unavailable";
+
+export function isFlightProbeProjectionError(
+  error: unknown
+): error is Error & { code: FlightProbeProjectionErrorCode } {
+  return (
+    error instanceof Error &&
+    ["oidc_rejected", "projection_denied", "upstream_unavailable"].includes(
+      (error as { code?: string }).code ?? ""
+    )
+  );
+}
