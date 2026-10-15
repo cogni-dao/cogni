@@ -6,18 +6,18 @@ A two-tier state substrate: small nodes share one budgeted, watched, fenceable P
 
 ## The key decoupling (this is the Pareto insight)
 
-**Poly's return does not need the automation.** Once Poly runs on its own cell (own VM, own disk), it physically cannot hurt neighbors — that guarantee is structural, zero code paths involved. The auto-containment controller and status surface (PR #2729) protect against the *next* noisy tenant. Couple them and Poly waits on everything; decouple and both goals finish sooner.
+**Poly's return does not need the automation.** Once Poly runs on its own cell (own VM, own disk), it physically cannot hurt neighbors — that guarantee is structural, zero code paths involved. The auto-containment controller and status surface (PR #2729) protect against the _next_ noisy tenant. Couple them and Poly waits on everything; decouple and both goals finish sooner.
 
 ## Lane 1 — critical path: Poly up + fleet structurally safe (~1–2 days)
 
-| # | step | owner | gates |
-|---|------|-------|-------|
-| 1 | Decide A; merge hub refinement 6b555902 | CEO | 5m |
-| 2 | Flight PR #2730 alone; solo validation = inert for existing nodes + cell provision/status/release exercised + DSN rotation dry-run on candidate | dev session | 2–3h |
-| 3 | Operator-merge #2730 (auto-previews; inertness proven, not assumed) | operator | queue |
-| 4 | Provision Poly candidate cell → restore representative data → direct pgbench replay (≥8 clients, 2× incident rate) → neighbors stay green | dev session | 3–4h |
-| 5 | Provision prod Poly cell → fenced final dump → restore → checksum verify → rotate Poly DSNs → enable → 5×1m two-region healthy → audited re-admission | dev session + CEO watch | 3–4h + VM lead time |
-| 6 | Rollback retained: source DB read-only through the window; reversal = DSN flip + re-fence Poly only | standing | — |
+| #   | step                                                                                                                                                  | owner                   | gates               |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------- |
+| 1   | Decide A; merge hub refinement 6b555902                                                                                                               | CEO                     | 5m                  |
+| 2   | Flight PR #2730 alone; solo validation = inert for existing nodes + cell provision/status/release exercised + DSN rotation dry-run on candidate       | dev session             | 2–3h                |
+| 3   | Operator-merge #2730 (auto-previews; inertness proven, not assumed)                                                                                   | operator                | queue               |
+| 4   | Provision Poly candidate cell → restore representative data → direct pgbench replay (≥8 clients, 2× incident rate) → neighbors stay green             | dev session             | 3–4h                |
+| 5   | Provision prod Poly cell → fenced final dump → restore → checksum verify → rotate Poly DSNs → enable → 5×1m two-region healthy → audited re-admission | dev session + CEO watch | 3–4h + VM lead time |
+| 6   | Rollback retained: source DB read-only through the window; reversal = DSN flip + re-fence Poly only                                                   | standing                | —                   |
 
 After step 5: **Poly is live and the fleet's biggest proven risk is permanently structural-fixed** — even if Lane 2 slipped a week.
 

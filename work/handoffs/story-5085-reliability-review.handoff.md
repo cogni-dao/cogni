@@ -43,6 +43,6 @@ The CEO rejects my "merge #2724 first" recommendation on trust grounds. Your fir
 
 - Story gate ledger: https://cognidao.org/work/items/story.5085 · tasks: task.5246, task.5247, task.5248, task.5254, spike.5006, bug.5299
 - PRs: https://github.com/cogni-dao/cogni/pull/2730 (merged) · /pull/2729 (active) · /pull/2724 (residency, OPEN — your first verdict)
-- My review records: work/reviews/story-5085-*.md + substrate-tenancy-standard.design-review.md (this branch)
+- My review records: work/reviews/story-5085-\*.md + substrate-tenancy-standard.design-review.md (this branch)
 - Dev collaboration channel: .context/cto-reliability/ (recovery-policy-decision.md holds the approved readmit protocol + my conditions)
 - Watch verbs: /version.buildSha is the only deploy truth; gh pr checks --watch for CI; validate-candidate scorecard is the merge gate.
