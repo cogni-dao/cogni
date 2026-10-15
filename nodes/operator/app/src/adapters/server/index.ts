@@ -128,6 +128,13 @@ export {
   PostgresReadmitSqlAdapter,
   RecoveryLedgerDatabaseContainmentAdapter,
 } from "./db/database-containment-production.adapter";
+export {
+  createCellAdminRecoveryControls,
+  createCellReadmitRecoveryControls,
+  PostgresDatabaseCellRecoveryProbeAdapter,
+  routeCellRecoveryBegin,
+  routeCellRecoveryVerification,
+} from "./db/database-recovery-cell.adapter";
 export { DrizzleCatalogNodeRegistryAdapter } from "./db/drizzle-catalog-node-registry.adapter";
 export {
   ProbeDeployAdapter,
@@ -147,6 +154,7 @@ export {
   GITHUB_ADAPTER_VERSION,
   GitHubWebhookNormalizer,
 } from "./ingestion/github-webhook";
+export { createGrafanaMimirAdapter } from "./metrics/grafana-mimir.adapter";
 export {
   buildReliabilityReadinessQuery,
   type MimirAdapterConfig,

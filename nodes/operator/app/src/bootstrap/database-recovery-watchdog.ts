@@ -14,10 +14,10 @@
 import { createServer } from "node:http";
 import pino from "pino";
 import {
+  createCellAdminRecoveryControls,
   PostgresAdminSqlAdapter,
   PostgresDatabaseRecoveryWatchdogAdapter,
 } from "@/adapters/server";
-import { createCellAdminRecoveryControls } from "@/adapters/server/db/database-recovery-cell.adapter";
 import type { DatabaseEnvironment } from "@/ports";
 import { EVENT_NAMES } from "@/shared/observability";
 

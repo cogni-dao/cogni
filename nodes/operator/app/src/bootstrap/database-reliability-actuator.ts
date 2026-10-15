@@ -20,23 +20,21 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import {
+  createCellAdminRecoveryControls,
+  createCellReadmitRecoveryControls,
+  createGrafanaMimirAdapter,
   HttpReliabilityRecoveryAdapter,
   PinoDatabaseContainmentAuditWriter,
   PostgresAdminSqlAdapter,
+  PostgresDatabaseCellRecoveryProbeAdapter,
   PostgresDatabaseRecoveryBeginAdapter,
   PostgresDatabaseRecoveryProbeAdapter,
   PostgresDatabaseRecoveryVerificationAdapter,
   PostgresReadmitSqlAdapter,
   RecoveryLedgerDatabaseContainmentAdapter,
-} from "@/adapters/server";
-import {
-  createCellAdminRecoveryControls,
-  createCellReadmitRecoveryControls,
-  PostgresDatabaseCellRecoveryProbeAdapter,
   routeCellRecoveryBegin,
   routeCellRecoveryVerification,
-} from "@/adapters/server/db/database-recovery-cell.adapter";
-import { createGrafanaMimirAdapter } from "@/adapters/server/metrics/grafana-mimir.adapter";
+} from "@/adapters/server";
 import {
   hasHealthyScopedRecoveryWindow,
   isReliabilitySweepReady,
