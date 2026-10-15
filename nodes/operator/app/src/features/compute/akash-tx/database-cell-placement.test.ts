@@ -4,8 +4,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { repoSpecSchema } from "@cogni/repo-spec";
+import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { describe, expect, it } from "vitest";
-
 import { DatabaseCellBindingReferenceSchema } from "@/contracts/database-cell-binding.v1.contract";
 import { DatabaseCellBinder } from "@/features/compute/akash-tx/database-cell-binding";
 import type { AkashTxAllocationRecord, DatabaseCellNativeProof } from "@/ports";
@@ -13,7 +14,6 @@ import {
   type AppliedDatabaseCellReceipt,
   DatabaseCellAllocationMetadataSchema,
 } from "@/shared/secrets/database-cell-placement.data";
-import { databasePlacementSchema } from "../../../../../../../packages/repo-spec/src/schema";
 import {
   materializeDatabaseCellKits,
   planDatabaseCellKits,
@@ -332,22 +332,38 @@ describe("durable cell allocation custody", () => {
 
 describe("declared Akash cell materialization", () => {
   it("validates dedicated placement while preserving undeclared shared nodes", () => {
+    const checkPlacement = (production: unknown) =>
+      repoSpecSchema.safeParse({
+        ...buildTestRepoSpec(),
+        state: {
+          database: {
+            environments: {
+              "candidate-a": {
+                tier: "shared",
+                budget_profile: "shared-default-v1",
+              },
+              preview: { tier: "shared", budget_profile: "shared-default-v1" },
+              production,
+            },
+          },
+        },
+      });
     expect(
-      databasePlacementSchema.safeParse({
+      checkPlacement({
         tier: "dedicated",
         budget_profile: "dedicated-high-throughput-v1",
         placement: "akash-cell",
       }).success
     ).toBe(true);
     expect(
-      databasePlacementSchema.safeParse({
+      checkPlacement({
         tier: "shared",
         budget_profile: "shared-default-v1",
         placement: "akash-cell",
       }).success
     ).toBe(false);
     expect(
-      databasePlacementSchema.safeParse({
+      checkPlacement({
         tier: "shared",
         budget_profile: "shared-default-v1",
       }).success
