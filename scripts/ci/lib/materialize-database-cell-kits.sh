@@ -56,7 +56,9 @@ materialize_database_cell_kits() {
   native_source="$(remote 'set -eu
     container_id=$(docker ps --filter label=com.docker.compose.project=cogni-runtime --filter label=com.docker.compose.service=postgres -q)
     [ "$(printf "%s\n" "$container_id" | wc -l)" -eq 1 ] && [ -n "$container_id" ]
-    docker exec "$container_id" psql -U root -d postgres -XAtv ON_ERROR_STOP=1 -c "SELECT jsonb_build_object('\''systemIdentifier'\'', (SELECT system_identifier::text FROM pg_control_system()), '\''databases'\'', (SELECT jsonb_agg(datname) FROM pg_database), '\''roles'\'', (SELECT jsonb_agg(rolname) FROM pg_roles));"')"
+    pg_user=$(docker exec "$container_id" printenv POSTGRES_USER)
+    [ -n "$pg_user" ]
+    docker exec "$container_id" psql -U "$pg_user" -d postgres -XAtv ON_ERROR_STOP=1 -c "SELECT jsonb_build_object('\''systemIdentifier'\'', (SELECT system_identifier::text FROM pg_control_system()), '\''databases'\'', (SELECT jsonb_agg(datname) FROM pg_database), '\''roles'\'', (SELECT jsonb_agg(rolname) FROM pg_roles));"')"
   plans="$(jq -n --arg operatorSourceSha "$operator_sha" --arg environment "$DEPLOY_ENVIRONMENT" --arg expectedSourceHost "$VM_IP" --argjson nativeSource "$native_source" --argjson slots "$slots" '{operatorSourceSha:$operatorSourceSha,environment:$environment,expectedSourceHost:$expectedSourceHost,nativeSource:$nativeSource,slots:$slots}' | pnpm exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-kits.ts" --plan)" || fail "actual cell source identity did not validate"
   while IFS= read -r cell_node; do
     cell_bank="${cell_node}-database-cell"
