@@ -16,6 +16,7 @@ import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockFeatureWarn = vi.hoisted(() => vi.fn());
+const mockFeatureError = vi.hoisted(() => vi.fn());
 
 const mockRedeem = vi.fn().mockResolvedValue({
   actorId: "11111111-1111-4111-8111-111111111111",
@@ -77,7 +78,7 @@ vi.mock("@/shared/config", () => ({
 vi.mock("@/bootstrap/container", () => {
   const childLogger = {
     info: vi.fn(),
-    error: vi.fn(),
+    error: mockFeatureError,
     warn: mockFeatureWarn,
     debug: vi.fn(),
   };
@@ -340,8 +341,8 @@ describe("POST /api/v1/agent/upgrade", () => {
           error: "authz_unavailable",
         });
         expect(mockUpgrade).not.toHaveBeenCalled();
-        expect(mockFeatureWarn).toHaveBeenCalledTimes(1);
-        expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
+        expect(mockFeatureError).toHaveBeenCalledTimes(1);
+        expect(mockFeatureError.mock.calls[0]?.[0]).toMatchObject({
           operation: "upgrade",
           statusCode: 503,
           reasonCode: "authz_unavailable",
