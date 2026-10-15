@@ -6142,6 +6142,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "applied_database_cell_binding": {
+          "name": "applied_database_cell_binding",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "last_applied_sdl_hash": {
           "name": "last_applied_sdl_hash",
           "type": "text",
