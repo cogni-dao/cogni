@@ -792,19 +792,37 @@ describe("akash-tx-actuator runtime", () => {
     expect(tsup).toContain(`outDir: "dist-${SERVICE_NAME}"`);
   });
 
-  it("keeps dedicated database replay catalog-selected and node-generic", () => {
+  it("keeps dedicated database replay receipt-selected and node-generic", () => {
     const replay = read("scripts/ops/replay-dedicated-database-cell.sh");
     expect(replay).toContain(
-      "${TARGET_NODE_SLUG:?catalog target node slug required}"
+      "${CELL_BINDING_RECEIPT_FILE:?native sealed ready binding required}"
     );
     expect(replay).toContain(
-      "${REPLAY_SQL_FILE:?reviewed workload SQL file required}"
+      "${CELL_DIAGNOSTIC_RECEIPT_FILE:?private actor completed clone receipt required}"
     );
     expect(replay).toContain(
-      "${CATALOG_ROOT:?immutable catalog directory required}"
+      "${REPLAY_SQL_FILE:?reviewed read-only workload artifact required}"
     );
-    expect(replay).toContain('.reliability_validation."candidate-a".role');
-    expect(replay).toContain("dedicated-neighbor");
+    expect(replay).toContain("node=$(jq -er '.nodeSlug' <<< \"$binding\")");
+    expect(replay).toContain('$b.phase=="ready"');
+    expect(replay).toContain('$b.environment=="production"');
+    expect(replay).toContain("$d.nodeId==$b.nodeId");
+    expect(replay).toContain("$d.nodeSlug==$b.nodeSlug");
+    expect(replay).toContain("$d.allocationReceiptId==$b.receiptId");
+    expect(replay).toContain("$d.systemIdentifier==$b.systemIdentifier");
+    expect(replay).toContain(
+      '$d.databaseName==($b.databaseName+"_diagnostic")'
+    );
+    expect(replay).toContain("role=production-db-reader");
+    expect(replay).toContain("public.database_replay_identity()");
+    expect(replay).toContain("/v1/akash/observe-database-cell-diagnostic");
+    expect(replay).toContain("-c 8 -j 8");
+    expect(replay).toContain("-T 600");
+    expect(replay).toContain("$c.parentRolesContained==true");
+    expect(replay).toContain("$c.parentRuntimeSessions==0");
+    expect(replay).not.toMatch(
+      /contain_database_incident|begin_database_recovery|ALTER ROLE/
+    );
     expect(replay).not.toMatch(/POLY_|NODE_SLUG:-poly|poly-cell|poly_trader/);
 
     const profiles = parse<Record<string, unknown>>(
