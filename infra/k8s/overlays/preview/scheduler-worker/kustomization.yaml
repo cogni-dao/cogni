@@ -13,7 +13,7 @@ resources:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:288b7c1b29c19361289dfed7b8363dc37ea1fdc592583839c69f800d3912e5d2"
+    digest: "sha256:40eef5fecad9abdb1d74e99983a4577691026098bd26f01a5518a1dfa263ba1b"
 
 patches:
   # GENERATED sibling (render-scheduler-worker-endpoints.sh): this env's
@@ -36,10 +36,10 @@ patches:
         value: "preview"
       - op: replace
         path: /data/IMAGE_DIGEST
-        value: "sha256:288b7c1b29c19361289dfed7b8363dc37ea1fdc592583839c69f800d3912e5d2"
+        value: "sha256:40eef5fecad9abdb1d74e99983a4577691026098bd26f01a5518a1dfa263ba1b"
       - op: add
         path: /data/GIT_SHA
-        value: "4be447aa4bd6e37c48697b67529133f71a396ef3"
+        value: "764c57e37254080a395f9bbb15f63f44b871bcb2"
 
   # bug.0295: VM discovery via DNS (cogni-preview.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
