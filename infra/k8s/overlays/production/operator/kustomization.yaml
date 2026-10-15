@@ -14,6 +14,7 @@ resources:
   # Its old-account leases are closed (all 12 retired 2026-09-15) and its Console key
   # is dead; the pod was pure reconcile-churn + memory on a full box.
   - external-secret.yaml
+  - ../../../base/operator-migration-external-secret
   - ./secrets-writer-sa.yaml
   - ./compute-workload-platform-application.yaml
   # story.5016 production cutover — the private Akash transaction actuator Crossplane calls.
@@ -54,9 +55,23 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:b8de468c9f4e22ecbbbf2823f84c659e3d62e5d3062ef79b2aa5f13941c38163"
+    digest: "sha256:e415a9f373a819c25c6ac8f6ea543d8f1898ca27eb91bb672d77c1cdb243e111"
 
 patches:
+  - target:
+      kind: ExternalSecret
+      name: migration-secrets
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: production/operator-database-migration
+  - target:
+      kind: Deployment
+      name: node-app
+    patch: |
+      - op: replace
+        path: /spec/template/spec/initContainers/0/env/0/valueFrom/secretKeyRef/name
+        value: operator-migration-secrets
   # bug.5240 — same BY-NAME env rule as the actuator patch below.
   - target:
       kind: Deployment
