@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/db-client/tests/client-options`
  * Purpose: Verify injected pool configuration without opening a connection.
- * Scope: Factory option forwarding only; database semantics use component tests.
+ * Scope: Factory option forwarding only. Does not test database semantics.
  * Invariants: Defaults and role-specific DSNs remain unchanged.
  * Side-effects: none
  * Links: bug.5467
