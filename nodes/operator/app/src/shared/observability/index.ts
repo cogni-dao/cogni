@@ -19,8 +19,6 @@ export const EVENT_NAMES = {
     "feature.node_publish.secret_shape_generated",
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
-  FLIGHT_PROBE_PROJECTION_COMPLETE:
-    "feature.flight_probe_projection.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
   // Env-membership merge → lane reconcile (task.5132). One terminal event per merged
   // `cogni-operator/node-env-<slug>-<env>` PR, including the no-dispatch outcomes. Adding a
