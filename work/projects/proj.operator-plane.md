@@ -52,19 +52,19 @@ MDI server.js
 
 | Entity                       | Key fields                                                     | Purpose                                                      |
 | ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
-| `actors`                     | `id, tenant_id, kind, parent_actor_id, label, status`          | Economic subject — who earned, who spent, who was attributed |
+| `actors`                     | `id, tenant_id, kind, parent_actor_id, label, status`          | Economic subject; parent is accepted stewardship, not access |
 | `actor_bindings`             | `actor_id, provider, external_id`                              | External refs: wallets, OAuth IDs, platform identities       |
 | `budget_allocations`         | `actor_id, funded_by_actor_id, limit, spent, policy`           | Delegated spend slices                                       |
 | `charge_receipts.actor_id`   | FK → actors (nullable, v1+; v0 uses `external_agent_ref` TEXT) | Usage attribution: which actor made this LLM call            |
 | `epoch_allocations.actor_id` | FK → actors (planned, bridges to user_id)                      | Reward attribution: which actor earned this epoch            |
-| `claims`                     | `actor_id, statement_id, wallet, amount` (future)              | On-chain reward claiming                                     |
+| `claims`                     | `actor_id, statement_id, wallet, amount` (future)              | On-chain claim against the wallet pinned at materialization   |
 
 ### Actor kinds
 
 | Kind     | Description                                    | Example                 |
 | -------- | ---------------------------------------------- | ----------------------- |
 | `user`   | Human person. 1:1 FK to `users.id`.            | Connor (MDI operator)   |
-| `agent`  | AI agent. Has `parent_actor_id` for hierarchy. | MDI agent "Kai"         |
+| `agent`  | AI agent. May have accepted stewardship via `parent_actor_id`. | MDI agent "Kai"         |
 | `system` | Internal system processes. Sentinel.           | `cogni_system`          |
 | `org`    | Treasury / collective. No direct login.        | MDI collective treasury |
 
@@ -73,12 +73,12 @@ MDI server.js
 Three layers, kept strictly separate:
 
 1. **`earned_by_actor_id`** — who did the work (always an actor_id, human or agent)
-2. **`beneficiary_actor_id`** — who can claim the reward (defaults to self for humans, parent for agents)
-3. **`claimant_wallet`** — where value is sent (resolved from actor_bindings at claim time)
+2. **`beneficiary_actor_id`** — who can claim the reward (frozen from explicit policy; never inferred from parentage)
+3. **`claimant_wallet`** — where value is sent (pinned from an evidenced binding at cumulative-distribution materialization)
 
-**Default policy:** Agents accrue rewards (`earned_by_actor_id` is always the agent). Provenance is never rewritten — the agent earned it, period. `beneficiary_actor_id` determines who may benefit (defaults to parent human or org treasury for agents). `claimant_wallet` is resolved from `actor_bindings` only at claim time. These three fields are never collapsed into one. Governance rights (voting, proposals) are a separate policy layer — economic attribution does NOT imply political participation.
+**Policy:** Agents accrue rewards (`earned_by_actor_id` is always the agent). Provenance is never rewritten — the agent earned it, period. `beneficiary_actor_id` determines who may benefit and is selected only from an explicit effective policy; stewardship or parentage never redirects value by implication. If no eligible beneficiary is resolved, the allocation remains pending. `claimant_wallet` is pinned from an evidenced beneficiary binding when the cumulative distribution is materialized. These three fields are never collapsed into one. Governance rights (voting, proposals) are a separate policy layer — economic attribution does NOT imply political participation.
 
-**`beneficiary_actor_id` is derived by policy but persisted on the reward record.** Resolution rule: nearest claimable ancestor, explicit override, or tenant treasury — evaluated at allocation time and stored. Not re-derived at read time. If ownership/governance changes after allocation, existing records are immutable — only future allocations reflect the new policy. This preserves auditability: a third party can verify who was entitled to what, when.
+**`beneficiary_actor_id` is derived by policy but persisted on the reward record.** The effective, accepted beneficiary policy is evaluated at allocation time and stored. It is not re-derived at read time. A node may define an explicit default policy such as self or treasury, but absence of policy never means "nearest parent." If ownership/governance changes after allocation, existing records are immutable — only future allocations reflect the new policy. This preserves auditability: a third party can verify who was entitled to what, when.
 
 ### Relationship to proj.transparent-credit-payouts
 

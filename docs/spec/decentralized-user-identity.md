@@ -210,12 +210,20 @@ infrastructure failures roll the nonce consumption back.
 Git attribution first records the work under the stable external claimant key
 `identity:github:<id>`. It does not require a Cogni account and is not rewritten
 when someone later links that GitHub identity. At settlement/read time, a node
-may resolve that identity claimant through its own `user_bindings` to the local
-user who proved control of the GitHub account.
+resolves that claimant through its local identity-owner registry. The legacy
+human-only projection may resolve through `user_bindings`; the actor-aware path
+binds an agent-operated provider identity to the durable agent actor and records
+human stewardship and beneficiary policy separately.
 
-For P0, this lets a locally authenticated human prove control of an
-agent-operated GitHub account such as `flock-leader` and claim its preserved
-identity allocation. The broker does not encode future actor/beneficiary policy.
+For the legacy P0 path, this lets a locally authenticated human prove control of
+an agent-operated GitHub account such as `flock-leader`. Under the
+[human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard),
+that proof establishes an explicit stewardship/beneficiary decision; it does not
+turn the AI's source identity or authorship into the human's. The immutable provider
+identity binds to the durable agent actor, the allocation freezes the AI as earner
+and the selected beneficiary separately, and settlement later pins the beneficiary
+wallet. The frozen v1 broker carries subject provenance only; the claim ceremony
+and beneficiary policy live above it.
 
 **Attestation is not git-specific.** `claimantKey()` is
 `identity:<provider>:<external_id>` and `user_bindings.provider` already admits

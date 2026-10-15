@@ -860,7 +860,7 @@ Enable transparent, verifiable credit distribution where contribution activity i
 
 ### Actor Migration Path (Planned)
 
-Finalized statements now preserve claimant identity explicitly (`claimant_key`, `claimant`) and treat `epoch_allocations.user_id` as the resolved-human override surface, not the only economic subject. `actor_id` is the durable node-local attribution subject; claimant keys can resolve to actor-backed subjects without changing the deterministic statement model. For human actors (`kind=user`), `actor_id` bridges 1:1 to `user_id`; agent actors preserve AI authorship even when an explicit beneficiary receives value. Every economic event remains scoped by `(node_id, scope_id)`. No invariant changes — PAYOUT_DETERMINISTIC and ALL_MATH_BIGINT apply regardless of subject key. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard).
+Finalized statements now preserve claimant identity explicitly (`claimant_key`, `claimant`) and treat `epoch_allocations.user_id` as the legacy resolved-human compatibility projection, not an authorship override or the only economic subject. `actor_id` is the durable node-local attribution subject; claimant keys can resolve to actor-backed subjects without changing the deterministic statement model. For human actors (`kind=user`), `actor_id` bridges 1:1 to `user_id`; agent actors preserve AI authorship even when an explicit beneficiary receives value. Every economic event remains scoped by `(node_id, scope_id)`. No invariant changes — PAYOUT_DETERMINISTIC and ALL_MATH_BIGINT apply regardless of subject key. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard).
 
 ### AI Agent Developer Actors (V0 Addendum)
 
@@ -868,7 +868,9 @@ External AI agents can request developer flight control for a specific node
 before they are payout actors. The approval fact lives in RBAC, not in the
 attribution ledger:
 
-- Registration mints a `user_id` and bearer token for the AI agent.
+- Legacy v1 registration mints a compatibility `user_id` and bearer token. Durable
+  registration mints an `actor(kind=agent)` and replaceable credential; both remain
+  distinct from a human identity.
 - The node creator/admin approves or rejects the agent for one `node:{node_id}`
   through `POST /api/v1/nodes/{node_id}/developers`.
 - Approval writes the OpenFGA `developer` tuple. `can_flight` is computed by the authorization model.
@@ -876,9 +878,12 @@ attribution ledger:
 
 No attribution statement changes when an agent receives flight permission. If
 the agent later produces contribution activity, that activity enters the ledger
-like any other claimant: unresolved first, then resolved to a human `user_id` or
-future `actor_id` when bindings exist. Flight authority is operational control;
-credit attribution remains governed by `(node_id, scope_id)` epoch rules.
+under the external identity that authored it. Resolution may attach that claimant
+to the durable agent's `earned_by_actor_id`; it never rewrites AI authorship to a
+stewarding human. A separately frozen `beneficiary_actor_id` may designate that
+human, and the cumulative distribution later pins the beneficiary wallet. Flight
+authority is operational control; credit attribution remains governed by
+`(node_id, scope_id)` epoch rules.
 
 ## Non-Goals
 

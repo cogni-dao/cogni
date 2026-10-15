@@ -202,7 +202,7 @@ See [attribution-ledger spec](../../docs/spec/attribution-ledger.md) for full ar
 - Epoch close is idempotent — same inputs produce identical statement hash
 - All write operations go through Temporal — Next.js stays stateless. **Exception:** `ingestion_receipts` appends via webhook receivers (per WEBHOOK_RECEIPT_APPEND_EXEMPT)
 - All monetary math in BIGINT — no floating point, including weights (integer milli-units)
-- `user_id` remains the resolved human override surface for attribution, while finalized statements preserve claimant identity explicitly for linked and unlinked subjects — see the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard)
+- `user_id` remains a legacy human compatibility projection; it never overrides the frozen external claimant or an AI `earned_by_actor_id`. Beneficiary and wallet resolve separately — see the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard)
 - Identity resolution is best-effort — unresolved events flagged, not silently dropped
 - Source adapters use cursor-based incremental sync — no full-window rescans
 - Verification = recompute from stored data — not re-fetch from external sources
