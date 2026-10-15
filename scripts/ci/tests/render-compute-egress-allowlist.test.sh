@@ -273,7 +273,9 @@ ok "self-control and nonproduction control grant no cross-environment admission"
 : > "$DNS_QUERY_LOG"
 env "${MIGRATION_ENV[@]}" FORK_DOMAIN_ROOT= \
   bash "$RENDERER" candidate-a production > "$TMPROOT/control-twin.list"
-diff -u "$OUT_A" "$TMPROOT/control-twin.list" || fail "control-host twin provider rows changed or gained a migration rule"
+diff -u <(sed '/^# env:/d' "$OUT_A") <(sed '/^# env:/d' "$TMPROOT/control-twin.list") \
+  || fail "control-host twin provider rows changed or gained a migration rule"
+grep -q '^# env: production ' "$TMPROOT/control-twin.list" || fail "allowlist names the caller instead of its destination"
 [ ! -s "$DNS_QUERY_LOG" ] || fail "control-host twin resolved foreign migration trust"
 ok "actual production control-host twin preserves provider rules with NO custodian/self admission"
 
@@ -502,6 +504,16 @@ printf '%s\n' '65.108.194.156/32:5432' > "$TMPROOT/scoped-candidate.expected"
 diff -u "$TMPROOT/scoped-candidate.expected" "$TMPROOT/scoped-candidate.rules" || fail "entry environment scope leaked"
 ok "entry scopes preserve distinct same-CIDR ports and normalize equivalent sets"
 
+for caller_lane in candidate-a preview; do
+  COGNI_CATALOG_ROOT="$SCOPED_CATALOG" bash "$RENDERER" "$caller_lane" production > "$TMPROOT/control-$caller_lane.list"
+  grep -Fxq '65.108.194.156/32:7233' "$TMPROOT/control-$caller_lane.list" \
+    || fail "$caller_lane reconcile erased the destination's production grant"
+  if grep -q '^65.108.194.156/32:5432' "$TMPROOT/control-$caller_lane.list"; then
+    fail "$caller_lane reconcile admitted the foreign Postgres grant to production"
+  fi
+done
+ok "candidate and preview control reconciles preserve production grants without foreign Postgres trust"
+
 # The hardener must install only the declared Temporal port for this source.
 cp "$TMPROOT/scoped-production.list" "$STAGED_ALLOWLIST"
 run_harden
@@ -568,7 +580,11 @@ scoped_render preview preview > "$TMPROOT/scoped-preview"
 grep -Fxq "65.108.194.156/32:$PORTS" "$TMPROOT/scoped-preview" || fail "preview worker NAT missing from preview destination"
 grep -Fxq "198.51.100.201/32:$PORTS" "$TMPROOT/scoped-preview" || fail "scoped entry removed legacy provider trust"
 ok "preview entry admits exactly its existing five ports only to preview"
-for pair in 'production production' 'preview production' 'candidate-a production' 'production preview' 'production candidate-a' 'candidate-a candidate-a'; do
+scoped_render production preview > "$TMPROOT/production-to-preview"
+grep -Fxq "65.108.194.156/32:$PORTS" "$TMPROOT/production-to-preview" \
+  || fail "foreign caller erased the destination's preview grant"
+ok "destination-owned preview grants survive a production caller"
+for pair in 'production production' 'preview production' 'candidate-a production' 'production candidate-a' 'candidate-a candidate-a'; do
   read -r lane destination <<<"$pair"
   scoped_render "$lane" "$destination" > "$TMPROOT/after-$lane-$destination"
   cmp "$TMPROOT/baseline-$lane-$destination" "$TMPROOT/after-$lane-$destination" || fail "scoped entry changed $lane -> $destination output"
