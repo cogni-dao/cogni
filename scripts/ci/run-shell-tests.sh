@@ -67,7 +67,8 @@ PARALLEL=(
   detect-affected.test.sh
   classify-env-manager-fast-path.test.sh
   resolve-candidate-deploy-repository.test.sh
-  candidate-flight-pr-resolution.test.sh
+  candidate-build-release.test.sh
+  resolve-pr-build-images.test.sh
   reconcile-scheduler-worker-routing.test.sh
   promote-k8s-image.test.sh
   wait-for-in-cluster-services.test.sh

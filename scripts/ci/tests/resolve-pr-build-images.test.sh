@@ -14,6 +14,7 @@ mkdir -p "$WORKDIR/bin"
 cat > "$WORKDIR/bin/docker" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >> "${DOCKER_CALL_LOG:-/dev/null}"
 if [ "${1:-}" = "buildx" ] && [ "${2:-}" = "version" ]; then
   echo "buildx stub"
   exit 0
@@ -77,5 +78,30 @@ PY
 
 grep -q '^resolved_targets=ay$' "$github_out"
 grep -q '^has_images=true$' "$github_out"
+
+cat > "$WORKDIR/pinned.json" <<'JSON'
+{"targets":[{"target":"operator","tag":"ghcr.io/cogni-test-org/app:sha-ffffffffffffffffffffffffffffffffffffffff","digest":"ghcr.io/cogni-test-org/app@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","source_sha":"ffffffffffffffffffffffffffffffffffffffff"},{"target":"scheduler-worker","tag":"ghcr.io/cogni-test-org/app:sha-ffffffffffffffffffffffffffffffffffffffff-scheduler-worker","digest":"ghcr.io/cogni-test-org/app@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","source_sha":"ffffffffffffffffffffffffffffffffffffffff"}]}
+JSON
+PATH="$WORKDIR/bin:$PATH" \
+  IMAGE_TAG=sha-ffffffffffffffffffffffffffffffffffffffff \
+  SOURCE_SHA=ffffffffffffffffffffffffffffffffffffffff \
+  PINNED_BUILD_IMAGES_FILE="$WORKDIR/pinned.json" \
+  REMOTE_SOURCE_ARTIFACT_TARGETS_FILE="$WORKDIR/remote-source-artifact-targets.json" \
+  DOCKER_CALL_LOG="$WORKDIR/pinned-docker.log" \
+  OUTPUT_FILE="$WORKDIR/pinned-result.json" \
+  bash "$SCRIPT" >/dev/null
+
+python3 - "$WORKDIR" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+original = json.loads((root / "pinned.json").read_text())["targets"]
+actual = json.loads((root / "pinned-result.json").read_text())["targets"]
+assert actual[:2] == original, actual
+assert actual[2]["target"] == "ay", actual
+calls = (root / "pinned-docker.log").read_text()
+assert calls.count("imagetools inspect") == 1, calls
+assert "cogni-test-org/ay:" in calls, calls
+assert "cogni-test-org/app:" not in calls, calls
+PY
 
 echo "all cases passed"

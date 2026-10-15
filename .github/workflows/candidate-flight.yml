@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
   packages: read
   pull-requests: read
   statuses: write
@@ -55,11 +56,12 @@ jobs:
       node_slug: ${{ steps.meta.outputs.node_slug }}
       node_source_sha: ${{ steps.meta.outputs.node_source_sha }}
       resolved_pr_number: ${{ steps.meta.outputs.resolved_pr_number }}
+      in_repo_source: ${{ steps.meta.outputs.in_repo_source }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       status_url: ${{ steps.meta.outputs.status_url }}
       digests_json: ${{ steps.images.outputs.digests_json }}
-      targets_json: ${{ steps.detect.outputs.targets_json }}
-      has_targets: ${{ steps.detect.outputs.has_targets }}
+      targets_json: ${{ steps.release.outputs.targets_json || steps.detect.outputs.targets_json }}
+      has_targets: ${{ steps.release.outputs.has_targets || steps.detect.outputs.has_targets }}
       flight_targets_json: ${{ steps.flight-targets.outputs.flight_targets_json }}
       has_flight_targets: ${{ steps.flight-targets.outputs.has_flight_targets }}
       has_image_inputs: ${{ steps.flight-targets.outputs.has_image_inputs }}
@@ -91,7 +93,7 @@ jobs:
           NODE_SOURCE_SHA="${{ inputs.source_sha }}"
           COMMIT_STATUS_SHA=""
           RESOLVED_PR_NUMBER="${{ inputs.pr_number }}"
-          BASE_SHA=""
+          IN_REPO_SOURCE=false
           if [ -n "$NODE_SLUG" ] || [ -n "$NODE_SOURCE_SHA" ]; then
             if [ -n "$PR_NUMBER" ]; then
               echo "::error::candidate-flight accepts either pr_number or node_slug/source_sha, not both"
@@ -117,27 +119,7 @@ jobs:
               # infra/k8s manifest tree candidate-a must prove pre-merge.
               HEAD_SHA="$NODE_SOURCE_SHA"
               COMMIT_STATUS_SHA="$NODE_SOURCE_SHA"
-              # The operator API deliberately dispatches the uniform node-ref
-              # contract. For an in-repo SHA, recover its exact-head open PR so the flight
-              # keeps the PR's complete build/deploy scope (for example the
-              # scheduler-worker image changed by the same commit). Remote node
-              # SHAs belong to another repository and must stay single-target.
-              mapfile -t MATCHING_PRS < <(
-                gh api --paginate \
-                  -H 'Accept: application/vnd.github+json' \
-                  "repos/${{ github.repository }}/commits/${NODE_SOURCE_SHA}/pulls" \
-                  --jq ".[] | select(.state == \"open\" and (.head.sha | ascii_downcase) == (\"${NODE_SOURCE_SHA}\" | ascii_downcase)) | .number"
-              )
-              if [ "${#MATCHING_PRS[@]}" -gt 1 ]; then
-                echo "::error::in-repo node-ref ${NODE_SOURCE_SHA} is the exact head of multiple open PRs: ${MATCHING_PRS[*]}"
-                exit 1
-              fi
-              if [ "${#MATCHING_PRS[@]}" -eq 1 ]; then
-                RESOLVED_PR_NUMBER="${MATCHING_PRS[0]}"
-                echo "Resolved in-repo node-ref ${NODE_SOURCE_SHA} to PR #${RESOLVED_PR_NUMBER}"
-              else
-                echo "::notice::in-repo node-ref ${NODE_SOURCE_SHA} has no exact-head open PR; preserving single-target node-ref behavior"
-              fi
+              IN_REPO_SOURCE=true
             else
               # Remote node: source_sha belongs to the child repo; parent
               # manifests stay on the trusted workflow revision.
@@ -157,6 +139,7 @@ jobs:
               HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha')
             fi
             COMMIT_STATUS_SHA="$HEAD_SHA"
+            IN_REPO_SOURCE=true
             # ONE identity (SOURCE_SHA_IS_DEPLOY_IDENTITY): the in-repo PR lane
             # resolves the same `sha-<headSha>` image pr-build publishes — the
             # legacy pr-{N}-{X} namespace is purged. (The node_slug+source_sha
@@ -164,11 +147,8 @@ jobs:
             # transitional monorepo dispatch until it is unified onto node_slug.)
             IMAGE_TAG="sha-${HEAD_SHA}"
           fi
-          if [ -n "$RESOLVED_PR_NUMBER" ]; then
-            BASE_SHA=$(gh api "repos/${{ github.repository }}/pulls/${RESOLVED_PR_NUMBER}" --jq '.base.sha')
-          fi
+          echo "in_repo_source=$IN_REPO_SOURCE" >> "$GITHUB_OUTPUT"
           echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
-          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "commit_status_sha=$COMMIT_STATUS_SHA" >> "$GITHUB_OUTPUT"
           echo "node_slug=$NODE_SLUG" >> "$GITHUB_OUTPUT"
@@ -195,45 +175,52 @@ jobs:
           TARGET_URL: ${{ steps.meta.outputs.status_url }}
         run: bash scripts/ci/report-candidate-status.sh
 
-      # Use the GitHub PR `files` API (same list as the Files Changed tab)
-      # as the authoritative changed-paths source. `git diff origin/main...HEAD`
-      # is unreliable here: when a branch is forked from a sibling branch
-      # that later gets squash-merged into main, the original commits stay
-      # reachable from HEAD and pollute the merge-base diff with paths the
-      # PR never actually changed.
-      - name: Fetch PR changed-paths from GitHub API
-        id: pr-files
+      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+        with: { version: 9.12.2 }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: app-src/pnpm-lock.yaml
+
+      - name: Install trusted release resolver dependencies
+        if: steps.meta.outputs.in_repo_source == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve immutable build release
+        id: release
+        if: steps.meta.outputs.in_repo_source == 'true'
+        working-directory: nodes/operator/app
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          RESOLVED_PR_NUMBER: ${{ steps.meta.outputs.resolved_pr_number }}
-          OUT: ${{ runner.temp }}/pr-changed-paths.txt
+          SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
           NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
+          RELEASE_OUTPUT_DIR: ${{ runner.temp }}/release
+        run: pnpm exec tsx scripts/resolve-build-release.ts
+
+      - name: Load release changed paths
+        id: pr-files
+        env:
+          IN_REPO_SOURCE: ${{ steps.meta.outputs.in_repo_source }}
+          CHANGED_PATHS_FILE: ${{ steps.release.outputs.changed_paths_file }}
+          ADDED_PATHS_FILE: ${{ steps.release.outputs.added_paths_file }}
+          OUT: ${{ runner.temp }}/pr-changed-paths.txt
         run: |
           set -euo pipefail
-          if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then
+          if [ "$IN_REPO_SOURCE" = true ]; then
+            cp "$CHANGED_PATHS_FILE" "$OUT"
+            cp "$ADDED_PATHS_FILE" "${OUT%.txt}-added.txt"
+          else
             : > "$OUT"
             : > "${OUT%.txt}-added.txt"
-            echo "ℹ️  Node-ref flight for ${NODE_SLUG}; PR changed-paths are not used"
-            echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
-            echo "added_paths_file=${OUT%.txt}-added.txt" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
-          # Emit both filename and previous_filename so cross-directory
-          # renames trigger rebuilds for the source side too (otherwise
-          # renaming nodes/A/x.ts → nodes/B/x.ts only rebuilds B).
-          PR_NUMBER="$RESOLVED_PR_NUMBER"
-          gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
-            --jq '.[] | (.filename, .previous_filename) | select(. != null)' > "$OUT"
-          gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
-            --jq '.[] | select(.status == "added") | .filename' > "${OUT%.txt}-added.txt"
-          COUNT=$(wc -l < "$OUT" | tr -d ' ')
-          echo "ℹ️  PR #${PR_NUMBER} changed ${COUNT} path(s) (per GitHub API)"
           echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
           echo "added_paths_file=${OUT%.txt}-added.txt" >> "$GITHUB_OUTPUT"
 
       - name: Detect affected nodes
         id: detect
+        if: steps.meta.outputs.in_repo_source != 'true'
         working-directory: app-src
         env:
           CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
@@ -248,15 +235,6 @@ jobs:
           OUTPUT_FILE: ${{ runner.temp }}/remote-source-artifact-targets.json
         run: bash ../scripts/ci/detect-remote-source-artifact-targets.sh
 
-      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
-        with: { version: 9.12.2 }
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22"
-          cache: pnpm
-          cache-dependency-path: app-src/pnpm-lock.yaml
-
       - name: Install typed planner dependencies
         working-directory: app-src
         run: pnpm install --frozen-lockfile
@@ -264,16 +242,16 @@ jobs:
       - name: Combine flight targets
         id: flight-targets
         env:
-          NORMAL_FLIGHT_TARGETS_JSON: ${{ steps.detect.outputs.flight_targets_json }}
+          NORMAL_FLIGHT_TARGETS_JSON: ${{ steps.release.outputs.flight_targets_json || steps.detect.outputs.flight_targets_json }}
           REMOTE_SOURCE_ARTIFACT_TARGETS_JSON: ${{ steps.remote-source-artifact-targets.outputs.remote_source_artifact_targets_json }}
-          HAS_PARENT_TARGETS: ${{ steps.detect.outputs.has_targets }}
+          HAS_PARENT_TARGETS: ${{ steps.release.outputs.has_targets || steps.detect.outputs.has_targets }}
           HAS_REMOTE_SOURCE_ARTIFACT_TARGETS: ${{ steps.remote-source-artifact-targets.outputs.has_remote_source_artifact_targets }}
           NODE_SLUG: ${{ steps.meta.outputs.node_slug }}
-          RESOLVED_PR_NUMBER: ${{ steps.meta.outputs.resolved_pr_number }}
-          BASE_SHA: ${{ steps.meta.outputs.base_sha }}
+          IN_REPO_SOURCE: ${{ steps.meta.outputs.in_repo_source }}
+          BASE_SHA: ${{ steps.release.outputs.base_sha }}
         run: |
           set -euo pipefail
-          if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then
+          if [ "$IN_REPO_SOURCE" != true ]; then
             combined=$(python3 -c 'import json, os; print(json.dumps([os.environ["NODE_SLUG"]]))')
           else
             # Remote artifact detection is intentionally broad so every changed
@@ -356,14 +334,15 @@ jobs:
           IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
           SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
           NODE: ${{ steps.meta.outputs.node_slug }}
-          RESOLVED_PR_NUMBER: ${{ steps.meta.outputs.resolved_pr_number }}
+          IN_REPO_SOURCE: ${{ steps.meta.outputs.in_repo_source }}
           NODE_SOURCE_SHA: ${{ steps.meta.outputs.node_source_sha }}
           COGNI_CATALOG_ROOT: infra/catalog
+          PINNED_BUILD_IMAGES_FILE: ${{ steps.release.outputs.resolved_file }}
           REMOTE_SOURCE_ARTIFACT_TARGETS_FILE: ${{ steps.remote-source-artifact-targets.outputs.targets_file }}
           OUTPUT_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: |
           set -euo pipefail
-          if [ -n "$NODE" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then
+          if [ "$IN_REPO_SOURCE" != true ]; then
             SOURCE_SHA="$NODE_SOURCE_SHA" bash ../scripts/ci/resolve-node-ref-image.sh
           else
             bash ../scripts/ci/resolve-pr-build-images.sh
@@ -375,7 +354,7 @@ jobs:
           echo "::error::No deployable artifact images found for ${{ steps.meta.outputs.image_tag }}"
           exit 1
 
-      # A same-repo node-ref may resolve the PR's full affected set. Content-hash
+      # A same-repo node-ref consumes the release's full affected set. Content-hash
       # infra images can already exist even while the requested node image is still
       # building, so "at least one image" is not sufficient: proceeding would sync
       # the source overlay's advisory digest and mutate candidate-a without ever
@@ -406,6 +385,15 @@ jobs:
           name: resolved-pr-images
           path: ${{ runner.temp }}/resolved-pr-images.json
           retention-days: 1
+
+      - name: Upload immutable release receipt
+        if: steps.meta.outputs.in_repo_source == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: build-release-receipt
+          path: ${{ runner.temp }}/release/release-receipt.json
+          retention-days: 7
+          if-no-files-found: error
 
   reconcile-compute-egress:
     needs: decide
@@ -1652,7 +1640,7 @@ jobs:
           # PR flights reconcile the PR's catalog/manifests. Node-ref flights reconcile the
           # target fleet's workflow source; an in-repo operator SHA can come from canonical and
           # must not replace an isolated fork's catalog/domain state.
-          ref: ${{ needs.decide.outputs.resolved_pr_number != '' && needs.decide.outputs.head_sha || github.sha }}
+          ref: ${{ needs.decide.outputs.in_repo_source == 'true' && needs.decide.outputs.head_sha || github.sha }}
           path: app-src
 
       # Candidate k3s cells are watched from the manifest-declared test parent,

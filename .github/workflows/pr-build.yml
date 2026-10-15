@@ -286,6 +286,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          SOURCE_EVENT: ${{ github.event_name }}
           OUT: ${{ runner.temp }}/pr-changed-paths.txt
         run: |
           set -euo pipefail
@@ -297,11 +299,21 @@ jobs:
             echo "changed_paths_file=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          scope_before=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.head.sha, .base.sha] | join(":")')
+          if { [ "$SOURCE_EVENT" = pull_request ] || [ "$SOURCE_EVENT" = workflow_dispatch ]; } && [ "${scope_before%%:*}" != "$SOURCE_SHA" ]; then
+            echo "::error::PR head changed before build scope capture; rebuild the current source"
+            exit 1
+          fi
           # Emit both filename and previous_filename so cross-directory
           # renames trigger rebuilds for the source side too (otherwise
           # renaming nodes/A/x.ts → nodes/B/x.ts only rebuilds B).
           gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
             --jq '.[] | (.filename, .previous_filename) | select(. != null)' > "$OUT"
+          gh api --paginate "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | select(.status == "added") | .filename' > "${OUT%.txt}-added.txt"
+          scope_after=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.head.sha, .base.sha] | join(":")')
+          [ "$scope_before" = "$scope_after" ] || { echo "::error::PR scope changed during capture; rebuild the current source"; exit 1; }
+          echo "base_sha=${scope_before#*:}" >> "$GITHUB_OUTPUT"
           COUNT=$(wc -l < "$OUT" | tr -d ' ')
           echo "ℹ️  PR #${PR_NUMBER} changed ${COUNT} path(s) (per GitHub API)"
           echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
@@ -341,6 +353,54 @@ jobs:
           else
             bash scripts/ci/detect-affected.sh
           fi
+
+      - name: Snapshot build release scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          BASE_SHA: ${{ steps.pr-files.outputs.base_sha || github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+          CHANGED_PATHS_FILE: ${{ steps.pr-files.outputs.changed_paths_file }}
+          BUILD_TARGETS_JSON: ${{ steps.detect.outputs.targets_json }}
+          FLIGHT_TARGETS_JSON: ${{ steps.detect.outputs.flight_targets_json || '[]' }}
+          SCOPE_FILE: ${{ runner.temp }}/build-scope.json
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE_SHA" ] && [ -n "$PR_NUMBER" ]; then
+            BASE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.sha')
+          fi
+          export BASE_SHA="${BASE_SHA:-$(git rev-parse "origin/${BASE_REF:-main}")}"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+
+          changed_file = os.environ.get("CHANGED_PATHS_FILE", "")
+          def git_paths(*args):
+              return subprocess.check_output(["git", "diff", "--name-only", "--no-renames", *args, os.environ["BASE_SHA"], os.environ["SOURCE_SHA"]], text=True).splitlines()
+          if changed_file:
+              changed = pathlib.Path(changed_file).read_text().splitlines()
+              added = pathlib.Path(changed_file.removesuffix(".txt") + "-added.txt").read_text().splitlines()
+          else:
+              changed = git_paths()
+              added = git_paths("--diff-filter=A")
+          scope = {
+              "base_sha": os.environ["BASE_SHA"],
+              "changed_paths": sorted(set(changed)),
+              "added_paths": sorted(set(added)),
+              "build_targets": json.loads(os.environ["BUILD_TARGETS_JSON"]),
+              "flight_targets": json.loads(os.environ["FLIGHT_TARGETS_JSON"]),
+          }
+          pathlib.Path(os.environ["SCOPE_FILE"]).write_text(json.dumps(scope) + "\n")
+          PY
+
+      - name: Upload build release scope
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: build-scope-${{ needs.resolve.outputs.source_sha }}
+          path: ${{ runner.temp }}/build-scope.json
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
 
   build:
     needs: [resolve, detect]
@@ -422,8 +482,8 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          repository: ${{ needs.resolve.outputs.checkout_repo }}
-          ref: ${{ needs.resolve.outputs.checkout_ref }}
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
 
       - name: Download build fragments
         if: needs.detect.outputs.has_targets == 'true'
@@ -438,6 +498,12 @@ jobs:
           FRAGMENTS_DIR: ${{ runner.temp }}/build-fragments
           OUTPUT_FILE: ${{ runner.temp }}/build-images.json
         run: bash scripts/ci/merge-build-fragments.sh
+
+      - name: Download build release scope
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: build-scope-${{ needs.resolve.outputs.source_sha }}
+          path: ${{ runner.temp }}
 
       - name: Write build manifest
         env:
