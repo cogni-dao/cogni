@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Real-Postgres proof for durable, node-local agent credentials (task.5217). */
+/** Real-Postgres proof for durable, node-local agent credentials (task.5252). */
 import { randomUUID } from "node:crypto";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DrizzleAgentIdentityAdapter } from "@/adapters/server/identity/agent-identity.adapter";
@@ -120,6 +120,43 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     await db
       .delete(agentSpawnGrants)
       .where(eq(agentSpawnGrants.status, "pending"));
+  });
+
+  it("enforces the active-agent cap at grant issuance and redemption", async () => {
+    const issuedBeforeFull = await identity.createSpawnGrant({
+      issuerUserId: userId,
+      name: "issued-before-full",
+      idempotencyKey: randomUUID(),
+    });
+    const cappedActorIds = Array.from({ length: 25 }, () => randomUUID());
+    await db.insert(actors).values(
+      cappedActorIds.map((id, index) => ({
+        id,
+        kind: "agent" as const,
+        displayName: `cap-fixture-${index}`,
+        billingAccountId,
+      }))
+    );
+
+    await expect(
+      identity.createSpawnGrant({
+        issuerUserId: userId,
+        name: "over-active-cap",
+        idempotencyKey: randomUUID(),
+      })
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "spawn_limit",
+    });
+    await expect(
+      identity.redeemSpawnGrant(issuedBeforeFull.token)
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "spawn_limit",
+    });
+
+    await db.delete(actors).where(inArray(actors.id, cappedActorIds));
+    await db
+      .delete(agentSpawnGrants)
+      .where(eq(agentSpawnGrants.id, issuedBeforeFull.grantId));
   });
 
   it("redeems a grant concurrently into exactly one stable actor and credential", async () => {

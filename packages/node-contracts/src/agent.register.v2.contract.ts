@@ -7,7 +7,7 @@
  * Scope: Input (spawn token) and output (node-local credential plus durable actor identity). Does not redeem or persist the grant.
  * Invariants: SPAWNED_ONLY; CREDENTIAL_NE_PRINCIPAL; NODE_LOCAL_BEARER.
  * Side-effects: none
- * Links: task.5211, task.5217
+ * Links: task.5211, task.5252
  * @public
  */
 

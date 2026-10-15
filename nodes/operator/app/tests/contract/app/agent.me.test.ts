@@ -14,6 +14,7 @@ const PRINCIPAL_ID = `agent:${NODE_ID}/${ACTOR_ID}`;
 
 const authenticate = vi.hoisted(() => vi.fn());
 const listRelations = vi.hoisted(() => vi.fn());
+const resolvePrincipal = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
   debug: vi.fn(),
@@ -45,7 +46,7 @@ vi.mock("@/bootstrap/otel", () => ({
 
 vi.mock("@/app/_lib/auth/request-identity", () => ({
   RequestIdentityUnavailableError: class RequestIdentityUnavailableError extends Error {},
-  resolveRequestPrincipal: vi.fn(),
+  resolveRequestPrincipal: resolvePrincipal,
   extractBearerToken: (header: string | null) =>
     header?.startsWith("Bearer ") ? header.slice(7) : null,
 }));
@@ -70,6 +71,7 @@ import * as appHandler from "@/app/api/v1/agent/me/route";
 describe("GET /api/v1/agent/me", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolvePrincipal.mockResolvedValue(null);
     authenticate.mockResolvedValue({
       principal: {
         kind: "agent",
@@ -114,6 +116,64 @@ describe("GET /api/v1/agent/me", () => {
         expect(body.nodes).toEqual([{ nodeId: NODE_ID, roles: ["developer"] }]);
         expect(listRelations).toHaveBeenCalledWith(PRINCIPAL_ID);
         expect(listRelations).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  it("reports a browser session as human without an agent credential", async () => {
+    const userId = "55555555-5555-4555-8555-555555555555";
+    resolvePrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:${NODE_ID}/${userId}`,
+      userId,
+      walletAddress: "0x1111111111111111111111111111111111111111",
+      displayName: "Human steward",
+      avatarColor: null,
+    });
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch();
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(agentMeV2Operation.output.safeParse(body).success).toBe(true);
+        expect(body).toMatchObject({
+          kind: "human",
+          identity: { principalId: `user:${NODE_ID}/${userId}`, userId },
+          credential: null,
+        });
+      },
+    });
+  });
+
+  it("reports a v1 bearer as legacy_agent, never human", async () => {
+    const legacyUserId = "66666666-6666-4666-8666-666666666666";
+    resolvePrincipal.mockResolvedValue({
+      kind: "legacy_agent",
+      principalId: `user:${NODE_ID}/${legacyUserId}`,
+      legacyUserId,
+      displayName: "Legacy machine",
+      expiresAt: "2026-11-14T00:00:00.000Z",
+    });
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const response = await fetch({
+          headers: { Authorization: "Bearer cogni_ag_sk_v1_legacy-token" },
+        });
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(agentMeV2Operation.output.safeParse(body).success).toBe(true);
+        expect(body).toMatchObject({
+          kind: "legacy_agent",
+          identity: {
+            principalId: `user:${NODE_ID}/${legacyUserId}`,
+            legacyUserId,
+          },
+          credential: { kind: "legacy_v1", status: "active" },
+        });
       },
     });
   });
