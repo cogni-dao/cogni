@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/name: database-reliability-watchdog
     app.kubernetes.io/part-of: cogni
 spec:
-  replicas: 2
+  replicas: 0
   strategy:
     type: RollingUpdate
     rollingUpdate:
