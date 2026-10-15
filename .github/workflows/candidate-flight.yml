@@ -310,13 +310,15 @@ jobs:
 
               remote_deployment_targets=$(jq -c --arg target "$target" '. + [$target]' <<< "$remote_deployment_targets")
             done < <(jq -r '.[]' <<< "$REMOTE_SOURCE_ARTIFACT_TARGETS_JSON")
-            combined=$(REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets" python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_DEPLOYMENT_TARGETS_JSON"] or "[]"); node = os.environ.get("NODE_SLUG", ""); items = ([node] if node else []) + items; out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
+            # A resolved PR uses its affected set. The API's node identity must
+            # not invent an app build for a CI-only or infra-only change.
+            combined=$(REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets" python3 -c 'import json, os; items = json.loads(os.environ["NORMAL_FLIGHT_TARGETS_JSON"] or "[]") + json.loads(os.environ["REMOTE_DEPLOYMENT_TARGETS_JSON"] or "[]"); out = []; seen = set(); [out.append(item) or seen.add(item) for item in items if item not in seen]; print(json.dumps(out))')
           fi
           csv=$(python3 -c 'import json, sys; print(",".join(json.loads(sys.argv[1])))' "$combined")
           has_flight_targets=false
           [ "$combined" != "[]" ] && has_flight_targets=true
           has_image_inputs=false
-          if [ -n "$NODE_SLUG" ] || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_REMOTE_SOURCE_ARTIFACT_TARGETS" = "true" ]; then
+          if { [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; } || [ "$HAS_PARENT_TARGETS" = "true" ] || [ "$HAS_REMOTE_SOURCE_ARTIFACT_TARGETS" = "true" ]; then
             has_image_inputs=true
           fi
           echo "flight_targets_json=$combined" >> "$GITHUB_OUTPUT"
@@ -381,7 +383,7 @@ jobs:
       # the source overlay's advisory digest and mutate candidate-a without ever
       # promoting the requested artifact. Fail before any deploy-state mutation.
       - name: Require requested node image
-        if: steps.meta.outputs.node_slug != ''
+        if: steps.meta.outputs.node_slug != '' && contains(fromJSON(steps.flight-targets.outputs.flight_targets_json), steps.meta.outputs.node_slug)
         env:
           NODE: ${{ steps.meta.outputs.node_slug }}
           PAYLOAD_FILE: ${{ runner.temp }}/resolved-pr-images.json
