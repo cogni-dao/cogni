@@ -669,6 +669,9 @@ export class AkashComputeAdapter
       Buffer.from(value, "base64").toString("base64") === value;
     if (
       String(detail?.deployment?.id?.dseq) !== input.leaseId ||
+      !this.config.expectedCostConsumerAccountId ||
+      detail?.deployment?.id?.owner !==
+        this.config.expectedCostConsumerAccountId ||
       detail?.deployment?.state !== "active" ||
       active.length !== 1 ||
       String(lease?.id?.dseq) !== input.leaseId ||
@@ -687,6 +690,7 @@ export class AkashComputeAdapter
     return {
       observedAt: this.now().toISOString(),
       leaseId: input.leaseId,
+      ownerAccount: this.config.expectedCostConsumerAccountId,
       providerAccount: lease.id.provider,
       providerSdl: sdl,
       providerSdlSha256: createHash("sha256").update(sdl).digest("hex"),

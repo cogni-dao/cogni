@@ -346,6 +346,7 @@ export interface AkashTxProviderOutcomesPort {
 export interface AkashTxManagedDeploymentDefinition {
   readonly observedAt: string;
   readonly leaseId: string;
+  readonly ownerAccount: string;
   readonly providerAccount: string;
   /** May contain opaque/redacted env values. Never log or use them as DSN evidence. */
   readonly providerSdl: string;

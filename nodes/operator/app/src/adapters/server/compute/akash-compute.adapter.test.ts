@@ -287,7 +287,11 @@ describe("AkashComputeAdapter.readManagedDefinition", () => {
   const sdl =
     "services:\n  app:\n    env: [DATABASE_URL=opaque-redacted-token]\n";
   const detail = {
-    deployment: { id: { dseq: "7001" }, state: "active", hash: version },
+    deployment: {
+      id: { dseq: "7001", owner: "akash1consumer" },
+      state: "active",
+      hash: version,
+    },
     consoleSettings: { sdl, manifestVersion: version },
     leases: [
       { state: "active", id: { dseq: "7001", gseq: 1, oseq: 1, provider } },
@@ -302,6 +306,7 @@ describe("AkashComputeAdapter.readManagedDefinition", () => {
     });
     expect(observed).toMatchObject({
       leaseId: "7001",
+      ownerAccount: "akash1consumer",
       providerAccount: provider,
       providerSdl: sdl,
       providerSdlSha256: createHash("sha256").update(sdl).digest("hex"),
@@ -316,6 +321,13 @@ describe("AkashComputeAdapter.readManagedDefinition", () => {
   it("refuses missing, mismatched, ambiguous and oversized current definitions without mutation or echoed values", async () => {
     for (const value of [
       { ...detail, consoleSettings: undefined },
+      {
+        ...detail,
+        deployment: {
+          ...detail.deployment,
+          id: { dseq: "7001", owner: "foreign-account" },
+        },
+      },
       { ...detail, deployment: { ...detail.deployment, id: { dseq: "7002" } } },
       {
         ...detail,
