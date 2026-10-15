@@ -7,16 +7,25 @@ source "$REPO_ROOT/scripts/setup/lib/cogni-deployment-identity.sh"
 CELL_PLACEMENT_JSON=''
 load_database_cell_placement() {
   CELL_PLACEMENT_JSON=''
+  local placement require_applied=false
+  placement="$(yq -r ".database.\"${DEPLOY_ENVIRONMENT}\".placement // \"\"" "${CATALOG_DIR}/${TARGET_NODE}.yaml")"
+  if [[ "$placement" == akash-cell ]]; then
+    require_applied=true
+    [[ "$DEPLOY_ENVIRONMENT" == production && "$SECRETS_CONTROL_ENV" == production ]] || fail "declared cell placement requires its production custody owner"
+  fi
   [[ "$DEPLOY_ENVIRONMENT" == production && "$SECRETS_CONTROL_ENV" == production ]] || return 0
   local cell_bank="${TARGET_NODE}-database-cell" receipt kit encryption
   prefetch_path "$cell_bank"
   receipt="$(bao_get_field "$cell_bank" DATABASE_CELL_PLACEMENT_RECEIPT_JSON)"
-  [[ -n "$receipt" ]] || return 0
+  if [[ -z "$receipt" ]]; then
+    [[ "$require_applied" == false ]] || fail "declared cell placement has no applied allocation receipt"
+    return 0
+  fi
   [[ "$(jq -r .binding.nodeSlug <<<"$receipt")" == "$TARGET_NODE" && "$(jq -r .binding.nodeId <<<"$receipt")" == "$(node_id_for_target "$TARGET_NODE")" && "$(jq -r .allocationEnvironment <<<"$receipt")" == "$SECRETS_CONTROL_ENV" && "$(jq -r .binding.environment <<<"$receipt")" == "$DEPLOY_ENVIRONMENT" ]] || fail "cell placement does not own this target lane"
   kit="$(bao_get_field "$cell_bank" DATABASE_CELL_BOOTSTRAP_KIT_JSON)"
   prefetch_path "${TARGET_NODE}-database-backup"
   encryption="$(bao_get_field "${TARGET_NODE}-database-backup" DATABASE_CELL_BACKUP_ENCRYPTION_KEY)"
-  CELL_PLACEMENT_JSON="$(jq -n --argjson receipt "$receipt" --argjson kit "$kit" --arg backupEncryptionKey "$encryption" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "audited cell placement or scoped custody invalid"
+  CELL_PLACEMENT_JSON="$(jq -n --argjson receipt "$receipt" --argjson kit "$kit" --arg backupEncryptionKey "$encryption" --argjson requireApplied "$require_applied" '{receipt:$receipt,kit:$kit,backupEncryptionKey:$backupEncryptionKey,requireApplied:$requireApplied}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-placement.ts")" || fail "audited cell placement or scoped custody invalid"
 }
 
 cell_placement_composed_value() {

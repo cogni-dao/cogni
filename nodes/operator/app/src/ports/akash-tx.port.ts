@@ -452,6 +452,8 @@ export type AkashTxAllocationState =
   | "failed";
 
 export interface AkashTxAllocationRecord {
+  /** Durable policy; no delete request can override retained storage custody. */
+  readonly retentionPolicy?: "retain";
   /** Verified credential-free cell placement stored on this same allocation row. */
   readonly appliedDatabaseCellBinding?: readonly import("@/types/database-cell").AppliedDatabaseCellReceipt[];
   /** Durable allocation receipt row. Cost intervals attach here, never to a mutable node row. */
@@ -507,6 +509,7 @@ export interface AkashTxAllocationLedgerPort {
     workload: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
@@ -526,6 +529,7 @@ export interface AkashTxAllocationLedgerPort {
     cogniKey: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }): Promise<
     | { state: "bound"; record: AkashTxAllocationRecord }
     | { state: "absent" }

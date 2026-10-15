@@ -8,7 +8,11 @@ import { describe, expect, it } from "vitest";
 import { DatabaseCellBindingReferenceSchema } from "@/contracts/database-cell-binding.v1.contract";
 import { DatabaseCellBinder } from "@/features/compute/akash-tx/database-cell-binding";
 import type { AkashTxAllocationRecord, DatabaseCellNativeProof } from "@/ports";
-import type { AppliedDatabaseCellReceipt } from "@/shared/secrets/database-cell-placement.data";
+import {
+  type AppliedDatabaseCellReceipt,
+  DatabaseCellAllocationMetadataSchema,
+} from "@/shared/secrets/database-cell-placement.data";
+import { databasePlacementSchema } from "../../../../../../../packages/repo-spec/src/schema";
 import {
   materializeDatabaseCellKits,
   planDatabaseCellKits,
@@ -226,6 +230,7 @@ IFS= read -r CELL_BACKUP_KEY
 TARGET_NODE=controller RELIABILITY_CONTROLLER=controller DEPLOY_ENVIRONMENT=production DOMAIN=fixture.example.org
 APP_SOURCE_DIR="$REPO_ROOT" CATALOG_DIR=/unused-catalog
 NODE_TARGETS=(alpha)
+yq() { :; }
 git() { printf '%s' cccccccccccccccccccccccccccccccccccccccc; }
 prefetch_path() { :; }
 node_id_for_target() { printf '%s' 11111111-1111-4111-8111-111111111111; }
@@ -276,5 +281,136 @@ materialize_database_cell_kits`;
     current.wrongHost();
     await expect(current.binder.seal(current.ref)).rejects.toThrow("DNS");
     expect(current.writes()).toBe(0);
+  });
+});
+
+describe("durable cell allocation custody", () => {
+  it("accepts legacy empty metadata and explicit retention before native sealing", () => {
+    expect(DatabaseCellAllocationMetadataSchema.parse([])).toMatchObject({
+      bindings: [],
+      retentionPolicy: undefined,
+    });
+    expect(
+      DatabaseCellAllocationMetadataSchema.parse({
+        version: 1,
+        retentionPolicy: "retain",
+        bindings: [],
+      })
+    ).toEqual({ version: 1, retentionPolicy: "retain", bindings: [] });
+    expect(
+      DatabaseCellAllocationMetadataSchema.safeParse({
+        version: 1,
+        retentionPolicy: "delete",
+        bindings: [],
+      }).success
+    ).toBe(false);
+  });
+  it("retains a legacy verified cell without rewriting or weakening its binding proof", async () => {
+    const { binder, ref, restore } = fixture();
+    restore();
+    const sealed = await binder.seal(ref);
+    expect(DatabaseCellAllocationMetadataSchema.parse(sealed)).toMatchObject({
+      retentionPolicy: "retain",
+      bindings: sealed,
+    });
+  });
+});
+
+describe("declared Akash cell materialization", () => {
+  it("validates dedicated placement while preserving undeclared shared nodes", () => {
+    expect(
+      databasePlacementSchema.safeParse({
+        tier: "dedicated",
+        budget_profile: "dedicated-high-throughput-v1",
+        placement: "akash-cell",
+      }).success
+    ).toBe(true);
+    expect(
+      databasePlacementSchema.safeParse({
+        tier: "shared",
+        budget_profile: "shared-default-v1",
+        placement: "akash-cell",
+      }).success
+    ).toBe(false);
+    expect(
+      databasePlacementSchema.safeParse({
+        tier: "shared",
+        budget_profile: "shared-default-v1",
+      }).success
+    ).toBe(true);
+  });
+  it("refuses missing, unapproved and mismatched bindings before composition; repeats applied values exactly", async () => {
+    const current = fixture();
+    const ready = await current.binder.seal(current.ref);
+    current.restore();
+    const applied = await current.binder.cutover({
+      ...current.ref,
+      actorId: "human:fixture",
+      packetSha256: "f".repeat(64),
+    });
+    const repoRoot = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const script = `set -euo pipefail
+REPO_ROOT="$1"
+IFS= read -r CELL_RECEIPT
+IFS= read -r CELL_KIT
+IFS= read -r CELL_BACKUP_KEY
+IFS= read -r REQUIRED
+TARGET_NODE=alpha DEPLOY_ENVIRONMENT=production SECRETS_CONTROL_ENV=production CATALOG_DIR=/unused-catalog
+prefetch_path() { :; }
+node_id_for_target() { printf '%s' 11111111-1111-4111-8111-111111111111; }
+yq() { printf '%s' "$REQUIRED"; }
+bao_get_field() {
+  case "$2" in
+    DATABASE_CELL_PLACEMENT_RECEIPT_JSON) printf '%s' "$CELL_RECEIPT" ;;
+    DATABASE_CELL_BOOTSTRAP_KIT_JSON) printf '%s' "$CELL_KIT" ;;
+    DATABASE_CELL_BACKUP_ENCRYPTION_KEY) printf '%s' "$CELL_BACKUP_KEY" ;;
+  esac
+}
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+seed_kv() { fail "unexpected write"; }
+source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"
+load_database_cell_placement
+if [[ -n "$CELL_PLACEMENT_JSON" ]]; then
+  for key in DATABASE_URL DATABASE_SERVICE_URL DATABASE_MIGRATION_URL DATABASE_SSL_CA_CERT; do
+    cell_placement_composed_value alpha "$key"
+    printf '\\n'
+  done
+  if cell_placement_composed_value alpha DOLTGRES_URL; then fail "cell stole Doltgres"; fi
+fi`;
+    const run = (
+      receipt: unknown,
+      selectedKit: unknown = scopedKit,
+      required = "akash-cell"
+    ) =>
+      execFileSync("bash", ["-c", script, "fixture", repoRoot], {
+        cwd: repoRoot,
+        input: [
+          receipt ? JSON.stringify(receipt) : "",
+          JSON.stringify(selectedKit),
+          "e".repeat(64),
+          required,
+          "",
+        ].join("\n"),
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+    expect(() => run(null)).toThrow();
+    expect(() => run(ready[0])).toThrow();
+    expect(() =>
+      run(applied[0], {
+        ...scopedKit,
+        nodeId: "33333333-3333-4333-8333-333333333333",
+      })
+    ).toThrow();
+    expect(run(null, scopedKit, "")).toBe("");
+    const first = run(applied[0]);
+    expect(run(applied[0])).toBe(first);
+    expect(first).toContain(
+      "provider.example.org:15432/cogni_alpha?sslmode=verify-full"
+    );
+    expect(first).toContain("migration_alpha:");
+    expect(first).not.toContain("10.0.0.1");
   });
 });

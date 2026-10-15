@@ -40,6 +40,7 @@ App-local building blocks that cannot be extracted to `@cogni/node-shared` (env,
 - **App-local exports:**
   - Environment validation (`serverEnv`, `clientEnv`) — reads `process.env`
   - Database schemas (Drizzle ORM) — `db/schema.ts`
+  - Cell allocation metadata — backward-compatible native bindings and retained lifecycle validation
   - Config server (`repoSpec.server.ts`) — file I/O + env
   - AI model catalog (`model-catalog.server.ts`) — LiteLLM fetch + env
   - Node app scaffold generators (`node-app-scaffold/gens/`) — pure catalog,

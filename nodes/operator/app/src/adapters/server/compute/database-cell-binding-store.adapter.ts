@@ -18,6 +18,7 @@ import { akashTxAllocations } from "@/shared/db/schema";
 import {
   type AppliedDatabaseCellReceipt,
   AppliedDatabaseCellReceiptsSchema,
+  DatabaseCellAllocationMetadataSchema,
 } from "@/shared/secrets/database-cell-placement.data";
 
 export class DrizzleDatabaseCellBindingStore {
@@ -39,7 +40,8 @@ export class DrizzleDatabaseCellBindingStore {
       )
       .limit(1);
     if (!rows[0]) throw new Error("cell allocation receipt absent");
-    return AppliedDatabaseCellReceiptsSchema.parse(rows[0].bindings ?? []);
+    return DatabaseCellAllocationMetadataSchema.parse(rows[0].bindings ?? [])
+      .bindings;
   }
 
   async save(
@@ -57,7 +59,14 @@ export class DrizzleDatabaseCellBindingStore {
     const db = await this.getDb();
     const updated = await db
       .update(akashTxAllocations)
-      .set({ appliedDatabaseCellBinding: validated, updatedAt: sql`now()` })
+      .set({
+        appliedDatabaseCellBinding: {
+          version: 1,
+          retentionPolicy: "retain",
+          bindings: validated,
+        },
+        updatedAt: sql`now()`,
+      })
       .where(
         and(
           eq(akashTxAllocations.walletScope, this.walletScope),
@@ -69,7 +78,7 @@ export class DrizzleDatabaseCellBindingStore {
           eq(akashTxAllocations.externalName, record.externalName),
           eq(akashTxAllocations.providerAccount, record.providerAccount),
           eq(akashTxAllocations.lastAppliedSdlHash, record.lastAppliedSdlHash),
-          sql`coalesce(${akashTxAllocations.appliedDatabaseCellBinding}, '[]'::jsonb) = ${JSON.stringify(expected)}::jsonb`
+          sql`coalesce(${akashTxAllocations.appliedDatabaseCellBinding}->'bindings', ${akashTxAllocations.appliedDatabaseCellBinding}, '[]'::jsonb) = ${JSON.stringify(expected)}::jsonb`
         )
       )
       .returning({ id: akashTxAllocations.id });

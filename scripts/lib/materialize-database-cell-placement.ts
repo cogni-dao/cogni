@@ -28,12 +28,19 @@ const InputSchema = z
     receipt: AppliedDatabaseCellReceiptSchema,
     kit: DatabaseCellBootstrapKitSchema,
     backupEncryptionKey: z.string().regex(/^[0-9a-f]{64}$/),
+    requireApplied: z.boolean().optional(),
   })
   .strict();
 
 export function projectDatabaseCellPlacement(input: unknown) {
-  const { receipt, kit, backupEncryptionKey } = InputSchema.parse(input);
+  const { receipt, kit, backupEncryptionKey, requireApplied } =
+    InputSchema.parse(input);
   const binding = receipt.binding;
+  if (requireApplied && binding.phase !== "applied") {
+    throw new Error(
+      "declared cell placement requires its applied audited binding"
+    );
+  }
   const lane = kit.logicalDatabases.find(
     (value) => value.environment === binding.environment
   );

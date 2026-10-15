@@ -39,3 +39,20 @@ export const AppliedDatabaseCellReceiptsSchema = z
     }
   });
 export type { AppliedDatabaseCellReceipt } from "@/types/database-cell";
+
+/** The existing JSON allocation column owns lifecycle as well as native bindings. */
+export const DatabaseCellAllocationMetadataSchema = z.union([
+  z
+    .object({
+      version: z.literal(1),
+      retentionPolicy: z.literal("retain"),
+      bindings: AppliedDatabaseCellReceiptsSchema,
+    })
+    .strict(),
+  // Existing sealed cells must already be protected before the metadata is upgraded.
+  AppliedDatabaseCellReceiptsSchema.transform((bindings) => ({
+    version: 1 as const,
+    retentionPolicy: bindings.length ? ("retain" as const) : undefined,
+    bindings,
+  })),
+]);

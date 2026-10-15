@@ -55,7 +55,7 @@ import type {
   AkashTxWorkloadIdentity,
 } from "@/ports";
 import { akashTxAllocations } from "@/shared/db/schema";
-import { AppliedDatabaseCellReceiptsSchema } from "@/shared/secrets/database-cell-placement.data";
+import { DatabaseCellAllocationMetadataSchema } from "@/shared/secrets/database-cell-placement.data";
 
 interface AllocationRow {
   id: string;
@@ -90,14 +90,16 @@ const SELECTION = {
 };
 
 function toRecord(row: AllocationRow): AkashTxAllocationRecord {
+  const metadata = DatabaseCellAllocationMetadataSchema.parse(
+    row.appliedDatabaseCellBinding ?? []
+  );
   return {
+    ...(metadata.retentionPolicy
+      ? { retentionPolicy: metadata.retentionPolicy }
+      : {}),
     ...(row.appliedDatabaseCellBinding == null
       ? {}
-      : {
-          appliedDatabaseCellBinding: AppliedDatabaseCellReceiptsSchema.parse(
-            row.appliedDatabaseCellBinding
-          ),
-        }),
+      : { appliedDatabaseCellBinding: metadata.bindings }),
     receiptId: row.id,
     cogniKey: row.cogniKey,
     identity: {
@@ -145,6 +147,7 @@ export class DrizzleAkashTxAllocationLedger
     workload: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
@@ -166,6 +169,7 @@ export class DrizzleAkashTxAllocationLedger
     workload: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }): Promise<
     | { state: "claimed"; record: AkashTxAllocationRecord }
     | { state: "owned"; record: AkashTxAllocationRecord }
@@ -186,6 +190,31 @@ export class DrizzleAkashTxAllocationLedger
         .for("update")
         .limit(1);
       if (existing && existing.state === "preparing") {
+        if (
+          input.retentionPolicy &&
+          existing.nodeId === input.identity.nodeId &&
+          existing.environment === input.environment &&
+          existing.compositeUid === input.identity.compositeUid
+        ) {
+          const metadata = DatabaseCellAllocationMetadataSchema.parse(
+            existing.appliedDatabaseCellBinding ?? []
+          );
+          const retained = {
+            version: 1,
+            retentionPolicy: "retain",
+            bindings: metadata.bindings,
+          };
+          await tx
+            .update(akashTxAllocations)
+            .set({ appliedDatabaseCellBinding: retained })
+            .where(
+              and(
+                eq(akashTxAllocations.walletScope, this.walletScope),
+                eq(akashTxAllocations.id, existing.id)
+              )
+            );
+          existing.appliedDatabaseCellBinding = retained;
+        }
         return { state: "owned" as const, record: toRecord(existing) };
       }
       // A receipt that bound a handle is terminal forever (HANDLE_IS_WRITE_ONCE). One settled
@@ -223,6 +252,17 @@ export class DrizzleAkashTxAllocationLedger
           .update(akashTxAllocations)
           .set({
             state: "preparing",
+            ...(input.retentionPolicy
+              ? {
+                  appliedDatabaseCellBinding: {
+                    version: 1,
+                    retentionPolicy: "retain",
+                    bindings: DatabaseCellAllocationMetadataSchema.parse(
+                      existing.appliedDatabaseCellBinding ?? []
+                    ).bindings,
+                  },
+                }
+              : {}),
             // The previous attempt's baseline described a transaction that is now settled.
             // Carrying it forward would point the next recovery scan at the wrong high-water
             // mark and make an unrelated later deployment look adoptable.
@@ -263,6 +303,15 @@ export class DrizzleAkashTxAllocationLedger
           workload: input.workload,
           environment: input.environment,
           state: "preparing",
+          ...(input.retentionPolicy
+            ? {
+                appliedDatabaseCellBinding: {
+                  version: 1,
+                  retentionPolicy: "retain",
+                  bindings: [],
+                },
+              }
+            : {}),
         })
         .returning(SELECTION);
       if (!inserted) {
@@ -283,6 +332,7 @@ export class DrizzleAkashTxAllocationLedger
     cogniKey: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }): Promise<
     | { state: "bound"; record: AkashTxAllocationRecord }
     | { state: "absent" }
@@ -314,6 +364,17 @@ export class DrizzleAkashTxAllocationLedger
         .update(akashTxAllocations)
         .set({
           compositeGeneration: sql`greatest(${akashTxAllocations.compositeGeneration}, ${input.identity.compositeGeneration}::int)`,
+          ...(input.retentionPolicy
+            ? {
+                appliedDatabaseCellBinding: {
+                  version: 1,
+                  retentionPolicy: "retain",
+                  bindings: DatabaseCellAllocationMetadataSchema.parse(
+                    existing.appliedDatabaseCellBinding ?? []
+                  ).bindings,
+                },
+              }
+            : {}),
           updatedAt: sql`now()`,
         })
         .where(

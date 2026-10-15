@@ -126,6 +126,8 @@ export interface ProvisionSpec {
   readonly services: readonly ProvisionServiceSpec[];
   /** Hard placement constraints. Absent = unconstrained. */
   readonly placement?: ProvisionPlacement;
+  /** Retain paid storage on ordinary teardown; retirement requires a separate audited operation. */
+  readonly retentionPolicy?: "retain";
 }
 
 /** Lifecycle state of a provisioned workload, uniform across providers. */

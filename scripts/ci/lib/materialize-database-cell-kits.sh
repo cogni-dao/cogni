@@ -15,6 +15,12 @@ materialize_database_cell_kits() {
   [[ "$operator_sha" =~ ^[0-9a-f]{40}$ ]] || fail "cell bootstrap artifact provenance missing"
   for cell_node in "${NODE_TARGETS[@]}"; do
     catalog="${CATALOG_DIR}/${cell_node}.yaml"
+    # An activated external cell is registered through native allocation proof.
+    # Ordinary owner promotion neither re-censuses its old source nor remints it;
+    # the target node's placement loader enforces its own applied binding.
+    if [[ "$(yq -r ".database.\"${DEPLOY_ENVIRONMENT}\".placement // \"\"" "$catalog")" == akash-cell ]]; then
+      continue
+    fi
     # An applied physical cell owns its bootstrap artifact. An unrelated operator
     # release must not replace that artifact while its audited binding stays put.
     prefetch_path "${cell_node}-database-cell"

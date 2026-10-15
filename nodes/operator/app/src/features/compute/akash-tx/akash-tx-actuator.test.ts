@@ -156,6 +156,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     workload: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }) {
     if (this.failReads) throw new Error("ledger down");
     const existing = this.rows.get(input.cogniKey);
@@ -185,6 +186,9 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
       workload: input.workload,
       environment: input.environment,
       state: "preparing",
+      ...(input.retentionPolicy
+        ? { retentionPolicy: input.retentionPolicy }
+        : {}),
     };
     // A re-claim clears the stale baseline, exactly as the SQL UPDATE does.
     this.rows.set(input.cogniKey, record);
@@ -196,6 +200,7 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     cogniKey: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }) {
     if (this.failReads) throw new Error("ledger down");
     const row = this.rows.get(input.cogniKey);
@@ -209,6 +214,9 @@ class FakeLedger implements AkashTxAllocationLedgerPort {
     }
     const record: AkashTxAllocationRecord = {
       ...row,
+      ...(input.retentionPolicy
+        ? { retentionPolicy: input.retentionPolicy }
+        : {}),
       identity: {
         ...row.identity,
         compositeGeneration: Math.max(
@@ -1388,6 +1396,65 @@ describe("AkashTxActuator.update / delete", () => {
     expect(secondHash).not.toBe(firstHash);
   });
 
+  it("retains persistent storage before creation and refuses ordinary delete", async () => {
+    const { actuator, api, ledger } = build();
+    const allocate = api.allocateAndLease.bind(api);
+    api.allocateAndLease = async (input) => {
+      expect(ledger.rows.get("k1")?.retentionPolicy).toBe("retain");
+      return allocate(input);
+    };
+    const spec: ProvisionSpec = {
+      ...SPEC,
+      services: SPEC.services.map((service) => ({
+        ...service,
+        volumes: [
+          { name: "database", sizeMi: 1024, mountPath: "/data", tier: "nvme" },
+        ],
+      })),
+    };
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec,
+    });
+    expect(ledger.rows.get("k1")?.retentionPolicy).toBe("retain");
+    await expect(
+      actuator.delete({ cogniKey: "k1", externalName: "7001" })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(api.releaseCalls).toEqual([]);
+    expect(ledger.rows.get("k1")?.state).toBe("allocated");
+  });
+
+  it("retains an existing allocation before a persistent update and cannot downgrade it", async () => {
+    const { actuator, api, ledger } = build();
+    await actuator.create({
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: { ...SPEC, retentionPolicy: "retain" },
+    });
+    expect(ledger.rows.get("k1")?.retentionPolicy).toBe("retain");
+    await actuator.update({
+      cogniKey: "k1",
+      externalName: "7001",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec: SPEC,
+    });
+    await expect(
+      actuator.delete({ cogniKey: "k1", externalName: "7001" })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(api.releaseCalls).toEqual([]);
+  });
+
   it("releases the provider resource and settles the key", async () => {
     const { actuator, api, ledger } = build();
     await actuator.create({
@@ -1715,7 +1782,7 @@ describe("AkashTxActuator release migration (task.5135)", () => {
     });
   });
 
-  it("leaves delete untouched — a teardown must always work", async () => {
+  it("allows disposable app teardown regardless of migration failure", async () => {
     const { actuator, api, ledger, migration } = build();
     migration.outcome = "failed";
     seedAllocated(ledger);

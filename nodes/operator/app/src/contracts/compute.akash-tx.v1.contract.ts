@@ -151,6 +151,7 @@ export const AkashTxSpecSchema = z.strictObject({
   name: ServiceNameSchema,
   services: z.array(AkashTxServiceSpecSchema).min(1),
   placement: AkashTxPlacementSchema.optional(),
+  retentionPolicy: z.literal("retain").optional(),
 });
 
 /** Caller-owned idempotency key. Must embed the caller's resource revision. */

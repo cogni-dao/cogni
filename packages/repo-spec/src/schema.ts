@@ -539,8 +539,8 @@ export type NodeDeploymentSpec = z.infer<typeof nodeDeploymentSchema>;
 
 /**
  * Database placement is an operator-managed state concern, not app compute.
- * A dedicated cell means a distinct provider VM, Postgres process, and fixed
- * block volume; it never means a stateful service inside an Akash workload.
+ * A dedicated cell has a separate Postgres process and retained persistent volume.
+ * Its allocation is independent of ordinary app rollout and cleanup.
  */
 export const databaseTierSchema = z.enum(["shared", "dedicated"]);
 
@@ -551,8 +551,13 @@ export const databasePlacementSchema = z
     tier: databaseTierSchema,
     /** Named operator-owned budget; values never live in a node repo. */
     budget_profile: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+    /** Activated only after the allocation's audited binding is applied. */
+    placement: z.literal("akash-cell").optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => !value.placement || value.tier === "dedicated", {
+    message: "an Akash cell requires a dedicated database tier",
+  });
 
 export type DatabasePlacementSpec = z.infer<typeof databasePlacementSchema>;
 

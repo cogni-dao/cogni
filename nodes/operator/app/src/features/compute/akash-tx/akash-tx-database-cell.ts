@@ -137,6 +137,7 @@ export function databaseCellSpecFactory(
     launch.push("exec bash /app/bootstrap.sh");
     return {
       name: `${kit.nodeSlug}-database-cell`,
+      retentionPolicy: "retain",
       services: [
         {
           name: "postgres",

@@ -253,7 +253,7 @@
     },
     "database": {
       "type": "object",
-      "description": "Provider-neutral per-environment Postgres placement. Shared means a bounded database on the environment pool; dedicated means an operator-managed provider VM, process, and fixed block volume. This is state placement, never Akash app placement.",
+      "description": "Per-environment Postgres placement. Dedicated state uses a separate process and retained persistent volume, independent of app rollout. An activated akash-cell placement requires its audited allocation binding.",
       "additionalProperties": false,
       "properties": {
         "candidate-a": { "$ref": "#/$defs/databasePlacement" },
@@ -410,6 +410,7 @@
       "required": ["tier", "budget_profile"],
       "properties": {
         "tier": { "enum": ["shared", "dedicated"] },
+        "placement": { "const": "akash-cell" },
         "budget_profile": {
           "enum": [
             "shared-default-v1",
@@ -417,7 +418,13 @@
             "dedicated-high-throughput-v1"
           ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["placement"] },
+          "then": { "properties": { "tier": { "const": "dedicated" } } }
+        }
+      ]
     }
   }
 }

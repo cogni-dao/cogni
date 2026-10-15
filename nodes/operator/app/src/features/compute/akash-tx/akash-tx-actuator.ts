@@ -696,7 +696,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     // put a new revision in front of a resource that is already burning money, so it must be
     // attributable BEFORE the provider is contacted. This writes the advancing generation onto
     // the SAME receipt row the create opened; there is no second ledger and no second table.
-    const bound = await this.bindIdentity(input);
+    const bound = await this.bindIdentity({
+      ...input,
+      ...(retainsStorage(input.spec)
+        ? { retentionPolicy: "retain" as const }
+        : {}),
+    });
     if (bound.state !== "bound") {
       throw this.identityConflict({
         cogniKey: input.cogniKey,
@@ -857,6 +862,19 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       input.externalName,
       "delete"
     );
+    if (
+      record.retentionPolicy === "retain" ||
+      record.appliedDatabaseCellBinding?.length
+    ) {
+      this.log.warn(
+        { cogniKey: input.cogniKey, receiptId: record.receiptId },
+        "akash_tx_retained_storage_delete_refused"
+      );
+      throw new AkashTxError(
+        "invalid_request",
+        "retained storage requires audited retirement; ordinary delete is refused"
+      );
+    }
     await this.observeCost(record, input.externalName).catch(
       (error: unknown) => {
         this.log.warn(
@@ -1443,6 +1461,9 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         workload: input.spec.name,
         environment: input.environment,
         identity: input.identity,
+        ...(retainsStorage(input.spec)
+          ? { retentionPolicy: "retain" as const }
+          : {}),
       });
     } catch (error) {
       throw this.ledgerUnavailable(error, input.cogniKey, "claim");
@@ -1453,6 +1474,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     cogniKey: string;
     environment: string;
     identity: AkashTxWorkloadIdentity;
+    retentionPolicy?: "retain";
   }): Promise<
     Awaited<ReturnType<AkashTxAllocationLedgerPort["bindIdentity"]>>
   > {
@@ -1461,6 +1483,9 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         cogniKey: input.cogniKey,
         environment: input.environment,
         identity: input.identity,
+        ...(input.retentionPolicy
+          ? { retentionPolicy: input.retentionPolicy }
+          : {}),
       });
     } catch (error) {
       throw this.ledgerUnavailable(error, input.cogniKey, "bindIdentity");
@@ -1640,4 +1665,12 @@ export class AkashTxActuator implements AkashTxActuatorPort {
     );
     return new AkashTxError(code, "allocation ledger unavailable");
   }
+}
+
+/** Persistent volumes cannot opt out of retention by omitting a caller flag. */
+function retainsStorage(spec: ProvisionSpec): boolean {
+  return (
+    spec.retentionPolicy === "retain" ||
+    spec.services.some((service) => Boolean(service.volumes?.length))
+  );
 }
