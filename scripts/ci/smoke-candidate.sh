@@ -34,9 +34,14 @@ check_livez() {
   local url="$2"
   local body
 
-  body=$(curl -sk --max-time "$CURL_TIMEOUT" "${url}/livez" 2>/dev/null || true)
+  if ! body=$(curl -fskS --connect-timeout 10 --max-time "$CURL_TIMEOUT" \
+    --retry 2 --retry-connrefused --retry-delay 1 \
+    --retry-max-time "$((CURL_TIMEOUT * 3 + 2))" "${url}/livez"); then
+    echo "[ERROR] ${name} livez unreachable after bounded retries: ${url}/livez" >&2
+    exit 1
+  fi
   echo "${name} livez: ${body}"
-  if ! printf '%s' "$body" | grep -q '"status"'; then
+  if ! printf '%s' "$body" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"alive"'; then
     echo "[ERROR] ${name} livez did not return expected JSON" >&2
     exit 1
   fi
