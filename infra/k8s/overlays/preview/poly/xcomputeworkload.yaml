@@ -11,15 +11,15 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: preview
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:fba333621e3eace71e0ef12bcae1d06b14835a7bdbf034456f6cc05c15bbf6d7
+    ref: ghcr.io/cogni-dao/poly@sha256:2ad3f533fd8d65322101d93fe3251170767e26700890f763e4bc3ce7fe9f0c61
     source:
       repository: cogni-dao/poly
       sha: 482c14abdc993b7ce7005fcb4c1656bb0fb1122e
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:13fbf6fdd4afcc3f9acf289beb8fa87b326ccd7e6c8398b5ff3733fc9edf563f
+        image: ghcr.io/cogni-dao/poly@sha256:e46877d607b4f68145c2cb43d85cb61bfd43048e2bdbd27f8a0f67e6d76c817a
       - name: paper-trader
-        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:6782146ca3776741f37d806e1f2e663832e797fe6eedd8d7cc89e63e6fddf01e
+        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:1afee2f0c0a4ab713c16c057fd4f0a6f1aaab35ef6ebc61616dbdc4f4c55e221
   workload:
     name: poly
     publicHost: poly-preview.cognidao.org
@@ -66,7 +66,7 @@ spec:
   bootPolicy:
     onDeadline: Close
     onGiveUp: Hold
-  leaseGeneration: 3
+  leaseGeneration: 4
   actuatorNamespace: cogni-production
   dns:
     provider: cloudflare
