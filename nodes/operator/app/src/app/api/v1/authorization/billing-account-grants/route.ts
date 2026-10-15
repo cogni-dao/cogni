@@ -20,6 +20,7 @@ import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { authorizationFacadeGrantOperation } from "@/contracts/authorization-facade.v1.contract";
 import { mutateNodeBillingAccountAccess } from "@/features/authorization";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,26 +32,44 @@ export const POST = wrapRouteHandlerWithLogging(
     auth: { mode: "none" },
   },
   async (ctx, request) => {
+    const startedAt = performance.now();
+    const complete = (
+      status: number,
+      outcome: "success" | "error",
+      errorCode: string | undefined,
+      fields: Record<string, unknown> = {}
+    ) =>
+      logEvent(ctx.log, EVENT_NAMES.AUTHORIZATION_FACADE_GRANT_COMPLETE, {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        status,
+        durationMs: Math.round(performance.now() - startedAt),
+        outcome,
+        ...(errorCode !== undefined ? { errorCode } : {}),
+        ...fields,
+      });
     const body = await readBoundedJson(request, MAX_REQUEST_BYTES);
     if (!body.ok) {
+      const status = body.reason === "too_large" ? 413 : 400;
+      complete(status, "error", body.reason);
       return NextResponse.json(
         { error: "invalid_request" },
-        { status: body.reason === "too_large" ? 413 : 400 }
+        { status }
       );
     }
     const parsed = authorizationFacadeGrantOperation.input.safeParse(
       body.value
     );
     if (!parsed.success) {
+      complete(400, "error", "invalid_request");
       return NextResponse.json({ error: "invalid_request" }, { status: 400 });
     }
 
     const workload = await authenticateAuthorizationFacadeRequest(request);
     if (!workload.ok) {
-      ctx.log.warn(
-        { decision: "deny", code: workload.errorCode },
-        "authorization_facade.authentication_denied"
-      );
+      complete(workload.status, "error", workload.errorCode, {
+        decision: "deny",
+      });
       return NextResponse.json(
         {
           error:
@@ -80,23 +99,22 @@ export const POST = wrapRouteHandlerWithLogging(
         : decision.code === "authz_write_denied"
           ? 403
           : 503;
-    ctx.log.info(
+    complete(
+      status,
+      decision.decision === "success" ? "success" : "error",
+      decision.decision === "success" ? undefined : decision.code,
       {
         authenticatedNodeId: workload.node.nodeId,
         assertedGrantorUserId: parsed.data.grantorUserId,
         billingAccountId: parsed.data.billingAccountId,
-        semantic: {
-          operation: parsed.data.operation,
-          role: parsed.data.role,
-          targetKind: parsed.data.target.kind,
-          targetId: parsed.data.target.id,
-          subjectUserId: parsed.data.subjectUserId,
-        },
+        operation: parsed.data.operation,
+        role: parsed.data.role,
+        targetKind: parsed.data.target.kind,
+        hasSubject: parsed.data.subjectUserId !== undefined,
         decision: decision.decision,
         code: decision.code,
         requestId: parsed.data.requestId ?? ctx.reqId,
-      },
-      "authorization_facade.mutation_decided"
+      }
     );
     return NextResponse.json(
       authorizationFacadeGrantOperation.output.parse(decision),
