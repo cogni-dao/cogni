@@ -116,7 +116,10 @@ import {
   resolveAkashTxWallet,
 } from "@/features/compute/akash-tx/akash-tx-wallet";
 import { DatabaseCellBinder } from "@/features/compute/akash-tx/database-cell-binding";
-import { prepareDatabaseCellDiagnostic } from "@/features/compute/akash-tx/database-cell-diagnostic";
+import {
+  observeDatabaseCellDiagnostic,
+  prepareDatabaseCellDiagnostic,
+} from "@/features/compute/akash-tx/database-cell-diagnostic";
 import { AkashTxError, type AkashTxWorkloadIdentity } from "@/ports";
 import {
   ACCOUNT_WALLET_SCOPE_PATTERN,
@@ -610,7 +613,7 @@ const databaseCellBindings = new DatabaseCellBinder({
   },
 });
 
-const databaseCellDiagnostic = async (input: {
+const resolveDatabaseCellDiagnosticContext = async (input: {
   cogniKey: string;
   externalName: string;
   environment: string;
@@ -667,17 +670,31 @@ const databaseCellDiagnostic = async (input: {
       "identity_conflict",
       "diagnostic scope lacks its current ready production receipt"
     );
-  return prepareDatabaseCellDiagnostic(
+  return {
     kit,
-    receipt.binding,
-    runtimeEnv.APP_BUILD_SHA ?? ""
-  );
+    binding: receipt.binding,
+    actuatorBuildSha: runtimeEnv.APP_BUILD_SHA ?? "",
+  };
+};
+const databaseCellDiagnostic = async (
+  input: Parameters<typeof resolveDatabaseCellDiagnosticContext>[0]
+) => {
+  const { kit, binding, actuatorBuildSha } =
+    await resolveDatabaseCellDiagnosticContext(input);
+  return prepareDatabaseCellDiagnostic(kit, binding, actuatorBuildSha);
+};
+const databaseCellDiagnosticObserve = async (
+  input: Parameters<typeof resolveDatabaseCellDiagnosticContext>[0]
+) => {
+  const { kit, binding, actuatorBuildSha } =
+    await resolveDatabaseCellDiagnosticContext(input);
+  return observeDatabaseCellDiagnostic(kit, binding, actuatorBuildSha);
 };
 
 const server = createAkashTxActuatorServer({
   actuator,
   databaseCellBindings,
-  ...{ databaseCellDiagnostic },
+  ...{ databaseCellDiagnostic, databaseCellDiagnosticObserve },
   token: bearerToken,
   log,
   databaseCellSpec,
