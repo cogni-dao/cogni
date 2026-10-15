@@ -58,9 +58,7 @@ interface KvWriteResponse {
 interface KvReadResponse {
   readonly data?: {
     readonly data?: Readonly<Record<string, unknown>>;
-    readonly metadata?: {
-      readonly version?: number;
-    };
+    readonly metadata?: { readonly version?: number };
   };
 }
 
