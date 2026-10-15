@@ -52,7 +52,7 @@ MDI server.js
 
 | Entity                       | Key fields                                                     | Purpose                                                      |
 | ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
-| `actors`                     | `id, tenant_id, kind, parent_actor_id, label, status`          | Economic subject; parent is accepted stewardship, not access |
+| `actors`                     | `id, billing_account_id, kind, parent_actor_id, label, status` | Economic subject; parent is accepted stewardship, not access |
 | `actor_bindings`             | `actor_id, provider, external_id`                              | External refs: wallets, OAuth IDs, platform identities       |
 | `budget_allocations`         | `actor_id, funded_by_actor_id, limit, spent, policy`           | Delegated spend slices                                       |
 | `charge_receipts.actor_id`   | FK → actors (nullable, v1+; v0 uses `external_agent_ref` TEXT) | Usage attribution: which actor made this LLM call            |
