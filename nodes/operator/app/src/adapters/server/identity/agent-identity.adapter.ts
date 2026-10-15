@@ -29,6 +29,7 @@ import {
   type AgentCredentialStatus,
   AgentIdentityError,
   type AgentIdentityPort,
+  type LegacyAgentUpgrade,
 } from "@/ports";
 
 const CREDENTIAL_PREFIX = "cogni_ag_sk_v2_";
@@ -38,6 +39,7 @@ const SPAWN_TTL_MS = 10 * 60 * 1000;
 const AUTHENTICATE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const RENEW_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
+const LEGACY_TRANSFER_LEASE_MS = 5 * 60 * 1000;
 const MAX_ACTIVE_AGENTS_PER_BILLING_ACCOUNT = 25;
 const MAX_OUTSTANDING_GRANTS_PER_ISSUER = 5;
 
@@ -93,6 +95,23 @@ function hashesEqual(left: string, right: string): boolean {
 
 function asIso(value: Date): string {
   return value.toISOString();
+}
+
+function legacyUpgradeFingerprint(idempotencyKey: string): string {
+  return hashOpaque("legacy-upgrade-idempotency", idempotencyKey);
+}
+
+function legacyUpgradeMarker(fingerprint: string, leaseId: string): string {
+  return `legacy:${fingerprint}:${leaseId}`;
+}
+
+function parseLegacyUpgradeMarker(
+  value: string | null
+): { fingerprint: string; leaseId: string } | null {
+  if (!value?.startsWith("legacy:")) return null;
+  const [, fingerprint, leaseId, ...extra] = value.split(":");
+  if (!fingerprint || !leaseId || extra.length > 0) return null;
+  return { fingerprint, leaseId };
 }
 
 function principal(input: {
@@ -957,11 +976,12 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
     legacyUserId: string;
     displayName: string | null;
     idempotencyKey: string;
-  }): Promise<AgentCredentialMaterial> {
+  }): Promise<LegacyAgentUpgrade> {
     const secret = deriveSecret(
       "legacy-upgrade",
       `${input.legacyToken}\0${input.idempotencyKey}`
     );
+    const fingerprint = legacyUpgradeFingerprint(input.idempotencyKey);
     const now = this.now();
     return this.db.transaction(async (tx) => {
       await tx.execute(
@@ -983,6 +1003,100 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         .from(actors)
         .where(eq(actors.legacyUserId, input.legacyUserId))
         .limit(1);
+      if (actor) {
+        const credentials = await tx
+          .select()
+          .from(agentCredentials)
+          .where(
+            and(
+              eq(agentCredentials.actorId, actor.id),
+              eq(agentCredentials.nodeId, this.nodeId)
+            )
+          );
+        const legacyCredential = credentials.find((credential) =>
+          parseLegacyUpgradeMarker(credential.rotationIdempotencyKey)
+        );
+        if (!legacyCredential) {
+          // This covers credentials minted by the pre-transition implementation.
+          // Their request key and grant-copy completion were never recorded, so
+          // fail closed instead of minting another credential or replaying roles.
+          throw new AgentIdentityError(
+            "invalid_credential",
+            "Legacy credential was already upgraded"
+          );
+        }
+        const marker = parseLegacyUpgradeMarker(
+          legacyCredential.rotationIdempotencyKey
+        );
+        if (
+          !marker ||
+          marker.fingerprint !== fingerprint ||
+          !hashesEqual(
+            legacyCredential.secretHash,
+            hashOpaque("credential", secret)
+          ) ||
+          legacyCredential.status === "revoked" ||
+          legacyCredential.renewUntil < now
+        ) {
+          throw new AgentIdentityError(
+            "invalid_credential",
+            "Legacy credential was already upgraded"
+          );
+        }
+        if (legacyCredential.status === "active") {
+          return {
+            ...this.material(
+              {
+                credentialId: legacyCredential.id,
+                actorId: actor.id,
+                billingAccountId: actor.billingAccountId,
+                authenticateUntil: legacyCredential.authenticateUntil,
+                renewUntil: legacyCredential.renewUntil,
+              },
+              secret
+            ),
+            grantTransferRequired: false,
+          };
+        }
+        if (
+          legacyCredential.pendingExpiresAt &&
+          legacyCredential.pendingExpiresAt > now
+        ) {
+          throw new AgentIdentityError(
+            "rotation_pending",
+            "Legacy credential grant transfer is already running"
+          );
+        }
+        const transferLeaseId = randomUUID();
+        const pendingExpiresAt = new Date(
+          now.getTime() + LEGACY_TRANSFER_LEASE_MS
+        );
+        await tx
+          .update(agentCredentials)
+          .set({
+            rotationIdempotencyKey: legacyUpgradeMarker(
+              fingerprint,
+              transferLeaseId
+            ),
+            pendingExpiresAt,
+          })
+          .where(eq(agentCredentials.id, legacyCredential.id));
+        return {
+          ...this.material(
+            {
+              credentialId: legacyCredential.id,
+              actorId: actor.id,
+              billingAccountId: actor.billingAccountId,
+              authenticateUntil: legacyCredential.authenticateUntil,
+              renewUntil: legacyCredential.renewUntil,
+            },
+            secret
+          ),
+          grantTransferRequired: true,
+          transferLeaseId,
+        };
+      }
+
       if (!actor) {
         // Legacy migration creates the same durable actor shape as spawn, so it
         // must share the billing-account ceiling. Lock the account before the
@@ -1017,52 +1131,129 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         actor = { id: actorId, billingAccountId: billing.id };
       }
       const secretHash = hashOpaque("credential", secret);
-      const [existing] = await tx
-        .select()
-        .from(agentCredentials)
-        .where(
-          and(
-            eq(agentCredentials.actorId, actor.id),
-            eq(agentCredentials.secretHash, secretHash),
-            ne(agentCredentials.status, "revoked")
-          )
-        )
-        .limit(1);
-      if (existing) {
-        return this.material(
-          {
-            credentialId: existing.id,
-            actorId: actor.id,
-            billingAccountId: actor.billingAccountId,
-            authenticateUntil: existing.authenticateUntil,
-            renewUntil: existing.renewUntil,
-          },
-          secret
-        );
-      }
       const credentialId = randomUUID();
+      const transferLeaseId = randomUUID();
       const authenticateUntil = new Date(now.getTime() + AUTHENTICATE_TTL_MS);
       const renewUntil = new Date(authenticateUntil.getTime() + RENEW_GRACE_MS);
+      const pendingExpiresAt = new Date(
+        now.getTime() + LEGACY_TRANSFER_LEASE_MS
+      );
       await tx.insert(agentCredentials).values({
         id: credentialId,
         actorId: actor.id,
         nodeId: this.nodeId,
         secretHash,
-        status: "active",
+        status: "pending",
+        rotationIdempotencyKey: legacyUpgradeMarker(
+          fingerprint,
+          transferLeaseId
+        ),
         authenticateUntil,
         renewUntil,
-        confirmedAt: now,
+        pendingExpiresAt,
       });
-      return this.material(
-        {
-          credentialId,
-          actorId: actor.id,
-          billingAccountId: actor.billingAccountId,
-          authenticateUntil,
-          renewUntil,
-        },
-        secret
+      return {
+        ...this.material(
+          {
+            credentialId,
+            actorId: actor.id,
+            billingAccountId: actor.billingAccountId,
+            authenticateUntil,
+            renewUntil,
+          },
+          secret
+        ),
+        grantTransferRequired: true,
+        transferLeaseId,
+      };
+    });
+  }
+
+  async completeLegacyUpgrade(input: {
+    legacyUserId: string;
+    credentialId: string;
+    transferLeaseId: string;
+  }): Promise<void> {
+    const now = this.now();
+    await this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`legacy-agent:${input.legacyUserId}`}))`
       );
+      const [row] = await tx
+        .select({
+          credentialId: agentCredentials.id,
+          credentialStatus: agentCredentials.status,
+          nodeId: agentCredentials.nodeId,
+          rotationIdempotencyKey: agentCredentials.rotationIdempotencyKey,
+          legacyUserId: actors.legacyUserId,
+        })
+        .from(agentCredentials)
+        .innerJoin(actors, eq(agentCredentials.actorId, actors.id))
+        .where(eq(agentCredentials.id, input.credentialId))
+        .limit(1);
+      const marker = parseLegacyUpgradeMarker(
+        row?.rotationIdempotencyKey ?? null
+      );
+      if (
+        !row ||
+        row.nodeId !== this.nodeId ||
+        row.legacyUserId !== input.legacyUserId ||
+        row.credentialStatus !== "pending" ||
+        marker?.leaseId !== input.transferLeaseId
+      ) {
+        throw new AgentIdentityError(
+          "invalid_credential",
+          "Legacy credential transition is no longer active"
+        );
+      }
+      await tx
+        .update(agentCredentials)
+        .set({ status: "active", confirmedAt: now, pendingExpiresAt: null })
+        .where(eq(agentCredentials.id, row.credentialId));
+    });
+  }
+
+  async releaseLegacyUpgrade(input: {
+    legacyUserId: string;
+    credentialId: string;
+    transferLeaseId: string;
+  }): Promise<void> {
+    const now = this.now();
+    await this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`legacy-agent:${input.legacyUserId}`}))`
+      );
+      const [row] = await tx
+        .select({
+          status: agentCredentials.status,
+          nodeId: agentCredentials.nodeId,
+          marker: agentCredentials.rotationIdempotencyKey,
+          legacyUserId: actors.legacyUserId,
+        })
+        .from(agentCredentials)
+        .innerJoin(actors, eq(agentCredentials.actorId, actors.id))
+        .where(eq(agentCredentials.id, input.credentialId))
+        .limit(1);
+      const marker = parseLegacyUpgradeMarker(row?.marker ?? null);
+      if (
+        !row ||
+        row.nodeId !== this.nodeId ||
+        row.legacyUserId !== input.legacyUserId ||
+        row.status !== "pending" ||
+        marker?.leaseId !== input.transferLeaseId
+      ) {
+        return;
+      }
+      await tx
+        .update(agentCredentials)
+        .set({
+          rotationIdempotencyKey: legacyUpgradeMarker(
+            marker.fingerprint,
+            randomUUID()
+          ),
+          pendingExpiresAt: now,
+        })
+        .where(eq(agentCredentials.id, input.credentialId));
     });
   }
 

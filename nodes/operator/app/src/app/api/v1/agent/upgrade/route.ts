@@ -79,41 +79,58 @@ export const POST = wrapRouteHandlerWithLogging(
         idempotencyKey: parsed.data.idempotencyKey,
       });
 
-      // Upgrade changes the credential and creates an agent actor; it must not
-      // silently strand the direct node grants that made the legacy agent
-      // useful. Migrate only the explicit agent-safe role allowlist: never copy
-      // admin/owner/governance or an unrelated future relation by accident.
-      // Keep source tuples during the v1 compatibility window.
-      const sourceSubjects = new Set([
-        authzUserResource(legacy.sub),
-        `user:${getNodeId()}/${legacy.sub}`,
-      ]);
-      for (const source of sourceSubjects) {
-        const listed = await container.authorization.listRelations(source);
-        if (listed.decision !== "success") {
-          return agentIdentityResponse(
-            ctx,
-            startedAt,
-            "upgrade",
-            { error: "authz_unavailable" },
-            { status: 503 }
-          );
-        }
-        for (const tuple of listed.tuples) {
-          if (!isMigratableNodeGrant(tuple)) continue;
-          const written = await container.authorization.writeRelation({
-            user: result.principalId,
-            relation: tuple.relation,
-            object: tuple.object,
+      if (result.grantTransferRequired) {
+        let transferComplete = false;
+        try {
+          // The pending credential records the one-time transition before any
+          // OpenFGA write. Exact retries can resume a failed copy, while an
+          // active/revoked predecessor can never trigger another copy.
+          const sourceSubjects = new Set([
+            authzUserResource(legacy.sub),
+            `user:${getNodeId()}/${legacy.sub}`,
+          ]);
+          for (const source of sourceSubjects) {
+            const listed = await container.authorization.listRelations(source);
+            if (listed.decision !== "success") {
+              return agentIdentityResponse(
+                ctx,
+                startedAt,
+                "upgrade",
+                { error: "authz_unavailable" },
+                { status: 503 }
+              );
+            }
+            for (const tuple of listed.tuples) {
+              if (!isMigratableNodeGrant(tuple)) continue;
+              const written = await container.authorization.writeRelation({
+                user: result.principalId,
+                relation: tuple.relation,
+                object: tuple.object,
+              });
+              if (written.decision !== "success") {
+                return agentIdentityResponse(
+                  ctx,
+                  startedAt,
+                  "upgrade",
+                  { error: "authz_unavailable" },
+                  { status: 503 }
+                );
+              }
+            }
+          }
+          await container.agentIdentity.completeLegacyUpgrade({
+            legacyUserId: legacy.sub,
+            credentialId: result.credentialId,
+            transferLeaseId: result.transferLeaseId,
           });
-          if (written.decision !== "success") {
-            return agentIdentityResponse(
-              ctx,
-              startedAt,
-              "upgrade",
-              { error: "authz_unavailable" },
-              { status: 503 }
-            );
+          transferComplete = true;
+        } finally {
+          if (!transferComplete) {
+            await container.agentIdentity.releaseLegacyUpgrade({
+              legacyUserId: legacy.sub,
+              credentialId: result.credentialId,
+              transferLeaseId: result.transferLeaseId,
+            });
           }
         }
       }

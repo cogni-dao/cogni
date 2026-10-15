@@ -32,6 +32,17 @@ export interface AgentCredentialStatus {
   readonly renewUntil: string;
 }
 
+export type LegacyAgentUpgrade = AgentCredentialMaterial &
+  (
+    | {
+        readonly grantTransferRequired: false;
+      }
+    | {
+        readonly grantTransferRequired: true;
+        readonly transferLeaseId: string;
+      }
+  );
+
 export interface AgentIdentityPort {
   createSpawnGrant(input: {
     readonly issuerUserId: string;
@@ -79,7 +90,19 @@ export interface AgentIdentityPort {
     readonly legacyUserId: string;
     readonly displayName: string | null;
     readonly idempotencyKey: string;
-  }): Promise<AgentCredentialMaterial>;
+  }): Promise<LegacyAgentUpgrade>;
+
+  completeLegacyUpgrade(input: {
+    readonly legacyUserId: string;
+    readonly credentialId: string;
+    readonly transferLeaseId: string;
+  }): Promise<void>;
+
+  releaseLegacyUpgrade(input: {
+    readonly legacyUserId: string;
+    readonly credentialId: string;
+    readonly transferLeaseId: string;
+  }): Promise<void>;
 }
 
 export class AgentIdentityError extends Error {

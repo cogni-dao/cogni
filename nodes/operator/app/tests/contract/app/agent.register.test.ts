@@ -38,7 +38,18 @@ const upgraded = {
   authenticateUntil: "2026-01-31T00:00:00.000Z",
   renewUntil: "2026-02-07T00:00:00.000Z",
 };
-const mockUpgrade = vi.fn().mockResolvedValue(upgraded);
+const preparedUpgrade = {
+  ...upgraded,
+  grantTransferRequired: true as const,
+  transferLeaseId: "33333333-3333-4333-8333-333333333333",
+};
+const completedUpgrade = {
+  ...upgraded,
+  grantTransferRequired: false as const,
+};
+const mockUpgrade = vi.fn().mockResolvedValue(preparedUpgrade);
+const mockCompleteLegacyUpgrade = vi.fn().mockResolvedValue(undefined);
+const mockReleaseLegacyUpgrade = vi.fn().mockResolvedValue(undefined);
 const mockRecover = vi.fn().mockResolvedValue(upgraded);
 const mockListRelations = vi.fn().mockResolvedValue({
   decision: "success",
@@ -98,6 +109,8 @@ vi.mock("@/bootstrap/container", () => {
         redeemSpawnGrant: mockRedeem,
         recover: mockRecover,
         upgradeLegacy: mockUpgrade,
+        completeLegacyUpgrade: mockCompleteLegacyUpgrade,
+        releaseLegacyUpgrade: mockReleaseLegacyUpgrade,
       },
       authorization,
     })),
@@ -129,6 +142,9 @@ describe("POST /api/v1/agent/register", () => {
       ],
     });
     mockWriteRelation.mockResolvedValue({ decision: "success" });
+    mockUpgrade.mockResolvedValue(preparedUpgrade);
+    mockCompleteLegacyUpgrade.mockResolvedValue(undefined);
+    mockReleaseLegacyUpgrade.mockResolvedValue(undefined);
   });
 
   it("returns 201 with actor credentials", async () => {
@@ -327,6 +343,9 @@ describe("POST /api/v1/agent/upgrade", () => {
       ],
     });
     mockWriteRelation.mockResolvedValue({ decision: "success" });
+    mockUpgrade.mockResolvedValue(preparedUpgrade);
+    mockCompleteLegacyUpgrade.mockResolvedValue(undefined);
+    mockReleaseLegacyUpgrade.mockResolvedValue(undefined);
   });
 
   it("fails before creating upgrade material when authorization is absent", async () => {
@@ -412,6 +431,12 @@ describe("POST /api/v1/agent/upgrade", () => {
           relation: "developer",
           object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         });
+        expect(mockCompleteLegacyUpgrade).toHaveBeenCalledWith({
+          legacyUserId: "legacy-user",
+          credentialId: upgraded.credentialId,
+          transferLeaseId: preparedUpgrade.transferLeaseId,
+        });
+        expect(mockReleaseLegacyUpgrade).not.toHaveBeenCalled();
       },
     });
   });
@@ -452,6 +477,33 @@ describe("POST /api/v1/agent/upgrade", () => {
           relation: "developer",
           object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         });
+        expect(mockReleaseLegacyUpgrade).toHaveBeenCalledTimes(1);
+        expect(mockCompleteLegacyUpgrade).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  it("never recopies grants after the transition is complete", async () => {
+    mockUpgrade
+      .mockResolvedValueOnce(preparedUpgrade)
+      .mockResolvedValueOnce(completedUpgrade);
+
+    await testApiHandler({
+      appHandler: upgradeHandler,
+      url: "/api/v1/agent/upgrade",
+      async test({ fetch }) {
+        expect((await upgradeRequest(fetch)).status).toBe(201);
+
+        // This represents a destination-role revoke after migration. A v1
+        // replay must return the recorded response without reading or writing
+        // OpenFGA, so it cannot restore that revoked role.
+        mockListRelations.mockClear();
+        mockWriteRelation.mockClear();
+        expect((await upgradeRequest(fetch)).status).toBe(201);
+
+        expect(mockListRelations).not.toHaveBeenCalled();
+        expect(mockWriteRelation).not.toHaveBeenCalled();
+        expect(mockCompleteLegacyUpgrade).toHaveBeenCalledTimes(1);
       },
     });
   });

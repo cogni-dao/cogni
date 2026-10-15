@@ -59,6 +59,22 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     return identity.redeemSpawnGrant(grant.token);
   }
 
+  async function createLegacyFixture(label: string) {
+    const legacyUserId = randomUUID();
+    const legacyBillingAccountId = randomUUID();
+    await db.insert(users).values({
+      id: legacyUserId,
+      name: label,
+      walletAddress: `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`,
+    });
+    await db.insert(billingAccounts).values({
+      id: legacyBillingAccountId,
+      ownerUserId: legacyUserId,
+      balanceCredits: 0n,
+    });
+    return { legacyUserId, legacyBillingAccountId };
+  }
+
   it("rejects an unissued grant without creating an actor or credential", async () => {
     const beforeActors = await db.select().from(actors);
     const beforeCredentials = await db.select().from(agentCredentials);
@@ -471,18 +487,123 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       displayName: "legacy-agent",
       idempotencyKey: randomUUID(),
     };
-    const first = await identity.upgradeLegacy(input);
+    const prepared = await identity.upgradeLegacy(input);
+    expect(prepared.grantTransferRequired).toBe(true);
+    if (!prepared.grantTransferRequired) throw new Error("expected transfer");
+    await expect(identity.authenticate(prepared.apiKey)).resolves.toBeNull();
+    await identity.completeLegacyUpgrade({
+      legacyUserId: userId,
+      credentialId: prepared.credentialId,
+      transferLeaseId: prepared.transferLeaseId,
+    });
     const retry = await identity.upgradeLegacy(input);
 
-    expect(retry).toEqual(first);
-    expect(first.billingAccountId).toBe(billingAccountId);
-    expect(first.principalId).toBe(`agent:${nodeId}/${first.actorId}`);
-    await expect(identity.authenticate(first.apiKey)).resolves.toMatchObject({
+    expect(retry).toMatchObject({
+      actorId: prepared.actorId,
+      principalId: prepared.principalId,
+      credentialId: prepared.credentialId,
+      apiKey: prepared.apiKey,
+      billingAccountId: prepared.billingAccountId,
+      grantTransferRequired: false,
+    });
+    expect(retry.billingAccountId).toBe(billingAccountId);
+    expect(retry.principalId).toBe(`agent:${nodeId}/${retry.actorId}`);
+    await expect(identity.authenticate(retry.apiKey)).resolves.toMatchObject({
       principal: {
-        actorId: first.actorId,
+        actorId: retry.actorId,
         legacyUserId: userId,
         billingAccountId,
       },
+    });
+  });
+
+  it("rejects a new upgrade key and never revives a rotated predecessor", async () => {
+    const { legacyUserId } = await createLegacyFixture("rotated legacy agent");
+    const input = {
+      legacyToken: "cogni_ag_sk_v1_rotated-legacy-token",
+      legacyUserId,
+      displayName: "rotated-legacy-agent",
+      idempotencyKey: randomUUID(),
+    };
+    const prepared = await identity.upgradeLegacy(input);
+    if (!prepared.grantTransferRequired) throw new Error("expected transfer");
+
+    await expect(
+      identity.upgradeLegacy({ ...input, idempotencyKey: randomUUID() })
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "invalid_credential",
+    });
+
+    await identity.completeLegacyUpgrade({
+      legacyUserId,
+      credentialId: prepared.credentialId,
+      transferLeaseId: prepared.transferLeaseId,
+    });
+    const rotated = await identity.rotate({
+      token: prepared.apiKey,
+      idempotencyKey: randomUUID(),
+    });
+    await identity.confirm(rotated.apiKey);
+
+    await expect(identity.upgradeLegacy(input)).rejects.toMatchObject<
+      Partial<AgentIdentityError>
+    >({ code: "invalid_credential" });
+    await expect(
+      identity.upgradeLegacy({ ...input, idempotencyKey: randomUUID() })
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "invalid_credential",
+    });
+    await expect(identity.authenticate(prepared.apiKey)).resolves.toBeNull();
+    await expect(identity.authenticate(rotated.apiKey)).resolves.toMatchObject({
+      principal: { actorId: prepared.actorId },
+    });
+  });
+
+  it("serializes concurrent legacy upgrade attempts and resumes an abandoned copy", async () => {
+    const { legacyUserId } = await createLegacyFixture(
+      "concurrent legacy agent"
+    );
+    const input = {
+      legacyToken: "cogni_ag_sk_v1_concurrent-legacy-token",
+      legacyUserId,
+      displayName: "concurrent-legacy-agent",
+      idempotencyKey: randomUUID(),
+    };
+    const attempts = await Promise.allSettled([
+      identity.upgradeLegacy(input),
+      identity.upgradeLegacy(input),
+    ]);
+    const fulfilled = attempts.find(
+      (
+        attempt
+      ): attempt is PromiseFulfilledResult<
+        Awaited<ReturnType<typeof identity.upgradeLegacy>>
+      > => attempt.status === "fulfilled"
+    );
+    const rejected = attempts.find(
+      (attempt): attempt is PromiseRejectedResult =>
+        attempt.status === "rejected"
+    );
+    expect(fulfilled?.value.grantTransferRequired).toBe(true);
+    expect(rejected?.reason).toMatchObject({ code: "rotation_pending" });
+    if (!fulfilled?.value.grantTransferRequired) {
+      throw new Error("expected one transfer owner");
+    }
+
+    await identity.releaseLegacyUpgrade({
+      legacyUserId,
+      credentialId: fulfilled.value.credentialId,
+      transferLeaseId: fulfilled.value.transferLeaseId,
+    });
+    const resumed = await identity.upgradeLegacy(input);
+    expect(resumed.credentialId).toBe(fulfilled.value.credentialId);
+    expect(resumed.grantTransferRequired).toBe(true);
+    if (!resumed.grantTransferRequired) throw new Error("expected resume");
+    expect(resumed.transferLeaseId).not.toBe(fulfilled.value.transferLeaseId);
+    await identity.completeLegacyUpgrade({
+      legacyUserId,
+      credentialId: resumed.credentialId,
+      transferLeaseId: resumed.transferLeaseId,
     });
   });
 
