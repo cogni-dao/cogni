@@ -190,6 +190,7 @@ jobs:
         with:
           app_source_root: ${{ github.workspace }}/app-src
           environment: ${{ needs.decide.outputs.environment }}
+          fork_domain_root: ${{ vars.FORK_DOMAIN_ROOT }}
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
 
@@ -223,6 +224,7 @@ jobs:
           app_source_root: ${{ github.workspace }}/app-src
           environment: ${{ needs.decide.outputs.environment }}
           destination_environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
+          fork_domain_root: ${{ vars.FORK_DOMAIN_ROOT }}
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
 

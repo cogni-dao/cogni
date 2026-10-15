@@ -320,11 +320,23 @@ grep -qv '^#' "$TMPROOT/k3s-only.list" && fail "k3s-only lane gained migration a
 ok "a k3s-only lane resolves and admits no foreign migration control"
 
 ACTION="$REPO_ROOT/.github/actions/reconcile-compute-egress/action.yml"
-[ "$(yq -r '.runs.steps[0].env.FORK_DOMAIN_ROOT' "$ACTION")" = '${{ vars.FORK_DOMAIN_ROOT }}' ] \
-  || fail "composite must source explicit repo-owned root, not inherit DAO fallback"
+[ "$(yq -r '.runs.steps[0].env.FORK_DOMAIN_ROOT' "$ACTION")" = '${{ inputs.fork_domain_root }}' ] \
+  || fail "composite must receive explicit repo-owned root through its supported inputs context"
+if grep -Eq '\$\{\{[^}]*vars' "$ACTION"; then
+  fail "composite manifest must not use unsupported vars expressions"
+fi
+[ "$(yq -r '.inputs.fork_domain_root.default' "$ACTION")" = '' ] \
+  || fail "composite must not invent a domain-root fallback"
 [ "$(yq -r '.runs.steps[0].env.DESTINATION_ENVIRONMENT' "$ACTION")" = '${{ inputs.destination_environment || inputs.environment }}' ] \
   || fail "composite destination must default to lane"
 for workflow in candidate-flight.yml promote-and-deploy.yml; do
+  caller_roots="$(yq -r '.jobs[].steps[]? | select(.uses == "./app-src/.github/actions/reconcile-compute-egress") | .with.fork_domain_root' "$REPO_ROOT/.github/workflows/$workflow")"
+  [ "$(printf '%s\n' "$caller_roots" | wc -l | tr -d ' ')" = 2 ] \
+    || fail "$workflow must pass explicit root to both existing composite callers"
+  while IFS= read -r caller_root; do
+    [ "$caller_root" = '${{ vars.FORK_DOMAIN_ROOT }}' ] \
+      || fail "$workflow composite caller must pass raw repo-owned root without fallback"
+  done <<< "$caller_roots"
   actual_destination="$(yq -r '.jobs.reconcile-compute-egress-control.steps[] | select(.uses == "./app-src/.github/actions/reconcile-compute-egress") | .with.destination_environment' "$REPO_ROOT/.github/workflows/$workflow")"
   [ "$actual_destination" = '${{ vars.FLEET_CONTROL_ENV || '\''production'\'' }}' ] \
     || fail "$workflow control twin did not declare its actual destination"

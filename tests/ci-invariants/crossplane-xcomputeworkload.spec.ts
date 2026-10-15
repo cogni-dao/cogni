@@ -1403,9 +1403,9 @@ describe("catalog lease generation naming", () => {
     // closed lease, so a retry under :4 would replay the dead handle (task.5157 case c). toks5's
     // SDL is identical to healthy toks4, so gen-4's 404 reads as transient; 5 is a fresh key
     // that re-enters createAndLease to retry the manifest delivery.
-    // task.5180: preview gen-1 reached BootDeadlineClosed after a provider-http UPDATE wedge;
-    // its closed lease makes :1 spent, so :2 is the reviewed replacement.
-    expect(toks5.lease_generation?.preview).toBe(2);
+    // task.5256: preview gen-2 was intentionally retired through the actuator;
+    // provider closure and its released receipt permit reviewed replacement :3.
+    expect(toks5.lease_generation?.preview).toBe(3);
     expect(toks5.lease_generation?.production).toBe(5);
   });
 });

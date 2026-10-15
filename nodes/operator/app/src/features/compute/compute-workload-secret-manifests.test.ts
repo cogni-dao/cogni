@@ -106,6 +106,96 @@ describe("buildComputeSecretResources", () => {
   });
 
   it.each([
+    "candidate-a",
+    "preview",
+    "production",
+  ] as const)("projects only declared Doltgres beside the isolated PG migration bank in %s", (environment) => {
+    const resources = buildComputeSecretResources({
+      slug: "echo",
+      environment,
+      secretRefs: [
+        { key: "DATABASE_URL" },
+        { key: "DATABASE_SERVICE_URL" },
+        { key: "DOLTGRES_URL" },
+        { key: "DOLTGRES_URL" },
+        { key: "AUTH_SECRET" },
+      ],
+    });
+    const migration = resources.find(
+      ({ file }) => file === "compute-migration-external-secret.yaml"
+    )?.manifest as { metadata: unknown; spec: { data: unknown } };
+    expect(migration.metadata).toEqual({
+      name: "echo-compute-migration-secrets",
+      namespace: `cogni-${environment}`,
+    });
+    expect(migration.spec.data).toEqual([
+      {
+        secretKey: "DATABASE_MIGRATION_URL",
+        remoteRef: {
+          key: `${environment}/echo-database-migration`,
+          property: "DATABASE_MIGRATION_URL",
+        },
+      },
+      {
+        secretKey: "DATABASE_SSL_CA_CERT",
+        remoteRef: {
+          key: `${environment}/echo-database-migration`,
+          property: "DATABASE_SSL_CA_CERT",
+        },
+      },
+      {
+        secretKey: "DOLTGRES_URL",
+        remoteRef: {
+          key: `${environment}/echo`,
+          property: "DOLTGRES_URL",
+        },
+      },
+    ]);
+    expect(migration.spec).not.toHaveProperty("dataFrom");
+    const runtime = resources[0]?.manifest as {
+      spec: { data: { secretKey: string }[] };
+    };
+    expect(runtime.spec.data.map(({ secretKey }) => secretKey)).toEqual([
+      "AUTH_SECRET",
+      "DATABASE_SERVICE_URL",
+      "DATABASE_URL",
+      "DOLTGRES_URL",
+    ]);
+  });
+
+  it.each([
+    { secretRefs: [] },
+    { secretRefs: [{ key: "DATABASE_URL" }] },
+  ])("does not project an undeclared Doltgres URL for refs $secretRefs", ({
+    secretRefs,
+  }) => {
+    const resources = buildComputeSecretResources({
+      slug: "echo",
+      environment: "preview",
+      secretRefs,
+    });
+    const migration = resources.find(
+      ({ file }) => file === "compute-migration-external-secret.yaml"
+    )?.manifest as { spec: { data: unknown } };
+    expect(migration.spec.data).toEqual([
+      {
+        secretKey: "DATABASE_MIGRATION_URL",
+        remoteRef: {
+          key: "preview/echo-database-migration",
+          property: "DATABASE_MIGRATION_URL",
+        },
+      },
+      {
+        secretKey: "DATABASE_SSL_CA_CERT",
+        remoteRef: {
+          key: "preview/echo-database-migration",
+          property: "DATABASE_SSL_CA_CERT",
+        },
+      },
+    ]);
+  });
+
+  it.each([
     "LITELLM_MASTER_KEY",
     "AKASH_CONSOLE_API_KEY",
     "AKASH_ACTUATOR_CONSOLE_API_KEY",
