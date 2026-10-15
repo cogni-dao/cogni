@@ -27,6 +27,13 @@ const envState = vi.hoisted(() => ({
   DOLTHUB_OWNER: "cogni-dao" as string | undefined,
 }));
 
+const mockNodeLog = vi.hoisted(() => ({
+  child: vi.fn().mockReturnThis(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
 const mockGetServerSessionUser = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/auth/server", () => ({
@@ -40,6 +47,10 @@ vi.mock("@/shared/env", () => ({
 
 vi.mock("@/bootstrap/container", () => ({
   resolveAppDb: () => ({}),
+  getContainer: () => ({
+    log: mockNodeLog,
+    clock: { now: () => new Date().toISOString() },
+  }),
 }));
 
 vi.mock("@cogni/db-client", () => ({

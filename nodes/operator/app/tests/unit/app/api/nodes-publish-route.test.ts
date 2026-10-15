@@ -13,7 +13,7 @@
 
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbState = vi.hoisted(() => ({
   current: {
@@ -80,6 +80,7 @@ const mockOpenNodeSubmodulePr = vi.hoisted(() => vi.fn());
 const mockFetchFileText = vi.hoisted(() => vi.fn());
 const mockCountDeployedWizardNodes = vi.hoisted(() => vi.fn());
 const mockLogEvent = vi.hoisted(() => vi.fn());
+const mockRequestEnd = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
   debug: vi.fn(),
@@ -114,6 +115,10 @@ vi.mock("@/bootstrap/capabilities/node-repo-write", () => ({
 
 vi.mock("@/bootstrap/container", () => ({
   resolveAppDb: () => ({}),
+  getContainer: () => ({
+    log: mockLog,
+    clock: { now: () => new Date().toISOString() },
+  }),
 }));
 
 vi.mock("@/bootstrap/otel", () => ({
@@ -138,7 +143,7 @@ vi.mock("@/shared/observability", () => {
       routeId: "nodes.publish",
     }),
     logEvent: mockLogEvent,
-    logRequestEnd: vi.fn(),
+    logRequestEnd: mockRequestEnd,
     logRequestStart: vi.fn(),
     makeLogger: () => mockLog,
   };
@@ -209,6 +214,24 @@ async function publishNode(id = defaultNode.id) {
 }
 
 describe("POST /api/v1/nodes/[id]/publish", () => {
+  afterEach(() => {
+    const terminalEvents =
+      mockLogEvent.mock.calls.filter(
+        (call) => call[1] === "feature.node_publish.complete"
+      ).length +
+      [...mockLog.warn.mock.calls, ...mockLog.error.mock.calls].filter(
+        (call) => call[0]?.event === "feature.node_publish.complete"
+      ).length;
+    expect(terminalEvents).toBe(1);
+    expect(
+      mockLog.info.mock.calls.length +
+        mockLog.warn.mock.calls.length +
+        mockLog.error.mock.calls.length +
+        mockLogEvent.mock.calls.length +
+        mockRequestEnd.mock.calls.length
+    ).toBeLessThanOrEqual(3);
+  });
+
   beforeEach(() => {
     dbState.current = { ...defaultNode };
     dbState.patch = undefined;
@@ -254,6 +277,7 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     mockCountDeployedWizardNodes.mockResolvedValue(0);
     mockLogEvent.mockReset();
     mockLog.child.mockClear();
+    mockRequestEnd.mockClear();
     mockLog.debug.mockClear();
     mockLog.error.mockClear();
     mockLog.info.mockClear();
@@ -370,68 +394,25 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       repo: "atlas",
       created: true,
     });
-    expect(mockLog.info).toHaveBeenCalledWith(
+
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      mockLog,
+      "feature.node_publish.secret_shape_generated",
       expect.objectContaining({
-        event: "feature.node_publish.complete",
-        phase: "started",
-        nodeRef: id,
-        nodeId: undefined,
-      }),
-      "feature.node_publish.complete"
-    );
-    expect(mockLog.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_publish.complete",
-        phase: "step",
-        step: "bootstrap_dolthub",
-        outcome: "success",
-        created: true,
-      }),
-      "feature.node_publish.complete"
-    );
-    expect(mockLog.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_publish.complete",
-        phase: "step",
-        step: "fork_from_template",
-        outcome: "started",
-        slug: "atlas",
-      }),
-      "feature.node_publish.complete"
-    );
-    expect(mockLog.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_publish.complete",
-        phase: "step",
-        step: "open_submodule_pr",
-        outcome: "success",
-        prNumber: 1532,
-      }),
-      "feature.node_publish.complete"
-    );
-    expect(mockLog.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_publish.secret_shape_generated",
-        nodeId: "11111111-1111-4111-8111-111111111111",
-        slug: "atlas",
+        targetNodeId: defaultNode.id,
         childRepoHeadSha: "identity-commit",
         parentPrNumber: 1532,
-        secretTargetName: "atlas-env-secrets",
-        // Birth shape follows NODE_FORMATION_ENVS (story.5025): the transient candidate-a
-        // proof slot plus canonical production, and never preview.
-        externalSecretEnvs: [...NODE_FORMATION_ENVS],
-        overlayEnvs: [...NODE_FORMATION_ENVS],
-      }),
-      "feature.node_publish.secret_shape_generated"
+        externalSecretCount: NODE_FORMATION_ENVS.length,
+        overlayCount: NODE_FORMATION_ENVS.length,
+      })
     );
     expect(mockLogEvent).toHaveBeenCalledWith(
       mockLog,
       "feature.node_publish.complete",
       expect.objectContaining({
-        nodeId: "11111111-1111-4111-8111-111111111111",
+        targetNodeId: "11111111-1111-4111-8111-111111111111",
         outcome: "success",
         prNumber: 1532,
-        prUrl: "https://github.com/cogni-test-org/cogni-monorepo/pull/1532",
       })
     );
   });
@@ -481,18 +462,7 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     expect(body.errorCode).toBe("app_not_installed");
     expect(body.step).toBe("open_submodule_pr");
     expect(body.reqId).toBe("req-1");
-    expect(mockLog.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_publish.complete",
-        phase: "step",
-        step: "open_submodule_pr",
-        outcome: "error",
-        errorCode: "app_not_installed",
-        githubStatus: 404,
-        slug: "atlas",
-      }),
-      "feature.node_publish.complete"
-    );
+
     expect(mockLog.error).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "adapter.github_repo_write.error",
@@ -673,16 +643,6 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
 
     expect(response.status).toBe(404);
     expect(body.error).toBe("not found");
-    expect(mockLog.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_publish.complete",
-        phase: "step",
-        step: "load_node",
-        outcome: "error",
-        errorCode: "node_not_found",
-      }),
-      "feature.node_publish.complete"
-    );
   });
 
   it("logs idempotent already-published requests", async () => {
@@ -697,16 +657,15 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
 
     expect(response.status).toBe(200);
     expect(body.alreadyPublished).toBe(true);
-    expect(mockLog.info).toHaveBeenCalledWith(
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      mockLog,
+      "feature.node_publish.complete",
       expect.objectContaining({
-        event: "feature.node_publish.complete",
-        step: "load_node",
-        outcome: "already_published",
+        outcome: "success",
+        alreadyPublished: true,
         status: 200,
-        slug: "atlas",
-        nodeStatus: "published",
-      }),
-      "feature.node_publish.complete"
+        targetNodeId: defaultNode.id,
+      })
     );
   });
 
@@ -768,16 +727,7 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     expect(response.status).toBe(502);
     expect(body.error).toBe("dolthub bootstrap failed");
     expect(mockForkFromTemplate).not.toHaveBeenCalled();
-    expect(mockLog.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_publish.complete",
-        phase: "step",
-        step: "bootstrap_dolthub",
-        outcome: "error",
-        errorCode: "dolthub_bootstrap_failed",
-      }),
-      "feature.node_publish.complete"
-    );
+
     expect(mockLog.error).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "feature.node_publish.complete",
@@ -805,17 +755,6 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
     expect(body.errorCode).toBe("template_not_found");
     expect(body.step).toBe("fork_from_template");
     expect(mockOpenNodeSubmodulePr).not.toHaveBeenCalled();
-    expect(mockLog.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "feature.node_publish.complete",
-        phase: "step",
-        step: "fork_from_template",
-        outcome: "error",
-        errorCode: "template_not_found",
-        githubStatus: 404,
-      }),
-      "feature.node_publish.complete"
-    );
   });
 
   it("returns a stable conflict when the configured mint source drifted", async () => {

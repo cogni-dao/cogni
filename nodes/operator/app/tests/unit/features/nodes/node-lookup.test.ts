@@ -10,6 +10,7 @@
  */
 
 import type { Database } from "@cogni/db-client";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 import {
   isNodeId,
@@ -50,8 +51,11 @@ describe("isNodeId", () => {
 });
 
 describe("nodeIdOrSlug", () => {
-  it("emits a condition for a UUID segment (matches id OR slug)", () => {
-    expect(nodeIdOrSlug(UUID)).toBeDefined();
+  it("reserves UUID-shaped references for immutable identity even if a slug collides", () => {
+    const query = new PgDialect().sqlToQuery(nodeIdOrSlug(UUID));
+    expect(query.sql).toContain('"nodes"."id"');
+    expect(query.sql).not.toContain('"nodes"."slug"');
+    expect(query.params).toEqual([UUID]);
   });
 
   it("emits a condition for a slug segment (slug only — no uuid cast)", () => {

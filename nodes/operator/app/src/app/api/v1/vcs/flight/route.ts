@@ -53,8 +53,7 @@ interface FlightLogFields {
   readonly outcome: FlightOutcome;
   readonly status: number;
   readonly errorCode?: string | undefined;
-  readonly nodeId?: string | undefined;
-  readonly nodeRef?: string | undefined;
+  readonly targetNodeId?: string | undefined;
   readonly slug?: string | undefined;
   readonly sourceSha8?: string | undefined;
   readonly githubStatus?: number | undefined;
@@ -94,31 +93,6 @@ function logFlightRequestComplete(
   ctx.log[level](
     { event: EVENT_NAMES.VCS_FLIGHT_REQUEST_COMPLETE, ...payload },
     EVENT_NAMES.VCS_FLIGHT_REQUEST_COMPLETE
-  );
-}
-
-function logGithubAdapterError(
-  ctx: RequestContext,
-  startedAt: number,
-  fields: {
-    readonly operation: string;
-    readonly reasonCode: string;
-    readonly status?: number | undefined;
-    readonly nodeId?: string | undefined;
-    readonly slug?: string | undefined;
-    readonly prNumber?: number | undefined;
-  }
-): void {
-  ctx.log.error(
-    {
-      event: EVENT_NAMES.ADAPTER_GITHUB_REPO_WRITE_ERROR,
-      reqId: ctx.reqId,
-      routeId: ctx.routeId,
-      dep: "github",
-      durationMs: elapsedMs(startedAt),
-      ...fields,
-    },
-    EVENT_NAMES.ADAPTER_GITHUB_REPO_WRITE_ERROR
   );
 }
 
@@ -281,7 +255,6 @@ export const POST = wrapRouteHandlerWithLogging(
           outcome: "error",
           status: 404,
           errorCode: "node_not_found",
-          nodeRef: nodeRef.nodeId,
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });
         return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -294,7 +267,7 @@ export const POST = wrapRouteHandlerWithLogging(
           outcome: "error",
           status: authz.status,
           errorCode: authz.errorCode,
-          nodeId: node.id,
+          targetNodeId: node.id,
           slug: node.slug,
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });
@@ -325,7 +298,7 @@ export const POST = wrapRouteHandlerWithLogging(
           outcome: "error",
           status: 503,
           errorCode: "deploy_plane_config_missing",
-          nodeId: nodeRef?.nodeId,
+          targetNodeId: node.id,
         });
         return NextResponse.json({ error: message }, { status: 503 });
       }
@@ -343,7 +316,7 @@ export const POST = wrapRouteHandlerWithLogging(
           outcome: "error",
           status: 503,
           errorCode: "node_parent_config_missing",
-          nodeId: node.id,
+          targetNodeId: node.id,
           slug: node.slug,
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });
@@ -365,13 +338,7 @@ export const POST = wrapRouteHandlerWithLogging(
           error && typeof error === "object" && "code" in error
             ? String((error as { code: unknown }).code)
             : "node_ref_prepare_failed";
-        logGithubAdapterError(ctx, startedAt, {
-          operation: "prepare_node_ref_candidate_flight",
-          reasonCode: errorCode,
-          status: githubStatus(error),
-          nodeId: node.id,
-          slug: node.slug,
-        });
+
         if (response) {
           logTerminal({
             mode: "node_ref",
@@ -379,7 +346,7 @@ export const POST = wrapRouteHandlerWithLogging(
             status: response.status,
             errorCode,
             githubStatus: githubStatus(error),
-            nodeId: node.id,
+            targetNodeId: node.id,
             slug: node.slug,
             sourceSha8: nodeRef.sourceSha.slice(0, 8),
           });
@@ -391,11 +358,14 @@ export const POST = wrapRouteHandlerWithLogging(
           status: 500,
           errorCode,
           githubStatus: githubStatus(error),
-          nodeId: node.id,
+          targetNodeId: node.id,
           slug: node.slug,
           sourceSha8: nodeRef.sourceSha.slice(0, 8),
         });
-        throw error;
+        return NextResponse.json(
+          { error: "flight_preflight_failed" },
+          { status: 500 }
+        );
       }
 
       // vnext: this records dispatch acceptance only. Workflow started/completed/failed
@@ -413,7 +383,7 @@ export const POST = wrapRouteHandlerWithLogging(
           mode: "node_ref",
           outcome: "success",
           status: 202,
-          nodeId: prepared.nodeId,
+          targetNodeId: prepared.nodeId,
           slug: prepared.slug,
           sourceSha8: prepared.sourceSha.slice(0, 8),
           dispatchStatus: "initiated",
@@ -442,13 +412,7 @@ export const POST = wrapRouteHandlerWithLogging(
           (error && typeof error === "object" && "code" in error
             ? String((error as { code: unknown }).code)
             : "node_ref_dispatch_failed");
-        logGithubAdapterError(ctx, startedAt, {
-          operation: "dispatch_node_ref_candidate_flight",
-          reasonCode: errorCode,
-          status: githubStatus(error),
-          nodeId: prepared.nodeId,
-          slug: prepared.slug,
-        });
+
         logTerminal({
           mode: "node_ref",
           outcome: "error",
@@ -456,13 +420,16 @@ export const POST = wrapRouteHandlerWithLogging(
             dispatchError?.response.status ?? deployPlaneError?.status ?? 500,
           errorCode,
           githubStatus: githubStatus(error),
-          nodeId: prepared.nodeId,
+          targetNodeId: prepared.nodeId,
           slug: prepared.slug,
           sourceSha8: prepared.sourceSha.slice(0, 8),
         });
         if (dispatchError) return dispatchError.response;
         if (deployPlaneError) return deployPlaneError;
-        throw error;
+        return NextResponse.json(
+          { error: "flight_dispatch_failed" },
+          { status: 500 }
+        );
       }
     } catch (error) {
       if (!terminalLogged) {
@@ -474,7 +441,7 @@ export const POST = wrapRouteHandlerWithLogging(
           githubStatus: githubStatus(error),
         });
       }
-      throw error;
+      return NextResponse.json({ error: "flight_failed" }, { status: 500 });
     }
   }
 );

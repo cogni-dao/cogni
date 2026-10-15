@@ -11,20 +11,16 @@
  * @public
  */
 
-import { withTenantScope } from "@cogni/db-client";
-import { type UserId, userActor } from "@cogni/ids";
-import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { resolveAppDb } from "@/bootstrap/container";
+import { readOwnedNode } from "@/app/_lib/owned-node-read";
 import { nodeLaunchPackOperation } from "@/contracts/nodes.launch-pack.v1.contract";
 import {
   buildNodeLaunchPack,
   nodeRepoUrlForSlug,
 } from "@/features/nodes/launch-pack";
-import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { getServerSessionUser } from "@/lib/auth/server";
-import { type NodeStatus, nodes } from "@/shared/db/nodes";
+import type { NodeStatus } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
 import {
   buildNodeKnowledgeRemote,
@@ -53,25 +49,12 @@ export async function GET(request: Request, ctx: RouteParams) {
     );
   }
 
-  const db = resolveAppDb();
-
-  const rows = await withTenantScope(
-    db,
-    userActor(session.id as UserId),
-    async (tx) =>
-      tx
-        .select()
-        .from(nodes)
-        .where(
-          and(
-            nodeIdOrSlug(parsed.data.nodeId),
-            eq(nodes.ownerUserId, session.id)
-          )
-        )
-        .limit(1)
-  );
-
-  const node = rows[0];
+  const node = await readOwnedNode({
+    id: parsed.data.nodeId,
+    userId: session.id,
+    routeId: "nodes.launch_pack",
+    request,
+  });
   if (!node) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }

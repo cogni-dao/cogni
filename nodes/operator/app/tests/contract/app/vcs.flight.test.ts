@@ -321,7 +321,7 @@ describe("POST /api/v1/vcs/flight", () => {
           mode: "node_ref",
           outcome: "success",
           status: 202,
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
           sourceSha8: SOURCE_SHA.slice(0, 8),
           dispatchStatus: "initiated",
@@ -504,7 +504,7 @@ describe("POST /api/v1/vcs/flight", () => {
           outcome: "error",
           status: 403,
           errorCode: "authz_denied",
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
         });
       },
@@ -561,24 +561,13 @@ describe("POST /api/v1/vcs/flight", () => {
         expect(
           mockDeployPlane.dispatchNodeRefCandidateFlight
         ).not.toHaveBeenCalled();
-        expect(mockLog.error).toHaveBeenCalledWith(
-          expect.objectContaining({
-            event: "adapter.github_repo_write.error",
-            dep: "github",
-            operation: "prepare_node_ref_candidate_flight",
-            reasonCode: "source_missing",
-            status: 422,
-            nodeId: NODE_ID,
-            slug: "creative",
-          }),
-          "adapter.github_repo_write.error"
-        );
+
         expectFlightRequestLog("warn", {
           mode: "node_ref",
           outcome: "error",
           status: 422,
           errorCode: "source_missing",
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
           sourceSha8: SOURCE_SHA.slice(0, 8),
         });
@@ -610,7 +599,7 @@ describe("POST /api/v1/vcs/flight", () => {
           outcome: "error",
           status: 503,
           errorCode: "node_parent_config_missing",
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
           sourceSha8: SOURCE_SHA.slice(0, 8),
         });
@@ -655,7 +644,7 @@ describe("POST /api/v1/vcs/flight", () => {
           mode: "node_ref",
           outcome: "success",
           status: 202,
-          nodeId: NODE_ID,
+          targetNodeId: NODE_ID,
           slug: "creative",
           dispatchStatus: "initiated",
         });

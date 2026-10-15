@@ -26,11 +26,19 @@ const dbState = vi.hoisted(() => ({
         failureReason: string | null;
       }
     | undefined,
+  failRead: false,
   reads: [] as { sql: string; params: unknown[] }[],
   writes: [] as { sql: string; params: unknown[] }[],
   patch: undefined as
     | { status?: NodeStatus; failureReason?: string | null }
     | undefined,
+}));
+
+const mockNodeLog = vi.hoisted(() => ({
+  child: vi.fn().mockReturnThis(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
 }));
 
 const mockGetServerSessionUser = vi.hoisted(() => vi.fn());
@@ -42,6 +50,10 @@ vi.mock("@/lib/auth/server", () => ({
 
 vi.mock("@/bootstrap/container", () => ({
   resolveAppDb: () => ({}),
+  getContainer: () => ({
+    log: mockNodeLog,
+    clock: { now: () => new Date().toISOString() },
+  }),
 }));
 
 vi.mock("@cogni/db-client", () => ({
@@ -56,6 +68,7 @@ const mockTx = {
   select: () => ({
     from: () => ({
       where: (condition: SQL) => {
+        if (dbState.failRead) throw new Error("private database diagnostic");
         dbState.reads.push(new PgDialect().sqlToQuery(condition));
         return { limit: () => (dbState.current ? [dbState.current] : []) };
       },
@@ -95,6 +108,8 @@ describe("PATCH /api/v1/nodes/[id]", () => {
       status: "dao_pending",
       failureReason: null,
     };
+    vi.clearAllMocks();
+    dbState.failRead = false;
     dbState.patch = undefined;
     dbState.reads = [];
     dbState.writes = [];
@@ -114,6 +129,16 @@ describe("PATCH /api/v1/nodes/[id]", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(mockNodeLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_reference.read_complete",
+        targetNodeId: NODE_ID,
+        outcome: "success",
+      }),
+      expect.any(String)
+    );
+    expect(mockNodeLog.info.mock.calls[0]?.[0]).not.toHaveProperty("nodeId");
+    expect(mockNodeLog.info.mock.calls[0]?.[0]).not.toHaveProperty("nodeRef");
     expect((await response.json()).node.id).toBe(NODE_ID);
     expect(dbState.reads[0]?.params).toContain(id);
     expect(dbState.reads[0]?.params).toContain("user-1");
@@ -139,6 +164,43 @@ describe("PATCH /api/v1/nodes/[id]", () => {
     expect(dbState.writes[0]?.sql).toContain('"nodes"."id"');
     if (id === "red")
       expect(dbState.reads[0]?.sql).not.toContain('"nodes"."id"');
+  });
+
+  it("logs one safe read failure before propagating a database error", async () => {
+    dbState.failRead = true;
+    await expect(
+      GET(new Request("https://test.local/api/v1/nodes/red"), {
+        params: Promise.resolve({ id: "red" }),
+      })
+    ).rejects.toThrow("private database diagnostic");
+    expect(mockNodeLog.info).toHaveBeenCalledTimes(1);
+    expect(mockNodeLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_reference.read_complete",
+        status: 500,
+        errorCode: "registry_unavailable",
+      }),
+      expect.any(String)
+    );
+    expect(JSON.stringify(mockNodeLog.info.mock.calls)).not.toContain(
+      "private database diagnostic"
+    );
+  });
+
+  it("returns and logs one safe update failure on database errors", async () => {
+    dbState.failRead = true;
+    const response = await PATCH(patchRequest("wallet_provisioned"), {
+      params: Promise.resolve({ id: "red" }),
+    });
+    expect(response.status).toBe(500);
+    expect(mockNodeLog.info).toHaveBeenCalledTimes(1);
+    expect(mockNodeLog.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "feature.node_formation.update_complete",
+        errorCode: "update_failed",
+      }),
+      expect.any(String)
+    );
   });
 
   it("returns 404 for an unknown reference without writing", async () => {
