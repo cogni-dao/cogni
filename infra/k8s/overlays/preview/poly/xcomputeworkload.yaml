@@ -11,15 +11,15 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: preview
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:8d42cf4f0ee614d19451a4d16e4a36c69852593870bbcd92e9a73c1f1ee77e4e
+    ref: ghcr.io/cogni-dao/poly@sha256:3935ab5dc977a9219d0adefca197ebbaf668c6698946fe875427e039c064e848
     source:
       repository: cogni-dao/poly
-      sha: b2dad9e8dba888a6e0235ad747185ed7286b6c8b
+      sha: 55d9c7d58be54de38b72272d2dcf99fe10edf6d5
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:c1453c57a3c0cd641d6273c91bd8f5ecc269da58bbe70c56c1881593482c9e53
+        image: ghcr.io/cogni-dao/poly@sha256:f510abb629d918cb7cd4501ccd2c39a2ce1e48b9642a00d3315e2c2c06943dd9
       - name: paper-trader
-        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:f46949954553429530c5c1bcab3a3c759416853a504b13cb5356a2ec93aa5fc1
+        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:73629443f8bd40519ce846ceeb730cf845ee43e54baa35e2e500416445156e13
   workload:
     name: poly
     publicHost: poly-preview.cognidao.org
@@ -31,6 +31,7 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DATABASE_SSL_CA_CERT
           - key: DOLTGRES_URL
           - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
@@ -44,6 +45,23 @@ spec:
           - key: POLY_WALLET_AEAD_KEY_ID
           - key: POLY_TRADER_OBSERVATION_WRITER_ENABLED
           - key: POLY_WALLET_AEAD_KEY_HEX
+        command:
+          - /bin/sh
+          - -ec
+          - |-
+            set -eu
+            if [ -n "${DATABASE_SSL_CA_CERT:-}" ]; then
+              umask 077
+              cogni_db_ca_file=$(mktemp /tmp/cogni-database-ca.XXXXXX)
+              printf "%s\n" "$DATABASE_SSL_CA_CERT" > "$cogni_db_ca_file"
+              export NODE_EXTRA_CA_CERTS="$cogni_db_ca_file"
+              export PGSSLROOTCERT="$cogni_db_ca_file"
+            fi
+            exec "$@"
+          - cogni-database-trust
+        args:
+          - node
+          - app/server.js
         port: 3200
         visibility: public
         bindings:
