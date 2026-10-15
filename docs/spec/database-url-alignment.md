@@ -3,141 +3,94 @@ id: database-url-alignment-spec
 type: spec
 title: Database URL Alignment — DSN Single Source of Truth
 status: active
-spec_state: draft
-trust: draft
-summary: Database configuration contract — runtime containers receive only DATABASE_URL and DATABASE_SERVICE_URL, with provisioning credentials strictly isolated.
-read_when: Working with database connection strings, provisioning, deployment secrets, or container env configuration.
+spec_state: active
+trust: reviewed
+summary: Explicit app/service DSNs and an isolated rollout migration DSN agree with the lane-owned database; provisioning credentials stay outside applications.
+read_when: Working with database connection strings, provisioning, migration secrets, or container env configuration.
 owner: derekg1729
 created: 2026-02-06
-verified: 2026-02-06
+verified: 2026-10-15
 tags: [infra, deployment]
 ---
 
 # Database URL Alignment — DSN Single Source of Truth
 
-## Context
-
-> [!CRITICAL]
-> **Phased Reality:** Runtime containers are DSN-only today. Provisioning is transitioning to DSN-only. Until the provisioner is rewritten, provisioning uses component vars (`APP_DB_*`, `POSTGRES_ROOT_*`), but these must **never** reach runtime containers.
-
-Database configuration has historically used a mix of component variables (`APP_DB_HOST`, `APP_DB_PORT`, etc.) and full DSN strings. This creates drift risk and security surface. The target state is 3 DSNs as the only database secrets.
-
-**End State Contract (target):** Three DSNs are the only database secrets:
-
-| Secret                 | Purpose                          | Consumed By               |
-| ---------------------- | -------------------------------- | ------------------------- |
-| `DATABASE_ROOT_URL`    | Admin/superuser for provisioning | `db-provision` only       |
-| `DATABASE_URL`         | App user (RLS enforced)          | `app`, `migrate`          |
-| `DATABASE_SERVICE_URL` | Service user (BYPASSRLS)         | `app`, `scheduler-worker` |
-
 ## Goal
 
-Establish a clear security boundary between provisioning and runtime database credentials, ensuring runtime containers never receive admin/root credentials and all database configuration converges to DSN-only.
+Keep node runtime, rollout and administrative credentials separate while every PostgreSQL DSN agrees with the workload's declared database placement.
 
 ## Non-Goals
 
-- IaC-managed role creation (Terraform/OpenTofu — deferred as optional future improvement)
-- Runtime DSN rotation without restart (standard restart-based rotation is sufficient)
-
-## Core Invariants
-
-1. **AUTHORITATIVE_INPUTS_PER_PHASE**: Provisioning uses `POSTGRES_ROOT_*`, `APP_DB_*`, `COGNI_NODE_DBS`, and `LITELLM_DB_NAME` — all required, no defaults. Runtime uses only `DATABASE_URL` and `DATABASE_SERVICE_URL`.
-
-2. **RUNTIME_DSN_ONLY**: Runtime containers (`app`, `scheduler-worker`, `migrate`) receive **only** `DATABASE_URL` and/or `DATABASE_SERVICE_URL`. They never receive `DATABASE_ROOT_URL`, `APP_DB_*` component vars, or `POSTGRES_ROOT_*` credentials. **Enforcement:** CI validation fails if runtime container env blocks contain forbidden vars.
-
-3. **ROLE_ISOLATION**: `DATABASE_URL.username` ≠ `DATABASE_SERVICE_URL.username`. Denylist: `{postgres, root, admin, superuser}`. **Enforcement:** `validate-dsns.sh` in CI; runtime startup invariant check.
-
-4. **NO_HARDCODED_HOSTS_IN_CODE**: Provisioner and CI scripts must not assume `postgres:5432` or any specific host/port. Host and port are parsed from DSNs at runtime (using `URL` class or equivalent) or injected via environment in provisioning lane. **Enforcement:** Code review; no literal `postgres` or `5432` in scripts except in example `.env` files.
-
-5. **PROVISIONING_TRUST_BOUNDARY**: Provisioning credentials (`DATABASE_ROOT_URL` or `POSTGRES_ROOT_*`) must never cross into runtime containers. This is a hard security boundary.
+- Introducing another provisioner, credential writer, rotation path or deployment workflow.
+- Treating PostgreSQL residency as proof of Doltgres, Redis or Temporal isolation.
 
 ## Design
 
-### Provisioning Lane vs Runtime Lane
+### Credential contract
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ PROVISIONING LANE (db-provision container)                          │
-│ ─────────────────────────────────────────                           │
-│ Responsibilities:                                                   │
-│   - CREATE/ALTER ROLE                                               │
-│   - GRANT privileges                                                │
-│   - ALTER DATABASE ... OWNER                                        │
-│   - ALTER DEFAULT PRIVILEGES                                        │
-│                                                                     │
-│ Credentials (P0): POSTGRES_ROOT_*, APP_DB_*                         │
-│ Credentials (P1+): DATABASE_ROOT_URL, DATABASE_URL,                 │
-│                    DATABASE_SERVICE_URL                             │
-│                                                                     │
-│ Trust boundary: runs once at deploy, before app starts              │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼ provisioning complete
-┌─────────────────────────────────────────────────────────────────────┐
-│ RUNTIME LANE (app, scheduler-worker, migrate)                       │
-│ ─────────────────────────────────────────────                       │
-│ Responsibilities:                                                   │
-│   - Serve HTTP traffic                                              │
-│   - Execute background jobs                                         │
-│   - Run migrations (RLS-enforced)                                   │
-│                                                                     │
-│ Credentials: DATABASE_URL, DATABASE_SERVICE_URL only                │
-│                                                                     │
-│ Trust boundary: never has admin privileges                          │
-└─────────────────────────────────────────────────────────────────────┘
-```
+Applications receive explicit connection strings, never provisioning credential components. PostgreSQL runtime and migration identities are distinct. Secret custody does not choose database residency.
 
-### Per-Container Env Contract
+| Credential                         | Role                                                     | Consumer                                         |
+| ---------------------------------- | -------------------------------------------------------- | ------------------------------------------------ |
+| `DATABASE_URL`                     | `app_<normalized_slug>`, RLS enforced                    | application request paths                        |
+| `DATABASE_SERVICE_URL`             | `service_<normalized_slug>`, BYPASSRLS                   | authorized system/worker paths                   |
+| `DATABASE_MIGRATION_URL`           | `migration_<normalized_slug>`, isolated rollout identity | PostgreSQL migration only                        |
+| Provisioning root/component inputs | administrative identity                                  | authorized provisioning, never an app credential |
 
-| Container          | Receives                                                           |
-| ------------------ | ------------------------------------------------------------------ |
-| `app`              | `DATABASE_URL`, `DATABASE_SERVICE_URL`                             |
-| `scheduler-worker` | `DATABASE_SERVICE_URL`                                             |
-| `migrate`          | `DATABASE_URL`                                                     |
-| `db-provision`     | `POSTGRES_ROOT_*`, `APP_DB_*`, `COGNI_NODE_DBS`, `LITELLM_DB_NAME` |
+Historical local-development `app_user` and `app_service` examples are not fallbacks for deployed node roles. See [database role and placement contracts](databases.md#database-placement-and-budgets).
 
-**Forbidden in runtime containers:** `APP_DB_*`, `POSTGRES_ROOT_*`, `COGNI_NODE_DBS`, `LITELLM_DB_NAME`
+## Invariants
 
-**Required by provisioning (no defaults):** `COGNI_NODE_DBS` (comma-separated node DB names), `LITELLM_DB_NAME`
+1. **EXPLICIT_DSN_ONLY:** Runtime clients receive their declared DSN variables. They do not reconstruct a URL from `APP_DB_*` / `POSTGRES_ROOT_*`, silently substitute another credential, or default a missing database host.
+2. **ROLE_ISOLATION:** App and service usernames differ, neither is an administrative superuser, and the PostgreSQL migration credential is isolated from ordinary runtime containers. Local provisioning inputs and root DSNs never cross that application boundary.
+3. **MIGRATION_INPUT_IS_NOT_RUNTIME_AUTHORITY:** The existing migrator reads an environment variable named `DATABASE_URL`, but rollout supplies its value from the separate `DATABASE_MIGRATION_URL` secret. The variable name does not authorize using the runtime app credential.
+4. **RESIDENCY_AND_IDENTITY_AGREE:** Stored app, service and migration DSNs must resolve to the same expected lane-owned host/database through `lane_db_assert_agreement`. Shared-tier placement uses `lane_db_vm_env` / `lane_db_host`. A reviewed dedicated-cell binding follows its own lifecycle and cannot be replaced by a shared-tier fallback.
+5. **CUSTODY_IS_NOT_PLACEMENT:** The production operator may custody an authorized nonproduction lane's secrets without hosting that lane's database. Projection stays lane/node scoped and down-trust. Missing or mismatched identity fails closed rather than selecting the custodian's instance.
+6. **NO_SECRET_VALUES_IN_EVIDENCE:** Diagnostics and CI may report credential names, host/database agreement and authentication outcomes, never password-bearing DSNs or privileged secret contents.
+7. **PROVISIONING_PRESERVES_CONTAINMENT:** Credential reconciliation and ordinary deployment preserve existing `NOLOGIN`. Readmission is a separate audited capability, not a password-rotation side effect.
 
-### Implementation Status (P0)
+## Rollout mapping
 
-P0 runtime isolation is complete:
+| Surface                                  | PostgreSQL migrator input                                                                      |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Kubernetes `migrate` init container      | `DATABASE_URL` from `migration-secrets.DATABASE_MIGRATION_URL`                                 |
+| Akash/Crossplane declared `migrate` step | `databaseUrlSecretKey: DATABASE_MIGRATION_URL`, mapped to the migrator's `DATABASE_URL`        |
+| Ordinary application container           | app/service DSNs; no isolated migration credential                                             |
+| Authorized provisioner                   | existing environment-scoped administrative inputs; no root credential exported to the workload |
 
-- `validate-dsns.sh` created (distinct users, no superusers, non-empty, masks outputs)
-- Validation script called from `deploy-production.yml` and `staging-preview.yml`
-- Runtime env validated to NOT include `APP_DB_*` / `POSTGRES_ROOT_*` (enforced by `assertEnvInvariants()` + docker-compose verified)
-- INFRASTRUCTURE_SETUP.md documents two config surfaces (runtime DSNs + provisioning inputs)
+Migrations execute from the same immutable runtime artifact as the app, using the node's declared command/layout. Doltgres is a separate engine and declared phase using `DOLTGRES_URL`; the PostgreSQL per-role contract does not claim equivalent Doltgres permissions or environment isolation.
 
-### File Pointers
+## Ownership
 
-| File                                      | Role                                              |
-| ----------------------------------------- | ------------------------------------------------- |
-| `scripts/ci/validate-dsns.sh`             | CI DSN validation script                          |
-| `.github/workflows/deploy-production.yml` | Calls DSN validator before deploy                 |
-| `.github/workflows/staging-preview.yml`   | Calls DSN validator before deploy                 |
-| `docs/runbooks/INFRASTRUCTURE_SETUP.md`   | Documents two config surfaces                     |
-| `src/shared/env/invariants.ts`            | Runtime startup invariant check (role separation) |
+- The sole materializer composes and reconciles node-scoped credentials through the existing OpenBao/ESO path.
+- Provisioning creates/updates the target database and roles through that same lane-aware identity derivation.
+- Runtime pools consume only their declared credentials. They do not create or repair administrative roles.
+- Rotation of an admitted dedicated target follows the version-owned cutover/CAS contract; no independent fallback writer may rebind it.
 
-## Acceptance Checks
+Component inputs used by local Compose or authorized infrastructure provisioning remain outside application containers. This contract does not claim a speculative root-DSN-only provisioner is implemented.
 
-**Automated:**
+## Verification
 
-- CI `validate-dsns.sh` fails if `DATABASE_URL.username == DATABASE_SERVICE_URL.username`
-- CI `validate-dsns.sh` fails if either DSN uses a denylisted superuser name
-- Runtime `assertEnvInvariants()` fails if forbidden vars are present in runtime env
+- Read actual secret **references**, not values: the app/service projection and migration projection are distinct.
+- Assert equality of resolved host/database for all three stored PostgreSQL credentials, plus the exact expected role names.
+- Exercise missing migration identity and foreign-host negative cases; they must fail closed.
+- Prove migrations by terminal execution receipt, tracking journal and expected schema, then exercise database-backed behavior at the deployed SHA.
+- Prove runtime residency with native database/session evidence. Green CI, a successful materialization log or log silence alone is insufficient.
 
-**Manual:**
+## Executable sources
 
-1. Verify `db-provision` container has provisioning credentials but runtime containers do not
-2. Verify `validate-dsns.sh` masks credential output in CI logs
-
-## Open Questions
-
-_(none — P1 DSN-only provisioning and P2 secret cleanup tracked in proj.cicd-services-gitops.md)_
+| Source                                                                         | Owns                                                                      |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `scripts/ci/lib/lane-db-residency.sh`                                          | lane-owned shared PostgreSQL derivation and DSN agreement                 |
+| `scripts/ci/secret-materialize.sh`                                             | node-scoped app/service and isolated migration credential materialization |
+| `scripts/ci/assert-target-substrate.sh`                                        | fail-closed lane/credential substrate assertions                          |
+| `nodes/operator/app/src/features/compute/compute-workload-secret-manifests.ts` | separate runtime and migration ExternalSecret projections                 |
+| `nodes/operator/app/src/features/compute/akash-tx/akash-tx-migration-step.ts`  | declared migration secret-key selection and execution                     |
+| `infra/k8s/base/node-app/deployment.yaml`                                      | isolated migration credential mapped to the init container input          |
 
 ## Related
 
-- [Database RLS](./database-rls.md) — Tenant isolation, dual DB roles
-- [Databases](./databases.md) — Two-user model, migration strategy
-- [CI/CD](./ci-cd.md) — Deployment pipeline, secret management
+- [Databases](databases.md) — role budgets, migrations, backups and cell lifecycle
+- [Node CI/CD contract](node-ci-cd-contract.md#lane-vs-control-env) — workload lane versus control authority
+- [Database RLS](database-rls.md) — runtime dual-client authorization semantics
+- [Secrets management](secrets-management.md) — custody, projection and rotation
