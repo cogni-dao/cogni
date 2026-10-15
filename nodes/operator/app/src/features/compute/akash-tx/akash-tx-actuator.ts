@@ -720,6 +720,24 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         record: bound.record,
       });
     }
+    // Ordinary app updates have no proof that replacing a stateful layout is safe.
+    // Preserve byte-identical no-ops; all changed retained SDL needs audited state lifecycle.
+    if (
+      (bound.record.retentionPolicy === "retain" ||
+        bound.record.appliedDatabaseCellBinding?.length ||
+        retainsStorage(input.spec)) &&
+      (!bound.record.lastAppliedSdlHash ||
+        bound.record.lastAppliedSdlHash !== this.console.sdlHash(input.spec))
+    ) {
+      this.log.warn(
+        { cogniKey: input.cogniKey, receiptId: bound.record.receiptId },
+        "akash_tx_retained_storage_update_refused"
+      );
+      throw new AkashTxError(
+        "invalid_request",
+        "retained storage permits only an identical SDL no-op; changes require audited state lifecycle"
+      );
+    }
     // Refresh durable native evidence before replacing a paid workload. A failed cost read/write
     // holds the update retryably and must leave the provider untouched.
     await this.observeCost(bound.record, input.externalName);

@@ -1453,7 +1453,7 @@ describe("AkashTxActuator.update / delete", () => {
     expect(api.releaseCalls).toEqual([]);
   });
 
-  it("retains an existing allocation before a persistent update and cannot downgrade it", async () => {
+  it("retains custody when a changed update is refused and cannot downgrade it", async () => {
     const { actuator, api, ledger } = build();
     await actuator.create({
       cogniKey: "k1",
@@ -1461,13 +1461,15 @@ describe("AkashTxActuator.update / delete", () => {
       identity: IDENTITY,
       spec: SPEC,
     });
-    await actuator.update({
-      cogniKey: "k1",
-      externalName: "7001",
-      environment: "candidate-a",
-      identity: IDENTITY,
-      spec: { ...SPEC, retentionPolicy: "retain" },
-    });
+    await expect(
+      actuator.update({
+        cogniKey: "k1",
+        externalName: "7001",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: { ...SPEC, retentionPolicy: "retain" },
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
     expect(ledger.rows.get("k1")?.retentionPolicy).toBe("retain");
     await actuator.update({
       cogniKey: "k1",
@@ -1480,6 +1482,56 @@ describe("AkashTxActuator.update / delete", () => {
       actuator.delete({ cogniKey: "k1", externalName: "7001" })
     ).rejects.toMatchObject({ code: "invalid_request" });
     expect(api.releaseCalls).toEqual([]);
+  });
+
+  it("rejects retained storage removal and image changes while allowing an identical SDL no-op", async () => {
+    const { actuator, api, ledger } = build();
+    const spec: ProvisionSpec = {
+      ...SPEC,
+      services: SPEC.services.map((service) => ({
+        ...service,
+        volumes: [
+          { name: "database", sizeMi: 1024, mountPath: "/data", tier: "nvme" },
+        ],
+      })),
+    };
+    const input = {
+      cogniKey: "k1",
+      environment: "candidate-a",
+      identity: IDENTITY,
+      spec,
+    };
+    await actuator.create(input);
+    const applied = ledger.rows.get("k1")?.lastAppliedSdlHash;
+    await expect(
+      actuator.update({ ...input, externalName: "7001", spec: SPEC })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(
+      actuator.update({
+        ...input,
+        externalName: "7001",
+        spec: {
+          ...spec,
+          services: spec.services.map((service) => ({
+            ...service,
+            image: "postgres:16",
+          })),
+        },
+      })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(
+      (await actuator.update({ ...input, externalName: "7001" })).externalName
+    ).toBe("7001");
+    expect(api.updateCalls).toBe(0);
+    expect(ledger.rows.get("k1")?.lastAppliedSdlHash).toBe(applied);
+    const retained = ledger.rows.get("k1");
+    if (!retained) throw new Error("fixture allocation absent");
+    const { lastAppliedSdlHash: _hash, ...legacy } = retained;
+    ledger.rows.set("k1", legacy);
+    await expect(
+      actuator.update({ ...input, externalName: "7001" })
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(api.updateCalls).toBe(0);
   });
 
   it("releases the provider resource and settles the key", async () => {
