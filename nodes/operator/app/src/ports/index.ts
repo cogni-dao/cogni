@@ -71,6 +71,7 @@ export {
   type AkashTxErrorCode,
   type AkashTxLeaseLogSource,
   type AkashTxLeaseLogSources,
+  type AkashTxManagedDeploymentDefinition,
   type AkashTxMigrationPhase,
   type AkashTxMigrationPort,
   type AkashTxMigrationStep,

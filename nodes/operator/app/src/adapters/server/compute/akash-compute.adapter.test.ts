@@ -281,6 +281,71 @@ describe("AkashComputeAdapter.status", () => {
   });
 });
 
+describe("AkashComputeAdapter.readManagedDefinition", () => {
+  const version = Buffer.alloc(32, 1).toString("base64");
+  const provider = `akash1${"a".repeat(38)}`;
+  const sdl =
+    "services:\n  app:\n    env: [DATABASE_URL=opaque-redacted-token]\n";
+  const detail = {
+    deployment: { id: { dseq: "7001" }, state: "active", hash: version },
+    consoleSettings: { sdl, manifestVersion: version },
+    leases: [
+      { state: "active", id: { dseq: "7001", gseq: 1, oseq: 1, provider } },
+    ],
+  };
+  it("uses the existing readonly client and labels returned-definition bytes separately from full secret-bearing managed SDL", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ data: detail })
+    );
+    const observed = await makeAdapter(fetchImpl).readManagedDefinition({
+      leaseId: "7001",
+    });
+    expect(observed).toMatchObject({
+      leaseId: "7001",
+      providerAccount: provider,
+      providerSdl: sdl,
+      providerSdlSha256: createHash("sha256").update(sdl).digest("hex"),
+      consoleManifestVersion: version,
+      chainManifestVersion: version,
+    });
+    expect(observed).not.toHaveProperty("appDsnSha256");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(`${BASE}/v1/deployments/7001`);
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("GET");
+  });
+  it("refuses missing, mismatched, ambiguous and oversized current definitions without mutation or echoed values", async () => {
+    for (const value of [
+      { ...detail, consoleSettings: undefined },
+      { ...detail, deployment: { ...detail.deployment, id: { dseq: "7002" } } },
+      {
+        ...detail,
+        consoleSettings: {
+          sdl,
+          manifestVersion: Buffer.alloc(32, 2).toString("base64"),
+        },
+      },
+      { ...detail, leases: [...detail.leases, ...detail.leases] },
+      {
+        ...detail,
+        consoleSettings: {
+          sdl: "private".repeat(50000),
+          manifestVersion: version,
+        },
+      },
+    ]) {
+      const fetchImpl = vi.fn<typeof fetch>(async () =>
+        jsonResponse({ data: value })
+      );
+      await expect(
+        makeAdapter(fetchImpl).readManagedDefinition({ leaseId: "7001" })
+      ).rejects.toMatchObject({ code: "UNEXPECTED_SHAPE" });
+      expect(
+        fetchImpl.mock.calls.every(([, init]) => init?.method === "GET")
+      ).toBe(true);
+    }
+  });
+});
+
 describe("AkashComputeAdapter.observeCost", () => {
   const observedAt = new Date("2026-09-15T12:00:00.000Z");
 

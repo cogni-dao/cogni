@@ -13,7 +13,8 @@
  * Invariants:
  *   - PROVIDER_AGNOSTIC: SDL, dseq, bids, uakt/uusdc escrow never escape; callers see only
  *     ComputeBalance / ProvisionSpec / ProvisionOutput. `leaseId` IS the dseq but is opaque
- *     to callers by contract.
+ *     to callers by contract. The private actuator proof seam may read observed definition
+ *     bytes; these never enter a public route and opaque env values are not secret proof.
  *   - ADAPTER_SWAPPABLE: implements the provider-blind ComputeResourcePort next to
  *     CherryComputeAdapter; the factory composes them.
  *   - FAIL_LOUD: HTTP / network / timeout / no-bids / boot-SLO failures throw AkashComputeError
@@ -49,6 +50,7 @@ import type {
 } from "@cogni/ai-tools";
 import type {
   AkashLeaseLogDescriptor,
+  AkashTxManagedDeploymentDefinition,
   ComputeCostEvidencePort,
   ComputeResourceCostEvidence,
 } from "@/ports";
@@ -260,8 +262,10 @@ interface ConsoleDeploymentDetail {
   deployment?: {
     id?: { owner?: string; dseq?: string | number };
     state?: string;
+    hash?: string;
     created_at?: string;
   };
+  consoleSettings?: { sdl?: string; manifestVersion?: string };
   leases?: ConsoleLease[];
   escrow_account?: {
     state?: {
@@ -636,6 +640,59 @@ export class AkashComputeAdapter
       `/v1/deployments/${encodeURIComponent(p.leaseId)}`
     );
     return provisionOutputFromDetail(p.leaseId, detail);
+  }
+
+  /** Private, read-only observation of the managed definition. Values may be opaque. */
+  async readManagedDefinition(input: {
+    leaseId: string;
+  }): Promise<AkashTxManagedDeploymentDefinition> {
+    if (!/^[0-9]+$/.test(input.leaseId))
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "managed definition requires one paid handle"
+      );
+    const detail = await this.request<ConsoleDeploymentDetail>(
+      "GET",
+      `/v1/deployments/${encodeURIComponent(input.leaseId)}`
+    );
+    const active = (detail?.leases ?? []).filter(
+      (lease) => lease.state === "active"
+    );
+    const lease = active[0];
+    const sdl = detail?.consoleSettings?.sdl;
+    const consoleVersion = detail?.consoleSettings?.manifestVersion;
+    const chainVersion = detail?.deployment?.hash;
+    const digest = (value: unknown): value is string =>
+      typeof value === "string" &&
+      /^[A-Za-z0-9+/]{43}=$/.test(value) &&
+      Buffer.from(value, "base64").length === 32 &&
+      Buffer.from(value, "base64").toString("base64") === value;
+    if (
+      String(detail?.deployment?.id?.dseq) !== input.leaseId ||
+      detail?.deployment?.state !== "active" ||
+      active.length !== 1 ||
+      String(lease?.id?.dseq) !== input.leaseId ||
+      !lease?.id?.provider ||
+      typeof sdl !== "string" ||
+      !sdl.length ||
+      Buffer.byteLength(sdl, "utf8") > 256 * 1024 ||
+      !digest(consoleVersion) ||
+      !digest(chainVersion) ||
+      consoleVersion !== chainVersion
+    )
+      throw new AkashComputeError(
+        "UNEXPECTED_SHAPE",
+        "active paid definition and current manifest identity unavailable"
+      );
+    return {
+      observedAt: this.now().toISOString(),
+      leaseId: input.leaseId,
+      providerAccount: lease.id.provider,
+      providerSdl: sdl,
+      providerSdlSha256: createHash("sha256").update(sdl).digest("hex"),
+      consoleManifestVersion: consoleVersion,
+      chainManifestVersion: chainVersion,
+    };
   }
 
   /** Exact chain-native cost evidence. No fiat conversion or payer inference occurs here. */
