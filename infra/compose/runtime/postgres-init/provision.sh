@@ -785,7 +785,7 @@ BEGIN
   SELECT count(*) INTO runtime_sessions FROM pg_stat_activity
     WHERE usename IN ('$app_role', '$svc_role');
   IF to_regclass('public.billing_accounts') IS NOT NULL THEN
-    EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.billing_accounts WHERE id = \$1::uuid AND is_system_tenant)'
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.billing_accounts WHERE id = \$1::text AND is_system_tenant)'
       INTO system_tenant_exists USING '$SYSTEM_BILLING_ACCOUNT_ID';
   END IF;
   RETURN jsonb_build_object(
