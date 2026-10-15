@@ -11,13 +11,13 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: production
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:52454cc1fa9e4afc25cb022fad463947f1a879fdc31b2bde107f32f824bdec0b
+    ref: ghcr.io/cogni-dao/poly@sha256:6a6c268b0b2fc2ab42f330b765de81e5f8e5af86471d877a1f7cdc4a6200b7a3
     source:
       repository: cogni-dao/poly
-      sha: 3172ae5d67771d92bf61350f05fcd55c2b26ae2b
+      sha: 1de3e508550327a1dd41a07fa11446d018a7373c
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:440c7bc72bae95d164518e7a884cb644356ce0d692af7a391554220a024c6f09
+        image: ghcr.io/cogni-dao/poly@sha256:bd0f4dabdbd179a46c89862ca62aacbde42df9b0859e95aa03595b0c2beb8b99
   workload:
     name: poly
     publicHost: poly.cognidao.org
@@ -29,6 +29,7 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DATABASE_SSL_CA_CERT
           - key: DOLTGRES_URL
           - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
@@ -42,6 +43,23 @@ spec:
           - key: POLY_WALLET_AEAD_KEY_ID
           - key: POLY_TRADER_OBSERVATION_WRITER_ENABLED
           - key: POLY_WALLET_AEAD_KEY_HEX
+        command:
+          - /bin/sh
+          - -ec
+          - |-
+            set -eu
+            if [ -n "${DATABASE_SSL_CA_CERT:-}" ]; then
+              umask 077
+              cogni_db_ca_file=$(mktemp /tmp/cogni-database-ca.XXXXXX)
+              printf "%s\n" "$DATABASE_SSL_CA_CERT" > "$cogni_db_ca_file"
+              export NODE_EXTRA_CA_CERTS="$cogni_db_ca_file"
+              export PGSSLROOTCERT="$cogni_db_ca_file"
+            fi
+            exec "$@"
+          - cogni-database-trust
+        args:
+          - node
+          - app/server.js
         port: 3200
         visibility: public
         bindings: {}
@@ -65,3 +83,8 @@ spec:
     zoneId: 23220356c352c5831c6af57887b11a27
   runtime:
     substrateHost: cogni.vm.cognidao.org
+    databasePoolLimits:
+      replicaCount: 1
+      app: 3
+      service: 4
+      read: 2
