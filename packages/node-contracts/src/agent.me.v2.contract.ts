@@ -7,7 +7,7 @@
  * Scope: Identity, credential liveness, and directly assigned node roles only; does not grant or mutate access.
  * Invariants: SELF_ONLY; CREDENTIAL_NE_PRINCIPAL; HUMAN_AND_AGENT_ARE_DISTINCT.
  * Side-effects: none
- * Links: story.5075, task.5252, docs/spec/identity-model.md
+ * Links: story.5075, task.5252, https://cognidao.org/knowledge/human-ai-identity-standard
  * @public
  */
 

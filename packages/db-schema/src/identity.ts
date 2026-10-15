@@ -13,7 +13,7 @@
  * - HUMAN_AND_AGENT_ARE_DISTINCT: agent actors have no users.id; legacy_user_id is migration evidence only.
  * - RLS_ENABLED: Identity tables have row-level security enabled.
  * Side-effects: none (schema definitions only)
- * Links: docs/spec/identity-model.md, docs/spec/decentralized-user-identity.md
+ * Links: https://cognidao.org/knowledge/human-ai-identity-standard, docs/spec/decentralized-user-identity.md
  * @public
  */
 

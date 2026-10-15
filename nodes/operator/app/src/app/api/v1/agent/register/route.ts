@@ -11,36 +11,54 @@
  *   onboarding seam itself — callers can't present credentials they haven't
  *   been issued yet. The one-use, expiring spawn grant is the onboarding
  *   authority; anonymous self-registration is not supported.
- * Links: docs/spec/security-auth.md, docs/spec/identity-model.md
+ * Links: docs/spec/security-auth.md, https://cognidao.org/knowledge/human-ai-identity-standard
  * @public
  */
 
 import { registerAgentV2Operation } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { agentIdentityErrorResponse } from "../_shared";
+import {
+  agentIdentityErrorResponse,
+  agentIdentityResponse,
+} from "../_shared";
 
 export const runtime = "nodejs";
 
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "agent.register", auth: { mode: "none" } },
-  async (_ctx, request) => {
+  async (ctx, request) => {
+    const startedAt = performance.now();
     const parsed = registerAgentV2Operation.input.safeParse(
       await request.json()
     );
     if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "register",
+        { error: "Invalid request" },
+        { status: 400 }
+      );
     }
     try {
       const result = await getContainer().agentIdentity.redeemSpawnGrant(
         parsed.data.spawnToken
       );
-      return NextResponse.json(registerAgentV2Operation.output.parse(result), {
-        status: 201,
-      });
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "register",
+        registerAgentV2Operation.output.parse(result),
+        { status: 201 }
+      );
     } catch (error) {
-      const response = agentIdentityErrorResponse(error);
+      const response = agentIdentityErrorResponse(
+        ctx,
+        startedAt,
+        "register",
+        error
+      );
       if (response) return response;
       throw error;
     }

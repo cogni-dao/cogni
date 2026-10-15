@@ -3,30 +3,43 @@
 
 import { authzUserResource } from "@cogni/authorization-core";
 import { upgradeLegacyAgentCredentialOperation } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
 import { verifyLegacyAgentApiKey } from "@/app/_lib/auth/request-identity";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeId } from "@/shared/config";
-import { agentIdentityErrorResponse, requestBearer } from "../_shared";
+import {
+  agentIdentityErrorResponse,
+  agentIdentityResponse,
+  requestBearer,
+} from "../_shared";
 
 export const runtime = "nodejs";
 
 export const POST = wrapRouteHandlerWithLogging(
   { routeId: "agent.credentials.legacy_upgrade", auth: { mode: "none" } },
-  async (_ctx, request) => {
+  async (ctx, request) => {
+    const startedAt = performance.now();
     const token = requestBearer(request);
     const legacy = token ? verifyLegacyAgentApiKey(token) : null;
     const parsed = upgradeLegacyAgentCredentialOperation.input.safeParse(
       await request.json()
     );
     if (!token || !legacy || !parsed.success) {
-      return NextResponse.json({ error: "invalid_token" }, { status: 401 });
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "upgrade",
+        { error: "invalid_token" },
+        { status: 401 }
+      );
     }
     try {
       const container = getContainer();
       if (!container.authorization) {
-        return NextResponse.json(
+        return agentIdentityResponse(
+          ctx,
+          startedAt,
+          "upgrade",
           { error: "authz_unavailable" },
           { status: 503 }
         );
@@ -49,7 +62,10 @@ export const POST = wrapRouteHandlerWithLogging(
       for (const source of sourceSubjects) {
         const listed = await container.authorization.listRelations(source);
         if (listed.decision !== "success") {
-          return NextResponse.json(
+          return agentIdentityResponse(
+            ctx,
+            startedAt,
+            "upgrade",
             { error: "authz_unavailable" },
             { status: 503 }
           );
@@ -61,19 +77,30 @@ export const POST = wrapRouteHandlerWithLogging(
             object: tuple.object,
           });
           if (written.decision !== "success") {
-            return NextResponse.json(
+            return agentIdentityResponse(
+              ctx,
+              startedAt,
+              "upgrade",
               { error: "authz_unavailable" },
               { status: 503 }
             );
           }
         }
       }
-      return NextResponse.json(
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "upgrade",
         upgradeLegacyAgentCredentialOperation.output.parse(result),
         { status: 201 }
       );
     } catch (error) {
-      const response = agentIdentityErrorResponse(error);
+      const response = agentIdentityErrorResponse(
+        ctx,
+        startedAt,
+        "upgrade",
+        error
+      );
       if (response) return response;
       throw error;
     }

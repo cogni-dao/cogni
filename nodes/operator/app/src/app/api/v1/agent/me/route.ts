@@ -21,14 +21,13 @@ import {
   agentMeV2Operation,
   type RequestPrincipal,
 } from "@cogni/node-contracts";
-import { NextResponse } from "next/server";
 import {
   RequestIdentityUnavailableError,
   resolveRequestPrincipal,
 } from "@/app/_lib/auth/request-identity";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { requestBearer } from "../_shared";
+import { agentIdentityResponse, requestBearer } from "../_shared";
 
 const NODE_PREFIX = "node:";
 const DURABLE_PREFIX = "cogni_ag_sk_v2_";
@@ -72,7 +71,8 @@ async function readRoles(
 
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "agent.me.read", auth: { mode: "none" } },
-  async (_ctx, request) => {
+  async (ctx, request) => {
+    const startedAt = performance.now();
     const bearer = requestBearer(request);
     let principal: RequestPrincipal | null;
     let durableStatus: {
@@ -94,7 +94,10 @@ export const GET = wrapRouteHandlerWithLogging(
       }
     } catch (error) {
       if (error instanceof RequestIdentityUnavailableError || bearer) {
-        return NextResponse.json(
+        return agentIdentityResponse(
+          ctx,
+          startedAt,
+          "me",
           { error: "authn_unavailable" },
           { status: 503 }
         );
@@ -103,7 +106,13 @@ export const GET = wrapRouteHandlerWithLogging(
     }
 
     if (!principal) {
-      return NextResponse.json({ error: "invalid_token" }, { status: 401 });
+      return agentIdentityResponse(
+        ctx,
+        startedAt,
+        "me",
+        { error: "invalid_token" },
+        { status: 401 }
+      );
     }
 
     const grants = await readRoles(getContainer().authorization, principal);
@@ -139,7 +148,12 @@ export const GET = wrapRouteHandlerWithLogging(
               ...grants,
             };
 
-    return NextResponse.json(agentMeV2Operation.output.parse(result));
+    return agentIdentityResponse(
+      ctx,
+      startedAt,
+      "me",
+      agentMeV2Operation.output.parse(result)
+    );
   }
 );
 

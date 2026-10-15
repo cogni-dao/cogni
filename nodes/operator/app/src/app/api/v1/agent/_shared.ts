@@ -4,6 +4,52 @@
 import { NextResponse } from "next/server";
 import { extractBearerToken } from "@/app/_lib/auth/request-identity";
 import { AgentIdentityError } from "@/ports";
+import {
+  EVENT_NAMES,
+  logEvent,
+  type RequestContext,
+} from "@/shared/observability";
+
+export type AgentIdentityOperation =
+  | "confirm"
+  | "me"
+  | "recover"
+  | "recovery_grant"
+  | "register"
+  | "rotate"
+  | "spawn_grant"
+  | "status"
+  | "upgrade";
+
+/** One privacy-safe, feature-specific terminal marker for candidate validation. */
+export function agentIdentityResponse(
+  ctx: RequestContext,
+  startedAt: number,
+  operation: AgentIdentityOperation,
+  body: unknown,
+  init?: ResponseInit
+): NextResponse {
+  const statusCode = init?.status ?? 200;
+  const payload = {
+    reqId: ctx.reqId,
+    routeId: ctx.routeId,
+    operation,
+    outcome: statusCode < 400 ? "success" : "error",
+    statusCode,
+    durationMs: Math.round(performance.now() - startedAt),
+    ...(statusCode >= 400 ? { errorCode: `http_${statusCode}` } : {}),
+  } as const;
+  if (statusCode < 400) {
+    logEvent(ctx.log, EVENT_NAMES.AGENT_IDENTITY_OPERATION_COMPLETE, payload);
+  } else {
+    const level = statusCode >= 500 ? "error" : "warn";
+    ctx.log[level](
+      { event: EVENT_NAMES.AGENT_IDENTITY_OPERATION_COMPLETE, ...payload },
+      EVENT_NAMES.AGENT_IDENTITY_OPERATION_COMPLETE
+    );
+  }
+  return NextResponse.json(body, init);
+}
 
 export function requestBearer(request: Request): string | null {
   return extractBearerToken(request.headers.get("authorization"));
@@ -22,6 +68,9 @@ export function isSameOriginMutation(request: Request): boolean {
 }
 
 export function agentIdentityErrorResponse(
+  ctx: RequestContext,
+  startedAt: number,
+  operation: AgentIdentityOperation,
   error: unknown
 ): NextResponse | null {
   if (!(error instanceof AgentIdentityError)) return null;
@@ -35,7 +84,10 @@ export function agentIdentityErrorResponse(
           : error.code === "recovery_denied"
             ? 403
             : 401;
-  return NextResponse.json(
+  return agentIdentityResponse(
+    ctx,
+    startedAt,
+    operation,
     { error: error.code, error_description: error.message },
     {
       status,
