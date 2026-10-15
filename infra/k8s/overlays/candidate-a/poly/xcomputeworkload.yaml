@@ -11,15 +11,15 @@ spec:
   nodeId: 4b06359a-a859-4399-888e-a8c7a6696f7e
   environment: candidate-a
   bundle:
-    ref: ghcr.io/cogni-dao/poly@sha256:6cfbf6ec0b5f5a74e36f39a26bcb998257e9a58cc1d5c51c30aa2e4aee73fea6
+    ref: ghcr.io/cogni-dao/poly@sha256:6a6c268b0b2fc2ab42f330b765de81e5f8e5af86471d877a1f7cdc4a6200b7a3
     source:
       repository: cogni-dao/poly
-      sha: 61a07e830525e43d873f67cf705b0b69d93fd312
+      sha: 1de3e508550327a1dd41a07fa11446d018a7373c
     artifacts:
       - name: app
-        image: ghcr.io/cogni-dao/poly@sha256:8ebbf7501c0841dbc060512235e44bd1b584aefbdc7e37c740d3625dc1131df2
+        image: ghcr.io/cogni-dao/poly@sha256:bd0f4dabdbd179a46c89862ca62aacbde42df9b0859e95aa03595b0c2beb8b99
       - name: paper-trader
-        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:cc8d3d8c5a7c83a6f8130e495923d5408b087b1d487030733951189f83ad4c8a
+        image: ghcr.io/cogni-dao/poly-paper-trader@sha256:53b6d3544db1aee1eafc35bddefa7e391d91a1b6996e20f96b6d6d5249998285
   workload:
     name: poly
     publicHost: poly-test.cognidao.org
@@ -31,6 +31,7 @@ spec:
           - key: AUTH_SECRET
           - key: DATABASE_URL
           - key: DATABASE_SERVICE_URL
+          - key: DATABASE_SSL_CA_CERT
           - key: DOLTGRES_URL
           - key: EVM_RPC_URL
           - key: LITELLM_VIRTUAL_KEY
@@ -44,6 +45,23 @@ spec:
           - key: POLY_WALLET_AEAD_KEY_ID
           - key: POLY_TRADER_OBSERVATION_WRITER_ENABLED
           - key: POLY_WALLET_AEAD_KEY_HEX
+        command:
+          - /bin/sh
+          - -ec
+          - |-
+            set -eu
+            if [ -n "${DATABASE_SSL_CA_CERT:-}" ]; then
+              umask 077
+              cogni_db_ca_file=$(mktemp /tmp/cogni-database-ca.XXXXXX)
+              printf "%s\n" "$DATABASE_SSL_CA_CERT" > "$cogni_db_ca_file"
+              export NODE_EXTRA_CA_CERTS="$cogni_db_ca_file"
+              export PGSSLROOTCERT="$cogni_db_ca_file"
+            fi
+            exec "$@"
+          - cogni-database-trust
+        args:
+          - node
+          - app/server.js
         port: 3200
         visibility: public
         bindings:
