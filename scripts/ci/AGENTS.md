@@ -70,6 +70,8 @@ scripts/fetch_github_job_logs.sh  # Fetch job logs from GitHub Actions API (requ
 
 ## Notes
 
+- `render-compute-egress-allowlist.sh <lane> [destination-env]` keeps provider rules lane-scoped; only a lane's own nonproduction destination may admit its catalog-derived production migration custodian on TCP5432. Foreign admission requires explicit `FORK_DOMAIN_ROOT`; the composite action supplies the repo variable without a DAO fallback and control-host twins pass their actual destination environment.
+
 - Scripts designed to be called from GitHub Actions or Jenkins
 - Keep actual YAML pipelines in repository root .github/ directory
 - `build.sh` builds both APP_IMAGE (runner target) and MIGRATOR_IMAGE (migrator target)
