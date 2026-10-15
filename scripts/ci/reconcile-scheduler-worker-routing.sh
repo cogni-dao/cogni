@@ -36,6 +36,8 @@
 # branch (deploy/<env>), which owns the lane's substrate hostname. The current
 # scheduler image digest is restored after that refresh, so a foreign app-source
 # flight cannot replace the shared worker's VM target or roll back its image.
+# Candidate replica/startup policy follows the workflow source independently of
+# the reviewed app revision, including when that revision predates the policy.
 #
 # Idempotent: re-running with an unchanged catalog produces no diff → no commit
 # (status "noop"). The single per-env CI concurrency group serializes flights so
@@ -64,6 +66,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_SOURCE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 rc=0 # assigned by the EXIT traps below ($? at fire time); declared for shellcheck.
 DEPLOY_ENV=""
@@ -461,17 +464,17 @@ git -C "$WORKDIR" add -A "$ENDPOINTS_SUBPATH"
 
 if [ "$DEPLOY_ENV" = candidate-a ]; then
   SERIAL_PATCH="infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml"
-  [ -f "$APP_SOURCE_DIR/$SERIAL_PATCH" ] || {
-    echo "[ERROR] reviewed candidate serial-rollout patch is missing" >&2; exit 1;
+  [ -f "$PLATFORM_SOURCE_DIR/$SERIAL_PATCH" ] || {
+    echo "[ERROR] workflow-owned candidate serial-rollout patch is missing" >&2; exit 1;
   }
-  cp "$APP_SOURCE_DIR/$SERIAL_PATCH" "$WORKDIR/$SERIAL_PATCH"
+  cp "$PLATFORM_SOURCE_DIR/$SERIAL_PATCH" "$WORKDIR/$SERIAL_PATCH"
   yq -i '.patches = ((.patches // []) | map(select(.path != "serial-rollout.patch.yaml"))) + [{"path": "serial-rollout.patch.yaml"}]' "$OVERLAY_DST"
   git -C "$WORKDIR" add -A "$SERIAL_PATCH"
 
   REPLICAS_PATCH="infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml"
   yq -i '.patches = ((.patches // []) | map(select(.path != "replicas.patch.yaml")))' "$OVERLAY_DST"
-  if [ -f "$APP_SOURCE_DIR/$REPLICAS_PATCH" ]; then
-    cp "$APP_SOURCE_DIR/$REPLICAS_PATCH" "$WORKDIR/$REPLICAS_PATCH"
+  if [ -f "$PLATFORM_SOURCE_DIR/$REPLICAS_PATCH" ]; then
+    cp "$PLATFORM_SOURCE_DIR/$REPLICAS_PATCH" "$WORKDIR/$REPLICAS_PATCH"
     yq -i '.patches += [{"path": "replicas.patch.yaml"}]' "$OVERLAY_DST"
     git -C "$WORKDIR" add -A "$REPLICAS_PATCH"
   else

@@ -363,6 +363,12 @@ CATALOG_JSON="$(yq -o=json -I=0 '.' infra/catalog/scheduler-worker.yaml)" \
 pass "every repair path selects at most scheduler-worker, with empty node/database partitions"
 
 echo "[7/7] candidate startup samples actual available memory before the heavy worker"
+WORKFLOW=.github/workflows/candidate-flight.yml
+STEP='.jobs.reconcile-scheduler-worker-routing.steps[] | select(.name == "Reconcile scheduler-worker routing (propagate to per-env deploy branch)")'
+[ "$(yq -r "$STEP | .working-directory // \".\"" "$WORKFLOW")" = . ] \
+  || fail "scheduler reconciler must execute from workflow source"
+[ "$(yq -r "$STEP | .env.APP_SOURCE_DIR" "$WORKFLOW")" = '${{ github.workspace }}/app-src' ] \
+  || fail "reviewed app routing source must remain explicit"
 SERIAL_PATCH=infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml
 RENDERED="$(kubectl kustomize infra/k8s/overlays/candidate-a/scheduler-worker)"
 RENDERED_JSON="$(yq -o=json -I=0 'select(.kind == "Deployment")' <<< "$RENDERED")"

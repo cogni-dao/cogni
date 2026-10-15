@@ -111,6 +111,9 @@ cp "$REPO_ROOT/infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.pa
   "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml"
 cp "$REPO_ROOT/infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml" \
   "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml"
+yq -i '.spec.replicas = 2 | .spec.paused = true | .spec.strategy.rollingUpdate.maxSurge = 1' \
+  "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml"
+yq -i '.spec.replicas = 2' "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml"
 
 # Routing + lane-bootstrap authorities of the repository Argo actually watches.
 AUTHORITY_DIR="$TMPROOT/test-parent-main"
@@ -320,15 +323,17 @@ echo "PASS: idempotent (second run is a clean no-op)"
 
 REPLICAS_PATCH=infra/k8s/overlays/candidate-a/scheduler-worker/replicas.patch.yaml
 mv "$APP_SRC/$REPLICAS_PATCH" "$TMPROOT/replicas-original.yaml"
-run >/dev/null || fail "older reviewed source without replica override refused"
-[ ! -f "$DEPLOY_DIR/$REPLICAS_PATCH" ] || fail "stale replica override survived source rollback"
-[ "$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')" = 2 ] \
-  || fail "source rollback did not restore the base replica policy"
-mv "$TMPROOT/replicas-original.yaml" "$APP_SRC/$REPLICAS_PATCH"
-run >/dev/null || fail "reviewed one-replica policy did not restore"
+mv "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml" "$TMPROOT/serial-original.yaml"
+run >/dev/null || fail "older reviewed source without candidate rollout policy refused"
+[ -f "$DEPLOY_DIR/$REPLICAS_PATCH" ] || fail "older app source removed platform replica policy"
 [ "$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')" = 1 ] \
-  || fail "restored source replica override is ineffective"
-echo "PASS: replica override follows reviewed source, including older-source rollback"
+  || fail "older app source replaced the platform replica policy"
+mv "$TMPROOT/replicas-original.yaml" "$APP_SRC/$REPLICAS_PATCH"
+mv "$TMPROOT/serial-original.yaml" "$APP_SRC/infra/k8s/overlays/candidate-a/scheduler-worker/serial-rollout.patch.yaml"
+run >/dev/null || fail "older app replica policy refused"
+[ "$(kubectl kustomize "$(dirname "$OVERLAY")" | yq -N 'select(.kind == "Deployment") | .spec.replicas')" = 1 ] \
+  || fail "older app replica policy overrode the platform footprint"
+echo "PASS: platform rollout policy survives older app sources with missing or conflicting policy"
 
 # The digest follows the final composed consumer, not just one routing source.
 cp "$APP_SRC/$SUBPATH/configmap.yaml" "$TMPROOT/config-original.yaml"

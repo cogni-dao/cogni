@@ -1729,10 +1729,9 @@ jobs:
           path: ${{ runner.temp }}/
 
       - name: Reconcile scheduler-worker routing (propagate to per-env deploy branch)
-        working-directory: app-src
         env:
           GH_TOKEN: ${{ steps.deploy-app.outputs.token || github.token }}
-          APP_SOURCE_DIR: "."
+          APP_SOURCE_DIR: ${{ github.workspace }}/app-src
           DEPLOY_BRANCH_DIR: ${{ github.workspace }}/deploy-branch
           SWR_RECONCILE_SUMMARY_FILE: ${{ runner.temp }}/swr-reconcile-summary.json
           SWR_RECONCILE_HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
@@ -1742,12 +1741,7 @@ jobs:
           SWR_RECONCILE_STATUS_URL: ${{ needs.decide.outputs.status_url }}
         run: |
           set -euo pipefail
-          # Flights run on a main-merge ref; a head predating this script should
-          # skip rather than 127 (its routing already shipped via deploy-infra).
-          if [ ! -f scripts/ci/reconcile-scheduler-worker-routing.sh ]; then
-            echo "::warning::scripts/ci/reconcile-scheduler-worker-routing.sh absent at this ref — skipping routing reconcile"
-            exit 0
-          fi
+          # The workflow checkout owns candidate policy across app revisions.
           bash scripts/ci/reconcile-scheduler-worker-routing.sh candidate-a
 
       - name: Promote scheduler-worker in the same branch transaction

@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 #
 # CANDIDATE ONLY: one worker, matching production's constrained-VM pattern.
+# Reconciled from the workflow source when an older application revision flies.
 # The shared control VM has no safe memory headroom for two worker processes.
 # Starvation threatens every workload, including the control plane responsible
 # for recovery. One Temporal poller preserves task semantics at reduced redundancy.
