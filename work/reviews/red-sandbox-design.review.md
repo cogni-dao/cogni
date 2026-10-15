@@ -38,6 +38,18 @@ Red's success sentence is "red-solver solves ≥1 non-web challenge in an egress
 
 The loop, telemetry, and scope-guard stay in LangGraph (ONE_RUN_EXECUTION_PATH). The MCP seam mirrors the browser graph. Durability fails closed on restart. Backpressure is honest. The v0 acceptance is a non-web solve plus ≥2 isolated concurrent sessions.
 
+## CEO correction (2026-10-15): the operator hosts the sandboxes; BYO is only the escape hatch
+
+The proper design is that the operator runs one sandbox service for every node:
+
+1. **Isolation:** [gVisor](https://github.com/google/gvisor) (Apache-2.0). Each session gets its own user-space kernel. It needs no KVM and runs on an ordinary VM.
+2. **Orchestration:** [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) (Apache-2.0). It provides a `Sandbox` CRD for stateful, singleton agent sessions with `runtimeClassName: gvisor`, plus egress NetworkPolicy per sandbox.
+3. **Host:** an operator-controlled k3s node, kept separate from the control/env VM per the tenancy standard, because sandbox load is the textbook noisy neighbor. It does not run on Akash: Akash tenants only submit an SDL container, and they cannot choose a runtime class, run privileged, or install a CRD/controller on the provider's cluster.
+4. **Node side:** node-template ships the shared `SandboxSessionPort` and an MCP tool (shell, fs, interactive). Per-node quotas and egress allowlists come from the catalog (tenancy standard verbs 1–8).
+5. **Sovereign (verb 9):** a node may point the same port at its own sandbox endpoint (for example E2B) by config.
+
+Red's cheap Akash capability spike stays optional. If gVisor or nsjail works inside an Akash lease, it can become a lower-cost placement for self-owned targets later.
+
 ## Verdict: REQUEST CHANGES
 
-Red can start P1 today on an E2B cloud key behind the new port, with no operator dependency. The operator story owns the `SandboxSessionPort` package and the sandbox substrate profile.
+The operator story owns the agent-sandbox + gVisor service, the `SandboxSessionPort` package, and the sandbox substrate profile. Red builds its MCP tools against the port, starting on a dev E2B key until the operator service lands.
