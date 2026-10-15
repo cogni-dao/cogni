@@ -10,8 +10,8 @@ umask 077
 kit_root="${DATABASE_CELL_BACKUP_KIT_ROOT:-/database-cell-backup}"
 backup_root="${DB_BACKUP_ROOT:-/backups}/database-cells"
 minimum_free_mib="${DATABASE_CELL_BACKUP_MIN_FREE_MIB:-15000}"
-maximum_archive_mib="${DATABASE_CELL_BACKUP_MAX_ARCHIVE_MIB:-4096}"
-retain="${DATABASE_CELL_BACKUP_RETAIN:-3}"
+maximum_archive_mib="${DATABASE_CELL_BACKUP_MAX_ARCHIVE_MIB:-2800}"
+retain="${DATABASE_CELL_BACKUP_RETAIN:-1}"
 interval_seconds="${DATABASE_CELL_BACKUP_INTERVAL_SECONDS:-900}"
 jitter_seconds="${DATABASE_CELL_BACKUP_MAX_JITTER_SECONDS:-61}"
 for setting in minimum_free_mib maximum_archive_mib retain interval_seconds jitter_seconds; do
@@ -31,6 +31,14 @@ mkdir -p "$backup_root"
 partial=""
 trap '[[ -z "$partial" ]] || rm -rf "$partial"' EXIT
 found=0
+prune_completed() {
+  local target_root=$1 kept=0 existing
+  while IFS= read -r existing; do
+    [[ -f "$existing/receipt.json" && -f "$existing/MANIFEST.sha256" && -f "$existing/database.dump.enc" && ! -f "$existing/PINNED" ]] || continue
+    kept=$((kept + 1))
+    [[ "$kept" -le "$retain" ]] || rm -rf "$existing"
+  done < <(find "$target_root" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | sort -r)
+}
 for kit in "$kit_root"/*; do
   [[ -d "$kit" ]] || continue
   [[ -s "$kit/targets.tsv" && -s "$kit/pg_service.conf" && -s "$kit/encryption.key" && -s "$kit/ca.crt" ]] || exit 2
@@ -40,6 +48,11 @@ for kit in "$kit_root"/*; do
     [[ "$service" =~ ^[a-z][a-z0-9_]*$ && "$database" =~ ^cogni_[a-z0-9_]+$ ]] || exit 2
     [[ "$environment" =~ ^(candidate-a|preview|production)$ && "$node_id" =~ ^[0-9a-f-]{36}$ && "$binding_system" =~ ^[0-9]+$ ]] || exit 2
     found=1
+    target_root="$backup_root/$node_id/$environment/$database"
+    mkdir -p "$target_root"
+    # Keep the latest completed point and every pin while freeing only excess
+    # cell-specific completed points before admitting another bounded archive.
+    prune_completed "$target_root"
     free_mib="$(df -Pm "$backup_root" | awk 'NR==2 {print $4}')"
     [[ "$free_mib" =~ ^[0-9]+$ && "$free_mib" -ge $((minimum_free_mib + maximum_archive_mib)) ]] || {
       echo 'independent backup filesystem lacks bounded archive headroom' >&2; exit 1;
@@ -60,8 +73,6 @@ SQL
     started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     started_epoch="$(date +%s)"
     receipt_id="$(cat /proc/sys/kernel/random/uuid)"
-    target_root="$backup_root/$node_id/$environment/$database"
-    mkdir -p "$target_root"
     partial="$target_root/.${receipt_id}.partial"
     mkdir "$partial"
     archive="$partial/database.dump.enc"
@@ -83,10 +94,11 @@ SQL
     duration_seconds="$(( $(date +%s) - started_epoch + 1 ))"
     # Both sealed allocation and fresh native identity must agree. Scheduled
     # provenance is proven by timer/unit ground truth.
-    printf '{"version":1,"event":"database_cell.backup_completed","receiptId":"%s","nodeId":"%s","environment":"%s","database":"%s","bindingSystemIdentifier":"%s","startedAt":"%s","completedAt":"%s","durationSeconds":%s,"archiveBytes":%s,"archiveSha256":"%s","intervalSeconds":%s,"maximumJitterSeconds":%s,"rpoBoundSeconds":%s}\n' \
+    printf '{"version":1,"event":"database_cell.backup_completed","receiptId":"%s","nodeId":"%s","environment":"%s","database":"%s","bindingSystemIdentifier":"%s","startedAt":"%s","completedAt":"%s","durationSeconds":%s,"archiveBytes":%s,"archiveSha256":"%s","intervalSeconds":%s,"maximumJitterSeconds":%s,"rpoBoundSeconds":%s,"maximumArchiveMiB":%s,"minimumFreeMiB":%s,"retainUnpinned":%s}\n' \
       "$receipt_id" "$node_id" "$environment" "$database" "$binding_system" \
       "$started_at" "$completed_at" "$duration_seconds" "$archive_bytes" "$archive_sha" \
       "$interval_seconds" "$jitter_seconds" "$((interval_seconds + jitter_seconds + duration_seconds))" \
+      "$maximum_archive_mib" "$minimum_free_mib" "$retain" \
       > "$partial/receipt.json"
     (cd "$partial" && sha256sum database.dump.enc receipt.json > MANIFEST.sha256)
     final="$target_root/$(date -u +%Y%m%dT%H%M%SZ)-$receipt_id"
@@ -94,12 +106,7 @@ SQL
     partial=""
     # A cutover packet may pin its exact restore point. Prune only unpinned
     # completed artifacts; the free-space gate still bounds future writes.
-    kept=0
-    while IFS= read -r existing; do
-      [[ -f "$existing/receipt.json" && ! -f "$existing/PINNED" ]] || continue
-      kept=$((kept + 1))
-      [[ "$kept" -le "$retain" ]] || rm -rf "$existing"
-    done < <(find "$target_root" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | sort -r)
+    prune_completed "$target_root"
     cat "$final/receipt.json"
   done < "$kit/targets.tsv"
 done
