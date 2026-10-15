@@ -81,7 +81,7 @@ describe("flight-probe credential projection route", () => {
       status: 401,
       durationMs: expect.any(Number),
       outcome: "error",
-      errorCode: "unauthorized",
+      errorCode: "projection_denied",
     });
   });
 
