@@ -45,6 +45,7 @@ const CANDIDATE_OPERATOR_OVERLAY = readFileSync(
 
 interface WorkflowStep {
   name?: string;
+  "working-directory"?: string;
   if?: string;
   env?: Record<string, unknown>;
   run?: string;
@@ -211,30 +212,31 @@ describe("candidate-a manifest source", () => {
     );
   });
 
-  it("preserves the full PR target set for a same-repo node-ref", () => {
+  it("consumes complete release scope and pinned digests without recovering a PR", () => {
     const meta = namedStep("decide", "Resolve PR metadata").run;
-    const files = namedStep("decide", "Fetch PR changed-paths from GitHub API");
+    const release = namedStep("decide", "Resolve immutable build release");
+    const files = namedStep("decide", "Load release changed paths");
     const combine = namedStep("decide", "Combine flight targets");
     const images = namedStep("decide", "Resolve PR image digests");
 
-    expect(meta).toContain(
-      '"repos/${{ github.repository }}/commits/${NODE_SOURCE_SHA}/pulls"'
+    expect(meta).not.toContain("MATCHING_PRS");
+    expect(meta).not.toContain("/commits/");
+    expect(WORKFLOW).not.toMatch(/pulls\/.*\/files/);
+    expect(release.if).toBe("steps.meta.outputs.in_repo_source == 'true'");
+    expect(release["working-directory"]).toBe("nodes/operator/app");
+    expect(release.run).toBe("pnpm exec tsx scripts/resolve-build-release.ts");
+    expect(files.env?.CHANGED_PATHS_FILE).toBe(
+      "${{ steps.release.outputs.changed_paths_file }}"
     );
-    expect(meta).toContain('RESOLVED_PR_NUMBER="${MATCHING_PRS[0]}"');
-    expect(files.env?.RESOLVED_PR_NUMBER).toBe(
-      "${{ steps.meta.outputs.resolved_pr_number }}"
+    expect(combine.env?.NORMAL_FLIGHT_TARGETS_JSON).toContain(
+      "steps.release.outputs.flight_targets_json"
     );
-    expect(files.run).toContain(
-      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
+    expect(combine.env?.BASE_SHA).toBe("${{ steps.release.outputs.base_sha }}");
+    expect(images.env?.PINNED_BUILD_IMAGES_FILE).toBe(
+      "${{ steps.release.outputs.resolved_file }}"
     );
-    expect(combine.run).toContain(
-      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
-    );
+    expect(images.run).toContain('if [ "$IN_REPO_SOURCE" != true ]; then');
     expect(combine.run).toContain("items = ([node] if node else []) + items");
-    expect(images.run).toContain(
-      'if [ -n "$NODE" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
-    );
-    expect(images.run).toContain("resolve-pr-build-images.sh");
   });
 
   it("fails a node-ref before mutation when its exact image is absent", () => {

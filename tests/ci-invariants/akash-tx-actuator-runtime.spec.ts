@@ -585,9 +585,7 @@ describe("akash-tx-actuator runtime", () => {
     expect(combine).toContain(
       'REMOTE_DEPLOYMENT_TARGETS_JSON="$remote_deployment_targets"'
     );
-    expect(combine).toContain(
-      'if [ -n "$NODE_SLUG" ] && [ -z "$RESOLVED_PR_NUMBER" ]; then'
-    );
+    expect(combine).toContain('if [ "$IN_REPO_SOURCE" != true ]; then');
     expect(combine).not.toContain(
       'json.loads(os.environ["REMOTE_SOURCE_ARTIFACT_TARGETS_JSON"] or "[]") +'
     );

@@ -202,6 +202,26 @@ The deployment coordinate for a deployable artifact is `sourceSha`, paired with 
 5. `candidate-flight.yml` resolves `image_repository:sha-<sourceSha>` to an artifact record and writes `deploy/candidate-a-<target>` state.
 6. Candidate validation asserts `/version.buildSha == sourceSha`.
 
+For in-repo flights, the immutable `build-manifest-<sourceSha>` CI artifact is
+the release record. Version 2 carries the source repository/SHA, the build-time
+base SHA and changed/added paths, the complete build/flight target sets, and
+pinned image digests. Deployment consumes this scope rather than recovering an
+open PR or rediscovering whatever image tags happen to exist. A legacy explicit
+PR input may normalize to its source SHA; PR identity remains review metadata.
+
+The typed release resolver verifies the successful PR Build producer, repository
+and source binding, bounded archive size and SHA-256 integrity, schema, and
+complete declared/produced target equality before any deploy-state mutation.
+Compatible build records may coexist; conflicting scope/digests for the same
+source fail closed. The selected immutable artifact ID and archive digest form
+the flight receipt. Missing, expired, or legacy records require a fresh build;
+there is no partial-image or single-target fallback for an in-repo release.
+GitHub artifact retention bounds this carrier's lifetime; it is not a permanent
+release archive or a claim that downstream promotion has adopted the record.
+Legacy v1 artifacts may remain in retention after a v2 rebuild; they carry no
+deployment authority once a validated v2 record is available.
+Remote-source nodes continue to use their declared source-SHA OCI bundle lane.
+
 `pr-*`, `mq-*`, and `preview-*` tags are transitional/control-plane artifact aliases for legacy in-repo build mechanics. They may exist while workflows are being migrated, but no node deploy request should use them as artifact identity.
 
 ### Main Lane

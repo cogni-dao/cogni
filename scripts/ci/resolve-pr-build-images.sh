@@ -45,6 +45,7 @@ IMAGE_TAG=${IMAGE_TAG:-}
 SOURCE_SHA=${SOURCE_SHA:-}
 OUTPUT_FILE=${OUTPUT_FILE:-${RUNNER_TEMP:-/tmp}/resolved-pr-images.json}
 REMOTE_SOURCE_ARTIFACT_TARGETS_FILE=${REMOTE_SOURCE_ARTIFACT_TARGETS_FILE:-}
+PINNED_BUILD_IMAGES_FILE=${PINNED_BUILD_IMAGES_FILE:-}
 
 if [ -z "$IMAGE_TAG" ]; then
   echo "[ERROR] IMAGE_TAG is required" >&2
@@ -98,6 +99,13 @@ mkdir -p "$(dirname "$OUTPUT_FILE")"
 json_items=()
 resolved_targets=()
 
+if [ -n "$PINNED_BUILD_IMAGES_FILE" ]; then
+  # The typed release resolver has already validated this complete producer set.
+  # Carry its digests forward instead of rediscovering a partial registry set.
+  jq -e '.targets | type == "array"' "$PINNED_BUILD_IMAGES_FILE" >/dev/null
+  mapfile -t json_items < <(jq -c '.targets[]' "$PINNED_BUILD_IMAGES_FILE")
+  mapfile -t resolved_targets < <(jq -r '.targets[].target' "$PINNED_BUILD_IMAGES_FILE")
+else
 for target in "${ALL_TARGETS[@]}"; do
   if ! is_built_by_this_repo "$target"; then
     continue
@@ -108,6 +116,7 @@ for target in "${ALL_TARGETS[@]}"; do
     resolved_targets+=("$target")
   fi
 done
+fi
 
 if [ -n "$REMOTE_SOURCE_ARTIFACT_TARGETS_FILE" ] && [ -f "$REMOTE_SOURCE_ARTIFACT_TARGETS_FILE" ]; then
   while IFS=$'\t' read -r target source_repo item_source_sha image_repository full_tag; do

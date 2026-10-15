@@ -11,6 +11,7 @@ set -euo pipefail
 
 IMAGES_FILE=${IMAGES_FILE:-${RUNNER_TEMP:-/tmp}/build-images.json}
 MANIFEST_FILE=${MANIFEST_FILE:-${RUNNER_TEMP:-/tmp}/build-manifest.json}
+SCOPE_FILE=${SCOPE_FILE:-${RUNNER_TEMP:-/tmp}/build-scope.json}
 PR_NUMBER=${PR_NUMBER:-}
 HEAD_SHA=${HEAD_SHA:-${GITHUB_SHA:-}}
 REPOSITORY=${REPOSITORY:-${GITHUB_REPOSITORY:-}}
@@ -24,9 +25,8 @@ if [ ! -f "$IMAGES_FILE" ]; then
   exit 1
 fi
 
-# PR_NUMBER is informational provenance only (the manifest is not load-bearing —
-# deploy identity is sha-<HEAD_SHA>). It is empty on a direct push to main with no
-# `(#NNN)` subject; record null rather than hard-failing.
+# PR_NUMBER is informational provenance only. SHA-addressed flights consume this
+# release's complete scope and pinned digests; they never recover a PR from a SHA.
 
 if [ -z "$HEAD_SHA" ]; then
   echo "[ERROR] HEAD_SHA is required" >&2
@@ -35,7 +35,7 @@ fi
 
 mkdir -p "$(dirname "$MANIFEST_FILE")"
 
-python3 - "$IMAGES_FILE" "$MANIFEST_FILE" <<'PY'
+python3 - "$IMAGES_FILE" "$MANIFEST_FILE" "$SCOPE_FILE" <<'PY'
 import json
 import os
 import sys
@@ -46,9 +46,11 @@ manifest_path = sys.argv[2]
 
 with open(images_path, "r", encoding="utf-8") as handle:
     images = json.load(handle)
+with open(sys.argv[3], "r", encoding="utf-8") as handle:
+    scope = json.load(handle)
 
 manifest = {
-    "schema_version": 1,
+    "schema_version": 2,
     "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "repository": os.environ["REPOSITORY"],
     "pr_number": int(os.environ["PR_NUMBER"]) if os.environ.get("PR_NUMBER") else None,
@@ -63,6 +65,7 @@ manifest = {
     "image_tag": images["image_tag"],
     "platform": images["platform"],
     "targets": images["targets"],
+    "scope": scope,
 }
 
 with open(manifest_path, "w", encoding="utf-8") as handle:

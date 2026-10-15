@@ -99,6 +99,10 @@ export type {
   PreflightCreditCheckFn,
 } from "./billing-context";
 export type {
+  BuildReleaseArtifact,
+  BuildReleasePort,
+} from "./build-release.port";
+export type {
   CatalogNodeOwnerProjection,
   CatalogNodeRegistryPort,
   CatalogNodeRegistryReconcileSummary,
