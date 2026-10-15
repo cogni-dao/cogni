@@ -122,7 +122,7 @@ const HISTORICAL_UID_PREFIX = [
 ] as const;
 
 describe("fleet Serve alert contract (bug.5459)", () => {
-  it("binds regional serve success to a deployed SHA response and denies missing receipts", () => {
+  it("keeps continuous availability independent of release SHA receipts (bug.5484)", () => {
     const serveCheck = syntheticMain.slice(
       syntheticMain.indexOf(
         'resource "grafana_synthetic_monitoring_check" "environment_readyz"'
@@ -133,29 +133,57 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     );
     expect(serveCheck).toContain("for_each = local.environment_targets");
     expect(serveCheck).toContain("no_follow_redirects = true");
-    expect(serveCheck).toContain(
-      "toset(keys(var.serve_build_shas)) == toset(keys(local.environment_targets))"
+    expect(serveCheck).toContain("fail_if_not_ssl     = true");
+    expect(serveCheck).toContain("valid_status_codes  = [200]");
+    expect(serveCheck).toContain("timeout            = 5000");
+    expect(serveCheck).not.toContain("serve_build_shas");
+    expect(serveCheck).not.toContain("target_build_sha");
+    expect(serveCheck).not.toContain("buildSha");
+    expect(serveCheck).not.toContain("precondition");
+
+    const matcherList = serveCheck.match(
+      /fail_if_body_not_matches_regexp\s*=\s*\[([\s\S]*?)^ {6}\]/m
+    )?.[1];
+    expect(matcherList).toBeDefined();
+    // Parse the actual configured matcher, including its HCL string escapes.
+    const configuredMatchers = [
+      ...(matcherList ?? "").matchAll(/"(?:\\.|[^"\\])*"/g),
+    ]
+      .map(([literal]) => JSON.parse(literal) as string)
+      .map(
+        (expression) => new RegExp(expression.replaceAll("[[:space:]]", "\\s"))
+      );
+    expect(configuredMatchers).toHaveLength(1);
+    const matchesHealthyBody = (body: string) =>
+      configuredMatchers.every((matcher) => matcher.test(body));
+    const expectedSha = "a".repeat(40);
+    const actualSha = "b".repeat(40);
+    expect(
+      matchesHealthyBody(
+        JSON.stringify({ status: "healthy", buildSha: expectedSha })
+      )
+    ).toBe(true);
+    expect(
+      matchesHealthyBody(
+        JSON.stringify({ status: "healthy", buildSha: actualSha })
+      )
+    ).toBe(true);
+    expect(
+      matchesHealthyBody(
+        JSON.stringify({ status: "unhealthy", buildSha: actualSha })
+      )
+    ).toBe(false);
+    expect(matchesHealthyBody(JSON.stringify({ buildSha: actualSha }))).toBe(
+      false
     );
-    expect(serveCheck).toContain("Refusing Grafana changes");
-    expect(serveCheck).toContain(
-      'lookup(var.serve_build_shas, each.key, "unverified")'
-    );
-    const bodyMatchers = serveCheck.slice(
-      serveCheck.indexOf("fail_if_body_not_matches_regexp")
-    );
-    expect(bodyMatchers).toContain("buildSha");
-    expect(bodyMatchers).toContain("${var.serve_build_shas[each.key]}");
-    expect(bodyMatchers).toContain(
-      "contains(keys(var.serve_build_shas), each.key)"
-    );
-    expect(bodyMatchers).toContain(': "a^"');
-    expect(/a^/.test('{"status":"healthy"}')).toBe(false);
+    expect(matchesHealthyBody("upstream unavailable")).toBe(false);
+
     expect(
       readFileSync(
         path.join(path.dirname(SYNTHETIC_MAIN_FILE), "variables.tf"),
         "utf8"
       )
-    ).toContain('regex("^[0-9a-f]{40}$", build_sha)');
+    ).not.toContain('variable "serve_build_shas"');
   });
 
   it("projects existing Grafana authority only to the actuator and keeps readmission query credentials isolated", () => {
