@@ -54,4 +54,20 @@ assert release["scope"] == json.loads((root / "scope.json").read_text())
 assert release["targets"] == json.loads((root / "images.json").read_text())["targets"]
 PY
 
+# A real CLI invocation must reach structured input validation before network IO.
+# This catches runtime facade/module-format failures hidden by unit-test aliases.
+if GH_TOKEN=fixture SOURCE_SHA=invalid GITHUB_REPOSITORY=fixture/repo \
+  RELEASE_OUTPUT_DIR="$TMPROOT/cli" GITHUB_OUTPUT="$TMPROOT/cli.out" \
+  CATALOG_ROOT="$REPO_ROOT/infra/catalog" NODE_SLUG=operator \
+  pnpm --dir "$REPO_ROOT/nodes/operator/app" exec tsx scripts/resolve-build-release.ts \
+  >"$TMPROOT/cli.stdout" 2>"$TMPROOT/cli.stderr"; then
+  echo "FAIL: invalid CLI source must be rejected" >&2
+  exit 1
+fi
+python3 - "$TMPROOT/cli.stderr" <<'PY'
+import json, pathlib, sys
+events = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.startswith('{"event":')]
+assert any(event.get("event") == "build_release.rejected" and event.get("code") == "release_invalid" for event in events), events
+PY
+
 echo "PASS: candidate-build-release.test.sh"

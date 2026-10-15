@@ -12,11 +12,8 @@ import { promisify } from "node:util";
 import { Octokit } from "@octokit/core";
 import { z } from "zod";
 
-import {
-  type BuildReleaseArtifact,
-  BuildReleaseError,
-  type BuildReleasePort,
-} from "@/ports";
+import type { BuildReleaseArtifact, BuildReleasePort } from "@/ports";
+import { BuildReleaseError } from "@/shared/vcs/build-release-error";
 
 const execFileAsync = promisify(execFile);
 const MAX_BYTES = 2 * 1024 * 1024;

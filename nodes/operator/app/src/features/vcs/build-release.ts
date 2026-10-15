@@ -4,11 +4,8 @@
 /** SHA-addressed build scope and pinned artifacts; PR identity is optional provenance. */
 import { z } from "zod";
 
-import {
-  type BuildReleaseArtifact,
-  BuildReleaseError,
-  type BuildReleasePort,
-} from "@/ports";
+import type { BuildReleaseArtifact, BuildReleasePort } from "@/ports";
+import { BuildReleaseError } from "@/shared/vcs/build-release-error";
 
 const sha = z.string().regex(/^[a-f0-9]{40}$/);
 const target = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);

@@ -23,19 +23,3 @@ export interface BuildReleasePort {
     readonly sourceSha: string;
   }): Promise<readonly BuildReleaseArtifact[]>;
 }
-
-export class BuildReleaseError extends Error {
-  constructor(
-    readonly code:
-      | "release_missing"
-      | "release_invalid"
-      | "release_provenance"
-      | "release_conflict"
-      | "release_integrity"
-      | "release_unavailable",
-    message: string
-  ) {
-    super(message);
-    this.name = "BuildReleaseError";
-  }
-}

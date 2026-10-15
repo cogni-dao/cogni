@@ -102,7 +102,6 @@ export type {
   BuildReleaseArtifact,
   BuildReleasePort,
 } from "./build-release.port";
-export { BuildReleaseError } from "./build-release.port";
 export type {
   CatalogNodeOwnerProjection,
   CatalogNodeRegistryPort,

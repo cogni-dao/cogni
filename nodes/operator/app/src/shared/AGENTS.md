@@ -49,6 +49,7 @@ App-local building blocks that cannot be extracted to `@cogni/node-shared` (env,
   - Wagmi chain adapter (`evm-wagmi.ts`, `wagmi.config.ts`) — wagmi/chains runtime dep
   - Onchain client interface (`onchain/`) — viem types
   - Server logger (`observability/server/logger.ts`) — pino runtime
+  - Build release failure primitive (`vcs/build-release-error.ts`) — credential-free error codes shared by the CI policy and artifact carrier
   - Metrics (`observability/server/metrics.ts`) — prom-client runtime
   - Redact paths (`observability/server/redact.ts`) — fast-safe-stringify
   - CSS utility (`util/cn.ts`) — clsx + tailwind-merge

@@ -15,7 +15,7 @@ import { z } from "zod";
 
 import { GitHubBuildReleaseAdapter } from "../src/adapters/server/vcs/github-build-release";
 import { resolveBuildRelease } from "../src/features/vcs/build-release";
-import { BuildReleaseError } from "../src/ports";
+import { BuildReleaseError } from "../src/shared/vcs/build-release-error";
 
 async function main(): Promise<void> {
   const environmentSchema = z.object({
