@@ -165,6 +165,78 @@ describe("akash-tx dispatcher", () => {
     expect(received).toEqual([input]);
     expect(JSON.stringify(response.body)).not.toContain("Password");
   });
+  it("invokes only the owned diagnostic observer after auth and strict reference validation", async () => {
+    const received: unknown[] = [];
+    const observation = {
+      version: 1,
+      action: "diagnostic-status",
+      nodeId: IDENTITY.nodeId,
+      sourceSha: "a".repeat(40),
+      targetBuildSha: "b".repeat(40),
+      systemIdentifier: "1",
+      failureDomainId: "akash:neutral:1",
+      parentRolesContained: true,
+      parentRuntimeSessions: 0,
+      replayRole: "replay_toks9_diagnostic",
+      replayConnections: 8,
+      connectionLimit: 8,
+      cellSubstrate: {
+        version: 1 as const,
+        scope: "dedicated-cell" as const,
+        sourceSha: "a".repeat(40),
+        observedAt: "2026-10-15T00:00:00Z",
+        ioPressurePct: 0,
+        connectionPct: 10,
+        memoryHeadroomPct: 80,
+        diskHeadroomPct: 80,
+      },
+      observedAt: "2026-10-15T00:00:00Z",
+    };
+    const dispatch = createAkashTxDispatcher({
+      actuator: stubActuator(),
+      token: TOKEN,
+      databaseCellDiagnostic: async () => {
+        throw Error("observer must not clone");
+      },
+      databaseCellDiagnosticObserve: async (input) => {
+        received.push(input);
+        return observation;
+      },
+    });
+    const input = {
+      cogniKey: "cell/production/toks9/1",
+      environment: "production",
+      identity: IDENTITY,
+      nodeSlug: "toks9",
+      budgetProfile: "dedicated-high-throughput-v1",
+      externalName: "7001",
+    };
+    const request = {
+      method: "POST",
+      path: "/v1/akash/observe-database-cell-diagnostic",
+      authorization: AUTH,
+      body: JSON.stringify(input),
+    };
+    const { authorization: _authorization, ...unauthenticated } = request;
+    expect((await dispatch(unauthenticated)).status).toBe(401);
+    for (const override of [
+      { endpoint: "foreign.example" },
+      { rootPassword: "caller-secret" },
+      { databaseName: "foreign_db" },
+    ])
+      expect(
+        (
+          await dispatch({
+            ...request,
+            body: JSON.stringify({ ...input, ...override }),
+          })
+        ).status
+      ).toBe(400);
+    expect(received).toEqual([]);
+    expect(await dispatch(request)).toEqual({ status: 200, body: observation });
+    expect(received).toEqual([input]);
+    expect((await dispatcherFor(stubActuator())(request)).status).toBe(503);
+  });
   it("denies diagnostic preparation when its private executor is unavailable", async () => {
     const response = await dispatcherFor(stubActuator())({
       method: "POST",

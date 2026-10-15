@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import postgres from "postgres";
+import { z } from "zod";
 import { AkashTxError } from "@/ports";
 import type {
   DatabaseCellBinding,
@@ -42,7 +43,8 @@ const identifier = (value: string) => `"${value.replaceAll('"', '""')}"`;
 function privateClient(
   kit: DatabaseCellBootstrapKit,
   binding: DatabaseCellBinding,
-  database: string
+  database: string,
+  statementTimeoutMs = 600000
 ) {
   const url = new URL("postgres://cell.invalid");
   url.hostname = binding.endpoint.host;
@@ -57,7 +59,7 @@ function privateClient(
     idle_timeout: 1,
     connection: {
       application_name: "database-cell-diagnostic",
-      statement_timeout: 600000,
+      statement_timeout: statementTimeoutMs,
       search_path: "pg_catalog,pg_temp",
     },
   });
@@ -181,11 +183,18 @@ export async function prepareDatabaseCellDiagnostic(
       await clone`SELECT format('GRANT USAGE ON SCHEMA %I TO %I; GRANT SELECT ON ALL TABLES IN SCHEMA %I TO %I; GRANT SELECT ON ALL SEQUENCES IN SCHEMA %I TO %I',nspname,${diagnostic.replayRole}::text,nspname,${diagnostic.replayRole}::text,nspname,${diagnostic.replayRole}::text) AS command
       FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema','cogni_control') AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%'`;
     for (const grant of grants) await clone.unsafe(String(grant.command));
+    const [identityDefinition] = await clone`SELECT format(
+      'CREATE OR REPLACE FUNCTION public.database_replay_identity() RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS %L',
+      format('BEGIN IF session_user <> %L THEN RAISE EXCEPTION ''scoped replay identity required'' USING ERRCODE=''42501''; END IF; RETURN (SELECT jsonb_build_object(''databaseName'',current_database(),''role'',session_user,''systemIdentifier'',system_identifier::text,''sourceSha'',%L) FROM pg_control_system()); END', ${diagnostic.replayRole}::text,${actuatorBuildSha}::text)) AS command`;
+    await clone.unsafe(String(identityDefinition?.command));
+    await clone.unsafe(
+      `REVOKE ALL ON FUNCTION public.database_replay_identity() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.database_replay_identity() TO ${identifier(diagnostic.replayRole)}`
+    );
     const [isolation] = await clone`SELECT
       NOT EXISTS(SELECT 1 FROM pg_auth_members WHERE member=${diagnostic.replayRole}::regrole)
       AND NOT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema' AND has_schema_privilege(${diagnostic.replayRole},oid,'CREATE'))
       AND NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' AND c.relkind IN ('r','p','v','m','f') AND has_table_privilege(${diagnostic.replayRole},c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
-      AND NOT EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' AND p.prosecdef AND has_function_privilege(${diagnostic.replayRole},p.oid,'EXECUTE')) AS valid`;
+      AND NOT EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' AND p.prosecdef AND p.oid <> 'public.database_replay_identity()'::regprocedure AND has_function_privilege(${diagnostic.replayRole},p.oid,'EXECUTE')) AS valid`;
     if (isolation?.valid !== true)
       throw new Error("diagnostic role privilege drift");
     await root.unsafe(`ALTER ROLE ${identifier(diagnostic.replayRole)} LOGIN`);
@@ -220,6 +229,104 @@ export async function prepareDatabaseCellDiagnostic(
   } finally {
     await source?.end({ timeout: 5 });
     await clone?.end({ timeout: 5 });
+    await root.end({ timeout: 5 });
+  }
+}
+
+/** Fixed resource metadata read during all eight replay sessions; no ninth replay login. */
+export async function observeDatabaseCellDiagnostic(
+  kit: DatabaseCellBootstrapKit,
+  binding: DatabaseCellBinding,
+  actuatorBuildSha: string
+) {
+  if (
+    !kit.diagnostic ||
+    binding.phase !== "ready" ||
+    binding.environment !== "production" ||
+    kit.nodeId !== binding.nodeId ||
+    kit.sourceSha !== actuatorBuildSha ||
+    binding.sourceSha !== actuatorBuildSha ||
+    binding.endpoint.tlsMode !== "verify-full" ||
+    isIP(binding.endpoint.host)
+  )
+    throw new AkashTxError(
+      "invalid_request",
+      "private diagnostic scope unavailable"
+    );
+  const root = privateClient(kit, binding, kit.diagnostic.databaseName, 5000);
+  try {
+    const [identity] =
+      await root`SELECT system_identifier::text AS id FROM pg_control_system()`;
+    const [fence] = await root`SELECT count(*)=2 AND bool_and(NOT rolcanlogin)
+      AND NOT EXISTS(SELECT 1 FROM pg_stat_activity WHERE usename IN (${binding.appRole},${binding.serviceRole})) AS valid
+      FROM pg_roles WHERE rolname IN (${binding.appRole},${binding.serviceRole})`;
+    const [role] = await root`SELECT rolconnlimit AS limit,rolcanlogin AS login,
+        rolbypassrls AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
+        AND NOT rolreplication AND NOT rolinherit
+        AND NOT EXISTS(SELECT 1 FROM pg_auth_members WHERE member=role.oid)
+        AND NOT EXISTS(SELECT 1 FROM pg_db_role_setting WHERE setrole=role.oid AND setdatabase<>0)
+        AND rolconfig @> ARRAY['default_transaction_read_only=on','statement_timeout=2000ms',
+          'lock_timeout=2000ms','idle_in_transaction_session_timeout=30000ms','temp_file_limit=128MB','work_mem=16MB']
+        AND NOT has_database_privilege(rolname,current_database(),'CREATE')
+        AND NOT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema' AND has_schema_privilege(rolname,oid,'CREATE'))
+        AND NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' AND c.relkind IN ('r','p','v','m','f') AND has_table_privilege(rolname,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
+        AND NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' AND CASE WHEN c.relkind='S' THEN has_sequence_privilege(rolname,c.oid,'USAGE,UPDATE') ELSE false END)
+        AND NOT EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' AND p.prosecdef AND p.oid<>'public.database_replay_identity()'::regprocedure AND has_function_privilege(rolname,p.oid,'EXECUTE')) AS isolated
+        FROM pg_roles role WHERE rolname=${kit.diagnostic.replayRole}`;
+    const [sessions] =
+      await root`SELECT count(*) AS count FROM pg_stat_activity WHERE usename=${kit.diagnostic.replayRole}`;
+    const [snapshot] =
+      await root`WITH snapshot AS (SELECT pg_read_file('/run/database-cell/health.json',0,4096)::jsonb AS health)
+      SELECT health, (health->>'observedAt')::timestamptz <= clock_timestamp()
+        AND (health->>'observedAt')::timestamptz >= clock_timestamp()-interval '5 seconds' AS fresh FROM snapshot`;
+    const percent = z.number().min(0).max(100);
+    const health = z
+      .object({
+        version: z.literal(1),
+        scope: z.literal("dedicated-cell"),
+        sourceSha: z.literal(actuatorBuildSha),
+        observedAt: z.string().datetime(),
+        ioPressurePct: percent,
+        connectionPct: percent,
+        memoryHeadroomPct: percent,
+        diskHeadroomPct: percent,
+      })
+      .strict()
+      .parse(snapshot?.health);
+    if (
+      identity?.id !== binding.systemIdentifier ||
+      fence?.valid !== true ||
+      role?.limit !== 8 ||
+      role.login !== true ||
+      role.isolated !== true ||
+      snapshot?.fresh !== true ||
+      !Number.isInteger(Number(sessions?.count)) ||
+      Number(sessions?.count) < 0 ||
+      Number(sessions?.count) > 8
+    )
+      throw new Error("diagnostic native identity or fence mismatch");
+    return {
+      version: 1,
+      action: "diagnostic-status",
+      nodeId: binding.nodeId,
+      sourceSha: actuatorBuildSha,
+      targetBuildSha: kit.diagnostic.targetBuildSha,
+      systemIdentifier: binding.systemIdentifier,
+      failureDomainId: binding.failureDomainId,
+      parentRolesContained: true,
+      parentRuntimeSessions: 0,
+      replayRole: kit.diagnostic.replayRole,
+      replayConnections: Number(sessions?.count),
+      connectionLimit: role.limit,
+      cellSubstrate: health,
+      observedAt: new Date().toISOString(),
+    };
+  } catch {
+    throw new AkashTxError(
+      "provider_unavailable",
+      "private diagnostic observation failed"
+    );
+  } finally {
     await root.end({ timeout: 5 });
   }
 }

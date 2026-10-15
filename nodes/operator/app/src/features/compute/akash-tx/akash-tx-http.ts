@@ -62,7 +62,10 @@ import {
 } from "@/ports";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
-import type { DatabaseCellDiagnosticReceipt } from "./database-cell-diagnostic";
+import type {
+  DatabaseCellDiagnosticReceipt,
+  observeDatabaseCellDiagnostic,
+} from "./database-cell-diagnostic";
 
 /** Maximum accepted request body. A workload spec is kilobytes; anything larger is abuse. */
 export const AKASH_TX_MAX_BODY_BYTES = 1_048_576;
@@ -123,6 +126,11 @@ export interface AkashTxHttpDeps {
       typeof AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse
     >
   ) => Promise<DatabaseCellDiagnosticReceipt>;
+  readonly databaseCellDiagnosticObserve?: (
+    input: ReturnType<
+      typeof AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse
+    >
+  ) => ReturnType<typeof observeDatabaseCellDiagnostic>;
 }
 
 /**
@@ -262,6 +270,19 @@ export function createAkashTxDispatcher(
 
     try {
       switch (request.path) {
+        case "/v1/akash/observe-database-cell-diagnostic": {
+          const input =
+            AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse(payload);
+          if (!deps.databaseCellDiagnosticObserve)
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "private diagnostic observation unavailable"
+            );
+          return {
+            status: 200,
+            body: await deps.databaseCellDiagnosticObserve(input),
+          };
+        }
         case "/v1/akash/prepare-database-cell-diagnostic": {
           const input =
             AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse(payload);
