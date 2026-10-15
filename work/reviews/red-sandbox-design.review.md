@@ -50,6 +50,18 @@ The proper design is that the operator runs one sandbox service for every node:
 
 Red's cheap Akash capability spike stays optional. If gVisor or nsjail works inside an Akash lease, it can become a lower-cost placement for self-owned targets later.
 
+## Second CEO correction (2026-10-15): no operator-hosted sandboxes; they run on the node's own compute
+
+The first correction was wrong: operator-hosted sandboxes put every node's untrusted, bursty load onto operator headroom, which is the exact noisy-neighbor failure story.5085 exists to end. The proper design:
+
+1. **Sandbox = a node-declared optional service on the node's own Akash lease.** It scales with, and is paid by, the node. Operator headroom is zero.
+2. **Separate lease from the node app, with no secrets.** A compromised shell cannot reach the node's credentials or database. Egress is the catalog `compute_egress_cidrs` allowlist (fail-closed SDL).
+3. **Isolation = the Akash container boundary**, the same trust every Akash tenant already relies on. Concurrency is a warm pool of replicas: one session per replica, wiped and restarted between sessions. No nsjail, no privileged tier, no spike.
+4. **Node-template ships the parts:** the sandbox image + MCP ACI server (shell, fs, interactive), the shared `SandboxSessionPort`, and the catalog service declaration. The operator only places it, like any other node service.
+5. **MicroVM-class isolation only for untrusted public users**, through the sovereign `external` tier (for example E2B).
+
+Red's "red-ops sibling service on Red's own Akash deployment" was the right base. Drop per-session nsjail, the privileged Akash tier, and BLOCKER-0.
+
 ## Verdict: REQUEST CHANGES
 
 The operator story owns the agent-sandbox + gVisor service, the `SandboxSessionPort` package, and the sandbox substrate profile. Red builds its MCP tools against the port, starting on a dev E2B key until the operator service lands.
