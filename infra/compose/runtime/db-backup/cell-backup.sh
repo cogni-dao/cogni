@@ -14,9 +14,14 @@ maximum_archive_mib="${DATABASE_CELL_BACKUP_MAX_ARCHIVE_MIB:-2800}"
 retain="${DATABASE_CELL_BACKUP_RETAIN:-1}"
 interval_seconds="${DATABASE_CELL_BACKUP_INTERVAL_SECONDS:-900}"
 jitter_seconds="${DATABASE_CELL_BACKUP_MAX_JITTER_SECONDS:-61}"
+# Includes container startup and the bounded worker; matches the installed unit.
+scheduled_job_timeout_seconds=800
 for setting in minimum_free_mib maximum_archive_mib retain interval_seconds jitter_seconds; do
   [[ "${!setting}" =~ ^[1-9][0-9]*$ ]] || exit 2
 done
+[[ "$interval_seconds" -ge 900 && "$jitter_seconds" -ge 61 ]] || {
+  echo 'backup receipt cannot understate installed schedule bounds' >&2; exit 2;
+}
 if [[ "${DATABASE_CELL_BACKUP_BOUNDED_RUN:-0}" != 1 ]]; then
   # Covers metadata connects, dump, encryption, verification and retention. The
   # process group is terminated before the shortest jittered 15-minute spacing.
@@ -92,12 +97,14 @@ SQL
     archive_bytes="$(stat -c %s "$archive")"
     completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     duration_seconds="$(( $(date +%s) - started_epoch + 1 ))"
-    # Both sealed allocation and fresh native identity must agree. Scheduled
-    # provenance is proven by timer/unit ground truth.
-    printf '{"version":1,"event":"database_cell.backup_completed","receiptId":"%s","nodeId":"%s","environment":"%s","database":"%s","bindingSystemIdentifier":"%s","startedAt":"%s","completedAt":"%s","durationSeconds":%s,"archiveBytes":%s,"archiveSha256":"%s","intervalSeconds":%s,"maximumJitterSeconds":%s,"rpoBoundSeconds":%s,"maximumArchiveMiB":%s,"minimumFreeMiB":%s,"retainUnpinned":%s}\n' \
+    # A fast current dump cannot bound the NEXT scheduled job's completion.
+    # This conditional budget includes its full unit timeout. Missed/failed
+    # schedules require actual recovery-point age, not this nominal bound.
+    printf '{"version":1,"event":"database_cell.backup_completed","receiptId":"%s","nodeId":"%s","environment":"%s","database":"%s","bindingSystemIdentifier":"%s","startedAt":"%s","completedAt":"%s","durationSeconds":%s,"archiveBytes":%s,"archiveSha256":"%s","intervalSeconds":%s,"maximumJitterSeconds":%s,"rpoBoundSeconds":%s,"scheduledJobTimeoutSeconds":%s,"rpoAssumption":"successful_schedule_without_failed_or_skipped_runs","currentRpoBoundSeconds":null,"maximumArchiveMiB":%s,"minimumFreeMiB":%s,"retainUnpinned":%s}\n' \
       "$receipt_id" "$node_id" "$environment" "$database" "$binding_system" \
       "$started_at" "$completed_at" "$duration_seconds" "$archive_bytes" "$archive_sha" \
-      "$interval_seconds" "$jitter_seconds" "$((interval_seconds + jitter_seconds + duration_seconds))" \
+      "$interval_seconds" "$jitter_seconds" "$((interval_seconds + jitter_seconds + scheduled_job_timeout_seconds))" \
+      "$scheduled_job_timeout_seconds" \
       "$maximum_archive_mib" "$minimum_free_mib" "$retain" \
       > "$partial/receipt.json"
     (cd "$partial" && sha256sum database.dump.enc receipt.json > MANIFEST.sha256)
