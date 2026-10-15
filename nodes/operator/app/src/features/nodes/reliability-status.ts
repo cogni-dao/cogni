@@ -20,7 +20,6 @@ import { RELIABILITY_POLICY_V1 } from "@cogni/node-contracts";
 
 import type {
   DatabaseContainmentPort,
-  DatabaseContainmentReason,
   DatabaseContainmentStatus,
   DatabaseContainmentStatusPort,
   DatabaseRecoveryContainmentReceipt,
@@ -297,29 +296,7 @@ export async function reconcileReliabilityContainment(
         "dedicated database cell telemetry is not node-attributed",
     };
   }
-  const reason = containmentReason(status);
-  if (!reason || database.phase === "contained") return status;
-
-  const contained = await deps.containment.contain({
-    nodeId: input.nodeId,
-    nodeSlug: input.slug,
-    environment: input.environment,
-    incidentId: input.incidentId,
-    reason,
-    actorId: "system:reliability-controller.v1",
-    desiredTier: input.desiredTier,
-    budgetProfile: input.budgetProfile,
-    ...(input.cellId ? { cellId: input.cellId } : {}),
-  });
-  return {
-    ...status,
-    state: "contained",
-    databaseTier: contained.desiredTier,
-    budgetProfile: contained.budgetProfile,
-    incidentReason: status.incidentReason ?? "critical policy triggered",
-    lastTransitionAt: contained.lastTransitionAt,
-    incidentId: contained.incidentId,
-  };
+  return status;
 }
 
 /** One bounded actuator sweep. A failed target cannot suppress its neighbors. */
@@ -353,38 +330,6 @@ export async function runReliabilitySweep(
     }
   }
   return results;
-}
-
-const NOISY_NEIGHBOR_SHARE_PCT =
-  RELIABILITY_POLICY_V1.noisyNeighborSharePercent;
-
-function containmentReason(
-  status: ReliabilityStatusV1
-): DatabaseContainmentReason | null {
-  const reason = status.incidentReason;
-  const shares = status.utilization.databaseShare5m;
-  const shareValues = Object.values(shares);
-  const hasNodeAttribution =
-    status.utilization.evidenceScope === "node" &&
-    shareValues.every((value) => value !== null && Number.isFinite(value));
-  if (!hasNodeAttribution) return null;
-
-  if (
-    reason?.includes("I/O pressure critical") &&
-    ((shares.physicalReadsPct ?? 0) >= NOISY_NEIGHBOR_SHARE_PCT ||
-      (shares.tempBytesPct ?? 0) >= NOISY_NEIGHBOR_SHARE_PCT)
-  ) {
-    return "critical_io_pressure";
-  }
-  if (
-    reason?.includes("database connections critical") &&
-    (shares.backendsPct ?? 0) >= NOISY_NEIGHBOR_SHARE_PCT
-  ) {
-    return "critical_connections";
-  }
-  // Host memory/disk and regional availability have no causal per-database
-  // series in v1. They page a human but must never mutate a node role.
-  return null;
 }
 
 export function evaluateReliabilityPolicy(input: {

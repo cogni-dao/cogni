@@ -91,6 +91,7 @@ infra/compose/runtime/postgres-init/*
 infra/compose/runtime/postgres-init/control-migrations/*
 !infra/compose/runtime/postgres-init/control-migrations/0000_database_recovery_control.sql
 !infra/compose/runtime/postgres-init/control-migrations/0001_database_recovery_watchdog.sql
+!infra/compose/runtime/postgres-init/control-migrations/0003_disable_database_locking.sql
 scripts/ci
 scripts/bootstrap
 

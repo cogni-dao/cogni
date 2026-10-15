@@ -46,6 +46,13 @@ export async function setup() {
   const c = await new PostgreSqlContainer("postgres:15-alpine")
     .withCopyFilesToContainer([
       { source: PROVISION_SH, target: "/tmp/provision.sh" },
+      {
+        source: path.join(
+          path.dirname(PROVISION_SH),
+          "control-migrations/0003_disable_database_locking.sql"
+        ),
+        target: "/app/control-migrations/0003_disable_database_locking.sql",
+      },
     ])
     .start();
 
