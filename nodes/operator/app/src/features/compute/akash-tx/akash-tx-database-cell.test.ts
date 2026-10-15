@@ -55,6 +55,7 @@ const assets = {
   control: "control bytes",
   migration0: "migration zero bytes",
   migration1: "watchdog bytes",
+  lockingRetirement: "locking retirement bytes",
 };
 const reference = {
   nodeId,
@@ -102,6 +103,15 @@ describe("private database cell factory", () => {
     ).toBe(assets.migration1);
     expect(service.args?.[0]).toContain(
       "/app/control-migrations/0001_database_recovery_watchdog.sql"
+    );
+    expect(
+      Buffer.from(
+        service.env?.CELL_ASSET_LOCKINGRETIREMENT ?? "",
+        "base64"
+      ).toString()
+    ).toBe(assets.lockingRetirement);
+    expect(service.args?.[0]).toContain(
+      "/app/control-migrations/0003_disable_database_locking.sql"
     );
     expect(service.expose).toEqual([{ port: 5432, as: 5432, global: true }]);
   });

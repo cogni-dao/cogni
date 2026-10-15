@@ -517,10 +517,3 @@ patches:
       kind: EndpointSlice
       metadata:
         name: doltgres-external-1
-
-# Locking and automatic readmission are retired; retain the status actuator.
-replicas:
-  - name: database-reliability-watchdog
-    count: 0
-  - name: database-reliability-readmitter
-    count: 0

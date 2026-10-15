@@ -26,6 +26,8 @@ const ASSETS = {
   control: "/app/apply-control.sql",
   migration0: "/app/control-migrations/0000_database_recovery_control.sql",
   migration1: "/app/control-migrations/0001_database_recovery_watchdog.sql",
+  lockingRetirement:
+    "/app/control-migrations/0003_disable_database_locking.sql",
 } as const;
 export type DatabaseCellAssets = Readonly<Record<keyof typeof ASSETS, string>>;
 

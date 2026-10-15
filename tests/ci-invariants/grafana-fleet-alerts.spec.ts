@@ -207,7 +207,7 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     expect(source).not.toContain('credential("PROMETHEUS_READ_PASSWORD")');
   });
 
-  it("keeps the recovery watchdog independent and validates regional response identity", () => {
+  it("retires admission writers, preserves observation and validates regional identity", () => {
     const watchdogResources = yaml
       .parseAllDocuments(
         readFileSync(
@@ -223,7 +223,32 @@ describe("fleet Serve alert contract (bug.5459)", () => {
       (resource) => resource.kind === "Deployment"
     );
     const container = watchdog.spec.template.spec.containers[0];
-    expect(watchdog.spec.replicas).toBe(2);
+    expect(watchdog.spec.replicas).toBe(0);
+    const deployments = yaml
+      .parseAllDocuments(
+        readFileSync(
+          path.resolve(
+            __dirname,
+            "../../infra/k8s/base/database-reliability-actuator/deployment.yaml"
+          ),
+          "utf8"
+        )
+      )
+      .map((document) => document.toJSON());
+    expect(
+      deployments.find(
+        (resource) =>
+          resource.kind === "Deployment" &&
+          resource.metadata.name === "database-reliability-readmitter"
+      ).spec.replicas
+    ).toBe(0);
+    expect(
+      deployments.find(
+        (resource) =>
+          resource.kind === "Deployment" &&
+          resource.metadata.name === "database-reliability-actuator"
+      ).spec.replicas
+    ).toBe(1);
     expect(container.env).toContainEqual({
       name: "DATABASE_RELIABILITY_MODE",
       value: "watchdog",
