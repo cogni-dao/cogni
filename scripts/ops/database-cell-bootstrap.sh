@@ -250,6 +250,7 @@ REVOKE ALL ON FUNCTION cogni_control.database_recovery_probe_base() FROM PUBLIC;
 REVOKE ALL ON FUNCTION cogni_control.database_recovery_probe_base() FROM :"probe_role";
 CREATE OR REPLACE FUNCTION public.database_recovery_probe() RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS :'wrapper_body';
+ALTER FUNCTION public.database_recovery_probe() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.database_recovery_probe() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.database_recovery_probe() TO :"probe_role";
 SQL
@@ -330,10 +331,11 @@ LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS
 REVOKE ALL ON FUNCTION cogni_control.database_backup_identity_root() FROM PUBLIC;
 CREATE OR REPLACE FUNCTION public.database_backup_identity() RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS :'identity_body';
+ALTER FUNCTION public.database_backup_identity() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.database_backup_identity() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.database_backup_identity() TO :"backup_role";
 SELECT replace(:'qualifier_body','__PROBE_REPAIR__',
-  format('EXECUTE %L; EXECUTE %L; EXECUTE %L; REVOKE ALL ON FUNCTION cogni_control.database_recovery_probe_base() FROM PUBLIC; REVOKE ALL ON FUNCTION cogni_control.database_recovery_probe_base() FROM %I; REVOKE ALL ON FUNCTION public.database_recovery_probe() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.database_recovery_probe() TO %I; REVOKE ALL ON FUNCTION public.database_backup_identity() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.database_backup_identity() TO %I;',
+  format('EXECUTE %L; EXECUTE %L; EXECUTE %L; ALTER FUNCTION cogni_control.database_recovery_probe_base() OWNER TO postgres; ALTER FUNCTION public.database_recovery_probe() OWNER TO postgres; ALTER FUNCTION public.database_backup_identity() OWNER TO postgres; REVOKE ALL ON FUNCTION cogni_control.database_recovery_probe_base() FROM PUBLIC; REVOKE ALL ON FUNCTION cogni_control.database_recovery_probe_base() FROM %I; REVOKE ALL ON FUNCTION public.database_recovery_probe() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.database_recovery_probe() TO %I; REVOKE ALL ON FUNCTION public.database_backup_identity() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.database_backup_identity() TO %I;',
   pg_get_functiondef('cogni_control.database_recovery_probe_base()'::regprocedure), pg_get_functiondef('public.database_recovery_probe()'::regprocedure), pg_get_functiondef('public.database_backup_identity()'::regprocedure), :'probe_role', :'probe_role', :'backup_role')) AS qualified_body \gset
 CREATE OR REPLACE FUNCTION cogni_control.database_cell_qualify() RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS :'qualified_body';
