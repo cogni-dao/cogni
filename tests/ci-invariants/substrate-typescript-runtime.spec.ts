@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/ci-invariants/substrate-typescript-runtime`
  * Purpose: Verify substrate jobs install the typed materializer runtime before mutation.
- * Scope: Workflow dependency ordering and real owner-directory TypeScript resolution.
+ * Scope: Workflow ordering and real owner-directory TypeScript resolution. Does not mutate infrastructure or access credentials/network.
  * Invariants: Both trusted tooling and exact app checkouts have frozen dependencies; caller cwd is not module authority.
- * Side-effects: Reads workflows and invokes one bounded local TypeScript expression without credentials or network.
+ * Side-effects: IO (reads workflows and invokes one bounded local TypeScript expression)
  * Links: .github/workflows/candidate-flight.yml, .github/workflows/promote-and-deploy.yml, scripts/ci/secret-materialize.sh
  * @public
  */
