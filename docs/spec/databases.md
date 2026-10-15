@@ -41,11 +41,11 @@ pnpm dev:stack                # Same as above, but hits real LiteLLM/OpenRouter
 
 ## Database Separation
 
-**Database Security Model**: Two-user PostgreSQL architecture separating administrative and application access.
+**Database Security Model**: Node-scoped application/service runtime roles, an isolated rollout migration role, and separately held administration/support credentials.
 
-**Per-Node Databases (DB_PER_NODE):** Each node gets its own database. Small nodes use the bounded shared Postgres tier; a measured outlier uses an operator-managed dedicated state cell with its own provider VM, Postgres process, and fixed block volume. Placement changes the failure domain, never schema ownership: the database remains the node boundary and no tenancy columns are introduced. See [Multi-Node Tenancy](multi-node-tenancy.md).
+**Per-Node Databases (DB_PER_NODE):** Each node gets its own database. Small nodes use the bounded shared Postgres tier within their workload environment; a measured outlier uses an operator-managed dedicated state cell with its own retained allocation, Postgres process, and persistent storage. Placement changes the failure domain, never schema ownership: the database remains the node boundary and no tenancy columns are introduced. See [Multi-Node Tenancy](multi-node-tenancy.md).
 
-Dedicated state-cell capacity is selected from the catalog's named database budget profile, not caller-supplied provider sizes. Provisioning resolves the least-cost provider plan meeting that profile and persists a receipt binding node/environment/idempotency identity, provider project/region/resource IDs, compute and storage SKUs, allocated capacity, image, reviewed build SHA, and provider cost metadata captured at provision. Cherry's API plan quote supplies the exact compute rate for the requested hourly billing cycle; its storage API publishes size/SKU but no exact region/SKU price. The receipt therefore remains `complete: false`, scopes its total fields to compute, marks `exact-storage` unquoted, and separately records Cherry's fetched official [Elastic Block Storage](https://www.cherryservers.com/pricing) **“From”** rate as a provider-published minimum estimate with source and timestamp. It never presents that floor as exact storage cost or adds it to a total. The normalized compute month is hourly × 730; Cherry's discounted alternate monthly-cycle quote is retained under an explicitly separate field. Exact billing settlement is deferred to story.5088; purge policy remains outside this lifecycle contract. Provider `active` is not database readiness: provision and status both additionally require endpoint reachability and database identity/schema verification before returning `ready`.
+Dedicated state-cell capacity comes from the catalog's named database budget profile. The retained-allocation, custody, identity and readiness contract below governs the applied provider resource; a parked provider prototype is not a second production provisioning plane. Receipts distinguish actual provider prices from estimates or missing components. Provider `active` is not database readiness: endpoint reachability and database identity/schema verification are also required before reporting `ready`.
 
 **Postgres vs Doltgres:** This spec covers the Postgres (awareness plane) side. The knowledge plane runs on a separate Doltgres server with per-node `knowledge_<node>` databases and git-like versioning — see [Knowledge Data Plane](knowledge-data-plane.md).
 
@@ -54,7 +54,7 @@ Dedicated state-cell capacity is selected from the catalog's named database budg
 | Development | `cogni_operator`, `cogni_poly`, `cogni_resy`                      | `COGNI_NODE_DBS` in `.env.local` |
 | Test        | `cogni_template_stack_test`, `cogni_poly_test`, `cogni_resy_test` | `COGNI_NODE_DBS` in `.env.test`  |
 | CI          | `cogni_template_test`                                             | `COGNI_NODE_DBS` in `ci.yaml`    |
-| Production  | `cogni_operator` (single-node for now)                            | `COGNI_NODE_DBS` in deploy env   |
+| Deployed lanes | `cogni_<normalized_node>` on the lane-owned shared instance or reviewed dedicated cell | Catalog/repo-spec placement and lane-aware provisioning |
 
 `COGNI_NODE_DBS` is required — `provision.sh` fails fast if not set. No defaults, no fallback chain.
 
@@ -120,7 +120,7 @@ This service is gated behind the `bootstrap` profile and runs only when explicit
 ### Development vs. Production Roles
 
 - **Development:** Local dev connects via `app_user` (RLS enforced), `app_service` (BYPASSRLS), and local Grafana can read through `app_readonly`. `provision.sh` applies RLS role hardening to all node databases.
-- **Production:** Same role model. The application user should NOT have `DROP` or `TRUNCATE` permissions on the schema in production. Grafana/agent DB access must use the read-only role, not `app_service`.
+- **Deployed lanes:** Use exact `app_<node>` / `service_<node>` runtime roles and separate `migration_<node>` rollout identity as defined by `PER_NODE_RUNTIME_ROLE_NAMES`. Local `app_user` / `app_service` examples are not deployed-role fallbacks. Normal support reads follow the [node-owned data support plane](https://cognidao.org/knowledge/node-data-support-plane), not the service credential.
 
 ## Current Schema Baseline (Phase 0)
 
@@ -136,8 +136,10 @@ Per [Database RLS Spec](database-rls.md) design decision 7, the runtime app requ
 
 **Required Environment Variables:**
 
-- `DATABASE_URL` — app_user role (RLS enforced), used by Next.js request paths
-- `DATABASE_SERVICE_URL` — app_service role (BYPASSRLS), used by auth, workers, bootstrap
+- `DATABASE_URL` — `app_<node>` role (RLS enforced), used by Next.js request paths
+- `DATABASE_SERVICE_URL` — `service_<node>` role (BYPASSRLS), used by auth, workers, bootstrap
+
+Rollout uses the isolated `DATABASE_MIGRATION_URL` secret for `migration_<node>`; the migrator's `DATABASE_URL` input receives that credential, never the runtime app/service credential. It is not projected into ordinary application containers.
 
 **Startup Invariants (enforced by `assertEnvInvariants`):**
 
@@ -149,28 +151,29 @@ Per [Database RLS Spec](database-rls.md) design decision 7, the runtime app requ
 
 - **Local development:** `postgresql://app_user:password@localhost:55432/cogni_template_dev`
 - **Local testing:** `postgresql://app_user:password@localhost:55432/cogni_template_stack_test`
-- **Production:** `postgresql://app_user:<secret>@postgres:5432/cogni_template_production?sslmode=require`
+- **Deployed node:** `postgresql://app_<node>:<secret>@<lane-owned-or-reviewed-cell-host>:5432/cogni_<node>`; use the actual endpoint, port and TLS policy from the declared target rather than copying placeholder values.
 
 **Tooling-Only:** The `buildDatabaseUrl()` helper in `nodes/<node>/app/src/shared/db/db-url.ts` is used only by CLI test tooling (`drop-test-db.ts`, `reset-db.ts`). It is **not** used by the runtime app and **not** used by drizzle configs — per-node drizzle configs (`nodes/<node>/drizzle.config.ts`) require `DATABASE_URL` from env explicitly (task.0324).
 
 ## Database Security Architecture
 
-**Four-Role Model**: Production deployments use separate PostgreSQL roles:
+**Role separation**: Deployed lanes use distinct runtime, rollout, support and administration identities:
 
 - **Root User** (`POSTGRES_ROOT_USER`): Database server administration, user/database creation
-- **Application User** (`app_user` via `APP_DB_USER`): Runtime web app connections, RLS enforced
-- **Service User** (`app_service` via `APP_DB_SERVICE_PASSWORD`): Privileged system user. Scheduler workers and pre-auth lookups, BYPASSRLS. Connects via `DATABASE_SERVICE_URL`.
+- **Application User** (`app_<node>`): Runtime web app connections, RLS enforced, via `DATABASE_URL`.
+- **Service User** (`service_<node>`): Scheduler workers and pre-auth lookups, BYPASSRLS, via `DATABASE_SERVICE_URL`.
+- **Migration User** (`migration_<node>`): Isolated rollout-only identity, via `DATABASE_MIGRATION_URL`; membership is scoped to the node's object-owning application role.
 - **Read-Only User** (`app_readonly` via `APP_DB_READONLY_USER`): Grafana/agent support queries, BYPASSRLS for v0 cross-tenant reads, no write grants.
 
 See [Database RLS Spec](database-rls.md) for the dual-client architecture and static import enforcement.
 
 **Container Configuration**: The `db-provision` service runs `provision.sh`:
 
-- Creates roles: `app_user` (RLS), `app_service` (BYPASSRLS), `app_readonly` (SELECT-only, BYPASSRLS)
+- Creates per-node `app_<node>` (RLS), `service_<node>` (BYPASSRLS), and isolated `migration_<node>` roles; `app_readonly` remains environment-shared support/metrics custody.
 - Iterates `COGNI_NODE_DBS`: creates each database with ownership + RLS hardening
 - Creates `LITELLM_DB_NAME`: root-owned, shared LiteLLM database
 
-**Provisioning Variables** (used by `provision.sh`, not by runtime app):
+**Local Compose Provisioning Variables** (used by `provision.sh`, not by runtime app; deployed node credentials follow the lane-scoped materializer):
 
 | Variable                   | Purpose                             | Required            |
 | -------------------------- | ----------------------------------- | ------------------- |
@@ -189,14 +192,14 @@ See [Database RLS Spec](database-rls.md) for the dual-client architecture and st
 
 | Variable               | Purpose                      |
 | ---------------------- | ---------------------------- |
-| `DATABASE_URL`         | app_user role (RLS enforced) |
-| `DATABASE_SERVICE_URL` | app_service role (BYPASSRLS) |
+| `DATABASE_URL`         | `app_<node>` role (RLS enforced) |
+| `DATABASE_SERVICE_URL` | `service_<node>` role (BYPASSRLS) |
 
 > **Note:** The runtime app never receives `POSTGRES_ROOT_*`, `APP_DB_*`, or `COGNI_NODE_DBS`. These are provisioning-only.
 
 ## 2. Migration Strategy
 
-**Core Principle:** Each node owns its migrations and runs them as a Deployment **initContainer** off the runtime image. task.0324 split the previously-shared drizzle config into per-node configs (`nodes/<node>/drizzle.config.ts`). task.0370 rebased the migrator stage on `runner` and swapped drizzle-kit for `drizzle-orm/postgres-js/migrator`. task.0371 retired the separate `cogni-template-migrate` image and the Argo PreSync hook Jobs entirely — migrations now run inline on pod start, gated by `kubectl rollout status`.
+**Core Principle:** Each node owns its migrations and ships them in its immutable runtime image. Kubernetes expresses rollout-gating migration init containers; Akash uses declared runtime-profile migration steps materialized through Crossplane. Both consume the isolated migration credential and must prove terminal execution plus schema/journal state before serving. The Kubernetes details below describe that delivery path, not a requirement to run Akash applications as Kubernetes Deployments.
 
 **Architecture:**
 
