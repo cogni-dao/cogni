@@ -3,7 +3,7 @@
 
 import type { ResolvedNodeArtifactBundle } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
-
+import { withDatabaseCaTrust } from "@/shared/secrets/database-ca-command";
 import {
   bootPolicyForEnvironment,
   buildComputeWorkloadManifest,
@@ -895,10 +895,7 @@ describe("actuator namespace owner routing (bug.5263)", () => {
     ).toThrow(/refusing to default a wallet/);
   });
 
-  // (e) BYTE-IDENTICAL. The FULL cogni-dao candidate-a crossplane manifest is exactly what it
-  // was before owner routing existed (actuatorNamespace: cogni-production). This is the real-money
-  // guarantee that no paid node's desired state shifted.
-  it("renders a cogni-dao candidate-a manifest byte-identical to the pre-fix output", () => {
+  it("preserves owner routing and workload identity with database CA startup", () => {
     const manifest = buildComputeWorkloadManifest({
       slug: "toks4",
       environment: "candidate-a",
@@ -936,6 +933,7 @@ describe("actuator namespace owner routing (bug.5263)", () => {
               name: "web",
               artifact: "web",
               runtimeProfile: "cogni-node-app-v1",
+              ...withDatabaseCaTrust(["node", "app/server.js"]),
               secretRefs: REQUIRED_SECRET_REFS,
               port: 3200,
               visibility: "public",
