@@ -17,6 +17,9 @@ export {
   type OpenFgaCheckClient,
   type OpenFgaCheckOptions,
   type OpenFgaCheckRequest,
+  type OpenFgaReadClient,
+  type OpenFgaReadRequest,
+  type OpenFgaReadResponse,
   type OpenFgaStoreClient,
   type OpenFgaWriteClient,
 } from "./adapters/openfga-authorization.adapter";
