@@ -44,4 +44,4 @@ path_prefix: nodes/operator/
 is_primary_host: true
 reliability: { controller: true }
 reliability_validation:
-  candidate-a: { role: shared-control }
+  candidate-a: { role: shared-target }
