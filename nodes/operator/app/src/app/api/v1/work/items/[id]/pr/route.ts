@@ -18,6 +18,8 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { workItemSessionPrOperation } from "@/contracts/work-item-sessions.v1.contract";
 
+import { logWorkItemSessionComplete } from "../../_session-log";
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -33,8 +35,31 @@ export const POST = wrapRouteHandlerWithLogging<{
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser, context) => {
-    if (!context) throw new Error("context required for dynamic routes");
+    const startedAt = performance.now();
+    const logTerminal = (
+      fields: Omit<
+        Parameters<typeof logWorkItemSessionComplete>[2],
+        "operation"
+      >
+    ): void =>
+      logWorkItemSessionComplete(ctx, startedAt, {
+        operation: "link_pr",
+        ...fields,
+      });
+    if (!context) {
+      logTerminal({
+        outcome: "error",
+        status: 500,
+        errorCode: "internal_error",
+      });
+      throw new Error("context required for dynamic routes");
+    }
     if (!sessionUser) {
+      logTerminal({
+        outcome: "error",
+        status: 401,
+        errorCode: "auth_required",
+      });
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
     const { id } = await context.params;
@@ -43,11 +68,21 @@ export const POST = wrapRouteHandlerWithLogging<{
     try {
       body = await request.json();
     } catch {
+      logTerminal({
+        outcome: "error",
+        status: 400,
+        errorCode: "validation_error",
+      });
       return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
     }
 
     const parsed = workItemSessionPrOperation.input.safeParse(body);
     if (!parsed.success) {
+      logTerminal({
+        outcome: "error",
+        status: 400,
+        errorCode: "validation_error",
+      });
       return NextResponse.json(
         { error: "invalid input", issues: parsed.error.issues },
         { status: 400 }
@@ -61,36 +96,47 @@ export const POST = wrapRouteHandlerWithLogging<{
         sessionUser,
         statusUrl: coordinationUrl(request, id),
       });
-      ctx.log.info(
-        {
-          workItemId: id,
-          coordinationId: output.session.coordinationId,
-          claimedByUserId: sessionUser.id,
-          branch: output.session.branch,
-          prNumber: output.session.prNumber,
-        },
-        "dev_coordination.pr_linked"
-      );
+      logTerminal({ outcome: "success", status: 200 });
       return NextResponse.json(workItemSessionPrOperation.output.parse(output));
     } catch (error) {
       if ((error as Error)?.name === "CoordinationWorkItemNotFoundError") {
+        logTerminal({
+          outcome: "error",
+          status: 404,
+          errorCode: "work_item_not_found",
+        });
         return NextResponse.json(
           { error: (error as Error).message },
           { status: 404 }
         );
       }
       if ((error as Error)?.name === "WorkItemSessionForbiddenError") {
+        logTerminal({
+          outcome: "error",
+          status: 403,
+          errorCode: "session_owned_by_other",
+        });
         return NextResponse.json(
           { error: (error as Error).message },
           { status: 403 }
         );
       }
       if ((error as Error)?.name === "WorkItemSessionNotFoundError") {
+        logTerminal({
+          outcome: "error",
+          status: 404,
+          errorCode: "session_expired_or_missing",
+        });
         return NextResponse.json(
           { error: (error as Error).message },
           { status: 404 }
         );
       }
+      logTerminal({
+        outcome: "error",
+        status: 500,
+        errorCode: "internal_error",
+      });
       throw error;
     }
   }

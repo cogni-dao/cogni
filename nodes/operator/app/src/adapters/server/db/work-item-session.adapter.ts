@@ -99,7 +99,11 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
 
             if (!updated)
               throw new Error(`work item session not found: ${existing.id}`);
-            return { kind: "claimed", session: toRecord(updated) };
+            return {
+              kind: "claimed",
+              claimKind: "refreshed",
+              session: toRecord(updated),
+            };
           }
 
           const [superseded] = await tx
@@ -138,7 +142,11 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
 
         if (!inserted)
           throw new Error("work item session insert returned no row");
-        return { kind: "claimed", session: toRecord(inserted) };
+        return {
+          kind: "claimed",
+          claimKind: existingRow ? "reclaimed" : "fresh",
+          session: toRecord(inserted),
+        };
       });
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
@@ -147,6 +155,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
       if (conflicted.claimedByUserId === input.claimedByUserId) {
         return {
           kind: "claimed",
+          claimKind: "refreshed",
           session: await this.refreshExistingClaim(conflicted.id, input),
         };
       }

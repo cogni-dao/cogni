@@ -89,6 +89,7 @@ describe("DrizzleWorkItemSessionAdapter (Component)", () => {
 
     expect(result).toMatchObject({
       kind: "claimed",
+      claimKind: "reclaimed",
       session: {
         claimedByUserId: NEW_USER_ID,
         status: "active",

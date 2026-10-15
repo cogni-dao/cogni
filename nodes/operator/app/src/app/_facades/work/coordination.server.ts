@@ -91,6 +91,7 @@ export async function claimWorkItemSession(input: {
   return {
     claimed: result.kind === "claimed",
     conflict,
+    claimKind: result.kind === "claimed" ? result.claimKind : undefined,
     session: toWorkItemSessionDto(result.session, now),
     nextAction: nextActionForWorkItem({
       workItem,

@@ -35,7 +35,11 @@ export type WorkItemSessionRecord = {
 };
 
 export type ClaimWorkItemSessionResult =
-  | { readonly kind: "claimed"; readonly session: WorkItemSessionRecord }
+  | {
+      readonly kind: "claimed";
+      readonly claimKind: "fresh" | "refreshed" | "reclaimed";
+      readonly session: WorkItemSessionRecord;
+    }
   | { readonly kind: "conflict"; readonly session: WorkItemSessionRecord };
 
 export interface WorkItemSessionPort {

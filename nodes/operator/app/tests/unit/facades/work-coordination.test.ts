@@ -100,6 +100,7 @@ describe("app/_facades/work/coordination.server", () => {
   it("claims a session for the authenticated user", async () => {
     vi.mocked(port.claim).mockResolvedValue({
       kind: "claimed",
+      claimKind: "fresh",
       session: session(),
     });
 
@@ -112,6 +113,7 @@ describe("app/_facades/work/coordination.server", () => {
     });
 
     expect(result.claimed).toBe(true);
+    expect(result.claimKind).toBe("fresh");
     expect(result.session.deadlineAt).toBe("2026-05-02T12:30:00.000Z");
     expect(port.claim).toHaveBeenCalledWith({
       workItemId: "task.5007",
