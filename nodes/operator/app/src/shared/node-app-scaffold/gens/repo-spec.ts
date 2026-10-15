@@ -122,6 +122,16 @@ ${input.knowledgeRemote ? renderKnowledgeBlock(input.knowledgeRemote) : ""}
 # Add sibling services here (private by default) as this node grows.
 ${renderNodeDeploymentYaml().trimEnd()}
 
+# State substrate is declared separately from app compute. New nodes start on
+# bounded shared Postgres and graduate to a dedicated provider-VM cell only
+# through the platform's measured isolation policy.
+state:
+  database:
+    environments:
+      candidate-a: { tier: shared, budget_profile: shared-default-v1 }
+      preview: { tier: shared, budget_profile: shared-default-v1 }
+      production: { tier: shared, budget_profile: shared-default-v1 }
+
 # Activity ledger ingestion + approver allowlist.
 # \`approvers\` gates the \`(admin)/\` route group and write routes under
 # \`/api/v1/attribution/*\`. Replace with the fork's DAO-owner wallet(s) when

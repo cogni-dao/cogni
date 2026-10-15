@@ -46,6 +46,7 @@
 #   lane_db_residency_check  <node> <lane>   # -> 0 (ok/warn) | 1 (misresident) | 2 (unresolvable)
 #   lane_db_vm_env           <node> <lane>   # -> the env whose Postgres holds this lane's DB
 #   lane_db_host             <node> <lane>   # -> that env's VM alias
+#   lane_db_dsn_host <node> <lane> <local-env> <local-addr>   # -> the ADDRESS a DSN carries
 #   lane_db_assert_agreement <node> <lane> [dsn]   # stored DSN == both derivations
 
 # THE LEDGER *IS* THE PIN (bug.5299, 2026-10-14 ruling). These are the known-misresident
@@ -212,6 +213,70 @@ lane_db_host() {
   root="${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}"
   slug="$(cogni_deployment_slug)"
   cogni_vm_host_for_env "$env" "$root" "$slug"
+}
+
+# THE COMPOSER'S ADDRESS — WHAT GOES IN THE DSN (bug.5299 B1, call site 1).
+#
+# `lane_db_host` answers the question in the substrate's own vocabulary: an ALIAS. A DSN
+# cannot carry that answer today — every composed DSN is `sslmode=disable` and names an
+# ADDRESS (`${VM_IP}`, i.e. `hostname -I` on the VM secret-materialize.sh:148 SSHes into), so
+# putting a DNS name in it would be a new failure mode on a path with no TLS identity to gain
+# from it (review finding 9). This is the one function that crosses from alias to address,
+# and it is deliberately NOT inside `lane_db_host`: that function stays pure so the whole
+# residency invariant remains a static, hermetic test (review finding 4).
+#
+# ONE ADDRESS OF RECORD, NOT A SECOND DERIVATION. The caller already holds an address for
+# exactly one environment's VM — the one it is SSHed into (`<local-env>`, `<local-addr>`). When
+# the resolved residency env IS that env, this returns THAT SAME ADDRESS and performs no
+# lookup at all. That is what makes B1 inert: today `lane_db_vm_env` equals the materialize
+# run's own control env for every (node, lane) the catalog can produce — a pinned pair
+# resolves to its control env, which is what `SECRETS_CONTROL_ENV` already is
+# (run-node-substrate.sh:165), and an unpinned pair resolves to its lane, which for a
+# non-misresident pair IS its control env. So no DSN changes and no DNS is consulted.
+# It also sidesteps ROT-b (a VM with two public addresses, where `hostname -I` and the A
+# record name different interfaces): on the inert path there is still only ONE address.
+#
+# THE FOREIGN BRANCH IS THE CUTOVER, and it is the only path that can send a DSN at another
+# machine, so it is the one that must be loud:
+#   * `FORK_DOMAIN_ROOT` is REQUIRED, never defaulted. `lane_db_host` falls back to
+#     `cogni_domain_root`, which hard-defaults to `cognidao.org`
+#     (cogni-deployment-identity.sh:8-10) — so on a fork fleet (cogni-test-org) with that
+#     variable unset, a defaulted root would compose a DSN pointing a TEST lane at a
+#     cogni-dao PRODUCTION Postgres. That exact soft default was the FATAL finding of the
+#     egress review; it is refused here rather than defaulted.
+#   * An alias that does not resolve, or resolves to MORE than one A record, FAILS. A DSN
+#     holds exactly one host; picking one of several answers would be a guess, and a guess
+#     about which machine holds a database is the whole of bug.5299.
+# Nothing reaches this branch until a pin is deleted — which is the per-lane cutover, gated
+# on that lane's own census, its password carrier (B2) and migration-Job reachability (B3).
+lane_db_dsn_host() {
+  local node="${1:-}" lane="${2:-}" local_env="${3:-}" local_addr="${4:-}" env vm_alias addrs count
+  if [ -z "$node" ] || [ -z "$lane" ] || [ -z "$local_env" ] || [ -z "$local_addr" ]; then
+    echo "::error::lane_db_dsn_host: all of <node> <lane> <local-env> <local-addr> are required — the local address is the caller's single existing derivation (hostname -I on the VM it is SSHed into) and must be passed, never re-derived here" >&2
+    return 2
+  fi
+  env="$(lane_db_vm_env "$node" "$lane")" || return 2
+  if [ "$env" = "$local_env" ]; then
+    printf '%s\n' "$local_addr"
+    return 0
+  fi
+  # REQUIRED, NEVER DEFAULTED — and refused with an explicit return rather than `${x:?}`,
+  # which would kill a caller that did not wrap the call in a subshell.
+  if [ -z "${FORK_DOMAIN_ROOT:-}" ]; then
+    echo "::error::lane_db_dsn_host: FORK_DOMAIN_ROOT is unset, and ${node}/${lane}'s database resides on ${env} rather than ${local_env} — refusing to build a FOREIGN host from a defaulted domain root. cogni_domain_root hard-defaults to cognidao.org, so on a fork fleet that default would point this lane's DSN at the cogni-dao PRODUCTION Postgres (bug.5299)." >&2
+    return 2
+  fi
+  vm_alias="$(lane_db_host "$node" "$lane")" || return 2
+  addrs="$(_lane_db_resolve_a "$vm_alias")" || {
+    echo "::error::lane_db_dsn_host: ${node}/${lane}'s database resides on ${env}, but its VM alias ${vm_alias} does not resolve — refusing to compose a DSN with no host (bug.5299). Fix DNS or re-pin the lane." >&2
+    return 2
+  }
+  count="$(printf '%s\n' "$addrs" | grep -c .)"
+  if [ "$count" != 1 ]; then
+    echo "::error::lane_db_dsn_host: ${vm_alias} resolves to ${count} A records ($(printf '%s' "$addrs" | tr '\n' ' ')) — a DSN carries exactly one host, so choosing one would be a guess about which machine holds ${node}/${lane}'s database (bug.5299)." >&2
+    return 2
+  fi
+  printf '%s\n' "$addrs"
 }
 
 # THE EQUALITY GATE `lane-db-two-derivations` demands, for the HOST as well as the NAME.

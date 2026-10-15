@@ -20,6 +20,9 @@ production_branch: deploy/production-toks5
 # node, so every environment it runs in must bill the PRODUCTION sponsor account
 # (akash10auj…). The birth proof is spent; production is this node's only slot.
 envs: [preview, production]
+database:
+  preview: { tier: shared, budget_profile: shared-default-v1 }
+  production: { tier: shared, budget_profile: shared-default-v1 }
 # story.5025 — BORN_ON_AKASH. Placement is stated at birth, never inherited from the k3s
 # fallback that exists for rows minted before decentralized compute did.
 deployment_provider:

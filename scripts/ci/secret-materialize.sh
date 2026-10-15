@@ -146,6 +146,43 @@ fi
 export REPO_ROOT APP_SOURCE_DIR
 export DEPLOY_ENV="$DEPLOY_ENVIRONMENT"
 export VM_IP="${VM_IP:-$(remote "hostname -I | awk '{print \$1}'" | tr -d '[:space:]')}"
+
+# ── WHOSE POSTGRES HOLDS THIS LANE'S DATABASE (bug.5299 B1, call site 1) ──────────────
+#
+# `VM_IP` above answers ONE question — "what is the address of the VM I am SSHed into" —
+# and it is the vault/SSH target for everything below (bao_get_field, seed_kv, the
+# Compose-tier writes). It keeps that meaning, unchanged.
+#
+# It was ALSO being substituted as the host of the two Postgres DSNs, which asks a
+# DIFFERENT question: whose Postgres instance holds this (node, lane)'s database. For a
+# foreign-custodied lane those answers differ, and using the first as the second is the
+# residency bug: candidate-a's and preview's load, connections and crash blast radius land
+# in PRODUCTION's failure domain (31 of ~78 peak backends, measured 2026-10-13).
+#
+# `lane_db_dsn_host` answers the second question from the one cell `lane_db_vm_env`, and
+# today it returns `$VM_IP` for every (node, lane) the catalog can produce — a pinned pair
+# resolves to its control env, which is exactly what `SECRETS_CONTROL_ENV` is on this path
+# (run-node-substrate.sh:142/:165), and an unpinned pair resolves to its own lane, which for
+# a non-misresident pair IS its control env. So NO DSN value changes here, no lane moves and
+# no DNS lookup happens; `scripts/ci/tests/lane-db-dsn-host.test.sh` proves that by
+# enumerating every catalog pair rather than spot-checking. Deleting a pin is what makes a
+# lane's DSN move, per lane, after that lane's census + password carrier + Job reachability.
+#
+# SOURCING THE RESOLVER HERE ALSO ACTIVATES THE NAME RE-KEY in reconcile-secrets.sh's
+# `_lane_db_suffix`, and that pairing is REQUIRED, not incidental: a DSN whose host moved
+# without its name collapsing (or the reverse) would dial the wrong object on the wrong
+# instance. One cell drives both.
+CATALOG_DIR="${CATALOG_DIR:-${COGNI_CATALOG_ROOT:-${APP_SOURCE_DIR}/infra/catalog}}"
+export CATALOG_DIR
+# shellcheck source=lib/appset-paths.sh
+. "$SCRIPT_DIR/lib/appset-paths.sh"
+# shellcheck source=lib/lane-db-residency.sh
+. "$SCRIPT_DIR/lib/lane-db-residency.sh"
+COGNI_LANE_DB_HOST="$(lane_db_dsn_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV" "$VM_IP")" \
+  || fail "could not resolve which Postgres host ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'s database lives on (bug.5299) — refusing to compose a DSN against a guessed host"
+export COGNI_LANE_DB_HOST
+log "lane database residency: ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} -> env=$(lane_db_vm_env "$TARGET_NODE" "$DEPLOY_ENVIRONMENT") host=${COGNI_LANE_DB_HOST} (this run is on ${SECRETS_CONTROL_ENV}'s VM, ${VM_IP})"
+
 export CATALOG_FILE="${APP_SOURCE_DIR}/infra/secrets-catalog.yaml"
 export PAYMENT_NODES="${PAYMENT_NODES:-poly}"
 # DOMAIN is required: derive-env keys (APP_BASE_URL, NEXTAUTH_URL) build the
@@ -475,6 +512,34 @@ for k in "${LITELLM_SYNC_KEYS[@]}"; do
 done
 flush_batch
 
+# Migration credentials are deliberately NOT part of the node bucket. Every
+# node app Secret is projected wholesale into the runtime container, whereas
+# this identity can SET ROLE to the object owner and receives a bounded 15m
+# statement timeout. Keep the password + composed DSN in a separate per-node
+# OpenBao bucket consumed only by migration init/Job projections.
+migration_service="${TARGET_NODE}-database-migration"
+prefetch_path "$migration_service"
+migration_password="$(bao_get_field "$migration_service" APP_DB_MIGRATION_PASSWORD)"
+if [[ -z "$migration_password" ]]; then
+  # Preserve an early-development value if it was already minted in the node
+  # bucket; otherwise generate exactly once in the isolated bucket.
+  migration_password="$(bao_get_field "$TARGET_NODE" APP_DB_MIGRATION_PASSWORD)"
+  [[ -n "$migration_password" ]] || migration_password="$(_resolve_node_value "$migration_service" APP_DB_MIGRATION_PASSWORD)"
+  [[ -n "$migration_password" ]] || fail "migration password generation returned empty"
+  seed_kv "$migration_service" APP_DB_MIGRATION_PASSWORD "$migration_password"
+  created=$((created + 1))
+fi
+migration_dsn="$(_compose_node_value "$TARGET_NODE" DATABASE_MIGRATION_URL)"
+[[ -n "$migration_dsn" ]] || fail "migration DSN composition returned empty"
+if [[ "$(bao_get_field "$migration_service" DATABASE_MIGRATION_URL)" == "$migration_dsn" ]]; then
+  unchanged=$((unchanged + 1))
+else
+  rm -f "${CACHE_DIR}/${migration_service}/DATABASE_MIGRATION_URL"
+  seed_kv "$migration_service" DATABASE_MIGRATION_URL "$migration_dsn"
+  created=$((created + 1))
+fi
+flush_batch "$migration_service"
+
 # ── Platform-service agent secrets (non-node OpenBao buckets) ─────────────────
 # PLATFORM_SERVICES (reconcile-secrets.sh) own `cogni/<env>/<service>/*` instead of
 # borrowing a node's bucket, because the operator app consumes the WHOLE operator bucket
@@ -500,6 +565,9 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
     )
     for k in "${svc_keys[@]}"; do
       [[ -n "$k" ]] || continue
+      # This DSN depends on the generated component password in the same batch,
+      # so compose it after the random-key pass below regardless of sort order.
+      [[ "$k" == "DATABASE_RELIABILITY_ADMIN_URL" || "$k" == "DATABASE_RELIABILITY_READMIT_URL" ]] && continue
       if [[ -f "${CACHE_DIR}/${svc}/${k}" ]]; then
         unchanged=$((unchanged + 1))
         continue
@@ -512,6 +580,37 @@ if [[ "$TARGET_NODE" == "$PLATFORM_SERVICE_OWNER_NODE" ]]; then
       log "  created ${k} → cogni/${DEPLOY_ENVIRONMENT}/${svc}"
       created=$((created + 1))
     done
+    if [[ "$svc" == "database-reliability-actuator" ]]; then
+      reliability_password="$(bao_get_field "$svc" DATABASE_RELIABILITY_PASSWORD)"
+      [[ -n "$reliability_password" ]] \
+        || fail "platform-service ${svc} did not materialize DATABASE_RELIABILITY_PASSWORD"
+      reliability_dsn="$(_compose_node_value "$svc" DATABASE_RELIABILITY_ADMIN_URL)"
+      [[ -n "$reliability_dsn" ]] \
+        || fail "platform-service ${svc} produced an empty DATABASE_RELIABILITY_ADMIN_URL"
+      if [[ "$(bao_get_field "$svc" DATABASE_RELIABILITY_ADMIN_URL)" == "$reliability_dsn" ]]; then
+        unchanged=$((unchanged + 1))
+      else
+        rm -f "${CACHE_DIR}/${svc}/DATABASE_RELIABILITY_ADMIN_URL"
+        seed_kv "$svc" DATABASE_RELIABILITY_ADMIN_URL "$reliability_dsn"
+        log "  recomposed DATABASE_RELIABILITY_ADMIN_URL → cogni/${DEPLOY_ENVIRONMENT}/${svc} (drift corrected)"
+        created=$((created + 1))
+      fi
+    fi
+    if [[ "$svc" == "database-reliability-readmitter" ]]; then
+      readmit_password="$(bao_get_field "$svc" DATABASE_RELIABILITY_READMIT_PASSWORD)"
+      [[ -n "$readmit_password" ]] \
+        || fail "platform-service ${svc} did not materialize DATABASE_RELIABILITY_READMIT_PASSWORD"
+      readmit_dsn="$(_compose_node_value "$svc" DATABASE_RELIABILITY_READMIT_URL)"
+      [[ -n "$readmit_dsn" ]] \
+        || fail "platform-service ${svc} produced an empty DATABASE_RELIABILITY_READMIT_URL"
+      if [[ "$(bao_get_field "$svc" DATABASE_RELIABILITY_READMIT_URL)" == "$readmit_dsn" ]]; then
+        unchanged=$((unchanged + 1))
+      else
+        rm -f "${CACHE_DIR}/${svc}/DATABASE_RELIABILITY_READMIT_URL"
+        seed_kv "$svc" DATABASE_RELIABILITY_READMIT_URL "$readmit_dsn"
+        created=$((created + 1))
+      fi
+    fi
     flush_batch "$svc"
   done
 fi

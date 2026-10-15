@@ -469,10 +469,19 @@ spec:
             {{- $leaseObs := index $observedResources $leaseResourceName }}
             {{- $resp := dict }}
             {{- $respStatus := 0 }}
+            {{- $leaseCreatePending := "" }}
+            {{- $leaseCreateAmbiguous := false }}
             {{- if $leaseObs }}
             {{- $raw := dig "status" "response" "body" "" $leaseObs.resource }}
             {{- if ne $raw "" }}{{ $resp = fromJson $raw }}{{ end }}
             {{- $respStatus = int (dig "status" "response" "statusCode" 0 $leaseObs.resource) }}
+            {{- $leaseAnnotations := dig "metadata" "annotations" (dict) $leaseObs.resource }}
+            {{- $leaseCreatePending = get $leaseAnnotations "crossplane.io/external-create-pending" | default "" }}
+            {{- range (dig "status" "conditions" (list) $leaseObs.resource) }}
+            {{- if contains "cannot determine creation result" (dig "message" "" .) }}
+            {{- $leaseCreateAmbiguous = true }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- /*
               REFUSAL_IS_OBSERVABLE (bug.5115: a wallet block that only reached provider logs was
@@ -528,11 +537,13 @@ spec:
             {{- $currentKey = printf "%s:recover:%d" $baseCogniKey $recoveryCount }}
             {{- end }}
             {{- $responseKey := "" }}
+            {{- $lastRequestedSha := "" }}
             {{- if $leaseObs }}
             {{- $requestBodyRaw := dig "status" "requestDetails" "body" "" $leaseObs.resource }}
             {{- if ne $requestBodyRaw "" }}
             {{- $requestBody := fromJson $requestBodyRaw }}
             {{- $responseKey = dig "cogniKey" "" $requestBody }}
+            {{- $lastRequestedSha = dig "expectedSourceSha" "" $requestBody }}
             {{- end }}
             {{- end }}
             {{- $closedForCurrentKey := and $closed (eq $responseKey $currentKey) }}
@@ -589,6 +600,68 @@ spec:
             */ -}}
             {{- $prevSha := dig "status" "observedBundle" "source" "sha" "" $xr }}
             {{- $hasServedDesired := or (and $active $serving) (eq $prevSha $desiredSha) }}
+            {{- /*
+              RECEIPT-BACKED CREATE-AMBIGUITY RECOVERY (bug.5464). provider-http's generic
+              leak guard is correct for resources whose CREATE may allocate a different paid
+              object when retried. This actuator is deliberately stronger: cogniKey is stable,
+              and its durable ledger permits exactly one allocation for that key. A transport or
+              kube-apiserver interruption can still strand the generic guard after the actuator
+              has returned the existing allocation, which froze Red production on its prior SHA.
+
+              Release that guard only when FIVE independent facts agree: provider-http itself
+              reports the ambiguity; the pending timestamp exists; provider-http's current OR
+              cached successful response is a real found:true OBSERVE (not a CREATE/UPDATE echo);
+              that observation is active with a non-empty external handle under the exact current
+              cogniKey; and the XR has not served the desired SHA. The cache fallback is necessary
+              because provider-http overwrites status.response with a later transient refusal while
+              preserving its last successful observation in status.cache.response. It is used only
+              when the current response has no `found` key, and the cached response itself must be
+              2xx, found:true, active, and handle-bearing. Mirroring pending into succeeded then
+              permits OBSERVE — it does not vary cogniKey or leaseGeneration. If the external
+              resource disappeared after that observation, the actuator's one-allocation-per-key
+              ledger remains the final duplicate-spend fence. Any missing proof stays fail-closed.
+            */ -}}
+            {{- $leaseReceiptResp := $resp }}
+            {{- $leaseReceiptStatus := $respStatus }}
+            {{- if and $leaseObs (not (hasKey $resp "found")) }}
+            {{- $leaseCacheRaw := dig "status" "cache" "response" "body" "" $leaseObs.resource }}
+            {{- if ne $leaseCacheRaw "" }}
+            {{- $leaseCacheResp := fromJson $leaseCacheRaw }}
+            {{- $leaseCacheStatus := int (dig "status" "cache" "response" "statusCode" 0 $leaseObs.resource) }}
+            {{- $leaseCacheRes := dig "resource" (dict) $leaseCacheResp }}
+            {{- $leaseCacheFound := dig "found" false $leaseCacheResp }}
+            {{- $leaseCacheState := dig "state" "unknown" $leaseCacheRes }}
+            {{- $leaseCacheExternalName := dig "externalName" "" $leaseCacheRes }}
+            {{- if and (ge $leaseCacheStatus 200) (lt $leaseCacheStatus 300) (hasKey $leaseCacheResp "found") $leaseCacheFound (eq $leaseCacheState "active") (ne $leaseCacheExternalName "") }}
+            {{- $leaseReceiptResp = $leaseCacheResp }}
+            {{- $leaseReceiptStatus = $leaseCacheStatus }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- $leaseReceiptRes := dig "resource" (dict) $leaseReceiptResp }}
+            {{- $leaseReceiptObserved := hasKey $leaseReceiptResp "found" }}
+            {{- $leaseReceiptFound := dig "found" false $leaseReceiptResp }}
+            {{- $leaseReceiptState := dig "state" "unknown" $leaseReceiptRes }}
+            {{- $leaseReceiptExternalName := dig "externalName" "" $leaseReceiptRes }}
+            {{- $leaseReceiptProven := and (ge $leaseReceiptStatus 200) (lt $leaseReceiptStatus 300) $leaseReceiptObserved $leaseReceiptFound (eq $leaseReceiptState "active") (ne $leaseReceiptExternalName "") (eq $responseKey $currentKey) }}
+            {{- $leaseRevisionPending := ne $prevSha $desiredSha }}
+            {{- $recoverLeaseCreateAmbiguity := and $leaseCreateAmbiguous (ne $leaseCreatePending "") $leaseReceiptProven $leaseRevisionPending }}
+            {{- $unsafeLeaseCreateAmbiguity := and $leaseCreateAmbiguous (not $recoverLeaseCreateAmbiguity) }}
+            {{- /*
+              TARGETED REQUEUE AFTER A LOST PROVIDER EVENT (bug.0001). A transient kube-apiserver
+              refusal can strand one provider-http Request even while its sibling Requests keep
+              polling. Re-rendering the same XR does not help when the managed child never
+              observes its new body. Crossplane Runtime v2.3.3's official reconcile-requested-at
+              annotation is the narrow recovery seam: request one extra reconcile ONLY while
+              both durable receipts prove this child missed the desired bundle — the XR has not
+              served it, and the Request's last wire body did not name it.
+
+              The token is derived solely from desired state, so it is stable across ordinary
+              ticks and changes on the next real revision. It never enters cogniKey, never bumps
+              leaseGeneration, and cannot mint a replacement lease. Healthy and intentionally
+              down workloads whose Request already observed their current SHA are untouched.
+            */ -}}
+            {{- $needsLeaseRequeue := and (ne $prevSha $desiredSha) (ne $lastRequestedSha $desiredSha) }}
 
             {{- /* ---------- BOOT_SLO_OR_CLOSE ---------- */ -}}
             {{- $bootDeadlineSeconds := int (dig "bootPolicy" "bootDeadlineSeconds" 1800 $spec) }}
@@ -853,6 +926,12 @@ spec:
             metadata:
               annotations:
                 gotemplating.fn.crossplane.io/composition-resource-name: {{ $leaseResourceName }}
+                {{- if $needsLeaseRequeue }}
+                crossplane.io/reconcile-requested-at: {{ printf "%s:%d" $desiredSha $generation | quote }}
+                {{- end }}
+                {{- if $recoverLeaseCreateAmbiguity }}
+                crossplane.io/external-create-succeeded: {{ $leaseCreatePending | quote }}
+                {{- end }}
                 {{- if and $active $serving }}
                 gotemplating.fn.crossplane.io/ready: "True"
                 {{- end }}
@@ -1054,6 +1133,10 @@ spec:
             {{- $failMessage := "" }}
             {{- if and $active $serving }}
             {{- $phase = "Ready" }}
+            {{- else if $unsafeLeaseCreateAmbiguity }}
+            {{- $phase = "Failed" }}
+            {{- $failReason = "CreateResultAmbiguous" }}
+            {{- $failMessage = printf "provider-http cannot prove the paid create result for cogniKey %s; automatic recovery stayed fail-closed because its exact active allocation receipt was incomplete" $currentKey }}
             {{- else if $closeForBudget }}
             {{- $phase = "Failed" }}
             {{- $failReason = "BootDeadlineClosed" }}

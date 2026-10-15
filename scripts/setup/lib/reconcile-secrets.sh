@@ -19,6 +19,8 @@
 #
 # Caller contract (globals expected at invocation time):
 #   DEPLOY_ENV, ROOT_TOKEN, VM_IP, SSH_OPTS, REPO_ROOT,
+#   optional COGNI_LANE_DB_HOST (the Postgres host a composed DSN carries; defaults to
+#   VM_IP, which is byte-identical to the pre-resolver behaviour — bug.5299 B1),
 #   PRIMARY_NODE_DB, APP_DB_USER, APP_DB_SERVICE_USER, DOMAIN,
 #   POSTGRES_ROOT_PASSWORD, optional DOLTGRES_PASSWORD
 # Caller's seed loop iterates the arrays exported here:
@@ -97,6 +99,8 @@ declare -ga SCHEDULER_WORKER_KEYS=(
 # shellcheck disable=SC2034  # consumed by the sourcing script (scripts/ci/secret-materialize.sh)
 declare -ga PLATFORM_SERVICES=(
   akash-tx-actuator   # private Akash transaction actuator wallet + bearer token (task.5102)
+  database-reliability-actuator # private least-privilege Postgres containment actuator (task.5246)
+  database-reliability-readmitter # human-gated Postgres readmission identity (task.5246)
 )
 
 # Compose-tier secrets — bootstrap postgres/temporal directly via runtime/.env,
@@ -228,7 +232,14 @@ _resolve_node_value() {
 # the control env's ${VM_IP} would name the lane's suffix-less database on the WRONG host —
 # production's live `cogni_<node>` — which is bug.5207's destructive shape. The composer's
 # host substitution and this re-key land together or not at all; the pin ledger is what keeps
-# them in step until then.
+# them in step until then. THEY NOW LAND TOGETHER: secret-materialize.sh resolves
+# `COGNI_LANE_DB_HOST` from `lane_db_dsn_host` and sources the resolver into this composer's
+# shell, so both the NAME (here) and the HOST (below) key on the one cell `lane_db_vm_env`.
+# Unpinning a lane therefore moves both at once, which is the only safe pairing.
+#
+# POSTGRES ONLY. `_doltgres_db_suffix` below is the deliberate exception: the Doltgres DSN
+# still dials ${VM_IP}, so its NAME must keep keying on the control env, or an unpin would
+# point a lane at the CONTROL env's live `knowledge_<node>`.
 _lane_db_suffix() {
   local node="${1:-}" lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
   if [ -n "$node" ] && [ -n "$lane" ] && command -v lane_db_vm_env >/dev/null 2>&1; then
@@ -241,20 +252,73 @@ _lane_db_suffix() {
   printf '_%s' "${lane//-/_}"
 }
 
+# THE DOLTGRES SUFFIX STAYS ON THE CONTROL ENV — bug.5299's scope line, in code.
+#
+# This is `_lane_db_suffix`'s pre-resolver body, kept as its own function on purpose rather
+# than shared. Postgres residency moves with `lane_db_vm_env`; DOLTGRES RESIDENCY DOES NOT
+# MOVE AT ALL in bug.5299 (its superuser is immutable — Doltgres 0.56.3 RBAC is table-DML
+# only, databases.md §5.2 — so a lane's DSN would embed the wrong env's unrotatable
+# credential, which needs its own decision). `DOLTGRES_URL` therefore keeps dialing
+# ${VM_IP}, the control VM's own Doltgres.
+#
+# IF THE TWO SHARED ONE SUFFIX, DELETING A PIN WOULD BE DESTRUCTIVE ON THE DOLTGRES PLANE:
+# the suffix would collapse while the host stayed ${VM_IP}, pointing the lane at the CONTROL
+# env's LIVE `knowledge_<node>` — bug.5207's exact shape, on the plane this item is not
+# moving. Identical output to `_lane_db_suffix` for every pair today (every misresident pair
+# is pinned), so this split is inert; it only diverges at the moment a pin is deleted, which
+# is precisely when it must.
+_doltgres_db_suffix() {
+  local lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
+  if command -v lane_db_suffix >/dev/null 2>&1; then
+    lane_db_suffix "$lane" "$control"; return 0
+  fi
+  [ -n "$lane" ] && [ "$control" != "$lane" ] || return 0
+  printf '_%s' "${lane//-/_}"
+}
+
+# THE HOST A POSTGRES DSN CARRIES (bug.5299 B1, call site 1).
+#
+# `${VM_IP}` is `hostname -I` on the VM the provisioning run SSHed into — i.e. the CONTROL
+# env's machine, for every lane. That is the residency bug itself: it is an answer to "whose
+# VM am I talking to", used as if it answered "whose Postgres holds this lane's database".
+# `COGNI_LANE_DB_HOST` is the second question's answer, resolved once per materialize run by
+# `lane_db_dsn_host` (scripts/ci/lib/lane-db-residency.sh) and exported by
+# scripts/ci/secret-materialize.sh.
+#
+# WHY A SOFT FALLBACK HERE IS CORRECT, unlike the FORK_DOMAIN_ROOT case. `${VM_IP}` is not a
+# default guess about residency — it is EXACTLY the host this DSN names today, so a caller
+# with no resolver on the path (provision-env-vm.sh Phase 5c, local/test callers) composes
+# byte-identically to the pre-resolver code. The fail-loud guard belongs where a FOREIGN
+# host could be invented, which is inside `lane_db_dsn_host`, not here.
+#
+# DOLTGRES_URL below keeps `${VM_IP}` — see `_doltgres_db_suffix`.
 _compose_node_value() {
-  local node="$1" k="$2" kind source shared service db sfx
+  local node="$1" k="$2" kind source shared service db sfx dg_sfx pg_host
   sfx="$(_lane_db_suffix "$node")"
+  dg_sfx="$(_doltgres_db_suffix)"
+  pg_host="${COGNI_LANE_DB_HOST:-${VM_IP}}"
   db="cogni_${node//-/_}${sfx}"
   case "$k" in
+    DATABASE_RELIABILITY_ADMIN_URL)
+      # Private platform-service DSN. The component password is generated into
+      # this same isolated bucket first; hexadecimal encoding is URL-safe.
+      printf 'postgresql://database_reliability_actuator:%s@%s:5432/postgres?sslmode=disable' \
+        "$(bao_get_field database-reliability-actuator DATABASE_RELIABILITY_PASSWORD)" "${VM_IP}"; return 0 ;;
+    DATABASE_RELIABILITY_READMIT_URL)
+      printf 'postgresql://database_reliability_readmitter:%s@%s:5432/postgres?sslmode=disable' \
+        "$(bao_get_field database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD)" "${VM_IP}"; return 0 ;;
     DATABASE_URL)
       # Per-node: app_<node> role + the node's own source:agent password (OpenBao).
       # Role name is computed from the node; the password is read from
       # cogni/<env>/<node> (materialize generated it before this composition).
       printf 'postgresql://app_%s%s:%s@%s:5432/%s?sslmode=disable' \
-        "${node//-/_}" "${sfx}" "$(bao_get_field "$node" APP_DB_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
+        "${node//-/_}" "${sfx}" "$(bao_get_field "$node" APP_DB_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
     DATABASE_SERVICE_URL)
       printf 'postgresql://service_%s%s:%s@%s:5432/%s?sslmode=disable' \
-        "${node//-/_}" "${sfx}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${VM_IP}" "${db}"; return 0 ;;
+        "${node//-/_}" "${sfx}" "$(bao_get_field "$node" APP_DB_SERVICE_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
+    DATABASE_MIGRATION_URL)
+      printf 'postgresql://migration_%s%s:%s@%s:5432/%s?sslmode=disable' \
+        "${node//-/_}" "${sfx}" "$(bao_get_field "${node}-database-migration" APP_DB_MIGRATION_PASSWORD)" "${pg_host}" "${db}"; return 0 ;;
     DOLTGRES_PASSWORD)
       # Env-wide Doltgres superuser (one server, every node's knowledge_<node> DB).
       # Operator holds the single canonical SSOT (cogni/<env>/operator/DOLTGRES_PASSWORD)
@@ -276,8 +340,10 @@ _compose_node_value() {
       # operator is seeded. Composed, never derived inline, never from .env.
       local _dgu; _dgu="$(bao_get_field operator DOLTGRES_PASSWORD)"
       [[ -n "$_dgu" ]] || _dgu="$(derive_secret doltgres-root)"
+      # ${VM_IP} + ${dg_sfx}, NOT ${pg_host}/${sfx}: Doltgres residency is out of scope
+      # for bug.5299 and must not move when a Postgres pin is deleted.
       printf 'postgresql://postgres:%s@%s:5435/knowledge_%s%s?sslmode=disable' \
-        "$_dgu" "${VM_IP}" "${node//-/_}" "${sfx}"; return 0 ;;
+        "$_dgu" "${VM_IP}" "${node//-/_}" "${dg_sfx}"; return 0 ;;
   esac
   kind=$(_cat_field "$k" '.generate.kind')
   source=$(_cat_field "$k" '.source')

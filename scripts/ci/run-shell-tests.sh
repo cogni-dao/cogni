@@ -75,6 +75,7 @@ PARALLEL=(
   no-automatic-fork-source-sync.test.sh
   lane-db-residency.test.sh
   lane-db-resolver.test.sh
+  lane-db-dsn-host.test.sh
 )
 
 MAX_JOBS="${SHELL_TESTS_JOBS:-$(nproc 2>/dev/null || echo 4)}"

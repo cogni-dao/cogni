@@ -25,6 +25,7 @@ describe("buildComputeSecretResources", () => {
       "compute-env-external-secret.yaml",
       "compute-env-secret-role.yaml",
       "compute-env-secret-role-binding.yaml",
+      "compute-migration-external-secret.yaml",
     ]);
     const [externalSecretResource, roleResource, bindingResource] = resources;
     if (!externalSecretResource || !roleResource || !bindingResource) {
@@ -72,13 +73,28 @@ describe("buildComputeSecretResources", () => {
   });
 
   it("emits no projection for a zero-ref workload", () => {
-    expect(
-      buildComputeSecretResources({
-        slug: "echo",
-        environment: "candidate-a",
-        secretRefs: [],
-      })
-    ).toEqual([]);
+    const resources = buildComputeSecretResources({
+      slug: "echo",
+      environment: "candidate-a",
+      secretRefs: [],
+    });
+    expect(resources).toHaveLength(1);
+    expect(resources[0]).toMatchObject({
+      file: "compute-migration-external-secret.yaml",
+      manifest: {
+        metadata: { name: "echo-compute-migration-secrets" },
+        spec: {
+          data: [
+            {
+              secretKey: "DATABASE_MIGRATION_URL",
+              remoteRef: {
+                key: "candidate-a/echo-database-migration",
+              },
+            },
+          ],
+        },
+      },
+    });
   });
 
   it.each([
