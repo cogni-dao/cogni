@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 # Script: scripts/ci/detect-remote-source-artifact-targets.sh
-# Purpose: Detect changed catalog rows whose source is built outside this repo,
+# Purpose: Detect changed external artifact identities between reviewed revisions,
 # then emit the source-SHA tag the deploy lane should consume by digest.
 
 set -euo pipefail
@@ -30,8 +30,28 @@ has_target() {
   return 1
 }
 
-# Accepted deploy SHA for a remote-source node: read the catalog `source_sha` pin
-# (CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) — no gitlink, no node-source checkout.
+# A catalog placement edit is not authority to promote its historical source SHA.
+# Only an actual artifact identity change enters the existing promotion path.
+artifact_identity_changed() {
+  local target="$1" path="infra/catalog/${1}.yaml" base_names before after source_root
+  [[ -n "${BASE_SHA:-}" && -n "${HEAD_SHA:-}" ]] || {
+    echo "[ERROR] BASE_SHA and HEAD_SHA are required to compare remote artifact identity" >&2
+    exit 1
+  }
+  source_root="$(git rev-parse --show-toplevel)"
+  git -C "$source_root" cat-file -e "${BASE_SHA}^{commit}" \
+    && git -C "$source_root" cat-file -e "${HEAD_SHA}^{commit}" || {
+      echo "[ERROR] remote artifact comparison revisions are unavailable" >&2
+      exit 1
+    }
+  # A successful tree listing with no path is positive new-row evidence.
+  base_names="$(git -C "$source_root" ls-tree --name-only "$BASE_SHA" -- "$path")" || exit 1
+  after="$(git -C "$source_root" show "${HEAD_SHA}:${path}" | yq -o=json -I=0 '{"source_repo": .source_repo, "source_sha": .source_sha, "image_repository": .image_repository}' -)" || exit 1
+  [[ -n "$base_names" ]] || return 0
+  before="$(git -C "$source_root" show "${BASE_SHA}:${path}" | yq -o=json -I=0 '{"source_repo": .source_repo, "source_sha": .source_sha, "image_repository": .image_repository}' -)" || exit 1
+  [[ "$before" != "$after" ]]
+}
+
 catalog_source_sha_for_target() {
   local target="$1" sha
   sha="$(yq -N '.source_sha // ""' "${_image_tags_catalog_root}/${target}.yaml")"
@@ -90,6 +110,7 @@ while IFS= read -r path; do
     is_remote_source_artifact_target "$target" || continue
     path_selects_target "$path" "$target" || continue
     has_target "$target" || continue
+    artifact_identity_changed "$target" || continue
 
     if printf '%s\n' "${targets[@]}" | grep -qx "$target"; then
       continue

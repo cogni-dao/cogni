@@ -285,6 +285,9 @@ else
 
     if catalog_target=$(catalog_target_from_path "$path"); then
       add_target "$catalog_target"
+      # The operator image consumes the catalog as runtime desired state.
+      # Its image must advance even when the changed node builds elsewhere.
+      add_target operator
       selection_reason="catalog-target:${path}"
       continue
     fi

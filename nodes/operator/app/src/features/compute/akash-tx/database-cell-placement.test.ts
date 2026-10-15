@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
 import {
   existsSync,
@@ -1826,6 +1826,42 @@ describe("owned immutable applied evidence transport", () => {
 });
 
 describe("readonly initial probe custody bootstrap", () => {
+  it("skips factory source discovery for declared external placement while the target still requires its applied receipt", () => {
+    const repoRoot = fileURLToPath(
+      new URL("../../../../../../../", import.meta.url)
+    );
+    const script = [
+      "set -euo pipefail",
+      'REPO_ROOT="$1" APP_SOURCE_DIR="$1"',
+      'CATALOG_DIR="$REPO_ROOT/infra/catalog"',
+      "TARGET_NODE=operator RELIABILITY_CONTROLLER=operator DEPLOY_ENVIRONMENT=production SECRETS_CONTROL_ENV=production DOMAIN=cognidao.org",
+      "NODE_TARGETS=(poly)",
+      'fail() { printf "%s\\n" "$*" >&2; exit 1; }',
+      'prefetch_path() { fail "unexpected factory custody read"; }',
+      'remote() { fail "unexpected source database census"; }',
+      'source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-kits.sh"',
+      // No pending private input is seeded during this operator rollout.
+      "materialize_database_cell_applied_custodies() { :; }",
+      "materialize_database_cell_kits",
+      'printf "factory-skipped\\n"',
+      'source "$REPO_ROOT/scripts/ci/lib/materialize-database-cell-placement.sh"',
+      "TARGET_NODE=poly",
+      "prefetch_path() { :; }",
+      "bao_get_field() { :; }",
+      "load_database_cell_placement",
+      'fail "unqualified target materialization accepted"',
+    ].join("\n");
+    const result = spawnSync("bash", ["-c", script, "fixture", repoRoot], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("factory-skipped\n");
+    expect(result.stderr).toContain(
+      "declared cell placement has no applied allocation receipt"
+    );
+  });
+
   async function prepared() {
     const facts = registrationFacts();
     const password = "a".repeat(64);
