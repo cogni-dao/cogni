@@ -343,6 +343,22 @@ cp "$TMPROOT/original-watched-base.yaml" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml
 cp "$TMPROOT/original-watched-operator.yaml" "$AUTHORITY_DIR/infra/catalog/operator.yaml"
 echo "PASS: same-endpoint cross-authority slug/UUID rebindings refuse"
 
+yq -i '.node_id = "4FF8EAC1-4EBA-4ED0-931B-B1FE4F64713D" | .name = "foreign-operator"' \
+  "$AUTHORITY_DIR/infra/catalog/operator.yaml"
+sed -i.bak \
+  -e 's/4ff8eac1-4eba-4ed0-931b-b1fe4f64713d/4FF8EAC1-4EBA-4ED0-931B-B1FE4F64713D/g' \
+  -e 's#operator=http://operator-node-app:3000#foreign-operator=http://operator-node-app:3000#g' \
+  "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"
+if run >"$TMPROOT/identity-error" 2>&1; then
+  fail "mixed-case semantic UUID under a different slug must fail closed"
+fi
+grep -q 'missing route authority node identity' "$TMPROOT/identity-error" \
+  || fail "noncanonical UUID did not fail at the ownership boundary"
+cp "$TMPROOT/original-watched-provider.yaml" "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH"
+cp "$TMPROOT/original-watched-base.yaml" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"
+cp "$TMPROOT/original-watched-operator.yaml" "$AUTHORITY_DIR/infra/catalog/operator.yaml"
+echo "PASS: mixed-case semantic UUID alias cannot rebind a node"
+
 # ── 6. Conflicting ownership of one alias is never last-writer-wins ──────────
 sed -i.bak 's#operator=http://operator-node-app:3000#operator=https://foreign.example#' \
   "$AUTHORITY_DIR/$ENDPOINTS_SUBPATH" "$AUTHORITY_DIR/$SUBPATH/configmap.yaml"

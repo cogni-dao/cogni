@@ -350,7 +350,7 @@ for row in catalog:
     name, node_id, envs = row.get("name"), row.get("node_id"), row.get("envs")
     if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", name):
         raise SystemExit("invalid route authority node name")
-    if not isinstance(node_id, str) or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", node_id):
+    if not isinstance(node_id, str) or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", node_id):
         raise SystemExit("missing route authority node identity")
     if not isinstance(envs, list) or not all(isinstance(env, str) for env in envs):
         raise SystemExit("missing route authority environment membership")
