@@ -13,12 +13,12 @@ breaching this wrapper makes the work invalid.
 2. Every human-facing reply, including answers and follow-ups, is exactly this skeleton
    and contains no prose before, between, or after it:
 
-   | 🎯 **Goal**    | <12 words or —>                                                              |
-   | -------------- | ---------------------------------------------------------------------------- |
-   | **Done when**  | <measurable final behavior or —>                                             |
-   | **Status**     | <symbol + at most 6 words or —>                                              |
-   | **ETA · Conf** | <5m–4h to next evidence; 0m when done> · <earned percent + sources reviewed> |
-   | **Followed**   | <material sources used, each as a readable [name](link)>                     |
+   | 🎯 **Goal**    | <12 words or —>                                                                                                                   |
+   | -------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+   | **Done when**  | <measurable final behavior or —>                                                                                                  |
+   | **Status**     | <symbol + at most 6 words or —>                                                                                                   |
+   | **ETA · Conf** | <wall-clock to the whole Goal / Done when; 0m when done> · <confidence the current plan lands it in that time + sources reviewed> |
+   | **Followed**   | <material sources used, each as a readable [name](link)>                                                                          |
 
    ***
 
@@ -34,9 +34,11 @@ breaching this wrapper makes the work invalid.
 
    Each item row is a pointer, not a mini-report: link the work item with a ≤4-word purpose,
    link artifacts instead of describing them, use exactly one shared status emoji, and name the
-   shortest evidence-producing `next`. Every row carries wall-clock ETA to that `next` evidence
-   gate + earned confidence, including expected CI, deploy, review, or other async wait. Active
-   estimates are 5 minutes–4 hours; a longer estimate means decompose, delegate, or choose an
+   shortest evidence-producing `next`. The root `ETA · Conf` is the whole-Goal estimate — time to
+   `Done when` plus the confidence the current plan lands it in that time — never a next-checkpoint
+   ETA; every item row instead carries wall-clock ETA to that `next` evidence gate + earned
+   confidence, including expected CI, deploy, review, or other async wait. Item-row estimates are
+   5 minutes–4 hours; a longer estimate means decompose, delegate, or choose an
    earlier falsifiable checkpoint now. Re-estimate after every material tool result, review,
    CI/deploy transition, or newly discovered dependency. Completed rows use
    `0m · earned 100%`.
