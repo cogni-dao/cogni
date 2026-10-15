@@ -45,6 +45,7 @@ import {
   AkashTxLeaseLogSourcesInputSchema,
   type AkashTxObserveInput,
   AkashTxObserveInputSchema,
+  AkashTxPrepareDatabaseCellDiagnosticInputSchema,
   AkashTxUpdateDatabaseCellInputSchema,
   AkashTxUpdateInputSchema,
 } from "@/contracts/compute.akash-tx.v1.contract";
@@ -61,6 +62,7 @@ import {
 } from "@/ports";
 
 import type { AkashTxLogger } from "./akash-tx-actuator";
+import type { DatabaseCellDiagnosticReceipt } from "./database-cell-diagnostic";
 
 /** Maximum accepted request body. A workload spec is kilobytes; anything larger is abuse. */
 export const AKASH_TX_MAX_BODY_BYTES = 1_048_576;
@@ -116,6 +118,11 @@ export interface AkashTxHttpDeps {
     environment: string;
     budgetProfile: string;
   }) => ProvisionSpec | Promise<ProvisionSpec>;
+  readonly databaseCellDiagnostic?: (
+    input: ReturnType<
+      typeof AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse
+    >
+  ) => Promise<DatabaseCellDiagnosticReceipt>;
 }
 
 /**
@@ -255,6 +262,20 @@ export function createAkashTxDispatcher(
 
     try {
       switch (request.path) {
+        case "/v1/akash/prepare-database-cell-diagnostic": {
+          const input =
+            AkashTxPrepareDatabaseCellDiagnosticInputSchema.parse(payload);
+          if (!deps.databaseCellDiagnostic) {
+            throw new AkashTxError(
+              "ledger_unavailable",
+              "private diagnostic executor unavailable"
+            );
+          }
+          return {
+            status: 200,
+            body: await deps.databaseCellDiagnostic(input),
+          };
+        }
         case "/v1/akash/create-database-cell": {
           const input = AkashTxCreateDatabaseCellInputSchema.parse(payload);
           if (!deps.databaseCellSpec) {

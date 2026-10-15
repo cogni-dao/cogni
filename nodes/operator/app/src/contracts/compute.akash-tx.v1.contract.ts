@@ -264,6 +264,8 @@ export const AkashTxUpdateDatabaseCellInputSchema =
   AkashTxCreateDatabaseCellInputSchema.extend({
     externalName: ExternalNameSchema,
   });
+export const AkashTxPrepareDatabaseCellDiagnosticInputSchema =
+  AkashTxUpdateDatabaseCellInputSchema;
 
 /**
  * An update replaces the SDL in place and mints no lease, but it is still a mutation of a PAID

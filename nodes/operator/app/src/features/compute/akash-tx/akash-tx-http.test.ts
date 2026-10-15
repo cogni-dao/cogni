@@ -99,6 +99,88 @@ function dispatcherFor(actuator: AkashTxActuatorPort) {
 }
 
 describe("akash-tx dispatcher", () => {
+  it("prepares a diagnostic from authenticated references without allocating or accepting credentials", async () => {
+    const received: unknown[] = [];
+    const dispatch = createAkashTxDispatcher({
+      token: TOKEN,
+      actuator: stubActuator({
+        create: async () => {
+          throw new Error("diagnostic must not allocate");
+        },
+      }),
+      databaseCellDiagnostic: async (input) => {
+        received.push(input);
+        return {
+          version: 1,
+          action: "diagnostic-clone",
+          allocationReceiptId: "receipt",
+          nodeId: input.identity.nodeId,
+          nodeSlug: input.nodeSlug,
+          environment: "production",
+          provider: "akash",
+          providerAccount: "provider",
+          dseq: input.externalName,
+          failureDomainId: "failure-domain",
+          systemIdentifier: "123",
+          sourceSha: "a".repeat(40),
+          targetBuildSha: "b".repeat(40),
+          sourceDatabaseName: "cogni_toks9",
+          databaseName: "cogni_toks9_diagnostic",
+          replayRole: "replay_toks9_diagnostic",
+          connectionLimit: 8,
+          statementTimeoutMs: 2000,
+          verification: { rows: "1000", sha256: "a".repeat(64) },
+          completedAt: "2026-10-15T00:00:00Z",
+        };
+      },
+    });
+    const input = {
+      cogniKey: "cell/production/toks9/1",
+      environment: "production",
+      identity: IDENTITY,
+      nodeSlug: "toks9",
+      budgetProfile: "dedicated-high-throughput-v1",
+      externalName: "7001",
+    };
+    const request = {
+      method: "POST",
+      path: "/v1/akash/prepare-database-cell-diagnostic",
+      authorization: AUTH,
+      body: JSON.stringify(input),
+    };
+    expect(
+      (await dispatch({ ...request, authorization: undefined })).status
+    ).toBe(401);
+    expect(
+      (
+        await dispatch({
+          ...request,
+          body: JSON.stringify({ ...input, rootPassword: "caller-secret" }),
+        })
+      ).status
+    ).toBe(400);
+    expect(received).toHaveLength(0);
+    const response = await dispatch(request);
+    expect(response.status).toBe(200);
+    expect(received).toEqual([input]);
+    expect(JSON.stringify(response.body)).not.toContain("Password");
+  });
+  it("denies diagnostic preparation when its private executor is unavailable", async () => {
+    const response = await dispatcherFor(stubActuator())({
+      method: "POST",
+      path: "/v1/akash/prepare-database-cell-diagnostic",
+      authorization: AUTH,
+      body: JSON.stringify({
+        cogniKey: "cell/production/toks9/1",
+        environment: "production",
+        identity: IDENTITY,
+        nodeSlug: "toks9",
+        budgetProfile: "dedicated-high-throughput-v1",
+        externalName: "7001",
+      }),
+    });
+    expect(response.status).toBe(503);
+  });
   it("resolves the current private kit for same-lease cell UPDATE without caller spec or secrets", async () => {
     let kitVersion = "unsealed";
     const versions: string[] = [];
