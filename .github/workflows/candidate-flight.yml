@@ -457,6 +457,7 @@ jobs:
         with:
           app_source_root: ${{ github.workspace }}/app-src
           environment: candidate-a
+          destination_environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
           vm_host: ${{ secrets.VM_HOST }}
           ssh_deploy_key: ${{ secrets.SSH_DEPLOY_KEY }}
 
