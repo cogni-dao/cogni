@@ -416,8 +416,10 @@ run_harden
 RULES_1="$TMPROOT/rules.1"
 PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$RULES_1"
 
-grep -q -- "-s 80.200.246.35/32 -p tcp -m multiport --dports $PORTS .*compute-egress-allow.* ACCEPT" "$RULES_1" \
-  || { cat "$RULES_1" >&2; fail "catalog CIDR did not become a port-scoped ACCEPT"; }
+for port in 5432 5435 6379 4000 7233; do
+  grep -q -- "-s 80.200.246.35/32 -p tcp -m conntrack --ctdir ORIGINAL --ctorigdstport $port .*compute-egress-allow.* ACCEPT" "$RULES_1" \
+    || { cat "$RULES_1" >&2; fail "catalog CIDR did not become a published-port $port ACCEPT"; }
+done
 grep -q -- "-s 198.51.100.0/24 .*compute-egress-allow" "$RULES_1" || fail "second CIDR missing"
 allow_line=$(grep -n 'compute-egress-allow' "$RULES_1" | head -1 | cut -d: -f1)
 drop_line=$(grep -n 'drop-public' "$RULES_1" | cut -d: -f1)
@@ -459,9 +461,9 @@ ok "no staged file: previously installed allowlist still renders (boot path)"
 cp "$OUT_MIGRATION" "$STAGED_ALLOWLIST"
 run_harden
 PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/migration.rules"
-grep -q -- '-s 198.51.100.23/32 -p tcp -m multiport --dports 5432 .*compute-egress-allow.* ACCEPT' "$TMPROOT/migration.rules" \
+grep -q -- '-s 198.51.100.23/32 -p tcp -m conntrack --ctdir ORIGINAL --ctorigdstport 5432 .*compute-egress-allow.* ACCEPT' "$TMPROOT/migration.rules" \
   || fail "hardener did not install exact custodian TCP5432 ACCEPT"
-if grep '198.51.100.23/32' "$TMPROOT/migration.rules" | grep -qE -- '--dports (5432,|5435|6379|4000|7233|8080)'; then
+if grep '198.51.100.23/32' "$TMPROOT/migration.rules" | grep -qE -- '--ctorigdstport (5435|6379|4000|7233|8080)'; then
   fail "migration custodian gained unrelated substrate ports"
 fi
 ok "existing hardener installs custodian /32 for TCP5432 only"
@@ -500,13 +502,33 @@ printf '%s\n' '65.108.194.156/32:5432' > "$TMPROOT/scoped-candidate.expected"
 diff -u "$TMPROOT/scoped-candidate.expected" "$TMPROOT/scoped-candidate.rules" || fail "entry environment scope leaked"
 ok "entry scopes preserve distinct same-CIDR ports and normalize equivalent sets"
 
-# The unchanged hardener must install only the declared Temporal port for Poly.
+# The hardener must install only the declared Temporal port for this source.
 cp "$TMPROOT/scoped-production.list" "$STAGED_ALLOWLIST"
 run_harden
 PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/scoped-installed.rules"
-grep -q -- '-s 65.108.194.156/32 -p tcp -m multiport --dports 7233 .*compute-egress-allow.* ACCEPT' "$TMPROOT/scoped-installed.rules" || fail "Temporal-only rule missing"
-if grep '65.108.194.156/32' "$TMPROOT/scoped-installed.rules" | grep -q -- '--dports 5432'; then fail "Temporal NAT gained database access"; fi
+grep -q -- '-s 65.108.194.156/32 -p tcp -m conntrack --ctdir ORIGINAL --ctorigdstport 7233 .*compute-egress-allow.* ACCEPT' "$TMPROOT/scoped-installed.rules" || fail "Temporal-only rule missing"
+if grep '65.108.194.156/32' "$TMPROOT/scoped-installed.rules" | grep -qE -- '--ctorigdstport (5432|5435)'; then fail "Temporal NAT gained database access"; fi
 ok "hardener installs new production NAT for Temporal only"
+
+# Both services DNAT to container TCP5432. Each grant must retain its distinct
+# original published port, including the Dolt-only grant required after PG isolation.
+for published_port in 5432 5435; do
+  printf '%s\n' "198.51.100.42/32:$published_port" > "$STAGED_ALLOWLIST"
+  run_harden
+  PATH="$FAKEBIN:$PATH" iptables -S DOCKER-USER > "$TMPROOT/dnat-$published_port.rules"
+  grants=$(grep 'compute-egress-allow' "$TMPROOT/dnat-$published_port.rules")
+  [ "$(printf '%s\n' "$grants" | wc -l | tr -d ' ')" = 1 ] || fail "published-port grant widened"
+  printf '%s\n' "$grants" | grep -q -- "--ctdir ORIGINAL --ctorigdstport $published_port " \
+    || fail "grant lost original destination port $published_port"
+  if printf '%s\n' "$grants" | grep -q -- '--dport'; then fail "grant matches translated container ports"; fi
+done
+ok "Postgres-only and Doltgres-only grants distinguish their original published ports"
+
+incident_rule='-s 157.180.108.139/32 -p tcp --dport 5432 -m conntrack --ctorigdstport 5432 -m comment --comment incident-bug.5442-poly-prod-shed -j REJECT --reject-with tcp-reset'
+printf '%s\n' "$incident_rule" >> "$IPT_STATE"
+run_harden
+grep -Fxq -- "$incident_rule" "$IPT_STATE" || fail "hardener changed the scoped incident fence"
+ok "routine hardening preserves the corrected Postgres incident fence"
 
 cp "$SCOPED_CATALOG/scopea.yaml" "$TMPROOT/scope-valid.yaml"
 for mutation in '.compute_egress_cidrs[0].ports = []' '.compute_egress_cidrs[0].ports = [8080]' '.compute_egress_cidrs[0].ports = ["7233"]' '.compute_egress_cidrs[0].envs = []' '.compute_egress_cidrs[0].envs = ["preview"]'; do

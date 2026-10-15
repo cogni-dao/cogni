@@ -48,6 +48,18 @@ export function buildComputeSecretResources(input: {
                   name: secretName,
                   creationPolicy: "Owner",
                   deletionPolicy: "Delete",
+                  // provider-http substitutes these inside serialized JSON strings.
+                  // Migration Jobs consume a separate, unescaped Secret below.
+                  template: {
+                    engineVersion: "v2",
+                    mergePolicy: "Replace",
+                    data: Object.fromEntries(
+                      secretKeys.map((key) => [
+                        key,
+                        String.raw`{{ index . "${key}" | toJson | trimPrefix "\"" | trimSuffix "\"" }}`,
+                      ])
+                    ),
+                  },
                 },
                 data: secretKeys.map((key) => ({
                   secretKey: key,

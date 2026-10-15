@@ -98,12 +98,18 @@ if [ -f "$ALLOWLIST_FILE" ]; then
     case "$ports" in
       *[!0-9,]*|"") echo "[harden] WARN: skipping invalid ports: $line" >&2; continue ;;
     esac
-    if iptables -A DOCKER-USER -s "$cidr" -p tcp -m multiport --dports "$ports" \
-      -m comment --comment "$TAG:compute-egress-allow" -j ACCEPT; then
-      echo "[harden] compute-egress allow: $cidr -> $ports"
-    else
-      echo "[harden] WARN: iptables rejected allowlist line: $line" >&2
-    fi
+    # DOCKER-USER sees DNAT destinations: published Doltgres 5435 and Postgres
+    # 5432 both arrive as container port 5432. Grants name published ports.
+    IFS=, read -r -a published_ports <<< "$ports"
+    for published_port in "${published_ports[@]}"; do
+      if iptables -A DOCKER-USER -s "$cidr" -p tcp \
+        -m conntrack --ctdir ORIGINAL --ctorigdstport "$published_port" \
+        -m comment --comment "$TAG:compute-egress-allow" -j ACCEPT; then
+        echo "[harden] compute-egress allow: $cidr -> published $published_port"
+      else
+        echo "[harden] WARN: iptables rejected allowlist port: $cidr:$published_port" >&2
+      fi
+    done
   done < "$ALLOWLIST_FILE"
 fi
 
