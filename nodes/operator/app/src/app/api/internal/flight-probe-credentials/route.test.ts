@@ -53,21 +53,39 @@ describe("flight-probe credential projection route", () => {
       lane: "candidate-a",
       nodeId: NODE_ID,
     });
+    expect(d.audit).toHaveBeenCalledOnce();
+    expect(d.audit).toHaveBeenCalledWith({
+      lane: "candidate-a",
+      nodeId: NODE_ID,
+      status: 200,
+      durationMs: expect.any(Number),
+      outcome: "success",
+    });
   });
 
   it("rejects a carriage-return credential from the projection capability", async () => {
+    const d = deps({
+      readRing: vi.fn().mockResolvedValue({
+        active: `${"a".repeat(42)}\r=`,
+        previous: null,
+      }),
+    });
     const res = await handleFlightProbeCredentialProjection(
       request(),
-      deps({
-        readRing: vi.fn().mockResolvedValue({
-          active: `${"a".repeat(42)}\r=`,
-          previous: null,
-        }),
-      })
+      d
     );
     expect(res.status).toBe(401);
     expect(res.headers.get("cache-control")).toBe("no-store");
     await expect(res.json()).resolves.toEqual({ error: "unauthorized" });
+    expect(d.audit).toHaveBeenCalledOnce();
+    expect(d.audit).toHaveBeenCalledWith({
+      lane: "candidate-a",
+      nodeId: NODE_ID,
+      status: 401,
+      durationMs: expect.any(Number),
+      outcome: "error",
+      errorCode: "unauthorized",
+    });
   });
 
   it.each([
@@ -106,6 +124,13 @@ describe("flight-probe credential projection route", () => {
     const res = await handleFlightProbeCredentialProjection(request(), d);
     expect(res.status).toBe(429);
     expect(d.readRing).not.toHaveBeenCalled();
+    expect(d.audit).toHaveBeenCalledOnce();
+    expect(d.audit).toHaveBeenCalledWith({
+      status: 429,
+      durationMs: expect.any(Number),
+      outcome: "error",
+      errorCode: "rate_limited",
+    });
   });
 
   it("rejects an oversized body even without content-length", async () => {

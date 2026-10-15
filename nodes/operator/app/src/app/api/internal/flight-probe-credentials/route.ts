@@ -15,6 +15,7 @@ import {
   TokenBucketRateLimiter,
   wrapRouteHandlerWithLogging,
 } from "@/bootstrap/http";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 import { flightProbeRingSchema } from "@/shared/secrets/flight-probe-credential";
 
 export const runtime = "nodejs";
@@ -46,7 +47,10 @@ export type ProjectionDeps = {
   readonly audit: (event: {
     lane?: string;
     nodeId?: string;
-    outcome: "allowed" | "denied" | "rate_limited";
+    status: 200 | 401 | 429;
+    durationMs: number;
+    outcome: "success" | "error";
+    errorCode?: "unauthorized" | "rate_limited";
   }) => void;
 };
 
@@ -100,12 +104,21 @@ export async function handleFlightProbeCredentialProjection(
   request: Request,
   deps: ProjectionDeps
 ): Promise<NextResponse<Record<string, unknown>>> {
+  const startedAt = performance.now();
+  const audit = (
+    event: Omit<Parameters<ProjectionDeps["audit"]>[0], "durationMs">
+  ) =>
+    deps.audit({
+      ...event,
+      durationMs: Math.round(performance.now() - startedAt),
+    });
+
   if (!isTls(request) || !deps.isControl()) {
-    deps.audit({ outcome: "denied" });
+    audit({ status: 401, outcome: "error", errorCode: "unauthorized" });
     return response(401, { error: "unauthorized" });
   }
   if (!deps.consumeRateLimit(request)) {
-    deps.audit({ outcome: "rate_limited" });
+    audit({ status: 429, outcome: "error", errorCode: "rate_limited" });
     return response(429, { error: "rate_limited" });
   }
   const oidcJwt = bearer(request);
@@ -118,7 +131,7 @@ export async function handleFlightProbeCredentialProjection(
     (declaredLength !== null &&
       (!Number.isFinite(declaredLength) || declaredLength > MAX_BODY_BYTES))
   ) {
-    deps.audit({ outcome: "denied" });
+    audit({ status: 401, outcome: "error", errorCode: "unauthorized" });
     return response(401, { error: "unauthorized" });
   }
 
@@ -126,12 +139,12 @@ export async function handleFlightProbeCredentialProjection(
   try {
     body = await readBoundedJson(request);
   } catch {
-    deps.audit({ outcome: "denied" });
+    audit({ status: 401, outcome: "error", errorCode: "unauthorized" });
     return response(401, { error: "unauthorized" });
   }
   const parsed = RequestSchema.safeParse(body);
   if (!parsed.success || !deps.isCatalogNode(parsed.data.nodeId)) {
-    deps.audit({ outcome: "denied" });
+    audit({ status: 401, outcome: "error", errorCode: "unauthorized" });
     return response(401, { error: "unauthorized" });
   }
 
@@ -139,10 +152,15 @@ export async function handleFlightProbeCredentialProjection(
     const ring = flightProbeRingSchema.parse(
       await deps.readRing({ oidcJwt, ...parsed.data })
     );
-    deps.audit({ ...parsed.data, outcome: "allowed" });
+    audit({ ...parsed.data, status: 200, outcome: "success" });
     return response(200, ring);
   } catch {
-    deps.audit({ ...parsed.data, outcome: "denied" });
+    audit({
+      ...parsed.data,
+      status: 401,
+      outcome: "error",
+      errorCode: "unauthorized",
+    });
     return response(401, { error: "unauthorized" });
   }
 }
@@ -158,10 +176,11 @@ export const POST = wrapRouteHandlerWithLogging(
         limiter.consume(extractClientIp(req as NextRequest)),
       readRing: capability.readRing,
       audit: (event) =>
-        ctx.log.info(
-          { ...event, routeId: "flight-probe-credentials.internal" },
-          "flight-probe credential projection"
-        ),
+        logEvent(ctx.log, EVENT_NAMES.FLIGHT_PROBE_PROJECTION_COMPLETE, {
+          reqId: ctx.reqId,
+          routeId: ctx.routeId,
+          ...event,
+        }),
     });
   }
 );
