@@ -52,8 +52,8 @@ echo '[PASS] requested app image remains mandatory for an affected app'
 # incidental catalog selection must keep its existing rollback fence.
 promote="$REPO_ROOT/.github/workflows/promote-and-deploy.yml"
 yq -r '.jobs.promote-k8s.steps[] | select(.name == "Record external workload source-sha") | .run' "$promote" > "$work/pin.sh"
-mkdir -p "$work/app-src/scripts/ci" "$work/app-src/infra/catalog" "$work/deploy-branch/.promote-state"
-ln -s "$REPO_ROOT/scripts/ci/update-source-sha-map.sh" "$work/app-src/scripts/ci/update-source-sha-map.sh"
+mkdir -p "$work/ci-src/scripts/ci" "$work/app-src/infra/catalog" "$work/deploy-branch/.promote-state"
+ln -s "$REPO_ROOT/scripts/ci/update-source-sha-map.sh" "$work/ci-src/scripts/ci/update-source-sha-map.sh"
 birth=1111111111111111111111111111111111111111
 prior=2222222222222222222222222222222222222222
 printf 'source_sha: %s\n' "$birth" > "$work/app-src/infra/catalog/poly.yaml"
