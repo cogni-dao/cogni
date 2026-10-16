@@ -19,7 +19,7 @@
  */
 
 import type { Database } from "@cogni/db-client";
-import { eq, or, type SQL } from "drizzle-orm";
+import { eq, type SQL } from "drizzle-orm";
 
 import { nodes } from "@/shared/db/nodes";
 
@@ -50,8 +50,7 @@ export function isNodeId(value: string): boolean {
  */
 export function nodeIdOrSlug(idOrSlug: string): SQL {
   if (isNodeId(idOrSlug)) {
-    // `or(...)` is non-undefined here (two defined terms); assert for the SQL return type.
-    return or(eq(nodes.id, idOrSlug), eq(nodes.slug, idOrSlug)) as SQL;
+    return eq(nodes.id, idOrSlug);
   }
   return eq(nodes.slug, idOrSlug);
 }
