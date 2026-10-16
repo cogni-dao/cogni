@@ -1,19 +1,25 @@
 ---
 name: node-sync-prs
-description: Use when shared behavior must reach sovereign node repositories. Automatic template/fork source sync is retired; recall the hub distribution contract before choosing a package, pinned workflow, rare fail-closed codemod, or node-owned product change.
+description: Canonical entry skill whenever a shared change may need to reach sovereign node repositories. Routes package publication, exact package bumps, pinned workflows, fail-closed codemods, literal source ports, and node-owned product changes to separate knowledge atoms.
 ---
 
-# Node distribution — recall the hub contract
+# Node distribution — choose one lane
 
-Before acting, recall both canonical entries:
+First recall the fleet-wide safety boundary:
 
 - [Use packages—not fork-wide source sync](https://cognidao.org/knowledge/fork-sync-product-clobber)
-- [How Cogni publishes a shared package to node forks](https://cognidao.org/knowledge/publish-shared-runtime-core)
 
-`node-template` is a birth scaffold, not an ongoing source upstream. Automatic
-fork source sync is retired. Never create a generated or catch-all source-copy
-PR from this skill.
+Then choose exactly one branch and load its atom before editing:
 
-After recall, apply the hub's package/workflow/codemod/product classification and
-its required package-candidate analysis. A justified targeted manual port ships
-as an ordinary reviewed PR.
+| situation                                                 | required atom                                                                                      |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Shared behavior has no published package                  | [Publish a shared package](https://cognidao.org/knowledge/publish-shared-runtime-core)             |
+| A package already exists and a node needs a newer version | [Adopt one immutable package release](https://cognidao.org/knowledge/adopt-node-package-release)   |
+| Literal code must be copied once                          | [Port node source only with a recorded exit](https://cognidao.org/knowledge/port-node-source-once) |
+| The repository tree itself must change                    | [Run fleet codemods only fail closed](https://cognidao.org/knowledge/migrate-node-trees-safely)    |
+| Shared CI behavior must change                            | [Share node CI through pinned workflows](https://cognidao.org/knowledge/share-node-ci-workflow)    |
+| The change is product behavior or branding                | Stop distribution; it is node-owned.                                                               |
+
+Never create a generated or catch-all source-copy PR. Every delivery PR names
+the branch atom it follows; uncertainty routes to the literal-source-port atom
+and its package-candidate analysis before any copy is made.

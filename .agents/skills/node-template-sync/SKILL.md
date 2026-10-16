@@ -1,15 +1,12 @@
 ---
 name: node-template-sync
-description: Use when a node-template change must reach existing nodes, when auditing old generated sync PRs, or when automatic fork sync is requested. Source sync is retired; recall the hub distribution contract before acting.
+description: Redirect for requests phrased as node-template sync. Load node-sync-prs, which owns every supported path from shared change to sovereign node repository.
 ---
 
-# Node-template distribution — recall before acting
+# Node-template sync — redirect
 
-Recall the canonical contract and publishing mechanism:
+Read and follow [`node-sync-prs`](../node-sync-prs/SKILL.md). It is the single
+entry skill for package releases, package bumps, pinned workflows, codemods,
+targeted source ports, and node-owned product changes.
 
-- [Use packages—not fork-wide source sync](https://cognidao.org/knowledge/fork-sync-product-clobber)
-- [How Cogni publishes a shared package to node forks](https://cognidao.org/knowledge/publish-shared-runtime-core)
-
-Hard stop: no `node-template` push may write fork source. Do not reactivate,
-narrow, or rebuild the retired sync writers. Audit and close old generated sync
-PRs, then use the delivery lane selected by the recalled hub contract.
+This alias adds no policy. Do not run a second, template-specific procedure.
