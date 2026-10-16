@@ -80,6 +80,9 @@ export const EVENT_NAMES = {
   NODE_OPERATIONS_READ_COMPLETE: "feature.node_operations_read.complete",
   AGENT_IDENTITY_OPERATION_COMPLETE:
     "feature.agent_identity.operation_complete",
+  AGENT_EXECUTION_COMPLETE: "feature.agent_execution.complete",
+  WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE:
+    "feature.work_item_principal.operation_complete",
   VCS_FLIGHT_REQUEST_COMPLETE: "feature.vcs_flight.request_complete",
   VCS_MERGE_REQUEST_COMPLETE: "feature.vcs_merge.request_complete",
   VCS_RUN_CI_REQUEST_COMPLETE: "feature.vcs_run_ci.request_complete",

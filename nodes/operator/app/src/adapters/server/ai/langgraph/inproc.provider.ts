@@ -232,9 +232,10 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         const policy = createToolAllowlistPolicy(allToolIds);
         const source = createStaticToolSourceFromRecord(runtimeTools);
         const actorId =
-          scope.actorUserId !== undefined
+          scope.actorId ??
+          (scope.actorUserId !== undefined
             ? `user:${scope.actorUserId}`
-            : undefined;
+            : undefined);
         const tenantId = scope.billing.billingAccountId;
         const toolRunner = createToolRunner(source, emit, {
           policy,
@@ -293,8 +294,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         configurable: {
           model,
           toolIds,
-          ...(scope.actorUserId !== undefined
-            ? { actorId: `user:${scope.actorUserId}` }
+          ...(actorId !== undefined
+            ? { actorId }
             : {}),
           tenantId: scope.billing.billingAccountId,
           graphId,

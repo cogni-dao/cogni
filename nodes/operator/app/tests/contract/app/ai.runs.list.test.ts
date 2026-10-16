@@ -45,6 +45,9 @@ function makeRun(overrides: Partial<GraphRun> = {}): GraphRun {
 // --- Mocks ---
 
 const mockListRunsByUser = vi.fn();
+const { mockResolveRequestPrincipal } = vi.hoisted(() => ({
+  mockResolveRequestPrincipal: vi.fn(),
+}));
 const mockGraphRunRepository = {
   createRun: vi.fn(),
   markRunStarted: vi.fn(),
@@ -77,11 +80,52 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
 }));
 
+vi.mock("@/app/_lib/auth/request-identity", () => ({
+  RequestIdentityUnavailableError: class RequestIdentityUnavailableError extends Error {},
+  resolveRequestPrincipal: mockResolveRequestPrincipal,
+}));
+
 // --- Tests ---
 
 describe("GET /api/v1/ai/runs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:operator/${TEST_SESSION_USER_1.id}`,
+      userId: TEST_SESSION_USER_1.id,
+      walletAddress: TEST_SESSION_USER_1.walletAddress,
+      displayName: TEST_SESSION_USER_1.displayName,
+      avatarColor: TEST_SESSION_USER_1.avatarColor,
+    });
+  });
+
+  it("lists fresh-v2 runs by durable actor id", async () => {
+    const actorId = "00000000-0000-4000-8000-000000005264";
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "agent",
+      principalId: `agent:operator/${actorId}`,
+      actorId,
+      credentialId: "00000000-0000-4000-8000-000000005265",
+      billingAccountId: "00000000-0000-4000-8000-000000005263",
+      legacyUserId: null,
+      displayName: "fresh-v2",
+    });
+    mockListRunsByUser.mockResolvedValue([]);
+
+    await testApiHandler({
+      appHandler,
+      url: "/api/v1/ai/runs",
+      async test({ fetch }) {
+        expect((await fetch({ method: "GET" })).status).toBe(200);
+      },
+    });
+
+    expect(mockListRunsByUser).toHaveBeenCalledWith(
+      expect.anything(),
+      actorId,
+      expect.anything()
+    );
   });
 
   it("returns 200 with runs for authenticated user", async () => {
