@@ -2662,6 +2662,38 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         return toActorBeneficiaryPolicyProposal(proposal, acceptances);
       }
 
+      const [activationEarner, activationBeneficiary, activationSteward] =
+        await Promise.all([
+          tx
+            .select({ kind: actors.kind, status: actors.status, parentActorId: actors.parentActorId })
+            .from(actors)
+            .where(eq(actors.id, proposal.earnedByActorId))
+            .limit(1),
+          tx
+            .select({ kind: actors.kind, status: actors.status })
+            .from(actors)
+            .where(eq(actors.id, proposal.beneficiaryActorId))
+            .limit(1),
+          tx
+            .select({ kind: actors.kind, status: actors.status })
+            .from(actors)
+            .where(eq(actors.id, proposal.stewardActorId))
+            .limit(1),
+        ]);
+      if (
+        activationEarner[0]?.kind !== "agent" ||
+        activationEarner[0].status !== "active" ||
+        activationEarner[0].parentActorId !== proposal.stewardActorId ||
+        activationBeneficiary[0]?.kind !== "user" ||
+        activationBeneficiary[0].status !== "active" ||
+        activationSteward[0]?.kind !== "user" ||
+        activationSteward[0].status !== "active"
+      ) {
+        throw new Error(
+          "Beneficiary proposal authority changed before activation; propose again"
+        );
+      }
+
       const [latestAllocation] = await tx
         .select({ contributionCutoff: actorContributionAllocations.contributionCutoff })
         .from(actorContributionAllocations)
@@ -2718,6 +2750,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     readonly proposalId: string;
     readonly revokedByActorId: string;
     readonly revokedAt: Date;
+    readonly governanceOverride?: boolean;
   }): Promise<ActorBeneficiaryPolicyProposalRecord> {
     return this.db.transaction(async (tx) => {
       await tx.execute(
@@ -2729,12 +2762,25 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .where(eq(actorBeneficiaryPolicyProposals.id, params.proposalId))
         .limit(1);
       if (!proposal) throw new Error("Beneficiary proposal not found");
-      if (
+      const outsideParticipantSet =
         params.revokedByActorId !== proposal.earnedByActorId &&
         params.revokedByActorId !== proposal.stewardActorId &&
-        params.revokedByActorId !== proposal.beneficiaryActorId
-      ) {
+        params.revokedByActorId !== proposal.beneficiaryActorId;
+      if (outsideParticipantSet && !params.governanceOverride) {
         throw new Error("Caller cannot revoke this beneficiary proposal");
+      }
+      if (outsideParticipantSet) {
+        const [governanceActor] = await tx
+          .select({ kind: actors.kind, status: actors.status })
+          .from(actors)
+          .where(eq(actors.id, params.revokedByActorId))
+          .limit(1);
+        if (
+          governanceActor?.kind !== "user" ||
+          governanceActor.status !== "active"
+        ) {
+          throw new Error("Governance revocation requires an active human actor");
+        }
       }
       if (proposal.status === "revoked") {
         const acceptances = await tx

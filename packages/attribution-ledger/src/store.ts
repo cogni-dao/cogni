@@ -1027,6 +1027,7 @@ export interface ActorAttributionStore {
     readonly proposalId: string;
     readonly revokedByActorId: string;
     readonly revokedAt: Date;
+    readonly governanceOverride?: boolean;
   }): Promise<ActorBeneficiaryPolicyProposalRecord>;
 
   getActorBeneficiaryPolicyProposal(

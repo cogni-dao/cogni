@@ -49,6 +49,7 @@ export async function resolveAttributionActor(input: {
 export async function mutateBeneficiaryPolicy(input: {
   readonly actorId: string;
   readonly mutation: ActorBeneficiaryPolicyMutation;
+  readonly governanceOverride?: boolean;
 }) {
   const store = getContainer().attributionStore;
   const now = new Date();
@@ -76,6 +77,9 @@ export async function mutateBeneficiaryPolicy(input: {
     proposalId: input.mutation.proposalId,
     revokedByActorId: input.actorId,
     revokedAt: now,
+    ...(input.governanceOverride !== undefined
+      ? { governanceOverride: input.governanceOverride }
+      : {}),
   });
 }
 

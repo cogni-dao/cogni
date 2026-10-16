@@ -82,10 +82,33 @@ export const POST = wrapRouteHandlerWithLogging(
       const denied = checkApprover(ctx, caller.principal.walletAddress);
       if (denied) return denied;
     }
+    let governanceOverride = false;
+    if (mutation.action === "revoke") {
+      const proposal =
+        await getContainer().attributionStore.getActorBeneficiaryPolicyProposal(
+          mutation.proposalId
+        );
+      if (!proposal) {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
+      const participant =
+        caller.actorId === proposal.earnedByActorId ||
+        caller.actorId === proposal.stewardActorId ||
+        caller.actorId === proposal.beneficiaryActorId;
+      if (!participant) {
+        if (caller.principal.kind !== "human") {
+          return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        }
+        const denied = checkApprover(ctx, caller.principal.walletAddress);
+        if (denied) return denied;
+        governanceOverride = true;
+      }
+    }
     try {
       const proposal = await mutateBeneficiaryPolicy({
         actorId: caller.actorId,
         mutation,
+        governanceOverride,
       });
       ctx.log.info(
         {
