@@ -39,7 +39,12 @@ import { and, eq, sql } from "drizzle-orm";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DrizzleAgentIdentityAdapter } from "@/adapters/server/identity/agent-identity.adapter";
-import { actors, billingAccounts, userBindings } from "@/shared/db/schema";
+import {
+  actors,
+  billingAccounts,
+  epochs,
+  userBindings,
+} from "@/shared/db/schema";
 
 /** Unwrap DrizzleQueryError → underlying PostgresError message */
 function drizzleCause(err: unknown): string {
@@ -1917,7 +1922,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
     );
 
-    it("freezes flock-leader as earner and Derek as explicit beneficiary", async () => {
+    it("settles a historical flock-leader receipt after claim and late beneficiary consent", async () => {
       const derek = await seedTestActor(db, { walletAddress: signer.address });
       const externalId = `295942454-${derek.user.id}`;
       await db.insert(userBindings).values({
@@ -2001,7 +2006,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         db,
         TEST_NODE_ID,
         "actor-claim-component-test-secret-minimum-32-chars",
-        () => new Date("2026-10-03T00:00:00.000Z")
+        () => new Date("2026-10-09T00:00:00.000Z")
       );
       const identityClaim = await identity.createExistingAgentClaim({
         stewardUserId: derek.user.id,
@@ -2011,80 +2016,13 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         providerLogin: "flock-leader",
         attestationJti: crypto.randomUUID(),
         attestationEvidence: { ceremony: "github-source-claim-v1" },
-        attestationExpiresAt: new Date("2026-10-04T00:00:00.000Z"),
+        attestationExpiresAt: new Date("2026-10-10T00:00:00.000Z"),
         idempotencyKey: crypto.randomUUID(),
       });
       await identity.acceptExistingAgentClaim({
         actorId: flockLeaderActorId,
         claimId: identityClaim.claimId,
       });
-      const proposal = await adapter.proposeActorBeneficiaryPolicy({
-        earnedByActorId: flockLeaderActorId,
-        beneficiaryActorId: derekActor.id,
-        stewardActorId: derekActor.id,
-        policyVersion: "flock-leader-beneficiary.v1",
-        proposedByActorId: flockLeaderActorId,
-        evidence: { ceremony: "human-ai-beneficiary-claim-v1" },
-        effectiveFrom: new Date("2026-10-01T00:00:00.000Z"),
-      });
-      await expect(
-        adapter.proposeActorBeneficiaryPolicy({
-          earnedByActorId: flockLeaderActorId,
-          beneficiaryActorId: derekActor.id,
-          stewardActorId: derekActor.id,
-          policyVersion: "flock-leader-beneficiary.v1",
-          proposedByActorId: flockLeaderActorId,
-          evidence: { ceremony: "human-ai-beneficiary-claim-v1" },
-          effectiveFrom: new Date("2026-10-01T00:00:00.000Z"),
-        })
-      ).resolves.toMatchObject({ id: proposal.id, status: "pending" });
-      await Promise.all([
-        adapter.acceptActorBeneficiaryPolicy({
-          proposalId: proposal.id,
-          role: "earner",
-          acceptedByActorId: flockLeaderActorId,
-          evidence: { credential: "durable-agent-v2" },
-          acceptedAt: new Date("2026-09-30T20:00:00.000Z"),
-        }),
-        adapter.acceptActorBeneficiaryPolicy({
-          proposalId: proposal.id,
-          role: "earner",
-          acceptedByActorId: flockLeaderActorId,
-          evidence: { credential: "durable-agent-v2" },
-          acceptedAt: new Date("2026-09-30T20:00:00.000Z"),
-        }),
-      ]);
-      await adapter.acceptActorBeneficiaryPolicy({
-        proposalId: proposal.id,
-        role: "steward",
-        acceptedByActorId: derekActor.id,
-        evidence: { session: "steward-siwe" },
-        acceptedAt: new Date("2026-09-30T20:01:00.000Z"),
-      });
-      await adapter.acceptActorBeneficiaryPolicy({
-        proposalId: proposal.id,
-        role: "beneficiary",
-        acceptedByActorId: derekActor.id,
-        evidence: { consent: "beneficiary-accepted" },
-        acceptedAt: new Date("2026-09-30T20:02:00.000Z"),
-      });
-      const activated = await adapter.acceptActorBeneficiaryPolicy({
-        proposalId: proposal.id,
-        role: "steward",
-        acceptedByActorId: derekActor.id,
-        evidence: { session: "steward-siwe" },
-        acceptedAt: new Date("2026-09-30T20:03:00.000Z"),
-      });
-      expect(activated).toMatchObject({
-        status: "activated",
-        activatedPolicyId: expect.any(String),
-      });
-      expect(activated.acceptances.map(({ role }) => role).sort()).toEqual([
-        "beneficiary",
-        "earner",
-        "steward",
-      ]);
-
       const epoch = await adapter.createEpoch({
         nodeId: TEST_NODE_ID,
         scopeId: TEST_SCOPE_ID,
@@ -2119,8 +2057,8 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       });
       expect(prepared).toMatchObject({
         earnedByActorId: flockLeaderActorId,
-        beneficiaryActorId: derekActor.id,
-        beneficiaryPolicyVersion: "flock-leader-beneficiary.v1",
+        beneficiaryActorId: null,
+        beneficiaryPolicyVersion: null,
         contributionCutoff: "2026-10-02T12:00:00.000Z",
         sourceEvidence: expect.objectContaining({
           immutableExternalId: externalId,
@@ -2133,7 +2071,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       expect(persisted).toMatchObject({
         allocationRef: prepared.allocationRef,
         earnedByActorId: flockLeaderActorId,
-        beneficiaryActorId: derekActor.id,
+        beneficiaryActorId: null,
       });
       await expect(
         adapter.listUnallocatedActorReceiptIdsForEpoch(epoch.id)
@@ -2141,17 +2079,17 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       await expect(
         adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
       ).resolves.toMatchObject({ status: "frozen", tokenAmount: null });
-      const walletResolution = await new DrizzleClaimantWalletResolver(
-        db
-      ).resolveBeneficiaryWallets([persisted]);
-      expect(walletResolution).toEqual([
+      const unresolvedWalletResolution =
+        await new DrizzleClaimantWalletResolver(db).resolveBeneficiaryWallets([
+          persisted,
+        ]);
+      expect(unresolvedWalletResolution).toEqual([
         expect.objectContaining({
           allocationRef: persisted.allocationRef,
-          beneficiaryActorId: derekActor.id,
-          wallet: signer.address,
-          bindingEvidence: expect.objectContaining({
-            actorId: derekActor.id,
-            provider: "wallet",
+          beneficiaryActorId: null,
+          wallet: null,
+          failureEvidence: expect.objectContaining({
+            code: "beneficiary_policy_unresolved",
           }),
         }),
       ]);
@@ -2162,13 +2100,13 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         scopeId: TEST_SCOPE_ID,
         sourceEpochId: epoch.id,
         earnedByActorId: flockLeaderActorId,
-        beneficiaryActorId: derekActor.id,
+        beneficiaryActorId: null,
         contributionCutoff: new Date(persisted.contributionCutoff),
         tokenAmount: 17n,
         sourceEvidenceHash: persisted.sourceEvidenceHash,
         resolverFailure: {
-          code: "beneficiary_wallet_unbound" as const,
-          beneficiaryActorId: derekActor.id,
+          code: "beneficiary_policy_unresolved" as const,
+          beneficiaryActorId: null,
           observedBindingIds: [],
         },
       };
@@ -2194,10 +2132,26 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       await expect(
         adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
       ).resolves.toMatchObject({
-        status: "pending_wallet",
+        status: "pending_beneficiary",
         tokenAmount: 17n,
         claimantWallet: null,
       });
+
+      const activated = await activateReplacement({
+        beneficiaryActorId: derekActor.id,
+        policyVersion: "flock-leader-beneficiary.v1",
+        effectiveFrom: new Date("2026-10-16T00:00:00.000Z"),
+        acceptedAt: new Date("2026-10-10T00:00:00.000Z"),
+      });
+      expect(activated).toMatchObject({
+        status: "activated",
+        activatedPolicyId: expect.any(String),
+      });
+      expect(activated.acceptances.map(({ role }) => role).sort()).toEqual([
+        "beneficiary",
+        "earner",
+        "steward",
+      ]);
 
       const future = await seedTestActor(db);
       await db.insert(userBindings).values({
@@ -2212,35 +2166,25 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         .where(and(eq(actors.kind, "user"), eq(actors.userId, future.user.id)))
         .limit(1);
       if (!futureActor) throw new Error("Expected future beneficiary actor");
-      await expect(
-        activateReplacement({
-          beneficiaryActorId: futureActor.id,
-          policyVersion: "flock-leader-beneficiary.backdated-rejected",
-          effectiveFrom: new Date("2026-10-02T11:00:00.000Z"),
-          acceptedAt: new Date("2026-10-02T10:00:00.000Z"),
-        })
-      ).rejects.toThrow(
-        "Beneficiary policy cannot backdate across a frozen actor allocation"
-      );
       await activateReplacement({
         beneficiaryActorId: futureActor.id,
         policyVersion: "flock-leader-beneficiary.v2",
-        effectiveFrom: new Date("2026-10-04T00:00:00.000Z"),
-        acceptedAt: new Date("2026-10-03T00:00:00.000Z"),
+        effectiveFrom: new Date("2026-10-25T00:00:00.000Z"),
+        acceptedAt: new Date("2026-10-24T00:00:00.000Z"),
       });
       await expect(
         activateReplacement({
           beneficiaryActorId: derekActor.id,
           policyVersion: "flock-leader-beneficiary.out-of-order-rejected",
-          effectiveFrom: new Date("2026-10-03T00:00:00.000Z"),
-          acceptedAt: new Date("2026-10-02T15:00:00.000Z"),
+          effectiveFrom: new Date("2026-10-24T12:00:00.000Z"),
+          acceptedAt: new Date("2026-10-24T01:00:00.000Z"),
         })
       ).rejects.toThrow(
         "Beneficiary policy effectiveFrom must be strictly after the latest policy"
       );
       expect(
         await adapter.getActorContributionAllocation(persisted.allocationRef)
-      ).toMatchObject({ beneficiaryActorId: derekActor.id });
+      ).toMatchObject({ beneficiaryActorId: null });
 
       await adapter.closeIngestion(
         epoch.id,
@@ -2250,6 +2194,10 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         "actor-allocation-cleanup"
       );
       await adapter.finalizeEpoch(epoch.id, 0n);
+      await db
+        .update(epochs)
+        .set({ closedAt: new Date("2026-10-10T02:00:00.000Z") })
+        .where(eq(epochs.id, epoch.id));
 
       const nextEpoch = await adapter.createEpoch({
         nodeId: TEST_NODE_ID,
@@ -2266,18 +2214,72 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         "actor-settlement-cleanup"
       );
       await adapter.finalizeEpoch(nextEpoch.id, 0n);
+      await db
+        .update(epochs)
+        .set({ closedAt: new Date("2026-10-15T01:00:00.000Z") })
+        .where(eq(epochs.id, nextEpoch.id));
+      const pendingBeforePolicyEffective =
+        await adapter.listPendingActorDistributionLiabilities(nextEpoch.id);
+      expect(pendingBeforePolicyEffective).toEqual([
+        expect.objectContaining({
+          allocationRef: persisted.allocationRef,
+          allocation: expect.objectContaining({
+            beneficiaryActorId: null,
+            beneficiaryPolicyId: null,
+          }),
+        }),
+      ]);
+
+      const settlementEpoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        periodStart: new Date("2026-10-15T00:00:00.000Z"),
+        periodEnd: new Date("2026-10-22T00:00:00.000Z"),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      await adapter.closeIngestion(
+        settlementEpoch.id,
+        [],
+        "actor-late-policy-settlement",
+        "weight-sum-v0",
+        "actor-late-policy-settlement"
+      );
+      await adapter.finalizeEpoch(settlementEpoch.id, 0n);
+      await db
+        .update(epochs)
+        .set({ closedAt: new Date("2026-10-23T00:00:00.000Z") })
+        .where(eq(epochs.id, settlementEpoch.id));
       const pending = await adapter.listPendingActorDistributionLiabilities(
-        nextEpoch.id
+        settlementEpoch.id
       );
       expect(pending).toEqual([
         expect.objectContaining({
           allocationRef: persisted.allocationRef,
           sourceEpochId: epoch.id,
           tokenAmount: 17n,
+          allocation: expect.objectContaining({
+            earnedByActorId: flockLeaderActorId,
+            beneficiaryActorId: derekActor.id,
+            beneficiaryPolicyVersion: "flock-leader-beneficiary.v1",
+          }),
         }),
       ]);
       const liability = pending[0];
       if (!liability) throw new Error("Expected pending actor liability");
+      const walletResolution = await new DrizzleClaimantWalletResolver(
+        db
+      ).resolveBeneficiaryWallets([liability.allocation]);
+      expect(walletResolution).toEqual([
+        expect.objectContaining({
+          allocationRef: persisted.allocationRef,
+          beneficiaryActorId: derekActor.id,
+          wallet: signer.address,
+          bindingEvidence: expect.objectContaining({
+            actorId: derekActor.id,
+            provider: "wallet",
+          }),
+        }),
+      ]);
       const resolverEvidence = walletResolution[0]?.bindingEvidence;
       if (!resolverEvidence) {
         throw new Error("Expected pinned Derek wallet binding evidence");
@@ -2285,8 +2287,8 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       const manifestWithSettlement = {
         nodeId: TEST_NODE_ID,
         scopeId: TEST_SCOPE_ID,
-        epochId: nextEpoch.id,
-        distributionId: `epoch-${nextEpoch.id}`,
+        epochId: settlementEpoch.id,
+        distributionId: `epoch-${settlementEpoch.id}`,
         statementHash: "0xactor-liability-statement",
         merkleRoot: "0xactor-liability-root",
         chainId: 8453,
@@ -2301,7 +2303,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
             nodeId: TEST_NODE_ID,
             scopeId: TEST_SCOPE_ID,
             sourceEpochId: epoch.id,
-            foldEpochId: nextEpoch.id,
+            foldEpochId: settlementEpoch.id,
             earnedByActorId: flockLeaderActorId,
             beneficiaryActorId: derekActor.id,
             tokenAmount: 17n,
@@ -2312,8 +2314,17 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       };
       await adapter.upsertDistributionManifest(manifestWithSettlement);
       expect(
-        await adapter.listPendingActorDistributionLiabilities(nextEpoch.id)
+        await adapter.listPendingActorDistributionLiabilities(
+          settlementEpoch.id
+        )
       ).toEqual([]);
+      await expect(
+        adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
+      ).resolves.toMatchObject({
+        status: "settled",
+        tokenAmount: 17n,
+        claimantWallet: signer.address.toLowerCase(),
+      });
       await expect(
         adapter.upsertDistributionManifest(manifestWithSettlement)
       ).rejects.toThrow();

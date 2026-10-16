@@ -1798,7 +1798,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
               gt(
                 actorBeneficiaryPolicies.effectiveFrom,
                 new Date(allocation.contributionCutoff)
-              )
+              ),
+              lte(actorBeneficiaryPolicies.effectiveFrom, targetEpoch.closedAt)
             )
           )
           .orderBy(asc(actorBeneficiaryPolicies.effectiveFrom))
