@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/ci-invariants/shared-runtime-restarts`
  * Purpose: Keep dependency health failures from triggering shared-state restart loops.
- * Scope: Production Compose service policy, shared by all environment reconciles.
+ * Scope: Production Compose service policy; does not dispatch or restart services.
  * Invariants: Health remains observable; Docker owns process-exit restarts.
  * Side-effects: IO (reads the runtime Compose declaration).
  * Links: bug.5489, docs/spec/vm-watchdog.md
