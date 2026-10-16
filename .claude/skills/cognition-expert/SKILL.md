@@ -19,11 +19,11 @@ Everything here is one of two questions. Keep them separate; conflating them is 
 
 **Exact response shape and cold-boot axioms are code-owned; rich semantics and node guidance are hub-owned.** The floor must work with an empty hub or cold cache. The bundle elaborates it and cannot override it.
 
-| Part                                                                   | Owner                                           | Why                                                                       |
-| ---------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------- |
-| **Cold-boot floor** — exact response skeleton and core axioms | **code** (root `AGENTS.md`, tooling axioms in `SESSION_BOOTSTRAP_INVARIANTS`) | remains usable without hub access or a warm cache |
-| Mission (the "why")                                                    | repo-spec `intent.mission`                      | per-node identity                                                         |
-| Rich process/status semantics, node orientation, skills and domain map | **hub** (Dolt), delivered at session start and recalled on demand | refined in place; no second response template |
+| Part                                                                   | Owner                                                                         | Why                                               |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------- |
+| **Cold-boot floor** — exact response skeleton and core axioms          | **code** (root `AGENTS.md`, tooling axioms in `SESSION_BOOTSTRAP_INVARIANTS`) | remains usable without hub access or a warm cache |
+| Mission (the "why")                                                    | repo-spec `intent.mission`                                                    | per-node identity                                 |
+| Rich process/status semantics, node orientation, skills and domain map | **hub** (Dolt), delivered at session start and recalled on demand             | refined in place; no second response template     |
 
 **The drift to watch for:** a copied hub template can lag the floor when a git PR lands before its companion Dolt contribution. Removing duplicate prose does not resolve competing templates. Keep the one literal response skeleton in AGENTS.md; a hub entry describes semantics without reproducing it. Never transfer authority to a destination that has not passed parity and fresh-session proof.
 
@@ -124,11 +124,11 @@ Keep the committed root `AGENTS.md` **< 32 KiB** so Codex never truncates its co
 
 ## Canonical sources
 
-| What                                                                            | Where                                                                                                                                                                                 |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cognition Substrate design (ownership, delivery, distribution, acceptance) | [cognition-substrate-bootstrap](https://cognidao.org/knowledge/cognition-substrate-bootstrap) |
-| The delivery loader (fetch → cache → emit per runtime)                          | `scripts/agent/session-cognition.sh`                                                                                                                                                  |
-| The bundle producer + `SESSION_BOOTSTRAP_INVARIANTS`                            | `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`                                                                                                                      |
-| Harness wiring                                                                  | `CLAUDE.md`, `.claude/settings.json`, `.claude/output-styles/Cogni Contract.md`, `scripts/agent/validate-status-contract.sh`, `.codex/config.toml`, `opencode.json`, root `AGENTS.md` |
-| Harness docs                                                                    | Claude Code memory/hooks (code.claude.com/docs/en/{memory,hooks}), Codex prompting/config (developers.openai.com), OpenCode V2 instructions (dev.opencode.ai/v2/docs/instructions)    |
-| What becomes a skill vs hub entry vs spec                                       | [`knowledge-syntropy-expert`](../knowledge-syntropy-expert/SKILL.md)                                                                                                                  |
+| What                                                                       | Where                                                                                                                                                                                 |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cognition Substrate design (ownership, delivery, distribution, acceptance) | [cognition-substrate-bootstrap](https://cognidao.org/knowledge/cognition-substrate-bootstrap)                                                                                         |
+| The delivery loader (fetch → cache → emit per runtime)                     | `scripts/agent/session-cognition.sh`                                                                                                                                                  |
+| The bundle producer + `SESSION_BOOTSTRAP_INVARIANTS`                       | `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`                                                                                                                      |
+| Harness wiring                                                             | `CLAUDE.md`, `.claude/settings.json`, `.claude/output-styles/Cogni Contract.md`, `scripts/agent/validate-status-contract.sh`, `.codex/config.toml`, `opencode.json`, root `AGENTS.md` |
+| Harness docs                                                               | Claude Code memory/hooks (code.claude.com/docs/en/{memory,hooks}), Codex prompting/config (developers.openai.com), OpenCode V2 instructions (dev.opencode.ai/v2/docs/instructions)    |
+| What becomes a skill vs hub entry vs spec                                  | [`knowledge-syntropy-expert`](../knowledge-syntropy-expert/SKILL.md)                                                                                                                  |
