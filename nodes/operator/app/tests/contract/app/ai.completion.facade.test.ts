@@ -116,9 +116,13 @@ describe("app/_facades/ai/completion.server", () => {
         subscribe: async function* () {
           yield {
             id: "1-0",
+            event: { type: "text_delta" as const, delta: "AI response" },
+          };
+          yield {
+            id: "2-0",
             event: { type: "assistant_final" as const, content: "AI response" },
           };
-          yield { id: "2-0", event: { type: "done" as const } };
+          yield { id: "3-0", event: { type: "done" as const } };
         },
       },
     } as never);

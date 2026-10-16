@@ -34,7 +34,6 @@ import {
   RequestIdentityUnavailableError,
   resolveRequestPrincipal,
 } from "@/app/_lib/auth/request-identity";
-import { getSessionUser } from "@/app/_lib/auth/session";
 import {
   buildAuthChallenge,
   wrapRouteHandlerWithLogging,
@@ -42,7 +41,6 @@ import {
 import { isAccountsFeatureError } from "@/features/accounts/public";
 import type { AiEvent, StreamFinalResult } from "@/features/ai/public";
 import { isLlmError } from "@/ports";
-import { getNodeId } from "@/shared/config";
 import {
   EVENT_NAMES,
   logEvent,
@@ -427,22 +425,6 @@ export const POST = wrapRouteHandlerWithLogging(
           );
         }
         throw error;
-      }
-      // Compatibility for existing human/legacy route harnesses and callers.
-      // A valid fresh-v2 bearer always resolves above; an invalid bearer remains
-      // exclusive because getSessionUser() also rejects it without cookie fallback.
-      if (!principal) {
-        const sessionUser = await getSessionUser();
-        if (sessionUser) {
-          principal = {
-            kind: "human",
-            principalId: `user:${getNodeId()}/${sessionUser.id}`,
-            userId: sessionUser.id,
-            walletAddress: sessionUser.walletAddress,
-            displayName: sessionUser.displayName,
-            avatarColor: sessionUser.avatarColor,
-          };
-        }
       }
       if (!principal) {
         const challenge = await buildAuthChallenge();

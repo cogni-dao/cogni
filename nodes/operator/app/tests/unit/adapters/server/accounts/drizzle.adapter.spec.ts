@@ -346,6 +346,7 @@ describe("UserDrizzleAccountService", () => {
       mockTx.query.billingAccounts.findFirst.mockResolvedValue({
         id: "acc-123",
         balanceCredits: 1000n, // Less than 2000n charged
+        authorizationOwnerBootstrappedAt: new Date(),
       });
 
       // Mock finding virtual key (required validation)
