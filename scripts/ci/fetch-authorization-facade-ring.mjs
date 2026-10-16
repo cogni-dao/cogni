@@ -5,7 +5,7 @@
 /**
  * Module: `@scripts/ci/fetch-authorization-facade-ring`
  * Purpose: Fetch one raw authority ring into a same-process stdout pipe without persisting or logging it.
- * Scope: Exchanges GitHub OIDC at the fleet-control projection route and validates one lane/node ring.
+ * Scope: Exchanges GitHub OIDC at the fleet-control projection route and validates one lane/node ring; does not persist, log, or interpret authorization policy.
  * Invariants: RAW_CREDENTIAL_PIPE_ONLY; STRICT_ORIGIN; BOUNDED_RESPONSE; FAIL_CLOSED.
  * Side-effects: IO (GitHub OIDC and HTTPS projection requests; validated secret ring on stdout)
  * Links: task.5228, .github/workflows/authorization-facade-credential-project.yml
