@@ -48,7 +48,7 @@ export const GET = wrapRouteHandlerWithLogging<RouteContext>(
     if (!lifecycle) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    if (lifecycle.allocation.beneficiaryActorId !== actorId) {
+    if (lifecycle.resolvedBeneficiaryActorId !== actorId) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     return NextResponse.json(

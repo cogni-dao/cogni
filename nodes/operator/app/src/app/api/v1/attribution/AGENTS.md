@@ -31,7 +31,7 @@ Authenticated HTTP endpoints for attribution operations. SIWE-protected reads fo
 - **Exports:** none (route handlers only)
 - **Routes:**
   - `GET|POST /api/v1/attribution/beneficiary-policies` — exact-principal beneficiary proposal/read/accept/revoke; AI + steward + ledger-governance acceptance required before activation
-  - `GET /api/v1/attribution/actor-allocations/[allocationRef]` — beneficiary-only frozen allocation, pending-liability, and settlement projection
+  - `GET /api/v1/attribution/actor-allocations/[allocationRef]` — resolved-beneficiary-only frozen allocation, pending-liability, and settlement projection; late policy/settlement resolution never rewrites frozen facts
   - `GET /api/v1/attribution/distribution-lifecycle` — folded-manifest + live cumulative-root evidence (SIWE auth, one RPC read per page)
   - `GET /api/v1/attribution/epochs` — list all epochs including open (SIWE auth)
   - `GET /api/v1/attribution/epochs/[id]/activity` — ingestion receipts with selection join (SIWE auth, PII)

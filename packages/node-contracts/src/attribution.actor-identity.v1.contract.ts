@@ -118,6 +118,7 @@ export const actorAllocationRecordSchema =
 
 export const actorAllocationLifecycleSchema = z.object({
   allocation: actorAllocationRecordSchema,
+  resolvedBeneficiaryActorId: z.string().nullable(),
   status: z.enum([
     "frozen",
     "pending_beneficiary",

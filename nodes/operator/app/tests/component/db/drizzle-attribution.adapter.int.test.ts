@@ -2078,7 +2078,11 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       ).resolves.toEqual([]);
       await expect(
         adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
-      ).resolves.toMatchObject({ status: "frozen", tokenAmount: null });
+      ).resolves.toMatchObject({
+        status: "frozen",
+        resolvedBeneficiaryActorId: null,
+        tokenAmount: null,
+      });
       const unresolvedWalletResolution =
         await new DrizzleClaimantWalletResolver(db).resolveBeneficiaryWallets([
           persisted,
@@ -2133,6 +2137,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
       ).resolves.toMatchObject({
         status: "pending_beneficiary",
+        resolvedBeneficiaryActorId: null,
         tokenAmount: 17n,
         claimantWallet: null,
       });
@@ -2322,6 +2327,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
       ).resolves.toMatchObject({
         status: "settled",
+        resolvedBeneficiaryActorId: derekActor.id,
         tokenAmount: 17n,
         claimantWallet: signer.address.toLowerCase(),
       });

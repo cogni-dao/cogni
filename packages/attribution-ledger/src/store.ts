@@ -250,6 +250,8 @@ export interface ActorContributionAllocationRecord
 
 export interface ActorContributionAllocationLifecycleRecord {
   readonly allocation: ActorContributionAllocationRecord;
+  /** Effective payout beneficiary without mutating the frozen allocation. */
+  readonly resolvedBeneficiaryActorId: string | null;
   readonly status:
     | "frozen"
     | "pending_beneficiary"

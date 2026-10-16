@@ -3028,6 +3028,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         liabilityAmount: actorDistributionLiabilities.tokenAmount,
         settlementId: actorDistributionSettlements.id,
         settlementAmount: actorDistributionSettlements.tokenAmount,
+        settlementBeneficiaryActorId:
+          actorDistributionSettlements.beneficiaryActorId,
         claimantWallet: actorDistributionSettlements.claimantWallet,
       })
       .from(actorContributionAllocations)
@@ -3053,8 +3055,36 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       )
       .limit(1);
     if (!row) return null;
+    let resolvedBeneficiaryActorId =
+      row.settlementBeneficiaryActorId ??
+      row.allocation.beneficiaryActorId ??
+      null;
+    if (!resolvedBeneficiaryActorId && row.liabilityId) {
+      const [eligiblePolicy] = await this.db
+        .select({
+          beneficiaryActorId: actorBeneficiaryPolicies.beneficiaryActorId,
+        })
+        .from(actorBeneficiaryPolicies)
+        .where(
+          and(
+            eq(
+              actorBeneficiaryPolicies.earnedByActorId,
+              row.allocation.earnedByActorId
+            ),
+            gt(
+              actorBeneficiaryPolicies.effectiveFrom,
+              row.allocation.contributionCutoff
+            ),
+            lte(actorBeneficiaryPolicies.effectiveFrom, new Date())
+          )
+        )
+        .orderBy(asc(actorBeneficiaryPolicies.effectiveFrom))
+        .limit(1);
+      resolvedBeneficiaryActorId = eligiblePolicy?.beneficiaryActorId ?? null;
+    }
     return {
       allocation: toActorContributionAllocation(row.allocation),
+      resolvedBeneficiaryActorId,
       status: row.settlementId
         ? "settled"
         : row.liabilityId
