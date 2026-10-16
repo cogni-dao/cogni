@@ -275,6 +275,20 @@ export async function patchWorkItem(
   input: ContractPatchInput,
   sessionUser: { id: string; displayName: string | null }
 ): Promise<WorkItemDto> {
+  return patchWorkItemAsPrincipal(input, authorTagFromSession(sessionUser));
+}
+
+/**
+ * Patch as an already-authenticated durable principal.
+ *
+ * The principal is written verbatim into the Dolt commit proof. In particular,
+ * an agent remains `agent:<node>/<actorId>` and is never projected into a
+ * `users.id` value merely to satisfy the legacy SessionUser facade.
+ */
+export async function patchWorkItemAsPrincipal(
+  input: ContractPatchInput,
+  principalId: string
+): Promise<WorkItemDto> {
   const container = getContainer();
   try {
     const patched = await container.doltgresWorkItems.patch(
@@ -282,7 +296,7 @@ export async function patchWorkItem(
         id: toWorkItemId(input.id),
         set: dropUndefined(input.set),
       },
-      authorTagFromSession(sessionUser)
+      principalId
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
     return toDto(patched);

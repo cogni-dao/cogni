@@ -83,6 +83,9 @@ export const EVENT_NAMES = {
   AGENT_ACCOUNT_ACCESS_MUTATION_COMPLETE:
     "feature.agent_account_access.mutation_complete",
   AGENT_ACCOUNT_READ_COMPLETE: "feature.agent_account_access.read_complete",
+  AGENT_EXECUTION_COMPLETE: "feature.agent_execution.complete",
+  WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE:
+    "feature.work_item_principal.operation_complete",
   VCS_FLIGHT_REQUEST_COMPLETE: "feature.vcs_flight.request_complete",
   VCS_MERGE_REQUEST_COMPLETE: "feature.vcs_merge.request_complete",
   VCS_RUN_CI_REQUEST_COMPLETE: "feature.vcs_run_ci.request_complete",

@@ -25,7 +25,9 @@ vi.mock("@/app/_facades/work/items.server", () => ({
 }));
 
 import {
+  claimWorkItemAsPrincipal,
   claimWorkItemSession,
+  heartbeatWorkItemAsPrincipal,
   heartbeatWorkItemSession,
   linkWorkItemSessionPr,
   WorkItemSessionForbiddenError,
@@ -86,15 +88,91 @@ function mockPort(): WorkItemSessionPort {
 
 describe("app/_facades/work/coordination.server", () => {
   let port: WorkItemSessionPort;
+  let doltgresWorkItems: {
+    get: ReturnType<typeof vi.fn>;
+    claim: ReturnType<typeof vi.fn>;
+    heartbeat: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     vi.resetAllMocks();
     port = mockPort();
+    doltgresWorkItems = {
+      get: vi.fn(),
+      claim: vi.fn(),
+      heartbeat: vi.fn(),
+    };
     vi.mocked(getContainer).mockReturnValue({
       workItemSessions: port,
+      doltgresWorkItems,
     } as never);
     vi.mocked(getWorkItem).mockResolvedValue(WORK_ITEM);
     vi.mocked(patchWorkItem).mockResolvedValue(WORK_ITEM);
+  });
+
+  it("claims and heartbeats using the exact durable agent principal", async () => {
+    const principal = {
+      kind: "agent" as const,
+      principalId:
+        "agent:operator/00000000-0000-4000-8000-000000005264" as const,
+      actorId: "00000000-0000-4000-8000-000000005264",
+      credentialId: "00000000-0000-4000-8000-000000005265",
+      billingAccountId: "00000000-0000-4000-8000-000000005263",
+      legacyUserId: null,
+      displayName: "fresh-v2",
+    };
+    doltgresWorkItems.claim.mockResolvedValue({
+      ...WORK_ITEM,
+      id: "task.5007",
+      claimedByRun: "00000000-0000-4000-8000-000000005264",
+      claimedAt: NOW.toISOString(),
+      lastCommand: "/implement",
+    });
+
+    const claimed = await claimWorkItemAsPrincipal({
+      workItemId: "task.5007",
+      body: { lastCommand: "/implement" },
+      principal,
+      statusUrl: "/status",
+      now: NOW,
+    });
+
+    expect(doltgresWorkItems.claim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "task.5007",
+        principalId: principal.principalId,
+      })
+    );
+    expect(claimed.session.claimedByPrincipalId).toBe(principal.principalId);
+
+    const runId = claimed.session.coordinationId;
+    doltgresWorkItems.get.mockResolvedValue({
+      ...WORK_ITEM,
+      claimedByRun: runId,
+    });
+    doltgresWorkItems.heartbeat.mockResolvedValue({
+      ...WORK_ITEM,
+      claimedByRun: runId,
+      claimedAt: NOW.toISOString(),
+      lastCommand: "/review-implementation",
+    });
+
+    await heartbeatWorkItemAsPrincipal({
+      workItemId: "task.5007",
+      body: { lastCommand: "/review-implementation" },
+      principal,
+      statusUrl: "/status",
+      now: NOW,
+    });
+
+    expect(doltgresWorkItems.heartbeat).toHaveBeenCalledWith({
+      id: "task.5007",
+      runId,
+      command: "/review-implementation",
+      principalId: principal.principalId,
+    });
+    expect(port.claim).not.toHaveBeenCalled();
+    expect(port.heartbeat).not.toHaveBeenCalled();
   });
 
   it("claims a session for the authenticated user", async () => {

@@ -16,11 +16,20 @@
  */
 
 import { toUserId, userActor } from "@cogni/ids";
-import { RunStreamParamsSchema } from "@cogni/node-contracts";
+import {
+  type RequestPrincipal,
+  RunStreamParamsSchema,
+} from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
-import { getSessionUser } from "@/app/_lib/auth/session";
+import {
+  RequestIdentityUnavailableError,
+  resolveRequestPrincipal,
+} from "@/app/_lib/auth/request-identity";
 import { getContainer } from "@/bootstrap/container";
-import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import {
+  buildAuthChallenge,
+  wrapRouteHandlerWithLogging,
+} from "@/bootstrap/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -49,9 +58,34 @@ interface RouteParams {
  * - 410: Stream expired (Redis TTL elapsed)
  */
 export const GET = wrapRouteHandlerWithLogging<RouteParams>(
-  { routeId: "ai.runs.stream", auth: { mode: "required", getSessionUser } },
-  async (ctx, request, sessionUser, routeParams) => {
+  { routeId: "ai.runs.stream", auth: { mode: "none" } },
+  async (ctx, request, _sessionUser, routeParams) => {
     const log = ctx.log;
+    let principal: RequestPrincipal | null;
+    try {
+      principal = await resolveRequestPrincipal();
+    } catch (error) {
+      if (error instanceof RequestIdentityUnavailableError) {
+        return NextResponse.json(
+          { error: "identity service unavailable" },
+          { status: 503 }
+        );
+      }
+      throw error;
+    }
+    if (!principal) {
+      const challenge = await buildAuthChallenge();
+      return NextResponse.json(challenge.body, {
+        status: 401,
+        headers: { "WWW-Authenticate": challenge.wwwAuthenticate },
+      });
+    }
+    const principalLocalId =
+      principal.kind === "agent"
+        ? principal.actorId
+        : principal.kind === "human"
+          ? principal.userId
+          : principal.legacyUserId;
 
     // --- 1. Parse and validate runId ---
     if (!routeParams) {
@@ -66,7 +100,7 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
 
     // --- 2. Look up run and verify ownership ---
     const container = getContainer();
-    const actorId = userActor(toUserId(sessionUser.id));
+    const actorId = userActor(toUserId(principalLocalId));
     const run = await container.graphRunRepository.getRunByRunId(
       actorId,
       runId
@@ -77,9 +111,13 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
       return NextResponse.json({ error: "Run not found" }, { status: 404 });
     }
 
-    if (run.requestedBy !== sessionUser.id) {
+    if (run.requestedBy !== principalLocalId) {
       log.warn(
-        { runId, requestedBy: run.requestedBy, sessionUserId: sessionUser.id },
+        {
+          runId,
+          requestedBy: run.requestedBy,
+          actorPrincipalId: principal.principalId,
+        },
         "Stream access denied — user does not own this run"
       );
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
