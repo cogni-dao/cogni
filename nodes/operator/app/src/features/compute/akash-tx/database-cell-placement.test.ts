@@ -53,6 +53,10 @@ import {
   validateAppliedDatabaseCellProbeCustody,
   validateAppliedDatabaseCellProbeQualification,
 } from "../../../../../../../scripts/lib/materialize-database-cell-placement";
+import {
+  dedicatedLane,
+  validateDedicatedCustody,
+} from "../../../../../../../scripts/lib/run-node-substrate";
 
 const nodeId = "11111111-1111-4111-8111-111111111111";
 const sourceSha = "a".repeat(40);
@@ -976,6 +980,46 @@ describe("audited already-applied registration", () => {
     expect(
       projectDatabaseCellPlacement({ receipt: receipts[0], custody })
     ).toMatchObject({ runtimePoolLimits: limits });
+    const probeCustody = {
+      ...custody,
+      readOnlyProbe: {
+        dsn: composeDatabaseCellDsn(
+          { host: custody.canonicalEndpointHost, port: 15432 },
+          custody.databaseName,
+          "probe_alpha",
+          "f".repeat(48)
+        ),
+        custodyRef: {
+          service: "alpha-database-recovery-probe",
+          key: "DATABASE_RECOVERY_PROBE_URL",
+        },
+      },
+    };
+    const input = {
+      node: "alpha",
+      nodeId,
+      pools: limits,
+      cell: {
+        DATABASE_CELL_PLACEMENT_RECEIPT_JSON: JSON.stringify(receipts[0]),
+        DATABASE_CELL_APPLIED_CUSTODY_JSON: JSON.stringify(probeCustody),
+      },
+      app: {
+        DATABASE_URL: custody.app.dsn,
+        DATABASE_SERVICE_URL: custody.service.dsn,
+      },
+      migration: { DATABASE_MIGRATION_URL: custody.app.dsn },
+    };
+    expect(validateDedicatedCustody(input).receipt).toEqual(receipts[0]);
+    for (const drift of [
+      { nodeId: "22222222-2222-4222-8222-222222222222" },
+      { pools: { ...limits, app: 2 } },
+      { cell: {} },
+      {
+        app: { ...input.app, DATABASE_URL: "postgresql://wrong.invalid/other" },
+      },
+      { migration: { DATABASE_MIGRATION_URL: custody.service.dsn } },
+    ])
+      expect(() => validateDedicatedCustody({ ...input, ...drift })).toThrow();
     expect(() =>
       projectDatabaseCellPlacement({
         receipt: receipts[0],
@@ -989,6 +1033,18 @@ describe("audited already-applied registration", () => {
         appliedCustody: custody,
       }).binder.registerApplied(request)
     ).rejects.toMatchObject({ code: "identity_conflict" });
+  });
+  it("routes only declared dedicated lanes away from the shared provisioner", () => {
+    const catalog = {
+      database: {
+        production: { tier: "dedicated" },
+        preview: { tier: "shared" },
+      },
+    };
+    expect(dedicatedLane(catalog, "production")).toBe(true);
+    expect(dedicatedLane(catalog, "preview")).toBe(false);
+    expect(dedicatedLane(catalog, "candidate-a")).toBe(false);
+    expect(dedicatedLane({}, "production")).toBe(false);
   });
   it("fails closed without a distinct read-only evidence producer", async () => {
     const current = fixture();

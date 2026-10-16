@@ -38,7 +38,7 @@ describe("substrate TypeScript runtime", () => {
       ) as Workflow;
       const steps = workflow.jobs[job]?.steps ?? [];
       const substrateAt = steps.findIndex((step) =>
-        step.run?.includes("run-node-substrate.sh")
+        /run-node-substrate\.(sh|ts)/.test(step.run ?? "")
       );
       expect(substrateAt).toBeGreaterThan(0);
       const before = steps.slice(0, substrateAt);
