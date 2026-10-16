@@ -52,10 +52,7 @@ export const POST = wrapRouteHandlerWithLogging(
     if (!body.ok) {
       const status = body.reason === "too_large" ? 413 : 400;
       complete(status, "error", body.reason);
-      return NextResponse.json(
-        { error: "invalid_request" },
-        { status }
-      );
+      return NextResponse.json({ error: "invalid_request" }, { status });
     }
     const parsed = authorizationFacadeGrantOperation.input.safeParse(
       body.value

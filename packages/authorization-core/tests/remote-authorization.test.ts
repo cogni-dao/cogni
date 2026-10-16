@@ -128,28 +128,25 @@ describe("RemoteAuthorizationAdapter", () => {
     ["empty", ""],
     ["wrong-kind", authzNodeAgentPrincipal(NODE_ID, AGENT_ID)],
     ["foreign", authzNodeUserPrincipal(OTHER_NODE_ID, USER_ID)],
-  ])(
-    "denies a supplied %s OBO subject before transport",
-    async (_case, subjectId) => {
-      const fetchImpl = vi.fn<typeof fetch>();
-      const adapter = new RemoteAuthorizationAdapter({
-        baseUrl: "https://operator.example",
-        serviceToken: TOKEN,
-        testOnlyFetchImpl: fetchImpl,
-      });
+  ])("denies a supplied %s OBO subject before transport", async (_case, subjectId) => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const adapter = new RemoteAuthorizationAdapter({
+      baseUrl: "https://operator.example",
+      serviceToken: TOKEN,
+      testOnlyFetchImpl: fetchImpl,
+    });
 
-      await expect(
-        adapter.check({
-          actorId: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
-          subjectId,
-          action: "billing_account.read",
-          resource: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
-          context: { tenantId: ACCOUNT_ID, nodeId: NODE_ID },
-        })
-      ).resolves.toMatchObject({ decision: "deny", code: "authz_denied" });
-      expect(fetchImpl).not.toHaveBeenCalled();
-    }
-  );
+    await expect(
+      adapter.check({
+        actorId: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+        subjectId,
+        action: "billing_account.read",
+        resource: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+        context: { tenantId: ACCOUNT_ID, nodeId: NODE_ID },
+      })
+    ).resolves.toMatchObject({ decision: "deny", code: "authz_denied" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 
   it("denies an account/RLS tenant mismatch before transport", async () => {
     const fetchImpl = vi.fn<typeof fetch>();

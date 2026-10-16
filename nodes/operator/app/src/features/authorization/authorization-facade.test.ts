@@ -50,6 +50,11 @@ function authorizationWith(
     writeRelations: vi.fn(writeSuccess),
     deleteRelations: vi.fn(writeSuccess),
     replaceRelation: vi.fn(writeSuccess),
+    listRelations: vi.fn(async () => ({
+      decision: "success" as const,
+      code: "authz_list_success" as const,
+      tuples: [],
+    })),
   };
 }
 
