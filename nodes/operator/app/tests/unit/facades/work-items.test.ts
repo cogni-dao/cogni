@@ -263,8 +263,7 @@ describe("app/_facades/work/items.server", () => {
   });
 
   it("patches with the exact durable principal instead of a user projection", async () => {
-    const principalId =
-      "agent:operator/00000000-0000-4000-8000-000000005264";
+    const principalId = "agent:operator/00000000-0000-4000-8000-000000005264";
     mockDoltgres.patch.mockResolvedValue({
       ...SAMPLE_WORK_ITEM,
       title: "Patched by agent",

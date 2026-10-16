@@ -141,16 +141,13 @@ describe("app/_facades/ai/completion.server", () => {
       principal,
       graphName: "langgraph:poet",
     };
-    const result = await chatCompletion(
-      completionInput,
-      {
-        log: makeNoopLogger(),
-        reqId: "agent-req-5264",
-        traceId: "00000000000000000000000000000000",
-        routeId: "test.route",
-        clock: new FakeClock("2025-01-01T12:00:00.000Z"),
-      }
-    );
+    const result = await chatCompletion(completionInput, {
+      log: makeNoopLogger(),
+      reqId: "agent-req-5264",
+      traceId: "00000000000000000000000000000000",
+      routeId: "test.route",
+      clock: new FakeClock("2025-01-01T12:00:00.000Z"),
+    });
     await chatCompletion(
       {
         ...completionInput,

@@ -76,8 +76,7 @@ const HUMAN_PRINCIPAL = {
 
 const AGENT_PRINCIPAL = {
   kind: "agent" as const,
-  principalId:
-    "agent:operator/00000000-0000-4000-8000-000000005264" as const,
+  principalId: "agent:operator/00000000-0000-4000-8000-000000005264" as const,
   actorId: "00000000-0000-4000-8000-000000005264",
   credentialId: "00000000-0000-4000-8000-000000005265",
   billingAccountId: "00000000-0000-4000-8000-000000005263",
