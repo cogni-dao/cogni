@@ -64,7 +64,7 @@ done
 
 # ─────────────────────────────────────────────────────────────────────────────
 # bug.0322 cross-node run-isolation regression check.
-# Registers a machine agent on poly, runs a chat completion on poly, asserts
+# Uses Poly's provisioned durable probe actor, runs a chat completion on poly, asserts
 # the run is visible on poly's /agent/runs AND absent from operator's. Locks
 # task.0280 (worker HTTP delegation) closed from the outside.
 # Skips when jq is unavailable — CI images have jq; laptop flights may not.
@@ -80,12 +80,9 @@ else
   POLY_BASE="https://poly-${DOMAIN}"
   OP_BASE="https://${DOMAIN}"
 
-  creds=$(curl -sk --max-time "$CURL_TIMEOUT" -X POST "${POLY_BASE}/api/v1/agent/register" \
-    -H 'Content-Type: application/json' \
-    -d '{"name":"smoke-bug0322"}')
-  api_key=$(printf '%s' "$creds" | jq -r '.apiKey // empty')
+  api_key="${POLY_FLIGHT_PROBE_API_KEY:-}"
   if [ -z "$api_key" ]; then
-    echo "[ERROR] poly /agent/register did not return apiKey: $creds" >&2
+    echo "[ERROR] POLY_FLIGHT_PROBE_API_KEY is not provisioned; anonymous probe registration is forbidden" >&2
     exit 1
   fi
 

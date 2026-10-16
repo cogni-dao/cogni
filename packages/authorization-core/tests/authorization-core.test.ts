@@ -250,14 +250,14 @@ describe("OpenFgaAuthorizationAdapter", () => {
   });
 
   it("writes and deletes relation tuples through OpenFGA", async () => {
-    const written: unknown[] = [];
+    const written: unknown[][] = [];
     const deleted: unknown[] = [];
     const client = {
       async check(): Promise<{ allowed: boolean }> {
         return { allowed: true };
       },
       async writeTuples(tuples: unknown[]): Promise<void> {
-        written.push(...tuples);
+        written.push(tuples);
       },
       async deleteTuples(tuples: unknown[]): Promise<void> {
         deleted.push(...tuples);
@@ -279,11 +279,18 @@ describe("OpenFgaAuthorizationAdapter", () => {
       decision: "success",
       code: "authz_write_success",
     });
+    const secondTuple = { ...tuple, relation: "env_manager" };
+    await expect(
+      authz.writeRelationsAtomically([tuple, secondTuple])
+    ).resolves.toMatchObject({
+      decision: "success",
+      code: "authz_write_success",
+    });
     await expect(authz.deleteRelation(tuple)).resolves.toMatchObject({
       decision: "success",
       code: "authz_write_success",
     });
-    expect(written).toEqual([tuple]);
+    expect(written).toEqual([[tuple], [tuple, secondTuple]]);
     expect(deleted).toEqual([tuple]);
   });
 

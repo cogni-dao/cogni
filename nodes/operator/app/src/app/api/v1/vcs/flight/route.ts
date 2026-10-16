@@ -24,12 +24,18 @@
  * @public
  */
 
-import type { AuthzDecisionCode } from "@cogni/authorization-core";
+import {
+  type AuthzDecisionCode,
+  authzUserResource,
+} from "@cogni/authorization-core";
 import { billingAccounts } from "@cogni/db-schema/refs";
-import { flightOperation } from "@cogni/node-contracts";
+import { flightOperation, type RequestPrincipal } from "@cogni/node-contracts";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { getSessionUser } from "@/app/_lib/auth/session";
+import {
+  RequestIdentityUnavailableError,
+  resolveRequestPrincipal,
+} from "@/app/_lib/auth/request-identity";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -164,10 +170,7 @@ function handleDeployPlaneError(error: unknown): NextResponse | null {
 }
 
 async function authorizeNodeFlight(params: {
-  readonly sessionUser: {
-    readonly id: string;
-    readonly displayName?: string | null;
-  };
+  readonly principal: RequestPrincipal;
   readonly node: { readonly id: string; readonly ownerUserId: string };
 }): Promise<
   | { readonly ok: true }
@@ -184,37 +187,66 @@ async function authorizeNodeFlight(params: {
   const authorization = container.authorization;
 
   if (!authorization) {
-    return params.node.ownerUserId === params.sessionUser.id
+    const compatibilityUserId =
+      params.principal.kind === "human"
+        ? params.principal.userId
+        : params.principal.kind === "legacy_agent"
+          ? params.principal.legacyUserId
+          : null;
+    return compatibilityUserId === params.node.ownerUserId
       ? { ok: true }
       : { ok: false, status: 404, errorCode: "node_not_found" };
   }
 
-  const db = resolveServiceDb();
-  const billingAccountRows = await db
-    .select({ id: billingAccounts.id })
-    .from(billingAccounts)
-    .where(eq(billingAccounts.ownerUserId, params.sessionUser.id))
-    .limit(1);
-  const billingAccount = billingAccountRows[0];
-  if (!billingAccount) {
+  const compatibilityUserId =
+    params.principal.kind === "human"
+      ? params.principal.userId
+      : params.principal.kind === "legacy_agent"
+        ? params.principal.legacyUserId
+        : null;
+  const billingAccountId =
+    params.principal.kind === "agent"
+      ? params.principal.billingAccountId
+      : (
+          await resolveServiceDb()
+            .select({ id: billingAccounts.id })
+            .from(billingAccounts)
+            .where(eq(billingAccounts.ownerUserId, compatibilityUserId ?? ""))
+            .limit(1)
+        )[0]?.id;
+  if (!billingAccountId) {
     return { ok: false, status: 403, errorCode: "billing_account_missing" };
   }
 
-  const decision = await authorization.check({
-    actorId: `user:${params.sessionUser.id}`,
-    action: "node.flight",
-    resource: `node:${params.node.id}`,
-    context: {
-      tenantId: billingAccount.id,
-      nodeId: params.node.id,
-    },
-  });
-
-  if (decision.decision === "allow") return { ok: true };
+  // Durable agents authorize only as their stable actor principal. Human and
+  // legacy-user principals dual-read during the node-qualification migration;
+  // this preserves today's tuples without ever falling an agent back to a user.
+  const actorIds =
+    params.principal.kind === "agent"
+      ? [params.principal.principalId]
+      : [
+          params.principal.principalId,
+          authzUserResource(compatibilityUserId ?? ""),
+        ];
+  for (const actorId of new Set(actorIds)) {
+    const decision = await authorization.check({
+      actorId,
+      action: "node.flight",
+      resource: `node:${params.node.id}`,
+      context: {
+        tenantId: billingAccountId,
+        nodeId: params.node.id,
+      },
+    });
+    if (decision.decision === "allow") return { ok: true };
+    if (decision.code === "authz_unavailable") {
+      return { ok: false, status: 503, errorCode: decision.code };
+    }
+  }
   return {
     ok: false,
-    status: decision.code === "authz_unavailable" ? 503 : 403,
-    errorCode: decision.code,
+    status: 403,
+    errorCode: "authz_denied",
   };
 }
 
@@ -234,8 +266,8 @@ function getNodeRefParentRepo(env: ServerEnv): {
 }
 
 export const POST = wrapRouteHandlerWithLogging(
-  { routeId: "vcs.flight", auth: { mode: "required", getSessionUser } },
-  async (ctx, request, sessionUser) => {
+  { routeId: "vcs.flight", auth: { mode: "none" } },
+  async (ctx, request) => {
     const startedAt = performance.now();
     let terminalLogged = false;
     const logTerminal = (fields: FlightLogFields): void => {
@@ -243,6 +275,39 @@ export const POST = wrapRouteHandlerWithLogging(
       logFlightRequestComplete(ctx, startedAt, fields);
     };
     try {
+      let principal: RequestPrincipal | null;
+      try {
+        principal = await resolveRequestPrincipal();
+      } catch (error) {
+        if (error instanceof RequestIdentityUnavailableError) {
+          logTerminal({
+            mode: "unknown",
+            outcome: "error",
+            status: 503,
+            errorCode: "authn_unavailable",
+          });
+          return NextResponse.json(
+            {
+              error: "authentication unavailable",
+              errorCode: "authn_unavailable",
+            },
+            { status: 503 }
+          );
+        }
+        throw error;
+      }
+      if (!principal) {
+        logTerminal({
+          mode: "unknown",
+          outcome: "error",
+          status: 401,
+          errorCode: "invalid_token",
+        });
+        return NextResponse.json(
+          { error: "invalid_token" },
+          { status: 401, headers: { "WWW-Authenticate": "Bearer" } }
+        );
+      }
       const parsed = flightOperation.input.safeParse(await request.json());
       if (!parsed.success) {
         logTerminal({
@@ -285,7 +350,7 @@ export const POST = wrapRouteHandlerWithLogging(
         return NextResponse.json({ error: "not found" }, { status: 404 });
       }
 
-      const authz = await authorizeNodeFlight({ sessionUser, node });
+      const authz = await authorizeNodeFlight({ principal, node });
       if (!authz.ok) {
         logTerminal({
           mode,

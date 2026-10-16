@@ -20,7 +20,7 @@
  */
 
 import {
-  agentMeOperation,
+  agentMeV2Operation,
   flightOperation,
   workItemsCreateOperation,
   workItemsPatchOperation,
@@ -78,7 +78,11 @@ export async function GET(request: Request) {
       },
     },
     registrationUrl: `${origin}/api/v1/agent/register`,
-    auth: { type: "bearer", keyPrefix: "cogni_ag_sk_v1_" },
+    registration: {
+      mode: "spawn_grant_redemption",
+      note: "An authorized human first creates a one-use spawn grant; name-only anonymous registration is not supported.",
+    },
+    auth: { type: "bearer", keyPrefix: "cogni_ag_sk_v2_" },
     // Fleet identity (task.5024): public keys nodes use to verify operator-signed
     // identity attestations. Nodes start the round trip at `/identity/attest`, which
     // authenticates a GitHub account through this environment's OAuth client — no
@@ -128,7 +132,7 @@ export async function GET(request: Request) {
         method: "GET",
         endpoint: `${origin}/api/v1/agent/me`,
         auth: { type: "bearer" },
-        outputSchema: z.toJSONSchema(agentMeOperation.output),
+        outputSchema: z.toJSONSchema(agentMeV2Operation.output),
       },
       flightCandidate: {
         method: "POST",
@@ -167,7 +171,7 @@ export async function GET(request: Request) {
       validationSkill: ".claude/skills/validate-candidate",
       requiredLoop: [
         "discover",
-        "register",
+        "redeem_spawn_grant",
         // Adopt over create (anti-sprawl), but creating is a first-class step of
         // the loop — `actions.createWorkItem` carries the schema.
         "adopt_or_create_work_item",
@@ -181,9 +185,10 @@ export async function GET(request: Request) {
       // The node serves an agent's session-start cognition as a substrate.
       // Wire a SessionStart hook that echoes the bundle's markdown into context;
       // Claude Code and Codex both inject SessionStart stdout. The bundle is
-      // public + index-only (full entry bodies stay behind the authed routes).
+      // principal-authenticated + index-first (full entry bodies stay behind
+      // the same target-node bearer authority).
       bootstrapUrl: `${origin}/api/v1/cognition`,
-      sessionStartHook: `curl -fsS ${origin}/api/v1/cognition | jq -r .markdown`,
+      sessionStartHook: `curl -fsS -H "Authorization: Bearer $COGNI_NODE_API_KEY" ${origin}/api/v1/cognition | jq -r .markdown`,
     },
     defaults: {
       model: "gpt-4o-mini",
