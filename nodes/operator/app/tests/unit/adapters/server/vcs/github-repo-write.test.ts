@@ -5044,3 +5044,42 @@ describe("GitHubRepoWriter.reconcileMergeQueuePolicy (task.5141)", () => {
     );
   });
 });
+
+describe("node Actions inspection", () => {
+  it("reports the App-observed policy without writing configuration", async () => {
+    routeHandlers["GET /repos/{owner}/{repo}/actions/permissions"] = () => ({
+      enabled: true,
+      allowed_actions: "all",
+    });
+    routeHandlers["GET /repos/{owner}/{repo}/actions/permissions/workflow"] =
+      () => ({
+        default_workflow_permissions: "read",
+        can_approve_pull_request_reviews: true,
+      });
+    routeHandlers[
+      "GET /repos/{owner}/{repo}/actions/permissions/fork-pr-contributor-approval"
+    ] = () => ({ approval_policy: "first_time_contributors" });
+    const result = await makeWriter().inspectNodeActionsPermissions({
+      owner: "Cogni-DAO",
+      repo: "red",
+      slug: "red",
+      isInRepoNode: false,
+    });
+    expect(result.workflow.default_workflow_permissions).toBe("read");
+    expect(result.contributorApproval.approval_policy).toBe(
+      "first_time_contributors"
+    );
+    expect(requests.every(({ route }) => route.startsWith("GET "))).toBe(true);
+  });
+  it("rejects inspection of the parent repository", async () => {
+    await expect(
+      makeWriter().inspectNodeActionsPermissions({
+        owner: "Cogni-DAO",
+        repo: "cogni",
+        slug: "operator",
+        isInRepoNode: true,
+      })
+    ).rejects.toMatchObject({ code: "in_repo_node_unsupported" });
+    expect(requests).toHaveLength(0);
+  });
+});
