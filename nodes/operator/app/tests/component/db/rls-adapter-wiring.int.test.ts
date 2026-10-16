@@ -33,6 +33,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { UserDrizzleAccountService } from "@/adapters/server/accounts/drizzle.adapter";
 import { getAppDb } from "@/adapters/server/db/client";
 import { UserDrizzlePaymentAttemptRepository } from "@/adapters/server/payments/drizzle-payment-attempt.adapter";
+import "./agent-identity.adapter.component-cases";
 
 interface TestTenant {
   userId: string;

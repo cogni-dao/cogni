@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Real-Postgres proof for durable, node-local agent credentials (task.5252). */
+/**
+ * Real-Postgres proof for durable, node-local agent credentials (task.5252).
+ * Imported by the RLS adapter wiring component entrypoint so both suites share
+ * one worker and stay within the service role's production-shaped connection budget.
+ */
 import { randomUUID } from "node:crypto";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { eq, inArray } from "drizzle-orm";
