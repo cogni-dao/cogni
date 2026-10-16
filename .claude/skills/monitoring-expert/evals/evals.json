@@ -1,0 +1,41 @@
+{
+  "skill_name": "monitoring-expert",
+  "evals": [
+    {
+      "id": 1,
+      "name": "availability-after-promotion",
+      "prompt": "The CEO asks: 'The fleet dashboard went red after promotion. Establish why and fix the smallest thing.' Offline fixture: 13 deployment slots each have two regional checks. All 26 current TLS/HTTP checks receive 200 within 120 ms; application and database queries pass. probe_success=0 and probe_failed_due_to_regex=1. Actual /version changed from aaaa to bbbb during an approved promotion; continuous probe body requires aaaa. Grafana checks are managed by an existing OpenTofu stack outside the app. Exact-SHA flight validation is a separate gate. Existing authorization permits reviewed monitoring config repair. Give your finding, ordered action/verification steps, what you will not declare proven, and a CEO answer of at most 20 words. Do not execute live actions. Use at most 450 words.",
+      "expected_output": "Identify false availability assertion; repair existing external configuration and prove readback/drift while retaining exact delivery validation. Count observations correctly; no unrelated app flight.",
+      "assertions": [
+        "Diagnoses a release-pinned availability assertion rather than database failure and preserves exact-SHA delivery checks.",
+        "Repairs the existing external OpenTofu/Grafana resource, with live assertion readback and post-apply drift verification; no unrelated app flight.",
+        "Distinguishes 13 deployment slots from 26 regional observations and does not claim a real serving outage.",
+        "Makes no live-repair or fleet-wide-health claim from this offline fixture."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "recovered-io-stall-uncertain-trigger",
+      "prompt": "The CEO demands: 'Why did Temporal stall and take the fleet red? There are no users. Was it the flight or Poly backup? Establish it.' Offline evidence: 01:54\u201302:10 host I/O PSI 79\u201399%; Temporal PostgreSQL checkpoint sync took 114s and persistence transactions timed out. Same-request native logs show /readyz awaited Temporal 5.24s; external probe deadline was 5s. Akash runtime bindings show the affected apps share this Temporal server. Poly backup started 01:46, wrote a multi-GB encrypted archive to that host root filesystem, failed its free-space floor at 02:12, and cleaned a partial archive; pressure dropped afterward. A counter collected at 03:00 reports 3.47GB written by its cgroup; historical writer counters are absent. Image GC was already failing at 01:37. Flight started 02:03. Loki ingests repeated old request IDs at later times, with original JSON timestamps retained. Services are currently usable. Give the established causal claims, unresolved question, next cheapest discriminating action and fix direction, closure status, and a <=20-word CEO answer. No live actions or production fault injection. Use at most 450 words.",
+      "expected_output": "Prove shared I/O to Temporal to blocking readiness mechanism; avoid claiming backup sole trigger; distinguish original timestamps, PSI meaning, flight timing and ongoing attribution.",
+      "assertions": [
+        "Establishes the I/O-wait \u2192 Temporal persistence \u2192 blocking readiness \u2192 external deadline mechanism without equating PSI to disk utilization.",
+        "Leaves the initiating writer unproven; overlapping backup and a later cgroup counter do not establish sole cause.",
+        "Uses original event times/deduplication and recognizes a 02:03 flight cannot initiate a 01:54 onset.",
+        "Keeps attribution unresolved with one cheapest discriminating next observation, avoiding new frameworks or production fault injection."
+      ]
+    },
+    {
+      "id": 3,
+      "name": "active-outage-operational-mitigation",
+      "prompt": "The fleet is degrading NOW. Offline fixture: host I/O pressure is 95%; native counters over the affected interval attribute 88% of bytes to one backup producer container. Temporal persistence times out; remote readiness callers exceed external deadlines. A verified readable previous backup remains retained. The existing runbook and CEO authorization permit pausing this one nonessential background job and resuming it; no data deletion is needed. Its parent systemd unit has a CPU quota but the writer runs in a separate Docker cgroup. Git schedules the job and reconciliation can restart it. An app PR adding deadlines is waiting for a candidate flight; the operator local readiness is already 200. Give the immediate actions in order, smallest durable fix and recurrence/efficiency proof, and a <=20-word CEO answer. No live actions. Use at most 450 words.",
+      "expected_output": "Pause attributed producer first under existing authorization, preserve backup/audit/rollback, durably bound actual cgroup/scheduler, prove remote and neighbor usability, headroom and reconciliation before claiming fixed; no app flight prerequisite.",
+      "assertions": [
+        "Prioritizes authorized reversible pause of the attributed background producer before application flight, with audit, rollback and previous-backup preservation.",
+        "Corrects the source schedule/reconciliation and applies limits to the actual writer container/cgroup, rather than relying on the parent CPU quota.",
+        "Requires before/after remote/application and neighbor usability plus constrained-resource evidence to establish recovery and efficiency.",
+        "Proves protection survives the normal scheduled/reconciliation trigger; local readiness 200 alone is insufficient."
+      ]
+    }
+  ]
+}
