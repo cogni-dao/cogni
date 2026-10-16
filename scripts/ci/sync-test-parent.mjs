@@ -91,7 +91,12 @@ const api = async (path, init = {}) => {
 const regenerate = (clone, policy, repo) => {
   const { commands, identity } = policy.regenerate;
   if (commands.length === 0) return;
-  const env = { ...process.env, ...identity, GITHUB_REPOSITORY: repo };
+  // The declared identity is the COMPLETE input set: an identity key it omits (e.g. DOMAIN, which
+  // candidate-flight.yml does not export) must not leak in from the runner's environment.
+  const env = { ...process.env };
+  for (const key of ["DOMAIN", "FORK_DOMAIN_ROOT", "FLEET_CONTROL_ENV"])
+    delete env[key];
+  Object.assign(env, identity, { GITHUB_REPOSITORY: repo });
   console.log(
     `  regenerate inputs   ${Object.entries(identity)
       .map(([k, v]) => `${k}=${v}`)
