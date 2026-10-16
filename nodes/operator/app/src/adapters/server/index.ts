@@ -174,6 +174,7 @@ export {
   LiveNodeRegistryAdapter,
   type LiveNodeRegistryDeps,
 } from "./node-registry/live-node-registry.adapter";
+export { NETWORK_NODES } from "./node-registry/network-nodes.data";
 export {
   type LivenessRollup,
   type NodeLiveness,
@@ -181,7 +182,6 @@ export {
   type ProdLivenessDeps,
   resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
-export { NETWORK_NODES } from "./node-registry/network-nodes.data";
 export { DrizzleNodeMigrationReportStore } from "./observability/drizzle-node-migration-report.adapter";
 export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
 export { HttpLokiPusher } from "./observability/loki-push.adapter";
