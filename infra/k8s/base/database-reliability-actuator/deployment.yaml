@@ -98,88 +98,6 @@ spec:
                   name: database-reliability-actuator-env-secrets
                   optional: true
 ---
-# Human-command process: no autonomous loop and no containment credential.
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: database-reliability-readmitter
-  annotations:
-    reloader.stakater.com/auto: "true"
-  labels:
-    app.kubernetes.io/name: database-reliability-readmitter
-    app.kubernetes.io/part-of: cogni
-spec:
-  replicas: 0
-  strategy: { type: Recreate }
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: database-reliability-readmitter
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: database-reliability-readmitter
-        app.kubernetes.io/part-of: cogni
-    spec:
-      serviceAccountName: database-reliability-readmitter
-      automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 30
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1001
-        runAsGroup: 1001
-        seccompProfile: { type: RuntimeDefault }
-      containers:
-        - name: readmitter
-          image: ghcr.io/cogni-dao/cogni-template:placeholder
-          imagePullPolicy: IfNotPresent
-          command:
-            [node, /app/nodes/operator/app/database-reliability-actuator.mjs]
-          env:
-            - name: DATABASE_RELIABILITY_MODE
-              value: readmit
-            - name: DEPLOY_ENVIRONMENT
-              value: replace-in-overlay
-            - name: FORK_DOMAIN_ROOT
-              value: replace-in-overlay
-            - name: DATABASE_RELIABILITY_ACTUATOR_URL
-              value: replace-in-overlay
-          ports:
-            - name: http
-              containerPort: 8081
-          volumeMounts:
-            - name: credentials
-              mountPath: /var/run/secrets/database-reliability
-              readOnly: true
-          resources:
-            requests: { cpu: 25m, memory: 64Mi }
-            limits: { cpu: 250m, memory: 192Mi }
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: { drop: [ALL] }
-            readOnlyRootFilesystem: true
-          startupProbe:
-            httpGet: { path: /healthz, port: http }
-            periodSeconds: 5
-            timeoutSeconds: 2
-            failureThreshold: 24
-          livenessProbe:
-            httpGet: { path: /healthz, port: http }
-            periodSeconds: 15
-            timeoutSeconds: 2
-            failureThreshold: 3
-          readinessProbe:
-            httpGet: { path: /readyz, port: http }
-            periodSeconds: 10
-            timeoutSeconds: 2
-            failureThreshold: 3
-      volumes:
-        - name: credentials
-          projected:
-            sources:
-              - secret:
-                  name: database-reliability-readmitter-env-secrets
-                  optional: true
----
 # Role-less identity: the controller has no Kubernetes API authority.
 apiVersion: v1
 kind: ServiceAccount
@@ -187,15 +105,6 @@ metadata:
   name: database-reliability-actuator
   labels:
     app.kubernetes.io/name: database-reliability-actuator
-    app.kubernetes.io/part-of: cogni
-automountServiceAccountToken: false
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: database-reliability-readmitter
-  labels:
-    app.kubernetes.io/name: database-reliability-readmitter
     app.kubernetes.io/part-of: cogni
 automountServiceAccountToken: false
 ---
@@ -214,20 +123,6 @@ spec:
   ports:
     - { name: http, port: 8080, targetPort: http, protocol: TCP }
 ---
-apiVersion: v1
-kind: Service
-metadata:
-  name: database-reliability-readmitter
-  labels:
-    app.kubernetes.io/name: database-reliability-readmitter
-    app.kubernetes.io/part-of: cogni
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: database-reliability-readmitter
-  ports:
-    - { name: http, port: 8081, targetPort: http, protocol: TCP }
----
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -242,9 +137,6 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: node-app
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: database-reliability-readmitter
       ports:
         - { protocol: TCP, port: 8080 }
   egress:
@@ -257,55 +149,6 @@ spec:
         - { protocol: TCP, port: 53 }
     # Standard NetworkPolicy cannot select external FQDNs. Restrict the residual
     # path to TLS telemetry/probes and PostgreSQL control traffic.
-    - to:
-        - ipBlock: { cidr: 0.0.0.0/0 }
-      ports:
-        - { protocol: TCP, port: 443 }
-        - { protocol: TCP, port: 5432 }
-    # Dedicated cells use provider-assigned public TLS ports. The runtime selects
-    # only sealed cell endpoints; private and link-local destinations stay excluded.
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              - 10.0.0.0/8
-              - 172.16.0.0/12
-              - 192.168.0.0/16
-              - 169.254.0.0/16
-              - 127.0.0.0/8
-      ports:
-        - { protocol: TCP, port: 1, endPort: 65535 }
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: database-reliability-readmitter
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: database-reliability-readmitter
-  policyTypes: [Ingress, Egress]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: node-app
-      ports:
-        - { protocol: TCP, port: 8081 }
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-      ports:
-        - { protocol: UDP, port: 53 }
-        - { protocol: TCP, port: 53 }
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: database-reliability-actuator
-      ports:
-        - { protocol: TCP, port: 8080 }
     - to:
         - ipBlock: { cidr: 0.0.0.0/0 }
       ports:
