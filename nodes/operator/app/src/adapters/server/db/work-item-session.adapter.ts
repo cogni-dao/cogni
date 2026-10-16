@@ -6,14 +6,16 @@
  * Purpose: Drizzle adapter for operator work-item execution sessions.
  * Scope: Persistence only. Does not validate work-item existence, enforce
  *   route auth, derive next actions, or call GitHub.
- * Invariants: ONE_ACTIVE_CLAIM_DB_ENFORCED, SERVICE_DB_SHARED_COORDINATION.
+ * Invariants: ONE_ACTIVE_CLAIM_DB_ENFORCED, EXPIRED_CLAIM_SUPERSEDED,
+ *   SERVICE_DB_SHARED_COORDINATION.
  * Side-effects: IO (Postgres via injected Drizzle database).
- * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
+ * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007,
+ *   bug.5136
  * @internal
  */
 
 import type { Database } from "@cogni/db-client";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 
 import type {
   ClaimWorkItemSessionResult,
@@ -44,12 +46,9 @@ function toRecord(
 }
 
 function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: string }).code === "23505"
-  );
+  const direct = (error as { code?: unknown })?.code;
+  const nested = (error as { cause?: { code?: unknown } })?.cause?.code;
+  return direct === "23505" || nested === "23505";
 }
 
 export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
@@ -59,35 +58,96 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
     readonly workItemId: string;
     readonly claimedByUserId: string;
     readonly claimedByDisplayName: string | null;
+    readonly now: Date;
     readonly deadlineAt: Date;
     readonly lastCommand?: string;
   }): Promise<ClaimWorkItemSessionResult> {
-    const existing = await this.getOpen(input.workItemId);
-    if (existing) {
-      if (existing.claimedByUserId !== input.claimedByUserId) {
-        return { kind: "conflict", session: existing };
-      }
-      return {
-        kind: "claimed",
-        session: await this.refreshExistingClaim(existing.id, input),
-      };
-    }
-
     try {
-      const [inserted] = await this.db
-        .insert(workItemSessions)
-        .values({
-          workItemId: input.workItemId,
-          claimedByUserId: input.claimedByUserId,
-          claimedByDisplayName: input.claimedByDisplayName,
-          deadlineAt: input.deadlineAt,
-          lastCommand: input.lastCommand,
-        })
-        .returning();
+      return await this.db.transaction(async (tx) => {
+        const [existingRow] = await tx
+          .select()
+          .from(workItemSessions)
+          .where(
+            and(
+              eq(workItemSessions.workItemId, input.workItemId),
+              inArray(workItemSessions.status, [...OPEN_SESSION_STATUSES])
+            )
+          )
+          .orderBy(desc(workItemSessions.claimedAt))
+          .limit(1)
+          .for("update");
 
-      if (!inserted)
-        throw new Error("work item session insert returned no row");
-      return { kind: "claimed", session: toRecord(inserted) };
+        if (existingRow) {
+          const existing = toRecord(existingRow);
+          if (existing.deadlineAt.getTime() >= input.now.getTime()) {
+            if (existing.claimedByUserId !== input.claimedByUserId) {
+              return { kind: "conflict", session: existing };
+            }
+
+            const [updated] = await tx
+              .update(workItemSessions)
+              .set({
+                status: "active",
+                deadlineAt: input.deadlineAt,
+                ...(input.lastCommand !== undefined && {
+                  lastCommand: input.lastCommand,
+                }),
+                updatedAt: input.now,
+              })
+              .where(eq(workItemSessions.id, existing.id))
+              .returning();
+
+            if (!updated)
+              throw new Error(`work item session not found: ${existing.id}`);
+            return {
+              kind: "claimed",
+              claimKind: "refreshed",
+              session: toRecord(updated),
+            };
+          }
+
+          const [superseded] = await tx
+            .update(workItemSessions)
+            .set({
+              status: "superseded",
+              closedAt: input.now,
+              updatedAt: input.now,
+            })
+            .where(
+              and(
+                eq(workItemSessions.id, existing.id),
+                inArray(workItemSessions.status, [...OPEN_SESSION_STATUSES]),
+                lt(workItemSessions.deadlineAt, input.now)
+              )
+            )
+            .returning({ id: workItemSessions.id });
+
+          if (!superseded) {
+            throw new Error(
+              `expired work item session could not be superseded: ${existing.id}`
+            );
+          }
+        }
+
+        const [inserted] = await tx
+          .insert(workItemSessions)
+          .values({
+            workItemId: input.workItemId,
+            claimedByUserId: input.claimedByUserId,
+            claimedByDisplayName: input.claimedByDisplayName,
+            deadlineAt: input.deadlineAt,
+            lastCommand: input.lastCommand,
+          })
+          .returning();
+
+        if (!inserted)
+          throw new Error("work item session insert returned no row");
+        return {
+          kind: "claimed",
+          claimKind: existingRow ? "reclaimed" : "fresh",
+          session: toRecord(inserted),
+        };
+      });
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
       const conflicted = await this.getOpen(input.workItemId);
@@ -95,6 +155,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
       if (conflicted.claimedByUserId === input.claimedByUserId) {
         return {
           kind: "claimed",
+          claimKind: "refreshed",
           session: await this.refreshExistingClaim(conflicted.id, input),
         };
       }
@@ -105,6 +166,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
   async heartbeat(input: {
     readonly workItemId: string;
     readonly claimedByUserId: string;
+    readonly now: Date;
     readonly deadlineAt: Date;
     readonly lastCommand?: string;
   }): Promise<WorkItemSessionRecord | null> {
@@ -112,18 +174,19 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
       .update(workItemSessions)
       .set({
         status: "active",
-        lastHeartbeatAt: new Date(),
+        lastHeartbeatAt: input.now,
         deadlineAt: input.deadlineAt,
         ...(input.lastCommand !== undefined && {
           lastCommand: input.lastCommand,
         }),
-        updatedAt: new Date(),
+        updatedAt: input.now,
       })
       .where(
         and(
           eq(workItemSessions.workItemId, input.workItemId),
           eq(workItemSessions.claimedByUserId, input.claimedByUserId),
-          inArray(workItemSessions.status, [...OPEN_SESSION_STATUSES])
+          inArray(workItemSessions.status, [...OPEN_SESSION_STATUSES]),
+          gte(workItemSessions.deadlineAt, input.now)
         )
       )
       .returning();
@@ -134,6 +197,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
   async linkPr(input: {
     readonly workItemId: string;
     readonly claimedByUserId: string;
+    readonly now: Date;
     readonly branch?: string;
     readonly prNumber?: number;
   }): Promise<WorkItemSessionRecord | null> {
@@ -142,13 +206,14 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
       .set({
         ...(input.branch !== undefined && { branch: input.branch }),
         ...(input.prNumber !== undefined && { prNumber: input.prNumber }),
-        updatedAt: new Date(),
+        updatedAt: input.now,
       })
       .where(
         and(
           eq(workItemSessions.workItemId, input.workItemId),
           eq(workItemSessions.claimedByUserId, input.claimedByUserId),
-          inArray(workItemSessions.status, [...OPEN_SESSION_STATUSES])
+          inArray(workItemSessions.status, [...OPEN_SESSION_STATUSES]),
+          gte(workItemSessions.deadlineAt, input.now)
         )
       )
       .returning();
@@ -191,6 +256,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
   private async refreshExistingClaim(
     id: string,
     input: {
+      readonly now: Date;
       readonly deadlineAt: Date;
       readonly lastCommand?: string;
     }
@@ -203,7 +269,7 @@ export class DrizzleWorkItemSessionAdapter implements WorkItemSessionPort {
         ...(input.lastCommand !== undefined && {
           lastCommand: input.lastCommand,
         }),
-        updatedAt: new Date(),
+        updatedAt: input.now,
       })
       .where(eq(workItemSessions.id, id))
       .returning();

@@ -18,6 +18,8 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { workItemSessionHeartbeatOperation } from "@/contracts/work-item-sessions.v1.contract";
 
+import { logWorkItemSessionComplete } from "../../_session-log";
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -33,9 +35,40 @@ export const POST = wrapRouteHandlerWithLogging<{
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser, context) => {
-    if (!context) throw new Error("context required for dynamic routes");
+    const startedAt = performance.now();
+    const logTerminal = (
+      fields: Omit<
+        Parameters<typeof logWorkItemSessionComplete>[2],
+        "operation"
+      >
+    ): void =>
+      logWorkItemSessionComplete(ctx, startedAt, {
+        operation: "heartbeat",
+        ...fields,
+      });
+    if (!context) {
+      const response = NextResponse.json(
+        { error: "Internal server error" },
+        { status: 500 }
+      );
+      logTerminal({
+        outcome: "error",
+        status: 500,
+        errorCode: "internal_error",
+      });
+      return response;
+    }
     if (!sessionUser) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+      const response = NextResponse.json(
+        { error: "unauthorized" },
+        { status: 401 }
+      );
+      logTerminal({
+        outcome: "error",
+        status: 401,
+        errorCode: "auth_required",
+      });
+      return response;
     }
     const { id } = await context.params;
 
@@ -48,10 +81,16 @@ export const POST = wrapRouteHandlerWithLogging<{
 
     const parsed = workItemSessionHeartbeatOperation.input.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { error: "invalid input", issues: parsed.error.issues },
         { status: 400 }
       );
+      logTerminal({
+        outcome: "error",
+        status: 400,
+        errorCode: "validation_error",
+      });
+      return response;
     }
 
     try {
@@ -61,37 +100,58 @@ export const POST = wrapRouteHandlerWithLogging<{
         sessionUser,
         statusUrl: coordinationUrl(request, id),
       });
-      ctx.log.info(
-        {
-          workItemId: id,
-          coordinationId: output.session.coordinationId,
-          claimedByUserId: sessionUser.id,
-        },
-        "dev_coordination.heartbeat"
-      );
-      return NextResponse.json(
+      const response = NextResponse.json(
         workItemSessionHeartbeatOperation.output.parse(output)
       );
+      logTerminal({ outcome: "success", status: 200 });
+      return response;
     } catch (error) {
       if ((error as Error)?.name === "CoordinationWorkItemNotFoundError") {
-        return NextResponse.json(
+        const response = NextResponse.json(
           { error: (error as Error).message },
           { status: 404 }
         );
+        logTerminal({
+          outcome: "error",
+          status: 404,
+          errorCode: "work_item_not_found",
+        });
+        return response;
       }
       if ((error as Error)?.name === "WorkItemSessionForbiddenError") {
-        return NextResponse.json(
+        const response = NextResponse.json(
           { error: (error as Error).message },
           { status: 403 }
         );
+        logTerminal({
+          outcome: "error",
+          status: 403,
+          errorCode: "session_owned_by_other",
+        });
+        return response;
       }
       if ((error as Error)?.name === "WorkItemSessionNotFoundError") {
-        return NextResponse.json(
+        const response = NextResponse.json(
           { error: (error as Error).message },
           { status: 404 }
         );
+        logTerminal({
+          outcome: "error",
+          status: 404,
+          errorCode: "session_expired_or_missing",
+        });
+        return response;
       }
-      throw error;
+      const response = NextResponse.json(
+        { error: "Internal server error" },
+        { status: 500 }
+      );
+      logTerminal({
+        outcome: "error",
+        status: 500,
+        errorCode: "internal_error",
+      });
+      return response;
     }
   }
 );

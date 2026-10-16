@@ -35,7 +35,11 @@ export type WorkItemSessionRecord = {
 };
 
 export type ClaimWorkItemSessionResult =
-  | { readonly kind: "claimed"; readonly session: WorkItemSessionRecord }
+  | {
+      readonly kind: "claimed";
+      readonly claimKind: "fresh" | "refreshed" | "reclaimed";
+      readonly session: WorkItemSessionRecord;
+    }
   | { readonly kind: "conflict"; readonly session: WorkItemSessionRecord };
 
 export interface WorkItemSessionPort {
@@ -43,6 +47,7 @@ export interface WorkItemSessionPort {
     readonly workItemId: string;
     readonly claimedByUserId: string;
     readonly claimedByDisplayName: string | null;
+    readonly now: Date;
     readonly deadlineAt: Date;
     readonly lastCommand?: string;
   }): Promise<ClaimWorkItemSessionResult>;
@@ -50,6 +55,7 @@ export interface WorkItemSessionPort {
   heartbeat(input: {
     readonly workItemId: string;
     readonly claimedByUserId: string;
+    readonly now: Date;
     readonly deadlineAt: Date;
     readonly lastCommand?: string;
   }): Promise<WorkItemSessionRecord | null>;
@@ -57,6 +63,7 @@ export interface WorkItemSessionPort {
   linkPr(input: {
     readonly workItemId: string;
     readonly claimedByUserId: string;
+    readonly now: Date;
     readonly branch?: string;
     readonly prNumber?: number;
   }): Promise<WorkItemSessionRecord | null>;

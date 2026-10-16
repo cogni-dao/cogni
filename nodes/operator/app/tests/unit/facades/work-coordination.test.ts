@@ -100,6 +100,7 @@ describe("app/_facades/work/coordination.server", () => {
   it("claims a session for the authenticated user", async () => {
     vi.mocked(port.claim).mockResolvedValue({
       kind: "claimed",
+      claimKind: "fresh",
       session: session(),
     });
 
@@ -112,11 +113,13 @@ describe("app/_facades/work/coordination.server", () => {
     });
 
     expect(result.claimed).toBe(true);
+    expect(result.claimKind).toBe("fresh");
     expect(result.session.deadlineAt).toBe("2026-05-02T12:30:00.000Z");
     expect(port.claim).toHaveBeenCalledWith({
       workItemId: "task.5007",
       claimedByUserId: "user-1",
       claimedByDisplayName: "agent-one",
+      now: NOW,
       deadlineAt: new Date("2026-05-02T12:02:00.000Z"),
       lastCommand: "/implement",
     });
@@ -159,6 +162,12 @@ describe("app/_facades/work/coordination.server", () => {
         now: NOW,
       })
     ).rejects.toBeInstanceOf(WorkItemSessionForbiddenError);
+    expect(port.heartbeat).toHaveBeenCalledWith({
+      workItemId: "task.5007",
+      claimedByUserId: "user-1",
+      now: NOW,
+      deadlineAt: new Date("2026-05-02T12:30:00.000Z"),
+    });
   });
 
   it("links PR metadata to both session state and the durable work item", async () => {
@@ -175,6 +184,13 @@ describe("app/_facades/work/coordination.server", () => {
     });
 
     expect(result.session).toMatchObject({
+      branch: "feat/session",
+      prNumber: 1201,
+    });
+    expect(port.linkPr).toHaveBeenCalledWith({
+      workItemId: "task.5007",
+      claimedByUserId: "user-1",
+      now: NOW,
       branch: "feat/session",
       prNumber: 1201,
     });
