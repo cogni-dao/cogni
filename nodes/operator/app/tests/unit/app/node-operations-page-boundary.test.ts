@@ -16,6 +16,19 @@ function source(relative: string): string {
 }
 
 describe("node operations page boundary", () => {
+  it("keeps the node index on one local owner read", () => {
+    const page = source("app/(app)/nodes/page.tsx");
+    const facade = source("app/_facades/nodes/owned.server.ts");
+
+    expect(page).toContain("listOwnedNodes(session.id)");
+    expect(page).not.toContain("resolveNodeRegistry");
+    expect(page).not.toContain("listPublic");
+    expect(facade).toContain("withTenantScope");
+    expect(facade).not.toContain("resolveNodeRegistry");
+    expect(facade).not.toContain("listPublic");
+    expect(facade).not.toContain("serving(");
+  });
+
   it("keeps personal AI activity separate and removes internal operations panels", () => {
     const dashboard = source("app/(app)/dashboard/view.tsx");
     expect(dashboard).toContain(">Dashboard</h1>");

@@ -44,6 +44,8 @@ export interface NodeTileView {
   /** Node-self-described brand color (CSS color) tinting the monogram placeholder; falls back to a token. */
   readonly brandColor?: string | null | undefined;
   readonly href: string;
+  /** Override Next.js route prefetching for expensive dynamic destinations. */
+  readonly prefetch?: boolean;
   /** External homepage (new tab) vs internal route (same tab). */
   readonly external?: boolean;
   /** Lifecycle badge for in-formation nodes. */
@@ -207,7 +209,12 @@ export function NodeTile({ node }: { node: NodeTileView }): ReactElement {
     : {};
   const compact = node.density === "compact";
   return (
-    <Link href={node.href} className="group block rounded-lg" {...linkProps}>
+    <Link
+      href={node.href}
+      className="group block rounded-lg"
+      {...(node.prefetch !== undefined && { prefetch: node.prefetch })}
+      {...linkProps}
+    >
       <Card className="h-full overflow-hidden transition-colors group-hover:border-primary">
         <div
           className={`relative w-full overflow-hidden border-border border-b bg-muted ${compact ? "aspect-[2.2/1]" : "aspect-video"}`}
