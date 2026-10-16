@@ -175,7 +175,7 @@ See [mcp-control-plane.md](../../docs/spec/mcp-control-plane.md) for full spec.
 - [mcp-control-plane.md](../../docs/spec/mcp-control-plane.md) — MCP deployment registry, agent bindings, credential resolution, ToolHive path
 - [agent-discovery.md](../../docs/spec/agent-discovery.md) — AgentCatalogPort, provider types
 - [agent-registry.md](../../docs/spec/agent-registry.md) — AgentRegistrationDocument, identity port (draft)
-- [identity-model.md](../../docs/spec/identity-model.md) — five identity primitives
+- [Identity keys](https://cognidao.org/knowledge/identity-keys-no-overload) — orthogonal identity primitives
 
 ## Design Notes
 

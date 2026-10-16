@@ -135,7 +135,7 @@ This spec owns:
 
 ### Actor Model (Planned)
 
-The owner/actor semantics above will be formalized as a first-class `actors` table in [proj.operator-plane](../../work/projects/proj.operator-plane.md). The existing `actor_type`/`actor_id` metadata fields become FK references to `actors.id`. `billing_account_id` remains the tenancy/RLS boundary — `actor_id` is economic attribution, not tenancy. See [identity-model.md](./identity-model.md) for the full `actor_id` primitive definition.
+The owner/actor semantics above will be formalized as a first-class `actors` table in [proj.operator-plane](../../work/projects/proj.operator-plane.md). The existing `actor_type`/`actor_id` metadata fields become FK references to `actors.id`. `billing_account_id` remains the tenancy/RLS boundary — `actor_id` is economic attribution, not tenancy. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard) for the full `actor_id` boundary.
 
 ## Open Questions
 

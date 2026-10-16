@@ -97,7 +97,8 @@ export class OperatorIdentityAttestationRepository
    * at 11.0s cold against 0.22s warm on candidate-a. A human reads 11s as broken; they
    * said so.
    *
-   * The projection is safe to lead with. `identity-model.md` fixes `nodes.id` AS the
+   * The projection is safe to lead with. The node identity standard
+   * (https://cognidao.org/knowledge/node-identity-projection-lineage) fixes `nodes.id` AS the
    * repo-spec `node_id` — not a surrogate — so the row is keyed by the same identity the
    * request names, and `deploy_envs` is the same list the allowlist needs.
    * `catalog-registry-reconcile` re-reads merged git on a ten-minute poll, so staleness

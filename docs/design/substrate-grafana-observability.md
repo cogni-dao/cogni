@@ -10,7 +10,7 @@ created: 2026-06-18
 updated: 2026-06-18
 tags: [observability, grafana, loki, rbac, substrate, node-identity]
 spec_refs:
-  - ../spec/identity-model.md
+  - https://cognidao.org/knowledge/node-identity-projection-lineage
   - ../spec/ci-cd.md
   - ../spec/rbac.md
   - ../spec/grafana-observability-access.md
@@ -55,7 +55,7 @@ The identity contract is **unstated**, not violated in live data — and an unst
 
 Existing contracts already say:
 
-- `identity-model.md`: `node_id` is immutable deployment identity and lives in `.cogni/repo-spec.yaml`.
+- [Node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage): `node_id` is immutable deployment identity.
 - `ci-cd.md`: `REPO_SPEC_IS_IDENTITY_SSOT`; catalog is deploy-shape, not identity.
 - `scripts/ci/lib/image-tags.sh`: routing and billing derive `node_id` from repo-spec, with catalog only as a projection for submodule nodes.
 - `getNodeId()` reads repo-spec `node_id` at runtime.
@@ -105,7 +105,7 @@ observability:all
 
 The operator's `nodes` row IS the node read model. There is no separate `registry_row_id`:
 **`nodes.id` is the operator's projection of repo-spec `node_id`** (one immutable UUID, keyed to
-the deployment-identity SSOT — consistent with `identity-model.md`'s "projection, never a second
+the deployment-identity SSOT — consistent with the identity standard's "projection, never a second
 authority"). `slug` is the human/agent addressing handle. `service_id`/`env` resource rows come from
 the catalog and the deploy-env enum, not from `nodes`.
 
@@ -271,7 +271,7 @@ way** rather than introducing a parallel `node_id` column that only ever holds t
 
 - **No schema change to identity.** `nodes.id` is the operator's projection of repo-spec `node_id`.
 - **Ratify the contract where it's enforced + read:**
-  - `identity-model.md` § Spec File Layering / projection: add a one-line invariant —
+  - [Node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage): add a one-line invariant —
     `OPERATOR_NODE_ROW_ID_IS_NODE_ID`: the operator `nodes.id` is the projection of the node's repo-spec
     `node_id`; for an externally-formed node the operator inserts the child's `node_id` as the row PK,
     never a fresh `defaultRandom()`. The repo-spec stays authoritative; the row mirrors it under the
@@ -330,7 +330,7 @@ _validating + pinning_ the caller's selector; the route swaps `filter` → `quer
 
 #### Per-site changes
 
-- `identity-model.md` + `shared/db/nodes.ts` header — ratify `OPERATOR_NODE_ROW_ID_IS_NODE_ID`.
+- [Node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage) + `shared/db/nodes.ts` header — ratify `OPERATOR_NODE_ROW_ID_IS_NODE_ID`.
 - new `resolveNodeIdentity(idOrSlug)` helper (slug **or** UUID) — used by developers / access-requests
   / flight; the two registry-backed routes already resolve both forms.
 - `features/nodes/observability-logs.ts` — `buildNodeScopedLogQL` → parse + scope-validate + pin a full

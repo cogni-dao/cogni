@@ -9,7 +9,7 @@
  * Invariants: NODES_TABLE_SCOPE (env-local catalog projection + pre-merge wizard state),
  *   STATE_MACHINE_TOTAL, OWNER_GATING, NO_PRIVATE_KEYS,
  *   OPERATOR_NODE_ROW_ID_IS_NODE_ID — `nodes.id` IS the operator's projection of the node's repo-spec
- *   `node_id` (the deployment-identity SSOT, docs/spec/identity-model.md). It is the OpenFGA `node:<id>`
+ *   `node_id` (the deployment-identity SSOT, https://cognidao.org/knowledge/node-identity-projection-lineage). It is the OpenFGA `node:<id>`
  *   resource and the Loki `node` label, never an unrelated surrogate. Wizard creation's `defaultRandom()`
  *   is the act of minting that `node_id` — `publish` writes the same value into the minted repo-spec.
  *   An externally-formed node MUST be inserted with `id = <child repo-spec node_id>`, never a fresh UUID,
@@ -18,7 +18,7 @@
  *   are projections of merged catalog intent. A node may deploy to many envs, but exactly one environment ingests activity and
  *   runs epoch schedules; the DB check requires that activity env to be in the deploy set.
  * Side-effects: none
- * Links: docs/spec/identity-model.md, docs/spec/node-formation.md, work/projects/proj.node-formation-ui.md, task.5083
+ * Links: https://cognidao.org/knowledge/node-identity-projection-lineage, docs/spec/node-formation.md, work/projects/proj.node-formation-ui.md, task.5083
  * @public
  */
 

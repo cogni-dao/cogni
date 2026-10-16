@@ -88,6 +88,13 @@ immutable model is written only when the hash changes or no prior model exists.
 
 ## Actor Types
 
+The table below is the current V0 compatibility shape. Durable human and agent
+principals are node-qualified (`user:{node_id}/{user_id}` and
+`agent:{node_id}/{actor_id}`) under the
+[human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard);
+shipping that shape requires migrating existing tuples rather than relabeling a
+user-backed agent as durable identity.
+
 | Type    | Format                  | Description                          |
 | ------- | ----------------------- | ------------------------------------ |
 | User    | `user:{user_id}`        | Human or user-bound machine token    |
@@ -204,8 +211,9 @@ The current `user.delegates` relation is global—not scoped to tenant or graph.
 **Node developer relation:** `node.developer` grants an actor operational
 developer authority for one node. In V0, registered external AI agents
 authenticate as user-backed machine principals (`user:{agent_user_id}`), so
-approval writes them as users. VNext can grant true `agent:{actor_id}`
-principals without changing the `node.flight` route check.
+approval writes them as users. The durable path grants
+`agent:{node_id}/{actor_id}` without changing the `node.flight` relation check,
+then retires the compatibility tuple after verified cutover.
 
 ---
 
@@ -385,7 +393,7 @@ observes the `core__vcs_flight_candidate` tool authorization path.
 
 New node spawn + external AI agent flow:
 
-1. The AI agent calls `POST /api/v1/agent/register` and receives a bearer token.
+1. The legacy v1 AI path calls `POST /api/v1/agent/register` and receives a user-backed bearer token. It is compatibility state, not proof that the AI is a human. The durable path instead registers an `actor(kind=agent)` and a replaceable target-issued credential under the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard).
 2. The agent files an access request for one `node:{node_id}` via
    `POST /api/v1/nodes/{node_id}/access-requests { role? }`. `role` defaults to
    `developer` — V0's only role, which confers `can_flight`. This upserts a
@@ -393,7 +401,7 @@ New node spawn + external AI agent flow:
    re-request reopens it to `pending`) the owner sees in-UI. The row is
    tracking/UX only; it is never the authority.
 3. The node creator/admin approves or rejects in-UI. Approval (a) writes the OpenFGA
-   role tuple `node:{node_id}#developer@user:{agent_user_id}` (V0), (b) **provisions
+   role tuple `node:{node_id}#developer@user:{agent_user_id}` for the v1 compatibility path; the durable path writes a node-qualified `agent:{node_id}/{actor_id}` principal, (b) **provisions
    GitHub branch-push** on the node repo for the agent's bound GitHub login (see
    §6a), and (c) transitions the request row to `approved`; rejection removes the
    tuple, **de-provisions the collaborator**, and transitions the row to
@@ -414,7 +422,7 @@ role, `developer` → `can_flight`. New access levels (e.g. `maintainer` →
 `node_access_requests.role` CHECK, add the immutable OpenFGA relation, and label
 the capability in the UI. The request table's `role` column **is** the OpenFGA
 relation name — never overload `scope` (reserved for the governance domain
-`scope_id`; see [identity-model.md](./identity-model.md)).
+`scope_id`; see [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload)).
 
 Approval authority comes from the node creator/admin's current ownership of the
 node registry row. Ongoing flight authority comes only from OpenFGA.

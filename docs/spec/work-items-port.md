@@ -20,13 +20,13 @@ tags: [work-system, ports, adapters]
 
 ### Key References
 
-|             |                                                                                           |                                   |
-| ----------- | ----------------------------------------------------------------------------------------- | --------------------------------- |
-| **Project** | [proj.agentic-project-management](../../work/projects/proj.agentic-project-management.md) | Roadmap and planning              |
-| **Spec**    | [Development Lifecycle](./development-lifecycle.md)                                       | Status enum and transition rules  |
-| **Spec**    | [Identity Model](./identity-model.md)                                                     | Actor kinds for SubjectRef        |
-| **Spec**    | [Docs + Work System](./docs-work-system.md)                                               | Frontmatter schema and ID formats |
-| **Package** | [`packages/work-items/`](../../packages/work-items/AGENTS.md)                             | Implementation                    |
+|              |                                                                                           |                                   |
+| ------------ | ----------------------------------------------------------------------------------------- | --------------------------------- |
+| **Project**  | [proj.agentic-project-management](../../work/projects/proj.agentic-project-management.md) | Roadmap and planning              |
+| **Spec**     | [Development Lifecycle](./development-lifecycle.md)                                       | Status enum and transition rules  |
+| **Standard** | [Human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)            | Actor kinds for SubjectRef        |
+| **Spec**     | [Docs + Work System](./docs-work-system.md)                                               | Frontmatter schema and ID formats |
+| **Package**  | [`packages/work-items/`](../../packages/work-items/AGENTS.md)                             | Implementation                    |
 
 ## Design
 
@@ -202,7 +202,7 @@ Enable agents and scripts to manage work items through typed port interfaces ins
 | ROUND_TRIP_SAFE          | Unknown storage-specific metadata preserved across read-modify-write cycles.                      |
 | BODY_PRESERVED           | Adapter writes never modify content outside the adapter's domain (markdown body, etc.).           |
 | CANONICAL_RELATIONS      | Relations store canonical direction only (`blocks`, `parent_of`). Inverses derived at query time. |
-| ACTOR_KINDS_ALIGNED      | `SubjectRef` kinds (`user`, `agent`, `system`) match identity-model.md actor kinds.               |
+| ACTOR_KINDS_ALIGNED      | `SubjectRef` kinds (`user`, `agent`, `system`) match the human–AI identity standard.              |
 | ID_ALLOC_UNIQUE          | `create()` allocates a unique `WorkItemId`. Collision is a bug.                                   |
 | NO_APP_IMPORTS           | `@cogni/work-items` imports nothing from `@/`, `src/`, or app/service code.                       |
 | CONTRACT_TESTS_PORTABLE  | The contract test suite runs against any adapter via factory parameterization.                    |
@@ -244,6 +244,6 @@ None.
 ## Related
 
 - [Development Lifecycle](./development-lifecycle.md) — status enum, command dispatch, transition rules
-- [Identity Model](./identity-model.md) — actor kinds that `SubjectRef` aligns with
+- [Human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard) — actor kinds that `SubjectRef` aligns with
 - [Docs + Work System](./docs-work-system.md) — frontmatter schema, ID conventions, content boundaries
 - [Packages Architecture](./packages-architecture.md) — package conventions, capability package shape
