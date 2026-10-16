@@ -18,7 +18,7 @@ A node's deploy-env membership is changed by RBAC-gated operator verb → catalo
 ## Start By Reading
 
 - **Skill: `.claude/skills/manage-node-envs/SKILL.md`** — the request→owner-approve→verb→merge→verify loop (canonical).
-- **Skill: `.claude/skills/test-expert/SKILL.md`** § "Environment e2e test lane" — the test-org/App contract + Pareto path (this task = step 2, make candidate/test "production-shaped").
+- **Hub: [node-test-contract](https://cognidao.org/knowledge/node-test-contract)** (read `GET /api/v1/knowledge/node-test-contract`; the `test-expert` skill triggers it) § "Environment e2e test lane" — the test-org/App contract + Pareto path (this task = step 2, make candidate/test "production-shaped").
 - Verb route: `nodes/operator/app/src/app/api/v1/nodes/[id]/envs/route.ts`; writer `openNodeEnvPr` in `src/adapters/server/vcs/github-repo-write.ts`; pure planner + guard in `src/shared/node-app-scaffold/gens/env-membership-plan.ts` (`buildEnvDeltaPlan`, `TEMPLATE_NODE_IMMUTABLE`).
 - Renderers (drift gates): `scripts/ci/render-node-appset.sh` (envs-aware ref) + `scripts/ci/render-node-overlays.sh` (`wizard_nodes_for_env`, fixed in #1934).
 - Approve route (owner-gated): `src/app/api/v1/nodes/[id]/developers/route.ts` (`nodes.ownerUserId == session.id`).
