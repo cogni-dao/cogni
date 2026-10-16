@@ -12,6 +12,7 @@ import {
   agentIdentityRateLimitResponse,
   agentIdentityResponse,
   requestBearer,
+  requestJson,
 } from "../_shared";
 
 export const runtime = "nodejs";
@@ -48,9 +49,10 @@ export const POST = wrapRouteHandlerWithLogging(
     );
     if (rateLimited) return rateLimited;
     const token = requestBearer(request);
+    const body = await requestJson(request);
     const legacy = token ? verifyLegacyAgentApiKey(token) : null;
     const parsed = upgradeLegacyAgentCredentialOperation.input.safeParse(
-      await request.json()
+      body.ok ? body.value : undefined
     );
     if (!token || !legacy || !parsed.success) {
       return agentIdentityResponse(
@@ -89,6 +91,10 @@ export const POST = wrapRouteHandlerWithLogging(
             authzUserResource(legacy.sub),
             `user:${getNodeId()}/${legacy.sub}`,
           ]);
+          const grantsByKey = new Map<
+            string,
+            { user: string; relation: string; object: string }
+          >();
           for (const source of sourceSubjects) {
             const listed = await container.authorization.listRelations(source);
             if (listed.decision !== "success") {
@@ -102,21 +108,28 @@ export const POST = wrapRouteHandlerWithLogging(
             }
             for (const tuple of listed.tuples) {
               if (!isMigratableNodeGrant(tuple)) continue;
-              const written = await container.authorization.writeRelation({
+              const grant = {
                 user: result.principalId,
                 relation: tuple.relation,
                 object: tuple.object,
-              });
-              if (written.decision !== "success") {
-                return agentIdentityResponse(
-                  ctx,
-                  startedAt,
-                  "upgrade",
-                  { error: "authz_unavailable" },
-                  { status: 503 }
-                );
-              }
+              };
+              grantsByKey.set(`${grant.relation}\0${grant.object}`, grant);
             }
+          }
+          // One OpenFGA transaction prevents a failed multi-role copy from
+          // leaving stale destination authority for an exact retry to activate.
+          // Duplicate source subject spellings collapse to the same grant.
+          const written = await container.authorization.writeRelationsAtomically(
+            [...grantsByKey.values()]
+          );
+          if (written.decision !== "success") {
+            return agentIdentityResponse(
+              ctx,
+              startedAt,
+              "upgrade",
+              { error: "authz_unavailable" },
+              { status: 503 }
+            );
           }
           await container.agentIdentity.completeLegacyUpgrade({
             legacyUserId: legacy.sub,

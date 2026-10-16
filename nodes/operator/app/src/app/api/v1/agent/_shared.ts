@@ -108,13 +108,33 @@ export function requestBearer(request: Request): string | null {
   return extractBearerToken(request.headers.get("authorization"));
 }
 
+export async function requestJson(
+  request: Request
+): Promise<{ ok: true; value: unknown } | { ok: false }> {
+  try {
+    return { ok: true, value: await request.json() };
+  } catch {
+    return { ok: false };
+  }
+}
+
 /** Cookie-authenticated agent mutations require an explicit same-origin proof. */
 export function isSameOriginMutation(request: Request): boolean {
   const origin = request.headers.get("origin");
-  const host = request.headers.get("host");
+  const host = (
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host")
+  )
+    ?.split(",", 1)[0]
+    ?.trim();
   if (!origin || !host) return false;
   try {
-    return new URL(origin).host === host;
+    const requestUrl = new URL(request.url);
+    const forwardedProto = request.headers
+      .get("x-forwarded-proto")
+      ?.split(",", 1)[0]
+      ?.trim();
+    const scheme = forwardedProto || requestUrl.protocol.slice(0, -1);
+    return new URL(origin).origin === new URL(`${scheme}://${host}`).origin;
   } catch {
     return false;
   }

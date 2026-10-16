@@ -9,6 +9,7 @@ import {
   agentIdentityRateLimitResponse,
   agentIdentityResponse,
   requestBearer,
+  requestJson,
 } from "../../_shared";
 
 export const runtime = "nodejs";
@@ -25,8 +26,9 @@ export const POST = wrapRouteHandlerWithLogging(
     );
     if (rateLimited) return rateLimited;
     const token = requestBearer(request);
+    const body = await requestJson(request);
     const parsed = rotateAgentCredentialOperation.input.safeParse(
-      await request.json()
+      body.ok ? body.value : undefined
     );
     if (!token || !parsed.success) {
       return agentIdentityResponse(

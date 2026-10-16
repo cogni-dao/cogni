@@ -61,11 +61,13 @@ const mockListRelations = vi.fn().mockResolvedValue({
     },
   ],
 });
-const mockWriteRelation = vi.fn().mockResolvedValue({ decision: "success" });
+const mockWriteRelationsAtomically = vi
+  .fn()
+  .mockResolvedValue({ decision: "success" });
 let authorization:
   | {
       listRelations: typeof mockListRelations;
-      writeRelation: typeof mockWriteRelation;
+      writeRelationsAtomically: typeof mockWriteRelationsAtomically;
     }
   | undefined;
 
@@ -129,7 +131,7 @@ describe("POST /api/v1/agent/register", () => {
     vi.spyOn(agentIdentityApiLimiter, "consume").mockReturnValue(true);
     authorization = {
       listRelations: mockListRelations,
-      writeRelation: mockWriteRelation,
+      writeRelationsAtomically: mockWriteRelationsAtomically,
     };
     mockListRelations.mockResolvedValue({
       decision: "success",
@@ -141,7 +143,7 @@ describe("POST /api/v1/agent/register", () => {
         },
       ],
     });
-    mockWriteRelation.mockResolvedValue({ decision: "success" });
+    mockWriteRelationsAtomically.mockResolvedValue({ decision: "success" });
     mockUpgrade.mockResolvedValue(preparedUpgrade);
     mockCompleteLegacyUpgrade.mockResolvedValue(undefined);
     mockReleaseLegacyUpgrade.mockResolvedValue(undefined);
@@ -190,6 +192,36 @@ describe("POST /api/v1/agent/register", () => {
 
         expect(response.status).toBe(400);
         expect(mockRedeem).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("returns one privacy-safe terminal event for malformed JSON", async () => {
+    await testApiHandler({
+      appHandler: registerHandler,
+      url: "/api/v1/agent/register",
+      async test({ fetch }) {
+        const response = await fetch({
+          method: "POST",
+          body: '{"spawnToken":',
+          headers: { "content-type": "application/json" },
+        });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({
+          error: "Invalid request",
+        });
+        expect(mockRedeem).not.toHaveBeenCalled();
+        expect(mockFeatureWarn).toHaveBeenCalledTimes(1);
+        expect(mockFeatureWarn.mock.calls[0]?.[0]).toMatchObject({
+          operation: "register",
+          outcome: "error",
+          statusCode: 400,
+          reasonCode: "invalid_request",
+        });
+        expect(JSON.stringify(mockFeatureWarn.mock.calls[0]?.[0])).not.toMatch(
+          /spawnToken|apiKey|credentialId|actorId|userId/
+        );
       },
     });
   });
@@ -330,7 +362,7 @@ describe("POST /api/v1/agent/upgrade", () => {
     vi.spyOn(agentIdentityApiLimiter, "consume").mockReturnValue(true);
     authorization = {
       listRelations: mockListRelations,
-      writeRelation: mockWriteRelation,
+      writeRelationsAtomically: mockWriteRelationsAtomically,
     };
     mockListRelations.mockResolvedValue({
       decision: "success",
@@ -342,7 +374,7 @@ describe("POST /api/v1/agent/upgrade", () => {
         },
       ],
     });
-    mockWriteRelation.mockResolvedValue({ decision: "success" });
+    mockWriteRelationsAtomically.mockResolvedValue({ decision: "success" });
     mockUpgrade.mockResolvedValue(preparedUpgrade);
     mockCompleteLegacyUpgrade.mockResolvedValue(undefined);
     mockReleaseLegacyUpgrade.mockResolvedValue(undefined);
@@ -382,7 +414,7 @@ describe("POST /api/v1/agent/upgrade", () => {
       async test({ fetch }) {
         const response = await upgradeRequest(fetch);
         expect(response.status).toBe(503);
-        expect(mockWriteRelation).not.toHaveBeenCalled();
+        expect(mockWriteRelationsAtomically).not.toHaveBeenCalled();
       },
     });
   });
@@ -420,17 +452,14 @@ describe("POST /api/v1/agent/upgrade", () => {
       async test({ fetch }) {
         const response = await upgradeRequest(fetch);
         expect(response.status).toBe(201);
-        expect(mockWriteRelation).toHaveBeenCalledTimes(2);
-        expect(mockWriteRelation).toHaveBeenNthCalledWith(1, {
-          user: upgraded.principalId,
-          relation: "developer",
-          object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        });
-        expect(mockWriteRelation).toHaveBeenNthCalledWith(2, {
-          user: upgraded.principalId,
-          relation: "developer",
-          object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        });
+        expect(mockWriteRelationsAtomically).toHaveBeenCalledTimes(1);
+        expect(mockWriteRelationsAtomically).toHaveBeenCalledWith([
+          {
+            user: upgraded.principalId,
+            relation: "developer",
+            object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          },
+        ]);
         expect(mockCompleteLegacyUpgrade).toHaveBeenCalledWith({
           legacyUserId: "legacy-user",
           credentialId: upgraded.credentialId,
@@ -441,13 +470,25 @@ describe("POST /api/v1/agent/upgrade", () => {
     });
   });
 
-  it("returns the same material on retry only after grant copy succeeds", async () => {
-    mockWriteRelation
+  it("re-reads source roles after a failed atomic copy before activating", async () => {
+    const sourceA = {
+      user: "user:legacy-user",
+      relation: "developer",
+      object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    };
+    const sourceB = { ...sourceA, relation: "env_manager" };
+    mockListRelations
+      .mockResolvedValueOnce({ decision: "success", tuples: [sourceA, sourceB] })
+      .mockResolvedValueOnce({ decision: "success", tuples: [] })
+      // Role A is revoked at the source after the failed all-or-none copy.
+      .mockResolvedValueOnce({ decision: "success", tuples: [sourceB] })
+      .mockResolvedValueOnce({ decision: "success", tuples: [] });
+    mockWriteRelationsAtomically
       .mockResolvedValueOnce({
         decision: "failure",
         code: "authz_write_unavailable",
       })
-      .mockResolvedValue({ decision: "success" });
+      .mockResolvedValueOnce({ decision: "success" });
 
     await testApiHandler({
       appHandler: upgradeHandler,
@@ -468,15 +509,29 @@ describe("POST /api/v1/agent/upgrade", () => {
         expect(mockUpgrade.mock.calls[0]).toEqual(mockUpgrade.mock.calls[1]);
         expect(mockListRelations.mock.calls.map(([source]) => source)).toEqual([
           "user:legacy-user",
+          "user:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/legacy-user",
           "user:legacy-user",
           "user:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/legacy-user",
         ]);
-        expect(mockWriteRelation).toHaveBeenCalledTimes(3);
-        expect(mockWriteRelation).toHaveBeenLastCalledWith({
-          user: upgraded.principalId,
-          relation: "developer",
-          object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        });
+        expect(mockWriteRelationsAtomically).toHaveBeenNthCalledWith(1, [
+          {
+            user: upgraded.principalId,
+            relation: "developer",
+            object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          },
+          {
+            user: upgraded.principalId,
+            relation: "env_manager",
+            object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          },
+        ]);
+        expect(mockWriteRelationsAtomically).toHaveBeenNthCalledWith(2, [
+          {
+            user: upgraded.principalId,
+            relation: "env_manager",
+            object: "node:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          },
+        ]);
         expect(mockReleaseLegacyUpgrade).toHaveBeenCalledTimes(1);
         expect(mockCompleteLegacyUpgrade).toHaveBeenCalledTimes(1);
       },
@@ -498,11 +553,11 @@ describe("POST /api/v1/agent/upgrade", () => {
         // replay must return the recorded response without reading or writing
         // OpenFGA, so it cannot restore that revoked role.
         mockListRelations.mockClear();
-        mockWriteRelation.mockClear();
+        mockWriteRelationsAtomically.mockClear();
         expect((await upgradeRequest(fetch)).status).toBe(201);
 
         expect(mockListRelations).not.toHaveBeenCalled();
-        expect(mockWriteRelation).not.toHaveBeenCalled();
+        expect(mockWriteRelationsAtomically).not.toHaveBeenCalled();
         expect(mockCompleteLegacyUpgrade).toHaveBeenCalledTimes(1);
       },
     });

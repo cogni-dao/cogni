@@ -22,6 +22,7 @@ import {
   agentIdentityErrorResponse,
   agentIdentityRateLimitResponse,
   agentIdentityResponse,
+  requestJson,
 } from "../_shared";
 
 export const runtime = "nodejs";
@@ -37,8 +38,9 @@ export const POST = wrapRouteHandlerWithLogging(
       request
     );
     if (rateLimited) return rateLimited;
+    const body = await requestJson(request);
     const parsed = registerAgentV2Operation.input.safeParse(
-      await request.json()
+      body.ok ? body.value : undefined
     );
     if (!parsed.success) {
       return agentIdentityResponse(

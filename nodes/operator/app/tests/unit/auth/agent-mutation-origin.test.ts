@@ -20,6 +20,7 @@ describe("agent cookie mutation origin", () => {
   it.each([
     { host: "node.example", origin: null },
     { host: null, origin: "https://node.example" },
+    { host: "node.example", origin: "http://node.example" },
     { host: "node.example", origin: "https://evil.example" },
     { host: "node.example", origin: "not-a-url" },
   ])("fails closed for %#", ({ host, origin }) => {

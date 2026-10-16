@@ -10,6 +10,7 @@ import {
   agentIdentityRateLimitResponse,
   agentIdentityResponse,
   isSameOriginMutation,
+  requestJson,
 } from "../_shared";
 
 export const runtime = "nodejs";
@@ -37,8 +38,9 @@ export const POST = wrapRouteHandlerWithLogging(
         { status: 403 }
       );
     }
+    const body = await requestJson(request);
     const parsed = createAgentSpawnGrantOperation.input.safeParse(
-      await request.json()
+      body.ok ? body.value : undefined
     );
     if (!parsed.success) {
       return agentIdentityResponse(
