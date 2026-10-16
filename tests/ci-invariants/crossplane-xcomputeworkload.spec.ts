@@ -1593,12 +1593,13 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     status: {
       leaseRequestGeneration?: number;
       activeLeaseGeneration?: number;
-      // bug.5322 — observed edge state; gates the close.
-
-      // bug.5322 — `published` is OBSERVED edge state and gates the close.
-      dns?: { target?: string; published?: boolean; observedContent?: string };
+      // bug.5322 — `observedContent` is the LIVE Cloudflare record content (read back, never
+      // an intent echo); the close is gated on it carrying the candidate's target.
+      dns?: { target?: string; observedContent?: string };
     };
     observed: Record<string, ObservedChild>;
+    /** spec.dns present (default). Without it there is no edge to move. */
+    dnsManaged?: boolean;
   };
 
   const NS = "cogni-production";
@@ -1705,14 +1706,6 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
         dnsTarget = host;
       }
     }
-    // Observed Cloudflare state. Defaults TRUE so every pre-existing case keeps its meaning;
-    // only the new regression cases set it false.
-    // bug.5322 (measured twice): `published` means "the record matches current INTENT", which
-    // during a cutover is still the INCUMBENT target while the latch holds -- so it is true
-    // immediately and cannot gate the close. The close needs "the record carries the CANDIDATE
-    // target". Fixtures express that as dns.observedContent; default = the latched target, so
-    // every pre-existing case is unchanged.
-    const dnsPublished = xr.status.dns?.published ?? true;
     const prevDnsTarget = xr.status.dns?.target ?? "";
     let effectiveDnsTarget = dnsTarget;
     if (dnsTarget === "") {
@@ -1725,8 +1718,16 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       effectiveDnsTarget = prevDnsTarget;
     }
 
-    const observedContent = xr.status.dns?.observedContent ?? effectiveDnsTarget;
-    const dnsCutoverObserved = dnsTarget !== "" && observedContent === dnsTarget;
+    // bug.5322 (measured twice): "the record matches current INTENT" ($dnsPublished) is true
+    // at once during a cutover, because the intent is still the INCUMBENT while the latch holds.
+    // The close needs "the LIVE record carries the CANDIDATE target". Fixtures express the live
+    // record as dns.observedContent; default = the latched target, so pre-existing cases keep
+    // their meaning.
+    const observedContent =
+      xr.status.dns?.observedContent ?? effectiveDnsTarget;
+    const dnsCutoverObserved =
+      dnsTarget !== "" && observedContent === dnsTarget;
+    const edgeCutoverObserved = xr.dnsManaged === false || dnsCutoverObserved;
 
     return {
       /** Every composed LEASE child this render returns, sorted. */
@@ -1740,11 +1741,11 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       status: {
         leaseRequestGeneration,
         // bug.5322 (2026-10-08): EDGE-observed, not lease-observed. `serving` only proves the
-        // candidate COULD serve the public host; dnsPublished is read back from the live zone
-        // and proves the edge DOES. Advancing on `serving` alone closed the incumbent while
+        // candidate COULD serve the public host; the live record carrying the candidate's
+        // target proves the edge DOES. Advancing on `serving` alone closed the incumbent while
         // Cloudflare still pointed at it -> nginx 404 for ~7 minutes on spawny-boi candidate-a.
         activeLeaseGeneration:
-          active && serving && dnsCutoverObserved
+          active && serving && edgeCutoverObserved
             ? xr.leaseGeneration
             : activeLeaseGeneration >= 0
               ? activeLeaseGeneration
@@ -1804,7 +1805,9 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
       '$retainedObserved := hasKey $retainedResp "found"',
       '$retainedGone := and $retainedObserved (or (not $retainedFound) (eq $retainedState "closed"))',
       '$holdOutgoingLease := and (ne $retainedResourceName "") (not $retainedGone)',
-      "{{- if and $active $serving }}",
+      '{{- if and (ne $dnsTarget "") (eq $recordContent $dnsTarget) }}{{ $dnsCutoverObserved = true }}{{ end }}',
+      "{{- $edgeCutoverObserved := or (not $dns) $dnsCutoverObserved }}",
+      "{{- if and $active $serving $edgeCutoverObserved }}",
       "activeLeaseGeneration: {{ $leaseGeneration }}",
       "{{- else if ge $activeLeaseGeneration 0 }}",
       "activeLeaseGeneration: {{ $activeLeaseGeneration }}",
@@ -2043,10 +2046,56 @@ describe("XComputeWorkload holds the outgoing lease until the replacement serves
     expect(r.status.activeLeaseGeneration).toBe(3);
   });
 
-  it("pins the template's advance gate to the observed edge signal (bug.5322)", () => {
-    expect(templateCode).toContain(
-      "{{- if and $active $serving $dnsCutoverObserved }}"
-    );
+  it("does NOT advance while the candidate has no target the edge could carry (bug.5322)", () => {
+    // An endpoint-less candidate observe must never satisfy the edge gate, even though the
+    // live record still matches the latched (incumbent) intent.
+    const r = render({
+      leaseGeneration: 3,
+      status: {
+        activeLeaseGeneration: 1,
+        leaseRequestGeneration: 3,
+        dns: { target: INCUMBENT_TARGET, observedContent: INCUMBENT_TARGET },
+      },
+      observed: {
+        "akash-lease-g1": {
+          requestKey: `xcw:${NS}:${NAME}:1`,
+          response: servingOn("lease-1", INCUMBENT_TARGET),
+        },
+        "akash-lease-g3": {
+          requestKey: `xcw:${NS}:${NAME}:3`,
+          response: {
+            found: true,
+            serving: true,
+            resource: {
+              state: "active",
+              externalName: "lease-3",
+              endpoints: [],
+            },
+          },
+        },
+      },
+    });
+    expect(r.status.activeLeaseGeneration).toBe(1);
+    expect(r.leaseChildren).toEqual(["akash-lease-g1", "akash-lease-g3"]);
+  });
+
+  it("a workload with no spec.dns advances on serving: there is no edge to move (bug.5322)", () => {
+    const r = render({
+      leaseGeneration: 3,
+      dnsManaged: false,
+      status: { activeLeaseGeneration: 1, leaseRequestGeneration: 3 },
+      observed: {
+        "akash-lease-g1": {
+          requestKey: `xcw:${NS}:${NAME}:1`,
+          response: servingOn("lease-1", INCUMBENT_TARGET),
+        },
+        "akash-lease-g3": {
+          requestKey: `xcw:${NS}:${NAME}:3`,
+          response: servingOn("lease-3", CANDIDATE_TARGET),
+        },
+      },
+    });
+    expect(r.status.activeLeaseGeneration).toBe(3);
   });
 
   it("does not advance the latch while the candidate is not serving", () => {

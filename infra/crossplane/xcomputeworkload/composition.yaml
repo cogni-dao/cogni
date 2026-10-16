@@ -848,7 +848,10 @@ spec:
               $dnsCutoverObserved is the signal the close actually needs: the live record carries
               the CANDIDATE's own target ($dnsTarget, derived from the candidate child's observed
               endpoints), so it cannot be true until the edge genuinely moved. Empty $dnsTarget --
-              a candidate with no endpoints yet -- can never satisfy it. */}}
+              a candidate with no endpoints yet -- can never satisfy it. It cannot pass trivially
+              on a target the incumbent shares, either: provider ingress hostnames are per lease,
+              and an IPv4-only candidate (bug.5340) is never $serving because the host-routed probe
+              rejects IP-literal endpoints (safe-version-probe.ts). */}}
             {{- $dnsCutoverObserved := false }}
             {{- range $dnsRecords }}
             {{- if and (eq (dig "type" "" .) $dnsRecordType) (dig "proxied" false .) }}
@@ -857,6 +860,7 @@ spec:
             {{- if and (ne $dnsTarget "") (eq $recordContent $dnsTarget) }}{{ $dnsCutoverObserved = true }}{{ end }}
             {{- end }}
             {{- end }}
+            {{- $edgeCutoverObserved := or (not $dns) $dnsCutoverObserved }}
 
             {{- /* ---------- composed: the OUTGOING Akash lease, held open ---------- */ -}}
             {{- /* bug.5322. A DELIBERATE COPY of the lease Request below, differing in exactly
@@ -1232,33 +1236,32 @@ spec:
               {{- if ge $leaseRequestGeneration 0 }}
               leaseRequestGeneration: {{ $leaseRequestGeneration }}
               {{- end }}
-              {{- /* THE CUTOVER LATCH (bug.5322). The generation PROVEN serving — advanced only
-                on `active && serving` for the CANDIDATE child, which is the same pair
-                status.serving and the Ready phase are written from. Advancing it is what lets
-                the OVERLAP_BEFORE_CLOSE block above stop retaining the outgoing child on the
-                next reconcile, so the close happens AFTER the cutover rather than before it.
-                Carried forward verbatim on every tick that does not prove serving: this must
-                never silently regress to -1 and un-protect a live lease. Omitted entirely while
-                still -1 so a fleet that has never served renders byte-identically. */}}
-              {{- /* EDGE-OBSERVED, NOT LEASE-OBSERVED (bug.5322, measured 2026-10-08). Advancing
-                this latch is what stops retaining the outgoing child, which closes its lease --
-                so it must require proof that THE PUBLIC HOST serves the candidate, not merely
-                that the candidate COULD. $serving comes from the host-routed probe, which
-                connects to the candidate's OWN lease endpoint presenting Host: <publicHost>; it
-                passes the moment the provider routes that vhost on that lease, while Cloudflare
-                still points at the incumbent. Advancing on it closed gen-1 while the edge was
-                still using it: spawny-boi candidate-a went nginx 404 for ~7 minutes (441 bad
-                responses, no self-heal, manual re-flight to recover), and the bug.5188
-                last-known-good latch then pinned DNS to a CLOSED lease.
-                $dnsPublished is the honest signal: it is read back from the LIVE Cloudflare zone
-                (bug.5152 -- an observation, never an intent echo), so it cannot be true until the
-                record actually carries $effectiveDnsTarget. Sequence it buys: tick N candidate
-                serves -> DNS child writes the new target, $dnsPublished still false -> DO NOT
-                advance, incumbent retained; tick N+1 the record reads back -> advance -> tick N+2
-                the outgoing child stops rendering and closes. The close now strictly follows the
-                observed cutover. A stalled Cloudflare write therefore leaks a retained lease
-                (bounded, visible, costed) instead of dropping traffic -- the correct trade. */}}
-              {{- if and $active $serving $dnsCutoverObserved }}
+              {{- /* THE CUTOVER LATCH (bug.5322). The generation PROVEN serving AT THE EDGE.
+                Advancing it is what lets the OVERLAP_BEFORE_CLOSE block above stop retaining the
+                outgoing child on the next reconcile, which closes the incumbent's lease -- so it
+                must require proof that THE PUBLIC HOST is pointed at the candidate, not merely
+                that the candidate COULD serve it. Carried forward verbatim on every tick that does
+                not prove the cutover: it must never silently regress to -1 and un-protect a live
+                lease. Omitted entirely while still -1 so a fleet that has never served renders
+                byte-identically.
+                EDGE-OBSERVED, NOT LEASE-OBSERVED (measured twice, 2026-10-08). $serving comes from
+                the host-routed probe, which connects to the candidate's OWN lease endpoint
+                presenting Host: <publicHost>; it passes the moment the provider routes that vhost
+                on that lease, while Cloudflare still points at the incumbent. Advancing on
+                `active && serving` closed gen-1 while the edge still used it: spawny-boi
+                candidate-a went nginx 404 for ~7 minutes (441 bad responses, manual re-flight to
+                recover), and the bug.5188 last-known-good latch then pinned DNS to a CLOSED lease.
+                $dnsPublished cannot gate it either: it compares the live record with current
+                INTENT ($effectiveDnsTarget), which is still the incumbent's target while the DNS
+                latch holds, so it is true at once (the second outage). $edgeCutoverObserved
+                requires the LIVE record (read back from Cloudflare, bug.5152) to carry the
+                CANDIDATE's own target. Sequence: tick N candidate serves -> DNS child writes its
+                target -> tick N+1 the record reads back carrying it -> advance -> tick N+2 the
+                outgoing child stops rendering and closes. A stalled Cloudflare write therefore
+                leaks a retained lease (bounded, visible, costed) instead of dropping traffic.
+                A workload with no spec.dns has no edge to move: its lease endpoint IS its public
+                route, so `active && serving` remains the proof there. */}}
+              {{- if and $active $serving $edgeCutoverObserved }}
               activeLeaseGeneration: {{ $leaseGeneration }}
               {{- else if ge $activeLeaseGeneration 0 }}
               activeLeaseGeneration: {{ $activeLeaseGeneration }}
