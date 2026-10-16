@@ -216,6 +216,9 @@ divergences:
       # files therefore mirror canonical byte-for-byte; only the generated patch above may differ.
       - "infra/k8s/overlays/*/operator/**"
       - "infra/k8s/overlays/*/scheduler-worker/**"
+      # The one legacy flat AppSet the hub STILL carries: the mirror's copy kept the retired
+      # `canary` element. Retained-only flat files (hub deleted them) stay artifact_only above.
+      - "infra/k8s/argocd/candidate-b-applicationset.yaml"
     regenerate:
       # GENERATED_IS_REDERIVED (scripts/ci/sync-test-parent.mjs). Roster-generated content is
       # re-derived by the CANONICAL generators against the mirror's own roster, never carried at
