@@ -328,15 +328,6 @@ export interface BindActorExternalIdentityParams {
   readonly effectiveAt: Date;
 }
 
-export interface InsertActorBeneficiaryPolicyParams {
-  readonly earnedByActorId: string;
-  readonly beneficiaryActorId: string;
-  readonly policyVersion: string;
-  readonly authorizedByActorId: string;
-  readonly evidence: Record<string, unknown>;
-  readonly effectiveFrom: Date;
-}
-
 export interface ProposeActorBeneficiaryPolicyParams {
   readonly earnedByActorId: string;
   readonly beneficiaryActorId: string;
@@ -1017,11 +1008,6 @@ export interface ActorAttributionStore {
   bindActorExternalIdentity(
     params: BindActorExternalIdentityParams
   ): Promise<ActorBindingRecord>;
-
-  /** @deprecated Migration/test seam. Application callers use the governed proposal ceremony. */
-  insertActorBeneficiaryPolicy(
-    params: InsertActorBeneficiaryPolicyParams
-  ): Promise<ActorBeneficiaryPolicyRecord>;
 
   resolveActiveHumanActorId(userId: string): Promise<string | null>;
 

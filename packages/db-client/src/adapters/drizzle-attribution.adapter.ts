@@ -27,7 +27,6 @@
 import type {
   AcceptActorBeneficiaryPolicyParams,
   ActorBeneficiaryPolicyAcceptanceRecord,
-  ActorBeneficiaryPolicyRecord,
   ActorBeneficiaryPolicyProposalRecord,
   ActorContributionAllocationLifecycleRecord,
   ActorBindingRecord,
@@ -50,7 +49,6 @@ import type {
   FinalClaimantAllocationRecord,
   IngestionCursor,
   IngestionReceipt,
-  InsertActorBeneficiaryPolicyParams,
   InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,
@@ -438,22 +436,6 @@ function toActorBinding(
     evidenceEventId: row.evidenceEventId,
     createdAt: row.createdAt,
     closedAt: row.closedAt,
-  };
-}
-
-function toActorBeneficiaryPolicy(
-  row: typeof actorBeneficiaryPolicies.$inferSelect
-): ActorBeneficiaryPolicyRecord {
-  return {
-    id: row.id,
-    earnedByActorId: row.earnedByActorId,
-    beneficiaryActorId: row.beneficiaryActorId,
-    policyVersion: row.policyVersion,
-    authorizedByActorId: row.authorizedByActorId,
-    evidence: row.evidence,
-    effectiveFrom: row.effectiveFrom,
-    effectiveTo: row.effectiveTo,
-    createdAt: row.createdAt,
   };
 }
 
@@ -2361,109 +2343,6 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         });
       }
       return toActorBinding(binding);
-    });
-  }
-
-  async insertActorBeneficiaryPolicy(
-    params: InsertActorBeneficiaryPolicyParams
-  ): Promise<ActorBeneficiaryPolicyRecord> {
-    if (params.authorizedByActorId !== params.beneficiaryActorId) {
-      throw new Error(
-        "P0 beneficiary claim must be explicitly authorized by the beneficiary actor"
-      );
-    }
-    if (Object.keys(params.evidence).length === 0) {
-      throw new Error("Beneficiary policy requires ceremony evidence");
-    }
-    return this.db.transaction(async (tx) => {
-      await tx.execute(
-        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${params.earnedByActorId}`}))`
-      );
-      const [earnerRows, beneficiaryRows] = await Promise.all([
-        tx
-          .select({ id: actors.id, kind: actors.kind })
-          .from(actors)
-          .where(
-            and(
-              eq(actors.id, params.earnedByActorId),
-              eq(actors.status, "active")
-            )
-          )
-          .limit(1),
-        tx
-          .select({ id: actors.id, kind: actors.kind })
-          .from(actors)
-          .where(
-            and(
-              eq(actors.id, params.beneficiaryActorId),
-              eq(actors.status, "active")
-            )
-          )
-          .limit(1),
-      ]);
-      const earner = earnerRows[0];
-      const beneficiary = beneficiaryRows[0];
-      if (earner?.kind !== "agent" || beneficiary?.kind !== "user") {
-        throw new Error(
-          "P0 beneficiary claim requires an active agent earner and human beneficiary"
-        );
-      }
-      const [latestPolicyRows, latestAllocationRows] = await Promise.all([
-        tx
-          .select({ effectiveFrom: actorBeneficiaryPolicies.effectiveFrom })
-          .from(actorBeneficiaryPolicies)
-          .where(
-            eq(actorBeneficiaryPolicies.earnedByActorId, params.earnedByActorId)
-          )
-          .orderBy(desc(actorBeneficiaryPolicies.effectiveFrom))
-          .limit(1),
-        tx
-          .select({
-            contributionCutoff: actorContributionAllocations.contributionCutoff,
-          })
-          .from(actorContributionAllocations)
-          .where(
-            eq(
-              actorContributionAllocations.earnedByActorId,
-              params.earnedByActorId
-            )
-          )
-          .orderBy(desc(actorContributionAllocations.contributionCutoff))
-          .limit(1),
-      ]);
-      const latestPolicy = latestPolicyRows[0];
-      if (
-        latestPolicy &&
-        params.effectiveFrom.getTime() <= latestPolicy.effectiveFrom.getTime()
-      ) {
-        throw new Error(
-          "Beneficiary policy effectiveFrom must be strictly after the latest policy"
-        );
-      }
-      const latestAllocation = latestAllocationRows[0];
-      if (
-        latestAllocation &&
-        params.effectiveFrom.getTime() <=
-          latestAllocation.contributionCutoff.getTime()
-      ) {
-        throw new Error(
-          "Beneficiary policy cannot backdate across a frozen actor allocation"
-        );
-      }
-      const [row] = await tx
-        .insert(actorBeneficiaryPolicies)
-        .values({
-          id: crypto.randomUUID(),
-          earnedByActorId: params.earnedByActorId,
-          beneficiaryActorId: params.beneficiaryActorId,
-          policyVersion: params.policyVersion,
-          authorizedByActorId: params.authorizedByActorId,
-          evidence: params.evidence,
-          effectiveFrom: params.effectiveFrom,
-        })
-        .returning();
-      if (!row) throw new Error("Beneficiary policy insert returned no row");
-      return toActorBeneficiaryPolicy(row);
     });
   }
 

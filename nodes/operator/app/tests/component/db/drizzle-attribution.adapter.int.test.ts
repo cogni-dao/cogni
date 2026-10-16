@@ -1953,6 +1953,43 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         spawnedByActorId: derekActor.id,
         parentActorId: derekActor.id,
       });
+      const activateReplacement = async (input: {
+        beneficiaryActorId: string;
+        policyVersion: string;
+        effectiveFrom: Date;
+        acceptedAt: Date;
+      }) => {
+        const replacement = await adapter.proposeActorBeneficiaryPolicy({
+          earnedByActorId: flockLeaderActorId,
+          beneficiaryActorId: input.beneficiaryActorId,
+          stewardActorId: derekActor.id,
+          proposedByActorId: derekActor.id,
+          policyVersion: input.policyVersion,
+          evidence: { ceremony: "governed-beneficiary-replacement" },
+          effectiveFrom: input.effectiveFrom,
+        });
+        await adapter.acceptActorBeneficiaryPolicy({
+          proposalId: replacement.id,
+          role: "earner",
+          acceptedByActorId: flockLeaderActorId,
+          evidence: { credential: "durable-agent-v2" },
+          acceptedAt: input.acceptedAt,
+        });
+        await adapter.acceptActorBeneficiaryPolicy({
+          proposalId: replacement.id,
+          role: "steward",
+          acceptedByActorId: derekActor.id,
+          evidence: { session: "steward-siwe" },
+          acceptedAt: input.acceptedAt,
+        });
+        return adapter.acceptActorBeneficiaryPolicy({
+          proposalId: replacement.id,
+          role: "governance",
+          acceptedByActorId: derekActor.id,
+          evidence: { approverSet: "test-ledger-approvers" },
+          acceptedAt: input.acceptedAt,
+        });
+      };
       await adapter.bindActorExternalIdentity({
         actorId: flockLeaderActorId,
         provider: "github",
@@ -2165,33 +2202,27 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         .limit(1);
       if (!futureActor) throw new Error("Expected future beneficiary actor");
       await expect(
-        adapter.insertActorBeneficiaryPolicy({
-          earnedByActorId: flockLeaderActorId,
+        activateReplacement({
           beneficiaryActorId: futureActor.id,
           policyVersion: "flock-leader-beneficiary.backdated-rejected",
-          authorizedByActorId: futureActor.id,
-          evidence: { ceremony: "backdated-reassignment-must-fail" },
           effectiveFrom: new Date("2026-10-02T11:00:00.000Z"),
+          acceptedAt: new Date("2026-10-02T10:00:00.000Z"),
         })
       ).rejects.toThrow(
         "Beneficiary policy cannot backdate across a frozen actor allocation"
       );
-      await adapter.insertActorBeneficiaryPolicy({
-        earnedByActorId: flockLeaderActorId,
+      await activateReplacement({
         beneficiaryActorId: futureActor.id,
         policyVersion: "flock-leader-beneficiary.v2",
-        authorizedByActorId: futureActor.id,
-        evidence: { ceremony: "future-only-reassignment" },
         effectiveFrom: new Date("2026-10-04T00:00:00.000Z"),
+        acceptedAt: new Date("2026-10-03T00:00:00.000Z"),
       });
       await expect(
-        adapter.insertActorBeneficiaryPolicy({
-          earnedByActorId: flockLeaderActorId,
+        activateReplacement({
           beneficiaryActorId: derekActor.id,
           policyVersion: "flock-leader-beneficiary.out-of-order-rejected",
-          authorizedByActorId: derekActor.id,
-          evidence: { ceremony: "out-of-order-policy-must-fail" },
           effectiveFrom: new Date("2026-10-03T00:00:00.000Z"),
+          acceptedAt: new Date("2026-10-02T15:00:00.000Z"),
         })
       ).rejects.toThrow(
         "Beneficiary policy effectiveFrom must be strictly after the latest policy"

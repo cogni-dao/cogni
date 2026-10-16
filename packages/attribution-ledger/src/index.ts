@@ -182,7 +182,6 @@ export type {
   IdentityResolver,
   IngestionCursor,
   IngestionReceipt,
-  InsertActorBeneficiaryPolicyParams,
   InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,
