@@ -2,19 +2,15 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
 namespace: cogni-preview
-
 resources:
   - ../../../base/scheduler-worker
-
 # Image digest — updated by promote-k8s-image.sh on each CI push.
 # Argo CD ApplicationSet points here; digest change → auto-sync.
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:8c71709da081dc6615b3d54e9fec78efb0fab90e2439dad8845871b5afb03694"
-
+    digest: "sha256:8d69ed8e0659c5abbc98758963c44878a05bbba9e96f19760c91689bf017366c"
 patches:
   # GENERATED sibling (render-scheduler-worker-endpoints.sh): this env's
   # PROVIDER-RESOLVED COGNI_NODE_ENDPOINTS. bug.5094 — a node placed on akash has
@@ -22,7 +18,6 @@ patches:
   # the shared base. Listed first so the base default is replaced before the
   # env-specific ops below apply.
   - path: node-endpoints.patch.yaml
-
   # Patch ConfigMap with staging-specific values
   - target:
       kind: ConfigMap
@@ -36,14 +31,13 @@ patches:
         value: "preview"
       - op: replace
         path: /data/IMAGE_DIGEST
-        value: "sha256:8c71709da081dc6615b3d54e9fec78efb0fab90e2439dad8845871b5afb03694"
+        value: "sha256:8d69ed8e0659c5abbc98758963c44878a05bbba9e96f19760c91689bf017366c"
       - op: add
         path: /data/GIT_SHA
-        value: "51adb8ae97f7d47b54ad31a320294b7e99ac9f1f"
-
+        value: "8243f0802f495741c8e8774ff6d0864d0f723f56"
   # bug.0295: VM discovery via DNS (cogni-preview.vm.cognidao.org).
   # Convert base headless Services → ExternalName; delete EndpointSlices.
-  - target: { kind: Service, name: temporal }
+  - target: {kind: Service, name: temporal}
     patch: |
       apiVersion: v1
       kind: Service
@@ -53,7 +47,7 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: postgres }
+  - target: {kind: Service, name: postgres}
     patch: |
       apiVersion: v1
       kind: Service
@@ -63,7 +57,7 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: Service, name: app }
+  - target: {kind: Service, name: app}
     patch: |
       apiVersion: v1
       kind: Service
@@ -73,24 +67,27 @@ patches:
         type: ExternalName
         externalName: cogni-preview.vm.cognidao.org
         clusterIP: null
-  - target: { kind: EndpointSlice, name: temporal-1 }
+  - target: {kind: EndpointSlice, name: temporal-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: temporal-1
-  - target: { kind: EndpointSlice, name: postgres-1 }
+  - target: {kind: EndpointSlice, name: postgres-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: postgres-1
-  - target: { kind: EndpointSlice, name: app-1 }
+  - target: {kind: EndpointSlice, name: app-1}
     patch: |
       $patch: delete
       apiVersion: discovery.k8s.io/v1
       kind: EndpointSlice
       metadata:
         name: app-1
+replicas:
+  - name: scheduler-worker
+    count: 2
