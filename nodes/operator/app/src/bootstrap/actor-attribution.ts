@@ -3,23 +3,17 @@
 
 /**
  * Module: `@bootstrap/actor-attribution`
- * Purpose: Compose governed beneficiary and signed allocation use cases for HTTP routes.
+ * Purpose: Compose governed beneficiary use cases for HTTP routes.
  * Scope: Server-only composition over AttributionStore and signing services.
  * Invariants: PRINCIPAL_IS_CALLER; BENEFICIARY_EXPLICIT; CUTOFF_FROZEN.
- * Side-effects: IO (database reads/writes; signature verification)
+ * Side-effects: IO (database reads/writes)
  * Links: story.5075, https://cognidao.org/knowledge/human-ai-identity-standard
  * @public
  */
 
-import {
-  buildActorContributionAllocationTypedData,
-  type ActorBeneficiaryPolicyProposalRecord,
-} from "@cogni/attribution-ledger";
-import { signActorContributionAllocation } from "@cogni/attribution-pipeline-plugins";
+import type { ActorBeneficiaryPolicyProposalRecord } from "@cogni/attribution-ledger";
 import type { ActorBeneficiaryPolicyMutation } from "@cogni/node-contracts";
 import { getContainer } from "@/bootstrap/container";
-import { getNodeId, getNodeTokenomicsConfig } from "@/shared/config";
-import { serverEnv } from "@/shared/env";
 
 export function serializeBeneficiaryProposal(
   proposal: ActorBeneficiaryPolicyProposalRecord
@@ -83,42 +77,4 @@ export async function mutateBeneficiaryPolicy(input: {
       ? { governanceOverride: input.governanceOverride }
       : {}),
   });
-}
-
-export async function prepareActorAllocation(input: {
-  readonly epochId: string;
-  readonly receiptId: string;
-}) {
-  const allocation =
-    await getContainer().attributionStore.prepareActorContributionAllocation({
-      nodeId: getNodeId(),
-      epochId: BigInt(input.epochId),
-      receiptId: input.receiptId,
-    });
-  return {
-    allocation,
-    typedData: buildActorContributionAllocationTypedData({
-      allocation,
-      chainId: getNodeTokenomicsConfig().chainId,
-      deploymentEnvironment: serverEnv().DEPLOY_ENVIRONMENT,
-    }),
-  };
-}
-
-export async function persistActorAllocation(input: {
-  readonly epochId: string;
-  readonly receiptId: string;
-  readonly signerActorId: string;
-  readonly signerAddress: string;
-  readonly signature: string;
-}) {
-  return signActorContributionAllocation(
-    {
-      attributionStore: getContainer().attributionStore,
-      nodeId: getNodeId(),
-      chainId: getNodeTokenomicsConfig().chainId,
-      deploymentEnvironment: serverEnv().DEPLOY_ENVIRONMENT,
-    },
-    input
-  );
 }

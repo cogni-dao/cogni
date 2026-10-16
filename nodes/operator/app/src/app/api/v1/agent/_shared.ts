@@ -12,6 +12,8 @@ import {
 } from "@/shared/observability";
 
 export type AgentIdentityOperation =
+  | "claim_accept"
+  | "claim_create"
   | "confirm"
   | "me"
   | "recover"
@@ -20,12 +22,16 @@ export type AgentIdentityOperation =
   | "rotate"
   | "spawn_grant"
   | "status"
+  | "suspend"
   | "upgrade";
 
 const AGENT_IDENTITY_REASON_CODES = new Set([
   "authn_unavailable",
   "authz_unavailable",
   "billing_account_missing",
+  "claim_conflict",
+  "claim_denied",
+  "claim_expired",
   "csrf_denied",
   "grant_already_redeemed",
   "grant_expired",
@@ -153,9 +159,10 @@ export function agentIdentityErrorResponse(
       : error.code === "rotation_pending" ||
           error.code === "grant_already_redeemed"
         ? 409
-        : error.code === "billing_account_missing"
+        : error.code === "billing_account_missing" ||
+            error.code === "claim_conflict"
           ? 409
-          : error.code === "recovery_denied"
+          : error.code === "recovery_denied" || error.code === "claim_denied"
             ? 403
             : 401;
   return agentIdentityResponse(

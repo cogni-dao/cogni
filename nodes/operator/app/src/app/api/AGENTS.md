@@ -77,6 +77,9 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/work/items/[id]/pr` [POST] - link branch/PR metadata to the active work-item session and durable work item
   - `/api/v1/work/items/[id]/coordination` [GET] - read current operator coordination state for a work item
   - `/api/v1/agent/register` [POST] - redeem a one-use human-issued spawn grant for a durable agent credential
+  - `/api/v1/agent/claims` [POST] - human proposes a target-bound claim over an existing AI actor using fresh provider attestation
+  - `/api/v1/agent/claims/accept` [POST] - exact durable AI credential accepts its pending human stewardship/source claim
+  - `/api/v1/agent/suspend` [POST] - current human steward suspends an AI, revokes credentials/recovery grants, and releases its active capacity slot
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
   - `/api/v1/accounts/agent-access` [POST] - human-session-only grant/revoke of direct or OBO access for an accepted agent steward

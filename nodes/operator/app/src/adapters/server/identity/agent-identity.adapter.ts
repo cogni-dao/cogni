@@ -14,11 +14,15 @@
 
 import { createHmac, hkdfSync, randomUUID, timingSafeEqual } from "node:crypto";
 import {
+  actorBindingEvents,
+  actorBindings,
   actorStewardshipEvents,
   actors,
   agentCredentials,
   agentRecoveryGrants,
   agentSpawnGrants,
+  existingAgentClaims,
+  userBindings,
 } from "@cogni/db-schema/identity";
 import { billingAccounts } from "@cogni/db-schema/refs";
 import type { AgentRequestPrincipal } from "@cogni/node-contracts";
@@ -202,6 +206,374 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
     };
   }
 
+  async createExistingAgentClaim(input: {
+    readonly stewardUserId: string;
+    readonly actorId: string;
+    readonly provider: "github";
+    readonly externalId: string;
+    readonly providerLogin: string | null;
+    readonly attestationJti: string;
+    readonly attestationEvidence: Record<string, unknown>;
+    readonly attestationExpiresAt: Date;
+    readonly idempotencyKey: string;
+  }) {
+    const now = this.now();
+    if (input.attestationExpiresAt <= now) {
+      throw new AgentIdentityError(
+        "claim_expired",
+        "Identity attestation expired"
+      );
+    }
+    return this.db.transaction(async (tx) => {
+      const steward = await this.ensureHumanActor(tx, input.stewardUserId);
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`existing-agent-claim:${input.actorId}`}))`
+      );
+      const [agent] = await tx
+        .select({
+          id: actors.id,
+          parentActorId: actors.parentActorId,
+        })
+        .from(actors)
+        .where(
+          and(
+            eq(actors.id, input.actorId),
+            eq(actors.kind, "agent"),
+            eq(actors.status, "active")
+          )
+        )
+        .limit(1);
+      if (
+        !agent ||
+        (agent.parentActorId && agent.parentActorId !== steward.id)
+      ) {
+        throw new AgentIdentityError(
+          "claim_denied",
+          "Agent is unavailable or already has another accepted steward"
+        );
+      }
+      const [existing] = await tx
+        .select()
+        .from(existingAgentClaims)
+        .where(
+          and(
+            eq(existingAgentClaims.stewardActorId, steward.id),
+            eq(existingAgentClaims.idempotencyKey, input.idempotencyKey)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        if (
+          existing.actorId !== input.actorId ||
+          existing.externalId !== input.externalId ||
+          existing.attestationJti !== input.attestationJti
+        ) {
+          throw new AgentIdentityError(
+            "claim_conflict",
+            "Existing-agent claim idempotency conflict"
+          );
+        }
+        return {
+          claimId: existing.id,
+          actorId: existing.actorId,
+          provider: "github" as const,
+          providerLogin: existing.providerLogin,
+          status: existing.status as "pending_ai_acceptance" | "accepted",
+          expiresAt: asIso(existing.expiresAt),
+        };
+      }
+      const [sourceOwner] = await tx
+        .select({ actorId: actorBindings.actorId })
+        .from(actorBindings)
+        .where(
+          and(
+            eq(actorBindings.provider, input.provider),
+            eq(actorBindings.externalId, input.externalId),
+            isNull(actorBindings.closedAt)
+          )
+        )
+        .limit(1);
+      if (
+        sourceOwner &&
+        sourceOwner.actorId !== input.actorId &&
+        sourceOwner.actorId !== steward.id
+      ) {
+        throw new AgentIdentityError(
+          "claim_denied",
+          "Attested external identity already belongs to another actor"
+        );
+      }
+      const claimId = randomUUID();
+      const [created] = await tx
+        .insert(existingAgentClaims)
+        .values({
+          id: claimId,
+          actorId: input.actorId,
+          stewardActorId: steward.id,
+          provider: input.provider,
+          externalId: input.externalId,
+          providerLogin: input.providerLogin,
+          attestationJti: input.attestationJti,
+          attestationEvidence: input.attestationEvidence,
+          idempotencyKey: input.idempotencyKey,
+          expiresAt: input.attestationExpiresAt,
+        })
+        .returning();
+      if (!created) {
+        throw new AgentIdentityError("claim_conflict", "Claim insert failed");
+      }
+      return {
+        claimId,
+        actorId: input.actorId,
+        provider: "github" as const,
+        providerLogin: input.providerLogin,
+        status: "pending_ai_acceptance" as const,
+        expiresAt: asIso(input.attestationExpiresAt),
+      };
+    });
+  }
+
+  async acceptExistingAgentClaim(input: {
+    readonly actorId: string;
+    readonly claimId: string;
+  }) {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`existing-agent-claim:${input.actorId}`}))`
+      );
+      const [claim] = await tx
+        .select()
+        .from(existingAgentClaims)
+        .where(eq(existingAgentClaims.id, input.claimId))
+        .limit(1)
+        .for("update");
+      if (!claim || claim.actorId !== input.actorId) {
+        throw new AgentIdentityError(
+          "claim_denied",
+          "Claim does not belong to caller"
+        );
+      }
+      if (claim.status === "accepted") {
+        return {
+          claimId: claim.id,
+          actorId: claim.actorId,
+          provider: "github" as const,
+          providerLogin: claim.providerLogin,
+          status: "accepted" as const,
+          expiresAt: asIso(claim.expiresAt),
+        };
+      }
+      if (
+        claim.status !== "pending_ai_acceptance" ||
+        claim.expiresAt <= this.now()
+      ) {
+        throw new AgentIdentityError(
+          "claim_expired",
+          "Claim is no longer active"
+        );
+      }
+      const [agent] = await tx
+        .select({ parentActorId: actors.parentActorId })
+        .from(actors)
+        .where(
+          and(
+            eq(actors.id, input.actorId),
+            eq(actors.kind, "agent"),
+            eq(actors.status, "active")
+          )
+        )
+        .limit(1);
+      if (
+        !agent ||
+        (agent.parentActorId && agent.parentActorId !== claim.stewardActorId)
+      ) {
+        throw new AgentIdentityError(
+          "claim_denied",
+          "Agent stewardship changed"
+        );
+      }
+      const [sourceOwner] = await tx
+        .select({ id: actorBindings.id, actorId: actorBindings.actorId })
+        .from(actorBindings)
+        .where(
+          and(
+            eq(actorBindings.provider, claim.provider),
+            eq(actorBindings.externalId, claim.externalId),
+            isNull(actorBindings.closedAt)
+          )
+        )
+        .limit(1)
+        .for("update");
+      if (
+        sourceOwner &&
+        sourceOwner.actorId !== input.actorId &&
+        sourceOwner.actorId !== claim.stewardActorId
+      ) {
+        throw new AgentIdentityError(
+          "claim_denied",
+          "External identity ownership changed before acceptance"
+        );
+      }
+      const acceptedAt = this.now();
+      if (sourceOwner?.actorId === claim.stewardActorId) {
+        const transferEvidence = {
+          claimId: claim.id,
+          attestationJti: claim.attestationJti,
+          humanAcceptedByActorId: claim.stewardActorId,
+          aiAcceptedByActorId: input.actorId,
+        };
+        await tx.insert(actorBindingEvents).values({
+          id: randomUUID(),
+          actorId: sourceOwner.actorId,
+          previousActorId: sourceOwner.actorId,
+          provider: claim.provider,
+          externalId: claim.externalId,
+          providerLogin: claim.providerLogin,
+          eventType: "transferred_out",
+          authorizedByActorId: claim.stewardActorId,
+          evidence: transferEvidence,
+          effectiveAt: acceptedAt,
+        });
+        await tx
+          .update(actorBindings)
+          .set({ closedAt: acceptedAt })
+          .where(eq(actorBindings.id, sourceOwner.id));
+        await tx
+          .delete(userBindings)
+          .where(
+            and(
+              eq(userBindings.provider, claim.provider),
+              eq(userBindings.externalId, claim.externalId)
+            )
+          );
+      }
+      if (!sourceOwner || sourceOwner.actorId === claim.stewardActorId) {
+        const bindingEventId = randomUUID();
+        await tx.insert(actorBindingEvents).values({
+          id: bindingEventId,
+          actorId: input.actorId,
+          previousActorId: sourceOwner?.actorId ?? null,
+          provider: claim.provider,
+          externalId: claim.externalId,
+          providerLogin: claim.providerLogin,
+          eventType: sourceOwner ? "transferred_in" : "bound",
+          authorizedByActorId: input.actorId,
+          evidence: {
+            claimId: claim.id,
+            attestationJti: claim.attestationJti,
+            humanAcceptedByActorId: claim.stewardActorId,
+            aiAcceptedByActorId: input.actorId,
+          },
+          effectiveAt: acceptedAt,
+        });
+        await tx.insert(actorBindings).values({
+          id: randomUUID(),
+          actorId: input.actorId,
+          provider: claim.provider,
+          externalId: claim.externalId,
+          providerLogin: claim.providerLogin,
+          evidenceEventId: bindingEventId,
+          createdAt: acceptedAt,
+        });
+      }
+      if (!agent.parentActorId) {
+        await tx
+          .update(actors)
+          .set({ parentActorId: claim.stewardActorId, updatedAt: acceptedAt })
+          .where(eq(actors.id, input.actorId));
+        await tx.insert(actorStewardshipEvents).values({
+          id: randomUUID(),
+          actorId: input.actorId,
+          parentActorId: claim.stewardActorId,
+          eventType: "accepted",
+          authorizedByActorId: input.actorId,
+          evidence: {
+            claimId: claim.id,
+            humanAcceptedByActorId: claim.stewardActorId,
+            aiAcceptedByActorId: input.actorId,
+          },
+          effectiveAt: acceptedAt,
+        });
+      }
+      await tx
+        .update(existingAgentClaims)
+        .set({ status: "accepted", acceptedAt })
+        .where(eq(existingAgentClaims.id, claim.id));
+      return {
+        claimId: claim.id,
+        actorId: claim.actorId,
+        provider: "github" as const,
+        providerLogin: claim.providerLogin,
+        status: "accepted" as const,
+        expiresAt: asIso(claim.expiresAt),
+      };
+    });
+  }
+
+  async suspendAgent(input: {
+    readonly stewardUserId: string;
+    readonly actorId: string;
+    readonly reason: string;
+  }): Promise<{ readonly actorId: string; readonly status: "suspended" }> {
+    const now = this.now();
+    return this.db.transaction(async (tx) => {
+      const steward = await this.ensureHumanActor(tx, input.stewardUserId);
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`agent-lifecycle:${input.actorId}`}))`
+      );
+      const [agent] = await tx
+        .select({
+          status: actors.status,
+          parentActorId: actors.parentActorId,
+        })
+        .from(actors)
+        .where(and(eq(actors.id, input.actorId), eq(actors.kind, "agent")))
+        .limit(1)
+        .for("update");
+      if (!agent || agent.parentActorId !== steward.id) {
+        throw new AgentIdentityError(
+          "recovery_denied",
+          "Only the accepted steward may suspend this agent"
+        );
+      }
+      if (agent.status === "suspended") {
+        return { actorId: input.actorId, status: "suspended" };
+      }
+      await tx
+        .update(actors)
+        .set({ status: "suspended", updatedAt: now })
+        .where(eq(actors.id, input.actorId));
+      await tx
+        .update(agentCredentials)
+        .set({ status: "revoked", revokedAt: now })
+        .where(
+          and(
+            eq(agentCredentials.actorId, input.actorId),
+            inArray(agentCredentials.status, ["active", "pending"])
+          )
+        );
+      await tx
+        .update(agentRecoveryGrants)
+        .set({ status: "revoked" })
+        .where(
+          and(
+            eq(agentRecoveryGrants.actorId, input.actorId),
+            eq(agentRecoveryGrants.status, "pending")
+          )
+        );
+      await tx.insert(actorStewardshipEvents).values({
+        id: randomUUID(),
+        actorId: input.actorId,
+        parentActorId: steward.id,
+        eventType: "revoked",
+        authorizedByActorId: steward.id,
+        evidence: { reason: input.reason, action: "agent_suspended" },
+        effectiveAt: now,
+      });
+      return { actorId: input.actorId, status: "suspended" };
+    });
+  }
+
   private async ensureHumanActor(
     tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
     userId: string
@@ -210,21 +582,45 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
       sql`select pg_advisory_xact_lock(hashtext(${`human-actor:${userId}`}))`
     );
     const [existing] = await tx
-      .select({ id: actors.id, billingAccountId: actors.billingAccountId })
+      .select({
+        id: actors.id,
+        billingAccountId: actors.billingAccountId,
+        authorizationOwnerBootstrappedAt:
+          billingAccounts.authorizationOwnerBootstrappedAt,
+      })
       .from(actors)
+      .innerJoin(
+        billingAccounts,
+        eq(billingAccounts.id, actors.billingAccountId)
+      )
       .where(and(eq(actors.kind, "user"), eq(actors.userId, userId)))
       .limit(1);
-    if (existing) return existing;
+    if (existing) {
+      if (!existing.authorizationOwnerBootstrappedAt) {
+        throw new AgentIdentityError(
+          "billing_account_missing",
+          "Billing account authority bootstrap is pending"
+        );
+      }
+      return {
+        id: existing.id,
+        billingAccountId: existing.billingAccountId,
+      };
+    }
 
     const [billing] = await tx
-      .select({ id: billingAccounts.id })
+      .select({
+        id: billingAccounts.id,
+        authorizationOwnerBootstrappedAt:
+          billingAccounts.authorizationOwnerBootstrappedAt,
+      })
       .from(billingAccounts)
       .where(eq(billingAccounts.ownerUserId, userId))
       .limit(1);
-    if (!billing) {
+    if (!billing?.authorizationOwnerBootstrappedAt) {
       throw new AgentIdentityError(
         "billing_account_missing",
-        "A billing account is required before spawning an agent"
+        "An authority-ready billing account is required before managing an agent"
       );
     }
 
@@ -915,8 +1311,10 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
           status: agentRecoveryGrants.status,
           expiresAt: agentRecoveryGrants.expiresAt,
           redeemedCredentialId: agentRecoveryGrants.redeemedCredentialId,
+          issuerActorId: agentRecoveryGrants.issuerActorId,
           billingAccountId: actors.billingAccountId,
           actorStatus: actors.status,
+          currentStewardActorId: actors.parentActorId,
         })
         .from(agentRecoveryGrants)
         .innerJoin(actors, eq(agentRecoveryGrants.actorId, actors.id))
@@ -926,7 +1324,8 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
         !grant ||
         grant.nodeId !== this.nodeId ||
         grant.status === "revoked" ||
-        grant.actorStatus !== "active"
+        grant.actorStatus !== "active" ||
+        grant.currentStewardActorId !== grant.issuerActorId
       ) {
         throw new AgentIdentityError("invalid_grant", "Invalid recovery grant");
       }

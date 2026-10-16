@@ -28,8 +28,8 @@ import type {
   AcceptActorBeneficiaryPolicyParams,
   ActorBeneficiaryPolicyAcceptanceRecord,
   ActorBeneficiaryPolicyProposalRecord,
-  ActorContributionAllocationLifecycleRecord,
   ActorBindingRecord,
+  ActorContributionAllocationLifecycleRecord,
   ActorContributionAllocationRecord,
   ActorDistributionLiabilityRecord,
   AttributionEpoch,
@@ -49,6 +49,7 @@ import type {
   FinalClaimantAllocationRecord,
   IngestionCursor,
   IngestionReceipt,
+  InsertActorContributionAllocationParams,
   InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,
@@ -56,7 +57,6 @@ import type {
   InsertReceiptParams,
   InsertSelectionAutoParams,
   InsertSignatureParams,
-  InsertSignedActorContributionAllocationParams,
   InsertStatementParams,
   InsertUserProjectionParams,
   PendingActorDistributionLiability,
@@ -102,9 +102,9 @@ import {
   ingestionReceipts,
 } from "@cogni/db-schema/attribution";
 import {
+  actorBeneficiaryPolicies,
   actorBeneficiaryPolicyAcceptances,
   actorBeneficiaryPolicyProposals,
-  actorBeneficiaryPolicies,
   actorBindingEvents,
   actorBindings,
   actors,
@@ -114,6 +114,7 @@ import { userProfiles } from "@cogni/db-schema/profile";
 import { users } from "@cogni/db-schema/refs";
 import {
   and,
+  asc,
   desc,
   eq,
   gt,
@@ -492,10 +493,6 @@ function toActorContributionAllocation(
     contributionCutoff: row.contributionCutoff.toISOString(),
     sourceEvidence: row.sourceEvidence,
     sourceEvidenceHash: row.sourceEvidenceHash,
-    signerActorId: row.signerActorId,
-    signerWallet: row.signerWallet,
-    signature: row.signature,
-    signedAt: row.signedAt,
     createdAt: row.createdAt,
   };
 }
@@ -514,7 +511,6 @@ function toActorDistributionLiability(
     contributionCutoff: row.contributionCutoff,
     tokenAmount: row.tokenAmount,
     sourceEvidenceHash: row.sourceEvidenceHash,
-    signerActorId: row.signerActorId,
     resolverFailure:
       row.resolverFailureJson as unknown as ActorDistributionLiabilityRecord["resolverFailure"],
     createdAt: row.createdAt,
@@ -1587,7 +1583,6 @@ export class DrizzleAttributionAdapter implements AttributionStore {
             contributionCutoff: liability.contributionCutoff,
             tokenAmount: liability.tokenAmount,
             sourceEvidenceHash: liability.sourceEvidenceHash,
-            signerActorId: liability.signerActorId,
             resolverFailureJson: { ...liability.resolverFailure },
           }))
         );
@@ -1783,10 +1778,45 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         sourceEpoch.periodEnd,
         actorDistributionLiabilities.allocationRef
       );
-    return rows.map((row) => ({
-      ...toActorDistributionLiability(row.liability),
-      allocation: toActorContributionAllocation(row.allocation),
-    }));
+    return Promise.all(
+      rows.map(async (row) => {
+        const allocation = toActorContributionAllocation(row.allocation);
+        if (allocation.beneficiaryActorId) {
+          return {
+            ...toActorDistributionLiability(row.liability),
+            allocation,
+          };
+        }
+        const [resolutionPolicy] = await this.db
+          .select()
+          .from(actorBeneficiaryPolicies)
+          .where(
+            and(
+              eq(
+                actorBeneficiaryPolicies.earnedByActorId,
+                allocation.earnedByActorId
+              ),
+              gt(
+                actorBeneficiaryPolicies.effectiveFrom,
+                new Date(allocation.contributionCutoff)
+              )
+            )
+          )
+          .orderBy(asc(actorBeneficiaryPolicies.effectiveFrom))
+          .limit(1);
+        return {
+          ...toActorDistributionLiability(row.liability),
+          allocation: resolutionPolicy
+            ? {
+                ...allocation,
+                beneficiaryActorId: resolutionPolicy.beneficiaryActorId,
+                beneficiaryPolicyId: resolutionPolicy.id,
+                beneficiaryPolicyVersion: resolutionPolicy.policyVersion,
+              }
+            : allocation,
+        };
+      })
+    );
   }
 
   async insertActorDistributionLiabilities(
@@ -1813,7 +1843,6 @@ export class DrizzleAttributionAdapter implements AttributionStore {
             contributionCutoff: liability.contributionCutoff,
             tokenAmount: liability.tokenAmount,
             sourceEvidenceHash: liability.sourceEvidenceHash,
-            signerActorId: liability.signerActorId,
             resolverFailureJson: { ...liability.resolverFailure },
           })
           .onConflictDoNothing({
@@ -1842,7 +1871,6 @@ export class DrizzleAttributionAdapter implements AttributionStore {
             liability.contributionCutoff.getTime() ||
           existing.tokenAmount !== liability.tokenAmount ||
           existing.sourceEvidenceHash !== liability.sourceEvidenceHash ||
-          existing.signerActorId !== liability.signerActorId ||
           canonicalJsonStringify(existing.resolverFailureJson) !==
             canonicalJsonStringify(liability.resolverFailure)
         ) {
@@ -2427,9 +2455,13 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       const earner = earnerRows[0];
       const beneficiary = beneficiaryRows[0];
       const steward = stewardRows[0];
-      if (earner?.kind !== "agent" || beneficiary?.kind !== "user") {
+      if (
+        earner?.kind !== "agent" ||
+        !beneficiary ||
+        beneficiary.kind === "system"
+      ) {
         throw new Error(
-          "Beneficiary proposal requires an active agent earner and human beneficiary"
+          "Beneficiary proposal requires an active agent earner and an explicit active beneficiary"
         );
       }
       if (
@@ -2537,15 +2569,17 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       }
 
       const expectedActorId =
-        params.role === "earner"
-          ? proposal.earnedByActorId
-          : params.role === "steward"
-            ? proposal.stewardActorId
-            : params.acceptedByActorId;
+        params.role === "beneficiary"
+          ? proposal.beneficiaryActorId
+          : params.role === "earner"
+            ? proposal.earnedByActorId
+            : params.role === "steward"
+              ? proposal.stewardActorId
+              : params.acceptedByActorId;
       if (params.acceptedByActorId !== expectedActorId) {
         throw new Error(`Caller cannot accept the ${params.role} role`);
       }
-      if (params.role === "governance") {
+      if (params.role.startsWith("governance_for_")) {
         const [governanceActor] = await tx
           .select({ kind: actors.kind, status: actors.status })
           .from(actors)
@@ -2588,10 +2622,16 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       }
 
       const acceptedRoles = new Set(acceptances.map(({ role }) => role));
+      const earnerAccepted =
+        acceptedRoles.has("earner") ||
+        acceptedRoles.has("governance_for_earner");
+      const stewardAccepted =
+        acceptedRoles.has("steward") ||
+        acceptedRoles.has("governance_for_steward");
       if (
-        !acceptedRoles.has("earner") ||
-        !acceptedRoles.has("steward") ||
-        !acceptedRoles.has("governance")
+        !acceptedRoles.has("beneficiary") ||
+        !earnerAccepted ||
+        !stewardAccepted
       ) {
         return toActorBeneficiaryPolicyProposal(proposal, acceptances);
       }
@@ -2630,7 +2670,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         activationEarner[0]?.kind !== "agent" ||
         activationEarner[0].status !== "active" ||
         activationEarner[0].parentActorId !== proposal.stewardActorId ||
-        activationBeneficiary[0]?.kind !== "user" ||
+        !activationBeneficiary[0] ||
+        activationBeneficiary[0].kind === "system" ||
         activationBeneficiary[0].status !== "active" ||
         activationSteward[0]?.kind !== "user" ||
         activationSteward[0].status !== "active"
@@ -2704,8 +2745,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         earnedByActorId: proposal.earnedByActorId,
         beneficiaryActorId: proposal.beneficiaryActorId,
         policyVersion: proposal.policyVersion,
-        // The beneficiary signs each frozen allocation. Governance acceptance
-        // authorizes activation but never becomes the economic beneficiary.
+        // Beneficiary acceptance is mandatory. Governance may substitute only
+        // for an unavailable earner or steward and never becomes beneficiary.
         authorizedByActorId: proposal.beneficiaryActorId,
         evidence: {
           proposalId: proposal.id,
@@ -2874,20 +2915,15 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       )
       .orderBy(desc(actorBeneficiaryPolicies.effectiveFrom))
       .limit(1);
-    if (!policy) {
-      throw new Error(
-        "Agent contribution has no explicit beneficiary policy at cutoff"
-      );
-    }
     return freezeActorContributionAllocation({
       nodeId: params.nodeId,
       scopeId: epoch.scopeId,
       epochId: params.epochId.toString(),
       receiptId: receipt.receiptId,
       earnedByActorId: binding.actorId,
-      beneficiaryActorId: policy.beneficiaryActorId,
-      beneficiaryPolicyId: policy.id,
-      beneficiaryPolicyVersion: policy.policyVersion,
+      beneficiaryActorId: policy?.beneficiaryActorId ?? null,
+      beneficiaryPolicyId: policy?.id ?? null,
+      beneficiaryPolicyVersion: policy?.policyVersion ?? null,
       contributionCutoff: receipt.eventTime.toISOString(),
       sourceEvidence: {
         provider: receipt.source,
@@ -2897,31 +2933,13 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         artifactUrl: receipt.artifactUrl,
         bindingId: binding.id,
         bindingEvidenceEventId: binding.evidenceEventId,
+        beneficiaryPolicyState: policy ? "accepted_at_cutoff" : "unresolved",
       },
     });
   }
 
-  async actorOwnsSigningWallet(params: {
-    readonly actorId: string;
-    readonly wallet: string;
-  }): Promise<boolean> {
-    const [row] = await this.db
-      .select({ walletAddress: users.walletAddress })
-      .from(actors)
-      .innerJoin(users, eq(actors.userId, users.id))
-      .where(
-        and(
-          eq(actors.id, params.actorId),
-          eq(actors.kind, "user"),
-          eq(actors.status, "active")
-        )
-      )
-      .limit(1);
-    return row?.walletAddress?.toLowerCase() === params.wallet.toLowerCase();
-  }
-
-  async insertSignedActorContributionAllocation(
-    params: InsertSignedActorContributionAllocationParams
+  async insertActorContributionAllocation(
+    params: InsertActorContributionAllocationParams
   ): Promise<ActorContributionAllocationRecord> {
     const initial = await this.prepareActorContributionAllocation({
       nodeId: params.allocation.nodeId,
@@ -2940,29 +2958,6 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       if (prepared.allocationRef !== params.allocation.allocationRef) {
         throw new Error("Actor allocation facts diverged before persistence");
       }
-      const [policy] = await tx
-        .select({
-          authorizedByActorId: actorBeneficiaryPolicies.authorizedByActorId,
-        })
-        .from(actorBeneficiaryPolicies)
-        .where(eq(actorBeneficiaryPolicies.id, prepared.beneficiaryPolicyId))
-        .limit(1);
-      if (policy?.authorizedByActorId !== params.signerActorId) {
-        throw new Error(
-          "Allocation signer is not the beneficiary policy authorizer"
-        );
-      }
-      if (
-        !(await this.actorOwnsSigningWallet({
-          actorId: params.signerActorId,
-          wallet: params.signerWallet,
-        }))
-      ) {
-        throw new Error(
-          "Allocation signer wallet is not owned by signer actor"
-        );
-      }
-
       const [inserted] = await tx
         .insert(actorContributionAllocations)
         .values({
@@ -2979,10 +2974,6 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           contributionCutoff: new Date(prepared.contributionCutoff),
           sourceEvidence: { ...prepared.sourceEvidence },
           sourceEvidenceHash: prepared.sourceEvidenceHash,
-          signerActorId: params.signerActorId,
-          signerWallet: params.signerWallet.toLowerCase(),
-          signature: params.signature,
-          signedAt: params.signedAt,
         })
         .onConflictDoNothing({ target: actorContributionAllocations.id })
         .returning();
@@ -2997,11 +2988,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           )
         )
         .limit(1);
-      if (
-        !existing ||
-        existing.signature !== params.signature ||
-        existing.signerWallet !== params.signerWallet.toLowerCase()
-      ) {
+      if (!existing) {
         throw new Error("Actor allocation idempotency conflict");
       }
       return toActorContributionAllocation(existing);
@@ -3064,8 +3051,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       status: row.settlementId
         ? "settled"
         : row.liabilityId
-          ? "pending_wallet"
-          : "signed",
+          ? row.allocation.beneficiaryActorId
+            ? "pending_wallet"
+            : "pending_beneficiary"
+          : "frozen",
       tokenAmount: row.settlementAmount ?? row.liabilityAmount ?? null,
       claimantWallet: row.claimantWallet,
       liabilityId: row.liabilityId,

@@ -27,6 +27,7 @@ export interface ActorWalletBindingEvidence {
 }
 
 export type ActorWalletResolutionFailureCode =
+  | "beneficiary_policy_unresolved"
   | "beneficiary_actor_inactive"
   | "beneficiary_wallet_unbound"
   | "beneficiary_wallet_ambiguous"
@@ -34,7 +35,7 @@ export type ActorWalletResolutionFailureCode =
 
 export interface ActorWalletResolutionFailureEvidence {
   readonly code: ActorWalletResolutionFailureCode;
-  readonly beneficiaryActorId: string;
+  readonly beneficiaryActorId: string | null;
   readonly observedBindingIds: readonly string[];
 }
 
@@ -55,7 +56,7 @@ export type ActorBeneficiaryWalletResolution =
     };
 
 /**
- * Resolves only the beneficiary frozen into each signed allocation. The full
+ * Resolves only the beneficiary frozen into each finalized allocation. The full
  * allocation record is supplied so adapters can retain provenance in traces,
  * but implementations must not derive a replacement beneficiary from mutable
  * parent, billing, OBO, account, or node ownership state.

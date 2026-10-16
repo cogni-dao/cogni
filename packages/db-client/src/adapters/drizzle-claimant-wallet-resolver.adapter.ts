@@ -147,7 +147,13 @@ export class DrizzleClaimantWalletResolver
       ...new Map(
         allocations.map((allocation) => [allocation.allocationRef, allocation])
       ).values(),
-    ];
+    ].filter(
+      (
+        allocation
+      ): allocation is ActorContributionAllocationRecord & {
+        beneficiaryActorId: string;
+      } => allocation.beneficiaryActorId !== null
+    );
     const beneficiaryIds = [
       ...new Set(
         uniqueAllocations.map((allocation) => allocation.beneficiaryActorId)

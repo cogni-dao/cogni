@@ -117,6 +117,57 @@ export const actorStewardshipEvents = pgTable(
   ]
 ).enableRLS();
 
+/**
+ * Human-proposed, AI-accepted claim ceremony for an already-existing agent.
+ * Provider proof is an operator-signed, target-bound attestation; only its JTI
+ * and normalized public identity are retained. The projection changes only
+ * when the exact durable agent accepts before expiry.
+ */
+export const existingAgentClaims = pgTable(
+  "existing_agent_claims",
+  {
+    id: text("id").primaryKey(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => actors.id),
+    stewardActorId: text("steward_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    provider: text("provider").notNull(),
+    externalId: text("external_id").notNull(),
+    providerLogin: text("provider_login"),
+    attestationJti: text("attestation_jti").notNull().unique(),
+    attestationEvidence: jsonb("attestation_evidence")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status").notNull().default("pending_ai_acceptance"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "existing_agent_claims_provider_check",
+      sql`${table.provider} = 'github'`
+    ),
+    check(
+      "existing_agent_claims_status_check",
+      sql`${table.status} IN ('pending_ai_acceptance', 'accepted', 'expired', 'revoked')`
+    ),
+    uniqueIndex("existing_agent_claims_steward_idempotency_unique").on(
+      table.stewardActorId,
+      table.idempotencyKey
+    ),
+    index("existing_agent_claims_actor_status_idx").on(
+      table.actorId,
+      table.status
+    ),
+  ]
+).enableRLS();
+
 export const ACTOR_BINDING_EVENT_TYPES = [
   "bound",
   "transferred_out",
@@ -250,9 +301,11 @@ export const ACTOR_BENEFICIARY_PROPOSAL_STATUSES = [
 ] as const;
 
 export const ACTOR_BENEFICIARY_ACCEPTANCE_ROLES = [
+  "beneficiary",
   "earner",
   "steward",
-  "governance",
+  "governance_for_earner",
+  "governance_for_steward",
 ] as const;
 
 /**
@@ -327,7 +380,7 @@ export const actorBeneficiaryPolicyAcceptances = pgTable(
   (table) => [
     check(
       "actor_beneficiary_policy_acceptances_role_check",
-      sql`${table.role} IN ('earner', 'steward', 'governance')`
+      sql`${table.role} IN ('beneficiary', 'earner', 'steward', 'governance_for_earner', 'governance_for_steward')`
     ),
     uniqueIndex("actor_beneficiary_policy_acceptances_role_unique").on(
       table.proposalId,

@@ -81,7 +81,10 @@ export const POST = wrapRouteHandlerWithLogging(
     const mutation = actorBeneficiaryPolicyOperation.input.parse(
       await request.json()
     );
-    if (mutation.action === "accept" && mutation.role === "governance") {
+    if (
+      mutation.action === "accept" &&
+      mutation.role.startsWith("governance_for_")
+    ) {
       if (caller.principal.kind !== "human") {
         return NextResponse.json(
           { error: "Governance acceptance requires a human approver" },

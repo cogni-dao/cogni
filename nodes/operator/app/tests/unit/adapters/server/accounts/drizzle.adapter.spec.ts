@@ -81,6 +81,7 @@ describe("UserDrizzleAccountService", () => {
         id: "acc-123",
         ownerUserId: "user-456",
         balanceCredits: 100000n,
+        authorizationOwnerBootstrappedAt: new Date(),
       });
 
       // Mock finding default virtual key
@@ -119,6 +120,7 @@ describe("UserDrizzleAccountService", () => {
         id: "acc-123",
         ownerUserId: "user-456",
         balanceCredits: 100000n,
+        authorizationOwnerBootstrappedAt: new Date(),
       });
 
       // Mock no default virtual key found
@@ -127,6 +129,20 @@ describe("UserDrizzleAccountService", () => {
       const result = await service.getBillingAccountById("acc-123");
 
       expect(result).toBeNull();
+    });
+
+    it("does not serve an account whose OpenFGA owner bootstrap is pending", async () => {
+      mockTx.query.billingAccounts.findFirst.mockResolvedValue({
+        id: "acc-pending",
+        ownerUserId: "user-456",
+        balanceCredits: 100000n,
+        authorizationOwnerBootstrappedAt: null,
+      });
+
+      await expect(
+        service.getBillingAccountById("acc-pending")
+      ).resolves.toBeNull();
+      expect(mockTx.query.virtualKeys.findFirst).not.toHaveBeenCalled();
     });
   });
 
@@ -178,7 +194,7 @@ describe("UserDrizzleAccountService", () => {
       expect(bootstrapOwner).toHaveBeenCalledTimes(2);
     });
 
-    it("leaves an unavailable optional projection pending for a later retry", async () => {
+    it("keeps an account non-serving while authority bootstrap is unavailable", async () => {
       const bootstrapOwner = vi.fn().mockRejectedValue(new Error("offline"));
       service = new UserDrizzleAccountService(
         mockDb,
@@ -196,7 +212,7 @@ describe("UserDrizzleAccountService", () => {
 
       await expect(
         service.getOrCreateBillingAccountForUser({ userId: TEST_USER_ID })
-      ).resolves.toMatchObject({ ownerUserId: TEST_USER_ID });
+      ).rejects.toThrow("offline");
       expect(bootstrapOwner).toHaveBeenCalledOnce();
       expect(mockTx.update).not.toHaveBeenCalled();
     });
@@ -228,6 +244,7 @@ describe("UserDrizzleAccountService", () => {
       mockTx.query.billingAccounts.findFirst.mockResolvedValue({
         id: "acc-123",
         balanceCredits: 100000n,
+        authorizationOwnerBootstrappedAt: new Date(),
       });
 
       // Mock finding virtual key (required validation)

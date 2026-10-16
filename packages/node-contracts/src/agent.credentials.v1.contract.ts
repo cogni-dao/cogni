@@ -231,6 +231,47 @@ export const createAgentRecoveryGrantOperation = {
   }),
 } as const;
 
+/**
+ * Two-party ceremony for linking a human steward and an operator-attested
+ * external account to an already-existing durable AI actor. The human proposes
+ * after completing the provider attestation; the exact AI actor accepts with
+ * its node-issued credential. Neither step alone mutates stewardship/bindings.
+ */
+export const createExistingAgentClaimOperation = {
+  id: "agent.existing-claims.create.v1",
+  input: z.object({
+    actorId: z.string().uuid(),
+    identityAttestation: z.string().min(32).max(8192),
+    idempotencyKey: z.string().min(8).max(128),
+  }),
+  output: z.object({
+    claimId: z.string().uuid(),
+    actorId: z.string().uuid(),
+    provider: z.literal("github"),
+    providerLogin: z.string().nullable(),
+    status: z.enum(["pending_ai_acceptance", "accepted"]),
+    expiresAt: z.string().datetime(),
+  }),
+} as const;
+
+export const acceptExistingAgentClaimOperation = {
+  id: "agent.existing-claims.accept.v1",
+  input: z.object({ claimId: z.string().uuid() }),
+  output: createExistingAgentClaimOperation.output,
+} as const;
+
+export const suspendAgentOperation = {
+  id: "agent.actors.suspend.v1",
+  input: z.object({
+    actorId: z.string().uuid(),
+    reason: z.string().min(1).max(280),
+  }),
+  output: z.object({
+    actorId: z.string().uuid(),
+    status: z.literal("suspended"),
+  }),
+} as const;
+
 export const recoverAgentCredentialOperation = {
   id: "agent.credentials.recover.v1",
   input: z.object({ recoveryToken: z.string().min(32).max(512) }),

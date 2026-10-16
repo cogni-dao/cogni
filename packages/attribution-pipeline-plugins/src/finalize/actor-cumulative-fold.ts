@@ -46,7 +46,9 @@ export interface ActorCumulativeFoldResult {
 
 function missingResolution(allocation: ActorContributionAllocationRecord) {
   return {
-    code: "beneficiary_wallet_unbound" as const,
+    code: allocation.beneficiaryActorId
+      ? ("beneficiary_wallet_unbound" as const)
+      : ("beneficiary_policy_unresolved" as const),
     beneficiaryActorId: allocation.beneficiaryActorId,
     observedBindingIds: [],
   };
@@ -96,10 +98,12 @@ export async function buildActorCumulativeFold(input: {
     input.legacyWalletResolver.resolveWallets(
       plan.legacyAmounts.map((amount) => amount.claimantKey)
     ),
-    input.actorWalletResolver.resolveBeneficiaryWallets([
-      ...currentAmounts.map(({ allocation }) => allocation),
-      ...input.pendingLiabilities.map(({ allocation }) => allocation),
-    ]),
+    input.actorWalletResolver.resolveBeneficiaryWallets(
+      [
+        ...currentAmounts.map(({ allocation }) => allocation),
+        ...input.pendingLiabilities.map(({ allocation }) => allocation),
+      ].filter((allocation) => allocation.beneficiaryActorId !== null)
+    ),
   ]);
   const legacyWalletByKey = new Map(
     legacyResolutions.map((resolution) => [
@@ -141,7 +145,11 @@ export async function buildActorCumulativeFold(input: {
       );
     }
     const resolution = actorResolutionByRef.get(allocation.allocationRef);
-    if (resolution?.wallet && resolution.bindingEvidence) {
+    if (
+      allocation.beneficiaryActorId &&
+      resolution?.wallet &&
+      resolution.bindingEvidence
+    ) {
       epochDeltas.push({
         claimantKey: `actor:${allocation.beneficiaryActorId}`,
         account: resolution.wallet,
@@ -175,7 +183,6 @@ export async function buildActorCumulativeFold(input: {
       contributionCutoff: new Date(allocation.contributionCutoff),
       tokenAmount,
       sourceEvidenceHash: allocation.sourceEvidenceHash,
-      signerActorId: allocation.signerActorId,
       resolverFailure: failure,
     });
     unresolved.add(`actor:${allocation.allocationRef}`);
@@ -191,13 +198,18 @@ export async function buildActorCumulativeFold(input: {
         `Pending actor liability ${pending.allocationRef} is not eligible for this fold`
       );
     }
+    const resolvedBeneficiaryActorId = pending.allocation.beneficiaryActorId;
     const resolution = actorResolutionByRef.get(pending.allocationRef);
-    if (!resolution?.wallet || !resolution.bindingEvidence) {
+    if (
+      !resolvedBeneficiaryActorId ||
+      !resolution?.wallet ||
+      !resolution.bindingEvidence
+    ) {
       unresolved.add(`actor:${pending.allocationRef}`);
       continue;
     }
     epochDeltas.push({
-      claimantKey: `actor:${pending.beneficiaryActorId}`,
+      claimantKey: `actor:${resolvedBeneficiaryActorId}`,
       account: resolution.wallet,
       deltaAmount: pending.tokenAmount,
       receiptIds: [pending.allocation.receiptId],
@@ -210,7 +222,7 @@ export async function buildActorCumulativeFold(input: {
       sourceEpochId: pending.sourceEpochId,
       foldEpochId: input.foldEpochId,
       earnedByActorId: pending.earnedByActorId,
-      beneficiaryActorId: pending.beneficiaryActorId,
+      beneficiaryActorId: resolvedBeneficiaryActorId,
       tokenAmount: pending.tokenAmount,
       claimantWallet: resolution.wallet,
       resolverEvidence: resolution.bindingEvidence,

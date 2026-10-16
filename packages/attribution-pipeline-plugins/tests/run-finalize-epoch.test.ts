@@ -473,17 +473,45 @@ describe("finalizeEpoch — per-node distribution config (bug.5020)", () => {
     expect(store.getEpoch).not.toHaveBeenCalled();
   });
 
-  it("keeps an epoch in review while an actor-owned receipt lacks a signed allocation", async () => {
+  it("automatically freezes an actor-owned receipt during normal finalization", async () => {
+    const allocation = {
+      allocationRef: "actor-allocation-v1:auto",
+      contractVersion: "actor.contribution.allocation.v1" as const,
+      nodeId: NODE_ID,
+      scopeId: SCOPE_ID,
+      epochId: "7",
+      receiptId: "receipt-1",
+      earnedByActorId: "actor:flock-leader",
+      beneficiaryActorId: null,
+      beneficiaryPolicyId: null,
+      beneficiaryPolicyVersion: null,
+      contributionCutoff: "2026-10-01T00:00:00.000Z",
+      sourceEvidence: { beneficiaryPolicyState: "unresolved" },
+      sourceEvidenceHash: "evidence-hash",
+    };
     const { store } = await makeFinalizeStore({
       listUnallocatedActorReceiptIdsForEpoch: vi
         .fn()
         .mockResolvedValue(["receipt-1"]),
+      prepareActorContributionAllocation: vi.fn().mockResolvedValue(allocation),
+      insertActorContributionAllocation: vi.fn().mockResolvedValue({
+        ...allocation,
+        createdAt: new Date("2026-10-01T00:00:01.000Z"),
+      }),
     });
 
     await expect(
       runFinalize(finalizeDepsWith(store, { deploymentEnvironment: "test" }))
-    ).rejects.toMatchObject({ code: "actor_allocation_unresolved" });
-    expect(store.finalizeEpochAtomic).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ statementId: "stmt-1" });
+    expect(store.prepareActorContributionAllocation).toHaveBeenCalledWith({
+      nodeId: NODE_ID,
+      epochId: 7n,
+      receiptId: "receipt-1",
+    });
+    expect(store.insertActorContributionAllocation).toHaveBeenCalledWith({
+      allocation,
+    });
+    expect(store.finalizeEpochAtomic).toHaveBeenCalledOnce();
   });
 
   it("ACTIVE: folds against the per-node config from the gateway (not baked)", async () => {

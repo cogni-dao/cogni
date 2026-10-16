@@ -400,6 +400,13 @@
       "when": 1792114023112,
       "tag": "0056_abnormal_machine_man",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1792115578426,
+      "tag": "0057_living_amphibian",
+      "breakpoints": true
     }
   ]
 }

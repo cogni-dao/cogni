@@ -15,7 +15,6 @@ import { createHash } from "node:crypto";
 import {
   ACTOR_CONTRIBUTION_ALLOCATION_VERSION,
   ATTRIBUTION_STATEMENT_TYPES,
-  buildActorContributionAllocationTypedData,
   buildCanonicalMessage,
   buildEIP712TypedData,
   computeApproverSetHash,
@@ -371,7 +370,7 @@ describe("ActorContributionAllocation v1", () => {
     expect(allocation.earnedByActorId).not.toBe(allocation.beneficiaryActorId);
   });
 
-  it("is deterministic and signs the cutoff, policy, and source evidence", async () => {
+  it("is deterministic across equivalent frozen facts", async () => {
     const [first, second] = await Promise.all([
       freezeActorContributionAllocation(facts),
       freezeActorContributionAllocation({
@@ -385,13 +384,7 @@ describe("ActorContributionAllocation v1", () => {
       }),
     ]);
     expect(first).toEqual(second);
-    const typedData = buildActorContributionAllocationTypedData({
-      allocation: first,
-      chainId: 8453,
-      deploymentEnvironment: "candidate-a",
-    });
-    expect(typedData.message).toMatchObject({
-      allocationRef: first.allocationRef,
+    expect(first).toMatchObject({
       earnedByActorId: "flock-leader-actor",
       beneficiaryActorId: "derek-actor",
       beneficiaryPolicyVersion: "flock-leader-beneficiary.v1",

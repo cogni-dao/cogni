@@ -50,34 +50,33 @@ function allocation(epochId = 91n): ActorContributionAllocationRecord {
       bindingEvidenceEventId: "event:flock-leader",
     },
     sourceEvidenceHash: "0xevidence",
-    signerActorId: "actor:derek",
-    signerWallet: DEREK_WALLET,
-    signature: "0xsigned",
-    signedAt: new Date("2026-10-02T00:00:00.000Z"),
     createdAt: new Date("2026-10-02T00:00:01.000Z"),
   };
 }
 
 const derekResolver: ActorBeneficiaryWalletResolver = {
   resolveBeneficiaryWallets: async (allocations) =>
-    allocations.map((item) => ({
-      allocationRef: item.allocationRef,
-      beneficiaryActorId: item.beneficiaryActorId,
-      wallet: DEREK_WALLET,
-      bindingEvidence: {
-        bindingId: "wallet-binding:derek",
-        evidenceEventId: "wallet-event:derek",
-        actorId: "actor:derek",
-        provider: "wallet",
-        externalId: DEREK_WALLET,
-        bindingCreatedAt: "2026-09-01T00:00:00.000Z",
-        eventType: "bound",
-        authorizedByActorId: "actor:derek",
-        effectiveAt: "2026-09-01T00:00:00.000Z",
-        bindingEvidence: { ceremony: "siwe" },
-      },
-      failureEvidence: null,
-    })),
+    allocations.map((item) => {
+      if (!item.beneficiaryActorId) throw new Error("beneficiary unresolved");
+      return {
+        allocationRef: item.allocationRef,
+        beneficiaryActorId: item.beneficiaryActorId,
+        wallet: DEREK_WALLET,
+        bindingEvidence: {
+          bindingId: "wallet-binding:derek",
+          evidenceEventId: "wallet-event:derek",
+          actorId: "actor:derek",
+          provider: "wallet" as const,
+          externalId: DEREK_WALLET,
+          bindingCreatedAt: "2026-09-01T00:00:00.000Z",
+          eventType: "bound",
+          authorizedByActorId: "actor:derek",
+          effectiveAt: "2026-09-01T00:00:00.000Z",
+          bindingEvidence: { ceremony: "siwe" },
+        },
+        failureEvidence: null,
+      };
+    }),
 };
 
 function currentFoldInput(actorAllocation: ActorContributionAllocationRecord) {
@@ -116,6 +115,38 @@ function currentFoldInput(actorAllocation: ActorContributionAllocationRecord) {
 }
 
 describe("actor cumulative fold", () => {
+  it("freezes value as a pending liability when no beneficiary policy exists", async () => {
+    const unresolvedAllocation: ActorContributionAllocationRecord = {
+      ...allocation(),
+      beneficiaryActorId: null,
+      beneficiaryPolicyId: null,
+      beneficiaryPolicyVersion: null,
+      sourceEvidence: { beneficiaryPolicyState: "unresolved" },
+    };
+    const resolver: ActorBeneficiaryWalletResolver = {
+      resolveBeneficiaryWallets: async () => [],
+    };
+    const result = await buildActorCumulativeFold({
+      ...currentFoldInput(unresolvedAllocation),
+      actorWalletResolver: resolver,
+    });
+
+    expect(result.distribution).toBeNull();
+    expect(result.liabilities).toEqual([
+      expect.objectContaining({
+        allocationRef: unresolvedAllocation.allocationRef,
+        beneficiaryActorId: null,
+        tokenAmount: 10n * 10n ** 18n,
+        resolverFailure: expect.objectContaining({
+          code: "beneficiary_policy_unresolved",
+        }),
+      }),
+    ]);
+    expect(result.unresolvedClaimantKeys).toEqual([
+      `actor:${unresolvedAllocation.allocationRef}`,
+    ]);
+  });
+
   it("credits a flock-leader contribution to the explicitly pinned Derek actor wallet", async () => {
     const actorAllocation = allocation();
     const result = await buildActorCumulativeFold({
@@ -145,17 +176,21 @@ describe("actor cumulative fold", () => {
     const actorAllocation = allocation(91n);
     const unresolvedResolver: ActorBeneficiaryWalletResolver = {
       resolveBeneficiaryWallets: async (allocations) =>
-        allocations.map((item) => ({
-          allocationRef: item.allocationRef,
-          beneficiaryActorId: item.beneficiaryActorId,
-          wallet: null,
-          bindingEvidence: null,
-          failureEvidence: {
-            code: "beneficiary_wallet_unbound",
+        allocations.map((item) => {
+          if (!item.beneficiaryActorId)
+            throw new Error("beneficiary unresolved");
+          return {
+            allocationRef: item.allocationRef,
             beneficiaryActorId: item.beneficiaryActorId,
-            observedBindingIds: [],
-          },
-        })),
+            wallet: null,
+            bindingEvidence: null,
+            failureEvidence: {
+              code: "beneficiary_wallet_unbound" as const,
+              beneficiaryActorId: item.beneficiaryActorId,
+              observedBindingIds: [],
+            },
+          };
+        }),
     };
     const original = await buildActorCumulativeFold({
       ...currentFoldInput(actorAllocation),

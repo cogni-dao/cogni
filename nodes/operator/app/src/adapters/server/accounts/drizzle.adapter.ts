@@ -136,6 +136,9 @@ async function ensureBillingAccountExists(
   if (!account) {
     throw new BillingAccountNotFoundPortError(billingAccountId);
   }
+  if (!account.authorizationOwnerBootstrappedAt) {
+    throw new BillingAccountOwnerBootstrapPortError("pending_authority");
+  }
 }
 
 async function ensureVirtualKeyExists(
@@ -223,36 +226,28 @@ export class UserDrizzleAccountService implements AccountService {
   private async ensureOwnerBootstrap(input: {
     readonly account: BillingAccount;
     readonly completedAt: Date | null;
-    readonly required: boolean;
   }): Promise<BillingAccount> {
     if (input.completedAt) return input.account;
     if (!this.bootstrapOwner) {
-      if (input.required) {
-        throw new BillingAccountOwnerBootstrapPortError();
-      }
-      return input.account;
+      throw new BillingAccountOwnerBootstrapPortError("pending_authority");
     }
 
-    try {
-      await this.bootstrapOwner({
-        ownerUserId: input.account.ownerUserId,
-        billingAccountId: input.account.id,
-      });
-      await withTenantScope(this.db, this.actorId, async (tx) => {
-        await tx
-          .update(billingAccounts)
-          .set({ authorizationOwnerBootstrappedAt: new Date() })
-          .where(
-            and(
-              eq(billingAccounts.id, input.account.id),
-              eq(billingAccounts.ownerUserId, input.account.ownerUserId),
-              isNull(billingAccounts.authorizationOwnerBootstrappedAt)
-            )
-          );
-      });
-    } catch (error) {
-      if (input.required) throw error;
-    }
+    await this.bootstrapOwner({
+      ownerUserId: input.account.ownerUserId,
+      billingAccountId: input.account.id,
+    });
+    await withTenantScope(this.db, this.actorId, async (tx) => {
+      await tx
+        .update(billingAccounts)
+        .set({ authorizationOwnerBootstrappedAt: new Date() })
+        .where(
+          and(
+            eq(billingAccounts.id, input.account.id),
+            eq(billingAccounts.ownerUserId, input.account.ownerUserId),
+            isNull(billingAccounts.authorizationOwnerBootstrappedAt)
+          )
+        );
+    });
     return input.account;
   }
 
@@ -264,7 +259,7 @@ export class UserDrizzleAccountService implements AccountService {
         where: eq(billingAccounts.id, billingAccountId),
       });
 
-      if (!account) {
+      if (!account || !account.authorizationOwnerBootstrappedAt) {
         return null;
       }
 
@@ -291,7 +286,6 @@ export class UserDrizzleAccountService implements AccountService {
   async getOrCreateBillingAccountForUser({
     userId,
     displayName,
-    requireAuthorizationOwner = false,
   }: {
     userId: string;
     walletAddress?: string;
@@ -354,7 +348,6 @@ export class UserDrizzleAccountService implements AccountService {
     );
     return this.ensureOwnerBootstrap({
       ...resolved,
-      required: requireAuthorizationOwner,
     });
   }
 
@@ -366,6 +359,9 @@ export class UserDrizzleAccountService implements AccountService {
 
       if (!account) {
         throw new BillingAccountNotFoundPortError(billingAccountId);
+      }
+      if (!account.authorizationOwnerBootstrappedAt) {
+        throw new BillingAccountOwnerBootstrapPortError("pending_authority");
       }
 
       return toNumber(account.balanceCredits);
@@ -805,34 +801,26 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
   private async ensureOwnerBootstrap(input: {
     readonly account: BillingAccount;
     readonly completedAt: Date | null;
-    readonly required: boolean;
   }): Promise<BillingAccount> {
     if (input.completedAt) return input.account;
     if (!this.bootstrapOwner) {
-      if (input.required) {
-        throw new BillingAccountOwnerBootstrapPortError();
-      }
-      return input.account;
+      throw new BillingAccountOwnerBootstrapPortError("pending_authority");
     }
 
-    try {
-      await this.bootstrapOwner({
-        ownerUserId: input.account.ownerUserId,
-        billingAccountId: input.account.id,
-      });
-      await this.db
-        .update(billingAccounts)
-        .set({ authorizationOwnerBootstrappedAt: new Date() })
-        .where(
-          and(
-            eq(billingAccounts.id, input.account.id),
-            eq(billingAccounts.ownerUserId, input.account.ownerUserId),
-            isNull(billingAccounts.authorizationOwnerBootstrappedAt)
-          )
-        );
-    } catch (error) {
-      if (input.required) throw error;
-    }
+    await this.bootstrapOwner({
+      ownerUserId: input.account.ownerUserId,
+      billingAccountId: input.account.id,
+    });
+    await this.db
+      .update(billingAccounts)
+      .set({ authorizationOwnerBootstrappedAt: new Date() })
+      .where(
+        and(
+          eq(billingAccounts.id, input.account.id),
+          eq(billingAccounts.ownerUserId, input.account.ownerUserId),
+          isNull(billingAccounts.authorizationOwnerBootstrappedAt)
+        )
+      );
     return input.account;
   }
 
@@ -843,7 +831,7 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
       where: eq(billingAccounts.id, billingAccountId),
     });
 
-    if (!account) {
+    if (!account || !account.authorizationOwnerBootstrappedAt) {
       return null;
     }
 
@@ -869,7 +857,6 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
   async getOrCreateBillingAccountForUser({
     userId,
     displayName,
-    requireAuthorizationOwner = false,
   }: {
     userId: string;
     walletAddress?: string;
@@ -928,7 +915,6 @@ export class ServiceDrizzleAccountService implements ServiceAccountService {
     });
     return this.ensureOwnerBootstrap({
       ...resolved,
-      required: requireAuthorizationOwner,
     });
   }
 

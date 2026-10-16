@@ -57,7 +57,6 @@ export const GET = wrapRouteHandlerWithLogging<RouteContext>(
         tokenAmount: lifecycle.tokenAmount?.toString() ?? null,
         allocation: {
           ...lifecycle.allocation,
-          signedAt: lifecycle.allocation.signedAt.toISOString(),
           createdAt: lifecycle.allocation.createdAt.toISOString(),
         },
       })

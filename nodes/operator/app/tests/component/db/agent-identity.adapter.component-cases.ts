@@ -7,19 +7,24 @@
  * one worker and stay within the service role's production-shaped connection budget.
  */
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { DrizzleAgentIdentityAdapter } from "@/adapters/server/identity/agent-identity.adapter";
 import type { AgentIdentityError } from "@/ports";
 import {
+  actorBindings,
   actors,
   agentCredentials,
   agentRecoveryGrants,
   agentSpawnGrants,
   billingAccounts,
+  existingAgentClaims,
+  userBindings,
   users,
+  virtualKeys,
 } from "@/shared/db/schema";
 
 describe("DrizzleAgentIdentityAdapter (Component)", () => {
@@ -45,10 +50,12 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       id: billingAccountId,
       ownerUserId: userId,
       balanceCredits: 0n,
+      authorizationOwnerBootstrappedAt: now,
     });
   });
 
   afterAll(async () => {
+    await db.delete(existingAgentClaims);
     await db.delete(agentRecoveryGrants);
     await db.delete(agentCredentials);
     await db.delete(agentSpawnGrants);
@@ -75,6 +82,7 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       id: legacyBillingAccountId,
       ownerUserId: legacyUserId,
       balanceCredits: 0n,
+      authorizationOwnerBootstrappedAt: now,
     });
     return { legacyUserId, legacyBillingAccountId };
   }
@@ -405,6 +413,237 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
     });
   });
 
+  it("rejects recovery after accepted stewardship changes", async () => {
+    const current = await spawn("stewardship-change-agent");
+    const grant = await identity.createRecoveryGrant({
+      issuerUserId: userId,
+      actorId: current.actorId,
+      idempotencyKey: randomUUID(),
+    });
+    const replacementUserId = randomUUID();
+    const replacementBillingAccountId = randomUUID();
+    await db.insert(users).values({
+      id: replacementUserId,
+      name: "Replacement steward",
+      walletAddress: `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`,
+    });
+    await db.insert(billingAccounts).values({
+      id: replacementBillingAccountId,
+      ownerUserId: replacementUserId,
+      balanceCredits: 0n,
+      authorizationOwnerBootstrappedAt: now,
+    });
+    await identity.createSpawnGrant({
+      issuerUserId: replacementUserId,
+      name: "replacement-steward-bootstrap",
+      idempotencyKey: randomUUID(),
+    });
+    const [replacementSteward] = await db
+      .select({ id: actors.id })
+      .from(actors)
+      .where(eq(actors.userId, replacementUserId))
+      .limit(1);
+    if (!replacementSteward) throw new Error("replacement steward missing");
+    await db
+      .update(actors)
+      .set({ parentActorId: replacementSteward.id })
+      .where(eq(actors.id, current.actorId));
+
+    await expect(identity.recover(grant.token)).rejects.toMatchObject<
+      Partial<AgentIdentityError>
+    >({ code: "invalid_grant" });
+    await expect(identity.authenticate(current.apiKey)).resolves.toMatchObject({
+      principal: { actorId: current.actorId },
+    });
+  });
+
+  it("claims an existing AI only after both human proposal and AI acceptance", async () => {
+    const actorId = randomUUID();
+    const externalId = `github-${randomUUID()}`;
+    await db.insert(userBindings).values({
+      id: randomUUID(),
+      userId,
+      provider: "github",
+      externalId,
+      providerLogin: "existing-ai",
+    });
+    await db.insert(actors).values({
+      id: actorId,
+      kind: "agent",
+      displayName: "existing-ai",
+      billingAccountId,
+    });
+    const claim = await identity.createExistingAgentClaim({
+      stewardUserId: userId,
+      actorId,
+      provider: "github",
+      externalId,
+      providerLogin: "existing-ai",
+      attestationJti: randomUUID(),
+      attestationEvidence: { source: "component-test" },
+      attestationExpiresAt: new Date(now.getTime() + 60_000),
+      idempotencyKey: randomUUID(),
+    });
+    const [beforeAcceptance] = await db
+      .select({ parentActorId: actors.parentActorId })
+      .from(actors)
+      .where(eq(actors.id, actorId));
+    expect(beforeAcceptance?.parentActorId).toBeNull();
+
+    const accepted = await identity.acceptExistingAgentClaim({
+      actorId,
+      claimId: claim.claimId,
+    });
+    expect(accepted.status).toBe("accepted");
+    const [afterAcceptance] = await db
+      .select({ parentActorId: actors.parentActorId })
+      .from(actors)
+      .where(eq(actors.id, actorId));
+    expect(afterAcceptance?.parentActorId).not.toBeNull();
+    const [binding] = await db
+      .select({ actorId: actorBindings.actorId })
+      .from(actorBindings)
+      .where(eq(actorBindings.externalId, externalId));
+    expect(binding?.actorId).toBe(actorId);
+    const legacyProjection = await db
+      .select({ id: userBindings.id })
+      .from(userBindings)
+      .where(eq(userBindings.externalId, externalId));
+    expect(legacyProjection).toEqual([]);
+  });
+
+  it("suspends an agent and releases its active-agent capacity", async () => {
+    const stewardUserId = randomUUID();
+    const accountId = randomUUID();
+    await db.insert(users).values({
+      id: stewardUserId,
+      name: "Capacity steward",
+      walletAddress: `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`,
+    });
+    await db.insert(billingAccounts).values({
+      id: accountId,
+      ownerUserId: stewardUserId,
+      balanceCredits: 0n,
+      authorizationOwnerBootstrappedAt: now,
+    });
+    const dedicatedIdentity = new DrizzleAgentIdentityAdapter(
+      db,
+      nodeId,
+      "component-agent-issuance-key-at-least-32-bytes",
+      () => now
+    );
+    const firstGrant = await dedicatedIdentity.createSpawnGrant({
+      issuerUserId: stewardUserId,
+      name: "suspend-for-capacity",
+      idempotencyKey: randomUUID(),
+    });
+    const first = await dedicatedIdentity.redeemSpawnGrant(firstGrant.token);
+    const recovery = await dedicatedIdentity.createRecoveryGrant({
+      issuerUserId: stewardUserId,
+      actorId: first.actorId,
+      idempotencyKey: randomUUID(),
+    });
+    const fillers = Array.from({ length: 24 }, () => randomUUID());
+    await db.insert(actors).values(
+      fillers.map((id, index) => ({
+        id,
+        kind: "agent" as const,
+        displayName: `capacity-fixture-${index}`,
+        billingAccountId: accountId,
+      }))
+    );
+    await expect(
+      dedicatedIdentity.createSpawnGrant({
+        issuerUserId: stewardUserId,
+        name: "blocked-at-cap",
+        idempotencyKey: randomUUID(),
+      })
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "spawn_limit",
+    });
+
+    await dedicatedIdentity.suspendAgent({
+      stewardUserId,
+      actorId: first.actorId,
+      reason: "capacity release proof",
+    });
+    await expect(
+      dedicatedIdentity.authenticate(first.apiKey)
+    ).resolves.toBeNull();
+    await expect(
+      dedicatedIdentity.createSpawnGrant({
+        issuerUserId: stewardUserId,
+        name: "allowed-after-suspension",
+        idempotencyKey: randomUUID(),
+      })
+    ).resolves.toMatchObject({ token: expect.any(String) });
+    await expect(
+      dedicatedIdentity.recover(recovery.token)
+    ).rejects.toMatchObject<Partial<AgentIdentityError>>({
+      code: "invalid_grant",
+    });
+  });
+
+  it("backfills a default virtual key for an existing keyless account", async () => {
+    const existingUserId = randomUUID();
+    const existingAccountId = randomUUID();
+    await db.insert(users).values({
+      id: existingUserId,
+      name: "Existing keyless account",
+      walletAddress: `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`,
+    });
+    await db.insert(billingAccounts).values({
+      id: existingAccountId,
+      ownerUserId: existingUserId,
+      balanceCredits: 0n,
+    });
+    const migration = readFileSync(
+      new URL(
+        "../../../src/adapters/server/db/migrations/0057_living_amphibian.sql",
+        import.meta.url
+      ),
+      "utf8"
+    );
+    const backfill = migration.match(
+      /INSERT INTO "virtual_keys"[\s\S]*?;(?=--> statement-breakpoint)/
+    )?.[0];
+    if (!backfill) throw new Error("0057 default-key backfill missing");
+    await db.execute(sql.raw(backfill));
+
+    const [defaultKey] = await db
+      .select({ active: virtualKeys.active, isDefault: virtualKeys.isDefault })
+      .from(virtualKeys)
+      .where(eq(virtualKeys.billingAccountId, existingAccountId));
+    expect(defaultKey).toEqual({ active: true, isDefault: true });
+  });
+
+  it("creates a default virtual key for a compatibility user binding", async () => {
+    const legacyUserId = randomUUID();
+    await db.insert(users).values({
+      id: legacyUserId,
+      name: "Post-0055 compatibility user",
+      walletAddress: `0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`,
+    });
+    await db.insert(userBindings).values({
+      id: randomUUID(),
+      userId: legacyUserId,
+      provider: "github",
+      externalId: `legacy-${randomUUID()}`,
+      providerLogin: "legacy-binding",
+    });
+    const [account] = await db
+      .select({ id: billingAccounts.id })
+      .from(billingAccounts)
+      .where(eq(billingAccounts.ownerUserId, legacyUserId));
+    expect(account).toBeDefined();
+    if (!account) throw new Error("compatibility account missing");
+    const [defaultKey] = await db
+      .select({ active: virtualKeys.active })
+      .from(virtualKeys)
+      .where(eq(virtualKeys.billingAccountId, account.id));
+    expect(defaultKey).toEqual({ active: true });
+  });
+
   it("caps outstanding recovery grants in the shared issuer grant budget", async () => {
     const current = await spawn("recovery-cap-agent");
     const other = await spawn("recovery-cap-other-agent");
@@ -624,6 +863,7 @@ describe("DrizzleAgentIdentityAdapter (Component)", () => {
       id: cappedBillingAccountId,
       ownerUserId: cappedUserId,
       balanceCredits: 0n,
+      authorizationOwnerBootstrappedAt: now,
     });
     await db.insert(actors).values(
       cappedActorIds.map((id, index) => ({

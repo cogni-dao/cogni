@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@contracts/attribution.actor-identity.v1.contract`
- * Purpose: Wire contracts for governed AI beneficiary policies and signed allocations.
- * Scope: Zod schemas only; never infers a beneficiary from stewardship, billing, or OBO.
+ * Purpose: Wire contracts for governed AI beneficiary policies and automatically frozen allocations.
+ * Scope: Zod schemas only; never persists policy state, infers a beneficiary from stewardship, billing, or OBO, or performs settlement.
  * Invariants: HUMAN_AND_AGENT_ARE_DISTINCT; EXPLICIT_BENEFICIARY; CUTOFF_FROZEN.
  * Side-effects: none
  * Links: story.5075, https://cognidao.org/knowledge/human-ai-identity-standard
@@ -35,7 +35,13 @@ export const actorBeneficiaryPolicyMutationSchema = z.discriminatedUnion(
     z.object({
       action: z.literal("accept"),
       proposalId: z.string().min(1),
-      role: z.enum(["earner", "steward", "governance"]),
+      role: z.enum([
+        "beneficiary",
+        "earner",
+        "steward",
+        "governance_for_earner",
+        "governance_for_steward",
+      ]),
       evidence: evidenceSchema,
     }),
     z.object({
@@ -48,7 +54,13 @@ export const actorBeneficiaryPolicyMutationSchema = z.discriminatedUnion(
 const acceptanceSchema = z.object({
   id: z.string(),
   proposalId: z.string(),
-  role: z.enum(["earner", "steward", "governance"]),
+  role: z.enum([
+    "beneficiary",
+    "earner",
+    "steward",
+    "governance_for_earner",
+    "governance_for_steward",
+  ]),
   acceptedByActorId: z.string(),
   evidence: evidenceSchema,
   acceptedAt: z.string().datetime(),
@@ -83,12 +95,6 @@ export const actorAllocationReadInputSchema = z.object({
   receiptId: z.string().min(1),
 });
 
-export const actorAllocationSignInputSchema =
-  actorAllocationReadInputSchema.extend({
-    signerAddress: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
-    signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
-  });
-
 export const actorContributionAllocationSchema = z.object({
   allocationRef: z.string(),
   contractVersion: z.literal("actor.contribution.allocation.v1"),
@@ -97,43 +103,27 @@ export const actorContributionAllocationSchema = z.object({
   epochId: z.string(),
   receiptId: z.string(),
   earnedByActorId: z.string(),
-  beneficiaryActorId: z.string(),
-  beneficiaryPolicyId: z.string(),
-  beneficiaryPolicyVersion: z.string(),
+  beneficiaryActorId: z.string().nullable(),
+  beneficiaryPolicyId: z.string().nullable(),
+  beneficiaryPolicyVersion: z.string().nullable(),
   contributionCutoff: z.string().datetime(),
   sourceEvidence: z.record(z.string(), z.unknown()),
   sourceEvidenceHash: z.string(),
 });
 
-export const actorAllocationTypedDataSchema = z.object({
-  allocation: actorContributionAllocationSchema,
-  typedData: z.object({
-    domain: z.object({
-      name: z.literal("Cogni Actor Contribution Allocation"),
-      version: z.literal("1"),
-      chainId: z.number().int().positive(),
-    }),
-    types: z.record(
-      z.string(),
-      z.array(z.object({ name: z.string(), type: z.string() }))
-    ),
-    primaryType: z.literal("ActorContributionAllocation"),
-    message: z.record(z.string(), z.unknown()),
-  }),
-});
-
 export const actorAllocationRecordSchema =
   actorContributionAllocationSchema.extend({
-    signerActorId: z.string(),
-    signerWallet: z.string(),
-    signature: z.string(),
-    signedAt: z.string().datetime(),
     createdAt: z.string().datetime(),
   });
 
 export const actorAllocationLifecycleSchema = z.object({
   allocation: actorAllocationRecordSchema,
-  status: z.enum(["signed", "pending_wallet", "settled"]),
+  status: z.enum([
+    "frozen",
+    "pending_beneficiary",
+    "pending_wallet",
+    "settled",
+  ]),
   tokenAmount: z.string().nullable(),
   claimantWallet: z.string().nullable(),
   liabilityId: z.string().nullable(),
@@ -142,10 +132,8 @@ export const actorAllocationLifecycleSchema = z.object({
 
 export const actorAllocationOperation = {
   id: "attribution.actor-allocation.v1",
-  summary: "Prepare, sign, and read a frozen AI contribution allocation",
+  summary: "Read an automatically frozen AI contribution allocation",
   readInput: actorAllocationReadInputSchema,
-  signInput: actorAllocationSignInputSchema,
-  typedDataOutput: actorAllocationTypedDataSchema,
   recordOutput: actorAllocationRecordSchema,
   lifecycleOutput: actorAllocationLifecycleSchema,
 } as const;

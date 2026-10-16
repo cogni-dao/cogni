@@ -12,13 +12,8 @@
  */
 
 export {
-  ACTOR_ALLOCATION_DOMAIN_NAME,
-  ACTOR_ALLOCATION_DOMAIN_VERSION,
-  ACTOR_CONTRIBUTION_ALLOCATION_TYPES,
   ACTOR_CONTRIBUTION_ALLOCATION_VERSION,
   type ActorContributionAllocationFacts,
-  type ActorContributionAllocationTypedData,
-  buildActorContributionAllocationTypedData,
   type FrozenActorContributionAllocation,
   freezeActorContributionAllocation,
 } from "./actor-contribution-allocation";
@@ -146,15 +141,15 @@ export {
 
 // Store port interface + types
 export type {
-  ActorAttributionStore,
   AcceptActorBeneficiaryPolicyParams,
+  ActorAttributionStore,
   ActorBeneficiaryAcceptanceRole,
   ActorBeneficiaryPolicyAcceptanceRecord,
-  ActorBeneficiaryPolicyRecord,
   ActorBeneficiaryPolicyProposalRecord,
+  ActorBeneficiaryPolicyRecord,
   ActorBindingRecord,
-  ActorContributionAllocationRecord,
   ActorContributionAllocationLifecycleRecord,
+  ActorContributionAllocationRecord,
   ActorDistributionLiabilityRecord,
   ActorDistributionSettlementRecord,
   AttributionEpoch,
@@ -182,6 +177,7 @@ export type {
   IdentityResolver,
   IngestionCursor,
   IngestionReceipt,
+  InsertActorContributionAllocationParams,
   InsertDistributionManifestParams,
   InsertFinalClaimantAllocationParams,
   InsertPoolComponentParams,
@@ -189,15 +185,14 @@ export type {
   InsertReceiptParams,
   InsertSelectionAutoParams,
   InsertSignatureParams,
-  InsertSignedActorContributionAllocationParams,
   InsertStatementParams,
   InsertUserProjectionParams,
   OverrideStore,
   PendingActorDistributionLiability,
-  ProposeActorBeneficiaryPolicyParams,
   PoolComponentInsertResult,
   PoolStore,
   ProjectionStore,
+  ProposeActorBeneficiaryPolicyParams,
   ReceiptClaimantsRecord,
   ReceiptStore,
   ReviewSubjectOverrideRecord,

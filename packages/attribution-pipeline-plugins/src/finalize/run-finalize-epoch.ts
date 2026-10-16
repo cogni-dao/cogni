@@ -80,7 +80,6 @@ export type FinalizeEpochErrorCode =
   | "missing_base_issuance"
   | "no_locked_claimants"
   | "no_claimant_allocations"
-  | "actor_allocation_unresolved"
   | "signature_invalid";
 
 /** A finalize failure the caller can fix (bad request state / signer / signature). */
@@ -848,17 +847,20 @@ export async function runFinalizeEpoch(
   const overrides = toReviewSubjectOverrides(overrideRecords);
   const receiptWeights = applyReceiptWeightOverrides(rawWeights, overrides);
 
-  // An external identity already owned by an actor must never fall through to
-  // the legacy claimant path merely because its governed beneficiary ceremony
-  // or wallet signature is incomplete. Keep the epoch in review until every
-  // included actor-owned receipt has an immutable signed allocation.
+  // Freeze actor ownership + the effective accepted beneficiary policy at the
+  // contribution cutoff as part of the ONE admin finalize action. Beneficiaries
+  // do not sign each receipt. Missing policy remains visible as unresolved
+  // identity state and never creates a second approval workflow.
   const unallocatedActorReceiptIds =
     await attributionStore.listUnallocatedActorReceiptIdsForEpoch(epochId);
-  if (unallocatedActorReceiptIds.length > 0) {
-    throw new FinalizeEpochError(
-      "actor_allocation_unresolved",
-      `finalizeEpoch: ${unallocatedActorReceiptIds.length} actor-owned receipt(s) require governed allocation before finalize`
-    );
+  for (const receiptId of unallocatedActorReceiptIds) {
+    const allocation =
+      await attributionStore.prepareActorContributionAllocation({
+        nodeId,
+        epochId,
+        receiptId,
+      });
+    await attributionStore.insertActorContributionAllocation({ allocation });
   }
 
   const finalClaimantAllocations = explodeToClaimants(

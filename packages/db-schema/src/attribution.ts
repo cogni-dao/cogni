@@ -145,7 +145,7 @@ export const ingestionReceipts = pgTable(
 // ---------------------------------------------------------------------------
 
 /**
- * Immutable, signed actor allocation input for one selected contribution.
+ * Immutable actor allocation input frozen during normal epoch finalization.
  * task.5220 consumes `id` as allocation_ref and derives value from the existing
  * finalized receipt-weight path; this table never rewrites legacy claimant rows.
  */
@@ -163,13 +163,13 @@ export const actorContributionAllocations = pgTable(
     earnedByActorId: text("earned_by_actor_id")
       .notNull()
       .references(() => actors.id),
-    beneficiaryActorId: text("beneficiary_actor_id")
-      .notNull()
-      .references(() => actors.id),
-    beneficiaryPolicyId: text("beneficiary_policy_id")
-      .notNull()
-      .references(() => actorBeneficiaryPolicies.id),
-    beneficiaryPolicyVersion: text("beneficiary_policy_version").notNull(),
+    beneficiaryActorId: text("beneficiary_actor_id").references(
+      () => actors.id
+    ),
+    beneficiaryPolicyId: text("beneficiary_policy_id").references(
+      () => actorBeneficiaryPolicies.id
+    ),
+    beneficiaryPolicyVersion: text("beneficiary_policy_version"),
     contributionCutoff: timestamp("contribution_cutoff", {
       withTimezone: true,
     }).notNull(),
@@ -177,12 +177,6 @@ export const actorContributionAllocations = pgTable(
       .$type<Record<string, unknown>>()
       .notNull(),
     sourceEvidenceHash: text("source_evidence_hash").notNull(),
-    signerActorId: text("signer_actor_id")
-      .notNull()
-      .references(() => actors.id),
-    signerWallet: text("signer_wallet").notNull(),
-    signature: text("signature").notNull(),
-    signedAt: timestamp("signed_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -778,17 +772,14 @@ export const actorDistributionLiabilities = pgTable(
     earnedByActorId: text("earned_by_actor_id")
       .notNull()
       .references(() => actors.id),
-    beneficiaryActorId: text("beneficiary_actor_id")
-      .notNull()
-      .references(() => actors.id),
+    beneficiaryActorId: text("beneficiary_actor_id").references(
+      () => actors.id
+    ),
     contributionCutoff: timestamp("contribution_cutoff", {
       withTimezone: true,
     }).notNull(),
     tokenAmount: numeric("token_amount", { mode: "bigint" }).notNull(),
     sourceEvidenceHash: text("source_evidence_hash").notNull(),
-    signerActorId: text("signer_actor_id")
-      .notNull()
-      .references(() => actors.id),
     resolverFailureJson: jsonb("resolver_failure_json")
       .$type<Record<string, unknown>>()
       .notNull(),

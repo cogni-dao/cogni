@@ -153,7 +153,12 @@ describe("RLS Adapter Wiring Gate", () => {
     let service: UserDrizzleAccountService;
 
     beforeAll(() => {
-      service = new UserDrizzleAccountService(rlsDb, toUserId(tenantA.userId));
+      service = new UserDrizzleAccountService(
+        rlsDb,
+        toUserId(tenantA.userId),
+        undefined,
+        async () => undefined
+      );
     });
 
     it("getOrCreateBillingAccountForUser returns account for existing user", async () => {

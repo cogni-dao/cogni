@@ -211,9 +211,11 @@ export interface ActorBeneficiaryPolicyRecord {
 }
 
 export type ActorBeneficiaryAcceptanceRole =
+  | "beneficiary"
   | "earner"
   | "steward"
-  | "governance";
+  | "governance_for_earner"
+  | "governance_for_steward";
 
 export interface ActorBeneficiaryPolicyAcceptanceRecord {
   readonly id: string;
@@ -243,16 +245,16 @@ export interface ActorBeneficiaryPolicyProposalRecord {
 
 export interface ActorContributionAllocationRecord
   extends FrozenActorContributionAllocation {
-  readonly signerActorId: string;
-  readonly signerWallet: string;
-  readonly signature: string;
-  readonly signedAt: Date;
   readonly createdAt: Date;
 }
 
 export interface ActorContributionAllocationLifecycleRecord {
   readonly allocation: ActorContributionAllocationRecord;
-  readonly status: "signed" | "pending_wallet" | "settled";
+  readonly status:
+    | "frozen"
+    | "pending_beneficiary"
+    | "pending_wallet"
+    | "settled";
   readonly tokenAmount: bigint | null;
   readonly claimantWallet: string | null;
   readonly liabilityId: string | null;
@@ -266,11 +268,10 @@ export interface ActorDistributionLiabilityRecord {
   readonly scopeId: string;
   readonly sourceEpochId: bigint;
   readonly earnedByActorId: string;
-  readonly beneficiaryActorId: string;
+  readonly beneficiaryActorId: string | null;
   readonly contributionCutoff: Date;
   readonly tokenAmount: bigint;
   readonly sourceEvidenceHash: string;
-  readonly signerActorId: string;
   readonly resolverFailure: ActorWalletResolutionFailureEvidence;
   readonly createdAt: Date;
 }
@@ -346,12 +347,8 @@ export interface AcceptActorBeneficiaryPolicyParams {
   readonly acceptedAt: Date;
 }
 
-export interface InsertSignedActorContributionAllocationParams {
+export interface InsertActorContributionAllocationParams {
   readonly allocation: FrozenActorContributionAllocation;
-  readonly signerActorId: string;
-  readonly signerWallet: string;
-  readonly signature: string;
-  readonly signedAt: Date;
 }
 
 export interface UpsertSelectionParams {
@@ -659,7 +656,7 @@ export interface DistributionManifestStore {
   /**
    * Unresolved actor liabilities from canonically earlier epochs, not merely a
    * lexically/numerically smaller identifier, and not yet consumed by a
-   * settlement row. The signed allocation is joined so the resolver consumes
+   * settlement row. The finalized allocation is joined so the resolver consumes
    * frozen provenance.
    */
   listPendingActorDistributionLiabilities(
@@ -1041,8 +1038,8 @@ export interface ActorAttributionStore {
     readonly receiptId: string;
   }): Promise<FrozenActorContributionAllocation>;
 
-  insertSignedActorContributionAllocation(
-    params: InsertSignedActorContributionAllocationParams
+  insertActorContributionAllocation(
+    params: InsertActorContributionAllocationParams
   ): Promise<ActorContributionAllocationRecord>;
 
   getActorContributionAllocation(
@@ -1053,16 +1050,10 @@ export interface ActorAttributionStore {
     allocationRef: string
   ): Promise<ActorContributionAllocationLifecycleRecord | null>;
 
-  /** Actor-owned included receipts which still lack a signed allocation. */
+  /** Actor-owned included receipts which still lack a frozen allocation. */
   listUnallocatedActorReceiptIdsForEpoch(
     epochId: bigint
   ): Promise<readonly string[]>;
-
-  /** Signer actor must be the explicit policy authorizer and own this wallet. */
-  actorOwnsSigningWallet(params: {
-    readonly actorId: string;
-    readonly wallet: string;
-  }): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------

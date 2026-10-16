@@ -12,12 +12,10 @@
  */
 
 import {
-  buildActorContributionAllocationTypedData,
   EpochNotFoundError,
   EpochNotInReviewError,
   EpochNotOpenError,
 } from "@cogni/attribution-ledger";
-import { signActorContributionAllocation } from "@cogni/attribution-pipeline-plugins";
 import {
   DrizzleAttributionAdapter,
   DrizzleClaimantWalletResolver,
@@ -1984,9 +1982,9 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         });
         return adapter.acceptActorBeneficiaryPolicy({
           proposalId: replacement.id,
-          role: "governance",
-          acceptedByActorId: derekActor.id,
-          evidence: { approverSet: "test-ledger-approvers" },
+          role: "beneficiary",
+          acceptedByActorId: input.beneficiaryActorId,
+          evidence: { consent: "beneficiary-accepted" },
           acceptedAt: input.acceptedAt,
         });
       };
@@ -2043,20 +2041,27 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         evidence: { session: "steward-siwe" },
         acceptedAt: new Date("2026-09-30T20:01:00.000Z"),
       });
+      await adapter.acceptActorBeneficiaryPolicy({
+        proposalId: proposal.id,
+        role: "beneficiary",
+        acceptedByActorId: derekActor.id,
+        evidence: { consent: "beneficiary-accepted" },
+        acceptedAt: new Date("2026-09-30T20:02:00.000Z"),
+      });
       const activated = await adapter.acceptActorBeneficiaryPolicy({
         proposalId: proposal.id,
-        role: "governance",
+        role: "steward",
         acceptedByActorId: derekActor.id,
-        evidence: { approverSet: "test-ledger-approvers" },
-        acceptedAt: new Date("2026-09-30T20:02:00.000Z"),
+        evidence: { session: "steward-siwe" },
+        acceptedAt: new Date("2026-09-30T20:03:00.000Z"),
       });
       expect(activated).toMatchObject({
         status: "activated",
         activatedPolicyId: expect.any(String),
       });
       expect(activated.acceptances.map(({ role }) => role).sort()).toEqual([
+        "beneficiary",
         "earner",
-        "governance",
         "steward",
       ]);
 
@@ -2098,33 +2103,9 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         beneficiaryPolicyVersion: "flock-leader-beneficiary.v1",
         contributionCutoff: "2026-10-02T12:00:00.000Z",
       });
-      const typedData = buildActorContributionAllocationTypedData({
+      const persisted = await adapter.insertActorContributionAllocation({
         allocation: prepared,
-        chainId: 8453,
-        deploymentEnvironment: "test",
       });
-      const signature = await signer.signTypedData({
-        domain: typedData.domain,
-        types: typedData.types,
-        primaryType: typedData.primaryType,
-        message: typedData.message,
-      });
-      const persisted = await signActorContributionAllocation(
-        {
-          attributionStore: adapter,
-          nodeId: TEST_NODE_ID,
-          chainId: 8453,
-          deploymentEnvironment: "test",
-          now: () => new Date("2026-10-03T00:00:00.000Z"),
-        },
-        {
-          epochId: epoch.id.toString(),
-          receiptId,
-          signerActorId: derekActor.id,
-          signerAddress: signer.address,
-          signature,
-        }
-      );
       expect(persisted).toMatchObject({
         allocationRef: prepared.allocationRef,
         earnedByActorId: flockLeaderActorId,
@@ -2135,7 +2116,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       ).resolves.toEqual([]);
       await expect(
         adapter.getActorContributionAllocationLifecycle(persisted.allocationRef)
-      ).resolves.toMatchObject({ status: "signed", tokenAmount: null });
+      ).resolves.toMatchObject({ status: "frozen", tokenAmount: null });
       const walletResolution = await new DrizzleClaimantWalletResolver(
         db
       ).resolveBeneficiaryWallets([persisted]);
@@ -2161,7 +2142,6 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         contributionCutoff: new Date(persisted.contributionCutoff),
         tokenAmount: 17n,
         sourceEvidenceHash: persisted.sourceEvidenceHash,
-        signerActorId: persisted.signerActorId,
         resolverFailure: {
           code: "beneficiary_wallet_unbound" as const,
           beneficiaryActorId: derekActor.id,

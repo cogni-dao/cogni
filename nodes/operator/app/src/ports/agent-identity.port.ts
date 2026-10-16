@@ -3,129 +3,18 @@
 
 /**
  * Module: `@ports/agent-identity`
- * Purpose: Durable agent actor and credential lifecycle boundary.
- * Scope: Interfaces only; secret generation, persistence, and request delivery live outside this port.
- * Invariants: CREDENTIAL_NE_PRINCIPAL; ROTATION_PRESERVES_ACTOR; NO_AUTH_SECRET_FALLBACK.
+ * Purpose: Re-export the portable target-node AI identity boundary for operator consumers.
+ * Scope: Compatibility barrel only; never implements identity, credentials, permissions, or persistence.
+ * Invariants: ONE_SHARED_PORT; TARGET_NODE_OWNS_IDENTITY.
  * Side-effects: none
- * Links: https://cognidao.org/knowledge/human-ai-identity-standard, task.5252
+ * Links: @cogni/node-contracts/agent.identity.port, story.5075
  * @public
  */
-
-import type { AgentRequestPrincipal } from "@cogni/node-contracts";
-
-export type AgentCredentialAccess = "active" | "renew_only";
-
-export interface AgentCredentialMaterial {
-  readonly actorId: string;
-  readonly principalId: `agent:${string}`;
-  readonly credentialId: string;
-  readonly apiKey: string;
-  readonly billingAccountId: string;
-  readonly authenticateUntil: string;
-  readonly renewUntil: string;
-}
-
-export interface AgentCredentialStatus {
-  readonly principal: AgentRequestPrincipal;
-  readonly access: AgentCredentialAccess;
-  readonly authenticateUntil: string;
-  readonly renewUntil: string;
-}
-
-export type LegacyAgentUpgrade = AgentCredentialMaterial &
-  (
-    | {
-        readonly grantTransferRequired: false;
-      }
-    | {
-        readonly grantTransferRequired: true;
-        readonly transferLeaseId: string;
-      }
-  );
-
-export interface AgentIdentityPort {
-  /** Resolve the accepted human steward for an active durable agent. */
-  getAcceptedStewardship(actorId: string): Promise<{
-    readonly stewardUserId: string;
-    readonly billingAccountId: string;
-  } | null>;
-
-  createSpawnGrant(input: {
-    readonly issuerUserId: string;
-    readonly name: string;
-    readonly idempotencyKey: string;
-  }): Promise<{
-    readonly grantId: string;
-    readonly token: string;
-    readonly expiresAt: string;
-  }>;
-
-  redeemSpawnGrant(token: string): Promise<AgentCredentialMaterial>;
-
-  authenticate(
-    token: string,
-    mode?: "data" | "renew"
-  ): Promise<AgentCredentialStatus | null>;
-
-  rotate(input: {
-    readonly token: string;
-    readonly idempotencyKey: string;
-  }): Promise<
-    AgentCredentialMaterial & {
-      readonly predecessorCredentialId: string;
-      readonly pendingExpiresAt: string;
-    }
-  >;
-
-  confirm(token: string): Promise<AgentCredentialStatus>;
-
-  createRecoveryGrant(input: {
-    readonly issuerUserId: string;
-    readonly actorId: string;
-    readonly idempotencyKey: string;
-  }): Promise<{
-    readonly grantId: string;
-    readonly token: string;
-    readonly expiresAt: string;
-  }>;
-
-  recover(token: string): Promise<AgentCredentialMaterial>;
-
-  upgradeLegacy(input: {
-    readonly legacyToken: string;
-    readonly legacyUserId: string;
-    readonly displayName: string | null;
-    readonly idempotencyKey: string;
-  }): Promise<LegacyAgentUpgrade>;
-
-  completeLegacyUpgrade(input: {
-    readonly legacyUserId: string;
-    readonly credentialId: string;
-    readonly transferLeaseId: string;
-  }): Promise<void>;
-
-  releaseLegacyUpgrade(input: {
-    readonly legacyUserId: string;
-    readonly credentialId: string;
-    readonly transferLeaseId: string;
-  }): Promise<void>;
-}
-
-export class AgentIdentityError extends Error {
-  constructor(
-    readonly code:
-      | "invalid_grant"
-      | "grant_expired"
-      | "grant_already_redeemed"
-      | "spawn_limit"
-      | "grant_limit"
-      | "rotation_pending"
-      | "invalid_credential"
-      | "recovery_denied"
-      | "billing_account_missing",
-    message: string
-  ) {
-    super(message);
-    this.name = "AgentIdentityError";
-  }
-}
+export {
+  type AgentCredentialAccess,
+  type AgentCredentialMaterial,
+  type AgentCredentialStatus,
+  AgentIdentityError,
+  type AgentIdentityPort,
+  type LegacyAgentUpgrade,
+} from "@cogni/node-contracts";
