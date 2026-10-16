@@ -94,6 +94,10 @@ export type {
   IngestionReceipt,
 } from "./attribution-store.port";
 export type {
+  AuthorizationFacadeCredentialVerification,
+  AuthorizationFacadeCredentialVerifierPort,
+} from "./authorization-facade-credential-verifier.port";
+export type {
   BillingContext,
   BillingResolver,
   PreflightCreditCheckFn,

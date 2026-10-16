@@ -20,6 +20,7 @@ import {
 import {
   AUTHZ_GRANT_NOT_EXPIRED_CONDITION,
   type AuthorizationPort,
+  type AuthzCheckOptions,
   type AuthzCheckParams,
   type AuthzDecision,
   type AuthzListDecision,
@@ -54,6 +55,20 @@ export interface OpenFgaCheckClient {
 }
 
 export interface OpenFgaWriteClient extends OpenFgaCheckClient {
+  write?(
+    body: {
+      readonly writes?: AuthzRelationTuple[];
+      readonly deletes?: Array<
+        Pick<AuthzRelationTuple, "user" | "relation" | "object">
+      >;
+    },
+    options?: {
+      readonly conflict?: {
+        readonly onDuplicateWrites?: "error" | "ignore";
+        readonly onMissingDeletes?: "error" | "ignore";
+      };
+    }
+  ): Promise<unknown>;
   writeTuples(
     tuples: AuthzRelationTuple[],
     options?: {
@@ -230,6 +245,27 @@ class StoreNameResolvingOpenFgaClient
       throw new Error("OpenFGA write client unavailable");
     }
     return client.writeTuples(tuples, options);
+  }
+
+  async write(
+    body: {
+      readonly writes?: AuthzRelationTuple[];
+      readonly deletes?: Array<
+        Pick<AuthzRelationTuple, "user" | "relation" | "object">
+      >;
+    },
+    options?: {
+      readonly conflict?: {
+        readonly onDuplicateWrites?: "error" | "ignore";
+        readonly onMissingDeletes?: "error" | "ignore";
+      };
+    }
+  ): Promise<unknown> {
+    const client = await this.resolveClient();
+    if (!isOpenFgaReplaceClient(client)) {
+      throw new Error("OpenFGA write client unavailable");
+    }
+    return client.write(body, options);
   }
 
   async deleteTuples(
@@ -463,10 +499,13 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     }
   }
 
-  async check(params: AuthzCheckParams): Promise<AuthzDecision> {
+  async check(
+    params: AuthzCheckParams,
+    options?: AuthzCheckOptions
+  ): Promise<AuthzDecision> {
     const checks = this.planChecks(params);
     const results = await Promise.all(
-      checks.map((check) => this.runCheck(check))
+      checks.map((check) => this.runCheck(check, options))
     );
 
     if (results.some((result) => result.code === "authz_unavailable")) {
@@ -492,6 +531,13 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     tuple: AuthzRelationTuple,
     options?: AuthzMutationOptions
   ): Promise<AuthzWriteDecision> {
+    return this.writeRelations([tuple], options);
+  }
+
+  async writeRelations(
+    tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision> {
     const client = this.client;
     if (!isOpenFgaWriteClient(client)) {
       return {
@@ -505,7 +551,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
       await withRetry(
         () =>
           withTimeout(
-            client.writeTuples([tuple], {
+            client.writeTuples([...tuples], {
               conflict: { onDuplicateWrites: "ignore" },
             }),
             this.writeTimeoutMs,
@@ -516,7 +562,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
         isRetryableWriteError
       );
       if (options?.confirm === "higher_consistency") {
-        return this.confirmRelation(tuple, true);
+        return this.confirmRelations(tuples, true);
       }
       return { decision: "success", code: "authz_write_success" };
     } catch (error) {
@@ -535,6 +581,13 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     tuple: AuthzRelationTuple,
     options?: AuthzMutationOptions
   ): Promise<AuthzWriteDecision> {
+    return this.deleteRelations([tuple], options);
+  }
+
+  async deleteRelations(
+    tuples: readonly AuthzRelationTuple[],
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision> {
     const client = this.client;
     if (!isOpenFgaWriteClient(client)) {
       return {
@@ -548,7 +601,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
       await withRetry(
         () =>
           withTimeout(
-            client.deleteTuples([tupleKeyWithoutCondition(tuple)], {
+            client.deleteTuples(tuples.map(tupleKeyWithoutCondition), {
               conflict: { onMissingDeletes: "ignore" },
             }),
             this.writeTimeoutMs,
@@ -559,7 +612,7 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
         isRetryableWriteError
       );
       if (options?.confirm === "higher_consistency") {
-        return this.confirmRelation(tuple, false);
+        return this.confirmRelations(tuples, false);
       }
       return { decision: "success", code: "authz_write_success" };
     } catch (error) {
@@ -567,6 +620,57 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
         decision: "failure",
         code: "authz_write_unavailable",
         reason: `OpenFGA delete unavailable: ${errorMessage(error)}`,
+      };
+    }
+  }
+
+  async replaceRelation(
+    tuple: AuthzRelationTuple,
+    options?: AuthzMutationOptions
+  ): Promise<AuthzWriteDecision> {
+    const client = this.client;
+    if (!isOpenFgaReplaceClient(client)) {
+      return {
+        decision: "failure",
+        code: "authz_write_unavailable",
+        reason: "OpenFGA write client unavailable",
+      };
+    }
+
+    try {
+      await withRetry(
+        () =>
+          withTimeout(
+            client.write(
+              {
+                deletes: [tupleKeyWithoutCondition(tuple)],
+                writes: [tuple],
+              },
+              {
+                conflict: {
+                  // Never acknowledge a retained older condition as success.
+                  // The server applies this delete+write as one transaction.
+                  onDuplicateWrites: "error",
+                  onMissingDeletes: "ignore",
+                },
+              }
+            ),
+            this.writeTimeoutMs,
+            "replace"
+          ),
+        this.writeMaxRetries,
+        this.writeRetryBackoffMs,
+        isRetryableWriteError
+      );
+      if (options?.confirm === "higher_consistency") {
+        return this.confirmRelations([tuple], true);
+      }
+      return { decision: "success", code: "authz_write_success" };
+    } catch (error) {
+      return {
+        decision: "failure",
+        code: "authz_write_unavailable",
+        reason: `OpenFGA replace unavailable: ${errorMessage(error)}`,
       };
     }
   }
@@ -654,15 +758,23 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     ];
   }
 
-  private async runCheck(check: PlannedSubcheck): Promise<AuthzSubcheck> {
+  private async runCheck(
+    check: PlannedSubcheck,
+    options?: AuthzCheckOptions
+  ): Promise<AuthzSubcheck> {
     try {
       const response = await withTimeout(
-        this.client.check({
-          user: check.user,
-          relation: check.relation,
-          object: check.object,
-          ...(check.context !== undefined ? { context: check.context } : {}),
-        }),
+        this.client.check(
+          {
+            user: check.user,
+            relation: check.relation,
+            object: check.object,
+            ...(check.context !== undefined ? { context: check.context } : {}),
+          },
+          options?.consistency === "higher_consistency"
+            ? { consistency: ConsistencyPreference.HigherConsistency }
+            : undefined
+        ),
         this.timeoutMs,
         "check"
       );
@@ -689,32 +801,36 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
     return { current_time: this.now().toISOString() };
   }
 
-  private async confirmRelation(
-    tuple: AuthzRelationTuple,
+  private async confirmRelations(
+    tuples: readonly AuthzRelationTuple[],
     expectedAllowed: boolean
   ): Promise<AuthzWriteDecision> {
     try {
-      const conditionContext =
-        tuple.condition?.name === AUTHZ_GRANT_NOT_EXPIRED_CONDITION
-          ? { current_time: this.now().toISOString() }
-          : undefined;
-      const response = await withTimeout(
-        this.client.check(
-          {
-            user: tuple.user,
-            relation: tuple.relation,
-            object: tuple.object,
-            ...(conditionContext !== undefined
-              ? { context: conditionContext }
-              : {}),
-          },
-          { consistency: ConsistencyPreference.HigherConsistency }
-        ),
-        this.timeoutMs,
-        "confirmation"
+      const responses = await Promise.all(
+        tuples.map((tuple) => {
+          const conditionContext =
+            tuple.condition?.name === AUTHZ_GRANT_NOT_EXPIRED_CONDITION
+              ? { current_time: this.now().toISOString() }
+              : undefined;
+          return withTimeout(
+            this.client.check(
+              {
+                user: tuple.user,
+                relation: tuple.relation,
+                object: tuple.object,
+                ...(conditionContext !== undefined
+                  ? { context: conditionContext }
+                  : {}),
+              },
+              { consistency: ConsistencyPreference.HigherConsistency }
+            ),
+            this.timeoutMs,
+            "confirmation"
+          );
+        })
       );
 
-      if (response.allowed === expectedAllowed) {
+      if (responses.every((response) => response.allowed === expectedAllowed)) {
         return { decision: "success", code: "authz_write_success" };
       }
       return {
@@ -752,4 +868,10 @@ function isOpenFgaReadClient(
   client: OpenFgaCheckClient
 ): client is OpenFgaReadClient {
   return "read" in client;
+}
+
+function isOpenFgaReplaceClient(
+  client: OpenFgaCheckClient
+): client is OpenFgaWriteClient & Required<Pick<OpenFgaWriteClient, "write">> {
+  return isOpenFgaWriteClient(client) && "write" in client;
 }
