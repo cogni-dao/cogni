@@ -156,6 +156,52 @@ export class DrizzleAgentIdentityAdapter implements AgentIdentityPort {
     );
   }
 
+  async getAcceptedStewardship(actorId: string): Promise<{
+    stewardUserId: string;
+    billingAccountId: string;
+  } | null> {
+    const [agent] = await this.db
+      .select({
+        parentActorId: actors.parentActorId,
+        billingAccountId: actors.billingAccountId,
+      })
+      .from(actors)
+      .where(
+        and(
+          eq(actors.id, actorId),
+          eq(actors.kind, "agent"),
+          eq(actors.status, "active")
+        )
+      )
+      .limit(1);
+    if (!agent?.parentActorId) return null;
+
+    const [steward] = await this.db
+      .select({
+        userId: actors.userId,
+        billingAccountId: actors.billingAccountId,
+      })
+      .from(actors)
+      .where(
+        and(
+          eq(actors.id, agent.parentActorId),
+          eq(actors.kind, "user"),
+          eq(actors.status, "active")
+        )
+      )
+      .limit(1);
+    if (
+      !steward?.userId ||
+      steward.billingAccountId !== agent.billingAccountId
+    ) {
+      return null;
+    }
+    return {
+      stewardUserId: steward.userId,
+      billingAccountId: agent.billingAccountId,
+    };
+  }
+
   private async ensureHumanActor(
     tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
     userId: string

@@ -230,6 +230,70 @@ describe("RemoteAuthorizationAdapter", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("sends only the semantic human-agent account ceremony", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toEqual({
+        operation: "grant",
+        grantorUserId: USER_ID,
+        billingAccountId: ACCOUNT_ID,
+        agentActorId: AGENT_ID,
+        mode: "on_behalf_of",
+        expiresAt: "2026-11-01T00:00:00.000Z",
+        requestId: "req-1",
+      });
+      expect(JSON.stringify(body)).not.toMatch(/relation|object|nodeId/);
+      return json({ decision: "success", code: "authz_write_success" });
+    });
+    const adapter = new RemoteAuthorizationAdapter({
+      baseUrl: "https://operator.example",
+      serviceToken: TOKEN,
+      testOnlyFetchImpl: fetchImpl,
+    });
+
+    await expect(
+      adapter.mutateAgentAccountAccess({
+        operation: "grant",
+        grantorUserId: USER_ID,
+        billingAccountId: ACCOUNT_ID,
+        agentActorId: AGENT_ID,
+        mode: "on_behalf_of",
+        expiresAt: "2026-11-01T00:00:00.000Z",
+        requestId: "req-1",
+      })
+    ).resolves.toMatchObject({
+      decision: "success",
+      code: "authz_write_success",
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://operator.example/api/v1/authorization/agent-account-access",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("denies malformed human-agent ceremony IDs before transport", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const adapter = new RemoteAuthorizationAdapter({
+      baseUrl: "https://operator.example",
+      serviceToken: TOKEN,
+      testOnlyFetchImpl: fetchImpl,
+    });
+    await expect(
+      adapter.mutateAgentAccountAccess({
+        operation: "grant",
+        grantorUserId: USER_ID,
+        billingAccountId: ACCOUNT_ID,
+        agentActorId: authzNodeAgentPrincipal(OTHER_NODE_ID, AGENT_ID),
+        mode: "direct",
+        expiresAt: "2026-11-01T00:00:00.000Z",
+      })
+    ).resolves.toMatchObject({
+      decision: "failure",
+      code: "authz_write_denied",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("fails closed on malformed successful HTTP responses", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       json({ decision: "allow" })

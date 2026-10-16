@@ -14,6 +14,7 @@
 import {
   type AuthorizationPort,
   type AuthzDecision,
+  type AuthzRelationTuple,
   type AuthzWriteDecision,
   authzBillingAccountResource,
   authzGrantExpiresAt,
@@ -22,6 +23,7 @@ import {
 } from "@cogni/authorization-core";
 
 import type {
+  AuthorizationFacadeAgentAccountAccessInput,
   AuthorizationFacadeCheckInput,
   AuthorizationFacadeGrantInput,
 } from "@/contracts/authorization-facade.v1.contract";
@@ -173,6 +175,83 @@ export async function mutateNodeBillingAccountAccess(
         confirm: "higher_consistency",
       })
     : deps.authorization.deleteRelations([tuple], {
+        confirm: "higher_consistency",
+      });
+}
+
+const MAX_AGENT_ACCOUNT_GRANT_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Perform the normal human-governed account ceremony. Direct access writes one
+ * conditioned reader edge. OBO access atomically writes the human→agent
+ * delegation and the account-scoped delegate edge, so a half-grant is never
+ * visible. The node workload supplies only semantic IDs; raw tuples stay here.
+ */
+export async function mutateNodeAgentAccountAccess(
+  deps: AuthorizationFacadePolicyDeps,
+  nodeId: string,
+  input: AuthorizationFacadeAgentAccountAccessInput
+): Promise<AuthzWriteDecision> {
+  const account = authzBillingAccountResource(nodeId, input.billingAccountId);
+  const grantor = authzNodeUserPrincipal(nodeId, input.grantorUserId);
+  const agent = authzNodeAgentPrincipal(nodeId, input.agentActorId);
+  const grantorDecision = await deps.authorization.check(
+    {
+      actorId: grantor,
+      action: "billing_account.grant",
+      resource: account,
+      context: { tenantId: input.billingAccountId, nodeId },
+    },
+    { consistency: "higher_consistency" }
+  );
+  if (grantorDecision.decision !== "allow") {
+    return grantorDecision.code === "authz_unavailable"
+      ? unavailable("grantor authority check unavailable")
+      : denied("grantor lacks can_grant on this billing account");
+  }
+
+  let accountTuple: AuthzRelationTuple;
+  if (input.operation === "grant") {
+    const expiresAt = Date.parse(input.expiresAt);
+    const nowMs = (deps.now?.() ?? new Date()).getTime();
+    if (
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= nowMs ||
+      expiresAt - nowMs > MAX_AGENT_ACCOUNT_GRANT_MS
+    ) {
+      return denied("grant expiry must be within the next 30 days");
+    }
+    accountTuple = {
+      user: agent,
+      relation: input.mode === "direct" ? "reader" : "delegate",
+      object: account,
+      condition: authzGrantExpiresAt(input.expiresAt),
+    } as const;
+  } else {
+    accountTuple = {
+      user: agent,
+      relation: input.mode === "direct" ? "reader" : "delegate",
+      object: account,
+    } as const;
+  }
+
+  const tuples =
+    input.mode === "on_behalf_of"
+      ? [
+          {
+            user: agent,
+            relation: "delegates",
+            object: grantor,
+          } as const,
+          accountTuple,
+        ]
+      : [accountTuple];
+
+  return input.operation === "grant"
+    ? deps.authorization.writeRelationsAtomically(tuples, {
+        confirm: "higher_consistency",
+      })
+    : deps.authorization.deleteRelations(tuples, {
         confirm: "higher_consistency",
       });
 }
