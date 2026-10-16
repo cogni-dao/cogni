@@ -5,7 +5,7 @@
     {
       "id": 1,
       "name": "cognition-research",
-      "prompt": "Explain how this repository delivers session cognition to Claude, Codex, and OpenCode, including the role of the local cache. This is read-only architecture research; do not implement changes or start a delivery workflow.",
+      "prompt": "how does cognition get into a new agent session?",
       "expected_output": "Contributor skill does not load via Skill or Read tool.",
       "files": [],
       "expectations": [
@@ -17,7 +17,7 @@
     {
       "id": 2,
       "name": "architecture-question",
-      "prompt": "I am onboarding to Cogni. Explain how a graph reaches the production runtime and why changes to graph code might or might not rebuild the worker. I want an architectural answer, no code or deployment changes.",
+      "prompt": "how does a graph actually run in prod?",
       "expected_output": "Contributor skill does not load via Skill or Read tool.",
       "files": [],
       "expectations": [
@@ -29,7 +29,7 @@
     {
       "id": 3,
       "name": "implement-bug",
-      "prompt": "Implement a fix for the cognition startup bug: research-only sessions should not be sent through the code-delivery lifecycle. Scope is approved for one PR on this node. Start the normal implementation workflow and identify the first concrete changes.",
+      "prompt": "fix the bug where every agent loads the contributor skill at startup",
       "expected_output": "Contributor skill loads via Skill or Read tool.",
       "files": [],
       "expectations": ["Contributor skill loads via Skill or Read tool."],
@@ -39,7 +39,7 @@
     {
       "id": 4,
       "name": "resume-pr",
-      "prompt": "Resume this branch\u2019s already approved code contribution. Find its existing PR and work-item outcome, then continue the delivery workflow to the next actionable gate. Reuse the assigned node and saved credentials.",
+      "prompt": "can you get this PR ready to merge?",
       "expected_output": "Contributor skill loads via Skill or Read tool.",
       "files": [],
       "expectations": ["Contributor skill loads via Skill or Read tool."],
@@ -49,7 +49,7 @@
     {
       "id": 5,
       "name": "knowledge-only",
-      "prompt": "We have a durable insight about why successful deployment receipts do not prove runtime health. Contribute it to the current node knowledge hub by refining an existing entry if possible. This is knowledge-only work; no code PR or repository changes are needed. Start the normal contribution workflow.",
+      "prompt": "add what we learned about deploy receipts vs actual health to the knowledge hub",
       "expected_output": "Contributor skill does not load via Skill or Read tool. Knowledge contribution skill loads via Skill or Read tool.",
       "files": [],
       "expectations": [
@@ -63,7 +63,7 @@
     {
       "id": 6,
       "name": "hub-curation",
-      "prompt": "Audit our hub for duplicated constitution text and stale .md references. Use the knowledge syntropy steward and md-to-hub migration guidance to decide which existing entry is canonical and propose an in-place cleanup. This is a knowledge curation review, not a code change.",
+      "prompt": "what in our knowledge hub is stale or duplicated?",
       "expected_output": "Contributor skill does not load via Skill or Read tool. Knowledge syntropy steward loads via Skill or Read tool.",
       "files": [],
       "expectations": [
@@ -76,7 +76,7 @@
     {
       "id": 7,
       "name": "nonoperator-delivery",
-      "prompt": "I am contributing a bug fix to the Poly node at https://poly.cognidao.org, not the operator. The node and existing work item are already assigned and its agent key is already configured. Start the code-contribution workflow for the existing PR, keeping knowledge/work-item ownership on Poly and deployment control on the operator.",
+      "prompt": "pick up the Poly PR and get it ready to ship",
       "expected_output": "Contributor skill loads via Skill or Read tool.",
       "files": [],
       "expectations": ["Contributor skill loads via Skill or Read tool."],
