@@ -13,12 +13,39 @@
 
 import { HttpNodeProber } from "@/adapters/server";
 import type { NodeProber } from "@/ports";
+import { serverEnv } from "@/shared/env/server-env";
+
+export function parseFlightProbeCredentials(
+  raw: string | undefined
+): Readonly<Record<string, string>> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] =>
+          entry[0].length > 0 &&
+          typeof entry[1] === "string" &&
+          entry[1].startsWith("cogni_ag_sk_v2_")
+      )
+    );
+  } catch {
+    return {};
+  }
+}
 
 /**
- * Real-fetch prober for the liveness gate — exercises a node's PUBLIC surface only (serving +
- * run-carries). The operator holds NO Grafana token; observability querying is a dev-direct RBAC
- * concern (docs/spec/grafana-observability-access.md), not an operator-API proxy.
+ * Real-fetch prober for the liveness gate — exercises a node's external surface
+ * (serving + run-carries). The target node is the sole issuer and verifier of
+ * each mapped durable probe credential; operator only custodies and presents it.
+ * The operator holds NO Grafana token; observability querying is a dev-direct
+ * RBAC concern (docs/spec/grafana-observability-access.md), not an operator-API proxy.
  */
 export function createNodeProber(): NodeProber {
-  return new HttpNodeProber();
+  const credentials = parseFlightProbeCredentials(
+    serverEnv().FLIGHT_PROBE_CREDENTIALS_JSON
+  );
+  return new HttpNodeProber((host) => credentials[host] ?? null);
 }

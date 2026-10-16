@@ -105,7 +105,13 @@ export class FakeAuthorizationAdapter implements AuthorizationPort {
   }
 
   async writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision> {
-    this.relations.add(relationKey(tuple));
+    return this.writeRelationsAtomically([tuple]);
+  }
+
+  async writeRelationsAtomically(
+    tuples: readonly AuthzRelationTuple[]
+  ): Promise<AuthzWriteDecision> {
+    for (const tuple of tuples) this.relations.add(relationKey(tuple));
     return { decision: "success", code: "authz_write_success" };
   }
 

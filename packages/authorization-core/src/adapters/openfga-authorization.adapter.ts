@@ -160,6 +160,7 @@ const DEFAULT_WRITE_TIMEOUT_MS = 8_000;
 // fail-closed-fast (no retry). Default 2 retries ≈ OpenFGA SDK's 3-attempt policy; 100ms backoff.
 const DEFAULT_WRITE_MAX_RETRIES = 2;
 const DEFAULT_WRITE_RETRY_BACKOFF_MS = 100;
+const MAX_ATOMIC_WRITE_TUPLES = 100;
 
 function openFgaClientConfig(
   config: OpenFgaAuthorizationAdapterConfig,
@@ -467,6 +468,22 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
   }
 
   async writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision> {
+    return this.writeRelationsAtomically([tuple]);
+  }
+
+  async writeRelationsAtomically(
+    tuples: readonly AuthzRelationTuple[]
+  ): Promise<AuthzWriteDecision> {
+    if (tuples.length === 0) {
+      return { decision: "success", code: "authz_write_success" };
+    }
+    if (tuples.length > MAX_ATOMIC_WRITE_TUPLES) {
+      return {
+        decision: "failure",
+        code: "authz_write_unavailable",
+        reason: `Atomic write exceeds ${MAX_ATOMIC_WRITE_TUPLES} tuples`,
+      };
+    }
     const client = this.client;
     if (!isOpenFgaWriteClient(client)) {
       return {
@@ -480,7 +497,10 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
       await withRetry(
         () =>
           withTimeout(
-            client.writeTuples([tuple], {
+            // OpenFGA applies one write request transactionally. Keep this as
+            // one bounded call: splitting here would expose a partially copied
+            // role set if a later request failed.
+            client.writeTuples([...tuples], {
               conflict: { onDuplicateWrites: "ignore" },
             }),
             this.writeTimeoutMs,

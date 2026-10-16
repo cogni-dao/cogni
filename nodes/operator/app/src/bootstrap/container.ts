@@ -92,6 +92,7 @@ import {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
   type Database,
+  DrizzleAgentIdentityAdapter,
   DrizzleAiTelemetryAdapter,
   DrizzleComputeCostStore,
   DrizzleConnectionBrokerAdapter,
@@ -198,6 +199,7 @@ import {
 } from "@/features/nodes/node-distribution-config";
 import type {
   AccountService,
+  AgentIdentityPort,
   AiTelemetryPort,
   Clock,
   ComputeCostReport,
@@ -279,6 +281,8 @@ export interface Container {
   llmService: LlmService;
   accountsForUser(userId: UserId): AccountService;
   serviceAccountService: ServiceAccountService;
+  /** Durable node-local agent actor and credential lifecycle. */
+  agentIdentity: AgentIdentityPort;
   clock: Clock;
   paymentAttemptsForUser(userId: UserId): PaymentAttemptUserRepository;
   paymentAttemptServiceRepository: PaymentAttemptServiceRepository;
@@ -708,6 +712,11 @@ function createContainer(): Container {
   const serviceAccountService = new ServiceDrizzleAccountService(
     getServiceDb(),
     financialLedger
+  );
+  const agentIdentity = new DrizzleAgentIdentityAdapter(
+    getServiceDb(),
+    getNodeId(),
+    env.AUTH_SECRET
   );
   // TreasuryReadPort: always uses ViemTreasuryAdapter (no test fake needed - mocked at port level in tests)
   const treasuryReadPort = new ViemTreasuryAdapter(evmOnchainClient);
@@ -1211,6 +1220,7 @@ function createContainer(): Container {
     accountsForUser: (userId: UserId) =>
       new UserDrizzleAccountService(db, userId, financialLedger),
     serviceAccountService,
+    agentIdentity,
     clock,
     paymentAttemptsForUser: (userId: UserId) =>
       new UserDrizzlePaymentAttemptRepository(db, userId),

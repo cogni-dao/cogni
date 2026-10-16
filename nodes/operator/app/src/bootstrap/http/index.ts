@@ -17,6 +17,7 @@ import { publicApiLimiter } from "./rateLimiter";
 import { makeWrapPublicRoute, type PublicRouteConfig } from "./wrapPublicRoute";
 
 export {
+  agentIdentityApiLimiter,
   extractClientIp,
   publicApiLimiter,
   TokenBucketRateLimiter,

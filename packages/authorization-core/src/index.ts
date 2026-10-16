@@ -78,6 +78,14 @@ export type AuthzDecision =
 export interface AuthorizationPort {
   check(params: AuthzCheckParams): Promise<AuthzDecision>;
   writeRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
+  /**
+   * Writes one bounded relation set in a single authorization-store
+   * transaction. Callers may rely on all-or-none visibility: a failure must
+   * not leave a prefix of `tuples` stored.
+   */
+  writeRelationsAtomically(
+    tuples: readonly AuthzRelationTuple[]
+  ): Promise<AuthzWriteDecision>;
   deleteRelation(tuple: AuthzRelationTuple): Promise<AuthzWriteDecision>;
   /**
    * Lists the stored relation tuples a subject holds (the directly-assigned
