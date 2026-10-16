@@ -478,7 +478,10 @@ describe("POST /api/v1/agent/upgrade", () => {
     };
     const sourceB = { ...sourceA, relation: "env_manager" };
     mockListRelations
-      .mockResolvedValueOnce({ decision: "success", tuples: [sourceA, sourceB] })
+      .mockResolvedValueOnce({
+        decision: "success",
+        tuples: [sourceA, sourceB],
+      })
       .mockResolvedValueOnce({ decision: "success", tuples: [] })
       // Role A is revoked at the source after the failed all-or-none copy.
       .mockResolvedValueOnce({ decision: "success", tuples: [sourceB] })

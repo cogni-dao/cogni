@@ -119,9 +119,10 @@ export const POST = wrapRouteHandlerWithLogging(
           // One OpenFGA transaction prevents a failed multi-role copy from
           // leaving stale destination authority for an exact retry to activate.
           // Duplicate source subject spellings collapse to the same grant.
-          const written = await container.authorization.writeRelationsAtomically(
-            [...grantsByKey.values()]
-          );
+          const written =
+            await container.authorization.writeRelationsAtomically([
+              ...grantsByKey.values(),
+            ]);
           if (written.decision !== "success") {
             return agentIdentityResponse(
               ctx,
