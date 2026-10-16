@@ -5,7 +5,7 @@ description: Validate a PR flighted to candidate-a with exact-SHA, behavior, aut
 
 # validate-candidate
 
-The contract lives in [node-candidate-validation](https://cognidao.org/knowledge/node-candidate-validation), not in this file. This skill is only its trigger.
+The contract lives in [validate-candidate](https://cognidao.org/knowledge/validate-candidate), not in this file. This skill is only its trigger.
 
 Read the full contract before validating. Use your saved Cogni key from `.env.cogni`:
 
@@ -14,7 +14,7 @@ set -o pipefail
 : "${COGNI_NODE_API_KEY:?Load your saved Cogni API key from .env.cogni}"
 curl -fsS --max-time 30 \
   -H "Authorization: Bearer $COGNI_NODE_API_KEY" \
-  https://cognidao.org/api/v1/knowledge/node-candidate-validation \
+  https://cognidao.org/api/v1/knowledge/validate-candidate \
   | jq -er '.content | select(type == "string" and length > 0)'
 ```
 
