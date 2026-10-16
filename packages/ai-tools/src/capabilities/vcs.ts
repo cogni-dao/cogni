@@ -144,12 +144,21 @@ export interface VcsCapability {
     prNumber: number;
   }): Promise<CiStatusResult>;
 
-  /** Merge a pull request. */
+  /**
+   * Merge a pull request.
+   *
+   * `expectedHeadSha` binds every synchronous merge attempt to the revision
+   * whose CI state the caller inspected. GitHub rejects the merge if the PR
+   * head changed in between. Queue-backed merges may rebase after enqueueing,
+   * but still require the caller's observed head so direct execution can never
+   * become an unpinned fallback.
+   */
   mergePr(params: {
     owner: string;
     repo: string;
     prNumber: number;
     method: "squash" | "merge" | "rebase";
+    expectedHeadSha: string;
     /**
      * Direct-merge even when the base branch has a merge queue. The caller may set this only
      * after a narrower trust gate has proved the PR is eligible and the executing GitHub App is

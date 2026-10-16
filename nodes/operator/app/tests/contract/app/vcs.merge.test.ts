@@ -264,6 +264,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: NODE_SLUG,
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: "0123456789012345678901234567890123456789",
     });
   });
 
@@ -340,6 +341,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: "0123456789012345678901234567890123456789",
     });
   });
 
@@ -356,6 +358,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: "0123456789012345678901234567890123456789",
     });
   });
 
@@ -441,6 +444,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: "0123456789012345678901234567890123456789",
       bypassQueue: true,
     });
   });
@@ -464,6 +468,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: "0123456789012345678901234567890123456789",
       bypassQueue: true,
     });
   });
@@ -486,6 +491,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: "cogni-monorepo",
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: "0123456789012345678901234567890123456789",
     });
   });
 
@@ -565,6 +571,7 @@ describe("POST /api/v1/vcs/merge", () => {
       repo: NODE_SLUG,
       prNumber: 42,
       method: "squash",
+      expectedHeadSha: "0123456789012345678901234567890123456789",
     });
   });
 });
