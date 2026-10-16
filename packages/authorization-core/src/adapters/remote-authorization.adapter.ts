@@ -12,11 +12,13 @@
  */
 
 import type {
+  AgentAccountAccessMutationInput,
   AuthorizationCheckPort,
   AuthzCheckParams,
   AuthzDecision,
   AuthzWriteDecision,
   BillingAccountGrantAdministrationPort,
+  BillingAccountAuthorizationPort,
   BillingAccountGrantInput,
   BillingAccountRevokeInput,
 } from "../index";
@@ -207,7 +209,10 @@ function parsedWriteDecision(value: unknown): AuthzWriteDecision | undefined {
 }
 
 export class RemoteAuthorizationAdapter
-  implements AuthorizationCheckPort, BillingAccountGrantAdministrationPort
+  implements
+    AuthorizationCheckPort,
+    BillingAccountGrantAdministrationPort,
+    BillingAccountAuthorizationPort
 {
   private readonly baseUrl: string;
   private readonly serviceToken: string;
@@ -320,6 +325,49 @@ export class RemoteAuthorizationAdapter
     input: BillingAccountRevokeInput
   ): Promise<AuthzWriteDecision> {
     return this.mutate("revoke", input);
+  }
+
+  async mutateAgentAccountAccess(
+    input: AgentAccountAccessMutationInput
+  ): Promise<AuthzWriteDecision> {
+    if (
+      !LOCAL_ID_PATTERN.test(input.grantorUserId) ||
+      !LOCAL_ID_PATTERN.test(input.billingAccountId) ||
+      !LOCAL_ID_PATTERN.test(input.agentActorId) ||
+      (input.operation === "grant" &&
+        (input.expiresAt === undefined ||
+          !Number.isFinite(Date.parse(input.expiresAt)))) ||
+      (input.operation === "revoke" && input.expiresAt !== undefined)
+    ) {
+      return writeDenied("invalid human-agent account access request");
+    }
+
+    try {
+      const response = await this.post(
+        "/api/v1/authorization/agent-account-access",
+        input
+      );
+      if (response.status === 403) {
+        return writeDenied("operator authorization facade denied mutation");
+      }
+      if (!response.ok) {
+        return writeUnavailable(
+          `operator authorization facade rejected mutation (status ${response.status})`
+        );
+      }
+      return (
+        parsedWriteDecision(await response.json()) ??
+        writeUnavailable(
+          "operator authorization facade returned an invalid mutation decision"
+        )
+      );
+    } catch (error) {
+      return writeUnavailable(
+        error instanceof Error
+          ? error.message
+          : "authorization facade unavailable"
+      );
+    }
   }
 
   private async mutate(

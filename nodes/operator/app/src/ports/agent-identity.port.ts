@@ -44,6 +44,12 @@ export type LegacyAgentUpgrade = AgentCredentialMaterial &
   );
 
 export interface AgentIdentityPort {
+  /** Resolve the accepted human steward for an active durable agent. */
+  getAcceptedStewardship(actorId: string): Promise<{
+    readonly stewardUserId: string;
+    readonly billingAccountId: string;
+  } | null>;
+
   createSpawnGrant(input: {
     readonly issuerUserId: string;
     readonly name: string;

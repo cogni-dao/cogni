@@ -141,9 +141,34 @@ export const authorizationFacadeGrantOperation = {
   output: AuthzWriteDecisionSchema,
 } as const;
 
+const AgentAccountAccessBaseSchema = z.strictObject({
+  grantorUserId: LocalIdSchema,
+  billingAccountId: LocalIdSchema,
+  agentActorId: LocalIdSchema,
+  mode: z.enum(["direct", "on_behalf_of"]),
+  requestId: RequestIdSchema.optional(),
+});
+
+export const authorizationFacadeAgentAccountAccessOperation = {
+  id: "authorization.facade.agent-account-access.v1",
+  input: z.discriminatedUnion("operation", [
+    AgentAccountAccessBaseSchema.extend({
+      operation: z.literal("grant"),
+      expiresAt: z.string().datetime(),
+    }),
+    AgentAccountAccessBaseSchema.extend({
+      operation: z.literal("revoke"),
+    }),
+  ]),
+  output: AuthzWriteDecisionSchema,
+} as const;
+
 export type AuthorizationFacadeCheckInput = z.infer<
   typeof authorizationFacadeCheckOperation.input
 >;
 export type AuthorizationFacadeGrantInput = z.infer<
   typeof authorizationFacadeGrantOperation.input
+>;
+export type AuthorizationFacadeAgentAccountAccessInput = z.infer<
+  typeof authorizationFacadeAgentAccountAccessOperation.input
 >;

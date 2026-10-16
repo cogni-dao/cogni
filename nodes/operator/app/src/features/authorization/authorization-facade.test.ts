@@ -13,10 +13,14 @@ import {
 } from "@cogni/authorization-core";
 import { describe, expect, it, vi } from "vitest";
 
-import { authorizationFacadeGrantOperation } from "@/contracts/authorization-facade.v1.contract";
+import {
+  authorizationFacadeAgentAccountAccessOperation,
+  authorizationFacadeGrantOperation,
+} from "@/contracts/authorization-facade.v1.contract";
 
 import {
   checkNodeBillingAccountAccess,
+  mutateNodeAgentAccountAccess,
   mutateNodeBillingAccountAccess,
 } from "./authorization-facade";
 
@@ -48,6 +52,7 @@ function authorizationWith(
     writeRelation: vi.fn(writeSuccess),
     deleteRelation: vi.fn(writeSuccess),
     writeRelations: vi.fn(writeSuccess),
+    writeRelationsAtomically: vi.fn(writeSuccess),
     deleteRelations: vi.fn(writeSuccess),
     replaceRelation: vi.fn(writeSuccess),
     listRelations: vi.fn(async () => ({
@@ -229,6 +234,98 @@ describe("authorization facade policy", () => {
         ...base,
         relation: "owner",
         object: `node:${OTHER_NODE_ID}`,
+      }).success
+    ).toBe(false);
+  });
+
+  it("atomically grants the human delegation and exact-account OBO edge", async () => {
+    const authorization = authorizationWith(async () => allow());
+    await mutateNodeAgentAccountAccess(
+      { authorization, now: () => new Date("2026-10-15T00:00:00.000Z") },
+      NODE_ID,
+      {
+        operation: "grant",
+        grantorUserId: GRANTOR_ID,
+        billingAccountId: ACCOUNT_ID,
+        agentActorId: AGENT_ID,
+        mode: "on_behalf_of",
+        expiresAt: "2026-10-20T00:00:00.000Z",
+      }
+    );
+
+    expect(authorization.writeRelationsAtomically).toHaveBeenCalledWith(
+      [
+        {
+          user: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+          relation: "delegates",
+          object: authzNodeUserPrincipal(NODE_ID, GRANTOR_ID),
+        },
+        {
+          user: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+          relation: "delegate",
+          object: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+          condition: authzGrantExpiresAt("2026-10-20T00:00:00.000Z"),
+        },
+      ],
+      { confirm: "higher_consistency" }
+    );
+  });
+
+  it("revokes both OBO legs atomically and rejects overlong grants", async () => {
+    const authorization = authorizationWith(async () => allow());
+    await mutateNodeAgentAccountAccess({ authorization }, NODE_ID, {
+      operation: "revoke",
+      grantorUserId: GRANTOR_ID,
+      billingAccountId: ACCOUNT_ID,
+      agentActorId: AGENT_ID,
+      mode: "on_behalf_of",
+    });
+    expect(authorization.deleteRelations).toHaveBeenCalledWith(
+      [
+        {
+          user: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+          relation: "delegates",
+          object: authzNodeUserPrincipal(NODE_ID, GRANTOR_ID),
+        },
+        {
+          user: authzNodeAgentPrincipal(NODE_ID, AGENT_ID),
+          relation: "delegate",
+          object: authzBillingAccountResource(NODE_ID, ACCOUNT_ID),
+        },
+      ],
+      { confirm: "higher_consistency" }
+    );
+
+    await expect(
+      mutateNodeAgentAccountAccess(
+        { authorization, now: () => new Date("2026-10-15T00:00:00.000Z") },
+        NODE_ID,
+        {
+          operation: "grant",
+          grantorUserId: GRANTOR_ID,
+          billingAccountId: ACCOUNT_ID,
+          agentActorId: AGENT_ID,
+          mode: "direct",
+          expiresAt: "2026-12-01T00:00:00.000Z",
+        }
+      )
+    ).resolves.toMatchObject({
+      decision: "failure",
+      code: "authz_write_denied",
+    });
+  });
+
+  it("rejects raw tuple or node fields from the combined ceremony contract", () => {
+    expect(
+      authorizationFacadeAgentAccountAccessOperation.input.safeParse({
+        operation: "grant",
+        grantorUserId: GRANTOR_ID,
+        billingAccountId: ACCOUNT_ID,
+        agentActorId: AGENT_ID,
+        mode: "direct",
+        expiresAt: EXPIRES_AT,
+        nodeId: OTHER_NODE_ID,
+        relation: "owner",
       }).success
     ).toBe(false);
   });

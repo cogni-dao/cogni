@@ -35,7 +35,11 @@ import {
   type RunFinalizeEpochDeps,
   runFinalizeEpoch,
 } from "@cogni/attribution-pipeline-plugins";
-import type { AuthorizationPort } from "@cogni/authorization-core";
+import {
+  type AuthorizationPort,
+  type BillingAccountAuthorizationPort,
+  RemoteAuthorizationAdapter,
+} from "@cogni/authorization-core";
 import { OpenFgaAuthorizationAdapter } from "@cogni/authorization-core/operator";
 import {
   DrizzleAttributionAdapter,
@@ -191,6 +195,7 @@ import {
   createAttributionProfileResolver,
   selectLocalAttributionNodes,
 } from "@/features/nodes/attribution-profile-resolver";
+import { mutateNodeAgentAccountAccess } from "@/features/authorization";
 import {
   createNodeDistributionConfigResolver,
   type NodeDistributionConfigResolver,
@@ -385,6 +390,8 @@ export interface Container {
   connectionBroker: ConnectionBrokerPort | undefined;
   /** Authorization port — undefined until OpenFGA env is configured */
   authorization: AuthorizationPort | undefined;
+  /** Portable semantic account authorization: local on operator, mediated on nodes. */
+  billingAccountAuthorization: BillingAccountAuthorizationPort | undefined;
   /** Model catalog — aggregates all providers for model listing */
   modelCatalog: ModelCatalogPort;
   /** Provider resolver — resolves providerKey to ModelProviderPort for runtime dispatch */
@@ -1157,6 +1164,22 @@ function createContainer(): Container {
         })
       : undefined;
 
+  const billingAccountAuthorization:
+    | BillingAccountAuthorizationPort
+    | undefined = authorization
+    ? {
+        check: (params, options) => authorization.check(params, options),
+        mutateAgentAccountAccess: (input) =>
+          mutateNodeAgentAccountAccess({ authorization }, nodeId, input),
+      }
+    : env.AUTHORIZATION_FACADE_TOKEN && env.DOMAIN
+      ? new RemoteAuthorizationAdapter({
+          baseUrl: `https://${env.DOMAIN}`,
+          serviceToken: env.AUTHORIZATION_FACADE_TOKEN,
+          timeoutMs: env.OPENFGA_TIMEOUT_MS,
+        })
+      : undefined;
+
   // Redis client for run event streaming (ephemeral stream plane)
   // Per REDIS_IS_STREAM_PLANE: only transient data, no durable state
   const redisClient = new Redis(env.REDIS_URL, {
@@ -1277,6 +1300,7 @@ function createContainer(): Container {
       : undefined,
     connectionBroker,
     authorization,
+    billingAccountAuthorization,
     // Multi-provider model ports
     ...(() => {
       const platformProvider = new PlatformModelProvider(llmService);

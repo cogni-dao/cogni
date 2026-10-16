@@ -227,6 +227,48 @@ export interface BillingAccountGrantAdministrationPort {
   ): Promise<AuthzWriteDecision>;
 }
 
+export type AgentAccountAccessMode = "direct" | "on_behalf_of";
+
+type AgentAccountAccessMutationBase = {
+  /** The authenticated human steward; never accepted directly from a browser body. */
+  readonly grantorUserId: string;
+  /** The exact account owned by the authenticated human. */
+  readonly billingAccountId: string;
+  /** Durable node-local agent actor receiving or losing access. */
+  readonly agentActorId: string;
+  /** Direct agent read, or human-subject OBO read with both delegation legs. */
+  readonly mode: AgentAccountAccessMode;
+  readonly requestId?: string;
+};
+
+export type AgentAccountAccessMutationInput = AgentAccountAccessMutationBase &
+  (
+    | {
+        readonly operation: "grant";
+        readonly expiresAt: string;
+      }
+    | {
+        readonly operation: "revoke";
+        readonly expiresAt?: never;
+      }
+  );
+
+/**
+ * Normal governed human→agent account-access ceremony. The implementation may
+ * express only the bounded direct-reader or OBO bundle; it never exposes tuple
+ * names to the caller.
+ */
+export interface AgentAccountAccessAdministrationPort {
+  mutateAgentAccountAccess(
+    input: AgentAccountAccessMutationInput
+  ): Promise<AuthzWriteDecision>;
+}
+
+/** Portable account-authorization surface used by every node application. */
+export interface BillingAccountAuthorizationPort
+  extends AuthorizationCheckPort,
+    AgentAccountAccessAdministrationPort {}
+
 export function authzToolResource(toolId: string): string {
   return `tool:${toolId}`;
 }

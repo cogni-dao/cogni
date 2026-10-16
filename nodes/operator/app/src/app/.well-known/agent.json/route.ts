@@ -27,6 +27,7 @@ import {
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { readAgentBillingAccountOperation } from "@/contracts/agent-account-access.v1.contract";
 import {
   getNodeBrandColor,
   getNodeBrandIcon,
@@ -104,6 +105,7 @@ export async function GET(request: Request) {
       // it is expired/invalid — unlike `users/me`, which is session-cookie-only
       // and 401s every agent key regardless of liveness. See `actions.agentMe`.
       agentIdentity: `${origin}/api/v1/agent/me`,
+      billingAccount: `${origin}/api/v1/accounts/{billingAccountId}`,
       // CI/CD plane (see docs/spec/node-ci-cd-contract.md § Env-promotion).
       // flight → candidate-a (node.flight/can_flight); promote → production
       // (node.promote_production/can_promote_production). Both dispatch via the
@@ -133,6 +135,13 @@ export async function GET(request: Request) {
         endpoint: `${origin}/api/v1/agent/me`,
         auth: { type: "bearer" },
         outputSchema: z.toJSONSchema(agentMeV2Operation.output),
+      },
+      readBillingAccount: {
+        method: "GET",
+        endpoint: `${origin}/api/v1/accounts/{billingAccountId}`,
+        auth: { type: "bearer", principal: "durable_agent" },
+        inputSchema: z.toJSONSchema(readAgentBillingAccountOperation.input),
+        outputSchema: z.toJSONSchema(readAgentBillingAccountOperation.output),
       },
       flightCandidate: {
         method: "POST",
