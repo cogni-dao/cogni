@@ -154,6 +154,7 @@ export type {
   ActorBeneficiaryPolicyProposalRecord,
   ActorBindingRecord,
   ActorContributionAllocationRecord,
+  ActorContributionAllocationLifecycleRecord,
   ActorDistributionLiabilityRecord,
   ActorDistributionSettlementRecord,
   AttributionEpoch,

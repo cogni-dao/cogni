@@ -127,6 +127,15 @@ export const actorAllocationRecordSchema = actorContributionAllocationSchema.ext
   createdAt: z.string().datetime(),
 });
 
+export const actorAllocationLifecycleSchema = z.object({
+  allocation: actorAllocationRecordSchema,
+  status: z.enum(["signed", "pending_wallet", "settled"]),
+  tokenAmount: z.string().nullable(),
+  claimantWallet: z.string().nullable(),
+  liabilityId: z.string().nullable(),
+  settlementId: z.string().nullable(),
+});
+
 export const actorAllocationOperation = {
   id: "attribution.actor-allocation.v1",
   summary: "Prepare, sign, and read a frozen AI contribution allocation",
@@ -134,6 +143,7 @@ export const actorAllocationOperation = {
   signInput: actorAllocationSignInputSchema,
   typedDataOutput: actorAllocationTypedDataSchema,
   recordOutput: actorAllocationRecordSchema,
+  lifecycleOutput: actorAllocationLifecycleSchema,
 } as const;
 
 export type ActorBeneficiaryPolicyMutation = z.infer<

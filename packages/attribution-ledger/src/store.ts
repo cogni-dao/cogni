@@ -250,6 +250,15 @@ export interface ActorContributionAllocationRecord
   readonly createdAt: Date;
 }
 
+export interface ActorContributionAllocationLifecycleRecord {
+  readonly allocation: ActorContributionAllocationRecord;
+  readonly status: "signed" | "pending_wallet" | "settled";
+  readonly tokenAmount: bigint | null;
+  readonly claimantWallet: string | null;
+  readonly liabilityId: string | null;
+  readonly settlementId: string | null;
+}
+
 export interface ActorDistributionLiabilityRecord {
   readonly id: string;
   readonly allocationRef: string;
@@ -1009,6 +1018,7 @@ export interface ActorAttributionStore {
     params: BindActorExternalIdentityParams
   ): Promise<ActorBindingRecord>;
 
+  /** @deprecated Migration/test seam. Application callers use the governed proposal ceremony. */
   insertActorBeneficiaryPolicy(
     params: InsertActorBeneficiaryPolicyParams
   ): Promise<ActorBeneficiaryPolicyRecord>;
@@ -1052,6 +1062,10 @@ export interface ActorAttributionStore {
   getActorContributionAllocation(
     allocationRef: string
   ): Promise<ActorContributionAllocationRecord | null>;
+
+  getActorContributionAllocationLifecycle(
+    allocationRef: string
+  ): Promise<ActorContributionAllocationLifecycleRecord | null>;
 
   /** Actor-owned included receipts which still lack a signed allocation. */
   listUnallocatedActorReceiptIdsForEpoch(

@@ -98,6 +98,7 @@ function makeMockStore(
     batchUpsertReviewSubjectOverrides: vi.fn().mockResolvedValue([]),
     deleteReviewSubjectOverride: vi.fn(),
     getReviewSubjectOverridesForEpoch: vi.fn().mockResolvedValue([]),
+    listUnallocatedActorReceiptIdsForEpoch: vi.fn().mockResolvedValue([]),
     listActorContributionAllocationsForEpoch: vi.fn().mockResolvedValue([]),
     listUnfoldedActorContributionAllocationsForEpoch: vi
       .fn()
@@ -470,6 +471,19 @@ describe("finalizeEpoch — per-node distribution config (bug.5020)", () => {
       runFinalize({ ...deps, deploymentEnvironment: undefined })
     ).rejects.toThrow(/DEPLOY_ENVIRONMENT/);
     expect(store.getEpoch).not.toHaveBeenCalled();
+  });
+
+  it("keeps an epoch in review while an actor-owned receipt lacks a signed allocation", async () => {
+    const { store } = await makeFinalizeStore({
+      listUnallocatedActorReceiptIdsForEpoch: vi
+        .fn()
+        .mockResolvedValue(["receipt-1"]),
+    });
+
+    await expect(
+      runFinalize(finalizeDepsWith(store, { deploymentEnvironment: "test" }))
+    ).rejects.toMatchObject({ code: "actor_allocation_unresolved" });
+    expect(store.finalizeEpochAtomic).not.toHaveBeenCalled();
   });
 
   it("ACTIVE: folds against the per-node config from the gateway (not baked)", async () => {

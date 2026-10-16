@@ -2085,6 +2085,11 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       await expect(
         adapter.listUnallocatedActorReceiptIdsForEpoch(epoch.id)
       ).resolves.toEqual([]);
+      await expect(
+        adapter.getActorContributionAllocationLifecycle(
+          persisted.allocationRef
+        )
+      ).resolves.toMatchObject({ status: "signed", tokenAmount: null });
       const walletResolution = await new DrizzleClaimantWalletResolver(
         db
       ).resolveBeneficiaryWallets([persisted]);
@@ -2136,6 +2141,15 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       expect(
         await adapter.listUnfoldedActorContributionAllocationsForEpoch(epoch.id)
       ).toEqual([]);
+      await expect(
+        adapter.getActorContributionAllocationLifecycle(
+          persisted.allocationRef
+        )
+      ).resolves.toMatchObject({
+        status: "pending_wallet",
+        tokenAmount: 17n,
+        claimantWallet: null,
+      });
 
       const future = await seedTestActor(db);
       await db.insert(userBindings).values({

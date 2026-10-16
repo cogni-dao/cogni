@@ -29,6 +29,7 @@ import type {
   ActorBeneficiaryPolicyAcceptanceRecord,
   ActorBeneficiaryPolicyRecord,
   ActorBeneficiaryPolicyProposalRecord,
+  ActorContributionAllocationLifecycleRecord,
   ActorBindingRecord,
   ActorContributionAllocationRecord,
   ActorDistributionLiabilityRecord,
@@ -2661,6 +2662,14 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       ) {
         return toActorBeneficiaryPolicyProposal(proposal, acceptances);
       }
+      const ceremonyCompletedAt = Math.max(
+        ...acceptances.map(({ acceptedAt }) => acceptedAt.getTime())
+      );
+      if (proposal.effectiveFrom.getTime() <= ceremonyCompletedAt) {
+        throw new Error(
+          "Beneficiary policy effectiveFrom must follow completed acceptance"
+        );
+      }
 
       const [activationEarner, activationBeneficiary, activationSteward] =
         await Promise.all([
@@ -2694,14 +2703,39 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         );
       }
 
-      const [latestAllocation] = await tx
-        .select({ contributionCutoff: actorContributionAllocations.contributionCutoff })
-        .from(actorContributionAllocations)
-        .where(
-          eq(actorContributionAllocations.earnedByActorId, proposal.earnedByActorId)
-        )
-        .orderBy(desc(actorContributionAllocations.contributionCutoff))
-        .limit(1);
+      const [latestPolicyRows, latestAllocationRows] = await Promise.all([
+        tx
+          .select({ effectiveFrom: actorBeneficiaryPolicies.effectiveFrom })
+          .from(actorBeneficiaryPolicies)
+          .where(
+            eq(actorBeneficiaryPolicies.earnedByActorId, proposal.earnedByActorId)
+          )
+          .orderBy(desc(actorBeneficiaryPolicies.effectiveFrom))
+          .limit(1),
+        tx
+          .select({
+            contributionCutoff: actorContributionAllocations.contributionCutoff,
+          })
+          .from(actorContributionAllocations)
+          .where(
+            eq(
+              actorContributionAllocations.earnedByActorId,
+              proposal.earnedByActorId
+            )
+          )
+          .orderBy(desc(actorContributionAllocations.contributionCutoff))
+          .limit(1),
+      ]);
+      const latestPolicy = latestPolicyRows[0];
+      if (
+        latestPolicy &&
+        proposal.effectiveFrom.getTime() <= latestPolicy.effectiveFrom.getTime()
+      ) {
+        throw new Error(
+          "Beneficiary policy effectiveFrom must be strictly after the latest policy"
+        );
+      }
+      const latestAllocation = latestAllocationRows[0];
       if (
         latestAllocation &&
         proposal.effectiveFrom.getTime() <= latestAllocation.contributionCutoff.getTime()
@@ -3040,6 +3074,55 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       )
       .limit(1);
     return row ? toActorContributionAllocation(row) : null;
+  }
+
+  async getActorContributionAllocationLifecycle(
+    allocationRef: string
+  ): Promise<ActorContributionAllocationLifecycleRecord | null> {
+    const [row] = await this.db
+      .select({
+        allocation: actorContributionAllocations,
+        liabilityId: actorDistributionLiabilities.id,
+        liabilityAmount: actorDistributionLiabilities.tokenAmount,
+        settlementId: actorDistributionSettlements.id,
+        settlementAmount: actorDistributionSettlements.tokenAmount,
+        claimantWallet: actorDistributionSettlements.claimantWallet,
+      })
+      .from(actorContributionAllocations)
+      .leftJoin(
+        actorDistributionLiabilities,
+        eq(
+          actorDistributionLiabilities.allocationRef,
+          actorContributionAllocations.id
+        )
+      )
+      .leftJoin(
+        actorDistributionSettlements,
+        eq(
+          actorDistributionSettlements.allocationRef,
+          actorContributionAllocations.id
+        )
+      )
+      .where(
+        and(
+          eq(actorContributionAllocations.id, allocationRef),
+          eq(actorContributionAllocations.scopeId, this.scopeId)
+        )
+      )
+      .limit(1);
+    if (!row) return null;
+    return {
+      allocation: toActorContributionAllocation(row.allocation),
+      status: row.settlementId
+        ? "settled"
+        : row.liabilityId
+          ? "pending_wallet"
+          : "signed",
+      tokenAmount: row.settlementAmount ?? row.liabilityAmount ?? null,
+      claimantWallet: row.claimantWallet,
+      liabilityId: row.liabilityId,
+      settlementId: row.settlementId,
+    };
   }
 
   async listUnallocatedActorReceiptIdsForEpoch(
