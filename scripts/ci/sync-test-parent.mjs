@@ -233,7 +233,7 @@ const main = async () => {
     // Not --cached: the generators below read the WORKTREE, so a hub-only roster row left on
     // disk would leak the production fleet into the mirror's rendered desired state.
     if (dropFromHub.length)
-      applyPaths(["rm", "-rq", "--ignore-unmatch"], dropFromHub);
+      applyPaths(["rm", "-rqf", "--ignore-unmatch"], dropFromHub);
     if (keepFromMirror.length)
       applyPaths(["checkout", mirrorSha], keepFromMirror);
     for (const path of gitlinks) {
