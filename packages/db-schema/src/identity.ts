@@ -243,6 +243,97 @@ export const actorBeneficiaryPolicies = pgTable(
   ]
 ).enableRLS();
 
+export const ACTOR_BENEFICIARY_PROPOSAL_STATUSES = [
+  "pending",
+  "activated",
+  "revoked",
+] as const;
+
+export const ACTOR_BENEFICIARY_ACCEPTANCE_ROLES = [
+  "earner",
+  "steward",
+  "governance",
+] as const;
+
+/**
+ * Governed request to create an effective beneficiary policy. A proposal is
+ * not allocation authority: only the policy inserted after all three distinct
+ * role acceptances can be selected at a contribution cutoff.
+ */
+export const actorBeneficiaryPolicyProposals = pgTable(
+  "actor_beneficiary_policy_proposals",
+  {
+    id: text("id").primaryKey(),
+    earnedByActorId: text("earned_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    beneficiaryActorId: text("beneficiary_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    stewardActorId: text("steward_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    proposedByActorId: text("proposed_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    policyVersion: text("policy_version").notNull(),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+    status: text("status").notNull().default("pending"),
+    activatedPolicyId: text("activated_policy_id").references(
+      () => actorBeneficiaryPolicies.id
+    ),
+    revokedByActorId: text("revoked_by_actor_id").references(() => actors.id),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "actor_beneficiary_policy_proposals_status_check",
+      sql`${table.status} IN ('pending', 'activated', 'revoked')`
+    ),
+    uniqueIndex("actor_beneficiary_policy_proposals_version_unique").on(
+      table.earnedByActorId,
+      table.policyVersion
+    ),
+    index("actor_beneficiary_policy_proposals_earner_idx").on(
+      table.earnedByActorId,
+      table.status
+    ),
+  ]
+).enableRLS();
+
+/** Append-only, role-specific evidence for the beneficiary ceremony. */
+export const actorBeneficiaryPolicyAcceptances = pgTable(
+  "actor_beneficiary_policy_acceptances",
+  {
+    id: text("id").primaryKey(),
+    proposalId: text("proposal_id")
+      .notNull()
+      .references(() => actorBeneficiaryPolicyProposals.id),
+    role: text("role").notNull(),
+    acceptedByActorId: text("accepted_by_actor_id")
+      .notNull()
+      .references(() => actors.id),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "actor_beneficiary_policy_acceptances_role_check",
+      sql`${table.role} IN ('earner', 'steward', 'governance')`
+    ),
+    uniqueIndex("actor_beneficiary_policy_acceptances_role_unique").on(
+      table.proposalId,
+      table.role
+    ),
+  ]
+).enableRLS();
+
 export const AGENT_GRANT_STATUSES = ["pending", "redeemed", "revoked"] as const;
 
 /** One-use, hash-only grant that is the only unauthenticated agent spawn seam. */

@@ -25,7 +25,10 @@
  */
 
 import type {
+  AcceptActorBeneficiaryPolicyParams,
+  ActorBeneficiaryPolicyAcceptanceRecord,
   ActorBeneficiaryPolicyRecord,
+  ActorBeneficiaryPolicyProposalRecord,
   ActorBindingRecord,
   ActorContributionAllocationRecord,
   ActorDistributionLiabilityRecord,
@@ -59,6 +62,7 @@ import type {
   InsertUserProjectionParams,
   PendingActorDistributionLiability,
   PoolComponentInsertResult,
+  ProposeActorBeneficiaryPolicyParams,
   ReceiptClaimantsRecord,
   ReviewSubjectOverrideRecord,
   SelectedReceiptForAllocation,
@@ -99,6 +103,8 @@ import {
   ingestionReceipts,
 } from "@cogni/db-schema/attribution";
 import {
+  actorBeneficiaryPolicyAcceptances,
+  actorBeneficiaryPolicyProposals,
   actorBeneficiaryPolicies,
   actorBindingEvents,
   actorBindings,
@@ -447,6 +453,41 @@ function toActorBeneficiaryPolicy(
     effectiveFrom: row.effectiveFrom,
     effectiveTo: row.effectiveTo,
     createdAt: row.createdAt,
+  };
+}
+
+function toActorBeneficiaryPolicyAcceptance(
+  row: typeof actorBeneficiaryPolicyAcceptances.$inferSelect
+): ActorBeneficiaryPolicyAcceptanceRecord {
+  return {
+    id: row.id,
+    proposalId: row.proposalId,
+    role: row.role as ActorBeneficiaryPolicyAcceptanceRecord["role"],
+    acceptedByActorId: row.acceptedByActorId,
+    evidence: row.evidence,
+    acceptedAt: row.acceptedAt,
+  };
+}
+
+function toActorBeneficiaryPolicyProposal(
+  row: typeof actorBeneficiaryPolicyProposals.$inferSelect,
+  acceptances: readonly (typeof actorBeneficiaryPolicyAcceptances.$inferSelect)[]
+): ActorBeneficiaryPolicyProposalRecord {
+  return {
+    id: row.id,
+    earnedByActorId: row.earnedByActorId,
+    beneficiaryActorId: row.beneficiaryActorId,
+    stewardActorId: row.stewardActorId,
+    proposedByActorId: row.proposedByActorId,
+    policyVersion: row.policyVersion,
+    evidence: row.evidence,
+    effectiveFrom: row.effectiveFrom,
+    status: row.status as ActorBeneficiaryPolicyProposalRecord["status"],
+    activatedPolicyId: row.activatedPolicyId,
+    revokedByActorId: row.revokedByActorId,
+    revokedAt: row.revokedAt,
+    createdAt: row.createdAt,
+    acceptances: acceptances.map(toActorBeneficiaryPolicyAcceptance),
   };
 }
 
@@ -2425,6 +2466,318 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     });
   }
 
+  async resolveActiveHumanActorId(userId: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ id: actors.id })
+      .from(actors)
+      .where(
+        and(
+          eq(actors.kind, "user"),
+          eq(actors.userId, userId),
+          eq(actors.status, "active")
+        )
+      )
+      .limit(1);
+    return row?.id ?? null;
+  }
+
+  async getActorBeneficiaryPolicyProposal(
+    proposalId: string
+  ): Promise<ActorBeneficiaryPolicyProposalRecord | null> {
+    const [proposal] = await this.db
+      .select()
+      .from(actorBeneficiaryPolicyProposals)
+      .where(eq(actorBeneficiaryPolicyProposals.id, proposalId))
+      .limit(1);
+    if (!proposal) return null;
+    const acceptances = await this.db
+      .select()
+      .from(actorBeneficiaryPolicyAcceptances)
+      .where(eq(actorBeneficiaryPolicyAcceptances.proposalId, proposalId))
+      .orderBy(actorBeneficiaryPolicyAcceptances.role);
+    return toActorBeneficiaryPolicyProposal(proposal, acceptances);
+  }
+
+  async proposeActorBeneficiaryPolicy(
+    params: ProposeActorBeneficiaryPolicyParams
+  ): Promise<ActorBeneficiaryPolicyProposalRecord> {
+    if (Object.keys(params.evidence).length === 0) {
+      throw new Error("Beneficiary policy proposal requires evidence");
+    }
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary:${params.earnedByActorId}`}))`
+      );
+      const [earnerRows, beneficiaryRows, stewardRows] = await Promise.all([
+        tx
+          .select({
+            id: actors.id,
+            kind: actors.kind,
+            parentActorId: actors.parentActorId,
+          })
+          .from(actors)
+          .where(
+            and(
+              eq(actors.id, params.earnedByActorId),
+              eq(actors.status, "active")
+            )
+          )
+          .limit(1),
+        tx
+          .select({ id: actors.id, kind: actors.kind })
+          .from(actors)
+          .where(
+            and(
+              eq(actors.id, params.beneficiaryActorId),
+              eq(actors.status, "active")
+            )
+          )
+          .limit(1),
+        tx
+          .select({ id: actors.id, kind: actors.kind })
+          .from(actors)
+          .where(
+            and(
+              eq(actors.id, params.stewardActorId),
+              eq(actors.status, "active")
+            )
+          )
+          .limit(1),
+      ]);
+      const earner = earnerRows[0];
+      const beneficiary = beneficiaryRows[0];
+      const steward = stewardRows[0];
+      if (earner?.kind !== "agent" || beneficiary?.kind !== "user") {
+        throw new Error(
+          "Beneficiary proposal requires an active agent earner and human beneficiary"
+        );
+      }
+      if (
+        steward?.kind !== "user" ||
+        earner.parentActorId !== params.stewardActorId
+      ) {
+        throw new Error(
+          "Beneficiary proposal steward must be the agent's accepted current steward"
+        );
+      }
+      if (
+        params.proposedByActorId !== params.earnedByActorId &&
+        params.proposedByActorId !== params.stewardActorId
+      ) {
+        throw new Error("Only the agent or its steward may propose a beneficiary");
+      }
+      const [row] = await tx
+        .insert(actorBeneficiaryPolicyProposals)
+        .values({
+          id: crypto.randomUUID(),
+          earnedByActorId: params.earnedByActorId,
+          beneficiaryActorId: params.beneficiaryActorId,
+          stewardActorId: params.stewardActorId,
+          proposedByActorId: params.proposedByActorId,
+          policyVersion: params.policyVersion,
+          evidence: params.evidence,
+          effectiveFrom: params.effectiveFrom,
+        })
+        .returning();
+      if (!row) throw new Error("Beneficiary proposal insert returned no row");
+      return toActorBeneficiaryPolicyProposal(row, []);
+    });
+  }
+
+  async acceptActorBeneficiaryPolicy(
+    params: AcceptActorBeneficiaryPolicyParams
+  ): Promise<ActorBeneficiaryPolicyProposalRecord> {
+    if (Object.keys(params.evidence).length === 0) {
+      throw new Error("Beneficiary acceptance requires evidence");
+    }
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary-proposal:${params.proposalId}`}))`
+      );
+      const [proposal] = await tx
+        .select()
+        .from(actorBeneficiaryPolicyProposals)
+        .where(eq(actorBeneficiaryPolicyProposals.id, params.proposalId))
+        .limit(1);
+      if (!proposal) throw new Error("Beneficiary proposal not found");
+      if (proposal.status !== "pending") {
+        throw new Error("Beneficiary proposal is no longer pending");
+      }
+
+      const expectedActorId =
+        params.role === "earner"
+          ? proposal.earnedByActorId
+          : params.role === "steward"
+            ? proposal.stewardActorId
+            : params.acceptedByActorId;
+      if (params.acceptedByActorId !== expectedActorId) {
+        throw new Error(`Caller cannot accept the ${params.role} role`);
+      }
+      if (params.role === "governance") {
+        const [governanceActor] = await tx
+          .select({ kind: actors.kind, status: actors.status })
+          .from(actors)
+          .where(eq(actors.id, params.acceptedByActorId))
+          .limit(1);
+        if (
+          governanceActor?.kind !== "user" ||
+          governanceActor.status !== "active"
+        ) {
+          throw new Error("Governance acceptance requires an active human actor");
+        }
+      }
+
+      const [inserted] = await tx
+        .insert(actorBeneficiaryPolicyAcceptances)
+        .values({
+          id: crypto.randomUUID(),
+          proposalId: proposal.id,
+          role: params.role,
+          acceptedByActorId: params.acceptedByActorId,
+          evidence: params.evidence,
+          acceptedAt: params.acceptedAt,
+        })
+        .onConflictDoNothing()
+        .returning();
+      const acceptances = await tx
+        .select()
+        .from(actorBeneficiaryPolicyAcceptances)
+        .where(eq(actorBeneficiaryPolicyAcceptances.proposalId, proposal.id))
+        .orderBy(actorBeneficiaryPolicyAcceptances.role);
+      if (!inserted) {
+        const existing = acceptances.find(
+          (acceptance) => acceptance.role === params.role
+        );
+        if (existing?.acceptedByActorId !== params.acceptedByActorId) {
+          throw new Error("Beneficiary acceptance idempotency conflict");
+        }
+      }
+
+      const acceptedRoles = new Set(acceptances.map(({ role }) => role));
+      if (
+        !acceptedRoles.has("earner") ||
+        !acceptedRoles.has("steward") ||
+        !acceptedRoles.has("governance")
+      ) {
+        return toActorBeneficiaryPolicyProposal(proposal, acceptances);
+      }
+
+      const [latestAllocation] = await tx
+        .select({ contributionCutoff: actorContributionAllocations.contributionCutoff })
+        .from(actorContributionAllocations)
+        .where(
+          eq(actorContributionAllocations.earnedByActorId, proposal.earnedByActorId)
+        )
+        .orderBy(desc(actorContributionAllocations.contributionCutoff))
+        .limit(1);
+      if (
+        latestAllocation &&
+        proposal.effectiveFrom.getTime() <= latestAllocation.contributionCutoff.getTime()
+      ) {
+        throw new Error(
+          "Beneficiary policy cannot backdate across a frozen actor allocation"
+        );
+      }
+      await tx
+        .update(actorBeneficiaryPolicies)
+        .set({ effectiveTo: proposal.effectiveFrom })
+        .where(
+          and(
+            eq(actorBeneficiaryPolicies.earnedByActorId, proposal.earnedByActorId),
+            isNull(actorBeneficiaryPolicies.effectiveTo),
+            lte(actorBeneficiaryPolicies.effectiveFrom, proposal.effectiveFrom)
+          )
+        );
+      const policyId = crypto.randomUUID();
+      await tx.insert(actorBeneficiaryPolicies).values({
+        id: policyId,
+        earnedByActorId: proposal.earnedByActorId,
+        beneficiaryActorId: proposal.beneficiaryActorId,
+        policyVersion: proposal.policyVersion,
+        // The beneficiary signs each frozen allocation. Governance acceptance
+        // authorizes activation but never becomes the economic beneficiary.
+        authorizedByActorId: proposal.beneficiaryActorId,
+        evidence: {
+          proposalId: proposal.id,
+          proposalEvidence: proposal.evidence,
+          acceptanceIds: acceptances.map(({ id }) => id).sort(),
+        },
+        effectiveFrom: proposal.effectiveFrom,
+      });
+      const [activated] = await tx
+        .update(actorBeneficiaryPolicyProposals)
+        .set({ status: "activated", activatedPolicyId: policyId })
+        .where(eq(actorBeneficiaryPolicyProposals.id, proposal.id))
+        .returning();
+      if (!activated) throw new Error("Beneficiary proposal activation failed");
+      return toActorBeneficiaryPolicyProposal(activated, acceptances);
+    });
+  }
+
+  async revokeActorBeneficiaryPolicy(params: {
+    readonly proposalId: string;
+    readonly revokedByActorId: string;
+    readonly revokedAt: Date;
+  }): Promise<ActorBeneficiaryPolicyProposalRecord> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`actor-beneficiary-proposal:${params.proposalId}`}))`
+      );
+      const [proposal] = await tx
+        .select()
+        .from(actorBeneficiaryPolicyProposals)
+        .where(eq(actorBeneficiaryPolicyProposals.id, params.proposalId))
+        .limit(1);
+      if (!proposal) throw new Error("Beneficiary proposal not found");
+      if (
+        params.revokedByActorId !== proposal.earnedByActorId &&
+        params.revokedByActorId !== proposal.stewardActorId &&
+        params.revokedByActorId !== proposal.beneficiaryActorId
+      ) {
+        throw new Error("Caller cannot revoke this beneficiary proposal");
+      }
+      if (proposal.status === "revoked") {
+        const acceptances = await tx
+          .select()
+          .from(actorBeneficiaryPolicyAcceptances)
+          .where(eq(actorBeneficiaryPolicyAcceptances.proposalId, proposal.id));
+        return toActorBeneficiaryPolicyProposal(proposal, acceptances);
+      }
+      if (
+        proposal.activatedPolicyId &&
+        params.revokedAt.getTime() <= proposal.effectiveFrom.getTime()
+      ) {
+        throw new Error("Activated beneficiary policy revocation must be prospective");
+      }
+      if (proposal.activatedPolicyId) {
+        await tx
+          .update(actorBeneficiaryPolicies)
+          .set({ effectiveTo: params.revokedAt })
+          .where(
+            and(
+              eq(actorBeneficiaryPolicies.id, proposal.activatedPolicyId),
+              isNull(actorBeneficiaryPolicies.effectiveTo)
+            )
+          );
+      }
+      const [revoked] = await tx
+        .update(actorBeneficiaryPolicyProposals)
+        .set({
+          status: "revoked",
+          revokedByActorId: params.revokedByActorId,
+          revokedAt: params.revokedAt,
+        })
+        .where(eq(actorBeneficiaryPolicyProposals.id, proposal.id))
+        .returning();
+      if (!revoked) throw new Error("Beneficiary proposal revocation failed");
+      const acceptances = await tx
+        .select()
+        .from(actorBeneficiaryPolicyAcceptances)
+        .where(eq(actorBeneficiaryPolicyAcceptances.proposalId, proposal.id));
+      return toActorBeneficiaryPolicyProposal(revoked, acceptances);
+    });
+  }
+
   async prepareActorContributionAllocation(params: {
     readonly nodeId: string;
     readonly epochId: bigint;
@@ -2641,6 +2994,52 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       )
       .limit(1);
     return row ? toActorContributionAllocation(row) : null;
+  }
+
+  async listUnallocatedActorReceiptIdsForEpoch(
+    epochId: bigint
+  ): Promise<readonly string[]> {
+    await this.resolveEpochScoped(epochId);
+    const rows = await this.db
+      .selectDistinct({ receiptId: ingestionReceipts.receiptId })
+      .from(epochSelection)
+      .innerJoin(
+        ingestionReceipts,
+        and(
+          eq(ingestionReceipts.nodeId, epochSelection.nodeId),
+          eq(ingestionReceipts.receiptId, epochSelection.receiptId)
+        )
+      )
+      .innerJoin(
+        actorBindings,
+        and(
+          eq(actorBindings.provider, ingestionReceipts.source),
+          eq(actorBindings.externalId, ingestionReceipts.platformUserId),
+          lte(actorBindings.createdAt, ingestionReceipts.eventTime),
+          or(
+            isNull(actorBindings.closedAt),
+            gt(actorBindings.closedAt, ingestionReceipts.eventTime)
+          )
+        )
+      )
+      .leftJoin(
+        actorContributionAllocations,
+        and(
+          eq(actorContributionAllocations.nodeId, epochSelection.nodeId),
+          eq(actorContributionAllocations.epochId, epochSelection.epochId),
+          eq(actorContributionAllocations.receiptId, epochSelection.receiptId),
+          eq(actorContributionAllocations.scopeId, this.scopeId)
+        )
+      )
+      .where(
+        and(
+          eq(epochSelection.epochId, epochId),
+          eq(epochSelection.included, true),
+          isNull(actorContributionAllocations.id)
+        )
+      )
+      .orderBy(ingestionReceipts.receiptId);
+    return rows.map(({ receiptId }) => receiptId);
   }
 
   // ── Identity resolution ───────────────────────────────────────

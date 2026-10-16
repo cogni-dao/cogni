@@ -210,6 +210,37 @@ export interface ActorBeneficiaryPolicyRecord {
   readonly createdAt: Date;
 }
 
+export type ActorBeneficiaryAcceptanceRole =
+  | "earner"
+  | "steward"
+  | "governance";
+
+export interface ActorBeneficiaryPolicyAcceptanceRecord {
+  readonly id: string;
+  readonly proposalId: string;
+  readonly role: ActorBeneficiaryAcceptanceRole;
+  readonly acceptedByActorId: string;
+  readonly evidence: Record<string, unknown>;
+  readonly acceptedAt: Date;
+}
+
+export interface ActorBeneficiaryPolicyProposalRecord {
+  readonly id: string;
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly stewardActorId: string;
+  readonly proposedByActorId: string;
+  readonly policyVersion: string;
+  readonly evidence: Record<string, unknown>;
+  readonly effectiveFrom: Date;
+  readonly status: "pending" | "activated" | "revoked";
+  readonly activatedPolicyId: string | null;
+  readonly revokedByActorId: string | null;
+  readonly revokedAt: Date | null;
+  readonly createdAt: Date;
+  readonly acceptances: readonly ActorBeneficiaryPolicyAcceptanceRecord[];
+}
+
 export interface ActorContributionAllocationRecord
   extends FrozenActorContributionAllocation {
   readonly signerActorId: string;
@@ -295,6 +326,24 @@ export interface InsertActorBeneficiaryPolicyParams {
   readonly authorizedByActorId: string;
   readonly evidence: Record<string, unknown>;
   readonly effectiveFrom: Date;
+}
+
+export interface ProposeActorBeneficiaryPolicyParams {
+  readonly earnedByActorId: string;
+  readonly beneficiaryActorId: string;
+  readonly stewardActorId: string;
+  readonly proposedByActorId: string;
+  readonly policyVersion: string;
+  readonly evidence: Record<string, unknown>;
+  readonly effectiveFrom: Date;
+}
+
+export interface AcceptActorBeneficiaryPolicyParams {
+  readonly proposalId: string;
+  readonly role: ActorBeneficiaryAcceptanceRole;
+  readonly acceptedByActorId: string;
+  readonly evidence: Record<string, unknown>;
+  readonly acceptedAt: Date;
 }
 
 export interface InsertSignedActorContributionAllocationParams {
@@ -964,6 +1013,26 @@ export interface ActorAttributionStore {
     params: InsertActorBeneficiaryPolicyParams
   ): Promise<ActorBeneficiaryPolicyRecord>;
 
+  resolveActiveHumanActorId(userId: string): Promise<string | null>;
+
+  proposeActorBeneficiaryPolicy(
+    params: ProposeActorBeneficiaryPolicyParams
+  ): Promise<ActorBeneficiaryPolicyProposalRecord>;
+
+  acceptActorBeneficiaryPolicy(
+    params: AcceptActorBeneficiaryPolicyParams
+  ): Promise<ActorBeneficiaryPolicyProposalRecord>;
+
+  revokeActorBeneficiaryPolicy(params: {
+    readonly proposalId: string;
+    readonly revokedByActorId: string;
+    readonly revokedAt: Date;
+  }): Promise<ActorBeneficiaryPolicyProposalRecord>;
+
+  getActorBeneficiaryPolicyProposal(
+    proposalId: string
+  ): Promise<ActorBeneficiaryPolicyProposalRecord | null>;
+
   /**
    * Resolve source ownership and explicit policy exactly as of receipt event_time.
    * task.5220 consumes the returned allocationRef; this never reads current parent,
@@ -982,6 +1051,11 @@ export interface ActorAttributionStore {
   getActorContributionAllocation(
     allocationRef: string
   ): Promise<ActorContributionAllocationRecord | null>;
+
+  /** Actor-owned included receipts which still lack a signed allocation. */
+  listUnallocatedActorReceiptIdsForEpoch(
+    epochId: bigint
+  ): Promise<readonly string[]>;
 
   /** Signer actor must be the explicit policy authorizer and own this wallet. */
   actorOwnsSigningWallet(params: {

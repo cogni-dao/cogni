@@ -147,7 +147,11 @@ export {
 // Store port interface + types
 export type {
   ActorAttributionStore,
+  AcceptActorBeneficiaryPolicyParams,
+  ActorBeneficiaryAcceptanceRole,
+  ActorBeneficiaryPolicyAcceptanceRecord,
   ActorBeneficiaryPolicyRecord,
+  ActorBeneficiaryPolicyProposalRecord,
   ActorBindingRecord,
   ActorContributionAllocationRecord,
   ActorDistributionLiabilityRecord,
@@ -190,6 +194,7 @@ export type {
   InsertUserProjectionParams,
   OverrideStore,
   PendingActorDistributionLiability,
+  ProposeActorBeneficiaryPolicyParams,
   PoolComponentInsertResult,
   PoolStore,
   ProjectionStore,

@@ -30,6 +30,8 @@ Authenticated HTTP endpoints for attribution operations. SIWE-protected reads fo
 
 - **Exports:** none (route handlers only)
 - **Routes:**
+  - `GET|POST /api/v1/attribution/beneficiary-policies` — exact-principal beneficiary proposal/read/accept/revoke; AI + steward + ledger-governance acceptance required before activation
+  - `GET|POST /api/v1/attribution/actor-allocations` — beneficiary-only EIP-712 preparation/signing for one actor-owned receipt
   - `GET /api/v1/attribution/distribution-lifecycle` — folded-manifest + live cumulative-root evidence (SIWE auth, one RPC read per page)
   - `GET /api/v1/attribution/epochs` — list all epochs including open (SIWE auth)
   - `GET /api/v1/attribution/epochs/[id]/activity` — ingestion receipts with selection join (SIWE auth, PII)
@@ -41,7 +43,7 @@ Authenticated HTTP endpoints for attribution operations. SIWE-protected reads fo
   - `GET|PATCH|DELETE /api/v1/attribution/epochs/[id]/review-subject-overrides` — manage subject identity overrides for epoch review (SIWE + approver)
   - `POST /api/v1/attribution/epochs/[id]/finalize` — sign + finalize epoch IN-PROCESS on this node's own DB (story.5007 FINALIZE_IN_PROCESS), returns **200 + the statement + R3 cumulative distribution** (SIWE + approver). No Temporal, no `ledger-tasks` queue — the route calls `finalizeEpochInProcess` (bootstrap) → `runFinalizeEpoch` (`@cogni/attribution-pipeline-plugins`). Idempotent (a re-POST repairs; fold FREEZE preserves a published manifest). Client-fault failures (wrong state / unknown signer / bad signature) → **422 + `{error, code}`** (typed `FinalizeEpochError`, FAULT_PARTY_BEFORE_BUCKET); server faults → 500.
   - `POST /api/v1/attribution/epochs/collect` — trigger epoch collection on demand (SIWE session, any user, 5min cooldown). Triggers LEDGER_INGEST schedule via ScheduleHandle.trigger().
-- **Files considered API:** `distribution-lifecycle/route.ts`, `epochs/route.ts`, `epochs/[id]/activity/route.ts`, `epochs/[id]/claimants/route.ts`, `epochs/[id]/user-projections/route.ts`, `epochs/[id]/pool-components/route.ts`, `epochs/[id]/review/route.ts`, `epochs/[id]/sign-data/route.ts`, `epochs/[id]/review-subject-overrides/route.ts`, `epochs/[id]/finalize/route.ts`, `epochs/collect/route.ts`
+- **Files considered API:** `beneficiary-policies/route.ts`, `actor-allocations/route.ts`, `distribution-lifecycle/route.ts`, `epochs/route.ts`, `epochs/[id]/activity/route.ts`, `epochs/[id]/claimants/route.ts`, `epochs/[id]/user-projections/route.ts`, `epochs/[id]/pool-components/route.ts`, `epochs/[id]/review/route.ts`, `epochs/[id]/sign-data/route.ts`, `epochs/[id]/review-subject-overrides/route.ts`, `epochs/[id]/finalize/route.ts`, `epochs/collect/route.ts`
 
 ## Ports
 
@@ -71,7 +73,7 @@ curl -X PATCH -b session http://localhost:3000/api/v1/attribution/epochs/1/revie
 
 ## Standards
 
-- All routes use `wrapRouteHandlerWithLogging({ auth: { mode: "required" } })`
+- Session-only routes use `wrapRouteHandlerWithLogging({ auth: { mode: "required" } })`; exact-principal human/agent routes use `mode: "none"` and call `resolveRequestPrincipal()` fail-closed.
 - Write routes call `checkApprover()` from `_lib/approver-guard.ts` before mutations; review-phase writes pass the loaded epoch so pinned approvers govern.
 - Approver allowlist sourced from `activity_ledger.approvers` in `.cogni/repo-spec.yaml`
 

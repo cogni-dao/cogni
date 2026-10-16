@@ -1963,14 +1963,54 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         evidence: { ceremony: "github-source-claim-v1" },
         effectiveAt: new Date("2026-10-01T00:00:00.000Z"),
       });
-      await adapter.insertActorBeneficiaryPolicy({
+      const proposal = await adapter.proposeActorBeneficiaryPolicy({
         earnedByActorId: flockLeaderActorId,
         beneficiaryActorId: derekActor.id,
+        stewardActorId: derekActor.id,
         policyVersion: "flock-leader-beneficiary.v1",
-        authorizedByActorId: derekActor.id,
+        proposedByActorId: flockLeaderActorId,
         evidence: { ceremony: "human-ai-beneficiary-claim-v1" },
         effectiveFrom: new Date("2026-10-01T00:00:00.000Z"),
       });
+      await Promise.all([
+        adapter.acceptActorBeneficiaryPolicy({
+          proposalId: proposal.id,
+          role: "earner",
+          acceptedByActorId: flockLeaderActorId,
+          evidence: { credential: "durable-agent-v2" },
+          acceptedAt: new Date("2026-09-30T20:00:00.000Z"),
+        }),
+        adapter.acceptActorBeneficiaryPolicy({
+          proposalId: proposal.id,
+          role: "earner",
+          acceptedByActorId: flockLeaderActorId,
+          evidence: { credential: "durable-agent-v2" },
+          acceptedAt: new Date("2026-09-30T20:00:00.000Z"),
+        }),
+      ]);
+      await adapter.acceptActorBeneficiaryPolicy({
+        proposalId: proposal.id,
+        role: "steward",
+        acceptedByActorId: derekActor.id,
+        evidence: { session: "steward-siwe" },
+        acceptedAt: new Date("2026-09-30T20:01:00.000Z"),
+      });
+      const activated = await adapter.acceptActorBeneficiaryPolicy({
+        proposalId: proposal.id,
+        role: "governance",
+        acceptedByActorId: derekActor.id,
+        evidence: { approverSet: "test-ledger-approvers" },
+        acceptedAt: new Date("2026-09-30T20:02:00.000Z"),
+      });
+      expect(activated).toMatchObject({
+        status: "activated",
+        activatedPolicyId: expect.any(String),
+      });
+      expect(activated.acceptances.map(({ role }) => role).sort()).toEqual([
+        "earner",
+        "governance",
+        "steward",
+      ]);
 
       const epoch = await adapter.createEpoch({
         nodeId: TEST_NODE_ID,
@@ -1994,6 +2034,10 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       await adapter.insertSelectionDoNothing([
         makeSelectionAuto({ epochId: epoch.id, receiptId }),
       ]);
+
+      await expect(
+        adapter.listUnallocatedActorReceiptIdsForEpoch(epoch.id)
+      ).resolves.toEqual([receiptId]);
 
       const prepared = await adapter.prepareActorContributionAllocation({
         nodeId: TEST_NODE_ID,
@@ -2038,6 +2082,9 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         earnedByActorId: flockLeaderActorId,
         beneficiaryActorId: derekActor.id,
       });
+      await expect(
+        adapter.listUnallocatedActorReceiptIdsForEpoch(epoch.id)
+      ).resolves.toEqual([]);
       const walletResolution = await new DrizzleClaimantWalletResolver(
         db
       ).resolveBeneficiaryWallets([persisted]);

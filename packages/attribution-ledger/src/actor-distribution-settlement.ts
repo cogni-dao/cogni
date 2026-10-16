@@ -7,7 +7,7 @@
  * Scope: Pure settlement arithmetic over immutable allocation and claimant inputs; does not resolve wallets or perform I/O.
  * Invariants: ACTOR_AMOUNT_FROZEN_AT_FIRST_FOLD, LARGEST_REMAINDER_DETERMINISTIC, LEGACY_RECEIPTS_PRESERVED.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md, docs/spec/identity-model.md
+ * Links: docs/spec/attribution-ledger.md, https://cognidao.org/knowledge/human-ai-identity-standard
  * @public
  */
 

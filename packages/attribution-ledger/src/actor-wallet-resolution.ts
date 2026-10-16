@@ -7,7 +7,7 @@
  * Scope: Domain types and port only; does not query identity state, infer ownership, or perform I/O.
  * Invariants: BENEFICIARY_FROM_FROZEN_ALLOCATION, WALLET_EVIDENCE_PINNED, UNRESOLVED_IS_EXPLICIT.
  * Side-effects: none
- * Links: docs/spec/identity-model.md, docs/spec/decentralized-user-identity.md
+ * Links: https://cognidao.org/knowledge/human-ai-identity-standard, docs/spec/decentralized-user-identity.md
  * @public
  */
 

@@ -36,6 +36,7 @@ export * from "./ai.threads.v1.contract";
 // ── Analytics ───────────────────────────────────────────────────────────────
 export * from "./analytics.summary.v1.contract";
 // ── Attribution ─────────────────────────────────────────────────────────────
+export * from "./attribution.actor-identity.v1.contract";
 export * from "./attribution.collect-trigger.v1.contract";
 export * from "./attribution.distribution-config.internal.v1.contract";
 export * from "./attribution.distribution-lifecycle.v1.contract";

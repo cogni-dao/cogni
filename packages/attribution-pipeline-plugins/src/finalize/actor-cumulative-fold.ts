@@ -7,7 +7,7 @@
  * Scope: Pure orchestration over injected wallet resolvers; does not persist rows, mutate prior manifests, or send funds.
  * Invariants: LIABILITY_AMOUNT_IMMUTABLE, LIABILITY_SETTLED_ONCE, LEGACY_BYTES_UNCHANGED, FROZEN_BENEFICIARY_ONLY.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md, docs/spec/identity-model.md
+ * Links: docs/spec/attribution-ledger.md, https://cognidao.org/knowledge/human-ai-identity-standard
  * @public
  */
 
