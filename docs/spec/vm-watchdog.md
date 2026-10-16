@@ -140,6 +140,7 @@ autoheal:
 
 - `autoheal` itself — `autoheal=false` to prevent self-restart loops
 - One-shot containers (`git-sync`, `repo-init`, `db-provision`, `db-migrate`) — `restart: no`, not long-running
+- Shared Temporal server — `autoheal=false`; dependency-health timeouts must not launch competing Docker restarts (`bug.5489`). Its healthcheck remains enabled and Docker's `restart: unless-stopped` handles process exits. An unsuccessful healthcheck is not authorization to interrupt the shared workflow service.
 
 **Deploy interaction:** `deploy.sh` stops autoheal before `compose up -d` to prevent a race condition — autoheal can restart a container between compose's stop and remove steps, causing "cannot remove container: container is running". Compose recreates autoheal as part of the stack, so no explicit re-enable is needed.
 
