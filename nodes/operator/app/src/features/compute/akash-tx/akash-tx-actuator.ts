@@ -73,6 +73,9 @@
  * @internal
  */
 
+import { createHash, X509Certificate } from "node:crypto";
+import { rootCertificates } from "node:tls";
+
 import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 
 import {
@@ -151,6 +154,33 @@ export interface AkashTxActuatorDeps {
    * whatever history exists, but recovery attempts record nothing (test/degraded mode).
    */
   readonly outcomes?: AkashTxProviderOutcomesPort;
+}
+
+const SYSTEM_ROOT_FINGERPRINTS = new Set(
+  rootCertificates.map((pem) => new X509Certificate(pem).fingerprint256)
+);
+
+function usesSystemTrust(ca: string | undefined): boolean {
+  if (!ca) return true;
+  const pem = ca.replaceAll("\\n", "\n").trim();
+  const certificates = pem.match(
+    /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g
+  );
+  if (
+    !certificates ||
+    certificates.length > 16 ||
+    certificates.join("").replace(/\s/g, "") !== pem.replace(/\s/g, "")
+  )
+    return false;
+  try {
+    return certificates.every((certificate) =>
+      SYSTEM_ROOT_FINGERPRINTS.has(
+        new X509Certificate(certificate).fingerprint256
+      )
+    );
+  } catch {
+    return false;
+  }
 }
 
 const NOOP_LOGGER: AkashTxLogger = {
@@ -1055,22 +1085,24 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       );
       const consumer = consumers[0];
       const env = consumer?.env;
-      const prefix = `{{ ${cell.binding.nodeSlug}-compute-env-secrets:`;
-      const appRef = env?.DATABASE_URL;
-      // The existing resolver owns secret values. Require the canonical owned
-      // references, rather than accepting a release's literal replacement DSNs.
-      const namespace =
-        appRef?.startsWith(prefix) && appRef.endsWith(":DATABASE_URL }}")
-          ? appRef.slice(prefix.length, -":DATABASE_URL }}".length)
-          : "";
+      // provider-http resolves the owned references before this private wire call.
+      // Compare the actual credentials with their immutable audited digests.
+      const digest = (value: string | undefined) =>
+        value === undefined
+          ? undefined
+          : createHash("sha256").update(value).digest("hex");
+      const ca = env?.DATABASE_SSL_CA_CERT?.replaceAll("\\n", "\n");
+      const tlsMatches =
+        cell.registration?.tlsTrustKind === "system"
+          ? usesSystemTrust(ca)
+          : ca !== undefined && digest(ca) === cell.registration?.tlsCaSha256;
       if (
         consumers.length !== 1 ||
         !env ||
-        !/^[a-z0-9][a-z0-9-]*-production$/.test(namespace) ||
-        env.DATABASE_SERVICE_URL !==
-          `${prefix}${namespace}:DATABASE_SERVICE_URL }}` ||
-        env.DATABASE_SSL_CA_CERT !==
-          `${prefix}${namespace}:DATABASE_SSL_CA_CERT }}` ||
+        digest(env.DATABASE_URL) !== cell.registration?.appDsnSha256 ||
+        digest(env.DATABASE_SERVICE_URL) !==
+          cell.registration?.serviceDsnSha256 ||
+        !tlsMatches ||
         env.COGNI_REPO_SHA !== input.requestedShas[0] ||
         env.DB_POOL_MAX !== String(pools.app) ||
         env.DB_SERVICE_POOL_MAX !== String(pools.service) ||
