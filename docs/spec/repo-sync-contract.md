@@ -10,7 +10,7 @@ implements:
   - proj.repo-sync
 owner: derekg1729
 created: 2026-05-26
-verified: 2026-09-29
+verified: 2026-10-15
 tags:
   - ci-cd
   - deployment
@@ -169,8 +169,7 @@ behavior; Toks4 also received product-path changes. This disproved both
 
 - A template push creates **zero** fork source-sync branches and PRs.
 - Retired writer names and their living branch names are forbidden by a structural CI guard.
-- Cross-repo fixes use explicit, ordinary per-node PRs while package/workflow/migration distribution is
-  built. Product ownership is never inferred from absence in an exception list.
+- Cross-repo delivery follows the canonical [ownership classification](https://cognidao.org/knowledge/fork-sync-product-clobber). A targeted manual source port is allowed only after its PR records the required package-candidate analysis. Product ownership is never inferred from absence in an exception list.
 - Compatibility is not source equality: a node's supported platform version and conformance behavior
   determine health. A divergent source tree that satisfies the contract is decoupled, not stale.
 

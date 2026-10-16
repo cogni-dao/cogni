@@ -10,7 +10,7 @@ read_when: "Creating a new node, extracting shared code from nodes/operator/app,
 implements: proj.operator-plane
 owner: derekg1729
 created: 2026-04-02
-verified: 2026-04-02
+verified: 2026-10-15
 tags: [architecture, nodes, packages, multi-node]
 ---
 

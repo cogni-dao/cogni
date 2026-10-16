@@ -9,7 +9,7 @@ summary: Internal @cogni/* packages — pure TypeScript libraries with strict is
 read_when: Creating a new package, debugging package builds, or working with @cogni/* imports.
 owner: derekg1729
 created: 2026-02-06
-verified: 2026-04-28
+verified: 2026-10-15
 tags: [infra, meta]
 ---
 
