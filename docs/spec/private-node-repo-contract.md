@@ -221,7 +221,7 @@ GHCR image refs are org-scoped (`ghcr.io/cogni-dao/<image>`), unaffected by repo
 - [Node vs Operator Contract](./node-operator-contract.md) — sovereignty invariants this spec preserves
 - [Node CI/CD Contract](./node-ci-cd-contract.md) — `single-node-scope` gate applies within a single repo; this spec extends the model to single-node repos
 - [VCS Integration spec](./vcs-integration.md) — `operator_node_registrations` schema referenced in Phase 2
-- [Identity Model](./identity-model.md) — `node_id` semantics
+- [Node identity projection and lineage](https://cognidao.org/knowledge/node-identity-projection-lineage) — `node_id` semantics
 
 ## Acceptance Checks
 

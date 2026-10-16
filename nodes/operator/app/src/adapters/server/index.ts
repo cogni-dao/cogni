@@ -143,6 +143,7 @@ export {
   type ProbeDeployConfig,
 } from "./deploy/probe-deploy.adapter";
 export { DrizzleGovernanceStatusAdapter } from "./governance/drizzle-governance-status.adapter";
+export { DrizzleAgentIdentityAdapter } from "./identity/agent-identity.adapter";
 export {
   JoseIdentityAttestationSigner,
   OperatorIdentityAttestationRepository,
@@ -174,6 +175,7 @@ export {
   LiveNodeRegistryAdapter,
   type LiveNodeRegistryDeps,
 } from "./node-registry/live-node-registry.adapter";
+export { NETWORK_NODES } from "./node-registry/network-nodes.data";
 export {
   type LivenessRollup,
   type NodeLiveness,
@@ -204,6 +206,8 @@ export {
   type GithubReviewAdapter,
 } from "./review/github-review.adapter";
 // Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
+export { EnvAuthorizationFacadeCredentialVerifierAdapter } from "./secrets/env-authorization-facade-credential-verifier.adapter";
+export { OpenBaoAuthorizationFacadeProjectionAdapter } from "./secrets/openbao-authorization-facade-projection.adapter";
 export {
   OpenBaoSecretsAdapter,
   type OpenBaoSecretsAdapterDeps,

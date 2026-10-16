@@ -25,7 +25,7 @@ import {
   createToolRunner,
 } from "@cogni/ai-core";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
-import type { AuthorizationPort } from "@cogni/authorization-core";
+import type { AuthorizationCheckPort } from "@cogni/authorization-core";
 import {
   type CompletionFn,
   type CreateGraphFn,
@@ -107,7 +107,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     private readonly getMcpToolSource: () => Promise<ToolSourcePort | null> = () =>
       Promise.resolve(null),
     nodeBundle: readonly CatalogBoundTool[] = [],
-    private readonly authorization?: AuthorizationPort
+    private readonly authorization?: AuthorizationCheckPort
   ) {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
@@ -228,13 +228,14 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 
       // Create tool execution function factory
       // Policy allowlist includes both native and MCP tool IDs
+      const actorId =
+        scope.actorId ??
+        (scope.actorUserId !== undefined
+          ? `user:${scope.actorUserId}`
+          : undefined);
       const createToolExecFn = (emit: (e: AiEvent) => void): ToolExecFn => {
         const policy = createToolAllowlistPolicy(allToolIds);
         const source = createStaticToolSourceFromRecord(runtimeTools);
-        const actorId =
-          scope.actorUserId !== undefined
-            ? `user:${scope.actorUserId}`
-            : undefined;
         const tenantId = scope.billing.billingAccountId;
         const toolRunner = createToolRunner(source, emit, {
           policy,
@@ -293,9 +294,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         configurable: {
           model,
           toolIds,
-          ...(scope.actorUserId !== undefined
-            ? { actorId: `user:${scope.actorUserId}` }
-            : {}),
+          ...(actorId !== undefined ? { actorId } : {}),
           tenantId: scope.billing.billingAccountId,
           graphId,
         },

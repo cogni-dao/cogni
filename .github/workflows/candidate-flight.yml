@@ -23,6 +23,7 @@ on:
         type: string
 
 permissions:
+  actions: write
   contents: write
   packages: read
   pull-requests: read
@@ -74,6 +75,7 @@ jobs:
       deployment_provider_by_target_json: ${{ steps.substrate-targets.outputs.deployment_provider_by_target_json }}
       source_repository_by_target_json: ${{ steps.substrate-targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.substrate-targets.outputs.source_sha_by_target_json }}
+      openfga_model_changed: ${{ steps.pr-files.outputs.openfga_model_changed }}
     steps:
       - name: Checkout workflow source
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -217,6 +219,7 @@ jobs:
             echo "ℹ️  Node-ref flight for ${NODE_SLUG}; PR changed-paths are not used"
             echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
             echo "added_paths_file=${OUT%.txt}-added.txt" >> "$GITHUB_OUTPUT"
+            echo "openfga_model_changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Emit both filename and previous_filename so cross-directory
@@ -231,6 +234,11 @@ jobs:
           echo "ℹ️  PR #${PR_NUMBER} changed ${COUNT} path(s) (per GitHub API)"
           echo "changed_paths_file=$OUT" >> "$GITHUB_OUTPUT"
           echo "added_paths_file=${OUT%.txt}-added.txt" >> "$GITHUB_OUTPUT"
+          if grep -Fxq 'infra/openfga/rbac-model.json' "$OUT"; then
+            echo "openfga_model_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "openfga_model_changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Detect affected nodes
         id: detect
@@ -1098,15 +1106,73 @@ jobs:
           path: assert-marker-out/assert-ok-${{ matrix.node }}.txt
           retention-days: 1
 
+  activate-candidate-openfga-model:
+    needs: decide
+    if: needs.decide.outputs.openfga_model_changed == 'true'
+    runs-on: ubuntu-latest
+    environment: candidate-a
+    steps:
+      - name: Activate exact-head OpenFGA model through the candidate infra authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.decide.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          response="$(gh api --method POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/candidate-flight-infra.yml/dispatches" \
+            -f ref=main -F return_run_details=true \
+            -f "inputs[ref]=$SOURCE_SHA")"
+          run_id="$(jq -r '.workflow_run_id // empty' <<<"$response")"
+          [[ "$run_id" =~ ^[0-9]+$ ]] || {
+            echo "::error::candidate infra dispatch returned no auditable run identity"
+            exit 1
+          }
+          echo "Candidate OpenFGA activation run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+
+  authorization-facade-credential-project:
+    needs: [decide, activate-candidate-openfga-model]
+    if: |
+      always() &&
+      needs.decide.result == 'success' &&
+      needs.decide.outputs.has_deployment_node_targets == 'true' &&
+      (needs.activate-candidate-openfga-model.result == 'success' || needs.activate-candidate-openfga-model.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJson(needs.decide.outputs.deployment_node_targets_json) }}
+    uses: ./.github/workflows/authorization-facade-credential-project.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      lane: candidate-a
+      node: ${{ matrix.node }}
+      operation: materialize
+      source_ref: ${{ needs.decide.outputs.head_sha }}
+    secrets:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+
   node-substrate:
     needs:
-      [decide, reconcile-appset, reconcile-dns, prepare-substrate-deploy-branch]
+      [
+        decide,
+        reconcile-appset,
+        reconcile-dns,
+        prepare-substrate-deploy-branch,
+        authorization-facade-credential-project,
+      ]
     if: |
       always() &&
       needs.decide.outputs.has_substrate_node_targets == 'true' &&
       needs.reconcile-appset.result == 'success' &&
       needs.reconcile-dns.result == 'success' &&
-      needs.prepare-substrate-deploy-branch.result == 'success'
+      needs.prepare-substrate-deploy-branch.result == 'success' &&
+      needs.authorization-facade-credential-project.result == 'success'
     strategy:
       fail-fast: false
       matrix:

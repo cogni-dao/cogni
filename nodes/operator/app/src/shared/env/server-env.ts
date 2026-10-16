@@ -219,6 +219,11 @@ export const serverSchema = z.object({
   // Required env-scoped deployment parent for submodule pin PRs and node-ref flights.
   NODE_SUBMODULE_PARENT_OWNER: optionalString,
   NODE_SUBMODULE_PARENT_REPO: optionalString,
+  // Host → target-node-issued durable agent bearer map for external run-carries
+  // probes. Operator custodies but never mints these identity credentials.
+  // Secret-managed and optional at process start; a missing host fails that
+  // probe loudly and never falls back to anonymous registration.
+  FLIGHT_PROBE_CREDENTIALS_JSON: optionalString,
   // Which repo's infra/catalog/ defines this env's nodes. Defaults to the submodule
   // parent; set separately where the pin-PR target is a throwaway org (bug.5073).
   NODE_REGISTRY_CATALOG_OWNER: optionalString,
@@ -381,6 +386,11 @@ export const serverSchema = z.object({
   OPENFGA_STORE_ID: optionalString,
   OPENFGA_AUTHORIZATION_MODEL_ID: optionalString,
   OPENFGA_API_TOKEN: optionalString,
+  // Lane-local verifier-only SHA-256 rings. Raw node facade credentials remain
+  // in their workload custodian vault and are never projected into this app.
+  AUTHORIZATION_FACADE_VERIFIER_RINGS_JSON: optionalString,
+  /** Raw lane/node facade credential; projected only to the exact node workload. */
+  AUTHORIZATION_FACADE_TOKEN: optionalString,
   // Per-attempt client deadline (checks + each write attempt). OpenFGA's p99 target
   // is ≤50ms, so 1500ms is a generous safety net, not a tuning knob.
   OPENFGA_TIMEOUT_MS: z.coerce.number().int().positive().default(1500),

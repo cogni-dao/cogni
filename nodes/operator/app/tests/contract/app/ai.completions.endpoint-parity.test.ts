@@ -42,6 +42,14 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn(),
 }));
 
+const { resolveRequestPrincipal } = vi.hoisted(() => ({
+  resolveRequestPrincipal: vi.fn(),
+}));
+vi.mock("@/app/_lib/auth/request-identity", () => ({
+  RequestIdentityUnavailableError: class RequestIdentityUnavailableError extends Error {},
+  resolveRequestPrincipal,
+}));
+
 // Mock bootstrap container (getContainer needed by wrapRouteHandlerWithLogging)
 vi.mock("@/bootstrap/container", () => ({
   resolveAiAdapterDeps: vi.fn(),
@@ -144,6 +152,14 @@ function setupMocks(
   );
 
   mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
+  resolveRequestPrincipal.mockResolvedValue({
+    kind: "human",
+    principalId: `user:test-node-id/${TEST_SESSION_USER_1.id}`,
+    userId: TEST_SESSION_USER_1.id,
+    walletAddress: TEST_SESSION_USER_1.walletAddress,
+    displayName: TEST_SESSION_USER_1.displayName,
+    avatarColor: TEST_SESSION_USER_1.avatarColor,
+  });
 
   mockResolveAiAdapterDeps.mockReturnValue({
     llmService: {} as never,
@@ -175,6 +191,14 @@ function setupMocksWithError(error: Error) {
   } as never);
 
   mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
+  resolveRequestPrincipal.mockResolvedValue({
+    kind: "human",
+    principalId: `user:test-node-id/${TEST_SESSION_USER_1.id}`,
+    userId: TEST_SESSION_USER_1.id,
+    walletAddress: TEST_SESSION_USER_1.walletAddress,
+    displayName: TEST_SESSION_USER_1.displayName,
+    avatarColor: TEST_SESSION_USER_1.avatarColor,
+  });
 
   mockResolveAiAdapterDeps.mockReturnValue({
     llmService: {} as never,
@@ -725,6 +749,7 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
         clock: { now: () => new Date() },
       } as never);
       mockGetSessionUser.mockResolvedValue(null);
+      resolveRequestPrincipal.mockResolvedValue(null);
 
       const { POST } = await import("@/app/api/v1/chat/completions/route");
 

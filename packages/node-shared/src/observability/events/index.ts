@@ -80,6 +80,14 @@ export const EVENT_NAMES = {
     "feature.node_observability_db_schema.complete",
   NODE_DEPLOY_STATE_COMPLETE: "feature.node_deploy_state.complete",
   NODE_OPERATIONS_READ_COMPLETE: "feature.node_operations_read.complete",
+  AGENT_IDENTITY_OPERATION_COMPLETE:
+    "feature.agent_identity.operation_complete",
+  AGENT_ACCOUNT_ACCESS_MUTATION_COMPLETE:
+    "feature.agent_account_access.mutation_complete",
+  AGENT_ACCOUNT_READ_COMPLETE: "feature.agent_account_access.read_complete",
+  AGENT_EXECUTION_COMPLETE: "feature.agent_execution.complete",
+  WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE:
+    "feature.work_item_principal.operation_complete",
   VCS_FLIGHT_REQUEST_COMPLETE: "feature.vcs_flight.request_complete",
   VCS_MERGE_REQUEST_COMPLETE: "feature.vcs_merge.request_complete",
   VCS_RUN_CI_REQUEST_COMPLETE: "feature.vcs_run_ci.request_complete",
@@ -107,11 +115,23 @@ export const EVENT_NAMES = {
   LEDGER_FINALIZE_SUBMITTED: "ledger.finalize_submitted",
   LEDGER_FINALIZE_NO_POLLERS: "ledger.finalize_no_pollers",
   LEDGER_COLLECT_TRIGGERED: "ledger.collect_triggered",
+  LEDGER_BENEFICIARY_POLICY_MUTATED: "ledger.beneficiary_policy_mutated",
+  LEDGER_BENEFICIARY_POLICY_REJECTED: "ledger.beneficiary_policy_rejected",
 
   // BYO-AI Auth Domain
   BYO_AUTH_DEVICE_CODE_COMPLETE: "byo_auth.device_code.complete",
   BYO_AUTH_EXCHANGE_COMPLETE: "byo_auth.exchange.complete",
   ADAPTER_OPENAI_DEVICE_AUTH_ERROR: "adapter.openai_device_auth.error",
+  AUTHORIZATION_FACADE_CHECK_COMPLETE: "authorization.facade.check.complete",
+  AUTHORIZATION_FACADE_GRANT_COMPLETE: "authorization.facade.grant.complete",
+  AUTHORIZATION_FACADE_OWNER_BOOTSTRAP_COMPLETE:
+    "authorization.facade.owner_bootstrap.complete",
+  AUTHORIZATION_FACADE_PROJECTION_COMPLETE:
+    "authorization.facade.projection.complete",
+  AUTHORIZATION_FACADE_CREDENTIAL_PROBE_COMPLETE:
+    "authorization.facade.credential_probe.complete",
+  AUTHORIZATION_FACADE_WORKLOAD_RECEIPT_COMPLETE:
+    "authorization.facade.workload_receipt.complete",
 
   // Scheduling Domain
   SCHEDULE_CREDIT_GATE_REJECTED: "schedules.credit_gate_rejected",

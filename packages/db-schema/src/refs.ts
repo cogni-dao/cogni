@@ -52,6 +52,16 @@ export const billingAccounts = pgTable(
     isSystemTenant: boolean("is_system_tenant").notNull().default(false),
     slug: text("slug").unique(),
     balanceCredits: bigint("balance_credits", { mode: "bigint" }).notNull(),
+    /**
+     * Durable completion marker for the one-time OpenFGA owner bootstrap.
+     * Null means account creation committed but authorization projection must
+     * be resumed. Once set it is never cleared, so a later owner revocation is
+     * not silently resurrected by an ordinary account lookup.
+     */
+    authorizationOwnerBootstrappedAt: timestamp(
+      "authorization_owner_bootstrapped_at",
+      { withTimezone: true }
+    ),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

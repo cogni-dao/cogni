@@ -202,7 +202,7 @@ See [attribution-ledger spec](../../docs/spec/attribution-ledger.md) for full ar
 - Epoch close is idempotent — same inputs produce identical statement hash
 - All write operations go through Temporal — Next.js stays stateless. **Exception:** `ingestion_receipts` appends via webhook receivers (per WEBHOOK_RECEIPT_APPEND_EXEMPT)
 - All monetary math in BIGINT — no floating point, including weights (integer milli-units)
-- `user_id` remains the resolved human override surface for attribution, while finalized statements preserve claimant identity explicitly for linked and unlinked subjects — see [identity-model](../../docs/spec/identity-model.md)
+- `user_id` remains a legacy human compatibility projection; it never overrides the frozen external claimant or an AI `earned_by_actor_id`. Beneficiary and wallet resolve separately — see the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard)
 - Identity resolution is best-effort — unresolved events flagged, not silently dropped
 - Source adapters use cursor-based incremental sync — no full-window rescans
 - Verification = recompute from stored data — not re-fetch from external sources
@@ -275,7 +275,7 @@ Attribution statements produced by this project are **governance truth** — who
 
 ### Actor integration (planned)
 
-`user_id` is correct for P0 (humans-only attribution). When `actors` ships ([proj.operator-plane](proj.operator-plane.md)), `epoch_allocations` gains `actor_id` alongside `user_id`. Human actors bridge 1:1; agent actors are a new attribution path. Provenance is always preserved: `earned_by_actor_id` records who did the work (even if an agent). `beneficiary_actor_id` determines who may claim — a separate field, never collapsed. No schema changes until the actor table exists. See [identity-model.md](../../docs/spec/identity-model.md) for the `actor_id` primitive.
+`user_id` is correct for P0 (humans-only attribution). The actor-aware path adds `actor_id` alongside `user_id`. Human actors bridge 1:1; agent actors are a distinct attribution path. Provenance is always preserved: `earned_by_actor_id` records who did the work (even if an agent). `beneficiary_actor_id` determines who may claim — a separate field, never collapsed. See the [human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard).
 
 ## PR / Links
 

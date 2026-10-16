@@ -24,7 +24,11 @@ vi.mock("@/bootstrap/container", () => ({
   getContainer: vi.fn(),
 }));
 
-import { getWorkItem, listWorkItems } from "@/app/_facades/work/items.server";
+import {
+  getWorkItem,
+  listWorkItems,
+  patchWorkItemAsPrincipal,
+} from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
 const mockGetContainer = vi.mocked(getContainer);
@@ -256,5 +260,26 @@ describe("app/_facades/work/items.server", () => {
 
       expect(mockPort.get).toHaveBeenCalledWith(toWorkItemId("task.0001"));
     });
+  });
+
+  it("patches with the exact durable principal instead of a user projection", async () => {
+    const principalId = "agent:operator/00000000-0000-4000-8000-000000005264";
+    mockDoltgres.patch.mockResolvedValue({
+      ...SAMPLE_WORK_ITEM,
+      title: "Patched by agent",
+    });
+
+    await patchWorkItemAsPrincipal(
+      { id: "task.0001", set: { title: "Patched by agent" } },
+      principalId
+    );
+
+    expect(mockDoltgres.patch).toHaveBeenCalledWith(
+      {
+        id: toWorkItemId("task.0001"),
+        set: { title: "Patched by agent" },
+      },
+      principalId
+    );
   });
 });

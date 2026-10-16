@@ -12,24 +12,54 @@
  */
 
 import {
+  type RequestPrincipal,
   workItemsDeleteOperation,
   workItemsGetOperation,
   workItemsPatchOperation,
 } from "@cogni/node-contracts";
+import type { SessionUser } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 
 import {
   deleteWorkItem,
   getWorkItem,
   patchWorkItem,
+  patchWorkItemAsPrincipal,
 } from "@/app/_facades/work/items.server";
+import {
+  RequestIdentityUnavailableError,
+  resolveRequestPrincipal,
+} from "@/app/_lib/auth/request-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
 import { workItemsWriteErrorResponse } from "../_errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+function compatibilitySessionUser(
+  principal: RequestPrincipal
+): SessionUser | null {
+  if (principal.kind === "human") {
+    return {
+      id: principal.userId,
+      walletAddress: principal.walletAddress,
+      displayName: principal.displayName,
+      avatarColor: principal.avatarColor,
+    };
+  }
+  if (principal.kind === "legacy_agent") {
+    return {
+      id: principal.legacyUserId,
+      walletAddress: null,
+      displayName: principal.displayName,
+      avatarColor: null,
+    };
+  }
+  return null;
+}
 
 /**
  * GET /api/v1/work/items/:id — Get a single work item by ID. IDs ≥ 5000 read
@@ -67,10 +97,22 @@ export const GET = wrapRouteHandlerWithLogging<{
 export const PATCH = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
 }>(
-  { routeId: "work.items.patch", auth: { mode: "required", getSessionUser } },
-  async (ctx, request, sessionUser, context) => {
+  { routeId: "work.items.patch", auth: { mode: "none" } },
+  async (ctx, request, _sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
-    if (!sessionUser) {
+    let principal: RequestPrincipal | null;
+    try {
+      principal = await resolveRequestPrincipal();
+    } catch (error) {
+      if (error instanceof RequestIdentityUnavailableError) {
+        return NextResponse.json(
+          { error: "identity service unavailable" },
+          { status: 503 }
+        );
+      }
+      throw error;
+    }
+    if (!principal) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
 
@@ -95,11 +137,33 @@ export const PATCH = wrapRouteHandlerWithLogging<{
     }
 
     try {
-      const patched = await patchWorkItem(parseResult.data, {
-        id: sessionUser.id,
-        displayName: sessionUser.displayName,
+      const sessionUser = compatibilitySessionUser(principal);
+      let patched: Awaited<ReturnType<typeof patchWorkItem>>;
+      if (principal.kind === "agent") {
+        patched = await patchWorkItemAsPrincipal(
+          parseResult.data,
+          principal.principalId
+        );
+      } else {
+        if (!sessionUser) {
+          return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+        }
+        patched = await patchWorkItem(parseResult.data, {
+          id: sessionUser.id,
+          displayName: sessionUser.displayName,
+        });
+      }
+      ctx.log.info(
+        { workItemId: id, actorPrincipalId: principal.principalId },
+        "work.items.patch_success"
+      );
+      logEvent(ctx.log, EVENT_NAMES.WORK_ITEM_PRINCIPAL_OPERATION_COMPLETE, {
+        reqId: ctx.reqId,
+        operation: "patch",
+        outcome: "success",
+        workItemId: id,
+        actorPrincipalId: principal.principalId,
       });
-      ctx.log.info({ workItemId: id }, "work.items.patch_success");
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
       // Coded responses: 403 authz_denied (permanent), 503 work_items_busy

@@ -1,0 +1,1 @@
+ALTER TABLE "billing_accounts" ADD COLUMN "authorization_owner_bootstrapped_at" timestamp with time zone;

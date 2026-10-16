@@ -29,6 +29,8 @@ import type {
 
 const NODE_ID = "11111111-1111-4111-8111-111111111111";
 const SOURCE_SHA = "0123456789012345678901234567890123456789";
+const ACTOR_ID = "22222222-2222-4222-8222-222222222222";
+const CREDENTIAL_ID = "33333333-3333-4333-8333-333333333333";
 
 const mockDeployPlane = vi.hoisted(() => ({
   prepareNodeRefCandidateFlight: vi.fn(),
@@ -69,7 +71,7 @@ const envState = vi.hoisted(() => ({
   },
 }));
 
-const mockGetSessionUser = vi.hoisted(() => vi.fn());
+const mockResolveRequestPrincipal = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
   debug: vi.fn(),
@@ -120,8 +122,9 @@ vi.mock("@/shared/env", () => ({
   serverEnv: () => envState.current,
 }));
 
-vi.mock("@/app/_lib/auth/session", () => ({
-  getSessionUser: () => mockGetSessionUser(),
+vi.mock("@/app/_lib/auth/request-identity", () => ({
+  RequestIdentityUnavailableError: class RequestIdentityUnavailableError extends Error {},
+  resolveRequestPrincipal: () => mockResolveRequestPrincipal(),
 }));
 
 vi.mock("@cogni/db-client", () => ({
@@ -248,11 +251,18 @@ describe("POST /api/v1/vcs/flight", () => {
       NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
       NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
     };
-    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:${NODE_ID}/${TEST_SESSION_USER_1.id}`,
+      userId: TEST_SESSION_USER_1.id,
+      walletAddress: TEST_SESSION_USER_1.walletAddress,
+      displayName: TEST_SESSION_USER_1.displayName,
+      avatarColor: TEST_SESSION_USER_1.avatarColor,
+    });
   });
 
   it("returns 401 when unauthenticated", async () => {
-    mockGetSessionUser.mockResolvedValue(null);
+    mockResolveRequestPrincipal.mockResolvedValue(null);
 
     await testApiHandler({
       appHandler,
@@ -433,7 +443,14 @@ describe("POST /api/v1/vcs/flight", () => {
       slug: "creative",
       ownerUserId: String(TEST_SESSION_USER_1.id),
     };
-    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:${NODE_ID}/${TEST_SESSION_USER_2.id}`,
+      userId: TEST_SESSION_USER_2.id,
+      walletAddress: TEST_SESSION_USER_2.walletAddress,
+      displayName: TEST_SESSION_USER_2.displayName,
+      avatarColor: TEST_SESSION_USER_2.avatarColor,
+    });
     mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
       makePreparedNodeRef()
     );
@@ -453,7 +470,7 @@ describe("POST /api/v1/vcs/flight", () => {
         });
         expect(res.status).toBe(202);
         expect(authzState.check).toHaveBeenCalledWith({
-          actorId: `user:${TEST_SESSION_USER_2.id}`,
+          actorId: `user:${NODE_ID}/${TEST_SESSION_USER_2.id}`,
           action: "node.flight",
           resource: `node:${NODE_ID}`,
           context: {
@@ -468,6 +485,48 @@ describe("POST /api/v1/vcs/flight", () => {
     });
   });
 
+  it("authorizes a durable agent as its exact actor principal", async () => {
+    authzState.decision = "authz_allowed";
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "agent",
+      principalId: `agent:${NODE_ID}/${ACTOR_ID}`,
+      actorId: ACTOR_ID,
+      credentialId: CREDENTIAL_ID,
+      billingAccountId: "44444444-4444-4444-8444-444444444444",
+      displayName: "flock-leader",
+      legacyUserId: null,
+    });
+    mockDeployPlane.prepareNodeRefCandidateFlight.mockResolvedValue(
+      makePreparedNodeRef()
+    );
+    mockDeployPlane.dispatchNodeRefCandidateFlight.mockResolvedValue(
+      makeDispatchResult()
+    );
+
+    await testApiHandler({
+      appHandler,
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nodeRef: { nodeId: NODE_ID, sourceSha: SOURCE_SHA },
+          }),
+        });
+        expect(res.status).toBe(202);
+        expect(authzState.check).toHaveBeenCalledWith({
+          actorId: `agent:${NODE_ID}/${ACTOR_ID}`,
+          action: "node.flight",
+          resource: `node:${NODE_ID}`,
+          context: {
+            tenantId: "44444444-4444-4444-8444-444444444444",
+            nodeId: NODE_ID,
+          },
+        });
+      },
+    });
+  });
+
   it.each([
     NODE_ID,
     "creative",
@@ -478,7 +537,14 @@ describe("POST /api/v1/vcs/flight", () => {
       slug: "creative",
       ownerUserId: String(TEST_SESSION_USER_1.id),
     };
-    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:${NODE_ID}/${TEST_SESSION_USER_2.id}`,
+      userId: TEST_SESSION_USER_2.id,
+      walletAddress: TEST_SESSION_USER_2.walletAddress,
+      displayName: TEST_SESSION_USER_2.displayName,
+      avatarColor: TEST_SESSION_USER_2.avatarColor,
+    });
 
     await testApiHandler({
       appHandler,
@@ -514,7 +580,14 @@ describe("POST /api/v1/vcs/flight", () => {
   it("rejects OpenFGA flight without creating billing state", async () => {
     authzState.decision = "authz_allowed";
     billingState.current = null;
-    mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_2);
+    mockResolveRequestPrincipal.mockResolvedValue({
+      kind: "human",
+      principalId: `user:${NODE_ID}/${TEST_SESSION_USER_2.id}`,
+      userId: TEST_SESSION_USER_2.id,
+      walletAddress: TEST_SESSION_USER_2.walletAddress,
+      displayName: TEST_SESSION_USER_2.displayName,
+      avatarColor: TEST_SESSION_USER_2.avatarColor,
+    });
 
     await testApiHandler({
       appHandler,

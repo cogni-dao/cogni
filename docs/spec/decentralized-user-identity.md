@@ -5,7 +5,7 @@ title: User Identity + Account Bindings
 status: active
 spec_state: active
 trust: reviewed
-summary: Stable user_id (UUID) as canonical identity. Wallet, Discord, and GitHub are evidenced bindings — never the identity itself. "Contributor" is a derived label, not an identity primitive. DID/VC portability deferred to P2.
+summary: Stable user_id (UUID) as the node-local human identity. Wallet, Discord, and GitHub are evidenced bindings — never the identity itself. "Contributor" is a derived label, not an identity primitive. DID/VC portability deferred to P2.
 read_when: Working on identity, auth, account linking, RBAC actor types, user context injection, or ledger attribution
 implements: proj.decentralized-identity
 owner: derekg1729
@@ -24,7 +24,7 @@ tags: [identity, auth, web3]
 | ------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------ |
 | **Project**  | [proj.decentralized-identity](../../work/projects/proj.decentralized-identity.md)         | Roadmap, phases, work items                |
 | **Research** | [DID-first identity refactor](../research/did-first-identity-refactor.md)                 | Gap analysis, library eval                 |
-| **Spec**     | [Identity Model](./identity-model.md)                                                     | Local user, actor, and binding boundaries  |
+| **Standard** | [Human–AI identity](https://cognidao.org/knowledge/human-ai-identity-standard)            | Local user, actor, and binding boundaries  |
 | **Spec**     | [Authentication](./authentication.md)                                                     | SIWE flow, wallet-session                  |
 | **Spec**     | [RBAC](./rbac.md)                                                                         | Actor types (will drop wallet from format) |
 | **Spec**     | [User Context](./user-context.md)                                                         | Agent identity injection                   |
@@ -147,7 +147,7 @@ operator account. The only portable fact is the GitHub provider id authenticated
 in the broker round trip. The relying node binds that id to the local user who
 owned the one-time nonce.
 
-This follows `BINDING_IS_THE_MULTI_ENV_KEY` from the identity-model spec: a
+This follows `BINDING_IS_THE_MULTI_ENV_KEY` from [identity keys](https://cognidao.org/knowledge/identity-keys-no-overload): a
 `user_id` is a node/environment-local surrogate, while the stable external
 GitHub id is the only cross-boundary identifier. The broker proof is deliberately
 VC-shaped evidence, not a portable person identity or a cross-node account.
@@ -210,12 +210,21 @@ infrastructure failures roll the nonce consumption back.
 Git attribution first records the work under the stable external claimant key
 `identity:github:<id>`. It does not require a Cogni account and is not rewritten
 when someone later links that GitHub identity. At settlement/read time, a node
-may resolve that identity claimant through its own `user_bindings` to the local
-user who proved control of the GitHub account.
+resolves that claimant through its local identity-owner registry. The legacy
+human-only projection may resolve through `user_bindings`; the actor-aware path
+binds an agent-operated provider identity to the durable agent actor and records
+human stewardship and beneficiary policy separately.
 
-For P0, this lets a locally authenticated human prove control of an
-agent-operated GitHub account such as `flock-leader` and claim its preserved
-identity allocation. The broker does not encode future actor/beneficiary policy.
+For the legacy P0 path, this lets a locally authenticated human prove control of
+an agent-operated GitHub account such as `flock-leader`. Under the
+[human–AI identity standard](https://cognidao.org/knowledge/human-ai-identity-standard),
+that proof is evidence supplied to the claim ceremony; by itself it establishes
+neither stewardship nor beneficiary policy and never turns the AI's source identity
+or authorship into the human's. The immutable provider identity binds to the durable
+agent actor, the accepted claim records stewardship separately, the allocation
+freezes the AI as earner plus the explicitly selected beneficiary, and settlement
+later pins the beneficiary wallet. The frozen v1 broker carries subject provenance
+only; acceptance, recovery authority, and beneficiary policy live above it.
 
 **Attestation is not git-specific.** `claimantKey()` is
 `identity:<provider>:<external_id>` and `user_bindings.provider` already admits
@@ -243,7 +252,7 @@ Business logic references `id` (= `user_id`). `walletAddress` is nullable — `n
 
 ## Goal
 
-Provide a stable, auth-method-agnostic identity inside each node. `users.id` works whether the user arrives via wallet, Discord, or any future auth method. Wallet and external accounts are evidenced bindings, not the identity itself. Attribution preserves external claimant provenance and resolves it through node-local bindings only when ownership or settlement needs a local account.
+Provide a stable, auth-method-agnostic human identity inside each node. `users.id` works whether the human arrives via wallet, Discord, or any future auth method. Wallet and external accounts are evidenced bindings, not the identity itself. Durable AI identity remains a distinct `actor(kind=agent)`. Attribution preserves external claimant provenance and resolves it through node-local bindings only when ownership or settlement needs a local actor.
 
 ## Non-Goals
 
@@ -261,7 +270,7 @@ Provide a stable, auth-method-agnostic identity inside each node. `users.id` wor
 | Rule                             | Constraint                                                                                                                                                                                                                                                                                  |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | USER_ID_AT_CREATION              | Every user gets a UUID minted at first contact. No user exists without one.                                                                                                                                                                                                                 |
-| CANONICAL_IS_USER_ID             | Business logic identity references use `user_id`, never `wallet_address`, `discord_user_id`, or DID.                                                                                                                                                                                        |
+| CANONICAL_IS_USER_ID             | Human-account identity references use node-local `user_id`, never `wallet_address`, `discord_user_id`, or DID. Actor-aware economic authorship uses `actor_id`; it does not overload `user_id`.                                                                                             |
 | BINDINGS_ARE_EVIDENCED           | Every binding has proof recorded in `identity_events.payload` (SIWE signature, bot challenge, PR link). Bindings table is current-state index only.                                                                                                                                         |
 | NO_AUTO_MERGE                    | If a binding's `(provider, external_id)` is already bound to a different user, the bind attempt fails. Never silently re-point. DB-enforced via UNIQUE.                                                                                                                                     |
 | SIWE_UNCHANGED                   | SIWE authentication continues working. Binding additions are additive — no existing auth flow breaks.                                                                                                                                                                                       |

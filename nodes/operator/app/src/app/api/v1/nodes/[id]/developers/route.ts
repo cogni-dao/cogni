@@ -12,7 +12,7 @@
  * Invariants: OWNER_GATING, OPENFGA_IS_AUTHORITY, NO_LOCAL_ROLE_TABLE, ROLE_FROM_NODE_ACCESS_ROLES,
  *   TRUST_BOUNDARY_IS_MERGE_NOT_PUSH, PUSH_LOGIN_FROM_REQUEST (no githubLogin param — from the request row).
  * Side-effects: IO (Postgres read, OpenFGA tuple write/delete, GitHub repo collaborator add/remove via App)
- * Links: docs/spec/rbac.md (§6, §6a), docs/spec/identity-model.md
+ * Links: docs/spec/rbac.md (§6, §6a), https://cognidao.org/knowledge/human-ai-identity-standard
  * @public
  */
 

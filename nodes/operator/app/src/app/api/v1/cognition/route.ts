@@ -12,7 +12,7 @@
  *   domains — their full bodies stay behind the same authed read routes
  *   (KNOWLEDGE_READ_REQUIRES_PRINCIPAL); the current-node orientation entry is
  *   rendered IN FULL so the bootstrap IS the agent's operating map.
- *   The public bootstrap seam stays /api/v1/agent/register: register → key → cognition.
+ *   The bootstrap seam stays /api/v1/agent/register: human-issued spawn grant → durable key → cognition.
  * Invariants:
  *   - INDEX_FIRST: returns skill/domain pointers; the current-node orientation
  *     entry is the one full body (ORIENTATION_LOADED_IN_FULL).
@@ -28,9 +28,13 @@ import {
   CognitionBundleResponseSchema,
   type CognitionDomainPointer,
   type CognitionSkillPointer,
+  type RequestPrincipal,
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
-import { getSessionUser } from "@/app/_lib/auth/session";
+import {
+  RequestIdentityUnavailableError,
+  resolveRequestPrincipal,
+} from "@/app/_lib/auth/request-identity";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeMission, getNodeName } from "@/shared/config";
@@ -67,11 +71,33 @@ function publicOrigin(request: Request): string {
 export const GET = wrapRouteHandlerWithLogging(
   {
     routeId: "cognition.bundle",
-    auth: { mode: "required", getSessionUser },
+    // Cognition is the first authenticated read after a fresh durable agent
+    // redeems its spawn grant. SessionUser is a legacy compatibility shape and
+    // intentionally cannot represent an unlinked v2 agent, so authenticate via
+    // the exact principal resolver here.
+    auth: { mode: "none" },
   },
-  async (ctx, request, sessionUser) => {
-    if (!sessionUser) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  async (ctx, request) => {
+    let principal: RequestPrincipal | null;
+    try {
+      principal = await resolveRequestPrincipal();
+    } catch (error) {
+      if (error instanceof RequestIdentityUnavailableError) {
+        return NextResponse.json(
+          { error: "authn_unavailable" },
+          { status: 503 }
+        );
+      }
+      throw error;
+    }
+    if (!principal) {
+      return NextResponse.json(
+        { error: "invalid_token" },
+        {
+          status: 401,
+          headers: { "WWW-Authenticate": "Bearer" },
+        }
+      );
     }
     const container = getContainer();
     const origin = publicOrigin(request);
