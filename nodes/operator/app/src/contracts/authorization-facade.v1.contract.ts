@@ -4,7 +4,7 @@
 /**
  * Module: `@contracts/authorization-facade.v1`
  * Purpose: Strict wire contracts for the node-scoped operator authorization facade.
- * Scope: Same-node billing-account read checks and semantic reader/OBO grants only.
+ * Scope: Same-node billing reads, semantic reader/OBO grants, and bounded initial-owner bootstrap. Does not expose raw tuples or owner transfer.
  * Invariants: NO_NODE_ID_INPUT; NO_RAW_TUPLES; UUID_LOCAL_IDS; STRICT_INPUT.
  * Side-effects: none
  * Links: task.5226, docs/spec/rbac.md

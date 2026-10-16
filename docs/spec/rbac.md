@@ -264,9 +264,19 @@ first verifies the asserted human currently has `can_grant` on that exact accoun
 Reader grants write only conditioned `reader`; OBO grants require an existing subject
 read edge and existing human→agent delegation, then write only the conditioned,
 account-scoped `delegate` edge. Mutation success is confirmed with
-`HIGHER_CONSISTENCY`. The facade cannot seed `owner`/`can_grant`, mutate node roles, or
-write arbitrary relations. Credential custody, digest projection, and rotation are
-owned separately by task.5228; this facade consumes only the projected verifier ring.
+`HIGHER_CONSISTENCY`.
+
+The only owner-seeding operation is the target node's bounded, idempotent initial
+billing-account bootstrap. `bootstrapBillingAccountOwner` accepts semantic user and
+billing-account IDs only; the facade derives the node namespace from the authenticated
+workload credential, writes and verifies the same-node `owner` relation, and lets the
+account service set its durable saga marker only after verification succeeds. Retries
+may repair a pending marker, but a completed marker prevents later reads from
+resurrecting a revoked owner. This operation cannot transfer an owner or submit raw
+tuples. Ordinary reader/OBO grant mutations still cannot seed `owner`/`can_grant`,
+mutate node roles, or write arbitrary relations. Credential custody, digest projection,
+and rotation are owned separately by task.5228; this facade consumes only the projected
+verifier ring.
 
 ---
 
