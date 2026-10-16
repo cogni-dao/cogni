@@ -27,7 +27,13 @@
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { compileArtifactPolicy, readManifest } from "./lib/sync-policy.mjs";
 
@@ -42,6 +48,14 @@ const TMP_ROOT = "/tmp";
 const MANIFEST = ".cogni/sync-manifest.yaml";
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
+
+const lstatOrNull = (path) => {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+};
 
 const cloneArtifact = (repo, dest) => {
   if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
@@ -177,10 +191,12 @@ const main = async () => {
       }
       required++;
       const fsPath = join(dest, path);
+      // A symlink is a tree entry in its own right (git stores the target path as the blob), so
+      // it is compared WITHOUT following it. Following it read a directory-targeting link as
+      // "missing" and a file-targeting link's target bytes as "different" (story.5038).
+      const entry = artifactSet.has(path) ? lstatOrNull(fsPath) : null;
       const presentAsFile =
-        artifactSet.has(path) &&
-        existsSync(fsPath) &&
-        statSync(fsPath).isFile();
+        entry !== null && (entry.isFile() || entry.isSymbolicLink());
       if (!presentAsFile) {
         missing.push(path);
         continue;
@@ -199,7 +215,9 @@ const main = async () => {
       } catch {
         continue; // submodule/symlink-as-tree-entry
       }
-      const artifactBlob = readFileSync(fsPath);
+      const artifactBlob = entry.isSymbolicLink()
+        ? Buffer.from(readlinkSync(fsPath))
+        : readFileSync(fsPath);
       if (sha256(hubBlob) !== sha256(artifactBlob)) {
         different.push({
           path,
