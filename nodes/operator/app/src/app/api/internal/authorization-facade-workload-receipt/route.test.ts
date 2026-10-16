@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import type { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/bootstrap/http", () => ({
@@ -45,7 +46,7 @@ describe("authorization facade workload receipt", () => {
           method: "POST",
           headers: { authorization: `Bearer ${TOKEN}` },
         }
-      )
+      ) as NextRequest
     );
 
     expect(response.status).toBe(400);
@@ -68,7 +69,7 @@ describe("authorization facade workload receipt", () => {
             "x-cogni-rotation-challenge": CHALLENGE,
           },
         }
-      )
+      ) as NextRequest
     );
 
     expect(response.status).toBe(401);
@@ -80,16 +81,15 @@ describe("authorization facade workload receipt", () => {
     process.env.APP_BUILD_SHA = "c".repeat(40);
     process.env.NEXTAUTH_URL = "https://poly.cognidao.org";
     process.env.NODE_NAME = "poly";
-    const fetchMock = vi.fn().mockResolvedValue(
-      Response.json(
-        { decision: "deny", code: "authz_denied", checks: [] },
-        { status: 403 }
-      )
-    );
-    vi.stubGlobal(
-      "fetch",
-      fetchMock
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json(
+          { decision: "deny", code: "authz_denied", checks: [] },
+          { status: 403 }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
     const { POST } = await import("./route");
 
     const response = await POST(
@@ -102,7 +102,7 @@ describe("authorization facade workload receipt", () => {
             "x-cogni-rotation-challenge": CHALLENGE,
           },
         }
-      )
+      ) as NextRequest
     );
 
     expect(response.status).toBe(200);

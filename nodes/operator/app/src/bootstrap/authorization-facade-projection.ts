@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import { NETWORK_NODES } from "@/adapters/server";
+import { NETWORK_NODES } from "@/adapters/server/node-registry/network-nodes.data";
 import { OpenBaoAuthorizationFacadeProjectionAdapter } from "@/adapters/server/secrets/openbao-authorization-facade-projection.adapter";
 import { serverEnv } from "@/shared/env";
 
