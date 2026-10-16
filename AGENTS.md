@@ -26,6 +26,8 @@ to diagnosing delivery, recovering this node's credentials, and warming a comple
 Run the shared loader from the repository root once and inspect the setup result. If it
 still cannot load a complete contract, report the missing delivery evidence and the
 specific setup action needed; do not repeatedly fetch or invent a fallback format.
+Do not offer to waive the missing contract or ask the human to authorize normal work
+without it. Recovery ends only when the native instruction path loads a complete bundle.
 
 On first setup, register through `/api/v1/agent/register` and save COGNI_NODE_API_KEY in
 the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition credentials.
